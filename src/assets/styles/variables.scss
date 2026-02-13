@@ -1,0 +1,72 @@
+/**
+ * 全局 SCSS 变量文件
+ *
+ * 定义项目中通用的颜色、尺寸、间距等变量
+ * 该文件会被自动注入到所有 SCSS 文件中
+ */
+
+// ==================== 颜色变量 ====================
+
+// 主色调 - 用于主要按钮、链接、重要信息
+$color-primary: #409eff;
+$color-primary-light: #ecf5ff;
+$color-primary-dark: #337ecc;
+
+// 功能色 - 用于状态提示
+$color-success: #67c23a;
+$color-warning: #e6a23c;
+$color-danger: #f56c6c;
+$color-info: #909399;
+
+// 文字颜色
+$color-text-primary: #303133;     // 主要文字
+$color-text-regular: #606266;     // 常规文字
+$color-text-secondary: #909399;   // 次要文字
+$color-text-placeholder: #c0c4cc; // 占位符文字
+
+// 边框颜色
+$color-border-base: #dcdfe6;
+$color-border-light: #e4e7ed;
+$color-border-lighter: #ebeef5;
+
+// 背景颜色
+$color-bg-base: #ffffff;
+$color-bg-page: #f5f7fa;
+$color-bg-overlay: rgba(0, 0, 0, 0.5);
+
+// ==================== 尺寸变量 ====================
+
+// 侧边栏宽度
+$sidebar-width: 240px;
+$sidebar-width-collapsed: 64px;
+
+// 头部高度
+$header-height: 60px;
+
+// 内容区域内边距
+$content-padding: 20px;
+
+// ==================== 间距变量 ====================
+
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 16px;
+$spacing-lg: 24px;
+$spacing-xl: 32px;
+
+// ==================== 圆角变量 ====================
+
+$border-radius-sm: 2px;
+$border-radius-md: 4px;
+$border-radius-lg: 8px;
+
+// ==================== 阴影变量 ====================
+
+$shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+$shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+$shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+// ==================== 过渡动画 ====================
+
+$transition-duration: 0.3s;
+$transition-timing: ease-in-out;

@@ -1,0 +1,178 @@
+/**
+ * 全局样式文件
+ *
+ * 定义应用级别的全局样式，包括：
+ * - 基础样式重置
+ * - 通用工具类
+ * - Element Plus 样式覆盖
+ */
+
+// 引入变量（虽然已在 vite.config.ts 中配置自动注入，但这里显式引入以便 IDE 识别）
+@use './variables.scss' as *;
+
+// ==================== 基础样式重置 ====================
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  width: 100%;
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', '微软雅黑', Arial, sans-serif;
+  font-size: 14px;
+  color: $color-text-primary;
+  background-color: $color-bg-page;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+}
+
+// ==================== 链接样式 ====================
+
+a {
+  color: $color-primary;
+  text-decoration: none;
+
+  &:hover {
+    color: $color-primary-dark;
+  }
+}
+
+// ==================== 滚动条样式 ====================
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: $color-bg-page;
+  border-radius: $border-radius-md;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: $color-border-base;
+  border-radius: $border-radius-md;
+
+  &:hover {
+    background-color: $color-text-secondary;
+  }
+}
+
+// ==================== 工具类 ====================
+
+// 清除浮动
+.clearfix::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+// 文字省略
+.text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 多行文字省略
+.text-ellipsis-2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+// 弹性布局
+.flex {
+  display: flex;
+}
+
+.flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flex-1 {
+  flex: 1;
+}
+
+// 间距类
+.mt-sm { margin-top: $spacing-sm; }
+.mt-md { margin-top: $spacing-md; }
+.mt-lg { margin-top: $spacing-lg; }
+.mb-sm { margin-bottom: $spacing-sm; }
+.mb-md { margin-bottom: $spacing-md; }
+.mb-lg { margin-bottom: $spacing-lg; }
+.ml-sm { margin-left: $spacing-sm; }
+.ml-md { margin-left: $spacing-md; }
+.mr-sm { margin-right: $spacing-sm; }
+.mr-md { margin-right: $spacing-md; }
+
+// ==================== Element Plus 样式覆盖 ====================
+
+// 表格样式优化
+.el-table {
+  // 表头背景色
+  th.el-table__cell {
+    background-color: $color-bg-page !important;
+    color: $color-text-primary;
+    font-weight: 600;
+  }
+
+  // 行悬浮效果
+  .el-table__row:hover > td {
+    background-color: $color-primary-light !important;
+  }
+}
+
+// 表单样式优化
+.el-form-item__label {
+  color: $color-text-primary;
+  font-weight: 500;
+}
+
+// 对话框样式优化
+.el-dialog__header {
+  border-bottom: 1px solid $color-border-lighter;
+  padding-bottom: $spacing-md;
+}
+
+.el-dialog__footer {
+  border-top: 1px solid $color-border-lighter;
+  padding-top: $spacing-md;
+}
+
+// 卡片样式优化
+.el-card {
+  border-radius: $border-radius-lg;
+  border: none;
+  box-shadow: $shadow-sm;
+}
+
+// 按钮间距
+.el-button + .el-button {
+  margin-left: $spacing-sm;
+}
+
+// 菜单样式优化
+.el-menu {
+  border-right: none !important;
+}

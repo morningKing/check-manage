@@ -1,0 +1,5 @@
+{
+  "/api/*": "/$1",
+  "/api/data/:pageId": "/:pageId",
+  "/api/data/:pageId/:id": "/:pageId/:id"
+}
