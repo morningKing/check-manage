@@ -50,13 +50,27 @@
       </div>
     </div>
 
+    <!-- 搜索栏 -->
+    <div class="search-bar">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="输入关键字搜索..."
+        clearable
+        :prefix-icon="Search"
+        style="width: 300px"
+      />
+      <span class="search-result-count">
+        共 {{ filteredData.length }} 条记录
+      </span>
+    </div>
+
     <!-- 数据表格 -->
     <el-card class="table-card">
       <DataTable
-        :data="tableData"
+        :data="filteredData"
         :fields="effectiveFields"
         :loading="tableLoading"
-        :total="tableData.length"
+        :total="filteredData.length"
         :show-pagination="false"
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
@@ -162,7 +176,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { DataTable, ConfirmDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -213,6 +227,11 @@ const submitLoading = ref(false)
  * 表格数据
  */
 const tableData = ref<DynamicRecord[]>([])
+
+/**
+ * 搜索关键字
+ */
+const searchKeyword = ref('')
 
 /**
  * 对话框可见性
@@ -320,6 +339,53 @@ const effectiveFields = computed<FieldConfig[]>(() => {
  */
 const dialogTitle = computed(() => {
   return isEditMode.value ? '编辑记录' : '新增记录'
+})
+
+/**
+ * 按关键字过滤后的表格数据
+ */
+const filteredData = computed<DynamicRecord[]>(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  if (!keyword) return tableData.value
+
+  return tableData.value.filter(record => {
+    for (const field of pageFields.value) {
+      const val = record[field.fieldName]
+      if (val === null || val === undefined) continue
+
+      if (['text', 'textarea', 'number'].includes(field.controlType)) {
+        if (String(val).toLowerCase().includes(keyword)) return true
+      }
+
+      if (['select', 'radio'].includes(field.controlType)) {
+        const opt = field.options?.find(o => o.value === val)
+        const label = opt?.label || String(val)
+        if (label.toLowerCase().includes(keyword)) return true
+      }
+
+      if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+        if (Array.isArray(val)) {
+          const matched = val.some(v => {
+            const opt = field.options?.find(o => o.value === v)
+            return (opt?.label || String(v)).toLowerCase().includes(keyword)
+          })
+          if (matched) return true
+        }
+      }
+
+      if (['date', 'datetime'].includes(field.controlType)) {
+        if (String(val).toLowerCase().includes(keyword)) return true
+      }
+
+      if (field.controlType === 'reference' && field.referenceConfig?.inheritFields) {
+        for (const inh of field.referenceConfig.inheritFields) {
+          const refVal = record[`_ref_${field.fieldName}_${inh}`]
+          if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
+        }
+      }
+    }
+    return false
+  })
 })
 
 // ==================== 方法 ====================
@@ -606,6 +672,18 @@ onMounted(() => {
 
 .import-result {
   padding: 10px 0;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  .search-result-count {
+    color: #909399;
+    font-size: 13px;
+  }
 }
 
 .table-card {
