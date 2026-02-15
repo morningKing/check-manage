@@ -24,12 +24,16 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 # (表名, 列列表, JSONB列索引集合)
 BACKUP_TABLES = [
     ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}),
-    ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at'], {4}),
+    ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
+                      'export_scripts', 'row_export_scripts'], {4, 7, 8}),
     ('dynamic_data', ['id', 'collection', 'data', 'created_at'], {2}),
     ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set()),
     ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set()),
     ('operation_logs', ['id', 'action', 'target_type', 'target_id', 'target_name', 'description',
-                        'operator_id', 'operator_name', 'operator_role', 'created_at'], set()),
+                        'operator_id', 'operator_name', 'operator_role', 'created_at',
+                        'batch_id', 'batch_desc'], set()),
+    ('export_scripts', ['id', 'name', 'description', 'language', 'script', 'output_format',
+                        'created_at', 'updated_at', 'scope'], set()),
 ]
 
 # 备份版本号（用于未来兼容性迁移）
@@ -71,7 +75,7 @@ def create_backup(backup_type='manual', created_by=None):
     """
     创建备份
 
-    导出 6 张业务表 → JSON → ZIP，保存到 server/backups/
+    导出 7 张业务表 → JSON → ZIP，保存到 server/backups/
     返回备份元数据 dict
     """
     _ensure_backup_dir()
