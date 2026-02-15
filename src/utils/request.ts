@@ -11,6 +11,7 @@
 
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
+import { getBatchHeaders } from './batch'
 
 /**
  * 创建 axios 实例
@@ -49,6 +50,9 @@ service.interceptors.request.use(
         config.headers.Authorization = `Bearer ${raw}`
       }
     }
+    // Inject batch context headers if active
+    const batchHeaders = getBatchHeaders()
+    Object.assign(config.headers, batchHeaders)
     return config
   },
   (error) => {

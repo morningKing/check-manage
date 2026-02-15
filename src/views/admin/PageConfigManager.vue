@@ -99,6 +99,40 @@
                 />
               </el-form-item>
 
+              <el-form-item label="导出脚本">
+                <el-select
+                  v-model="formData.exportScripts"
+                  multiple
+                  clearable
+                  placeholder="选择整页导出脚本"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="s in pageExportScripts"
+                    :key="s.id"
+                    :label="`${s.name} (${s.outputFormat})`"
+                    :value="s.id"
+                  />
+                </el-select>
+              </el-form-item>
+
+              <el-form-item label="行级导出">
+                <el-select
+                  v-model="formData.rowExportScripts"
+                  multiple
+                  clearable
+                  placeholder="选择单行导出脚本"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="s in rowExportScripts"
+                    :key="s.id"
+                    :label="`${s.name} (${s.outputFormat})`"
+                    :value="s.id"
+                  />
+                </el-select>
+              </el-form-item>
+
               <el-form-item>
                 <el-button
                   type="primary"
@@ -192,7 +226,7 @@
  * 2. 页面配置的增删改
  * 3. 字段配置编辑
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -200,7 +234,9 @@ import { usePageConfigStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import FieldConfigEditor from './FieldConfigEditor.vue'
 import type { PageConfig, PageFormData, FieldConfig } from '@/types'
+import type { ExportScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
+import { getExportScripts } from '@/api/exportScript'
 
 // ==================== Store ====================
 
@@ -252,6 +288,21 @@ const saveLoading = ref(false)
  * 创建加载状态
  */
 const createLoading = ref(false)
+
+/**
+ * 所有导出脚本
+ */
+const allExportScripts = ref<ExportScript[]>([])
+
+// ==================== 计算属性（脚本筛选） ====================
+
+const pageExportScripts = computed(() =>
+  allExportScripts.value.filter(s => (s.scope || 'page') === 'page')
+)
+
+const rowExportScripts = computed(() =>
+  allExportScripts.value.filter(s => s.scope === 'row')
+)
 
 // ==================== 常量 ====================
 
@@ -313,7 +364,9 @@ function handleSelect(config: PageConfig): void {
     id: config.id,
     name: config.name,
     description: config.description || '',
-    apiEndpoint: config.apiEndpoint
+    apiEndpoint: config.apiEndpoint,
+    exportScripts: config.exportScripts || [],
+    rowExportScripts: config.rowExportScripts || [],
   }
 }
 
@@ -364,6 +417,8 @@ async function handleSavePageInfo(): Promise<void> {
       name: formData.value.name,
       description: formData.value.description,
       apiEndpoint: formData.value.apiEndpoint,
+      exportScripts: formData.value.exportScripts || [],
+      rowExportScripts: formData.value.rowExportScripts || [],
       fields: currentFields.value
     })
     ElMessage.success('保存成功')
@@ -420,6 +475,14 @@ async function handleDelete(): Promise<void> {
 onMounted(async () => {
   if (pageConfigStore.pageConfigs.length === 0) {
     await pageConfigStore.fetchPageConfigs()
+  }
+})
+
+onActivated(async () => {
+  try {
+    allExportScripts.value = await getExportScripts()
+  } catch {
+    // ignore
   }
 })
 </script>

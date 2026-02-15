@@ -42,10 +42,12 @@ def row_to_dict(row):
         'operatorName': row[7],
         'operatorRole': row[8],
         'createdAt': format_ts(row[9]),
+        'batchId': row[10],
+        'batchDesc': row[11],
     }
 
 
-COLUMNS = 'id, action, target_type, target_id, target_name, description, operator_id, operator_name, operator_role, created_at'
+COLUMNS = 'id, action, target_type, target_id, target_name, description, operator_id, operator_name, operator_role, created_at, batch_id, batch_desc'
 
 
 def build_filter():
@@ -132,7 +134,7 @@ def export_logs():
         )
         rows = cur.fetchall()
 
-    headers = ['操作描述', '操作类型', '目标类型', '目标名称', '操作人', '角色', '时间']
+    headers = ['操作描述', '操作类型', '目标类型', '目标名称', '操作人', '角色', '时间', '批次']
 
     def make_row(r):
         d = row_to_dict(r)
@@ -144,6 +146,7 @@ def export_logs():
             d['operatorName'],
             ROLE_LABELS.get(d['operatorRole'], d['operatorRole']),
             d['createdAt'] or '',
+            d['batchDesc'] or '',
         ]
 
     # Try openpyxl for Excel output

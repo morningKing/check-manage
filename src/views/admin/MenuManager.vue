@@ -42,7 +42,10 @@
                   <component :is="data.icon" />
                 </el-icon>
                 <span class="node-label">{{ data.name }}</span>
-                <div class="node-actions">
+                <el-icon v-if="isSystemConfigMenu(data)" class="system-lock">
+                  <Lock />
+                </el-icon>
+                <div class="node-actions" v-if="!isSystemConfigMenu(data)">
                   <el-button
                     v-if="getNodeLevel(data) < 3"
                     type="primary"
@@ -81,8 +84,18 @@
             ref="formRef"
             :model="formData"
             :rules="formRules"
+            :disabled="isCurrentSystemMenu"
             label-width="100px"
           >
+            <el-alert
+              v-if="isCurrentSystemMenu"
+              type="info"
+              :closable="false"
+              title="系统菜单不可修改"
+              description="系统配置相关菜单为内置菜单，不允许编辑或删除。"
+              show-icon
+              style="margin-bottom: 16px"
+            />
             <el-form-item label="菜单名称" prop="name">
               <el-input
                 v-model="formData.name"
@@ -169,7 +182,7 @@
               <el-input :value="parentMenuName" disabled />
             </el-form-item>
 
-            <el-form-item>
+            <el-form-item v-if="!isCurrentSystemMenu">
               <el-button type="primary" @click="handleSubmit" :loading="submitLoading">
                 {{ isEditMode ? '更新' : '创建' }}
               </el-button>
@@ -206,7 +219,7 @@
 import { ref, computed, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Lock } from '@element-plus/icons-vue'
 import { useMenuStore, usePageConfigStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import type { MenuItem, MenuFormData } from '@/types'
@@ -335,6 +348,36 @@ const deleteMessage = computed(() => {
     return `确定要删除菜单"${menuToDelete.value.name}"及其 ${childCount} 个子菜单吗？`
   }
   return `确定要删除菜单"${menuToDelete.value.name}"吗？`
+})
+
+/**
+ * 判断菜单是否属于系统配置菜单树
+ *
+ * 通过路径和父子关系判断：
+ * - 路径以 /admin/ 开头的菜单
+ * - 子菜单中包含 /admin/ 路径的根菜单（即"系统配置"本身）
+ * - 父级属于系统配置的子菜单
+ */
+function isSystemConfigMenu(menu: MenuItem): boolean {
+  if (menu.path?.startsWith('/admin/')) return true
+  if (menu.parentId) {
+    const parent = menuStore.getMenuById(menu.parentId)
+    if (parent) return isSystemConfigMenu(parent)
+  }
+  if (!menu.parentId && !menu.path) {
+    const children = menuStore.getChildMenus(menu.id)
+    if (children.length > 0 && children.some(c => c.path?.startsWith('/admin/'))) return true
+  }
+  return false
+}
+
+/**
+ * 当前编辑的菜单是否为系统配置菜单
+ */
+const isCurrentSystemMenu = computed(() => {
+  if (!isEditMode.value || !formData.value.id) return false
+  const menu = menuStore.getMenuById(formData.value.id)
+  return menu ? isSystemConfigMenu(menu) : false
 })
 
 // ==================== 方法 ====================
@@ -543,6 +586,12 @@ onMounted(async () => {
 
   .node-label {
     flex: 1;
+  }
+
+  .system-lock {
+    margin-left: 6px;
+    color: #909399;
+    font-size: 14px;
   }
 
   .node-actions {

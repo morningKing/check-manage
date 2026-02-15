@@ -27,6 +27,16 @@ export interface OperationLog {
   operatorName: string
   operatorRole: string
   createdAt: string
+  batchId?: string
+  batchDesc?: string
+}
+
+/**
+ * 操作日志表格行（含树形子行）
+ */
+export interface OperationLogRow extends OperationLog {
+  children?: OperationLogRow[]
+  batchCount?: number
 }
 
 /**

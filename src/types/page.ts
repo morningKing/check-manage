@@ -25,6 +25,8 @@ export interface PageConfig {
   description?: string
   apiEndpoint: string
   fields: FieldConfig[]
+  exportScripts?: string[]
+  rowExportScripts?: string[]
   createdAt: string
   updatedAt: string
 }
@@ -39,6 +41,8 @@ export interface PageFormData {
   name: string
   description: string
   apiEndpoint: string
+  exportScripts?: string[]
+  rowExportScripts?: string[]
 }
 
 /**
@@ -50,7 +54,9 @@ export function createEmptyPageFormData(): PageFormData {
   return {
     name: '',
     description: '',
-    apiEndpoint: '/api/data/'
+    apiEndpoint: '/api/data/',
+    exportScripts: [],
+    rowExportScripts: [],
   }
 }
 

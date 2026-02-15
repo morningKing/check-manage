@@ -6,7 +6,8 @@ All exceptions are caught internally -- logging failure must never
 break the primary business operation.
 """
 import uuid
-from flask import g
+from urllib.parse import unquote
+from flask import g, has_request_context, request
 from db import get_db
 
 
@@ -31,15 +32,22 @@ def log_operation(action, target_type, target_id, target_name, description):
         operator_name = user.get('username', '')
         operator_role = user.get('role', '')
 
+        batch_id = None
+        batch_desc = None
+        if has_request_context():
+            batch_id = request.headers.get('X-Batch-Id') or None
+            raw_desc = request.headers.get('X-Batch-Desc') or None
+            batch_desc = unquote(raw_desc) if raw_desc else None
+
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
                 'INSERT INTO operation_logs '
                 '(id, action, target_type, target_id, target_name, description, '
-                ' operator_id, operator_name, operator_role) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                ' operator_id, operator_name, operator_role, batch_id, batch_desc) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (log_id, action, target_type, target_id, target_name, description,
-                 operator_id, operator_name, operator_role),
+                 operator_id, operator_name, operator_role, batch_id, batch_desc),
             )
     except Exception:
         pass

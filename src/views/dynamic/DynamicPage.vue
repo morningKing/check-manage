@@ -39,7 +39,24 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button type="warning" @click="handleExport">
+        <el-dropdown
+          v-if="boundExportScripts.length > 0"
+          split-button
+          type="warning"
+          @click="handleExport"
+          @command="handleExportCommand"
+        >
+          <el-icon><Download /></el-icon> 导出
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="excel">导出 Excel</el-dropdown-item>
+              <el-dropdown-item divided v-for="s in boundExportScripts" :key="s.id" :command="s.id">
+                {{ s.name }} ({{ s.outputFormat }})
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-button v-else type="warning" @click="handleExport">
           <el-icon><Download /></el-icon>
           导出
         </el-button>
@@ -74,7 +91,38 @@
         :show-pagination="false"
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
-      />
+      >
+        <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
+          <el-dropdown
+            v-if="boundRowExportScripts.length > 1"
+            @command="(cmd: string) => handleRowExport(cmd, row)"
+            trigger="click"
+          >
+            <el-button type="warning" link>
+              导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="s in boundRowExportScripts"
+                  :key="s.id"
+                  :command="s.id"
+                >
+                  {{ s.name }}
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <el-button
+            v-else
+            type="warning"
+            link
+            @click="handleRowExport(boundRowExportScripts[0].id, row)"
+          >
+            导出
+          </el-button>
+        </template>
+      </DataTable>
     </el-card>
 
     <!-- 新增/编辑对话框 -->
@@ -173,7 +221,7 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onActivated } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search } from '@element-plus/icons-vue'
@@ -181,7 +229,9 @@ import { usePageConfigStore } from '@/stores'
 import { DataTable, ConfirmDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile } from '@/utils/excel'
-import type { PageConfig, FieldConfig, DynamicRecord } from '@/types'
+import { withBatch } from '@/utils/batch'
+import { getExportScripts, executeExportScript } from '@/api/exportScript'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript } from '@/types'
 
 // ==================== Props ====================
 
@@ -280,6 +330,11 @@ const importTotal = ref(0)
  */
 const importResult = ref<{ success: number; failed: number } | null>(null)
 
+/**
+ * 所有导出脚本（缓存）
+ */
+const allExportScripts = ref<ExportScript[]>([])
+
 // ==================== 计算属性 ====================
 
 /**
@@ -299,6 +354,24 @@ const pageConfig = computed<PageConfig | undefined>(() => {
  */
 const pageFields = computed<FieldConfig[]>(() => {
   return pageConfigStore.getPageFields(pageId.value)
+})
+
+/**
+ * 当前页面绑定的导出脚本
+ */
+const boundExportScripts = computed<ExportScript[]>(() => {
+  const ids = pageConfig.value?.exportScripts || []
+  if (ids.length === 0) return []
+  return allExportScripts.value.filter(s => ids.includes(s.id))
+})
+
+/**
+ * 当前页面绑定的行级导出脚本
+ */
+const boundRowExportScripts = computed<ExportScript[]>(() => {
+  const ids = pageConfig.value?.rowExportScripts || []
+  if (ids.length === 0) return []
+  return allExportScripts.value.filter(s => ids.includes(s.id))
 })
 
 /**
@@ -478,20 +551,33 @@ async function handleFormSubmit(): Promise<void> {
 async function submitFormData(data: Record<string, any>): Promise<void> {
   submitLoading.value = true
   try {
-    // 分离关联字段和普通字段
-    const regularData = pageConfigStore.stripRelationFields(pageId.value, data)
+    const hasRelations = pageFields.value.some(f => f.controlType === 'relation')
 
-    if (isEditMode.value) {
-      // 编辑模式
-      await pageConfigStore.updatePageData(pageId.value, currentRecord.value.id, regularData)
-      await pageConfigStore.saveRelations(pageId.value, currentRecord.value.id, data)
-      ElMessage.success('更新成功')
-    } else {
-      // 新增模式：先创建记录获取ID，再保存关联
-      const created = await pageConfigStore.addPageData(pageId.value, regularData)
-      await pageConfigStore.saveRelations(pageId.value, created.id, data)
-      ElMessage.success('新增成功')
+    const doSave = async () => {
+      // 分离关联字段和普通字段
+      const regularData = pageConfigStore.stripRelationFields(pageId.value, data)
+
+      if (isEditMode.value) {
+        // 编辑模式
+        await pageConfigStore.updatePageData(pageId.value, currentRecord.value.id, regularData)
+        await pageConfigStore.saveRelations(pageId.value, currentRecord.value.id, data)
+        ElMessage.success('更新成功')
+      } else {
+        // 新增模式：先创建记录获取ID，再保存关联
+        const created = await pageConfigStore.addPageData(pageId.value, regularData)
+        await pageConfigStore.saveRelations(pageId.value, created.id, data)
+        ElMessage.success('新增成功')
+      }
     }
+
+    if (hasRelations) {
+      const name = data[pageFields.value[0]?.fieldName] || ''
+      const actionLabel = isEditMode.value ? '修改' : '新增'
+      await withBatch(`${actionLabel}${pageConfig.value?.name || '数据'}「${name}」`, doSave)
+    } else {
+      await doSave()
+    }
+
     dialogVisible.value = false
     // 刷新数据
     await loadPageData()
@@ -513,6 +599,49 @@ function handleExport(): void {
   const name = pageConfig.value?.name || '数据'
   exportToExcel(tableData.value, effectiveFields.value, name)
   ElMessage.success('导出成功')
+}
+
+/**
+ * 处理导出下拉命令（自定义脚本导出）
+ */
+async function handleExportCommand(command: string): Promise<void> {
+  if (command === 'excel') {
+    handleExport()
+    return
+  }
+  // command is a script id
+  if (tableData.value.length === 0) {
+    ElMessage.warning('暂无数据可导出')
+    return
+  }
+  const collection = pageId.value.replace('page-', '')
+  if (!collection) {
+    ElMessage.error('无法确定数据集合')
+    return
+  }
+  try {
+    await executeExportScript(command, collection)
+    ElMessage.success('导出成功')
+  } catch {
+    ElMessage.error('导出失败')
+  }
+}
+
+/**
+ * 处理行级导出
+ */
+async function handleRowExport(scriptId: string, row: DynamicRecord): Promise<void> {
+  const collection = pageId.value.replace('page-', '')
+  if (!collection) {
+    ElMessage.error('无法确定数据集合')
+    return
+  }
+  try {
+    await executeExportScript(scriptId, collection, row.id)
+    ElMessage.success('导出成功')
+  } catch {
+    ElMessage.error('导出失败')
+  }
 }
 
 /**
@@ -572,19 +701,21 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   let success = 0
   let failed = 0
 
-  for (let i = 0; i < records.length; i++) {
-    try {
-      const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
-      const created = await pageConfigStore.addPageData(pageId.value, regularData)
-      // 保存关联关系数据
-      await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
-      success++
-    } catch {
-      failed++
+  await withBatch(`导入 ${records.length} 条${pageConfig.value?.name || '数据'}`, async () => {
+    for (let i = 0; i < records.length; i++) {
+      try {
+        const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
+        const created = await pageConfigStore.addPageData(pageId.value, regularData)
+        // 保存关联关系数据
+        await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
+        success++
+      } catch {
+        failed++
+      }
+      importCurrent.value = i + 1
+      importProgress.value = Math.round(((i + 1) / records.length) * 100)
     }
-    importCurrent.value = i + 1
-    importProgress.value = Math.round(((i + 1) / records.length) * 100)
-  }
+  })
 
   importLoading.value = false
   importResult.value = { success, failed }
@@ -619,8 +750,13 @@ watch(
 
 // ==================== 生命周期 ====================
 
-onMounted(() => {
-  // 首次加载由 watch 触发
+onActivated(async () => {
+  // 加载导出脚本列表（用于绑定展示）
+  try {
+    allExportScripts.value = await getExportScripts()
+  } catch {
+    // 非管理员可能无权访问，忽略错误
+  }
 })
 </script>
 

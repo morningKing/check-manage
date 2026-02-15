@@ -45,11 +45,12 @@
       <el-table-column
         v-if="showActions"
         label="操作"
-        width="150"
+        :width="150"
         align="center"
         fixed="right"
       >
         <template #default="{ row }">
+          <slot name="extra-actions" :row="row" />
           <el-button type="primary" link @click="handleEdit(row)">
             编辑
           </el-button>

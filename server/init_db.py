@@ -104,6 +104,17 @@ CREATE TABLE IF NOT EXISTS backup_settings (
 );
 
 INSERT INTO backup_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS export_scripts (
+    id              VARCHAR(100) PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    language        VARCHAR(50) NOT NULL DEFAULT 'python',
+    script          TEXT NOT NULL,
+    output_format   VARCHAR(50) NOT NULL DEFAULT 'json',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
 """
 
 
@@ -148,6 +159,59 @@ def init_db():
             )
             conn.commit()
             print("Added backup menu.")
+
+        # Migration: add export_scripts column to page_configs if missing
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'export_scripts'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN export_scripts JSONB DEFAULT '[]'::jsonb")
+            conn.commit()
+            print("Added export_scripts column to page_configs table.")
+
+        # Migration: add batch_id / batch_desc columns to operation_logs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'operation_logs' AND column_name = 'batch_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE operation_logs ADD COLUMN batch_id VARCHAR(100)")
+            cur.execute("ALTER TABLE operation_logs ADD COLUMN batch_desc VARCHAR(500)")
+            cur.execute("CREATE INDEX idx_operation_logs_batch_id ON operation_logs(batch_id)")
+            conn.commit()
+            print("Added batch_id/batch_desc columns to operation_logs table.")
+
+        # Migration: add scope column to export_scripts
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'export_scripts' AND column_name = 'scope'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE export_scripts ADD COLUMN scope VARCHAR(50) NOT NULL DEFAULT 'page'")
+            conn.commit()
+            print("Added scope column to export_scripts table.")
+
+        # Migration: add row_export_scripts column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'row_export_scripts'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN row_export_scripts JSONB DEFAULT '[]'::jsonb")
+            conn.commit()
+            print("Added row_export_scripts column to page_configs table.")
+
+        # Migration: add export scripts menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-6'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-6', %s, 'Promotion', NULL, 'menu-3', 6, '/admin/export-scripts', %s)",
+                ('导出脚本', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added export scripts menu.")
 
         # Check if data exists
         cur.execute("SELECT COUNT(*) FROM menus")

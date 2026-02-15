@@ -6,6 +6,7 @@
  * - 按时间/操作类型/目标类型/操作人筛选
  * - 导出日志为Excel
  * - 删除单条日志（管理员权限）
+ * - 按批次分组展示，支持折叠/展开
  *
  * 仅管理员可访问
  */
@@ -76,28 +77,50 @@
 
       <!-- 数据表格 -->
       <el-table
-        :data="logList"
+        :data="displayData"
         v-loading="loading"
-        stripe
         border
+        row-key="id"
+        :tree-props="{ children: 'children' }"
+        :row-class-name="getRowClassName"
+        default-expand-all
         style="width: 100%; margin-top: 16px"
       >
-        <el-table-column prop="description" label="操作描述" min-width="250" show-overflow-tooltip />
+        <el-table-column prop="description" label="操作描述" min-width="250" show-overflow-tooltip>
+          <template #default="{ row }">
+            <template v-if="row.batchCount">
+              <span class="batch-label">
+                <el-icon class="batch-icon"><Folder /></el-icon>
+                {{ row.description }}
+                <el-tag size="small" type="info" round class="batch-count">
+                  {{ row.batchCount }} 条
+                </el-tag>
+              </span>
+            </template>
+            <template v-else>
+              {{ row.description }}
+            </template>
+          </template>
+        </el-table-column>
         <el-table-column prop="action" label="操作类型" width="100" align="center">
           <template #default="{ row }">
-            <el-tag
-              :type="ACTION_TAG_TYPES[row.action as OperationAction] || 'info'"
-              size="small"
-            >
-              {{ ACTION_LABELS[row.action as OperationAction] || row.action }}
-            </el-tag>
+            <template v-if="!row.batchCount">
+              <el-tag
+                :type="ACTION_TAG_TYPES[row.action as OperationAction] || 'info'"
+                size="small"
+              >
+                {{ ACTION_LABELS[row.action as OperationAction] || row.action }}
+              </el-tag>
+            </template>
           </template>
         </el-table-column>
         <el-table-column prop="targetType" label="目标类型" width="120" align="center">
           <template #default="{ row }">
-            <el-tag type="info" size="small" effect="plain">
-              {{ TARGET_TYPE_LABELS[row.targetType as OperationTargetType] || row.targetType }}
-            </el-tag>
+            <template v-if="!row.batchCount">
+              <el-tag type="info" size="small" effect="plain">
+                {{ TARGET_TYPE_LABELS[row.targetType as OperationTargetType] || row.targetType }}
+              </el-tag>
+            </template>
           </template>
         </el-table-column>
         <el-table-column prop="operatorName" label="操作人" width="120" />
@@ -116,6 +139,7 @@
         <el-table-column label="操作" width="80" align="center" fixed="right">
           <template #default="{ row }">
             <el-button
+              v-if="!row.batchCount"
               type="danger"
               link
               size="small"
@@ -154,9 +178,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Download } from '@element-plus/icons-vue'
+import { Search, Download, Folder } from '@element-plus/icons-vue'
 import { getOperationLogs, deleteOperationLog, exportOperationLogs } from '@/api/operationLog'
 import { ConfirmDialog } from '@/components/common'
 import {
@@ -167,7 +191,7 @@ import {
   TARGET_TYPE_OPTIONS,
   ROLE_LABELS,
 } from '@/types'
-import type { OperationLog, OperationAction, OperationTargetType, UserRole } from '@/types'
+import type { OperationLog, OperationLogRow, OperationAction, OperationTargetType, UserRole } from '@/types'
 
 // ==================== State ====================
 
@@ -185,6 +209,56 @@ const filterOperatorName = ref('')
 
 const deleteDialogVisible = ref(false)
 const deleteTarget = ref<OperationLog | null>(null)
+
+// ==================== 计算属性 ====================
+
+/**
+ * 按 batchId 分组后的展示数据
+ * 同一 batchId 的日志聚合为一个父行 + children 子行
+ * 无 batchId 的日志保持独立行
+ */
+const displayData = computed<OperationLogRow[]>(() => {
+  const rows: OperationLogRow[] = []
+  const batchMap = new Map<string, OperationLogRow>()
+
+  for (const log of logList.value) {
+    if (!log.batchId) {
+      rows.push({ ...log })
+      continue
+    }
+
+    let parent = batchMap.get(log.batchId)
+    if (!parent) {
+      parent = {
+        id: `batch-${log.batchId}`,
+        action: log.action,
+        targetType: log.targetType,
+        targetId: '',
+        targetName: '',
+        description: log.batchDesc || log.batchId,
+        operatorId: log.operatorId,
+        operatorName: log.operatorName,
+        operatorRole: log.operatorRole,
+        createdAt: log.createdAt,
+        batchId: log.batchId,
+        batchDesc: log.batchDesc,
+        batchCount: 0,
+        children: [],
+      }
+      batchMap.set(log.batchId, parent)
+      rows.push(parent)
+    }
+
+    parent.children!.push({ ...log })
+    parent.batchCount = parent.children!.length
+    // Use the latest timestamp from children
+    if (log.createdAt > parent.createdAt) {
+      parent.createdAt = log.createdAt
+    }
+  }
+
+  return rows
+})
 
 // ==================== 方法 ====================
 
@@ -212,6 +286,11 @@ function formatDate(value: string): string {
   } catch {
     return value
   }
+}
+
+function getRowClassName({ row }: { row: OperationLogRow }): string {
+  if (row.batchCount) return 'batch-parent-row'
+  return ''
 }
 
 function buildQuery() {
@@ -330,5 +409,29 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.batch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #409eff;
+
+  .batch-icon {
+    font-size: 16px;
+  }
+
+  .batch-count {
+    margin-left: 4px;
+  }
+}
+
+:deep(.batch-parent-row) {
+  background-color: #f0f7ff !important;
+
+  td:first-child {
+    border-left: 3px solid #409eff;
+  }
 }
 </style>

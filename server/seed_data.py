@@ -12,6 +12,7 @@ MENUS = [
     {"id": "menu-3-3", "name": "用户管理", "icon": "User", "pageId": None, "parentId": "menu-3", "order": 3, "path": "/admin/users", "roles": ["admin"]},
     {"id": "menu-3-4", "name": "操作日志", "icon": "Tickets", "pageId": None, "parentId": "menu-3", "order": 4, "path": "/admin/operation-log", "roles": ["admin"]},
     {"id": "menu-3-5", "name": "系统备份", "icon": "FolderOpened", "pageId": None, "parentId": "menu-3", "order": 5, "path": "/admin/backup", "roles": ["admin"]},
+    {"id": "menu-3-6", "name": "导出脚本", "icon": "Promotion", "pageId": None, "parentId": "menu-3", "order": 6, "path": "/admin/export-scripts", "roles": ["admin"]},
 ]
 
 PAGE_CONFIGS = [

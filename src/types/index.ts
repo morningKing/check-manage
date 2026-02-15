@@ -24,3 +24,6 @@ export * from './operationLog'
 
 // 备份相关类型
 export * from './backup'
+
+// 导出脚本相关类型
+export * from './exportScript'

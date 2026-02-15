@@ -26,6 +26,8 @@ def row_to_dict(row):
         'fields': row[4],
         'createdAt': format_ts(row[5]),
         'updatedAt': format_ts(row[6]),
+        'exportScripts': row[7] if len(row) > 7 else [],
+        'rowExportScripts': row[8] if len(row) > 8 else [],
     }
 
 
@@ -34,7 +36,7 @@ def row_to_dict(row):
 def list_page_configs():
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at FROM page_configs ORDER BY created_at')
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts FROM page_configs ORDER BY created_at')
         rows = cur.fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -44,7 +46,7 @@ def list_page_configs():
 def get_page_config(config_id):
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at FROM page_configs WHERE id = %s', (config_id,))
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts FROM page_configs WHERE id = %s', (config_id,))
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404
@@ -89,6 +91,12 @@ def update_page_config(config_id):
         if 'fields' in body:
             sets.append('fields=%s')
             params.append(psycopg2.extras.Json(body['fields']))
+        if 'exportScripts' in body:
+            sets.append('export_scripts=%s')
+            params.append(psycopg2.extras.Json(body['exportScripts']))
+        if 'rowExportScripts' in body:
+            sets.append('row_export_scripts=%s')
+            params.append(psycopg2.extras.Json(body['rowExportScripts']))
         if 'updatedAt' in body:
             sets.append('updated_at=%s')
             params.append(body['updatedAt'])
@@ -98,7 +106,7 @@ def update_page_config(config_id):
             cur.execute(f'UPDATE page_configs SET {", ".join(sets)} WHERE id=%s', params)
 
         # Return full record
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at FROM page_configs WHERE id = %s', (config_id,))
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts FROM page_configs WHERE id = %s', (config_id,))
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404

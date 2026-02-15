@@ -107,6 +107,15 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'FolderOpened',
         },
       },
+      {
+        path: 'admin/export-scripts',
+        name: 'ExportScriptManager',
+        component: () => import('@/views/admin/ExportScriptManager.vue'),
+        meta: {
+          title: '导出脚本',
+          icon: 'Promotion',
+        },
+      },
     ],
   },
   // 404 页面
