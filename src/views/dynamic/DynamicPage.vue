@@ -751,6 +751,8 @@ watch(
 // ==================== 生命周期 ====================
 
 onActivated(async () => {
+  // 重新加载页面数据（keep-alive 缓存可能显示过时数据，如双向关联同步后）
+  await loadPageData()
   // 加载导出脚本列表（用于绑定展示）
   try {
     allExportScripts.value = await getExportScripts()
