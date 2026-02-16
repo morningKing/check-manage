@@ -15,3 +15,6 @@ export { usePageConfigStore } from './pageConfig'
 
 // 认证状态
 export { useAuthStore } from './auth'
+
+// 标签页状态
+export { useTabStore } from './tab'

@@ -107,7 +107,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Loading, ArrowDown, User as UserIcon } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useAppStore, useMenuStore, useAuthStore } from '@/stores'
+import { useAppStore, useMenuStore, useAuthStore, useTabStore } from '@/stores'
 import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
@@ -118,6 +118,7 @@ import ContentArea from './ContentArea.vue'
 const appStore = useAppStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
+const tabStore = useTabStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -261,6 +262,35 @@ function toggleSidebar(): void {
  */
 onMounted(async () => {
   await appStore.initializeApp()
+
+  // 注册路由后置钩子，自动添加标签页
+  router.afterEach((to) => {
+    // 排除登录页等公开页面
+    if (to.meta.public || to.path === '/login') return
+
+    // 获取页面名称：优先从菜单获取，其次从 route.meta.title
+    const menu = menuStore.getMenuByPath(to.path)
+    const name = menu?.name || (to.meta.title as string) || '未命名页面'
+
+    tabStore.addTab({
+      path: to.path,
+      name,
+      icon: menu?.icon,
+      closable: to.path !== '/home'
+    })
+  })
+
+  // 首次加载时，为当前路由添加标签
+  if (route.path !== '/login') {
+    const menu = menuStore.getMenuByPath(route.path)
+    const name = menu?.name || (route.meta.title as string) || '未命名页面'
+    tabStore.addTab({
+      path: route.path,
+      name,
+      icon: menu?.icon,
+      closable: route.path !== '/home'
+    })
+  }
 })
 </script>
 
