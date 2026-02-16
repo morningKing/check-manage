@@ -64,6 +64,14 @@
           <el-icon><Refresh /></el-icon>
           刷新
         </el-button>
+        <el-button
+          type="danger"
+          :disabled="selectedRows.length === 0"
+          @click="handleBatchDeleteConfirm"
+        >
+          <el-icon><Delete /></el-icon>
+          批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
+        </el-button>
       </div>
     </div>
 
@@ -90,9 +98,11 @@
         :loading="tableLoading"
         :total="filteredData.length"
         :show-pagination="false"
+        show-selection
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
         @reference-click="handleReferenceClick"
+        @selection-change="handleSelectionChange"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
           <el-dropdown
@@ -166,6 +176,16 @@
       @confirm="handleDelete"
     />
 
+    <!-- 批量删除确认对话框 -->
+    <ConfirmDialog
+      v-model="batchDeleteDialogVisible"
+      title="批量删除确认"
+      :message="`确定要删除选中的 ${selectedRows.length} 条记录吗？删除后无法恢复。`"
+      type="danger"
+      confirm-text="全部删除"
+      @confirm="handleBatchDelete"
+    />
+
     <!-- 隐藏的文件选择器 -->
     <input
       ref="fileInputRef"
@@ -226,7 +246,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore } from '@/stores'
 import { DataTable, ConfirmDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -311,6 +331,16 @@ const currentRecord = ref<Record<string, any>>({})
  * 待删除的记录ID
  */
 const deleteRecordId = ref<string>('')
+
+/**
+ * 批量删除对话框可见性
+ */
+const batchDeleteDialogVisible = ref(false)
+
+/**
+ * 当前选中的行
+ */
+const selectedRows = ref<DynamicRecord[]>([])
 
 /**
  * 是否编辑模式
@@ -539,6 +569,54 @@ async function handleDelete(): Promise<void> {
 }
 
 /**
+ * 处理多选变化
+ */
+function handleSelectionChange(rows: DynamicRecord[]): void {
+  selectedRows.value = rows
+}
+
+/**
+ * 处理批量删除确认
+ */
+function handleBatchDeleteConfirm(): void {
+  if (selectedRows.value.length === 0) return
+  batchDeleteDialogVisible.value = true
+}
+
+/**
+ * 执行批量删除
+ */
+async function handleBatchDelete(): Promise<void> {
+  const rows = [...selectedRows.value]
+  batchDeleteDialogVisible.value = false
+
+  let success = 0
+  let failed = 0
+
+  await withBatch(`批量删除 ${rows.length} 条${pageConfig.value?.name || '数据'}`, async () => {
+    for (const row of rows) {
+      try {
+        await pageConfigStore.deletePageData(pageId.value, row.id)
+        success++
+      } catch {
+        failed++
+      }
+    }
+  })
+
+  selectedRows.value = []
+  dataTableRef.value?.clearSelection()
+
+  if (failed === 0) {
+    ElMessage.success(`成功删除 ${success} 条记录`)
+  } else {
+    ElMessage.warning(`删除完成：成功 ${success} 条，失败 ${failed} 条`)
+  }
+
+  await loadPageData()
+}
+
+/**
  * 处理表单提交（从表单组件触发）
  */
 async function handleSubmit(data: Record<string, any>): Promise<void> {
@@ -605,13 +683,14 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
 /**
  * 处理导出
  */
-function handleExport(): void {
+async function handleExport(): Promise<void> {
   if (tableData.value.length === 0) {
     ElMessage.warning('暂无数据可导出')
     return
   }
   const name = pageConfig.value?.name || '数据'
-  exportToExcel(tableData.value, effectiveFields.value, name)
+  const relationDisplayMap = await pageConfigStore.fetchRelationDisplayMaps(pageId.value)
+  exportToExcel(tableData.value, effectiveFields.value, name, relationDisplayMap)
   ElMessage.success('导出成功')
 }
 
@@ -711,6 +790,9 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   importCurrent.value = 0
   importTotal.value = records.length
   importDialogVisible.value = true
+
+  // 将关联字段的显示名称解析为记录 ID
+  await pageConfigStore.resolveRelationImportValues(pageId.value, records)
 
   let success = 0
   let failed = 0

@@ -22,8 +22,12 @@
       stripe
       highlight-current-row
       @sort-change="handleSortChange"
+      @selection-change="handleSelectionChange"
       style="width: 100%"
     >
+      <!-- 多选列 -->
+      <el-table-column v-if="showSelection" type="selection" width="45" align="center" />
+
       <!-- 序号列 -->
       <el-table-column type="index" label="序号" width="60" align="center" />
 
@@ -113,6 +117,8 @@ interface Props {
   loading?: boolean
   /** 是否显示操作列 */
   showActions?: boolean
+  /** 是否显示多选列 */
+  showSelection?: boolean
   /** 是否显示分页 */
   showPagination?: boolean
   /** 总记录数 */
@@ -122,6 +128,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
   showActions: true,
+  showSelection: false,
   showPagination: true,
   total: 0
 })
@@ -132,6 +139,7 @@ const emit = defineEmits<{
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
   (e: 'page-change', page: number, pageSize: number): void
   (e: 'sort-change', field: string, order: string): void
+  (e: 'selection-change', rows: DynamicRecord[]): void
 }>()
 
 // ==================== State ====================
@@ -328,9 +336,23 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   emit('reference-click', row, field)
 }
 
+/**
+ * 处理多选变化
+ */
+function handleSelectionChange(rows: DynamicRecord[]): void {
+  emit('selection-change', rows)
+}
+
+/**
+ * 清除多选
+ */
+function clearSelection(): void {
+  tableRef.value?.clearSelection()
+}
+
 // ==================== 暴露 ====================
 
-defineExpose({ tableRef })
+defineExpose({ tableRef, clearSelection })
 </script>
 
 <style scoped lang="scss">

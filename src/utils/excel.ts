@@ -11,6 +11,13 @@ import * as XLSX from 'xlsx'
 import type { FieldConfig } from '@/types'
 
 /**
+ * 关联字段显示名称映射
+ *
+ * key: fieldName, value: Map<recordId, displayName>
+ */
+export type RelationDisplayMap = Record<string, Map<string, string>>
+
+/**
  * 可导入导出的字段类型（排除文件、图片、关联）
  */
 const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference']
@@ -27,7 +34,7 @@ export function getExportableFields(fields: FieldConfig[]): FieldConfig[] {
 /**
  * 将选项值转为显示标签
  */
-function valueToLabel(value: any, field: FieldConfig, record?: Record<string, any>): string {
+function valueToLabel(value: any, field: FieldConfig, record?: Record<string, any>, relationDisplayMap?: RelationDisplayMap): string {
   if (value === null || value === undefined || value === '') return ''
 
   if (['select', 'radio'].includes(field.controlType)) {
@@ -49,6 +56,10 @@ function valueToLabel(value: any, field: FieldConfig, record?: Record<string, an
 
   if (field.controlType === 'relation') {
     if (Array.isArray(value)) {
+      const displayMap = relationDisplayMap?.[field.fieldName]
+      if (displayMap) {
+        return value.map((id) => displayMap.get(id) || id).join('、')
+      }
       return value.join('、')
     }
     return String(value)
@@ -100,11 +111,13 @@ function labelToValue(label: string, field: FieldConfig): any {
  * @param data - 表格数据
  * @param fields - 字段配置
  * @param filename - 文件名（不含扩展名）
+ * @param relationDisplayMap - 关联字段显示名称映射（可选）
  */
 export function exportToExcel(
   data: Record<string, any>[],
   fields: FieldConfig[],
-  filename: string
+  filename: string,
+  relationDisplayMap?: RelationDisplayMap
 ): void {
   const exportFields = getExportableFields(fields)
 
@@ -113,7 +126,7 @@ export function exportToExcel(
 
   // 构建数据行
   const rows = data.map((record) => {
-    return exportFields.map((field) => valueToLabel(record[field.fieldName], field, record))
+    return exportFields.map((field) => valueToLabel(record[field.fieldName], field, record, relationDisplayMap))
   })
 
   // 创建工作表
@@ -171,7 +184,7 @@ export function generateImportTemplate(
       multiSelect: '多选（用 、 分隔多个值）',
       radio: '单选',
       checkbox: '多选（用 、 分隔多个值）',
-      relation: '关联ID（用 、 分隔多个ID）',
+      relation: '关联（用 、 分隔多个主键ID）',
       reference: '引用记录ID'
     }
 

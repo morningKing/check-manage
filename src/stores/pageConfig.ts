@@ -525,6 +525,101 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     }
   }
 
+  /**
+   * 获取目标集合的主键字段名
+   *
+   * 查找目标集合的页面配置，返回 isPrimaryKey 为 true 的字段名。
+   * 如果没有主键字段，返回 null。
+   */
+  function getTargetPrimaryKeyField(targetCollection: string): string | null {
+    const targetPageId = `page-${targetCollection}`
+    const config = pageConfigs.value.find((c) => c.id === targetPageId)
+    if (!config) return null
+    const pkField = config.fields.find((f) => f.isPrimaryKey)
+    return pkField?.fieldName || null
+  }
+
+  /**
+   * 获取关联字段的主键映射（用于导出 Excel 时将内部 ID 转为主键值）
+   */
+  async function fetchRelationDisplayMaps(
+    pageId: string
+  ): Promise<Record<string, Map<string, string>>> {
+    const relationFields = getRelationFields(pageId)
+    const result: Record<string, Map<string, string>> = {}
+
+    for (const field of relationFields) {
+      const config = field.relationConfig
+      if (!config) continue
+      const pkField = getTargetPrimaryKeyField(config.targetCollection)
+      if (!pkField) continue
+      try {
+        const records = await get<any[]>(`/${config.targetCollection}`)
+        const idToPk = new Map<string, string>()
+        for (const r of records) {
+          const pkVal = r[pkField]
+          if (pkVal) idToPk.set(r.id, String(pkVal))
+        }
+        result[field.fieldName] = idToPk
+      } catch {
+        // 目标集合加载失败时跳过
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * 解析导入数据中的关联字段：将主键值转为内部记录 ID
+   *
+   * Excel 中关联列填写的是目标记录的主键值（如用例ID "IC-001"），
+   * 此方法查找匹配的记录并替换为内部 ID，以便 saveRelations 使用。
+   */
+  async function resolveRelationImportValues(
+    pageId: string,
+    records: Record<string, any>[]
+  ): Promise<void> {
+    const relationFields = getRelationFields(pageId)
+    if (relationFields.length === 0) return
+
+    for (const field of relationFields) {
+      const config = field.relationConfig
+      if (!config) continue
+
+      const pkField = getTargetPrimaryKeyField(config.targetCollection)
+
+      let targetRecords: any[]
+      try {
+        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+      } catch {
+        continue
+      }
+
+      // 构建查找表：主键值 → 内部 ID
+      const pkToId = new Map<string, string>()
+      const idSet = new Set<string>()
+      for (const r of targetRecords) {
+        idSet.add(r.id)
+        if (pkField) {
+          const pkVal = r[pkField]
+          if (pkVal) pkToId.set(String(pkVal), r.id)
+        }
+      }
+
+      // 解析每条导入记录的关联值
+      for (const record of records) {
+        const vals = record[field.fieldName]
+        if (!Array.isArray(vals) || vals.length === 0) continue
+        record[field.fieldName] = vals
+          .map((v: string) => {
+            if (idSet.has(v)) return v            // 已经是内部 ID
+            return pkToId.get(v) || null          // 按主键值查找
+          })
+          .filter((v: string | null): v is string => v !== null)
+      }
+    }
+  }
+
   // 返回需要暴露的内容
   return {
     // State
@@ -554,6 +649,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     getCachedPageData,
     // 关联关系
     stripRelationFields,
-    saveRelations
+    saveRelations,
+    fetchRelationDisplayMaps,
+    resolveRelationImportValues
   }
 })
