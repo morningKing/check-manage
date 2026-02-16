@@ -15,6 +15,7 @@
   <div class="data-table">
     <!-- 表格 -->
     <el-table
+      ref="tableRef"
       :data="data"
       :loading="loading"
       border
@@ -37,7 +38,12 @@
         show-overflow-tooltip
       >
         <template #default="{ row }">
-          <span>{{ formatCellValue(row, field) }}</span>
+          <span
+            v-if="field.controlType === 'reference' && row[field.fieldName]"
+            class="reference-link"
+            @click.stop="handleReferenceClick(row, field)"
+          >{{ formatCellValue(row, field) }}</span>
+          <span v-else>{{ formatCellValue(row, field) }}</span>
         </template>
       </el-table-column>
 
@@ -123,11 +129,17 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   (e: 'edit', row: DynamicRecord): void
   (e: 'delete', row: DynamicRecord): void
+  (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
   (e: 'page-change', page: number, pageSize: number): void
   (e: 'sort-change', field: string, order: string): void
 }>()
 
 // ==================== State ====================
+
+/**
+ * el-table 实例引用
+ */
+const tableRef = ref()
 
 /**
  * 当前页码
@@ -308,11 +320,31 @@ function handleCurrentChange(page: number): void {
 function handleSortChange({ prop, order }: { prop: string; order: string }): void {
   emit('sort-change', prop, order === 'ascending' ? 'asc' : 'desc')
 }
+
+/**
+ * 处理引用字段点击
+ */
+function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
+  emit('reference-click', row, field)
+}
+
+// ==================== 暴露 ====================
+
+defineExpose({ tableRef })
 </script>
 
 <style scoped lang="scss">
 .data-table {
   width: 100%;
+}
+
+.reference-link {
+  color: #409eff;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .pagination-container {

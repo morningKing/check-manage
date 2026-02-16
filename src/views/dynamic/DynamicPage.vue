@@ -84,6 +84,7 @@
     <!-- 数据表格 -->
     <el-card class="table-card">
       <DataTable
+        ref="dataTableRef"
         :data="filteredData"
         :fields="effectiveFields"
         :loading="tableLoading"
@@ -91,6 +92,7 @@
         :show-pagination="false"
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
+        @reference-click="handleReferenceClick"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
           <el-dropdown
@@ -221,11 +223,11 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, onActivated } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, watch, nextTick, onActivated } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search } from '@element-plus/icons-vue'
-import { usePageConfigStore } from '@/stores'
+import { usePageConfigStore, useMenuStore } from '@/stores'
 import { DataTable, ConfirmDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile } from '@/utils/excel'
@@ -242,7 +244,9 @@ const props = defineProps<{
 // ==================== Route & Store ====================
 
 const route = useRoute()
+const router = useRouter()
 const pageConfigStore = usePageConfigStore()
+const menuStore = useMenuStore()
 
 // ==================== Refs ====================
 
@@ -250,6 +254,11 @@ const pageConfigStore = usePageConfigStore()
  * 动态表单引用
  */
 const dynamicFormRef = ref<InstanceType<typeof DynamicForm>>()
+
+/**
+ * 数据表格引用
+ */
+const dataTableRef = ref<InstanceType<typeof DataTable>>()
 
 /**
  * 文件选择器引用
@@ -473,6 +482,11 @@ async function loadPageData(): Promise<void> {
   try {
     const data = await pageConfigStore.fetchPageData(pageId.value)
     tableData.value = data
+    // 如果有 recordId query 参数，高亮定位到该记录
+    const recordId = route.query.recordId as string
+    if (recordId) {
+      highlightRecord(recordId)
+    }
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
@@ -733,6 +747,54 @@ async function handleRefresh(): Promise<void> {
   ElMessage.success('数据已刷新')
 }
 
+/**
+ * 处理引用字段点击 — 跳转到被引用数据所在页面
+ */
+function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
+  const targetCollection = field.referenceConfig?.targetCollection
+  if (!targetCollection) return
+
+  const targetPageId = `page-${targetCollection}`
+  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到被引用数据的页面')
+    return
+  }
+
+  const recordId = row[field.fieldName]
+  router.push({ path: targetMenu.path, query: { recordId } })
+}
+
+/**
+ * 高亮定位指定记录（从引用跳转过来时调用）
+ */
+async function highlightRecord(recordId: string): Promise<void> {
+  await nextTick()
+  const row = tableData.value.find(r => r.id === recordId)
+  if (!row) return
+
+  // 通过 el-table 高亮该行
+  const elTable = dataTableRef.value?.tableRef
+  if (elTable) {
+    elTable.setCurrentRow(row)
+  }
+
+  // 滚动到该行并闪烁提示
+  await nextTick()
+  const tableEl = dataTableRef.value?.$el as HTMLElement | undefined
+  if (tableEl) {
+    const currentRow = tableEl.querySelector('.el-table__body tr.current-row') as HTMLElement
+    if (currentRow) {
+      currentRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      currentRow.classList.add('highlight-flash')
+      setTimeout(() => currentRow.classList.remove('highlight-flash'), 2000)
+    }
+  }
+
+  // 清除 query 参数，避免刷新时重复定位
+  router.replace({ query: {} })
+}
+
 // ==================== 监听 ====================
 
 /**
@@ -833,5 +895,14 @@ onActivated(async () => {
     padding: 16px;
     overflow: auto;
   }
+
+  :deep(.highlight-flash) {
+    animation: row-flash 0.6s ease-in-out 3;
+  }
+}
+
+@keyframes row-flash {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: #ecf5ff; }
 }
 </style>
