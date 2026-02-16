@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import datetime, timezone
 from auth import login_required
-from utils.operation_log import log_operation
+from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 import psycopg2.extras
 
 dynamic_bp = Blueprint('dynamic', __name__)
@@ -126,9 +126,10 @@ def create_item(collection):
             'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)',
             (rid, collection, psycopg2.extras.Json(data), created_at),
         )
-    record_name = data.get('caseName') or data.get('planName') or data.get('specialName') or data.get('name') or rid
+        page_name, fields = get_page_info(cur, collection)
+    record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
-                  f'新增数据「{record_name}」（集合：{collection}）')
+                  f'新增{page_name}「{record_name}」')
     return jsonify(body), 201
 
 
@@ -148,6 +149,10 @@ def update_item(collection, item_id):
             error = check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=item_id)
             if error:
                 return jsonify({"error": error}), 409
+        # Fetch old data for diff
+        cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        old_row = cur.fetchone()
+        old_data = old_row[0] if old_row and old_row[0] else {}
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s WHERE collection = %s AND id = %s',
@@ -158,10 +163,19 @@ def update_item(collection, item_id):
                 'UPDATE dynamic_data SET data = %s WHERE collection = %s AND id = %s',
                 (psycopg2.extras.Json(data), collection, item_id),
             )
+        page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id
-    record_name = data.get('caseName') or data.get('planName') or data.get('specialName') or data.get('name') or item_id
-    log_operation('update', 'dynamic_data', item_id, record_name,
-                  f'修改数据「{record_name}」（集合：{collection}）')
+    label_map = get_field_label_map(fields)
+    record_name = pick_display_name(data, fields) or pick_display_name(old_data, fields) or item_id
+    changed_labels = []
+    for key, new_val in data.items():
+        if key in label_map and old_data.get(key) != new_val:
+            changed_labels.append(label_map[key])
+    if changed_labels:
+        desc = f'修改{page_name}「{record_name}」的 {", ".join(changed_labels)}'
+    else:
+        desc = f'修改{page_name}「{record_name}」'
+    log_operation('update', 'dynamic_data', item_id, record_name, desc)
     return jsonify(body)
 
 
@@ -209,9 +223,9 @@ def delete_item(collection, item_id):
         # Fetch record name for the log before deleting
         cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
         data_row = cur.fetchone()
+        page_name, fields = get_page_info(cur, collection)
         if data_row and data_row[0]:
-            d = data_row[0]
-            record_name = d.get('caseName') or d.get('planName') or d.get('specialName') or d.get('name') or item_id
+            record_name = pick_display_name(data_row[0], fields) or item_id
         else:
             record_name = item_id
         cur.execute('DELETE FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
@@ -221,5 +235,5 @@ def delete_item(collection, item_id):
             (collection, item_id, collection, item_id),
         )
     log_operation('delete', 'dynamic_data', item_id, record_name,
-                  f'删除数据「{record_name}」（集合：{collection}）')
+                  f'删除{page_name}「{record_name}」')
     return jsonify({})

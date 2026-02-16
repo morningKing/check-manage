@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required
-from utils.operation_log import log_operation
+from utils.operation_log import log_operation, get_page_info, pick_display_name
 
 relations_bp = Blueprint('relations', __name__)
 
@@ -38,6 +38,22 @@ def update_relations(collection, record_id, field_name):
 
     with get_db() as conn:
         cur = conn.cursor()
+
+        # Look up source page info and record name for logging
+        src_page_name, src_fields = get_page_info(cur, collection)
+        field_label = field_name
+        for f in src_fields:
+            if f.get('fieldName') == field_name:
+                field_label = f.get('label', field_name)
+                break
+
+        cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, record_id))
+        src_row = cur.fetchone()
+        src_data = src_row[0] if src_row and src_row[0] else {}
+        record_display = pick_display_name(src_data, src_fields) or record_id
+
+        # Look up target page name
+        tgt_page_name, _ = get_page_info(cur, target_collection)
 
         # 1. Get old related IDs
         cur.execute(
@@ -81,8 +97,9 @@ def update_relations(collection, record_id, field_name):
                 (target_collection, rid, target_field, collection, record_id),
             )
 
-    log_operation('update', 'relation', record_id, field_name,
-                  f'更新关联关系（集合：{collection}，记录：{record_id}，字段：{field_name}）')
+    count = len(new_ids)
+    log_operation('update', 'relation', record_id, record_display,
+                  f'更新{src_page_name}「{record_display}」的 {field_label} → 关联 {count} 条{tgt_page_name}')
     return jsonify({"ids": list(new_ids)})
 
 
@@ -91,6 +108,13 @@ def update_relations(collection, record_id, field_name):
 def delete_all_relations(collection, record_id):
     with get_db() as conn:
         cur = conn.cursor()
+        # Look up info for logging
+        src_page_name, src_fields = get_page_info(cur, collection)
+        cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, record_id))
+        src_row = cur.fetchone()
+        src_data = src_row[0] if src_row and src_row[0] else {}
+        record_display = pick_display_name(src_data, src_fields) or record_id
+
         cur.execute(
             'DELETE FROM data_relations WHERE collection = %s AND record_id = %s',
             (collection, record_id),
@@ -99,6 +123,6 @@ def delete_all_relations(collection, record_id):
             'DELETE FROM data_relations WHERE related_collection = %s AND related_id = %s',
             (collection, record_id),
         )
-    log_operation('delete', 'relation', record_id, None,
-                  f'删除关联关系（集合：{collection}，记录：{record_id}）')
+    log_operation('delete', 'relation', record_id, record_display,
+                  f'删除{src_page_name}「{record_display}」的所有关联关系')
     return jsonify({})

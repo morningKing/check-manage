@@ -11,6 +11,40 @@ from flask import g, has_request_context, request
 from db import get_db
 
 
+def get_page_info(cur, collection):
+    """获取集合对应的页面名称和字段配置，用于丰富日志描述。
+
+    Returns:
+        (page_name, fields) — page_name 回退为 collection, fields 回退为 []
+    """
+    page_id = f'page-{collection}'
+    cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (page_id,))
+    row = cur.fetchone()
+    if not row:
+        return collection, []
+    return row[0] or collection, row[1] or []
+
+
+def pick_display_name(data, fields=None):
+    """从数据中选取最佳显示名称（优先按字段顺序取第一个文本字段）。"""
+    if fields:
+        for f in sorted(fields, key=lambda x: x.get('order', 999)):
+            if f.get('controlType') in ('text', 'textarea'):
+                val = data.get(f.get('fieldName', ''))
+                if val and isinstance(val, str):
+                    return val
+    for key in ('name', 'caseName', 'planName', 'specialName'):
+        val = data.get(key)
+        if val and isinstance(val, str):
+            return val
+    return None
+
+
+def get_field_label_map(fields):
+    """构建 fieldName → label 的映射。"""
+    return {f['fieldName']: f.get('label', f['fieldName']) for f in fields}
+
+
 def log_operation(action, target_type, target_id, target_name, description):
     """
     Record an operation log entry.
