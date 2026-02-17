@@ -7,12 +7,17 @@ MENUS = [
     {"id": "menu-2-3-1", "name": "日常巡检", "icon": "Clock", "pageId": "page-daily-record", "parentId": "menu-2-3", "order": 1, "path": "/inspection/record/daily", "roles": ["admin", "developer"]},
     {"id": "menu-2-3-2", "name": "专项巡检", "icon": "Flag", "pageId": "page-special-record", "parentId": "menu-2-3", "order": 2, "path": "/inspection/record/special", "roles": ["admin", "developer"]},
     {"id": "menu-3", "name": "系统配置", "icon": "Setting", "pageId": None, "parentId": None, "order": 3, "path": None, "roles": ["admin"]},
-    {"id": "menu-3-1", "name": "菜单管理", "icon": "Menu", "pageId": None, "parentId": "menu-3", "order": 1, "path": "/admin/menu", "roles": ["admin"]},
-    {"id": "menu-3-2", "name": "页面配置", "icon": "Files", "pageId": None, "parentId": "menu-3", "order": 2, "path": "/admin/page-config", "roles": ["admin"]},
-    {"id": "menu-3-3", "name": "用户管理", "icon": "User", "pageId": None, "parentId": "menu-3", "order": 3, "path": "/admin/users", "roles": ["admin"]},
-    {"id": "menu-3-4", "name": "操作日志", "icon": "Tickets", "pageId": None, "parentId": "menu-3", "order": 4, "path": "/admin/operation-log", "roles": ["admin"]},
-    {"id": "menu-3-5", "name": "系统备份", "icon": "FolderOpened", "pageId": None, "parentId": "menu-3", "order": 5, "path": "/admin/backup", "roles": ["admin"]},
-    {"id": "menu-3-6", "name": "导出脚本", "icon": "Promotion", "pageId": None, "parentId": "menu-3", "order": 6, "path": "/admin/export-scripts", "roles": ["admin"]},
+    {"id": "menu-3-a", "name": "平台管理", "icon": "Platform", "pageId": None, "parentId": "menu-3", "order": 1, "path": None, "roles": ["admin"]},
+    {"id": "menu-3-1", "name": "菜单管理", "icon": "Menu", "pageId": None, "parentId": "menu-3-a", "order": 1, "path": "/admin/menu", "roles": ["admin"]},
+    {"id": "menu-3-2", "name": "页面配置", "icon": "Files", "pageId": None, "parentId": "menu-3-a", "order": 2, "path": "/admin/page-config", "roles": ["admin"]},
+    {"id": "menu-3-3", "name": "用户管理", "icon": "User", "pageId": None, "parentId": "menu-3-a", "order": 3, "path": "/admin/users", "roles": ["admin"]},
+    {"id": "menu-3-b", "name": "数据工具", "icon": "DataLine", "pageId": None, "parentId": "menu-3", "order": 2, "path": None, "roles": ["admin"]},
+    {"id": "menu-3-6", "name": "导出脚本", "icon": "Promotion", "pageId": None, "parentId": "menu-3-b", "order": 1, "path": "/admin/export-scripts", "roles": ["admin"]},
+    {"id": "menu-3-8", "name": "校验脚本", "icon": "CircleCheck", "pageId": None, "parentId": "menu-3-b", "order": 2, "path": "/admin/validation-scripts", "roles": ["admin"]},
+    {"id": "menu-3-7", "name": "Open API", "icon": "Key", "pageId": None, "parentId": "menu-3-b", "order": 3, "path": "/admin/api-keys", "roles": ["admin"]},
+    {"id": "menu-3-c", "name": "系统运维", "icon": "Monitor", "pageId": None, "parentId": "menu-3", "order": 3, "path": None, "roles": ["admin"]},
+    {"id": "menu-3-4", "name": "操作日志", "icon": "Tickets", "pageId": None, "parentId": "menu-3-c", "order": 1, "path": "/admin/operation-log", "roles": ["admin"]},
+    {"id": "menu-3-5", "name": "系统备份", "icon": "FolderOpened", "pageId": None, "parentId": "menu-3-c", "order": 2, "path": "/admin/backup", "roles": ["admin"]},
 ]
 
 PAGE_CONFIGS = [

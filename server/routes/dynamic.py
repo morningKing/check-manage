@@ -8,7 +8,7 @@ import psycopg2.extras
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts'}
 
 
 def format_ts(dt):
@@ -79,6 +79,67 @@ def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
     return None
 
 
+def get_validation_script(cur, collection):
+    """Get validation script code from validation_scripts table via page_configs binding."""
+    page_id = f'page-{collection}'
+    cur.execute('SELECT validation_script FROM page_configs WHERE id = %s', (page_id,))
+    row = cur.fetchone()
+    script_id = row[0] if row and row[0] else None
+    if not script_id:
+        return None
+    cur.execute('SELECT script FROM validation_scripts WHERE id = %s', (script_id,))
+    script_row = cur.fetchone()
+    return script_row[0] if script_row and script_row[0] else None
+
+
+def apply_pending_relations(cur, collection, record_id, pending_relations):
+    """Apply relation operations queued by validation script (bidirectional sync)."""
+    for rel in pending_relations:
+        field_name = rel['fieldName']
+        target_collection = rel['targetCollection']
+        target_field = rel['targetField']
+        new_ids = set(rel['ids'])
+
+        # Get old related IDs
+        cur.execute(
+            'SELECT related_id FROM data_relations '
+            'WHERE collection = %s AND record_id = %s AND field_name = %s',
+            (collection, record_id, field_name),
+        )
+        old_ids = set(row[0] for row in cur.fetchall())
+
+        # Delete all existing forward relations for this field
+        cur.execute(
+            'DELETE FROM data_relations '
+            'WHERE collection = %s AND record_id = %s AND field_name = %s',
+            (collection, record_id, field_name),
+        )
+
+        # Insert new forward relations
+        for rid in new_ids:
+            cur.execute(
+                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                'VALUES (%s, %s, %s, %s, %s)',
+                (collection, record_id, field_name, target_collection, rid),
+            )
+
+        # Sync reverse: remove reverse entries for removed IDs
+        for rid in old_ids - new_ids:
+            cur.execute(
+                'DELETE FROM data_relations '
+                'WHERE collection = %s AND record_id = %s AND field_name = %s AND related_id = %s',
+                (target_collection, rid, target_field, record_id),
+            )
+
+        # Sync reverse: add reverse entries for added IDs
+        for rid in new_ids - old_ids:
+            cur.execute(
+                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                'VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                (target_collection, rid, target_field, collection, record_id),
+            )
+
+
 @dynamic_bp.route('/<collection>', methods=['GET'])
 @login_required
 def list_items(collection):
@@ -122,11 +183,33 @@ def create_item(collection):
             error = check_primary_key_unique(cur, collection, data, pk_fields)
             if error:
                 return jsonify({"error": error}), 409
+        # Run validation script if configured
+        page_name, fields = get_page_info(cur, collection)
+        validation_script = get_validation_script(cur, collection)
+        pending_relations = []
+        if validation_script:
+            from utils.script_runner import run_validation_script
+            try:
+                errors, warnings, pending_relations = run_validation_script(
+                    validation_script, data, 'create', None, fields, collection, conn
+                )
+            except Exception as e:
+                return jsonify({"error": f"校验脚本执行错误：{str(e)}"}), 400
+            if errors:
+                return jsonify({
+                    "error": "校验失败",
+                    "validationErrors": errors,
+                    "validationWarnings": warnings,
+                }), 400
         cur.execute(
             'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)',
             (rid, collection, psycopg2.extras.Json(data), created_at),
         )
-        page_name, fields = get_page_info(cur, collection)
+        # Apply relations queued by validation script
+        if pending_relations:
+            apply_pending_relations(cur, collection, rid, pending_relations)
+        if not validation_script:
+            page_name, fields = get_page_info(cur, collection)
     record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
                   f'新增{page_name}「{record_name}」')
@@ -153,6 +236,24 @@ def update_item(collection, item_id):
         cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
         old_row = cur.fetchone()
         old_data = old_row[0] if old_row and old_row[0] else {}
+        # Run validation script if configured
+        page_name, fields = get_page_info(cur, collection)
+        validation_script = get_validation_script(cur, collection)
+        pending_relations = []
+        if validation_script:
+            from utils.script_runner import run_validation_script
+            try:
+                errors, warnings, pending_relations = run_validation_script(
+                    validation_script, data, 'update', old_data, fields, collection, conn
+                )
+            except Exception as e:
+                return jsonify({"error": f"校验脚本执行错误：{str(e)}"}), 400
+            if errors:
+                return jsonify({
+                    "error": "校验失败",
+                    "validationErrors": errors,
+                    "validationWarnings": warnings,
+                }), 400
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s WHERE collection = %s AND id = %s',
@@ -163,7 +264,11 @@ def update_item(collection, item_id):
                 'UPDATE dynamic_data SET data = %s WHERE collection = %s AND id = %s',
                 (psycopg2.extras.Json(data), collection, item_id),
             )
-        page_name, fields = get_page_info(cur, collection)
+        # Apply relations queued by validation script
+        if pending_relations:
+            apply_pending_relations(cur, collection, item_id, pending_relations)
+        if not validation_script:
+            page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id
     label_map = get_field_label_map(fields)
     record_name = pick_display_name(data, fields) or pick_display_name(old_data, fields) or item_id

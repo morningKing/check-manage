@@ -115,6 +115,24 @@ CREATE TABLE IF NOT EXISTS export_scripts (
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id              VARCHAR(100) PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    key_hash        VARCHAR(256) NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at    TIMESTAMPTZ,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS validation_scripts (
+    id              VARCHAR(100) PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    script          TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
 """
 
 
@@ -212,6 +230,85 @@ def init_db():
             )
             conn.commit()
             print("Added export scripts menu.")
+
+        # Migration: add api_public column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'api_public'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN api_public BOOLEAN NOT NULL DEFAULT FALSE")
+            conn.commit()
+            print("Added api_public column to page_configs table.")
+
+        # Migration: add validation_script column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'validation_script'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN validation_script TEXT")
+            conn.commit()
+            print("Added validation_script column to page_configs table.")
+
+        # Migration: add Open API menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-7'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-7', %s, 'Key', NULL, 'menu-3', 7, '/admin/api-keys', %s)",
+                ('Open API', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added Open API menu.")
+
+        # Migration: add validation scripts menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-8'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-8', %s, 'CircleCheck', NULL, 'menu-3', 8, '/admin/validation-scripts', %s)",
+                ('校验脚本', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added validation scripts menu.")
+
+        # Migration: reorganize system config menus into sub-groups
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-a'")
+        if not cur.fetchone():
+            # 插入 3 个分组容器菜单
+            for mid, name, icon, order in [
+                ('menu-3-a', '平台管理', 'Platform', 1),
+                ('menu-3-b', '数据工具', 'DataLine', 2),
+                ('menu-3-c', '系统运维', 'Monitor',  3),
+            ]:
+                cur.execute(
+                    'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                    'VALUES (%s, %s, %s, NULL, %s, %s, NULL, %s)',
+                    (mid, name, icon, 'menu-3', order, psycopg2.extras.Json(['admin'])),
+                )
+
+            # 将现有菜单移入分组，同时重置 order
+            reparent = [
+                # 平台管理
+                ('menu-3-1', 'menu-3-a', 1),
+                ('menu-3-2', 'menu-3-a', 2),
+                ('menu-3-3', 'menu-3-a', 3),
+                # 数据工具
+                ('menu-3-6', 'menu-3-b', 1),
+                ('menu-3-8', 'menu-3-b', 2),
+                ('menu-3-7', 'menu-3-b', 3),
+                # 系统运维
+                ('menu-3-4', 'menu-3-c', 1),
+                ('menu-3-5', 'menu-3-c', 2),
+            ]
+            for menu_id, new_parent, new_order in reparent:
+                cur.execute(
+                    'UPDATE menus SET parent_id = %s, "order" = %s WHERE id = %s',
+                    (new_parent, new_order, menu_id),
+                )
+            conn.commit()
+            print("Reorganized system config menus into sub-groups.")
 
         # Check if data exists
         cur.execute("SELECT COUNT(*) FROM menus")

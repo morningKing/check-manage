@@ -673,8 +673,18 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
     dialogVisible.value = false
     // 刷新数据
     await loadPageData()
-  } catch (error) {
-    ElMessage.error(isEditMode.value ? '更新失败' : '新增失败')
+  } catch (error: any) {
+    const resp = error.response?.data
+    if (resp?.validationErrors?.length) {
+      ElMessage.error(resp.validationErrors.join('；'))
+      if (resp.validationWarnings?.length) {
+        ElMessage.warning(resp.validationWarnings.join('；'))
+      }
+    } else if (resp?.error) {
+      ElMessage.error(resp.error)
+    } else {
+      ElMessage.error(isEditMode.value ? '更新失败' : '新增失败')
+    }
   } finally {
     submitLoading.value = false
   }

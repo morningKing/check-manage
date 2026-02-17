@@ -69,3 +69,44 @@ export async function executeExportScript(scriptId: string, collection: string, 
   document.body.removeChild(link)
   window.URL.revokeObjectURL(url)
 }
+
+export interface BatchExportTask {
+  scriptId: string
+  collection: string
+}
+
+export async function executeBatchExport(tasks: BatchExportTask[]) {
+  const response = await service.post('/exportScripts/batchExport', { tasks }, {
+    responseType: 'blob',
+    timeout: 120000,
+  })
+
+  const res = response as any
+  const disposition = res.headers?.['content-disposition'] || ''
+
+  if (!disposition) {
+    const contentType = res.headers?.['content-type'] || ''
+    if (contentType.includes('application/json')) {
+      const text = await (res.data as Blob).text()
+      const json = JSON.parse(text)
+      throw new Error(json.error || '批量导出失败')
+    }
+  }
+
+  const blob = new Blob([res.data])
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+
+  let downloadName = '批量导出.zip'
+  const starMatch = disposition.match(/filename\*=UTF-8''(.+)/i)
+  if (starMatch) {
+    downloadName = decodeURIComponent(starMatch[1])
+  }
+  link.download = downloadName
+
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+}

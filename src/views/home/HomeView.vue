@@ -79,6 +79,10 @@
               <el-icon><Files /></el-icon>
               <span>页面配置</span>
             </router-link>
+            <div class="quick-link" @click="batchExportVisible = true">
+              <el-icon><Download /></el-icon>
+              <span>批量导出</span>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -104,6 +108,8 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <BatchExportDialog v-model="batchExportVisible" />
   </div>
 </template>
 
@@ -113,14 +119,17 @@
  *
  * 显示系统概览和统计信息
  */
-import { computed } from 'vue'
-import { Monitor, Document, Files, Setting, Menu } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { Monitor, Document, Files, Setting, Menu, Download } from '@element-plus/icons-vue'
 import { useMenuStore, usePageConfigStore } from '@/stores'
+import { BatchExportDialog } from '@/components/common'
 
 // ==================== Store ====================
 
 const menuStore = useMenuStore()
 const pageConfigStore = usePageConfigStore()
+
+const batchExportVisible = ref(false)
 
 // ==================== 计算属性 ====================
 
@@ -244,6 +253,7 @@ const totalFields = computed(() => {
     color: #606266;
     text-decoration: none;
     transition: all 0.3s ease;
+    cursor: pointer;
 
     &:hover {
       background-color: #ecf5ff;

@@ -116,6 +116,24 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'Promotion',
         },
       },
+      {
+        path: 'admin/api-keys',
+        name: 'ApiKeyManager',
+        component: () => import('@/views/admin/ApiKeyManager.vue'),
+        meta: {
+          title: 'Open API',
+          icon: 'Key',
+        },
+      },
+      {
+        path: 'admin/validation-scripts',
+        name: 'ValidationScriptManager',
+        component: () => import('@/views/admin/ValidationScriptManager.vue'),
+        meta: {
+          title: '校验脚本',
+          icon: 'CircleCheck',
+        },
+      },
     ],
   },
   // 404 页面

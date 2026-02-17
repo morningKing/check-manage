@@ -6,6 +6,8 @@ from utils.operation_log import log_operation
 from utils.script_runner import run_export_script
 import psycopg2.extras
 import uuid
+import zipfile
+import io
 from urllib.parse import quote
 
 export_scripts_bp = Blueprint('export_scripts', __name__)
@@ -259,5 +261,109 @@ def execute_script():
         headers={
             'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename)}",
             'Content-Length': str(len(result_bytes)),
+        },
+    )
+
+
+@export_scripts_bp.route('/exportScripts/batchExport', methods=['POST'])
+@login_required
+def batch_export():
+    """Execute multiple export scripts and return results as a zip file."""
+    body = request.get_json(force=True)
+    tasks = body.get('tasks', [])
+    if not tasks:
+        return jsonify({'error': '未选择导出任务'}), 400
+
+    buf = io.BytesIO()
+    seen_filenames = {}
+    file_count = 0
+    errors = []
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for idx, task in enumerate(tasks):
+                script_id = task.get('scriptId')
+                collection = task.get('collection')
+                if not script_id or not collection:
+                    errors.append(f'任务 {idx + 1}: 缺少参数')
+                    continue
+
+                # Fetch script
+                cur.execute(
+                    'SELECT script, output_format FROM export_scripts WHERE id = %s',
+                    (script_id,),
+                )
+                script_row = cur.fetchone()
+                if not script_row:
+                    errors.append(f'任务 {idx + 1}: 脚本 {script_id} 不存在')
+                    continue
+
+                script_code = script_row[0]
+                output_format = script_row[1]
+
+                # Fetch collection data
+                cur.execute(
+                    'SELECT id, collection, data, created_at FROM dynamic_data '
+                    'WHERE collection = %s ORDER BY created_at',
+                    (collection,),
+                )
+                rows = cur.fetchall()
+                data = []
+                for r in rows:
+                    record = {'id': r[0]}
+                    if r[2]:
+                        record.update(r[2])
+                    if r[3]:
+                        ts = r[3]
+                        if hasattr(ts, 'astimezone'):
+                            ts = ts.astimezone(timezone.utc)
+                        record['createdAt'] = ts.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    data.append(record)
+
+                # Fetch page config
+                page_id = f'page-{collection}'
+                cur.execute(
+                    'SELECT name, fields FROM page_configs WHERE id = %s', (page_id,)
+                )
+                pc_row = cur.fetchone()
+                page_name = pc_row[0] if pc_row else collection
+                fields = pc_row[1] if pc_row else []
+
+                # Execute script
+                try:
+                    result_bytes, filename, content_type = run_export_script(
+                        script_code, data, fields, page_name, output_format
+                    )
+                except Exception as e:
+                    errors.append(f'任务 {idx + 1} ({page_name}): {str(e)}')
+                    continue
+
+                # Deduplicate filenames
+                if filename in seen_filenames:
+                    seen_filenames[filename] += 1
+                    name_part, dot, ext = filename.rpartition('.')
+                    if dot:
+                        filename = f'{name_part}_{seen_filenames[filename]}.{ext}'
+                    else:
+                        filename = f'{filename}_{seen_filenames[filename]}'
+                else:
+                    seen_filenames[filename] = 0
+
+                zf.writestr(filename, result_bytes)
+                file_count += 1
+
+    if file_count == 0:
+        return jsonify({'error': '所有导出任务均失败', 'details': errors}), 400
+
+    zip_bytes = buf.getvalue()
+    zip_filename = '批量导出.zip'
+
+    return Response(
+        zip_bytes,
+        mimetype='application/zip',
+        headers={
+            'Content-Disposition': f"attachment; filename*=UTF-8''{quote(zip_filename)}",
+            'Content-Length': str(len(zip_bytes)),
         },
     )

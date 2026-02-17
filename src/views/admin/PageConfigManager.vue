@@ -133,6 +133,30 @@
                 </el-select>
               </el-form-item>
 
+              <el-form-item label="Open API">
+                <el-switch
+                  v-model="formData.apiPublic"
+                  active-text="公开"
+                  inactive-text="关闭"
+                />
+              </el-form-item>
+
+              <el-form-item label="校验脚本">
+                <el-select
+                  v-model="formData.validationScript"
+                  clearable
+                  placeholder="选择校验脚本（可选）"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="s in allValidationScripts"
+                    :key="s.id"
+                    :label="s.name"
+                    :value="s.id"
+                  />
+                </el-select>
+              </el-form-item>
+
               <el-form-item>
                 <el-button
                   type="primary"
@@ -235,8 +259,10 @@ import { ConfirmDialog } from '@/components/common'
 import FieldConfigEditor from './FieldConfigEditor.vue'
 import type { PageConfig, PageFormData, FieldConfig } from '@/types'
 import type { ExportScript } from '@/types'
+import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
 import { getExportScripts } from '@/api/exportScript'
+import { getValidationScripts } from '@/api/validationScript'
 
 // ==================== Store ====================
 
@@ -293,6 +319,11 @@ const createLoading = ref(false)
  * 所有导出脚本
  */
 const allExportScripts = ref<ExportScript[]>([])
+
+/**
+ * 所有校验脚本
+ */
+const allValidationScripts = ref<ValidationScript[]>([])
 
 // ==================== 计算属性（脚本筛选） ====================
 
@@ -367,6 +398,8 @@ function handleSelect(config: PageConfig): void {
     apiEndpoint: config.apiEndpoint,
     exportScripts: config.exportScripts || [],
     rowExportScripts: config.rowExportScripts || [],
+    apiPublic: config.apiPublic || false,
+    validationScript: config.validationScript || '',
   }
 }
 
@@ -419,6 +452,8 @@ async function handleSavePageInfo(): Promise<void> {
       apiEndpoint: formData.value.apiEndpoint,
       exportScripts: formData.value.exportScripts || [],
       rowExportScripts: formData.value.rowExportScripts || [],
+      apiPublic: formData.value.apiPublic,
+      validationScript: formData.value.validationScript || null,
       fields: currentFields.value
     })
     ElMessage.success('保存成功')
@@ -481,6 +516,11 @@ onMounted(async () => {
 onActivated(async () => {
   try {
     allExportScripts.value = await getExportScripts()
+  } catch {
+    // ignore
+  }
+  try {
+    allValidationScripts.value = await getValidationScripts()
   } catch {
     // ignore
   }

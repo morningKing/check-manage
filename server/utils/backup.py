@@ -25,7 +25,7 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 BACKUP_TABLES = [
     ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}),
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
-                      'export_scripts', 'row_export_scripts'], {4, 7, 8}),
+                      'export_scripts', 'row_export_scripts', 'api_public', 'validation_script'], {4, 7, 8}),
     ('dynamic_data', ['id', 'collection', 'data', 'created_at'], {2}),
     ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set()),
     ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set()),
@@ -34,6 +34,8 @@ BACKUP_TABLES = [
                         'batch_id', 'batch_desc'], set()),
     ('export_scripts', ['id', 'name', 'description', 'language', 'script', 'output_format',
                         'created_at', 'updated_at', 'scope'], set()),
+    ('api_keys', ['id', 'name', 'key_hash', 'created_at', 'last_used_at', 'is_active'], set()),
+    ('validation_scripts', ['id', 'name', 'description', 'script', 'created_at', 'updated_at'], set()),
 ]
 
 # 备份版本号（用于未来兼容性迁移）

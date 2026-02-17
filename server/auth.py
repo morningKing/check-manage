@@ -1,8 +1,10 @@
 import jwt
+import hashlib
 import datetime
 from functools import wraps
 from flask import request, jsonify, g
 from config import JWT_SECRET, JWT_EXPIRY_HOURS
+from db import get_db
 
 
 def create_token(user):
@@ -54,5 +56,42 @@ def admin_required(f):
         if payload.get('role') != 'admin':
             return jsonify({'error': '权限不足'}), 403
         g.current_user = payload
+        return f(*args, **kwargs)
+    return decorated
+
+
+def hash_api_key(key):
+    """Hash an API key using SHA-256."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def api_key_required(f):
+    """Decorator: require valid API key in X-API-Key header."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key', '')
+        if not api_key:
+            return jsonify({'error': 'Missing API key'}), 401
+
+        key_hash = hash_api_key(api_key)
+
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id, name, is_active FROM api_keys WHERE key_hash = %s',
+                (key_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': 'Invalid API key'}), 401
+            if not row[2]:
+                return jsonify({'error': 'API key has been revoked'}), 401
+
+            cur.execute(
+                'UPDATE api_keys SET last_used_at = NOW() WHERE id = %s',
+                (row[0],),
+            )
+
+        g.api_key_info = {'id': row[0], 'name': row[1]}
         return f(*args, **kwargs)
     return decorated

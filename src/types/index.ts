@@ -27,3 +27,9 @@ export * from './backup'
 
 // 导出脚本相关类型
 export * from './exportScript'
+
+// API Key 相关类型
+export * from './apiKey'
+
+// 校验脚本相关类型
+export * from './validationScript'
