@@ -338,3 +338,66 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         raise error_holder[0]
 
     return errors, warnings, pending_relations
+
+
+def run_etl_script(script_code, records):
+    """
+    ETL 转换脚本执行。
+
+    注入变量：
+    - records: list[dict] — 当前管道中的记录列表
+
+    脚本须设置：
+    - result: list[dict] — 转换后的记录列表
+
+    返回: list[dict]
+    """
+    _validate_script(script_code)
+
+    safe_globals = {
+        '__builtins__': {
+            'json': json,
+            're': re,
+            'math': math,
+            'collections': collections,
+            'datetime': datetime,
+            'timedelta': timedelta,
+            'len': len, 'str': str, 'int': int, 'float': float, 'bool': bool,
+            'list': list, 'dict': dict, 'tuple': tuple, 'set': set,
+            'sorted': sorted, 'reversed': reversed,
+            'enumerate': enumerate, 'zip': zip, 'map': map, 'filter': filter,
+            'range': range, 'min': min, 'max': max, 'sum': sum,
+            'abs': abs, 'round': round, 'isinstance': isinstance, 'hasattr': hasattr,
+            'any': any, 'all': all,
+            'None': None, 'True': True, 'False': False,
+        },
+    }
+
+    script_locals = {
+        'records': records,
+        'result': None,
+    }
+
+    error_holder = [None]
+
+    def _execute():
+        try:
+            exec(script_code, safe_globals, script_locals)  # noqa: S102
+        except Exception as e:
+            error_holder[0] = e
+
+    thread = threading.Thread(target=_execute)
+    thread.start()
+    thread.join(timeout=SCRIPT_TIMEOUT)
+
+    if thread.is_alive():
+        raise TimeoutError(f'ETL脚本执行超时（>{SCRIPT_TIMEOUT}秒）')
+
+    if error_holder[0]:
+        raise error_holder[0]
+
+    result = script_locals.get('result')
+    if result is None:
+        raise ValueError('脚本未设置 result 变量')
+
+    return result

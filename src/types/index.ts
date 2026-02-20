@@ -33,3 +33,6 @@ export * from './apiKey'
 
 // 校验脚本相关类型
 export * from './validationScript'
+
+// ETL相关类型
+export * from './etl'

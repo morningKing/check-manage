@@ -133,6 +133,36 @@ CREATE TABLE IF NOT EXISTS validation_scripts (
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS etl_tasks (
+    id              VARCHAR(100) PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    steps           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    last_run_at     TIMESTAMPTZ,
+    last_run_status VARCHAR(50),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS etl_logs (
+    id              VARCHAR(100) PRIMARY KEY,
+    task_id         VARCHAR(100) NOT NULL,
+    task_name       VARCHAR(200),
+    status          VARCHAR(50) NOT NULL,
+    started_at      TIMESTAMPTZ NOT NULL,
+    finished_at     TIMESTAMPTZ,
+    total_records   INTEGER DEFAULT 0,
+    success_count   INTEGER DEFAULT 0,
+    error_count     INTEGER DEFAULT 0,
+    step_results    JSONB DEFAULT '[]'::jsonb,
+    error_detail    TEXT,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_etl_logs_task_id ON etl_logs(task_id);
+CREATE INDEX IF NOT EXISTS idx_etl_logs_created_at ON etl_logs(created_at DESC);
 """
 
 
@@ -309,6 +339,17 @@ def init_db():
                 )
             conn.commit()
             print("Reorganized system config menus into sub-groups.")
+
+        # Migration: add ETL management menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-9'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-9', %s, 'Connection', NULL, 'menu-3-b', 4, '/admin/etl-tasks', %s)",
+                ('ETL 管理', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added ETL management menu.")
 
         # Check if data exists
         cur.execute("SELECT COUNT(*) FROM menus")

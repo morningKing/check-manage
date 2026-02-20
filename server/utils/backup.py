@@ -36,6 +36,11 @@ BACKUP_TABLES = [
                         'created_at', 'updated_at', 'scope'], set()),
     ('api_keys', ['id', 'name', 'key_hash', 'created_at', 'last_used_at', 'is_active'], set()),
     ('validation_scripts', ['id', 'name', 'description', 'script', 'created_at', 'updated_at'], set()),
+    ('etl_tasks', ['id', 'name', 'description', 'steps', 'enabled', 'last_run_at', 'last_run_status',
+                   'created_at', 'updated_at'], {3}),
+    ('etl_logs', ['id', 'task_id', 'task_name', 'status', 'started_at', 'finished_at',
+                  'total_records', 'success_count', 'error_count', 'step_results', 'error_detail',
+                  'created_at'], {9}),
 ]
 
 # 备份版本号（用于未来兼容性迁移）

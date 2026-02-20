@@ -134,6 +134,15 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'CircleCheck',
         },
       },
+      {
+        path: 'admin/etl-tasks',
+        name: 'EtlTaskManager',
+        component: () => import('@/views/admin/EtlTaskManager.vue'),
+        meta: {
+          title: 'ETL 管理',
+          icon: 'Connection',
+        },
+      },
     ],
   },
   // 404 页面

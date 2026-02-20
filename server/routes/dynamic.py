@@ -8,7 +8,7 @@ import psycopg2.extras
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks'}
 
 
 def format_ts(dt):

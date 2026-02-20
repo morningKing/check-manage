@@ -42,10 +42,10 @@
                   <component :is="data.icon" />
                 </el-icon>
                 <span class="node-label">{{ data.name }}</span>
-                <el-icon v-if="isSystemConfigMenu(data)" class="system-lock">
+                <el-icon v-if="isBuiltinMenu(data)" class="system-lock">
                   <Lock />
                 </el-icon>
-                <div class="node-actions" v-if="!isSystemConfigMenu(data)">
+                <div class="node-actions" v-if="!isBuiltinMenu(data)">
                   <el-button
                     v-if="getNodeLevel(data) < 3"
                     type="primary"
@@ -84,15 +84,15 @@
             ref="formRef"
             :model="formData"
             :rules="formRules"
-            :disabled="isCurrentSystemMenu"
+            :disabled="isCurrentBuiltinMenu"
             label-width="100px"
           >
             <el-alert
-              v-if="isCurrentSystemMenu"
+              v-if="isCurrentBuiltinMenu"
               type="info"
               :closable="false"
-              title="系统菜单不可修改"
-              description="系统配置相关菜单为内置菜单，不允许编辑或删除。"
+              title="内置菜单不可修改"
+              description="内置菜单不允许编辑或删除。"
               show-icon
               style="margin-bottom: 16px"
             />
@@ -182,7 +182,7 @@
               <el-input :value="parentMenuName" disabled />
             </el-form-item>
 
-            <el-form-item v-if="!isCurrentSystemMenu">
+            <el-form-item v-if="!isCurrentBuiltinMenu">
               <el-button type="primary" @click="handleSubmit" :loading="submitLoading">
                 {{ isEditMode ? '更新' : '创建' }}
               </el-button>
@@ -352,11 +352,6 @@ const deleteMessage = computed(() => {
 
 /**
  * 判断菜单是否属于系统配置菜单树
- *
- * 通过路径和父子关系判断：
- * - 路径以 /admin/ 开头的菜单
- * - 子菜单中包含 /admin/ 路径的根菜单（即"系统配置"本身）
- * - 父级属于系统配置的子菜单
  */
 function isSystemConfigMenu(menu: MenuItem): boolean {
   if (menu.path?.startsWith('/admin/')) return true
@@ -372,12 +367,21 @@ function isSystemConfigMenu(menu: MenuItem): boolean {
 }
 
 /**
- * 当前编辑的菜单是否为系统配置菜单
+ * 判断菜单是否为内置菜单（首页 + 系统配置树）
+ * 内置菜单不允许编辑和删除，系统配置菜单还不允许增加子菜单
  */
-const isCurrentSystemMenu = computed(() => {
+function isBuiltinMenu(menu: MenuItem): boolean {
+  if (menu.id === 'menu-1') return true
+  return isSystemConfigMenu(menu)
+}
+
+/**
+ * 当前编辑的菜单是否为内置菜单
+ */
+const isCurrentBuiltinMenu = computed(() => {
   if (!isEditMode.value || !formData.value.id) return false
   const menu = menuStore.getMenuById(formData.value.id)
-  return menu ? isSystemConfigMenu(menu) : false
+  return menu ? isBuiltinMenu(menu) : false
 })
 
 // ==================== 方法 ====================
@@ -467,8 +471,9 @@ async function handleDelete(): Promise<void> {
     deleteDialogVisible.value = false
     showForm.value = false
     formData.value = createEmptyMenuFormData()
-  } catch (error) {
-    ElMessage.error('删除失败')
+  } catch (error: any) {
+    const msg = error.response?.data?.error
+    ElMessage.error(msg || '删除失败')
   }
 }
 
@@ -507,8 +512,9 @@ async function handleSubmit(): Promise<void> {
       ElMessage.success('创建成功')
       resetForm()
     }
-  } catch (error) {
-    ElMessage.error(isEditMode.value ? '更新失败' : '创建失败')
+  } catch (error: any) {
+    const msg = error.response?.data?.error
+    ElMessage.error(msg || (isEditMode.value ? '更新失败' : '创建失败'))
   } finally {
     submitLoading.value = false
   }

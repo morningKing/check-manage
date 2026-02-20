@@ -14,6 +14,29 @@ def row_to_dict(row):
     return {CAMEL_KEYS[i]: row[i] for i in range(len(CAMEL_KEYS))}
 
 
+def _is_descendant_of(cur, menu_id, ancestor_id):
+    """判断 menu_id 是否为 ancestor_id 本身或其后代"""
+    current = menu_id
+    visited = set()
+    while current:
+        if current == ancestor_id:
+            return True
+        if current in visited:
+            return False
+        visited.add(current)
+        cur.execute('SELECT parent_id FROM menus WHERE id = %s', (current,))
+        row = cur.fetchone()
+        current = row[0] if row else None
+    return False
+
+
+def _is_builtin_menu(cur, menu_id):
+    """判断菜单是否为内置菜单（首页 + 系统配置树）"""
+    if menu_id == 'menu-1':
+        return True
+    return _is_descendant_of(cur, menu_id, 'menu-3')
+
+
 @menus_bp.route('/menus', methods=['GET'])
 @login_required
 def list_menus():
@@ -40,6 +63,15 @@ def get_menu(menu_id):
 @admin_required
 def create_menu():
     body = request.get_json(force=True)
+    parent_id = body.get('parentId')
+
+    # 系统配置下不允许增加子菜单
+    if parent_id:
+        with get_db() as conn:
+            cur = conn.cursor()
+            if _is_descendant_of(cur, parent_id, 'menu-3'):
+                return jsonify({"error": "系统配置菜单下不允许添加子菜单"}), 403
+
     roles = body.get('roles', ['admin', 'developer', 'guest'])
     with get_db() as conn:
         cur = conn.cursor()
@@ -57,6 +89,12 @@ def create_menu():
 @menus_bp.route('/menus/<menu_id>', methods=['PUT'])
 @admin_required
 def update_menu(menu_id):
+    # 内置菜单不允许编辑
+    with get_db() as conn:
+        cur = conn.cursor()
+        if _is_builtin_menu(cur, menu_id):
+            return jsonify({"error": "内置菜单不允许编辑"}), 403
+
     body = request.get_json(force=True)
     roles = body.get('roles', ['admin', 'developer', 'guest'])
     with get_db() as conn:
@@ -76,6 +114,12 @@ def update_menu(menu_id):
 @menus_bp.route('/menus/<menu_id>', methods=['DELETE'])
 @admin_required
 def delete_menu(menu_id):
+    # 内置菜单不允许删除
+    with get_db() as conn:
+        cur = conn.cursor()
+        if _is_builtin_menu(cur, menu_id):
+            return jsonify({"error": "内置菜单不允许删除"}), 403
+
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
