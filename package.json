@@ -9,7 +9,11 @@
     "preview": "vite preview",
     "server": "cd server && python app.py",
     "server:init": "cd server && python init_db.py",
-    "dev:all": "concurrently \"npm run server\" \"npm run dev\""
+    "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:server": "cd server && python -m pytest -v",
+    "test:all": "npm run test:server && npm run test"
   },
   "dependencies": {
     "@codemirror/lang-python": "^6.2.1",
@@ -29,11 +33,14 @@
   "devDependencies": {
     "@types/uuid": "^9.0.8",
     "@vitejs/plugin-vue": "^5.0.4",
+    "@vue/test-utils": "^2.4.6",
     "concurrently": "^8.2.2",
+    "jsdom": "^28.1.0",
     "json-server": "^0.17.4",
     "sass": "^1.71.1",
     "typescript": "^5.4.2",
     "vite": "^5.1.6",
+    "vitest": "^4.0.18",
     "vue-tsc": "^2.0.6"
   }
 }
