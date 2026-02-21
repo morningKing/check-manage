@@ -24,6 +24,7 @@ export type ControlType =
   | 'relation'    // 多对多关联
   | 'reference'   // 数据引用（一对多依赖）
   | 'autoTimestamp' // 自动时间戳（新增/修改时自动填充）
+  | 'autoSequence'  // 自增序列（新增时自动生成递增编号）
 
 /**
  * 控件类型配置
@@ -44,7 +45,8 @@ export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '图片上传', value: 'image' },
   { label: '关联关系', value: 'relation' },
   { label: '数据引用', value: 'reference' },
-  { label: '自动时间戳', value: 'autoTimestamp' }
+  { label: '自动时间戳', value: 'autoTimestamp' },
+  { label: '自增序列', value: 'autoSequence' }
 ]
 
 /**
@@ -104,6 +106,17 @@ export interface ReferenceConfig {
 }
 
 /**
+ * 自增序列配置接口
+ *
+ * @property prefix - 序列前缀，如 "IC-"
+ * @property max - 数字上限，如 999 表示最多编到 999
+ */
+export interface SequenceConfig {
+  prefix: string
+  max: number
+}
+
+/**
  * 验证规则接口
  *
  * 定义字段的验证规则
@@ -152,6 +165,7 @@ export interface FieldConfig {
   relationConfig?: RelationConfig
   isPrimaryKey?: boolean
   referenceConfig?: ReferenceConfig
+  sequenceConfig?: SequenceConfig
 }
 
 /**
@@ -173,6 +187,7 @@ export interface FieldFormData {
   relationConfig?: RelationConfig
   isPrimaryKey: boolean
   referenceConfig?: ReferenceConfig
+  sequenceConfig?: SequenceConfig
 }
 
 /**
@@ -194,6 +209,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     optionsSource: { type: 'static' },
     relationConfig: { targetCollection: '', displayField: '', targetField: '' },
     isPrimaryKey: false,
-    referenceConfig: { targetCollection: '', displayField: '', inheritFields: [] }
+    referenceConfig: { targetCollection: '', displayField: '', inheritFields: [] },
+    sequenceConfig: { prefix: '', max: 999 }
   }
 }

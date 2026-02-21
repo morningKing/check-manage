@@ -48,3 +48,33 @@ export const BACKUP_INTERVAL_OPTIONS = [
   { label: '每周', value: 'weekly' },
   { label: '每月', value: 'monthly' },
 ]
+
+/**
+ * 字段级变更
+ */
+export interface DiffChangedField {
+  fieldName: string
+  oldValue: any
+  newValue: any
+}
+
+/**
+ * 修改记录项
+ */
+export interface DiffModifiedItem {
+  id: string
+  record: Record<string, any>
+  oldRecord: Record<string, any>
+  fields: DiffChangedField[]
+}
+
+/**
+ * 对比结果
+ */
+export interface DiffResult {
+  added: Record<string, any>[]
+  removed: Record<string, any>[]
+  modified: DiffModifiedItem[]
+  unchangedCount: number
+  fields: any[]
+}

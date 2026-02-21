@@ -29,7 +29,7 @@ def pick_display_name(data, fields=None):
     """从数据中选取最佳显示名称（优先按字段顺序取第一个文本字段）。"""
     if fields:
         for f in sorted(fields, key=lambda x: x.get('order', 999)):
-            if f.get('controlType') in ('text', 'textarea'):
+            if f.get('controlType') in ('text', 'textarea', 'autoSequence'):
                 val = data.get(f.get('fieldName', ''))
                 if val and isinstance(val, str):
                     return val

@@ -66,6 +66,13 @@
         </el-button>
         <el-button
           v-if="isAdmin"
+          @click="diffDialogVisible = true"
+        >
+          <el-icon><DCaret /></el-icon>
+          数据对比
+        </el-button>
+        <el-button
+          v-if="isAdmin"
           type="danger"
           :disabled="selectedRows.length === 0"
           @click="handleBatchDeleteConfirm"
@@ -229,6 +236,13 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 数据对比对话框 -->
+    <BackupDiffDialog
+      v-model="diffDialogVisible"
+      :collection="collection"
+      :page-name="pageConfig?.name || '数据'"
+    />
   </div>
 </template>
 
@@ -247,9 +261,9 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
-import { DataTable, ConfirmDialog } from '@/components/common'
+import { DataTable, ConfirmDialog, BackupDiffDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -377,12 +391,22 @@ const importResult = ref<{ success: number; failed: number } | null>(null)
  */
 const allExportScripts = ref<ExportScript[]>([])
 
+/**
+ * 数据对比对话框可见性
+ */
+const diffDialogVisible = ref(false)
+
 // ==================== 计算属性 ====================
 
 /**
  * 当前页面ID
  */
 const pageId = computed(() => props.pageId || (route.params.pageId as string))
+
+/**
+ * 集合名称（用于对比接口）
+ */
+const collection = computed(() => pageId.value.replace('page-', ''))
 
 /**
  * 页面配置
@@ -468,7 +492,7 @@ const filteredData = computed<DynamicRecord[]>(() => {
       const val = record[field.fieldName]
       if (val === null || val === undefined) continue
 
-      if (['text', 'textarea', 'number'].includes(field.controlType)) {
+      if (['text', 'textarea', 'number', 'autoSequence'].includes(field.controlType)) {
         if (String(val).toLowerCase().includes(keyword)) return true
       }
 
@@ -680,7 +704,8 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
     }
 
     if (hasRelations) {
-      const name = data[pageFields.value[0]?.fieldName] || ''
+      const displayField = pageFields.value.find(f => !['autoTimestamp', 'autoSequence', 'relation'].includes(f.controlType))
+      const name = (displayField ? data[displayField.fieldName] : '') || ''
       const actionLabel = isEditMode.value ? '修改' : '新增'
       await withBatch(`${actionLabel}${pageConfig.value?.name || '数据'}「${name}」`, doSave)
     } else {

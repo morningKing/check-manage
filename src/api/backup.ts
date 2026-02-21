@@ -3,7 +3,7 @@
  */
 import { get, post, del } from '@/utils/request'
 import service from '@/utils/request'
-import type { Backup, BackupSettings } from '@/types'
+import type { Backup, BackupSettings, DiffResult } from '@/types'
 
 /**
  * 获取备份列表
@@ -81,4 +81,15 @@ export function getBackupSettings() {
  */
 export function updateBackupSettings(settings: Partial<BackupSettings>) {
   return service.put('/backups/settings', settings)
+}
+
+/**
+ * 对比两个数据源中指定集合的差异
+ */
+export function diffBackupCollection(
+  collection: string,
+  baseSource: string,
+  targetSource: string
+) {
+  return post<DiffResult>('/backups/diff', { collection, baseSource, targetSource })
 }

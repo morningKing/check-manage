@@ -341,6 +341,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       newRecord[field.fieldName] = now
     }
 
+    // 自动填充 autoSequence 字段
+    for (const field of getAutoSequenceFields(pageId)) {
+      newRecord[field.fieldName] = generateNextSequenceValue(pageId, field)
+    }
+
     try {
       const created = await post<DynamicRecord>(`/${endpoint}`, newRecord)
       if (pageDataCache.value[pageId]) {
@@ -435,6 +440,45 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     const config = pageConfigs.value.find((c) => c.id === pageId)
     if (!config) return []
     return config.fields.filter((f) => f.controlType === 'autoTimestamp')
+  }
+
+  /**
+   * 获取页面配置中所有 autoSequence 类型的字段
+   */
+  function getAutoSequenceFields(pageId: string): FieldConfig[] {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return []
+    return config.fields.filter((f) => f.controlType === 'autoSequence')
+  }
+
+  /**
+   * 生成下一个自增序列值
+   *
+   * 从缓存的页面数据中提取目标字段的已有值，
+   * 去掉前缀后解析数字，取最大值 +1，补零后返回。
+   */
+  function generateNextSequenceValue(pageId: string, field: FieldConfig): string {
+    const config = field.sequenceConfig || { prefix: '', max: 999 }
+    const prefix = config.prefix
+    const maxNum = config.max
+    const padLen = String(maxNum).length
+
+    const records = pageDataCache.value[pageId] || []
+    let currentMax = 0
+
+    for (const record of records) {
+      const val = record[field.fieldName]
+      if (typeof val === 'string' && val.startsWith(prefix)) {
+        const numStr = val.slice(prefix.length)
+        const num = parseInt(numStr, 10)
+        if (!isNaN(num) && num > currentMax) {
+          currentMax = num
+        }
+      }
+    }
+
+    const next = currentMax + 1
+    return `${prefix}${String(next).padStart(padLen, '0')}`
   }
 
   /**

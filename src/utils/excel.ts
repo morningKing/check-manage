@@ -20,7 +20,7 @@ export type RelationDisplayMap = Record<string, Map<string, string>>
 /**
  * 可导入导出的字段类型（排除文件、图片、关联）
  */
-const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp']
+const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence']
 
 /**
  * 筛选可导入导出的字段
@@ -103,6 +103,10 @@ function labelToValue(label: string, field: FieldConfig): any {
   }
 
   if (field.controlType === 'autoTimestamp') {
+    return null
+  }
+
+  if (field.controlType === 'autoSequence') {
     return null
   }
 
@@ -190,7 +194,8 @@ export function generateImportTemplate(
       checkbox: '多选（用 、 分隔多个值）',
       relation: '关联（用 、 分隔多个主键ID）',
       reference: '引用记录ID',
-      autoTimestamp: '自动时间戳（无需填写）'
+      autoTimestamp: '自动时间戳（无需填写）',
+      autoSequence: '自增序列（无需填写，自动生成）'
     }
 
     const options = field.options?.map((o) => o.label).join('、') || ''

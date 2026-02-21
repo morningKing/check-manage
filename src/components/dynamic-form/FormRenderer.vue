@@ -104,7 +104,7 @@ const formRef = ref<FormInstance>()
  */
 const sortedFields = computed(() => {
   return [...props.fields]
-    .filter((f) => f.controlType !== 'autoTimestamp')
+    .filter((f) => f.controlType !== 'autoTimestamp' && f.controlType !== 'autoSequence')
     .sort((a, b) => a.order - b.order)
 })
 

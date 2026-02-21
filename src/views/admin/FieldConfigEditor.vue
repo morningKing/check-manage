@@ -330,6 +330,38 @@
             </el-form-item>
           </div>
         </el-form-item>
+
+        <!-- 序列配置（仅自增序列类型显示） -->
+        <el-form-item
+          v-if="showSequenceConfig"
+          label="序列配置"
+        >
+          <div class="sequence-config">
+            <el-row :gutter="16">
+              <el-col :span="12">
+                <el-form-item label="前缀" label-width="60px">
+                  <el-input
+                    v-model="fieldFormData.sequenceConfig!.prefix"
+                    placeholder="如 IC-"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="上限" label-width="60px">
+                  <el-input-number
+                    v-model="fieldFormData.sequenceConfig!.max"
+                    :min="1"
+                    :max="999999"
+                    style="width: 100%"
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <div v-if="sequencePreview" class="sequence-preview">
+              格式预览：{{ sequencePreview }}
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -458,6 +490,19 @@ const showRelationConfig = computed(() => {
 
 const showReferenceConfig = computed(() => {
   return fieldFormData.value.controlType === 'reference'
+})
+
+const showSequenceConfig = computed(() => {
+  return fieldFormData.value.controlType === 'autoSequence'
+})
+
+const sequencePreview = computed(() => {
+  const cfg = fieldFormData.value.sequenceConfig
+  if (!cfg) return ''
+  const padLen = String(cfg.max).length
+  const first = `${cfg.prefix}${String(1).padStart(padLen, '0')}`
+  const last = `${cfg.prefix}${String(cfg.max).padStart(padLen, '0')}`
+  return `${first} ~ ${last}`
 })
 
 /**
@@ -593,7 +638,10 @@ function handleEditField(field: FieldConfig, index: number): void {
     isPrimaryKey: field.isPrimaryKey || false,
     referenceConfig: field.referenceConfig
       ? { ...field.referenceConfig, inheritFields: [...(field.referenceConfig.inheritFields || [])] }
-      : { targetCollection: '', displayField: '', inheritFields: [] }
+      : { targetCollection: '', displayField: '', inheritFields: [] },
+    sequenceConfig: field.sequenceConfig
+      ? { ...field.sequenceConfig }
+      : { prefix: '', max: 999 }
   }
   editDialogVisible.value = true
 }
@@ -629,7 +677,8 @@ async function handleSaveField(): Promise<void> {
     optionsSource: showOptionsConfig.value ? fieldFormData.value.optionsSource : undefined,
     relationConfig: showRelationConfig.value ? fieldFormData.value.relationConfig : undefined,
     isPrimaryKey: fieldFormData.value.isPrimaryKey || undefined,
-    referenceConfig: showReferenceConfig.value ? fieldFormData.value.referenceConfig : undefined
+    referenceConfig: showReferenceConfig.value ? fieldFormData.value.referenceConfig : undefined,
+    sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined
   }
 
   if (editingIndex.value === -1) {
@@ -780,5 +829,14 @@ watch(
   .api-options {
     padding-top: 8px;
   }
+}
+
+.sequence-preview {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #606266;
 }
 </style>

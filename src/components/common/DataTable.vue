@@ -194,7 +194,7 @@ const visibleFields = computed(() => {
  */
 function isSortable(field: FieldConfig): boolean | 'custom' {
   // 文本、数字、日期类型支持排序
-  const sortableTypes = ['text', 'number', 'date', 'datetime', 'autoTimestamp']
+  const sortableTypes = ['text', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence']
   return sortableTypes.includes(field.controlType) ? 'custom' : false
 }
 
@@ -209,6 +209,8 @@ function getColumnWidth(field: FieldConfig): string {
     case 'datetime':
     case 'autoTimestamp':
       return '180'
+    case 'autoSequence':
+      return '150'
     case 'select':
     case 'multiSelect':
     case 'reference':
@@ -261,6 +263,9 @@ function formatCellValue(row: any, field: FieldConfig): string {
 
     case 'autoTimestamp':
       return formatDate(value, 'YYYY-MM-DD HH:mm:ss')
+
+    case 'autoSequence':
+      return String(value)
 
     case 'file':
     case 'image':
