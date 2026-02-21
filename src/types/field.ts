@@ -23,6 +23,7 @@ export type ControlType =
   | 'image'       // 图片上传
   | 'relation'    // 多对多关联
   | 'reference'   // 数据引用（一对多依赖）
+  | 'autoTimestamp' // 自动时间戳（新增/修改时自动填充）
 
 /**
  * 控件类型配置
@@ -42,7 +43,8 @@ export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '文件上传', value: 'file' },
   { label: '图片上传', value: 'image' },
   { label: '关联关系', value: 'relation' },
-  { label: '数据引用', value: 'reference' }
+  { label: '数据引用', value: 'reference' },
+  { label: '自动时间戳', value: 'autoTimestamp' }
 ]
 
 /**

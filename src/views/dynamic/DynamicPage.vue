@@ -488,8 +488,18 @@ const filteredData = computed<DynamicRecord[]>(() => {
         }
       }
 
-      if (['date', 'datetime'].includes(field.controlType)) {
+      if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
         if (String(val).toLowerCase().includes(keyword)) return true
+      }
+
+      if (field.controlType === 'relation') {
+        const labels = record[`_rel_${field.fieldName}_labels`]
+        if (Array.isArray(labels)) {
+          const matched = labels.some((item: { id: string; label: string }) =>
+            item.label.toLowerCase().includes(keyword)
+          )
+          if (matched) return true
+        }
       }
 
       if (field.controlType === 'reference') {

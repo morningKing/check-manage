@@ -20,6 +20,7 @@ import FileUpload from './FileUpload.vue'
 import ImageUpload from './ImageUpload.vue'
 import RelationSelect from './RelationSelect.vue'
 import ReferenceSelect from './ReferenceSelect.vue'
+import AutoTimestamp from './AutoTimestamp.vue'
 
 /**
  * 控件类型到组件的映射
@@ -39,7 +40,8 @@ export const controlComponentMap: Record<ControlType, Component> = {
   file: FileUpload,
   image: ImageUpload,
   relation: RelationSelect,
-  reference: ReferenceSelect
+  reference: ReferenceSelect,
+  autoTimestamp: AutoTimestamp
 }
 
 /**
@@ -67,6 +69,7 @@ export function getControlDefaultValue(controlType: ControlType): any {
       return []
     case 'number':
     case 'reference':
+    case 'autoTimestamp':
       return null
     case 'file':
     case 'image':
@@ -89,5 +92,6 @@ export {
   FileUpload,
   ImageUpload,
   RelationSelect,
-  ReferenceSelect
+  ReferenceSelect,
+  AutoTimestamp
 }

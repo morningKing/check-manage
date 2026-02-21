@@ -93,6 +93,8 @@ export const PATTERNS = {
  * @returns Element Plus 验证规则数组
  */
 export function generateFieldRules(field: FieldConfig): FormItemRule[] {
+  if (field.controlType === 'autoTimestamp') return []
+
   const rules: FormItemRule[] = []
 
   // 必填验证

@@ -329,10 +329,16 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     record: Omit<DynamicRecord, 'id'>
   ): Promise<DynamicRecord> {
     const endpoint = pageId.replace('page-', '')
+    const now = new Date().toISOString()
     const newRecord: DynamicRecord = {
       ...record,
       id: `${endpoint}-${uuidv4().slice(0, 8)}`,
-      createdAt: new Date().toISOString()
+      createdAt: now
+    }
+
+    // 自动填充 autoTimestamp 字段
+    for (const field of getAutoTimestampFields(pageId)) {
+      newRecord[field.fieldName] = now
     }
 
     try {
@@ -363,11 +369,19 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     const endpoint = pageId.replace('page-', '')
 
     try {
-      const updated = await put<DynamicRecord>(`/${endpoint}/${recordId}`, {
+      const now = new Date().toISOString()
+      const updateData: Partial<DynamicRecord> = {
         ...record,
         id: recordId,
-        updatedAt: new Date().toISOString()
-      })
+        updatedAt: now
+      }
+
+      // 自动更新 autoTimestamp 字段
+      for (const field of getAutoTimestampFields(pageId)) {
+        updateData[field.fieldName] = now
+      }
+
+      const updated = await put<DynamicRecord>(`/${endpoint}/${recordId}`, updateData)
 
       if (pageDataCache.value[pageId]) {
         const index = pageDataCache.value[pageId].findIndex((r) => r.id === recordId)
@@ -412,6 +426,15 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   function getCachedPageData(pageId: string): DynamicRecord[] {
     return pageDataCache.value[pageId] || []
+  }
+
+  /**
+   * 获取页面配置中所有 autoTimestamp 类型的字段
+   */
+  function getAutoTimestampFields(pageId: string): FieldConfig[] {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return []
+    return config.fields.filter((f) => f.controlType === 'autoTimestamp')
   }
 
   /**

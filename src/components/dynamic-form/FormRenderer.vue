@@ -103,7 +103,9 @@ const formRef = ref<FormInstance>()
  * 排序后的字段列表
  */
 const sortedFields = computed(() => {
-  return [...props.fields].sort((a, b) => a.order - b.order)
+  return [...props.fields]
+    .filter((f) => f.controlType !== 'autoTimestamp')
+    .sort((a, b) => a.order - b.order)
 })
 
 /**

@@ -43,7 +43,11 @@ import { get, post, put, del } from '../request'
 
 describe('request 封装', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    mockInstance.get.mockClear()
+    mockInstance.post.mockClear()
+    mockInstance.put.mockClear()
+    mockInstance.patch.mockClear()
+    mockInstance.delete.mockClear()
   })
 
   it('get 调用 axios.get', async () => {
