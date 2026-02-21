@@ -1,23 +1,23 @@
 <template>
-  <el-select
-    v-model="selectValue"
-    :placeholder="field.placeholder || '请选择关联记录'"
-    :disabled="field.disabled"
-    :loading="loading"
-    multiple
-    collapse-tags
-    collapse-tags-tooltip
-    clearable
-    filterable
-    style="width: 100%"
-  >
-    <el-option
-      v-for="option in options"
-      :key="option.value"
-      :label="option.label"
-      :value="option.value"
-    />
-  </el-select>
+  <div class="relation-select-wrapper">
+    <el-select
+      v-model="selectValue"
+      :placeholder="field.placeholder || '请选择关联记录'"
+      :disabled="field.disabled"
+      :loading="loading"
+      multiple
+      clearable
+      filterable
+      style="width: 100%"
+    >
+      <el-option
+        v-for="option in options"
+        :key="option.value"
+        :label="option.label"
+        :value="option.value"
+      />
+    </el-select>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -75,3 +75,10 @@ watch(
   { deep: true }
 )
 </script>
+
+<style scoped>
+.relation-select-wrapper :deep(.el-select .el-select__tags) {
+  max-height: 120px;
+  overflow-y: auto;
+}
+</style>

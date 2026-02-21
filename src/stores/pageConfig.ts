@@ -296,6 +296,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         }
       }
 
+      // 解析关联字段的 ID 为显示名称
+      if (relationFields.length > 0) {
+        await resolveRelationLabels(data, relationFields)
+      }
+
       // 加载引用字段的继承数据
       const referenceFields = getReferenceFields(pageId)
       if (referenceFields.length > 0) {
@@ -520,6 +525,63 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
           record[`_ref_${field.fieldName}_${inheritField}`] = parent
             ? parent[inheritField]
             : ''
+        }
+      }
+    }
+  }
+
+  /**
+   * 批量解析关联字段的 ID 为显示名称
+   *
+   * 按 targetCollection 分组批量请求，构建 id → displayField 映射，
+   * 将结果写入 record[`_rel_${fieldName}_labels`] 为 { id, label }[]
+   */
+  async function resolveRelationLabels(
+    data: DynamicRecord[],
+    relationFields: FieldConfig[]
+  ): Promise<void> {
+    // 按 targetCollection 分组，避免重复请求同一集合
+    const collectionSet = new Set<string>()
+    for (const field of relationFields) {
+      const config = field.relationConfig
+      if (config?.targetCollection) {
+        collectionSet.add(config.targetCollection)
+      }
+    }
+
+    // 批量加载每个目标集合的全部记录
+    const collectionRecords = new Map<string, any[]>()
+    for (const collection of collectionSet) {
+      try {
+        const records = await get<any[]>(`/${collection}`)
+        collectionRecords.set(collection, records)
+      } catch {
+        // 加载失败时跳过
+      }
+    }
+
+    // 为每个关联字段构建 id → label 映射，并写入 _rel_ 前缀字段
+    for (const field of relationFields) {
+      const config = field.relationConfig
+      if (!config?.targetCollection) continue
+
+      const records = collectionRecords.get(config.targetCollection)
+      if (!records) continue
+
+      const idToLabel = new Map<string, string>()
+      for (const rec of records) {
+        idToLabel.set(rec.id, rec[config.displayField] || rec.id)
+      }
+
+      for (const record of data) {
+        const ids = record[field.fieldName]
+        if (Array.isArray(ids) && ids.length > 0) {
+          record[`_rel_${field.fieldName}_labels`] = ids.map((id: string) => ({
+            id,
+            label: idToLabel.get(id) || id
+          }))
+        } else {
+          record[`_rel_${field.fieldName}_labels`] = []
         }
       }
     }

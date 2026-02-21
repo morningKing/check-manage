@@ -39,11 +39,26 @@
         :label="field.label"
         :sortable="isSortable(field)"
         :min-width="getColumnWidth(field)"
-        show-overflow-tooltip
+        :show-overflow-tooltip="field.controlType !== 'relation'"
       >
         <template #default="{ row }">
+          <template v-if="field.controlType === 'relation'">
+            <span v-if="!row[`_rel_${field.fieldName}_labels`]?.length">-</span>
+            <span v-else class="relation-tags">
+              <el-tag
+                v-for="item in row[`_rel_${field.fieldName}_labels`].slice(0, 3)"
+                :key="item.id"
+                size="small"
+              >{{ item.label }}</el-tag>
+              <el-tag
+                v-if="row[`_rel_${field.fieldName}_labels`].length > 3"
+                size="small"
+                type="info"
+              >+{{ row[`_rel_${field.fieldName}_labels`].length - 3 }}</el-tag>
+            </span>
+          </template>
           <span
-            v-if="field.controlType === 'reference' && row[field.fieldName]"
+            v-else-if="field.controlType === 'reference' && row[field.fieldName]"
             class="reference-link"
             @click.stop="handleReferenceClick(row, field)"
           >{{ formatCellValue(row, field) }}</span>
@@ -195,9 +210,10 @@ function getColumnWidth(field: FieldConfig): string {
       return '160'
     case 'select':
     case 'multiSelect':
-    case 'relation':
     case 'reference':
       return '120'
+    case 'relation':
+      return '200'
     default:
       return '150'
   }
@@ -367,6 +383,13 @@ defineExpose({ tableRef, clearSelection })
   &:hover {
     text-decoration: underline;
   }
+}
+
+.relation-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
 }
 
 .pagination-container {

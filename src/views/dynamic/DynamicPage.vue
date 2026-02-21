@@ -65,6 +65,7 @@
           刷新
         </el-button>
         <el-button
+          v-if="isAdmin"
           type="danger"
           :disabled="selectedRows.length === 0"
           @click="handleBatchDeleteConfirm"
@@ -247,7 +248,7 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete } from '@element-plus/icons-vue'
-import { usePageConfigStore, useMenuStore } from '@/stores'
+import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
 import { DataTable, ConfirmDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile } from '@/utils/excel'
@@ -267,6 +268,8 @@ const route = useRoute()
 const router = useRouter()
 const pageConfigStore = usePageConfigStore()
 const menuStore = useMenuStore()
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.isAdmin)
 
 // ==================== Refs ====================
 
@@ -489,10 +492,14 @@ const filteredData = computed<DynamicRecord[]>(() => {
         if (String(val).toLowerCase().includes(keyword)) return true
       }
 
-      if (field.controlType === 'reference' && field.referenceConfig?.inheritFields) {
-        for (const inh of field.referenceConfig.inheritFields) {
-          const refVal = record[`_ref_${field.fieldName}_${inh}`]
-          if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
+      if (field.controlType === 'reference') {
+        const displayVal = record[`_ref_${field.fieldName}_display`]
+        if (displayVal && String(displayVal).toLowerCase().includes(keyword)) return true
+        if (field.referenceConfig?.inheritFields) {
+          for (const inh of field.referenceConfig.inheritFields) {
+            const refVal = record[`_ref_${field.fieldName}_${inh}`]
+            if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
+          }
         }
       }
     }
