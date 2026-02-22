@@ -49,6 +49,8 @@
                 v-for="item in row[`_rel_${field.fieldName}_labels`].slice(0, 3)"
                 :key="item.id"
                 size="small"
+                class="relation-tag-link"
+                @click.stop="handleRelationClick(item.id, field)"
               >{{ item.label }}</el-tag>
               <el-tag
                 v-if="row[`_rel_${field.fieldName}_labels`].length > 3"
@@ -152,6 +154,7 @@ const emit = defineEmits<{
   (e: 'edit', row: DynamicRecord): void
   (e: 'delete', row: DynamicRecord): void
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
+  (e: 'relation-click', relatedRecordId: string, field: FieldConfig): void
   (e: 'page-change', page: number, pageSize: number): void
   (e: 'sort-change', field: string, order: string): void
   (e: 'selection-change', rows: DynamicRecord[]): void
@@ -362,6 +365,13 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
 }
 
 /**
+ * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面
+ */
+function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
+  emit('relation-click', relatedRecordId, field)
+}
+
+/**
  * 处理多选变化
  */
 function handleSelectionChange(rows: DynamicRecord[]): void {
@@ -399,6 +409,16 @@ defineExpose({ tableRef, clearSelection })
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+}
+
+.relation-tag-link {
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: #409eff;
+    border-color: #409eff;
+  }
 }
 
 .pagination-container {

@@ -110,6 +110,7 @@
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
         @reference-click="handleReferenceClick"
+        @relation-click="handleRelationClick"
         @selection-change="handleSelectionChange"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
@@ -897,6 +898,23 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
 
   const recordId = row[field.fieldName]
   router.push({ path: targetMenu.path, query: { recordId } })
+}
+
+/**
+ * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面
+ */
+function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
+  const targetCollection = field.relationConfig?.targetCollection
+  if (!targetCollection) return
+
+  const targetPageId = `page-${targetCollection}`
+  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到关联数据的页面')
+    return
+  }
+
+  router.push({ path: targetMenu.path, query: { recordId: relatedRecordId } })
 }
 
 /**
