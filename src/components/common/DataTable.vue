@@ -12,12 +12,13 @@
  * - 响应式设计
  */
 <template>
-  <div class="data-table">
+  <div ref="tableWrapperRef" class="data-table">
     <!-- 表格 -->
     <el-table
       ref="tableRef"
       :data="data"
       :loading="loading"
+      :height="tableHeight"
       border
       stripe
       highlight-current-row
@@ -120,7 +121,7 @@
  * - delete: 删除记录
  * - page-change: 分页变化
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import type { FieldConfig, DynamicRecord } from '@/types'
 
 // ==================== Props & Emits ====================
@@ -166,6 +167,43 @@ const emit = defineEmits<{
  * el-table 实例引用
  */
 const tableRef = ref()
+
+/**
+ * 表格容器引用（用于 ResizeObserver 计算可用高度）
+ */
+const tableWrapperRef = ref<HTMLElement>()
+
+/**
+ * 容器实际高度
+ */
+const wrapperHeight = ref(0)
+
+/**
+ * 表格高度 — 根据容器高度动态计算，使水平滚动条始终可见
+ */
+const tableHeight = computed(() => {
+  if (!wrapperHeight.value) return undefined
+  const paginationH = props.showPagination ? 52 : 0
+  return Math.max(200, wrapperHeight.value - paginationH)
+})
+
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  if (tableWrapperRef.value) {
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        wrapperHeight.value = entry.contentRect.height
+      }
+    })
+    resizeObserver.observe(tableWrapperRef.value)
+  }
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
+})
 
 /**
  * 当前页码
@@ -393,6 +431,10 @@ defineExpose({ tableRef, clearSelection })
 <style scoped lang="scss">
 .data-table {
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .reference-link {

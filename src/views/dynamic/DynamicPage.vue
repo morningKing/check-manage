@@ -1040,12 +1040,14 @@ onActivated(async () => {
 
 .table-card {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
 
   :deep(.el-card__body) {
     height: 100%;
     padding: 16px;
-    overflow: auto;
+    overflow: hidden;
+    box-sizing: border-box;
   }
 
   :deep(.highlight-flash) {
