@@ -23,11 +23,11 @@
         </span>
       </div>
       <div class="page-actions">
-        <el-button type="primary" @click="handleAdd">
+        <el-button v-if="!isGuest" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
           新增
         </el-button>
-        <el-dropdown @command="handleImportCommand" class="import-dropdown">
+        <el-dropdown v-if="!isGuest" @command="handleImportCommand" class="import-dropdown">
           <el-button type="success">
             <el-icon><Upload /></el-icon>
             导入<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -106,6 +106,7 @@
         :loading="tableLoading"
         :total="filteredData.length"
         :show-pagination="false"
+        :show-actions="!isGuest"
         show-selection
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
@@ -285,6 +286,7 @@ const pageConfigStore = usePageConfigStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.isAdmin)
+const isGuest = computed(() => authStore.isGuest)
 
 // ==================== Refs ====================
 
@@ -571,6 +573,7 @@ async function loadPageData(): Promise<void> {
  * 处理新增
  */
 function handleAdd(): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   isEditMode.value = false
   currentRecord.value = {}
   dialogVisible.value = true
@@ -580,6 +583,7 @@ function handleAdd(): void {
  * 处理编辑
  */
 function handleEdit(row: DynamicRecord): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   isEditMode.value = true
   currentRecord.value = { ...row }
   dialogVisible.value = true
@@ -589,6 +593,7 @@ function handleEdit(row: DynamicRecord): void {
  * 处理删除确认
  */
 function handleDeleteConfirm(row: DynamicRecord): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   deleteRecordId.value = row.id
   deleteDialogVisible.value = true
 }
@@ -621,6 +626,7 @@ function handleSelectionChange(rows: DynamicRecord[]): void {
  * 处理批量删除确认
  */
 function handleBatchDeleteConfirm(): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   if (selectedRows.value.length === 0) return
   batchDeleteDialogVisible.value = true
 }

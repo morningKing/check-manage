@@ -42,6 +42,24 @@ def login_required(f):
     return decorated
 
 
+def write_required(f):
+    """Decorator: require non-guest role (implies login_required). Guest users get 403."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': '未登录'}), 401
+        token = auth_header.split(' ', 1)[1]
+        payload = decode_token(token)
+        if not payload:
+            return jsonify({'error': '登录已过期'}), 401
+        if payload.get('role') == 'guest':
+            return jsonify({'error': '访客无操作权限'}), 403
+        g.current_user = payload
+        return f(*args, **kwargs)
+    return decorated
+
+
 def admin_required(f):
     """Decorator: require admin role (implies login_required)."""
     @wraps(f)

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import login_required
+from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name
 
 relations_bp = Blueprint('relations', __name__)
@@ -29,7 +29,7 @@ def get_relations(collection, record_id):
 
 
 @relations_bp.route('/relations/<collection>/<record_id>/<field_name>', methods=['PUT'])
-@login_required
+@write_required
 def update_relations(collection, record_id, field_name):
     body = request.get_json(force=True)
     target_collection = body['targetCollection']
@@ -104,7 +104,7 @@ def update_relations(collection, record_id, field_name):
 
 
 @relations_bp.route('/relations/<collection>/<record_id>', methods=['DELETE'])
-@login_required
+@write_required
 def delete_all_relations(collection, record_id):
     with get_db() as conn:
         cur = conn.cursor()

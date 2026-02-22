@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required
+from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 import psycopg2.extras
 
@@ -167,7 +167,7 @@ def get_item(collection, item_id):
 
 
 @dynamic_bp.route('/<collection>', methods=['POST'])
-@login_required
+@write_required
 def create_item(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
@@ -217,7 +217,7 @@ def create_item(collection):
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['PUT'])
-@login_required
+@write_required
 def update_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
@@ -315,7 +315,7 @@ def check_reference_dependencies(cur, collection, record_id):
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['DELETE'])
-@login_required
+@write_required
 def delete_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404

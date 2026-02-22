@@ -30,6 +30,9 @@ export const useAuthStore = defineStore('auth', () => {
   /** 是否管理员 */
   const isAdmin = computed(() => user.value?.role === 'admin')
 
+  /** 是否访客（只读权限） */
+  const isGuest = computed(() => user.value?.role === 'guest')
+
   /** 显示名称 */
   const displayName = computed(() => user.value?.displayName ?? '')
 
@@ -106,6 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     userRole,
     isAdmin,
+    isGuest,
     displayName,
     // Actions
     login,
