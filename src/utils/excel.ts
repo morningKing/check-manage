@@ -229,10 +229,13 @@ export function parseImportFile(
 ): Promise<Record<string, any>[]> {
   const exportFields = getExportableFields(fields)
 
-  // 建立 label → field 映射
-  const labelToField = new Map<string, FieldConfig>()
+  // 建立 label / fieldName → field 映射（同时支持两种表头格式）
+  const headerToField = new Map<string, FieldConfig>()
   exportFields.forEach((f) => {
-    labelToField.set(f.label, f)
+    headerToField.set(f.label, f)
+    if (!headerToField.has(f.fieldName)) {
+      headerToField.set(f.fieldName, f)
+    }
   })
 
   return new Promise((resolve, reject) => {
@@ -256,7 +259,7 @@ export function parseImportFile(
 
         // 匹配表头到字段
         const colFieldMap: (FieldConfig | null)[] = headerRow.map((header) => {
-          return labelToField.get(header) || null
+          return headerToField.get(header) || null
         })
 
         // 解析数据行
