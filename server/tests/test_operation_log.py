@@ -75,6 +75,38 @@ class TestPickDisplayName:
         data = {'name': 123}
         assert pick_display_name(data) is None
 
+    def test_with_autoSequence_field(self):
+        from utils.operation_log import pick_display_name
+
+        fields = [
+            {'fieldName': 'seqNo', 'controlType': 'autoSequence', 'order': 1},
+            {'fieldName': 'desc', 'controlType': 'textarea', 'order': 2},
+        ]
+        data = {'seqNo': 'IC-001', 'desc': '描述'}
+        assert pick_display_name(data, fields) == 'IC-001'
+
+    def test_autoSequence_has_priority_by_order(self):
+        from utils.operation_log import pick_display_name
+
+        fields = [
+            {'fieldName': 'name', 'controlType': 'text', 'order': 2},
+            {'fieldName': 'seqNo', 'controlType': 'autoSequence', 'order': 1},
+        ]
+        data = {'seqNo': 'IC-002', 'name': '记录名'}
+        # order=1 的 autoSequence 排在前面
+        assert pick_display_name(data, fields) == 'IC-002'
+
+    def test_autoSequence_skipped_when_empty(self):
+        from utils.operation_log import pick_display_name
+
+        fields = [
+            {'fieldName': 'seqNo', 'controlType': 'autoSequence', 'order': 1},
+            {'fieldName': 'name', 'controlType': 'text', 'order': 2},
+        ]
+        data = {'seqNo': '', 'name': '有名称'}
+        # autoSequence 值为空，应该跳过取 text 字段
+        assert pick_display_name(data, fields) == '有名称'
+
 
 class TestGetFieldLabelMap:
     def test_builds_mapping(self):

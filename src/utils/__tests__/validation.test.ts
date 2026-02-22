@@ -158,6 +158,28 @@ describe('generateFieldRules', () => {
     expect(rules.length).toBe(0)
   })
 
+  it('autoTimestamp 字段跳过验证', () => {
+    const field: FieldConfig = {
+      fieldName: 'updatedTime',
+      label: '更新时间',
+      controlType: 'autoTimestamp',
+      required: true,
+    } as FieldConfig
+    const rules = generateFieldRules(field)
+    expect(rules.length).toBe(0)
+  })
+
+  it('autoSequence 字段跳过验证', () => {
+    const field: FieldConfig = {
+      fieldName: 'seqNo',
+      label: '编号',
+      controlType: 'autoSequence',
+      required: true,
+    } as FieldConfig
+    const rules = generateFieldRules(field)
+    expect(rules.length).toBe(0)
+  })
+
   it('带自定义验证规则的字段', () => {
     const field: FieldConfig = {
       fieldName: 'code',

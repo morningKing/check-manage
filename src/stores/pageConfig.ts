@@ -780,6 +780,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     stripRelationFields,
     saveRelations,
     fetchRelationDisplayMaps,
-    resolveRelationImportValues
+    resolveRelationImportValues,
+    // 自动字段
+    generateNextSequenceValue
   }
 })

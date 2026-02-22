@@ -55,13 +55,32 @@ describe('Excel Utils', () => {
     })
 
     it('支持所有可导出类型', () => {
-      const exportableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference']
+      const exportableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence']
       const fields = exportableTypes.map((type, i) =>
         makeField({ fieldName: `f${i}`, controlType: type, order: i })
       )
 
       const result = getExportableFields(fields)
       expect(result).toHaveLength(exportableTypes.length)
+    })
+
+    it('autoSequence 字段可导出', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'seqNo', controlType: 'autoSequence', order: 1 }),
+        makeField({ fieldName: 'name', controlType: 'text', order: 2 }),
+      ]
+      const result = getExportableFields(fields)
+      expect(result).toHaveLength(2)
+      expect(result[0].fieldName).toBe('seqNo')
+    })
+
+    it('autoTimestamp 字段可导出', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'ts', controlType: 'autoTimestamp', order: 1 }),
+      ]
+      const result = getExportableFields(fields)
+      expect(result).toHaveLength(1)
+      expect(result[0].controlType).toBe('autoTimestamp')
     })
 
     it('空数组返回空数组', () => {

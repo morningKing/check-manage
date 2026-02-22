@@ -13,7 +13,7 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import { get, post, del } from '@/utils/request'
-import { getBackups, createBackup, deleteBackup, restoreBackup, getBackupSettings } from '../backup'
+import { getBackups, createBackup, deleteBackup, restoreBackup, getBackupSettings, diffBackupCollection } from '../backup'
 
 const mockGet = vi.mocked(get)
 const mockPost = vi.mocked(post)
@@ -69,5 +69,31 @@ describe('Backup API', () => {
     const res = await getBackupSettings()
     expect(mockGet).toHaveBeenCalledWith('/backups/settings')
     expect(res).toEqual(settings)
+  })
+
+  it('diffBackupCollection 调用 POST /backups/diff', async () => {
+    const diffResult = { added: [], removed: [], modified: [], unchangedCount: 5 }
+    mockPost.mockResolvedValueOnce(diffResult as any)
+
+    const res = await diffBackupCollection('test-col', 'current', 'bk-1')
+    expect(mockPost).toHaveBeenCalledWith('/backups/diff', {
+      collection: 'test-col',
+      baseSource: 'current',
+      targetSource: 'bk-1',
+    })
+    expect(res).toEqual(diffResult)
+  })
+
+  it('diffBackupCollection 两个备份之间对比', async () => {
+    const diffResult = { added: [{ id: 'r1' }], removed: [], modified: [], unchangedCount: 0 }
+    mockPost.mockResolvedValueOnce(diffResult as any)
+
+    const res = await diffBackupCollection('my-col', 'bk-1', 'bk-2')
+    expect(mockPost).toHaveBeenCalledWith('/backups/diff', {
+      collection: 'my-col',
+      baseSource: 'bk-1',
+      targetSource: 'bk-2',
+    })
+    expect(res).toEqual(diffResult)
   })
 })
