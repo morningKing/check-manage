@@ -4,7 +4,7 @@
  * 职责：
  * - 根据字段配置动态渲染表格列
  * - 支持分页、排序
- * - 集成操作按钮（编辑、删除）
+ * - 集成操作按钮（查看、编辑、删除）
  *
  * 特性：
  * - 自动根据 controlType 格式化显示值
@@ -88,20 +88,24 @@
 
       <!-- 操作列 -->
       <el-table-column
-        v-if="showActions"
         label="操作"
-        :width="150"
+        :width="showActions ? 200 : 80"
         align="center"
         fixed="right"
       >
         <template #default="{ row }">
-          <slot name="extra-actions" :row="row" />
-          <el-button type="primary" link @click="handleEdit(row)">
-            编辑
+          <el-button type="primary" link @click="handleView(row)">
+            查看
           </el-button>
-          <el-button type="danger" link @click="handleDelete(row)">
-            删除
-          </el-button>
+          <template v-if="showActions">
+            <slot name="extra-actions" :row="row" />
+            <el-button type="primary" link @click="handleEdit(row)">
+              编辑
+            </el-button>
+            <el-button type="danger" link @click="handleDelete(row)">
+              删除
+            </el-button>
+          </template>
         </template>
       </el-table-column>
     </el-table>
@@ -134,6 +138,7 @@
  * - total: 总记录数
  *
  * Events：
+ * - view: 查看记录
  * - edit: 编辑记录
  * - delete: 删除记录
  * - page-change: 分页变化
@@ -169,6 +174,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 const emit = defineEmits<{
+  (e: 'view', row: DynamicRecord): void
   (e: 'edit', row: DynamicRecord): void
   (e: 'delete', row: DynamicRecord): void
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
@@ -381,6 +387,13 @@ function formatDate(value: string, format: string): string {
   } catch {
     return value
   }
+}
+
+/**
+ * 处理查看
+ */
+function handleView(row: DynamicRecord): void {
+  emit('view', row)
 }
 
 /**

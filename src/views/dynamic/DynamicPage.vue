@@ -108,6 +108,7 @@
         :show-pagination="false"
         :show-actions="!isGuest"
         show-selection
+        @view="handleView"
         @edit="handleEdit"
         @delete="handleDeleteConfirm"
         @reference-click="handleReferenceClick"
@@ -173,6 +174,124 @@
           :loading="submitLoading"
         >
           确定
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 查看记录对话框 -->
+    <el-dialog
+      v-model="viewDialogVisible"
+      title="查看记录"
+      width="700px"
+      destroy-on-close
+    >
+      <el-descriptions :column="1" border>
+        <el-descriptions-item
+          v-for="field in viewDisplayFields"
+          :key="field.id"
+          :label="field.label"
+          :label-width="140"
+        >
+          <!-- 关联关系字段：Tag 可点击跳转 -->
+          <template v-if="field.controlType === 'relation'">
+            <span v-if="!viewRecord[`_rel_${field.fieldName}_labels`]?.length">-</span>
+            <span v-else class="relation-tags">
+              <el-tag
+                v-for="item in viewRecord[`_rel_${field.fieldName}_labels`]"
+                :key="item.id"
+                size="small"
+                class="relation-tag-link"
+                @click="viewDialogVisible = false; handleRelationClick(item.id, field)"
+              >{{ item.label }}</el-tag>
+            </span>
+          </template>
+
+          <!-- 引用选择字段：Tag 可点击跳转 -->
+          <template v-else-if="field.controlType === 'quoteSelect'">
+            <span v-if="!viewRecord[`_quote_${field.fieldName}_labels`]?.length">-</span>
+            <span v-else class="relation-tags">
+              <el-tag
+                v-for="item in viewRecord[`_quote_${field.fieldName}_labels`]"
+                :key="item.id"
+                size="small"
+                class="relation-tag-link"
+                @click="viewDialogVisible = false; handleQuoteClick(item.id, field)"
+              >{{ item.label }}</el-tag>
+            </span>
+          </template>
+
+          <!-- 数据引用字段：可点击跳转 -->
+          <template v-else-if="field.controlType === 'reference'">
+            <span v-if="!viewRecord[field.fieldName]">-</span>
+            <span
+              v-else
+              class="reference-link"
+              @click="viewDialogVisible = false; handleReferenceClick(viewRecord, field)"
+            >{{ viewRecord[`_ref_${field.fieldName}_display`] || viewRecord[field.fieldName] }}</span>
+          </template>
+
+          <!-- 选项类字段：显示标签 -->
+          <template v-else-if="['select', 'radio'].includes(field.controlType)">
+            {{ formatViewValue(field) }}
+          </template>
+
+          <!-- 多选类字段：Tag 展示 -->
+          <template v-else-if="['multiSelect', 'checkbox'].includes(field.controlType)">
+            <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
+            <span v-else class="relation-tags">
+              <el-tag
+                v-for="v in viewRecord[field.fieldName]"
+                :key="v"
+                size="small"
+              >{{ field.options?.find(o => o.value === v)?.label || v }}</el-tag>
+            </span>
+          </template>
+
+          <!-- 文件/图片字段 -->
+          <template v-else-if="field.controlType === 'file'">
+            <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
+            <div v-else>
+              <div v-for="(f, idx) in viewRecord[field.fieldName]" :key="idx">
+                <el-link type="primary" :href="f.url" target="_blank">{{ f.name }}</el-link>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="field.controlType === 'image'">
+            <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
+            <div v-else class="view-images">
+              <el-image
+                v-for="(img, idx) in viewRecord[field.fieldName]"
+                :key="idx"
+                :src="img.url"
+                :preview-src-list="viewRecord[field.fieldName].map((i: any) => i.url)"
+                :initial-index="idx"
+                fit="cover"
+                class="view-image-item"
+              />
+            </div>
+          </template>
+
+          <!-- 日期/时间字段 -->
+          <template v-else-if="['date', 'datetime', 'autoTimestamp'].includes(field.controlType)">
+            {{ formatViewDate(viewRecord[field.fieldName], field.controlType) }}
+          </template>
+
+          <!-- 多行文本 -->
+          <template v-else-if="field.controlType === 'textarea'">
+            <span class="view-textarea">{{ viewRecord[field.fieldName] || '-' }}</span>
+          </template>
+
+          <!-- 默认：纯文本 -->
+          <template v-else>
+            {{ viewRecord[field.fieldName] ?? '-' }}
+          </template>
+        </el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="viewDialogVisible = false">关闭</el-button>
+        <el-button v-if="!isGuest" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
+          编辑
         </el-button>
       </template>
     </el-dialog>
@@ -339,6 +458,11 @@ const searchKeyword = ref('')
 const dialogVisible = ref(false)
 
 /**
+ * 查看对话框可见性
+ */
+const viewDialogVisible = ref(false)
+
+/**
  * 删除对话框可见性
  */
 const deleteDialogVisible = ref(false)
@@ -347,6 +471,11 @@ const deleteDialogVisible = ref(false)
  * 当前编辑的记录
  */
 const currentRecord = ref<Record<string, any>>({})
+
+/**
+ * 当前查看的记录
+ */
+const viewRecord = ref<Record<string, any>>({})
 
 /**
  * 待删除的记录ID
@@ -485,6 +614,37 @@ const dialogTitle = computed(() => {
 })
 
 /**
+ * 查看对话框中显示的字段列表（含 reference 继承字段，按 order 排序）
+ */
+const viewDisplayFields = computed<FieldConfig[]>(() => {
+  const result: FieldConfig[] = []
+  for (const field of pageFields.value) {
+    if (field.hidden) continue
+    result.push(field)
+    if (field.controlType === 'reference' && field.referenceConfig?.inheritFields?.length) {
+      const config = field.referenceConfig
+      const targetPageConfig = pageConfigStore.getPageConfigById(`page-${config.targetCollection}`)
+      const targetFields = targetPageConfig?.fields || []
+      for (const inheritFieldName of config.inheritFields) {
+        const parentField = targetFields.find((f) => f.fieldName === inheritFieldName)
+        result.push({
+          id: `_ref_${field.fieldName}_${inheritFieldName}`,
+          fieldName: `_ref_${field.fieldName}_${inheritFieldName}`,
+          label: parentField?.label || inheritFieldName,
+          controlType: parentField?.controlType || 'text',
+          required: false,
+          order: field.order + 0.1,
+          hidden: false,
+          disabled: true,
+          options: parentField?.options
+        })
+      }
+    }
+  }
+  return result.sort((a, b) => a.order - b.order)
+})
+
+/**
  * 按关键字过滤后的表格数据
  */
 const filteredData = computed<DynamicRecord[]>(() => {
@@ -558,6 +718,37 @@ const filteredData = computed<DynamicRecord[]>(() => {
 // ==================== 方法 ====================
 
 /**
+ * 格式化查看对话框中的选项字段值
+ */
+function formatViewValue(field: FieldConfig): string {
+  const value = viewRecord.value[field.fieldName]
+  if (value === null || value === undefined || value === '') return '-'
+  const opt = field.options?.find(o => o.value === value)
+  return opt?.label || String(value)
+}
+
+/**
+ * 格式化查看对话框中的日期值
+ */
+function formatViewDate(value: any, controlType: string): string {
+  if (!value) return '-'
+  try {
+    const date = new Date(value)
+    if (isNaN(date.getTime())) return String(value)
+    const y = date.getFullYear()
+    const m = String(date.getMonth() + 1).padStart(2, '0')
+    const d = String(date.getDate()).padStart(2, '0')
+    if (controlType === 'date') return `${y}-${m}-${d}`
+    const hh = String(date.getHours()).padStart(2, '0')
+    const mm = String(date.getMinutes()).padStart(2, '0')
+    const ss = String(date.getSeconds()).padStart(2, '0')
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`
+  } catch {
+    return String(value)
+  }
+}
+
+/**
  * 加载页面数据
  */
 async function loadPageData(): Promise<void> {
@@ -578,6 +769,14 @@ async function loadPageData(): Promise<void> {
   } finally {
     tableLoading.value = false
   }
+}
+
+/**
+ * 处理查看记录
+ */
+function handleView(row: DynamicRecord): void {
+  viewRecord.value = { ...row }
+  viewDialogVisible.value = true
 }
 
 /**
@@ -1096,5 +1295,48 @@ onActivated(async () => {
 @keyframes row-flash {
   0%, 100% { background-color: transparent; }
   50% { background-color: #ecf5ff; }
+}
+
+.relation-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.relation-tag-link {
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: #409eff;
+    border-color: #409eff;
+  }
+}
+
+.reference-link {
+  color: #409eff;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.view-textarea {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.view-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.view-image-item {
+  width: 80px;
+  height: 80px;
+  border-radius: 4px;
 }
 </style>
