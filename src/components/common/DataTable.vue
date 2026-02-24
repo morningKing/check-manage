@@ -40,7 +40,7 @@
         :label="field.label"
         :sortable="isSortable(field)"
         :min-width="getColumnWidth(field)"
-        :show-overflow-tooltip="field.controlType !== 'relation'"
+        :show-overflow-tooltip="!['relation', 'quoteSelect'].includes(field.controlType)"
       >
         <template #default="{ row }">
           <template v-if="field.controlType === 'relation'">
@@ -58,6 +58,23 @@
                 size="small"
                 type="info"
               >+{{ row[`_rel_${field.fieldName}_labels`].length - 3 }}</el-tag>
+            </span>
+          </template>
+          <template v-else-if="field.controlType === 'quoteSelect'">
+            <span v-if="!row[`_quote_${field.fieldName}_labels`]?.length">-</span>
+            <span v-else class="relation-tags">
+              <el-tag
+                v-for="item in row[`_quote_${field.fieldName}_labels`].slice(0, 3)"
+                :key="item.id"
+                size="small"
+                class="relation-tag-link"
+                @click.stop="handleQuoteClick(item.id, field)"
+              >{{ item.label }}</el-tag>
+              <el-tag
+                v-if="row[`_quote_${field.fieldName}_labels`].length > 3"
+                size="small"
+                type="info"
+              >+{{ row[`_quote_${field.fieldName}_labels`].length - 3 }}</el-tag>
             </span>
           </template>
           <span
@@ -156,6 +173,7 @@ const emit = defineEmits<{
   (e: 'delete', row: DynamicRecord): void
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
   (e: 'relation-click', relatedRecordId: string, field: FieldConfig): void
+  (e: 'quote-click', quotedRecordId: string, field: FieldConfig): void
   (e: 'page-change', page: number, pageSize: number): void
   (e: 'sort-change', field: string, order: string): void
   (e: 'selection-change', rows: DynamicRecord[]): void
@@ -258,6 +276,8 @@ function getColumnWidth(field: FieldConfig): string {
       return '120'
     case 'relation':
       return '200'
+    case 'quoteSelect':
+      return '200'
     default:
       return '150'
   }
@@ -319,6 +339,12 @@ function formatCellValue(row: any, field: FieldConfig): string {
     case 'relation':
       if (Array.isArray(value)) {
         return value.length === 0 ? '-' : `${value.length} 条关联`
+      }
+      return String(value)
+
+    case 'quoteSelect':
+      if (Array.isArray(value)) {
+        return value.length === 0 ? '-' : `${value.length} 条引用`
       }
       return String(value)
 
@@ -407,6 +433,13 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
  */
 function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
   emit('relation-click', relatedRecordId, field)
+}
+
+/**
+ * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面
+ */
+function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
+  emit('quote-click', quotedRecordId, field)
 }
 
 /**

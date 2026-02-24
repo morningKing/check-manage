@@ -24,6 +24,7 @@ vi.mock('uuid', () => ({
 }))
 
 import { usePageConfigStore } from '../pageConfig'
+import { get } from '@/utils/request'
 import type { PageConfig, FieldConfig } from '@/types'
 
 function makeField(overrides: Partial<FieldConfig>): FieldConfig {
@@ -272,5 +273,152 @@ describe('PageConfig Store — autoSequence', () => {
       const val = store.generateNextSequenceValue('page-demo', field)
       expect(val).toBe('IC-003')
     })
+  })
+})
+
+describe('PageConfig Store — quoteSelect', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('quoteSelect 字段不会被 stripRelationFields 剥离', () => {
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({ id: 'f2', fieldName: 'quotedCases', controlType: 'quoteSelect' }),
+            makeField({ id: 'f3', fieldName: 'relatedItems', controlType: 'relation' }),
+          ],
+        }),
+      ],
+    })
+
+    const formData = { name: '测试', quotedCases: ['id-1', 'id-2'], relatedItems: ['id-3'] }
+    const result = store.stripRelationFields('page-test', formData)
+    expect(result.name).toBe('测试')
+    expect(result.quotedCases).toEqual(['id-1', 'id-2'])
+    expect(result.relatedItems).toBeUndefined()
+  })
+
+  it('resolveQuoteLabels 正确解析标签', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // fetchPageData('page-test') calls:
+    // 1. get('/test') — main data
+    // 2. get('/cases') — resolveQuoteLabels target records
+    mockedGet.mockResolvedValueOnce([
+      { id: 'r1', quotedCases: ['case-1', 'case-2'] },
+      { id: 'r2', quotedCases: [] },
+    ])
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseName: '用例A' },
+      { id: 'case-2', caseName: '用例B' },
+    ])
+
+    const result = await store.fetchPageData('page-test')
+    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    expect(labels).toHaveLength(2)
+    expect(labels[0].label).toBe('用例A')
+    expect(labels[1].label).toBe('用例B')
+  })
+
+  it('fetchQuoteDisplayMaps 构建正确映射', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001' },
+      { id: 'case-2', caseId: 'IC-002' },
+    ])
+
+    const maps = await store.fetchQuoteDisplayMaps('page-test')
+    expect(maps.quotedCases).toBeDefined()
+    expect(maps.quotedCases.get('case-1')).toBe('IC-001')
+    expect(maps.quotedCases.get('case-2')).toBe('IC-002')
+  })
+
+  it('resolveQuoteImportValues 正确解析导入值', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001' },
+      { id: 'case-2', caseId: 'IC-002' },
+    ])
+
+    const records = [
+      { quotedCases: ['IC-001', 'IC-002'] },
+      { quotedCases: ['case-1'] },  // 已经是内部 ID
+    ]
+
+    await store.resolveQuoteImportValues('page-test', records)
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
+    expect(records[1].quotedCases).toEqual(['case-1'])
   })
 })

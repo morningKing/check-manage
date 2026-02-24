@@ -362,6 +362,47 @@
             </div>
           </div>
         </el-form-item>
+
+        <!-- 引用选择配置（仅引用选择类型显示） -->
+        <el-form-item
+          v-if="showQuoteConfig"
+          label="引用配置"
+        >
+          <div class="relation-config">
+            <el-form-item label="目标集合" label-width="80px">
+              <el-select
+                v-model="fieldFormData.quoteConfig!.targetCollection"
+                placeholder="请选择目标集合"
+                filterable
+                style="width: 100%"
+                @change="handleQuoteTargetCollectionChange"
+              >
+                <el-option
+                  v-for="opt in collectionOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="显示字段" label-width="80px">
+              <el-select
+                v-model="fieldFormData.quoteConfig!.displayField"
+                placeholder="请选择显示字段"
+                filterable
+                style="width: 100%"
+                :disabled="!fieldFormData.quoteConfig!.targetCollection"
+              >
+                <el-option
+                  v-for="opt in quoteDisplayFieldOptions"
+                  :key="opt.value"
+                  :label="`${opt.label}（${opt.value}）`"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+          </div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -496,6 +537,10 @@ const showSequenceConfig = computed(() => {
   return fieldFormData.value.controlType === 'autoSequence'
 })
 
+const showQuoteConfig = computed(() => {
+  return fieldFormData.value.controlType === 'quoteSelect'
+})
+
 const sequencePreview = computed(() => {
   const cfg = fieldFormData.value.sequenceConfig
   if (!cfg) return ''
@@ -575,6 +620,29 @@ const refDisplayFieldOptions = computed(() => {
     }))
 })
 
+/**
+ * 引用选择配置：选中目标集合的字段列表
+ */
+const quoteTargetCollectionFields = computed(() => {
+  const tc = fieldFormData.value.quoteConfig?.targetCollection
+  if (!tc) return []
+  const config = pageConfigStore.pageConfigs.find((c) => c.id === `page-${tc}`)
+  if (!config) return []
+  return config.fields
+})
+
+/**
+ * 引用选择配置：显示字段的选项（目标集合的非关联/非引用字段）
+ */
+const quoteDisplayFieldOptions = computed(() => {
+  return quoteTargetCollectionFields.value
+    .filter((f) => !['relation', 'reference', 'quoteSelect'].includes(f.controlType))
+    .map((f) => ({
+      label: f.label,
+      value: f.fieldName
+    }))
+})
+
 // ==================== 方法 ====================
 
 /**
@@ -602,6 +670,15 @@ function handleRefTargetCollectionChange(): void {
   if (fieldFormData.value.referenceConfig) {
     fieldFormData.value.referenceConfig.displayField = ''
     fieldFormData.value.referenceConfig.inheritFields = []
+  }
+}
+
+/**
+ * 处理引用选择目标集合变更，清空依赖字段
+ */
+function handleQuoteTargetCollectionChange(): void {
+  if (fieldFormData.value.quoteConfig) {
+    fieldFormData.value.quoteConfig.displayField = ''
   }
 }
 
@@ -641,7 +718,10 @@ function handleEditField(field: FieldConfig, index: number): void {
       : { targetCollection: '', displayField: '', inheritFields: [] },
     sequenceConfig: field.sequenceConfig
       ? { ...field.sequenceConfig }
-      : { prefix: '', max: 999 }
+      : { prefix: '', max: 999 },
+    quoteConfig: field.quoteConfig
+      ? { ...field.quoteConfig }
+      : { targetCollection: '', displayField: '' }
   }
   editDialogVisible.value = true
 }
@@ -678,7 +758,8 @@ async function handleSaveField(): Promise<void> {
     relationConfig: showRelationConfig.value ? fieldFormData.value.relationConfig : undefined,
     isPrimaryKey: fieldFormData.value.isPrimaryKey || undefined,
     referenceConfig: showReferenceConfig.value ? fieldFormData.value.referenceConfig : undefined,
-    sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined
+    sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined,
+    quoteConfig: showQuoteConfig.value ? fieldFormData.value.quoteConfig : undefined
   }
 
   if (editingIndex.value === -1) {

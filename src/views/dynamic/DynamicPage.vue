@@ -112,6 +112,7 @@
         @delete="handleDeleteConfirm"
         @reference-click="handleReferenceClick"
         @relation-click="handleRelationClick"
+        @quote-click="handleQuoteClick"
         @selection-change="handleSelectionChange"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
@@ -539,6 +540,16 @@ const filteredData = computed<DynamicRecord[]>(() => {
           }
         }
       }
+
+      if (field.controlType === 'quoteSelect') {
+        const labels = record[`_quote_${field.fieldName}_labels`]
+        if (Array.isArray(labels)) {
+          const matched = labels.some((item: { id: string; label: string }) =>
+            item.label.toLowerCase().includes(keyword)
+          )
+          if (matched) return true
+        }
+      }
     }
     return false
   })
@@ -749,7 +760,9 @@ async function handleExport(): Promise<void> {
   }
   const name = pageConfig.value?.name || '数据'
   const relationDisplayMap = await pageConfigStore.fetchRelationDisplayMaps(pageId.value)
-  exportToExcel(tableData.value, effectiveFields.value, name, relationDisplayMap)
+  const quoteDisplayMap = await pageConfigStore.fetchQuoteDisplayMaps(pageId.value)
+  const mergedDisplayMap = { ...relationDisplayMap, ...quoteDisplayMap }
+  exportToExcel(tableData.value, effectiveFields.value, name, mergedDisplayMap)
   ElMessage.success('导出成功')
 }
 
@@ -852,6 +865,8 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
 
   // 将关联字段的显示名称解析为记录 ID
   await pageConfigStore.resolveRelationImportValues(pageId.value, records)
+  // 将引用选择字段的显示名称解析为记录 ID
+  await pageConfigStore.resolveQuoteImportValues(pageId.value, records)
 
   let success = 0
   let failed = 0
@@ -921,6 +936,23 @@ function handleRelationClick(relatedRecordId: string, field: FieldConfig): void 
   }
 
   router.push({ path: targetMenu.path, query: { recordId: relatedRecordId } })
+}
+
+/**
+ * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面
+ */
+function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
+  const targetCollection = field.quoteConfig?.targetCollection
+  if (!targetCollection) return
+
+  const targetPageId = `page-${targetCollection}`
+  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到引用数据的页面')
+    return
+  }
+
+  router.push({ path: targetMenu.path, query: { recordId: quotedRecordId } })
 }
 
 /**

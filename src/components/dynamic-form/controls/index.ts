@@ -22,6 +22,7 @@ import RelationSelect from './RelationSelect.vue'
 import ReferenceSelect from './ReferenceSelect.vue'
 import AutoTimestamp from './AutoTimestamp.vue'
 import AutoSequence from './AutoSequence.vue'
+import QuoteSelect from './QuoteSelect.vue'
 
 /**
  * 控件类型到组件的映射
@@ -43,7 +44,8 @@ export const controlComponentMap: Record<ControlType, Component> = {
   relation: RelationSelect,
   reference: ReferenceSelect,
   autoTimestamp: AutoTimestamp,
-  autoSequence: AutoSequence
+  autoSequence: AutoSequence,
+  quoteSelect: QuoteSelect
 }
 
 /**
@@ -68,6 +70,8 @@ export function getControlDefaultValue(controlType: ControlType): any {
     case 'checkbox':
       return []
     case 'relation':
+      return []
+    case 'quoteSelect':
       return []
     case 'number':
     case 'reference':
@@ -97,5 +101,6 @@ export {
   RelationSelect,
   ReferenceSelect,
   AutoTimestamp,
-  AutoSequence
+  AutoSequence,
+  QuoteSelect
 }

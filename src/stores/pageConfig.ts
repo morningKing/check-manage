@@ -307,6 +307,12 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         await resolveReferences(data, referenceFields)
       }
 
+      // 解析引用选择字段的 ID 为显示名称
+      const quoteFields = getQuoteFields(pageId)
+      if (quoteFields.length > 0) {
+        await resolveQuoteLabels(data, quoteFields)
+      }
+
       pageDataCache.value[pageId] = data
       return data
     } catch (error) {
@@ -540,6 +546,15 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 获取页面配置中所有 quoteSelect 类型的字段
+   */
+  function getQuoteFields(pageId: string): FieldConfig[] {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return []
+    return config.fields.filter((f) => f.controlType === 'quoteSelect')
+  }
+
+  /**
    * 批量解析引用字段，加载父记录数据并合并到子记录
    */
   async function resolveReferences(
@@ -655,6 +670,60 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 批量解析引用选择字段的 ID 为显示名称
+   *
+   * 按 targetCollection 分组批量请求，构建 id → displayField 映射，
+   * 将结果写入 record[`_quote_${fieldName}_labels`] 为 { id, label }[]
+   */
+  async function resolveQuoteLabels(
+    data: DynamicRecord[],
+    quoteFields: FieldConfig[]
+  ): Promise<void> {
+    const collectionSet = new Set<string>()
+    for (const field of quoteFields) {
+      const config = field.quoteConfig
+      if (config?.targetCollection) {
+        collectionSet.add(config.targetCollection)
+      }
+    }
+
+    const collectionRecords = new Map<string, any[]>()
+    for (const collection of collectionSet) {
+      try {
+        const records = await get<any[]>(`/${collection}`)
+        collectionRecords.set(collection, records)
+      } catch {
+        // 加载失败时跳过
+      }
+    }
+
+    for (const field of quoteFields) {
+      const config = field.quoteConfig
+      if (!config?.targetCollection) continue
+
+      const records = collectionRecords.get(config.targetCollection)
+      if (!records) continue
+
+      const idToLabel = new Map<string, string>()
+      for (const rec of records) {
+        idToLabel.set(rec.id, rec[config.displayField] || rec.id)
+      }
+
+      for (const record of data) {
+        const ids = record[field.fieldName]
+        if (Array.isArray(ids) && ids.length > 0) {
+          record[`_quote_${field.fieldName}_labels`] = ids.map((id: string) => ({
+            id,
+            label: idToLabel.get(id) || id
+          }))
+        } else {
+          record[`_quote_${field.fieldName}_labels`] = []
+        }
+      }
+    }
+  }
+
+  /**
    * 获取目标集合的主键字段名
    *
    * 查找目标集合的页面配置，返回 isPrimaryKey 为 true 的字段名。
@@ -749,6 +818,82 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     }
   }
 
+  /**
+   * 获取引用选择字段的主键映射（用于导出 Excel 时将内部 ID 转为主键值）
+   */
+  async function fetchQuoteDisplayMaps(
+    pageId: string
+  ): Promise<Record<string, Map<string, string>>> {
+    const quoteFields = getQuoteFields(pageId)
+    const result: Record<string, Map<string, string>> = {}
+
+    for (const field of quoteFields) {
+      const config = field.quoteConfig
+      if (!config) continue
+      const pkField = getTargetPrimaryKeyField(config.targetCollection)
+      if (!pkField) continue
+      try {
+        const records = await get<any[]>(`/${config.targetCollection}`)
+        const idToPk = new Map<string, string>()
+        for (const r of records) {
+          const pkVal = r[pkField]
+          if (pkVal) idToPk.set(r.id, String(pkVal))
+        }
+        result[field.fieldName] = idToPk
+      } catch {
+        // 目标集合加载失败时跳过
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * 解析导入数据中的引用选择字段：将主键值转为内部记录 ID
+   */
+  async function resolveQuoteImportValues(
+    pageId: string,
+    records: Record<string, any>[]
+  ): Promise<void> {
+    const quoteFields = getQuoteFields(pageId)
+    if (quoteFields.length === 0) return
+
+    for (const field of quoteFields) {
+      const config = field.quoteConfig
+      if (!config) continue
+
+      const pkField = getTargetPrimaryKeyField(config.targetCollection)
+
+      let targetRecords: any[]
+      try {
+        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+      } catch {
+        continue
+      }
+
+      const pkToId = new Map<string, string>()
+      const idSet = new Set<string>()
+      for (const r of targetRecords) {
+        idSet.add(r.id)
+        if (pkField) {
+          const pkVal = r[pkField]
+          if (pkVal) pkToId.set(String(pkVal), r.id)
+        }
+      }
+
+      for (const record of records) {
+        const vals = record[field.fieldName]
+        if (!Array.isArray(vals) || vals.length === 0) continue
+        record[field.fieldName] = vals
+          .map((v: string) => {
+            if (idSet.has(v)) return v
+            return pkToId.get(v) || null
+          })
+          .filter((v: string | null): v is string => v !== null)
+      }
+    }
+  }
+
   // 返回需要暴露的内容
   return {
     // State
@@ -781,6 +926,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     saveRelations,
     fetchRelationDisplayMaps,
     resolveRelationImportValues,
+    // 引用选择
+    fetchQuoteDisplayMaps,
+    resolveQuoteImportValues,
     // 自动字段
     generateNextSequenceValue
   }

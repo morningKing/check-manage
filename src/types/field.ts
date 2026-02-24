@@ -25,6 +25,7 @@ export type ControlType =
   | 'reference'   // 数据引用（一对多依赖）
   | 'autoTimestamp' // 自动时间戳（新增/修改时自动填充）
   | 'autoSequence'  // 自增序列（新增时自动生成递增编号）
+  | 'quoteSelect'   // 引用选择（单向多选引用另一集合记录）
 
 /**
  * 控件类型配置
@@ -46,7 +47,8 @@ export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '关联关系', value: 'relation' },
   { label: '数据引用', value: 'reference' },
   { label: '自动时间戳', value: 'autoTimestamp' },
-  { label: '自增序列', value: 'autoSequence' }
+  { label: '自增序列', value: 'autoSequence' },
+  { label: '引用选择', value: 'quoteSelect' }
 ]
 
 /**
@@ -103,6 +105,17 @@ export interface ReferenceConfig {
   targetCollection: string
   displayField: string
   inheritFields: string[]
+}
+
+/**
+ * 引用选择配置接口
+ *
+ * @property targetCollection - 目标集合名称
+ * @property displayField - 下拉框中显示的字段名
+ */
+export interface QuoteConfig {
+  targetCollection: string
+  displayField: string
 }
 
 /**
@@ -166,6 +179,7 @@ export interface FieldConfig {
   isPrimaryKey?: boolean
   referenceConfig?: ReferenceConfig
   sequenceConfig?: SequenceConfig
+  quoteConfig?: QuoteConfig
 }
 
 /**
@@ -188,6 +202,7 @@ export interface FieldFormData {
   isPrimaryKey: boolean
   referenceConfig?: ReferenceConfig
   sequenceConfig?: SequenceConfig
+  quoteConfig?: QuoteConfig
 }
 
 /**
@@ -210,6 +225,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     relationConfig: { targetCollection: '', displayField: '', targetField: '' },
     isPrimaryKey: false,
     referenceConfig: { targetCollection: '', displayField: '', inheritFields: [] },
-    sequenceConfig: { prefix: '', max: 999 }
+    sequenceConfig: { prefix: '', max: 999 },
+    quoteConfig: { targetCollection: '', displayField: '' }
   }
 }

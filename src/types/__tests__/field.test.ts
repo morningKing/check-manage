@@ -24,8 +24,14 @@ describe('Field Types', () => {
       expect(opt!.label).toBe('自增序列')
     })
 
-    it('共 15 种控件类型', () => {
-      expect(CONTROL_TYPE_OPTIONS).toHaveLength(15)
+    it('包含 quoteSelect 选项', () => {
+      const opt = CONTROL_TYPE_OPTIONS.find(o => o.value === 'quoteSelect')
+      expect(opt).toBeDefined()
+      expect(opt!.label).toBe('引用选择')
+    })
+
+    it('共 16 种控件类型', () => {
+      expect(CONTROL_TYPE_OPTIONS).toHaveLength(16)
     })
   })
 
@@ -50,6 +56,13 @@ describe('Field Types', () => {
       expect(data.referenceConfig).toBeDefined()
       expect(data.referenceConfig!.targetCollection).toBe('')
       expect(data.referenceConfig!.inheritFields).toEqual([])
+    })
+
+    it('包含 quoteConfig 默认值', () => {
+      const data = createEmptyFieldFormData()
+      expect(data.quoteConfig).toBeDefined()
+      expect(data.quoteConfig!.targetCollection).toBe('')
+      expect(data.quoteConfig!.displayField).toBe('')
     })
 
     it('接受自定义 order', () => {

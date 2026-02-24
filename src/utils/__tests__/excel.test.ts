@@ -55,7 +55,7 @@ describe('Excel Utils', () => {
     })
 
     it('支持所有可导出类型', () => {
-      const exportableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence']
+      const exportableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect']
       const fields = exportableTypes.map((type, i) =>
         makeField({ fieldName: `f${i}`, controlType: type, order: i })
       )
@@ -85,6 +85,16 @@ describe('Excel Utils', () => {
 
     it('空数组返回空数组', () => {
       expect(getExportableFields([])).toEqual([])
+    })
+
+    it('quoteSelect 字段可导出', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'quoted', controlType: 'quoteSelect', order: 1 }),
+        makeField({ fieldName: 'name', controlType: 'text', order: 2 }),
+      ]
+      const result = getExportableFields(fields)
+      expect(result).toHaveLength(2)
+      expect(result[0].fieldName).toBe('quoted')
     })
   })
 })
