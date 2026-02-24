@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS dynamic_data (
     id          VARCHAR(100) PRIMARY KEY,
     collection  VARCHAR(200) NOT NULL,
     data        JSONB NOT NULL DEFAULT '{}'::jsonb,
-    created_at  TIMESTAMPTZ DEFAULT NOW()
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW(),
+    version     INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_collection ON dynamic_data(collection);
@@ -350,6 +352,17 @@ def init_db():
             )
             conn.commit()
             print("Added ETL management menu.")
+
+        # Migration: add version and updated_at columns to dynamic_data
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'dynamic_data' AND column_name = 'version'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE dynamic_data ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW()")
+            cur.execute("ALTER TABLE dynamic_data ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+            conn.commit()
+            print("Added version and updated_at columns to dynamic_data table.")
 
         # Check if data exists
         cur.execute("SELECT COUNT(*) FROM menus")

@@ -934,7 +934,11 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
     await loadPageData()
   } catch (error: any) {
     const resp = error.response?.data
-    if (resp?.validationErrors?.length) {
+    if (resp?.code === 'VERSION_CONFLICT') {
+      ElMessage.error('数据已被其他用户修改，请刷新后重试')
+      dialogVisible.value = false
+      await loadPageData()
+    } else if (resp?.validationErrors?.length) {
       ElMessage.error(resp.validationErrors.join('；'))
       if (resp.validationWarnings?.length) {
         ElMessage.warning(resp.validationWarnings.join('；'))

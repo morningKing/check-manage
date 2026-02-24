@@ -22,12 +22,15 @@ def format_ts(dt):
 
 
 def row_to_record(row):
-    """Reconstruct flat object from (id, collection, data, created_at) row."""
+    """Reconstruct flat object from (id, collection, data, created_at, updated_at, version) row."""
     record = {'id': row[0]}
     if row[2]:  # data JSONB
         record.update(row[2])
     if row[3]:  # created_at
         record['createdAt'] = format_ts(row[3])
+    if row[4]:  # updated_at
+        record['updatedAt'] = format_ts(row[4])
+    record['_version'] = row[5] if len(row) > 5 and row[5] is not None else 1
     return record
 
 
@@ -147,7 +150,7 @@ def list_items(collection):
         return jsonify({"error": "Not found"}), 404
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s ORDER BY created_at', (collection,))
+        cur.execute('SELECT id, collection, data, created_at, updated_at, version FROM dynamic_data WHERE collection = %s ORDER BY created_at', (collection,))
         rows = cur.fetchall()
     return jsonify([row_to_record(r) for r in rows])
 
@@ -159,7 +162,7 @@ def get_item(collection, item_id):
         return jsonify({"error": "Not found"}), 404
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        cur.execute('SELECT id, collection, data, created_at, updated_at, version FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404
@@ -213,6 +216,7 @@ def create_item(collection):
     record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
                   f'新增{page_name}「{record_name}」')
+    body['_version'] = 1
     return jsonify(body), 201
 
 
@@ -223,7 +227,8 @@ def update_item(collection, item_id):
         return jsonify({"error": "Not found"}), 404
     body = request.get_json(force=True)
     created_at = body.get('createdAt')
-    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt')}
+    client_version = body.get('_version')
+    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt')}
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness (exclude current record)
@@ -232,10 +237,13 @@ def update_item(collection, item_id):
             error = check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=item_id)
             if error:
                 return jsonify({"error": error}), 409
-        # Fetch old data for diff
-        cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        # Fetch old data for diff (and current version for optimistic locking)
+        cur.execute('SELECT data, version FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
         old_row = cur.fetchone()
-        old_data = old_row[0] if old_row and old_row[0] else {}
+        if not old_row:
+            return jsonify({"error": "记录不存在"}), 404
+        old_data = old_row[0] if old_row[0] else {}
+        db_version = old_row[1] if old_row[1] is not None else 1
         # Run validation script if configured
         page_name, fields = get_page_info(cur, collection)
         validation_script = get_validation_script(cur, collection)
@@ -254,22 +262,39 @@ def update_item(collection, item_id):
                     "validationErrors": errors,
                     "validationWarnings": warnings,
                 }), 400
+        # Optimistic locking: check version if client provides it
+        if client_version is not None and int(client_version) != db_version:
+            return jsonify({
+                "error": "数据已被其他用户修改，请刷新后重试",
+                "code": "VERSION_CONFLICT",
+                "_version": db_version,
+            }), 409
+        new_version = db_version + 1
         if created_at:
             cur.execute(
-                'UPDATE dynamic_data SET data = %s, created_at = %s WHERE collection = %s AND id = %s',
-                (psycopg2.extras.Json(data), created_at, collection, item_id),
+                'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
+                'WHERE collection = %s AND id = %s AND version = %s',
+                (psycopg2.extras.Json(data), created_at, new_version, collection, item_id, db_version),
             )
         else:
             cur.execute(
-                'UPDATE dynamic_data SET data = %s WHERE collection = %s AND id = %s',
-                (psycopg2.extras.Json(data), collection, item_id),
+                'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
+                'WHERE collection = %s AND id = %s AND version = %s',
+                (psycopg2.extras.Json(data), new_version, collection, item_id, db_version),
             )
+        if cur.rowcount == 0:
+            # Another request changed the version between our SELECT and UPDATE
+            return jsonify({
+                "error": "数据已被其他用户修改，请刷新后重试",
+                "code": "VERSION_CONFLICT",
+            }), 409
         # Apply relations queued by validation script
         if pending_relations:
             apply_pending_relations(cur, collection, item_id, pending_relations)
         if not validation_script:
             page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id
+    body['_version'] = new_version
     label_map = get_field_label_map(fields)
     record_name = pick_display_name(data, fields) or pick_display_name(old_data, fields) or item_id
     changed_labels = []

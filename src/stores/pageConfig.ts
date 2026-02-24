@@ -392,6 +392,12 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         updateData[field.fieldName] = now
       }
 
+      // 携带版本号用于乐观锁检测
+      const cached = pageDataCache.value[pageId]?.find((r) => r.id === recordId)
+      if (cached?._version !== undefined) {
+        updateData._version = cached._version
+      }
+
       const updated = await put<DynamicRecord>(`/${endpoint}/${recordId}`, updateData)
 
       if (pageDataCache.value[pageId]) {

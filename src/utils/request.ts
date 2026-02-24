@@ -101,7 +101,10 @@ service.interceptors.response.use(
           ElMessage.error('请求资源不存在')
           break
         case 409:
-          ElMessage.error(message)
+          // VERSION_CONFLICT is handled by the caller, skip duplicate message
+          if (error.response?.data?.code !== 'VERSION_CONFLICT') {
+            ElMessage.error(message)
+          }
           break
         case 500:
           ElMessage.error('服务器内部错误')

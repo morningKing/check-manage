@@ -26,7 +26,7 @@ BACKUP_TABLES = [
     ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}),
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
                       'export_scripts', 'row_export_scripts', 'api_public', 'validation_script'], {4, 7, 8}),
-    ('dynamic_data', ['id', 'collection', 'data', 'created_at'], {2}),
+    ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version'], {2}),
     ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set()),
     ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set()),
     ('operation_logs', ['id', 'action', 'target_type', 'target_id', 'target_name', 'description',

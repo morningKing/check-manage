@@ -1,14 +1,14 @@
 """
 动态数据路由单元测试
 
-测试 RESERVED 集合拦截和基本 CRUD 路由。
+测试 RESERVED 集合拦截、基本 CRUD 路由和乐观锁。
 """
 
 import sys
 import os
 import json
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -38,9 +38,14 @@ def setup(mock_conn, mock_cursor):
         patch('routes.relations.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('utils.operation_log.log_operation'),
-        patch('utils.operation_log.get_page_info', return_value=('page-test', '测试页面')),
+        patch('utils.operation_log.get_page_info', return_value=('测试页面', [])),
+        patch('routes.dynamic.get_page_info', return_value=('测试页面', [])),
         patch('utils.operation_log.pick_display_name', return_value='记录名'),
+        patch('routes.dynamic.pick_display_name', return_value='记录名'),
         patch('utils.operation_log.get_field_label_map', return_value={}),
+        patch('routes.dynamic.get_field_label_map', return_value={}),
+        patch('routes.dynamic.log_operation'),
+        patch('routes.dynamic.get_validation_script', return_value=None),
     ]
     for p in patches:
         p.start()
@@ -77,12 +82,24 @@ class TestListCollection:
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
         mock_cursor.fetchall.return_value = [
-            ('rec-1', 'test-collection', {'name': '记录1'}, now),
+            ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 1),
         ]
         resp = client.get('/test-collection', headers=headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert isinstance(data, list)
+
+    def test_list_returns_version(self, setup):
+        """列表接口返回 _version 字段"""
+        client, mock_cursor, _, headers = setup
+        now = datetime.now(timezone.utc)
+        mock_cursor.fetchall.return_value = [
+            ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 3),
+        ]
+        resp = client.get('/test-collection', headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data[0]['_version'] == 3
 
     def test_list_empty_collection(self, setup):
         client, mock_cursor, _, headers = setup
@@ -101,6 +118,96 @@ class TestCreateRecord:
                            content_type='application/json',
                            headers=headers)
         assert resp.status_code == 201
+
+    def test_create_returns_version_1(self, setup):
+        """新建记录返回 _version=1"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        resp = client.post('/test-collection',
+                           data=json.dumps({'name': '新记录'}),
+                           content_type='application/json',
+                           headers=headers)
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data['_version'] == 1
+
+
+class TestUpdateRecord:
+    def test_update_increments_version(self, setup):
+        """更新记录后 version 递增"""
+        client, mock_cursor, _, headers = setup
+        # fetchone 调用序列：
+        # 1. get_primary_key_fields → None (无主键配置)
+        # 2. SELECT data, version → 返回旧数据和版本号
+        mock_cursor.fetchone.side_effect = [
+            None,                                  # pk_fields: no page config
+            ({'name': '旧记录'}, 2),               # old data + version
+        ]
+        mock_cursor.rowcount = 1  # UPDATE affected 1 row
+        resp = client.put('/test-collection/rec-1',
+                          data=json.dumps({'name': '新名', '_version': 2}),
+                          content_type='application/json',
+                          headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['_version'] == 3
+
+    def test_update_version_conflict(self, setup):
+        """客户端版本不匹配时返回 409"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            None,                                  # pk_fields
+            ({'name': '旧记录'}, 5),               # old data + version=5
+        ]
+        # 客户端携带 _version=3，但数据库已经是 version=5
+        resp = client.put('/test-collection/rec-1',
+                          data=json.dumps({'name': '新名', '_version': 3}),
+                          content_type='application/json',
+                          headers=headers)
+        assert resp.status_code == 409
+        data = resp.get_json()
+        assert data['code'] == 'VERSION_CONFLICT'
+
+    def test_update_without_version_still_works(self, setup):
+        """不携带 _version 的更新请求仍然成功（向后兼容）"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            None,                                  # pk_fields
+            ({'name': '旧记录'}, 1),               # old data + version
+        ]
+        mock_cursor.rowcount = 1
+        resp = client.put('/test-collection/rec-1',
+                          data=json.dumps({'name': '新名'}),
+                          content_type='application/json',
+                          headers=headers)
+        assert resp.status_code == 200
+
+    def test_update_race_condition(self, setup):
+        """版本匹配但 UPDATE rowcount=0 时返回 409（竞态条件）"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            None,                                  # pk_fields
+            ({'name': '旧记录'}, 2),               # old data + version
+        ]
+        mock_cursor.rowcount = 0  # UPDATE 匹配0行（被其他请求先改了）
+        resp = client.put('/test-collection/rec-1',
+                          data=json.dumps({'name': '新名', '_version': 2}),
+                          content_type='application/json',
+                          headers=headers)
+        assert resp.status_code == 409
+
+    def test_update_nonexistent_record(self, setup):
+        """更新不存在的记录返回 404"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            None,   # pk_fields
+            None,   # old data → record not found
+        ]
+        resp = client.put('/test-collection/rec-999',
+                          data=json.dumps({'name': '新名', '_version': 1}),
+                          content_type='application/json',
+                          headers=headers)
+        assert resp.status_code == 404
 
 
 class TestUnauthorized:

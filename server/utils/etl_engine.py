@@ -310,7 +310,7 @@ def _step_save_to_collection(config, context, conn, dry_run):
                     existing = cur.fetchone()
                     if existing:
                         cur.execute(
-                            'UPDATE dynamic_data SET data = %s WHERE id = %s',
+                            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 WHERE id = %s',
                             (psycopg2.extras.Json(record_data), existing[0]),
                         )
                     else:
@@ -333,7 +333,7 @@ def _step_save_to_collection(config, context, conn, dry_run):
                     existing = cur.fetchone()
                     if existing:
                         cur.execute(
-                            'UPDATE dynamic_data SET data = %s WHERE id = %s',
+                            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 WHERE id = %s',
                             (psycopg2.extras.Json(record_data), existing[0]),
                         )
                         success += 1
