@@ -344,6 +344,84 @@ describe('PageConfig Store — quoteSelect', () => {
     expect(labels[1].label).toBe('用例B')
   })
 
+  it('resolveQuoteLabels 保持引用数组的原始顺序', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 引用顺序为 case-3, case-1, case-2（非自然排序）
+    mockedGet.mockResolvedValueOnce([
+      { id: 'r1', quotedCases: ['case-3', 'case-1', 'case-2'] },
+    ])
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseName: '用例A' },
+      { id: 'case-2', caseName: '用例B' },
+      { id: 'case-3', caseName: '用例C' },
+    ])
+
+    const result = await store.fetchPageData('page-test')
+    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    expect(labels).toHaveLength(3)
+    // 验证标签顺序与原始 ID 数组一致，而非按目标集合顺序
+    expect(labels[0]).toEqual({ id: 'case-3', label: '用例C' })
+    expect(labels[1]).toEqual({ id: 'case-1', label: '用例A' })
+    expect(labels[2]).toEqual({ id: 'case-2', label: '用例B' })
+  })
+
+  it('resolveQuoteLabels 删除中间引用后保持剩余顺序', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 原始引用 B, C, D → 目标集合中 C 已被删除
+    mockedGet.mockResolvedValueOnce([
+      { id: 'r1', quotedCases: ['id-B', 'id-C', 'id-D'] },
+    ])
+    mockedGet.mockResolvedValueOnce([
+      { id: 'id-B', caseName: '记录B' },
+      // id-C 已删除，不在目标集合中
+      { id: 'id-D', caseName: '记录D' },
+    ])
+
+    const result = await store.fetchPageData('page-test')
+    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    expect(labels).toHaveLength(3)
+    // B 和 D 保持原始顺序，C 的 ID 作为 fallback 显示
+    expect(labels[0]).toEqual({ id: 'id-B', label: '记录B' })
+    expect(labels[1]).toEqual({ id: 'id-C', label: 'id-C' }) // 已删除，fallback 为 ID
+    expect(labels[2]).toEqual({ id: 'id-D', label: '记录D' })
+  })
+
   it('fetchQuoteDisplayMaps 构建正确映射', async () => {
     const mockedGet = vi.mocked(get)
     mockedGet.mockReset()
@@ -420,5 +498,149 @@ describe('PageConfig Store — quoteSelect', () => {
     await store.resolveQuoteImportValues('page-test', records)
     expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
     expect(records[1].quotedCases).toEqual(['case-1'])
+  })
+
+  it('resolveQuoteImportValues 保持导入值的原始顺序', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001' },
+      { id: 'case-2', caseId: 'IC-002' },
+      { id: 'case-3', caseId: 'IC-003' },
+    ])
+
+    // 导入顺序为 IC-003, IC-001, IC-002（非自然排序）
+    const records = [
+      { quotedCases: ['IC-003', 'IC-001', 'IC-002'] },
+    ]
+
+    await store.resolveQuoteImportValues('page-test', records)
+    // 验证解析后的 ID 保持与导入值相同的顺序
+    expect(records[0].quotedCases).toEqual(['case-3', 'case-1', 'case-2'])
+  })
+
+  it('resolveQuoteImportValues 跳过不存在的值但保持剩余顺序', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001' },
+      { id: 'case-3', caseId: 'IC-003' },
+    ])
+
+    // IC-002 不存在，应被过滤但不影响 IC-001 和 IC-003 的顺序
+    const records = [
+      { quotedCases: ['IC-001', 'IC-002', 'IC-003'] },
+    ]
+
+    await store.resolveQuoteImportValues('page-test', records)
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-3'])
+  })
+
+  it('stripRelationFields 保持 quoteSelect 数组顺序不变', () => {
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({ id: 'f2', fieldName: 'quotedCases', controlType: 'quoteSelect' }),
+            makeField({ id: 'f3', fieldName: 'relatedItems', controlType: 'relation' }),
+          ],
+        }),
+      ],
+    })
+
+    const ordered = ['id-3', 'id-1', 'id-2']
+    const formData = { name: '测试', quotedCases: ordered, relatedItems: ['id-x'] }
+    const result = store.stripRelationFields('page-test', formData)
+    expect(result.quotedCases).toEqual(['id-3', 'id-1', 'id-2'])
+  })
+
+  it('fetchQuoteDisplayMaps 导出映射按 ID 数组顺序生成', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001' },
+      { id: 'case-2', caseId: 'IC-002' },
+    ])
+
+    const maps = await store.fetchQuoteDisplayMaps('page-test')
+    expect(maps.quotedCases).toBeDefined()
+    expect(maps.quotedCases.get('case-1')).toBe('IC-001')
+    expect(maps.quotedCases.get('case-2')).toBe('IC-002')
+
+    // 验证：给定有序 ID 数组，通过 map 查找后顺序不变
+    const orderedIds = ['case-2', 'case-1']
+    const displayValues = orderedIds.map(id => maps.quotedCases.get(id))
+    expect(displayValues).toEqual(['IC-002', 'IC-001'])
   })
 })
