@@ -152,6 +152,7 @@
             >
               <el-radio value="static">静态选项</el-radio>
               <el-radio value="api">API获取</el-radio>
+              <el-radio value="collection">数据页数据</el-radio>
             </el-radio-group>
 
             <!-- 静态选项配置 -->
@@ -186,7 +187,7 @@
             </div>
 
             <!-- API选项配置 -->
-            <div v-else class="api-options">
+            <div v-else-if="fieldFormData.optionsSource.type === 'api'" class="api-options">
               <el-form-item label="API地址" label-width="80px">
                 <el-input
                   v-model="fieldFormData.optionsSource.url"
@@ -208,6 +209,64 @@
                       v-model="fieldFormData.optionsSource.valueField"
                       placeholder="value"
                     />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </div>
+
+            <!-- 数据页数据选项配置 -->
+            <div v-else-if="fieldFormData.optionsSource.type === 'collection'" class="collection-options">
+              <el-form-item label="数据页" label-width="80px">
+                <el-select
+                  v-model="fieldFormData.optionsSource.collection"
+                  placeholder="请选择数据页"
+                  filterable
+                  style="width: 100%"
+                  @change="handleOptionsCollectionChange"
+                >
+                  <el-option
+                    v-for="opt in optionsCollectionList"
+                    :key="opt.value"
+                    :label="opt.label"
+                    :value="opt.value"
+                  />
+                </el-select>
+              </el-form-item>
+              <el-row :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="标签字段" label-width="80px">
+                    <el-select
+                      v-model="fieldFormData.optionsSource.labelField"
+                      placeholder="选择显示字段"
+                      filterable
+                      style="width: 100%"
+                      :disabled="!fieldFormData.optionsSource.collection"
+                    >
+                      <el-option
+                        v-for="opt in optionsCollectionFieldList"
+                        :key="opt.value"
+                        :label="`${opt.label}（${opt.value}）`"
+                        :value="opt.value"
+                      />
+                    </el-select>
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="值字段" label-width="80px">
+                    <el-select
+                      v-model="fieldFormData.optionsSource.valueField"
+                      placeholder="选择值字段"
+                      filterable
+                      style="width: 100%"
+                      :disabled="!fieldFormData.optionsSource.collection"
+                    >
+                      <el-option
+                        v-for="opt in optionsCollectionFieldList"
+                        :key="opt.value"
+                        :label="`${opt.label}（${opt.value}）`"
+                        :value="opt.value"
+                      />
+                    </el-select>
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -643,6 +702,32 @@ const quoteDisplayFieldOptions = computed(() => {
     }))
 })
 
+/**
+ * 选项配置 - 数据页列表（可选择包含自身页面，因为选项数据和当前页面之间没有约束）
+ */
+const optionsCollectionList = computed(() => {
+  return pageConfigStore.pageConfigs.map((c) => ({
+    label: c.name,
+    value: c.id.replace('page-', '')
+  }))
+})
+
+/**
+ * 选项配置 - 选中数据页的字段列表（非关联/非引用类字段）
+ */
+const optionsCollectionFieldList = computed(() => {
+  const tc = fieldFormData.value.optionsSource?.collection
+  if (!tc) return []
+  const config = pageConfigStore.pageConfigs.find((c) => c.id === `page-${tc}`)
+  if (!config) return []
+  return config.fields
+    .filter((f) => !['relation', 'reference', 'quoteSelect', 'file', 'image'].includes(f.controlType))
+    .map((f) => ({
+      label: f.label,
+      value: f.fieldName
+    }))
+})
+
 // ==================== 方法 ====================
 
 /**
@@ -680,6 +765,14 @@ function handleQuoteTargetCollectionChange(): void {
   if (fieldFormData.value.quoteConfig) {
     fieldFormData.value.quoteConfig.displayField = ''
   }
+}
+
+/**
+ * 处理选项数据页变更，清空标签字段和值字段
+ */
+function handleOptionsCollectionChange(): void {
+  fieldFormData.value.optionsSource.labelField = ''
+  fieldFormData.value.optionsSource.valueField = ''
 }
 
 /**
@@ -908,6 +1001,10 @@ watch(
   }
 
   .api-options {
+    padding-top: 8px;
+  }
+
+  .collection-options {
     padding-top: 8px;
   }
 }

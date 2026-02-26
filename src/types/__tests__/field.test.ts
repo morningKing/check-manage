@@ -9,6 +9,7 @@ import {
   CONTROL_TYPE_OPTIONS,
   createEmptyFieldFormData,
 } from '../field'
+import type { OptionsSource } from '../field'
 
 describe('Field Types', () => {
   describe('CONTROL_TYPE_OPTIONS', () => {
@@ -68,6 +69,32 @@ describe('Field Types', () => {
     it('接受自定义 order', () => {
       const data = createEmptyFieldFormData(5)
       expect(data.order).toBe(5)
+    })
+
+    it('optionsSource 默认为 static 类型', () => {
+      const data = createEmptyFieldFormData()
+      expect(data.optionsSource).toEqual({ type: 'static' })
+    })
+  })
+
+  describe('OptionsSource', () => {
+    it('支持 static 类型', () => {
+      const source: OptionsSource = { type: 'static' }
+      expect(source.type).toBe('static')
+    })
+
+    it('支持 api 类型', () => {
+      const source: OptionsSource = { type: 'api', url: '/api/options', labelField: 'name', valueField: 'code' }
+      expect(source.type).toBe('api')
+      expect(source.url).toBe('/api/options')
+    })
+
+    it('支持 collection 类型', () => {
+      const source: OptionsSource = { type: 'collection', collection: 'cases', labelField: 'caseName', valueField: 'caseName' }
+      expect(source.type).toBe('collection')
+      expect(source.collection).toBe('cases')
+      expect(source.labelField).toBe('caseName')
+      expect(source.valueField).toBe('caseName')
     })
   })
 })

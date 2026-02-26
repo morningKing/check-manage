@@ -109,6 +109,23 @@ async function loadOptions(): Promise<void> {
       loading.value = false
     }
   }
+
+  // 数据页数据获取选项
+  if (source.type === 'collection' && source.collection) {
+    loading.value = true
+    try {
+      const data = await get<any[]>(`/${source.collection}`)
+      options.value = data.map((item) => ({
+        label: String(item[source.labelField || 'id'] ?? item.id),
+        value: item[source.valueField || 'id'] ?? item.id
+      }))
+    } catch (error) {
+      console.error('加载数据页选项失败:', error)
+      options.value = []
+    } finally {
+      loading.value = false
+    }
+  }
 }
 
 // ==================== 生命周期 ====================

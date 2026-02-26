@@ -81,7 +81,7 @@ const selectValue = computed({
 /**
  * 加载选项数据
  *
- * 根据配置决定是使用静态选项还是从 API 获取
+ * 根据配置决定是使用静态选项、从 API 获取或从数据页获取
  */
 async function loadOptions(): Promise<void> {
   const source = props.field.optionsSource
@@ -103,6 +103,23 @@ async function loadOptions(): Promise<void> {
       }))
     } catch (error) {
       console.error('加载选项失败:', error)
+      options.value = []
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // 数据页数据获取选项
+  if (source.type === 'collection' && source.collection) {
+    loading.value = true
+    try {
+      const data = await get<any[]>(`/${source.collection}`)
+      options.value = data.map((item) => ({
+        label: String(item[source.labelField || 'id'] ?? item.id),
+        value: item[source.valueField || 'id'] ?? item.id
+      }))
+    } catch (error) {
+      console.error('加载数据页选项失败:', error)
       options.value = []
     } finally {
       loading.value = false

@@ -69,16 +69,18 @@ export interface FieldOption {
  *
  * 定义选项数据的获取方式
  *
- * @property type - 来源类型：static（静态配置）或 api（接口获取）
+ * @property type - 来源类型：static（静态配置）、api（接口获取）或 collection（数据页数据）
  * @property url - API地址（type为api时需要）
- * @property labelField - API响应中的标签字段名
- * @property valueField - API响应中的值字段名
+ * @property labelField - 标签字段名（api/collection 类型使用）
+ * @property valueField - 值字段名（api/collection 类型使用）
+ * @property collection - 目标集合名称（type为collection时需要）
  */
 export interface OptionsSource {
-  type: 'static' | 'api'
+  type: 'static' | 'api' | 'collection'
   url?: string
   labelField?: string
   valueField?: string
+  collection?: string
 }
 
 /**
