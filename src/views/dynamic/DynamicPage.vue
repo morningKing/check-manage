@@ -1105,8 +1105,12 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
 
   // 将关联字段的显示名称解析为记录 ID
   await pageConfigStore.resolveRelationImportValues(pageId.value, records)
+  // 将引用字段的显示名称 / 主键值解析为记录 ID
+  await pageConfigStore.resolveReferenceImportValues(pageId.value, records)
   // 将引用选择字段的显示名称解析为记录 ID
   await pageConfigStore.resolveQuoteImportValues(pageId.value, records)
+  // 将 collection 类型选项字段的显示标签解析为实际存储值
+  await pageConfigStore.resolveCollectionSelectImportValues(pageId.value, records)
 
   let success = 0
   let failed = 0
@@ -1114,8 +1118,10 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   await withBatch(`导入 ${records.length} 条${pageConfig.value?.name || '数据'}`, async () => {
     for (let i = 0; i < records.length; i++) {
       try {
+        const importId = records[i]._importId as string | undefined
         const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
-        const created = await pageConfigStore.addPageData(pageId.value, regularData)
+        delete regularData._importId
+        const created = await pageConfigStore.addPageData(pageId.value, regularData, importId)
         // 保存关联关系数据
         await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
         success++

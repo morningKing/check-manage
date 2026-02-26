@@ -20,9 +20,12 @@ vi.mock('@/api/relation', () => ({
   updateFieldRelations: vi.fn(),
 }))
 
-vi.mock('uuid', () => ({
-  v4: () => 'mock-uuid-1234',
-}))
+vi.mock('uuid', () => {
+  let counter = 0
+  return {
+    v4: () => `mock-uuid-${String(++counter).padStart(4, '0')}`,
+  }
+})
 
 import { usePageConfigStore } from '../pageConfig'
 import { get } from '@/utils/request'
@@ -584,6 +587,84 @@ describe('PageConfig Store — quoteSelect', () => {
     expect(records[0].quotedCases).toEqual(['case-1', 'case-3'])
   })
 
+  it('resolveQuoteImportValues 通过 displayField 名称匹配', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001', caseName: '用例A' },
+      { id: 'case-2', caseId: 'IC-002', caseName: '用例B' },
+    ])
+
+    // 用户在 Excel 中填写的是 displayField 的值（下拉框中看到的名称）
+    const records = [
+      { quotedCases: ['用例A', '用例B'] },
+    ]
+
+    await store.resolveQuoteImportValues('page-test', records)
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
+  })
+
+  it('resolveQuoteImportValues 主键匹配优先于 displayField', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    // caseId='X' 的记录和 caseName='X' 的记录不同
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'X', caseName: '用例1' },
+      { id: 'case-2', caseId: 'Y', caseName: 'X' },
+    ])
+
+    const records = [{ quotedCases: ['X'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    // 主键匹配优先
+    expect(records[0].quotedCases).toEqual(['case-1'])
+  })
+
   it('stripRelationFields 保持 quoteSelect 数组顺序不变', () => {
     store.$patch({
       pageConfigs: [
@@ -759,5 +840,595 @@ describe('PageConfig Store — 批量关联加载', () => {
     // 'items' 集合只请求一次（共享缓存）
     const itemsCalls = mockedGet.mock.calls.filter(c => c[0] === '/items')
     expect(itemsCalls).toHaveLength(1)
+  })
+})
+
+describe('PageConfig Store — resolveRelationImportValues displayField', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('通过 displayField 名称匹配关联记录', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'relItems',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backRef' },
+            }),
+          ],
+        }),
+        // items 集合没有主键
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', itemName: '物品A' },
+      { id: 'item-2', itemName: '物品B' },
+    ])
+
+    // 用户在 Excel 中填写的是 displayField 值
+    const records = [
+      { relItems: ['物品A', '物品B'] },
+    ]
+
+    await store.resolveRelationImportValues('page-test', records)
+    expect(records[0].relItems).toEqual(['item-1', 'item-2'])
+  })
+
+  it('主键匹配优先于 displayField', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'relItems',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backRef' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-items',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'code', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', code: 'X', itemName: '物品1' },
+      { id: 'item-2', code: 'Y', itemName: 'X' },
+    ])
+
+    const records = [{ relItems: ['X'] }]
+    await store.resolveRelationImportValues('page-test', records)
+    // 主键优先：'X' 匹配 code='X' → item-1
+    expect(records[0].relItems).toEqual(['item-1'])
+  })
+})
+
+describe('PageConfig Store — resolveReferenceImportValues', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('将 displayField 显示值解析为内部记录 ID', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'templateRef',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'templates', displayField: 'templateName', inheritFields: [] },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'tpl-001', templateName: '模板A' },
+      { id: 'tpl-002', templateName: '模板B' },
+    ])
+
+    const records = [
+      { templateRef: '模板A' },
+      { templateRef: '模板B' },
+    ]
+
+    await store.resolveReferenceImportValues('page-test', records)
+    expect(records[0].templateRef).toBe('tpl-001')
+    expect(records[1].templateRef).toBe('tpl-002')
+  })
+
+  it('将主键值解析为内部记录 ID', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'templateRef',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'templates', displayField: 'templateName', inheritFields: [] },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-templates',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'tplCode', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'tpl-001', tplCode: 'TPL-A', templateName: '模板A' },
+      { id: 'tpl-002', tplCode: 'TPL-B', templateName: '模板B' },
+    ])
+
+    const records = [
+      { templateRef: 'TPL-A' },
+      { templateRef: 'TPL-B' },
+    ]
+
+    await store.resolveReferenceImportValues('page-test', records)
+    expect(records[0].templateRef).toBe('tpl-001')
+    expect(records[1].templateRef).toBe('tpl-002')
+  })
+
+  it('已经是内部 ID 时保持不变', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'templateRef',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'templates', displayField: 'templateName', inheritFields: [] },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'tpl-001', templateName: '模板A' },
+    ])
+
+    const records = [
+      { templateRef: 'tpl-001' },
+    ]
+
+    await store.resolveReferenceImportValues('page-test', records)
+    expect(records[0].templateRef).toBe('tpl-001')
+  })
+
+  it('主键匹配优先于 displayField 匹配', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'ref',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'items', displayField: 'name', inheritFields: [] },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-items',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'code', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    // code='X' 的记录和 name='X' 的记录不同
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', code: 'X', name: '物品1' },
+      { id: 'item-2', code: 'Y', name: 'X' },
+    ])
+
+    const records = [{ ref: 'X' }]
+    await store.resolveReferenceImportValues('page-test', records)
+    // 主键匹配优先：'X' 匹配 code='X' → item-1
+    expect(records[0].ref).toBe('item-1')
+  })
+
+  it('空值跳过不处理', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'ref',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'items', displayField: 'name', inheritFields: [] },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', name: '物品A' },
+    ])
+
+    const records = [
+      { ref: '' },
+      { ref: '物品A' },
+    ]
+
+    await store.resolveReferenceImportValues('page-test', records)
+    expect(records[0].ref).toBe('')
+    expect(records[1].ref).toBe('item-1')
+  })
+
+  it('无 reference 字段时直接返回，不发请求', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+          ],
+        }),
+      ],
+    })
+
+    const records = [{ name: 'test' }]
+    await store.resolveReferenceImportValues('page-test', records)
+
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+
+describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('将 collection 类型 select 字段的标签值解析为实际选项值', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'category',
+              controlType: 'select',
+              optionsSource: {
+                type: 'collection',
+                collection: 'categories',
+                labelField: 'catName',
+                valueField: 'id',
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 目标集合已有记录
+    mockedGet.mockResolvedValueOnce([
+      { id: 'cat-001', catName: '分类A' },
+      { id: 'cat-002', catName: '分类B' },
+    ])
+
+    const records = [
+      { category: '分类A' },
+      { category: '分类B' },
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+    expect(records[0].category).toBe('cat-001')
+    expect(records[1].category).toBe('cat-002')
+  })
+
+  it('将 collection 类型 multiSelect 字段的标签数组解析为实际值', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'tags',
+              controlType: 'multiSelect',
+              optionsSource: {
+                type: 'collection',
+                collection: 'tagList',
+                labelField: 'tagName',
+                valueField: 'id',
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'tag-1', tagName: '标签X' },
+      { id: 'tag-2', tagName: '标签Y' },
+      { id: 'tag-3', tagName: '标签Z' },
+    ])
+
+    const records = [
+      { tags: ['标签X', '标签Z'] },
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+    expect(records[0].tags).toEqual(['tag-1', 'tag-3'])
+  })
+
+  it('自引用场景：valueField 为 id 时预生成 ID 并解析', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f-a', fieldName: 'colA', controlType: 'text', order: 0 }),
+            makeField({
+              id: 'f-c',
+              fieldName: 'colC',
+              controlType: 'select',
+              order: 2,
+              optionsSource: {
+                type: 'collection',
+                collection: 'test',       // 自引用：与 page-test 的 endpoint 相同
+                labelField: 'colA',
+                valueField: 'id',
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 当前集合为空（所有数据都是新导入的）
+    mockedGet.mockResolvedValueOnce([])
+
+    const records = [
+      { colA: '1', colB: '2', colC: '' },    // Row 1
+      { colA: '2', colB: '4', colC: '1' },   // Row 2: C 引用 Row 1 的 A
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+
+    // Row 1 应有预生成的 _importId
+    expect(records[0]._importId).toBeDefined()
+    expect(typeof records[0]._importId).toBe('string')
+    // Row 2 的 colC 应被解析为 Row 1 的 _importId
+    expect(records[1].colC).toBe(records[0]._importId)
+  })
+
+  it('自引用场景：valueField 为普通字段时直接映射', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f-a', fieldName: 'colA', controlType: 'text', order: 0 }),
+            makeField({
+              id: 'f-c',
+              fieldName: 'colC',
+              controlType: 'select',
+              order: 2,
+              optionsSource: {
+                type: 'collection',
+                collection: 'test',
+                labelField: 'colA',
+                valueField: 'colA',   // labelField === valueField
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([])
+
+    const records = [
+      { colA: '1', colB: '2', colC: '' },
+      { colA: '2', colB: '4', colC: '1' },
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+
+    // labelField === valueField 时，值不变
+    expect(records[1].colC).toBe('1')
+    // 不应生成 _importId（valueField 不是 'id'）
+    expect(records[0]._importId).toBeUndefined()
+  })
+
+  it('跳过空值和非 collection 类型字段', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'staticSelect',
+              controlType: 'select',
+              optionsSource: { type: 'static' },
+              options: [{ label: 'A', value: 'a' }],
+            }),
+            makeField({
+              id: 'f2',
+              fieldName: 'dynSelect',
+              controlType: 'select',
+              optionsSource: {
+                type: 'collection',
+                collection: 'items',
+                labelField: 'name',
+                valueField: 'id',
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', name: '物品A' },
+    ])
+
+    const records = [
+      { staticSelect: 'a', dynSelect: '' },    // dynSelect 为空
+      { staticSelect: 'a', dynSelect: '物品A' },
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+
+    // 静态 select 不受影响
+    expect(records[0].staticSelect).toBe('a')
+    // 空值跳过
+    expect(records[0].dynSelect).toBe('')
+    // collection 类型正确解析
+    expect(records[1].dynSelect).toBe('item-1')
+  })
+
+  it('无 collection 类型字段时直接返回，不发请求', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'status',
+              controlType: 'select',
+              optionsSource: { type: 'static' },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    const records = [{ name: 'test', status: 'active' }]
+    await store.resolveCollectionSelectImportValues('page-test', records)
+
+    expect(mockedGet).not.toHaveBeenCalled()
+    expect(records[0].status).toBe('active')
+  })
+
+  it('自引用场景：现有记录和导入记录共同构建映射', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f-a', fieldName: 'colA', controlType: 'text', order: 0 }),
+            makeField({
+              id: 'f-c',
+              fieldName: 'colC',
+              controlType: 'select',
+              order: 2,
+              optionsSource: {
+                type: 'collection',
+                collection: 'test',
+                labelField: 'colA',
+                valueField: 'id',
+              },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 数据库中已有一条记录 colA='existing'
+    mockedGet.mockResolvedValueOnce([
+      { id: 'test-existing', colA: 'existing' },
+    ])
+
+    const records = [
+      { colA: 'new1', colC: 'existing' },   // 引用已有记录
+      { colA: 'new2', colC: 'new1' },        // 引用同批新记录
+    ]
+
+    await store.resolveCollectionSelectImportValues('page-test', records)
+
+    // 引用已有记录 → 解析为已有记录的 id
+    expect(records[0].colC).toBe('test-existing')
+    // 引用同批新记录 → 解析为预生成的 _importId
+    expect(records[1].colC).toBe(records[0]._importId)
   })
 })

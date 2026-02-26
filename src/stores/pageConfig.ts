@@ -354,17 +354,19 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    *
    * @param pageId - 页面ID
    * @param record - 数据记录
+   * @param importId - 导入时预生成的记录ID（可选，用于自引用集合选项场景）
    * @returns 创建的记录
    */
   async function addPageData(
     pageId: string,
-    record: Omit<DynamicRecord, 'id'>
+    record: Omit<DynamicRecord, 'id'>,
+    importId?: string
   ): Promise<DynamicRecord> {
     const endpoint = pageId.replace('page-', '')
     const now = new Date().toISOString()
     const newRecord: DynamicRecord = {
       ...record,
-      id: `${endpoint}-${uuidv4().slice(0, 8)}`,
+      id: importId || `${endpoint}-${uuidv4().slice(0, 8)}`,
       createdAt: now
     }
 
@@ -797,10 +799,12 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
-   * 解析导入数据中的关联字段：将主键值转为内部记录 ID
+   * 解析导入数据中的关联字段：将主键值 / 显示名称转为内部记录 ID
    *
-   * Excel 中关联列填写的是目标记录的主键值（如用例ID "IC-001"），
-   * 此方法查找匹配的记录并替换为内部 ID，以便 saveRelations 使用。
+   * Excel 中关联列填写的是目标记录的主键值（如用例ID "IC-001"）或
+   * 显示名称（如 "用例A"），此方法查找匹配的记录并替换为内部 ID。
+   *
+   * 查找优先级：已经是内部 ID → 按主键值匹配 → 按 displayField 匹配
    */
   async function resolveRelationImportValues(
     pageId: string,
@@ -822,14 +826,19 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         continue
       }
 
-      // 构建查找表：主键值 → 内部 ID
+      // 构建查找表
       const pkToId = new Map<string, string>()
+      const displayToId = new Map<string, string>()
       const idSet = new Set<string>()
       for (const r of targetRecords) {
         idSet.add(r.id)
         if (pkField) {
           const pkVal = r[pkField]
           if (pkVal) pkToId.set(String(pkVal), r.id)
+        }
+        if (config.displayField) {
+          const displayVal = r[config.displayField]
+          if (displayVal) displayToId.set(String(displayVal), r.id)
         }
       }
 
@@ -840,9 +849,65 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         record[field.fieldName] = vals
           .map((v: string) => {
             if (idSet.has(v)) return v            // 已经是内部 ID
-            return pkToId.get(v) || null          // 按主键值查找
+            return pkToId.get(v) || displayToId.get(v) || null
           })
           .filter((v: string | null): v is string => v !== null)
+      }
+    }
+  }
+
+  /**
+   * 解析导入数据中的引用字段（reference）：将显示值 / 主键值转为内部记录 ID
+   *
+   * reference 字段存储的是目标记录的内部 ID（如 "template-abc12345"），
+   * 但 Excel 导出时写出的是 displayField 的值（如 "模板A"），导入时需要反向查找。
+   *
+   * 查找优先级：已经是内部 ID → 按主键值匹配 → 按 displayField 匹配
+   */
+  async function resolveReferenceImportValues(
+    pageId: string,
+    records: Record<string, any>[]
+  ): Promise<void> {
+    const referenceFields = getReferenceFields(pageId)
+    if (referenceFields.length === 0) return
+
+    for (const field of referenceFields) {
+      const config = field.referenceConfig
+      if (!config?.targetCollection) continue
+
+      const pkField = getTargetPrimaryKeyField(config.targetCollection)
+
+      let targetRecords: any[]
+      try {
+        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+      } catch {
+        continue
+      }
+
+      // 构建查找表
+      const idSet = new Set<string>()
+      const pkToId = new Map<string, string>()
+      const displayToId = new Map<string, string>()
+      for (const r of targetRecords) {
+        idSet.add(r.id)
+        if (pkField) {
+          const pkVal = r[pkField]
+          if (pkVal) pkToId.set(String(pkVal), r.id)
+        }
+        const displayVal = r[config.displayField]
+        if (displayVal) displayToId.set(String(displayVal), r.id)
+      }
+
+      // 解析每条导入记录
+      for (const record of records) {
+        const val = record[field.fieldName]
+        if (!val || val === '') continue
+        const strVal = String(val)
+        if (idSet.has(strVal)) continue                             // 已经是内部 ID
+        const resolved = pkToId.get(strVal) || displayToId.get(strVal)
+        if (resolved) {
+          record[field.fieldName] = resolved
+        }
       }
     }
   }
@@ -878,7 +943,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
-   * 解析导入数据中的引用选择字段：将主键值转为内部记录 ID
+   * 解析导入数据中的引用选择字段：将主键值 / 显示名称转为内部记录 ID
+   *
+   * 查找优先级：已经是内部 ID → 按主键值匹配 → 按 displayField 匹配
    */
   async function resolveQuoteImportValues(
     pageId: string,
@@ -901,12 +968,17 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       }
 
       const pkToId = new Map<string, string>()
+      const displayToId = new Map<string, string>()
       const idSet = new Set<string>()
       for (const r of targetRecords) {
         idSet.add(r.id)
         if (pkField) {
           const pkVal = r[pkField]
           if (pkVal) pkToId.set(String(pkVal), r.id)
+        }
+        if (config.displayField) {
+          const displayVal = r[config.displayField]
+          if (displayVal) displayToId.set(String(displayVal), r.id)
         }
       }
 
@@ -916,9 +988,100 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         record[field.fieldName] = vals
           .map((v: string) => {
             if (idSet.has(v)) return v
-            return pkToId.get(v) || null
+            return pkToId.get(v) || displayToId.get(v) || null
           })
           .filter((v: string | null): v is string => v !== null)
+      }
+    }
+  }
+
+  /**
+   * 解析导入数据中 collection 类型选项字段：将显示标签转为实际选项值
+   *
+   * 当 select/multiSelect/radio/checkbox 字段的 optionsSource.type 为 'collection' 时，
+   * Excel 中填写的是 labelField 的值（显示标签），需要转换为 valueField 的值（实际存储值）。
+   *
+   * 对于自引用情况（source.collection 等于当前页面集合），也会从正在导入的记录
+   * 中构建映射，并为这些记录预生成 ID（当 valueField 为 'id' 时），存储在
+   * record._importId 中，以确保后续 addPageData 能使用一致的 ID。
+   */
+  async function resolveCollectionSelectImportValues(
+    pageId: string,
+    records: Record<string, any>[]
+  ): Promise<void> {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return
+
+    const collectionSelectFields = config.fields.filter(
+      (f) =>
+        ['select', 'multiSelect', 'radio', 'checkbox'].includes(f.controlType) &&
+        f.optionsSource?.type === 'collection' &&
+        f.optionsSource?.collection
+    )
+    if (collectionSelectFields.length === 0) return
+
+    const endpoint = pageId.replace('page-', '')
+    const collectionCache = new Map<string, any[]>()
+
+    for (const field of collectionSelectFields) {
+      const source = field.optionsSource!
+      const collection = source.collection!
+      const labelField = source.labelField || 'id'
+      const valueField = source.valueField || 'id'
+
+      // 获取目标集合的已有记录
+      const targetRecords = await fetchCollectionData(collection, collectionCache)
+
+      // 构建映射: labelField 值 → valueField 值
+      const labelToVal = new Map<string, any>()
+      for (const r of targetRecords) {
+        const label = String(r[labelField] ?? '')
+        const value = r[valueField] ?? r.id
+        if (label) labelToVal.set(label, value)
+      }
+
+      // 自引用：将正在导入的记录也加入映射
+      const isSelfReferencing = collection === endpoint
+      if (isSelfReferencing) {
+        for (const record of records) {
+          const label = String(record[labelField] ?? '')
+          if (!label) continue
+
+          if (valueField === 'id') {
+            // valueField 为 id 时需要预生成 ID
+            if (!record._importId) {
+              record._importId = `${endpoint}-${uuidv4().slice(0, 8)}`
+            }
+            labelToVal.set(label, record._importId)
+          } else {
+            const value = record[valueField]
+            if (value !== undefined && value !== null && value !== '') {
+              labelToVal.set(label, value)
+            }
+          }
+        }
+      }
+
+      // 解析每条记录的选项值
+      for (const record of records) {
+        const val = record[field.fieldName]
+        if (val === null || val === undefined || val === '') continue
+
+        if (['select', 'radio'].includes(field.controlType)) {
+          // 单选：直接查找映射
+          const resolved = labelToVal.get(String(val))
+          if (resolved !== undefined) {
+            record[field.fieldName] = resolved
+          }
+        } else if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+          // 多选：逐个映射
+          if (Array.isArray(val)) {
+            record[field.fieldName] = val.map((v: any) => {
+              const resolved = labelToVal.get(String(v))
+              return resolved !== undefined ? resolved : v
+            })
+          }
+        }
       }
     }
   }
@@ -1021,9 +1184,13 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     saveRelations,
     fetchRelationDisplayMaps,
     resolveRelationImportValues,
+    // 数据引用
+    resolveReferenceImportValues,
     // 引用选择
     fetchQuoteDisplayMaps,
     resolveQuoteImportValues,
+    // collection 类型选项解析
+    resolveCollectionSelectImportValues,
     // 自动字段
     generateNextSequenceValue
   }
