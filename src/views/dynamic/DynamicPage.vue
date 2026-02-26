@@ -1197,10 +1197,30 @@ function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
 
 /**
  * 高亮定位指定记录（从引用跳转过来时调用）
+ *
+ * 自动切换到目标记录所在的分页，然后滚动并高亮闪烁。
  */
 async function highlightRecord(recordId: string): Promise<void> {
   await nextTick()
-  const row = tableData.value.find(r => r.id === recordId)
+
+  // 在 filteredData 中查找记录的索引，确定所在分页
+  const index = filteredData.value.findIndex(r => r.id === recordId)
+  if (index === -1) return
+
+  // 切换到目标记录所在的分页
+  const targetPage = Math.floor(index / currentPageSize.value) + 1
+  if (currentPage.value !== targetPage) {
+    currentPage.value = targetPage
+    // 同步通知 DataTable 组件更新内部页码
+    const elDataTable = dataTableRef.value
+    if (elDataTable) {
+      handlePageChange(targetPage, currentPageSize.value)
+    }
+    await nextTick()
+  }
+
+  // 在分页后的数据中找到该行
+  const row = paginatedData.value.find(r => r.id === recordId)
   if (!row) return
 
   // 通过 el-table 高亮该行

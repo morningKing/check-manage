@@ -198,4 +198,64 @@ describe('DynamicPage — 查看功能', () => {
       expect(formatViewValue(field, {})).toBe('-')
     })
   })
+
+  describe('highlightRecord 分页定位', () => {
+    /**
+     * 复刻 highlightRecord 中计算目标分页的逻辑
+     *
+     * @param recordId - 目标记录 ID
+     * @param filteredData - 当前过滤后的全量数据
+     * @param currentPageSize - 每页条数
+     * @returns 目标记录所在的页码（1-based），-1 表示未找到
+     */
+    function calcTargetPage(
+      recordId: string,
+      filteredData: { id: string }[],
+      currentPageSize: number
+    ): number {
+      const index = filteredData.findIndex(r => r.id === recordId)
+      if (index === -1) return -1
+      return Math.floor(index / currentPageSize) + 1
+    }
+
+    it('第一条记录在第 1 页', () => {
+      const data = Array.from({ length: 100 }, (_, i) => ({ id: `r${i}` }))
+      expect(calcTargetPage('r0', data, 50)).toBe(1)
+    })
+
+    it('第 50 条记录（索引 49）在第 1 页', () => {
+      const data = Array.from({ length: 100 }, (_, i) => ({ id: `r${i}` }))
+      expect(calcTargetPage('r49', data, 50)).toBe(1)
+    })
+
+    it('第 51 条记录（索引 50）在第 2 页', () => {
+      const data = Array.from({ length: 100 }, (_, i) => ({ id: `r${i}` }))
+      expect(calcTargetPage('r50', data, 50)).toBe(2)
+    })
+
+    it('最后一条记录在正确的页', () => {
+      const data = Array.from({ length: 120 }, (_, i) => ({ id: `r${i}` }))
+      // 120 条，每页 50 → 第 3 页（索引 100-119）
+      expect(calcTargetPage('r119', data, 50)).toBe(3)
+    })
+
+    it('每页 20 条时的分页计算', () => {
+      const data = Array.from({ length: 55 }, (_, i) => ({ id: `r${i}` }))
+      expect(calcTargetPage('r0', data, 20)).toBe(1)
+      expect(calcTargetPage('r19', data, 20)).toBe(1)
+      expect(calcTargetPage('r20', data, 20)).toBe(2)
+      expect(calcTargetPage('r39', data, 20)).toBe(2)
+      expect(calcTargetPage('r40', data, 20)).toBe(3)
+      expect(calcTargetPage('r54', data, 20)).toBe(3)
+    })
+
+    it('记录不存在时返回 -1', () => {
+      const data = [{ id: 'r1' }, { id: 'r2' }]
+      expect(calcTargetPage('r999', data, 50)).toBe(-1)
+    })
+
+    it('空数据返回 -1', () => {
+      expect(calcTargetPage('r1', [], 50)).toBe(-1)
+    })
+  })
 })
