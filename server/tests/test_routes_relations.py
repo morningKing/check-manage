@@ -55,6 +55,35 @@ def setup(mock_conn, mock_cursor):
         p.stop()
 
 
+class TestGetCollectionRelations:
+    def test_returns_all_grouped(self, setup):
+        client, mock_cursor, admin_h = setup
+        mock_cursor.fetchall.return_value = [
+            ('rec-1', 'fieldA', 'id-1'),
+            ('rec-1', 'fieldA', 'id-2'),
+            ('rec-1', 'fieldB', 'id-3'),
+            ('rec-2', 'fieldA', 'id-4'),
+        ]
+        resp = client.get('/relations/testCol', headers=admin_h)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['rec-1']['fieldA'] == ['id-1', 'id-2']
+        assert data['rec-1']['fieldB'] == ['id-3']
+        assert data['rec-2']['fieldA'] == ['id-4']
+
+    def test_empty_collection(self, setup):
+        client, mock_cursor, admin_h = setup
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/relations/testCol', headers=admin_h)
+        assert resp.status_code == 200
+        assert resp.get_json() == {}
+
+    def test_no_token_401(self, setup):
+        client, _, _ = setup
+        resp = client.get('/relations/testCol')
+        assert resp.status_code == 401
+
+
 class TestGetRelations:
     def test_returns_grouped_relations(self, setup):
         client, mock_cursor, admin_h = setup

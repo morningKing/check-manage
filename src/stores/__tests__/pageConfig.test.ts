@@ -16,6 +16,7 @@ vi.mock('@/utils/request', () => ({
 
 vi.mock('@/api/relation', () => ({
   getRecordRelations: vi.fn(),
+  getCollectionRelations: vi.fn(),
   updateFieldRelations: vi.fn(),
 }))
 
@@ -25,6 +26,7 @@ vi.mock('uuid', () => ({
 
 import { usePageConfigStore } from '../pageConfig'
 import { get } from '@/utils/request'
+import { getCollectionRelations } from '@/api/relation'
 import type { PageConfig, FieldConfig } from '@/types'
 
 function makeField(overrides: Partial<FieldConfig>): FieldConfig {
@@ -642,5 +644,120 @@ describe('PageConfig Store — quoteSelect', () => {
     const orderedIds = ['case-2', 'case-1']
     const displayValues = orderedIds.map(id => maps.quotedCases.get(id))
     expect(displayValues).toEqual(['IC-002', 'IC-001'])
+  })
+})
+
+describe('PageConfig Store — 批量关联加载', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('fetchPageData 使用批量关联接口加载关联数据', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetCollectionRelations = vi.mocked(getCollectionRelations)
+    mockedGet.mockReset()
+    mockedGetCollectionRelations.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'relItems',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backRef' },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 1. get('/test') — main data
+    mockedGet.mockResolvedValueOnce([
+      { id: 'r1', name: 'Record 1' },
+      { id: 'r2', name: 'Record 2' },
+    ])
+    // 2. getCollectionRelations('test') — batch relations
+    mockedGetCollectionRelations.mockResolvedValueOnce({
+      'r1': { relItems: ['item-1', 'item-2'] },
+      'r2': { relItems: ['item-3'] },
+    })
+    // 3. get('/items') — resolve relation labels
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', itemName: '物品A' },
+      { id: 'item-2', itemName: '物品B' },
+      { id: 'item-3', itemName: '物品C' },
+    ])
+
+    const result = await store.fetchPageData('page-test')
+
+    // 验证使用了批量接口而非逐条请求
+    expect(mockedGetCollectionRelations).toHaveBeenCalledWith('test')
+    expect(mockedGetCollectionRelations).toHaveBeenCalledTimes(1)
+
+    // 验证关联数据正确分配
+    expect(result[0].relItems).toEqual(['item-1', 'item-2'])
+    expect(result[1].relItems).toEqual(['item-3'])
+
+    // 验证标签解析正确
+    expect(result[0]._rel_relItems_labels).toHaveLength(2)
+    expect(result[0]._rel_relItems_labels[0].label).toBe('物品A')
+  })
+
+  it('resolveRelationLabels 使用共享缓存避免重复请求', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetCollectionRelations = vi.mocked(getCollectionRelations)
+    mockedGet.mockReset()
+    mockedGetCollectionRelations.mockReset()
+
+    // 两个字段都指向同一集合 'items'
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'relA',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backA' },
+            }),
+            makeField({
+              id: 'f3',
+              fieldName: 'refB',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'items', displayField: 'itemName', inheritFields: [] },
+            }),
+          ],
+        }),
+      ],
+    })
+
+    // 1. get('/test') — main data
+    mockedGet.mockResolvedValueOnce([
+      { id: 'r1', name: 'Record 1', refB: 'item-1' },
+    ])
+    // 2. batch relations
+    mockedGetCollectionRelations.mockResolvedValueOnce({
+      'r1': { relA: ['item-2'] },
+    })
+    // 3. get('/items') — shared between resolveRelationLabels and resolveReferences
+    mockedGet.mockResolvedValueOnce([
+      { id: 'item-1', itemName: '物品A' },
+      { id: 'item-2', itemName: '物品B' },
+    ])
+
+    await store.fetchPageData('page-test')
+
+    // 'items' 集合只请求一次（共享缓存）
+    const itemsCalls = mockedGet.mock.calls.filter(c => c[0] === '/items')
+    expect(itemsCalls).toHaveLength(1)
   })
 })

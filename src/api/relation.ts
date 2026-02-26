@@ -5,6 +5,11 @@
 import { get, put, del } from '@/utils/request'
 
 export type RelationData = Record<string, string[]>
+export type BatchRelationData = Record<string, Record<string, string[]>>
+
+export function getCollectionRelations(collection: string) {
+  return get<BatchRelationData>(`/relations/${collection}`)
+}
 
 export function getRecordRelations(collection: string, recordId: string) {
   return get<RelationData>(`/relations/${collection}/${recordId}`)

@@ -1,26 +1,25 @@
 <template>
-  <el-select
+  <el-select-v2
     v-model="selectValue"
+    :options="options"
     :placeholder="field.placeholder || '请选择引用记录'"
     :disabled="field.disabled"
     :loading="loading"
     clearable
     filterable
     style="width: 100%"
-  >
-    <el-option
-      v-for="option in options"
-      :key="option.value"
-      :label="option.label"
-      :value="option.value"
-    />
-  </el-select>
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
-import type { FieldConfig, FieldOption } from '@/types'
+import type { FieldConfig } from '@/types'
 import { get } from '@/utils/request'
+
+interface SelectOption {
+  label: string
+  value: string
+}
 
 interface Props {
   field: FieldConfig
@@ -32,7 +31,7 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: string | null): void
 }>()
 
-const options = ref<FieldOption[]>([])
+const options = ref<SelectOption[]>([])
 const loading = ref(false)
 
 const selectValue = computed({

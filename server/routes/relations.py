@@ -6,6 +6,31 @@ from utils.operation_log import log_operation, get_page_info, pick_display_name
 relations_bp = Blueprint('relations', __name__)
 
 
+@relations_bp.route('/relations/<collection>', methods=['GET'])
+@login_required
+def get_collection_relations(collection):
+    """一次查询返回整个集合的所有关联关系，按 record_id → field_name 分组"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT record_id, field_name, related_id FROM data_relations '
+            'WHERE collection = %s '
+            'ORDER BY record_id, field_name',
+            (collection,),
+        )
+        rows = cur.fetchall()
+
+    result = {}
+    for record_id, field_name, related_id in rows:
+        if record_id not in result:
+            result[record_id] = {}
+        if field_name not in result[record_id]:
+            result[record_id][field_name] = []
+        result[record_id][field_name].append(related_id)
+
+    return jsonify(result)
+
+
 @relations_bp.route('/relations/<collection>/<record_id>', methods=['GET'])
 @login_required
 def get_relations(collection, record_id):

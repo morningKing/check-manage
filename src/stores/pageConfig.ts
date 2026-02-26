@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { PageConfig, FieldConfig, DynamicRecord } from '@/types'
 import { get, post, put, del } from '@/utils/request'
-import { getRecordRelations, updateFieldRelations } from '@/api/relation'
+import { getRecordRelations, getCollectionRelations, updateFieldRelations } from '@/api/relation'
 import { v4 as uuidv4 } from 'uuid'
 
 /**
@@ -266,6 +266,26 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   // ==================== 页面数据 CRUD ====================
 
   /**
+   * 辅助函数：获取目标集合数据，使用共享缓存避免重复请求
+   */
+  async function fetchCollectionData(
+    collection: string,
+    cache: Map<string, any[]>
+  ): Promise<any[]> {
+    if (cache.has(collection)) {
+      return cache.get(collection)!
+    }
+    try {
+      const records = await get<any[]>(`/${collection}`)
+      cache.set(collection, records)
+      return records
+    } catch {
+      cache.set(collection, [])
+      return []
+    }
+  }
+
+  /**
    * 获取页面数据列表
    *
    * @param pageId - 页面ID
@@ -279,16 +299,22 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const endpoint = pageId.replace('page-', '')
       const data = await get<DynamicRecord[]>(`/${endpoint}`)
 
-      // 加载关联字段数据
+      // 共享集合缓存，避免多个 resolve 函数重复请求同一集合
+      const collectionCache = new Map<string, any[]>()
+
+      // 批量加载关联字段数据（一次请求替代 N 次）
       const relationFields = getRelationFields(pageId)
       if (relationFields.length > 0) {
-        for (const record of data) {
-          try {
-            const relations = await getRecordRelations(endpoint, record.id)
+        try {
+          const batchRelations = await getCollectionRelations(endpoint)
+          for (const record of data) {
+            const recordRelations = batchRelations[record.id] || {}
             for (const field of relationFields) {
-              record[field.fieldName] = relations[field.fieldName] || []
+              record[field.fieldName] = recordRelations[field.fieldName] || []
             }
-          } catch {
+          }
+        } catch {
+          for (const record of data) {
             for (const field of relationFields) {
               record[field.fieldName] = []
             }
@@ -298,19 +324,19 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
       // 解析关联字段的 ID 为显示名称
       if (relationFields.length > 0) {
-        await resolveRelationLabels(data, relationFields)
+        await resolveRelationLabels(data, relationFields, collectionCache)
       }
 
       // 加载引用字段的继承数据
       const referenceFields = getReferenceFields(pageId)
       if (referenceFields.length > 0) {
-        await resolveReferences(data, referenceFields)
+        await resolveReferences(data, referenceFields, collectionCache)
       }
 
       // 解析引用选择字段的 ID 为显示名称
       const quoteFields = getQuoteFields(pageId)
       if (quoteFields.length > 0) {
-        await resolveQuoteLabels(data, quoteFields)
+        await resolveQuoteLabels(data, quoteFields, collectionCache)
       }
 
       pageDataCache.value[pageId] = data
@@ -565,8 +591,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveReferences(
     data: DynamicRecord[],
-    referenceFields: FieldConfig[]
+    referenceFields: FieldConfig[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
+
     // 按目标集合分组，收集所有需要加载的父记录 ID
     const collectionIds = new Map<string, Set<string>>()
 
@@ -587,13 +616,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     const parentRecordMap = new Map<string, Record<string, any>>()
     for (const [collection, ids] of collectionIds) {
       if (ids.size === 0) continue
-      try {
-        const allRecords = await get<any[]>(`/${collection}`)
-        for (const rec of allRecords) {
-          parentRecordMap.set(rec.id, rec)
-        }
-      } catch {
-        // 加载失败，跳过
+      const allRecords = await fetchCollectionData(collection, cache)
+      for (const rec of allRecords) {
+        parentRecordMap.set(rec.id, rec)
       }
     }
 
@@ -626,8 +651,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveRelationLabels(
     data: DynamicRecord[],
-    relationFields: FieldConfig[]
+    relationFields: FieldConfig[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
+
     // 按 targetCollection 分组，避免重复请求同一集合
     const collectionSet = new Set<string>()
     for (const field of relationFields) {
@@ -640,12 +668,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     // 批量加载每个目标集合的全部记录
     const collectionRecords = new Map<string, any[]>()
     for (const collection of collectionSet) {
-      try {
-        const records = await get<any[]>(`/${collection}`)
-        collectionRecords.set(collection, records)
-      } catch {
-        // 加载失败时跳过
-      }
+      const records = await fetchCollectionData(collection, cache)
+      collectionRecords.set(collection, records)
     }
 
     // 为每个关联字段构建 id → label 映射，并写入 _rel_ 前缀字段
@@ -683,8 +707,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveQuoteLabels(
     data: DynamicRecord[],
-    quoteFields: FieldConfig[]
+    quoteFields: FieldConfig[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
+
     const collectionSet = new Set<string>()
     for (const field of quoteFields) {
       const config = field.quoteConfig
@@ -695,12 +722,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
     const collectionRecords = new Map<string, any[]>()
     for (const collection of collectionSet) {
-      try {
-        const records = await get<any[]>(`/${collection}`)
-        collectionRecords.set(collection, records)
-      } catch {
-        // 加载失败时跳过
-      }
+      const records = await fetchCollectionData(collection, cache)
+      collectionRecords.set(collection, records)
     }
 
     for (const field of quoteFields) {
@@ -900,6 +923,71 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     }
   }
 
+  /**
+   * 智能刷新单条记录（编辑/新增后调用，避免全量重新加载）
+   *
+   * @param pageId - 页面ID
+   * @param recordId - 记录ID
+   * @returns 更新后的记录，如果找不到则返回 null
+   */
+  async function refreshSingleRecord(pageId: string, recordId: string): Promise<DynamicRecord | null> {
+    const endpoint = pageId.replace('page-', '')
+    const collectionCache = new Map<string, any[]>()
+
+    try {
+      // 获取单条记录
+      const record = await get<DynamicRecord>(`/${endpoint}/${recordId}`)
+
+      // 获取该记录的关联数据
+      const relationFields = getRelationFields(pageId)
+      if (relationFields.length > 0) {
+        try {
+          const relations = await getRecordRelations(endpoint, recordId)
+          for (const field of relationFields) {
+            record[field.fieldName] = relations[field.fieldName] || []
+          }
+        } catch {
+          for (const field of relationFields) {
+            record[field.fieldName] = []
+          }
+        }
+      }
+
+      // 解析关联标签
+      if (relationFields.length > 0) {
+        await resolveRelationLabels([record], relationFields, collectionCache)
+      }
+
+      // 解析引用字段
+      const referenceFields = getReferenceFields(pageId)
+      if (referenceFields.length > 0) {
+        await resolveReferences([record], referenceFields, collectionCache)
+      }
+
+      // 解析引用选择标签
+      const quoteFields = getQuoteFields(pageId)
+      if (quoteFields.length > 0) {
+        await resolveQuoteLabels([record], quoteFields, collectionCache)
+      }
+
+      // 更新缓存中的对应记录
+      if (pageDataCache.value[pageId]) {
+        const index = pageDataCache.value[pageId].findIndex((r) => r.id === recordId)
+        if (index !== -1) {
+          pageDataCache.value[pageId][index] = record
+        } else {
+          // 新增记录，追加到缓存末尾
+          pageDataCache.value[pageId].push(record)
+        }
+      }
+
+      return record
+    } catch (error) {
+      console.error(`刷新单条记录失败 [${pageId}/${recordId}]:`, error)
+      return null
+    }
+  }
+
   // 返回需要暴露的内容
   return {
     // State
@@ -927,6 +1015,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     updatePageData,
     deletePageData,
     getCachedPageData,
+    refreshSingleRecord,
     // 关联关系
     stripRelationFields,
     saveRelations,

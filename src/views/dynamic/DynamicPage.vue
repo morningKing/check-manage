@@ -101,11 +101,11 @@
     <el-card class="table-card">
       <DataTable
         ref="dataTableRef"
-        :data="filteredData"
+        :data="paginatedData"
         :fields="effectiveFields"
         :loading="tableLoading"
         :total="filteredData.length"
-        :show-pagination="false"
+        :show-pagination="true"
         :show-actions="!isGuest"
         show-selection
         @view="handleView"
@@ -115,6 +115,7 @@
         @relation-click="handleRelationClick"
         @quote-click="handleQuoteClick"
         @selection-change="handleSelectionChange"
+        @page-change="handlePageChange"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
           <el-dropdown
@@ -529,6 +530,12 @@ const allExportScripts = ref<ExportScript[]>([])
  */
 const diffDialogVisible = ref(false)
 
+/**
+ * 分页状态
+ */
+const currentPage = ref(1)
+const currentPageSize = ref(50)
+
 // ==================== 计算属性 ====================
 
 /**
@@ -715,7 +722,24 @@ const filteredData = computed<DynamicRecord[]>(() => {
   })
 })
 
+/**
+ * 分页后的数据（基于 filteredData 切片）
+ */
+const paginatedData = computed<DynamicRecord[]>(() => {
+  const start = (currentPage.value - 1) * currentPageSize.value
+  const end = start + currentPageSize.value
+  return filteredData.value.slice(start, end)
+})
+
 // ==================== 方法 ====================
+
+/**
+ * 处理分页变化
+ */
+function handlePageChange(page: number, pageSize: number): void {
+  currentPage.value = page
+  currentPageSize.value = pageSize
+}
 
 /**
  * 格式化查看对话框中的选项字段值
@@ -902,6 +926,7 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
   submitLoading.value = true
   try {
     const hasRelations = pageFields.value.some(f => f.controlType === 'relation')
+    let savedRecordId = ''
 
     const doSave = async () => {
       // 分离关联字段和普通字段
@@ -911,11 +936,13 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
         // 编辑模式
         await pageConfigStore.updatePageData(pageId.value, currentRecord.value.id, regularData)
         await pageConfigStore.saveRelations(pageId.value, currentRecord.value.id, data)
+        savedRecordId = currentRecord.value.id
         ElMessage.success('更新成功')
       } else {
         // 新增模式：先创建记录获取ID，再保存关联
         const created = await pageConfigStore.addPageData(pageId.value, regularData)
         await pageConfigStore.saveRelations(pageId.value, created.id, data)
+        savedRecordId = created.id
         ElMessage.success('新增成功')
       }
     }
@@ -930,8 +957,18 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
     }
 
     dialogVisible.value = false
-    // 刷新数据
-    await loadPageData()
+    // 智能刷新：仅刷新受影响的单条记录，避免全量重新加载
+    if (savedRecordId) {
+      const refreshed = await pageConfigStore.refreshSingleRecord(pageId.value, savedRecordId)
+      if (refreshed) {
+        tableData.value = [...pageConfigStore.getCachedPageData(pageId.value)]
+      } else {
+        // 刷新单条失败，回退到全量加载
+        await loadPageData()
+      }
+    } else {
+      await loadPageData()
+    }
   } catch (error: any) {
     const resp = error.response?.data
     if (resp?.code === 'VERSION_CONFLICT') {
@@ -1197,11 +1234,19 @@ watch(
   () => pageId.value,
   (newPageId) => {
     if (newPageId) {
+      currentPage.value = 1
       loadPageData()
     }
   },
   { immediate: true }
 )
+
+/**
+ * 搜索关键字变化时重置到第一页
+ */
+watch(searchKeyword, () => {
+  currentPage.value = 1
+})
 
 // ==================== 生命周期 ====================
 

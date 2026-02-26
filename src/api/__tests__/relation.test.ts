@@ -8,7 +8,7 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import { get, put, del } from '@/utils/request'
-import { getRecordRelations, updateFieldRelations, deleteRecordRelations } from '../relation'
+import { getRecordRelations, getCollectionRelations, updateFieldRelations, deleteRecordRelations } from '../relation'
 
 const mockGet = vi.mocked(get)
 const mockPut = vi.mocked(put)
@@ -17,6 +17,18 @@ const mockDel = vi.mocked(del)
 describe('Relation API', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('getCollectionRelations 调用 GET /relations/{collection}', async () => {
+    const batchData = {
+      'rec-1': { field1: ['id-1', 'id-2'] },
+      'rec-2': { field1: ['id-3'] },
+    }
+    mockGet.mockResolvedValueOnce(batchData as any)
+
+    const res = await getCollectionRelations('testCol')
+    expect(mockGet).toHaveBeenCalledWith('/relations/testCol')
+    expect(res).toEqual(batchData)
   })
 
   it('getRecordRelations 调用 GET /relations/{collection}/{recordId}', async () => {
