@@ -180,10 +180,36 @@
                   <el-icon><Delete /></el-icon>
                 </el-button>
               </div>
-              <el-button type="primary" link @click="addOption">
-                <el-icon><Plus /></el-icon>
-                添加选项
-              </el-button>
+              <div class="option-actions">
+                <el-button type="primary" link @click="addOption">
+                  <el-icon><Plus /></el-icon>
+                  添加选项
+                </el-button>
+                <el-button type="primary" link @click="batchDialogVisible = true">
+                  <el-icon><DocumentAdd /></el-icon>
+                  批量添加
+                </el-button>
+              </div>
+
+              <!-- 批量添加对话框 -->
+              <el-dialog
+                v-model="batchDialogVisible"
+                title="批量添加选项"
+                width="480px"
+                append-to-body
+              >
+                <p class="batch-hint">每行一个选项。可用 <code>:</code> 分隔显示文本和值，省略则两者相同。</p>
+                <el-input
+                  v-model="batchOptionsText"
+                  type="textarea"
+                  :rows="8"
+                  placeholder="选项A&#10;选项B:value_b&#10;选项C"
+                />
+                <template #footer>
+                  <el-button @click="batchDialogVisible = false">取消</el-button>
+                  <el-button type="primary" @click="confirmBatchAdd">确定添加</el-button>
+                </template>
+              </el-dialog>
             </div>
 
             <!-- API选项配置 -->
@@ -488,7 +514,7 @@
 import { ref, computed, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus, Check, Rank, Delete } from '@element-plus/icons-vue'
+import { Plus, Check, Rank, Delete, DocumentAdd } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import type { FieldConfig, FieldFormData, FieldOption } from '@/types'
 import { CONTROL_TYPE_OPTIONS, createEmptyFieldFormData } from '@/types'
@@ -903,6 +929,38 @@ function removeOption(index: number): void {
   fieldFormData.value.options.splice(index, 1)
 }
 
+/**
+ * 批量添加对话框状态
+ */
+const batchDialogVisible = ref(false)
+const batchOptionsText = ref('')
+
+/**
+ * 确认批量添加选项
+ *
+ * 每行解析为一个选项，支持 "标签:值" 格式，省略值时与标签相同。
+ */
+function confirmBatchAdd(): void {
+  const lines = batchOptionsText.value.split('\n').map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) {
+    ElMessage.warning('请输入至少一个选项')
+    return
+  }
+  for (const line of lines) {
+    const sepIdx = line.indexOf(':')
+    if (sepIdx > 0) {
+      const label = line.slice(0, sepIdx).trim()
+      const value = line.slice(sepIdx + 1).trim() || label
+      fieldFormData.value.options.push({ label, value })
+    } else {
+      fieldFormData.value.options.push({ label: line, value: line })
+    }
+  }
+  batchOptionsText.value = ''
+  batchDialogVisible.value = false
+  ElMessage.success(`已添加 ${lines.length} 个选项`)
+}
+
 // ==================== 监听 ====================
 
 /**
@@ -997,6 +1055,24 @@ watch(
       align-items: center;
       gap: 8px;
       margin-bottom: 8px;
+    }
+
+    .option-actions {
+      display: flex;
+      gap: 16px;
+    }
+
+    .batch-hint {
+      margin: 0 0 12px;
+      font-size: 13px;
+      color: #909399;
+
+      code {
+        background: #f5f7fa;
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 12px;
+      }
     }
   }
 
