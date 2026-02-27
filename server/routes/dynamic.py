@@ -367,3 +367,83 @@ def delete_item(collection, item_id):
     log_operation('delete', 'dynamic_data', item_id, record_name,
                   f'删除{page_name}「{record_name}」')
     return jsonify({})
+
+
+@dynamic_bp.route('/<collection>/batch-delete', methods=['POST'])
+@write_required
+def batch_delete_items(collection, **kwargs):
+    """Batch delete multiple records in a single transaction."""
+    if collection in RESERVED:
+        return jsonify({"error": "Not found"}), 404
+    ids = request.json.get('ids', [])
+    if not ids:
+        return jsonify({"error": "ids is required"}), 400
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        page_name, fields = get_page_info(cur, collection)
+
+        # Check reference dependencies for all IDs at once
+        ref_fields = []
+        cur.execute('SELECT id, name, fields FROM page_configs')
+        rows = cur.fetchall()
+        for page_id, pname, pfields in rows:
+            if not pfields:
+                continue
+            child_collection = page_id.replace('page-', '')
+            for field in pfields:
+                if field.get('controlType') != 'reference':
+                    continue
+                ref_config = field.get('referenceConfig', {})
+                if ref_config.get('targetCollection') == collection:
+                    ref_fields.append((child_collection, field['fieldName'], pname))
+
+        blocked_ids = {}
+        for child_col, field_name, pname in ref_fields:
+            cur.execute(
+                "SELECT data->>%s FROM dynamic_data WHERE collection = %s AND data->>%s = ANY(%s)",
+                (field_name, child_col, field_name, ids),
+            )
+            for (ref_id,) in cur.fetchall():
+                if ref_id and ref_id in ids:
+                    blocked_ids.setdefault(ref_id, []).append(pname)
+
+        deletable_ids = [i for i in ids if i not in blocked_ids]
+
+        deleted = 0
+        record_names = []
+        if deletable_ids:
+            # Fetch record names for logging
+            cur.execute(
+                'SELECT id, data FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
+                (collection, deletable_ids),
+            )
+            id_name_map = {}
+            for row_id, data in cur.fetchall():
+                id_name_map[row_id] = pick_display_name(data, fields) or row_id if data else row_id
+            record_names = [id_name_map.get(i, i) for i in deletable_ids]
+
+            # Batch delete records
+            cur.execute(
+                'DELETE FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
+                (collection, deletable_ids),
+            )
+            deleted = cur.rowcount
+
+            # Batch clean up relations
+            cur.execute(
+                'DELETE FROM data_relations WHERE (collection = %s AND record_id = ANY(%s)) OR (related_collection = %s AND related_id = ANY(%s))',
+                (collection, deletable_ids, collection, deletable_ids),
+            )
+
+    if deleted > 0:
+        summary = '、'.join(record_names[:3])
+        if len(record_names) > 3:
+            summary += f' 等{len(record_names)}条'
+        log_operation('delete', 'dynamic_data', ','.join(deletable_ids[:3]), summary,
+                      f'批量删除{page_name}「{summary}」')
+
+    result = {"deleted": deleted}
+    if blocked_ids:
+        result["blocked"] = {rid: f'被「{"、".join(set(pages))}」引用' for rid, pages in blocked_ids.items()}
+    return jsonify(result)

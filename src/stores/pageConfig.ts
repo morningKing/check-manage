@@ -464,6 +464,38 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 批量删除页面数据记录
+   *
+   * 单次请求批量删除，比逐条删除性能好得多。
+   * 返回 { deleted, blocked? } 信息。
+   */
+  async function batchDeletePageData(
+    pageId: string,
+    recordIds: string[]
+  ): Promise<{ deleted: number; blocked?: Record<string, string> }> {
+    const endpoint = pageId.replace('page-', '')
+
+    try {
+      const result = await post<{ deleted: number; blocked?: Record<string, string> }>(
+        `/${endpoint}/batch-delete`,
+        { ids: recordIds }
+      )
+      // 从缓存中移除已删除的记录
+      if (pageDataCache.value[pageId]) {
+        const blockedIds = new Set(result.blocked ? Object.keys(result.blocked) : [])
+        const deletedIds = new Set(recordIds.filter((id) => !blockedIds.has(id)))
+        pageDataCache.value[pageId] = pageDataCache.value[pageId].filter(
+          (r) => !deletedIds.has(r.id)
+        )
+      }
+      return result
+    } catch (error) {
+      console.error(`批量删除数据失败 [${pageId}]:`, error)
+      throw error
+    }
+  }
+
+  /**
    * 获取缓存的页面数据
    *
    * @param pageId - 页面ID
@@ -1177,6 +1209,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     addPageData,
     updatePageData,
     deletePageData,
+    batchDeletePageData,
     getCachedPageData,
     refreshSingleRecord,
     // 关联关系

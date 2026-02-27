@@ -872,30 +872,24 @@ async function handleBatchDelete(): Promise<void> {
   const rows = [...selectedRows.value]
   batchDeleteDialogVisible.value = false
 
-  let success = 0
-  let failed = 0
+  try {
+    const ids = rows.map((r) => r.id)
+    const result = await pageConfigStore.batchDeletePageData(pageId.value, ids)
 
-  await withBatch(`批量删除 ${rows.length} 条${pageConfig.value?.name || '数据'}`, async () => {
-    for (const row of rows) {
-      try {
-        await pageConfigStore.deletePageData(pageId.value, row.id)
-        success++
-      } catch {
-        failed++
-      }
+    selectedRows.value = []
+    dataTableRef.value?.clearSelection()
+
+    const blockedCount = result.blocked ? Object.keys(result.blocked).length : 0
+    if (blockedCount === 0) {
+      ElMessage.success(`成功删除 ${result.deleted} 条记录`)
+    } else {
+      ElMessage.warning(`删除完成：成功 ${result.deleted} 条，${blockedCount} 条因被引用跳过`)
     }
-  })
 
-  selectedRows.value = []
-  dataTableRef.value?.clearSelection()
-
-  if (failed === 0) {
-    ElMessage.success(`成功删除 ${success} 条记录`)
-  } else {
-    ElMessage.warning(`删除完成：成功 ${success} 条，失败 ${failed} 条`)
+    await loadPageData()
+  } catch {
+    ElMessage.error('批量删除失败')
   }
-
-  await loadPageData()
 }
 
 /**
