@@ -116,6 +116,7 @@
         @quote-click="handleQuoteClick"
         @selection-change="handleSelectionChange"
         @page-change="handlePageChange"
+        @filter-change="handleFilterChange"
       >
         <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
           <el-dropdown
@@ -454,6 +455,11 @@ const tableData = ref<DynamicRecord[]>([])
 const searchKeyword = ref('')
 
 /**
+ * 列筛选条件
+ */
+const columnFilters = ref<Record<string, { value: any; value2?: any; operator?: string }>>({})
+
+/**
  * 对话框可见性
  */
 const dialogVisible = ref(false)
@@ -652,74 +658,138 @@ const viewDisplayFields = computed<FieldConfig[]>(() => {
 })
 
 /**
- * 按关键字过滤后的表格数据
+ * 按关键字和列筛选条件过滤后的表格数据
  */
 const filteredData = computed<DynamicRecord[]>(() => {
+  let result = tableData.value
   const keyword = searchKeyword.value.trim().toLowerCase()
-  if (!keyword) return tableData.value
 
-  return tableData.value.filter(record => {
-    for (const field of pageFields.value) {
-      const val = record[field.fieldName]
-      if (val === null || val === undefined) continue
+  if (keyword) {
+    result = result.filter(record => {
+      for (const field of pageFields.value) {
+        const val = record[field.fieldName]
+        if (val === null || val === undefined) continue
 
-      if (['text', 'textarea', 'number', 'autoSequence'].includes(field.controlType)) {
-        if (String(val).toLowerCase().includes(keyword)) return true
-      }
-
-      if (['select', 'radio'].includes(field.controlType)) {
-        const opt = field.options?.find(o => o.value === val)
-        const label = opt?.label || String(val)
-        if (label.toLowerCase().includes(keyword)) return true
-      }
-
-      if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-        if (Array.isArray(val)) {
-          const matched = val.some(v => {
-            const opt = field.options?.find(o => o.value === v)
-            return (opt?.label || String(v)).toLowerCase().includes(keyword)
-          })
-          if (matched) return true
+        if (['text', 'textarea', 'number', 'autoSequence'].includes(field.controlType)) {
+          if (String(val).toLowerCase().includes(keyword)) return true
         }
-      }
 
-      if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
-        if (String(val).toLowerCase().includes(keyword)) return true
-      }
-
-      if (field.controlType === 'relation') {
-        const labels = record[`_rel_${field.fieldName}_labels`]
-        if (Array.isArray(labels)) {
-          const matched = labels.some((item: { id: string; label: string }) =>
-            item.label.toLowerCase().includes(keyword)
-          )
-          if (matched) return true
+        if (['select', 'radio'].includes(field.controlType)) {
+          const opt = field.options?.find(o => o.value === val)
+          const label = opt?.label || String(val)
+          if (label.toLowerCase().includes(keyword)) return true
         }
-      }
 
-      if (field.controlType === 'reference') {
-        const displayVal = record[`_ref_${field.fieldName}_display`]
-        if (displayVal && String(displayVal).toLowerCase().includes(keyword)) return true
-        if (field.referenceConfig?.inheritFields) {
-          for (const inh of field.referenceConfig.inheritFields) {
-            const refVal = record[`_ref_${field.fieldName}_${inh}`]
-            if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
+        if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+          if (Array.isArray(val)) {
+            const matched = val.some(v => {
+              const opt = field.options?.find(o => o.value === v)
+              return (opt?.label || String(v)).toLowerCase().includes(keyword)
+            })
+            if (matched) return true
+          }
+        }
+
+        if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
+          if (String(val).toLowerCase().includes(keyword)) return true
+        }
+
+        if (field.controlType === 'relation') {
+          const labels = record[`_rel_${field.fieldName}_labels`]
+          if (Array.isArray(labels)) {
+            const matched = labels.some((item: { id: string; label: string }) =>
+              item.label.toLowerCase().includes(keyword)
+            )
+            if (matched) return true
+          }
+        }
+
+        if (field.controlType === 'reference') {
+          const displayVal = record[`_ref_${field.fieldName}_display`]
+          if (displayVal && String(displayVal).toLowerCase().includes(keyword)) return true
+          if (field.referenceConfig?.inheritFields) {
+            for (const inh of field.referenceConfig.inheritFields) {
+              const refVal = record[`_ref_${field.fieldName}_${inh}`]
+              if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
+            }
+          }
+        }
+
+        if (field.controlType === 'quoteSelect') {
+          const labels = record[`_quote_${field.fieldName}_labels`]
+          if (Array.isArray(labels)) {
+            const matched = labels.some((item: { id: string; label: string }) =>
+              item.label.toLowerCase().includes(keyword)
+            )
+            if (matched) return true
           }
         }
       }
+      return false
+    })
+  }
 
-      if (field.controlType === 'quoteSelect') {
-        const labels = record[`_quote_${field.fieldName}_labels`]
-        if (Array.isArray(labels)) {
-          const matched = labels.some((item: { id: string; label: string }) =>
-            item.label.toLowerCase().includes(keyword)
-          )
-          if (matched) return true
+  const filterEntries = Object.entries(columnFilters.value)
+  if (filterEntries.length > 0) {
+    result = result.filter(record => {
+      return filterEntries.every(([fieldName, filter]) => {
+        const field = pageFields.value.find(f => f.fieldName === fieldName)
+        if (!field) return true
+
+        const val = record[fieldName]
+        if (val === null || val === undefined || val === '') return false
+
+        if (['select', 'radio'].includes(field.controlType)) {
+          return val === filter.value
         }
-      }
-    }
-    return false
-  })
+
+        if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+          if (!Array.isArray(val) || !Array.isArray(filter.value)) return false
+          return filter.value.every(v => val.includes(v))
+        }
+
+        if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
+          const recordDate = new Date(val).getTime()
+          const filterDate = filter.value ? new Date(filter.value).getTime() : null
+          const filterDate2 = filter.value2 ? new Date(filter.value2).getTime() : null
+
+          if (filter.operator === 'eq' && filterDate) {
+            return recordDate === filterDate
+          } else if (filter.operator === 'lt' && filterDate) {
+            return recordDate < filterDate
+          } else if (filter.operator === 'gt' && filterDate) {
+            return recordDate > filterDate
+          } else if (filter.operator === 'between' && filterDate && filterDate2) {
+            return recordDate >= filterDate && recordDate <= filterDate2
+          }
+          return true
+        }
+
+        if (field.controlType === 'number') {
+          const numVal = Number(val)
+          const numFilter = Number(filter.value)
+          const numFilter2 = Number(filter.value2)
+
+          if (filter.operator === 'eq') {
+            return numVal === numFilter
+          } else if (filter.operator === 'gt') {
+            return numVal > numFilter
+          } else if (filter.operator === 'lt') {
+            return numVal < numFilter
+          } else if (filter.operator === 'between') {
+            return numVal >= numFilter && numVal <= numFilter2
+          }
+          return true
+        }
+
+        const strVal = String(val).toLowerCase()
+        const strFilter = String(filter.value).toLowerCase()
+        return strVal.includes(strFilter)
+      })
+    })
+  }
+
+  return result
 })
 
 /**
@@ -739,6 +809,14 @@ const paginatedData = computed<DynamicRecord[]>(() => {
 function handlePageChange(page: number, pageSize: number): void {
   currentPage.value = page
   currentPageSize.value = pageSize
+}
+
+/**
+ * 处理列筛选变化
+ */
+function handleFilterChange(filters: Record<string, { value: any; value2?: any; operator?: string }>): void {
+  columnFilters.value = filters
+  currentPage.value = 1
 }
 
 /**
@@ -1266,6 +1344,13 @@ watch(
  */
 watch(searchKeyword, () => {
   currentPage.value = 1
+})
+
+/**
+ * 页面ID变化时清除筛选条件
+ */
+watch(pageId, () => {
+  columnFilters.value = {}
 })
 
 // ==================== 生命周期 ====================
