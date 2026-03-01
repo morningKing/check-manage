@@ -111,23 +111,19 @@ describe('请求拦截器注册', () => {
 
     it('localStorage 有 token 时注入 Authorization', () => {
       const token = 'test-token-123'
-      vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(JSON.stringify(token))
+      localStorage.setItem('check-manage:token', JSON.stringify(token))
 
       const config = { headers: {} as Record<string, string> }
       const result = requestInterceptor(config)
       expect(result.headers.Authorization).toBe(`Bearer ${token}`)
-
-      vi.restoreAllMocks()
     })
 
     it('localStorage 无 token 时不注入', () => {
-      vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null)
+      localStorage.clear()
 
       const config = { headers: {} as Record<string, string> }
       const result = requestInterceptor(config)
       expect(result.headers.Authorization).toBeUndefined()
-
-      vi.restoreAllMocks()
     })
   })
 

@@ -12,7 +12,7 @@
     "dev:all": "concurrently \"npm run server\" \"npm run dev\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:server": "cd server && python -m pytest -v",
+    "test:server": "cd server && set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest -v",
     "test:all": "npm run test:server && npm run test"
   },
   "dependencies": {
