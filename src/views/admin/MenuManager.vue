@@ -178,8 +178,25 @@
               </div>
             </el-form-item>
 
-            <el-form-item label="父级菜单" v-if="!isAddingRoot">
-              <el-input :value="parentMenuName" disabled />
+            <el-form-item label="父级菜单" prop="parentId">
+              <el-select
+                v-model="formData.parentId"
+                placeholder="请选择父级菜单（可选）"
+                clearable
+                style="width: 100%"
+                :disabled="isAddingRoot"
+              >
+                <el-option
+                  v-for="opt in availableParentOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                  :disabled="opt.disabled"
+                />
+              </el-select>
+              <div class="form-tip">
+                选择父级菜单将创建子菜单，留空则为顶级菜单
+              </div>
             </el-form-item>
 
             <el-form-item v-if="!isCurrentBuiltinMenu">
@@ -354,15 +371,22 @@ const deleteMessage = computed(() => {
  * 判断菜单是否属于系统配置菜单树
  */
 function isSystemConfigMenu(menu: MenuItem): boolean {
+  // 如果菜单路径以 /admin/ 开头，则是系统配置菜单
   if (menu.path?.startsWith('/admin/')) return true
+
+  // 如果有父级，递归检查父级
   if (menu.parentId) {
     const parent = menuStore.getMenuById(menu.parentId)
     if (parent) return isSystemConfigMenu(parent)
   }
+
+  // 如果是根菜单（无父级）且无路径，检查其子菜单
   if (!menu.parentId && !menu.path) {
+    // 使用 menuStore.getChildMenus 而不是 menu.children
     const children = menuStore.getChildMenus(menu.id)
     if (children.length > 0 && children.some(c => c.path?.startsWith('/admin/'))) return true
   }
+
   return false
 }
 
@@ -383,6 +407,75 @@ const isCurrentBuiltinMenu = computed(() => {
   const menu = menuStore.getMenuById(formData.value.id)
   return menu ? isBuiltinMenu(menu) : false
 })
+
+/**
+ * 可选的父级菜单选项
+ * 排除当前菜单及其子菜单（避免循环引用）
+ * 排除已经是第3级的菜单（不能再添加子菜单）
+ */
+const availableParentOptions = computed(() => {
+  const options: Array<{ value: string; label: string; disabled?: boolean }> = []
+
+  // 递归构建菜单选项
+  function buildOptions(menus: MenuItem[], level: number = 1, prefix: string = '') {
+    menus.forEach(menu => {
+      // 排除当前编辑的菜单及其子菜单
+      if (isEditMode.value && formData.value.id) {
+        if (menu.id === formData.value.id) return
+        // 检查是否是当前菜单的后代
+        if (isDescendant(formData.value.id, menu.id)) return
+      }
+
+      // 排除内置菜单（不允许作为父级）
+      if (isBuiltinMenu(menu)) return
+
+      // 排除已经是第3级的菜单（不能再添加子菜单）
+      if (level >= 3) return
+
+      const label = prefix + menu.name
+
+      // 如果当前菜单是第2级，选择父级后会成为第3级，需要确保目标父级是顶级菜单
+      // 如果当前菜单是第3级，选择父级后会成为第4级（不允许），所以只能选择顶级或第1级菜单
+      let disabled = false
+      if (isEditMode.value && formData.value.id) {
+        const currentLevel = getNodeLevel(menuStore.getMenuById(formData.value.id)!)
+        if (currentLevel === 3 && level >= 2) {
+          disabled = true // 第3级菜单只能移到顶级或第1级下
+        }
+      }
+
+      options.push({
+        value: menu.id,
+        label,
+        disabled
+      })
+
+      // 递归处理子菜单
+      if (menu.children && menu.children.length > 0) {
+        buildOptions(menu.children, level + 1, label + ' / ')
+      }
+    })
+  }
+
+  buildOptions(menuTree.value)
+
+  return options
+})
+
+/**
+ * 检查目标菜单是否是源菜单的后代
+ */
+function isDescendant(sourceId: string, targetId: string): boolean {
+  const target = menuStore.getMenuById(targetId)
+  if (!target) return false
+
+  let current: MenuItem | undefined = target
+  while (current) {
+    if (current.parentId === sourceId) return true
+    current = current.parentId ? menuStore.getMenuById(current.parentId) : undefined
+  }
+  return false
+}
 
 // ==================== 方法 ====================
 
@@ -484,6 +577,31 @@ async function handleSubmit(): Promise<void> {
   const valid = await formRef.value?.validate()
   if (!valid) return
 
+  // 验证父级菜单选择
+  if (isEditMode.value && formData.value.id && formData.value.parentId) {
+    // 检查是否选择了自己作为父级
+    if (formData.value.parentId === formData.value.id) {
+      ElMessage.error('不能将自己设为父级菜单')
+      return
+    }
+
+    // 检查是否选择了自己的子菜单作为父级（循环引用）
+    if (isDescendant(formData.value.id, formData.value.parentId)) {
+      ElMessage.error('不能将子菜单设为父级菜单')
+      return
+    }
+
+    // 检查层级限制（最多3级）
+    const newParent = menuStore.getMenuById(formData.value.parentId)
+    if (newParent) {
+      const newParentLevel = getNodeLevel(newParent)
+      if (newParentLevel >= 3) {
+        ElMessage.error('父级菜单不能是第3级菜单（会导致第4级）')
+        return
+      }
+    }
+  }
+
   submitLoading.value = true
   try {
     if (isEditMode.value && formData.value.id) {
@@ -498,6 +616,20 @@ async function handleSubmit(): Promise<void> {
         roles: formData.value.roles
       })
       ElMessage.success('更新成功')
+      // 更新成功后刷新表单数据
+      const updated = menuStore.getMenuById(formData.value.id)
+      if (updated) {
+        formData.value = {
+          id: updated.id,
+          name: updated.name,
+          icon: updated.icon || 'Document',
+          pageId: updated.pageId || null,
+          parentId: updated.parentId || null,
+          order: updated.order,
+          path: updated.path || '',
+          roles: updated.roles || ['admin', 'developer', 'guest']
+        }
+      }
     } else {
       // 新增
       await menuStore.addMenu({

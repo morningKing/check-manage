@@ -96,6 +96,45 @@ def update_menu(menu_id):
             return jsonify({"error": "内置菜单不允许编辑"}), 403
 
     body = request.get_json(force=True)
+    new_parent_id = body.get('parentId')
+
+    # 验证父级菜单
+    if new_parent_id:
+        with get_db() as conn:
+            cur = conn.cursor()
+
+            # 不能将自己设为父级
+            if new_parent_id == menu_id:
+                return jsonify({"error": "不能将自己设为父级菜单"}), 400
+
+            # 不能将子菜单设为父级（循环引用）
+            if _is_descendant_of(cur, new_parent_id, menu_id):
+                return jsonify({"error": "不能将子菜单设为父级菜单"}), 400
+
+            # 检查层级限制（最多3级）
+            # 计算新父级的层级
+            parent_level = 0
+            current_id = new_parent_id
+            visited = set()
+            while current_id:
+                if current_id in visited:
+                    break
+                visited.add(current_id)
+                cur.execute('SELECT parent_id FROM menus WHERE id = %s', (current_id,))
+                row = cur.fetchone()
+                if not row:
+                    break
+                parent_level += 1
+                current_id = row[0]
+
+            # 如果新父级已经是第3级，不允许
+            if parent_level >= 3:
+                return jsonify({"error": "父级菜单层级过深（最多支持3级菜单）"}), 400
+
+            # 检查新父级是否是内置菜单
+            if _is_builtin_menu(cur, new_parent_id):
+                return jsonify({"error": "不能将菜单移到内置菜单下"}), 403
+
     roles = body.get('roles', ['admin', 'developer', 'guest'])
     with get_db() as conn:
         cur = conn.cursor()
