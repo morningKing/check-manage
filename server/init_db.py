@@ -364,43 +364,52 @@ def init_db():
             conn.commit()
             print("Added version and updated_at columns to dynamic_data table.")
 
-        # Check if data exists
-        cur.execute("SELECT COUNT(*) FROM menus")
-        count = cur.fetchone()[0]
-        if count > 0:
-            print("Data already exists, skipping menu/config seed.")
-        else:
-            # Seed menus
-            for m in MENUS:
+        # Seed menus (insert only if not exists)
+        menus_inserted = 0
+        for m in MENUS:
+            cur.execute("SELECT id FROM menus WHERE id = %s", (m["id"],))
+            if not cur.fetchone():
                 cur.execute(
                     'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
                     (m["id"], m["name"], m.get("icon"), m.get("pageId"), m.get("parentId"), m.get("order", 0), m.get("path"), psycopg2.extras.Json(m.get("roles", ["admin", "developer", "guest"]))),
                 )
-            print(f"Inserted {len(MENUS)} menus.")
+                menus_inserted += 1
+        if menus_inserted > 0:
+            print(f"Inserted {menus_inserted} menus.")
+        else:
+            print("Menus already exist, skipping.")
 
-            # Seed page_configs
-            for pc in PAGE_CONFIGS:
+        # Seed page_configs (insert only if not exists)
+        configs_inserted = 0
+        for pc in PAGE_CONFIGS:
+            cur.execute("SELECT id FROM page_configs WHERE id = %s", (pc["id"],))
+            if not cur.fetchone():
                 cur.execute(
                     "INSERT INTO page_configs (id, name, description, api_endpoint, fields, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                     (pc["id"], pc["name"], pc.get("description"), pc.get("apiEndpoint"),
                      psycopg2.extras.Json(pc["fields"]),
                      pc.get("createdAt"), pc.get("updatedAt")),
                 )
-            print(f"Inserted {len(PAGE_CONFIGS)} page configs.")
+                configs_inserted += 1
+        if configs_inserted > 0:
+            print(f"Inserted {configs_inserted} page configs.")
 
-            # Seed dynamic data
-            total = 0
-            for collection, records in DYNAMIC_DATA.items():
-                for r in records:
-                    rid = r["id"]
+        # Seed dynamic data (insert only if not exists)
+        data_inserted = 0
+        for collection, records in DYNAMIC_DATA.items():
+            for r in records:
+                rid = r["id"]
+                cur.execute("SELECT id FROM dynamic_data WHERE id = %s", (rid,))
+                if not cur.fetchone():
                     created_at = r.get("createdAt")
                     data = {k: v for k, v in r.items() if k not in ("id", "createdAt")}
                     cur.execute(
                         "INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)",
                         (rid, collection, psycopg2.extras.Json(data), created_at),
                     )
-                    total += 1
-            print(f"Inserted {total} dynamic data records.")
+                    data_inserted += 1
+        if data_inserted > 0:
+            print(f"Inserted {data_inserted} dynamic data records.")
 
         # Seed default admin user if users table is empty
         cur.execute("SELECT COUNT(*) FROM users")
