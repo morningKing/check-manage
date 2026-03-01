@@ -1,8 +1,25 @@
-import { describe, it, expect } from 'vitest'
-import { getExportableFields } from '../excel'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {
+  getExportableFields,
+  parseImportFile,
+  exportToExcel,
+  generateImportTemplate,
+} from '../excel'
 import type { FieldConfig } from '@/types'
 
-// Only test the pure functions that don't depend on xlsx file I/O
+// Mock xlsx library
+vi.mock('xlsx', () => ({
+  utils: {
+    aoa_to_sheet: vi.fn(() => ({ '!cols': [] })),
+    sheet_to_json: vi.fn(),
+    book_new: vi.fn(() => ({})),
+    book_append_sheet: vi.fn(),
+  },
+  read: vi.fn(),
+  writeFile: vi.fn(),
+}))
+
+import * as XLSX from 'xlsx'
 
 function makeField(overrides: Partial<FieldConfig>): FieldConfig {
   return {
@@ -95,6 +112,340 @@ describe('Excel Utils', () => {
       const result = getExportableFields(fields)
       expect(result).toHaveLength(2)
       expect(result[0].fieldName).toBe('quoted')
+    })
+  })
+
+  describe('exportToExcel', () => {
+    const mockWriteFile = vi.mocked(XLSX.writeFile)
+    const mockAoatoSheet = vi.mocked(XLSX.utils.aoa_to_sheet)
+    const mockBookNew = vi.mocked(XLSX.utils.book_new)
+    const mockBookAppendSheet = vi.mocked(XLSX.utils.book_append_sheet)
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('基本导出功能', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2 }),
+      ]
+      const data = [
+        { name: '张三', age: 25 },
+        { name: '李四', age: 30 },
+      ]
+
+      exportToExcel(data, fields, 'test-export')
+
+      expect(mockAoatoSheet).toHaveBeenCalled()
+      expect(mockBookNew).toHaveBeenCalled()
+      expect(mockBookAppendSheet).toHaveBeenCalled()
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.anything(), 'test-export.xlsx')
+    })
+
+    it('空数据导出只有表头', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      exportToExcel([], fields, 'empty-export')
+
+      expect(mockAoatoSheet).toHaveBeenCalled()
+    })
+
+    it('自定义文件名', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const data = [{ name: 'test' }]
+
+      exportToExcel(data, fields, 'custom-file-name')
+
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.anything(), 'custom-file-name.xlsx')
+    })
+
+    it('select 字段值转标签', () => {
+      const fields: FieldConfig[] = [
+        makeField({
+          fieldName: 'status',
+          label: '状态',
+          controlType: 'select',
+          order: 1,
+          options: [
+            { label: '启用', value: 'active' },
+            { label: '禁用', value: 'inactive' },
+          ],
+        }),
+      ]
+      const data = [{ status: 'active' }]
+
+      exportToExcel(data, fields, 'test')
+
+      const callArgs = mockAoatoSheet.mock.calls[0][0]
+      const dataRow = callArgs[1]
+      expect(dataRow[0]).toBe('启用')
+    })
+
+    it('multiSelect 字段值转标签并用顿号分隔', () => {
+      const fields: FieldConfig[] = [
+        makeField({
+          fieldName: 'tags',
+          label: '标签',
+          controlType: 'multiSelect',
+          order: 1,
+          options: [
+            { label: '标签A', value: 'a' },
+            { label: '标签B', value: 'b' },
+          ],
+        }),
+      ]
+      const data = [{ tags: ['a', 'b'] }]
+
+      exportToExcel(data, fields, 'test')
+
+      const callArgs = mockAoatoSheet.mock.calls[0][0]
+      const dataRow = callArgs[1]
+      expect(dataRow[0]).toBe('标签A、标签B')
+    })
+  })
+
+  describe('generateImportTemplate', () => {
+    const mockWriteFile = vi.mocked(XLSX.writeFile)
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('生成导入模板', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1, required: true }),
+        makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2, required: false }),
+      ]
+
+      generateImportTemplate(fields, 'import-template')
+
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.anything(), 'import-template.xlsx')
+    })
+
+    it('模板包含字段说明工作表', () => {
+      const fields: FieldConfig[] = [
+        makeField({
+          fieldName: 'status',
+          label: '状态',
+          controlType: 'select',
+          order: 1,
+          options: [
+            { label: '启用', value: 'active' },
+            { label: '禁用', value: 'inactive' },
+          ],
+        }),
+      ]
+
+      generateImportTemplate(fields, 'test')
+
+      // 应该调用两次 book_append_sheet：一次是数据模板，一次是字段说明
+      const mockBookAppendSheet = vi.mocked(XLSX.utils.book_append_sheet)
+      expect(mockBookAppendSheet).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('parseImportFile', () => {
+    const mockRead = vi.mocked(XLSX.read)
+    const mockSheetToJson = vi.mocked(XLSX.utils.sheet_to_json)
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('解析正常 Excel 文件', async () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2 }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['名称', '年龄'],
+        ['张三', 25],
+        ['李四', 30],
+      ])
+
+      const file = new File([''], 'test.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toHaveLength(2)
+      expect(result[0].name).toBe('张三')
+      // labelToValue returns string for numbers
+      expect(result[0].age).toBe('25')
+      expect(result[1].name).toBe('李四')
+      expect(result[1].age).toBe('30')
+    })
+
+    it('空文件返回空数组', async () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([['名称']])
+
+      const file = new File([''], 'empty.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toEqual([])
+    })
+
+    it('支持字段名作为表头', async () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['name'],
+        ['张三'],
+      ])
+
+      const file = new File([''], 'test.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toHaveLength(1)
+      expect(result[0].name).toBe('张三')
+    })
+
+    it('跳过空行', async () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['名称'],
+        ['张三'],
+        [null],
+        ['李四'],
+      ])
+
+      const file = new File([''], 'test.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toHaveLength(2)
+      expect(result[0].name).toBe('张三')
+      expect(result[1].name).toBe('李四')
+    })
+
+    it('select 字段标签转值', async () => {
+      const fields: FieldConfig[] = [
+        makeField({
+          fieldName: 'status',
+          label: '状态',
+          controlType: 'select',
+          order: 1,
+          options: [
+            { label: '启用', value: 'active' },
+            { label: '禁用', value: 'inactive' },
+          ],
+        }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['状态'],
+        ['启用'],
+        ['禁用'],
+      ])
+
+      const file = new File([''], 'test.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toHaveLength(2)
+      expect(result[0].status).toBe('active')
+      expect(result[1].status).toBe('inactive')
+    })
+
+    it('multiSelect 字段标签转值', async () => {
+      const fields: FieldConfig[] = [
+        makeField({
+          fieldName: 'tags',
+          label: '标签',
+          controlType: 'multiSelect',
+          order: 1,
+          options: [
+            { label: '标签A', value: 'a' },
+            { label: '标签B', value: 'b' },
+          ],
+        }),
+      ]
+
+      const mockWorkbook = {
+        SheetNames: ['Sheet1'],
+        Sheets: {
+          Sheet1: {},
+        },
+      }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['标签'],
+        ['标签A、标签B'],
+      ])
+
+      const file = new File([''], 'test.xlsx')
+      const result = await parseImportFile(file, fields)
+
+      expect(result).toHaveLength(1)
+      expect(result[0].tags).toEqual(['a', 'b'])
+    })
+
+    it('文件读取失败抛出错误', async () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      const file = new File([''], 'test.xlsx')
+
+      // 模拟 FileReader 错误
+      const originalFileReader = global.FileReader
+      class MockFileReader {
+        onerror: (() => void) | null = null
+        readAsArrayBuffer() {
+          setTimeout(() => this.onerror?.(), 0)
+        }
+      }
+      global.FileReader = MockFileReader as any
+
+      await expect(parseImportFile(file, fields)).rejects.toThrow('文件读取失败')
+
+      global.FileReader = originalFileReader
     })
   })
 })

@@ -28,8 +28,8 @@ vi.mock('uuid', () => {
 })
 
 import { usePageConfigStore } from '../pageConfig'
-import { get } from '@/utils/request'
-import { getCollectionRelations } from '@/api/relation'
+import { get, post } from '@/utils/request'
+import { getCollectionRelations, getRecordRelations } from '@/api/relation'
 import type { PageConfig, FieldConfig } from '@/types'
 
 function makeField(overrides: Partial<FieldConfig>): FieldConfig {
@@ -1430,5 +1430,306 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     expect(records[0].colC).toBe('test-existing')
     // 引用同批新记录 → 解析为预生成的 _importId
     expect(records[1].colC).toBe(records[0]._importId)
+  })
+})
+
+describe('PageConfig Store — batchDeletePageData', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('批量删除成功，更新缓存', async () => {
+    const mockedPost = vi.mocked(post)
+    mockedPost.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [
+          { id: 'r1', name: 'Record 1' },
+          { id: 'r2', name: 'Record 2' },
+          { id: 'r3', name: 'Record 3' },
+        ],
+      },
+    })
+
+    mockedPost.mockResolvedValueOnce({ deleted: 2, blocked: {} })
+
+    const result = await store.batchDeletePageData('page-test', ['r1', 'r3'])
+
+    expect(mockedPost).toHaveBeenCalledWith('/test/batch-delete', { ids: ['r1', 'r3'] })
+    expect(result.deleted).toBe(2)
+    expect(store.pageDataCache['page-test']).toHaveLength(1)
+    expect(store.pageDataCache['page-test'][0].id).toBe('r2')
+  })
+
+  it('批量删除部分被阻止，只移除未阻止的记录', async () => {
+    const mockedPost = vi.mocked(post)
+    mockedPost.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [
+          { id: 'r1', name: 'Record 1' },
+          { id: 'r2', name: 'Record 2' },
+          { id: 'r3', name: 'Record 3' },
+        ],
+      },
+    })
+
+    // r2 被阻止删除（如有关联数据）
+    mockedPost.mockResolvedValueOnce({
+      deleted: 2,
+      blocked: { 'r2': '存在关联数据' },
+    })
+
+    const result = await store.batchDeletePageData('page-test', ['r1', 'r2', 'r3'])
+
+    expect(result.deleted).toBe(2)
+    expect(result.blocked).toEqual({ 'r2': '存在关联数据' })
+    // 只有 r2 保留
+    expect(store.pageDataCache['page-test']).toHaveLength(1)
+    expect(store.pageDataCache['page-test'][0].id).toBe('r2')
+  })
+
+  it('批量删除失败抛出错误', async () => {
+    const mockedPost = vi.mocked(post)
+    mockedPost.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [{ id: 'r1', name: 'Record 1' }],
+      },
+    })
+
+    mockedPost.mockRejectedValueOnce(new Error('删除失败'))
+
+    await expect(store.batchDeletePageData('page-test', ['r1'])).rejects.toThrow('删除失败')
+  })
+
+  it('无缓存时不报错', async () => {
+    const mockedPost = vi.mocked(post)
+    mockedPost.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {},
+    })
+
+    mockedPost.mockResolvedValueOnce({ deleted: 1, blocked: {} })
+
+    const result = await store.batchDeletePageData('page-test', ['r1'])
+    expect(result.deleted).toBe(1)
+  })
+})
+
+describe('PageConfig Store — refreshSingleRecord', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('刷新存在的记录，更新缓存', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetRecordRelations = vi.mocked(getRecordRelations)
+    mockedGet.mockReset()
+    mockedGetRecordRelations.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'relItems',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backRef' },
+            }),
+          ],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [
+          { id: 'r1', name: 'Old Name', relItems: [] },
+        ],
+      },
+    })
+
+    // 获取单条记录
+    mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'New Name' })
+    // 获取记录关联
+    mockedGetRecordRelations.mockResolvedValueOnce({ relItems: ['item-1'] })
+    // 获取关联标签
+    mockedGet.mockResolvedValueOnce([{ id: 'item-1', itemName: '物品A' }])
+
+    const result = await store.refreshSingleRecord('page-test', 'r1')
+
+    expect(mockedGet).toHaveBeenCalledWith('/test/r1')
+    expect(mockedGetRecordRelations).toHaveBeenCalledWith('test', 'r1')
+    expect(result).not.toBeNull()
+    expect(result!.name).toBe('New Name')
+    expect(result!.relItems).toEqual(['item-1'])
+    expect(result!._rel_relItems_labels).toHaveLength(1)
+
+    // 验证缓存更新
+    expect(store.pageDataCache['page-test'][0].name).toBe('New Name')
+  })
+
+  it('刷新新记录，追加到缓存末尾', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetRecordRelations = vi.mocked(getRecordRelations)
+    mockedGet.mockReset()
+    mockedGetRecordRelations.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [
+          { id: 'r1', name: 'Record 1' },
+        ],
+      },
+    })
+
+    mockedGet.mockResolvedValueOnce({ id: 'r2', name: 'New Record' })
+    mockedGetRecordRelations.mockResolvedValueOnce({})
+
+    const result = await store.refreshSingleRecord('page-test', 'r2')
+
+    expect(result).not.toBeNull()
+    expect(result!.id).toBe('r2')
+    expect(store.pageDataCache['page-test']).toHaveLength(2)
+    expect(store.pageDataCache['page-test'][1].id).toBe('r2')
+  })
+
+  it('获取失败返回 null', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
+        }),
+      ],
+      pageDataCache: {
+        'page-test': [{ id: 'r1', name: 'Record 1' }],
+      },
+    })
+
+    mockedGet.mockRejectedValueOnce(new Error('记录不存在'))
+
+    const result = await store.refreshSingleRecord('page-test', 'r1')
+
+    expect(result).toBeNull()
+  })
+
+  it('关联数据获取失败时不影响主记录', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetRecordRelations = vi.mocked(getRecordRelations)
+    mockedGet.mockReset()
+    mockedGetRecordRelations.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'relItems',
+              controlType: 'relation',
+              relationConfig: { targetCollection: 'items', displayField: 'itemName', targetField: 'backRef' },
+            }),
+          ],
+        }),
+      ],
+      pageDataCache: {},
+    })
+
+    mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test Record' })
+    mockedGetRecordRelations.mockRejectedValueOnce(new Error('关联获取失败'))
+    mockedGet.mockResolvedValueOnce([])
+
+    const result = await store.refreshSingleRecord('page-test', 'r1')
+
+    expect(result).not.toBeNull()
+    expect(result!.name).toBe('Test Record')
+    // 关联字段应为空数组
+    expect(result!.relItems).toEqual([])
+  })
+
+  it('解析 reference 字段', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedGetRecordRelations = vi.mocked(getRecordRelations)
+    mockedGet.mockReset()
+    mockedGetRecordRelations.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'name', controlType: 'text' }),
+            makeField({
+              id: 'f2',
+              fieldName: 'templateRef',
+              controlType: 'reference',
+              referenceConfig: { targetCollection: 'templates', displayField: 'tplName', inheritFields: ['desc'] },
+            }),
+          ],
+        }),
+      ],
+      pageDataCache: {},
+    })
+
+    mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test', templateRef: 'tpl-1' })
+    mockedGetRecordRelations.mockResolvedValueOnce({})
+    // 获取引用记录
+    mockedGet.mockResolvedValueOnce([
+      { id: 'tpl-1', tplName: '模板A', desc: '描述A' },
+    ])
+
+    const result = await store.refreshSingleRecord('page-test', 'r1')
+
+    expect(result).not.toBeNull()
+    expect(result!.templateRef).toBe('tpl-1')
+    expect(result!._ref_templateRef_display).toBe('模板A')
+    expect(result!._ref_templateRef_desc).toBe('描述A')
   })
 })
