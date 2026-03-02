@@ -72,8 +72,15 @@
                     @click="clearColumnFilter(field.fieldName)"
                   >清除</el-button>
                 </div>
+                <el-input
+                  v-if="['relation', 'quoteSelect', 'reference'].includes(field.controlType)"
+                  v-model="columnFilterForm.value"
+                  :placeholder="`输入${field.label}关键字`"
+                  clearable
+                  style="width: 100%"
+                />
                 <el-select
-                  v-if="['select', 'radio', 'multiSelect', 'checkbox'].includes(field.controlType)"
+                  v-else-if="['select', 'radio', 'multiSelect', 'checkbox'].includes(field.controlType)"
                   v-model="columnFilterForm.value"
                   :placeholder="`选择${field.label}`"
                   clearable
@@ -384,7 +391,7 @@ const visibleFields = computed(() => {
  * 判断字段是否可筛选
  */
 function isFilterable(field: FieldConfig): boolean {
-  const filterableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'select', 'radio', 'multiSelect', 'checkbox']
+  const filterableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'select', 'radio', 'multiSelect', 'checkbox', 'relation', 'quoteSelect', 'reference']
   return filterableTypes.includes(field.controlType)
 }
 

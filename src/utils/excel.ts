@@ -312,3 +312,88 @@ export function parseImportFile(
     reader.readAsArrayBuffer(file)
   })
 }
+
+/**
+ * 解析导入的 JSON 文件
+ *
+ * @param file - 上传的文件
+ * @param fields - 字段配置
+ * @returns 解析后的记录数组
+ */
+export function parseJsonImportFile(
+  file: File,
+  fields: FieldConfig[]
+): Promise<Record<string, any>[]> {
+  const exportFields = getExportableFields(fields)
+
+  // 建立 label / fieldName → field 映射（同时支持两种 key 格式）
+  const headerToField = new Map<string, FieldConfig>()
+  exportFields.forEach((f) => {
+    headerToField.set(f.label, f)
+    if (!headerToField.has(f.fieldName)) {
+      headerToField.set(f.fieldName, f)
+    }
+  })
+
+  const ARRAY_FIELD_TYPES = ['multiSelect', 'checkbox', 'relation', 'quoteSelect']
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const text = e.target!.result as string
+        const parsed = JSON.parse(text)
+
+        if (!Array.isArray(parsed)) {
+          throw new Error('JSON 文件内容必须是数组')
+        }
+
+        const records: Record<string, any>[] = []
+
+        for (const obj of parsed) {
+          if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
+
+          const record: Record<string, any> = {}
+          let hasData = false
+
+          for (const [key, value] of Object.entries(obj)) {
+            const field = headerToField.get(key)
+            if (!field) continue
+
+            if (value === null || value === undefined || value === '') continue
+
+            if (Array.isArray(value) && ARRAY_FIELD_TYPES.includes(field.controlType)) {
+              // 数组值：对 select 类字段做 label→value 映射
+              if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+                record[field.fieldName] = value.map((item) => {
+                  const opt = field.options?.find((o) => o.label === String(item) || o.value === String(item))
+                  return opt?.value || String(item)
+                })
+              } else {
+                // relation / quoteSelect — 保持字符串原样
+                record[field.fieldName] = value.map((item) => String(item))
+              }
+              hasData = true
+            } else if (typeof value === 'number' && field.controlType === 'number') {
+              record[field.fieldName] = value
+              hasData = true
+            } else {
+              record[field.fieldName] = labelToValue(String(value), field)
+              hasData = true
+            }
+          }
+
+          if (hasData) {
+            records.push(record)
+          }
+        }
+
+        resolve(records)
+      } catch (err) {
+        reject(err)
+      }
+    }
+    reader.onerror = () => reject(new Error('文件读取失败'))
+    reader.readAsText(file)
+  })
+}

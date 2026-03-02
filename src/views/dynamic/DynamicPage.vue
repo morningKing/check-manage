@@ -322,7 +322,7 @@
     <input
       ref="fileInputRef"
       type="file"
-      accept=".xlsx,.xls"
+      accept=".xlsx,.xls,.json"
       style="display: none"
       @change="handleFileSelected"
     />
@@ -389,7 +389,7 @@ import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret } fr
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
 import { DataTable, ConfirmDialog, BackupDiffDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
-import { exportToExcel, generateImportTemplate, parseImportFile } from '@/utils/excel'
+import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript } from '@/types'
@@ -735,6 +735,31 @@ const filteredData = computed<DynamicRecord[]>(() => {
       return filterEntries.every(([fieldName, filter]) => {
         const field = pageFields.value.find(f => f.fieldName === fieldName)
         if (!field) return true
+
+        if (field.controlType === 'relation') {
+          const labels = record[`_rel_${fieldName}_labels`]
+          if (!Array.isArray(labels) || labels.length === 0) return false
+          const keyword = String(filter.value).toLowerCase()
+          return labels.some((item: { id: string; label: string }) =>
+            item.label.toLowerCase().includes(keyword)
+          )
+        }
+
+        if (field.controlType === 'quoteSelect') {
+          const labels = record[`_quote_${fieldName}_labels`]
+          if (!Array.isArray(labels) || labels.length === 0) return false
+          const keyword = String(filter.value).toLowerCase()
+          return labels.some((item: { id: string; label: string }) =>
+            item.label.toLowerCase().includes(keyword)
+          )
+        }
+
+        if (field.controlType === 'reference') {
+          const display = record[`_ref_${fieldName}_display`]
+          if (!display) return false
+          const keyword = String(filter.value).toLowerCase()
+          return String(display).toLowerCase().includes(keyword)
+        }
 
         const val = record[fieldName]
         if (val === null || val === undefined || val === '') return false
@@ -1153,7 +1178,10 @@ async function handleFileSelected(e: Event): Promise<void> {
   input.value = ''
 
   try {
-    const records = await parseImportFile(file, pageFields.value)
+    const isJson = file.name.toLowerCase().endsWith('.json')
+    const records = isJson
+      ? await parseJsonImportFile(file, pageFields.value)
+      : await parseImportFile(file, pageFields.value)
     if (records.length === 0) {
       ElMessage.warning('文件中没有可导入的数据')
       return
