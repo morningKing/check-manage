@@ -284,6 +284,11 @@
             <span class="view-textarea">{{ viewRecord[field.fieldName] || '-' }}</span>
           </template>
 
+          <!-- 富文本 -->
+          <template v-else-if="field.controlType === 'richText'">
+            <div class="view-richtext" v-html="viewRecord[field.fieldName] || '-'" />
+          </template>
+
           <!-- 默认：纯文本 -->
           <template v-else>
             {{ viewRecord[field.fieldName] ?? '-' }}
@@ -1508,6 +1513,14 @@ onActivated(async () => {
 .view-textarea {
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.view-richtext {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
 }
 
 .view-images {

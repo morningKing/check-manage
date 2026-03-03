@@ -482,6 +482,8 @@ function getColumnWidth(field: FieldConfig): string {
       return '200'
     case 'quoteSelect':
       return '200'
+    case 'richText':
+      return '200'
     default:
       return '150'
   }
@@ -556,6 +558,11 @@ function formatCellValue(row: any, field: FieldConfig): string {
       // 显示父记录的 displayField 值
       const displayVal = row[`_ref_${field.fieldName}_display`]
       return displayVal || String(value)
+
+    case 'richText':
+      // 移除 HTML 标签，显示纯文本预览（最多 50 字符）
+      const plain = value?.replace(/<[^>]*>/g, '') || ''
+      return plain.length > 50 ? plain.slice(0, 50) + '...' : plain || '-'
 
     default:
       return String(value)

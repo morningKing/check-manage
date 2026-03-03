@@ -26,6 +26,7 @@ export type ControlType =
   | 'autoTimestamp' // 自动时间戳（新增/修改时自动填充）
   | 'autoSequence'  // 自增序列（新增时自动生成递增编号）
   | 'quoteSelect'   // 引用选择（单向多选引用另一集合记录）
+  | 'richText'      // 富文本编辑器
 
 /**
  * 控件类型配置
@@ -35,6 +36,7 @@ export type ControlType =
 export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '单行文本', value: 'text' },
   { label: '多行文本', value: 'textarea' },
+  { label: '富文本', value: 'richText' },
   { label: '数字输入', value: 'number' },
   { label: '单选下拉', value: 'select' },
   { label: '多选下拉', value: 'multiSelect' },

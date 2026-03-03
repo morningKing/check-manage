@@ -10,6 +10,7 @@ import type { ControlType } from '@/types'
 // 导入所有控件组件
 import TextInput from './TextInput.vue'
 import TextArea from './TextArea.vue'
+import RichTextEditor from './RichTextEditor.vue'
 import NumberInput from './NumberInput.vue'
 import SelectInput from './SelectInput.vue'
 import MultiSelect from './MultiSelect.vue'
@@ -32,6 +33,7 @@ import QuoteSelect from './QuoteSelect.vue'
 export const controlComponentMap: Record<ControlType, Component> = {
   text: TextInput,
   textarea: TextArea,
+  richText: RichTextEditor,
   number: NumberInput,
   select: SelectInput,
   multiSelect: MultiSelect,
@@ -81,6 +83,8 @@ export function getControlDefaultValue(controlType: ControlType): any {
     case 'file':
     case 'image':
       return []
+    case 'richText':
+      return ''
     default:
       return ''
   }
@@ -90,6 +94,7 @@ export function getControlDefaultValue(controlType: ControlType): any {
 export {
   TextInput,
   TextArea,
+  RichTextEditor,
   NumberInput,
   SelectInput,
   MultiSelect,
