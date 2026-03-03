@@ -397,6 +397,7 @@ import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
+import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript } from '@/types'
 
 // ==================== Props ====================
@@ -1208,35 +1209,124 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   importTotal.value = records.length
   importDialogVisible.value = true
 
-  // 将关联字段的显示名称解析为记录 ID
-  await pageConfigStore.resolveRelationImportValues(pageId.value, records)
-  // 将引用字段的显示名称 / 主键值解析为记录 ID
-  await pageConfigStore.resolveReferenceImportValues(pageId.value, records)
-  // 将引用选择字段的显示名称解析为记录 ID
-  await pageConfigStore.resolveQuoteImportValues(pageId.value, records)
-  // 将 collection 类型选项字段的显示标签解析为实际存储值
-  await pageConfigStore.resolveCollectionSelectImportValues(pageId.value, records)
+  // 创建共享缓存，避免多个 resolve 函数重复请求同一集合
+  const collectionCache = new Map<string, any[]>()
+
+  // 并行解析（使用共享缓存）
+  await Promise.all([
+    pageConfigStore.resolveRelationImportValues(pageId.value, records, collectionCache),
+    pageConfigStore.resolveReferenceImportValues(pageId.value, records, collectionCache),
+    pageConfigStore.resolveQuoteImportValues(pageId.value, records, collectionCache),
+    pageConfigStore.resolveCollectionSelectImportValues(pageId.value, records, collectionCache)
+  ])
+
+  // 批量生成自增序列值
+  const sequenceValues = pageConfigStore.batchGenerateSequenceValues(pageId.value, records.length)
+  const sequenceFields = Object.keys(sequenceValues)
 
   let success = 0
   let failed = 0
 
-  await withBatch(`导入 ${records.length} 条${pageConfig.value?.name || '数据'}`, async () => {
-    for (let i = 0; i < records.length; i++) {
+  // 使用批量 API（≥ 10 条记录）
+  if (records.length >= 10) {
+    const BATCH_SIZE = 500
+    const batches = Math.ceil(records.length / BATCH_SIZE)
+
+    for (let batchIdx = 0; batchIdx < batches; batchIdx++) {
+      const start = batchIdx * BATCH_SIZE
+      const end = Math.min(start + BATCH_SIZE, records.length)
+      const batchRecords = records.slice(start, end)
+
       try {
-        const importId = records[i]._importId as string | undefined
-        const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
-        delete regularData._importId
-        const created = await pageConfigStore.addPageData(pageId.value, regularData, importId)
-        // 保存关联关系数据
-        await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
-        success++
-      } catch {
-        failed++
+        // 准备批量请求数据
+        const batchData = batchRecords.map((record, idx) => {
+          const importId = record._importId as string | undefined
+          const regularData = pageConfigStore.stripRelationFields(pageId.value, record)
+          delete regularData._importId
+
+          // 填充自增序列值
+          for (const fieldName of sequenceFields) {
+            if (!regularData[fieldName]) {
+              regularData[fieldName] = sequenceValues[fieldName][start + idx]
+            }
+          }
+
+          // 提取关联关系
+          const relations: Record<string, string[]> = {}
+          const relationFields = pageConfigStore.getRelationFields(pageId.value)
+          for (const field of relationFields) {
+            const ids = record[field.fieldName]
+            if (Array.isArray(ids) && ids.length > 0) {
+              relations[field.fieldName] = ids
+            }
+          }
+
+          return {
+            id: importId || `${collection.value}-${Math.random().toString(36).slice(2, 10)}`,
+            data: regularData,
+            relations
+          }
+        })
+
+        // 调用批量创建 API
+        const result = await post<{
+          success: boolean
+          created: number
+          failed: number
+          errors?: Array<{ index: number; error: string; record: any }>
+          sequenceValues?: Record<string, string>
+        }>(`/${collection.value}/batch-create`, {
+          records: batchData,
+          options: {
+            skipValidation: false,
+            generateSequence: true,
+            continueOnError: true
+          }
+        })
+
+        success += result.created
+        failed += result.failed
+
+        // 处理失败记录
+        if (result.errors && result.errors.length > 0) {
+          console.warn(`批次 ${batchIdx + 1} 失败记录:`, result.errors)
+        }
+      } catch (error) {
+        console.error(`批次 ${batchIdx + 1} 导入失败:`, error)
+        failed += batchRecords.length
       }
-      importCurrent.value = i + 1
-      importProgress.value = Math.round(((i + 1) / records.length) * 100)
+
+      importCurrent.value = end
+      importProgress.value = Math.round((end / records.length) * 100)
     }
-  })
+  } else {
+    // 少量记录使用原有逐条导入
+    await withBatch(`导入 ${records.length} 条${pageConfig.value?.name || '数据'}`, async () => {
+      for (let i = 0; i < records.length; i++) {
+        try {
+          const importId = records[i]._importId as string | undefined
+          const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
+          delete regularData._importId
+
+          // 填充自增序列值
+          for (const fieldName of sequenceFields) {
+            if (!regularData[fieldName]) {
+              regularData[fieldName] = sequenceValues[fieldName][i]
+            }
+          }
+
+          const created = await pageConfigStore.addPageData(pageId.value, regularData, importId)
+          // 保存关联关系数据
+          await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
+          success++
+        } catch {
+          failed++
+        }
+        importCurrent.value = i + 1
+        importProgress.value = Math.round(((i + 1) / records.length) * 100)
+      }
+    })
+  }
 
   importLoading.value = false
   importResult.value = { success, failed }

@@ -554,6 +554,55 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 批量生成自增序列值（性能优化版本）
+   *
+   * 一次遍历找到最大值，批量生成 N 个序列值。
+   * 时间复杂度 O(N) 而非 O(N²)。
+   *
+   * @param pageId - 页面ID
+   * @param count - 需要生成的序列值数量
+   * @returns 每个序列字段的批量值映射
+   */
+  function batchGenerateSequenceValues(
+    pageId: string,
+    count: number
+  ): Record<string, string[]> {
+    const results: Record<string, string[]> = {}
+    const sequenceFields = getAutoSequenceFields(pageId)
+
+    for (const field of sequenceFields) {
+      const config = field.sequenceConfig || { prefix: '', max: 999 }
+      const prefix = config.prefix
+      const maxNum = config.max
+      const padLen = String(maxNum).length
+
+      // 一次遍历找到最大值
+      let currentMax = 0
+      const records = pageDataCache.value[pageId] || []
+      for (const record of records) {
+        const val = record[field.fieldName]
+        if (typeof val === 'string' && val.startsWith(prefix)) {
+          const numStr = val.slice(prefix.length)
+          const num = parseInt(numStr, 10)
+          if (!isNaN(num) && num > currentMax) {
+            currentMax = num
+          }
+        }
+      }
+
+      // 批量生成序列值
+      results[field.fieldName] = []
+      for (let i = 1; i <= count; i++) {
+        results[field.fieldName].push(
+          `${prefix}${String(currentMax + i).padStart(padLen, '0')}`
+        )
+      }
+    }
+
+    return results
+  }
+
+  /**
    * 获取页面配置中所有 relation 类型的字段
    */
   function getRelationFields(pageId: string): FieldConfig[] {
@@ -840,8 +889,10 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveRelationImportValues(
     pageId: string,
-    records: Record<string, any>[]
+    records: Record<string, any>[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
     const relationFields = getRelationFields(pageId)
     if (relationFields.length === 0) return
 
@@ -853,7 +904,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
       let targetRecords: any[]
       try {
-        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+        targetRecords = await fetchCollectionData(config.targetCollection, cache)
       } catch {
         continue
       }
@@ -898,8 +949,10 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveReferenceImportValues(
     pageId: string,
-    records: Record<string, any>[]
+    records: Record<string, any>[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
     const referenceFields = getReferenceFields(pageId)
     if (referenceFields.length === 0) return
 
@@ -911,7 +964,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
       let targetRecords: any[]
       try {
-        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+        targetRecords = await fetchCollectionData(config.targetCollection, cache)
       } catch {
         continue
       }
@@ -981,8 +1034,10 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveQuoteImportValues(
     pageId: string,
-    records: Record<string, any>[]
+    records: Record<string, any>[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
+    const cache = collectionCache || new Map<string, any[]>()
     const quoteFields = getQuoteFields(pageId)
     if (quoteFields.length === 0) return
 
@@ -994,7 +1049,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
       let targetRecords: any[]
       try {
-        targetRecords = await get<any[]>(`/${config.targetCollection}`)
+        targetRecords = await fetchCollectionData(config.targetCollection, cache)
       } catch {
         continue
       }
@@ -1039,11 +1094,13 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function resolveCollectionSelectImportValues(
     pageId: string,
-    records: Record<string, any>[]
+    records: Record<string, any>[],
+    collectionCache?: Map<string, any[]>
   ): Promise<void> {
     const config = pageConfigs.value.find((c) => c.id === pageId)
     if (!config) return
 
+    const cache = collectionCache || new Map<string, any[]>()
     const collectionSelectFields = config.fields.filter(
       (f) =>
         ['select', 'multiSelect', 'radio', 'checkbox'].includes(f.controlType) &&
@@ -1053,7 +1110,6 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     if (collectionSelectFields.length === 0) return
 
     const endpoint = pageId.replace('page-', '')
-    const collectionCache = new Map<string, any[]>()
 
     for (const field of collectionSelectFields) {
       const source = field.optionsSource!
@@ -1213,6 +1269,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     getCachedPageData,
     refreshSingleRecord,
     // 关联关系
+    getRelationFields,
     stripRelationFields,
     saveRelations,
     fetchRelationDisplayMaps,
@@ -1225,6 +1282,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     // collection 类型选项解析
     resolveCollectionSelectImportValues,
     // 自动字段
-    generateNextSequenceValue
+    generateNextSequenceValue,
+    batchGenerateSequenceValues
   }
 })

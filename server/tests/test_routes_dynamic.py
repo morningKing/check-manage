@@ -215,3 +215,166 @@ class TestUnauthorized:
         client, _, _, _ = setup
         resp = client.get('/test-collection')
         assert resp.status_code == 401
+
+
+class TestBatchCreate:
+    """批量创建接口测试"""
+
+    def test_batch_create_success(self, setup):
+        """批量创建成功"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchall.return_value = []  # no existing IDs
+
+        records = [
+            {'id': 'rec-1', 'data': {'name': '记录1'}, 'relations': {}},
+            {'id': 'rec-2', 'data': {'name': '记录2'}, 'relations': {}},
+        ]
+        resp = client.post('/test-collection/batch-create',
+                          data=json.dumps({'records': records}),
+                          content_type='application/json',
+                          headers=headers)
+
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data['success'] is True
+        assert data['created'] == 2
+        assert data['failed'] == 0
+
+    def test_batch_create_duplicate_id_in_batch(self, setup):
+        """批量创建时批内有重复 ID"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchall.return_value = []  # no existing IDs in DB
+
+        records = [
+            {'id': 'rec-1', 'data': {'name': '记录1'}, 'relations': {}},
+            {'id': 'rec-1', 'data': {'name': '记录2'}, 'relations': {}},  # duplicate ID
+        ]
+        resp = client.post('/test-collection/batch-create',
+                          data=json.dumps({'records': records}),
+                          content_type='application/json',
+                          headers=headers)
+
+        assert resp.status_code == 409
+        data = resp.get_json()
+        assert 'failed' in data
+        assert len(data['errors']) == 2
+
+    def test_batch_create_existing_id_in_db(self, setup):
+        """批量创建时数据库已有相同 ID"""
+        client, mock_cursor, _, headers = setup
+        # Mock database has 'rec-1' already
+        mock_cursor.fetchall.side_effect = [
+            [('rec-1',)],  # existing IDs query
+        ]
+
+        records = [
+            {'id': 'rec-1', 'data': {'name': '记录1'}, 'relations': {}},
+            {'id': 'rec-2', 'data': {'name': '记录2'}, 'relations': {}},
+        ]
+        resp = client.post('/test-collection/batch-create',
+                          data=json.dumps({'records': records}),
+                          content_type='application/json',
+                          headers=headers)
+
+        # By default continueOnError is False, but we skip the duplicate
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data['created'] == 1  # Only rec-2 created
+        assert data['failed'] == 1   # rec-1 failed
+
+    def test_batch_create_with_relations(self, setup):
+        """批量创建包含关联关系"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchall.return_value = []  # no existing IDs
+
+        # Mock field config with relation
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', [
+            {'fieldName': 'relatedItems', 'controlType': 'relation',
+             'relationConfig': {'targetCollection': 'other-collection', 'targetField': 'parentItems'}}
+        ])):
+            records = [
+                {
+                    'id': 'rec-1',
+                    'data': {'name': '记录1'},
+                    'relations': {'relatedItems': ['other-1', 'other-2']}
+                },
+            ]
+            resp = client.post('/test-collection/batch-create',
+                              data=json.dumps({'records': records}),
+                              content_type='application/json',
+                              headers=headers)
+
+            assert resp.status_code == 201
+            data = resp.get_json()
+            assert data['created'] == 1
+
+    def test_batch_create_continue_on_error(self, setup):
+        """批量创建部分失败时继续处理"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchall.return_value = []
+
+        # First record will fail validation
+        with patch('routes.dynamic.get_validation_script', return_value='raise Exception("test")'):
+            records = [
+                {'id': 'rec-1', 'data': {'name': '记录1'}, 'relations': {}},
+                {'id': 'rec-2', 'data': {'name': '记录2'}, 'relations': {}},
+            ]
+            resp = client.post('/test-collection/batch-create',
+                              data=json.dumps({
+                                  'records': records,
+                                  'options': {'continueOnError': True}
+                              }),
+                              content_type='application/json',
+                              headers=headers)
+
+            assert resp.status_code == 201
+            data = resp.get_json()
+            assert data['created'] >= 0
+            assert data['failed'] >= 0
+
+    def test_batch_create_empty_records(self, setup):
+        """批量创建时记录为空"""
+        client, _, _, headers = setup
+        resp = client.post('/test-collection/batch-create',
+                          data=json.dumps({'records': []}),
+                          content_type='application/json',
+                          headers=headers)
+
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert 'error' in data
+
+    def test_batch_create_validation_error(self, setup):
+        """批量创建时校验失败"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchall.return_value = []
+
+        # Mock validation script that returns errors
+        def mock_run_script(*args, **kwargs):
+            return (['字段不能为空'], [], [])
+
+        with patch('routes.dynamic.get_validation_script', return_value='script'):
+            with patch('utils.script_runner.run_validation_script', side_effect=mock_run_script):
+                records = [
+                    {'id': 'rec-1', 'data': {'name': ''}, 'relations': {}},
+                ]
+                resp = client.post('/test-collection/batch-create',
+                                  data=json.dumps({'records': records}),
+                                  content_type='application/json',
+                                  headers=headers)
+
+                assert resp.status_code == 201
+                data = resp.get_json()
+                assert data['failed'] == 1
+                assert len(data['errors']) == 1
+
+    def test_batch_create_reserved_collection(self, setup):
+        """批量创建保留集合返回 404"""
+        client, _, _, headers = setup
+        records = [{'id': 'r1', 'data': {}, 'relations': {}}]
+        resp = client.post('/menus/batch-create',
+                          data=json.dumps({'records': records}),
+                          content_type='application/json',
+                          headers=headers)
+
+        assert resp.status_code == 404

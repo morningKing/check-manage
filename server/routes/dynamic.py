@@ -369,6 +369,222 @@ def delete_item(collection, item_id):
     return jsonify({})
 
 
+@dynamic_bp.route('/<collection>/batch-create', methods=['POST'])
+@write_required
+def batch_create_items(collection):
+    """Batch create multiple records in a single transaction."""
+    if collection in RESERVED:
+        return jsonify({"error": "Not found"}), 404
+
+    body = request.get_json(force=True)
+    records = body.get('records', [])
+    options = body.get('options', {})
+
+    if not records:
+        return jsonify({"error": "records is required"}), 400
+
+    skip_validation = options.get('skipValidation', False)
+    continue_on_error = options.get('continueOnError', False)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 1. Batch fetch configuration (shared by all records)
+        page_name, fields = get_page_info(cur, collection)
+        pk_fields = get_primary_key_fields(cur, collection)
+        validation_script = None if skip_validation else get_validation_script(cur, collection)
+
+        # 2. Extract all IDs for uniqueness check
+        all_ids = [r.get('id') for r in records if r.get('id')]
+
+        # 3. Check for duplicate IDs within the batch
+        id_set = set()
+        duplicate_ids = []
+        for rid in all_ids:
+            if rid in id_set:
+                duplicate_ids.append(rid)
+            id_set.add(rid)
+
+        if duplicate_ids and not continue_on_error:
+            return jsonify({
+                "error": "批量导入包含重复 ID",
+                "failed": len(records),
+                "errors": [{"index": i, "error": "ID 重复", "record": records[i]}
+                           for i, r in enumerate(records) if r.get('id') in duplicate_ids]
+            }), 409
+
+        # 4. Check existing IDs in database (batch query)
+        if all_ids:
+            cur.execute(
+                'SELECT id FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
+                (collection, all_ids)
+            )
+            existing_ids = set(row[0] for row in cur.fetchall())
+        else:
+            existing_ids = set()
+
+        # 5. Validate and prepare records
+        prepared_records = []
+        errors = []
+        sequence_values = {}
+
+        for idx, record in enumerate(records):
+            rid = record.get('id')
+            data = record.get('data', {})
+            relations = record.get('relations', {})
+
+            # Skip records with duplicate IDs in batch
+            if rid in duplicate_ids:
+                errors.append({"index": idx, "error": "ID 重复", "record": record})
+                continue
+
+            # Skip records with existing IDs
+            if rid and rid in existing_ids:
+                errors.append({"index": idx, "error": "主键已存在", "record": record})
+                continue
+
+            # Check primary key uniqueness for composite keys
+            if pk_fields:
+                error = check_primary_key_unique(cur, collection, data, pk_fields)
+                if error:
+                    errors.append({"index": idx, "error": error, "record": record})
+                    continue
+
+            # Run validation script if configured
+            if validation_script:
+                from utils.script_runner import run_validation_script
+                try:
+                    val_errors, warnings, pending_relations = run_validation_script(
+                        validation_script, data, 'create', None, fields, collection, conn
+                    )
+                    if val_errors:
+                        errors.append({
+                            "index": idx,
+                            "error": "校验失败",
+                            "validationErrors": val_errors,
+                            "record": record
+                        })
+                        continue
+                    # Store pending relations for later
+                    record['_pending_relations'] = pending_relations
+                except Exception as e:
+                    errors.append({
+                        "index": idx,
+                        "error": f"校验脚本执行错误：{str(e)}",
+                        "record": record
+                    })
+                    continue
+
+            prepared_records.append({
+                "id": rid,
+                "data": data,
+                "relations": relations,
+                "index": idx
+            })
+
+        # 6. Handle errors based on continue_on_error flag
+        if errors and not continue_on_error:
+            return jsonify({
+                "error": "批量创建失败",
+                "failed": len(errors),
+                "errors": errors
+            }), 400
+
+        # 7. Batch insert records using execute_values
+        if prepared_records:
+            values = [
+                (r['id'], collection, psycopg2.extras.Json(r['data']))
+                for r in prepared_records
+            ]
+            psycopg2.extras.execute_values(
+                cur,
+                'INSERT INTO dynamic_data (id, collection, data) VALUES %s',
+                values
+            )
+
+            # 8. Batch insert relations (forward and reverse)
+            all_relation_values = []
+            all_reverse_values = []
+
+            for record in prepared_records:
+                rid = record['id']
+                relations = record.get('relations', {})
+                pending = record.get('_pending_relations', [])
+
+                # Process relations from request
+                for field_name, related_ids in relations.items():
+                    if not isinstance(related_ids, list):
+                        continue
+                    for related_id in related_ids:
+                        # Find field config to get target collection
+                        field_config = next((f for f in fields if f['fieldName'] == field_name), None)
+                        if not field_config:
+                            continue
+                        rel_config = field_config.get('relationConfig', {})
+                        target_collection = rel_config.get('targetCollection')
+                        target_field = rel_config.get('targetField')
+
+                        if target_collection:
+                            all_relation_values.append(
+                                (collection, rid, field_name, target_collection, related_id)
+                            )
+                            if target_field:
+                                all_reverse_values.append(
+                                    (target_collection, related_id, target_field, collection, rid)
+                                )
+
+                # Process pending relations from validation script
+                for rel in pending:
+                    field_name = rel['fieldName']
+                    target_collection = rel['targetCollection']
+                    target_field = rel.get('targetField')
+                    for related_id in rel['ids']:
+                        all_relation_values.append(
+                            (collection, rid, field_name, target_collection, related_id)
+                        )
+                        if target_field:
+                            all_reverse_values.append(
+                                (target_collection, related_id, target_field, collection, rid)
+                            )
+
+            # Batch insert forward relations
+            if all_relation_values:
+                psycopg2.extras.execute_values(
+                    cur,
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                    'VALUES %s ON CONFLICT DO NOTHING',
+                    all_relation_values
+                )
+
+            # Batch insert reverse relations (bidirectional sync)
+            if all_reverse_values:
+                psycopg2.extras.execute_values(
+                    cur,
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                    'VALUES %s ON CONFLICT DO NOTHING',
+                    all_reverse_values
+                )
+
+    # Log the batch creation
+    if prepared_records:
+        created_count = len(prepared_records)
+        summary = f'{created_count} 条记录'
+        log_operation('create', 'dynamic_data', ','.join(r['id'] for r in prepared_records[:3]),
+                      summary, f'批量新增{page_name}「{summary}」')
+
+    result = {
+        "success": True,
+        "created": len(prepared_records),
+        "failed": len(errors),
+        "sequenceValues": sequence_values
+    }
+
+    if errors:
+        result["errors"] = errors
+
+    return jsonify(result), 201
+
+
 @dynamic_bp.route('/<collection>/batch-delete', methods=['POST'])
 @write_required
 def batch_delete_items(collection, **kwargs):
