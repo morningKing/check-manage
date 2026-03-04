@@ -205,7 +205,7 @@
       <!-- 操作列 -->
       <el-table-column
         label="操作"
-        :width="showActions ? 200 : 80"
+        :width="showActions ? 250 : 80"
         align="center"
         fixed="right"
       >

@@ -1118,7 +1118,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const valueField = source.valueField || 'id'
 
       // 获取目标集合的已有记录
-      const targetRecords = await fetchCollectionData(collection, collectionCache)
+      const targetRecords = await fetchCollectionData(collection, cache)
 
       // 构建映射: labelField 值 → valueField 值
       const labelToVal = new Map<string, any>()

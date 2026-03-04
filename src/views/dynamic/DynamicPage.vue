@@ -118,7 +118,10 @@
         @page-change="handlePageChange"
         @filter-change="handleFilterChange"
       >
-        <template v-if="boundRowExportScripts.length > 0" #extra-actions="{ row }">
+        <template #extra-actions="{ row }">
+          <el-button type="info" link @click="handleShowRelationGraph(row)">
+            图谱
+          </el-button>
           <el-dropdown
             v-if="boundRowExportScripts.length > 1"
             @command="(cmd: string) => handleRowExport(cmd, row)"
@@ -140,7 +143,7 @@
             </template>
           </el-dropdown>
           <el-button
-            v-else
+            v-else-if="boundRowExportScripts.length === 1"
             type="warning"
             link
             @click="handleRowExport(boundRowExportScripts[0].id, row)"
@@ -297,6 +300,9 @@
       </el-descriptions>
       <template #footer>
         <el-button @click="viewDialogVisible = false">关闭</el-button>
+        <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
+          关系图谱
+        </el-button>
         <el-button v-if="!isGuest" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
           编辑
         </el-button>
@@ -372,6 +378,14 @@
       :collection="collection"
       :page-name="pageConfig?.name || '数据'"
     />
+
+    <!-- 关系图谱对话框 -->
+    <RelationGraphDialog
+      v-model="graphDialogVisible"
+      :collection="collection"
+      :record-id="graphRecordId"
+      @navigate="handleGraphNodeNavigate"
+    />
   </div>
 </template>
 
@@ -392,7 +406,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
-import { DataTable, ConfirmDialog, BackupDiffDialog } from '@/components/common'
+import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -541,6 +555,16 @@ const allExportScripts = ref<ExportScript[]>([])
  * 数据对比对话框可见性
  */
 const diffDialogVisible = ref(false)
+
+/**
+ * 关系图谱对话框可见性
+ */
+const graphDialogVisible = ref(false)
+
+/**
+ * 关系图谱记录ID
+ */
+const graphRecordId = ref('')
 
 /**
  * 分页状态
@@ -1394,6 +1418,27 @@ function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
   }
 
   router.push({ path: targetMenu.path, query: { recordId: quotedRecordId } })
+}
+
+/**
+ * 打开关系图谱对话框
+ */
+function handleShowRelationGraph(row: DynamicRecord): void {
+  graphRecordId.value = row.id
+  graphDialogVisible.value = true
+}
+
+/**
+ * 处理图谱节点双击跳转
+ */
+function handleGraphNodeNavigate(targetCollection: string, targetRecordId: string): void {
+  const targetPageId = `page-${targetCollection}`
+  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到目标数据的页面')
+    return
+  }
+  router.push({ path: targetMenu.path, query: { recordId: targetRecordId } })
 }
 
 /**

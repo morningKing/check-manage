@@ -272,11 +272,13 @@ class TestBatchCreate:
             {'id': 'rec-2', 'data': {'name': '记录2'}, 'relations': {}},
         ]
         resp = client.post('/test-collection/batch-create',
-                          data=json.dumps({'records': records}),
+                          data=json.dumps({
+                              'records': records,
+                              'options': {'continueOnError': True}
+                          }),
                           content_type='application/json',
                           headers=headers)
 
-        # By default continueOnError is False, but we skip the duplicate
         assert resp.status_code == 201
         data = resp.get_json()
         assert data['created'] == 1  # Only rec-2 created
@@ -359,7 +361,10 @@ class TestBatchCreate:
                     {'id': 'rec-1', 'data': {'name': ''}, 'relations': {}},
                 ]
                 resp = client.post('/test-collection/batch-create',
-                                  data=json.dumps({'records': records}),
+                                  data=json.dumps({
+                                      'records': records,
+                                      'options': {'continueOnError': True}
+                                  }),
                                   content_type='application/json',
                                   headers=headers)
 

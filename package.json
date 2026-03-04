@@ -23,6 +23,7 @@
     "axios": "^1.6.8",
     "codemirror": "^6.0.2",
     "element-plus": "^2.6.1",
+    "force-graph": "^1.51.1",
     "pinia": "^2.1.7",
     "uuid": "^9.0.1",
     "vue": "^3.4.21",

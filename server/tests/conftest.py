@@ -20,6 +20,8 @@ def mock_cursor():
     cursor = MagicMock()
     cursor.fetchall.return_value = []
     cursor.fetchone.return_value = None
+    cursor.connection.encoding = 'UTF8'
+    cursor.mogrify.return_value = b'(mock_values)'
     return cursor
 
 
