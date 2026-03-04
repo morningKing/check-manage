@@ -26,9 +26,17 @@
             </div>
           </template>
 
+          <el-input
+            v-model="searchKeyword"
+            placeholder="搜索页面名称..."
+            clearable
+            :prefix-icon="Search"
+            class="list-search"
+          />
+
           <div class="page-list">
             <div
-              v-for="config in pageConfigs"
+              v-for="config in filteredPageConfigs"
               :key="config.id"
               class="page-item"
               :class="{ active: currentPageId === config.id }"
@@ -52,7 +60,7 @@
               </div>
             </div>
 
-            <el-empty v-if="pageConfigs.length === 0" description="暂无页面配置" />
+            <el-empty v-if="filteredPageConfigs.length === 0" :description="searchKeyword ? '无匹配结果' : '暂无页面配置'" />
           </div>
         </el-card>
       </el-col>
@@ -253,7 +261,7 @@
 import { ref, computed, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Search } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import FieldConfigEditor from './FieldConfigEditor.vue'
@@ -279,6 +287,11 @@ const addFormRef = ref<FormInstance>()
  * 当前选中的页面ID
  */
 const currentPageId = ref<string | null>(null)
+
+/**
+ * 搜索关键词
+ */
+const searchKeyword = ref('')
 
 /**
  * 页面表单数据
@@ -356,6 +369,15 @@ const formRules: FormRules = {
  * 页面配置列表
  */
 const pageConfigs = computed(() => pageConfigStore.pageConfigs)
+
+/**
+ * 搜索过滤后的页面配置列表
+ */
+const filteredPageConfigs = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase()
+  if (!kw) return pageConfigs.value
+  return pageConfigs.value.filter(c => c.name.toLowerCase().includes(kw))
+})
 
 /**
  * 当前页面配置
@@ -550,6 +572,10 @@ onActivated(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.list-search {
+  margin-bottom: 12px;
 }
 
 .page-list {
