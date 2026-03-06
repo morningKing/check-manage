@@ -1,7 +1,9 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import api_key_required
 from datetime import timezone
+import uuid
+import psycopg2.extras
 
 open_api_bp = Blueprint('open_api', __name__, url_prefix='/api/v1')
 
@@ -23,6 +25,90 @@ def row_to_record(row):
     return record
 
 
+def check_collection_public(cur, page_id):
+    """Check if collection is public. Returns (api_public, api_writable) or (None, None)."""
+    cur.execute(
+        'SELECT api_public, api_writable FROM page_configs WHERE id = %s', (page_id,)
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, None
+    return row[0], row[1]
+
+
+def check_collection_writable(cur, collection):
+    """Check if collection is both public and writable. Returns error response or None."""
+    page_id = f'page-{collection}'
+    api_public, api_writable = check_collection_public(cur, page_id)
+    if not api_public:
+        return jsonify({'error': 'Collection not found or not public'}), 404
+    if not api_writable:
+        return jsonify({'error': 'Collection is read-only'}), 403
+    return None
+
+
+def get_page_fields(cur, collection):
+    """Get fields config for a collection."""
+    page_id = f'page-{collection}'
+    cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+    row = cur.fetchone()
+    return row[0] if row and row[0] else []
+
+
+def validate_required_fields(data, fields):
+    """Validate required fields are present. Returns list of error messages."""
+    errors = []
+    for f in fields:
+        if not f.get('required'):
+            continue
+        field_name = f.get('fieldName')
+        # Skip auto-generated fields
+        if f.get('controlType') in ('autoSequence', 'autoTimestamp'):
+            continue
+        value = data.get(field_name)
+        if value is None or (isinstance(value, str) and value.strip() == ''):
+            label = f.get('label', field_name)
+            errors.append(f'{label} is required')
+    return errors
+
+
+def get_primary_key_fields(cur, collection):
+    """Get primary key field names from page config."""
+    page_id = f'page-{collection}'
+    cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return []
+    return [f['fieldName'] for f in row[0] if f.get('isPrimaryKey')]
+
+
+def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
+    """Check if primary key combination is unique. Returns error message or None."""
+    if not pk_fields:
+        return None
+    pk_values = {}
+    for field in pk_fields:
+        pk_values[field] = data.get(field)
+
+    conditions = ['collection = %s']
+    params = [collection]
+    for field, value in pk_values.items():
+        if value is None:
+            conditions.append("(data->>%s IS NULL)")
+            params.append(field)
+        else:
+            conditions.append("data->>%s = %s")
+            params.append(field)
+            params.append(str(value))
+    if exclude_id:
+        conditions.append('id != %s')
+        params.append(exclude_id)
+
+    sql = f"SELECT id FROM dynamic_data WHERE {' AND '.join(conditions)} LIMIT 1"
+    cur.execute(sql, params)
+    return f'Primary key conflict' if cur.fetchone() else None
+
+
 @open_api_bp.route('/collections', methods=['GET'])
 @api_key_required
 def list_collections():
@@ -30,7 +116,7 @@ def list_collections():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT id, name, description '
+            'SELECT id, name, description, api_writable '
             'FROM page_configs WHERE api_public = TRUE ORDER BY created_at'
         )
         rows = cur.fetchall()
@@ -42,6 +128,7 @@ def list_collections():
             'collection': collection,
             'name': row[1],
             'description': row[2],
+            'writable': bool(row[3]),
         })
     return jsonify({'data': collections})
 
@@ -53,11 +140,8 @@ def list_collection_data(collection):
     page_id = f'page-{collection}'
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            'SELECT api_public FROM page_configs WHERE id = %s', (page_id,)
-        )
-        row = cur.fetchone()
-        if not row or not row[0]:
+        api_public, _ = check_collection_public(cur, page_id)
+        if not api_public:
             return jsonify({'error': 'Collection not found or not public'}), 404
 
         page = request.args.get('page', 1, type=int)
@@ -97,11 +181,8 @@ def get_collection_item(collection, item_id):
     page_id = f'page-{collection}'
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            'SELECT api_public FROM page_configs WHERE id = %s', (page_id,)
-        )
-        row = cur.fetchone()
-        if not row or not row[0]:
+        api_public, _ = check_collection_public(cur, page_id)
+        if not api_public:
             return jsonify({'error': 'Collection not found or not public'}), 404
 
         cur.execute(
@@ -124,7 +205,7 @@ def get_collection_schema(collection):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT name, description, fields, api_public '
+            'SELECT name, description, fields, api_public, api_writable '
             'FROM page_configs WHERE id = %s',
             (page_id,),
         )
@@ -147,6 +228,140 @@ def get_collection_schema(collection):
             'collection': collection,
             'name': row[0],
             'description': row[1],
+            'writable': bool(row[4]),
             'fields': fields,
         },
     })
+
+
+@open_api_bp.route('/collections/<collection>', methods=['POST'])
+@api_key_required
+def create_collection_item(collection):
+    """Create a new record in a public writable collection."""
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # Check collection is public and writable
+        error_resp = check_collection_writable(cur, collection)
+        if error_resp:
+            return error_resp
+
+        body = request.get_json(silent=True)
+        if not body:
+            return jsonify({'error': 'Request body is required'}), 400
+
+        fields = get_page_fields(cur, collection)
+
+        # Validate required fields
+        req_errors = validate_required_fields(body, fields)
+        if req_errors:
+            return jsonify({'error': 'Validation failed', 'details': req_errors}), 400
+
+        # Generate ID if not provided
+        record_id = body.pop('id', None) or f'api-{uuid.uuid4().hex[:12]}'
+
+        # Check ID uniqueness
+        cur.execute(
+            'SELECT id FROM dynamic_data WHERE id = %s', (record_id,)
+        )
+        if cur.fetchone():
+            return jsonify({'error': 'Record ID already exists'}), 409
+
+        # Check primary key uniqueness
+        pk_fields = get_primary_key_fields(cur, collection)
+        if pk_fields:
+            pk_error = check_primary_key_unique(cur, collection, body, pk_fields)
+            if pk_error:
+                return jsonify({'error': pk_error}), 409
+
+        # Strip internal fields
+        data = {k: v for k, v in body.items() if k not in ('createdAt', 'updatedAt', '_version')}
+
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data) VALUES (%s, %s, %s) '
+            'RETURNING id, collection, data, created_at',
+            (record_id, collection, psycopg2.extras.Json(data)),
+        )
+        new_row = cur.fetchone()
+
+    return jsonify({'data': row_to_record(new_row)}), 201
+
+
+@open_api_bp.route('/collections/<collection>/<item_id>', methods=['PUT'])
+@api_key_required
+def update_collection_item(collection, item_id):
+    """Update an existing record in a public writable collection."""
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # Check collection is public and writable
+        error_resp = check_collection_writable(cur, collection)
+        if error_resp:
+            return error_resp
+
+        body = request.get_json(silent=True)
+        if not body:
+            return jsonify({'error': 'Request body is required'}), 400
+
+        # Check record exists
+        cur.execute(
+            'SELECT id, data, version FROM dynamic_data WHERE collection = %s AND id = %s',
+            (collection, item_id),
+        )
+        existing = cur.fetchone()
+        if not existing:
+            return jsonify({'error': 'Record not found'}), 404
+
+        old_data = existing[1] or {}
+        db_version = existing[2] if existing[2] is not None else 1
+
+        # Optimistic locking: check _version if client provides it
+        client_version = body.pop('_version', None)
+        if client_version is not None and int(client_version) != db_version:
+            return jsonify({
+                'error': 'Record has been modified by another request, please retry',
+                'code': 'VERSION_CONFLICT',
+                '_version': db_version,
+            }), 409
+
+        fields = get_page_fields(cur, collection)
+
+        # Merge: old data + new data (partial update supported)
+        merged = dict(old_data)
+        new_data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', 'updatedAt', '_version')}
+        merged.update(new_data)
+
+        # Validate required fields on the merged result
+        req_errors = validate_required_fields(merged, fields)
+        if req_errors:
+            return jsonify({'error': 'Validation failed', 'details': req_errors}), 400
+
+        # Check primary key uniqueness
+        pk_fields = get_primary_key_fields(cur, collection)
+        if pk_fields:
+            pk_error = check_primary_key_unique(cur, collection, merged, pk_fields, exclude_id=item_id)
+            if pk_error:
+                return jsonify({'error': pk_error}), 409
+
+        new_version = db_version + 1
+        cur.execute(
+            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
+            'WHERE collection = %s AND id = %s AND version = %s',
+            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version),
+        )
+        if cur.rowcount == 0:
+            return jsonify({
+                'error': 'Record has been modified by another request, please retry',
+                'code': 'VERSION_CONFLICT',
+            }), 409
+
+        cur.execute(
+            'SELECT id, collection, data, created_at FROM dynamic_data '
+            'WHERE collection = %s AND id = %s',
+            (collection, item_id),
+        )
+        updated_row = cur.fetchone()
+
+    result = row_to_record(updated_row)
+    result['_version'] = new_version
+    return jsonify({'data': result})

@@ -273,6 +273,16 @@ def init_db():
             conn.commit()
             print("Added api_public column to page_configs table.")
 
+        # Migration: add api_writable column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'api_writable'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN api_writable BOOLEAN NOT NULL DEFAULT FALSE")
+            conn.commit()
+            print("Added api_writable column to page_configs table.")
+
         # Migration: add validation_script column to page_configs
         cur.execute("""
             SELECT column_name FROM information_schema.columns

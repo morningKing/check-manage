@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-Open API 允许外部系统通过 API Key 认证方式，以 RESTful 接口读取系统中已授权开放的业务数据集合。
+Open API 允许外部系统通过 API Key 认证方式，以 RESTful 接口读取和写入系统中已授权开放的业务数据集合。
 
 **Base URL：**
 
@@ -12,7 +12,7 @@ http://<host>:<port>/api/v1
 
 默认开发环境为 `http://localhost:7001/api/v1`。
 
-**数据格式：** 所有接口均返回 `application/json`。
+**数据格式：** 所有接口均返回 `application/json`。写入接口的请求体也必须是 `application/json`。
 
 **认证方式：** 通过 `X-API-Key` 请求头传递 API Key。
 
@@ -74,12 +74,15 @@ sequenceDiagram
 
 1. **创建 API Key** — 管理员在「系统配置 → 数据工具 → Open API」中创建
 2. **开放数据集合** — 管理员在「页面配置」中勾选「允许 Open API 访问」
+3. **开放写入权限**（可选）— 如需通过 API 新增/修改数据，还需在「页面配置」中开启「允许写入」
 
-只有标记为 `api_public = true` 的数据集合才会对 Open API 可见。
+只有标记为 `api_public = true` 的数据集合才会对 Open API 可见。写入操作还需要 `api_writable = true`。
 
 ---
 
 ## 4. 接口列表
+
+### 4.1 查询接口（只读）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -87,6 +90,13 @@ sequenceDiagram
 | GET | `/api/v1/collections/{collection}` | 获取集合中的数据（分页） |
 | GET | `/api/v1/collections/{collection}/{id}` | 获取单条记录详情 |
 | GET | `/api/v1/collections/{collection}/schema` | 获取集合的字段定义 |
+
+### 4.2 写入接口（需开启「允许写入」）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/collections/{collection}` | 新增一条记录 |
+| PUT | `/api/v1/collections/{collection}/{id}` | 修改一条记录（支持部分更新） |
 
 ---
 
@@ -116,12 +126,14 @@ GET /api/v1/collections
     {
       "collection": "inspection-cases",
       "name": "巡检用例",
-      "description": "巡检用例数据表"
+      "description": "巡检用例数据表",
+      "writable": false
     },
     {
       "collection": "devices",
       "name": "设备台账",
-      "description": "设备基础信息"
+      "description": "设备基础信息",
+      "writable": true
     }
   ]
 }
@@ -135,6 +147,7 @@ GET /api/v1/collections
 | `data[].collection` | string | 集合标识（用于后续接口的路径参数） |
 | `data[].name` | string | 集合显示名称 |
 | `data[].description` | string | 集合描述 |
+| `data[].writable` | boolean | 是否允许写入（POST/PUT） |
 
 ---
 
@@ -277,6 +290,7 @@ GET /api/v1/collections/{collection}/schema
     "collection": "inspection-cases",
     "name": "巡检用例",
     "description": "巡检用例数据表",
+    "writable": true,
     "fields": [
       {
         "fieldName": "caseName",
@@ -320,6 +334,7 @@ GET /api/v1/collections/{collection}/schema
 | `data.collection` | string | 集合标识 |
 | `data.name` | string | 集合显示名称 |
 | `data.description` | string | 集合描述 |
+| `data.writable` | boolean | 是否允许写入 |
 | `data.fields` | array | 字段定义列表 |
 | `data.fields[].fieldName` | string | 字段名（对应数据中的 key） |
 | `data.fields[].label` | string | 字段显示名称 |
@@ -346,12 +361,136 @@ GET /api/v1/collections/{collection}/schema
 | `quoteSelect` | 引用选择 |
 | `autoTimestamp` | 自动时间戳 |
 | `autoSequence` | 自增序列 |
+| `richtext` | 富文本编辑器 |
 
 **错误响应**
 
 | HTTP 状态码 | error | 触发条件 |
 |-------------|-------|---------|
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
+
+---
+
+### 5.5 新增记录
+
+向指定集合中新增一条记录。集合必须开启「允许写入」。
+
+**请求**
+
+```
+POST /api/v1/collections/{collection}
+Content-Type: application/json
+```
+
+**路径参数**
+
+| 名称 | 类型 | 说明 |
+|------|------|------|
+| collection | string | 集合标识 |
+
+**请求体**
+
+```json
+{
+  "caseName": "新增用例",
+  "priority": "high",
+  "status": "active",
+  "description": "通过 API 创建的测试用例"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 否 | 自定义记录 ID；不传则自动生成 `api-xxxxxxxxxxxx` 格式 |
+| `*` | any | 视字段定义 | 业务字段，需符合 schema 中的必填约束 |
+
+**响应 — 201**
+
+```json
+{
+  "data": {
+    "id": "api-a1b2c3d4e5f6",
+    "caseName": "新增用例",
+    "priority": "high",
+    "status": "active",
+    "description": "通过 API 创建的测试用例",
+    "createdAt": "2026-03-05T10:30:00.000Z"
+  }
+}
+```
+
+**错误响应**
+
+| HTTP 状态码 | error | 触发条件 |
+|-------------|-------|---------|
+| 400 | `Request body is required` | 请求体为空 |
+| 400 | `Validation failed` | 必填字段缺失（`details` 数组包含具体字段） |
+| 403 | `Collection is read-only` | 集合未开启「允许写入」 |
+| 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
+| 409 | `Record ID already exists` | 自定义 ID 已存在 |
+| 409 | `Primary key conflict` | 主键字段值与已有记录重复 |
+
+---
+
+### 5.6 修改记录
+
+修改指定集合中的一条记录。支持**部分更新**：只传需要修改的字段即可，未传的字段保持原值。
+
+**请求**
+
+```
+PUT /api/v1/collections/{collection}/{id}
+Content-Type: application/json
+```
+
+**路径参数**
+
+| 名称 | 类型 | 说明 |
+|------|------|------|
+| collection | string | 集合标识 |
+| id | string | 记录 ID |
+
+**请求体**
+
+```json
+{
+  "status": "inactive",
+  "description": "已通过 API 更新"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `_version` | integer | 否 | 乐观锁版本号；传入时进行并发冲突检测 |
+| `*` | any | 否 | 需要更新的业务字段（部分更新） |
+
+**响应 — 200**
+
+```json
+{
+  "data": {
+    "id": "a1b2c3d4",
+    "caseName": "登录功能验证",
+    "priority": "high",
+    "status": "inactive",
+    "description": "已通过 API 更新",
+    "createdAt": "2025-12-01T08:30:00.000Z",
+    "_version": 2
+  }
+}
+```
+
+**错误响应**
+
+| HTTP 状态码 | error | 触发条件 |
+|-------------|-------|---------|
+| 400 | `Request body is required` | 请求体为空 |
+| 400 | `Validation failed` | 更新后必填字段为空（`details` 数组包含具体字段） |
+| 403 | `Collection is read-only` | 集合未开启「允许写入」 |
+| 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
+| 404 | `Record not found` | 记录 ID 不存在 |
+| 409 | `Record has been modified...` | 乐观锁冲突（`code: "VERSION_CONFLICT"`） |
+| 409 | `Primary key conflict` | 主键字段值与已有记录重复 |
 
 ---
 
@@ -378,6 +517,20 @@ curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases/a1b2c3d
 
 # 5. 查看集合字段定义
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases/schema" | jq
+
+# 6. 新增一条记录
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"caseName":"API新增用例","priority":"high","status":"active"}' \
+  "$BASE_URL/collections/inspection-cases" | jq
+
+# 7. 修改一条记录（部分更新）
+curl -s -X PUT \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"inactive"}' \
+  "$BASE_URL/collections/inspection-cases/a1b2c3d4" | jq
 ```
 
 ### 6.2 Python
@@ -436,12 +589,35 @@ def get_schema(collection):
     return resp.json()["data"]
 
 
+def create_record(collection, data):
+    """新增一条记录"""
+    resp = requests.post(
+        f"{BASE_URL}/collections/{collection}",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json=data,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def update_record(collection, record_id, data):
+    """修改一条记录（部分更新）"""
+    resp = requests.put(
+        f"{BASE_URL}/collections/{collection}/{record_id}",
+        headers={**HEADERS, "Content-Type": "application/json"},
+        json=data,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
 # ---- 使用示例 ----
 if __name__ == "__main__":
     # 列出所有可用集合
     collections = get_collections()
     for c in collections:
-        print(f"[{c['collection']}] {c['name']} - {c['description']}")
+        rw = "读写" if c["writable"] else "只读"
+        print(f"[{c['collection']}] {c['name']} ({rw})")
 
     # 获取第一个集合的所有数据
     if collections:
@@ -450,6 +626,24 @@ if __name__ == "__main__":
         print(f"\n共 {len(records)} 条记录")
         for r in records[:3]:
             print(f"  {r['id']}: {r}")
+
+    # 新增记录
+    if collections:
+        writable = [c for c in collections if c["writable"]]
+        if writable:
+            col = writable[0]["collection"]
+            new_record = create_record(col, {
+                "caseName": "API 新增用例",
+                "priority": "medium",
+                "status": "active",
+            })
+            print(f"\n新增成功: {new_record['id']}")
+
+            # 修改记录
+            updated = update_record(col, new_record["id"], {
+                "status": "inactive",
+            })
+            print(f"修改成功: status={updated['status']}")
 ```
 
 ### 6.3 JavaScript / Node.js
@@ -458,12 +652,21 @@ if __name__ == "__main__":
 const API_KEY = "cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2";
 const BASE_URL = "http://localhost:7001/api/v1";
 
-async function fetchAPI(path, params = {}) {
+async function fetchAPI(path, options = {}) {
   const url = new URL(`${BASE_URL}${path}`);
-  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+  if (options.params) {
+    Object.entries(options.params).forEach(([k, v]) =>
+      url.searchParams.set(k, v)
+    );
+  }
 
   const resp = await fetch(url, {
-    headers: { "X-API-Key": API_KEY },
+    method: options.method || "GET",
+    headers: {
+      "X-API-Key": API_KEY,
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
   if (!resp.ok) {
@@ -481,7 +684,9 @@ async function getCollections() {
 
 // 分页获取数据
 async function getRecords(collection, page = 1, pageSize = 20) {
-  return fetchAPI(`/collections/${collection}`, { page, pageSize });
+  return fetchAPI(`/collections/${collection}`, {
+    params: { page, pageSize },
+  });
 }
 
 // 获取所有数据（自动遍历分页）
@@ -509,6 +714,24 @@ async function getSchema(collection) {
   return data;
 }
 
+// 新增记录
+async function createRecord(collection, recordData) {
+  const { data } = await fetchAPI(`/collections/${collection}`, {
+    method: "POST",
+    body: recordData,
+  });
+  return data;
+}
+
+// 修改记录（部分更新）
+async function updateRecord(collection, id, recordData) {
+  const { data } = await fetchAPI(`/collections/${collection}/${id}`, {
+    method: "PUT",
+    body: recordData,
+  });
+  return data;
+}
+
 // ---- 使用示例 ----
 (async () => {
   const collections = await getCollections();
@@ -518,6 +741,23 @@ async function getSchema(collection) {
     const name = collections[0].collection;
     const records = await getAllRecords(name);
     console.log(`${name} 共 ${records.length} 条记录`);
+  }
+
+  // 新增记录
+  const writable = collections.filter((c) => c.writable);
+  if (writable.length > 0) {
+    const col = writable[0].collection;
+    const newRecord = await createRecord(col, {
+      caseName: "API 新增用例",
+      priority: "medium",
+    });
+    console.log("新增:", newRecord.id);
+
+    // 修改记录
+    const updated = await updateRecord(col, newRecord.id, {
+      status: "inactive",
+    });
+    console.log("修改:", updated);
   }
 })();
 ```
@@ -550,6 +790,38 @@ public class OpenApiClient {
         return response.body();
     }
 
+    public static String post(String path, String json) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(BASE_URL + path))
+            .header("X-API-Key", API_KEY)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(json))
+            .build();
+        HttpResponse<String> response = client.send(request,
+            HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 201) {
+            throw new RuntimeException("HTTP " + response.statusCode()
+                + ": " + response.body());
+        }
+        return response.body();
+    }
+
+    public static String put(String path, String json) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(BASE_URL + path))
+            .header("X-API-Key", API_KEY)
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString(json))
+            .build();
+        HttpResponse<String> response = client.send(request,
+            HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("HTTP " + response.statusCode()
+                + ": " + response.body());
+        }
+        return response.body();
+    }
+
     public static void main(String[] args) throws Exception {
         // 获取集合列表
         String collections = get("/collections");
@@ -559,9 +831,15 @@ public class OpenApiClient {
         String data = get("/collections/inspection-cases?page=1&pageSize=20");
         System.out.println("数据: " + data);
 
-        // 获取字段定义
-        String schema = get("/collections/inspection-cases/schema");
-        System.out.println("字段定义: " + schema);
+        // 新增记录
+        String newRecord = post("/collections/inspection-cases",
+            "{\"caseName\":\"Java新增\",\"priority\":\"high\"}");
+        System.out.println("新增: " + newRecord);
+
+        // 修改记录
+        String updated = put("/collections/inspection-cases/a1b2c3d4",
+            "{\"status\":\"inactive\"}");
+        System.out.println("修改: " + updated);
     }
 }
 ```
@@ -580,23 +858,38 @@ public class OpenApiClient {
 }
 ```
 
+部分校验错误会包含 `details` 数组：
+
+```json
+{
+  "error": "Validation failed",
+  "details": ["名称 is required", "优先级 is required"]
+}
+```
+
 ### 7.2 错误码汇总
 
 | HTTP 状态码 | error | 说明 |
 |-------------|-------|------|
+| 400 | `Request body is required` | POST/PUT 请求体为空 |
+| 400 | `Validation failed` | 必填字段缺失或校验不通过 |
 | 401 | `Missing API key` | 请求头缺少 X-API-Key |
 | 401 | `Invalid API key` | API Key 不存在 |
 | 401 | `API key has been revoked` | API Key 已被停用 |
+| 403 | `Collection is read-only` | 集合未开启写入权限 |
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API |
 | 404 | `Record not found` | 记录不存在 |
+| 409 | `Record ID already exists` | 新增时 ID 冲突 |
+| 409 | `Primary key conflict` | 主键字段值重复 |
+| 409 | `Record has been modified...` | 乐观锁版本冲突 |
 
 ### 7.3 错误处理建议
 
 ```python
 import requests
 
-def safe_request(url, headers):
-    resp = requests.get(url, headers=headers)
+def safe_request(method, url, headers, json=None):
+    resp = requests.request(method, url, headers=headers, json=json)
     if resp.status_code == 401:
         error = resp.json().get("error", "")
         if "Missing" in error:
@@ -606,8 +899,18 @@ def safe_request(url, headers):
         elif "revoked" in error:
             print("错误：API Key 已被停用，请联系管理员")
         return None
+    elif resp.status_code == 403:
+        print("错误：集合为只读，请联系管理员开启写入权限")
+        return None
     elif resp.status_code == 404:
         print("错误：集合或记录不存在，请检查集合是否已开放 API 访问")
+        return None
+    elif resp.status_code == 409:
+        body = resp.json()
+        if body.get("code") == "VERSION_CONFLICT":
+            print("错误：数据冲突，请重新获取数据后重试")
+        else:
+            print(f"错误：{body.get('error')}")
         return None
     resp.raise_for_status()
     return resp.json()
@@ -621,7 +924,10 @@ def safe_request(url, headers):
 flowchart TD
     A[管理员创建 API Key] --> B[复制保存密钥]
     B --> C[管理员开启目标页面的\n「允许 Open API 访问」]
-    C --> D[将密钥和接口地址\n提供给外部系统]
+    C --> C2{需要写入？}
+    C2 -- 是 --> C3[开启「允许写入」]
+    C2 -- 否 --> D
+    C3 --> D[将密钥和接口地址\n提供给外部系统]
     D --> E[外部系统调用\nGET /api/v1/collections\n验证连通性]
     E --> F{返回 200？}
     F -- 是 --> G[按需调用数据接口]
@@ -635,8 +941,9 @@ flowchart TD
 2. 点击「创建 API Key」，输入名称，创建后**立即复制密钥**（仅此一次可见）
 3. 进入「系统配置 → 平台管理 → 页面配置」，选择需要开放的页面
 4. 在页面基本信息中开启「允许 Open API 访问」并保存
-5. 将 API Key 和 Base URL 提供给外部系统开发者
-6. 外部系统通过 `X-API-Key` 请求头调用接口
+5. 如需外部系统写入数据，还需开启「允许写入」开关
+6. 将 API Key 和 Base URL 提供给外部系统开发者
+7. 外部系统通过 `X-API-Key` 请求头调用接口
 
 ---
 
@@ -647,9 +954,9 @@ flowchart TD
 | 密钥保管 | API Key 创建后仅显示一次，请妥善保存 |
 | 传输安全 | 生产环境务必使用 HTTPS，防止密钥泄露 |
 | 最小开放 | 仅对必要的集合开启 Open API，遵循最小权限原则 |
+| 写入权限 | 仅对确需外部写入的集合开启「允许写入」，默认只读 |
 | 定期轮换 | 建议定期创建新密钥并停用旧密钥 |
 | 及时停用 | 不再使用的密钥应立即停用或删除 |
-| 只读访问 | Open API 仅提供数据读取能力，不支持写入操作 |
 | 速率限制 | 系统记录每个密钥的最后使用时间，管理员可据此监控使用情况 |
 
 ---
@@ -658,11 +965,19 @@ flowchart TD
 
 **Q: 如何判断哪些集合已开放 API 访问？**
 
-调用 `GET /api/v1/collections` 即可获取所有已开放的集合列表。未开放的集合不会出现在返回结果中。
+调用 `GET /api/v1/collections` 即可获取所有已开放的集合列表。未开放的集合不会出现在返回结果中。返回结果中 `writable` 字段标识该集合是否允许写入。
 
 **Q: 能否通过 API 写入数据？**
 
-不能。Open API 当前仅支持只读操作（GET），不提供创建、更新、删除接口。如需写入数据，请使用 ETL 管道功能。
+可以。管理员在「页面配置」中开启「允许写入」后，外部系统可通过 `POST` 新增记录、`PUT` 修改记录。默认情况下集合仅开放只读访问。
+
+**Q: 修改记录时需要传所有字段吗？**
+
+不需要。PUT 接口支持部分更新，只传需要修改的字段即可。未传的字段保持原值不变。
+
+**Q: 如何避免并发修改冲突？**
+
+PUT 请求体中可传入 `_version` 字段，系统会进行乐观锁检测。如果服务端版本号与传入值不一致，将返回 `409 VERSION_CONFLICT` 错误。建议先 GET 获取最新版本号，修改后连同 `_version` 一起提交。
 
 **Q: 分页的最大 pageSize 是多少？**
 

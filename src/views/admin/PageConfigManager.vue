@@ -149,6 +149,17 @@
                 />
               </el-form-item>
 
+              <el-form-item label="允许写入" v-if="formData.apiPublic">
+                <el-switch
+                  v-model="formData.apiWritable"
+                  active-text="允许"
+                  inactive-text="只读"
+                />
+                <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                  开启后外部系统可通过 Open API 新增和修改数据
+                </div>
+              </el-form-item>
+
               <el-form-item label="校验脚本">
                 <el-select
                   v-model="formData.validationScript"
@@ -421,6 +432,7 @@ function handleSelect(config: PageConfig): void {
     exportScripts: config.exportScripts || [],
     rowExportScripts: config.rowExportScripts || [],
     apiPublic: config.apiPublic || false,
+    apiWritable: config.apiWritable || false,
     validationScript: config.validationScript || '',
   }
 }
@@ -475,6 +487,7 @@ async function handleSavePageInfo(): Promise<void> {
       exportScripts: formData.value.exportScripts || [],
       rowExportScripts: formData.value.rowExportScripts || [],
       apiPublic: formData.value.apiPublic,
+      apiWritable: formData.value.apiPublic ? formData.value.apiWritable : false,
       validationScript: formData.value.validationScript || null,
       fields: currentFields.value
     })

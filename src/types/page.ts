@@ -28,6 +28,7 @@ export interface PageConfig {
   exportScripts?: string[]
   rowExportScripts?: string[]
   apiPublic?: boolean
+  apiWritable?: boolean
   validationScript?: string
   createdAt: string
   updatedAt: string
@@ -46,6 +47,7 @@ export interface PageFormData {
   exportScripts?: string[]
   rowExportScripts?: string[]
   apiPublic?: boolean
+  apiWritable?: boolean
   validationScript?: string
 }
 
@@ -62,6 +64,7 @@ export function createEmptyPageFormData(): PageFormData {
     exportScripts: [],
     rowExportScripts: [],
     apiPublic: false,
+    apiWritable: false,
     validationScript: '',
   }
 }

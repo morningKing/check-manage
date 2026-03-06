@@ -19,8 +19,8 @@
       >
         <template #title>
           外部系统通过 <strong>X-API-Key</strong> 请求头携带密钥访问
-          <code>GET /api/v1/collections</code> 等接口读取数据。
-          需在「页面配置」中开启 Open API 开关的数据页才可被访问。
+          <code>/api/v1/collections</code> 等接口读取和写入数据。
+          需在「页面配置」中开启 Open API 开关的数据页才可被访问，开启「允许写入」后支持新增和修改。
         </template>
       </el-alert>
 
