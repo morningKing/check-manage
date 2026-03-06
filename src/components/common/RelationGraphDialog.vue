@@ -9,9 +9,30 @@
     @opened="initGraph"
     @close="destroyGraph"
   >
-    <div v-loading="loading" class="graph-wrapper">
-      <el-empty v-if="!loading && isEmpty" description="该记录暂无关联关系" />
-      <div v-show="!isEmpty" ref="containerRef" class="graph-container" />
+    <div class="graph-wrapper">
+      <div v-if="initLoading" v-loading="true" class="graph-loading" />
+      <el-empty v-if="!initLoading && isEmpty" description="该记录暂无关联关系" />
+      <div v-show="!isEmpty" class="graph-body">
+        <div ref="containerRef" class="graph-container" />
+        <div v-show="selectedNode" class="detail-panel">
+            <div class="detail-header">
+              <span class="detail-collection">{{ selectedNode?.collectionLabel }}</span>
+              <el-button :icon="Close" size="small" text @click="selectedNode = null" />
+            </div>
+            <div class="detail-title">{{ selectedNode?.label }}</div>
+            <el-scrollbar class="detail-scroll">
+              <table class="detail-table">
+                <tr v-for="item in selectedNodeFields" :key="item.label">
+                  <td class="detail-label">{{ item.label }}</td>
+                  <td class="detail-value">{{ item.value }}</td>
+                </tr>
+              </table>
+              <div v-if="selectedNodeFields.length === 0" class="detail-empty">
+                暂无详细数据
+              </div>
+            </el-scrollbar>
+        </div>
+      </div>
     </div>
     <template #footer>
       <div class="dialog-footer">
@@ -28,7 +49,7 @@
             <span class="legend-line quote-line" />
             引用选择
           </span>
-          <span class="legend-tip">单击展开 · 双击跳转</span>
+          <span class="legend-tip">单击展开/查看 · 双击跳转</span>
         </div>
         <el-button @click="$emit('update:modelValue', false)">关闭</el-button>
       </div>
@@ -37,12 +58,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
+import { Close } from '@element-plus/icons-vue'
 import ForceGraph2D from 'force-graph'
 // force-graph runtime is a Kapsule factory function, not a class constructor
 const createGraph = ForceGraph2D as any as () => (el: HTMLElement) => any
 import { getRelationGraph } from '@/api/relationGraph'
 import type { GraphNode, GraphEdge } from '@/api/relationGraph'
+import { usePageConfigStore } from '@/stores/pageConfig'
 
 const props = defineProps<{
   modelValue: boolean
@@ -55,9 +78,45 @@ const emit = defineEmits<{
   navigate: [collection: string, recordId: string]
 }>()
 
+const pageConfigStore = usePageConfigStore()
+
 const containerRef = ref<HTMLElement>()
-const loading = ref(false)
+const initLoading = ref(false)
 const isEmpty = ref(false)
+const selectedNode = ref<GraphNode | null>(null)
+
+const selectedNodeFields = computed(() => {
+  const node = selectedNode.value
+  if (!node?.data) return []
+
+  const pageId = `page-${node.collection}`
+  const fields = pageConfigStore.getPageFields(pageId)
+  const result: { label: string; value: string }[] = []
+
+  if (fields.length > 0) {
+    for (const f of fields) {
+      const ct = f.controlType
+      // Skip internal/auto fields and relation-type fields
+      if (ct === 'autoTimestamp' || ct === 'relation' || ct === 'quoteSelect') continue
+      const raw = node.data[f.fieldName]
+      if (raw === undefined || raw === null || raw === '') continue
+      result.push({ label: f.label, value: formatValue(raw, ct) })
+    }
+  } else {
+    // Fallback: show raw key-value pairs
+    for (const [key, val] of Object.entries(node.data)) {
+      if (val === undefined || val === null || val === '') continue
+      result.push({ label: key, value: String(val) })
+    }
+  }
+  return result
+})
+
+function formatValue(val: any, controlType?: string): string {
+  if (Array.isArray(val)) return val.join(', ')
+  if (controlType === 'switch') return val ? '是' : '否'
+  return String(val)
+}
 
 let fg: any = null
 let centerId = ''
@@ -116,7 +175,7 @@ function toLink(e: GraphEdge) {
 async function initGraph() {
   if (!containerRef.value || !props.collection || !props.recordId) return
 
-  loading.value = true
+  initLoading.value = true
   isEmpty.value = false
   allNodes.clear()
   allEdges.length = 0
@@ -145,7 +204,8 @@ async function initGraph() {
     fg = createGraph()(el)
       .width(w)
       .height(h)
-      .backgroundColor('transparent')
+      .backgroundColor('#ffffff')
+      .autoPauseRedraw(false)
       .graphData({ nodes: data.nodes.map(toNode), links: data.edges.map(toLink) })
       // Node
       .nodeRelSize(1)
@@ -215,7 +275,7 @@ async function initGraph() {
     console.error('Failed to load relation graph:', err)
     isEmpty.value = true
   } finally {
-    loading.value = false
+    initLoading.value = false
   }
 }
 
@@ -235,7 +295,13 @@ function handleClick(node: any) {
     return
   }
   lastClickId = node.id
-  clickTimer = setTimeout(() => { clickTimer = null; expandNode(node.id) }, 200)
+  clickTimer = setTimeout(() => {
+    clickTimer = null
+    expandNode(node.id)
+    // Show detail panel
+    const nd = allNodes.get(node.id)
+    if (nd) selectedNode.value = nd
+  }, 200)
 }
 
 async function expandNode(nodeId: string) {
@@ -243,7 +309,6 @@ async function expandNode(nodeId: string) {
   const nd = allNodes.get(nodeId)
   if (!nd) return
   loadedNodeIds.add(nodeId)
-  loading.value = true
 
   try {
     const data = await getRelationGraph(nd.collection, nodeId)
@@ -272,8 +337,6 @@ async function expandNode(nodeId: string) {
     }
   } catch (err) {
     console.error('Failed to expand node:', err)
-  } finally {
-    loading.value = false
   }
 }
 
@@ -281,6 +344,7 @@ function destroyGraph() {
   if (clickTimer) { clearTimeout(clickTimer); clickTimer = null }
   if (fg) { fg.pauseAnimation(); fg = null }
   if (containerRef.value) containerRef.value.innerHTML = ''
+  selectedNode.value = null
   allNodes.clear()
   allEdges.length = 0
   edgeKeySet.clear()
@@ -297,11 +361,107 @@ onBeforeUnmount(() => destroyGraph())
   position: relative;
 }
 
+.graph-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+
+.graph-body {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
 .graph-container {
   width: 100%;
   height: 100%;
 }
 
+/* ── Detail panel (absolute overlay on the right) ── */
+.detail-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 300px;
+  height: 100%;
+  border-left: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  display: flex;
+  flex-direction: column;
+  background: var(--el-bg-color, #fff);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.06);
+  z-index: 10;
+  transition: transform 0.2s ease;
+}
+
+.detail-panel[style*="display: none"] {
+  transform: translateX(100%);
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 0;
+}
+
+.detail-collection {
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #909399);
+  background: var(--el-fill-color-light, #f5f7fa);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.detail-title {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 8px 14px 12px;
+  color: var(--el-text-color-primary, #303133);
+  border-bottom: 1px solid var(--el-border-color-extra-light, #f2f6fc);
+}
+
+.detail-scroll {
+  flex: 1;
+  overflow: auto;
+}
+
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  tr:hover {
+    background: var(--el-fill-color-lighter, #fafafa);
+  }
+
+  td {
+    padding: 8px 14px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--el-border-color-extra-light, #f2f6fc);
+  }
+}
+
+.detail-label {
+  color: var(--el-text-color-secondary, #909399);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.detail-value {
+  color: var(--el-text-color-primary, #303133);
+  word-break: break-all;
+}
+
+.detail-empty {
+  text-align: center;
+  padding: 30px 14px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 13px;
+}
+
+/* ── Footer ── */
 .dialog-footer {
   display: flex;
   align-items: center;

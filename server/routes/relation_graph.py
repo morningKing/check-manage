@@ -67,6 +67,7 @@ def get_relation_graph(collection, record_id):
                 'label': center_display,
                 'collection': collection,
                 'collectionLabel': page_label,
+                'data': center_data,
             }
         }
 
@@ -277,12 +278,14 @@ def get_relation_graph(collection, record_id):
                     _, ndata = fetched[nid]
                     display = _get_display_name(ndata, p_fields) or nid
                 else:
+                    ndata = {}
                     display = nid
                 resolved_nodes[nid] = {
                     'id': nid,
                     'label': display,
                     'collection': ncol,
                     'collectionLabel': p_label,
+                    'data': ndata,
                 }
 
     return jsonify({

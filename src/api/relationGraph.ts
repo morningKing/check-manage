@@ -5,6 +5,7 @@ export interface GraphNode {
   label: string
   collection: string
   collectionLabel: string
+  data?: Record<string, any>
 }
 
 export interface GraphEdge {
