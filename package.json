@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:server": "cd server && set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest -v",
-    "test:all": "npm run test:server && npm run test"
+    "test:all": "npm run test:server && npm run test",
+    "start": "bash start.sh",
+    "start:skip-build": "bash start.sh --skip-build"
   },
   "dependencies": {
     "@codemirror/lang-python": "^6.2.1",
