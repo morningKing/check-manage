@@ -374,6 +374,22 @@ def init_db():
             conn.commit()
             print("Added query console menu.")
 
+        # Migration: move 数据工具 to top-level, move Open API to 平台管理
+        cur.execute("SELECT parent_id FROM menus WHERE id = 'menu-3-b'")
+        row = cur.fetchone()
+        if row and row[0] == 'menu-3':
+            # 数据工具 → 一级菜单 (order=3), 系统配置 → order=4
+            cur.execute('UPDATE menus SET parent_id = NULL, "order" = 3, roles = %s WHERE id = %s',
+                        (psycopg2.extras.Json(['admin', 'developer']), 'menu-3-b'))
+            cur.execute('UPDATE menus SET "order" = 4 WHERE id = %s', ('menu-3',))
+            # Open API → 平台管理
+            cur.execute('UPDATE menus SET parent_id = %s, "order" = 4 WHERE id = %s',
+                        ('menu-3-a', 'menu-3-7'))
+            # 系统运维 order 调整 (原 order=3, 改为 2，因为数据工具已移走)
+            cur.execute('UPDATE menus SET "order" = 2 WHERE id = %s', ('menu-3-c',))
+            conn.commit()
+            print("Moved 数据工具 to top-level menu, moved Open API to 平台管理.")
+
         # Migration: add version and updated_at columns to dynamic_data
         cur.execute("""
             SELECT column_name FROM information_schema.columns
