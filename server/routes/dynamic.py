@@ -3,12 +3,14 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
+from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 import psycopg2.extras
+import json
 
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query'}
 
 
 def format_ts(dt):
@@ -148,9 +150,39 @@ def apply_pending_relations(cur, collection, record_id, pending_relations):
 def list_items(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
+
+    query_str = request.args.get('q', '')
+
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, collection, data, created_at, updated_at, version FROM dynamic_data WHERE collection = %s ORDER BY created_at', (collection,))
+
+        if query_str:
+            try:
+                query = json.loads(query_str)
+                # Remap Chinese labels to fieldNames
+                page_id = f'page-{collection}'
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+                pc_row = cur.fetchone()
+                if pc_row and pc_row[0]:
+                    query = remap_labels(query, pc_row[0])
+                where_fragment, q_params = mongo_translate(query)
+                sql = (
+                    'SELECT id, collection, data, created_at, updated_at, version '
+                    'FROM dynamic_data WHERE collection = %s AND (' + where_fragment + ') '
+                    'ORDER BY created_at'
+                )
+                cur.execute(sql, [collection] + q_params)
+            except json.JSONDecodeError as e:
+                return jsonify({"error": f"查询语法错误: JSON 解析失败 - {e}"}), 400
+            except MongoQueryError as e:
+                return jsonify({"error": f"查询语法错误: {e}"}), 400
+        else:
+            cur.execute(
+                'SELECT id, collection, data, created_at, updated_at, version '
+                'FROM dynamic_data WHERE collection = %s ORDER BY created_at',
+                (collection,),
+            )
+
         rows = cur.fetchall()
     return jsonify([row_to_record(r) for r in rows])
 

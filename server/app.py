@@ -19,6 +19,7 @@ from routes.open_api import open_api_bp
 from routes.validation_scripts import validation_scripts_bp
 from routes.etl_tasks import etl_tasks_bp
 from routes.relation_graph import relation_graph_bp
+from routes.query import query_bp
 
 app = Flask(__name__)
 CORS(app)
@@ -37,6 +38,7 @@ app.register_blueprint(open_api_bp)
 app.register_blueprint(validation_scripts_bp)
 app.register_blueprint(etl_tasks_bp)
 app.register_blueprint(relation_graph_bp)
+app.register_blueprint(query_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start)

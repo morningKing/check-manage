@@ -143,6 +143,15 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'Connection',
         },
       },
+      {
+        path: 'admin/query',
+        name: 'QueryConsole',
+        component: () => import('@/views/admin/QueryConsole.vue'),
+        meta: {
+          title: '数据查询',
+          icon: 'Search',
+        },
+      },
     ],
   },
   // 404 页面

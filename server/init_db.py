@@ -363,6 +363,17 @@ def init_db():
             conn.commit()
             print("Added ETL management menu.")
 
+        # Migration: add Query Console menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-10'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-10', %s, 'Search', NULL, 'menu-3-b', 5, '/admin/query', %s)",
+                ('数据查询', psycopg2.extras.Json(['admin', 'developer'])),
+            )
+            conn.commit()
+            print("Added query console menu.")
+
         # Migration: add version and updated_at columns to dynamic_data
         cur.execute("""
             SELECT column_name FROM information_schema.columns

@@ -2,7 +2,9 @@ from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import api_key_required
 from datetime import timezone
+from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 import uuid
+import json
 import psycopg2.extras
 
 open_api_bp = Blueprint('open_api', __name__, url_prefix='/api/v1')
@@ -136,7 +138,7 @@ def list_collections():
 @open_api_bp.route('/collections/<collection>', methods=['GET'])
 @api_key_required
 def list_collection_data(collection):
-    """List records in a public collection with pagination."""
+    """List records in a public collection with pagination and optional MongoDB query."""
     page_id = f'page-{collection}'
     with get_db() as conn:
         cur = conn.cursor()
@@ -149,17 +151,36 @@ def list_collection_data(collection):
         page_size = min(page_size, 100)
         offset = (page - 1) * page_size
 
+        query_str = request.args.get('q', '')
+        extra_where = ''
+        q_params = []
+
+        if query_str:
+            try:
+                query = json.loads(query_str)
+                # Remap labels to fieldNames
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+                pc_row = cur.fetchone()
+                if pc_row and pc_row[0]:
+                    query = remap_labels(query, pc_row[0])
+                where_fragment, q_params = mongo_translate(query)
+                extra_where = f' AND ({where_fragment})'
+            except json.JSONDecodeError as e:
+                return jsonify({'error': f'Query syntax error: {e}'}), 400
+            except MongoQueryError as e:
+                return jsonify({'error': f'Query syntax error: {e}'}), 400
+
         cur.execute(
-            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s',
-            (collection,),
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s' + extra_where,
+            [collection] + q_params,
         )
         total = cur.fetchone()[0]
 
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
-            'WHERE collection = %s ORDER BY created_at '
+            'WHERE collection = %s' + extra_where + ' ORDER BY created_at '
             'LIMIT %s OFFSET %s',
-            (collection, page_size, offset),
+            [collection] + q_params + [page_size, offset],
         )
         rows = cur.fetchall()
 

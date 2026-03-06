@@ -291,13 +291,14 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    * @param pageId - 页面ID
    * @returns 数据列表
    */
-  async function fetchPageData(pageId: string): Promise<DynamicRecord[]> {
+  async function fetchPageData(pageId: string, query?: Record<string, any>): Promise<DynamicRecord[]> {
     try {
       // 根据页面配置获取对应的数据端点
       const config = getPageConfigById.value(pageId)
       // 使用简化的端点名称（从pageId提取）
       const endpoint = pageId.replace('page-', '')
-      const data = await get<DynamicRecord[]>(`/${endpoint}`)
+      const qs = query ? `?q=${encodeURIComponent(JSON.stringify(query))}` : ''
+      const data = await get<DynamicRecord[]>(`/${endpoint}${qs}`)
 
       // 共享集合缓存，避免多个 resolve 函数重复请求同一集合
       const collectionCache = new Map<string, any[]>()

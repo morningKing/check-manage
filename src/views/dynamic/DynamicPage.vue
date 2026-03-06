@@ -85,15 +85,65 @@
 
     <!-- 搜索栏 -->
     <div class="search-bar">
-      <el-input
-        v-model="searchKeyword"
-        placeholder="输入关键字搜索..."
-        clearable
-        :prefix-icon="Search"
-        style="width: 300px"
-      />
+      <template v-if="!queryMode">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="输入关键字搜索..."
+          clearable
+          :prefix-icon="Search"
+          style="width: 300px"
+        />
+      </template>
+      <template v-else>
+        <el-input
+          v-model="mongoQueryText"
+          type="textarea"
+          :autosize="{ minRows: 1, maxRows: 4 }"
+          placeholder='{"field": {"$regex": "value"}, "age": {"$gte": 18}}'
+          style="flex: 1; max-width: 600px; font-family: monospace"
+          @keydown.ctrl.enter="executeMongoQuery"
+        />
+        <el-button type="primary" :loading="tableLoading" @click="executeMongoQuery">
+          查询
+        </el-button>
+        <el-button v-if="activeMongoQuery" @click="clearMongoQuery">
+          清除
+        </el-button>
+        <el-popover placement="bottom-start" :width="420" trigger="click">
+          <template #reference>
+            <el-button text type="info">语法帮助</el-button>
+          </template>
+          <div class="query-help">
+            <p><b>MongoDB 查询语法</b>（支持中文字段名）</p>
+            <table>
+              <tr><td><code>{"用例ID": "IC-001"}</code></td><td>精确匹配</td></tr>
+              <tr><td><code>{"名称": {"$regex": "test"}}</code></td><td>正则匹配（不区分大小写）</td></tr>
+              <tr><td><code>{"名称": {"$like": "test"}}</code></td><td>模糊匹配（%test%）</td></tr>
+              <tr><td><code>{"age": {"$gt": 18}}</code></td><td>大于（$gte, $lt, $lte 类似）</td></tr>
+              <tr><td><code>{"状态": {"$in": ["a","b"]}}</code></td><td>在列表中</td></tr>
+              <tr><td><code>{"状态": {"$nin": ["a"]}}</code></td><td>不在列表中</td></tr>
+              <tr><td><code>{"field": {"$ne": "val"}}</code></td><td>不等于</td></tr>
+              <tr><td><code>{"field": {"$exists": true}}</code></td><td>字段存在/不存在</td></tr>
+              <tr><td><code>{"$or": [{...}, {...}]}</code></td><td>逻辑或</td></tr>
+              <tr><td><code>{"$and": [{...}, {...}]}</code></td><td>逻辑与</td></tr>
+            </table>
+            <p style="margin-top:8px;color:#909399;font-size:12px">Ctrl+Enter 快捷执行 · 字段名可用中文标签或英文字段名</p>
+          </div>
+        </el-popover>
+      </template>
+      <el-tooltip :content="queryMode ? '简单搜索' : '高级查询'">
+        <el-button
+          :type="queryMode ? 'primary' : 'default'"
+          :icon="queryMode ? Search : DCaret"
+          circle
+          @click="toggleQueryMode"
+        />
+      </el-tooltip>
       <span class="search-result-count">
         共 {{ filteredData.length }} 条记录
+        <template v-if="activeMongoQuery">
+          （已筛选）
+        </template>
       </span>
     </div>
 
@@ -478,6 +528,13 @@ const searchKeyword = ref('')
  * 列筛选条件
  */
 const columnFilters = ref<Record<string, { value: any; value2?: any; operator?: string }>>({})
+
+/**
+ * 高级查询模式
+ */
+const queryMode = ref(false)
+const mongoQueryText = ref('')
+const activeMongoQuery = ref<Record<string, any> | null>(null)
 
 /**
  * 对话框可见性
@@ -913,7 +970,8 @@ async function loadPageData(): Promise<void> {
 
   tableLoading.value = true
   try {
-    const data = await pageConfigStore.fetchPageData(pageId.value)
+    const query = activeMongoQuery.value || undefined
+    const data = await pageConfigStore.fetchPageData(pageId.value, query)
     tableData.value = data
     // 如果有 recordId query 参数，高亮定位到该记录
     const recordId = route.query.recordId as string
@@ -926,6 +984,53 @@ async function loadPageData(): Promise<void> {
   } finally {
     tableLoading.value = false
   }
+}
+
+/**
+ * 切换查询模式
+ */
+function toggleQueryMode(): void {
+  queryMode.value = !queryMode.value
+  if (!queryMode.value && activeMongoQuery.value) {
+    clearMongoQuery()
+  }
+}
+
+/**
+ * 执行 MongoDB 查询
+ */
+async function executeMongoQuery(): Promise<void> {
+  const text = mongoQueryText.value.trim()
+  if (!text) {
+    clearMongoQuery()
+    return
+  }
+  try {
+    const query = JSON.parse(text)
+    if (typeof query !== 'object' || Array.isArray(query)) {
+      ElMessage.warning('查询必须是 JSON 对象，如 {"field": "value"}')
+      return
+    }
+    activeMongoQuery.value = query
+    currentPage.value = 1
+    await loadPageData()
+  } catch (e: any) {
+    if (e instanceof SyntaxError) {
+      ElMessage.error('JSON 格式错误: ' + e.message)
+    } else {
+      ElMessage.error(e.message || '查询失败')
+    }
+  }
+}
+
+/**
+ * 清除查询
+ */
+async function clearMongoQuery(): Promise<void> {
+  activeMongoQuery.value = null
+  mongoQueryText.value = ''
+  currentPage.value = 1
+  await loadPageData()
 }
 
 /**
@@ -1519,6 +1624,9 @@ watch(searchKeyword, () => {
  */
 watch(pageId, () => {
   columnFilters.value = {}
+  queryMode.value = false
+  activeMongoQuery.value = null
+  mongoQueryText.value = ''
 })
 
 // ==================== 生命周期 ====================
@@ -1594,6 +1702,35 @@ onActivated(async () => {
   .search-result-count {
     color: #909399;
     font-size: 13px;
+    white-space: nowrap;
+  }
+}
+
+.query-help {
+  font-size: 13px;
+  line-height: 1.6;
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+
+    td {
+      padding: 4px 8px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+    }
+
+    td:first-child {
+      font-family: monospace;
+      font-size: 12px;
+      white-space: nowrap;
+      color: #606266;
+    }
+
+    td:last-child {
+      color: #909399;
+    }
   }
 }
 
