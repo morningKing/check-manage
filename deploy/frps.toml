@@ -1,0 +1,28 @@
+# ==============================================================
+# frps.toml - frp 服务端配置（部署在公网服务器上）
+#
+# 启动命令: ./frps -c frps.toml
+# ==============================================================
+
+# frp 服务端监听端口（客户端连接用）
+bindPort = 7000
+
+# 鉴权配置（客户端必须使用相同的 token）
+auth.token = "check-manage-frp-secret-change-me"
+
+# HTTP 代理端口（浏览器通过此端口访问）
+vhostHTTPPort = 80
+
+# HTTPS 代理端口（如需 HTTPS）
+# vhostHTTPSPort = 443
+
+# 管理面板（可选，用于监控连接状态）
+webServer.addr = "0.0.0.0"
+webServer.port = 7500
+webServer.user = "admin"
+webServer.password = "admin123"
+
+# 日志配置
+log.to = "./frps.log"
+log.level = "info"
+log.maxDays = 7

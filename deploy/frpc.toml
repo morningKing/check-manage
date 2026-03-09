@@ -1,0 +1,39 @@
+# ==============================================================
+# frpc.toml - frp 客户端配置（部署在本地机器上）
+#
+# 启动命令: ./frpc -c frpc.toml
+#
+# 前置条件: 先通过 start.sh 启动项目（默认监听 8080 端口）
+# ==============================================================
+
+# 公网 frps 服务器地址（替换为实际 IP 或域名）
+serverAddr = "your-server-ip"
+serverPort = 7000
+
+# 鉴权 token（必须与 frps.toml 一致）
+auth.token = "check-manage-frp-secret-change-me"
+
+# 日志配置
+log.to = "./frpc.log"
+log.level = "info"
+log.maxDays = 3
+
+# ------ 代理规则 ------
+
+# HTTP 方式：通过域名访问（推荐）
+# 访问地址: http://check.your-domain.com
+[[proxies]]
+name = "check-manage-http"
+type = "http"
+localIP = "127.0.0.1"
+localPort = 8080
+customDomains = ["check.your-domain.com"]
+
+# TCP 方式：通过 IP:端口 直接访问（备选，无需域名）
+# 访问地址: http://your-server-ip:18080
+# [[proxies]]
+# name = "check-manage-tcp"
+# type = "tcp"
+# localIP = "127.0.0.1"
+# localPort = 8080
+# remotePort = 18080
