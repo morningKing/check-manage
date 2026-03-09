@@ -49,7 +49,7 @@
             <span class="legend-line quote-line" />
             引用选择
           </span>
-          <span class="legend-tip">单击展开/查看 · 双击跳转</span>
+          <span class="legend-tip">单击查看详情 · 点击 ⊕ 展开关系 · 双击跳转</span>
         </div>
         <el-button @click="$emit('update:modelValue', false)">关闭</el-button>
       </div>
@@ -127,6 +127,13 @@ const loadedNodeIds = new Set<string>()
 
 const CENTER_R = 14
 const NORMAL_R = 9
+const EXPAND_BTN_R = 6
+/** Expand button center: bottom-right edge of the node circle */
+function expandBtnPos(node: any) {
+  const r = node.isCenter ? CENTER_R : NORMAL_R
+  const angle = Math.PI * 0.25 // 45° bottom-right
+  return { x: node.x + r * Math.cos(angle), y: node.y + r * Math.sin(angle) }
+}
 
 const PALETTE = [
   '#5B8FF9', '#5AD8A6', '#F6BD16', '#E86452',
@@ -214,6 +221,7 @@ async function initGraph() {
       .nodeCanvasObjectMode(() => 'replace' as any)
       .nodeCanvasObject((node: any, ctx: CanvasRenderingContext2D, gs: number) => {
         const r = node.isCenter ? CENTER_R : NORMAL_R
+        // Node circle
         ctx.beginPath()
         ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
         ctx.fillStyle = node.color
@@ -223,6 +231,7 @@ async function initGraph() {
           ctx.lineWidth = 2 / gs
           ctx.stroke()
         }
+        // Label
         const fs = 12 / gs
         if (fs > 2) {
           ctx.font = `${fs}px sans-serif`
@@ -231,6 +240,28 @@ async function initGraph() {
           ctx.fillStyle = '#333'
           ctx.fillText(node.short, node.x, node.y + r + 3 / gs)
         }
+        // Expand "⊕" button for unexpanded nodes
+        if (!loadedNodeIds.has(node.id)) {
+          const btn = expandBtnPos(node)
+          const br = EXPAND_BTN_R
+          ctx.beginPath()
+          ctx.arc(btn.x, btn.y, br, 0, Math.PI * 2)
+          ctx.fillStyle = '#fff'
+          ctx.fill()
+          ctx.strokeStyle = node.color
+          ctx.lineWidth = 1.5 / gs
+          ctx.stroke()
+          // "+" sign
+          const s = br * 0.5
+          ctx.beginPath()
+          ctx.moveTo(btn.x - s, btn.y)
+          ctx.lineTo(btn.x + s, btn.y)
+          ctx.moveTo(btn.x, btn.y - s)
+          ctx.lineTo(btn.x, btn.y + s)
+          ctx.strokeStyle = node.color
+          ctx.lineWidth = 1.8 / gs
+          ctx.stroke()
+        }
       })
       .nodePointerAreaPaint((node: any, c: string, ctx: CanvasRenderingContext2D) => {
         const r = (node.isCenter ? CENTER_R : NORMAL_R) + 3
@@ -238,6 +269,13 @@ async function initGraph() {
         ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
         ctx.fillStyle = c
         ctx.fill()
+        // Extend hit area to cover expand button
+        if (!loadedNodeIds.has(node.id)) {
+          const btn = expandBtnPos(node)
+          ctx.beginPath()
+          ctx.arc(btn.x, btn.y, EXPAND_BTN_R + 3, 0, Math.PI * 2)
+          ctx.fill()
+        }
       })
       // Link
       .linkColor((l: any) => l.color)
@@ -283,7 +321,20 @@ async function initGraph() {
 let clickTimer: ReturnType<typeof setTimeout> | null = null
 let lastClickId = ''
 
-function handleClick(node: any) {
+function handleClick(node: any, event: MouseEvent) {
+  // ── Check if click landed on the expand "⊕" button ──
+  if (!loadedNodeIds.has(node.id) && fg) {
+    const btn = expandBtnPos(node)
+    const coords = fg.screen2GraphCoords(event.offsetX, event.offsetY)
+    const dx = coords.x - btn.x
+    const dy = coords.y - btn.y
+    if (Math.sqrt(dx * dx + dy * dy) < EXPAND_BTN_R + 3) {
+      expandNode(node.id)
+      return
+    }
+  }
+
+  // ── Double click → navigate ──
   if (clickTimer && lastClickId === node.id) {
     clearTimeout(clickTimer)
     clickTimer = null
@@ -294,11 +345,11 @@ function handleClick(node: any) {
     }
     return
   }
+
+  // ── Single click → show detail panel only ──
   lastClickId = node.id
   clickTimer = setTimeout(() => {
     clickTimer = null
-    expandNode(node.id)
-    // Show detail panel
     const nd = allNodes.get(node.id)
     if (nd) selectedNode.value = nd
   }, 200)
