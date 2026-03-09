@@ -195,7 +195,7 @@ watch(
   () => {
     initFormData()
   },
-  { immediate: true, deep: true }
+  { immediate: true }
 )
 
 // ==================== 暴露方法 ====================

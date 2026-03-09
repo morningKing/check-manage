@@ -201,7 +201,7 @@ watch(
   () => {
     initFormData()
   },
-  { immediate: true, deep: true }
+  { immediate: true }
 )
 
 /**
@@ -211,8 +211,7 @@ watch(
   () => props.fields,
   () => {
     initFormData()
-  },
-  { deep: true }
+  }
 )
 
 // ==================== 暴露方法 ====================

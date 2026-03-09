@@ -262,6 +262,7 @@ def create_item(collection):
     log_operation('create', 'dynamic_data', rid, record_name,
                   f'新增{page_name}「{record_name}」')
     body['_version'] = 1
+    body.pop('_relations', None)
     return jsonify(body), 201
 
 
@@ -349,6 +350,7 @@ def update_item(collection, item_id):
             page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id
     body['_version'] = new_version
+    body.pop('_relations', None)
     label_map = get_field_label_map(fields)
     record_name = pick_display_name(data, fields) or pick_display_name(old_data, fields) or item_id
     changed_labels = []

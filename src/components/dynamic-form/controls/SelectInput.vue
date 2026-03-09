@@ -4,10 +4,12 @@
  * 职责：
  * - 渲染单选下拉框
  * - 支持静态选项和 API 动态获取选项
- * - 支持 placeholder 和禁用状态
+ * - 静态选项使用 el-select，动态选项使用 el-select-v2（虚拟滚动）
  */
 <template>
+  <!-- 静态少量选项使用 el-select -->
   <el-select
+    v-if="useBasicSelect"
     v-model="selectValue"
     :placeholder="field.placeholder || '请选择'"
     :disabled="field.disabled"
@@ -23,19 +25,21 @@
       :value="option.value"
     />
   </el-select>
+  <!-- 动态/大量选项使用 el-select-v2（虚拟滚动，避免大量 DOM 导致页面卡死） -->
+  <el-select-v2
+    v-else
+    v-model="selectValue"
+    :options="v2Options"
+    :placeholder="field.placeholder || '请选择'"
+    :disabled="field.disabled"
+    :loading="loading"
+    clearable
+    filterable
+    style="width: 100%"
+  />
 </template>
 
 <script setup lang="ts">
-/**
- * SelectInput 组件
- *
- * 基于 Element Plus Select 组件封装
- * 用于动态表单中的单选下拉
- *
- * 选项来源：
- * 1. 静态配置：从 field.options 获取
- * 2. API 获取：从 field.optionsSource.url 请求数据
- */
 import { computed, ref, onMounted, watch } from 'vue'
 import type { FieldConfig, FieldOption } from '@/types'
 import { get } from '@/utils/request'
@@ -43,9 +47,7 @@ import { get } from '@/utils/request'
 // ==================== Props & Emits ====================
 
 interface Props {
-  /** 字段配置 */
   field: FieldConfig
-  /** 当前值 */
   modelValue: string | number | boolean | null
 }
 
@@ -56,43 +58,36 @@ const emit = defineEmits<{
 
 // ==================== State ====================
 
-/**
- * 选项列表
- */
 const options = ref<FieldOption[]>([])
-
-/**
- * 加载状态
- */
 const loading = ref(false)
+const useBasicSelect = ref(true)
 
 // ==================== 计算属性 ====================
 
-/**
- * 双向绑定的选择值
- */
 const selectValue = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
 })
 
+/** el-select-v2 要求 { label, value } 格式 */
+const v2Options = computed(() =>
+  options.value.map((o) => ({ label: String(o.label), value: o.value }))
+)
+
 // ==================== 方法 ====================
 
-/**
- * 加载选项数据
- *
- * 根据配置决定是使用静态选项、从 API 获取或从数据页获取
- */
 async function loadOptions(): Promise<void> {
   const source = props.field.optionsSource
 
-  // 静态选项
   if (!source || source.type === 'static') {
     options.value = props.field.options || []
+    useBasicSelect.value = true
     return
   }
 
-  // API 获取选项
+  // API / collection 来源使用虚拟滚动
+  useBasicSelect.value = false
+
   if (source.type === 'api' && source.url) {
     loading.value = true
     try {
@@ -109,7 +104,6 @@ async function loadOptions(): Promise<void> {
     }
   }
 
-  // 数据页数据获取选项
   if (source.type === 'collection' && source.collection) {
     loading.value = true
     try {
@@ -133,7 +127,6 @@ onMounted(() => {
   loadOptions()
 })
 
-// 监听字段配置变化，重新加载选项
 watch(
   () => props.field.optionsSource,
   () => loadOptions(),
