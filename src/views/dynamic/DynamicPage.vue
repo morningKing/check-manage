@@ -1165,15 +1165,13 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
       const regularData = pageConfigStore.stripRelationFields(pageId.value, data)
 
       if (isEditMode.value) {
-        // 编辑模式
-        await pageConfigStore.updatePageData(pageId.value, currentRecord.value.id, regularData)
-        await pageConfigStore.saveRelations(pageId.value, currentRecord.value.id, data)
+        // 编辑模式：关联数据与主数据在同一事务中提交，保证原子性
+        await pageConfigStore.updatePageData(pageId.value, currentRecord.value.id, regularData, data)
         savedRecordId = currentRecord.value.id
         ElMessage.success('更新成功')
       } else {
-        // 新增模式：先创建记录获取ID，再保存关联
-        const created = await pageConfigStore.addPageData(pageId.value, regularData)
-        await pageConfigStore.saveRelations(pageId.value, created.id, data)
+        // 新增模式：关联数据与主数据在同一事务中提交，保证原子性
+        const created = await pageConfigStore.addPageData(pageId.value, regularData, undefined, data)
         savedRecordId = created.id
         ElMessage.success('新增成功')
       }

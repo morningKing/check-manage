@@ -100,49 +100,53 @@ def get_validation_script(cur, collection):
 def apply_pending_relations(cur, collection, record_id, pending_relations):
     """Apply relation operations queued by validation script (bidirectional sync)."""
     for rel in pending_relations:
-        field_name = rel['fieldName']
-        target_collection = rel['targetCollection']
-        target_field = rel['targetField']
-        new_ids = set(rel['ids'])
-
-        # Get old related IDs
-        cur.execute(
-            'SELECT related_id FROM data_relations '
-            'WHERE collection = %s AND record_id = %s AND field_name = %s',
-            (collection, record_id, field_name),
+        _apply_relation_update(
+            cur, collection, record_id,
+            rel['fieldName'], rel['targetCollection'], rel['targetField'],
+            set(rel['ids']),
         )
-        old_ids = set(row[0] for row in cur.fetchall())
 
-        # Delete all existing forward relations for this field
+
+def _apply_relation_update(cur, collection, record_id, field_name, target_collection, target_field, new_ids):
+    """Bidirectional M:N relation sync (reusable for both validation scripts and client-side relations)."""
+    # Get old related IDs
+    cur.execute(
+        'SELECT related_id FROM data_relations '
+        'WHERE collection = %s AND record_id = %s AND field_name = %s',
+        (collection, record_id, field_name),
+    )
+    old_ids = set(row[0] for row in cur.fetchall())
+
+    # Delete all existing forward relations for this field
+    cur.execute(
+        'DELETE FROM data_relations '
+        'WHERE collection = %s AND record_id = %s AND field_name = %s',
+        (collection, record_id, field_name),
+    )
+
+    # Insert new forward relations
+    for rid in new_ids:
+        cur.execute(
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            (collection, record_id, field_name, target_collection, rid),
+        )
+
+    # Sync reverse: remove reverse entries for removed IDs
+    for rid in old_ids - new_ids:
         cur.execute(
             'DELETE FROM data_relations '
-            'WHERE collection = %s AND record_id = %s AND field_name = %s',
-            (collection, record_id, field_name),
+            'WHERE collection = %s AND record_id = %s AND field_name = %s AND related_id = %s',
+            (target_collection, rid, target_field, record_id),
         )
 
-        # Insert new forward relations
-        for rid in new_ids:
-            cur.execute(
-                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
-                'VALUES (%s, %s, %s, %s, %s)',
-                (collection, record_id, field_name, target_collection, rid),
-            )
-
-        # Sync reverse: remove reverse entries for removed IDs
-        for rid in old_ids - new_ids:
-            cur.execute(
-                'DELETE FROM data_relations '
-                'WHERE collection = %s AND record_id = %s AND field_name = %s AND related_id = %s',
-                (target_collection, rid, target_field, record_id),
-            )
-
-        # Sync reverse: add reverse entries for added IDs
-        for rid in new_ids - old_ids:
-            cur.execute(
-                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
-                'VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
-                (target_collection, rid, target_field, collection, record_id),
-            )
+    # Sync reverse: add reverse entries for added IDs
+    for rid in new_ids - old_ids:
+        cur.execute(
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+            'VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+            (target_collection, rid, target_field, collection, record_id),
+        )
 
 
 @dynamic_bp.route('/<collection>', methods=['GET'])
@@ -209,7 +213,8 @@ def create_item(collection):
     body = request.get_json(force=True)
     rid = body.get('id')
     created_at = body.get('createdAt')
-    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt')}
+    client_relations = body.get('_relations')
+    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations')}
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness
@@ -243,6 +248,14 @@ def create_item(collection):
         # Apply relations queued by validation script
         if pending_relations:
             apply_pending_relations(cur, collection, rid, pending_relations)
+        # Apply client-side relation changes in the SAME transaction (atomic with data create)
+        if client_relations:
+            for rel in client_relations:
+                _apply_relation_update(
+                    cur, collection, rid,
+                    rel['fieldName'], rel['targetCollection'], rel['targetField'],
+                    set(rel.get('ids', [])),
+                )
         if not validation_script:
             page_name, fields = get_page_info(cur, collection)
     record_name = pick_display_name(data, fields) or rid
@@ -260,7 +273,8 @@ def update_item(collection, item_id):
     body = request.get_json(force=True)
     created_at = body.get('createdAt')
     client_version = body.get('_version')
-    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt')}
+    client_relations = body.get('_relations')  # [{fieldName, targetCollection, targetField, ids}]
+    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt', '_relations')}
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness (exclude current record)
@@ -323,6 +337,14 @@ def update_item(collection, item_id):
         # Apply relations queued by validation script
         if pending_relations:
             apply_pending_relations(cur, collection, item_id, pending_relations)
+        # Apply client-side relation changes in the SAME transaction (atomic with data update)
+        if client_relations:
+            for rel in client_relations:
+                _apply_relation_update(
+                    cur, collection, item_id,
+                    rel['fieldName'], rel['targetCollection'], rel['targetField'],
+                    set(rel.get('ids', [])),
+                )
         if not validation_script:
             page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id

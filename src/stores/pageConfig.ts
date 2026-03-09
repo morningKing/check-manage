@@ -361,7 +361,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function addPageData(
     pageId: string,
     record: Omit<DynamicRecord, 'id'>,
-    importId?: string
+    importId?: string,
+    relationData?: Record<string, any>
   ): Promise<DynamicRecord> {
     const endpoint = pageId.replace('page-', '')
     const now = new Date().toISOString()
@@ -379,6 +380,31 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     // 自动填充 autoSequence 字段
     for (const field of getAutoSequenceFields(pageId)) {
       newRecord[field.fieldName] = generateNextSequenceValue(pageId, field)
+    }
+
+    // 将关联数据合并到同一请求，实现原子性事务
+    if (relationData) {
+      const relationFields = getRelationFields(pageId)
+      const relations: Array<{
+        fieldName: string
+        targetCollection: string
+        targetField: string
+        ids: string[]
+      }> = []
+      for (const field of relationFields) {
+        const config = field.relationConfig
+        if (!config) continue
+        const ids = relationData[field.fieldName] || []
+        relations.push({
+          fieldName: field.fieldName,
+          targetCollection: config.targetCollection,
+          targetField: config.targetField,
+          ids,
+        })
+      }
+      if (relations.length > 0) {
+        ;(newRecord as any)._relations = relations
+      }
     }
 
     try {
@@ -404,7 +430,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function updatePageData(
     pageId: string,
     recordId: string,
-    record: Partial<DynamicRecord>
+    record: Partial<DynamicRecord>,
+    relationData?: Record<string, any>
   ): Promise<DynamicRecord> {
     const endpoint = pageId.replace('page-', '')
 
@@ -425,6 +452,31 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const cached = pageDataCache.value[pageId]?.find((r) => r.id === recordId)
       if (cached?._version !== undefined) {
         updateData._version = cached._version
+      }
+
+      // 将关联数据合并到同一请求，实现原子性事务
+      if (relationData) {
+        const relationFields = getRelationFields(pageId)
+        const relations: Array<{
+          fieldName: string
+          targetCollection: string
+          targetField: string
+          ids: string[]
+        }> = []
+        for (const field of relationFields) {
+          const config = field.relationConfig
+          if (!config) continue
+          const ids = relationData[field.fieldName] || []
+          relations.push({
+            fieldName: field.fieldName,
+            targetCollection: config.targetCollection,
+            targetField: config.targetField,
+            ids,
+          })
+        }
+        if (relations.length > 0) {
+          ;(updateData as any)._relations = relations
+        }
       }
 
       const updated = await put<DynamicRecord>(`/${endpoint}/${recordId}`, updateData)
