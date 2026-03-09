@@ -49,7 +49,7 @@
             <span class="legend-line quote-line" />
             引用选择
           </span>
-          <span class="legend-tip">单击查看详情 · 点击 ⊕ 展开关系 · 双击跳转</span>
+          <span class="legend-tip">单击节点打开菜单 · 双击跳转</span>
         </div>
         <el-button @click="$emit('update:modelValue', false)">关闭</el-button>
       </div>
@@ -61,7 +61,6 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { Close } from '@element-plus/icons-vue'
 import ForceGraph2D from 'force-graph'
-// force-graph runtime is a Kapsule factory function, not a class constructor
 const createGraph = ForceGraph2D as any as () => (el: HTMLElement) => any
 import { getRelationGraph } from '@/api/relationGraph'
 import type { GraphNode, GraphEdge } from '@/api/relationGraph'
@@ -96,14 +95,12 @@ const selectedNodeFields = computed(() => {
   if (fields.length > 0) {
     for (const f of fields) {
       const ct = f.controlType
-      // Skip internal/auto fields and relation-type fields
       if (ct === 'autoTimestamp' || ct === 'relation' || ct === 'quoteSelect') continue
       const raw = node.data[f.fieldName]
       if (raw === undefined || raw === null || raw === '') continue
       result.push({ label: f.label, value: formatValue(raw, ct) })
     }
   } else {
-    // Fallback: show raw key-value pairs
     for (const [key, val] of Object.entries(node.data)) {
       if (val === undefined || val === null || val === '') continue
       result.push({ label: key, value: String(val) })
@@ -125,15 +122,98 @@ const allEdges: GraphEdge[] = []
 const edgeKeySet = new Set<string>()
 const loadedNodeIds = new Set<string>()
 
+// ── Ring menu state ──
+let ringNodeId: string | null = null   // which node has the ring open (graph-space id)
+
 const CENTER_R = 14
 const NORMAL_R = 9
-const EXPAND_BTN_R = 6
-/** Expand button center: bottom-right edge of the node circle */
-function expandBtnPos(node: any) {
-  const r = node.isCenter ? CENTER_R : NORMAL_R
-  const angle = Math.PI * 0.25 // 45° bottom-right
-  return { x: node.x + r * Math.cos(angle), y: node.y + r * Math.sin(angle) }
+
+// ── Ring menu geometry (graph-space units) ──
+const RING_GAP = 5
+const RING_WIDTH = 18
+const SEGMENT_GAP = 0.06          // radians gap between arcs
+
+interface RingSeg {
+  id: 'expand' | 'detail' | 'navigate'
+  startAngle: number
+  endAngle: number
+  icon: (ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) => void
 }
+
+function buildSegments(canExpand: boolean): RingSeg[] {
+  const segs: { id: RingSeg['id']; icon: RingSeg['icon'] }[] = []
+
+  if (canExpand) {
+    // Expand icon: branching dots
+    segs.push({ id: 'expand', icon: drawExpandIcon })
+  }
+  // Detail icon: info "i"
+  segs.push({ id: 'detail', icon: drawDetailIcon })
+  // Navigate icon: arrow
+  segs.push({ id: 'navigate', icon: drawNavigateIcon })
+
+  const count = segs.length
+  const totalGap = SEGMENT_GAP * count
+  const arcEach = (Math.PI * 2 - totalGap) / count
+
+  return segs.map((s, i) => ({
+    ...s,
+    startAngle: -Math.PI / 2 + i * (arcEach + SEGMENT_GAP),
+    endAngle: -Math.PI / 2 + i * (arcEach + SEGMENT_GAP) + arcEach,
+  }))
+}
+
+// ── Icon drawers (ctx centered at icon center, s = half-size) ──
+
+function drawExpandIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
+  // Central dot + 3 radiating lines with dots
+  ctx.beginPath()
+  ctx.arc(cx, cy, s * 0.2, 0, Math.PI * 2)
+  ctx.fill()
+  for (let i = 0; i < 3; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI * 2) / 3
+    const ex = cx + Math.cos(a) * s
+    const ey = cy + Math.sin(a) * s
+    ctx.beginPath()
+    ctx.moveTo(cx, cy)
+    ctx.lineTo(ex, ey)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.arc(ex, ey, s * 0.22, 0, Math.PI * 2)
+    ctx.fill()
+  }
+}
+
+function drawDetailIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
+  // Document / list icon
+  const w = s * 0.7, h = s
+  ctx.strokeRect(cx - w, cy - h, w * 2, h * 2)
+  // lines
+  const lx1 = cx - w * 0.55, lx2 = cx + w * 0.55
+  for (let i = 0; i < 3; i++) {
+    const ly = cy - h * 0.45 + i * h * 0.45
+    ctx.beginPath()
+    ctx.moveTo(lx1, ly)
+    ctx.lineTo(lx2, ly)
+    ctx.stroke()
+  }
+}
+
+function drawNavigateIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
+  // Arrow pointing right
+  ctx.beginPath()
+  ctx.moveTo(cx - s * 0.6, cy)
+  ctx.lineTo(cx + s * 0.3, cy)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(cx + s * 0.3, cy - s * 0.5)
+  ctx.lineTo(cx + s * 0.85, cy)
+  ctx.lineTo(cx + s * 0.3, cy + s * 0.5)
+  ctx.closePath()
+  ctx.fill()
+}
+
+// ── Colors ──
 
 const PALETTE = [
   '#5B8FF9', '#5AD8A6', '#F6BD16', '#E86452',
@@ -157,7 +237,7 @@ function toNode(n: GraphNode) {
   return {
     id: n.id,
     label: n.label,
-    short: n.label.length > 10 ? n.label.slice(0, 10) + '…' : n.label,
+    short: n.label.length > 10 ? n.label.slice(0, 10) + '...' : n.label,
     collection: n.collection,
     collectionLabel: n.collectionLabel,
     color: isCenter ? '#FF6A00' : getColor(n.collection),
@@ -179,6 +259,84 @@ function toLink(e: GraphEdge) {
   }
 }
 
+// ── Draw ring menu on canvas ──
+
+function drawRingMenu(node: any, ctx: CanvasRenderingContext2D, gs: number) {
+  const r = node.isCenter ? CENTER_R : NORMAL_R
+  const inner = r + RING_GAP
+  const outer = inner + RING_WIDTH
+  const canExpand = !loadedNodeIds.has(node.id)
+  const segs = buildSegments(canExpand)
+
+  // Glow
+  ctx.save()
+  ctx.shadowColor = 'rgba(255, 210, 80, 0.7)'
+  ctx.shadowBlur = 18 / gs
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, r + 2, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(255, 210, 80, 0.15)'
+  ctx.fill()
+  ctx.restore()
+
+  // Glow ring border
+  ctx.beginPath()
+  ctx.arc(node.x, node.y, outer + 1, 0, Math.PI * 2)
+  ctx.strokeStyle = 'rgba(255, 210, 80, 0.35)'
+  ctx.lineWidth = 1.5 / gs
+  ctx.stroke()
+
+  for (const seg of segs) {
+    // Arc segment background
+    ctx.beginPath()
+    ctx.arc(node.x, node.y, outer, seg.startAngle, seg.endAngle)
+    ctx.arc(node.x, node.y, inner, seg.endAngle, seg.startAngle, true)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(240, 240, 240, 0.92)'
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(200, 200, 200, 0.6)'
+    ctx.lineWidth = 0.8 / gs
+    ctx.stroke()
+
+    // Icon at center of arc
+    const midAngle = (seg.startAngle + seg.endAngle) / 2
+    const midR = (inner + outer) / 2
+    const ix = node.x + Math.cos(midAngle) * midR
+    const iy = node.y + Math.sin(midAngle) * midR
+    const iconSize = RING_WIDTH * 0.32
+
+    ctx.fillStyle = '#555'
+    ctx.strokeStyle = '#555'
+    ctx.lineWidth = 1.2 / gs
+    seg.icon(ctx, ix, iy, iconSize)
+  }
+}
+
+// ── Hit-test ring segment ──
+
+function hitTestRing(node: any, gx: number, gy: number): RingSeg | null {
+  const r = node.isCenter ? CENTER_R : NORMAL_R
+  const inner = r + RING_GAP
+  const outer = inner + RING_WIDTH
+  const dx = gx - node.x
+  const dy = gy - node.y
+  const dist = Math.sqrt(dx * dx + dy * dy)
+  if (dist < inner || dist > outer + 2) return null
+
+  let angle = Math.atan2(dy, dx)
+  // Normalize to same range as segments
+  const canExpand = !loadedNodeIds.has(node.id)
+  const segs = buildSegments(canExpand)
+  for (const seg of segs) {
+    // Normalize angle comparison
+    let a = angle
+    if (a < seg.startAngle - 0.01) a += Math.PI * 2
+    if (a >= seg.startAngle - 0.01 && a <= seg.endAngle + 0.01) return seg
+  }
+  return null
+}
+
+// ── Init graph ──
+
 async function initGraph() {
   if (!containerRef.value || !props.collection || !props.recordId) return
 
@@ -190,6 +348,7 @@ async function initGraph() {
   loadedNodeIds.clear()
   colorMap.clear()
   colorIdx = 0
+  ringNodeId = null
 
   try {
     const data = await getRelationGraph(props.collection, props.recordId)
@@ -217,21 +376,47 @@ async function initGraph() {
       // Node
       .nodeRelSize(1)
       .nodeVal((n: any) => n.val)
-      .nodeLabel((n: any) => `[${n.collectionLabel}] ${n.label}`)
+      .nodeLabel(() => '')  // disable default tooltip, we use ring menu
       .nodeCanvasObjectMode(() => 'replace' as any)
       .nodeCanvasObject((node: any, ctx: CanvasRenderingContext2D, gs: number) => {
         const r = node.isCenter ? CENTER_R : NORMAL_R
+        const isRingNode = ringNodeId === node.id
+
+        // Glow effect for ring-selected node
+        if (isRingNode) {
+          ctx.save()
+          ctx.shadowColor = 'rgba(255, 210, 80, 0.6)'
+          ctx.shadowBlur = 20 / gs
+          ctx.beginPath()
+          ctx.arc(node.x, node.y, r + 1, 0, Math.PI * 2)
+          ctx.fillStyle = 'rgba(255, 210, 80, 0.08)'
+          ctx.fill()
+          ctx.restore()
+        }
+
         // Node circle
         ctx.beginPath()
         ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
         ctx.fillStyle = node.color
         ctx.fill()
-        if (node.isCenter) {
-          ctx.strokeStyle = '#CC5500'
+        if (node.isCenter || isRingNode) {
+          ctx.strokeStyle = isRingNode ? 'rgba(255, 200, 50, 0.8)' : '#CC5500'
           ctx.lineWidth = 2 / gs
           ctx.stroke()
         }
-        // Label
+
+        // Node label inside circle (if fits)
+        const labelFs = (r * 1.2) / gs
+        if (labelFs > 2.5) {
+          ctx.font = `bold ${Math.min(labelFs, 11 / gs)}px sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillStyle = '#fff'
+          const txt = node.label.length > 4 ? node.label.slice(0, 4) : node.label
+          ctx.fillText(txt, node.x, node.y)
+        }
+
+        // Label below node
         const fs = 12 / gs
         if (fs > 2) {
           ctx.font = `${fs}px sans-serif`
@@ -240,40 +425,25 @@ async function initGraph() {
           ctx.fillStyle = '#333'
           ctx.fillText(node.short, node.x, node.y + r + 3 / gs)
         }
-        // Expand "⊕" button for unexpanded nodes
-        if (!loadedNodeIds.has(node.id)) {
-          const btn = expandBtnPos(node)
-          const br = EXPAND_BTN_R
-          ctx.beginPath()
-          ctx.arc(btn.x, btn.y, br, 0, Math.PI * 2)
-          ctx.fillStyle = '#fff'
-          ctx.fill()
-          ctx.strokeStyle = node.color
-          ctx.lineWidth = 1.5 / gs
-          ctx.stroke()
-          // "+" sign
-          const s = br * 0.5
-          ctx.beginPath()
-          ctx.moveTo(btn.x - s, btn.y)
-          ctx.lineTo(btn.x + s, btn.y)
-          ctx.moveTo(btn.x, btn.y - s)
-          ctx.lineTo(btn.x, btn.y + s)
-          ctx.strokeStyle = node.color
-          ctx.lineWidth = 1.8 / gs
-          ctx.stroke()
+
+        // Ring menu
+        if (isRingNode) {
+          drawRingMenu(node, ctx, gs)
         }
       })
       .nodePointerAreaPaint((node: any, c: string, ctx: CanvasRenderingContext2D) => {
-        const r = (node.isCenter ? CENTER_R : NORMAL_R) + 3
-        ctx.beginPath()
-        ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
-        ctx.fillStyle = c
-        ctx.fill()
-        // Extend hit area to cover expand button
-        if (!loadedNodeIds.has(node.id)) {
-          const btn = expandBtnPos(node)
+        // Hit area covers node + ring menu if active
+        const r = (node.isCenter ? CENTER_R : NORMAL_R)
+        if (ringNodeId === node.id) {
+          const outer = r + RING_GAP + RING_WIDTH + 4
           ctx.beginPath()
-          ctx.arc(btn.x, btn.y, EXPAND_BTN_R + 3, 0, Math.PI * 2)
+          ctx.arc(node.x, node.y, outer, 0, Math.PI * 2)
+          ctx.fillStyle = c
+          ctx.fill()
+        } else {
+          ctx.beginPath()
+          ctx.arc(node.x, node.y, r + 3, 0, Math.PI * 2)
+          ctx.fillStyle = c
           ctx.fill()
         }
       })
@@ -302,8 +472,8 @@ async function initGraph() {
         ctx.fillText(link.label, mx, my)
       })
       // Interaction
-      .onNodeClick(handleClick)
-      // Layout: pre-run 30 ticks so first frame shows decent layout
+      .onNodeClick(handleNodeClick)
+      .onBackgroundClick(handleBgClick)
       .cooldownTime(3000)
       .warmupTicks(30)
 
@@ -317,27 +487,42 @@ async function initGraph() {
   }
 }
 
-// ── Single / double click ──
+// ── Click handling ──
+
 let clickTimer: ReturnType<typeof setTimeout> | null = null
 let lastClickId = ''
 
-function handleClick(node: any, event: MouseEvent) {
-  // ── Check if click landed on the expand "⊕" button ──
-  if (!loadedNodeIds.has(node.id) && fg) {
-    const btn = expandBtnPos(node)
+function handleNodeClick(node: any, event: MouseEvent) {
+  // ── If this node has ring menu open, hit-test the ring segments ──
+  if (ringNodeId === node.id && fg) {
     const coords = fg.screen2GraphCoords(event.offsetX, event.offsetY)
-    const dx = coords.x - btn.x
-    const dy = coords.y - btn.y
-    if (Math.sqrt(dx * dx + dy * dy) < EXPAND_BTN_R + 3) {
-      expandNode(node.id)
+    const seg = hitTestRing(node, coords.x, coords.y)
+    if (seg) {
+      ringNodeId = null
+      if (seg.id === 'expand') {
+        expandNode(node.id)
+      } else if (seg.id === 'detail') {
+        const nd = allNodes.get(node.id)
+        if (nd) selectedNode.value = nd
+      } else if (seg.id === 'navigate') {
+        const nd = allNodes.get(node.id)
+        if (nd) {
+          emit('update:modelValue', false)
+          emit('navigate', nd.collection, nd.id)
+        }
+      }
       return
     }
+    // Clicked node body while ring is open → close ring
+    ringNodeId = null
+    return
   }
 
-  // ── Double click → navigate ──
+  // ── Double click detection → navigate ──
   if (clickTimer && lastClickId === node.id) {
     clearTimeout(clickTimer)
     clickTimer = null
+    ringNodeId = null
     const nd = allNodes.get(node.id)
     if (nd) {
       emit('update:modelValue', false)
@@ -346,13 +531,18 @@ function handleClick(node: any, event: MouseEvent) {
     return
   }
 
-  // ── Single click → show detail panel only ──
+  // ── Single click → open ring menu on this node ──
   lastClickId = node.id
   clickTimer = setTimeout(() => {
     clickTimer = null
-    const nd = allNodes.get(node.id)
-    if (nd) selectedNode.value = nd
+    ringNodeId = node.id
   }, 200)
+}
+
+function handleBgClick() {
+  if (ringNodeId) {
+    ringNodeId = null
+  }
 }
 
 async function expandNode(nodeId: string) {
@@ -396,6 +586,7 @@ function destroyGraph() {
   if (fg) { fg.pauseAnimation(); fg = null }
   if (containerRef.value) containerRef.value.innerHTML = ''
   selectedNode.value = null
+  ringNodeId = null
   allNodes.clear()
   allEdges.length = 0
   edgeKeySet.clear()
