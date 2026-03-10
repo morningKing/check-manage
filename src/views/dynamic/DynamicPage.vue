@@ -435,6 +435,7 @@
       :collection="collection"
       :record-id="graphRecordId"
       @navigate="handleGraphNodeNavigate"
+      @edit="handleGraphNodeEdit"
     />
   </div>
 </template>
@@ -1542,6 +1543,24 @@ function handleGraphNodeNavigate(targetCollection: string, targetRecordId: strin
     return
   }
   router.push({ path: targetMenu.path, query: { recordId: targetRecordId } })
+}
+
+/**
+ * 处理图谱节点编辑
+ */
+function handleGraphNodeEdit(targetCollection: string, targetRecordId: string): void {
+  // 仅允许编辑当前页面的数据
+  if (targetCollection !== collection.value) {
+    ElMessage.info('跨页面编辑请先跳转到目标页面')
+    return
+  }
+  const record = pageConfigStore.getCachedPageData(pageId.value)?.find(r => r.id === targetRecordId)
+  if (!record) {
+    ElMessage.warning('未找到对应记录')
+    return
+  }
+  graphDialogVisible.value = false
+  handleEdit(record)
 }
 
 /**

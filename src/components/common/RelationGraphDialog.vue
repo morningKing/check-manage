@@ -49,7 +49,7 @@
             <span class="legend-line quote-line" />
             引用选择
           </span>
-          <span class="legend-tip">单击节点打开菜单 · 双击跳转</span>
+          <span class="legend-tip">单击查看详情 · 双击跳转</span>
         </div>
         <el-button @click="$emit('update:modelValue', false)">关闭</el-button>
       </div>
@@ -75,6 +75,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   navigate: [collection: string, recordId: string]
+  edit: [collection: string, recordId: string]
 }>()
 
 const pageConfigStore = usePageConfigStore()
@@ -134,7 +135,7 @@ const RING_WIDTH = 18
 const SEGMENT_GAP = 0.06          // radians gap between arcs
 
 interface RingSeg {
-  id: 'expand' | 'detail' | 'navigate'
+  id: 'expand' | 'edit' | 'navigate'
   startAngle: number
   endAngle: number
   icon: (ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) => void
@@ -147,8 +148,8 @@ function buildSegments(canExpand: boolean): RingSeg[] {
     // Expand icon: branching dots
     segs.push({ id: 'expand', icon: drawExpandIcon })
   }
-  // Detail icon: info "i"
-  segs.push({ id: 'detail', icon: drawDetailIcon })
+  // Edit icon: pencil
+  segs.push({ id: 'edit', icon: drawEditIcon })
   // Navigate icon: arrow
   segs.push({ id: 'navigate', icon: drawNavigateIcon })
 
@@ -184,19 +185,22 @@ function drawExpandIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s
   }
 }
 
-function drawDetailIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
-  // Document / list icon
-  const w = s * 0.7, h = s
-  ctx.strokeRect(cx - w, cy - h, w * 2, h * 2)
-  // lines
-  const lx1 = cx - w * 0.55, lx2 = cx + w * 0.55
-  for (let i = 0; i < 3; i++) {
-    const ly = cy - h * 0.45 + i * h * 0.45
-    ctx.beginPath()
-    ctx.moveTo(lx1, ly)
-    ctx.lineTo(lx2, ly)
-    ctx.stroke()
-  }
+function drawEditIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
+  // Pencil icon
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.rotate(-Math.PI / 4)
+  // Pencil body
+  const bw = s * 0.35, bh = s * 1.1
+  ctx.strokeRect(-bw, -bh, bw * 2, bh * 1.8)
+  // Pencil tip
+  ctx.beginPath()
+  ctx.moveTo(-bw, bh * 0.8)
+  ctx.lineTo(0, bh * 1.15)
+  ctx.lineTo(bw, bh * 0.8)
+  ctx.closePath()
+  ctx.fill()
+  ctx.restore()
 }
 
 function drawNavigateIcon(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number) {
@@ -501,9 +505,11 @@ function handleNodeClick(node: any, event: MouseEvent) {
       ringNodeId = null
       if (seg.id === 'expand') {
         expandNode(node.id)
-      } else if (seg.id === 'detail') {
+      } else if (seg.id === 'edit') {
         const nd = allNodes.get(node.id)
-        if (nd) selectedNode.value = nd
+        if (nd) {
+          emit('edit', nd.collection, nd.id)
+        }
       } else if (seg.id === 'navigate') {
         const nd = allNodes.get(node.id)
         if (nd) {
@@ -531,8 +537,10 @@ function handleNodeClick(node: any, event: MouseEvent) {
     return
   }
 
-  // ── Single click → open ring menu on this node ──
+  // ── Single click → show detail panel + open ring menu ──
   lastClickId = node.id
+  const nd = allNodes.get(node.id)
+  if (nd) selectedNode.value = nd
   clickTimer = setTimeout(() => {
     clickTimer = null
     ringNodeId = node.id
