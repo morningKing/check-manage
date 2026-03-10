@@ -488,6 +488,62 @@
             </el-form-item>
           </div>
         </el-form-item>
+
+        <!-- 工作流配置（仅 select 类型显示） -->
+        <el-form-item
+          v-if="showWorkflowConfig"
+          label="工作流"
+        >
+          <div class="workflow-config">
+            <el-switch
+              v-model="workflowEnabled"
+              active-text="启用工作流"
+              inactive-text=""
+            />
+
+            <template v-if="workflowEnabled">
+              <div class="workflow-transitions">
+                <div
+                  v-for="(t, tIdx) in workflowTransitions"
+                  :key="tIdx"
+                  class="transition-row"
+                >
+                  <el-select v-model="t.from" placeholder="源状态" style="width: 100px" size="small">
+                    <el-option label="任意(*)" value="*" />
+                    <el-option
+                      v-for="opt in fieldFormData.options"
+                      :key="String(opt.value)"
+                      :label="opt.label"
+                      :value="String(opt.value)"
+                    />
+                  </el-select>
+                  <span style="margin: 0 4px; color: #909399">&rarr;</span>
+                  <el-select v-model="t.to" placeholder="目标状态" style="width: 100px" size="small">
+                    <el-option
+                      v-for="opt in fieldFormData.options"
+                      :key="String(opt.value)"
+                      :label="opt.label"
+                      :value="String(opt.value)"
+                    />
+                  </el-select>
+                  <el-input v-model="t.label" placeholder="按钮名" style="width: 80px" size="small" />
+                  <el-select v-model="t.roles" multiple placeholder="角色(空=全部)" style="width: 140px" size="small">
+                    <el-option label="管理员" value="admin" />
+                    <el-option label="开发者" value="developer" />
+                    <el-option label="访客" value="guest" />
+                  </el-select>
+                  <el-button type="danger" link size="small" @click="workflowTransitions.splice(tIdx, 1)">
+                    <el-icon><Delete /></el-icon>
+                  </el-button>
+                </div>
+                <el-button type="primary" link size="small" @click="addWorkflowTransition">
+                  <el-icon><Plus /></el-icon>
+                  添加转换规则
+                </el-button>
+              </div>
+            </template>
+          </div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -625,6 +681,17 @@ const showSequenceConfig = computed(() => {
 const showQuoteConfig = computed(() => {
   return fieldFormData.value.controlType === 'quoteSelect'
 })
+
+const showWorkflowConfig = computed(() => {
+  return fieldFormData.value.controlType === 'select'
+})
+
+const workflowEnabled = ref(false)
+const workflowTransitions = ref<Array<{ from: string; to: string; label: string; roles: string[] }>>([])
+
+function addWorkflowTransition() {
+  workflowTransitions.value.push({ from: '*', to: '', label: '', roles: [] })
+}
 
 const sequencePreview = computed(() => {
   const cfg = fieldFormData.value.sequenceConfig
@@ -807,6 +874,8 @@ function handleOptionsCollectionChange(): void {
 function handleAddField(): void {
   editingIndex.value = -1
   fieldFormData.value = createEmptyFieldFormData(localFields.value.length + 1)
+  workflowEnabled.value = false
+  workflowTransitions.value = []
   editDialogVisible.value = true
 }
 
@@ -842,6 +911,12 @@ function handleEditField(field: FieldConfig, index: number): void {
       ? { ...field.quoteConfig }
       : { targetCollection: '', displayField: '' }
   }
+  // Load workflow config
+  const wf = field.workflowConfig
+  workflowEnabled.value = wf?.enabled || false
+  workflowTransitions.value = wf?.transitions
+    ? wf.transitions.map(t => ({ from: t.from, to: t.to, label: t.label, roles: t.roles || [] }))
+    : []
   editDialogVisible.value = true
 }
 
@@ -878,7 +953,20 @@ async function handleSaveField(): Promise<void> {
     isPrimaryKey: fieldFormData.value.isPrimaryKey || undefined,
     referenceConfig: showReferenceConfig.value ? fieldFormData.value.referenceConfig : undefined,
     sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined,
-    quoteConfig: showQuoteConfig.value ? fieldFormData.value.quoteConfig : undefined
+    quoteConfig: showQuoteConfig.value ? fieldFormData.value.quoteConfig : undefined,
+    workflowConfig: showWorkflowConfig.value && workflowEnabled.value
+      ? {
+          enabled: true,
+          transitions: workflowTransitions.value
+            .filter(t => t.from && t.to)
+            .map(t => ({
+              from: t.from,
+              to: t.to,
+              label: t.label || `${t.from}→${t.to}`,
+              roles: t.roles.length > 0 ? t.roles : undefined,
+            })),
+        }
+      : undefined
   }
 
   if (editingIndex.value === -1) {
@@ -1092,5 +1180,21 @@ watch(
   border-radius: 4px;
   font-size: 13px;
   color: #606266;
+}
+
+.workflow-config {
+  width: 100%;
+}
+
+.workflow-transitions {
+  margin-top: 8px;
+}
+
+.transition-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
 }
 </style>

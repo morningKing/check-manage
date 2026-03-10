@@ -152,6 +152,24 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'Search',
         },
       },
+      {
+        path: 'admin/trigger-rules',
+        name: 'TriggerRuleManager',
+        component: () => import('@/views/admin/TriggerRuleManager.vue'),
+        meta: {
+          title: '联动规则',
+          icon: 'Connection',
+        },
+      },
+      {
+        path: 'dashboard/:id?',
+        name: 'Dashboard',
+        component: () => import('@/views/dashboard/DashboardView.vue'),
+        meta: {
+          title: '仪表盘',
+          icon: 'DataLine',
+        },
+      },
     ],
   },
   // 404 页面

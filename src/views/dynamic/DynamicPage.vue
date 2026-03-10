@@ -23,63 +23,47 @@
         </span>
       </div>
       <div class="page-actions">
+        <el-radio-group v-if="hasKanbanConfig" v-model="viewMode" size="small" class="view-toggle">
+          <el-radio-button value="table"><el-icon><Grid /></el-icon></el-radio-button>
+          <el-radio-button value="kanban"><el-icon><Operation /></el-icon></el-radio-button>
+        </el-radio-group>
         <el-button v-if="!isGuest" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
           新增
-        </el-button>
-        <el-dropdown v-if="!isGuest" @command="handleImportCommand" class="import-dropdown">
-          <el-button type="success">
-            <el-icon><Upload /></el-icon>
-            导入<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-          </el-button>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="template">下载导入模板</el-dropdown-item>
-              <el-dropdown-item command="import">导入数据</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <el-dropdown
-          v-if="boundExportScripts.length > 0"
-          split-button
-          type="warning"
-          @click="handleExport"
-          @command="handleExportCommand"
-        >
-          <el-icon><Download /></el-icon> 导出
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="excel">导出 Excel</el-dropdown-item>
-              <el-dropdown-item divided v-for="s in boundExportScripts" :key="s.id" :command="s.id">
-                {{ s.name }} ({{ s.outputFormat }})
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <el-button v-else type="warning" @click="handleExport">
-          <el-icon><Download /></el-icon>
-          导出
         </el-button>
         <el-button @click="handleRefresh">
           <el-icon><Refresh /></el-icon>
           刷新
         </el-button>
-        <el-button
-          v-if="isAdmin"
-          @click="diffDialogVisible = true"
-        >
-          <el-icon><DCaret /></el-icon>
-          数据对比
-        </el-button>
-        <el-button
-          v-if="isAdmin"
-          type="danger"
-          :disabled="selectedRows.length === 0"
-          @click="handleBatchDeleteConfirm"
-        >
-          <el-icon><Delete /></el-icon>
-          批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
-        </el-button>
+        <el-dropdown @command="handleMoreCommand" trigger="click">
+          <el-button>
+            更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="export" :icon="Download">导出 Excel</el-dropdown-item>
+              <el-dropdown-item
+                v-for="s in boundExportScripts"
+                :key="s.id"
+                :command="'script:' + s.id"
+                :icon="Download"
+              >
+                {{ s.name }} ({{ s.outputFormat }})
+              </el-dropdown-item>
+              <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
+              <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" divided command="diff" :icon="DCaret">数据对比</el-dropdown-item>
+              <el-dropdown-item
+                v-if="isAdmin"
+                command="batchDelete"
+                :icon="Delete"
+                :disabled="selectedRows.length === 0"
+              >
+                批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </div>
 
@@ -148,7 +132,7 @@
     </div>
 
     <!-- 数据表格 -->
-    <el-card class="table-card">
+    <el-card v-if="viewMode === 'table'" class="table-card">
       <DataTable
         ref="dataTableRef"
         :data="paginatedData"
@@ -202,6 +186,23 @@
           </el-button>
         </template>
       </DataTable>
+    </el-card>
+
+    <!-- 看板视图 -->
+    <el-card v-if="viewMode === 'kanban' && kanbanConfig" class="table-card">
+      <KanbanBoard
+        :data="filteredData"
+        :group-field="kanbanConfig.groupField"
+        :group-options="kanbanGroupOptions"
+        :card-title="kanbanConfig.cardTitle"
+        :card-fields="kanbanConfig.cardFields || []"
+        :fields="pageFields"
+        :column-order="kanbanConfig.columnOrder"
+        :card-color-field="kanbanConfig.cardColorField"
+        :search-keyword="searchKeyword"
+        @card-move="handleKanbanCardMove"
+        @card-click="handleView"
+      />
     </el-card>
 
     <!-- 新增/编辑对话框 -->
@@ -348,14 +349,34 @@
           </template>
         </el-descriptions-item>
       </el-descriptions>
+
+      <!-- 评论/变更历史 -->
+      <el-divider content-position="left">评论 / 变更历史</el-divider>
+      <RecordTimeline
+        v-if="viewDialogVisible && viewRecord.id"
+        :collection="collection"
+        :record-id="viewRecord.id"
+      />
+
       <template #footer>
-        <el-button @click="viewDialogVisible = false">关闭</el-button>
-        <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
-          关系图谱
-        </el-button>
-        <el-button v-if="!isGuest" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
-          编辑
-        </el-button>
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+          <WorkflowActions
+            v-if="!isGuest"
+            :record="viewRecord"
+            :fields="pageFields"
+            @transition="handleWorkflowTransition"
+          />
+          <span v-else></span>
+          <div>
+            <el-button @click="viewDialogVisible = false">关闭</el-button>
+            <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
+              关系图谱
+            </el-button>
+            <el-button v-if="!isGuest" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
+              编辑
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -455,15 +476,15 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
-import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog } from '@/components/common'
+import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption } from '@/types'
 
 // ==================== Props ====================
 
@@ -625,6 +646,11 @@ const graphDialogVisible = ref(false)
 const graphRecordId = ref('')
 
 /**
+ * 视图模式（table / kanban）
+ */
+const viewMode = ref<'table' | 'kanban'>('table')
+
+/**
  * 分页状态
  */
 const currentPage = ref(1)
@@ -654,6 +680,23 @@ const pageConfig = computed<PageConfig | undefined>(() => {
  */
 const pageFields = computed<FieldConfig[]>(() => {
   return pageConfigStore.getPageFields(pageId.value)
+})
+
+/**
+ * 看板配置
+ */
+const kanbanConfig = computed<KanbanConfig | undefined>(() => {
+  return pageConfig.value?.viewConfig?.kanban
+})
+
+const hasKanbanConfig = computed(() => {
+  return !!kanbanConfig.value?.groupField
+})
+
+const kanbanGroupOptions = computed<FieldOption[]>(() => {
+  if (!kanbanConfig.value) return []
+  const groupFieldConfig = pageFields.value.find(f => f.fieldName === kanbanConfig.value!.groupField)
+  return groupFieldConfig?.options || []
 })
 
 /**
@@ -1043,6 +1086,74 @@ function handleView(row: DynamicRecord): void {
 }
 
 /**
+ * 处理工作流状态转换（从查看弹窗中的快捷按钮）
+ */
+async function handleWorkflowTransition(payload: { field: string; from: string; to: string }): Promise<void> {
+  const record = viewRecord.value
+  if (!record?.id) return
+  try {
+    const updateData: Record<string, any> = { ...record }
+    updateData[payload.field] = payload.to
+    delete updateData.id
+    delete updateData.createdAt
+    delete updateData.updatedAt
+    for (const key of Object.keys(updateData)) {
+      if (key.startsWith('_rel_') || key.startsWith('_ref_') || key.startsWith('_quote_')) {
+        delete updateData[key]
+      }
+    }
+    await pageConfigStore.updatePageData(pageId.value, record.id, updateData)
+    ElMessage.success('状态已更新')
+    // Update local state
+    const row = tableData.value.find(r => r.id === record.id)
+    if (row) {
+      row[payload.field] = payload.to
+      tableData.value = [...tableData.value]
+    }
+    viewRecord.value = { ...viewRecord.value, [payload.field]: payload.to }
+  } catch (error: any) {
+    const resp = error.response?.data
+    ElMessage.error(resp?.error || '状态更新失败')
+  }
+}
+
+/**
+ * 处理看板卡片拖拽移动
+ */
+async function handleKanbanCardMove(recordId: string, newGroupValue: string): Promise<void> {
+  if (!kanbanConfig.value) return
+  const record = tableData.value.find(r => r.id === recordId)
+  if (!record) return
+  try {
+    const updateData: Record<string, any> = { ...record }
+    updateData[kanbanConfig.value.groupField] = newGroupValue
+    // Strip internal fields
+    delete updateData.id
+    delete updateData.createdAt
+    delete updateData.updatedAt
+    for (const key of Object.keys(updateData)) {
+      if (key.startsWith('_rel_') || key.startsWith('_ref_') || key.startsWith('_quote_')) {
+        delete updateData[key]
+      }
+    }
+    await pageConfigStore.updatePageData(pageId.value, recordId, updateData)
+    // Update local data
+    record[kanbanConfig.value.groupField] = newGroupValue
+    tableData.value = [...tableData.value]
+    ElMessage.success('状态已更新')
+  } catch (error: any) {
+    const resp = error.response?.data
+    if (resp?.error) {
+      ElMessage.error(resp.error)
+    } else {
+      ElMessage.error('状态更新失败')
+    }
+    // Reload to revert kanban state
+    await loadPageData()
+  }
+}
+
+/**
  * 处理新增
  */
 function handleAdd(): void {
@@ -1288,6 +1399,25 @@ function handleImportCommand(command: string): void {
     handleDownloadTemplate()
   } else if (command === 'import') {
     fileInputRef.value?.click()
+  }
+}
+
+/**
+ * 处理「更多」下拉菜单命令
+ */
+function handleMoreCommand(command: string): void {
+  if (command === 'export') {
+    handleExport()
+  } else if (command.startsWith('script:')) {
+    handleExportCommand(command.slice(7))
+  } else if (command === 'import') {
+    handleImportCommand('import')
+  } else if (command === 'template') {
+    handleImportCommand('template')
+  } else if (command === 'diff') {
+    diffDialogVisible.value = true
+  } else if (command === 'batchDelete') {
+    handleBatchDeleteConfirm()
   }
 }
 
@@ -1626,6 +1756,8 @@ watch(pageId, () => {
   queryMode.value = false
   activeMongoQuery.value = null
   mongoQueryText.value = ''
+  // Set default view mode from config
+  viewMode.value = pageConfig.value?.viewConfig?.defaultView || 'table'
 })
 
 // ==================== 生命周期 ====================
@@ -1675,6 +1807,10 @@ onActivated(async () => {
     display: flex;
     gap: 8px;
     align-items: center;
+
+    .view-toggle {
+      margin-right: 8px;
+    }
   }
 }
 

@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, write_required
@@ -10,7 +10,7 @@ import json
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules'}
 
 
 def format_ts(dt):
@@ -261,6 +261,16 @@ def create_item(collection):
     record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
                   f'新增{page_name}「{record_name}」')
+    # Fire cross-collection triggers
+    try:
+        from utils.trigger_engine import fire_triggers
+        with get_db() as tconn:
+            tcur = tconn.cursor()
+            user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+            fire_triggers('create', collection, rid, None, data,
+                          user.get('username', ''), tcur)
+    except Exception:
+        pass
     body['_version'] = 1
     body.pop('_relations', None)
     return jsonify(body), 201
@@ -317,6 +327,22 @@ def update_item(collection, item_id):
                 "_version": db_version,
             }), 409
         new_version = db_version + 1
+        # Workflow validation: check status field transitions
+        from flask import g as flask_g
+        from utils.workflow import validate_transition, execute_actions
+        user_role = getattr(flask_g, 'current_user', {}).get('role', 'guest') if hasattr(flask_g, 'current_user') else 'guest'
+        for field_cfg in (fields or []):
+            wf = field_cfg.get('workflowConfig')
+            if wf and wf.get('enabled') and field_cfg['fieldName'] in data:
+                old_val = old_data.get(field_cfg['fieldName'])
+                new_val = data[field_cfg['fieldName']]
+                if old_val != new_val and old_val is not None:
+                    allowed, error, actions = validate_transition(
+                        fields, field_cfg['fieldName'], old_val, new_val, data, user_role
+                    )
+                    if not allowed:
+                        return jsonify({"error": error}), 400
+                    execute_actions(actions, data, collection, item_id, cur)
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
@@ -354,14 +380,49 @@ def update_item(collection, item_id):
     label_map = get_field_label_map(fields)
     record_name = pick_display_name(data, fields) or pick_display_name(old_data, fields) or item_id
     changed_labels = []
+    field_changes = []
     for key, new_val in data.items():
         if key in label_map and old_data.get(key) != new_val:
             changed_labels.append(label_map[key])
+            field_changes.append({
+                'field': key,
+                'label': label_map[key],
+                'from': old_data.get(key),
+                'to': new_val,
+            })
     if changed_labels:
         desc = f'修改{page_name}「{record_name}」的 {", ".join(changed_labels)}'
     else:
         desc = f'修改{page_name}「{record_name}」'
-    log_operation('update', 'dynamic_data', item_id, record_name, desc)
+    log_operation('update', 'dynamic_data', item_id, record_name, desc,
+                  field_changes=field_changes if field_changes else None)
+    # Notify on status field changes
+    try:
+        from utils.notifier import notify_status_change
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        operator = user.get('username', '')
+        for fc in field_changes:
+            for field_cfg in (fields or []):
+                if field_cfg['fieldName'] == fc['field'] and field_cfg.get('controlType') == 'select':
+                    wf = field_cfg.get('workflowConfig')
+                    if wf and wf.get('enabled'):
+                        notify_status_change(
+                            collection, item_id,
+                            fc['label'], fc['from'], fc['to'], operator
+                        )
+                    break
+    except Exception:
+        pass
+    # Fire cross-collection triggers
+    try:
+        from utils.trigger_engine import fire_triggers
+        with get_db() as tconn:
+            tcur = tconn.cursor()
+            user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+            fire_triggers('update', collection, item_id, old_data, data,
+                          user.get('username', ''), tcur)
+    except Exception:
+        pass
     return jsonify(body)
 
 

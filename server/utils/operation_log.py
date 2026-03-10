@@ -45,7 +45,7 @@ def get_field_label_map(fields):
     return {f['fieldName']: f.get('label', f['fieldName']) for f in fields}
 
 
-def log_operation(action, target_type, target_id, target_name, description):
+def log_operation(action, target_type, target_id, target_name, description, field_changes=None):
     """
     Record an operation log entry.
 
@@ -55,6 +55,7 @@ def log_operation(action, target_type, target_id, target_name, description):
         target_id:    ID of the affected record (str or None)
         target_name:  Human-readable name of the target (str or None)
         description:  Chinese human-readable description
+        field_changes: Optional list of {field, label, from, to} dicts
     """
     try:
         user = getattr(g, 'current_user', None)
@@ -73,15 +74,17 @@ def log_operation(action, target_type, target_id, target_name, description):
             raw_desc = request.headers.get('X-Batch-Desc') or None
             batch_desc = unquote(raw_desc) if raw_desc else None
 
+        import psycopg2.extras
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
                 'INSERT INTO operation_logs '
                 '(id, action, target_type, target_id, target_name, description, '
-                ' operator_id, operator_name, operator_role, batch_id, batch_desc) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                ' operator_id, operator_name, operator_role, batch_id, batch_desc, field_changes) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (log_id, action, target_type, target_id, target_name, description,
-                 operator_id, operator_name, operator_role, batch_id, batch_desc),
+                 operator_id, operator_name, operator_role, batch_id, batch_desc,
+                 psycopg2.extras.Json(field_changes) if field_changes else None),
             )
     except Exception:
         pass

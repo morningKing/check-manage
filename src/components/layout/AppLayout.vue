@@ -44,6 +44,7 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <NotificationBell />
           <el-dropdown @command="handleUserCommand">
             <span class="user-info">
               <el-icon><UserIcon /></el-icon>
@@ -112,6 +113,7 @@ import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
 import ContentArea from './ContentArea.vue'
+import { NotificationBell } from '@/components/common'
 
 // ==================== Store ====================
 
@@ -339,6 +341,10 @@ onMounted(async () => {
   }
 
   .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
     .user-info {
       display: flex;
       align-items: center;

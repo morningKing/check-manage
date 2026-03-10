@@ -19,6 +19,19 @@ import type { FieldConfig } from './field'
  * @property createdAt - 创建时间
  * @property updatedAt - 更新时间
  */
+export interface KanbanConfig {
+  groupField: string
+  cardTitle: string
+  cardFields: string[]
+  columnOrder?: string[]
+  cardColorField?: string
+}
+
+export interface ViewConfig {
+  defaultView?: 'table' | 'kanban'
+  kanban?: KanbanConfig
+}
+
 export interface PageConfig {
   id: string
   name: string
@@ -30,6 +43,7 @@ export interface PageConfig {
   apiPublic?: boolean
   apiWritable?: boolean
   validationScript?: string
+  viewConfig?: ViewConfig
   createdAt: string
   updatedAt: string
 }
@@ -49,6 +63,7 @@ export interface PageFormData {
   apiPublic?: boolean
   apiWritable?: boolean
   validationScript?: string
+  viewConfig?: ViewConfig
 }
 
 /**
@@ -66,6 +81,7 @@ export function createEmptyPageFormData(): PageFormData {
     apiPublic: false,
     apiWritable: false,
     validationScript: '',
+    viewConfig: {},
   }
 }
 

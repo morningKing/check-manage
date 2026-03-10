@@ -401,6 +401,167 @@ def init_db():
             conn.commit()
             print("Added version and updated_at columns to dynamic_data table.")
 
+        # Migration: add view_config column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'view_config'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN view_config JSONB DEFAULT '{}'::jsonb")
+            conn.commit()
+            print("Added view_config column to page_configs table.")
+
+        # Migration: add field_changes column to operation_logs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'operation_logs' AND column_name = 'field_changes'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE operation_logs ADD COLUMN field_changes JSONB")
+            conn.commit()
+            print("Added field_changes column to operation_logs table.")
+
+        # Migration: create record_comments table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'record_comments'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE record_comments (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    collection      VARCHAR(200) NOT NULL,
+                    record_id       VARCHAR(100) NOT NULL,
+                    content         TEXT NOT NULL,
+                    mentions        JSONB DEFAULT '[]'::jsonb,
+                    author_id       VARCHAR(100) NOT NULL,
+                    author_name     VARCHAR(200) NOT NULL,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_comments_record ON record_comments(collection, record_id);
+                CREATE INDEX idx_comments_created ON record_comments(created_at DESC);
+            """)
+            conn.commit()
+            print("Created record_comments table.")
+
+        # Migration: create dashboards table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'dashboards'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE dashboards (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    name            VARCHAR(200) NOT NULL,
+                    description     TEXT,
+                    layout          JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    owner_id        VARCHAR(100),
+                    is_global       BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            conn.commit()
+            print("Created dashboards table.")
+
+        # Migration: create notifications table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'notifications'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE notifications (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    user_id         VARCHAR(100) NOT NULL,
+                    type            VARCHAR(50) NOT NULL,
+                    title           VARCHAR(500) NOT NULL,
+                    content         TEXT,
+                    source_collection VARCHAR(200),
+                    source_record_id  VARCHAR(100),
+                    is_read         BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_notifications_user ON notifications(user_id, is_read, created_at DESC);
+            """)
+            conn.commit()
+            print("Created notifications table.")
+
+        # Migration: create reminders table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'reminders'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE reminders (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    collection      VARCHAR(200) NOT NULL,
+                    record_id       VARCHAR(100) NOT NULL,
+                    user_id         VARCHAR(100) NOT NULL,
+                    remind_at       TIMESTAMPTZ NOT NULL,
+                    message         VARCHAR(500),
+                    is_sent         BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_reminders_pending ON reminders(is_sent, remind_at);
+            """)
+            conn.commit()
+            print("Created reminders table.")
+
+        # Migration: create trigger_rules table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'trigger_rules'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE trigger_rules (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    name            VARCHAR(200) NOT NULL,
+                    description     TEXT,
+                    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+                    source_collection VARCHAR(200) NOT NULL,
+                    trigger_event   VARCHAR(50) NOT NULL,
+                    trigger_condition JSONB DEFAULT '{}'::jsonb,
+                    target_collection VARCHAR(200) NOT NULL,
+                    action_type     VARCHAR(50) NOT NULL,
+                    action_config   JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    execution_order INTEGER DEFAULT 0,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_trigger_rules_source ON trigger_rules(source_collection, enabled);
+            """)
+            conn.commit()
+            print("Created trigger_rules table.")
+
+        # Migration: create trigger_logs table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'trigger_logs'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE trigger_logs (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    rule_id         VARCHAR(100) NOT NULL,
+                    rule_name       VARCHAR(200),
+                    source_collection VARCHAR(200),
+                    source_record_id  VARCHAR(100),
+                    target_collection VARCHAR(200),
+                    target_record_id  VARCHAR(100),
+                    status          VARCHAR(50) NOT NULL,
+                    error_message   TEXT,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_trigger_logs_rule ON trigger_logs(rule_id, created_at DESC);
+            """)
+            conn.commit()
+            print("Created trigger_logs table.")
+
         # Seed menus (insert only if not exists)
         menus_inserted = 0
         for m in MENUS:

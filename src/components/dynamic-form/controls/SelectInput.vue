@@ -23,6 +23,7 @@
       :key="String(option.value)"
       :label="option.label"
       :value="option.value"
+      :disabled="isOptionDisabled(option)"
     />
   </el-select>
   <!-- 动态/大量选项使用 el-select-v2（虚拟滚动，避免大量 DOM 导致页面卡死） -->
@@ -73,6 +74,29 @@ const selectValue = computed({
 const v2Options = computed(() =>
   options.value.map((o) => ({ label: String(o.label), value: o.value }))
 )
+
+/**
+ * 工作流约束：计算当前状态允许转换到的目标值
+ * 如果字段未启用工作流，返回 null（不限制）
+ */
+const allowedTargets = computed<Set<string> | null>(() => {
+  const wf = props.field.workflowConfig
+  if (!wf?.enabled || !wf.transitions?.length) return null
+  const currentVal = String(props.modelValue ?? '')
+  const targets = new Set<string>()
+  targets.add(currentVal) // Always allow keeping current value
+  for (const t of wf.transitions) {
+    if (t.from === '*' || t.from === currentVal) {
+      targets.add(t.to)
+    }
+  }
+  return targets
+})
+
+function isOptionDisabled(option: FieldOption): boolean {
+  if (!allowedTargets.value) return false
+  return !allowedTargets.value.has(String(option.value))
+}
 
 // ==================== 方法 ====================
 

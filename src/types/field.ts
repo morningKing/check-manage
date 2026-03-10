@@ -164,6 +164,34 @@ export interface ValidationRule {
  * @property hidden - 是否隐藏
  * @property width - 字段宽度（如 '100%', '50%'）
  */
+export interface WorkflowCondition {
+  field: string
+  rule: 'notEmpty' | 'equals' | 'notEquals'
+  value?: any
+  message: string
+}
+
+export interface WorkflowAction {
+  type: 'setField' | 'runScript'
+  field?: string
+  value?: string
+  scriptId?: string
+}
+
+export interface WorkflowTransition {
+  from: string
+  to: string
+  label: string
+  roles?: string[]
+  conditions?: WorkflowCondition[]
+  actions?: WorkflowAction[]
+}
+
+export interface WorkflowConfig {
+  enabled: boolean
+  transitions: WorkflowTransition[]
+}
+
 export interface FieldConfig {
   id: string
   label: string
@@ -184,6 +212,7 @@ export interface FieldConfig {
   referenceConfig?: ReferenceConfig
   sequenceConfig?: SequenceConfig
   quoteConfig?: QuoteConfig
+  workflowConfig?: WorkflowConfig
 }
 
 /**
@@ -207,6 +236,7 @@ export interface FieldFormData {
   referenceConfig?: ReferenceConfig
   sequenceConfig?: SequenceConfig
   quoteConfig?: QuoteConfig
+  workflowConfig?: WorkflowConfig
 }
 
 /**

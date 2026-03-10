@@ -31,6 +31,7 @@ def row_to_dict(row):
         'apiPublic': row[9] if len(row) > 9 else False,
         'validationScript': row[10] if len(row) > 10 else None,
         'apiWritable': row[11] if len(row) > 11 else False,
+        'viewConfig': row[12] if len(row) > 12 else {},
     }
 
 
@@ -39,7 +40,7 @@ def row_to_dict(row):
 def list_page_configs():
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable FROM page_configs ORDER BY created_at')
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable, view_config FROM page_configs ORDER BY created_at')
         rows = cur.fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -49,7 +50,7 @@ def list_page_configs():
 def get_page_config(config_id):
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable FROM page_configs WHERE id = %s', (config_id,))
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable, view_config FROM page_configs WHERE id = %s', (config_id,))
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404
@@ -109,6 +110,9 @@ def update_page_config(config_id):
         if 'apiWritable' in body:
             sets.append('api_writable=%s')
             params.append(body['apiWritable'])
+        if 'viewConfig' in body:
+            sets.append('view_config=%s')
+            params.append(psycopg2.extras.Json(body['viewConfig']))
         if 'updatedAt' in body:
             sets.append('updated_at=%s')
             params.append(body['updatedAt'])
@@ -118,7 +122,7 @@ def update_page_config(config_id):
             cur.execute(f'UPDATE page_configs SET {", ".join(sets)} WHERE id=%s', params)
 
         # Return full record
-        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable FROM page_configs WHERE id = %s', (config_id,))
+        cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable, view_config FROM page_configs WHERE id = %s', (config_id,))
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404

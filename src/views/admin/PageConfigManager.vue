@@ -176,6 +176,61 @@
                 </el-select>
               </el-form-item>
 
+              <el-divider content-position="left">看板视图配置</el-divider>
+
+              <el-form-item label="默认视图">
+                <el-select v-model="kanbanDefaultView" placeholder="表格" style="width: 200px">
+                  <el-option label="表格视图" value="table" />
+                  <el-option label="看板视图" value="kanban" />
+                </el-select>
+              </el-form-item>
+
+              <el-form-item label="分组字段">
+                <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
+                  <el-option
+                    v-for="f in selectTypeFields"
+                    :key="f.fieldName"
+                    :label="f.label"
+                    :value="f.fieldName"
+                  />
+                </el-select>
+              </el-form-item>
+
+              <template v-if="kanbanGroupField">
+                <el-form-item label="卡片标题">
+                  <el-select v-model="kanbanCardTitle" placeholder="选择标题字段" style="width: 100%">
+                    <el-option
+                      v-for="f in currentFields"
+                      :key="f.fieldName"
+                      :label="f.label"
+                      :value="f.fieldName"
+                    />
+                  </el-select>
+                </el-form-item>
+
+                <el-form-item label="卡片摘要">
+                  <el-select v-model="kanbanCardFields" multiple placeholder="选择显示字段" style="width: 100%">
+                    <el-option
+                      v-for="f in currentFields"
+                      :key="f.fieldName"
+                      :label="f.label"
+                      :value="f.fieldName"
+                    />
+                  </el-select>
+                </el-form-item>
+
+                <el-form-item label="颜色字段">
+                  <el-select v-model="kanbanColorField" clearable placeholder="可选：按此字段着色" style="width: 100%">
+                    <el-option
+                      v-for="f in selectTypeFields"
+                      :key="f.fieldName"
+                      :label="f.label"
+                      :value="f.fieldName"
+                    />
+                  </el-select>
+                </el-form-item>
+              </template>
+
               <el-form-item>
                 <el-button
                   type="primary"
@@ -349,6 +404,15 @@ const allExportScripts = ref<ExportScript[]>([])
  */
 const allValidationScripts = ref<ValidationScript[]>([])
 
+/**
+ * 看板配置响应式状态
+ */
+const kanbanDefaultView = ref<'table' | 'kanban'>('table')
+const kanbanGroupField = ref('')
+const kanbanCardTitle = ref('')
+const kanbanCardFields = ref<string[]>([])
+const kanbanColorField = ref('')
+
 // ==================== 计算属性（脚本筛选） ====================
 
 const pageExportScripts = computed(() =>
@@ -357,6 +421,10 @@ const pageExportScripts = computed(() =>
 
 const rowExportScripts = computed(() =>
   allExportScripts.value.filter(s => s.scope === 'row')
+)
+
+const selectTypeFields = computed<FieldConfig[]>(() =>
+  currentFields.value.filter(f => f.controlType === 'select')
 )
 
 // ==================== 常量 ====================
@@ -434,7 +502,15 @@ function handleSelect(config: PageConfig): void {
     apiPublic: config.apiPublic || false,
     apiWritable: config.apiWritable || false,
     validationScript: config.validationScript || '',
+    viewConfig: config.viewConfig || {},
   }
+  // Load kanban config
+  const vc = config.viewConfig || {}
+  kanbanDefaultView.value = vc.defaultView || 'table'
+  kanbanGroupField.value = vc.kanban?.groupField || ''
+  kanbanCardTitle.value = vc.kanban?.cardTitle || ''
+  kanbanCardFields.value = vc.kanban?.cardFields || []
+  kanbanColorField.value = vc.kanban?.cardColorField || ''
 }
 
 /**
@@ -478,6 +554,19 @@ async function handleSavePageInfo(): Promise<void> {
   const valid = await formRef.value?.validate()
   if (!valid || !currentPageId.value) return
 
+  // Build viewConfig from kanban state
+  const viewConfig: Record<string, any> = {
+    defaultView: kanbanDefaultView.value,
+  }
+  if (kanbanGroupField.value) {
+    viewConfig.kanban = {
+      groupField: kanbanGroupField.value,
+      cardTitle: kanbanCardTitle.value,
+      cardFields: kanbanCardFields.value,
+      cardColorField: kanbanColorField.value || undefined,
+    }
+  }
+
   saveLoading.value = true
   try {
     await pageConfigStore.updatePageConfig(currentPageId.value, {
@@ -489,6 +578,7 @@ async function handleSavePageInfo(): Promise<void> {
       apiPublic: formData.value.apiPublic,
       apiWritable: formData.value.apiPublic ? formData.value.apiWritable : false,
       validationScript: formData.value.validationScript || undefined,
+      viewConfig,
       fields: currentFields.value
     })
     ElMessage.success('保存成功')
