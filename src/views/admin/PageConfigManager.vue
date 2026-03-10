@@ -75,181 +75,203 @@
           </template>
 
           <div v-if="showDetail" class="page-detail">
-            <!-- 页面基本信息 -->
-            <el-form
-              ref="formRef"
-              :model="formData"
-              :rules="formRules"
-              label-width="100px"
-              class="page-form"
-            >
-              <el-form-item label="页面名称" prop="name">
-                <el-input
-                  v-model="formData.name"
-                  placeholder="请输入页面名称"
-                  maxlength="50"
-                />
-              </el-form-item>
-
-              <el-form-item label="页面描述" prop="description">
-                <el-input
-                  v-model="formData.description"
-                  type="textarea"
-                  placeholder="请输入页面描述"
-                  :rows="2"
-                />
-              </el-form-item>
-
-              <el-form-item label="API端点" prop="apiEndpoint">
-                <el-input
-                  v-model="formData.apiEndpoint"
-                  placeholder="如：/api/data/inspection-case"
-                />
-              </el-form-item>
-
-              <el-form-item label="导出脚本">
-                <el-select
-                  v-model="formData.exportScripts"
-                  multiple
-                  clearable
-                  placeholder="选择整页导出脚本"
-                  style="width: 100%"
+            <el-tabs v-model="activeTab" type="border-card">
+              <!-- Tab 1: 基本信息 -->
+              <el-tab-pane label="基本信息" name="basic">
+                <el-form
+                  ref="formRef"
+                  :model="formData"
+                  :rules="formRules"
+                  label-width="100px"
+                  class="page-form"
                 >
-                  <el-option
-                    v-for="s in pageExportScripts"
-                    :key="s.id"
-                    :label="`${s.name} (${s.outputFormat})`"
-                    :value="s.id"
-                  />
-                </el-select>
-              </el-form-item>
-
-              <el-form-item label="行级导出">
-                <el-select
-                  v-model="formData.rowExportScripts"
-                  multiple
-                  clearable
-                  placeholder="选择单行导出脚本"
-                  style="width: 100%"
-                >
-                  <el-option
-                    v-for="s in rowExportScripts"
-                    :key="s.id"
-                    :label="`${s.name} (${s.outputFormat})`"
-                    :value="s.id"
-                  />
-                </el-select>
-              </el-form-item>
-
-              <el-form-item label="Open API">
-                <el-switch
-                  v-model="formData.apiPublic"
-                  active-text="公开"
-                  inactive-text="关闭"
-                />
-              </el-form-item>
-
-              <el-form-item label="允许写入" v-if="formData.apiPublic">
-                <el-switch
-                  v-model="formData.apiWritable"
-                  active-text="允许"
-                  inactive-text="只读"
-                />
-                <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                  开启后外部系统可通过 Open API 新增和修改数据
-                </div>
-              </el-form-item>
-
-              <el-form-item label="校验脚本">
-                <el-select
-                  v-model="formData.validationScript"
-                  clearable
-                  placeholder="选择校验脚本（可选）"
-                  style="width: 100%"
-                >
-                  <el-option
-                    v-for="s in allValidationScripts"
-                    :key="s.id"
-                    :label="s.name"
-                    :value="s.id"
-                  />
-                </el-select>
-              </el-form-item>
-
-              <el-divider content-position="left">看板视图配置</el-divider>
-
-              <el-form-item label="默认视图">
-                <el-select v-model="kanbanDefaultView" placeholder="表格" style="width: 200px">
-                  <el-option label="表格视图" value="table" />
-                  <el-option label="看板视图" value="kanban" />
-                </el-select>
-              </el-form-item>
-
-              <el-form-item label="分组字段">
-                <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
-                  <el-option
-                    v-for="f in selectTypeFields"
-                    :key="f.fieldName"
-                    :label="f.label"
-                    :value="f.fieldName"
-                  />
-                </el-select>
-              </el-form-item>
-
-              <template v-if="kanbanGroupField">
-                <el-form-item label="卡片标题">
-                  <el-select v-model="kanbanCardTitle" placeholder="选择标题字段" style="width: 100%">
-                    <el-option
-                      v-for="f in currentFields"
-                      :key="f.fieldName"
-                      :label="f.label"
-                      :value="f.fieldName"
+                  <el-form-item label="页面名称" prop="name">
+                    <el-input
+                      v-model="formData.name"
+                      placeholder="请输入页面名称"
+                      maxlength="50"
                     />
-                  </el-select>
-                </el-form-item>
+                  </el-form-item>
 
-                <el-form-item label="卡片摘要">
-                  <el-select v-model="kanbanCardFields" multiple placeholder="选择显示字段" style="width: 100%">
-                    <el-option
-                      v-for="f in currentFields"
-                      :key="f.fieldName"
-                      :label="f.label"
-                      :value="f.fieldName"
+                  <el-form-item label="页面描述" prop="description">
+                    <el-input
+                      v-model="formData.description"
+                      type="textarea"
+                      placeholder="请输入页面描述"
+                      :rows="2"
                     />
-                  </el-select>
-                </el-form-item>
+                  </el-form-item>
 
-                <el-form-item label="颜色字段">
-                  <el-select v-model="kanbanColorField" clearable placeholder="可选：按此字段着色" style="width: 100%">
-                    <el-option
-                      v-for="f in selectTypeFields"
-                      :key="f.fieldName"
-                      :label="f.label"
-                      :value="f.fieldName"
+                  <el-form-item label="API端点" prop="apiEndpoint">
+                    <el-input
+                      v-model="formData.apiEndpoint"
+                      placeholder="如：/api/data/inspection-case"
                     />
-                  </el-select>
-                </el-form-item>
-              </template>
+                  </el-form-item>
 
-              <el-form-item>
-                <el-button
-                  type="primary"
-                  @click="handleSavePageInfo"
-                  :loading="saveLoading"
-                >
-                  保存基本信息
-                </el-button>
-              </el-form-item>
-            </el-form>
+                  <el-form-item label="导出脚本">
+                    <el-select
+                      v-model="formData.exportScripts"
+                      multiple
+                      clearable
+                      placeholder="选择整页导出脚本"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="s in pageExportScripts"
+                        :key="s.id"
+                        :label="`${s.name} (${s.outputFormat})`"
+                        :value="s.id"
+                      />
+                    </el-select>
+                  </el-form-item>
 
-            <el-divider content-position="left">字段配置</el-divider>
+                  <el-form-item label="行级导出">
+                    <el-select
+                      v-model="formData.rowExportScripts"
+                      multiple
+                      clearable
+                      placeholder="选择单行导出脚本"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="s in rowExportScripts"
+                        :key="s.id"
+                        :label="`${s.name} (${s.outputFormat})`"
+                        :value="s.id"
+                      />
+                    </el-select>
+                  </el-form-item>
 
-            <!-- 字段配置编辑器 -->
-            <FieldConfigEditor
-              :page-id="currentPageId!"
-              :fields="currentFields"
-              @update="handleFieldsUpdate"
-            />
+                  <el-form-item label="Open API">
+                    <el-switch
+                      v-model="formData.apiPublic"
+                      active-text="公开"
+                      inactive-text="关闭"
+                    />
+                  </el-form-item>
+
+                  <el-form-item label="允许写入" v-if="formData.apiPublic">
+                    <el-switch
+                      v-model="formData.apiWritable"
+                      active-text="允许"
+                      inactive-text="只读"
+                    />
+                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      开启后外部系统可通过 Open API 新增和修改数据
+                    </div>
+                  </el-form-item>
+
+                  <el-form-item label="校验脚本">
+                    <el-select
+                      v-model="formData.validationScript"
+                      clearable
+                      placeholder="选择校验脚本（可选）"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="s in allValidationScripts"
+                        :key="s.id"
+                        :label="s.name"
+                        :value="s.id"
+                      />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item>
+                    <el-button
+                      type="primary"
+                      @click="handleSavePageInfo"
+                      :loading="saveLoading"
+                    >
+                      保存
+                    </el-button>
+                  </el-form-item>
+                </el-form>
+              </el-tab-pane>
+
+              <!-- Tab 2: 视图配置 -->
+              <el-tab-pane label="视图配置" name="view">
+                <el-form label-width="100px" class="page-form">
+                  <el-form-item label="默认视图">
+                    <el-select v-model="kanbanDefaultView" placeholder="表格" style="width: 200px">
+                      <el-option label="表格视图" value="table" />
+                      <el-option label="看板视图" value="kanban" />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item label="分组字段">
+                    <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
+                      <el-option
+                        v-for="f in selectTypeFields"
+                        :key="f.fieldName"
+                        :label="f.label"
+                        :value="f.fieldName"
+                      />
+                    </el-select>
+                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      选择一个下拉选择类型的字段作为看板列的分组依据
+                    </div>
+                  </el-form-item>
+
+                  <template v-if="kanbanGroupField">
+                    <el-form-item label="卡片标题">
+                      <el-select v-model="kanbanCardTitle" placeholder="选择标题字段" style="width: 100%">
+                        <el-option
+                          v-for="f in currentFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="卡片摘要">
+                      <el-select v-model="kanbanCardFields" multiple placeholder="选择显示字段" style="width: 100%">
+                        <el-option
+                          v-for="f in currentFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="颜色字段">
+                      <el-select v-model="kanbanColorField" clearable placeholder="可选：按此字段着色" style="width: 100%">
+                        <el-option
+                          v-for="f in selectTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+                  </template>
+
+                  <el-empty v-if="selectTypeFields.length === 0" :image-size="60" description="暂无 select 类型字段，请先在「字段配置」中添加" />
+
+                  <el-form-item>
+                    <el-button
+                      type="primary"
+                      @click="handleSavePageInfo"
+                      :loading="saveLoading"
+                    >
+                      保存
+                    </el-button>
+                  </el-form-item>
+                </el-form>
+              </el-tab-pane>
+
+              <!-- Tab 3: 字段配置 -->
+              <el-tab-pane label="字段配置" name="fields">
+                <FieldConfigEditor
+                  :page-id="currentPageId!"
+                  :fields="currentFields"
+                  @update="handleFieldsUpdate"
+                />
+              </el-tab-pane>
+            </el-tabs>
           </div>
 
           <el-empty v-else description="请选择或新增页面配置" />
@@ -358,6 +380,11 @@ const currentPageId = ref<string | null>(null)
  * 搜索关键词
  */
 const searchKeyword = ref('')
+
+/**
+ * 当前激活的 Tab
+ */
+const activeTab = ref('basic')
 
 /**
  * 页面表单数据
@@ -733,6 +760,10 @@ onActivated(async () => {
 .page-detail {
   .page-form {
     max-width: 600px;
+  }
+
+  :deep(.el-tabs__content) {
+    padding: 16px 8px;
   }
 }
 </style>
