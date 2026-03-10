@@ -95,11 +95,11 @@ watch(
   () => props.modelValue,
   (newValue) => {
     if (newValue) {
-      fileList.value = newValue.map((file) => ({
-        uid: file.uid,
+      fileList.value = newValue.map((file, index) => ({
+        uid: index,
         name: file.name,
         url: file.url,
-        status: 'success'
+        status: 'success' as const
       })) as UploadFile[]
     } else {
       fileList.value = []
@@ -131,7 +131,7 @@ function mockUpload(options: UploadRequestOptions): Promise<void> {
       emit('update:modelValue', [...currentFiles, uploadedFile])
 
       if (options.onSuccess) {
-        options.onSuccess({ url }, file as any)
+        options.onSuccess({ url })
       }
       resolve()
     }, 500)
@@ -177,7 +177,7 @@ function handlePreview(file: UploadFile): void {
  */
 function handleRemove(file: UploadFile): void {
   const currentFiles = props.modelValue || []
-  const updatedFiles = currentFiles.filter((f) => f.uid !== file.uid)
+  const updatedFiles = currentFiles.filter((f) => f.uid !== String(file.uid))
   emit('update:modelValue', updatedFiles)
 }
 </script>

@@ -13,7 +13,6 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import { get, post, del } from '@/utils/request'
-import service from '@/utils/request'
 import {
   getBackups,
   createBackup,
@@ -21,9 +20,6 @@ import {
   restoreBackup,
   getBackupSettings,
   diffBackupCollection,
-  downloadBackup,
-  uploadAndRestore,
-  updateBackupSettings,
 } from '../backup'
 
 const mockGet = vi.mocked(get)

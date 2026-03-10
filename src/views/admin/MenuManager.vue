@@ -36,7 +36,7 @@
             :expand-on-click-node="false"
             @node-click="handleNodeClick"
           >
-            <template #default="{ node, data }">
+            <template #default="{ data }">
               <div class="tree-node">
                 <el-icon v-if="data.icon" class="node-icon">
                   <component :is="data.icon" />
@@ -344,15 +344,6 @@ const formTitle = computed(() => {
   if (isEditMode.value) return '编辑菜单'
   if (isAddingRoot.value) return '新增顶级菜单'
   return '新增子菜单'
-})
-
-/**
- * 父级菜单名称
- */
-const parentMenuName = computed(() => {
-  if (!formData.value.parentId) return '-'
-  const parent = menuStore.getMenuById(formData.value.parentId)
-  return parent?.name || '-'
 })
 
 /**

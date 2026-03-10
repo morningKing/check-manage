@@ -51,7 +51,7 @@
  * - submit: 表单提交
  * - cancel: 取消操作
  */
-import { ref, computed, watch } from 'vue'
+import { ref, watch } from 'vue'
 import type { FieldConfig } from '@/types'
 import FormRenderer from './FormRenderer.vue'
 import { getControlDefaultValue } from './controls'
@@ -106,13 +106,6 @@ const formData = ref<Record<string, any>>({})
 const loading = ref(false)
 
 // ==================== 计算属性 ====================
-
-/**
- * 是否为编辑模式
- */
-const isEditMode = computed(() => {
-  return Object.keys(props.initialData).length > 0
-})
 
 // ==================== 方法 ====================
 

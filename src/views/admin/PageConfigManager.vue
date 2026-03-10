@@ -488,7 +488,7 @@ async function handleSavePageInfo(): Promise<void> {
       rowExportScripts: formData.value.rowExportScripts || [],
       apiPublic: formData.value.apiPublic,
       apiWritable: formData.value.apiPublic ? formData.value.apiWritable : false,
-      validationScript: formData.value.validationScript || null,
+      validationScript: formData.value.validationScript || undefined,
       fields: currentFields.value
     })
     ElMessage.success('保存成功')

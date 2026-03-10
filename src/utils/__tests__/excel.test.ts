@@ -6,7 +6,7 @@ import {
   exportToExcel,
   generateImportTemplate,
 } from '../excel'
-import type { FieldConfig } from '@/types'
+import type { FieldConfig, ControlType } from '@/types'
 
 // Mock xlsx library
 vi.mock('xlsx', () => ({
@@ -75,7 +75,7 @@ describe('Excel Utils', () => {
     it('支持所有可导出类型', () => {
       const exportableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect']
       const fields = exportableTypes.map((type, i) =>
-        makeField({ fieldName: `f${i}`, controlType: type, order: i })
+        makeField({ fieldName: `f${i}`, controlType: type as ControlType, order: i })
       )
 
       const result = getExportableFields(fields)
@@ -435,18 +435,18 @@ describe('Excel Utils', () => {
       const file = new File([''], 'test.xlsx')
 
       // 模拟 FileReader 错误
-      const originalFileReader = global.FileReader
+      const originalFileReader = globalThis.FileReader
       class MockFileReader {
         onerror: (() => void) | null = null
         readAsArrayBuffer() {
           setTimeout(() => this.onerror?.(), 0)
         }
       }
-      global.FileReader = MockFileReader as any
+      globalThis.FileReader = MockFileReader as any
 
       await expect(parseImportFile(file, fields)).rejects.toThrow('文件读取失败')
 
-      global.FileReader = originalFileReader
+      globalThis.FileReader = originalFileReader
     })
   })
 
@@ -611,18 +611,18 @@ describe('Excel Utils', () => {
 
       const file = new File([''], 'test.json')
 
-      const originalFileReader = global.FileReader
+      const originalFileReader = globalThis.FileReader
       class MockFileReader {
         onerror: (() => void) | null = null
         readAsText() {
           setTimeout(() => this.onerror?.(), 0)
         }
       }
-      global.FileReader = MockFileReader as any
+      globalThis.FileReader = MockFileReader as any
 
       await expect(parseJsonImportFile(file, fields)).rejects.toThrow('文件读取失败')
 
-      global.FileReader = originalFileReader
+      globalThis.FileReader = originalFileReader
     })
   })
 })

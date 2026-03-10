@@ -330,8 +330,6 @@ function formatJson() {
 }
 
 function insertField(f: FieldInfo) {
-  // Insert a field reference snippet into the query
-  const snippet = `"${f.label}": `
   // Attempt to parse and insert intelligently
   try {
     const obj = JSON.parse(queryText.value)

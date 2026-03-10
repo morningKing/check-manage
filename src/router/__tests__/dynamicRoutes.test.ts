@@ -2,7 +2,7 @@
  * 动态路由工具单元测试
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { Router, RouteRecordRaw } from 'vue-router'
 import type { MenuItem } from '@/types'
 import {
@@ -28,7 +28,7 @@ function makeMockRouter(): Router {
   const routes: Map<string, RouteRecordRaw> = new Map()
 
   return {
-    addRoute: vi.fn((parentName: string, route: RouteRecordRaw) => {
+    addRoute: vi.fn((_parentName: string, route: RouteRecordRaw) => {
       routes.set(route.name as string, route)
     }),
     removeRoute: vi.fn((name: string) => {

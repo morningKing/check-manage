@@ -14,6 +14,7 @@ import { createPinia } from 'pinia'
 // Element Plus 组件库
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+// @ts-ignore - Element Plus locale module lacks type declaration
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 
 // Element Plus 图标

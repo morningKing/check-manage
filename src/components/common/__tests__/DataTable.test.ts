@@ -3,7 +3,7 @@
  *
  * 测试操作列中「查看」按钮的渲染和事件触发。
  */
-import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import { mount } from '@vue/test-utils'
 import DataTable from '../DataTable.vue'
 import type { FieldConfig } from '@/types'

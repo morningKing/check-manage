@@ -294,7 +294,6 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function fetchPageData(pageId: string, query?: Record<string, any>): Promise<DynamicRecord[]> {
     try {
       // 根据页面配置获取对应的数据端点
-      const config = getPageConfigById.value(pageId)
       // 使用简化的端点名称（从pageId提取）
       const endpoint = pageId.replace('page-', '')
       const qs = query ? `?q=${encodeURIComponent(JSON.stringify(query))}` : ''
@@ -1107,30 +1106,49 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         continue
       }
 
-      const pkToId = new Map<string, string>()
-      const displayToId = new Map<string, string>()
+      const pkToIds = new Map<string, string[]>()
+      const displayToIds = new Map<string, string[]>()
       const idSet = new Set<string>()
       for (const r of targetRecords) {
         idSet.add(r.id)
         if (pkField) {
           const pkVal = r[pkField]
-          if (pkVal) pkToId.set(String(pkVal), r.id)
+          if (pkVal) {
+            const key = String(pkVal)
+            const arr = pkToIds.get(key)
+            if (arr) arr.push(r.id)
+            else pkToIds.set(key, [r.id])
+          }
         }
         if (config.displayField) {
           const displayVal = r[config.displayField]
-          if (displayVal) displayToId.set(String(displayVal), r.id)
+          if (displayVal) {
+            const key = String(displayVal)
+            const arr = displayToIds.get(key)
+            if (arr) arr.push(r.id)
+            else displayToIds.set(key, [r.id])
+          }
         }
       }
 
       for (const record of records) {
         const vals = record[field.fieldName]
         if (!Array.isArray(vals) || vals.length === 0) continue
-        record[field.fieldName] = vals
-          .map((v: string) => {
-            if (idSet.has(v)) return v
-            return pkToId.get(v) || displayToId.get(v) || null
-          })
-          .filter((v: string | null): v is string => v !== null)
+        const seen = new Set<string>()
+        const resolved: string[] = []
+        for (const v of vals) {
+          if (idSet.has(v)) {
+            if (!seen.has(v)) { seen.add(v); resolved.push(v) }
+          } else {
+            const ids = pkToIds.get(v) || displayToIds.get(v)
+            if (ids) {
+              for (const id of ids) {
+                if (!seen.has(id)) { seen.add(id); resolved.push(id) }
+              }
+            }
+          }
+        }
+        record[field.fieldName] = resolved
       }
     }
   }

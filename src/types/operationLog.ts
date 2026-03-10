@@ -1,8 +1,6 @@
 /**
  * 操作日志相关类型定义
  */
-import type { UserRole } from './user'
-
 /**
  * 操作类型
  */

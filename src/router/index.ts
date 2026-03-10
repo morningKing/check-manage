@@ -18,7 +18,7 @@
 
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { generateRoutesFromMenus, addDynamicRoutes, resetRouter } from './dynamicRoutes'
+import { generateRoutesFromMenus, addDynamicRoutes } from './dynamicRoutes'
 
 /**
  * 静态路由配置
@@ -169,7 +169,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: staticRoutes,
   // 滚动行为配置
-  scrollBehavior(to, from, savedPosition) {
+  scrollBehavior(_to, _from, savedPosition) {
     if (savedPosition) {
       return savedPosition
     } else {

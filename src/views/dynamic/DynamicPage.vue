@@ -281,7 +281,7 @@
             <span
               v-else
               class="reference-link"
-              @click="viewDialogVisible = false; handleReferenceClick(viewRecord, field)"
+              @click="viewDialogVisible = false; handleReferenceClick(viewRecord as DynamicRecord, field)"
             >{{ viewRecord[`_ref_${field.fieldName}_display`] || viewRecord[field.fieldName] }}</span>
           </template>
 

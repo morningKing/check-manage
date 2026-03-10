@@ -158,15 +158,13 @@ describe('PageConfig Store — autoSequence', () => {
       })
 
       // 模拟缓存数据
-      store.$patch({
-        pageDataCache: {
-          'page-demo': [
-            { id: 'r1', seqNo: 'IC-001' },
-            { id: 'r2', seqNo: 'IC-005' },
-            { id: 'r3', seqNo: 'IC-003' },
-          ],
-        },
-      })
+      store.pageDataCache = {
+        'page-demo': [
+          { id: 'r1', seqNo: 'IC-001' },
+          { id: 'r2', seqNo: 'IC-005' },
+          { id: 'r3', seqNo: 'IC-003' },
+        ],
+      }
 
       const field = store.getPageFields('page-demo').find(f => f.controlType === 'autoSequence')!
       const val = store.generateNextSequenceValue('page-demo', field)
@@ -188,13 +186,13 @@ describe('PageConfig Store — autoSequence', () => {
             ],
           }),
         ],
-        pageDataCache: {
-          'page-demo': [
-            { id: 'r1', seqNo: 'IC-010' },
-            { id: 'r2', seqNo: 'RM-03' },
-          ],
-        },
       })
+      store.pageDataCache = {
+        'page-demo': [
+          { id: 'r1', seqNo: 'IC-010' },
+          { id: 'r2', seqNo: 'RM-03' },
+        ],
+      }
 
       const field = store.getPageFields('page-demo').find(f => f.controlType === 'autoSequence')!
       const val = store.generateNextSequenceValue('page-demo', field)
@@ -216,12 +214,12 @@ describe('PageConfig Store — autoSequence', () => {
             ],
           }),
         ],
-        pageDataCache: {
-          'page-demo': [
-            { id: 'r1', seqNo: 'T-00042' },
-          ],
-        },
       })
+      store.pageDataCache = {
+        'page-demo': [
+          { id: 'r1', seqNo: 'T-00042' },
+        ],
+      }
 
       const field = store.getPageFields('page-demo').find(f => f.controlType === 'autoSequence')!
       const val = store.generateNextSequenceValue('page-demo', field)
@@ -266,13 +264,13 @@ describe('PageConfig Store — autoSequence', () => {
             ],
           }),
         ],
-        pageDataCache: {
-          'page-demo': [
-            { id: 'r1', seqNo: 'IC-abc' },
-            { id: 'r2', seqNo: 'IC-002' },
-          ],
-        },
       })
+      store.pageDataCache = {
+        'page-demo': [
+          { id: 'r1', seqNo: 'IC-abc' },
+          { id: 'r2', seqNo: 'IC-002' },
+        ],
+      }
 
       const field = store.getPageFields('page-demo').find(f => f.controlType === 'autoSequence')!
       const val = store.generateNextSequenceValue('page-demo', field)
@@ -663,6 +661,119 @@ describe('PageConfig Store — quoteSelect', () => {
     await store.resolveQuoteImportValues('page-test', records)
     // 主键匹配优先
     expect(records[0].quotedCases).toEqual(['case-1'])
+  })
+
+  it('resolveQuoteImportValues 相同 displayField 值匹配所有记录', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    // 三条记录的 caseName 相同
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001', caseName: '同名用例' },
+      { id: 'case-2', caseId: 'IC-002', caseName: '同名用例' },
+      { id: 'case-3', caseId: 'IC-003', caseName: '同名用例' },
+    ])
+
+    const records = [{ quotedCases: ['同名用例'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    // 应匹配所有三条记录
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-2', 'case-3'])
+  })
+
+  it('resolveQuoteImportValues 相同主键值匹配所有记录', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    // 两条记录的 caseId 相同
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-DUP', caseName: '用例A' },
+      { id: 'case-2', caseId: 'IC-DUP', caseName: '用例B' },
+    ])
+
+    const records = [{ quotedCases: ['IC-DUP'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
+  })
+
+  it('resolveQuoteImportValues 重复导入值去重', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1',
+              fieldName: 'quotedCases',
+              controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockResolvedValueOnce([
+      { id: 'case-1', caseId: 'IC-001', caseName: '机房安全检查' },
+      { id: 'case-2', caseId: 'IC-002', caseName: '机房安全检查' },
+    ])
+
+    // 导入值中同名出现两次，解析后应去重，只保留 2 条而非 4 条
+    const records = [{ quotedCases: ['机房安全检查', '机房安全检查'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
   })
 
   it('stripRelationFields 保持 quoteSelect 数组顺序不变', () => {
@@ -1252,7 +1363,7 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     // 当前集合为空（所有数据都是新导入的）
     mockedGet.mockResolvedValueOnce([])
 
-    const records = [
+    const records: Record<string, any>[] = [
       { colA: '1', colB: '2', colC: '' },    // Row 1
       { colA: '2', colB: '4', colC: '1' },   // Row 2: C 引用 Row 1 的 A
     ]
@@ -1295,7 +1406,7 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
 
     mockedGet.mockResolvedValueOnce([])
 
-    const records = [
+    const records: Record<string, any>[] = [
       { colA: '1', colB: '2', colC: '' },
       { colA: '2', colB: '4', colC: '1' },
     ]
@@ -1419,7 +1530,7 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
       { id: 'test-existing', colA: 'existing' },
     ])
 
-    const records = [
+    const records: Record<string, any>[] = [
       { colA: 'new1', colC: 'existing' },   // 引用已有记录
       { colA: 'new2', colC: 'new1' },        // 引用同批新记录
     ]
@@ -1452,14 +1563,14 @@ describe('PageConfig Store — batchDeletePageData', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {
-        'page-test': [
-          { id: 'r1', name: 'Record 1' },
-          { id: 'r2', name: 'Record 2' },
-          { id: 'r3', name: 'Record 3' },
-        ],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [
+        { id: 'r1', name: 'Record 1' },
+        { id: 'r2', name: 'Record 2' },
+        { id: 'r3', name: 'Record 3' },
+      ],
+    }
 
     mockedPost.mockResolvedValueOnce({ deleted: 2, blocked: {} })
 
@@ -1482,14 +1593,14 @@ describe('PageConfig Store — batchDeletePageData', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {
-        'page-test': [
-          { id: 'r1', name: 'Record 1' },
-          { id: 'r2', name: 'Record 2' },
-          { id: 'r3', name: 'Record 3' },
-        ],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [
+        { id: 'r1', name: 'Record 1' },
+        { id: 'r2', name: 'Record 2' },
+        { id: 'r3', name: 'Record 3' },
+      ],
+    }
 
     // r2 被阻止删除（如有关联数据）
     mockedPost.mockResolvedValueOnce({
@@ -1517,10 +1628,10 @@ describe('PageConfig Store — batchDeletePageData', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {
-        'page-test': [{ id: 'r1', name: 'Record 1' }],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [{ id: 'r1', name: 'Record 1' }],
+    }
 
     mockedPost.mockRejectedValueOnce(new Error('删除失败'))
 
@@ -1538,8 +1649,8 @@ describe('PageConfig Store — batchDeletePageData', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {},
     })
+    store.pageDataCache = {}
 
     mockedPost.mockResolvedValueOnce({ deleted: 1, blocked: {} })
 
@@ -1577,12 +1688,12 @@ describe('PageConfig Store — refreshSingleRecord', () => {
           ],
         }),
       ],
-      pageDataCache: {
-        'page-test': [
-          { id: 'r1', name: 'Old Name', relItems: [] },
-        ],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [
+        { id: 'r1', name: 'Old Name', relItems: [] },
+      ],
+    }
 
     // 获取单条记录
     mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'New Name' })
@@ -1617,12 +1728,12 @@ describe('PageConfig Store — refreshSingleRecord', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {
-        'page-test': [
-          { id: 'r1', name: 'Record 1' },
-        ],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [
+        { id: 'r1', name: 'Record 1' },
+      ],
+    }
 
     mockedGet.mockResolvedValueOnce({ id: 'r2', name: 'New Record' })
     mockedGetRecordRelations.mockResolvedValueOnce({})
@@ -1646,10 +1757,10 @@ describe('PageConfig Store — refreshSingleRecord', () => {
           fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })],
         }),
       ],
-      pageDataCache: {
-        'page-test': [{ id: 'r1', name: 'Record 1' }],
-      },
     })
+    store.pageDataCache = {
+      'page-test': [{ id: 'r1', name: 'Record 1' }],
+    }
 
     mockedGet.mockRejectedValueOnce(new Error('记录不存在'))
 
@@ -1679,8 +1790,8 @@ describe('PageConfig Store — refreshSingleRecord', () => {
           ],
         }),
       ],
-      pageDataCache: {},
     })
+    store.pageDataCache = {}
 
     mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test Record' })
     mockedGetRecordRelations.mockRejectedValueOnce(new Error('关联获取失败'))
@@ -1715,8 +1826,8 @@ describe('PageConfig Store — refreshSingleRecord', () => {
           ],
         }),
       ],
-      pageDataCache: {},
     })
+    store.pageDataCache = {}
 
     mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test', templateRef: 'tpl-1' })
     mockedGetRecordRelations.mockResolvedValueOnce({})

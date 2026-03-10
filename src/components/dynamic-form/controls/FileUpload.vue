@@ -43,10 +43,10 @@
  * - 由于没有真实后端，使用自定义上传方法模拟
  * - 文件转换为 Base64 或 ObjectURL 存储
  */
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
-import type { UploadFile, UploadFiles, UploadRequestOptions } from 'element-plus'
+import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -85,11 +85,11 @@ watch(
   () => props.modelValue,
   (newValue) => {
     if (newValue) {
-      fileList.value = newValue.map((file) => ({
-        uid: file.uid,
+      fileList.value = newValue.map((file, index) => ({
+        uid: index,
         name: file.name,
         url: file.url,
-        status: 'success'
+        status: 'success' as const
       })) as UploadFile[]
     } else {
       fileList.value = []
@@ -124,7 +124,7 @@ function mockUpload(options: UploadRequestOptions): Promise<void> {
       emit('update:modelValue', [...currentFiles, uploadedFile])
 
       if (options.onSuccess) {
-        options.onSuccess({ url }, file as any)
+        options.onSuccess({ url })
       }
       resolve()
     }, 500)
@@ -162,7 +162,7 @@ function handleSuccess(): void {
  */
 function handleRemove(file: UploadFile): void {
   const currentFiles = props.modelValue || []
-  const updatedFiles = currentFiles.filter((f) => f.uid !== file.uid)
+  const updatedFiles = currentFiles.filter((f) => f.uid !== String(file.uid))
   emit('update:modelValue', updatedFiles)
 }
 </script>

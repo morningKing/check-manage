@@ -45,6 +45,6 @@ const emit = defineEmits<{
  */
 const inputValue = computed({
   get: () => props.modelValue ?? '',
-  set: (value) => emit('update:modelValue', value)
+  set: (value) => emit('update:modelValue', String(value))
 })
 </script>
