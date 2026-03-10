@@ -17,20 +17,90 @@
         <div v-show="selectedNode" class="detail-panel">
             <div class="detail-header">
               <span class="detail-collection">{{ selectedNode?.collectionLabel }}</span>
-              <el-button :icon="Close" size="small" text @click="selectedNode = null" />
+              <el-button :icon="Close" size="small" text @click="closePanel" />
             </div>
             <div class="detail-title">{{ selectedNode?.label }}</div>
-            <el-scrollbar class="detail-scroll">
-              <table class="detail-table">
-                <tr v-for="item in selectedNodeFields" :key="item.label">
-                  <td class="detail-label">{{ item.label }}</td>
-                  <td class="detail-value">{{ item.value }}</td>
-                </tr>
-              </table>
-              <div v-if="selectedNodeFields.length === 0" class="detail-empty">
-                暂无详细数据
+
+            <!-- 编辑模式 -->
+            <template v-if="editing">
+              <el-scrollbar class="detail-scroll">
+                <el-form
+                  ref="editFormRef"
+                  :model="editFormData"
+                  label-position="top"
+                  class="edit-form"
+                  size="small"
+                >
+                  <el-form-item
+                    v-for="f in editableFields"
+                    :key="f.fieldName"
+                    :label="f.label"
+                    :prop="f.fieldName"
+                  >
+                    <el-input
+                      v-if="f.controlType === 'textarea' || f.controlType === 'richText'"
+                      v-model="editFormData[f.fieldName]"
+                      type="textarea"
+                      :rows="3"
+                    />
+                    <el-input-number
+                      v-else-if="f.controlType === 'number'"
+                      v-model="editFormData[f.fieldName]"
+                      controls-position="right"
+                      style="width: 100%"
+                    />
+                    <el-select
+                      v-else-if="['select', 'radio'].includes(f.controlType)"
+                      v-model="editFormData[f.fieldName]"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="opt in (f.options || [])"
+                        :key="opt.value"
+                        :label="opt.label"
+                        :value="opt.value"
+                      />
+                    </el-select>
+                    <el-select
+                      v-else-if="['multiSelect', 'checkbox'].includes(f.controlType)"
+                      v-model="editFormData[f.fieldName]"
+                      multiple
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="opt in (f.options || [])"
+                        :key="opt.value"
+                        :label="opt.label"
+                        :value="opt.value"
+                      />
+                    </el-select>
+                    <el-input
+                      v-else
+                      v-model="editFormData[f.fieldName]"
+                    />
+                  </el-form-item>
+                </el-form>
+              </el-scrollbar>
+              <div class="edit-actions">
+                <el-button size="small" @click="editing = false">取消</el-button>
+                <el-button size="small" type="primary" :loading="saving" @click="handleSave">保存</el-button>
               </div>
-            </el-scrollbar>
+            </template>
+
+            <!-- 查看模式 -->
+            <template v-else>
+              <el-scrollbar class="detail-scroll">
+                <table class="detail-table">
+                  <tr v-for="item in selectedNodeFields" :key="item.label">
+                    <td class="detail-label">{{ item.label }}</td>
+                    <td class="detail-value">{{ item.value }}</td>
+                  </tr>
+                </table>
+                <div v-if="selectedNodeFields.length === 0" class="detail-empty">
+                  暂无详细数据
+                </div>
+              </el-scrollbar>
+            </template>
         </div>
       </div>
     </div>
@@ -58,13 +128,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, reactive, onBeforeUnmount } from 'vue'
 import { Close } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import ForceGraph2D from 'force-graph'
 const createGraph = ForceGraph2D as any as () => (el: HTMLElement) => any
 import { getRelationGraph } from '@/api/relationGraph'
 import type { GraphNode, GraphEdge } from '@/api/relationGraph'
 import { usePageConfigStore } from '@/stores/pageConfig'
+import type { FieldConfig } from '@/types'
 
 const props = defineProps<{
   modelValue: boolean
@@ -75,7 +147,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   navigate: [collection: string, recordId: string]
-  edit: [collection: string, recordId: string]
+  updated: []
 }>()
 
 const pageConfigStore = usePageConfigStore()
@@ -99,7 +171,7 @@ const selectedNodeFields = computed(() => {
       if (ct === 'autoTimestamp' || ct === 'relation' || ct === 'quoteSelect') continue
       const raw = node.data[f.fieldName]
       if (raw === undefined || raw === null || raw === '') continue
-      result.push({ label: f.label, value: formatValue(raw, ct) })
+      result.push({ label: f.label, value: formatValue(raw) })
     }
   } else {
     for (const [key, val] of Object.entries(node.data)) {
@@ -110,10 +182,84 @@ const selectedNodeFields = computed(() => {
   return result
 })
 
-function formatValue(val: any, controlType?: string): string {
+function formatValue(val: any): string {
   if (Array.isArray(val)) return val.join(', ')
-  if (controlType === 'switch') return val ? '是' : '否'
   return String(val)
+}
+
+// ── Inline editing ──
+
+const READONLY_TYPES = new Set(['relation', 'quoteSelect', 'reference', 'autoTimestamp', 'autoSequence'])
+
+const editing = ref(false)
+const saving = ref(false)
+const editFormRef = ref()
+const editFormData = reactive<Record<string, any>>({})
+
+const editableFields = computed<FieldConfig[]>(() => {
+  const node = selectedNode.value
+  if (!node) return []
+  const pageId = `page-${node.collection}`
+  return pageConfigStore.getPageFields(pageId).filter(f => !READONLY_TYPES.has(f.controlType))
+})
+
+function startEditing() {
+  const node = selectedNode.value
+  if (!node?.data) return
+  // Populate form data from node
+  for (const f of editableFields.value) {
+    editFormData[f.fieldName] = node.data[f.fieldName] ?? ''
+  }
+  editing.value = true
+}
+
+function closePanel() {
+  editing.value = false
+  selectedNode.value = null
+}
+
+async function handleSave() {
+  const node = selectedNode.value
+  if (!node?.data) return
+  const pageId = `page-${node.collection}`
+  saving.value = true
+  try {
+    const payload: Record<string, any> = {}
+    for (const f of editableFields.value) {
+      payload[f.fieldName] = editFormData[f.fieldName]
+    }
+    // Include version for optimistic lock
+    if (node.data._version !== undefined) {
+      payload._version = node.data._version
+    }
+    await pageConfigStore.updatePageData(pageId, node.id, payload)
+    // Update local node data so the detail view reflects changes
+    const updated = { ...node.data, ...payload }
+    if (updated._version !== undefined) updated._version++
+    node.data = updated
+    // Update node label if changed
+    const fields = pageConfigStore.getPageFields(pageId)
+    const displayField = fields.find(f => f.controlType === 'autoSequence') || fields.find(f => !READONLY_TYPES.has(f.controlType))
+    if (displayField && updated[displayField.fieldName]) {
+      node.label = String(updated[displayField.fieldName])
+      // Refresh graph node label
+      if (fg) {
+        const gd = fg.graphData()
+        const gn = (gd.nodes as any[]).find((n: any) => n.id === node.id)
+        if (gn) {
+          gn.label = node.label
+          gn.short = node.label.length > 10 ? node.label.slice(0, 10) + '...' : node.label
+        }
+      }
+    }
+    editing.value = false
+    ElMessage.success('保存成功')
+    emit('updated')
+  } catch (err: any) {
+    ElMessage.error(err?.message || '保存失败')
+  } finally {
+    saving.value = false
+  }
 }
 
 let fg: any = null
@@ -508,7 +654,8 @@ function handleNodeClick(node: any, event: MouseEvent) {
       } else if (seg.id === 'edit') {
         const nd = allNodes.get(node.id)
         if (nd) {
-          emit('edit', nd.collection, nd.id)
+          selectedNode.value = nd
+          startEditing()
         }
       } else if (seg.id === 'navigate') {
         const nd = allNodes.get(node.id)
@@ -594,6 +741,7 @@ function destroyGraph() {
   if (fg) { fg.pauseAnimation(); fg = null }
   if (containerRef.value) containerRef.value.innerHTML = ''
   selectedNode.value = null
+  editing.value = false
   ringNodeId = null
   allNodes.clear()
   allEdges.length = 0
@@ -709,6 +857,28 @@ onBeforeUnmount(() => destroyGraph())
   padding: 30px 14px;
   color: var(--el-text-color-secondary, #909399);
   font-size: 13px;
+}
+
+.edit-form {
+  padding: 12px 14px;
+
+  :deep(.el-form-item) {
+    margin-bottom: 12px;
+  }
+
+  :deep(.el-form-item__label) {
+    font-size: 12px;
+    color: var(--el-text-color-secondary, #909399);
+    padding-bottom: 2px;
+  }
+}
+
+.edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--el-border-color-extra-light, #f2f6fc);
 }
 
 /* ── Footer ── */
