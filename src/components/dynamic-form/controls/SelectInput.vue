@@ -83,6 +83,8 @@ const allowedTargets = computed<Set<string> | null>(() => {
   const wf = props.field.workflowConfig
   if (!wf?.enabled || !wf.transitions?.length) return null
   const currentVal = String(props.modelValue ?? '')
+  // New record (no current value) — all options available, no workflow restriction
+  if (!currentVal) return null
   const targets = new Set<string>()
   targets.add(currentVal) // Always allow keeping current value
   for (const t of wf.transitions) {

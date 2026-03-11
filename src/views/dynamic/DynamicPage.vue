@@ -189,7 +189,7 @@
     </el-card>
 
     <!-- 看板视图 -->
-    <el-card v-if="viewMode === 'kanban' && kanbanConfig" class="table-card">
+    <el-card v-if="viewMode === 'kanban' && kanbanConfig" class="table-card kanban-card">
       <KanbanBoard
         :data="filteredData"
         :group-field="kanbanConfig.groupField"
@@ -1883,6 +1883,14 @@ onActivated(async () => {
 
   :deep(.highlight-flash) {
     animation: row-flash 0.6s ease-in-out 3;
+  }
+}
+
+.kanban-card {
+  overflow: auto;
+
+  :deep(.el-card__body) {
+    overflow: auto;
   }
 }
 

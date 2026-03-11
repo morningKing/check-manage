@@ -122,7 +122,7 @@ function rebuildColumnData() {
       const matched = fieldsToSearch.some(fn => {
         const val = record[fn]
         if (val == null) return false
-        return formatFieldValue(fn, val).toLowerCase().includes(keyword)
+        return formatFieldValue(fn, val, record).toLowerCase().includes(keyword)
       })
       if (!matched) continue
     }
@@ -155,13 +155,41 @@ function getFieldLabel(fieldName: string): string {
 
 function getFieldDisplay(record: any, fieldName: string): string {
   const val = record[fieldName]
+  // For reference fields, prefer the resolved display value even if raw val is an ID
+  const field = props.fields.find((f: any) => f.fieldName === fieldName)
+  if (field?.controlType === 'reference') {
+    const display = record[`_ref_${fieldName}_display`]
+    if (display) return String(display)
+  }
   if (val == null) return '-'
-  return formatFieldValue(fieldName, val)
+  return formatFieldValue(fieldName, val, record)
 }
 
-function formatFieldValue(fieldName: string, value: any): string {
+function formatFieldValue(fieldName: string, value: any, record?: any): string {
   const field = props.fields.find((f: any) => f.fieldName === fieldName)
   if (!field) return String(value)
+
+  // Reference field: use resolved display value
+  if (field.controlType === 'reference' && record) {
+    const display = record[`_ref_${fieldName}_display`]
+    if (display) return String(display)
+  }
+
+  // Relation field: use resolved labels
+  if (field.controlType === 'relation' && record) {
+    const labels = record[`_rel_${fieldName}_labels`]
+    if (Array.isArray(labels) && labels.length > 0) {
+      return labels.map((item: any) => item.label).join(', ')
+    }
+  }
+
+  // QuoteSelect field: use resolved labels
+  if (field.controlType === 'quoteSelect' && record) {
+    const labels = record[`_quote_${fieldName}_labels`]
+    if (Array.isArray(labels) && labels.length > 0) {
+      return labels.map((item: any) => item.label).join(', ')
+    }
+  }
 
   if (['select', 'radio'].includes(field.controlType) && Array.isArray(field.options)) {
     const opt = field.options.find((o: any) => String(o.value) === String(value))

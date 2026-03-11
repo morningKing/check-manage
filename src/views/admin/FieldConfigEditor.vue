@@ -947,7 +947,12 @@ async function handleSaveField(): Promise<void> {
     order: fieldFormData.value.order,
     placeholder: fieldFormData.value.placeholder,
     defaultValue: fieldFormData.value.defaultValue,
-    options: showOptionsConfig.value ? fieldFormData.value.options : undefined,
+    options: showOptionsConfig.value
+      ? fieldFormData.value.options.map(o => ({
+          label: o.label,
+          value: o.value || o.label   // auto-fill empty value with label
+        }))
+      : undefined,
     optionsSource: showOptionsConfig.value ? fieldFormData.value.optionsSource : undefined,
     relationConfig: showRelationConfig.value ? fieldFormData.value.relationConfig : undefined,
     isPrimaryKey: fieldFormData.value.isPrimaryKey || undefined,
