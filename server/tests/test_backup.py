@@ -384,3 +384,305 @@ class TestDeleteBackupFile:
         from utils.backup import delete_backup_file
 
         delete_backup_file(None)
+
+
+class TestTableLevelBackup:
+    """测试表级备份功能"""
+
+    @patch('utils.backup._ensure_backup_dir')
+    @patch('utils.backup.get_db')
+    @patch('utils.backup.os.path.getsize')
+    def test_create_partial_backup_with_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
+        """创建表级备份应只备份指定的表"""
+        from utils.backup import create_backup
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = lambda self: mock_conn
+        mock_conn.__exit__ = lambda self, *args: None
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        mock_get_db.return_value = mock_conn
+        mock_getsize.return_value = 1024
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('utils.backup.BACKUP_DIR', tmpdir):
+                # 只备份 menus 和 users 两张表
+                result = create_backup(
+                    backup_type='manual',
+                    created_by='admin',
+                    tables=['menus', 'users']
+                )
+
+                # 验证返回结果
+                assert result['backupScope'] == 'partial'
+                assert result['backupTables'] == ['menus', 'users']
+                assert result['tablesCount'] == 2
+
+                # 验证 ZIP 内容
+                zip_path = result['filePath']
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    names = zf.namelist()
+                    assert 'manifest.json' in names
+                    assert 'menus.json' in names
+                    assert 'users.json' in names
+                    # 其他表不应存在
+                    assert 'page_configs.json' not in names
+                    assert 'dynamic_data.json' not in names
+
+                    # 验证 manifest
+                    manifest = json.loads(zf.read('manifest.json'))
+                    assert manifest['scope'] == 'partial'
+                    assert manifest['tables'] == ['menus', 'users']
+
+    @patch('utils.backup._ensure_backup_dir')
+    @patch('utils.backup.get_db')
+    @patch('utils.backup.os.path.getsize')
+    def test_create_full_backup_without_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
+        """不传 tables 参数应创建全量备份"""
+        from utils.backup import create_backup, BACKUP_TABLES
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = lambda self: mock_conn
+        mock_conn.__exit__ = lambda self, *args: None
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        mock_get_db.return_value = mock_conn
+        mock_getsize.return_value = 1024
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('utils.backup.BACKUP_DIR', tmpdir):
+                result = create_backup(backup_type='manual')
+
+                # 验证返回结果
+                assert result['backupScope'] == 'full'
+                assert result['tablesCount'] == len(BACKUP_TABLES)
+
+    @patch('utils.backup._ensure_backup_dir')
+    @patch('utils.backup.get_db')
+    @patch('utils.backup.os.path.getsize')
+    def test_create_backup_filters_invalid_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
+        """创建表级备份应过滤无效的表名"""
+        from utils.backup import create_backup
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = lambda self: mock_conn
+        mock_conn.__exit__ = lambda self, *args: None
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        mock_get_db.return_value = mock_conn
+        mock_getsize.return_value = 1024
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('utils.backup.BACKUP_DIR', tmpdir):
+                # 传入无效表名和有效表名
+                result = create_backup(
+                    tables=['menus', 'invalid_table', 'users', 'another_invalid']
+                )
+
+                # 只有有效的表被备份
+                assert result['backupTables'] == ['menus', 'users']
+
+    @patch('utils.backup._ensure_backup_dir')
+    @patch('utils.backup.get_db')
+    @patch('utils.backup.os.path.getsize')
+    def test_create_backup_raises_error_for_no_valid_tables(self, mock_getsize, mock_get_db, mock_ensure_dir):
+        """所有表名都无效时应抛出错误"""
+        from utils.backup import create_backup
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = lambda self: mock_conn
+        mock_conn.__exit__ = lambda self, *args: None
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_db.return_value = mock_conn
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch('utils.backup.BACKUP_DIR', tmpdir):
+                with pytest.raises(ValueError, match='没有有效的表需要备份'):
+                    create_backup(tables=['invalid_table', 'another_invalid'])
+
+
+class TestTableLevelRestore:
+    """测试表级还原功能"""
+
+    @patch('db.pool')
+    def test_restore_partial_tables(self, mock_pool):
+        """只还原指定的表"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'test-backup.zip')
+
+            # 创建包含多张表的备份
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-test',
+                'name': '测试备份',
+                'type': 'manual',
+                'scope': 'partial',
+                'tables': ['menus', 'users', 'dynamic_data'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 3,
+            }
+
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', json.dumps([{'id': 'm1', 'name': 'menu1'}]))
+                zf.writestr('users.json', json.dumps([{'id': 'u1', 'username': 'user1'}]))
+                zf.writestr('dynamic_data.json', json.dumps([{'id': 'd1', 'collection': 'test'}]))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            # 只还原 menus 和 users
+            result = restore_backup(zip_path, tables=['menus', 'users'])
+
+            assert result['id'] == 'backup-test'
+            # 应该只执行了 2 张表的 TRUNCATE
+            truncate_calls = [call for call in mock_cursor.execute.call_args_list
+                            if 'TRUNCATE' in str(call)]
+            assert len(truncate_calls) == 2
+
+    @patch('db.pool')
+    def test_restore_filters_tables_not_in_backup(self, mock_pool):
+        """还原时指定的表不在备份中应被过滤"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'test-backup.zip')
+
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-test',
+                'name': '测试备份',
+                'type': 'manual',
+                'tables': ['menus', 'users'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 0,
+            }
+
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', '[]')
+                zf.writestr('users.json', '[]')
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            # 请求还原 menus 和不在备份中的 page_configs
+            result = restore_backup(zip_path, tables=['menus', 'page_configs'])
+
+            # 只有 menus 被还原
+            truncate_calls = [call for call in mock_cursor.execute.call_args_list
+                            if 'TRUNCATE' in str(call)]
+            assert len(truncate_calls) == 1
+
+    @patch('db.pool')
+    def test_restore_raises_error_when_no_tables_match(self, mock_pool):
+        """还原时指定的表都不在备份中应抛出错误"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'test-backup.zip')
+
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-test',
+                'name': '测试备份',
+                'type': 'manual',
+                'tables': ['menus', 'users'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 0,
+            }
+
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', '[]')
+                zf.writestr('users.json', '[]')
+
+            # 请求还原不在备份中的表
+            with pytest.raises(ValueError, match='指定的表不在备份中'):
+                restore_backup(zip_path, tables=['dynamic_data', 'page_configs'])
+
+    @patch('db.pool')
+    def test_restore_legacy_backup_without_tables_field(self, mock_pool):
+        """还原旧版备份（无 tables 字段）应从文件名推断"""
+        from utils.backup import restore_backup
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'legacy-backup.zip')
+
+            # 旧版 manifest 无 tables 字段
+            manifest = {
+                'version': 1,
+                'id': 'legacy-backup',
+                'name': '旧版备份',
+                'type': 'manual',
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 0,
+            }
+
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', '[]')
+                zf.writestr('users.json', '[]')
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            # 应该能正常还原
+            result = restore_backup(zip_path, tables=['menus'])
+            assert result['id'] == 'legacy-backup'
+
+
+class TestGetBackupTableNames:
+    """测试 get_backup_table_names 函数"""
+
+    def test_returns_list_of_tables(self):
+        """应返回可备份的表列表"""
+        from utils.backup import get_backup_table_names, BACKUP_TABLES
+
+        result = get_backup_table_names()
+
+        assert isinstance(result, list)
+        assert len(result) == len(BACKUP_TABLES)
+
+        # 每个元素应有 name 和 label
+        for item in result:
+            assert 'name' in item
+            assert 'label' in item
+
+    def test_includes_common_tables(self):
+        """应包含常见的关键表"""
+        from utils.backup import get_backup_table_names
+
+        result = get_backup_table_names()
+        table_names = [t['name'] for t in result]
+
+        assert 'menus' in table_names
+        assert 'page_configs' in table_names
+        assert 'dynamic_data' in table_names
+        assert 'users' in table_names
+
+    def test_table_has_chinese_label(self):
+        """每个表应有中文标签"""
+        from utils.backup import get_backup_table_names
+
+        result = get_backup_table_names()
+
+        for item in result:
+            # 中文标签不应为空且不应等于表名
+            assert item['label']
+            assert item['label'] != item['name']

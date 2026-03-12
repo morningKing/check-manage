@@ -21,27 +21,30 @@ import psycopg2.extras
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 
 # 需要备份的业务表及其列定义
-# (表名, 列列表, JSONB列索引集合)
+# (表名, 列列表, JSONB列索引集合, 中文标签)
 BACKUP_TABLES = [
-    ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}),
+    ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}, '菜单配置'),
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
-                      'export_scripts', 'row_export_scripts', 'api_public', 'validation_script'], {4, 7, 8}),
-    ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version'], {2}),
-    ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set()),
-    ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set()),
+                      'export_scripts', 'row_export_scripts', 'api_public', 'validation_script'], {4, 7, 8}, '页面配置'),
+    ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version'], {2}, '动态数据'),
+    ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '数据关联'),
+    ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set(), '用户数据'),
     ('operation_logs', ['id', 'action', 'target_type', 'target_id', 'target_name', 'description',
                         'operator_id', 'operator_name', 'operator_role', 'created_at',
-                        'batch_id', 'batch_desc'], set()),
+                        'batch_id', 'batch_desc'], set(), '操作日志'),
     ('export_scripts', ['id', 'name', 'description', 'language', 'script', 'output_format',
-                        'created_at', 'updated_at', 'scope'], set()),
-    ('api_keys', ['id', 'name', 'key_hash', 'created_at', 'last_used_at', 'is_active'], set()),
-    ('validation_scripts', ['id', 'name', 'description', 'script', 'created_at', 'updated_at'], set()),
+                        'created_at', 'updated_at', 'scope'], set(), '导出脚本'),
+    ('api_keys', ['id', 'name', 'key_hash', 'created_at', 'last_used_at', 'is_active'], set(), 'API密钥'),
+    ('validation_scripts', ['id', 'name', 'description', 'script', 'created_at', 'updated_at'], set(), '校验脚本'),
     ('etl_tasks', ['id', 'name', 'description', 'steps', 'enabled', 'last_run_at', 'last_run_status',
-                   'created_at', 'updated_at'], {3}),
+                   'created_at', 'updated_at'], {3}, 'ETL任务'),
     ('etl_logs', ['id', 'task_id', 'task_name', 'status', 'started_at', 'finished_at',
                   'total_records', 'success_count', 'error_count', 'step_results', 'error_detail',
-                  'created_at'], {9}),
+                  'created_at'], {9}, 'ETL日志'),
 ]
+
+# 表名到定义的映射
+BACKUP_TABLE_MAP = {t[0]: t for t in BACKUP_TABLES}
 
 # 备份版本号（用于未来兼容性迁移）
 BACKUP_VERSION = 1
@@ -78,29 +81,65 @@ def _export_table(cur, table_name, columns):
     return records
 
 
-def create_backup(backup_type='manual', created_by=None):
+def get_backup_table_names():
+    """获取可备份的表名列表"""
+    return [
+        {'name': t[0], 'label': t[3]}
+        for t in BACKUP_TABLES
+    ]
+
+
+def create_backup(backup_type='manual', created_by=None, tables=None):
     """
     创建备份
 
-    导出 7 张业务表 → JSON → ZIP，保存到 server/backups/
-    返回备份元数据 dict
+    导出业务表 → JSON → ZIP，保存到 server/backups/
+
+    Parameters
+    ----------
+    backup_type : str
+        'manual' 或 'scheduled'
+    created_by : str
+        创建者用户名
+    tables : list[str] | None
+        None = 全量备份（所有 BACKUP_TABLES）
+        ['table1', 'table2'] = 表级备份（只备份指定表）
+
+    Returns
+    -------
+    dict
+        备份元数据
     """
     _ensure_backup_dir()
+
+    # 确定要备份的表
+    if tables:
+        # 过滤出有效的表名
+        tables_to_backup = [t for t in tables if t in BACKUP_TABLE_MAP]
+        backup_scope = 'partial'
+    else:
+        tables_to_backup = [t[0] for t in BACKUP_TABLES]
+        backup_scope = 'full'
+
+    if not tables_to_backup:
+        raise ValueError('没有有效的表需要备份')
 
     backup_id = f'backup-{uuid.uuid4().hex[:12]}'
     now = datetime.now(timezone.utc)
     now_str = now.strftime('%Y-%m-%d %H:%M:%S')
     type_label = '手动备份' if backup_type == 'manual' else '定时备份'
-    backup_name = f'{type_label} {now_str}'
+    scope_label = '全量' if backup_scope == 'full' else '表级'
+    backup_name = f'{type_label}({scope_label}) {now_str}'
 
     table_stats = {}
     total_records = 0
 
-    # 1. 导出所有表数据
+    # 1. 导出指定表数据
     with get_db() as conn:
         cur = conn.cursor()
         table_data = {}
-        for table_name, columns, _ in BACKUP_TABLES:
+        for table_name in tables_to_backup:
+            _, columns, _, _ = BACKUP_TABLE_MAP[table_name]
             records = _export_table(cur, table_name, columns)
             table_data[table_name] = records
             table_stats[table_name] = len(records)
@@ -112,10 +151,12 @@ def create_backup(backup_type='manual', created_by=None):
         'id': backup_id,
         'name': backup_name,
         'type': backup_type,
+        'scope': backup_scope,
+        'tables': tables_to_backup,
+        'tableStats': table_stats,
+        'totalRecords': total_records,
         'createdAt': now.isoformat(),
         'createdBy': created_by,
-        'tables': table_stats,
-        'totalRecords': total_records,
     }
 
     # 3. 打包 ZIP
@@ -134,10 +175,11 @@ def create_backup(backup_type='manual', created_by=None):
         cur = conn.cursor()
         cur.execute(
             'INSERT INTO backups (id, name, type, status, file_path, file_size, '
-            'tables_count, records_count, created_by, created_at, note) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            'tables_count, records_count, created_by, created_at, note, backup_scope, backup_tables) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
             (backup_id, backup_name, backup_type, 'completed', zip_path,
-             file_size, len(BACKUP_TABLES), total_records, created_by, now, None),
+             file_size, len(tables_to_backup), total_records, created_by, now, None,
+             backup_scope, psycopg2.extras.Json(tables_to_backup)),
         )
 
     # 5. 如果是定时备份，更新 last_backup_at
@@ -159,21 +201,36 @@ def create_backup(backup_type='manual', created_by=None):
         'status': 'completed',
         'filePath': zip_path,
         'fileSize': file_size,
-        'tablesCount': len(BACKUP_TABLES),
+        'tablesCount': len(tables_to_backup),
         'recordsCount': total_records,
         'createdBy': created_by,
         'createdAt': now.isoformat(),
         'note': None,
+        'backupScope': backup_scope,
+        'backupTables': tables_to_backup,
     }
 
 
-def restore_backup(zip_path):
+def restore_backup(zip_path, tables=None):
     """
     从 ZIP 备份文件还原数据
 
-    在单个事务中 TRUNCATE 全部业务表并重新 INSERT。
+    在单个事务中 TRUNCATE 指定业务表并重新 INSERT。
     不清空 backups 和 backup_settings 表。
     失败则全部回滚。
+
+    Parameters
+    ----------
+    zip_path : str
+        ZIP 备份文件路径
+    tables : list[str] | None
+        None = 还原备份中的所有表
+        ['table1'] = 只还原指定表（必须是备份中包含的表）
+
+    Returns
+    -------
+    dict
+        manifest 信息
     """
     # 1. 解压并校验
     if not os.path.isfile(zip_path):
@@ -185,11 +242,30 @@ def restore_backup(zip_path):
             raise ValueError('无效的备份文件：缺少 manifest.json')
 
         manifest = json.loads(zf.read('manifest.json'))
+
+        # 确定备份中包含的表
+        backup_tables = manifest.get('tables', [])
+        if not backup_tables:
+            # 旧版备份格式，从文件名推断
+            backup_tables = [t[0] for t in BACKUP_TABLES if f'{t[0]}.json' in names]
+
+        # 确定要还原的表
+        if tables:
+            # 只还原指定的表，且必须在备份中存在
+            tables_to_restore = [t for t in tables if t in backup_tables]
+            if not tables_to_restore:
+                raise ValueError('指定的表不在备份中')
+        else:
+            tables_to_restore = backup_tables
+
+        # 读取表数据
         table_data = {}
-        for table_name, _, _ in BACKUP_TABLES:
+        for table_name in tables_to_restore:
             json_file = f'{table_name}.json'
             if json_file in names:
                 table_data[table_name] = json.loads(zf.read(json_file))
+            else:
+                table_data[table_name] = []
 
     # 2. 在单个事务中还原
     conn = None
@@ -198,13 +274,17 @@ def restore_backup(zip_path):
         conn = pool.getconn()
         cur = conn.cursor()
 
-        # TRUNCATE 所有业务表（反序以避免潜在依赖）
-        table_names = [t[0] for t in BACKUP_TABLES]
-        for table_name in reversed(table_names):
-            cur.execute(f'TRUNCATE TABLE {table_name} CASCADE')
+        # TRUNCATE 指定表（反序以避免潜在依赖）
+        all_table_names = [t[0] for t in BACKUP_TABLES]
+        for table_name in reversed(all_table_names):
+            if table_name in tables_to_restore:
+                cur.execute(f'TRUNCATE TABLE {table_name} CASCADE')
 
         # INSERT 数据
-        for table_name, columns, jsonb_indices in BACKUP_TABLES:
+        for table_name in tables_to_restore:
+            if table_name not in BACKUP_TABLE_MAP:
+                continue
+            _, columns, jsonb_indices, _ = BACKUP_TABLE_MAP[table_name]
             records = table_data.get(table_name, [])
             clean_cols = [c.strip('"') for c in columns]
             col_str = ', '.join(columns)

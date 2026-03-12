@@ -3,7 +3,7 @@
  *
  * 职责：
  * - 查看备份列表
- * - 手动创建备份
+ * - 手动创建备份（支持全量/表级）
  * - 下载/还原/删除备份
  * - 上传外部备份还原
  * - 配置定时备份设置
@@ -87,6 +87,21 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="backupScope" label="备份范围" width="140" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.backupScope === 'full' ? '' : 'warning'" size="small">
+              {{ row.backupScope === 'full' ? '全量' : '表级' }}
+            </el-tag>
+            <el-tooltip v-if="row.backupScope === 'partial' && row.backupTables?.length" placement="top">
+              <template #content>
+                <div style="max-width: 300px">
+                  {{ row.backupTables.map(t => tableLabelMap[t] || t).join('、') }}
+                </div>
+              </template>
+              <el-icon style="margin-left: 4px; cursor: pointer"><InfoFilled /></el-icon>
+            </el-tooltip>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="BACKUP_STATUS_TAG_TYPES[row.status] || 'info'" size="small">
@@ -124,8 +139,30 @@
     </el-card>
 
     <!-- 创建备份对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建备份" width="400px">
-      <el-form>
+    <el-dialog v-model="createDialogVisible" title="创建备份" width="500px">
+      <el-form label-width="100px">
+        <el-form-item label="备份范围">
+          <el-radio-group v-model="createScope">
+            <el-radio value="full">全量备份</el-radio>
+            <el-radio value="partial">表级备份</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="createScope === 'partial'" label="选择表">
+          <el-select
+            v-model="createSelectedTables"
+            multiple
+            filterable
+            placeholder="请选择要备份的表"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in availableTables"
+              :key="t.name"
+              :label="t.label"
+              :value="t.name"
+            />
+          </el-select>
+        </el-form-item>
         <el-form-item label="备注（可选）">
           <el-input v-model="createNote" placeholder="例如：部署前备份" />
         </el-form-item>
@@ -139,16 +176,37 @@
     </el-dialog>
 
     <!-- 还原确认 -->
-    <el-dialog v-model="restoreDialogVisible" title="还原确认" width="420px">
+    <el-dialog v-model="restoreDialogVisible" title="还原确认" width="500px">
       <el-alert
-        title="警告：还原操作将覆盖当前所有业务数据！"
+        title="警告：还原操作将覆盖当前数据！"
         type="warning"
         :closable="false"
         show-icon
         style="margin-bottom: 16px"
       />
       <p>确定要从备份 <strong>{{ restoreTarget?.name }}</strong> 还原吗？</p>
-      <p style="color: #909399; font-size: 13px">还原后页面将自动刷新。</p>
+
+      <!-- 表级备份显示表选择 -->
+      <div v-if="restoreTarget?.backupScope === 'partial'" style="margin-top: 12px">
+        <el-form-item label="选择还原表">
+          <el-select
+            v-model="restoreSelectedTables"
+            multiple
+            filterable
+            placeholder="请选择要还原的表"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="t in restoreTarget?.backupTables || []"
+              :key="t"
+              :label="tableLabelMap[t] || t"
+              :value="t"
+            />
+          </el-select>
+        </el-form-item>
+      </div>
+
+      <p style="color: #909399; font-size: 13px; margin-top: 12px">还原后页面将自动刷新。</p>
       <template #footer>
         <el-button @click="restoreDialogVisible = false">取消</el-button>
         <el-button type="warning" @click="doRestore" :loading="restoring">
@@ -189,9 +247,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Upload } from '@element-plus/icons-vue'
+import { Plus, Upload, InfoFilled } from '@element-plus/icons-vue'
 import {
   getBackups,
   createBackup,
@@ -201,6 +259,7 @@ import {
   uploadAndRestore,
   getBackupSettings,
   updateBackupSettings,
+  getBackupTables,
 } from '@/api/backup'
 import { ConfirmDialog } from '@/components/common'
 import {
@@ -227,11 +286,28 @@ const settings = reactive({
   lastBackupAt: null as string | null,
 })
 
+// 可备份的表列表
+const availableTables = ref<{ name: string; label: string }[]>([])
+
+// 表名 -> 中文标签映射
+const tableLabelMap = computed(() => {
+  const map: Record<string, string> = {}
+  for (const t of availableTables.value) {
+    map[t.name] = t.label
+  }
+  return map
+})
+
+// 创建备份对话框
 const createDialogVisible = ref(false)
 const createNote = ref('')
+const createScope = ref<'full' | 'partial'>('full')
+const createSelectedTables = ref<string[]>([])
 
+// 还原确认
 const restoreDialogVisible = ref(false)
 const restoreTarget = ref<Backup | null>(null)
+const restoreSelectedTables = ref<string[]>([])
 
 const deleteDialogVisible = ref(false)
 const deleteTarget = ref<Backup | null>(null)
@@ -294,6 +370,14 @@ async function loadSettings(): Promise<void> {
   }
 }
 
+async function loadAvailableTables(): Promise<void> {
+  try {
+    availableTables.value = await getBackupTables()
+  } catch {
+    // 静默处理
+  }
+}
+
 async function handleSaveSettings(): Promise<void> {
   settingsSaving.value = true
   try {
@@ -312,13 +396,21 @@ async function handleSaveSettings(): Promise<void> {
 
 function handleCreateBackup(): void {
   createNote.value = ''
+  createScope.value = 'full'
+  createSelectedTables.value = []
   createDialogVisible.value = true
 }
 
 async function doCreateBackup(): Promise<void> {
+  if (createScope.value === 'partial' && createSelectedTables.value.length === 0) {
+    ElMessage.warning('请至少选择一张表')
+    return
+  }
+
   creating.value = true
   try {
-    await createBackup(createNote.value || undefined)
+    const tables = createScope.value === 'partial' ? createSelectedTables.value : undefined
+    await createBackup(createNote.value || undefined, tables)
     ElMessage.success('备份创建成功')
     createDialogVisible.value = false
     await loadBackups()
@@ -339,14 +431,28 @@ async function handleDownload(row: Backup): Promise<void> {
 
 function handleRestoreConfirm(row: Backup): void {
   restoreTarget.value = row
+  // 表级备份默认全选
+  restoreSelectedTables.value = row.backupScope === 'partial' && row.backupTables
+    ? [...row.backupTables]
+    : []
   restoreDialogVisible.value = true
 }
 
 async function doRestore(): Promise<void> {
   if (!restoreTarget.value) return
+
+  // 表级备份需要选择表
+  if (restoreTarget.value.backupScope === 'partial' && restoreSelectedTables.value.length === 0) {
+    ElMessage.warning('请至少选择一张表')
+    return
+  }
+
   restoring.value = true
   try {
-    await restoreBackup(restoreTarget.value.id)
+    const tables = restoreTarget.value.backupScope === 'partial'
+      ? restoreSelectedTables.value
+      : undefined
+    await restoreBackup(restoreTarget.value.id, tables)
     ElMessage.success('还原成功，页面即将刷新')
     restoreDialogVisible.value = false
     setTimeout(() => window.location.reload(), 1500)
@@ -408,6 +514,7 @@ async function doUploadRestore(): Promise<void> {
 onMounted(() => {
   loadBackups()
   loadSettings()
+  loadAvailableTables()
 })
 </script>
 

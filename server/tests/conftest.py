@@ -30,6 +30,9 @@ def mock_conn(mock_cursor):
     """创建 mock psycopg2 connection"""
     conn = MagicMock()
     conn.cursor.return_value = mock_cursor
+    # 实现上下文管理器协议
+    conn.__enter__ = lambda self: conn
+    conn.__exit__ = lambda self, *args: None
     return conn
 
 

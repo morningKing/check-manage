@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS backups (
     records_count   INTEGER DEFAULT 0,
     created_by      VARCHAR(200),
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    note            TEXT
+    note            TEXT,
+    backup_scope    VARCHAR(20) DEFAULT 'full',
+    backup_tables   JSONB DEFAULT '[]'::jsonb
 );
 
 CREATE TABLE IF NOT EXISTS backup_settings (
@@ -608,6 +610,17 @@ def init_db():
             )
             conn.commit()
             print("Added AI settings menu.")
+
+        # Migration: add backup_scope and backup_tables columns to backups
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'backups' AND column_name = 'backup_scope'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE backups ADD COLUMN backup_scope VARCHAR(20) DEFAULT 'full'")
+            cur.execute("ALTER TABLE backups ADD COLUMN backup_tables JSONB DEFAULT '[]'::jsonb")
+            conn.commit()
+            print("Added backup_scope and backup_tables columns to backups table.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0

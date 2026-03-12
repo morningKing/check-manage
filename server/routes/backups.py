@@ -17,6 +17,7 @@ from utils.backup import (
     delete_backup_file,
     get_backup_settings,
     update_backup_settings,
+    get_backup_table_names,
     BACKUP_DIR,
 )
 
@@ -36,6 +37,8 @@ def _row_to_dict(row):
         'createdBy': row[8],
         'createdAt': row[9].isoformat() if row[9] else None,
         'note': row[10],
+        'backupScope': row[11] if len(row) > 11 else 'full',
+        'backupTables': row[12] if len(row) > 12 else [],
     }
 
 
@@ -47,7 +50,7 @@ def list_backups():
         cur = conn.cursor()
         cur.execute(
             'SELECT id, name, type, status, file_path, file_size, '
-            'tables_count, records_count, created_by, created_at, note '
+            'tables_count, records_count, created_by, created_at, note, backup_scope, backup_tables '
             'FROM backups ORDER BY created_at DESC'
         )
         rows = cur.fetchall()
@@ -61,10 +64,11 @@ def create_manual_backup():
     from flask import g
     body = request.get_json(silent=True) or {}
     note = body.get('note')
+    tables = body.get('tables')  # None = 全量备份
     created_by = g.current_user.get('username', 'admin')
 
     try:
-        result = create_backup(backup_type='manual', created_by=created_by)
+        result = create_backup(backup_type='manual', created_by=created_by, tables=tables)
         # 更新备注
         if note:
             with get_db() as conn:
@@ -112,6 +116,9 @@ def download_backup(backup_id):
 @admin_required
 def restore_from_backup(backup_id):
     """从已有备份还原"""
+    body = request.get_json(silent=True) or {}
+    tables = body.get('tables')  # None = 还原所有表
+
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute('SELECT file_path FROM backups WHERE id = %s', (backup_id,))
@@ -123,7 +130,7 @@ def restore_from_backup(backup_id):
         return jsonify({'error': '备份文件不存在'}), 404
 
     try:
-        manifest = restore_backup(file_path)
+        manifest = restore_backup(file_path, tables=tables)
         return jsonify({
             'message': '还原成功',
             'manifest': manifest,
@@ -185,6 +192,14 @@ def update_settings():
 
     settings = update_backup_settings(enabled, interval, retention_count)
     return jsonify(settings)
+
+
+@backups_bp.route('/backups/tables', methods=['GET'])
+@admin_required
+def list_backup_tables():
+    """获取可备份的表列表"""
+    tables = get_backup_table_names()
+    return jsonify(tables)
 
 
 # ==================== 备份数据对比 ====================

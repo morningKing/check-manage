@@ -13,6 +13,8 @@ export interface Backup {
   createdBy: string
   createdAt: string
   note: string | null
+  backupScope: 'full' | 'partial'
+  backupTables: string[]
 }
 
 export interface BackupSettings {

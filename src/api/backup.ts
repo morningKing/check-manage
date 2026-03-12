@@ -13,10 +13,12 @@ export function getBackups() {
 }
 
 /**
- * 创建手动备份
+ * 创建备份
+ * @param note 备注
+ * @param tables 指定备份的表名列表，undefined = 全量备份
  */
-export function createBackup(note?: string) {
-  return post<Backup>('/backups', note ? { note } : {})
+export function createBackup(note?: string, tables?: string[]) {
+  return post<Backup>('/backups', { note, tables })
 }
 
 /**
@@ -51,10 +53,12 @@ export async function downloadBackup(id: string, name: string) {
 }
 
 /**
- * 从已有备份还原
+ * 还原备份
+ * @param id 备份ID
+ * @param tables 指定还原的表名列表，undefined = 还原所有表
  */
-export function restoreBackup(id: string) {
-  return post<{ message: string }>(`/backups/${id}/restore`)
+export function restoreBackup(id: string, tables?: string[]) {
+  return service.post(`/backups/${id}/restore`, { tables })
 }
 
 /**
@@ -81,6 +85,13 @@ export function getBackupSettings() {
  */
 export function updateBackupSettings(settings: Partial<BackupSettings>) {
   return service.put('/backups/settings', settings)
+}
+
+/**
+ * 获取可备份的表列表
+ */
+export function getBackupTables() {
+  return get<{ name: string; label: string }[]>('/backups/tables')
 }
 
 /**
