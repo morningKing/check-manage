@@ -69,7 +69,23 @@
 
     <!-- 搜索栏 -->
     <div class="search-bar">
-      <template v-if="!queryMode">
+      <template v-if="aiSearchMode">
+        <el-input
+          v-model="aiSearchText"
+          placeholder="用自然语言描述查询条件，如：找出所有待评审的用例"
+          clearable
+          style="flex: 1; max-width: 600px"
+          @keydown.enter="executeAiQuery"
+        />
+        <el-button type="primary" :loading="aiSearchLoading" @click="executeAiQuery">
+          <el-icon><MagicStick /></el-icon>
+          AI 查询
+        </el-button>
+        <el-button v-if="aiGeneratedFilter" @click="clearAiQuery">
+          清除
+        </el-button>
+      </template>
+      <template v-else-if="!queryMode">
         <el-input
           v-model="searchKeyword"
           placeholder="输入关键字搜索..."
@@ -115,6 +131,14 @@
           </div>
         </el-popover>
       </template>
+      <el-tooltip content="AI 智能查询">
+        <el-button
+          :type="aiSearchMode ? 'warning' : 'default'"
+          :icon="MagicStick"
+          circle
+          @click="toggleAiSearch"
+        />
+      </el-tooltip>
       <el-tooltip :content="queryMode ? '简单搜索' : '高级查询'">
         <el-button
           :type="queryMode ? 'primary' : 'default'"
@@ -129,6 +153,15 @@
           （已筛选）
         </template>
       </span>
+      <el-tooltip v-if="aiGeneratedFilter" placement="bottom">
+        <template #content>
+          <pre style="margin:0;max-width:400px;white-space:pre-wrap">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
+        </template>
+        <el-tag type="warning" closable @close="clearAiQuery">
+          <el-icon style="vertical-align: -2px"><MagicStick /></el-icon>
+          AI 筛选条件
+        </el-tag>
+      </el-tooltip>
     </div>
 
     <!-- 数据表格 -->
@@ -476,7 +509,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
 import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -557,6 +590,14 @@ const columnFilters = ref<Record<string, { value: any; value2?: any; operator?: 
 const queryMode = ref(false)
 const mongoQueryText = ref('')
 const activeMongoQuery = ref<Record<string, any> | null>(null)
+
+/**
+ * AI 搜索模式
+ */
+const aiSearchMode = ref(false)
+const aiSearchText = ref('')
+const aiSearchLoading = ref(false)
+const aiGeneratedFilter = ref<Record<string, any> | null>(null)
 
 /**
  * 对话框可见性
@@ -1035,7 +1076,13 @@ async function loadPageData(): Promise<void> {
  */
 function toggleQueryMode(): void {
   queryMode.value = !queryMode.value
-  if (!queryMode.value && activeMongoQuery.value) {
+  if (queryMode.value) {
+    aiSearchMode.value = false
+    if (aiGeneratedFilter.value) {
+      clearAiQuery()
+    }
+  }
+  if (!queryMode.value && activeMongoQuery.value && !aiGeneratedFilter.value) {
     clearMongoQuery()
   }
 }
@@ -1073,6 +1120,65 @@ async function executeMongoQuery(): Promise<void> {
 async function clearMongoQuery(): Promise<void> {
   activeMongoQuery.value = null
   mongoQueryText.value = ''
+  currentPage.value = 1
+  await loadPageData()
+}
+
+/**
+ * 切换 AI 搜索模式（与简单搜索/高级查询互斥）
+ */
+function toggleAiSearch(): void {
+  aiSearchMode.value = !aiSearchMode.value
+  if (aiSearchMode.value) {
+    queryMode.value = false
+    if (activeMongoQuery.value && !aiGeneratedFilter.value) {
+      clearMongoQuery()
+    }
+  } else if (aiGeneratedFilter.value) {
+    clearAiQuery()
+  }
+}
+
+/**
+ * 执行 AI 自然语言查询
+ */
+async function executeAiQuery(): Promise<void> {
+  const text = aiSearchText.value.trim()
+  if (!text) return
+
+  const collection = pageId.value?.replace('page-', '')
+  if (!collection) return
+
+  aiSearchLoading.value = true
+  try {
+    const result = await post<{ filter: Record<string, any> }>('/ai/query', {
+      collection,
+      question: text,
+    })
+    const filter = result.filter
+    if (!filter || Object.keys(filter).length === 0) {
+      ElMessage.warning('AI 未能生成有效的查询条件，请尝试更具体的描述')
+      return
+    }
+    aiGeneratedFilter.value = filter
+    activeMongoQuery.value = filter
+    currentPage.value = 1
+    await loadPageData()
+    ElMessage.success('AI 查询已应用')
+  } catch (e: any) {
+    ElMessage.error(e.message || e.error || 'AI 查询失败')
+  } finally {
+    aiSearchLoading.value = false
+  }
+}
+
+/**
+ * 清除 AI 查询
+ */
+async function clearAiQuery(): Promise<void> {
+  aiGeneratedFilter.value = null
+  aiSearchText.value = ''
+  activeMongoQuery.value = null
   currentPage.value = 1
   await loadPageData()
 }
@@ -1756,6 +1862,10 @@ watch(pageId, () => {
   queryMode.value = false
   activeMongoQuery.value = null
   mongoQueryText.value = ''
+  aiSearchMode.value = false
+  aiSearchText.value = ''
+  aiSearchLoading.value = false
+  aiGeneratedFilter.value = null
   // Set default view mode from config
   viewMode.value = pageConfig.value?.viewConfig?.defaultView || 'table'
 })

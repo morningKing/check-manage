@@ -15,6 +15,7 @@ MENUS = [
     {"id": "menu-3-2", "name": "页面配置", "icon": "Files", "pageId": None, "parentId": "menu-3-a", "order": 2, "path": "/admin/page-config", "roles": ["admin"]},
     {"id": "menu-3-3", "name": "用户管理", "icon": "User", "pageId": None, "parentId": "menu-3-a", "order": 3, "path": "/admin/users", "roles": ["admin"]},
     {"id": "menu-3-7", "name": "Open API", "icon": "Key", "pageId": None, "parentId": "menu-3-a", "order": 4, "path": "/admin/api-keys", "roles": ["admin"]},
+    {"id": "menu-3-11", "name": "AI 配置", "icon": "MagicStick", "pageId": None, "parentId": "menu-3-a", "order": 5, "path": "/admin/ai-settings", "roles": ["admin"]},
     {"id": "menu-3-c", "name": "系统运维", "icon": "Monitor", "pageId": None, "parentId": "menu-3", "order": 2, "path": None, "roles": ["admin"]},
     {"id": "menu-3-4", "name": "操作日志", "icon": "Tickets", "pageId": None, "parentId": "menu-3-c", "order": 1, "path": "/admin/operation-log", "roles": ["admin"]},
     {"id": "menu-3-5", "name": "系统备份", "icon": "FolderOpened", "pageId": None, "parentId": "menu-3-c", "order": 2, "path": "/admin/backup", "roles": ["admin"]},

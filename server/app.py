@@ -25,6 +25,7 @@ from routes.timeline import timeline_bp
 from routes.dashboards import dashboards_bp
 from routes.notifications import notifications_bp
 from routes.trigger_rules import trigger_rules_bp
+from routes.ai import ai_bp
 
 app = Flask(__name__)
 CORS(app)
@@ -49,6 +50,7 @@ app.register_blueprint(timeline_bp)
 app.register_blueprint(dashboards_bp)
 app.register_blueprint(notifications_bp)
 app.register_blueprint(trigger_rules_bp)
+app.register_blueprint(ai_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start)

@@ -162,6 +162,15 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/ai-settings',
+        name: 'AiSettings',
+        component: () => import('@/views/admin/AiSettings.vue'),
+        meta: {
+          title: 'AI 配置',
+          icon: 'MagicStick',
+        },
+      },
+      {
         path: 'dashboard/:id?',
         name: 'Dashboard',
         component: () => import('@/views/dashboard/DashboardView.vue'),

@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS backup_settings (
 
 INSERT INTO backup_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS ai_settings (
+    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+    api_key         VARCHAR(500) NOT NULL DEFAULT '',
+    endpoint        VARCHAR(1000) NOT NULL DEFAULT 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    model           VARCHAR(200) NOT NULL DEFAULT 'qwen-plus',
+    timeout         INTEGER NOT NULL DEFAULT 30,
+    max_tokens      INTEGER NOT NULL DEFAULT 1024,
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS export_scripts (
     id              VARCHAR(100) PRIMARY KEY,
     name            VARCHAR(200) NOT NULL,
@@ -561,6 +574,40 @@ def init_db():
             """)
             conn.commit()
             print("Created trigger_logs table.")
+
+        # Migration: create ai_settings table if missing
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'ai_settings'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE ai_settings (
+                    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+                    api_key         VARCHAR(500) NOT NULL DEFAULT '',
+                    endpoint        VARCHAR(1000) NOT NULL DEFAULT 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+                    model           VARCHAR(200) NOT NULL DEFAULT 'qwen-plus',
+                    timeout         INTEGER NOT NULL DEFAULT 30,
+                    max_tokens      INTEGER NOT NULL DEFAULT 1024,
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                INSERT INTO ai_settings (id, enabled, api_key)
+                VALUES (1, TRUE, 'sk-d234f87ccfce4893be2b17781a054546');
+            """)
+            conn.commit()
+            print("Created ai_settings table.")
+
+        # Migration: add AI settings menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-11'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-11', %s, 'MagicStick', NULL, 'menu-3-a', 5, '/admin/ai-settings', %s)",
+                ('AI 配置', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added AI settings menu.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0
