@@ -433,6 +433,149 @@
       @confirm="handleBatchDelete"
     />
 
+    <!-- 删除绑定对话框 -->
+    <el-dialog
+      v-model="deleteBindingDialogVisible"
+      :title="pageConfig?.deleteBinding?.dialogTitle || '删除确认'"
+      :width="pageConfig?.deleteBinding?.dialogWidth || '500px'"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-alert
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      >
+        <template #title>
+          确定要删除此记录吗？删除后将自动创建相关记录。
+        </template>
+      </el-alert>
+
+      <!-- 显示被删除记录的关键信息 -->
+      <div v-if="deleteBindingRecord" class="deleted-record-info">
+        <el-descriptions :column="1" border size="small">
+          <el-descriptions-item label="记录ID">
+            {{ deleteBindingRecord.id }}
+          </el-descriptions-item>
+          <el-descriptions-item
+            v-for="field in deleteBindingInheritDisplayFields"
+            :key="field.sourceField"
+            :label="getDeleteBindingFieldLabel(field.sourceField)"
+          >
+            {{ formatDeleteBindingValue(deleteBindingRecord[field.sourceField], field.sourceField) }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </div>
+
+      <!-- 动态表单（使用目标集合的字段配置） -->
+      <DynamicForm
+        v-if="deleteBindingDialogVisible && deleteBindingFields.length > 0"
+        ref="deleteBindingFormRef"
+        :fields="deleteBindingFields"
+        :initial-data="deleteBindingFormData"
+        :show-actions="false"
+        @submit="handleDeleteBindingFormSubmit"
+      />
+
+      <!-- 如果没有表单字段需要填写，显示提示 -->
+      <el-alert
+        v-else-if="deleteBindingFields.length === 0"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-top: 16px"
+      >
+        <template #title>
+          所有字段将自动继承，点击确认删除即可。
+        </template>
+      </el-alert>
+
+      <template #footer>
+        <el-button @click="deleteBindingDialogVisible = false" :disabled="deleteBindingLoading">
+          取消
+        </el-button>
+        <el-button
+          type="danger"
+          @click="handleDeleteBindingSubmit"
+          :loading="deleteBindingLoading"
+        >
+          确认删除
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量删除绑定对话框 -->
+    <el-dialog
+      v-model="batchDeleteBindingDialogVisible"
+      :title="pageConfig?.deleteBinding?.dialogTitle || '批量删除确认'"
+      :width="pageConfig?.deleteBinding?.dialogWidth || '500px'"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!batchDeleteBindingLoading"
+      :show-close="!batchDeleteBindingLoading"
+      destroy-on-close
+    >
+      <!-- 进度显示 -->
+      <div v-if="batchDeleteBindingLoading" class="batch-progress">
+        <el-progress :percentage="batchDeleteBindingProgress" :stroke-width="20" striped striped-flow />
+        <p>正在处理... {{ batchDeleteBindingCurrent }} / {{ batchDeleteBindingTotal }}</p>
+      </div>
+
+      <!-- 表单内容 -->
+      <template v-else>
+        <el-alert
+          type="warning"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 16px"
+        >
+          <template #title>
+            确定要删除选中的 {{ selectedRows.length }} 条记录吗？删除后将自动创建相关记录。
+          </template>
+        </el-alert>
+
+        <!-- 动态表单（使用目标集合的字段配置） -->
+        <DynamicForm
+          v-if="deleteBindingFields.length > 0"
+          ref="batchDeleteBindingFormRef"
+          :fields="deleteBindingFields"
+          :initial-data="batchDeleteBindingFormData"
+          :show-actions="false"
+          @submit="handleBatchDeleteBindingFormSubmit"
+        />
+
+        <!-- 如果没有表单字段需要填写，显示提示 -->
+        <el-alert
+          v-else
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-top: 16px"
+        >
+          <template #title>
+            所有字段将自动继承，点击确认删除即可。
+          </template>
+        </el-alert>
+      </template>
+
+      <template #footer>
+        <el-button
+          @click="batchDeleteBindingDialogVisible = false"
+          :disabled="batchDeleteBindingLoading"
+        >
+          取消
+        </el-button>
+        <el-button
+          type="danger"
+          @click="handleBatchDeleteBindingSubmit"
+          :loading="batchDeleteBindingLoading"
+          :disabled="batchDeleteBindingLoading"
+        >
+          确认删除全部
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 隐藏的文件选择器 -->
     <input
       ref="fileInputRef"
@@ -517,7 +660,7 @@ import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImport
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig } from '@/types'
 
 // ==================== Props ====================
 
@@ -633,6 +776,58 @@ const deleteRecordId = ref<string>('')
  * 批量删除对话框可见性
  */
 const batchDeleteDialogVisible = ref(false)
+
+/**
+ * 删除绑定对话框可见性
+ */
+const deleteBindingDialogVisible = ref(false)
+
+/**
+ * 待删除绑定的记录
+ */
+const deleteBindingRecord = ref<DynamicRecord | null>(null)
+
+/**
+ * 删除绑定表单数据
+ */
+const deleteBindingFormData = ref<Record<string, any>>({})
+
+/**
+ * 删除绑定表单引用
+ */
+const deleteBindingFormRef = ref<InstanceType<typeof DynamicForm>>()
+
+/**
+ * 删除绑定提交加载状态
+ */
+const deleteBindingLoading = ref(false)
+
+/**
+ * 批量删除绑定对话框可见性
+ */
+const batchDeleteBindingDialogVisible = ref(false)
+
+/**
+ * 批量删除绑定表单数据
+ */
+const batchDeleteBindingFormData = ref<Record<string, any>>({})
+
+/**
+ * 批量删除绑定表单引用
+ */
+const batchDeleteBindingFormRef = ref<InstanceType<typeof DynamicForm>>()
+
+/**
+ * 批量删除绑定提交加载状态
+ */
+const batchDeleteBindingLoading = ref(false)
+
+/**
+ * 批量删除绑定进度
+ */
+const batchDeleteBindingProgress = ref(0)
+const batchDeleteBindingCurrent = ref(0)
+const batchDeleteBindingTotal = ref(0)
 
 /**
  * 当前选中的行
@@ -998,6 +1193,47 @@ const paginatedData = computed<DynamicRecord[]>(() => {
   return filteredData.value.slice(start, end)
 })
 
+/**
+ * 删除绑定配置
+ */
+const deleteBindingConfig = computed<DeleteBindingConfig | undefined>(() => {
+  return pageConfig.value?.deleteBinding
+})
+
+/**
+ * 删除绑定表单字段（直接使用目标集合的字段配置）
+ */
+const deleteBindingFields = computed<FieldConfig[]>(() => {
+  if (!deleteBindingConfig.value?.targetCollection) return []
+
+  // 获取目标集合的字段配置
+  const targetPageId = `page-${deleteBindingConfig.value.targetCollection}`
+  const targetConfig = pageConfigStore.getPageConfigById(targetPageId)
+
+  if (!targetConfig?.fields) return []
+
+  // 过滤掉继承字段（继承字段会自动填充，不需要用户填写）
+  const inheritTargetFields = new Set(
+    deleteBindingConfig.value.inheritFields?.map(m => m.targetField) || []
+  )
+
+  // 过滤掉系统自动填充字段
+  const systemFields = new Set(['_operatorName', '_operatorUsername', '_deletedAt', '_sourceRecordId', '_sourceCollection'])
+
+  return targetConfig.fields.filter(f =>
+    !inheritTargetFields.has(f.fieldName) &&
+    !systemFields.has(f.fieldName)
+  )
+})
+
+/**
+ * 删除绑定继承字段显示列表（去重，最多显示5个）
+ */
+const deleteBindingInheritDisplayFields = computed<{ sourceField: string; targetField: string }[]>(() => {
+  const inheritFields = deleteBindingConfig.value?.inheritFields || []
+  return inheritFields.slice(0, 5)
+})
+
 // ==================== 方法 ====================
 
 /**
@@ -1284,8 +1520,18 @@ function handleEdit(row: DynamicRecord): void {
  */
 function handleDeleteConfirm(row: DynamicRecord): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
-  deleteRecordId.value = row.id
-  deleteDialogVisible.value = true
+
+  // 检测是否启用删除绑定
+  if (pageConfig.value?.deleteBinding?.enabled) {
+    // 显示删除绑定表单对话框
+    deleteBindingRecord.value = row
+    deleteBindingFormData.value = {}
+    deleteBindingDialogVisible.value = true
+  } else {
+    // 显示普通确认对话框
+    deleteRecordId.value = row.id
+    deleteDialogVisible.value = true
+  }
 }
 
 /**
@@ -1306,6 +1552,127 @@ async function handleDelete(): Promise<void> {
 }
 
 /**
+ * 处理删除绑定表单提交
+ */
+async function handleDeleteBindingSubmit(): Promise<void> {
+  const config = pageConfig.value?.deleteBinding
+  if (!config || !deleteBindingRecord.value) return
+
+  // 验证表单（如果有表单字段）
+  if (deleteBindingFields.value.length > 0 && deleteBindingFormRef.value) {
+    const isValid = await deleteBindingFormRef.value.validate()
+    if (!isValid) return
+  }
+
+  // 获取表单数据（如果有表单）
+  const formData = deleteBindingFormRef.value?.getFormData() || {}
+  const targetData: Record<string, any> = { ...formData }
+
+  // 1. 填充继承字段
+  for (const mapping of config.inheritFields) {
+    targetData[mapping.targetField] = deleteBindingRecord.value[mapping.sourceField]
+  }
+
+  // 2. 自动填充操作者信息
+  if (config.autoFillOperator) {
+    targetData._operatorName = authStore.user?.displayName || authStore.user?.username || ''
+    targetData._operatorUsername = authStore.user?.username || ''
+    targetData._deletedAt = new Date().toISOString()
+  }
+
+  // 3. 记录被删除记录信息
+  targetData._sourceRecordId = deleteBindingRecord.value.id
+  targetData._sourceCollection = collection.value
+
+  deleteBindingLoading.value = true
+  try {
+    // 4. 先创建目标记录
+    await pageConfigStore.addPageData(`page-${config.targetCollection}`, targetData)
+
+    // 5. 再删除原记录
+    await pageConfigStore.deletePageData(pageId.value, deleteBindingRecord.value.id)
+
+    ElMessage.success('操作成功')
+    deleteBindingDialogVisible.value = false
+    deleteBindingRecord.value = null
+    deleteBindingFormData.value = {}
+
+    // 刷新数据
+    await loadPageData()
+  } catch (error: any) {
+    const resp = error.response?.data
+    if (resp?.error) {
+      ElMessage.error(`操作失败: ${resp.error}`)
+    } else {
+      ElMessage.error('操作失败')
+    }
+  } finally {
+    deleteBindingLoading.value = false
+  }
+}
+
+/**
+ * 处理删除绑定表单提交事件
+ */
+async function handleDeleteBindingFormSubmit(data: Record<string, any>): Promise<void> {
+  deleteBindingFormData.value = data
+  await handleDeleteBindingSubmit()
+}
+
+/**
+ * 获取删除绑定字段标签
+ */
+function getDeleteBindingFieldLabel(fieldName: string): string {
+  const field = pageFields.value.find(f => f.fieldName === fieldName)
+  return field?.label || fieldName
+}
+
+/**
+ * 格式化删除绑定字段值
+ */
+function formatDeleteBindingValue(value: any, fieldName: string): string {
+  if (value === null || value === undefined || value === '') return '-'
+
+  const field = pageFields.value.find(f => f.fieldName === fieldName)
+  if (!field) return String(value)
+
+  // 选项类字段
+  if (['select', 'radio'].includes(field.controlType)) {
+    const opt = field.options?.find(o => o.value === value)
+    return opt?.label || String(value)
+  }
+
+  // 多选类字段
+  if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+    if (Array.isArray(value)) {
+      return value.map(v => {
+        const opt = field.options?.find(o => o.value === v)
+        return opt?.label || String(v)
+      }).join(', ')
+    }
+  }
+
+  // 日期时间字段
+  if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
+    try {
+      const date = new Date(value)
+      if (isNaN(date.getTime())) return String(value)
+      const y = date.getFullYear()
+      const m = String(date.getMonth() + 1).padStart(2, '0')
+      const d = String(date.getDate()).padStart(2, '0')
+      if (field.controlType === 'date') return `${y}-${m}-${d}`
+      const hh = String(date.getHours()).padStart(2, '0')
+      const mm = String(date.getMinutes()).padStart(2, '0')
+      return `${y}-${m}-${d} ${hh}:${mm}`
+    } catch {
+      return String(value)
+    }
+  }
+
+  return String(value)
+}
+
+/**
  * 处理多选变化
  */
 function handleSelectionChange(rows: DynamicRecord[]): void {
@@ -1318,7 +1685,19 @@ function handleSelectionChange(rows: DynamicRecord[]): void {
 function handleBatchDeleteConfirm(): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   if (selectedRows.value.length === 0) return
-  batchDeleteDialogVisible.value = true
+
+  // 检测是否启用删除绑定
+  if (pageConfig.value?.deleteBinding?.enabled) {
+    // 显示批量删除绑定表单对话框
+    batchDeleteBindingFormData.value = {}
+    batchDeleteBindingProgress.value = 0
+    batchDeleteBindingCurrent.value = 0
+    batchDeleteBindingTotal.value = selectedRows.value.length
+    batchDeleteBindingDialogVisible.value = true
+  } else {
+    // 显示普通批量删除确认对话框
+    batchDeleteDialogVisible.value = true
+  }
 }
 
 /**
@@ -1346,6 +1725,92 @@ async function handleBatchDelete(): Promise<void> {
   } catch {
     ElMessage.error('批量删除失败')
   }
+}
+
+/**
+ * 处理批量删除绑定表单提交
+ */
+async function handleBatchDeleteBindingSubmit(): Promise<void> {
+  const config = pageConfig.value?.deleteBinding
+  if (!config || selectedRows.value.length === 0) return
+
+  // 验证表单（如果有表单字段）
+  if (deleteBindingFields.value.length > 0 && batchDeleteBindingFormRef.value) {
+    const isValid = await batchDeleteBindingFormRef.value.validate()
+    if (!isValid) return
+  }
+
+  // 获取表单数据（如果有表单）
+  const formData = batchDeleteBindingFormRef.value?.getFormData() || {}
+  const rows = [...selectedRows.value]
+
+  batchDeleteBindingLoading.value = true
+  batchDeleteBindingTotal.value = rows.length
+  batchDeleteBindingCurrent.value = 0
+
+  let successCount = 0
+  let failCount = 0
+
+  try {
+    for (const row of rows) {
+      batchDeleteBindingCurrent.value++
+      batchDeleteBindingProgress.value = Math.round((batchDeleteBindingCurrent.value / batchDeleteBindingTotal.value) * 100)
+
+      try {
+        const targetData: Record<string, any> = { ...formData }
+
+        // 1. 填充继承字段
+        for (const mapping of config.inheritFields) {
+          targetData[mapping.targetField] = row[mapping.sourceField]
+        }
+
+        // 2. 自动填充操作者信息
+        if (config.autoFillOperator) {
+          targetData._operatorName = authStore.user?.displayName || authStore.user?.username || ''
+          targetData._operatorUsername = authStore.user?.username || ''
+          targetData._deletedAt = new Date().toISOString()
+        }
+
+        // 3. 记录被删除记录信息
+        targetData._sourceRecordId = row.id
+        targetData._sourceCollection = collection.value
+
+        // 4. 先创建目标记录
+        await pageConfigStore.addPageData(`page-${config.targetCollection}`, targetData)
+
+        // 5. 再删除原记录
+        await pageConfigStore.deletePageData(pageId.value, row.id)
+
+        successCount++
+      } catch {
+        failCount++
+      }
+    }
+
+    batchDeleteBindingDialogVisible.value = false
+    selectedRows.value = []
+    dataTableRef.value?.clearSelection()
+
+    if (failCount === 0) {
+      ElMessage.success(`成功处理 ${successCount} 条记录`)
+    } else {
+      ElMessage.warning(`处理完成：成功 ${successCount} 条，失败 ${failCount} 条`)
+    }
+
+    await loadPageData()
+  } catch (error) {
+    ElMessage.error('批量操作失败')
+  } finally {
+    batchDeleteBindingLoading.value = false
+  }
+}
+
+/**
+ * 处理批量删除绑定表单提交事件
+ */
+async function handleBatchDeleteBindingFormSubmit(data: Record<string, any>): Promise<void> {
+  batchDeleteBindingFormData.value = data
+  await handleBatchDeleteBindingSubmit()
 }
 
 /**
@@ -2058,5 +2523,19 @@ onActivated(async () => {
   width: 80px;
   height: 80px;
   border-radius: 4px;
+}
+
+.deleted-record-info {
+  margin-bottom: 16px;
+}
+
+.batch-progress {
+  text-align: center;
+  padding: 20px 0;
+
+  p {
+    margin-top: 12px;
+    color: #909399;
+  }
 }
 </style>

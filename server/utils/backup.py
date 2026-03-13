@@ -25,7 +25,8 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 BACKUP_TABLES = [
     ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}, '菜单配置'),
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
-                      'export_scripts', 'row_export_scripts', 'api_public', 'validation_script'], {4, 7, 8}, '页面配置'),
+                      'export_scripts', 'row_export_scripts', 'api_public', 'validation_script',
+                      'api_writable', 'view_config', 'delete_binding'], {4, 7, 8, 12, 13}, '页面配置'),
     ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version'], {2}, '动态数据'),
     ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '数据关联'),
     ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set(), '用户数据'),

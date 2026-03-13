@@ -271,6 +271,134 @@
                   @update="handleFieldsUpdate"
                 />
               </el-tab-pane>
+
+              <!-- Tab 4: 删除绑定 -->
+              <el-tab-pane label="删除绑定" name="deleteBinding">
+                <el-form label-width="100px" class="page-form">
+                  <el-form-item label="启用删除绑定">
+                    <el-switch
+                      v-model="deleteBindingEnabled"
+                      active-text="启用"
+                      inactive-text="关闭"
+                    />
+                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      启用后，删除数据时会弹出表单让用户填写信息，保存后再执行删除
+                    </div>
+                  </el-form-item>
+
+                  <template v-if="deleteBindingEnabled">
+                    <el-form-item label="目标集合" required>
+                      <el-select
+                        v-model="deleteBindingTargetCollection"
+                        placeholder="选择目标集合"
+                        style="width: 100%"
+                      >
+                        <el-option
+                          v-for="c in availableTargetCollections"
+                          :key="c.id"
+                          :label="c.name"
+                          :value="c.id"
+                        />
+                      </el-select>
+                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        删除记录时，表单数据将保存到此集合
+                      </div>
+                    </el-form-item>
+
+                    <el-form-item label="对话框标题">
+                      <el-input
+                        v-model="deleteBindingDialogTitle"
+                        placeholder="如：设备报废登记"
+                        clearable
+                      />
+                    </el-form-item>
+
+                    <el-form-item label="对话框宽度">
+                      <el-input
+                        v-model="deleteBindingDialogWidth"
+                        placeholder="500px"
+                        style="width: 200px"
+                      />
+                    </el-form-item>
+
+                    <el-form-item label="自动填充">
+                      <el-switch
+                        v-model="deleteBindingAutoFillOperator"
+                        active-text="操作者信息"
+                        inactive-text="关闭"
+                      />
+                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        自动填充操作者用户名、删除时间、源记录ID等信息
+                      </div>
+                    </el-form-item>
+
+                    <el-divider content-position="left">继承字段映射</el-divider>
+
+                    <div class="inherit-fields-config">
+                      <div
+                        v-for="(mapping, index) in deleteBindingInheritFields"
+                        :key="index"
+                        class="inherit-field-item"
+                      >
+                        <el-select
+                          v-model="mapping.sourceField"
+                          placeholder="源字段"
+                          style="width: 180px"
+                        >
+                          <el-option
+                            v-for="f in currentFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                        <el-icon class="arrow-icon"><Right /></el-icon>
+                        <el-select
+                          v-model="mapping.targetField"
+                          placeholder="目标字段"
+                          style="width: 180px"
+                          :disabled="!deleteBindingTargetCollection"
+                        >
+                          <el-option
+                            v-for="f in targetCollectionFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                        <el-button
+                          type="danger"
+                          link
+                          @click="removeInheritField(index)"
+                        >
+                          删除
+                        </el-button>
+                      </div>
+                      <el-button type="primary" link @click="addInheritField">
+                        + 添加继承字段
+                      </el-button>
+                    </div>
+
+                    <el-alert type="info" :closable="false" show-icon style="margin-top: 16px">
+                      <template #title>
+                        表单字段将自动使用目标集合的字段配置，继承字段会自动填充无需用户填写。
+                      </template>
+                    </el-alert>
+                  </template>
+
+                  <el-empty v-else :image-size="60" description="启用删除绑定以配置" />
+
+                  <el-form-item style="margin-top: 20px">
+                    <el-button
+                      type="primary"
+                      @click="handleSaveDeleteBinding"
+                      :loading="saveLoading"
+                    >
+                      保存
+                    </el-button>
+                  </el-form-item>
+                </el-form>
+              </el-tab-pane>
             </el-tabs>
           </div>
 
@@ -349,11 +477,11 @@
 import { ref, computed, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus, Search } from '@element-plus/icons-vue'
+import { Plus, Search, Right } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import FieldConfigEditor from './FieldConfigEditor.vue'
-import type { PageConfig, PageFormData, FieldConfig } from '@/types'
+import type { PageConfig, PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
 import type { ExportScript } from '@/types'
 import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
@@ -440,6 +568,16 @@ const kanbanCardTitle = ref('')
 const kanbanCardFields = ref<string[]>([])
 const kanbanColorField = ref('')
 
+/**
+ * 删除绑定配置响应式状态
+ */
+const deleteBindingEnabled = ref(false)
+const deleteBindingTargetCollection = ref('')
+const deleteBindingDialogTitle = ref('')
+const deleteBindingDialogWidth = ref('500px')
+const deleteBindingAutoFillOperator = ref(true)
+const deleteBindingInheritFields = ref<InheritFieldMapping[]>([])
+
 // ==================== 计算属性（脚本筛选） ====================
 
 const pageExportScripts = computed(() =>
@@ -512,6 +650,28 @@ const detailTitle = computed(() => {
   return currentPageConfig.value?.name || '页面详情'
 })
 
+/**
+ * 可选的目标集合列表（排除当前页面）
+ */
+const availableTargetCollections = computed(() => {
+  return pageConfigs.value
+    .filter(p => p.id !== currentPageId.value)
+    .map(p => ({
+      id: p.id.replace('page-', ''),
+      name: p.name
+    }))
+})
+
+/**
+ * 目标集合的字段列表
+ */
+const targetCollectionFields = computed<FieldConfig[]>(() => {
+  if (!deleteBindingTargetCollection.value) return []
+  const targetPageId = `page-${deleteBindingTargetCollection.value}`
+  const targetConfig = pageConfigStore.getPageConfigById(targetPageId)
+  return targetConfig?.fields || []
+})
+
 // ==================== 方法 ====================
 
 /**
@@ -538,6 +698,14 @@ function handleSelect(config: PageConfig): void {
   kanbanCardTitle.value = vc.kanban?.cardTitle || ''
   kanbanCardFields.value = vc.kanban?.cardFields || []
   kanbanColorField.value = vc.kanban?.cardColorField || ''
+  // Load delete binding config
+  const db = config.deleteBinding
+  deleteBindingEnabled.value = db?.enabled || false
+  deleteBindingTargetCollection.value = db?.targetCollection || ''
+  deleteBindingDialogTitle.value = db?.dialogTitle || ''
+  deleteBindingDialogWidth.value = db?.dialogWidth || '500px'
+  deleteBindingAutoFillOperator.value = db?.autoFillOperator ?? true
+  deleteBindingInheritFields.value = db?.inheritFields ? [...db.inheritFields] : []
 }
 
 /**
@@ -594,6 +762,20 @@ async function handleSavePageInfo(): Promise<void> {
     }
   }
 
+  // Build deleteBinding config
+  let deleteBinding: DeleteBindingConfig | undefined
+  if (deleteBindingEnabled.value && deleteBindingTargetCollection.value) {
+    deleteBinding = {
+      enabled: true,
+      targetCollection: deleteBindingTargetCollection.value,
+      dialogTitle: deleteBindingDialogTitle.value || undefined,
+      dialogWidth: deleteBindingDialogWidth.value || '500px',
+      autoFillOperator: deleteBindingAutoFillOperator.value,
+      inheritFields: deleteBindingInheritFields.value,
+      fields: deleteBindingFields.value,
+    }
+  }
+
   saveLoading.value = true
   try {
     await pageConfigStore.updatePageConfig(currentPageId.value, {
@@ -606,6 +788,7 @@ async function handleSavePageInfo(): Promise<void> {
       apiWritable: formData.value.apiPublic ? formData.value.apiWritable : false,
       validationScript: formData.value.validationScript || undefined,
       viewConfig,
+      deleteBinding,
       fields: currentFields.value
     })
     ElMessage.success('保存成功')
@@ -627,6 +810,70 @@ async function handleFieldsUpdate(fields: FieldConfig[]): Promise<void> {
     ElMessage.success('字段配置已更新')
   } catch (error) {
     ElMessage.error('更新失败')
+  }
+}
+
+/**
+ * 添加继承字段映射
+ */
+function addInheritField(): void {
+  deleteBindingInheritFields.value.push({
+    sourceField: '',
+    targetField: ''
+  })
+}
+
+/**
+ * 删除继承字段映射
+ */
+function removeInheritField(index: number): void {
+  deleteBindingInheritFields.value.splice(index, 1)
+}
+
+/**
+ * 处理保存删除绑定配置
+ */
+async function handleSaveDeleteBinding(): Promise<void> {
+  if (!currentPageId.value) return
+
+  // Build deleteBinding config
+  let deleteBinding: DeleteBindingConfig | undefined
+  if (deleteBindingEnabled.value && deleteBindingTargetCollection.value) {
+    deleteBinding = {
+      enabled: true,
+      targetCollection: deleteBindingTargetCollection.value,
+      dialogTitle: deleteBindingDialogTitle.value || undefined,
+      dialogWidth: deleteBindingDialogWidth.value || '500px',
+      autoFillOperator: deleteBindingAutoFillOperator.value,
+      inheritFields: deleteBindingInheritFields.value,
+      fields: [], // 不再需要单独配置，表单字段自动从目标集合获取
+    }
+  }
+
+  saveLoading.value = true
+  try {
+    // 获取当前页面配置
+    const currentConfig = currentPageConfig.value
+    if (!currentConfig) return
+
+    await pageConfigStore.updatePageConfig(currentPageId.value, {
+      name: currentConfig.name,
+      description: currentConfig.description || '',
+      apiEndpoint: currentConfig.apiEndpoint,
+      exportScripts: currentConfig.exportScripts || [],
+      rowExportScripts: currentConfig.rowExportScripts || [],
+      apiPublic: currentConfig.apiPublic || false,
+      apiWritable: currentConfig.apiWritable || false,
+      validationScript: currentConfig.validationScript || undefined,
+      viewConfig: currentConfig.viewConfig || {},
+      deleteBinding,
+      fields: currentConfig.fields
+    })
+    ElMessage.success('删除绑定配置已保存')
+  } catch (error) {
+    ElMessage.error('保存失败')
+  } finally {
+    saveLoading.value = false
   }
 }
 
@@ -764,6 +1011,24 @@ onActivated(async () => {
 
   :deep(.el-tabs__content) {
     padding: 16px 8px;
+  }
+}
+
+.inherit-fields-config {
+  margin-bottom: 16px;
+
+  .inherit-field-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 8px;
+    background-color: #f5f7fa;
+    border-radius: 4px;
+
+    .arrow-icon {
+      color: #909399;
+    }
   }
 }
 </style>

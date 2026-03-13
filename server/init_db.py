@@ -426,6 +426,16 @@ def init_db():
             conn.commit()
             print("Added view_config column to page_configs table.")
 
+        # Migration: add delete_binding column to page_configs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'delete_binding'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN delete_binding JSONB")
+            conn.commit()
+            print("Added delete_binding column to page_configs table.")
+
         # Migration: add field_changes column to operation_logs
         cur.execute("""
             SELECT column_name FROM information_schema.columns

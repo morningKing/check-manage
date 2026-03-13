@@ -7,6 +7,43 @@
 import type { FieldConfig } from './field'
 
 /**
+ * 继承字段映射接口
+ *
+ * 用于删除绑定时，将源记录的字段值映射到目标记录
+ */
+export interface InheritFieldMapping {
+  /** 源字段名（被删除记录的字段） */
+  sourceField: string
+  /** 目标字段名（目标集合的字段） */
+  targetField: string
+}
+
+/**
+ * 删除绑定配置接口
+ *
+ * 定义删除数据时的绑定行为：
+ * - 弹出表单让用户填写信息
+ * - 保存到目标集合
+ * - 再执行删除操作
+ */
+export interface DeleteBindingConfig {
+  /** 是否启用删除绑定 */
+  enabled: boolean
+  /** 目标集合（不含 page- 前缀） */
+  targetCollection: string
+  /** 对话框标题 */
+  dialogTitle?: string
+  /** 对话框宽度 */
+  dialogWidth?: string
+  /** 继承字段映射（从被删除记录自动填充到目标记录） */
+  inheritFields: InheritFieldMapping[]
+  /** 表单字段定义（用户填写的字段） */
+  fields: FieldConfig[]
+  /** 自动填充操作者信息 */
+  autoFillOperator: boolean
+}
+
+/**
  * 页面配置接口
  *
  * 定义单个数据页面的完整配置
@@ -44,6 +81,7 @@ export interface PageConfig {
   apiWritable?: boolean
   validationScript?: string
   viewConfig?: ViewConfig
+  deleteBinding?: DeleteBindingConfig
   createdAt: string
   updatedAt: string
 }
@@ -64,6 +102,7 @@ export interface PageFormData {
   apiWritable?: boolean
   validationScript?: string
   viewConfig?: ViewConfig
+  deleteBinding?: DeleteBindingConfig
 }
 
 /**
