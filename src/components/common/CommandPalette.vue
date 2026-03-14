@@ -219,7 +219,7 @@ function getPinyinInitials(text: string): string {
     '测': 'c', '试': 's', '功': 'g', '能': 'n',
     '家': 'j', '庭': 't', '企': 'q', '业': 'y',
     '工': 'g', '作': 'z', '目': 'm', '标': 'b',
-    '项': 'x', '务': 'w', '任': 'r', '务': 'w'
+    '项': 'x', '务': 'w', '任': 'r'
   }
 
   let result = ''

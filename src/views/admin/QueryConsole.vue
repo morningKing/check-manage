@@ -17,10 +17,20 @@
             :value="c.collection"
           />
         </el-select>
+
+        <!-- 查询模式切换 -->
+        <el-radio-group v-model="queryMode" size="default" style="margin-left: 12px;">
+          <el-radio-button value="mongodb">MongoDB 语法</el-radio-button>
+          <el-radio-button value="ai" :disabled="!aiEnabled">
+            <el-icon v-if="!aiEnabled" style="margin-right: 4px;"><Lock /></el-icon>
+            AI 搜索
+          </el-radio-button>
+        </el-radio-group>
+
         <el-button type="primary" :icon="CaretRight" :loading="executing" @click="executeQuery">
           执行 (Ctrl+Enter)
         </el-button>
-        <el-button :icon="Refresh" @click="formatJson">格式化</el-button>
+        <el-button v-if="queryMode === 'mongodb'" :icon="Refresh" @click="formatJson">格式化</el-button>
         <el-button
           :icon="Download"
           :disabled="!resultData.length"
@@ -35,7 +45,9 @@
           </span>
         </div>
       </div>
-      <div class="editor-body">
+
+      <!-- MongoDB 语法编辑器 -->
+      <div v-if="queryMode === 'mongodb'" class="editor-body">
         <div class="editor-main">
           <Codemirror
             v-model="queryText"
@@ -87,7 +99,78 @@
           </div>
         </div>
       </div>
+
+      <!-- AI 搜索模式 -->
+      <div v-else class="ai-search-area">
+        <div class="ai-search-input-wrapper">
+          <el-input
+            v-model="aiSearchText"
+            type="textarea"
+            :rows="3"
+            placeholder="用自然语言描述查询条件，例如：&#10;- 查找所有状态为待审核的记录&#10;- 名称包含关键词且创建时间在最近7天&#10;- 金额大于1000的客户"
+            :disabled="aiSearchLoading"
+            @keydown="handleAiInputKeydown"
+          />
+          <div class="ai-search-actions">
+            <el-button
+              type="primary"
+              :icon="MagicStick"
+              :loading="aiSearchLoading"
+              :disabled="!aiSearchText.trim() || !selectedCollection"
+              @click="handleAiSearch"
+            >
+              {{ aiSearchLoading ? 'AI 分析中...' : 'AI 生成查询' }}
+            </el-button>
+            <el-button
+              v-if="aiGeneratedFilter"
+              :icon="View"
+              @click="showGeneratedFilter = true"
+            >
+              查看生成结果
+            </el-button>
+          </div>
+        </div>
+        <div class="ai-search-sidebar">
+          <div class="sidebar-title">字段列表</div>
+          <el-scrollbar class="field-list-scroll">
+            <div
+              v-for="f in aiQueryableFields"
+              :key="f.fieldName"
+              class="field-item"
+              :title="`${f.label} (${f.fieldName}) - ${f.controlType}`"
+            >
+              <span class="field-label">{{ f.label }}</span>
+              <span class="field-name">{{ f.fieldName }}</span>
+            </div>
+            <div v-if="!aiQueryableFields.length" class="field-empty">
+              {{ selectedCollection ? '无可查询字段' : '请先选择集合' }}
+            </div>
+          </el-scrollbar>
+          <div v-if="!aiEnabled" class="ai-disabled-hint">
+            <el-icon><Warning /></el-icon>
+            <span>AI 搜索未启用，请联系管理员配置</span>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <!-- 查看生成的Filter对话框 -->
+    <el-dialog v-model="showGeneratedFilter" title="AI 生成的查询条件" width="600px">
+      <div class="generated-filter-view">
+        <div class="filter-section">
+          <div class="filter-label">自然语言输入：</div>
+          <div class="filter-content ai-input-text">{{ aiSearchText }}</div>
+        </div>
+        <div class="filter-section">
+          <div class="filter-label">生成的 MongoDB Filter：</div>
+          <pre class="filter-content mongo-filter">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="showGeneratedFilter = false">关闭</el-button>
+        <el-button type="primary" @click="applyGeneratedFilter">应用到编辑器</el-button>
+      </template>
+    </el-dialog>
 
     <!-- Bottom: Results Area -->
     <div class="results-area">
@@ -146,7 +229,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CaretRight, Refresh, Download } from '@element-plus/icons-vue'
+import { CaretRight, Refresh, Download, MagicStick, View, Lock, Warning } from '@element-plus/icons-vue'
 import { Codemirror } from 'vue-codemirror'
 import { json, jsonParseLinter } from '@codemirror/lang-json'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -175,9 +258,22 @@ interface ResultColumn {
   isLookup?: boolean
 }
 
+interface AiSettings {
+  enabled: boolean
+  apiKey: string
+  endpoint: string
+  model: string
+  timeout: number
+  maxTokens: number
+}
+
+// 不能通过AI查询的字段类型
+const AI_SKIP_TYPES = new Set(['relation', 'reference', 'quoteSelect', 'file', 'image', 'richText'])
+
 // State
 const collections = ref<CollectionInfo[]>([])
 const selectedCollection = ref('')
+const queryMode = ref<'mongodb' | 'ai'>('mongodb')
 const queryText = ref(`{
   "collection": "",
   "query": {},
@@ -196,6 +292,13 @@ const resultTime = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(100)
 const resultTableHeight = ref(400)
+
+// AI 搜索相关状态
+const aiEnabled = ref(false)
+const aiSearchText = ref('')
+const aiSearchLoading = ref(false)
+const aiGeneratedFilter = ref<Record<string, any> | null>(null)
+const showGeneratedFilter = ref(false)
 
 // Build autocomplete source from current collection fields
 function fieldCompletions(context: any) {
@@ -268,6 +371,11 @@ const filteredFields = computed(() => {
   )
 })
 
+// AI 可查询的字段（排除关联、文件等类型）
+const aiQueryableFields = computed(() => {
+  return currentFields.value.filter(f => !AI_SKIP_TYPES.has(f.controlType))
+})
+
 // Syntax reference
 const syntaxRef = [
   { label: '$regex', desc: '正则匹配', snippet: '{"$regex": ""}' },
@@ -288,6 +396,14 @@ onMounted(async () => {
     collections.value = await get<CollectionInfo[]>('/query/collections')
   } catch {
     ElMessage.error('加载集合列表失败')
+  }
+  // 加载 AI 设置
+  try {
+    const settings = await get<AiSettings>('/ai/settings')
+    aiEnabled.value = settings.enabled
+  } catch {
+    // AI 设置获取失败，保持默认禁用
+    aiEnabled.value = false
   }
   calcTableHeight()
   window.addEventListener('resize', calcTableHeight)
@@ -414,6 +530,109 @@ async function executeQuery() {
   } finally {
     executing.value = false
   }
+}
+
+// ==================== AI 搜索相关方法 ====================
+
+/**
+ * 处理 AI 输入框键盘事件
+ */
+function handleAiInputKeydown(e: KeyboardEvent) {
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault()
+    handleAiSearch()
+  }
+}
+
+/**
+ * 调用 AI 将自然语言转换为 MongoDB filter
+ */
+async function handleAiSearch() {
+  if (!aiSearchText.value.trim() || !selectedCollection.value) return
+
+  aiSearchLoading.value = true
+  queryError.value = ''
+  aiGeneratedFilter.value = null
+
+  try {
+    // 调用 AI 接口生成 filter
+    const res = await post<{ filter: Record<string, any> }>('/ai/query', {
+      collection: selectedCollection.value,
+      question: aiSearchText.value.trim()
+    })
+
+    aiGeneratedFilter.value = res.filter
+
+    // 直接执行查询
+    await executeAiGeneratedQuery(res.filter)
+  } catch (e: any) {
+    const msg = e?.response?.data?.error || e.message || 'AI 查询生成失败'
+    queryError.value = msg
+  } finally {
+    aiSearchLoading.value = false
+  }
+}
+
+/**
+ * 执行 AI 生成的查询
+ */
+async function executeAiGeneratedQuery(filter: Record<string, any>) {
+  executing.value = true
+  executed.value = false
+  const startTime = Date.now()
+
+  const body = {
+    collection: selectedCollection.value,
+    query: filter,
+    lookup: [],
+    sort: {},
+    skip: (currentPage.value - 1) * pageSize.value,
+    limit: pageSize.value
+  }
+
+  try {
+    const res = await post<any>('/query/execute', body)
+    resultTime.value = Date.now() - startTime
+    resultData.value = res.data || []
+    resultTotal.value = res.total || 0
+    resultColumns.value = res.columns || []
+    executed.value = true
+
+    if (resultData.value.length === 0 && resultTotal.value > 0) {
+      currentPage.value = 1
+      body.skip = 0
+      const res2 = await post<any>('/query/execute', body)
+      resultData.value = res2.data || []
+      resultColumns.value = res2.columns || []
+    }
+  } catch (e: any) {
+    const msg = e?.response?.data?.error || e.message || '查询执行失败'
+    queryError.value = msg
+    resultData.value = []
+    resultTotal.value = -1
+  } finally {
+    executing.value = false
+  }
+}
+
+/**
+ * 将 AI 生成的 filter 应用到 MongoDB 编辑器
+ */
+function applyGeneratedFilter() {
+  showGeneratedFilter.value = false
+
+  const body = {
+    collection: selectedCollection.value,
+    query: aiGeneratedFilter.value || {},
+    lookup: [],
+    sort: {},
+    limit: 200
+  }
+
+  queryText.value = JSON.stringify(body, null, 2)
+  queryMode.value = 'mongodb'
+
+  ElMessage.success('已应用到 MongoDB 编辑器')
 }
 
 function handlePageChange(page: number) {
@@ -658,5 +877,103 @@ function handleExport() {
   display: flex;
   justify-content: flex-end;
   padding-top: 8px;
+}
+
+/* AI Search Area */
+.ai-search-area {
+  display: flex;
+  height: 260px;
+  min-height: 160px;
+}
+
+.ai-search-input-wrapper {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  :deep(.el-textarea__inner) {
+    font-size: 14px;
+    line-height: 1.6;
+  }
+}
+
+.ai-search-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.ai-search-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  border-left: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  background: var(--el-fill-color-lighter, #fafafa);
+  overflow: hidden;
+
+  .sidebar-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--el-text-color-secondary, #909399);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .field-list-scroll {
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+.ai-disabled-hint {
+  margin-top: 12px;
+  padding: 8px;
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--el-color-warning-dark-2, #b88230);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Generated Filter Dialog */
+.generated-filter-view {
+  .filter-section {
+    margin-bottom: 16px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  .filter-label {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--el-text-color-secondary, #909399);
+    font-size: 13px;
+  }
+
+  .filter-content {
+    background: var(--el-fill-color-lighter, #f5f7fa);
+    padding: 12px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  .ai-input-text {
+    color: var(--el-text-color-primary, #303133);
+    white-space: pre-wrap;
+  }
+
+  .mongo-filter {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    overflow-x: auto;
+    margin: 0;
+  }
 }
 </style>
