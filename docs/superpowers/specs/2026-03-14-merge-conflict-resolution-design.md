@@ -88,6 +88,12 @@ interface MergeState {
 | 记录选择 | 勾选/取消勾选记录 | 更新 decisions.addedRecords/removedRecords/modifiedRecords |
 | 字段选择 | 对修改记录逐字段选择值 | 更新 fieldDecisions |
 
+### 步骤导航规则
+
+- **允许跳过步骤**：用户可以从概览直接跳到字段选择，或跳过任意步骤
+- **回退保留选择**：返回上一步时，已做的选择保留不丢失
+- **空合并禁用提交**：当用户未选择任何变更时，提交按钮禁用并显示提示"请至少选择一项变更"
+
 ## API 设计
 
 ### 新增端点
@@ -127,31 +133,62 @@ interface PartialMergeResponse {
 
 ```python
 def apply_partial_merge(source_version_id, target_branch, decisions):
-    # 1. 获取源版本快照数据
-    source_data = get_snapshot_data(source_version_id)
+    """
+    应用部分合并决策（事务包装，部分失败则回滚）
+    """
+    with get_db() as conn:
+        try:
+            # 1. 获取源版本快照数据
+            source_data = get_snapshot_data(source_version_id)
 
-    # 2. 处理新增记录
-    for record_id in decisions.added_record_ids:
-        record = source_data.find(record_id)
-        insert_to_branch(record, target_branch)
+            # 2. 处理新增记录（同步处理关系数据）
+            for record_id in decisions.added_record_ids:
+                record = source_data.find(record_id)
+                insert_to_branch(record, target_branch)
+                # 复制该记录的关系数据
+                copy_relations(record_id, source_version_id, target_branch)
 
-    # 3. 处理删除记录
-    for record_id in decisions.removed_record_ids:
-        delete_from_branch(record_id, target_branch)
+            # 3. 处理删除记录（同步删除关系数据）
+            for record_id in decisions.removed_record_ids:
+                delete_from_branch(record_id, target_branch)
+                # 删除该记录的关系数据
+                delete_relations(record_id, target_branch)
 
-    # 4. 处理修改记录
-    for mod in decisions.modified_records:
-        update_record_fields(
-            mod.record_id,
-            mod.field_values,
-            target_branch
-        )
+            # 4. 处理修改记录
+            for mod in decisions.modified_records:
+                update_record_fields(
+                    mod.record_id,
+                    mod.field_values,
+                    target_branch
+                )
 
-    # 5. 更新 data_hash
-    recalculate_branch_hash(target_branch)
+            # 5. 更新 data_hash
+            recalculate_branch_hash(target_branch)
 
-    return {'success': True, 'merged_count': len(...)}
+            conn.commit()
+            return {'success': True, 'merged_count': len(...)}
+
+        except Exception as e:
+            conn.rollback()
+            raise MergeError('MERGE_FAILED', f'合并失败: {str(e)}')
 ```
+
+### 关系数据处理
+
+合并记录时需同步处理 `data_relations` 表：
+
+| 操作 | 关系数据处理 |
+|------|-------------|
+| 新增记录 | 从源版本复制该记录的所有关系到目标分支 |
+| 删除记录 | 删除目标分支中该记录的所有关系 |
+| 修改记录 | 保留现有关系，仅更新字段值（关系不随字段变化） |
+
+### 事务原子性
+
+部分合并操作使用数据库事务包装：
+- 所有操作（新增、删除、修改、关系处理）在同一事务中执行
+- 任一操作失败，全部回滚
+- 保证数据一致性，避免部分成功导致的数据损坏
 
 ## 前端状态管理
 
@@ -177,6 +214,12 @@ export function useMergeState() {
     state.decisions.removedRecords.size > 0 ||
     state.decisions.modifiedRecords.size > 0
   )
+
+  const canSubmit = computed(() => hasChanges.value)
+
+  // 提交按钮状态
+  // :disabled="!canSubmit"
+  // 禁用时显示提示："请至少选择一项变更"
 
   const modifiedRecordCount = computed(() =>
     state.diffResult?.modified?.length ?? 0
@@ -204,6 +247,7 @@ export function useMergeState() {
   return {
     state,
     hasChanges,
+    canSubmit,
     modifiedRecordCount,
     acceptAllSource,
     acceptAllTarget,
