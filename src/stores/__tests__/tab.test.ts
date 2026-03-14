@@ -1,11 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useTabStore } from '../tab'
 import type { TabItem } from '../tab'
 
+// Mock localStorage
+const localStorageMock = (() => {
+  let store: Record<string, string> = {}
+  return {
+    getItem: vi.fn((key: string) => store[key] || null),
+    setItem: vi.fn((key: string, value: string) => { store[key] = value }),
+    removeItem: vi.fn((key: string) => { delete store[key] }),
+    clear: vi.fn(() => { store = {} }),
+  }
+})()
+Object.defineProperty(global, 'localStorage', { value: localStorageMock })
+
 describe('Tab Store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorageMock.clear()
   })
 
   it('初始状态包含首页标签', () => {
@@ -171,6 +184,62 @@ describe('Tab Store', () => {
       expect(store.tabs).toHaveLength(1)
       expect(store.tabs[0].path).toBe('/home')
       expect(store.activeTabPath).toBe('/home')
+    })
+  })
+
+  describe('recentPages', () => {
+    it('初始状态为空数组', () => {
+      const store = useTabStore()
+      expect(store.recentPages).toEqual([])
+    })
+
+    it('addRecentPage 添加最近访问记录', () => {
+      const store = useTabStore()
+      store.addRecentPage({ path: '/page/1', name: '页面1' })
+
+      expect(store.recentPages).toHaveLength(1)
+      expect(store.recentPages[0].path).toBe('/page/1')
+      expect(store.recentPages[0].name).toBe('页面1')
+      expect(store.recentPages[0].visitedAt).toBeDefined()
+    })
+
+    it('重复访问同一页面会更新时间并移到头部', () => {
+      const store = useTabStore()
+      store.addRecentPage({ path: '/page/1', name: '页面1' })
+      store.addRecentPage({ path: '/page/2', name: '页面2' })
+      store.addRecentPage({ path: '/page/1', name: '页面1' })
+
+      expect(store.recentPages).toHaveLength(2)
+      expect(store.recentPages[0].path).toBe('/page/1')
+    })
+
+    it('最多保存 10 条记录', () => {
+      const store = useTabStore()
+      for (let i = 1; i <= 15; i++) {
+        store.addRecentPage({ path: `/page/${i}`, name: `页面${i}` })
+      }
+
+      expect(store.recentPages).toHaveLength(10)
+      expect(store.recentPages[0].path).toBe('/page/15')
+    })
+
+    it('getRecentPages 返回最近访问列表', () => {
+      const store = useTabStore()
+      store.addRecentPage({ path: '/page/1', name: '页面1' })
+      store.addRecentPage({ path: '/page/2', name: '页面2' })
+
+      const pages = store.getRecentPages()
+      expect(pages).toHaveLength(2)
+      expect(pages[0].path).toBe('/page/2')
+    })
+
+    it('clearRecentPages 清空最近访问记录', () => {
+      const store = useTabStore()
+      store.addRecentPage({ path: '/page/1', name: '页面1' })
+      store.addRecentPage({ path: '/page/2', name: '页面2' })
+
+      store.clearRecentPages()
+      expect(store.recentPages).toHaveLength(0)
     })
   })
 })

@@ -92,6 +92,9 @@
         <el-button type="primary" :loading="passwordLoading" @click="handleChangePassword">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 命令面板 -->
+    <CommandPalette v-model:visible="showCommandPalette" />
   </el-container>
 </template>
 
@@ -104,7 +107,7 @@
  * 2. 侧边栏状态管理
  * 3. 面包屑导航生成
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Loading, ArrowDown, User as UserIcon } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -113,7 +116,7 @@ import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
 import ContentArea from './ContentArea.vue'
-import { NotificationBell } from '@/components/common'
+import { NotificationBell, CommandPalette } from '@/components/common'
 
 // ==================== Store ====================
 
@@ -206,6 +209,22 @@ const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: ''
 const passwordLoading = ref(false)
 
 /**
+ * 命令面板可见性
+ */
+const showCommandPalette = ref(false)
+
+/**
+ * 全局键盘事件处理
+ */
+function handleGlobalKeydown(e: KeyboardEvent): void {
+  // Ctrl+K 或 Cmd+K (Mac) 打开命令面板
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault()
+    showCommandPalette.value = true
+  }
+}
+
+/**
  * 处理用户下拉命令
  */
 function handleUserCommand(command: string): void {
@@ -265,6 +284,9 @@ function toggleSidebar(): void {
 onMounted(async () => {
   await appStore.initializeApp()
 
+  // 注册全局键盘快捷键
+  window.addEventListener('keydown', handleGlobalKeydown)
+
   // 注册路由后置钩子，自动添加标签页
   router.afterEach((to) => {
     // 排除登录页等公开页面
@@ -280,6 +302,14 @@ onMounted(async () => {
       icon: menu?.icon,
       closable: to.path !== '/home'
     })
+
+    // 添加到最近访问记录
+    if (to.path !== '/home') {
+      tabStore.addRecentPage({
+        path: to.path,
+        name
+      })
+    }
   })
 
   // 首次加载时，为当前路由添加标签
@@ -293,6 +323,13 @@ onMounted(async () => {
       closable: route.path !== '/home'
     })
   }
+})
+
+/**
+ * 组件卸载时清理事件监听
+ */
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
 })
 </script>
 

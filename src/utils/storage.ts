@@ -23,6 +23,10 @@ export const STORAGE_KEYS = {
   AUTH_TOKEN: 'check-manage:token',
   /** 用户信息 */
   USER_INFO: 'check-manage:userInfo',
+  /** 最近访问的页面 */
+  RECENT_PAGES: 'check-manage:recentPages',
+  /** 收藏的页面菜单ID */
+  FAVORITE_PAGES: 'check-manage:favoritePages',
 } as const
 
 /**

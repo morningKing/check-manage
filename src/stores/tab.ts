@@ -9,6 +9,7 @@
 
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { getStorage, setStorage, STORAGE_KEYS } from '@/utils/storage'
 
 /**
  * 标签页项
@@ -23,6 +24,21 @@ export interface TabItem {
   /** 是否可关闭（首页不可关闭） */
   closable: boolean
 }
+
+/**
+ * 最近访问的页面
+ */
+export interface RecentPage {
+  /** 路由路径 */
+  path: string
+  /** 显示名称 */
+  name: string
+  /** 访问时间戳 */
+  visitedAt: number
+}
+
+/** 最近访问页面最大数量 */
+const MAX_RECENT_PAGES = 10
 
 /**
  * 标签页 Store
@@ -44,7 +60,61 @@ export const useTabStore = defineStore('tab', () => {
    */
   const activeTabPath = ref('/home')
 
+  /**
+   * 最近访问的页面列表
+   *
+   * 从 localStorage 初始化
+   */
+  const recentPages = ref<RecentPage[]>(
+    getStorage(STORAGE_KEYS.RECENT_PAGES, [])
+  )
+
   // ==================== Actions ====================
+
+  /**
+   * 添加最近访问的页面
+   *
+   * 如果已存在则更新访问时间，否则添加到列表头部
+   * 保持在 MAX_RECENT_PAGES 数量限制内
+   */
+  function addRecentPage(page: Omit<RecentPage, 'visitedAt'>): void {
+    const now = Date.now()
+    const existingIndex = recentPages.value.findIndex(p => p.path === page.path)
+
+    if (existingIndex !== -1) {
+      // 已存在，移到头部并更新时间
+      recentPages.value.splice(existingIndex, 1)
+    }
+
+    // 添加到头部
+    recentPages.value.unshift({
+      ...page,
+      visitedAt: now
+    })
+
+    // 保持数量限制
+    if (recentPages.value.length > MAX_RECENT_PAGES) {
+      recentPages.value = recentPages.value.slice(0, MAX_RECENT_PAGES)
+    }
+
+    // 持久化
+    setStorage(STORAGE_KEYS.RECENT_PAGES, recentPages.value)
+  }
+
+  /**
+   * 获取最近访问的页面列表
+   */
+  function getRecentPages(): RecentPage[] {
+    return recentPages.value
+  }
+
+  /**
+   * 清空最近访问记录
+   */
+  function clearRecentPages(): void {
+    recentPages.value = []
+    setStorage(STORAGE_KEYS.RECENT_PAGES, [])
+  }
 
   /**
    * 添加标签页
@@ -132,11 +202,15 @@ export const useTabStore = defineStore('tab', () => {
   return {
     tabs,
     activeTabPath,
+    recentPages,
     addTab,
     removeTab,
     setActiveTab,
     moveTab,
     removeOtherTabs,
-    removeAllTabs
+    removeAllTabs,
+    addRecentPage,
+    getRecentPages,
+    clearRecentPages
   }
 })
