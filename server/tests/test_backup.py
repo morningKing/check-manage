@@ -116,6 +116,10 @@ class TestCreateBackup:
             [],  # validation_scripts
             [],  # etl_tasks
             [],  # etl_logs
+            [],  # collection_versions
+            [],  # version_snapshots
+            [],  # version_relations
+            [],  # user_current_branch
         ]
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 2048
@@ -173,6 +177,10 @@ class TestRestoreBackup:
                 zf.writestr('validation_scripts.json', '[]')
                 zf.writestr('etl_tasks.json', '[]')
                 zf.writestr('etl_logs.json', '[]')
+                zf.writestr('collection_versions.json', '[]')
+                zf.writestr('version_snapshots.json', '[]')
+                zf.writestr('version_relations.json', '[]')
+                zf.writestr('user_current_branch.json', '[]')
 
             # Mock 数据库连接
             mock_conn = MagicMock()
@@ -210,6 +218,10 @@ class TestRestoreBackup:
                 zf.writestr('validation_scripts.json', '[]')
                 zf.writestr('etl_tasks.json', '[]')
                 zf.writestr('etl_logs.json', '[]')
+                zf.writestr('collection_versions.json', '[]')
+                zf.writestr('version_snapshots.json', '[]')
+                zf.writestr('version_relations.json', '[]')
+                zf.writestr('user_current_branch.json', '[]')
 
             mock_conn = MagicMock()
             mock_cursor = MagicMock()

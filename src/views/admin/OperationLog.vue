@@ -131,6 +131,16 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="branchName" label="分支" width="120" align="center">
+          <template #default="{ row }">
+            <template v-if="!row.batchCount">
+              <el-tag v-if="row.branchName && row.branchName !== '主分支'" type="warning" size="small">
+                {{ row.branchName }}
+              </el-tag>
+              <span v-else class="main-branch">主分支</span>
+            </template>
+          </template>
+        </el-table-column>
         <el-table-column prop="createdAt" label="操作时间" width="180">
           <template #default="{ row }">
             {{ formatDate(row.createdAt) }}
@@ -433,5 +443,10 @@ onMounted(() => {
   td:first-child {
     border-left: 3px solid #409eff;
   }
+}
+
+.main-branch {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

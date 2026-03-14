@@ -27,12 +27,12 @@ BACKUP_TABLES = [
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
                       'export_scripts', 'row_export_scripts', 'api_public', 'validation_script',
                       'api_writable', 'view_config', 'delete_binding'], {4, 7, 8, 12, 13}, '页面配置'),
-    ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version'], {2}, '动态数据'),
-    ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '数据关联'),
+    ('dynamic_data', ['id', 'collection', 'data', 'created_at', 'updated_at', 'version', 'branch_id'], {2}, '动态数据'),
+    ('data_relations', ['collection', 'record_id', 'field_name', 'related_collection', 'related_id', 'branch_id'], set(), '数据关联'),
     ('users', ['id', 'username', 'password_hash', 'display_name', 'role', 'created_at'], set(), '用户数据'),
     ('operation_logs', ['id', 'action', 'target_type', 'target_id', 'target_name', 'description',
                         'operator_id', 'operator_name', 'operator_role', 'created_at',
-                        'batch_id', 'batch_desc'], set(), '操作日志'),
+                        'batch_id', 'batch_desc', 'branch_id'], set(), '操作日志'),
     ('export_scripts', ['id', 'name', 'description', 'language', 'script', 'output_format',
                         'created_at', 'updated_at', 'scope'], set(), '导出脚本'),
     ('api_keys', ['id', 'name', 'key_hash', 'created_at', 'last_used_at', 'is_active'], set(), 'API密钥'),
@@ -42,6 +42,13 @@ BACKUP_TABLES = [
     ('etl_logs', ['id', 'task_id', 'task_name', 'status', 'started_at', 'finished_at',
                   'total_records', 'success_count', 'error_count', 'step_results', 'error_detail',
                   'created_at'], {9}, 'ETL日志'),
+    # 版本管理相关表
+    ('collection_versions', ['id', 'collection', 'name', 'description', 'version_type', 'parent_version',
+                             'status', 'data_hash', 'records_count', 'relations_count', 'created_by',
+                             'created_at', 'merged_at', 'merged_by', 'merged_into', 'is_protected'], set(), '版本元数据'),
+    ('version_snapshots', ['version_id', 'record_id', 'record_data', 'created_at'], {2}, '版本快照'),
+    ('version_relations', ['version_id', 'collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '版本关联'),
+    ('user_current_branch', ['id', 'user_id', 'username', 'collection', 'branch_id', 'updated_at'], set(), '用户分支映射'),
 ]
 
 # 表名到定义的映射
@@ -66,10 +73,30 @@ def _serialize_value(val):
     return val
 
 
-def _export_table(cur, table_name, columns):
-    """导出单张表的所有数据"""
+def _export_table(cur, table_name, columns, collection_filter=None):
+    """导出单张表的所有数据
+
+    Parameters
+    ----------
+    cur : cursor
+        数据库游标
+    table_name : str
+        表名
+    columns : list
+        列列表
+    collection_filter : str | None
+        对于 dynamic_data 表，可选的 collection 过滤
+
+    Returns
+    -------
+    list[dict]
+        记录列表
+    """
     col_str = ', '.join(columns)
-    cur.execute(f'SELECT {col_str} FROM {table_name}')
+    if table_name == 'dynamic_data' and collection_filter:
+        cur.execute(f'SELECT {col_str} FROM {table_name} WHERE collection = %s', (collection_filter,))
+    else:
+        cur.execute(f'SELECT {col_str} FROM {table_name}')
     rows = cur.fetchall()
     # 用不带引号的列名作为 key
     clean_cols = [c.strip('"') for c in columns]
@@ -105,6 +132,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
     tables : list[str] | None
         None = 全量备份（所有 BACKUP_TABLES）
         ['table1', 'table2'] = 表级备份（只备份指定表）
+        ['dynamic_data:collection1', 'dynamic_data:collection2'] = 只备份指定 collection
 
     Returns
     -------
@@ -113,14 +141,35 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
     """
     _ensure_backup_dir()
 
-    # 确定要备份的表
+    # 解析要备份的内容
+    # tables_to_backup: 实际要备份的表名列表
+    # collection_filters: {table_name: [collection1, collection2]} 过滤条件
+    # original_tables: 原始表名列表（保留 dynamic_data:collection 格式，仅包含有效的表）
+    collection_filters = {}
+    tables_to_backup = []
+    original_tables = []  # 保存有效的原始表名用于记录
+    backup_scope = 'full'
+
     if tables:
-        # 过滤出有效的表名
-        tables_to_backup = [t for t in tables if t in BACKUP_TABLE_MAP]
         backup_scope = 'partial'
+        for t in tables:
+            if ':' in t:
+                # 格式：dynamic_data:collection_name
+                base_table, collection = t.split(':', 1)
+                if base_table in BACKUP_TABLE_MAP:
+                    if base_table not in collection_filters:
+                        collection_filters[base_table] = []
+                        tables_to_backup.append(base_table)
+                    collection_filters[base_table].append(collection)
+                    original_tables.append(t)  # 保留有效的原始表名
+            elif t in BACKUP_TABLE_MAP:
+                tables_to_backup.append(t)
+                original_tables.append(t)  # 保留有效的原始表名
+
+        # 去重
+        tables_to_backup = list(dict.fromkeys(tables_to_backup))
     else:
         tables_to_backup = [t[0] for t in BACKUP_TABLES]
-        backup_scope = 'full'
 
     if not tables_to_backup:
         raise ValueError('没有有效的表需要备份')
@@ -141,19 +190,120 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
         table_data = {}
         for table_name in tables_to_backup:
             _, columns, _, _ = BACKUP_TABLE_MAP[table_name]
-            records = _export_table(cur, table_name, columns)
-            table_data[table_name] = records
-            table_stats[table_name] = len(records)
+
+            # 检查是否有 collection 过滤
+            if table_name in collection_filters:
+                # 按 collection 分别导出
+                records = []
+                for col in collection_filters[table_name]:
+                    col_records = _export_table(cur, table_name, columns, collection_filter=col)
+                    records.extend(col_records)
+                table_data[table_name] = records
+                table_stats[table_name] = len(records)
+            else:
+                records = _export_table(cur, table_name, columns)
+                table_data[table_name] = records
+                table_stats[table_name] = len(records)
             total_records += len(records)
 
+        # 如果备份了 dynamic_data，需要同步备份对应的 data_relations
+        if 'dynamic_data' in tables_to_backup and 'data_relations' not in table_data:
+            _, rel_columns, _, _ = BACKUP_TABLE_MAP['data_relations']
+            # 如果有 collection 过滤，只备份对应的关联数据
+            if 'dynamic_data' in collection_filters:
+                rel_records = []
+                for col in collection_filters['dynamic_data']:
+                    cur.execute(
+                        'SELECT collection, record_id, field_name, related_collection, related_id, branch_id '
+                        'FROM data_relations WHERE collection = %s',
+                        (col,)
+                    )
+                    for row in cur.fetchall():
+                        rel_records.append({
+                            'collection': row[0],
+                            'record_id': row[1],
+                            'field_name': row[2],
+                            'related_collection': row[3],
+                            'related_id': row[4],
+                            'branch_id': row[5],
+                        })
+                table_data['data_relations'] = rel_records
+                table_stats['data_relations'] = len(rel_records)
+                total_records += len(rel_records)
+            else:
+                table_data['data_relations'] = _export_table(cur, 'data_relations', rel_columns)
+                table_stats['data_relations'] = len(table_data['data_relations'])
+                total_records += table_stats['data_relations']
+
+        # 如果备份了 dynamic_data，需要同步备份对应的 version_snapshots 和 version_relations
+        if 'dynamic_data' in tables_to_backup and 'version_snapshots' not in table_data:
+            _, vs_columns, _, _ = BACKUP_TABLE_MAP['version_snapshots']
+            if 'dynamic_data' in collection_filters:
+                # 按 collection 过滤版本快照
+                vs_records = []
+                for col in collection_filters['dynamic_data']:
+                    cur.execute(
+                        'SELECT vs.version_id, vs.record_id, vs.record_data, vs.created_at '
+                        'FROM version_snapshots vs '
+                        'JOIN collection_versions cv ON vs.version_id = cv.id '
+                        'WHERE cv.collection = %s',
+                        (col,)
+                    )
+                    for row in cur.fetchall():
+                        vs_records.append({
+                            'version_id': row[0],
+                            'record_id': row[1],
+                            'record_data': row[2],
+                            'created_at': row[3].isoformat() if row[3] else None,
+                        })
+                table_data['version_snapshots'] = vs_records
+                table_stats['version_snapshots'] = len(vs_records)
+                total_records += len(vs_records)
+            else:
+                table_data['version_snapshots'] = _export_table(cur, 'version_snapshots', vs_columns)
+                table_stats['version_snapshots'] = len(table_data['version_snapshots'])
+                total_records += table_stats['version_snapshots']
+
+        if 'dynamic_data' in tables_to_backup and 'version_relations' not in table_data:
+            _, vr_columns, _, _ = BACKUP_TABLE_MAP['version_relations']
+            if 'dynamic_data' in collection_filters:
+                vr_records = []
+                for col in collection_filters['dynamic_data']:
+                    cur.execute(
+                        'SELECT vr.version_id, vr.collection, vr.record_id, vr.field_name, '
+                        'vr.related_collection, vr.related_id '
+                        'FROM version_relations vr '
+                        'JOIN collection_versions cv ON vr.version_id = cv.id '
+                        'WHERE cv.collection = %s',
+                        (col,)
+                    )
+                    for row in cur.fetchall():
+                        vr_records.append({
+                            'version_id': row[0],
+                            'collection': row[1],
+                            'record_id': row[2],
+                            'field_name': row[3],
+                            'related_collection': row[4],
+                            'related_id': row[5],
+                        })
+                table_data['version_relations'] = vr_records
+                table_stats['version_relations'] = len(vr_records)
+                total_records += len(vr_records)
+            else:
+                table_data['version_relations'] = _export_table(cur, 'version_relations', vr_columns)
+                table_stats['version_relations'] = len(table_data['version_relations'])
+                total_records += table_stats['version_relations']
+
     # 2. 构建 manifest
+    # 对于表级备份，保留原始表名（包含 collection 信息）
+    manifest_tables = original_tables if original_tables else tables_to_backup
     manifest = {
         'version': BACKUP_VERSION,
         'id': backup_id,
         'name': backup_name,
         'type': backup_type,
         'scope': backup_scope,
-        'tables': tables_to_backup,
+        'tables': manifest_tables,
         'tableStats': table_stats,
         'totalRecords': total_records,
         'createdAt': now.isoformat(),
@@ -172,6 +322,8 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
     file_size = os.path.getsize(zip_path)
 
     # 4. 写入备份记录
+    # 对于表级备份，保留原始表名（包含 collection 信息）
+    backup_tables_json = manifest_tables
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -180,7 +332,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
             'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
             (backup_id, backup_name, backup_type, 'completed', zip_path,
              file_size, len(tables_to_backup), total_records, created_by, now, None,
-             backup_scope, psycopg2.extras.Json(tables_to_backup)),
+             backup_scope, psycopg2.extras.Json(backup_tables_json)),
         )
 
     # 5. 如果是定时备份，更新 last_backup_at
@@ -208,7 +360,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
         'createdAt': now.isoformat(),
         'note': None,
         'backupScope': backup_scope,
-        'backupTables': tables_to_backup,
+        'backupTables': manifest_tables,
     }
 
 
@@ -216,7 +368,7 @@ def restore_backup(zip_path, tables=None):
     """
     从 ZIP 备份文件还原数据
 
-    在单个事务中 TRUNCATE 指定业务表并重新 INSERT。
+    在单个事务中还原数据。
     不清空 backups 和 backup_settings 表。
     失败则全部回滚。
 
@@ -227,6 +379,7 @@ def restore_backup(zip_path, tables=None):
     tables : list[str] | None
         None = 还原备份中的所有表
         ['table1'] = 只还原指定表（必须是备份中包含的表）
+        ['dynamic_data:collection1'] = 只还原指定 collection 的数据
 
     Returns
     -------
@@ -244,27 +397,56 @@ def restore_backup(zip_path, tables=None):
 
         manifest = json.loads(zf.read('manifest.json'))
 
-        # 确定备份中包含的表
-        backup_tables = manifest.get('tables', [])
-        if not backup_tables:
+        # 确定备份中包含的表（提取基础表名）
+        backup_tables_raw = manifest.get('tables', [])
+        if not backup_tables_raw:
             # 旧版备份格式，从文件名推断
-            backup_tables = [t[0] for t in BACKUP_TABLES if f'{t[0]}.json' in names]
+            backup_tables_raw = [t[0] for t in BACKUP_TABLES if f'{t[0]}.json' in names]
 
-        # 确定要还原的表
+        # 提取基础表名（去除 collection 部分）
+        backup_base_tables = set()
+        for t in backup_tables_raw:
+            base_name = t.split(':')[0] if ':' in t else t
+            backup_base_tables.add(base_name)
+
+        # 解析要还原的内容
+        # collection_filters: {table_name: [collection1, collection2]} 过滤条件
+        collection_filters = {}
+        tables_to_restore = []
+
         if tables:
-            # 只还原指定的表，且必须在备份中存在
-            tables_to_restore = [t for t in tables if t in backup_tables]
+            for t in tables:
+                if ':' in t:
+                    # 格式：dynamic_data:collection_name
+                    base_table, collection = t.split(':', 1)
+                    if base_table in backup_base_tables:
+                        if base_table not in collection_filters:
+                            collection_filters[base_table] = []
+                            tables_to_restore.append(base_table)
+                        collection_filters[base_table].append(collection)
+                elif t in backup_base_tables:
+                    tables_to_restore.append(t)
+
             if not tables_to_restore:
                 raise ValueError('指定的表不在备份中')
+
+            # 去重
+            tables_to_restore = list(dict.fromkeys(tables_to_restore))
         else:
-            tables_to_restore = backup_tables
+            tables_to_restore = list(backup_base_tables)
 
         # 读取表数据
         table_data = {}
-        for table_name in tables_to_restore:
+        for table_name in backup_base_tables:
             json_file = f'{table_name}.json'
             if json_file in names:
-                table_data[table_name] = json.loads(zf.read(json_file))
+                all_records = json.loads(zf.read(json_file))
+                # 如果有 collection 过滤，只保留指定 collection 的记录
+                if table_name in collection_filters:
+                    filtered = [r for r in all_records if r.get('collection') in collection_filters[table_name]]
+                    table_data[table_name] = filtered
+                else:
+                    table_data[table_name] = all_records
             else:
                 table_data[table_name] = []
 
@@ -275,11 +457,38 @@ def restore_backup(zip_path, tables=None):
         conn = pool.getconn()
         cur = conn.cursor()
 
-        # TRUNCATE 指定表（反序以避免潜在依赖）
-        all_table_names = [t[0] for t in BACKUP_TABLES]
-        for table_name in reversed(all_table_names):
-            if table_name in tables_to_restore:
+        # 对于 collection 级别的还原，使用 DELETE 而不是 TRUNCATE
+        for table_name in tables_to_restore:
+            if table_name in collection_filters:
+                # 只删除指定 collection 的数据
+                for col in collection_filters[table_name]:
+                    cur.execute(f'DELETE FROM {table_name} WHERE collection = %s', (col,))
+                    # 删除相关的 data_relations
+                    if table_name == 'dynamic_data':
+                        cur.execute('DELETE FROM data_relations WHERE collection = %s', (col,))
+                        # 删除相关的版本数据
+                        cur.execute(
+                            'DELETE FROM version_snapshots WHERE version_id IN '
+                            '(SELECT id FROM collection_versions WHERE collection = %s)',
+                            (col,)
+                        )
+                        cur.execute(
+                            'DELETE FROM version_relations WHERE version_id IN '
+                            '(SELECT id FROM collection_versions WHERE collection = %s)',
+                            (col,)
+                        )
+                        cur.execute('DELETE FROM collection_versions WHERE collection = %s', (col,))
+                        cur.execute('DELETE FROM user_current_branch WHERE collection = %s', (col,))
+            else:
+                # 全表还原，使用 TRUNCATE
                 cur.execute(f'TRUNCATE TABLE {table_name} CASCADE')
+                # 如果是 dynamic_data，也需要清理相关表
+                if table_name == 'dynamic_data':
+                    cur.execute('TRUNCATE TABLE data_relations CASCADE')
+                    cur.execute('TRUNCATE TABLE version_snapshots CASCADE')
+                    cur.execute('TRUNCATE TABLE version_relations CASCADE')
+                    cur.execute('TRUNCATE TABLE collection_versions CASCADE')
+                    cur.execute('TRUNCATE TABLE user_current_branch CASCADE')
 
         # INSERT 数据
         for table_name in tables_to_restore:
@@ -302,6 +511,21 @@ def restore_backup(zip_path, tables=None):
                     f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})',
                     values,
                 )
+
+        # 如果还原了 dynamic_data，需要同步还原相关的 data_relations
+        if 'dynamic_data' in tables_to_restore and 'data_relations' not in tables_to_restore:
+            if 'data_relations' in table_data:
+                records = table_data['data_relations']
+                # 如果有 collection 过滤，只还原对应的数据
+                if 'dynamic_data' in collection_filters:
+                    records = [r for r in records if r.get('collection') in collection_filters['dynamic_data']]
+                for record in records:
+                    cur.execute(
+                        'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+                        'VALUES (%s, %s, %s, %s, %s, %s)',
+                        (record.get('collection'), record.get('record_id'), record.get('field_name'),
+                         record.get('related_collection'), record.get('related_id'), record.get('branch_id'))
+                    )
 
         conn.commit()
     except Exception:

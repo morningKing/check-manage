@@ -30,7 +30,13 @@ def format_ts(dt):
     return dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
-def row_to_dict(row):
+def row_to_dict(row, branch_name_map=None):
+    raw_branch_id = row[12] if len(row) > 12 else None
+    # 根据分支ID获取显示名称
+    if raw_branch_id and raw_branch_id != 'main':
+        branch_name = branch_name_map.get(raw_branch_id, raw_branch_id) if branch_name_map else raw_branch_id
+    else:
+        branch_name = '主分支'
     return {
         'id': row[0],
         'action': row[1],
@@ -44,10 +50,11 @@ def row_to_dict(row):
         'createdAt': format_ts(row[9]),
         'batchId': row[10],
         'batchDesc': row[11],
+        'branchName': branch_name,
     }
 
 
-COLUMNS = 'id, action, target_type, target_id, target_name, description, operator_id, operator_name, operator_role, created_at, batch_id, batch_desc'
+COLUMNS = 'id, action, target_type, target_id, target_name, description, operator_id, operator_name, operator_role, created_at, batch_id, batch_desc, branch_id'
 
 
 def build_filter():
@@ -60,6 +67,7 @@ def build_filter():
     operator_name = request.args.get('operatorName', '').strip()
     start_time = request.args.get('startTime', '').strip()
     end_time = request.args.get('endTime', '').strip()
+    branch_id = request.args.get('branchId', '').strip()
 
     if action:
         conditions.append('action = %s')
@@ -76,6 +84,9 @@ def build_filter():
     if end_time:
         conditions.append('created_at <= %s')
         params.append(end_time)
+    if branch_id:
+        conditions.append('branch_id = %s')
+        params.append(branch_id)
 
     where = ''
     if conditions:
@@ -94,6 +105,10 @@ def list_logs():
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 构建分支ID到名称的映射
+        cur.execute('SELECT id, name FROM collection_versions')
+        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.execute(f'SELECT COUNT(*) FROM operation_logs {where}', params)
         total = cur.fetchone()[0]
 
@@ -105,7 +120,7 @@ def list_logs():
         rows = cur.fetchall()
 
     return jsonify({
-        'items': [row_to_dict(r) for r in rows],
+        'items': [row_to_dict(r, branch_name_map) for r in rows],
         'total': total,
     })
 
@@ -128,16 +143,20 @@ def export_logs():
 
     with get_db() as conn:
         cur = conn.cursor()
+        # 构建分支ID到名称的映射
+        cur.execute('SELECT id, name FROM collection_versions')
+        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.execute(
             f'SELECT {COLUMNS} FROM operation_logs {where} ORDER BY created_at DESC',
             params,
         )
         rows = cur.fetchall()
 
-    headers = ['操作描述', '操作类型', '目标类型', '目标名称', '操作人', '角色', '时间', '批次']
+    headers = ['操作描述', '操作类型', '目标类型', '目标名称', '操作人', '角色', '分支', '时间', '批次']
 
     def make_row(r):
-        d = row_to_dict(r)
+        d = row_to_dict(r, branch_name_map)
         return [
             d['description'],
             ACTION_LABELS.get(d['action'], d['action']),
@@ -145,6 +164,7 @@ def export_logs():
             d['targetName'] or '',
             d['operatorName'],
             ROLE_LABELS.get(d['operatorRole'], d['operatorRole']),
+            d['branchName'],
             d['createdAt'] or '',
             d['batchDesc'] or '',
         ]

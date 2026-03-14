@@ -139,7 +139,7 @@
     </el-card>
 
     <!-- 创建备份对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建备份" width="500px">
+    <el-dialog v-model="createDialogVisible" title="创建备份" width="600px">
       <el-form label-width="100px">
         <el-form-item label="备份范围">
           <el-radio-group v-model="createScope">
@@ -147,21 +147,51 @@
             <el-radio value="partial">表级备份</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="createScope === 'partial'" label="选择表">
-          <el-select
-            v-model="createSelectedTables"
-            multiple
-            filterable
-            placeholder="请选择要备份的表"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="t in availableTables"
-              :key="t.name"
-              :label="t.label"
-              :value="t.name"
+        <el-form-item v-if="createScope === 'partial'" label="选择数据">
+          <div class="table-selector">
+            <el-input
+              v-model="tableSearchKey"
+              placeholder="搜索..."
+              clearable
+              style="margin-bottom: 8px"
             />
-          </el-select>
+            <div class="table-list">
+              <template v-for="t in availableTables" :key="t.name">
+                <!-- 分组表（动态数据） -->
+                <template v-if="t.isGroup && t.children">
+                  <div class="table-group-header">
+                    <el-checkbox
+                      :model-value="isGroupAllSelected(t)"
+                      :indeterminate="isGroupIndeterminate(t)"
+                      @change="toggleGroup(t, $event)"
+                    >
+                      {{ t.label }}（全选）
+                    </el-checkbox>
+                  </div>
+                  <div class="table-group-children">
+                    <el-checkbox
+                      v-for="child in filterChildren(t.children)"
+                      :key="child.name"
+                      :model-value="createSelectedTables.includes(child.name)"
+                      @change="toggleChild(child.name, $event)"
+                    >
+                      {{ child.label }}
+                      <span class="record-count">({{ child.count || 0 }} 条)</span>
+                    </el-checkbox>
+                  </div>
+                </template>
+                <!-- 普通表 -->
+                <template v-else-if="!t.isGroup && matchesSearch(t.label)">
+                  <el-checkbox
+                    :model-value="createSelectedTables.includes(t.name)"
+                    @change="toggleChild(t.name, $event)"
+                  >
+                    {{ t.label }}
+                  </el-checkbox>
+                </template>
+              </template>
+            </div>
+          </div>
         </el-form-item>
         <el-form-item label="备注（可选）">
           <el-input v-model="createNote" placeholder="例如：部署前备份" />
@@ -188,18 +218,18 @@
 
       <!-- 表级备份显示表选择 -->
       <div v-if="restoreTarget?.backupScope === 'partial'" style="margin-top: 12px">
-        <el-form-item label="选择还原表">
+        <el-form-item label="选择还原数据">
           <el-select
             v-model="restoreSelectedTables"
             multiple
             filterable
-            placeholder="请选择要还原的表"
+            placeholder="请选择要还原的数据"
             style="width: 100%"
           >
             <el-option
               v-for="t in restoreTarget?.backupTables || []"
               :key="t"
-              :label="tableLabelMap[t] || t"
+              :label="formatBackupTableName(t)"
               :value="t"
             />
           </el-select>
@@ -287,12 +317,38 @@ const settings = reactive({
 })
 
 // 可备份的表列表
-const availableTables = ref<{ name: string; label: string }[]>([])
+interface BackupTableItem {
+  name: string
+  label: string
+  isGroup?: boolean
+  children?: { name: string; label: string; count?: number }[]
+}
+const availableTables = ref<BackupTableItem[]>([])
+
+// 扁平化的表名列表（用于显示已选择的表）
+const flatTableOptions = computed(() => {
+  const result: { name: string; label: string; parent?: string }[] = []
+  for (const t of availableTables.value) {
+    if (t.isGroup && t.children) {
+      for (const child of t.children) {
+        result.push({ name: child.name, label: child.label, parent: t.label })
+      }
+    } else {
+      result.push({ name: t.name, label: t.label })
+    }
+  }
+  return result
+})
 
 // 表名 -> 中文标签映射
 const tableLabelMap = computed(() => {
   const map: Record<string, string> = {}
   for (const t of availableTables.value) {
+    if (t.isGroup && t.children) {
+      for (const child of t.children) {
+        map[child.name] = child.label
+      }
+    }
     map[t.name] = t.label
   }
   return map
@@ -303,6 +359,7 @@ const createDialogVisible = ref(false)
 const createNote = ref('')
 const createScope = ref<'full' | 'partial'>('full')
 const createSelectedTables = ref<string[]>([])
+const tableSearchKey = ref('')
 
 // 还原确认
 const restoreDialogVisible = ref(false)
@@ -398,7 +455,65 @@ function handleCreateBackup(): void {
   createNote.value = ''
   createScope.value = 'full'
   createSelectedTables.value = []
+  tableSearchKey.value = ''
   createDialogVisible.value = true
+}
+
+function matchesSearch(label: string): boolean {
+  if (!tableSearchKey.value) return true
+  return label.toLowerCase().includes(tableSearchKey.value.toLowerCase())
+}
+
+function filterChildren(children: { name: string; label: string; count?: number }[]) {
+  if (!tableSearchKey.value) return children
+  return children.filter(c => matchesSearch(c.label))
+}
+
+function isGroupAllSelected(t: BackupTableItem): boolean {
+  if (!t.children) return false
+  return t.children.every(c => createSelectedTables.value.includes(c.name))
+}
+
+function isGroupIndeterminate(t: BackupTableItem): boolean {
+  if (!t.children) return false
+  const selected = t.children.filter(c => createSelectedTables.value.includes(c.name))
+  return selected.length > 0 && selected.length < t.children.length
+}
+
+function toggleGroup(t: BackupTableItem, checked: boolean): void {
+  if (!t.children) return
+  if (checked) {
+    // 全选
+    for (const c of t.children) {
+      if (!createSelectedTables.value.includes(c.name)) {
+        createSelectedTables.value.push(c.name)
+      }
+    }
+  } else {
+    // 取消全选
+    createSelectedTables.value = createSelectedTables.value.filter(
+      name => !t.children!.some(c => c.name === name)
+    )
+  }
+}
+
+function toggleChild(name: string, checked: boolean): void {
+  if (checked) {
+    if (!createSelectedTables.value.includes(name)) {
+      createSelectedTables.value.push(name)
+    }
+  } else {
+    createSelectedTables.value = createSelectedTables.value.filter(n => n !== name)
+  }
+}
+
+function formatBackupTableName(name: string): string {
+  // 处理 dynamic_data:collection 格式
+  if (name.startsWith('dynamic_data:')) {
+    const collection = name.substring('dynamic_data:'.length)
+    return tableLabelMap.value[name] || collection
+  }
+  return tableLabelMap.value[name] || name
 }
 
 async function doCreateBackup(): Promise<void> {
@@ -552,5 +667,44 @@ onMounted(() => {
   margin-top: 8px;
   color: #909399;
   font-size: 13px;
+}
+
+.table-selector {
+  width: 100%;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-group-header {
+  padding: 8px 0 4px 0;
+  border-bottom: 1px solid #ebeef5;
+  margin-bottom: 4px;
+}
+
+.table-group-header :deep(.el-checkbox__label) {
+  font-weight: 600;
+  color: #303133;
+}
+
+.table-group-children {
+  padding-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.record-count {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 4px;
 }
 </style>

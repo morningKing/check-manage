@@ -53,6 +53,7 @@
               <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" divided command="diff" :icon="DCaret">数据对比</el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" command="version" :icon="Tickets">版本管理</el-dropdown-item>
               <el-dropdown-item
                 v-if="isAdmin"
                 command="batchDelete"
@@ -626,6 +627,14 @@
       :page-name="pageConfig?.name || '数据'"
     />
 
+    <!-- 版本管理抽屉 -->
+    <VersionManager
+      v-model="versionManagerVisible"
+      :collection="collection"
+      :page-name="pageConfig?.name || '数据'"
+      @refresh="loadPageData"
+    />
+
     <!-- 关系图谱对话框 -->
     <RelationGraphDialog
       v-model="graphDialogVisible"
@@ -652,9 +661,9 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
-import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions } from '@/components/common'
+import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -870,6 +879,11 @@ const allExportScripts = ref<ExportScript[]>([])
  * 数据对比对话框可见性
  */
 const diffDialogVisible = ref(false)
+
+/**
+ * 版本管理抽屉可见性
+ */
+const versionManagerVisible = ref(false)
 
 /**
  * 关系图谱对话框可见性
@@ -1987,6 +2001,8 @@ function handleMoreCommand(command: string): void {
     handleImportCommand('template')
   } else if (command === 'diff') {
     diffDialogVisible.value = true
+  } else if (command === 'version') {
+    versionManagerVisible.value = true
   } else if (command === 'batchDelete') {
     handleBatchDeleteConfirm()
   }

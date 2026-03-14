@@ -27,12 +27,23 @@
           :disabled="diffLoading"
         >
           <el-option label="当前数据" value="current" />
-          <el-option
-            v-for="b in backupList"
-            :key="b.id"
-            :label="b.name + (b.note ? ` (${b.note})` : '')"
-            :value="b.id"
-          />
+          <el-option-group label="版本快照">
+            <el-option
+              v-for="v in versionList"
+              :key="v.id"
+              :label="v.name + (v.status === 'merged' ? ' (已合并)' : '')"
+              :value="v.id"
+              :disabled="v.status === 'merged'"
+            />
+          </el-option-group>
+          <el-option-group label="历史备份">
+            <el-option
+              v-for="b in backupList"
+              :key="b.id"
+              :label="b.name + (b.note ? ` (${b.note})` : '')"
+              :value="b.id"
+            />
+          </el-option-group>
         </el-select>
       </div>
       <el-icon class="source-arrow"><Right /></el-icon>
@@ -45,12 +56,23 @@
           :disabled="diffLoading"
         >
           <el-option label="当前数据" value="current" />
-          <el-option
-            v-for="b in backupList"
-            :key="b.id"
-            :label="b.name + (b.note ? ` (${b.note})` : '')"
-            :value="b.id"
-          />
+          <el-option-group label="版本快照">
+            <el-option
+              v-for="v in versionList"
+              :key="v.id"
+              :label="v.name + (v.status === 'merged' ? ' (已合并)' : '')"
+              :value="v.id"
+              :disabled="v.status === 'merged'"
+            />
+          </el-option-group>
+          <el-option-group label="历史备份">
+            <el-option
+              v-for="b in backupList"
+              :key="b.id"
+              :label="b.name + (b.note ? ` (${b.note})` : '')"
+              :value="b.id"
+            />
+          </el-option-group>
         </el-select>
       </div>
       <el-button
@@ -182,7 +204,9 @@ import { ElMessage } from 'element-plus'
 import { Right, Download, CirclePlusFilled, RemoveFilled, EditPen } from '@element-plus/icons-vue'
 import * as XLSX from 'xlsx'
 import { getBackups, diffBackupCollection } from '@/api/backup'
+import { getVersions } from '@/api/version'
 import type { Backup, DiffResult, FieldConfig } from '@/types'
+import type { CollectionVersion } from '@/types'
 
 // ==================== Props & Emits ====================
 
@@ -190,9 +214,14 @@ interface Props {
   modelValue: boolean
   collection: string
   pageName: string
+  baseSource?: string    // 可选的默认基准数据源
+  targetSource?: string  // 可选的默认对比数据源
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  baseSource: 'current',
+  targetSource: '',
+})
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
 }>()
@@ -205,6 +234,7 @@ const visible = computed({
 })
 
 const backupList = ref<Backup[]>([])
+const versionList = ref<CollectionVersion[]>([])
 const baseSource = ref('current')
 const targetSource = ref('')
 const diffLoading = ref(false)
@@ -278,6 +308,12 @@ async function loadBackups() {
     backupList.value = await getBackups()
   } catch {
     backupList.value = []
+  }
+  // 同时加载版本列表
+  try {
+    versionList.value = await getVersions(props.collection)
+  } catch {
+    versionList.value = []
   }
 }
 
@@ -368,8 +404,9 @@ watch(visible, (v) => {
   if (v) {
     loadBackups()
     diffResult.value = null
-    baseSource.value = 'current'
-    targetSource.value = ''
+    // 使用 props 传入的值或默认值
+    baseSource.value = props.baseSource || 'current'
+    targetSource.value = props.targetSource || ''
   }
 })
 </script>

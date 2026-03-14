@@ -46,12 +46,24 @@ CREATE TABLE IF NOT EXISTS data_relations (
     record_id           VARCHAR(100) NOT NULL,
     field_name          VARCHAR(200) NOT NULL,
     related_collection  VARCHAR(200) NOT NULL,
-    related_id          VARCHAR(100) NOT NULL,
-    PRIMARY KEY (collection, record_id, field_name, related_id)
+    related_id          VARCHAR(100) NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_relations_reverse
     ON data_relations(related_collection, related_id);
+
+CREATE TABLE IF NOT EXISTS user_current_branch (
+    id              VARCHAR(100) PRIMARY KEY,
+    user_id         VARCHAR(100) NOT NULL,
+    username        VARCHAR(100) NOT NULL,
+    collection      VARCHAR(200) NOT NULL,
+    branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, collection)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_current_branch_user ON user_current_branch(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_current_branch_collection ON user_current_branch(collection);
 
 CREATE TABLE IF NOT EXISTS users (
     id              VARCHAR(100) PRIMARY KEY,
@@ -180,6 +192,58 @@ CREATE TABLE IF NOT EXISTS etl_logs (
 
 CREATE INDEX IF NOT EXISTS idx_etl_logs_task_id ON etl_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_etl_logs_created_at ON etl_logs(created_at DESC);
+
+-- ==================== 版本管理表 ====================
+
+CREATE TABLE IF NOT EXISTS collection_versions (
+    id              VARCHAR(100) PRIMARY KEY,
+    collection      VARCHAR(200) NOT NULL,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    version_type    VARCHAR(20) NOT NULL DEFAULT 'snapshot',
+                    -- 'snapshot' | 'branch'
+    parent_version  VARCHAR(100),
+                    -- 引用父版本，形成分支树
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+                    -- 'active' | 'merged' | 'archived'
+    data_hash       VARCHAR(64),
+                    -- SHA256 哈希，快速判断数据是否相同
+    records_count   INTEGER DEFAULT 0,
+    relations_count INTEGER DEFAULT 0,
+    created_by      VARCHAR(200),
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    merged_at       TIMESTAMPTZ,
+    merged_by       VARCHAR(200),
+    merged_into     VARCHAR(100),
+    is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
+    FOREIGN KEY (parent_version) REFERENCES collection_versions(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cv_collection ON collection_versions(collection);
+CREATE INDEX IF NOT EXISTS idx_cv_parent ON collection_versions(parent_version);
+CREATE INDEX IF NOT EXISTS idx_cv_status ON collection_versions(status);
+
+CREATE TABLE IF NOT EXISTS version_snapshots (
+    version_id      VARCHAR(100) NOT NULL,
+    record_id       VARCHAR(100) NOT NULL,
+    record_data     JSONB NOT NULL,
+    created_at      TIMESTAMPTZ,
+    PRIMARY KEY (version_id, record_id),
+    FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_vs_version ON version_snapshots(version_id);
+
+CREATE TABLE IF NOT EXISTS version_relations (
+    version_id          VARCHAR(100) NOT NULL,
+    collection          VARCHAR(200) NOT NULL,
+    record_id           VARCHAR(100) NOT NULL,
+    field_name          VARCHAR(200) NOT NULL,
+    related_collection  VARCHAR(200) NOT NULL,
+    related_id          VARCHAR(100) NOT NULL,
+    PRIMARY KEY (version_id, collection, record_id, field_name, related_id),
+    FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
+);
 """
 
 
@@ -631,6 +695,151 @@ def init_db():
             cur.execute("ALTER TABLE backups ADD COLUMN backup_tables JSONB DEFAULT '[]'::jsonb")
             conn.commit()
             print("Added backup_scope and backup_tables columns to backups table.")
+
+        # Migration: create collection_versions table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'collection_versions'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE collection_versions (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    collection      VARCHAR(200) NOT NULL,
+                    name            VARCHAR(200) NOT NULL,
+                    description     TEXT,
+                    version_type    VARCHAR(20) NOT NULL DEFAULT 'snapshot',
+                    parent_version  VARCHAR(100),
+                    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+                    data_hash       VARCHAR(64),
+                    records_count   INTEGER DEFAULT 0,
+                    relations_count INTEGER DEFAULT 0,
+                    created_by      VARCHAR(200),
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    merged_at       TIMESTAMPTZ,
+                    merged_by       VARCHAR(200),
+                    merged_into     VARCHAR(100),
+                    is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
+                    FOREIGN KEY (parent_version) REFERENCES collection_versions(id) ON DELETE SET NULL
+                );
+                CREATE INDEX idx_cv_collection ON collection_versions(collection);
+                CREATE INDEX idx_cv_parent ON collection_versions(parent_version);
+                CREATE INDEX idx_cv_status ON collection_versions(status);
+            """)
+            conn.commit()
+            print("Created collection_versions table.")
+
+        # Migration: create version_snapshots table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'version_snapshots'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE version_snapshots (
+                    version_id      VARCHAR(100) NOT NULL,
+                    record_id       VARCHAR(100) NOT NULL,
+                    record_data     JSONB NOT NULL,
+                    created_at      TIMESTAMPTZ,
+                    PRIMARY KEY (version_id, record_id),
+                    FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_vs_version ON version_snapshots(version_id);
+            """)
+            conn.commit()
+            print("Created version_snapshots table.")
+
+        # Migration: create version_relations table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'version_relations'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE version_relations (
+                    version_id          VARCHAR(100) NOT NULL,
+                    collection          VARCHAR(200) NOT NULL,
+                    record_id           VARCHAR(100) NOT NULL,
+                    field_name          VARCHAR(200) NOT NULL,
+                    related_collection  VARCHAR(200) NOT NULL,
+                    related_id          VARCHAR(100) NOT NULL,
+                    PRIMARY KEY (version_id, collection, record_id, field_name, related_id),
+                    FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
+                );
+            """)
+            conn.commit()
+            print("Created version_relations table.")
+
+        # Migration: add branch_id to dynamic_data and change primary key
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'dynamic_data' AND column_name = 'branch_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE dynamic_data ADD COLUMN branch_id VARCHAR(100) NOT NULL DEFAULT 'main'")
+            # Drop the existing primary key and create a composite one
+            cur.execute("ALTER TABLE dynamic_data DROP CONSTRAINT dynamic_data_pkey")
+            cur.execute("ALTER TABLE dynamic_data ADD PRIMARY KEY (id, branch_id)")
+            conn.commit()
+            print("Added branch_id column to dynamic_data table and updated primary key.")
+
+        # Migration: add branch_id to data_relations
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'data_relations' AND column_name = 'branch_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE data_relations ADD COLUMN branch_id VARCHAR(100) NOT NULL DEFAULT 'main'")
+            conn.commit()
+            print("Added branch_id column to data_relations table.")
+
+        # Migration: update data_relations primary key to include branch_id
+        cur.execute("""
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = 'data_relations'::regclass AND i.indisprimary
+            ORDER BY array_position(i.indkey, a.attnum)
+        """)
+        pk_cols = [row[0] for row in cur.fetchall()]
+        if 'branch_id' not in pk_cols:
+            cur.execute("ALTER TABLE data_relations DROP CONSTRAINT IF EXISTS data_relations_pkey")
+            cur.execute("ALTER TABLE data_relations ADD PRIMARY KEY (collection, record_id, field_name, related_id, branch_id)")
+            conn.commit()
+            print("Updated data_relations primary key to include branch_id.")
+
+        # Migration: create user_current_branch table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'user_current_branch'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE user_current_branch (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    user_id         VARCHAR(100) NOT NULL,
+                    username        VARCHAR(100) NOT NULL,
+                    collection      VARCHAR(200) NOT NULL,
+                    branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, collection)
+                );
+                CREATE INDEX idx_user_current_branch_user ON user_current_branch(user_id);
+                CREATE INDEX idx_user_current_branch_collection ON user_current_branch(collection);
+            """)
+            conn.commit()
+            print("Created user_current_branch table.")
+
+        # Migration: add branch_id column to operation_logs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'operation_logs' AND column_name = 'branch_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE operation_logs ADD COLUMN branch_id VARCHAR(100) DEFAULT 'main'")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_operation_logs_branch_id ON operation_logs(branch_id)")
+            conn.commit()
+            print("Added branch_id column to operation_logs table.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0

@@ -28,6 +28,9 @@
         <div v-else class="timeline-change">
           <span class="change-author">{{ item.author }}</span>
           <span class="change-action">{{ item.content }}</span>
+          <el-tag v-if="item.branchName" :type="item.branchName === '主分支' ? 'info' : 'warning'" size="small" class="branch-tag">
+            {{ item.branchName }}
+          </el-tag>
           <div v-if="item.fieldChanges?.length" class="field-changes">
             <div v-for="(fc, idx) in item.fieldChanges" :key="idx" class="field-change-item">
               <span class="fc-label">{{ fc.label }}:</span>
@@ -84,6 +87,7 @@ interface TimelineItem {
   timestamp: string
   fieldChanges?: Array<{ field: string; label: string; from: any; to: any }>
   authorId?: string
+  branchName?: string
 }
 
 const items = ref<TimelineItem[]>([])
@@ -189,6 +193,7 @@ onMounted(loadTimeline)
 .comment-edit-actions { margin-top: 4px; display: flex; gap: 4px; justify-content: flex-end; }
 .timeline-change { font-size: 13px; color: #909399; }
 .change-author { font-weight: 500; color: #606266; }
+.branch-tag { margin-left: 8px; vertical-align: middle; }
 .field-changes { margin-top: 4px; }
 .field-change-item {
   font-size: 12px;

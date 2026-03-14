@@ -36,3 +36,6 @@ export * from './validationScript'
 
 // ETL相关类型
 export * from './etl'
+
+// 版本管理相关类型
+export * from './version'

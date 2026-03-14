@@ -27,6 +27,7 @@ export interface OperationLog {
   createdAt: string
   batchId?: string
   batchDesc?: string
+  branchName?: string
 }
 
 /**

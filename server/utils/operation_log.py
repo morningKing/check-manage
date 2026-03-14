@@ -45,7 +45,7 @@ def get_field_label_map(fields):
     return {f['fieldName']: f.get('label', f['fieldName']) for f in fields}
 
 
-def log_operation(action, target_type, target_id, target_name, description, field_changes=None):
+def log_operation(action, target_type, target_id, target_name, description, field_changes=None, branch_id=None):
     """
     Record an operation log entry.
 
@@ -56,6 +56,7 @@ def log_operation(action, target_type, target_id, target_name, description, fiel
         target_name:  Human-readable name of the target (str or None)
         description:  Chinese human-readable description
         field_changes: Optional list of {field, label, from, to} dicts
+        branch_id:    Optional branch ID for branch-specific logging
     """
     try:
         user = getattr(g, 'current_user', None)
@@ -80,11 +81,12 @@ def log_operation(action, target_type, target_id, target_name, description, fiel
             cur.execute(
                 'INSERT INTO operation_logs '
                 '(id, action, target_type, target_id, target_name, description, '
-                ' operator_id, operator_name, operator_role, batch_id, batch_desc, field_changes) '
-                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                ' operator_id, operator_name, operator_role, batch_id, batch_desc, field_changes, branch_id) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
                 (log_id, action, target_type, target_id, target_name, description,
                  operator_id, operator_name, operator_role, batch_id, batch_desc,
-                 psycopg2.extras.Json(field_changes) if field_changes else None),
+                 psycopg2.extras.Json(field_changes) if field_changes else None,
+                 branch_id or 'main'),
             )
     except Exception:
         pass

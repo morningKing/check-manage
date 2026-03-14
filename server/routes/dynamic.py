@@ -4,13 +4,26 @@ from datetime import datetime, timezone
 from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 import psycopg2.extras
 import json
 
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules', 'ai'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules', 'ai', 'versions'}
+
+
+def _get_current_user_branch(collection):
+    """Get the current user's branch for a collection.
+
+    Returns the branch_id (str), defaults to 'main' for main branch.
+    """
+    user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+    user_id = user.get('userId')
+    if not user_id:
+        return MAIN_BRANCH_ID
+    return get_user_current_branch(user_id, collection)
 
 
 def format_ts(dt):
@@ -24,7 +37,7 @@ def format_ts(dt):
 
 
 def row_to_record(row):
-    """Reconstruct flat object from (id, collection, data, created_at, updated_at, version) row."""
+    """Reconstruct flat object from (id, collection, data, created_at, updated_at, version, branch_id) row."""
     record = {'id': row[0]}
     if row[2]:  # data JSONB
         record.update(row[2])
@@ -33,6 +46,8 @@ def row_to_record(row):
     if row[4]:  # updated_at
         record['updatedAt'] = format_ts(row[4])
     record['_version'] = row[5] if len(row) > 5 and row[5] is not None else 1
+    if len(row) > 6 and row[6] is not None:
+        record['_branchId'] = row[6]
     return record
 
 
@@ -48,8 +63,8 @@ def get_primary_key_fields(cur, collection):
     return [f['fieldName'] for f in row[0] if f.get('isPrimaryKey')]
 
 
-def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
-    """Check if primary key combination is unique. Returns error message or None."""
+def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, branch_id=None):
+    """Check if primary key combination is unique within the same branch. Returns error message or None."""
     if not pk_fields:
         return None
 
@@ -58,8 +73,8 @@ def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
         pk_values[field] = data.get(field)
 
     # Build JSONB conditions for each primary key field
-    conditions = ['collection = %s']
-    params = [collection]
+    conditions = ['collection = %s', 'branch_id = %s']
+    params = [collection, branch_id]
 
     for field, value in pk_values.items():
         if value is None:
@@ -97,55 +112,55 @@ def get_validation_script(cur, collection):
     return script_row[0] if script_row and script_row[0] else None
 
 
-def apply_pending_relations(cur, collection, record_id, pending_relations):
+def apply_pending_relations(cur, collection, record_id, pending_relations, branch_id=None):
     """Apply relation operations queued by validation script (bidirectional sync)."""
     for rel in pending_relations:
         _apply_relation_update(
             cur, collection, record_id,
             rel['fieldName'], rel['targetCollection'], rel['targetField'],
-            set(rel['ids']),
+            set(rel['ids']), branch_id=branch_id,
         )
 
 
-def _apply_relation_update(cur, collection, record_id, field_name, target_collection, target_field, new_ids):
+def _apply_relation_update(cur, collection, record_id, field_name, target_collection, target_field, new_ids, branch_id=None):
     """Bidirectional M:N relation sync (reusable for both validation scripts and client-side relations)."""
-    # Get old related IDs
+    # Get old related IDs (within the same branch)
     cur.execute(
         'SELECT related_id FROM data_relations '
-        'WHERE collection = %s AND record_id = %s AND field_name = %s',
-        (collection, record_id, field_name),
+        'WHERE collection = %s AND record_id = %s AND field_name = %s AND branch_id = %s',
+        (collection, record_id, field_name, branch_id),
     )
     old_ids = set(row[0] for row in cur.fetchall())
 
-    # Delete all existing forward relations for this field
+    # Delete all existing forward relations for this field (within the same branch)
     cur.execute(
         'DELETE FROM data_relations '
-        'WHERE collection = %s AND record_id = %s AND field_name = %s',
-        (collection, record_id, field_name),
+        'WHERE collection = %s AND record_id = %s AND field_name = %s AND branch_id = %s',
+        (collection, record_id, field_name, branch_id),
     )
 
-    # Insert new forward relations
+    # Insert new forward relations (with branch_id)
     for rid in new_ids:
         cur.execute(
-            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
-            'VALUES (%s, %s, %s, %s, %s)',
-            (collection, record_id, field_name, target_collection, rid),
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            (collection, record_id, field_name, target_collection, rid, branch_id),
         )
 
     # Sync reverse: remove reverse entries for removed IDs
     for rid in old_ids - new_ids:
         cur.execute(
             'DELETE FROM data_relations '
-            'WHERE collection = %s AND record_id = %s AND field_name = %s AND related_id = %s',
-            (target_collection, rid, target_field, record_id),
+            'WHERE collection = %s AND record_id = %s AND field_name = %s AND related_id = %s AND branch_id = %s',
+            (target_collection, rid, target_field, record_id, branch_id),
         )
 
     # Sync reverse: add reverse entries for added IDs
     for rid in new_ids - old_ids:
         cur.execute(
-            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
-            'VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
-            (target_collection, rid, target_field, collection, record_id),
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+            (target_collection, rid, target_field, collection, record_id, branch_id),
         )
 
 
@@ -156,6 +171,7 @@ def list_items(collection):
         return jsonify({"error": "Not found"}), 404
 
     query_str = request.args.get('q', '')
+    branch_id = _get_current_user_branch(collection)
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -171,20 +187,20 @@ def list_items(collection):
                     query = remap_labels(query, pc_row[0])
                 where_fragment, q_params = mongo_translate(query)
                 sql = (
-                    'SELECT id, collection, data, created_at, updated_at, version '
-                    'FROM dynamic_data WHERE collection = %s AND (' + where_fragment + ') '
+                    'SELECT id, collection, data, created_at, updated_at, version, branch_id '
+                    'FROM dynamic_data WHERE collection = %s AND branch_id = %s AND (' + where_fragment + ') '
                     'ORDER BY created_at'
                 )
-                cur.execute(sql, [collection] + q_params)
+                cur.execute(sql, [collection, branch_id] + q_params)
             except json.JSONDecodeError as e:
                 return jsonify({"error": f"查询语法错误: JSON 解析失败 - {e}"}), 400
             except MongoQueryError as e:
                 return jsonify({"error": f"查询语法错误: {e}"}), 400
         else:
             cur.execute(
-                'SELECT id, collection, data, created_at, updated_at, version '
-                'FROM dynamic_data WHERE collection = %s ORDER BY created_at',
-                (collection,),
+                'SELECT id, collection, data, created_at, updated_at, version, branch_id '
+                'FROM dynamic_data WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                (collection, branch_id),
             )
 
         rows = cur.fetchall()
@@ -196,9 +212,14 @@ def list_items(collection):
 def get_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
+    branch_id = _get_current_user_branch(collection)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('SELECT id, collection, data, created_at, updated_at, version FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        cur.execute(
+            'SELECT id, collection, data, created_at, updated_at, version, branch_id '
+            'FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, branch_id),
+        )
         row = cur.fetchone()
     if not row:
         return jsonify({"error": "Not found"}), 404
@@ -215,12 +236,14 @@ def create_item(collection):
     created_at = body.get('createdAt')
     client_relations = body.get('_relations')
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations')}
+    branch_id = _get_current_user_branch(collection)
+
     with get_db() as conn:
         cur = conn.cursor()
-        # Check primary key uniqueness
+        # Check primary key uniqueness (within the same branch)
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
-            error = check_primary_key_unique(cur, collection, data, pk_fields)
+            error = check_primary_key_unique(cur, collection, data, pk_fields, branch_id=branch_id)
             if error:
                 return jsonify({"error": error}), 409
         # Run validation script if configured
@@ -242,25 +265,25 @@ def create_item(collection):
                     "validationWarnings": warnings,
                 }), 400
         cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)',
-            (rid, collection, psycopg2.extras.Json(data), created_at),
+            'INSERT INTO dynamic_data (id, collection, data, created_at, branch_id) VALUES (%s,%s,%s,%s,%s)',
+            (rid, collection, psycopg2.extras.Json(data), created_at, branch_id),
         )
         # Apply relations queued by validation script
         if pending_relations:
-            apply_pending_relations(cur, collection, rid, pending_relations)
+            apply_pending_relations(cur, collection, rid, pending_relations, branch_id=branch_id)
         # Apply client-side relation changes in the SAME transaction (atomic with data create)
         if client_relations:
             for rel in client_relations:
                 _apply_relation_update(
                     cur, collection, rid,
                     rel['fieldName'], rel['targetCollection'], rel['targetField'],
-                    set(rel.get('ids', [])),
+                    set(rel.get('ids', [])), branch_id=branch_id,
                 )
         if not validation_script:
             page_name, fields = get_page_info(cur, collection)
     record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
-                  f'新增{page_name}「{record_name}」')
+                  f'新增{page_name}「{record_name}」', branch_id=branch_id)
     # Fire cross-collection triggers
     try:
         from utils.trigger_engine import fire_triggers
@@ -286,16 +309,20 @@ def update_item(collection, item_id):
     client_version = body.get('_version')
     client_relations = body.get('_relations')  # [{fieldName, targetCollection, targetField, ids}]
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt', '_relations')}
+    branch_id = _get_current_user_branch(collection)
     with get_db() as conn:
         cur = conn.cursor()
-        # Check primary key uniqueness (exclude current record)
+        # Check primary key uniqueness (exclude current record, within same branch)
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
-            error = check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=item_id)
+            error = check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=item_id, branch_id=branch_id)
             if error:
                 return jsonify({"error": error}), 409
         # Fetch old data for diff (and current version for optimistic locking)
-        cur.execute('SELECT data, version FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        cur.execute(
+            'SELECT data, version FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, branch_id)
+        )
         old_row = cur.fetchone()
         if not old_row:
             return jsonify({"error": "记录不存在"}), 404
@@ -346,14 +373,14 @@ def update_item(collection, item_id):
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
-                'WHERE collection = %s AND id = %s AND version = %s',
-                (psycopg2.extras.Json(data), created_at, new_version, collection, item_id, db_version),
+                'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
+                (psycopg2.extras.Json(data), created_at, new_version, collection, item_id, db_version, branch_id),
             )
         else:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
-                'WHERE collection = %s AND id = %s AND version = %s',
-                (psycopg2.extras.Json(data), new_version, collection, item_id, db_version),
+                'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
+                (psycopg2.extras.Json(data), new_version, collection, item_id, db_version, branch_id),
             )
         if cur.rowcount == 0:
             # Another request changed the version between our SELECT and UPDATE
@@ -363,14 +390,14 @@ def update_item(collection, item_id):
             }), 409
         # Apply relations queued by validation script
         if pending_relations:
-            apply_pending_relations(cur, collection, item_id, pending_relations)
+            apply_pending_relations(cur, collection, item_id, pending_relations, branch_id=branch_id)
         # Apply client-side relation changes in the SAME transaction (atomic with data update)
         if client_relations:
             for rel in client_relations:
                 _apply_relation_update(
                     cur, collection, item_id,
                     rel['fieldName'], rel['targetCollection'], rel['targetField'],
-                    set(rel.get('ids', [])),
+                    set(rel.get('ids', [])), branch_id=branch_id,
                 )
         if not validation_script:
             page_name, fields = get_page_info(cur, collection)
@@ -395,7 +422,7 @@ def update_item(collection, item_id):
     else:
         desc = f'修改{page_name}「{record_name}」'
     log_operation('update', 'dynamic_data', item_id, record_name, desc,
-                  field_changes=field_changes if field_changes else None)
+                  field_changes=field_changes if field_changes else None, branch_id=branch_id)
     # Notify on status field changes
     try:
         from utils.notifier import notify_status_change
@@ -426,7 +453,7 @@ def update_item(collection, item_id):
     return jsonify(body)
 
 
-def check_reference_dependencies(cur, collection, record_id):
+def check_reference_dependencies(cur, collection, record_id, branch_id=None):
     """Check if any records in other collections reference this record via 'reference' fields.
 
     Returns error message string if dependencies exist, None otherwise.
@@ -447,8 +474,8 @@ def check_reference_dependencies(cur, collection, record_id):
             # This page has a reference field pointing to our collection
             field_name = field['fieldName']
             cur.execute(
-                "SELECT count(*) FROM dynamic_data WHERE collection = %s AND data->>%s = %s",
-                (child_collection, field_name, record_id),
+                "SELECT count(*) FROM dynamic_data WHERE collection = %s AND data->>%s = %s AND branch_id = %s",
+                (child_collection, field_name, record_id, branch_id),
             )
             count = cur.fetchone()[0]
             if count > 0:
@@ -461,28 +488,35 @@ def check_reference_dependencies(cur, collection, record_id):
 def delete_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
+    branch_id = _get_current_user_branch(collection)
     with get_db() as conn:
         cur = conn.cursor()
-        # Check reference dependencies before deletion
-        ref_error = check_reference_dependencies(cur, collection, item_id)
+        # Check reference dependencies before deletion (within same branch)
+        ref_error = check_reference_dependencies(cur, collection, item_id, branch_id=branch_id)
         if ref_error:
             return jsonify({"error": ref_error}), 409
         # Fetch record name for the log before deleting
-        cur.execute('SELECT data FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
+        cur.execute(
+            'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, branch_id)
+        )
         data_row = cur.fetchone()
         page_name, fields = get_page_info(cur, collection)
         if data_row and data_row[0]:
             record_name = pick_display_name(data_row[0], fields) or item_id
         else:
             record_name = item_id
-        cur.execute('DELETE FROM dynamic_data WHERE collection = %s AND id = %s', (collection, item_id))
-        # Clean up all relations involving this record
         cur.execute(
-            'DELETE FROM data_relations WHERE (collection = %s AND record_id = %s) OR (related_collection = %s AND related_id = %s)',
-            (collection, item_id, collection, item_id),
+            'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, branch_id)
+        )
+        # Clean up all relations involving this record (within same branch)
+        cur.execute(
+            'DELETE FROM data_relations WHERE ((collection = %s AND record_id = %s) OR (related_collection = %s AND related_id = %s)) AND branch_id = %s',
+            (collection, item_id, collection, item_id, branch_id),
         )
     log_operation('delete', 'dynamic_data', item_id, record_name,
-                  f'删除{page_name}「{record_name}」')
+                  f'删除{page_name}「{record_name}」', branch_id=branch_id)
     return jsonify({})
 
 
@@ -502,6 +536,7 @@ def batch_create_items(collection):
 
     skip_validation = options.get('skipValidation', False)
     continue_on_error = options.get('continueOnError', False)
+    branch_id = _get_current_user_branch(collection)
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -530,11 +565,11 @@ def batch_create_items(collection):
                            for i, r in enumerate(records) if r.get('id') in duplicate_ids]
             }), 409
 
-        # 4. Check existing IDs in database (batch query)
+        # 4. Check existing IDs in database (batch query, within same branch)
         if all_ids:
             cur.execute(
-                'SELECT id FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
-                (collection, all_ids)
+                'SELECT id FROM dynamic_data WHERE collection = %s AND id = ANY(%s) AND branch_id = %s',
+                (collection, all_ids, branch_id)
             )
             existing_ids = set(row[0] for row in cur.fetchall())
         else:
@@ -560,9 +595,9 @@ def batch_create_items(collection):
                 errors.append({"index": idx, "error": "主键已存在", "record": record})
                 continue
 
-            # Check primary key uniqueness for composite keys
+            # Check primary key uniqueness for composite keys (within same branch)
             if pk_fields:
-                error = check_primary_key_unique(cur, collection, data, pk_fields)
+                error = check_primary_key_unique(cur, collection, data, pk_fields, branch_id=branch_id)
                 if error:
                     errors.append({"index": idx, "error": error, "record": record})
                     continue
@@ -607,19 +642,19 @@ def batch_create_items(collection):
                 "errors": errors
             }), 400
 
-        # 7. Batch insert records using execute_values
+        # 7. Batch insert records using execute_values (with branch_id)
         if prepared_records:
             values = [
-                (r['id'], collection, psycopg2.extras.Json(r['data']))
+                (r['id'], collection, psycopg2.extras.Json(r['data']), branch_id)
                 for r in prepared_records
             ]
             psycopg2.extras.execute_values(
                 cur,
-                'INSERT INTO dynamic_data (id, collection, data) VALUES %s',
+                'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES %s',
                 values
             )
 
-            # 8. Batch insert relations (forward and reverse)
+            # 8. Batch insert relations (forward and reverse, with branch_id)
             all_relation_values = []
             all_reverse_values = []
 
@@ -643,11 +678,11 @@ def batch_create_items(collection):
 
                         if target_collection:
                             all_relation_values.append(
-                                (collection, rid, field_name, target_collection, related_id)
+                                (collection, rid, field_name, target_collection, related_id, branch_id)
                             )
                             if target_field:
                                 all_reverse_values.append(
-                                    (target_collection, related_id, target_field, collection, rid)
+                                    (target_collection, related_id, target_field, collection, rid, branch_id)
                                 )
 
                 # Process pending relations from validation script
@@ -657,27 +692,27 @@ def batch_create_items(collection):
                     target_field = rel.get('targetField')
                     for related_id in rel['ids']:
                         all_relation_values.append(
-                            (collection, rid, field_name, target_collection, related_id)
+                            (collection, rid, field_name, target_collection, related_id, branch_id)
                         )
                         if target_field:
                             all_reverse_values.append(
-                                (target_collection, related_id, target_field, collection, rid)
+                                (target_collection, related_id, target_field, collection, rid, branch_id)
                             )
 
-            # Batch insert forward relations
+            # Batch insert forward relations (with branch_id)
             if all_relation_values:
                 psycopg2.extras.execute_values(
                     cur,
-                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
                     'VALUES %s ON CONFLICT DO NOTHING',
                     all_relation_values
                 )
 
-            # Batch insert reverse relations (bidirectional sync)
+            # Batch insert reverse relations (bidirectional sync, with branch_id)
             if all_reverse_values:
                 psycopg2.extras.execute_values(
                     cur,
-                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id) '
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
                     'VALUES %s ON CONFLICT DO NOTHING',
                     all_reverse_values
                 )
@@ -687,7 +722,7 @@ def batch_create_items(collection):
         created_count = len(prepared_records)
         summary = f'{created_count} 条记录'
         log_operation('create', 'dynamic_data', ','.join(r['id'] for r in prepared_records[:3]),
-                      summary, f'批量新增{page_name}「{summary}」')
+                      summary, f'批量新增{page_name}「{summary}」', branch_id=branch_id)
 
     result = {
         "success": True,
@@ -712,11 +747,13 @@ def batch_delete_items(collection, **kwargs):
     if not ids:
         return jsonify({"error": "ids is required"}), 400
 
+    branch_id = _get_current_user_branch(collection)
+
     with get_db() as conn:
         cur = conn.cursor()
         page_name, fields = get_page_info(cur, collection)
 
-        # Check reference dependencies for all IDs at once
+        # Check reference dependencies for all IDs at once (within same branch)
         ref_fields = []
         cur.execute('SELECT id, name, fields FROM page_configs')
         rows = cur.fetchall()
@@ -734,8 +771,8 @@ def batch_delete_items(collection, **kwargs):
         blocked_ids = {}
         for child_col, field_name, pname in ref_fields:
             cur.execute(
-                "SELECT data->>%s FROM dynamic_data WHERE collection = %s AND data->>%s = ANY(%s)",
-                (field_name, child_col, field_name, ids),
+                "SELECT data->>%s FROM dynamic_data WHERE collection = %s AND data->>%s = ANY(%s) AND branch_id = %s",
+                (field_name, child_col, field_name, ids, branch_id),
             )
             for (ref_id,) in cur.fetchall():
                 if ref_id and ref_id in ids:
@@ -746,27 +783,27 @@ def batch_delete_items(collection, **kwargs):
         deleted = 0
         record_names = []
         if deletable_ids:
-            # Fetch record names for logging
+            # Fetch record names for logging (within same branch)
             cur.execute(
-                'SELECT id, data FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
-                (collection, deletable_ids),
+                'SELECT id, data FROM dynamic_data WHERE collection = %s AND id = ANY(%s) AND branch_id = %s',
+                (collection, deletable_ids, branch_id),
             )
             id_name_map = {}
             for row_id, data in cur.fetchall():
                 id_name_map[row_id] = pick_display_name(data, fields) or row_id if data else row_id
             record_names = [id_name_map.get(i, i) for i in deletable_ids]
 
-            # Batch delete records
+            # Batch delete records (within same branch)
             cur.execute(
-                'DELETE FROM dynamic_data WHERE collection = %s AND id = ANY(%s)',
-                (collection, deletable_ids),
+                'DELETE FROM dynamic_data WHERE collection = %s AND id = ANY(%s) AND branch_id = %s',
+                (collection, deletable_ids, branch_id),
             )
             deleted = cur.rowcount
 
-            # Batch clean up relations
+            # Batch clean up relations (within same branch)
             cur.execute(
-                'DELETE FROM data_relations WHERE (collection = %s AND record_id = ANY(%s)) OR (related_collection = %s AND related_id = ANY(%s))',
-                (collection, deletable_ids, collection, deletable_ids),
+                'DELETE FROM data_relations WHERE ((collection = %s AND record_id = ANY(%s)) OR (related_collection = %s AND related_id = ANY(%s))) AND branch_id = %s',
+                (collection, deletable_ids, collection, deletable_ids, branch_id),
             )
 
     if deleted > 0:
@@ -774,7 +811,7 @@ def batch_delete_items(collection, **kwargs):
         if len(record_names) > 3:
             summary += f' 等{len(record_names)}条'
         log_operation('delete', 'dynamic_data', ','.join(deletable_ids[:3]), summary,
-                      f'批量删除{page_name}「{summary}」')
+                      f'批量删除{page_name}「{summary}」', branch_id=branch_id)
 
     result = {"deleted": deleted}
     if blocked_ids:

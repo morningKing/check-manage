@@ -1,0 +1,1019 @@
+"""
+版本管理核心逻辑
+
+职责：
+- 创建集合版本快照
+- 对比两个版本差异
+- 合并版本到当前数据
+- 从版本恢复数据
+- 分支管理（数据分支化支持）
+"""
+
+import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
+from db import get_db
+import psycopg2.extras
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+# ==================== 分支管理函数 ====================
+
+# 主分支的 branch_id 常量
+MAIN_BRANCH_ID = 'main'
+
+
+def get_user_current_branch(user_id, collection):
+    """
+    获取用户在指定集合的当前工作分支
+
+    Parameters
+    ----------
+    user_id : str
+        用户 ID
+    collection : str
+        集合名称
+
+    Returns
+    -------
+    str
+        当前分支 ID，'main' 表示主分支
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT branch_id FROM user_current_branch WHERE user_id = %s AND collection = %s',
+            (user_id, collection),
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0] or MAIN_BRANCH_ID  # 返回 'main' 如果为 NULL
+        return MAIN_BRANCH_ID  # 未设置，默认主分支
+
+
+def set_user_current_branch(user_id, username, collection, branch_id):
+    """
+    设置用户在指定集合的当前工作分支
+
+    Parameters
+    ----------
+    user_id : str
+        用户 ID
+    username : str
+        用户名
+    collection : str
+        集合名称
+    branch_id : str
+        分支 ID，'main' 表示切换到主分支
+    """
+    now = datetime.now(timezone.utc)
+    record_id = f'ucb-{user_id}-{collection}'
+    actual_branch_id = branch_id or MAIN_BRANCH_ID
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        # 使用 upsert
+        cur.execute(
+            'INSERT INTO user_current_branch (id, user_id, username, collection, branch_id, updated_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s) '
+            'ON CONFLICT (user_id, collection) DO UPDATE SET branch_id = %s, updated_at = %s',
+            (record_id, user_id, username, collection, actual_branch_id, now, actual_branch_id, now),
+        )
+
+
+def clear_user_current_branch(user_id, collection):
+    """
+    清除用户在指定集合的当前分支设置（切换回主分支）
+
+    Parameters
+    ----------
+    user_id : str
+        用户 ID
+    collection : str
+        集合名称
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'UPDATE user_current_branch SET branch_id = %s, updated_at = %s '
+            'WHERE user_id = %s AND collection = %s',
+            (MAIN_BRANCH_ID, datetime.now(timezone.utc), user_id, collection),
+        )
+
+
+def copy_data_to_branch(collection, source_branch_id, target_branch_id):
+    """
+    复制一个分支的数据到另一个分支
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+    source_branch_id : str
+        源分支 ID，'main' 表示主分支
+    target_branch_id : str
+        目标分支 ID
+    """
+    source_branch = source_branch_id or MAIN_BRANCH_ID
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 复制 dynamic_data
+        cur.execute(
+            "INSERT INTO dynamic_data (id, collection, data, created_at, updated_at, version, branch_id) "
+            "SELECT CONCAT(id, '-', $1), collection, data, created_at, updated_at, version, $2 "
+            "FROM dynamic_data WHERE collection = $3 AND branch_id = $4",
+            (target_branch_id[:8], target_branch_id, collection, source_branch),
+        )
+
+        # 复制 data_relations
+        cur.execute(
+            "INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) "
+            "SELECT collection, CONCAT(record_id, '-', $1), field_name, related_collection, "
+            "CONCAT(related_id, '-', $1), $2 "
+            "FROM data_relations WHERE collection = $3 AND branch_id = $4",
+            (target_branch_id[:8], target_branch_id, collection, source_branch),
+        )
+
+
+def get_branch_data_count(collection, branch_id):
+    """
+    获取分支的数据记录数量
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+    branch_id : str
+        分支 ID，'main' 表示主分支
+
+    Returns
+    -------
+    int
+        记录数量
+    """
+    actual_branch_id = branch_id or MAIN_BRANCH_ID
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, actual_branch_id),
+        )
+        return cur.fetchone()[0]
+
+
+def _compute_data_hash(records, relations):
+    """计算数据和关联的 SHA256 哈希，用于快速判断数据是否相同"""
+    data_str = json.dumps(records, sort_keys=True, ensure_ascii=False, cls=DateTimeEncoder)
+    rel_str = json.dumps(relations, sort_keys=True, ensure_ascii=False, cls=DateTimeEncoder)
+    combined = data_str + rel_str
+    return hashlib.sha256(combined.encode()).hexdigest()
+
+
+def create_version_snapshot(collection, name, description, version_type, parent_version, created_by, branch_id=None):
+    """
+    创建集合版本快照
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+    name : str
+        版本名称
+    description : str
+        版本描述
+    version_type : str
+        'snapshot' 或 'branch'
+    parent_version : str | None
+        父版本 ID
+    created_by : str
+        创建者
+    branch_id : str | None
+        要快照的分支 ID，None 表示主分支
+
+    Returns
+    -------
+    dict
+        版本信息
+    """
+    version_id = f'ver-{uuid.uuid4().hex[:8]}'
+    now = datetime.now(timezone.utc)
+    actual_branch_id = branch_id or MAIN_BRANCH_ID
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 1. 查询当前 dynamic_data（按分支过滤）
+        cur.execute(
+            'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, actual_branch_id),
+        )
+        data_rows = cur.fetchall()
+
+        # 2. 查询当前 data_relations（按分支过滤）
+        cur.execute(
+            'SELECT collection, record_id, field_name, related_collection, related_id '
+            'FROM data_relations WHERE collection = %s AND branch_id = %s',
+            (collection, actual_branch_id),
+        )
+        rel_rows = cur.fetchall()
+
+        # 3. 计算哈希
+        records = [{'id': r[0], 'data': r[1], 'created_at': r[2]} for r in data_rows]
+        relations = [list(r) for r in rel_rows]
+        data_hash = _compute_data_hash(records, relations)
+
+        # 4. 插入版本元数据
+        cur.execute(
+            'INSERT INTO collection_versions '
+            '(id, collection, name, description, version_type, parent_version, status, '
+            'data_hash, records_count, relations_count, created_by, created_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (version_id, collection, name, description, version_type, parent_version,
+             'active', data_hash, len(data_rows), len(rel_rows), created_by, now),
+        )
+
+        # 5. 批量插入 version_snapshots
+        if data_rows:
+            snapshot_values = [
+                (version_id, row[0], psycopg2.extras.Json(row[1]), row[2])
+                for row in data_rows
+            ]
+            psycopg2.extras.execute_values(
+                cur,
+                'INSERT INTO version_snapshots (version_id, record_id, record_data, created_at) '
+                'VALUES %s',
+                snapshot_values,
+            )
+
+        # 6. 批量插入 version_relations
+        if rel_rows:
+            rel_values = [
+                (version_id, r[0], r[1], r[2], r[3], r[4])
+                for r in rel_rows
+            ]
+            psycopg2.extras.execute_values(
+                cur,
+                'INSERT INTO version_relations '
+                '(version_id, collection, record_id, field_name, related_collection, related_id) '
+                'VALUES %s',
+                rel_values,
+            )
+
+    return {
+        'id': version_id,
+        'collection': collection,
+        'name': name,
+        'description': description,
+        'versionType': version_type,
+        'parentVersion': parent_version,
+        'status': 'active',
+        'dataHash': data_hash,
+        'recordsCount': len(data_rows),
+        'relationsCount': len(rel_rows),
+        'createdBy': created_by,
+        'createdAt': now.isoformat(),
+    }
+
+
+def get_version_list(collection=None, status=None):
+    """
+    获取版本列表
+
+    Parameters
+    ----------
+    collection : str | None
+        筛选集合，None 表示所有集合
+    status : str | None
+        筛选状态，None 表示所有状态
+
+    Returns
+    -------
+    list[dict]
+        版本列表
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        conditions = []
+        params = []
+
+        if collection:
+            conditions.append('collection = %s')
+            params.append(collection)
+        if status:
+            conditions.append('status = %s')
+            params.append(status)
+
+        where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
+        sql = f'''
+            SELECT id, collection, name, description, version_type, parent_version, status,
+                   data_hash, records_count, relations_count, created_by, created_at,
+                   merged_at, merged_by, merged_into, is_protected
+            FROM collection_versions
+            {where_clause}
+            ORDER BY created_at DESC
+        '''
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    return [{
+        'id': r[0],
+        'collection': r[1],
+        'name': r[2],
+        'description': r[3],
+        'versionType': r[4],
+        'parentVersion': r[5],
+        'status': r[6],
+        'dataHash': r[7],
+        'recordsCount': r[8],
+        'relationsCount': r[9],
+        'createdBy': r[10],
+        'createdAt': r[11].isoformat() if r[11] else None,
+        'mergedAt': r[12].isoformat() if r[12] else None,
+        'mergedBy': r[13],
+        'mergedInto': r[14],
+        'isProtected': r[15],
+    } for r in rows]
+
+
+def get_version_detail(version_id):
+    """
+    获取版本详情
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    dict | None
+        版本详情，不存在返回 None
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, collection, name, description, version_type, parent_version, status, '
+            'data_hash, records_count, relations_count, created_by, created_at, '
+            'merged_at, merged_by, merged_into, is_protected '
+            'FROM collection_versions WHERE id = %s',
+            (version_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+    return {
+        'id': row[0],
+        'collection': row[1],
+        'name': row[2],
+        'description': row[3],
+        'versionType': row[4],
+        'parentVersion': row[5],
+        'status': row[6],
+        'dataHash': row[7],
+        'recordsCount': row[8],
+        'relationsCount': row[9],
+        'createdBy': row[10],
+        'createdAt': row[11].isoformat() if row[11] else None,
+        'mergedAt': row[12].isoformat() if row[12] else None,
+        'mergedBy': row[13],
+        'mergedInto': row[14],
+        'isProtected': row[15],
+    }
+
+
+def delete_version(version_id):
+    """
+    删除版本
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    bool
+        是否成功删除
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        # 检查是否受保护
+        cur.execute('SELECT is_protected FROM collection_versions WHERE id = %s', (version_id,))
+        row = cur.fetchone()
+        if not row:
+            return False
+        if row[0]:
+            raise ValueError('无法删除受保护的版本')
+
+        # 检查是否有子版本
+        cur.execute('SELECT COUNT(*) FROM collection_versions WHERE parent_version = %s', (version_id,))
+        child_count = cur.fetchone()[0]
+        if child_count > 0:
+            raise ValueError(f'无法删除：存在 {child_count} 个子版本')
+
+        # 删除（CASCADE 会自动删除 version_snapshots 和 version_relations）
+        cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
+    return True
+
+
+def load_version_data(version_id):
+    """
+    加载版本数据
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    tuple
+        (records, relations_map) 或 (None, None) 如果版本不存在
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 检查版本是否存在
+        cur.execute('SELECT id FROM collection_versions WHERE id = %s', (version_id,))
+        if not cur.fetchone():
+            return None, None
+
+        # 加载快照数据
+        cur.execute(
+            'SELECT record_id, record_data FROM version_snapshots WHERE version_id = %s',
+            (version_id,),
+        )
+        snapshot_rows = cur.fetchall()
+
+        # 加载关联数据
+        cur.execute(
+            'SELECT record_id, field_name, related_id FROM version_relations WHERE version_id = %s',
+            (version_id,),
+        )
+        rel_rows = cur.fetchall()
+
+    # 构建记录列表
+    records = []
+    for rid, data in snapshot_rows:
+        flat = {'id': rid}
+        if isinstance(data, dict):
+            flat.update(data)
+        records.append(flat)
+
+    # 构建关联映射
+    rel_map = {}
+    for record_id, field_name, related_id in rel_rows:
+        rel_map.setdefault(record_id, {}).setdefault(field_name, []).append(related_id)
+
+    return records, rel_map
+
+
+def load_current_data(collection, branch_id=None):
+    """
+    加载当前数据
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+    branch_id : str | None
+        分支 ID，None 或 'main' 表示主分支
+
+    Returns
+    -------
+    tuple
+        (records, relations_map)
+    """
+    actual_branch_id = branch_id or MAIN_BRANCH_ID
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, data FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, actual_branch_id),
+        )
+        data_rows = cur.fetchall()
+
+        cur.execute(
+            'SELECT record_id, field_name, related_id FROM data_relations WHERE collection = %s AND branch_id = %s',
+            (collection, actual_branch_id),
+        )
+        rel_rows = cur.fetchall()
+
+    # 构建记录列表
+    records = []
+    for rid, data in data_rows:
+        flat = {'id': rid}
+        if isinstance(data, dict):
+            flat.update(data)
+        records.append(flat)
+
+    # 构建关联映射
+    rel_map = {}
+    for record_id, field_name, related_id in rel_rows:
+        rel_map.setdefault(record_id, {}).setdefault(field_name, []).append(related_id)
+
+    return records, rel_map
+
+
+def compute_diff(base_records, target_records, field_names, base_rels=None, target_rels=None, relation_fields=None):
+    """
+    计算两组记录的差异
+
+    Parameters
+    ----------
+    base_records : list[dict]
+        基准数据
+    target_records : list[dict]
+        对比数据
+    field_names : list[str]
+        要比较的字段名列表
+    base_rels : dict | None
+        基准关联数据
+    target_rels : dict | None
+        对比关联数据
+    relation_fields : list[dict] | None
+        关联字段配置
+
+    Returns
+    -------
+    dict
+        {added, removed, modified, unchangedCount}
+    """
+    # 合并关联数据到记录中
+    if relation_fields and base_rels is not None and target_rels is not None:
+        for rec in base_records:
+            rid = rec['id']
+            rec_rels = base_rels.get(rid, {})
+            for rf in relation_fields:
+                fn = rf['fieldName']
+                rec[fn] = sorted(rec_rels.get(fn, []))
+        for rec in target_records:
+            rid = rec['id']
+            rec_rels = target_rels.get(rid, {})
+            for rf in relation_fields:
+                fn = rf['fieldName']
+                rec[fn] = sorted(rec_rels.get(fn, []))
+
+    base_map = {r['id']: r for r in base_records}
+    target_map = {r['id']: r for r in target_records}
+
+    base_ids = set(base_map.keys())
+    target_ids = set(target_map.keys())
+
+    added = []
+    for rid in sorted(target_ids - base_ids):
+        added.append(target_map[rid])
+
+    removed = []
+    for rid in sorted(base_ids - target_ids):
+        removed.append(base_map[rid])
+
+    modified = []
+    unchanged_count = 0
+    for rid in sorted(base_ids & target_ids):
+        old = base_map[rid]
+        new = target_map[rid]
+        changed_fields = []
+        for fn in field_names:
+            old_val = old.get(fn)
+            new_val = new.get(fn)
+            if old_val != new_val:
+                changed_fields.append({
+                    'fieldName': fn,
+                    'oldValue': old_val,
+                    'newValue': new_val,
+                })
+        if changed_fields:
+            modified.append({
+                'id': rid,
+                'record': new,
+                'oldRecord': old,
+                'fields': changed_fields,
+            })
+        else:
+            unchanged_count += 1
+
+    return {
+        'added': added,
+        'removed': removed,
+        'modified': modified,
+        'unchangedCount': unchanged_count,
+    }
+
+
+def merge_version_to_current(version_id, strategy, merged_by, user_id=None):
+    """
+    合并版本到当前数据
+
+    Parameters
+    ----------
+    version_id : str
+        源版本 ID
+    strategy : str
+        合并策略：'theirs'（使用源版本数据）或 'ours'（保留当前数据）
+    merged_by : str
+        合并者
+    user_id : str | None
+        用户 ID，用于获取目标分支
+
+    Returns
+    -------
+    dict
+        {success, summary: {recordsCreated, recordsUpdated, recordsDeleted}}
+    """
+    now = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 获取版本信息
+        cur.execute(
+            'SELECT collection, status, version_type FROM collection_versions WHERE id = %s',
+            (version_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+        collection, status, version_type = row
+
+        if status == 'merged':
+            raise ValueError('该版本已被合并')
+
+        # 获取目标分支（用户当前工作分支，如果没有则是主分支）
+        target_branch_id = get_user_current_branch(user_id, collection) if user_id else MAIN_BRANCH_ID
+
+        # 加载源数据
+        if version_type == 'branch':
+            # 对于分支类型，从 dynamic_data 加载（带 branch_id 过滤）
+            source_records, source_rels = load_current_data(collection, branch_id=version_id)
+        else:
+            # 对于快照类型，从 version_snapshots 加载
+            source_records, source_rels = load_version_data(version_id)
+
+        # 加载目标数据
+        target_records, target_rels = load_current_data(collection, branch_id=target_branch_id)
+
+        # 获取字段配置
+        page_id = f'page-{collection}'
+        cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+        pc_row = cur.fetchone()
+        fields = pc_row[0] if pc_row and pc_row[0] else []
+        field_names = [f['fieldName'] for f in fields]
+        relation_fields = [f for f in fields if f.get('controlType') == 'relation']
+
+        # 计算差异
+        diff = compute_diff(
+            target_records, source_records, field_names,
+            target_rels, source_rels, relation_fields
+        )
+
+        summary = {
+            'recordsCreated': 0,
+            'recordsUpdated': 0,
+            'recordsDeleted': 0,
+        }
+
+        if strategy == 'theirs':
+            # 使用源版本数据
+
+            # 1. 删除目标数据中不在源版本中的记录
+            for rec in diff['removed']:
+                cur.execute(
+                    'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                    (collection, rec['id'], target_branch_id),
+                )
+                cur.execute(
+                    'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                    (collection, rec['id'], target_branch_id),
+                )
+                summary['recordsDeleted'] += 1
+
+            # 2. 插入新增记录（带目标分支 ID）
+            for rec in diff['added']:
+                data = {k: v for k, v in rec.items() if k != 'id'}
+                cur.execute(
+                    'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
+                    (rec['id'], collection, psycopg2.extras.Json(data), target_branch_id),
+                )
+                summary['recordsCreated'] += 1
+
+            # 3. 更新修改记录
+            for item in diff['modified']:
+                new_data = {k: v for k, v in item['record'].items() if k != 'id'}
+                cur.execute(
+                    'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 '
+                    'WHERE collection = %s AND id = %s AND branch_id = %s',
+                    (psycopg2.extras.Json(new_data), collection, item['id'], target_branch_id),
+                )
+                summary['recordsUpdated'] += 1
+
+            # 4. 重建关联数据
+            # 先清空该集合在目标分支的所有关联
+            cur.execute(
+                'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s',
+                (collection, target_branch_id)
+            )
+            # 从源数据恢复关联
+            if version_type == 'branch':
+                # 从 dynamic_data 的 data_relations 加载
+                cur.execute(
+                    'SELECT collection, record_id, field_name, related_collection, related_id '
+                    'FROM data_relations WHERE collection = %s AND branch_id = %s',
+                    (collection, version_id),
+                )
+            else:
+                # 从 version_relations 加载
+                cur.execute(
+                    'SELECT collection, record_id, field_name, related_collection, related_id '
+                    'FROM version_relations WHERE version_id = %s',
+                    (version_id,),
+                )
+            for rel_row in cur.fetchall():
+                cur.execute(
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+                    'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                    (*rel_row, target_branch_id),
+                )
+
+        elif strategy == 'ours':
+            # 保留当前数据，不做任何修改
+            pass
+
+        else:
+            raise ValueError(f'不支持的合并策略: {strategy}')
+
+        # 标记版本为已合并
+        cur.execute(
+            'UPDATE collection_versions SET status = %s, merged_at = %s, merged_by = %s '
+            'WHERE id = %s',
+            ('merged', now, merged_by, version_id),
+        )
+
+    return {
+        'success': True,
+        'summary': summary,
+    }
+
+
+def restore_from_version(version_id, restored_by, user_id=None):
+    """
+    从版本恢复数据（完全覆盖当前数据）
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+    restored_by : str
+        恢复者
+    user_id : str | None
+        用户 ID，用于获取目标分支
+
+    Returns
+    -------
+    dict
+        {success, recordsCount, relationsCount}
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 获取版本信息
+        cur.execute(
+            'SELECT collection, records_count, relations_count FROM collection_versions WHERE id = %s',
+            (version_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+        collection, records_count, relations_count = row
+
+        # 获取目标分支
+        target_branch_id = get_user_current_branch(user_id, collection) if user_id else MAIN_BRANCH_ID
+
+        # 加载版本数据
+        version_records, version_rels = load_version_data(version_id)
+
+        # 清空目标分支的当前数据
+        cur.execute(
+            'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, target_branch_id)
+        )
+        cur.execute(
+            'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s',
+            (collection, target_branch_id)
+        )
+
+        # 插入快照数据（带目标分支 ID）
+        for rec in version_records:
+            data = {k: v for k, v in rec.items() if k != 'id'}
+            cur.execute(
+                'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
+                (rec['id'], collection, psycopg2.extras.Json(data), target_branch_id),
+            )
+
+        # 恢复关联数据（带目标分支 ID）
+        cur.execute(
+            'SELECT collection, record_id, field_name, related_collection, related_id '
+            'FROM version_relations WHERE version_id = %s',
+            (version_id,),
+        )
+        for rel_row in cur.fetchall():
+            cur.execute(
+                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+                'VALUES (%s, %s, %s, %s, %s, %s)',
+                (*rel_row, target_branch_id),
+            )
+
+    return {
+        'success': True,
+        'recordsCount': records_count,
+        'relationsCount': relations_count,
+    }
+
+
+def switch_to_version(version_id, switched_by, user_id=None):
+    """
+    切换到指定分支（数据分支化模式）
+
+    切换流程：
+    1. 检查目标版本状态和锁定
+    2. 如果分支没有数据，从快照初始化
+    3. 设置用户当前工作分支
+    4. 锁定目标分支
+
+    Parameters
+    ----------
+    version_id : str
+        目标版本 ID
+    switched_by : str
+        切换操作者用户名
+    user_id : str | None
+        用户 ID，用于设置当前分支
+
+    Returns
+    -------
+    dict
+        {success, branchId, recordsInBranch, initialized}
+    """
+    now = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 1. 获取目标版本信息
+        cur.execute(
+            'SELECT collection, name, status, version_type FROM collection_versions WHERE id = %s',
+            (version_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('目标版本不存在')
+        collection, target_name, status, version_type = row
+
+        # 只能切换到活跃的分支版本
+        if status != 'active':
+            raise ValueError(f'无法切换：版本状态为「{status}」')
+        if version_type != 'branch':
+            raise ValueError('只能切换到分支类型版本，快照不支持切换')
+
+        # 2. 检查分支是否已有数据
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, version_id),
+        )
+        existing_count = cur.fetchone()[0]
+        initialized = False
+
+        # 3. 如果分支没有数据，从快照初始化
+        if existing_count == 0:
+            cur.execute(
+                'SELECT record_id, record_data FROM version_snapshots WHERE version_id = %s',
+                (version_id,),
+            )
+            target_records = cur.fetchall()
+
+            cur.execute(
+                'SELECT collection, record_id, field_name, related_collection, related_id '
+                'FROM version_relations WHERE version_id = %s',
+                (version_id,),
+            )
+            target_relations = cur.fetchall()
+
+            # 插入数据（带 branch_id）
+            for rid, data in target_records:
+                flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
+                cur.execute(
+                    'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
+                    (rid, collection, psycopg2.extras.Json(flat_data), version_id),
+                )
+
+            # 插入关联（带 branch_id）
+            for rel in target_relations:
+                cur.execute(
+                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+                    'VALUES (%s, %s, %s, %s, %s, %s)',
+                    (rel[0], rel[1], rel[2], rel[3], rel[4], version_id),
+                )
+
+            existing_count = len(target_records)
+            initialized = True
+
+        # 4. 设置用户当前工作分支
+        if user_id:
+            set_user_current_branch(user_id, switched_by, collection, version_id)
+
+    return {
+        'success': True,
+        'branchId': version_id,
+        'branchName': target_name,
+        'recordsInBranch': existing_count,
+        'initialized': initialized,
+    }
+
+
+def switch_to_main_branch(collection, switched_by, user_id=None):
+    """
+    切换到主分支
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+    switched_by : str
+        切换操作者用户名
+    user_id : str | None
+        用户 ID
+
+    Returns
+    -------
+    dict
+        {success}
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 获取主分支数据数量
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, MAIN_BRANCH_ID),
+        )
+        main_count = cur.fetchone()[0]
+
+        # 设置用户当前分支为主分支
+        if user_id:
+            set_user_current_branch(user_id, switched_by, collection, MAIN_BRANCH_ID)
+
+    return {
+        'success': True,
+        'branchId': MAIN_BRANCH_ID,
+        'branchName': '主分支',
+        'recordsInBranch': main_count,
+        'initialized': False,
+    }
+
+
+def get_current_branch(collection):
+    """
+    获取集合的当前工作分支
+
+    通过检查 description 中是否包含 '[当前工作分支]' 标记来判断
+
+    Parameters
+    ----------
+    collection : str
+        集合名称
+
+    Returns
+    -------
+    dict | None
+        当前分支信息，如果没有则返回 None
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, description, version_type FROM collection_versions "
+            "WHERE collection = %s AND status = 'active' AND version_type = 'branch' "
+            "AND description LIKE %s",
+            (collection, '%[当前工作分支]%'),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            'id': row[0],
+            'name': row[1],
+            'description': row[2],
+            'versionType': row[3],
+        }
+
+

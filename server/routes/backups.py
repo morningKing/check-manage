@@ -197,12 +197,108 @@ def update_settings():
 @backups_bp.route('/backups/tables', methods=['GET'])
 @admin_required
 def list_backup_tables():
-    """获取可备份的表列表"""
-    tables = get_backup_table_names()
-    return jsonify(tables)
+    """获取可备份的表列表，包括动态数据的 collection 分组"""
+    from utils.backup import get_backup_table_names
+
+    base_tables = get_backup_table_names()
+
+    # 获取动态数据表中的所有 collection
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT DISTINCT collection FROM dynamic_data ORDER BY collection'
+        )
+        collections = [row[0] for row in cur.fetchall()]
+
+        # 获取每个 collection 的记录数
+        collection_stats = {}
+        for col in collections:
+            cur.execute(
+                'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s',
+                (col,),
+            )
+            collection_stats[col] = cur.fetchone()[0]
+
+        # 获取每个 collection 对应的页面名称
+        cur.execute(
+            'SELECT SUBSTRING(id FROM 6) AS col, name FROM page_configs WHERE id LIKE \'page-%\''
+        )
+        page_names = {row[0]: row[1] for row in cur.fetchall()}
+
+    # 构建结果：基础表 + 动态数据 collection 分组
+    result = []
+    for t in base_tables:
+        if t['name'] == 'dynamic_data':
+            # 动态数据表展开为 collection 列表
+            result.append({
+                'name': 'dynamic_data',
+                'label': t['label'],
+                'isGroup': True,
+                'children': [
+                    {
+                        'name': f'dynamic_data:{col}',
+                        'label': page_names.get(col, col),
+                        'count': collection_stats.get(col, 0),
+                    }
+                    for col in collections
+                ]
+            })
+        else:
+            result.append({
+                'name': t['name'],
+                'label': t['label'],
+                'isGroup': False,
+            })
+
+    return jsonify(result)
 
 
 # ==================== 备份数据对比 ====================
+
+
+def _load_version_collection(version_id, collection):
+    """从版本快照中读取指定集合的 dynamic_data 和 data_relations 记录。
+
+    返回 (records, relations_map, error)。
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        # 检查版本是否存在
+        cur.execute(
+            'SELECT id FROM collection_versions WHERE id = %s AND collection = %s',
+            (version_id, collection),
+        )
+        if not cur.fetchone():
+            return None, None, '版本不存在或不属于该集合'
+
+        # 加载快照数据
+        cur.execute(
+            'SELECT record_id, record_data FROM version_snapshots WHERE version_id = %s',
+            (version_id,),
+        )
+        snapshot_rows = cur.fetchall()
+
+        # 加载关联数据
+        cur.execute(
+            'SELECT record_id, field_name, related_id FROM version_relations WHERE version_id = %s',
+            (version_id,),
+        )
+        rel_rows = cur.fetchall()
+
+    # 构建记录列表
+    result = []
+    for rid, data in snapshot_rows:
+        flat = {'id': rid}
+        if isinstance(data, dict):
+            flat.update(data)
+        result.append(flat)
+
+    # 构建关联映射
+    rel_map = {}
+    for record_id, field_name, related_id in rel_rows:
+        rel_map.setdefault(record_id, {}).setdefault(field_name, []).append(related_id)
+
+    return result, rel_map, None
 
 
 def _load_backup_collection(backup_id, collection):
@@ -440,6 +536,11 @@ def diff_collection():
     # 加载基准数据
     if base_source == 'current':
         base_records, base_rels = _load_current_collection(collection)
+    elif base_source.startswith('ver-'):
+        # 版本 ID
+        base_records, base_rels, err = _load_version_collection(base_source, collection)
+        if err:
+            return jsonify({'error': f'基准数据加载失败: {err}'}), 400
     else:
         base_records, base_rels, err = _load_backup_collection(base_source, collection)
         if err:
@@ -448,6 +549,11 @@ def diff_collection():
     # 加载对比数据
     if target_source == 'current':
         target_records, target_rels = _load_current_collection(collection)
+    elif target_source.startswith('ver-'):
+        # 版本 ID
+        target_records, target_rels, err = _load_version_collection(target_source, collection)
+        if err:
+            return jsonify({'error': f'对比数据加载失败: {err}'}), 400
     else:
         target_records, target_rels, err = _load_backup_collection(target_source, collection)
         if err:
