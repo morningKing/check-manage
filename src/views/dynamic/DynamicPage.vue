@@ -240,10 +240,10 @@
       />
     </el-card>
 
-    <!-- Excel 视图 -->
-    <el-card v-if="viewMode === 'excel'" class="table-card excel-card">
+    <!-- Excel 视图 - 使用原始数据，让 ExcelView 自己处理过滤 -->
+    <el-card v-if="viewMode === 'excel' && excelReady" class="table-card excel-card">
       <ExcelView
-        :data="filteredData"
+        :data="tableData"
         :fields="effectiveFields"
         :loading="tableLoading"
         @row-click="handleView"
@@ -251,6 +251,13 @@
         @relation-click="handleRelationClick"
         @quote-click="handleQuoteClick"
       />
+    </el-card>
+    <!-- Excel 视图加载占位 -->
+    <el-card v-else-if="viewMode === 'excel' && !excelReady" class="table-card excel-card">
+      <div class="excel-loading-placeholder">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>正在加载 Excel 视图...</span>
+      </div>
     </el-card>
 
     <!-- 新增/编辑对话框 -->
@@ -675,7 +682,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
 import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager, ExcelView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -913,6 +920,12 @@ const graphRecordId = ref('')
  * 视图模式（table / kanban / excel）
  */
 const viewMode = ref<'table' | 'kanban' | 'excel'>('table')
+
+/**
+ * Excel 视图延迟加载状态
+ * 用于在切换到 Excel 视图时避免立即渲染大量数据导致的卡顿
+ */
+const excelReady = ref(false)
 
 /**
  * 分页状态
@@ -2365,6 +2378,24 @@ watch(pageId, () => {
   viewMode.value = pageConfig.value?.viewConfig?.defaultView || 'table'
 })
 
+/**
+ * 视图模式切换时延迟渲染 Excel 视图
+ * 避免大量数据同时渲染导致的卡顿
+ */
+watch(viewMode, (newMode) => {
+  if (newMode === 'excel') {
+    // 切换到 Excel 视图时，先显示加载占位，延迟渲染实际组件
+    excelReady.value = false
+    // 使用 setTimeout 让浏览器先完成当前渲染帧
+    setTimeout(() => {
+      excelReady.value = true
+    }, 50)
+  } else {
+    // 切换到其他视图时立即隐藏 Excel 视图
+    excelReady.value = false
+  }
+})
+
 // ==================== 生命周期 ====================
 
 onActivated(async () => {
@@ -2496,6 +2527,38 @@ onActivated(async () => {
 
   :deep(.el-card__body) {
     overflow: auto;
+  }
+}
+
+.excel-card {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+
+  :deep(.el-card__body) {
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+}
+
+.excel-loading-placeholder {
+  height: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: #909399;
+
+  .el-icon {
+    font-size: 48px;
+    color: #409eff;
+  }
+
+  span {
+    font-size: 14px;
   }
 }
 

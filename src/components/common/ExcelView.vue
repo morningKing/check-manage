@@ -315,6 +315,7 @@ const wrapperHeight = ref(0)
 
 const searchText = ref('')
 const debouncedSearchText = ref('')
+// 使用 shallowRef 避免深层响应式，提升大数据性能
 const columnFilters = shallowRef<Record<string, ColumnFilter>>({})
 
 // 分页
@@ -340,6 +341,23 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 // ResizeObserver
 let resizeObserver: ResizeObserver | null = null
+
+// ==================== 性能优化：缓存 ====================
+
+// 缓存过滤结果，避免重复计算
+const filterResultCache = {
+  keyword: '',
+  filters: {} as Record<string, ColumnFilter>,
+  filteredIds: new Set<string>(),
+  version: 0
+}
+
+// 缓存排序结果
+const sortResultCache = {
+  field: '',
+  direction: '' as 'asc' | 'desc' | '',
+  sortedData: null as DynamicRecord[] | null
+}
 
 onMounted(() => {
   if (tableWrapperRef.value) {
@@ -379,77 +397,58 @@ const filterDialogTitle = computed(() => {
   return `筛选 "${currentFilterField.value?.label || ''}"`
 })
 
-// 使用 Map 缓存筛选结果，避免重复计算
-const filterCache = new Map<string, boolean>()
+// ==================== 性能优化：增量过滤 ====================
 
-const filteredCount = computed(() => {
+/**
+ * 执行过滤并返回匹配的记录ID集合
+ * 使用缓存策略，仅在条件变化时重新计算
+ */
+function getFilteredIds(): Set<string> {
   const data = props.data
   const keyword = debouncedSearchText.value.trim().toLowerCase()
   const filters = columnFilters.value
-  const fields = visibleFields.value
-  const hasKeyword = keyword !== ''
-  const filterEntries = Object.entries(filters)
-  const hasFilters = filterEntries.length > 0
+  const filterKey = JSON.stringify(filters)
 
-  if (!hasKeyword && !hasFilters) return data.length
-
-  // 清除旧缓存
-  filterCache.clear()
-
-  let count = 0
-  for (let i = 0; i < data.length; i++) {
-    const record = data[i]
-    if (matchFilters(record, keyword, hasKeyword, filterEntries, hasFilters, fields)) {
-      filterCache.set(record.id, true)
-      count++
-    }
+  // 检查缓存是否有效
+  if (filterResultCache.keyword === keyword &&
+      JSON.stringify(filterResultCache.filters) === filterKey) {
+    return filterResultCache.filteredIds
   }
-  return count
-})
 
-// 分页数据 - 直接从原始数据切片，利用缓存判断
-const paginatedData = computed(() => {
-  const data = props.data
-  const keyword = debouncedSearchText.value.trim().toLowerCase()
-  const filters = columnFilters.value
-  const fields = visibleFields.value
+  // 重新计算
+  const filteredIds = new Set<string>()
   const hasKeyword = keyword !== ''
   const filterEntries = Object.entries(filters)
   const hasFilters = filterEntries.length > 0
+  const fields = visibleFields.value
 
+  // 快速路径：无筛选条件
   if (!hasKeyword && !hasFilters) {
-    // 无筛选，直接分页
-    const start = (currentPage.value - 1) * pageSize.value
-    const end = start + pageSize.value
-    // 应用排序
-    let result = data.slice()
-    if (sortField.value) {
-      result = sortData(result, sortField.value, sortDirection.value, fields)
+    for (let i = 0; i < data.length; i++) {
+      filteredIds.add(data[i].id)
     }
-    return result.slice(start, end)
-  }
-
-  // 有筛选，先过滤再分页
-  let filtered: DynamicRecord[] = []
-  for (let i = 0; i < data.length; i++) {
-    const record = data[i]
-    if (filterCache.has(record.id) || matchFilters(record, keyword, hasKeyword, filterEntries, hasFilters, fields)) {
-      filtered.push(record)
+  } else {
+    for (let i = 0; i < data.length; i++) {
+      if (matchFiltersFast(data[i], keyword, hasKeyword, filterEntries, hasFilters, fields)) {
+        filteredIds.add(data[i].id)
+      }
     }
   }
 
-  // 排序
-  if (sortField.value) {
-    filtered = sortData(filtered, sortField.value, sortDirection.value, fields)
-  }
+  // 更新缓存
+  filterResultCache.keyword = keyword
+  filterResultCache.filters = { ...filters }
+  filterResultCache.filteredIds = filteredIds
+  filterResultCache.version++
 
-  const start = (currentPage.value - 1) * pageSize.value
-  return filtered.slice(start, start + pageSize.value)
-})
+  return filteredIds
+}
 
-// ==================== 方法 ====================
-
-function matchFilters(
+/**
+ * 快速过滤匹配函数（优化版）
+ * 减少函数调用和对象创建
+ */
+function matchFiltersFast(
   record: DynamicRecord,
   keyword: string,
   hasKeyword: boolean,
@@ -460,28 +459,58 @@ function matchFilters(
   // 全文搜索
   if (hasKeyword) {
     let matched = false
-    for (const field of fields) {
+    for (let i = 0; i < fields.length; i++) {
+      const field = fields[i]
       const val = record[field.fieldName]
       if (val == null) continue
 
-      if (['text', 'textarea', 'number', 'autoSequence'].includes(field.controlType)) {
+      const controlType = field.controlType
+
+      if (controlType === 'text' || controlType === 'textarea' ||
+          controlType === 'number' || controlType === 'autoSequence') {
         if (String(val).toLowerCase().includes(keyword)) { matched = true; break }
-      } else if (['select', 'radio'].includes(field.controlType)) {
-        const opt = field.options?.find(o => o.value === val)
-        if ((opt?.label || String(val)).toLowerCase().includes(keyword)) { matched = true; break }
-      } else if (['multiSelect', 'checkbox'].includes(field.controlType) && Array.isArray(val)) {
-        if (val.some(v => (field.options?.find(o => o.value === v)?.label || String(v)).toLowerCase().includes(keyword))) { matched = true; break }
-      } else if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
-        if (String(val).toLowerCase().includes(keyword)) { matched = true; break }
-      } else if (field.controlType === 'relation') {
+      } else if (controlType === 'select' || controlType === 'radio') {
+        const opts = field.options
+        if (opts) {
+          for (let j = 0; j < opts.length; j++) {
+            if (opts[j].value === val && opts[j].label.toLowerCase().includes(keyword)) {
+              matched = true; break
+            }
+          }
+          if (matched) break
+        }
+      } else if (controlType === 'multiSelect' || controlType === 'checkbox') {
+        const opts = field.options
+        if (opts && Array.isArray(val)) {
+          for (let j = 0; j < val.length; j++) {
+            const opt = opts.find(o => o.value === val[j])
+            if (opt && opt.label.toLowerCase().includes(keyword)) {
+              matched = true; break
+            }
+          }
+          if (matched) break
+        }
+      } else if (controlType === 'relation') {
         const labels = record[`_rel_${field.fieldName}_labels`]
-        if (Array.isArray(labels) && labels.some((item: any) => item.label.toLowerCase().includes(keyword))) { matched = true; break }
-      } else if (field.controlType === 'reference') {
+        if (Array.isArray(labels)) {
+          for (let j = 0; j < labels.length; j++) {
+            if (labels[j].label.toLowerCase().includes(keyword)) { matched = true; break }
+          }
+          if (matched) break
+        }
+      } else if (controlType === 'reference') {
         const display = record[`_ref_${field.fieldName}_display`]
         if (display && String(display).toLowerCase().includes(keyword)) { matched = true; break }
-      } else if (field.controlType === 'quoteSelect') {
+      } else if (controlType === 'quoteSelect') {
         const labels = record[`_quote_${field.fieldName}_labels`]
-        if (Array.isArray(labels) && labels.some((item: any) => item.label.toLowerCase().includes(keyword))) { matched = true; break }
+        if (Array.isArray(labels)) {
+          for (let j = 0; j < labels.length; j++) {
+            if (labels[j].label.toLowerCase().includes(keyword)) { matched = true; break }
+          }
+          if (matched) break
+        }
+      } else if (controlType === 'date' || controlType === 'datetime' || controlType === 'autoTimestamp') {
+        if (String(val).toLowerCase().includes(keyword)) { matched = true; break }
       }
     }
     if (!matched) return false
@@ -489,54 +518,136 @@ function matchFilters(
 
   // 列筛选
   if (hasFilters) {
-    for (const [fieldName, filter] of filterEntries) {
+    for (let i = 0; i < filterEntries.length; i++) {
+      const [fieldName, filter] = filterEntries[i]
       const field = fields.find(f => f.fieldName === fieldName)
       if (!field) continue
 
-      if (field.controlType === 'relation') {
+      const filterVal = filter.value
+      if (filterVal == null || filterVal === '') continue
+
+      const controlType = field.controlType
+
+      if (controlType === 'relation') {
         const labels = record[`_rel_${fieldName}_labels`]
         if (!Array.isArray(labels) || labels.length === 0) return false
-        if (!labels.some((item: any) => item.label.toLowerCase().includes(String(filter.value).toLowerCase()))) return false
-      } else if (field.controlType === 'quoteSelect') {
+        const kw = String(filterVal).toLowerCase()
+        let found = false
+        for (let j = 0; j < labels.length; j++) {
+          if (labels[j].label.toLowerCase().includes(kw)) { found = true; break }
+        }
+        if (!found) return false
+      } else if (controlType === 'quoteSelect') {
         const labels = record[`_quote_${fieldName}_labels`]
         if (!Array.isArray(labels) || labels.length === 0) return false
-        if (!labels.some((item: any) => item.label.toLowerCase().includes(String(filter.value).toLowerCase()))) return false
-      } else if (field.controlType === 'reference') {
+        const kw = String(filterVal).toLowerCase()
+        let found = false
+        for (let j = 0; j < labels.length; j++) {
+          if (labels[j].label.toLowerCase().includes(kw)) { found = true; break }
+        }
+        if (!found) return false
+      } else if (controlType === 'reference') {
         const display = record[`_ref_${fieldName}_display`]
-        if (!display || !String(display).toLowerCase().includes(String(filter.value).toLowerCase())) return false
+        if (!display || !String(display).toLowerCase().includes(String(filterVal).toLowerCase())) return false
+      } else if (controlType === 'select' || controlType === 'radio') {
+        if (record[fieldName] !== filterVal) return false
+      } else if (controlType === 'multiSelect' || controlType === 'checkbox') {
+        const val = record[fieldName]
+        if (!Array.isArray(val) || !Array.isArray(filterVal)) return false
+        for (let j = 0; j < filterVal.length; j++) {
+          if (!val.includes(filterVal[j])) return false
+        }
+      } else if (controlType === 'number') {
+        const n = Number(record[fieldName])
+        const n1 = Number(filterVal)
+        const op = filter.operator
+        if (op === 'eq' && n !== n1) return false
+        else if (op === 'gt' && n <= n1) return false
+        else if (op === 'lt' && n >= n1) return false
+        else if (op === 'between') {
+          const n2 = Number(filter.value2)
+          if (n < n1 || n > n2) return false
+        }
+      } else if (controlType === 'date' || controlType === 'datetime' || controlType === 'autoTimestamp') {
+        const recordDate = new Date(record[fieldName]).getTime()
+        const f1 = filterVal ? new Date(filterVal).getTime() : 0
+        const f2 = filter.value2 ? new Date(filter.value2).getTime() : 0
+        const op = filter.operator
+        if (op === 'eq' && f1 && recordDate !== f1) return false
+        else if (op === 'lt' && f1 && recordDate >= f1) return false
+        else if (op === 'gt' && f1 && recordDate <= f1) return false
+        else if (op === 'between' && f1 && f2 && (recordDate < f1 || recordDate > f2)) return false
       } else {
+        // 文本类型
         const val = record[fieldName]
         if (val == null || val === '') return false
-
-        if (['select', 'radio'].includes(field.controlType)) {
-          if (val !== filter.value) return false
-        } else if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-          if (!Array.isArray(val) || !Array.isArray(filter.value) || !filter.value.every(v => val.includes(v))) return false
-        } else if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
-          const recordDate = new Date(val).getTime()
-          const f1 = filter.value ? new Date(filter.value).getTime() : 0
-          const f2 = filter.value2 ? new Date(filter.value2).getTime() : 0
-          if (filter.operator === 'eq' && f1 && recordDate !== f1) return false
-          else if (filter.operator === 'lt' && f1 && recordDate >= f1) return false
-          else if (filter.operator === 'gt' && f1 && recordDate <= f1) return false
-          else if (filter.operator === 'between' && f1 && f2 && (recordDate < f1 || recordDate > f2)) return false
-        } else if (field.controlType === 'number') {
-          const n = Number(val)
-          const n1 = Number(filter.value)
-          const n2 = Number(filter.value2)
-          if (filter.operator === 'eq' && n !== n1) return false
-          else if (filter.operator === 'gt' && n <= n1) return false
-          else if (filter.operator === 'lt' && n >= n1) return false
-          else if (filter.operator === 'between' && (n < n1 || n > n2)) return false
-        } else {
-          if (!String(val).toLowerCase().includes(String(filter.value).toLowerCase())) return false
-        }
+        if (!String(val).toLowerCase().includes(String(filterVal).toLowerCase())) return false
       }
     }
   }
 
   return true
 }
+
+const filteredCount = computed(() => {
+  // 无筛选条件时直接返回数据长度
+  const keyword = debouncedSearchText.value.trim()
+  const filters = columnFilters.value
+  if (!keyword && Object.keys(filters).length === 0) {
+    return props.data.length
+  }
+  return getFilteredIds().size
+})
+
+// 分页数据 - 使用缓存优化
+const paginatedData = computed(() => {
+  const data = props.data
+  const keyword = debouncedSearchText.value.trim()
+  const filters = columnFilters.value
+  const hasKeyword = keyword !== ''
+  const hasFilters = Object.keys(filters).length > 0
+
+  // 快速路径：无筛选，直接分页
+  if (!hasKeyword && !hasFilters) {
+    const start = (currentPage.value - 1) * pageSize.value
+    const end = start + pageSize.value
+
+    // 排序优化：检查缓存
+    if (sortField.value) {
+      const needSort = sortResultCache.field !== sortField.value ||
+                       sortResultCache.direction !== sortDirection.value
+
+      if (needSort || sortResultCache.sortedData === null) {
+        sortResultCache.field = sortField.value
+        sortResultCache.direction = sortDirection.value
+        sortResultCache.sortedData = sortData(data.slice(), sortField.value, sortDirection.value, visibleFields.value)
+      }
+      return sortResultCache.sortedData.slice(start, end)
+    }
+
+    return data.slice(start, end)
+  }
+
+  // 有筛选：使用缓存的过滤结果
+  const filteredIds = getFilteredIds()
+  const filtered: DynamicRecord[] = []
+
+  for (let i = 0; i < data.length; i++) {
+    if (filteredIds.has(data[i].id)) {
+      filtered.push(data[i])
+    }
+  }
+
+  // 排序
+  if (sortField.value) {
+    return sortData(filtered, sortField.value, sortDirection.value, visibleFields.value)
+      .slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value)
+  }
+
+  return filtered.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value)
+})
+
+// ==================== 方法 ====================
 
 function sortData(data: DynamicRecord[], field: string, direction: 'asc' | 'desc', fields: FieldConfig[]): DynamicRecord[] {
   const fieldConfig = fields.find(f => f.fieldName === field)
@@ -631,7 +742,9 @@ function handleSearchInput() {
   searchTimer = setTimeout(() => {
     debouncedSearchText.value = searchText.value
     currentPage.value = 1
-    filterCache.clear()
+    // 清除过滤缓存
+    filterResultCache.keyword = ''
+    filterResultCache.version = 0
   }, 300)
 }
 
@@ -670,7 +783,9 @@ function applyCurrentFilter() {
   }
   columnFilters.value = newFilters
   currentPage.value = 1
-  filterCache.clear()
+  // 清除缓存
+  filterResultCache.filters = {}
+  filterResultCache.version = 0
   filterDialogVisible.value = false
 }
 
@@ -682,7 +797,9 @@ function clearCurrentFilter() {
   delete newFilters[fieldName]
   columnFilters.value = newFilters
   currentPage.value = 1
-  filterCache.clear()
+  // 清除缓存
+  filterResultCache.filters = {}
+  filterResultCache.version = 0
   filterDialogVisible.value = false
 }
 
@@ -691,7 +808,13 @@ function clearAllFilters() {
   searchText.value = ''
   debouncedSearchText.value = ''
   currentPage.value = 1
-  filterCache.clear()
+  // 清除所有缓存
+  filterResultCache.keyword = ''
+  filterResultCache.filters = {}
+  filterResultCache.filteredIds.clear()
+  filterResultCache.version = 0
+  sortResultCache.field = ''
+  sortResultCache.sortedData = null
 }
 
 function handleSortChange({ prop, order }: { prop: string; order: string }) {
@@ -723,32 +846,36 @@ function handleQuoteClick(id: string, field: FieldConfig) {
 function handleExport() {
   // 导出筛选后的所有数据
   const data = props.data
-  const keyword = debouncedSearchText.value.trim().toLowerCase()
-  const filters = columnFilters.value
-  const fields = visibleFields.value
+  const keyword = debouncedSearchText.value.trim()
   const hasKeyword = keyword !== ''
-  const filterEntries = Object.entries(filters)
-  const hasFilters = filterEntries.length > 0
+  const hasFilters = Object.keys(columnFilters.value).length > 0
 
   let exportData = data
   if (hasKeyword || hasFilters) {
-    exportData = data.filter(r => matchFilters(r, keyword, hasKeyword, filterEntries, hasFilters, fields))
+    const filteredIds = getFilteredIds()
+    exportData = data.filter(r => filteredIds.has(r.id))
   }
 
   if (exportData.length === 0) return
 
   if (sortField.value) {
-    exportData = sortData(exportData, sortField.value, sortDirection.value, fields)
+    exportData = sortData(exportData, sortField.value, sortDirection.value, visibleFields.value)
   }
 
-  exportToExcel(exportData, fields, '数据导出')
+  exportToExcel(exportData, visibleFields.value, '数据导出')
   emit('export', exportData)
 }
 
 // 数据变化时重置页码和缓存
 watch(() => props.data, () => {
   currentPage.value = 1
-  filterCache.clear()
+  // 清除所有缓存
+  filterResultCache.keyword = ''
+  filterResultCache.filters = {}
+  filterResultCache.filteredIds.clear()
+  filterResultCache.version = 0
+  sortResultCache.field = ''
+  sortResultCache.sortedData = null
 }, { deep: false })
 
 defineExpose({ clearAllFilters, tableRef })

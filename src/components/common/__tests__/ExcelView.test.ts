@@ -571,7 +571,7 @@ describe('ExcelView — 筛选功能', () => {
   })
 })
 
-describe('ExcelView — matchFilters 全文搜索', () => {
+describe('ExcelView — matchFiltersFast 全文搜索', () => {
   it('匹配文本字段', async () => {
     const wrapper = mount(ExcelView, {
       props: { data: [], fields: [] },
@@ -581,8 +581,8 @@ describe('ExcelView — matchFilters 全文搜索', () => {
     const vm = wrapper.vm as any
     const fields = [makeField({ fieldName: 'name', controlType: 'text' })]
 
-    expect(vm.matchFilters({ id: '1', name: '测试文本' }, '测试', true, [], false, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '1', name: '其他文本' }, '测试', true, [], false, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', name: '测试文本' }, '测试', true, [], false, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '1', name: '其他文本' }, '测试', true, [], false, fields)).toBe(false)
   })
 
   it('匹配 select 字段', async () => {
@@ -598,8 +598,8 @@ describe('ExcelView — matchFilters 全文搜索', () => {
       options: [{ label: '进行中', value: 'active' }, { label: '已完成', value: 'done' }]
     }]
 
-    expect(vm.matchFilters({ id: '1', status: 'active' }, '进行', true, [], false, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '1', status: 'done' }, '进行', true, [], false, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', status: 'active' }, '进行', true, [], false, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '1', status: 'done' }, '进行', true, [], false, fields)).toBe(false)
   })
 
   it('匹配 multiSelect 字段', async () => {
@@ -616,10 +616,10 @@ describe('ExcelView — matchFilters 全文搜索', () => {
     }]
 
     // 搜索 "标签A" - 匹配 value 'a' 对应的 label
-    const result1 = vm.matchFilters({ id: '1', tags: ['a', 'b'] }, '标签a', true, [], false, fields)
+    const result1 = vm.matchFiltersFast({ id: '1', tags: ['a', 'b'] }, '标签a', true, [], false, fields)
     expect(result1).toBe(true)
 
-    const result2 = vm.matchFilters({ id: '1', tags: ['b'] }, '标签a', true, [], false, fields)
+    const result2 = vm.matchFiltersFast({ id: '1', tags: ['b'] }, '标签a', true, [], false, fields)
     expect(result2).toBe(false)
   })
 
@@ -633,13 +633,13 @@ describe('ExcelView — matchFilters 全文搜索', () => {
     const fields = [{ fieldName: 'rel', controlType: 'relation' }]
 
     // 注意：record 需要包含 rel 字段（即使为空数组），否则 matchFilters 会跳过
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '1',
       rel: ['r1'],  // 需要有这个字段
       _rel_rel_labels: [{ id: 'r1', label: '关联记录A' }]
     }, '关联', true, [], false, fields)).toBe(true)
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '2',
       rel: ['r2'],
       _rel_rel_labels: [{ id: 'r2', label: '其他记录' }]
@@ -655,13 +655,13 @@ describe('ExcelView — matchFilters 全文搜索', () => {
     const vm = wrapper.vm as any
     const fields = [{ fieldName: 'ref', controlType: 'reference' }]
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '1',
       ref: 'ref-id',
       _ref_ref_display: '引用显示名称'
     }, '显示', true, [], false, fields)).toBe(true)
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '2',
       ref: 'ref-id',
       _ref_ref_display: '其他名称'
@@ -669,7 +669,7 @@ describe('ExcelView — matchFilters 全文搜索', () => {
   })
 })
 
-describe('ExcelView — matchFilters 列筛选', () => {
+describe('ExcelView — matchFiltersFast 列筛选', () => {
   it('筛选 select 字段（精确匹配）', async () => {
     const wrapper = mount(ExcelView, {
       props: { data: [], fields: [] },
@@ -680,8 +680,8 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'status', controlType: 'select' }]
     const filters = [['status', { value: 'active' }]]
 
-    expect(vm.matchFilters({ id: '1', status: 'active' }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', status: 'done' }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', status: 'active' }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', status: 'done' }, '', false, filters, true, fields)).toBe(false)
   })
 
   it('筛选 multiSelect 字段', async () => {
@@ -694,8 +694,8 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'tags', controlType: 'multiSelect' }]
     const filters = [['tags', { value: ['a', 'b'] }]]
 
-    expect(vm.matchFilters({ id: '1', tags: ['a', 'b', 'c'] }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', tags: ['a'] }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', tags: ['a', 'b', 'c'] }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', tags: ['a'] }, '', false, filters, true, fields)).toBe(false)
   })
 
   it('筛选 number 字段（等于）', async () => {
@@ -708,8 +708,8 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'amount', controlType: 'number' }]
     const filters = [['amount', { value: 100, operator: 'eq' }]]
 
-    expect(vm.matchFilters({ id: '1', amount: 100 }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', amount: 100 }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(false)
   })
 
   it('筛选 number 字段（大于）', async () => {
@@ -722,9 +722,9 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'amount', controlType: 'number' }]
     const filters = [['amount', { value: 100, operator: 'gt' }]]
 
-    expect(vm.matchFilters({ id: '1', amount: 150 }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(false)
-    expect(vm.matchFilters({ id: '3', amount: 100 }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', amount: 150 }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '3', amount: 100 }, '', false, filters, true, fields)).toBe(false)
   })
 
   it('筛选 number 字段（介于）', async () => {
@@ -737,11 +737,11 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'amount', controlType: 'number' }]
     const filters = [['amount', { value: 50, value2: 100, operator: 'between' }]]
 
-    expect(vm.matchFilters({ id: '1', amount: 75 }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '3', amount: 100 }, '', false, filters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '4', amount: 49 }, '', false, filters, true, fields)).toBe(false)
-    expect(vm.matchFilters({ id: '5', amount: 101 }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', amount: 75 }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', amount: 50 }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '3', amount: 100 }, '', false, filters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '4', amount: 49 }, '', false, filters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '5', amount: 101 }, '', false, filters, true, fields)).toBe(false)
   })
 
   it('筛选 date 字段', async () => {
@@ -755,13 +755,13 @@ describe('ExcelView — matchFilters 列筛选', () => {
 
     // 早于
     const ltFilters = [['date', { value: '2024-06-01', operator: 'lt' }]]
-    expect(vm.matchFilters({ id: '1', date: '2024-03-15' }, '', false, ltFilters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', date: '2024-07-01' }, '', false, ltFilters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', date: '2024-03-15' }, '', false, ltFilters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', date: '2024-07-01' }, '', false, ltFilters, true, fields)).toBe(false)
 
     // 晚于
     const gtFilters = [['date', { value: '2024-06-01', operator: 'gt' }]]
-    expect(vm.matchFilters({ id: '1', date: '2024-07-01' }, '', false, gtFilters, true, fields)).toBe(true)
-    expect(vm.matchFilters({ id: '2', date: '2024-03-15' }, '', false, gtFilters, true, fields)).toBe(false)
+    expect(vm.matchFiltersFast({ id: '1', date: '2024-07-01' }, '', false, gtFilters, true, fields)).toBe(true)
+    expect(vm.matchFiltersFast({ id: '2', date: '2024-03-15' }, '', false, gtFilters, true, fields)).toBe(false)
   })
 
   it('筛选 relation 字段', async () => {
@@ -774,12 +774,12 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'rel', controlType: 'relation' }]
     const filters = [['rel', { value: '关联' }]]
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '1',
       _rel_rel_labels: [{ id: 'r1', label: '关联记录A' }]
     }, '', false, filters, true, fields)).toBe(true)
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '2',
       _rel_rel_labels: [{ id: 'r2', label: '其他记录' }]
     }, '', false, filters, true, fields)).toBe(false)
@@ -795,12 +795,12 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'quote', controlType: 'quoteSelect' }]
     const filters = [['quote', { value: '引用' }]]
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '1',
       _quote_quote_labels: [{ id: 'q1', label: '引用项A' }]
     }, '', false, filters, true, fields)).toBe(true)
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '2',
       _quote_quote_labels: []
     }, '', false, filters, true, fields)).toBe(false)
@@ -816,13 +816,13 @@ describe('ExcelView — matchFilters 列筛选', () => {
     const fields = [{ fieldName: 'ref', controlType: 'reference' }]
     const filters = [['ref', { value: '显示' }]]
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '1',
       ref: 'ref-id',
       _ref_ref_display: '显示名称'
     }, '', false, filters, true, fields)).toBe(true)
 
-    expect(vm.matchFilters({
+    expect(vm.matchFiltersFast({
       id: '2',
       ref: 'ref-id',
       _ref_ref_display: '其他名称'
