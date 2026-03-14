@@ -9,6 +9,8 @@ import type {
   MergeVersionRequest,
   MergeResult,
   RestoreResult,
+  PartialMergeRequest,
+  PartialMergeResponse,
 } from '@/types'
 import type { DiffResult } from '@/types'
 
@@ -98,4 +100,11 @@ export function switchToVersion(id: string) {
  */
 export function switchToMainBranch(collection: string) {
   return post<SwitchResult>('/versions/switch-main', { collection })
+}
+
+/**
+ * 部分合并版本
+ */
+export function partialMergeVersion(data: PartialMergeRequest) {
+  return post<PartialMergeResponse>('/versions/partial-merge', data)
 }
