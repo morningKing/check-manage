@@ -2,6 +2,8 @@
  * 版本管理相关类型定义
  */
 
+import type { DiffResult } from './backup'
+
 export type VersionType = 'snapshot' | 'branch'
 export type VersionStatus = 'active' | 'merged' | 'archived'
 export type MergeStrategy = 'theirs' | 'ours'
@@ -106,4 +108,67 @@ export const VERSION_TYPE_LABELS: Record<string, string> = {
 export const VERSION_TYPE_TAG_TYPES: Record<string, string> = {
   snapshot: '',
   branch: 'warning',
+}
+
+/**
+ * 部分合并决策
+ */
+export interface PartialMergeDecisions {
+  added_record_ids: string[]
+  removed_record_ids: string[]
+  modified_records: ModifiedRecordDecision[]
+}
+
+/**
+ * 修改记录的字段决策
+ */
+export interface ModifiedRecordDecision {
+  record_id: string
+  field_values: Record<string, any>
+}
+
+/**
+ * 部分合并请求
+ */
+export interface PartialMergeRequest {
+  source_version_id: string
+  target_branch: string
+  decisions: PartialMergeDecisions
+}
+
+/**
+ * 部分合并响应
+ */
+export interface PartialMergeResponse {
+  success: boolean
+  merged_count: number
+  message: string
+}
+
+/**
+ * 合并步骤
+ */
+export type MergeStep = 'overview' | 'records' | 'fields'
+
+/**
+ * 合并决策状态
+ */
+export interface MergeDecisions {
+  addedRecords: Set<string>
+  removedRecords: Set<string>
+  modifiedRecords: Map<string, {
+    recordId: string
+    fieldDecisions: Map<string, 'source' | 'target'>
+  }>
+}
+
+/**
+ * 合并状态
+ */
+export interface MergeState {
+  step: MergeStep
+  sourceVersion: CollectionVersion | null
+  targetBranch: string
+  diffResult: DiffResult | null
+  decisions: MergeDecisions
 }
