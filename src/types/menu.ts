@@ -18,6 +18,8 @@ import type { UserRole } from './user'
  * @property path - 路由路径（可选，用于导航）
  * @property roles - 可见此菜单的角色列表
  * @property children - 子菜单列表（运行时构建，非存储字段）
+ * @property exportScriptId - 菜单级导出脚本ID
+ * @property exportScriptName - 导出脚本名称（前端展示用）
  */
 export interface MenuItem {
   id: string
@@ -29,6 +31,8 @@ export interface MenuItem {
   path?: string | null
   roles?: UserRole[]
   children?: MenuItem[]
+  exportScriptId?: string | null
+  exportScriptName?: string
 }
 
 /**
@@ -45,6 +49,7 @@ export interface MenuFormData {
   order: number
   path: string
   roles: UserRole[]
+  exportScriptId?: string | null
 }
 
 /**
@@ -61,6 +66,35 @@ export interface MenuTreeNode {
 }
 
 /**
+ * 菜单导出预览 - 页面信息
+ */
+export interface MenuExportPageInfo {
+  collection: string
+  pageName: string
+  recordCount: number
+}
+
+/**
+ * 菜单导出预览 - 单个菜单信息
+ */
+export interface MenuExportPreviewItem {
+  menuId: string
+  menuName: string
+  pages: MenuExportPageInfo[]
+  boundScript?: { id: string; name: string } | null
+  totalRecords: number
+}
+
+/**
+ * 菜单导出预览响应
+ */
+export interface MenuExportPreview {
+  menus: MenuExportPreviewItem[]
+  totalRecords: number
+  availableScripts: Array<{ id: string; name: string; description?: string }>
+}
+
+/**
  * 创建空菜单表单数据
  *
  * @returns 初始化的菜单表单数据
@@ -73,6 +107,7 @@ export function createEmptyMenuFormData(): MenuFormData {
     parentId: null,
     order: 1,
     path: '',
-    roles: ['admin', 'developer', 'guest']
+    roles: ['admin', 'developer', 'guest'],
+    exportScriptId: null
   }
 }

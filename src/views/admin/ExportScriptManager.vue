@@ -26,8 +26,8 @@
                 <div class="script-name">{{ script.name }}</div>
                 <div class="script-meta">
                   <el-tag size="small" type="info">{{ script.outputFormat }}</el-tag>
-                  <el-tag size="small" :type="script.scope === 'row' ? 'warning' : ''">
-                    {{ script.scope === 'row' ? '单行' : '整页' }}
+                  <el-tag size="small" :type="scopeTagType(script.scope)">
+                    {{ scopeLabel(script.scope) }}
                   </el-tag>
                 </div>
               </div>
@@ -96,7 +96,19 @@
                 <el-select v-model="formData.scope" placeholder="选择导出维度">
                   <el-option label="整页数据" value="page" />
                   <el-option label="单行数据" value="row" />
+                  <el-option label="菜单级（多表聚合）" value="menu" />
                 </el-select>
+                <div class="form-tip">
+                  <template v-if="formData.scope === 'page'">
+                    逐表导出，每个数据表生成一个文件
+                  </template>
+                  <template v-else-if="formData.scope === 'row'">
+                    单行数据导出，在数据表格中点击行导出按钮使用
+                  </template>
+                  <template v-else-if="formData.scope === 'menu'">
+                    菜单级导出，接收菜单下所有数据表的数据，可统一处理
+                  </template>
+                </div>
               </el-form-item>
 
               <el-form-item label="脚本代码" class="code-form-item">
@@ -168,6 +180,13 @@
               <el-tab-pane label="变量参考">
                 <div class="help-content">
                   <h4>入参变量（系统自动注入）</h4>
+
+                  <el-alert type="info" :closable="false" style="margin-bottom: 16px;">
+                    <template #title>
+                      <strong>整页/单行模式</strong>：使用 <code>data</code>、<code>fields</code>、<code>page_name</code>
+                    </template>
+                  </el-alert>
+
                   <table class="help-table">
                     <thead>
                       <tr><th>变量名</th><th>类型</th><th>说明</th></tr>
@@ -190,6 +209,55 @@
                       </tr>
                     </tbody>
                   </table>
+
+                  <el-divider content-position="left">菜单级模式变量</el-divider>
+
+                  <el-alert type="success" :closable="false" style="margin-bottom: 16px;">
+                    <template #title>
+                      <strong>菜单级模式</strong>：使用 <code>menu_data</code>、<code>menu_name</code>、<code>total_records</code>
+                    </template>
+                  </el-alert>
+
+                  <table class="help-table">
+                    <thead>
+                      <tr><th>变量名</th><th>类型</th><th>说明</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><code>menu_data</code></td>
+                        <td><code>list[dict]</code></td>
+                        <td>菜单下所有数据表的信息列表</td>
+                      </tr>
+                      <tr>
+                        <td><code>menu_name</code></td>
+                        <td><code>str</code></td>
+                        <td>菜单名称</td>
+                      </tr>
+                      <tr>
+                        <td><code>total_records</code></td>
+                        <td><code>int</code></td>
+                        <td>总记录数（所有数据表）</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <h4>menu_data 结构示例</h4>
+<pre class="help-code">[
+  {
+    "collection": "inspection-case",
+    "pageName": "巡检用例",
+    "records": [...],
+    "fields": [...],
+    "recordCount": 26997
+  },
+  {
+    "collection": "inspection-plan",
+    "pageName": "巡检计划",
+    "records": [...],
+    "fields": [...],
+    "recordCount": 4
+  }
+]</pre>
 
                   <h4>data 示例结构</h4>
 <pre class="help-code">[
@@ -545,6 +613,79 @@ for row in data:
 html += '</tbody></table></body></html>'
 result = html
 `,
+  // 菜单级脚本模板
+  menu_json: `# ============================================
+# 菜单级导出脚本 — JSON 格式
+# ============================================
+# 入参变量（系统自动注入，无需定义）：
+#   menu_data    : list[dict] — 菜单下所有数据表的信息
+#     每个元素包含：
+#       - collection   : str        — 数据集合名
+#       - pageName     : str        — 页面名称
+#       - records      : list[dict] — 该表的所有记录
+#       - fields       : list[dict] — 字段配置
+#       - recordCount  : int        — 记录数
+#   menu_name    : str         — 菜单名称
+#   total_records: int         — 总记录数
+#
+# 输出方式1 - 单文件：
+#   result   : str | bytes — 导出文件内容
+#   filename : str         — 文件名（可选）
+#
+# 输出方式2 - 多文件（返回列表）：
+#   result = [
+#     {'filename': '巡检用例.json', 'content': '...'},
+#     {'filename': '巡检计划.csv', 'content': '...'},
+#   ]
+# ============================================
+
+# 示例：将所有数据表合并为一个 JSON 文件
+output = {
+    'menuName': menu_name,
+    'exportTime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    'totalRecords': total_records,
+    'tables': []
+}
+
+for table in menu_data:
+    output['tables'].append({
+        'pageName': table['pageName'],
+        'collection': table['collection'],
+        'recordCount': table['recordCount'],
+        'records': table['records']
+    })
+
+result = json.dumps(output, ensure_ascii=False, indent=2)
+filename = menu_name + '_export.json'
+`,
+  menu_csv: `# ============================================
+# 菜单级导出脚本 — 多文件 CSV 格式
+# ============================================
+# 菜单级脚本可以输出多个文件
+# result 为列表时，每个元素包含 filename 和 content
+# ============================================
+
+result = []
+
+for table in menu_data:
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # 写入表头
+    if table['fields']:
+        headers = [f['label'] for f in table['fields']]
+        writer.writerow(headers)
+
+    # 写入数据行
+    for row in table['records']:
+        if table['fields']:
+            writer.writerow([str(row.get(f['fieldName'], '')) for f in table['fields']])
+
+    result.append({
+        'filename': table['pageName'] + '.csv',
+        'content': output.getvalue()
+    })
+`,
 }
 
 /**
@@ -562,7 +703,7 @@ const formData = ref({
   name: '',
   description: '',
   outputFormat: 'json',
-  scope: 'page' as 'page' | 'row',
+  scope: 'page' as 'page' | 'row' | 'menu',
   script: '',
 })
 const saveLoading = ref(false)
@@ -585,16 +726,59 @@ const formRules: FormRules = {
   outputFormat: [{ required: true, message: '请选择输出格式', trigger: 'change' }],
 }
 
+// ==================== Scope 辅助函数 ====================
+
+function scopeLabel(scope: string): string {
+  const labels: Record<string, string> = {
+    'page': '整页',
+    'row': '单行',
+    'menu': '菜单级'
+  }
+  return labels[scope] || scope
+}
+
+function scopeTagType(scope: string): '' | 'success' | 'warning' | 'info' | 'danger' {
+  const types: Record<string, '' | 'success' | 'warning' | 'info' | 'danger'> = {
+    'page': '',
+    'row': 'warning',
+    'menu': 'success'
+  }
+  return types[scope] || ''
+}
+
 // ==================== 格式切换时自动更新脚手架 ====================
+
+function getScaffoldKey(format: string, scope: string): string {
+  if (scope === 'menu') {
+    return `menu_${format}`
+  }
+  return format
+}
 
 watch(
   () => formData.value.outputFormat,
   (newFormat, oldFormat) => {
     if (!newFormat || !oldFormat) return
+    const oldKey = getScaffoldKey(oldFormat, formData.value.scope)
+    const newKey = getScaffoldKey(newFormat, formData.value.scope)
     // 仅当当前内容是旧格式的脚手架（未被用户修改）时才自动切换
-    const oldScaffold = SCAFFOLD_TEMPLATES[oldFormat]
+    const oldScaffold = SCAFFOLD_TEMPLATES[oldKey]
     if (formData.value.script === oldScaffold || formData.value.script === '') {
-      formData.value.script = SCAFFOLD_TEMPLATES[newFormat] || SCAFFOLD_TEMPLATES['json']
+      formData.value.script = SCAFFOLD_TEMPLATES[newKey] || SCAFFOLD_TEMPLATES['json']
+    }
+  }
+)
+
+// scope 变化时也切换脚手架
+watch(
+  () => formData.value.scope,
+  (newScope, oldScope) => {
+    if (!newScope || !oldScope) return
+    const oldKey = getScaffoldKey(formData.value.outputFormat, oldScope)
+    const newKey = getScaffoldKey(formData.value.outputFormat, newScope)
+    const oldScaffold = SCAFFOLD_TEMPLATES[oldKey]
+    if (formData.value.script === oldScaffold || formData.value.script === '') {
+      formData.value.script = SCAFFOLD_TEMPLATES[newKey] || SCAFFOLD_TEMPLATES['json']
     }
   }
 )

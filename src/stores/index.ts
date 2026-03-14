@@ -18,3 +18,6 @@ export { useAuthStore } from './auth'
 
 // 标签页状态
 export { useTabStore } from './tab'
+
+// 导出脚本状态
+export { useExportScriptStore } from './exportScript'

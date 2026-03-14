@@ -47,6 +47,9 @@ FORBIDDEN_NAMES = {
 # 脚本执行超时（秒）
 SCRIPT_TIMEOUT = 10
 
+# 菜单级脚本执行超时（秒）- 更长时间因为数据量大
+MENU_SCRIPT_TIMEOUT = 60
+
 
 def _validate_script(script_code):
     """检查脚本中是否包含危险操作"""
@@ -401,3 +404,165 @@ def run_etl_script(script_code, records):
         raise ValueError('脚本未设置 result 变量')
 
     return result
+
+
+def run_menu_export_script(script_code, menu_data, menu_name, output_format='json'):
+    """
+    执行菜单级导出脚本
+
+    与单表导出不同，菜单级脚本接收所有数据表的数据，可以做统一处理。
+
+    注入变量：
+    - menu_data: list[dict] — 菜单下所有数据表的信息
+      [{
+          'collection': 'inspection-case',
+          'pageName': '巡检用例',
+          'records': [...],
+          'fields': [...],
+          'recordCount': 100
+      }, ...]
+    - menu_name: str — 菜单名称
+    - total_records: int — 总记录数
+
+    脚本输出方式：
+
+    方式1 - 单文件输出：
+        result = "..."  # str 或 bytes
+        filename = "导出文件.json"  # 可选，默认用菜单名
+
+    方式2 - 多文件输出（返回列表）：
+        result = [
+            {'filename': '巡检用例.json', 'content': '...'},
+            {'filename': '巡检计划.csv', 'content': '...'},
+        ]
+
+    返回：[(bytes, filename, content_type), ...] — 文件列表
+    """
+    # 1. 校验脚本安全性
+    _validate_script(script_code)
+
+    # 2. 计算总记录数
+    total_records = sum(t.get('recordCount', 0) for t in menu_data)
+
+    # 3. 构建安全的执行环境
+    safe_globals = {
+        # 预注入的模块
+        'json': json,
+        'csv': csv,
+        'io': io,
+        're': re,
+        'math': math,
+        'collections': collections,
+        'ET': ET,
+        'minidom': minidom,
+        'datetime': datetime,
+        'timedelta': timedelta,
+        # 安全的内置函数
+        'len': len,
+        'str': str,
+        'int': int,
+        'float': float,
+        'bool': bool,
+        'list': list,
+        'dict': dict,
+        'tuple': tuple,
+        'set': set,
+        'sorted': sorted,
+        'reversed': reversed,
+        'enumerate': enumerate,
+        'zip': zip,
+        'map': map,
+        'filter': filter,
+        'range': range,
+        'min': min,
+        'max': max,
+        'sum': sum,
+        'abs': abs,
+        'round': round,
+        'isinstance': isinstance,
+        'hasattr': hasattr,
+        'None': None,
+        'True': True,
+        'False': False,
+    }
+
+    # 4. 注入数据变量
+    script_locals = {
+        'menu_data': menu_data,
+        'menu_name': menu_name,
+        'total_records': total_records,
+        'result': None,
+        'filename': None,
+        'content_type': None,
+    }
+
+    # 5. 带超时执行
+    error_holder = [None]
+
+    def _execute():
+        try:
+            exec(script_code, safe_globals, script_locals)  # noqa: S102
+        except Exception as e:
+            error_holder[0] = e
+
+    thread = threading.Thread(target=_execute)
+    thread.start()
+    thread.join(timeout=MENU_SCRIPT_TIMEOUT)
+
+    if thread.is_alive():
+        raise TimeoutError(f'菜单级导出脚本执行超时（>{MENU_SCRIPT_TIMEOUT}秒）')
+
+    if error_holder[0]:
+        raise error_holder[0]
+
+    # 6. 提取结果
+    result = script_locals.get('result')
+    if result is None:
+        raise ValueError('脚本未设置 result 变量')
+
+    # 7. 处理结果 - 支持单文件或多文件输出
+    files = []
+
+    if isinstance(result, list):
+        # 多文件输出
+        for item in result:
+            if not isinstance(item, dict):
+                raise ValueError('多文件输出时，result 列表中的每个元素必须是 dict')
+            if 'filename' not in item or 'content' not in item:
+                raise ValueError('多文件输出时，每个元素必须包含 filename 和 content 字段')
+
+            content = item['content']
+            filename = item['filename']
+            content_type = item.get('content_type') or guess_content_type(filename)
+
+            if isinstance(content, str):
+                content_bytes = content.encode('utf-8')
+            elif isinstance(content, bytes):
+                content_bytes = content
+            else:
+                raise ValueError(f'content 必须是 str 或 bytes，得到 {type(content).__name__}')
+
+            files.append((content_bytes, filename, content_type))
+
+    elif isinstance(result, (str, bytes)):
+        # 单文件输出
+        if isinstance(result, str):
+            result_bytes = result.encode('utf-8')
+        else:
+            result_bytes = result
+
+        filename = script_locals.get('filename') or f'{menu_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
+        content_type = script_locals.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
+
+        files.append((result_bytes, filename, content_type))
+
+    else:
+        raise ValueError(f'result 必须是 str、bytes 或 list，得到 {type(result).__name__}')
+
+    return files
+
+
+def guess_content_type(filename):
+    """根据文件扩展名猜测 Content-Type"""
+    ext = filename.rpartition('.')[2].lower() if '.' in filename else ''
+    return FORMAT_CONTENT_TYPES.get(ext, 'application/octet-stream')

@@ -841,6 +841,27 @@ def init_db():
             conn.commit()
             print("Added branch_id column to operation_logs table.")
 
+        # Migration: add export_script_id column to menus for menu-level export
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'menus' AND column_name = 'export_script_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE menus ADD COLUMN export_script_id VARCHAR(100)")
+            conn.commit()
+            print("Added export_script_id column to menus table.")
+
+        # Migration: add menu export page menu entry
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-12'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-12', %s, 'Download', NULL, 'menu-3-b', 6, '/admin/menu-export', %s)",
+                ('数据导出', psycopg2.extras.Json(['admin', 'developer'])),
+            )
+            conn.commit()
+            print("Added menu export page menu.")
+
         # Seed menus (insert only if not exists)
         menus_inserted = 0
         for m in MENUS:

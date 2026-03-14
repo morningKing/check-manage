@@ -199,6 +199,25 @@
               </div>
             </el-form-item>
 
+            <el-form-item label="导出脚本" prop="exportScriptId">
+              <el-select
+                v-model="formData.exportScriptId"
+                placeholder="请选择导出脚本（可选）"
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="opt in exportScriptOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+              <div class="form-tip">
+                绑定导出脚本后，在数据导出页面可一键导出此菜单下所有数据
+              </div>
+            </el-form-item>
+
             <el-form-item v-if="!isCurrentBuiltinMenu">
               <el-button type="primary" @click="handleSubmit" :loading="submitLoading">
                 {{ isEditMode ? '更新' : '创建' }}
@@ -237,7 +256,7 @@ import { ref, computed, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Lock } from '@element-plus/icons-vue'
-import { useMenuStore, usePageConfigStore } from '@/stores'
+import { useMenuStore, usePageConfigStore, useExportScriptStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import type { MenuItem, MenuFormData } from '@/types'
 import { createEmptyMenuFormData, ROLE_OPTIONS } from '@/types'
@@ -246,6 +265,7 @@ import { createEmptyMenuFormData, ROLE_OPTIONS } from '@/types'
 
 const menuStore = useMenuStore()
 const pageConfigStore = usePageConfigStore()
+const exportScriptStore = useExportScriptStore()
 
 // ==================== Refs ====================
 
@@ -336,6 +356,11 @@ const menuTree = computed(() => menuStore.menuTree)
  * 页面配置选项
  */
 const pageOptions = computed(() => pageConfigStore.pageConfigOptions)
+
+/**
+ * 导出脚本选项
+ */
+const exportScriptOptions = computed(() => exportScriptStore.scriptOptions)
 
 /**
  * 表单标题
@@ -499,7 +524,8 @@ function handleNodeClick(data: MenuItem): void {
     parentId: data.parentId || null,
     order: data.order,
     path: data.path || '',
-    roles: data.roles || ['admin', 'developer', 'guest']
+    roles: data.roles || ['admin', 'developer', 'guest'],
+    exportScriptId: data.exportScriptId || null
   }
   showForm.value = true
 }
@@ -604,7 +630,8 @@ async function handleSubmit(): Promise<void> {
         parentId: formData.value.parentId,
         order: formData.value.order,
         path: formData.value.path,
-        roles: formData.value.roles
+        roles: formData.value.roles,
+        exportScriptId: formData.value.exportScriptId
       })
       ElMessage.success('更新成功')
       // 更新成功后刷新表单数据
@@ -618,7 +645,8 @@ async function handleSubmit(): Promise<void> {
           parentId: updated.parentId || null,
           order: updated.order,
           path: updated.path || '',
-          roles: updated.roles || ['admin', 'developer', 'guest']
+          roles: updated.roles || ['admin', 'developer', 'guest'],
+          exportScriptId: updated.exportScriptId || null
         }
       }
     } else {
@@ -630,7 +658,8 @@ async function handleSubmit(): Promise<void> {
         parentId: formData.value.parentId,
         order: formData.value.order,
         path: formData.value.path,
-        roles: formData.value.roles
+        roles: formData.value.roles,
+        exportScriptId: formData.value.exportScriptId
       })
       ElMessage.success('创建成功')
       resetForm()
@@ -673,6 +702,9 @@ onMounted(async () => {
   }
   if (pageConfigStore.pageConfigs.length === 0) {
     await pageConfigStore.fetchPageConfigs()
+  }
+  if (exportScriptStore.scripts.length === 0) {
+    await exportScriptStore.fetchScripts()
   }
 })
 </script>

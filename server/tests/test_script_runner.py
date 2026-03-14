@@ -214,3 +214,189 @@ if len(existing) > 0:
             script, {}, 'create', None, [], 'test', mock_conn
         )
         assert len(warnings) == 1
+
+
+# ==================== run_menu_export_script ====================
+
+class TestRunMenuExportScript:
+    """测试菜单级导出脚本执行"""
+
+    def test_single_file_output(self):
+        """单文件输出"""
+        from utils.script_runner import run_menu_export_script
+
+        script = 'result = json.dumps(menu_data, ensure_ascii=False)'
+        menu_data = [
+            {'collection': 'table1', 'pageName': '表1', 'records': [{'id': 1}], 'fields': [], 'recordCount': 1}
+        ]
+
+        files = run_menu_export_script(script, menu_data, '测试菜单', 'json')
+
+        assert len(files) == 1
+        result_bytes, filename, content_type = files[0]
+        assert b'table1' in result_bytes
+        assert filename == '测试菜单.json'
+        assert content_type == 'application/json'
+
+    def test_multi_file_output(self):
+        """多文件输出"""
+        from utils.script_runner import run_menu_export_script
+
+        script = '''
+result = [
+    {'filename': 'file1.json', 'content': '{"a": 1}'},
+    {'filename': 'file2.csv', 'content': 'name,value\\ntest,1'},
+]
+'''
+        menu_data = [
+            {'collection': 'table1', 'pageName': '表1', 'records': [], 'fields': [], 'recordCount': 0}
+        ]
+
+        files = run_menu_export_script(script, menu_data, '测试菜单', 'json')
+
+        assert len(files) == 2
+        assert files[0][1] == 'file1.json'
+        assert files[1][1] == 'file2.csv'
+
+    def test_custom_filename(self):
+        """自定义文件名"""
+        from utils.script_runner import run_menu_export_script
+
+        script = '''
+result = "data"
+filename = "custom_export.json"
+'''
+        files = run_menu_export_script(script, [], '菜单', 'json')
+
+        assert files[0][1] == 'custom_export.json'
+
+    def test_injected_variables(self):
+        """验证注入变量可用"""
+        from utils.script_runner import run_menu_export_script
+
+        script = '''
+output = {
+    'menuName': menu_name,
+    'totalRecords': total_records,
+    'tableCount': len(menu_data)
+}
+result = json.dumps(output)
+'''
+        menu_data = [
+            {'collection': 't1', 'pageName': '表1', 'records': [{'id': 1}], 'fields': [], 'recordCount': 1},
+            {'collection': 't2', 'pageName': '表2', 'records': [{'id': 2}, {'id': 3}], 'fields': [], 'recordCount': 2},
+        ]
+
+        files = run_menu_export_script(script, menu_data, '测试菜单', 'json')
+
+        import json
+        result = json.loads(files[0][0])
+        assert result['menuName'] == '测试菜单'
+        assert result['totalRecords'] == 3
+        assert result['tableCount'] == 2
+
+    def test_result_required(self):
+        """必须设置 result"""
+        from utils.script_runner import run_menu_export_script
+
+        with pytest.raises(ValueError, match='result'):
+            run_menu_export_script('x = 1', [], '菜单', 'json')
+
+    def test_result_must_be_valid_type(self):
+        """result 必须是有效类型"""
+        from utils.script_runner import run_menu_export_script
+
+        with pytest.raises(ValueError, match='str、bytes 或 list'):
+            run_menu_export_script('result = 123', [], '菜单', 'json')
+
+    def test_multi_file_item_must_have_filename_and_content(self):
+        """多文件输出时每个元素必须有 filename 和 content"""
+        from utils.script_runner import run_menu_export_script
+
+        with pytest.raises(ValueError, match='filename 和 content'):
+            run_menu_export_script('result = [{"filename": "test.json"}]', [], '菜单', 'json')
+
+    def test_multi_file_item_must_be_dict(self):
+        """多文件输出时元素必须是 dict"""
+        from utils.script_runner import run_menu_export_script
+
+        with pytest.raises(ValueError, match='必须是 dict'):
+            run_menu_export_script('result = ["string"]', [], '菜单', 'json')
+
+    def test_bytes_result(self):
+        """bytes 类型结果"""
+        from utils.script_runner import run_menu_export_script
+
+        script = 'result = b"binary data"'
+        files = run_menu_export_script(script, [], '菜单', 'json')
+
+        assert files[0][0] == b'binary data'
+
+    def test_content_type_inference(self):
+        """content_type 自动推断"""
+        from utils.script_runner import run_menu_export_script
+
+        script = 'result = [{"filename": "data.csv", "content": "a,b\\n1,2"}]'
+        files = run_menu_export_script(script, [], '菜单', 'json')
+
+        assert files[0][2] == 'text/csv'
+
+    def test_import_blocked(self):
+        """禁止 import"""
+        from utils.script_runner import run_menu_export_script
+
+        with pytest.raises(ValueError, match='import'):
+            run_menu_export_script('import os\nresult = "x"', [], '菜单', 'json')
+
+    def test_injected_modules_available(self):
+        """预注入模块可用"""
+        from utils.script_runner import run_menu_export_script
+
+        script = '''
+# 使用预注入的模块
+output = io.StringIO()
+writer = csv.writer(output)
+writer.writerow(['name', 'value'])
+result = output.getvalue()
+'''
+        files = run_menu_export_script(script, [], '菜单', 'csv')
+
+        assert b'name,value' in files[0][0]
+
+    def test_can_access_all_table_data(self):
+        """可以访问所有数据表的数据"""
+        from utils.script_runner import run_menu_export_script
+
+        script = '''
+# 遍历所有表，提取数据
+all_records = []
+for table in menu_data:
+    for record in table['records']:
+        record['_tableName'] = table['pageName']
+        all_records.append(record)
+result = json.dumps(all_records, ensure_ascii=False)
+'''
+        menu_data = [
+            {
+                'collection': 'cases',
+                'pageName': '用例表',
+                'records': [{'id': 'c1', 'name': '用例1'}, {'id': 'c2', 'name': '用例2'}],
+                'fields': [],
+                'recordCount': 2
+            },
+            {
+                'collection': 'plans',
+                'pageName': '计划表',
+                'records': [{'id': 'p1', 'name': '计划1'}],
+                'fields': [],
+                'recordCount': 1
+            },
+        ]
+
+        files = run_menu_export_script(script, menu_data, '巡检管理', 'json')
+
+        import json
+        result = json.loads(files[0][0])
+        assert len(result) == 3
+        assert result[0]['_tableName'] == '用例表'
+        assert result[2]['_tableName'] == '计划表'

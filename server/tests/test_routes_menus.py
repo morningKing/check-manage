@@ -61,7 +61,7 @@ class TestListMenus:
     def test_returns_list(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('menu-1', '首页', 'House', None, None, 0, '/home', '["admin"]'),
+            ('menu-1', '首页', 'House', None, None, 0, '/home', '["admin"]', None),
         ]
         resp = client.get('/menus', headers=admin_h)
         assert resp.status_code == 200
