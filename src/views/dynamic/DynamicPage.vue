@@ -23,9 +23,10 @@
         </span>
       </div>
       <div class="page-actions">
-        <el-radio-group v-if="hasKanbanConfig" v-model="viewMode" size="small" class="view-toggle">
+        <el-radio-group v-model="viewMode" size="small" class="view-toggle">
           <el-radio-button value="table"><el-icon><Grid /></el-icon></el-radio-button>
-          <el-radio-button value="kanban"><el-icon><Operation /></el-icon></el-radio-button>
+          <el-radio-button value="excel"><el-icon><Document /></el-icon></el-radio-button>
+          <el-radio-button v-if="hasKanbanConfig" value="kanban"><el-icon><Operation /></el-icon></el-radio-button>
         </el-radio-group>
         <el-button v-if="!isGuest" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
@@ -236,6 +237,19 @@
         :search-keyword="searchKeyword"
         @card-move="handleKanbanCardMove"
         @card-click="handleView"
+      />
+    </el-card>
+
+    <!-- Excel 视图 -->
+    <el-card v-if="viewMode === 'excel'" class="table-card excel-card">
+      <ExcelView
+        :data="filteredData"
+        :fields="effectiveFields"
+        :loading="tableLoading"
+        @row-click="handleView"
+        @reference-click="handleReferenceClick"
+        @relation-click="handleRelationClick"
+        @quote-click="handleQuoteClick"
       />
     </el-card>
 
@@ -661,9 +675,9 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore } from '@/stores'
-import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager } from '@/components/common'
+import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager, ExcelView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -896,9 +910,9 @@ const graphDialogVisible = ref(false)
 const graphRecordId = ref('')
 
 /**
- * 视图模式（table / kanban）
+ * 视图模式（table / kanban / excel）
  */
-const viewMode = ref<'table' | 'kanban'>('table')
+const viewMode = ref<'table' | 'kanban' | 'excel'>('table')
 
 /**
  * 分页状态

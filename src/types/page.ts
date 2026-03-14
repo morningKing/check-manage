@@ -64,9 +64,19 @@ export interface KanbanConfig {
   cardColorField?: string
 }
 
+export interface ExcelViewConfig {
+  /** 是否启用 Excel 视图 */
+  enabled?: boolean
+  /** 默认显示的字段 */
+  defaultFields?: string[]
+  /** 冻结列数（默认冻结序号列） */
+  freezeColumns?: number
+}
+
 export interface ViewConfig {
-  defaultView?: 'table' | 'kanban'
+  defaultView?: 'table' | 'kanban' | 'excel'
   kanban?: KanbanConfig
+  excel?: ExcelViewConfig
 }
 
 export interface PageConfig {
