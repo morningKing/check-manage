@@ -17,7 +17,7 @@
     @close="handleClose"
   >
     <!-- 顶部批量操作按钮 -->
-    <div v-if="!loading && !error && hasChanges" class="batch-actions">
+    <div v-if="!loading && !error && hasDiff" class="batch-actions">
       <el-button type="success" plain @click="handleAcceptAllSource">
         全部接受源版本
       </el-button>
@@ -64,7 +64,7 @@
     </div>
 
     <!-- 空状态 -->
-    <div v-else-if="!hasChanges" class="empty-container">
+    <div v-else-if="!hasDiff" class="empty-container">
       <el-empty description="没有需要处理的变更" />
     </div>
 
@@ -180,7 +180,8 @@ const emit = defineEmits<{
 
 const {
   state,
-  hasChanges,
+  hasDiff,
+  hasSelection,
   selectedCount,
   setSourceVersion,
   setDiffResult,
@@ -225,8 +226,6 @@ const totalChanges = computed(() => {
   if (!state.diffResult) return 0
   return state.diffResult.added.length + state.diffResult.removed.length + state.diffResult.modified.length
 })
-
-const hasSelection = computed(() => selectedCount.value > 0)
 
 async function loadDiff(): Promise<void> {
   if (!props.sourceVersion) {

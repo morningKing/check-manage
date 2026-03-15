@@ -1,0 +1,85 @@
+{
+  "title": "check-manage 项目优势分析报告",
+  "style": "keynote",
+  "style_guidelines": {
+    "color_palette": "Deep black backgrounds (#000000 to #1d1d1f), pure white text (#ffffff), signature blue (#0071e3) as accent, subtle gray gradients for depth",
+    "typography": "San Francisco Pro Display style, extreme weight contrast (bold 80pt+ titles, light 24pt body), negative letter-spacing on headlines",
+    "imagery": "Cinematic photography, dramatic lighting, clean icons, full-bleed imagery, professional tech aesthetic",
+    "layout": "Maximum negative space, single powerful statement per slide, content centered or dramatically offset, no clutter",
+    "effects": "Subtle gradient overlays, light bloom on key elements, smooth transitions, reflection surfaces"
+  },
+  "aspect_ratio": "16:9",
+  "slides": [
+    {
+      "slide_number": 1,
+      "type": "title",
+      "title": "check-manage",
+      "subtitle": "配置驱动的动态数据管理平台\n优势分析报告",
+      "visual_description": "Deep black gradient background (#000000 to #1a1a1a). Center: bold white title 'check-manage' in San Francisco Pro Display style (96pt, weight 700). Below: subtitle in lighter gray (#86868b, 32pt). Subtle blue accent glow (#0071e3) behind title creating depth. Minimalist Apple keynote aesthetic with 60% negative space. Professional, cinematic presentation opening."
+    },
+    {
+      "slide_number": 2,
+      "type": "content",
+      "title": "当前痛点",
+      "key_points": ["版本管理混乱", "协作效率低下（锁表等待）", "修订记录依赖人工", "无 API 接口", "工具散落各处"],
+      "visual_description": "Black background with subtle gradient. Left side: large white title '当前痛点' (72pt bold). Right side: five key pain points as clean white text cards with subtle transparency, arranged vertically with generous spacing. Each point has a subtle red accent dot. Apple-style minimal design with 50% negative space."
+    },
+    {
+      "slide_number": 3,
+      "type": "content",
+      "title": "核心结论",
+      "key_points": ["协作效率提升 5 倍", "数据错误率降至 1%", "版本对比从 1 小时到 1 分钟", "学习成本从 2 周到 2 小时", "ROI: 59% (第一年)"],
+      "visual_description": "Black gradient background. Center: large white title '核心结论' (72pt bold). Five metrics displayed as large bold numbers in signature blue (#0071e3) with smaller white labels below, arranged in a clean grid. Each metric card has subtle glow. Dramatic size contrast between numbers and labels. Premium Apple keynote style."
+    },
+    {
+      "slide_number": 4,
+      "type": "comparison",
+      "title": "协作效率对比",
+      "left_label": "传统方式：50 分钟（串行）",
+      "right_label": "check-manage: 10 分钟（并行）",
+      "visual_description": "Split screen composition. Left half: dark gray background with red accent, showing '50 分钟' in large faded text with '串行等待' label. Right half: signature blue gradient background with '10 分钟' in large bold white text and '并行协作' label. Center: subtle dividing line. Bottom: '效率提升 5 倍' in white. Clean comparison visualization."
+    },
+    {
+      "slide_number": 5,
+      "type": "content",
+      "title": "数据质量保障",
+      "key_points": ["15 种控件类型约束输入", "Python 校验脚本自动执行", "关联关系自动维护", "错误率从 15% 降至 1%"],
+      "visual_description": "Black background. Top: white title '数据质量保障' (72pt bold). Center: abstract visualization showing data flow with checkmarks and shields in blue and white. Four key points arranged below as clean white text with subtle blue bullet points. Professional, secure, trustworthy aesthetic."
+    },
+    {
+      "slide_number": 6,
+      "type": "content",
+      "title": "版本管理革新",
+      "key_points": ["单一数据源，自动版本管理", "内置数据对比，逐字段高亮", "一键还原到任意历史版本", "定时备份 + 手动备份"],
+      "visual_description": "Black gradient background. Title '版本管理革新' at top. Center: abstract timeline visualization showing version history with glowing nodes connected by smooth lines in blue. Four features listed below in white text. Clean, modern, controlled aesthetic emphasizing reliability."
+    },
+    {
+      "slide_number": 7,
+      "type": "content",
+      "title": "工具统一化",
+      "key_points": ["定制化导出能力", "统一脚本管理", "跨页面复用", "降低维护成本"],
+      "visual_description": "Black background with subtle blue gradient accent. Title '工具统一化' prominent. Center: visual metaphor of multiple scattered tools converging into one unified tool, represented by clean abstract icons in white and blue. Four benefits below. Emphasizing consolidation and efficiency."
+    },
+    {
+      "slide_number": 8,
+      "type": "content",
+      "title": "投资回报率",
+      "key_points": ["10 人团队年度收益：79.5 万元", "开发成本：50 万元（一次性）", "第一年 ROI: 59%", "回收期：6-12 个月"],
+      "visual_description": "Black background. Large title '投资回报率'. Center: dramatic upward trending arrow/line in signature blue, with '79.5 万' displayed prominently at the peak in large bold numbers. ROI metrics arranged below in clean white text. Financial confidence, clear value proposition."
+    },
+    {
+      "slide_number": 9,
+      "type": "conclusion",
+      "title": "核心优势",
+      "subtitle": "协作效率 × 数据质量 × 版本管理 × 开发扩展 × 工具统一",
+      "visual_description": "Dramatic black gradient finale. Center: '核心优势' in large bold white. Below: five key dimensions arranged horizontally as clean blue-tinted cards or badges with subtle glow. Generous whitespace creating confidence and impact. Most visually striking slide while maintaining Apple keynote aesthetic."
+    },
+    {
+      "slide_number": 10,
+      "type": "conclusion",
+      "title": "推荐采用",
+      "subtitle": "check-manage 替代传统配置管理方式",
+      "visual_description": "Ultimate minimalist closing slide. Pure black background. Single powerful statement '推荐采用' in massive bold white text (100pt+) centered. Below in smaller light gray: 'check-manage 替代传统配置管理方式'. Maximum negative space (80%+). Confident, decisive, memorable. Classic Apple keynote ending."
+    }
+  ]
+}

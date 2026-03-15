@@ -50,9 +50,21 @@ export function useMergeState() {
   // ==================== Computed ====================
 
   /**
-   * 是否有任何更改
+   * 是否有任何差异（不关心是否已选择）
    */
-  const hasChanges = computed(() => {
+  const hasDiff = computed(() => {
+    if (!state.diffResult) return false
+    return (
+      state.diffResult.added.length > 0 ||
+      state.diffResult.removed.length > 0 ||
+      state.diffResult.modified.length > 0
+    )
+  })
+
+  /**
+   * 是否有已选择的变更（用于提交按钮状态）
+   */
+  const hasSelection = computed(() => {
     return (
       state.decisions.addedRecords.size > 0 ||
       state.decisions.removedRecords.size > 0 ||
@@ -354,7 +366,8 @@ export function useMergeState() {
 
   return {
     state,
-    hasChanges,
+    hasDiff,
+    hasSelection,
     selectedCount,
     setSourceVersion,
     setDiffResult,
