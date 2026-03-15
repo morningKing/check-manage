@@ -21,7 +21,9 @@ from utils.version import (
     get_current_branch,
     get_user_current_branch,
     MAIN_BRANCH_ID,
+    apply_partial_merge,
 )
+from utils.errors import MergeError
 
 versions_bp = Blueprint('versions', __name__)
 
@@ -212,6 +214,55 @@ def merge_versions():
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'合并失败: {str(e)}'}), 500
+
+
+@versions_bp.route('/versions/partial-merge', methods=['POST'])
+@write_required
+def partial_merge_versions():
+    """部分合并：根据用户决策选择性合并记录
+
+    请求体:
+        - source_version_id: 源版本 ID
+        - target_branch: 目标分支 ID ('main' 表示主分支)
+        - decisions: 用户合并决策
+            - added_record_ids: 要新增的记录 ID 列表
+            - removed_record_ids: 要删除的记录 ID 列表
+            - modified_records: 要修改的记录列表
+                - record_id: 记录 ID
+                - field_values: 字段级合并结果 {fieldName: value}
+    """
+    body = request.get_json(force=True)
+    source_version_id = body.get('source_version_id')
+    target_branch = body.get('target_branch')
+    decisions = body.get('decisions')
+
+    # 验证必填字段
+    if not source_version_id:
+        return jsonify({'error': 'source_version_id 是必填项'}), 400
+    if not target_branch:
+        return jsonify({'error': 'target_branch 是必填项'}), 400
+    if decisions is None:
+        return jsonify({'error': 'decisions 是必填项'}), 400
+
+    user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+    merged_by = user.get('username', 'unknown')
+
+    try:
+        result = apply_partial_merge(
+            source_version_id=source_version_id,
+            target_branch=target_branch,
+            decisions=decisions,
+            merged_by=merged_by,
+        )
+        return jsonify({
+            'success': result['success'],
+            'merged_count': result['merged_count'],
+            'message': result['message'],
+        })
+    except MergeError as e:
+        return jsonify({'code': e.code, 'message': e.message}), 400
+    except Exception as e:
+        return jsonify({'error': f'部分合并失败: {str(e)}'}), 500
 
 
 @versions_bp.route('/versions/<version_id>/restore', methods=['POST'])
