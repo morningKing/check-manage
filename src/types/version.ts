@@ -146,11 +146,6 @@ export interface PartialMergeResponse {
 }
 
 /**
- * 合并步骤
- */
-export type MergeStep = 'overview' | 'records' | 'fields'
-
-/**
  * 合并决策状态
  */
 export interface MergeDecisions {
@@ -166,9 +161,9 @@ export interface MergeDecisions {
  * 合并状态
  */
 export interface MergeState {
-  step: MergeStep
   sourceVersion: CollectionVersion | null
   targetBranch: string
   diffResult: DiffResult | null
   decisions: MergeDecisions
+  expandedRecords: Set<string>  // IDs of modified records with expanded field panels
 }
