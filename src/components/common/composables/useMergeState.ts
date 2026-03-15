@@ -2,15 +2,14 @@
  * useMergeState - 合并决策状态管理 Composable
  *
  * 管理版本合并过程中的决策状态，包括：
- * - 步骤导航
  * - 差异结果
  * - 用户决策（新增、删除、修改记录的选择）
+ * - 展开状态管理
  */
 import { reactive, computed } from 'vue'
 import { partialMergeVersion } from '@/api/version'
 import type {
   MergeState,
-  MergeStep,
   MergeDecisions,
   CollectionVersion,
   PartialMergeRequest,
@@ -35,11 +34,11 @@ function createEmptyDecisions(): MergeDecisions {
  */
 function createInitialState(): MergeState {
   return {
-    step: 'overview',
     sourceVersion: null,
     targetBranch: 'current',
     diffResult: null,
     decisions: createEmptyDecisions(),
+    expandedRecords: new Set<string>(),
   }
 }
 
@@ -62,60 +61,17 @@ export function useMergeState() {
   })
 
   /**
-   * 是否可以提交（与 hasChanges 相同，用于 UI 绑定）
+   * 已选择的变更总数
    */
-  const canSubmit = computed(() => hasChanges.value)
-
-  /**
-   * 修改记录数量
-   */
-  const modifiedRecordCount = computed(() => {
-    return state.diffResult?.modified?.length ?? 0
-  })
-
-  /**
-   * 新增记录数量
-   */
-  const addedRecordCount = computed(() => {
-    return state.diffResult?.added?.length ?? 0
-  })
-
-  /**
-   * 删除记录数量
-   */
-  const removedRecordCount = computed(() => {
-    return state.diffResult?.removed?.length ?? 0
-  })
-
-  /**
-   * 已选择的新增记录数量
-   */
-  const selectedAddedCount = computed(() => {
-    return state.decisions.addedRecords.size
-  })
-
-  /**
-   * 已选择的删除记录数量
-   */
-  const selectedRemovedCount = computed(() => {
-    return state.decisions.removedRecords.size
-  })
-
-  /**
-   * 已选择的修改记录数量
-   */
-  const selectedModifiedCount = computed(() => {
-    return state.decisions.modifiedRecords.size
+  const selectedCount = computed(() => {
+    return (
+      state.decisions.addedRecords.size +
+      state.decisions.removedRecords.size +
+      state.decisions.modifiedRecords.size
+    )
   })
 
   // ==================== Actions ====================
-
-  /**
-   * 设置步骤
-   */
-  function setStep(step: MergeStep): void {
-    state.step = step
-  }
 
   /**
    * 设置源版本信息
@@ -125,32 +81,23 @@ export function useMergeState() {
   }
 
   /**
-   * 设置目标分支
-   */
-  function setTargetBranch(branch: string): void {
-    state.targetBranch = branch
-  }
-
-  /**
    * 设置差异结果并初始化选择
    */
   function setDiffResult(result: DiffResult): void {
     state.diffResult = result
-    // 重置决策
     state.decisions = createEmptyDecisions()
+    state.expandedRecords = new Set<string>()
   }
 
   /**
    * 设置整个决策对象
-   * 用于子组件更新决策时同步状态
-   * 注意：深拷贝嵌套的 Map 结构，避免共享引用
    */
   function setDecisions(decisions: MergeDecisions): void {
     const modifiedRecordsMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
     decisions.modifiedRecords.forEach((value, key) => {
       modifiedRecordsMap.set(key, {
         recordId: value.recordId,
-        fieldDecisions: new Map(value.fieldDecisions), // Deep copy nested Map
+        fieldDecisions: new Map(value.fieldDecisions),
       })
     })
     state.decisions = {
@@ -183,10 +130,29 @@ export function useMergeState() {
   }
 
   /**
-   * 设置修改记录的字段决策
-   * @param recordId 记录 ID
-   * @param fieldName 字段名
-   * @param choice 'source' 使用源版本值，'target' 使用目标版本值
+   * 切换修改记录的选择状态
+   */
+  function toggleModifiedRecord(recordId: string): void {
+    if (state.decisions.modifiedRecords.has(recordId)) {
+      state.decisions.modifiedRecords.delete(recordId)
+      state.expandedRecords.delete(recordId)
+    } else {
+      const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
+      if (modifiedItem) {
+        const fieldDecisions = new Map<string, 'source' | 'target'>()
+        modifiedItem.fields.forEach(field => {
+          fieldDecisions.set(field.fieldName, 'source')
+        })
+        state.decisions.modifiedRecords.set(recordId, {
+          recordId,
+          fieldDecisions,
+        })
+      }
+    }
+  }
+
+  /**
+   * 设置字段决策
    */
   function setFieldDecision(
     recordId: string,
@@ -205,107 +171,118 @@ export function useMergeState() {
   }
 
   /**
-   * 设置整个修改记录的决策
-   * @param recordId 记录 ID
-   * @param fieldChoices 字段选择映射
+   * 切换修改记录的展开状态
    */
-  function setRecordDecision(
-    recordId: string,
-    fieldChoices: Map<string, 'source' | 'target'>
-  ): void {
-    state.decisions.modifiedRecords.set(recordId, {
-      recordId,
-      fieldDecisions: fieldChoices,
-    })
+  function toggleRecordExpanded(recordId: string): void {
+    if (state.expandedRecords.has(recordId)) {
+      state.expandedRecords.delete(recordId)
+    } else {
+      state.expandedRecords.add(recordId)
+    }
   }
 
   /**
-   * 切换修改记录的选择状态
-   * 如果记录已选择，则移除；否则添加并使用源版本作为默认值
+   * 全选/取消全选新增记录
    */
-  function toggleModifiedRecord(recordId: string): void {
-    if (state.decisions.modifiedRecords.has(recordId)) {
-      state.decisions.modifiedRecords.delete(recordId)
+  function selectAllAdded(selected: boolean): void {
+    if (selected && state.diffResult) {
+      state.decisions.addedRecords = new Set(state.diffResult.added.map(r => r.id))
     } else {
-      // 添加记录，并初始化所有字段使用源版本
-      const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
-      if (modifiedItem) {
+      state.decisions.addedRecords = new Set()
+    }
+  }
+
+  /**
+   * 全选/取消全选删除记录
+   */
+  function selectAllRemoved(selected: boolean): void {
+    if (selected && state.diffResult) {
+      state.decisions.removedRecords = new Set(state.diffResult.removed.map(r => r.id))
+    } else {
+      state.decisions.removedRecords = new Set()
+    }
+  }
+
+  /**
+   * 全选/取消全选修改记录
+   */
+  function selectAllModified(selected: boolean): void {
+    if (selected && state.diffResult) {
+      const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
+      state.diffResult.modified.forEach(item => {
         const fieldDecisions = new Map<string, 'source' | 'target'>()
-        modifiedItem.fields.forEach(field => {
+        item.fields.forEach(field => {
           fieldDecisions.set(field.fieldName, 'source')
         })
-        state.decisions.modifiedRecords.set(recordId, {
-          recordId,
-          fieldDecisions,
-        })
-      }
+        newMap.set(item.id, { recordId: item.id, fieldDecisions })
+      })
+      state.decisions.modifiedRecords = newMap
+    } else {
+      state.decisions.modifiedRecords = new Map()
+      state.expandedRecords = new Set()
     }
   }
 
   /**
    * 接受所有源版本变更
-   * - 新增记录：全部选择
-   * - 删除记录：全部选择
-   * - 修改记录：全部选择，所有字段使用源版本值
    */
   function acceptAllSource(): void {
     if (!state.diffResult) return
 
-    // 新增记录：全部选择
     state.diffResult.added.forEach(record => {
-      const id = record.id
-      if (id) {
-        state.decisions.addedRecords.add(id)
-      }
+      state.decisions.addedRecords.add(record.id)
     })
 
-    // 删除记录：全部选择
     state.diffResult.removed.forEach(record => {
-      const id = record.id
-      if (id) {
-        state.decisions.removedRecords.add(id)
-      }
+      state.decisions.removedRecords.add(record.id)
     })
 
-    // 修改记录：全部选择，字段使用源版本值
+    const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
     state.diffResult.modified.forEach(item => {
       const fieldDecisions = new Map<string, 'source' | 'target'>()
       item.fields.forEach(field => {
         fieldDecisions.set(field.fieldName, 'source')
       })
-      state.decisions.modifiedRecords.set(item.id, {
-        recordId: item.id,
-        fieldDecisions,
-      })
+      newMap.set(item.id, { recordId: item.id, fieldDecisions })
     })
+    state.decisions.modifiedRecords = newMap
   }
 
   /**
-   * 接受所有目标版本（拒绝源版本变更）
-   * - 新增记录：全部不选择（不合并）
-   * - 删除记录：全部不选择（保留）
-   * - 修改记录：全部选择，所有字段使用目标版本值
+   * 接受所有目标版本变更
    */
   function acceptAllTarget(): void {
     if (!state.diffResult) return
 
-    // 新增记录：全部不选择（清空）
-    state.decisions.addedRecords.clear()
+    state.decisions.addedRecords = new Set()
+    state.decisions.removedRecords = new Set()
 
-    // 删除记录：全部不选择（清空）
-    state.decisions.removedRecords.clear()
-
-    // 修改记录：全部选择，字段使用目标版本值
+    const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
     state.diffResult.modified.forEach(item => {
       const fieldDecisions = new Map<string, 'source' | 'target'>()
       item.fields.forEach(field => {
         fieldDecisions.set(field.fieldName, 'target')
       })
-      state.decisions.modifiedRecords.set(item.id, {
-        recordId: item.id,
-        fieldDecisions,
-      })
+      newMap.set(item.id, { recordId: item.id, fieldDecisions })
     })
+    state.decisions.modifiedRecords = newMap
+  }
+
+  /**
+   * 为单条修改记录设置所有字段选择
+   */
+  function setAllFieldsForRecord(recordId: string, choice: 'source' | 'target'): void {
+    const recordDecision = state.decisions.modifiedRecords.get(recordId)
+    if (!recordDecision) return
+
+    const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
+    if (!modifiedItem) return
+
+    const newFieldDecisions = new Map<string, 'source' | 'target'>()
+    modifiedItem.fields.forEach(field => {
+      newFieldDecisions.set(field.fieldName, choice)
+    })
+    recordDecision.fieldDecisions = newFieldDecisions
   }
 
   /**
@@ -316,7 +293,6 @@ export function useMergeState() {
       return null
     }
 
-    // 转换修改记录的决策格式
     const modifiedRecords: ModifiedRecordDecision[] = []
 
     state.decisions.modifiedRecords.forEach((decision, recordId) => {
@@ -330,7 +306,6 @@ export function useMergeState() {
       decision.fieldDecisions.forEach((choice, fieldName) => {
         const field = modifiedItem.fields.find(f => f.fieldName === fieldName)
         if (field) {
-          // source: 使用源版本值（newValue），target: 使用目标版本值（oldValue）
           fieldValues[fieldName] = choice === 'source' ? field.newValue : field.oldValue
         }
       })
@@ -370,40 +345,31 @@ export function useMergeState() {
    */
   function reset(): void {
     const initialState = createInitialState()
-    state.step = initialState.step
     state.sourceVersion = initialState.sourceVersion
     state.targetBranch = initialState.targetBranch
     state.diffResult = initialState.diffResult
     state.decisions = initialState.decisions
+    state.expandedRecords = initialState.expandedRecords
   }
 
   return {
-    // State (通过 setter 方法修改，不使用 readonly 避免类型嵌套问题)
     state,
-
-    // Computed
     hasChanges,
-    canSubmit,
-    modifiedRecordCount,
-    addedRecordCount,
-    removedRecordCount,
-    selectedAddedCount,
-    selectedRemovedCount,
-    selectedModifiedCount,
-
-    // Actions
-    setStep,
+    selectedCount,
     setSourceVersion,
-    setTargetBranch,
     setDiffResult,
     setDecisions,
     toggleAddedRecord,
     toggleRemovedRecord,
-    setFieldDecision,
-    setRecordDecision,
     toggleModifiedRecord,
+    setFieldDecision,
+    toggleRecordExpanded,
+    selectAllAdded,
+    selectAllRemoved,
+    selectAllModified,
     acceptAllSource,
     acceptAllTarget,
+    setAllFieldsForRecord,
     buildMergePayload,
     submitMerge,
     reset,
