@@ -173,12 +173,8 @@ function handleSelectAll(selected: boolean): void {
   }
 
   &.is-selected {
-    background-color: #f0f9eb;
+    background-color: var(--el-color-primary-light-9);
   }
-}
-
-.record-item.is-selected {
-  background-color: var(--el-color-primary-light-9);
 }
 
 .record-display {
