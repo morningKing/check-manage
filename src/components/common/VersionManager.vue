@@ -207,50 +207,13 @@
       :target-source="diffTargetSource"
     />
 
-    <!-- 合并确认对话框 -->
-    <el-dialog
-      v-model="showMergeDialog"
-      title="合并版本"
-      width="500px"
-      :close-on-click-modal="false"
-    >
-      <el-alert
-        type="warning"
-        title="合并操作将修改当前数据"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 16px"
-      >
-        <template #default>
-          此操作将把版本「{{ mergeTarget?.name }}」的数据合并到当前数据。
-          <br />
-          当前数据将被覆盖，请确认操作。
-        </template>
-      </el-alert>
-      <el-form label-width="80px">
-        <el-form-item label="合并策略">
-          <el-radio-group v-model="mergeStrategy">
-            <el-radio value="theirs">
-              使用版本数据（覆盖当前）
-            </el-radio>
-            <el-radio value="ours">
-              保留当前数据（不修改）
-            </el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showMergeDialog = false">取消</el-button>
-        <el-button
-          type="primary"
-          @click="confirmMerge"
-          :loading="merging"
-          :disabled="mergeStrategy !== 'theirs'"
-        >
-          确认合并
-        </el-button>
-      </template>
-    </el-dialog>
+    <!-- 合并冲突对话框 -->
+    <MergeConflictDialog
+      v-model="showMergeConflictDialog"
+      :collection="collection"
+      :source-version="mergeConflictTarget"
+      @success="handleMergeSuccess"
+    />
 
     <!-- 切换分支确认对话框 -->
     <el-dialog
@@ -290,11 +253,11 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Sort, RefreshRight, Delete, Connection, Switch, FolderOpened, Document } from '@element-plus/icons-vue'
 import BackupDiffDialog from './BackupDiffDialog.vue'
+import MergeConflictDialog from './MergeConflictDialog.vue'
 import {
   getVersions,
   createVersion,
   deleteVersion,
-  mergeVersion,
   restoreVersion,
   switchToVersion,
   switchToMainBranch,
@@ -352,10 +315,8 @@ const diffBaseSource = ref('current')
 const diffTargetSource = ref('')
 
 // 合并
-const showMergeDialog = ref(false)
-const mergeTarget = ref<CollectionVersion | null>(null)
-const mergeStrategy = ref<'theirs' | 'ours'>('theirs')
-const merging = ref(false)
+const showMergeConflictDialog = ref(false)
+const mergeConflictTarget = ref<CollectionVersion | null>(null)
 
 // 切换
 const showSwitchDialog = ref(false)
@@ -450,34 +411,15 @@ function handleDiff(row: CollectionVersion) {
 }
 
 function handleMerge(row: CollectionVersion) {
-  mergeTarget.value = row
-  mergeStrategy.value = 'theirs'
-  showMergeDialog.value = true
+  mergeConflictTarget.value = row
+  showMergeConflictDialog.value = true
 }
 
-async function confirmMerge() {
-  if (!mergeTarget.value) return
-
-  merging.value = true
-  try {
-    const result = await mergeVersion({
-      sourceVersion: mergeTarget.value.id,
-      strategy: mergeStrategy.value,
-    })
-    ElMessage.success(
-      `合并成功：新增 ${result.summary.recordsCreated} 条，` +
-      `更新 ${result.summary.recordsUpdated} 条，` +
-      `删除 ${result.summary.recordsDeleted} 条`
-    )
-    showMergeDialog.value = false
-    loadVersions()
-    emit('refresh')
-  } catch (e: any) {
-    const msg = e?.response?.data?.error || '合并失败'
-    ElMessage.error(msg)
-  } finally {
-    merging.value = false
-  }
+function handleMergeSuccess() {
+  showMergeConflictDialog.value = false
+  loadVersions()
+  emit('refresh')
+  ElMessage.success('合并成功')
 }
 
 async function handleRestore(row: CollectionVersion) {

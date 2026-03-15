@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from db import get_db
 import psycopg2.extras
+from utils.errors import MergeError, VERSION_NOT_FOUND, VERSION_ALREADY_MERGED
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -791,182 +792,182 @@ def apply_partial_merge(source_version_id, target_branch, decisions, merged_by):
     -------
     dict
         {success, message, merged_count, summary}
+
+    Raises
+    ------
+    MergeError
+        版本不存在或已合并时抛出
     """
     now = datetime.now(timezone.utc)
     target_branch_id = target_branch or MAIN_BRANCH_ID
 
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
+    with get_db() as conn:
+        cur = conn.cursor()
 
-            # 1. 获取版本信息并验证状态
+        # 1. 获取版本信息并验证状态
+        cur.execute(
+            'SELECT collection, status, version_type FROM collection_versions WHERE id = %s',
+            (source_version_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise MergeError(VERSION_NOT_FOUND, '源版本不存在')
+        collection, status, version_type = row
+
+        if status == 'merged':
+            raise MergeError(VERSION_ALREADY_MERGED, '该版本已合并，无法再次合并')
+
+        # 2. 加载源数据（支持分支和快照两种类型）
+        if version_type == 'branch':
+            source_records, source_rels = load_current_data(collection, branch_id=source_version_id)
+        else:
+            source_records, source_rels = load_version_data(source_version_id)
+            # load_version_data 返回 (records, relations_map)，需要转换格式
+            # relations_map: {record_id: {field_name: [related_ids]}}
+            # 我们需要将其转换为列表格式
+
+        # 构建源记录查找表
+        source_record_map = {r['id']: r for r in source_records}
+
+        summary = {
+            'recordsCreated': 0,
+            'recordsDeleted': 0,
+            'recordsUpdated': 0,
+            'recordsSkipped': 0,      # 因冲突被跳过的记录
+            'recordsNotFound': 0,     # 修改时未找到的目标记录
+        }
+
+        # 3. 处理新增记录
+        added_record_ids = decisions.get('added_record_ids', [])
+        for record_id in added_record_ids:
+            if record_id not in source_record_map:
+                summary['recordsSkipped'] += 1
+                continue
+
+            record = source_record_map[record_id]
+            data = {k: v for k, v in record.items() if k != 'id'}
+
+            # 插入记录，检查冲突
             cur.execute(
-                'SELECT collection, status, version_type FROM collection_versions WHERE id = %s',
-                (source_version_id,),
+                'INSERT INTO dynamic_data (id, collection, data, branch_id) '
+                'VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING',
+                (record_id, collection, psycopg2.extras.Json(data), target_branch_id),
             )
-            row = cur.fetchone()
-            if not row:
-                return {
-                    'success': False,
-                    'message': '源版本不存在',
-                    'merged_count': 0,
-                }
-            collection, status, version_type = row
+            if cur.rowcount == 0:
+                # 插入冲突，记录跳过
+                summary['recordsSkipped'] += 1
+                continue
 
-            if status == 'merged':
-                return {
-                    'success': False,
-                    'message': '该版本已合并，无法再次合并',
-                    'merged_count': 0,
-                }
-
-            # 2. 加载源数据（支持分支和快照两种类型）
-            if version_type == 'branch':
-                source_records, source_rels = load_current_data(collection, branch_id=source_version_id)
-            else:
-                source_records, source_rels = load_version_data(source_version_id)
-                # load_version_data 返回 (records, relations_map)，需要转换格式
-                # relations_map: {record_id: {field_name: [related_ids]}}
-                # 我们需要将其转换为列表格式
-
-            # 构建源记录查找表
-            source_record_map = {r['id']: r for r in source_records}
-
-            # 获取字段配置用于更新 data_hash
-            page_id = f'page-{collection}'
-            cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
-            pc_row = cur.fetchone()
-            fields = pc_row[0] if pc_row and pc_row[0] else []
-
-            summary = {
-                'recordsAdded': 0,
-                'recordsRemoved': 0,
-                'recordsModified': 0,
-            }
-
-            # 3. 处理新增记录
-            added_record_ids = decisions.get('added_record_ids', [])
-            for record_id in added_record_ids:
-                if record_id not in source_record_map:
-                    continue
-
-                record = source_record_map[record_id]
-                data = {k: v for k, v in record.items() if k != 'id'}
-
-                # 插入记录
-                cur.execute(
-                    'INSERT INTO dynamic_data (id, collection, data, branch_id) '
-                    'VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING',
-                    (record_id, collection, psycopg2.extras.Json(data), target_branch_id),
-                )
-
-                # 同步复制关系数据
-                if isinstance(source_rels, list):
-                    # source_rels 是关系列表
-                    for rel in source_rels:
-                        if isinstance(rel, dict) and rel.get('record_id') == record_id:
+            # 同步复制关系数据
+            if isinstance(source_rels, list):
+                # source_rels 是关系列表
+                for rel in source_rels:
+                    if isinstance(rel, dict) and rel.get('record_id') == record_id:
+                        related_collection = rel.get('related_collection', collection)
+                        cur.execute(
+                            'INSERT INTO data_relations '
+                            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+                            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                            (collection, record_id, rel['field_name'],
+                             related_collection, rel['related_id'], target_branch_id),
+                        )
+            elif isinstance(source_rels, dict):
+                # source_rels 是关系映射 {record_id: {field_name: [related_ids]}}
+                # 注意：此格式缺少 related_collection 信息，默认使用 collection
+                if record_id in source_rels:
+                    for field_name, related_ids in source_rels[record_id].items():
+                        for related_id in related_ids:
                             cur.execute(
                                 'INSERT INTO data_relations '
                                 '(collection, record_id, field_name, related_collection, related_id, branch_id) '
                                 'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
-                                (collection, record_id, rel['field_name'],
-                                 rel['related_collection'], rel['related_id'], target_branch_id),
+                                (collection, record_id, field_name, collection, related_id, target_branch_id),
                             )
-                elif isinstance(source_rels, dict):
-                    # source_rels 是关系映射 {record_id: {field_name: [related_ids]}}
-                    if record_id in source_rels:
-                        for field_name, related_ids in source_rels[record_id].items():
-                            for related_id in related_ids:
-                                cur.execute(
-                                    'INSERT INTO data_relations '
-                                    '(collection, record_id, field_name, related_collection, related_id, branch_id) '
-                                    'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
-                                    (collection, record_id, field_name, collection, related_id, target_branch_id),
-                                )
 
-                summary['recordsAdded'] += 1
+            summary['recordsCreated'] += 1
 
-            # 4. 处理删除记录
-            removed_record_ids = decisions.get('removed_record_ids', [])
-            for record_id in removed_record_ids:
-                # 删除记录
-                cur.execute(
-                    'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
-                    (collection, record_id, target_branch_id),
-                )
-
-                # 同步删除关系数据
-                cur.execute(
-                    'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
-                    (collection, record_id, target_branch_id),
-                )
-
-                summary['recordsRemoved'] += 1
-
-            # 5. 处理修改记录
-            modified_records = decisions.get('modified_records', [])
-            for mod in modified_records:
-                record_id = mod.get('record_id')
-                field_values = mod.get('field_values', {})
-
-                if not record_id or not field_values:
-                    continue
-
-                # 获取当前记录数据
-                cur.execute(
-                    'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
-                    (collection, record_id, target_branch_id),
-                )
-                current_row = cur.fetchone()
-                if current_row:
-                    current_data = current_row[0] or {}
-                    # 合并字段更新
-                    current_data.update(field_values)
-                    cur.execute(
-                        'UPDATE dynamic_data SET data = %s, updated_at = %s, version = version + 1 '
-                        'WHERE collection = %s AND id = %s AND branch_id = %s',
-                        (psycopg2.extras.Json(current_data), now, collection, record_id, target_branch_id),
-                    )
-                    summary['recordsModified'] += 1
-
-            # 6. 更新 data_hash（计算新状态的哈希）
+        # 4. 处理删除记录
+        removed_record_ids = decisions.get('removed_record_ids', [])
+        for record_id in removed_record_ids:
+            # 删除记录
             cur.execute(
-                'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
-                (collection, target_branch_id),
+                'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                (collection, record_id, target_branch_id),
             )
-            new_data_rows = cur.fetchall()
-            cur.execute(
-                'SELECT collection, record_id, field_name, related_collection, related_id '
-                'FROM data_relations WHERE collection = %s AND branch_id = %s',
-                (collection, target_branch_id),
-            )
-            new_rel_rows = cur.fetchall()
+            deleted = cur.rowcount > 0
 
-            new_records = [{'id': r[0], 'data': r[1], 'created_at': r[2]} for r in new_data_rows]
-            new_relations = [list(r) for r in new_rel_rows]
-            new_hash = _compute_data_hash(new_records, new_relations)
-
-            # 更新版本状态
+            # 同步删除关系数据
             cur.execute(
-                'UPDATE collection_versions SET status = %s, merged_at = %s, merged_by = %s, data_hash = %s '
-                'WHERE id = %s',
-                ('merged', now, merged_by, new_hash, source_version_id),
+                'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                (collection, record_id, target_branch_id),
             )
 
-            merged_count = summary['recordsAdded'] + summary['recordsRemoved'] + summary['recordsModified']
+            if deleted:
+                summary['recordsDeleted'] += 1
+            else:
+                summary['recordsNotFound'] += 1
 
-            return {
-                'success': True,
-                'message': f'部分合并完成，共处理 {merged_count} 条记录',
-                'merged_count': merged_count,
-                'summary': summary,
-            }
+        # 5. 处理修改记录
+        modified_records = decisions.get('modified_records', [])
+        for mod in modified_records:
+            record_id = mod.get('record_id')
+            field_values = mod.get('field_values', {})
 
-    except Exception as e:
+            if not record_id or not field_values:
+                summary['recordsSkipped'] += 1
+                continue
+
+            # 获取当前记录数据
+            cur.execute(
+                'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                (collection, record_id, target_branch_id),
+            )
+            current_row = cur.fetchone()
+            if current_row:
+                current_data = current_row[0] or {}
+                # 合并字段更新
+                current_data.update(field_values)
+                cur.execute(
+                    'UPDATE dynamic_data SET data = %s, updated_at = %s, version = version + 1 '
+                    'WHERE collection = %s AND id = %s AND branch_id = %s',
+                    (psycopg2.extras.Json(current_data), now, collection, record_id, target_branch_id),
+                )
+                summary['recordsUpdated'] += 1
+            else:
+                # 目标记录不存在
+                summary['recordsNotFound'] += 1
+
+        # 6. 更新 data_hash（计算新状态的哈希）
+        cur.execute(
+            'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, target_branch_id),
+        )
+        new_data_rows = cur.fetchall()
+        cur.execute(
+            'SELECT collection, record_id, field_name, related_collection, related_id '
+            'FROM data_relations WHERE collection = %s AND branch_id = %s',
+            (collection, target_branch_id),
+        )
+        new_rel_rows = cur.fetchall()
+
+        new_records = [{'id': r[0], 'data': r[1], 'created_at': r[2]} for r in new_data_rows]
+        new_relations = [list(r) for r in new_rel_rows]
+        new_hash = _compute_data_hash(new_records, new_relations)
+
+        # 更新版本状态
+        cur.execute(
+            'UPDATE collection_versions SET status = %s, merged_at = %s, merged_by = %s, data_hash = %s '
+            'WHERE id = %s',
+            ('merged', now, merged_by, new_hash, source_version_id),
+        )
+
+        merged_count = summary['recordsCreated'] + summary['recordsDeleted'] + summary['recordsUpdated']
+
         return {
-            'success': False,
-            'message': f'合并失败: {str(e)}',
-            'merged_count': 0,
+            'success': True,
+            'message': f'部分合并完成，共处理 {merged_count} 条记录',
+            'merged_count': merged_count,
+            'summary': summary,
         }
 
 

@@ -6,7 +6,7 @@
  * - 差异结果
  * - 用户决策（新增、删除、修改记录的选择）
  */
-import { reactive, computed, readonly } from 'vue'
+import { reactive, computed } from 'vue'
 import { partialMergeVersion } from '@/api/version'
 import type {
   MergeState,
@@ -138,6 +138,26 @@ export function useMergeState() {
     state.diffResult = result
     // 重置决策
     state.decisions = createEmptyDecisions()
+  }
+
+  /**
+   * 设置整个决策对象
+   * 用于子组件更新决策时同步状态
+   * 注意：深拷贝嵌套的 Map 结构，避免共享引用
+   */
+  function setDecisions(decisions: MergeDecisions): void {
+    const modifiedRecordsMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
+    decisions.modifiedRecords.forEach((value, key) => {
+      modifiedRecordsMap.set(key, {
+        recordId: value.recordId,
+        fieldDecisions: new Map(value.fieldDecisions), // Deep copy nested Map
+      })
+    })
+    state.decisions = {
+      addedRecords: new Set(decisions.addedRecords),
+      removedRecords: new Set(decisions.removedRecords),
+      modifiedRecords: modifiedRecordsMap,
+    }
   }
 
   /**
@@ -358,8 +378,8 @@ export function useMergeState() {
   }
 
   return {
-    // State (readonly to prevent direct mutation)
-    state: readonly(state),
+    // State (通过 setter 方法修改，不使用 readonly 避免类型嵌套问题)
+    state,
 
     // Computed
     hasChanges,
@@ -376,6 +396,7 @@ export function useMergeState() {
     setSourceVersion,
     setTargetBranch,
     setDiffResult,
+    setDecisions,
     toggleAddedRecord,
     toggleRemovedRecord,
     setFieldDecision,

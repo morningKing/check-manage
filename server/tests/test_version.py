@@ -65,6 +65,9 @@ class TestPartialMerge:
 
     def test_partial_merge_remove_records(self, mock_db_setup):
         """测试部分合并删除记录"""
+        # 设置 rowcount 模拟删除成功
+        mock_db_setup['cur'].rowcount = 1
+
         decisions = {
             'added_record_ids': [],
             'removed_record_ids': ['record-2'],
@@ -87,10 +90,9 @@ class TestPartialMerge:
     def test_partial_merge_modified_records(self, mock_db_setup):
         """测试部分合并修改记录"""
         # 为修改记录测试重新设置 fetchone 返回值
-        # 需要: 版本信息、page_config fields（返回 None 表示无字段配置）、当前记录数据
+        # 需要: 版本信息、当前记录数据
         mock_db_setup['cur'].fetchone.side_effect = [
             ('test_collection', 'active', 'snapshot'),  # 版本信息
-            None,  # page_config fields (无配置)
             ({'name': '旧名称'},),  # 当前记录数据 (tuple with dict)
         ]
 
@@ -142,7 +144,7 @@ class TestPartialMerge:
         assert result['success'] is True
 
     def test_partial_merge_rollback_on_error(self, mock_db_setup):
-        """测试部分合并失败时回滚"""
+        """测试部分合并失败时抛出异常"""
         mock_db_setup['cur'].execute.side_effect = Exception('DB Error')
 
         decisions = {
@@ -157,18 +159,16 @@ class TestPartialMerge:
                 []
             )
 
-            result = apply_partial_merge(
-                source_version_id='version-1',
-                target_branch='main',
-                decisions=decisions,
-                merged_by='admin'
-            )
-
-        assert result['success'] is False
-        assert '失败' in result['message']
+            with pytest.raises(Exception, match='DB Error'):
+                apply_partial_merge(
+                    source_version_id='version-1',
+                    target_branch='main',
+                    decisions=decisions,
+                    merged_by='admin'
+                )
 
     def test_partial_merge_version_not_found(self):
-        """测试版本不存在"""
+        """测试版本不存在时抛出 MergeError"""
         with patch('utils.version.get_db') as mock_get_db:
             mock_conn = MagicMock()
             mock_cur = MagicMock()
@@ -178,18 +178,20 @@ class TestPartialMerge:
             mock_conn.__exit__ = lambda self, *args: None
             mock_get_db.return_value = mock_conn
 
-            result = apply_partial_merge(
-                source_version_id='nonexistent',
-                target_branch='main',
-                decisions={},
-                merged_by='admin'
-            )
+            with pytest.raises(MergeError) as exc_info:
+                apply_partial_merge(
+                    source_version_id='nonexistent',
+                    target_branch='main',
+                    decisions={},
+                    merged_by='admin'
+                )
 
-        assert result['success'] is False
-        assert result['message'] == '源版本不存在'
+            assert exc_info.value.code == VERSION_NOT_FOUND
 
     def test_partial_merge_version_already_merged(self):
-        """测试版本已合并"""
+        """测试版本已合并时抛出 MergeError"""
+        from utils.errors import VERSION_ALREADY_MERGED
+
         with patch('utils.version.get_db') as mock_get_db:
             mock_conn = MagicMock()
             mock_cur = MagicMock()
@@ -199,12 +201,12 @@ class TestPartialMerge:
             mock_conn.__exit__ = lambda self, *args: None
             mock_get_db.return_value = mock_conn
 
-            result = apply_partial_merge(
-                source_version_id='version-1',
-                target_branch='main',
-                decisions={},
-                merged_by='admin'
-            )
+            with pytest.raises(MergeError) as exc_info:
+                apply_partial_merge(
+                    source_version_id='version-1',
+                    target_branch='main',
+                    decisions={},
+                    merged_by='admin'
+                )
 
-        assert result['success'] is False
-        assert '已合并' in result['message']
+            assert exc_info.value.code == VERSION_ALREADY_MERGED
