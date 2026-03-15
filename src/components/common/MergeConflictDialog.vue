@@ -1,118 +1,155 @@
 /**
- * 版本合并冲突解决对话框
+ * 版本合并对话框
  *
- * 职责：
- * - 管理三步合并流程（概览 → 记录选择 → 字段选择）
- * - 加载版本差异信息
- * - 提交部分合并决策
+ * 单页统一视图设计：
+ * - 无向导步骤，所有变更一页展示
+ * - 新增/删除记录：复选框选择
+ * - 修改记录：记录级选择 + 可展开的字段级选择
  */
 <template>
   <el-dialog
     v-model="visible"
-    title="版本合并"
-    width="900px"
+    :title="dialogTitle"
+    width="1000px"
     top="5vh"
     :close-on-click-modal="false"
     destroy-on-close
     @close="handleClose"
   >
-    <!-- 步骤指示器 -->
-    <div class="steps-container">
-      <el-steps :active="stepIndex" align-center>
-        <el-step title="概览" description="变更统计" />
-        <el-step title="记录选择" description="选择记录" />
-        <el-step title="字段选择" description="字段决策" />
-      </el-steps>
+    <!-- 顶部批量操作按钮 -->
+    <div v-if="!loading && !error && hasChanges" class="batch-actions">
+      <el-button type="success" plain @click="handleAcceptAllSource">
+        全部接受源版本
+      </el-button>
+      <el-button type="warning" plain @click="handleAcceptAllTarget">
+        全部接受目标版本
+      </el-button>
     </div>
 
-    <!-- 加载中状态 -->
+    <!-- 统计条 -->
+    <div v-if="!loading && !error && diffResult" class="statistics-bar">
+      <span class="stat-item">
+        <span class="stat-label">共</span>
+        <span class="stat-value">{{ totalChanges }}</span>
+        <span class="stat-label">处变更</span>
+      </span>
+      <span class="stat-divider">|</span>
+      <span class="stat-item stat-added">
+        新增 {{ diffResult.added.length }}
+      </span>
+      <span class="stat-item stat-removed">
+        删除 {{ diffResult.removed.length }}
+      </span>
+      <span class="stat-item stat-modified">
+        修改 {{ diffResult.modified.length }}
+      </span>
+      <span class="stat-divider">|</span>
+      <span class="stat-item stat-selected">
+        已选 {{ selectedCount }}
+      </span>
+    </div>
+
+    <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <el-icon class="is-loading" :size="32"><Loading /></el-icon>
       <span>正在加载变更信息...</span>
     </div>
 
     <!-- 错误状态 -->
-    <el-alert
-      v-else-if="error"
-      :title="error"
-      type="error"
-      :closable="false"
-      show-icon
-    />
-
-    <!-- 步骤内容 -->
-    <div v-else-if="state.diffResult" class="step-content">
-      <!-- 步骤1: 概览 -->
-      <StepOverview
-        v-if="state.step === 'overview'"
-        :diff-result="state.diffResult"
-        @accept-source="handleAcceptAllSource"
-        @accept-target="handleAcceptAllTarget"
-        @next="handleGoToRecords"
-        @cancel="handleCancel"
-      />
-
-      <!-- 步骤2: 记录选择 -->
-      <StepRecordSelect
-        v-else-if="state.step === 'records'"
-        :diff-result="state.diffResult"
-        :fields="fields"
-        :decisions="localDecisions"
-        @update:decisions="handleDecisionsUpdate"
-      />
-
-      <!-- 步骤3: 字段选择 -->
-      <StepFieldSelect
-        v-else-if="state.step === 'fields'"
-        :diff-result="state.diffResult"
-        :fields="fields"
-        :decisions="localDecisions"
-        @update:decisions="handleDecisionsUpdate"
-      />
+    <div v-else-if="error" class="error-container">
+      <el-icon :size="48" color="#f56c6c"><CircleCloseFilled /></el-icon>
+      <div class="error-title">加载变更信息失败</div>
+      <div class="error-message">{{ error }}</div>
+      <el-button type="primary" @click="loadDiff">重试</el-button>
     </div>
 
-    <!-- 底部操作按钮 -->
+    <!-- 空状态 -->
+    <div v-else-if="!hasChanges" class="empty-container">
+      <el-empty description="没有需要处理的变更" />
+    </div>
+
+    <!-- 主内容区域 -->
+    <div v-else class="main-content">
+      <el-collapse v-model="activePanels">
+        <!-- 新增记录 -->
+        <MergeRecordSection
+          v-if="diffResult"
+          type="added"
+          title="新增记录"
+          name="added"
+          :records="diffResult.added"
+          :selected-ids="state.decisions.addedRecords"
+          :fields="fields"
+          @toggle="handleToggleAdded"
+          @select-all="handleSelectAllAdded"
+        />
+
+        <!-- 删除记录 -->
+        <MergeRecordSection
+          v-if="diffResult"
+          type="removed"
+          title="删除记录"
+          name="removed"
+          :records="diffResult.removed"
+          :selected-ids="state.decisions.removedRecords"
+          :fields="fields"
+          @toggle="handleToggleRemoved"
+          @select-all="handleSelectAllRemoved"
+        />
+
+        <!-- 修改记录 -->
+        <MergeModifiedSection
+          v-if="diffResult"
+          :records="diffResult.modified"
+          :selected-records="state.decisions.modifiedRecords"
+          :expanded-records="state.expandedRecords"
+          :fields="fields"
+          @toggle-record="handleToggleModified"
+          @toggle-expand="handleToggleExpand"
+          @field-select="handleFieldSelect"
+          @set-all-fields="handleSetAllFields"
+          @select-all="handleSelectAllModified"
+        />
+      </el-collapse>
+    </div>
+
+    <!-- 底部确认区 -->
     <template #footer>
       <div class="dialog-footer">
-        <div class="footer-left">
-          <el-button @click="handleCancel">取消</el-button>
+        <div class="footer-status">
+          <span v-if="!hasSelection" class="status-warning">
+            ⚠️ 请至少选择一项变更
+          </span>
+          <span v-else class="status-info">
+            💡 已选择 {{ selectedCount }} 项变更：新增 {{ state.decisions.addedRecords.size }} / 删除 {{ state.decisions.removedRecords.size }} / 修改 {{ state.decisions.modifiedRecords.size }}
+          </span>
         </div>
-        <div class="footer-right">
+        <div class="footer-actions">
+          <el-button @click="handleCancel">取消</el-button>
           <el-button
-            v-if="state.step !== 'overview'"
-            @click="handlePrevStep"
-          >
-            上一步
-          </el-button>
-          <el-button
-            v-if="state.step === 'overview'"
-            type="primary"
-            :disabled="!hasTotalChanges"
-            @click="handleGoToRecords"
-          >
-            下一步
-          </el-button>
-          <el-button
-            v-else-if="state.step === 'records'"
-            type="primary"
-            @click="handleGoToFields"
-          >
-            下一步
-          </el-button>
-          <el-button
-            v-else
             type="primary"
             :loading="submitting"
-            :disabled="!canSubmit"
+            :disabled="!hasSelection"
             @click="handleSubmit"
           >
-            完成合并
+            确认合并
           </el-button>
         </div>
       </div>
-      <div v-if="state.step === 'fields' && !canSubmit" class="footer-hint">
-        请至少选择一项变更
-      </div>
+    </template>
+  </el-dialog>
+
+  <!-- 关闭确认对话框 -->
+  <el-dialog
+    v-model="showCloseConfirm"
+    title="提示"
+    width="400px"
+    append-to-body
+  >
+    <p>您已选择了部分变更，关闭后将丢失这些选择。是否确认关闭？</p>
+    <template #footer>
+      <el-button @click="showCloseConfirm = false">取消</el-button>
+      <el-button type="primary" @click="confirmClose">确认关闭</el-button>
     </template>
   </el-dialog>
 </template>
@@ -120,16 +157,13 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading } from '@element-plus/icons-vue'
+import { Loading, CircleCloseFilled } from '@element-plus/icons-vue'
 import { diffVersions } from '@/api/version'
 import { useMergeState } from './composables/useMergeState'
-import type { CollectionVersion, MergeDecisions, MergeStep } from '@/types/version'
+import MergeRecordSection from './MergeRecordSection.vue'
+import MergeModifiedSection from './MergeModifiedSection.vue'
+import type { CollectionVersion } from '@/types/version'
 import type { FieldConfig } from '@/types'
-import StepOverview from './StepOverview.vue'
-import StepRecordSelect from './StepRecordSelect.vue'
-import StepFieldSelect from './StepFieldSelect.vue'
-
-// ==================== Props & Emits ====================
 
 interface Props {
   modelValue: boolean
@@ -144,17 +178,23 @@ const emit = defineEmits<{
   (e: 'success'): void
 }>()
 
-// ==================== State ====================
-
 const {
   state,
-  canSubmit,
-  setStep,
+  hasChanges,
+  selectedCount,
   setSourceVersion,
   setDiffResult,
-  setDecisions,
+  toggleAddedRecord,
+  toggleRemovedRecord,
+  toggleModifiedRecord,
+  setFieldDecision,
+  toggleRecordExpanded,
+  selectAllAdded,
+  selectAllRemoved,
+  selectAllModified,
   acceptAllSource,
   acceptAllTarget,
+  setAllFieldsForRecord,
   submitMerge,
   reset,
 } = useMergeState()
@@ -162,75 +202,32 @@ const {
 const loading = ref(false)
 const error = ref('')
 const submitting = ref(false)
-// fields 用于存储字段配置（composable 不管理此状态）
 const fields = ref<FieldConfig[]>([])
-// 用于跟踪异步操作是否被中止
 const loadAborted = ref(false)
-
-// 本地决策状态（用于子组件绑定）
-const localDecisions = ref<MergeDecisions>({
-  addedRecords: new Set<string>(),
-  removedRecords: new Set<string>(),
-  modifiedRecords: new Map(),
-})
-
-// ==================== Computed ====================
+const showCloseConfirm = ref(false)
+const activePanels = ref<string[]>(['added', 'removed', 'modified'])
 
 const visible = computed({
   get: () => props.modelValue,
   set: (v) => emit('update:modelValue', v),
 })
 
-const stepIndex = computed(() => {
-  const stepMap: Record<MergeStep, number> = {
-    overview: 0,
-    records: 1,
-    fields: 2,
+const dialogTitle = computed(() => {
+  if (props.sourceVersion) {
+    return `版本合并 - 将「${props.sourceVersion.name}」合并到「当前工作区」`
   }
-  return stepMap[state.step]
+  return '版本合并'
 })
 
-/**
- * 是否有任何变更（基于 diff 结果）
- */
-const hasTotalChanges = computed(() => {
-  if (!state.diffResult) return false
-  return (
-    state.diffResult.added.length > 0 ||
-    state.diffResult.removed.length > 0 ||
-    state.diffResult.modified.length > 0
-  )
+const diffResult = computed(() => state.diffResult)
+
+const totalChanges = computed(() => {
+  if (!state.diffResult) return 0
+  return state.diffResult.added.length + state.diffResult.removed.length + state.diffResult.modified.length
 })
 
-// ==================== Methods ====================
+const hasSelection = computed(() => selectedCount.value > 0)
 
-/**
- * 同步 composable 状态到本地决策
- */
-function syncStateToLocal(): void {
-  // 转换 modifiedRecords Map，确保创建新的可变对象
-  const modifiedRecordsMap = new Map<string, {
-    recordId: string
-    fieldDecisions: Map<string, 'source' | 'target'>
-  }>()
-
-  state.decisions.modifiedRecords.forEach((value, key) => {
-    modifiedRecordsMap.set(key, {
-      recordId: value.recordId,
-      fieldDecisions: new Map(value.fieldDecisions),
-    })
-  })
-
-  localDecisions.value = {
-    addedRecords: new Set(state.decisions.addedRecords),
-    removedRecords: new Set(state.decisions.removedRecords),
-    modifiedRecords: modifiedRecordsMap,
-  }
-}
-
-/**
- * 加载版本差异
- */
 async function loadDiff(): Promise<void> {
   if (!props.sourceVersion) {
     error.value = '未指定源版本'
@@ -248,20 +245,13 @@ async function loadDiff(): Promise<void> {
       targetVersion: props.sourceVersion.id,
     })
 
-    // 检查是否已被中止（对话框关闭）
-    if (loadAborted.value) {
-      return
-    }
+    if (loadAborted.value) return
 
     fields.value = result.fields || []
     setDiffResult(result)
     setSourceVersion(props.sourceVersion)
-    syncStateToLocal()
   } catch (e: any) {
-    // 检查是否已被中止
-    if (loadAborted.value) {
-      return
-    }
+    if (loadAborted.value) return
     const msg = e?.response?.data?.error || e?.message || '加载差异信息失败'
     error.value = msg
     ElMessage.error(msg)
@@ -272,82 +262,72 @@ async function loadDiff(): Promise<void> {
   }
 }
 
-/**
- * 处理决策更新
- */
-function handleDecisionsUpdate(newDecisions: MergeDecisions): void {
-  localDecisions.value = newDecisions
-  setDecisions(newDecisions)
+function handleToggleAdded(recordId: string, _selected: boolean): void {
+  toggleAddedRecord(recordId)
 }
 
-/**
- * 处理全部接受源版本
- */
+function handleToggleRemoved(recordId: string, _selected: boolean): void {
+  toggleRemovedRecord(recordId)
+}
+
+function handleToggleModified(recordId: string, _selected: boolean): void {
+  toggleModifiedRecord(recordId)
+}
+
+function handleToggleExpand(recordId: string): void {
+  toggleRecordExpanded(recordId)
+}
+
+function handleFieldSelect(recordId: string, fieldName: string, choice: 'source' | 'target'): void {
+  setFieldDecision(recordId, fieldName, choice)
+}
+
+function handleSelectAllAdded(selected: boolean): void {
+  selectAllAdded(selected)
+}
+
+function handleSelectAllRemoved(selected: boolean): void {
+  selectAllRemoved(selected)
+}
+
+function handleSelectAllModified(selected: boolean): void {
+  selectAllModified(selected)
+}
+
+function handleSetAllFields(recordId: string, choice: 'source' | 'target'): void {
+  setAllFieldsForRecord(recordId, choice)
+}
+
 function handleAcceptAllSource(): void {
   acceptAllSource()
-  syncStateToLocal()
 }
 
-/**
- * 处理全部接受目标版本
- */
 function handleAcceptAllTarget(): void {
   acceptAllTarget()
-  syncStateToLocal()
 }
 
-/**
- * 进入记录选择步骤
- */
-function handleGoToRecords(): void {
-  setStep('records')
-}
-
-/**
- * 进入字段选择步骤
- */
-function handleGoToFields(): void {
-  setStep('fields')
-}
-
-/**
- * 返回上一步
- */
-function handlePrevStep(): void {
-  const stepOrder: MergeStep[] = ['overview', 'records', 'fields']
-  const currentIndex = stepOrder.indexOf(state.step)
-  if (currentIndex > 0) {
-    setStep(stepOrder[currentIndex - 1])
+function handleCancel(): void {
+  if (hasSelection.value) {
+    showCloseConfirm.value = true
+  } else {
+    visible.value = false
   }
 }
 
-/**
- * 取消操作
- */
-function handleCancel(): void {
+function confirmClose(): void {
+  showCloseConfirm.value = false
   visible.value = false
 }
 
-/**
- * 关闭对话框
- */
 function handleClose(): void {
   reset()
   fields.value = []
   error.value = ''
   loadAborted.value = true
-  localDecisions.value = {
-    addedRecords: new Set<string>(),
-    removedRecords: new Set<string>(),
-    modifiedRecords: new Map(),
-  }
 }
 
-/**
- * 提交合并
- */
 async function handleSubmit(): Promise<void> {
-  if (!canSubmit.value) {
+  if (!hasSelection.value) {
     ElMessage.warning('请至少选择一项变更')
     return
   }
@@ -369,51 +349,95 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-// ==================== Watch ====================
-
 watch(visible, (v) => {
   if (v && props.sourceVersion) {
     reset()
     loadDiff()
   } else if (!v) {
-    // 对话框关闭时，中止进行中的加载操作
     loadAborted.value = true
   }
 })
 </script>
 
 <style scoped lang="scss">
-.steps-container {
-  padding: 0 20px 20px;
+.batch-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
   border-bottom: 1px solid #ebeef5;
-  margin-bottom: 20px;
 }
 
-.loading-container {
+.statistics-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background-color: #f5f7fa;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-value {
+  font-weight: 600;
+  color: #303133;
+}
+
+.stat-label {
+  color: #606266;
+}
+
+.stat-divider {
+  color: #dcdfe6;
+}
+
+.stat-added {
+  color: #67c23a;
+}
+
+.stat-removed {
+  color: #f56c6c;
+}
+
+.stat-modified {
+  color: #e6a23c;
+}
+
+.stat-selected {
+  color: #409eff;
+  font-weight: 500;
+}
+
+.loading-container,
+.error-container,
+.empty-container {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 60px 0;
-  color: #909399;
   gap: 12px;
-
-  .is-loading {
-    animation: rotating 2s linear infinite;
-  }
 }
 
-@keyframes rotating {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.error-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: #303133;
 }
 
-.step-content {
-  min-height: 400px;
+.error-message {
+  font-size: 14px;
+  color: #909399;
+}
+
+.main-content {
   max-height: 60vh;
   overflow-y: auto;
 }
@@ -424,20 +448,33 @@ watch(visible, (v) => {
   align-items: center;
 }
 
-.footer-left {
-  display: flex;
-  gap: 10px;
+.footer-status {
+  font-size: 14px;
 }
 
-.footer-right {
-  display: flex;
-  gap: 10px;
-}
-
-.footer-hint {
-  text-align: right;
-  font-size: 12px;
+.status-warning {
   color: #f56c6c;
-  margin-top: 8px;
+}
+
+.status-info {
+  color: #606266;
+}
+
+.footer-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.is-loading {
+  animation: rotating 2s linear infinite;
+}
+
+@keyframes rotating {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>
