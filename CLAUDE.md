@@ -112,3 +112,51 @@ This is a **configuration-driven** dynamic data management platform. Unlike trad
 *   **Default Credentials**: admin / admin123 (set in `server/seed_data.py`).
 *   **Database Config**: `server/config.py`.
 *   **Testing**: Frontend uses Vitest with `@/` path alias mocking. Backend uses Pytest with `unittest.mock` for database patching.
+
+## Testing Patterns
+
+### ResizeObserver Polyfill
+jsdom environment lacks ResizeObserver. Add this polyfill in test files when components use Element Plus or resize-dependent features:
+```typescript
+beforeAll(() => {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as any
+})
+```
+
+### Element Plus Component Stubs
+For isolated component testing, stub Element Plus components with minimal implementations:
+```typescript
+const stubs = {
+  'el-checkbox': {
+    template: `<input type="checkbox" :checked="modelValue" @change="$emit('change', $event.target.checked)" />`,
+    props: ['modelValue'],
+    emits: ['change'],
+  },
+  'el-button': {
+    template: `<button @click="$emit('click')"><slot /></button>`,
+    emits: ['click'],
+  },
+}
+```
+
+### Deep Equality Assertions
+Use `toStrictEqual` for object comparisons (not `toBe`):
+```typescript
+// ❌ Wrong - fails for objects
+expect(state.sourceVersion).toBe(version)
+// ✅ Correct - deep equality
+expect(state.sourceVersion).toStrictEqual(version)
+```
+
+## Composables Pattern
+
+Use Vue 3 composables for reusable state management. Key patterns:
+- Return reactive state and computed properties
+- Provide action functions that modify state
+- Use `reactive()` for complex state objects
+- Use `Set`/`Map` for collection state (more intuitive than arrays for toggle operations)
+- Distinguish between data existence (`hasDiff`) and user action state (`hasSelection`)
