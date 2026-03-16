@@ -194,7 +194,7 @@
             show-overflow-tooltip
           >
             <template #default="{ row }">
-              <template v-if="col.isLookup">
+              <template v-if="row && col.isLookup">
                 <span v-if="Array.isArray(row[col.key])">
                   {{ row[col.key].map(formatLookupItem).join('; ') }}
                 </span>
@@ -203,7 +203,7 @@
                 </span>
                 <span v-else>{{ row[col.key] ?? '-' }}</span>
               </template>
-              <template v-else>
+              <template v-else-if="row">
                 {{ formatCellValue(row[col.key]) }}
               </template>
             </template>

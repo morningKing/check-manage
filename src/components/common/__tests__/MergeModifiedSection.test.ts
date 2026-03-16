@@ -47,13 +47,8 @@ const stubs = {
     props: ['modelValue', 'size'],
   },
   'el-radio-button': {
-    template: `<label><input type="radio" :value="value" :checked="checked" @change="$parent.$emit('update:modelValue', value)" /><slot /></label>`,
+    template: `<label><input type="radio" :value="value" @change="$parent.$emit('update:modelValue', value)" /><slot /></label>`,
     props: ['value'],
-    computed: {
-      checked() {
-        return this.$parent?.modelValue === this.value
-      }
-    }
   },
   'EditPen': { template: '<span>edit-icon</span>' },
 }

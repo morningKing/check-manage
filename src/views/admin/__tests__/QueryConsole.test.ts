@@ -131,7 +131,7 @@ describe('QueryConsole - 基础功能', () => {
   })
 
   it('加载集合列表', async () => {
-    const wrapper = mount(QueryConsole, { global: { stubs: basicStubs } })
+    mount(QueryConsole, { global: { stubs: basicStubs } })
     await nextTick()
     expect(mockGet).toHaveBeenCalledWith('/query/collections')
   })
@@ -194,7 +194,7 @@ describe('QueryConsole - AI搜索功能', () => {
     await nextTick()
 
     expect(mockGet).toHaveBeenCalledWith('/ai/settings')
-    expect(wrapper.vm.aiEnabled).toBe(true)
+    expect((wrapper.vm as any).aiEnabled).toBe(true)
   })
 
   it('AI禁用时切换按钮禁用', async () => {
@@ -206,15 +206,15 @@ describe('QueryConsole - AI搜索功能', () => {
 
     const wrapper = mount(QueryConsole, { global: { stubs } })
     await nextTick()
-    expect(wrapper.vm.aiEnabled).toBe(false)
+    expect((wrapper.vm as any).aiEnabled).toBe(false)
   })
 
   it('aiQueryableFields过滤不可查询字段', async () => {
     const wrapper = mount(QueryConsole, { global: { stubs } })
-    wrapper.vm.selectedCollection = 'test-collection'
+    ;(wrapper.vm as any).selectedCollection = 'test-collection'
     await nextTick()
 
-    const fields = wrapper.vm.aiQueryableFields
+    const fields = (wrapper.vm as any).aiQueryableFields
     expect(fields.length).toBe(2) // name 和 status，排除 relation 类型
     expect(fields.find((f: any) => f.fieldName === 'related')).toBeUndefined()
   })
@@ -223,31 +223,31 @@ describe('QueryConsole - AI搜索功能', () => {
     const wrapper = mount(QueryConsole, { global: { stubs } })
     await nextTick()
 
-    wrapper.vm.selectedCollection = 'test-collection'
-    wrapper.vm.aiSearchText = '查找名称包含测试的记录'
+    ;(wrapper.vm as any).selectedCollection = 'test-collection'
+    ;(wrapper.vm as any).aiSearchText = '查找名称包含测试的记录'
 
-    await wrapper.vm.handleAiSearch()
+    await (wrapper.vm as any).handleAiSearch()
     await nextTick()
 
     expect(mockPost).toHaveBeenCalledWith('/ai/query', {
       collection: 'test-collection',
       question: '查找名称包含测试的记录'
     })
-    expect(wrapper.vm.aiGeneratedFilter).toEqual({ name: { $regex: '测试' } })
+    expect((wrapper.vm as any).aiGeneratedFilter).toEqual({ name: { $regex: '测试' } })
   })
 
   it('applyGeneratedFilter切换到MongoDB模式并填充查询', async () => {
     const wrapper = mount(QueryConsole, { global: { stubs } })
     await nextTick()
 
-    wrapper.vm.selectedCollection = 'test-collection'
-    wrapper.vm.aiGeneratedFilter = { name: { $regex: '测试' } }
-    wrapper.vm.showGeneratedFilter = true
+    ;(wrapper.vm as any).selectedCollection = 'test-collection'
+    ;(wrapper.vm as any).aiGeneratedFilter = { name: { $regex: '测试' } }
+    ;(wrapper.vm as any).showGeneratedFilter = true
 
-    wrapper.vm.applyGeneratedFilter()
+    ;(wrapper.vm as any).applyGeneratedFilter()
 
-    expect(wrapper.vm.queryMode).toBe('mongodb')
-    const queryObj = JSON.parse(wrapper.vm.queryText)
+    expect((wrapper.vm as any).queryMode).toBe('mongodb')
+    const queryObj = JSON.parse((wrapper.vm as any).queryText)
     expect(queryObj.collection).toBe('test-collection')
     expect(queryObj.query).toEqual({ name: { $regex: '测试' } })
   })

@@ -8,8 +8,7 @@
  * - 字段级决策
  * - 全选/批量操作
  */
-import { describe, it, expect, beforeEach } from 'vitest'
-import { nextTick } from 'vue'
+import { describe, it, expect } from 'vitest'
 import { useMergeState } from '../useMergeState'
 import type { CollectionVersion, MergeDecisions } from '@/types/version'
 import type { DiffResult } from '@/types/backup'
@@ -61,7 +60,7 @@ describe('useMergeState', () => {
 
   describe('hasDiff vs hasSelection 区分', () => {
     it('hasDiff 检测差异结果是否存在', () => {
-      const { state, setDiffResult, hasDiff } = useMergeState()
+      const { setDiffResult, hasDiff } = useMergeState()
 
       // 无差异
       setDiffResult(createMockDiffResult())
@@ -92,7 +91,7 @@ describe('useMergeState', () => {
     })
 
     it('hasSelection 检测用户是否已选择变更', () => {
-      const { state, setDiffResult, hasSelection, toggleAddedRecord, toggleRemovedRecord, toggleModifiedRecord } = useMergeState()
+      const { setDiffResult, hasSelection, toggleAddedRecord, toggleRemovedRecord, toggleModifiedRecord } = useMergeState()
 
       // 设置差异
       setDiffResult(createMockDiffResult({

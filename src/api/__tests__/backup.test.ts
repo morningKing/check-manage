@@ -161,7 +161,7 @@ describe('Backup API', () => {
   })
 
   it('updateBackupSettings 调用 PUT /backups/settings', async () => {
-    const settings = { enabled: true, interval: 'weekly', retentionCount: 5 }
+    const settings = { enabled: true, interval: 'weekly' as const, retentionCount: 5 }
     vi.mocked(service.put).mockResolvedValueOnce({ data: settings } as any)
 
     await updateBackupSettings(settings)

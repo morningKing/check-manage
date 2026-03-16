@@ -95,7 +95,7 @@
             <el-tooltip v-if="row.backupScope === 'partial' && row.backupTables?.length" placement="top">
               <template #content>
                 <div style="max-width: 300px">
-                  {{ row.backupTables.map(t => tableLabelMap[t] || t).join('、') }}
+                  {{ row.backupTables.map((t: string) => tableLabelMap[t] || t).join('、') }}
                 </div>
               </template>
               <el-icon style="margin-left: 4px; cursor: pointer"><InfoFilled /></el-icon>
@@ -324,21 +324,6 @@ interface BackupTableItem {
   children?: { name: string; label: string; count?: number }[]
 }
 const availableTables = ref<BackupTableItem[]>([])
-
-// 扁平化的表名列表（用于显示已选择的表）
-const flatTableOptions = computed(() => {
-  const result: { name: string; label: string; parent?: string }[] = []
-  for (const t of availableTables.value) {
-    if (t.isGroup && t.children) {
-      for (const child of t.children) {
-        result.push({ name: child.name, label: child.label, parent: t.label })
-      }
-    } else {
-      result.push({ name: t.name, label: t.label })
-    }
-  }
-  return result
-})
 
 // 表名 -> 中文标签映射
 const tableLabelMap = computed(() => {

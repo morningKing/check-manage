@@ -43,8 +43,6 @@ vi.mock('uuid', () => ({
 }))
 
 import CommandPalette from '../CommandPalette.vue'
-import { useMenuStore } from '@/stores/menu'
-import { useTabStore } from '@/stores/tab'
 
 // Stub Element Plus 组件
 const stubs = {
@@ -73,7 +71,7 @@ describe('CommandPalette', () => {
     const wrapper = mount(CommandPalette, {
       props: {
         visible,
-        'onUpdate:visible': (val: boolean) => {}
+        'onUpdate:visible': (_val: boolean) => {}
       },
       global: { stubs },
       attachTo: document.body

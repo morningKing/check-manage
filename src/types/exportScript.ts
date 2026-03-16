@@ -5,7 +5,7 @@ export interface ExportScript {
   language: string
   script: string
   outputFormat: string
-  scope: 'page' | 'row'
+  scope: 'page' | 'row' | 'menu'
   createdAt: string
   updatedAt: string
 }

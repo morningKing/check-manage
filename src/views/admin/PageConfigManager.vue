@@ -772,7 +772,7 @@ async function handleSavePageInfo(): Promise<void> {
       dialogWidth: deleteBindingDialogWidth.value || '500px',
       autoFillOperator: deleteBindingAutoFillOperator.value,
       inheritFields: deleteBindingInheritFields.value,
-      fields: deleteBindingFields.value,
+      fields: [],
     }
   }
 

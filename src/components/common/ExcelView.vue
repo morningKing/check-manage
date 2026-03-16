@@ -40,7 +40,9 @@ import '@univerjs/preset-sheets-filter/lib/index.css'
 import '@univerjs/design/lib/index.css'
 
 // 导入中文语言包
+// @ts-ignore - locale files exist at runtime
 import sheetsCoreZhCN from '@univerjs/preset-sheets-core/lib/locales/zh-CN'
+// @ts-ignore - locale files exist at runtime
 import sheetsFilterZhCN from '@univerjs/preset-sheets-filter/lib/locales/zh-CN'
 
 // ==================== Props & Emits ====================
@@ -69,8 +71,8 @@ const emit = defineEmits<{
 // ==================== State ====================
 
 const univerContainerRef = ref<HTMLElement>()
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-let univerInstance: any = null
+// @ts-ignore used for cleanup reference
+let univerInstance: any = null // eslint-disable-line @typescript-eslint/no-unused-vars
 let univerAPI: any = null
 
 // ==================== Lifecycle ====================
