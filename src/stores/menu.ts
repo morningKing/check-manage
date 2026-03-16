@@ -5,11 +5,16 @@
  * - 菜单列表的获取和更新
  * - 菜单树结构的构建
  * - 菜单项的增删改操作
+ *
+ * 性能优化：
+ * - 使用浅比较缓存菜单树，避免重复构建
+ * - 使用 Map 缓存角色过滤结果，避免重复过滤
+ * - 保持对象引用稳定，减少不必要的组件重渲染
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { MenuItem } from '@/types'
+import { ref, computed, shallowRef } from 'vue'
+import type { MenuItem, UserRole } from '@/types'
 import { get, post, put, del } from '@/utils/request'
 import { v4 as uuidv4 } from 'uuid'
 import router from '@/router'
@@ -38,16 +43,40 @@ export const useMenuStore = defineStore('menu', () => {
    */
   const activeMenuId = ref<string>('')
 
+  /**
+   * 上次构建时的菜单列表引用（用于检测变化）
+   */
+  let lastMenuListRef: MenuItem[] | null = null
+
+  /**
+   * 缓存的菜单树（使用 shallowRef 避免深度响应）
+   */
+  const cachedMenuTree = shallowRef<MenuItem[]>([])
+
+  /**
+   * 角色过滤缓存 Map
+   * key: role, value: 过滤后的菜单树
+   */
+  const filteredMenuCache = new Map<UserRole, MenuItem[]>()
+
   // ==================== Getters ====================
 
   /**
    * 构建菜单树结构
    *
+   * 使用缓存策略：仅当 menuList 引用变化时重新构建
    * 将扁平化的菜单列表转换为嵌套的树形结构
    * 支持1-3级菜单嵌套
    */
   const menuTree = computed<MenuItem[]>(() => {
-    return buildMenuTree(menuList.value)
+    // 检查引用是否变化
+    if (lastMenuListRef !== menuList.value) {
+      lastMenuListRef = menuList.value
+      cachedMenuTree.value = buildMenuTree(menuList.value)
+      // 清空过滤缓存
+      filteredMenuCache.clear()
+    }
+    return cachedMenuTree.value
   })
 
   /**
@@ -270,6 +299,69 @@ export const useMenuStore = defineStore('menu', () => {
     return descendants
   }
 
+  /**
+   * 根据角色获取过滤后的菜单树（带缓存）
+   *
+   * 使用 Map 缓存过滤结果，避免重复计算
+   * 对象引用稳定，防止不必要的组件重渲染
+   *
+   * @param role - 用户角色
+   * @returns 过滤后的菜单树
+   */
+  function getFilteredMenuTree(role: UserRole | null): MenuItem[] {
+    if (!role) return []
+
+    // 检查缓存
+    if (filteredMenuCache.has(role)) {
+      return filteredMenuCache.get(role)!
+    }
+
+    // 计算并缓存
+    const filtered = filterMenusByRole(cachedMenuTree.value, role)
+    filteredMenuCache.set(role, filtered)
+    return filtered
+  }
+
+  /**
+   * 递归过滤菜单树（基于菜单的 roles 配置）
+   *
+   * @param menus - 菜单列表
+   * @param role - 用户角色
+   * @returns 过滤后的菜单列表
+   */
+  function filterMenusByRole(menus: MenuItem[], role: UserRole): MenuItem[] {
+    const result: MenuItem[] = []
+
+    for (const menu of menus) {
+      // 检查当前菜单是否对该角色可见
+      const menuRoles = menu.roles || ['admin', 'developer', 'guest']
+      if (!menuRoles.includes(role)) continue
+
+      // 递归过滤子菜单
+      const filteredChildren = menu.children
+        ? filterMenusByRole(menu.children, role)
+        : []
+
+      // 使用原对象引用，仅当需要修改 children 时创建新对象
+      if (menu.children && menu.children.length !== filteredChildren.length) {
+        result.push({ ...menu, children: filteredChildren })
+      } else if (menu.children && menu.children.length === filteredChildren.length) {
+        // 子菜单数量相同，检查引用是否变化
+        const childrenChanged = filteredChildren.some((child, i) => child !== menu.children![i])
+        if (childrenChanged) {
+          result.push({ ...menu, children: filteredChildren })
+        } else {
+          // 完全使用原对象，保持引用稳定
+          result.push(menu)
+        }
+      } else {
+        result.push(menu)
+      }
+    }
+
+    return result
+  }
+
   // 返回需要暴露的内容
   return {
     // State
@@ -288,6 +380,8 @@ export const useMenuStore = defineStore('menu', () => {
     updateMenu,
     deleteMenu,
     setActiveMenu,
-    updateMenuOrder
+    updateMenuOrder,
+    // 性能优化：带缓存的过滤方法
+    getFilteredMenuTree
   }
 })

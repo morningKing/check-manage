@@ -45,17 +45,19 @@
  * SideMenu 组件脚本
  *
  * 主要逻辑：
- * 1. 从 Store 获取菜单树数据
+ * 1. 从 Store 获取菜单树数据（使用缓存）
  * 2. 根据当前路由计算激活菜单
  * 3. 响应侧边栏折叠状态
+ *
+ * 性能优化：
+ * - 使用 store 中的 getFilteredMenuTree 方法获取缓存结果
+ * - 避免本地重复计算菜单过滤
  */
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Monitor } from '@element-plus/icons-vue'
 import { useAppStore, useMenuStore, useAuthStore } from '@/stores'
 import MenuItem from './MenuItem.vue'
-import type { MenuItem as MenuItemType } from '@/types'
-import type { UserRole } from '@/types'
 
 // ==================== Store ====================
 
@@ -73,10 +75,11 @@ const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 
 /**
  * 根据角色过滤后的菜单树
+ *
+ * 使用 store 中的缓存方法，避免重复计算
  */
 const menuTree = computed(() => {
-  const tree = menuStore.menuTree
-  return filterMenusByRole(tree, authStore.userRole)
+  return menuStore.getFilteredMenuTree(authStore.userRole)
 })
 
 /**
@@ -88,29 +91,6 @@ const activeMenu = computed(() => {
   const currentMenu = menuStore.getMenuByPath(route.path)
   return currentMenu?.id || ''
 })
-
-// ==================== 方法 ====================
-
-/**
- * 递归过滤菜单树（基于菜单的 roles 配置）
- */
-function filterMenusByRole(menus: MenuItemType[], role: UserRole | null): MenuItemType[] {
-  if (!role) return []
-
-  return menus
-    .map((menu) => {
-      // 检查当前菜单是否对该角色可见
-      const menuRoles = menu.roles || ['admin', 'developer', 'guest']
-      if (!menuRoles.includes(role)) return null
-
-      // 递归过滤子菜单
-      const filteredChildren = menu.children
-        ? filterMenusByRole(menu.children, role)
-        : []
-      return { ...menu, children: filteredChildren }
-    })
-    .filter(Boolean) as MenuItemType[]
-}
 </script>
 
 <style scoped lang="scss">
