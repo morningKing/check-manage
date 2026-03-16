@@ -1,0 +1,78 @@
+{
+  "title": "Check-Manage 系统技术介绍",
+  "style": "dark-premium",
+  "style_guidelines": {
+    "color_palette": "Deep black base (#0a0a0a to #121212), luminous electric blue accent (#00d4ff), subtle gray gradients for depth, pure white text (#ffffff)",
+    "typography": "Modern sans-serif style, dramatic size contrast (72pt+ headlines, 18pt body), letter-spacing for headlines, pure white text",
+    "imagery": "Abstract tech visualization, geometric patterns, circuit-like connections, data flow imagery, clean 3D elements",
+    "layout": "Generous negative space (60%+), asymmetric balance, single focal point per slide, premium tech aesthetic",
+    "effects": "Subtle ambient glow behind key elements, light bloom effects, gradient overlays, clean shadows",
+    "visual_language": "Premium tech brand aesthetic, sophistication through restraint, modern enterprise software feel"
+  },
+  "aspect_ratio": "16:9",
+  "slides": [
+    {
+      "slide_number": 1,
+      "type": "title",
+      "title": "Check-Manage",
+      "subtitle": "企业级动态数据管理平台",
+      "visual_description": "Dramatic title slide. Deep black gradient background (#0a0a0a to #121212). Center: large premium glass panel with subtle electric blue glow border, containing bold white title 'Check-Manage' (massive 96pt) and elegant subtitle '企业级动态数据管理平台'. Abstract data visualization in background: flowing lines and nodes representing data connections, soft blue (#00d4ff) glow emanating from behind the title panel. Floating geometric shapes (hexagons, cubes) at edges with subtle transparency. Premium enterprise software aesthetic. Minimal, powerful, confident."
+    },
+    {
+      "slide_number": 2,
+      "type": "content",
+      "title": "系统概述",
+      "key_points": ["配置驱动架构 — 无需编码即可扩展业务", "统一数据模型 — JSONB 灵活存储", "多视图支持 — 表格 / Excel / 看板", "企业级特性 — 版本控制 / AI查询 / ETL"],
+      "visual_description": "Same deep black background. Left side: large title '系统概述' in bold white (60pt). Right side: four stacked glass cards, each with a key point and subtle blue accent line on left. Abstract data flow visualization in background: interconnected nodes with soft blue glow representing the configuration-driven flow. Clean, organized, information hierarchy. The glass cards have subtle white borders and soft shadows."
+    },
+    {
+      "slide_number": 3,
+      "type": "content",
+      "title": "技术架构",
+      "key_points": ["前端: Vue 3.4 + TypeScript 5.4 + Vite 5.1", "UI: Element Plus 2.6 + Univer 0.16", "后端: Flask + 24 Blueprint 路由", "数据库: PostgreSQL 22张表 + JSONB"],
+      "visual_description": "Deep black background. Central composition: three stacked horizontal layers representing the architecture. Top layer: 'Frontend' with Vue/TypeScript icons as soft blue glowing symbols. Middle layer: 'Backend' with Flask/Python symbols. Bottom layer: 'Database' with PostgreSQL symbol. Layers connected by flowing blue light streams representing data flow. Title '技术架构' at top in bold white. Clean architectural diagram aesthetic with premium feel."
+    },
+    {
+      "slide_number": 4,
+      "type": "content",
+      "title": "核心特性：配置驱动",
+      "key_points": ["页面配置定义字段结构", "菜单管理生成路由", "系统自动渲染表单和表格", "零代码扩展新业务实体"],
+      "visual_description": "Deep black background with subtle gradient. Left: large glass panel showing abstract 'Configuration' interface with fields and form elements represented as glowing blue outlines. Right: flowing arrow made of light particles pointing to 'Auto-generated UI' represented as abstract interface shapes. Title '核心特性：配置驱动' at top. Visual storytelling: from configuration to automatic UI generation. Premium tech aesthetic."
+    },
+    {
+      "slide_number": 5,
+      "type": "content",
+      "title": "数据库设计",
+      "key_points": ["22张业务表，7大分类", "dynamic_data: JSONB 统一存储", "版本控制: 快照/分支/合并", "关联关系: data_relations 多对多"],
+      "visual_description": "Deep black background. Center: abstract database visualization showing interconnected table nodes (22 nodes arranged in clusters of 7 groups). Main 'dynamic_data' node in center with larger glow, connected to satellite nodes. Soft blue (#00d4ff) connection lines between related tables. Title '数据库设计' at top. Subtle grid pattern in background suggesting data structure. Clean, organized complexity."
+    },
+    {
+      "slide_number": 6,
+      "type": "content",
+      "title": "17种字段控件",
+      "key_points": ["基础: text / textarea / number / date", "选择: select / multiSelect / radio / checkbox", "关联: relation / reference / quoteSelect", "特殊: richText / file / image / autoSequence"],
+      "visual_description": "Deep black background. Grid layout of 17 small glass panels, each representing a control type with an abstract icon. Four groups with subtle blue dividing lines. Left side: category labels. Title '17种字段控件' at top in bold white. The controls are arranged in a clean grid, each with soft blue glow on hover effect implied. Information density balanced with elegance."
+    },
+    {
+      "slide_number": 7,
+      "type": "content",
+      "title": "高级功能",
+      "key_points": ["Excel视图: Univer 电子表格引擎", "AI查询: 自然语言转查询条件", "ETL管道: 可视化数据导入", "版本控制: 快照/分支/部分合并"],
+      "visual_description": "Deep black background. Four quadrants, each with a glass card featuring one advanced feature. Top-left: Excel representation with grid cells glowing blue. Top-right: AI brain icon with neural connections. Bottom-left: Pipeline flow diagram. Bottom-right: Version tree with branches. Title '高级功能' at top. Each quadrant has its own subtle accent color variation within the blue family. Premium feature showcase."
+    },
+    {
+      "slide_number": 8,
+      "type": "content",
+      "title": "前端架构",
+      "key_points": ["Pinia状态管理: auth/pageConfig/menu/tab", "动态路由: 菜单驱动路由生成", "组件化: 15+字段控件组件", "测试覆盖: Vitest 316+ 单元测试"],
+      "visual_description": "Deep black background. Left: abstract component hierarchy tree with Vue component boxes connected by lines, softly glowing. Right: store diagram showing interconnected Pinia stores as nodes with data flow arrows. Title '前端架构' at top. Clean, modern frontend architecture visualization. Subtle blue glow on active components and data flows."
+    },
+    {
+      "slide_number": 9,
+      "type": "conclusion",
+      "title": "技术亮点总结",
+      "subtitle": "配置驱动 · 灵活扩展 · 企业级特性",
+      "visual_description": "Dramatic conclusion slide. Deep black background with increased gradient intensity. Center: large glass panel with bold white title '技术亮点总结' and three key phrases below as glowing statements: '配置驱动', '灵活扩展', '企业级特性'. Behind the panel: abstract network visualization with nodes lighting up, representing the interconnected system. Soft blue light rays emanating from center. Celebration of technical achievement. Premium, memorable finale."
+    }
+  ]
+}
