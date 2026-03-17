@@ -83,6 +83,18 @@ export function useMergeState() {
     )
   })
 
+  /**
+   * 是否有字段级决策被修改过（从默认的 source 改为 target 或反之）
+   */
+  const hasFieldDecisionChanged = computed(() => {
+    for (const [, decision] of state.decisions.modifiedRecords) {
+      for (const [, choice] of decision.fieldDecisions) {
+        if (choice === 'target') return true
+      }
+    }
+    return false
+  })
+
   // ==================== Actions ====================
 
   /**
@@ -159,6 +171,8 @@ export function useMergeState() {
           recordId,
           fieldDecisions,
         })
+        // 选中时自动展开
+        state.expandedRecords.add(recordId)
       }
     }
   }
@@ -369,6 +383,7 @@ export function useMergeState() {
     hasDiff,
     hasSelection,
     selectedCount,
+    hasFieldDecisionChanged,
     setSourceVersion,
     setDiffResult,
     setDecisions,

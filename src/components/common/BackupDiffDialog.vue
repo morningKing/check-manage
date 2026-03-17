@@ -193,7 +193,16 @@
     />
 
     <template #footer>
-      <el-button @click="visible = false">关闭</el-button>
+      <div class="dialog-footer-bar">
+        <el-button
+          v-if="mergeableVersionId"
+          type="primary"
+          @click="handleMerge"
+        >
+          从此版本合并
+        </el-button>
+        <el-button @click="visible = false">关闭</el-button>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -224,6 +233,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
+  (e: 'merge', versionId: string): void
 }>()
 
 // ==================== State ====================
@@ -253,6 +263,19 @@ const hasChanges = computed(() => {
     diffResult.value.removed.length > 0 ||
     diffResult.value.modified.length > 0
   )
+})
+
+const mergeableVersionId = computed(() => {
+  // Show merge button when one side is a version (not 'current' and not a backup)
+  // Versions are from versionList; backups are from backupList
+  const versionIds = new Set(versionList.value.map(v => v.id))
+  if (targetSource.value && targetSource.value !== 'current' && versionIds.has(targetSource.value)) {
+    return targetSource.value
+  }
+  if (baseSource.value && baseSource.value !== 'current' && versionIds.has(baseSource.value)) {
+    return baseSource.value
+  }
+  return null
 })
 
 const displayColumns = computed(() => {
@@ -398,6 +421,12 @@ function handleExportReport() {
   ElMessage.success('报告已导出')
 }
 
+function handleMerge() {
+  if (mergeableVersionId.value) {
+    emit('merge', mergeableVersionId.value)
+  }
+}
+
 // ==================== Watch ====================
 
 watch(visible, (v) => {
@@ -508,5 +537,11 @@ watch(visible, (v) => {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+.dialog-footer-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 </style>

@@ -143,6 +143,7 @@ export interface PartialMergeResponse {
   success: boolean
   merged_count: number
   message: string
+  snapshot_created?: boolean
 }
 
 /**

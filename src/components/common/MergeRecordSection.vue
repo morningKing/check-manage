@@ -27,9 +27,19 @@
       </div>
     </template>
 
+    <div v-if="showSearch" class="search-bar">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="搜索记录..."
+        clearable
+        size="small"
+        :prefix-icon="Search"
+      />
+    </div>
+
     <div class="record-list">
       <div
-        v-for="record in records"
+        v-for="record in filteredRecords"
         :key="record.id"
         class="record-item"
         :class="{ 'is-selected': isSelected(record.id) }"
@@ -39,7 +49,13 @@
           @change="(val: boolean) => handleToggle(record.id, val)"
         />
         <span class="record-display">{{ getRecordDisplay(record) }}</span>
-        <el-tag v-if="type === 'removed' && !isSelected(record.id)" type="info" size="small">
+        <el-tag v-if="type === 'added' && isSelected(record.id)" type="success" size="small">
+          添加
+        </el-tag>
+        <el-tag v-else-if="type === 'added' && !isSelected(record.id)" type="info" size="small">
+          忽略
+        </el-tag>
+        <el-tag v-else-if="type === 'removed' && !isSelected(record.id)" type="info" size="small">
           保留
         </el-tag>
         <el-tag v-else-if="type === 'removed' && isSelected(record.id)" type="danger" size="small">
@@ -51,8 +67,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { CirclePlusFilled, RemoveFilled } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { CirclePlusFilled, RemoveFilled, Search } from '@element-plus/icons-vue'
 import type { FieldConfig } from '@/types'
 
 interface Props {
@@ -83,27 +99,44 @@ const isAllSelected = computed(() => {
   return props.records.length > 0 && props.selectedIds.size === props.records.length
 })
 
-const displayField = computed(() => {
-  const pkField = props.fields.find(f => f.isPrimaryKey)
-  if (pkField) return pkField
+const searchKeyword = ref('')
 
-  const seqField = props.fields.find(f => f.controlType === 'autoSequence')
-  if (seqField) return seqField
+const showSearch = computed(() => props.records.length > 15)
 
-  const textField = props.fields
-    .filter(f => ['text', 'textarea'].includes(f.controlType))
-    .sort((a, b) => a.order - b.order)[0]
+const filteredRecords = computed(() => {
+  if (!searchKeyword.value) return props.records
+  const kw = searchKeyword.value.toLowerCase()
+  return props.records.filter(record => {
+    const display = getRecordDisplay(record).toLowerCase()
+    return display.includes(kw)
+  })
+})
 
-  return textField
+const SYSTEM_FIELDS = ['createTime', 'createUser', 'updateTime', 'updateUser']
+
+const displayFields = computed(() => {
+  return props.fields
+    .filter(f => !f.hidden && !SYSTEM_FIELDS.includes(f.fieldName))
+    .sort((a, b) => {
+      // Primary key and autoSequence fields come first
+      if (a.isPrimaryKey) return -1
+      if (b.isPrimaryKey) return 1
+      if (a.controlType === 'autoSequence') return -1
+      if (b.controlType === 'autoSequence') return 1
+      return a.order - b.order
+    })
+    .slice(0, 3)
 })
 
 function getRecordDisplay(record: Record<string, any>): string {
-  if (displayField.value) {
-    const val = record[displayField.value.fieldName]
+  const parts: string[] = []
+  for (const field of displayFields.value) {
+    const val = record[field.fieldName]
     if (val !== null && val !== undefined && val !== '') {
-      return String(val)
+      parts.push(String(val))
     }
   }
+  if (parts.length > 0) return parts.join(' | ')
   return record.id || '未命名记录'
 }
 
@@ -149,6 +182,11 @@ function handleSelectAll(selected: boolean): void {
   margin-left: auto;
   font-size: 12px;
   color: #909399;
+}
+
+.search-bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid #ebeef5;
 }
 
 .record-list {

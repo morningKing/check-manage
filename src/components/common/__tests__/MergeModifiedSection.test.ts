@@ -279,7 +279,7 @@ describe('MergeModifiedSection', () => {
   })
 
   describe('展开/收起功能', () => {
-    it('未选择记录时显示提示文字', () => {
+    it('未选择记录时也显示展开按钮', () => {
       const wrapper = mount(MergeModifiedSection, {
         props: {
           records: [makeModifiedItem()],
@@ -290,7 +290,7 @@ describe('MergeModifiedSection', () => {
         global: { stubs },
       })
 
-      expect(wrapper.text()).toContain('点击选择后可展开')
+      expect(wrapper.text()).toContain('展开')
     })
 
     it('已选择但未展开时显示展开按钮', () => {
@@ -457,10 +457,10 @@ describe('MergeModifiedSection', () => {
         global: { stubs },
       })
 
-      expect(wrapper.text()).toContain('全用源版本')
+      expect(wrapper.text()).toContain('全用版本数据')
     })
 
-    it('展开时显示"全用目标版本"按钮', () => {
+    it('展开时显示"全用当前数据"按钮', () => {
       const wrapper = mount(MergeModifiedSection, {
         props: {
           records: [makeModifiedItem()],
@@ -471,10 +471,10 @@ describe('MergeModifiedSection', () => {
         global: { stubs },
       })
 
-      expect(wrapper.text()).toContain('全用目标版本')
+      expect(wrapper.text()).toContain('全用当前数据')
     })
 
-    it('点击"全用源版本"触发 set-all-fields 事件', async () => {
+    it('点击"全用版本数据"触发 set-all-fields 事件', async () => {
       const wrapper = mount(MergeModifiedSection, {
         props: {
           records: [makeModifiedItem()],
@@ -486,14 +486,14 @@ describe('MergeModifiedSection', () => {
       })
 
       const buttons = wrapper.findAll('button')
-      const sourceBtn = buttons.find(b => b.text().includes('全用源版本'))
+      const sourceBtn = buttons.find(b => b.text().includes('全用版本数据'))
       await sourceBtn!.trigger('click')
 
       expect(wrapper.emitted('set-all-fields')).toBeTruthy()
       expect(wrapper.emitted('set-all-fields')![0]).toEqual(['1', 'source'])
     })
 
-    it('点击"全用目标版本"触发 set-all-fields 事件', async () => {
+    it('点击"全用当前数据"触发 set-all-fields 事件', async () => {
       const wrapper = mount(MergeModifiedSection, {
         props: {
           records: [makeModifiedItem()],
@@ -505,7 +505,7 @@ describe('MergeModifiedSection', () => {
       })
 
       const buttons = wrapper.findAll('button')
-      const targetBtn = buttons.find(b => b.text().includes('全用目标版本'))
+      const targetBtn = buttons.find(b => b.text().includes('全用当前数据'))
       await targetBtn!.trigger('click')
 
       expect(wrapper.emitted('set-all-fields')).toBeTruthy()
@@ -530,13 +530,12 @@ describe('MergeModifiedSection', () => {
           records: [item],
           selectedRecords,
           expandedRecords: new Set<string>(),
-          fields: [makeField(), makeField({ fieldName: 'status' })],
+          fields: [makeField(), makeField({ fieldName: 'status', label: '状态' })],
         },
         global: { stubs },
       })
 
-      expect(wrapper.text()).toContain('源版本: 1字段')
-      expect(wrapper.text()).toContain('目标版本: 1字段')
+      expect(wrapper.text()).toContain('变更: 名称、状态')
     })
   })
 

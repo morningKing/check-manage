@@ -205,6 +205,7 @@
       :page-name="pageName"
       :base-source="diffBaseSource"
       :target-source="diffTargetSource"
+      @merge="handleMergeFromDiff"
     />
 
     <!-- 合并冲突对话框 -->
@@ -408,6 +409,15 @@ function handleDiff(row: CollectionVersion) {
   diffBaseSource.value = 'current'
   diffTargetSource.value = row.id
   showDiffDialog.value = true
+}
+
+function handleMergeFromDiff(versionId: string) {
+  showDiffDialog.value = false
+  const version = versions.value.find(v => v.id === versionId)
+  if (version) {
+    mergeConflictTarget.value = version
+    showMergeConflictDialog.value = true
+  }
 }
 
 function handleMerge(row: CollectionVersion) {

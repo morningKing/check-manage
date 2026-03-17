@@ -216,7 +216,7 @@ describe('useMergeState', () => {
     })
 
     it('取消选择修改记录时移除展开状态', () => {
-      const { setDiffResult, toggleModifiedRecord, toggleRecordExpanded, state } = useMergeState()
+      const { setDiffResult, toggleModifiedRecord, state } = useMergeState()
 
       setDiffResult(createMockDiffResult({
         modified: [{
@@ -228,7 +228,7 @@ describe('useMergeState', () => {
       }))
 
       toggleModifiedRecord('1')
-      toggleRecordExpanded('1')
+      // toggleModifiedRecord now auto-expands
       expect(state.expandedRecords.has('1')).toBe(true)
 
       toggleModifiedRecord('1') // 取消选择

@@ -181,9 +181,9 @@ describe('MergeRecordSection', () => {
           type: 'added',
           title: '新增记录',
           name: 'added',
-          records: [{ id: 'record-123', value: 100 }],
+          records: [{ id: 'record-123' }],
           selectedIds: new Set<string>(),
-          fields: [makeField({ fieldName: 'value', controlType: 'number' })],
+          fields: [],
         },
         global: { stubs },
       })

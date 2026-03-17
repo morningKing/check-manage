@@ -24,6 +24,9 @@ from utils.version import (
     apply_partial_merge,
 )
 from utils.errors import MergeError
+import logging
+
+logger = logging.getLogger(__name__)
 
 versions_bp = Blueprint('versions', __name__)
 
@@ -246,11 +249,57 @@ def partial_merge_versions():
 
     user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
     merged_by = user.get('username', 'unknown')
+    user_id = user.get('userId')
+
+    # 将 'current' 解析为用户的实际分支 ID
+    if target_branch == 'current':
+        # 需要先获取 collection 才能查询用户分支
+        from db import get_db
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT collection FROM collection_versions WHERE id = %s', (source_version_id,))
+            row = cur.fetchone()
+        if not row:
+            return jsonify({'error': '源版本不存在'}), 404
+        merge_collection = row[0]
+        actual_target_branch = get_user_current_branch(user_id, merge_collection) if user_id else MAIN_BRANCH_ID
+    else:
+        actual_target_branch = target_branch
+        merge_collection = None  # 从 source_version 获取
+
+    # 合并前自动创建快照（保护措施，失败不阻塞合并）
+    snapshot_created = False
+    try:
+        from datetime import datetime
+        # 获取源版本的 collection 用于创建快照
+        if not merge_collection:
+            from db import get_db
+            with get_db() as conn:
+                cur = conn.cursor()
+                cur.execute('SELECT collection FROM collection_versions WHERE id = %s', (source_version_id,))
+                row = cur.fetchone()
+            if row:
+                merge_collection = row[0]
+        if merge_collection:
+            snapshot_branch_id = get_user_current_branch(user_id, merge_collection) if user_id else MAIN_BRANCH_ID
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            create_version_snapshot(
+                collection=merge_collection,
+                name=f'合并前自动快照 - {timestamp}',
+                description=f'合并版本 {source_version_id} 前自动创建的安全快照',
+                version_type='snapshot',
+                parent_version=None,
+                created_by=merged_by,
+                branch_id=snapshot_branch_id,
+            )
+            snapshot_created = True
+    except Exception as snapshot_err:
+        logger.warning('合并前自动快照创建失败: %s', snapshot_err)
 
     try:
         result = apply_partial_merge(
             source_version_id=source_version_id,
-            target_branch=target_branch,
+            target_branch=actual_target_branch,
             decisions=decisions,
             merged_by=merged_by,
         )
@@ -258,6 +307,7 @@ def partial_merge_versions():
             'success': result['success'],
             'merged_count': result['merged_count'],
             'message': result['message'],
+            'snapshot_created': snapshot_created,
         })
     except MergeError as e:
         return jsonify({'code': e.code, 'message': e.message}), 400

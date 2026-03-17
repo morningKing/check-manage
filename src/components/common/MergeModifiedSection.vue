@@ -26,9 +26,19 @@
       </div>
     </template>
 
+    <div v-if="showSearch" class="search-bar">
+      <el-input
+        v-model="searchKeyword"
+        placeholder="搜索记录..."
+        clearable
+        size="small"
+        :prefix-icon="Search"
+      />
+    </div>
+
     <div class="record-list">
       <div
-        v-for="item in records"
+        v-for="item in filteredRecords"
         :key="item.id"
         class="record-item"
         :class="{ 'is-selected': isSelected(item.id) }"
@@ -45,7 +55,7 @@
             size="small"
             @click="handleSetAllFields(item.id, 'source')"
           >
-            全用源版本
+            全用版本数据
           </el-button>
           <el-button
             v-if="isSelected(item.id) && isExpanded(item.id)"
@@ -53,25 +63,23 @@
             size="small"
             @click="handleSetAllFields(item.id, 'target')"
           >
-            全用目标版本
+            全用当前数据
           </el-button>
           <el-button
-            v-if="isSelected(item.id)"
             text
             size="small"
             @click="handleToggleExpand(item.id)"
           >
             {{ isExpanded(item.id) ? '收起' : '展开' }}
           </el-button>
-          <span v-else class="expand-hint">点击选择后可展开</span>
         </div>
 
         <!-- 字段选择表格 -->
-        <div v-if="isSelected(item.id) && isExpanded(item.id)" class="field-table">
+        <div v-if="isExpanded(item.id)" class="field-table">
           <div class="field-header">
             <span class="col-field">字段</span>
-            <span class="col-value">源版本</span>
-            <span class="col-value">目标版本</span>
+            <span class="col-value">版本数据</span>
+            <span class="col-value">当前数据</span>
             <span class="col-action">选择</span>
           </div>
           <div
@@ -97,8 +105,8 @@
                   size="small"
                   @change="(val: 'source' | 'target') => handleFieldSelect(item.id, field.fieldName, val)"
                 >
-                  <el-radio-button value="source">源</el-radio-button>
-                  <el-radio-button value="target">目标</el-radio-button>
+                  <el-radio-button value="source">版本</el-radio-button>
+                  <el-radio-button value="target">当前</el-radio-button>
                 </el-radio-group>
               </template>
             </span>
@@ -117,8 +125,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { EditPen } from '@element-plus/icons-vue'
+import { computed, ref } from 'vue'
+import { EditPen, Search } from '@element-plus/icons-vue'
 import type { FieldConfig, DiffModifiedItem } from '@/types'
 
 interface FieldDecision {
@@ -143,7 +151,7 @@ const emit = defineEmits<{
   (e: 'select-all', selected: boolean): void
 }>()
 
-const AUTO_FIELDS = ['createTime', 'createUser', 'updateTime', 'updateUser']
+const SYSTEM_FIELDS = ['createTime', 'createUser', 'updateTime', 'updateUser']
 
 const selectedCount = computed(() => props.selectedRecords.size)
 
@@ -155,6 +163,19 @@ const isIndeterminate = computed(() => {
   return props.selectedRecords.size > 0 && props.selectedRecords.size < props.records.length
 })
 
+const searchKeyword = ref('')
+
+const showSearch = computed(() => props.records.length > 15)
+
+const filteredRecords = computed(() => {
+  if (!searchKeyword.value) return props.records
+  const kw = searchKeyword.value.toLowerCase()
+  return props.records.filter(item => {
+    const display = getRecordDisplay(item).toLowerCase()
+    return display.includes(kw)
+  })
+})
+
 const fieldLabelMap = computed(() => {
   const map: Record<string, string> = {}
   for (const f of props.fields) {
@@ -163,28 +184,29 @@ const fieldLabelMap = computed(() => {
   return map
 })
 
-const displayField = computed(() => {
-  const pkField = props.fields.find(f => f.isPrimaryKey)
-  if (pkField) return pkField
-
-  const seqField = props.fields.find(f => f.controlType === 'autoSequence')
-  if (seqField) return seqField
-
-  const textField = props.fields
-    .filter(f => ['text', 'textarea'].includes(f.controlType))
-    .sort((a, b) => a.order - b.order)[0]
-
-  return textField
+const displayFields = computed(() => {
+  return props.fields
+    .filter(f => !f.hidden && !SYSTEM_FIELDS.includes(f.fieldName))
+    .sort((a, b) => {
+      if (a.isPrimaryKey) return -1
+      if (b.isPrimaryKey) return 1
+      if (a.controlType === 'autoSequence') return -1
+      if (b.controlType === 'autoSequence') return 1
+      return a.order - b.order
+    })
+    .slice(0, 3)
 })
 
 function getRecordDisplay(item: DiffModifiedItem): string {
   const record = item.record || item.oldRecord || {}
-  if (displayField.value) {
-    const val = record[displayField.value.fieldName]
+  const parts: string[] = []
+  for (const field of displayFields.value) {
+    const val = record[field.fieldName]
     if (val !== null && val !== undefined && val !== '') {
-      return String(val)
+      parts.push(String(val))
     }
   }
+  if (parts.length > 0) return parts.join(' | ')
   return item.id || '未命名记录'
 }
 
@@ -197,7 +219,7 @@ function isExpanded(recordId: string): boolean {
 }
 
 function isAutoField(fieldName: string): boolean {
-  return AUTO_FIELDS.includes(fieldName)
+  return SYSTEM_FIELDS.includes(fieldName)
 }
 
 function getFieldLabel(fieldName: string): string {
@@ -223,14 +245,15 @@ function getSummary(recordId: string): string {
   const record = props.selectedRecords.get(recordId)
   if (!record) return ''
 
-  let sourceCount = 0
-  let targetCount = 0
-  record.fieldDecisions.forEach(choice => {
-    if (choice === 'source') sourceCount++
-    else targetCount++
-  })
+  const modifiedItem = props.records.find(r => r.id === recordId)
+  if (!modifiedItem) return ''
 
-  return `源版本: ${sourceCount}字段, 目标版本: ${targetCount}字段`
+  const changedFieldNames = modifiedItem.fields
+    .filter(f => !SYSTEM_FIELDS.includes(f.fieldName))
+    .map(f => getFieldLabel(f.fieldName))
+
+  if (changedFieldNames.length === 0) return ''
+  return `变更: ${changedFieldNames.join('、')}`
 }
 
 function handleToggleRecord(recordId: string, selected: boolean): void {
@@ -281,6 +304,11 @@ function handleSelectAll(selected: boolean): void {
   color: #909399;
 }
 
+.search-bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid #ebeef5;
+}
+
 .record-list {
   max-height: 500px;
   overflow-y: auto;
@@ -322,11 +350,6 @@ function handleSelectAll(selected: boolean): void {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-
-.expand-hint {
-  font-size: 12px;
-  color: #909399;
 }
 
 .field-table {

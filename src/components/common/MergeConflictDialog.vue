@@ -18,12 +18,16 @@
   >
     <!-- 顶部批量操作按钮 -->
     <div v-if="!loading && !error && hasDiff" class="batch-actions">
-      <el-button type="success" plain @click="handleAcceptAllSource">
-        全部接受源版本
-      </el-button>
-      <el-button type="warning" plain @click="handleAcceptAllTarget">
-        全部接受目标版本
-      </el-button>
+      <el-tooltip content="接受版本中的所有新增、删除和字段修改" placement="top">
+        <el-button type="success" plain @click="handleAcceptAllSource">
+          采用全部版本变更
+        </el-button>
+      </el-tooltip>
+      <el-tooltip content="忽略所有变更，保留当前工作区数据" placement="top">
+        <el-button type="info" plain @click="handleAcceptAllTarget">
+          保持当前数据
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 统计条 -->
@@ -183,6 +187,7 @@ const {
   hasDiff,
   hasSelection,
   selectedCount,
+  hasFieldDecisionChanged,
   setSourceVersion,
   setDiffResult,
   toggleAddedRecord,
@@ -306,7 +311,8 @@ function handleAcceptAllTarget(): void {
 }
 
 function handleCancel(): void {
-  if (hasSelection.value) {
+  // Only show confirmation when user has significant selections (>=3) or modified field-level decisions
+  if (selectedCount.value >= 3 || hasFieldDecisionChanged.value) {
     showCloseConfirm.value = true
   } else {
     visible.value = false
@@ -336,7 +342,8 @@ async function handleSubmit(): Promise<void> {
   try {
     const result = await submitMerge()
     if (result.success) {
-      ElMessage.success(`合并成功，共处理 ${result.merged_count} 项变更`)
+      const snapshotMsg = result.snapshot_created ? '（已自动创建合并前快照）' : ''
+      ElMessage.success(`合并成功，共处理 ${result.merged_count} 项变更${snapshotMsg}`)
       emit('success')
       visible.value = false
     }
