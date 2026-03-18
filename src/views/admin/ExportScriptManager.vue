@@ -170,8 +170,8 @@
                   <h4>注意事项</h4>
                   <ul>
                     <li>脚本<strong>必须</strong>设置 <code>result</code> 变量，类型为 <code>str</code> 或 <code>bytes</code></li>
-                    <li>不允许使用 <code>import</code> 语句，所有可用模块已预先注入</li>
-                    <li>脚本执行超时时间为 <strong>10 秒</strong></li>
+                    <li>不允许使用 <code>import</code> 语句，所有可用模块已预先注入（json, csv, io, re, math, collections, ET, minidom, datetime, timedelta, <strong>pd</strong>, <strong>np</strong>）</li>
+                    <li>脚本执行超时时间为 <strong>60 秒</strong>，菜单级导出脚本为 <strong>300 秒</strong></li>
                     <li>禁止使用 <code>open()</code>、<code>exec()</code>、<code>eval()</code> 等危险函数</li>
                   </ul>
                 </div>

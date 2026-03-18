@@ -152,8 +152,8 @@ if not record.get('caseName'):
                   <p>用户提交数据时，如果 <code>caseName</code> 为空，前端会弹出错误提示，数据不会被保存。</p>
                   <h4>注意事项</h4>
                   <ul>
-                    <li>不允许使用 <code>import</code> 语句，所有可用模块已预先注入</li>
-                    <li>脚本执行超时时间为 <strong>10 秒</strong></li>
+                    <li>不允许使用 <code>import</code> 语句，所有可用模块已预先注入（json, re, math, collections, datetime, timedelta, <strong>pd</strong>, <strong>np</strong>）</li>
+                    <li>脚本执行超时时间为 <strong>60 秒</strong></li>
                     <li>禁止使用 <code>open()</code>、<code>exec()</code>、<code>eval()</code> 等危险函数</li>
                     <li>脚本对数据库的访问为<strong>只读</strong>（通过 query 类函数），写入仅限 <code>set_relations()</code></li>
                   </ul>
