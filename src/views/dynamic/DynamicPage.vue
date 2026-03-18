@@ -243,12 +243,15 @@
 
     <!-- Excel 视图 - 使用原始数据，让 ExcelView 自己处理过滤 -->
     <el-card v-show="viewMode === 'excel'" class="table-card excel-card">
-      <div v-if="!excelReady" class="excel-loading-placeholder">
+      <!-- loading placeholder 覆盖在 ExcelView 上方 -->
+      <div v-show="!excelReady" class="excel-loading-placeholder">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>正在加载 Excel 视图...</span>
       </div>
+      <!-- ExcelView 延迟挂载，挂载后用 v-show 控制可见性 -->
       <ExcelView
-        v-else
+        v-if="excelInitialized"
+        v-show="excelReady"
         ref="excelViewRef"
         :data="tableData"
         :fields="effectiveFields"
@@ -930,6 +933,9 @@ const excelViewRef = ref<{ saveSnapshot: () => void } | null>(null)
  * 用于在切换到 Excel 视图时避免立即渲染大量数据导致的卡顿
  */
 const excelReady = ref(false)
+
+/** Excel 视图是否已初始化（用于延迟挂载） */
+const excelInitialized = ref(false)
 
 /**
  * 分页状态
@@ -2393,7 +2399,11 @@ watch(viewMode, (newMode, oldMode) => {
   }
 
   if (newMode === 'excel') {
-    // 切换到 Excel 视图时，先显示加载占位，延迟渲染实际组件
+    // 首次切换到 Excel 视图时初始化组件
+    if (!excelInitialized.value) {
+      excelInitialized.value = true
+    }
+    // 显示加载占位，延迟显示实际组件
     excelReady.value = false
     // 使用 setTimeout 让浏览器先完成当前渲染帧
     setTimeout(() => {
@@ -2543,6 +2553,7 @@ onActivated(async () => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 
   :deep(.el-card__body) {
     height: 100%;
@@ -2553,13 +2564,19 @@ onActivated(async () => {
 }
 
 .excel-loading-placeholder {
-  height: 400px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 16px;
   color: #909399;
+  background: #fff;
+  z-index: 10;
 
   .el-icon {
     font-size: 48px;
