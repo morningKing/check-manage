@@ -224,8 +224,9 @@
     </el-card>
 
     <!-- 看板视图 -->
-    <el-card v-show="viewMode === 'kanban' && kanbanConfig" class="table-card kanban-card">
+    <el-card v-show="viewMode === 'kanban'" class="table-card kanban-card">
       <KanbanBoard
+        v-if="kanbanConfig"
         :data="filteredData"
         :group-field="kanbanConfig.groupField"
         :group-options="kanbanGroupOptions"
