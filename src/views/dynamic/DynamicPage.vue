@@ -167,7 +167,7 @@
     </div>
 
     <!-- 数据表格 -->
-    <el-card v-if="viewMode === 'table'" class="table-card">
+    <el-card v-show="viewMode === 'table'" class="table-card">
       <DataTable
         ref="dataTableRef"
         :data="paginatedData"
@@ -224,7 +224,7 @@
     </el-card>
 
     <!-- 看板视图 -->
-    <el-card v-if="viewMode === 'kanban' && kanbanConfig" class="table-card kanban-card">
+    <el-card v-show="viewMode === 'kanban' && kanbanConfig" class="table-card kanban-card">
       <KanbanBoard
         :data="filteredData"
         :group-field="kanbanConfig.groupField"
@@ -241,8 +241,13 @@
     </el-card>
 
     <!-- Excel 视图 - 使用原始数据，让 ExcelView 自己处理过滤 -->
-    <el-card v-if="viewMode === 'excel' && excelReady" class="table-card excel-card">
+    <el-card v-show="viewMode === 'excel'" class="table-card excel-card">
+      <div v-if="!excelReady" class="excel-loading-placeholder">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>正在加载 Excel 视图...</span>
+      </div>
       <ExcelView
+        v-else
         :data="tableData"
         :fields="effectiveFields"
         :loading="tableLoading"
@@ -251,13 +256,6 @@
         @relation-click="handleRelationClick"
         @quote-click="handleQuoteClick"
       />
-    </el-card>
-    <!-- Excel 视图加载占位 -->
-    <el-card v-else-if="viewMode === 'excel' && !excelReady" class="table-card excel-card">
-      <div class="excel-loading-placeholder">
-        <el-icon class="is-loading"><Loading /></el-icon>
-        <span>正在加载 Excel 视图...</span>
-      </div>
     </el-card>
 
     <!-- 新增/编辑对话框 -->
