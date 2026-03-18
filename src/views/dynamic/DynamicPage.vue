@@ -70,7 +70,7 @@
     </div>
 
     <!-- 搜索栏 -->
-    <div class="search-bar">
+    <div class="search-bar" v-if="viewMode !== 'excel'">
       <template v-if="aiSearchMode">
         <el-input
           v-model="aiSearchText"
