@@ -98,7 +98,8 @@
       "WebSearch",
       "mcp__web-search-prime__web_search_prime",
       "Bash(cd:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(clawhub search:*)"
     ]
   }
 }

@@ -9,16 +9,6 @@
  */
 <template>
   <div class="excel-view">
-    <!-- 工具栏 -->
-    <div class="excel-toolbar">
-      <div class="toolbar-right">
-        <el-button type="primary" @click="handleExport">
-          <el-icon><Download /></el-icon>
-          导出
-        </el-button>
-      </div>
-    </div>
-
     <!-- Univer 容器 -->
     <div ref="univerContainerRef" class="univer-container"></div>
   </div>
@@ -26,13 +16,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import { Download } from '@element-plus/icons-vue'
 import { createUniver, LocaleType } from '@univerjs/presets'
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core'
 import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter'
 import type { FieldConfig, DynamicRecord } from '@/types'
 import { buildWorkbookData } from '@/utils/univerHelper'
-import { exportToExcel } from '@/utils/excel'
 
 // 导入 Univer 样式
 import '@univerjs/preset-sheets-core/lib/index.css'
@@ -65,7 +53,6 @@ const emit = defineEmits<{
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
   (e: 'relation-click', relatedRecordId: string, field: FieldConfig): void
   (e: 'quote-click', quotedRecordId: string, field: FieldConfig): void
-  (e: 'export', data: DynamicRecord[]): void
 }>()
 
 // ==================== State ====================
@@ -254,20 +241,6 @@ function handleCellDoubleClick() {
 }
 
 /**
- * 导出数据
- */
-function handleExport() {
-  if (props.data.length === 0) return
-
-  const visibleFields = props.fields
-    .filter(f => !f.hidden)
-    .sort((a, b) => a.order - b.order)
-
-  exportToExcel(props.data, visibleFields, '数据导出')
-  emit('export', props.data)
-}
-
-/**
  * 销毁 Univer 实例
  */
 function disposeUniver() {
@@ -294,20 +267,6 @@ defineExpose({
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.excel-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  padding: 12px 0;
-  gap: 16px;
-
-  .toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
 }
 
 .univer-container {

@@ -43,13 +43,9 @@ vi.mock('@univerjs/preset-sheets-core/lib/index.css', () => ({}))
 vi.mock('@univerjs/preset-sheets-filter/lib/index.css', () => ({}))
 vi.mock('@univerjs/design/lib/index.css', () => ({}))
 
-// Mock helper and excel
+// Mock helper
 vi.mock('@/utils/univerHelper', () => ({
   buildWorkbookData: vi.fn(() => ({ sheets: {} })),
-}))
-
-vi.mock('@/utils/excel', () => ({
-  exportToExcel: vi.fn(),
 }))
 
 // Must import after mocks
@@ -68,7 +64,6 @@ function makeField(overrides: Partial<FieldConfig> = {}): FieldConfig {
 }
 
 const commonStubs = {
-  'el-button': { template: '<button @click="$emit(\'click\')"><slot /></button>', emits: ['click'] },
   'el-icon': { template: '<span><slot /></span>' },
 }
 
@@ -88,57 +83,12 @@ describe('ExcelView — 组件基础', () => {
     expect(wrapper.exists()).toBe(true)
   })
 
-  it('渲染导出按钮', () => {
-    const wrapper = mount(ExcelView, {
-      props: { data: [], fields: [makeField()] },
-      global: { stubs: commonStubs }
-    })
-    expect(wrapper.text()).toContain('导出')
-  })
-
   it('渲染 Univer 容器', () => {
     const wrapper = mount(ExcelView, {
       props: { data: [], fields: [] },
       global: { stubs: commonStubs }
     })
     expect(wrapper.find('.univer-container').exists()).toBe(true)
-  })
-})
-
-describe('ExcelView — 导出功能', () => {
-  afterEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('handleExport 有数据时触发导出', async () => {
-    const { exportToExcel } = await import('@/utils/excel')
-
-    const wrapper = mount(ExcelView, {
-      props: {
-        data: [{ id: '1', name: '测试' }],
-        fields: [makeField()]
-      },
-      global: { stubs: commonStubs }
-    })
-
-    await wrapper.find('button').trigger('click')
-
-    expect(exportToExcel).toHaveBeenCalled()
-    expect(wrapper.emitted('export')).toBeTruthy()
-  })
-
-  it('handleExport 无数据时不导出', async () => {
-    const { exportToExcel } = await import('@/utils/excel')
-
-    const wrapper = mount(ExcelView, {
-      props: { data: [], fields: [makeField()] },
-      global: { stubs: commonStubs }
-    })
-
-    await wrapper.find('button').trigger('click')
-
-    expect(exportToExcel).not.toHaveBeenCalled()
-    expect(wrapper.emitted('export')).toBeFalsy()
   })
 })
 
