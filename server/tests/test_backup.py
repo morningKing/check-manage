@@ -698,3 +698,76 @@ class TestGetBackupTableNames:
             # 中文标签不应为空且不应等于表名
             assert item['label']
             assert item['label'] != item['name']
+
+
+class TestRestoreOrder:
+    """测试还原顺序的正确性"""
+
+    def test_restore_order_respects_foreign_keys(self):
+        """还原顺序应遵循外键依赖关系"""
+        from utils.backup import RESTORE_ORDER
+
+        # collection_versions 应在 version_snapshots 和 version_relations 之前
+        cv_idx = RESTORE_ORDER.index('collection_versions')
+        vs_idx = RESTORE_ORDER.index('version_snapshots')
+        vr_idx = RESTORE_ORDER.index('version_relations')
+
+        assert cv_idx < vs_idx, "collection_versions 应在 version_snapshots 之前还原"
+        assert cv_idx < vr_idx, "collection_versions 应在 version_relations 之前还原"
+
+    def test_restore_order_includes_all_tables(self):
+        """还原顺序应包含所有需要备份的表"""
+        from utils.backup import RESTORE_ORDER, BACKUP_TABLES
+
+        for table_name, _, _, _ in BACKUP_TABLES:
+            assert table_name in RESTORE_ORDER, f"{table_name} 应在 RESTORE_ORDER 中"
+
+    @patch('db.pool')
+    def test_restore_uses_correct_order(self, mock_pool):
+        """还原时应按 RESTORE_ORDER 顺序执行 INSERT"""
+        from utils.backup import restore_backup, BACKUP_VERSION, RESTORE_ORDER
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'test-order.zip')
+
+            # 创建包含多张表的备份
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-order-test',
+                'name': '顺序测试',
+                'type': 'manual',
+                'tables': ['menus', 'collection_versions', 'version_snapshots', 'version_relations'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 3,
+            }
+
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', json.dumps([{'id': 'm1', 'name': 'menu1'}]))
+                zf.writestr('collection_versions.json', json.dumps([{'id': 'cv1', 'collection': 'test'}]))
+                zf.writestr('version_snapshots.json', json.dumps([{'version_id': 'cv1', 'record_id': 'r1', 'record_data': {}}]))
+                zf.writestr('version_relations.json', json.dumps([{'version_id': 'cv1', 'collection': 'test', 'record_id': 'r1', 'field_name': 'f1', 'related_collection': 'test', 'related_id': 'r2'}]))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path)
+
+            # 收集所有 INSERT 语句的表名顺序
+            insert_order = []
+            for call in mock_cursor.execute.call_args_list:
+                sql = str(call[0][0])
+                if 'INSERT INTO' in sql:
+                    # 提取表名
+                    for table in RESTORE_ORDER:
+                        if f'INSERT INTO {table}' in sql:
+                            if table not in insert_order:
+                                insert_order.append(table)
+                            break
+
+            # 验证顺序符合 RESTORE_ORDER
+            expected_order = [t for t in RESTORE_ORDER if t in insert_order]
+            assert insert_order == expected_order, f"INSERT 顺序应为 {expected_order}，实际为 {insert_order}"

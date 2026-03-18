@@ -57,6 +57,32 @@ BACKUP_TABLE_MAP = {t[0]: t for t in BACKUP_TABLES}
 # 备份版本号（用于未来兼容性迁移）
 BACKUP_VERSION = 1
 
+# 还原时的表导入顺序（遵循外键依赖关系）
+# 被依赖的表排在前面，依赖其他表的表排在后面
+# 关键依赖关系：
+# - version_snapshots/version_relations 依赖 collection_versions
+# - collection_versions 有自引用 parent_version
+RESTORE_ORDER = [
+    # 第一层：无外键依赖或外键指向自身的表
+    'menus',
+    'page_configs',
+    'users',
+    'export_scripts',
+    'api_keys',
+    'validation_scripts',
+    'etl_tasks',
+    'etl_logs',
+    'operation_logs',
+    'dynamic_data',
+    'data_relations',
+    'user_current_branch',
+    # 第二层：被 version_snapshots/version_relations 依赖
+    'collection_versions',
+    # 第三层：依赖 collection_versions
+    'version_snapshots',
+    'version_relations',
+]
+
 
 def _ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -412,7 +438,7 @@ def restore_backup(zip_path, tables=None):
         # 解析要还原的内容
         # collection_filters: {table_name: [collection1, collection2]} 过滤条件
         collection_filters = {}
-        tables_to_restore = []
+        tables_to_restore_set = set()  # 使用 set 去重
 
         if tables:
             for t in tables:
@@ -422,18 +448,25 @@ def restore_backup(zip_path, tables=None):
                     if base_table in backup_base_tables:
                         if base_table not in collection_filters:
                             collection_filters[base_table] = []
-                            tables_to_restore.append(base_table)
+                            tables_to_restore_set.add(base_table)
                         collection_filters[base_table].append(collection)
                 elif t in backup_base_tables:
-                    tables_to_restore.append(t)
+                    tables_to_restore_set.add(t)
 
-            if not tables_to_restore:
+            if not tables_to_restore_set:
                 raise ValueError('指定的表不在备份中')
-
-            # 去重
-            tables_to_restore = list(dict.fromkeys(tables_to_restore))
         else:
-            tables_to_restore = list(backup_base_tables)
+            tables_to_restore_set = backup_base_tables
+
+        # 按照 RESTORE_ORDER 的顺序排列表，确保外键依赖正确
+        tables_to_restore = [
+            t for t in RESTORE_ORDER
+            if t in tables_to_restore_set
+        ]
+        # 添加不在 RESTORE_ORDER 中的表（如有新增表）
+        for t in tables_to_restore_set:
+            if t not in tables_to_restore:
+                tables_to_restore.append(t)
 
         # 读取表数据
         table_data = {}
@@ -456,6 +489,10 @@ def restore_backup(zip_path, tables=None):
         from db import pool
         conn = pool.getconn()
         cur = conn.cursor()
+
+        # 临时禁用触发器以绕过外键约束检查
+        # 这允许我们按任意顺序插入数据，包括自引用的情况
+        cur.execute('SET session_replication_role = replica')
 
         # 对于 collection 级别的还原，使用 DELETE 而不是 TRUNCATE
         for table_name in tables_to_restore:
@@ -490,7 +527,7 @@ def restore_backup(zip_path, tables=None):
                     cur.execute('TRUNCATE TABLE collection_versions CASCADE')
                     cur.execute('TRUNCATE TABLE user_current_branch CASCADE')
 
-        # INSERT 数据
+        # INSERT 数据（按 RESTORE_ORDER 顺序）
         for table_name in tables_to_restore:
             if table_name not in BACKUP_TABLE_MAP:
                 continue
@@ -534,6 +571,12 @@ def restore_backup(zip_path, tables=None):
         raise
     finally:
         if conn:
+            try:
+                # 恢复触发器（在单独的 try 中执行，避免影响主逻辑）
+                cur = conn.cursor()
+                cur.execute('SET session_replication_role = DEFAULT')
+            except Exception:
+                pass
             from db import pool
             pool.putconn(conn)
 
