@@ -249,6 +249,7 @@
       </div>
       <ExcelView
         v-else
+        ref="excelViewRef"
         :data="tableData"
         :fields="effectiveFields"
         :loading="tableLoading"
@@ -920,6 +921,9 @@ const graphRecordId = ref('')
  * 视图模式（table / kanban / excel）
  */
 const viewMode = ref<'table' | 'kanban' | 'excel'>('table')
+
+/** Excel 视图组件引用 */
+const excelViewRef = ref<{ saveSnapshot: () => void } | null>(null)
 
 /**
  * Excel 视图延迟加载状态
@@ -2382,7 +2386,12 @@ watch(pageId, () => {
  * 视图模式切换时延迟渲染 Excel 视图
  * 避免大量数据同时渲染导致的卡顿
  */
-watch(viewMode, (newMode) => {
+watch(viewMode, (newMode, oldMode) => {
+  // 离开 Excel 视图时，保存快照
+  if (oldMode === 'excel' && newMode !== 'excel') {
+    excelViewRef.value?.saveSnapshot()
+  }
+
   if (newMode === 'excel') {
     // 切换到 Excel 视图时，先显示加载占位，延迟渲染实际组件
     excelReady.value = false

@@ -317,7 +317,9 @@ function disposeUniver() {
 defineExpose({
   clearAllFilters: () => {
     // Univer 的筛选通过 UI 操作，这里不需要实现
-  }
+  },
+  /** 手动保存快照（供父组件在视图切换时调用） */
+  saveSnapshot: saveSnapshotToCache
 })
 </script>
 
