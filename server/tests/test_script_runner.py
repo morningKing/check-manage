@@ -109,6 +109,32 @@ result = str(val)
         result_bytes, _, _ = run_export_script(script, [], [], '页面', 'txt')
         assert result_bytes == b'2'
 
+    def test_pandas_available(self):
+        """验证 pandas 可用（如果已安装）"""
+        script = '''
+if pd is None:
+    result = "pandas not installed"
+else:
+    df = pd.DataFrame(data)
+    result = str(len(df))
+'''
+        result_bytes, _, _ = run_export_script(script, [], [], '测试', 'txt')
+        # 如果 pandas 安装了，返回 '0'，否则返回 'pandas not installed'
+        assert result_bytes in [b'0', b'pandas not installed']
+
+    def test_numpy_available(self):
+        """验证 numpy 可用（如果已安装）"""
+        script = '''
+if np is None:
+    result = "numpy not installed"
+else:
+    arr = np.array([1, 2, 3])
+    result = str(arr.sum())
+'''
+        result_bytes, _, _ = run_export_script(script, [], [], '测试', 'txt')
+        # 如果 numpy 安装了，返回 '6'，否则返回 'numpy not installed'
+        assert result_bytes in [b'6', b'numpy not installed']
+
 
 # ==================== run_etl_script ====================
 

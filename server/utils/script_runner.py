@@ -19,6 +19,17 @@ from xml.dom import minidom
 from datetime import datetime, timedelta
 import threading
 
+# 可选数据处理库（如果已安装）
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 # 默认 MIME 类型映射
 FORMAT_CONTENT_TYPES = {
     'json': 'application/json',
@@ -45,19 +56,23 @@ FORBIDDEN_NAMES = {
 }
 
 # 脚本执行超时（秒）
-SCRIPT_TIMEOUT = 10
+SCRIPT_TIMEOUT = 60
 
 # 菜单级脚本执行超时（秒）- 更长时间因为数据量大
-MENU_SCRIPT_TIMEOUT = 60
+MENU_SCRIPT_TIMEOUT = 300
+
+# 数据处理库注入提示（用于错误信息）
+DATA_LIBS_HINT = '数据处理库已预注入: pd (pandas), np (numpy)。如未安装，请先 pip install pandas numpy'
 
 
 def _validate_script(script_code):
     """检查脚本中是否包含危险操作"""
-    # 禁止 import 语句
+    # 禁止 import 语句（安全考虑）
+    # 数据处理库 pandas、numpy 已预注入为 pd、np
     if re.search(r'^\s*import\s+', script_code, re.MULTILINE):
-        raise ValueError('脚本中不允许使用 import 语句，请使用预注入的模块')
+        raise ValueError(f'脚本中不允许使用 import 语句。\n可用预注入模块: json, csv, io, re, math, collections, ET, minidom, datetime, timedelta, pd (pandas), np (numpy)')
     if re.search(r'^\s*from\s+\S+\s+import', script_code, re.MULTILINE):
-        raise ValueError('脚本中不允许使用 from...import 语句，请使用预注入的模块')
+        raise ValueError(f'脚本中不允许使用 from...import 语句。\n可用预注入模块: json, csv, io, re, math, collections, ET, minidom, datetime, timedelta, pd (pandas), np (numpy)')
 
     # 禁止危险内置函数
     for name in FORBIDDEN_NAMES:
@@ -98,6 +113,9 @@ def run_export_script(script_code, data, fields, page_name, output_format='json'
         'minidom': minidom,
         'datetime': datetime,
         'timedelta': timedelta,
+        # 数据处理库（如果已安装）
+        'pd': pd,
+        'np': np,
         # 安全的内置函数
         'len': len,
         'str': str,
@@ -276,6 +294,9 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         'collections': collections,
         'datetime': datetime,
         'timedelta': timedelta,
+        # 数据处理库（如果已安装）
+        'pd': pd,
+        'np': np,
         # 安全的内置函数
         'len': len,
         'str': str,
@@ -365,6 +386,8 @@ def run_etl_script(script_code, records):
             'collections': collections,
             'datetime': datetime,
             'timedelta': timedelta,
+            'pd': pd,
+            'np': np,
             'len': len, 'str': str, 'int': int, 'float': float, 'bool': bool,
             'list': list, 'dict': dict, 'tuple': tuple, 'set': set,
             'sorted': sorted, 'reversed': reversed,
@@ -457,6 +480,9 @@ def run_menu_export_script(script_code, menu_data, menu_name, output_format='jso
         'minidom': minidom,
         'datetime': datetime,
         'timedelta': timedelta,
+        # 数据处理库（如果已安装）
+        'pd': pd,
+        'np': np,
         # 安全的内置函数
         'len': len,
         'str': str,
