@@ -252,6 +252,7 @@
         :data="tableData"
         :fields="effectiveFields"
         :loading="tableLoading"
+        :collection-id="pageId"
         @row-click="handleView"
         @reference-click="handleReferenceClick"
         @relation-click="handleRelationClick"

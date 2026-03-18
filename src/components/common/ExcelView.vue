@@ -6,6 +6,7 @@
  * - 只读模式，不可编辑
  * - 支持列筛选、列宽拖拽、冻结窗格
  * - 双击单元格触发导航事件
+ * - 支持跨路由状态缓存（筛选、样式等）
  */
 <template>
   <div class="excel-view">
@@ -33,6 +34,23 @@ import sheetsCoreZhCN from '@univerjs/preset-sheets-core/lib/locales/zh-CN'
 // @ts-ignore - locale files exist at runtime
 import sheetsFilterZhCN from '@univerjs/preset-sheets-filter/lib/locales/zh-CN'
 
+// ==================== 全局快照缓存 ====================
+
+interface CacheEntry {
+  snapshot: any
+  dataHash: string
+}
+
+/** 按 collection 缓存 Excel 快照 */
+const excelSnapshotCache = new Map<string, CacheEntry>()
+
+/** 生成数据 hash（简单基于记录数和第一条数据） */
+function generateDataHash(data: DynamicRecord[]): string {
+  if (data.length === 0) return 'empty'
+  const first = data[0]
+  return `${data.length}-${first.id || 'no-id'}`
+}
+
 // ==================== Props & Emits ====================
 
 interface Props {
@@ -42,10 +60,13 @@ interface Props {
   fields: FieldConfig[]
   /** 加载状态 */
   loading?: boolean
+  /** 集合 ID，用于缓存快照 */
+  collectionId?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  loading: false
+  loading: false,
+  collectionId: ''
 })
 
 const emit = defineEmits<{
@@ -61,6 +82,7 @@ const univerContainerRef = ref<HTMLElement>()
 // @ts-ignore used for cleanup reference
 let univerInstance: any = null // eslint-disable-line @typescript-eslint/no-unused-vars
 let univerAPI: any = null
+let currentDataHash = ''
 
 // ==================== Lifecycle ====================
 
@@ -71,12 +93,19 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 保存快照到缓存
+  saveSnapshotToCache()
   disposeUniver()
 })
 
-// 监听数据变化，重新加载 workbook
-watch(() => [props.data, props.fields], () => {
-  if (univerAPI) {
+// 监听数据变化，重新加载 workbook（仅当数据实际变化时）
+watch(() => props.data, (newData) => {
+  if (!univerAPI) return
+
+  const newHash = generateDataHash(newData)
+  // 如果数据 hash 变化，才重新加载
+  if (newHash !== currentDataHash) {
+    currentDataHash = newHash
     reloadWorkbook()
   }
 }, { deep: false })
@@ -112,7 +141,7 @@ function initUniver() {
   univerInstance = _univer
   univerAPI = api
 
-  // 加载初始数据
+  // 加载初始数据（优先使用缓存）
   loadWorkbook()
 
   // 设置只读模式
@@ -128,8 +157,40 @@ function initUniver() {
 function loadWorkbook() {
   if (!univerAPI) return
 
-  const workbookData = buildWorkbookData(props.fields, props.data)
-  univerAPI.createWorkbook(workbookData)
+  const dataHash = generateDataHash(props.data)
+  currentDataHash = dataHash
+
+  // 检查是否有缓存
+  const cached = props.collectionId ? excelSnapshotCache.get(props.collectionId) : null
+
+  if (cached && cached.dataHash === dataHash) {
+    // 数据未变化，恢复快照（保留筛选、样式等）
+    univerAPI.createWorkbook(cached.snapshot)
+  } else {
+    // 数据变化或无缓存，创建新 workbook
+    const workbookData = buildWorkbookData(props.fields, props.data)
+    univerAPI.createWorkbook(workbookData)
+  }
+}
+
+/**
+ * 保存快照到缓存
+ */
+function saveSnapshotToCache() {
+  if (!univerAPI || !props.collectionId) return
+
+  const activeWorkbook = univerAPI.getActiveWorkbook()
+  if (!activeWorkbook) return
+
+  try {
+    const snapshot = activeWorkbook.save()
+    excelSnapshotCache.set(props.collectionId, {
+      snapshot,
+      dataHash: currentDataHash
+    })
+  } catch (e) {
+    console.warn('Failed to save Excel snapshot:', e)
+  }
 }
 
 /**
