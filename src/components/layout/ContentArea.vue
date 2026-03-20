@@ -53,7 +53,9 @@
     <!-- 路由视图，带过渡动画 -->
     <div class="content-main">
       <router-view v-slot="{ Component, route }">
-        <transition name="fade-transform" mode="out-in">
+        <!-- 移除 mode="out-in" 以减少交互延迟（INP） -->
+        <!-- 使用 keep-alive 缓存组件状态，避免重复渲染 -->
+        <transition name="fade-fast">
           <keep-alive>
             <component :is="Component" :key="route.path" />
           </keep-alive>
@@ -277,20 +279,15 @@ onUnmounted(() => {
   overflow: auto;
 }
 
-/* 页面切换过渡动画 */
-.fade-transform-enter-active,
-.fade-transform-leave-active {
-  transition: all 0.3s ease;
+/* 页面切换过渡动画 - 优化性能 */
+.fade-fast-enter-active,
+.fade-fast-leave-active {
+  transition: opacity 0.15s ease;
 }
 
-.fade-transform-enter-from {
+.fade-fast-enter-from,
+.fade-fast-leave-to {
   opacity: 0;
-  transform: translateX(-20px);
-}
-
-.fade-transform-leave-to {
-  opacity: 0;
-  transform: translateX(20px);
 }
 </style>
 

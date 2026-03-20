@@ -113,7 +113,8 @@ async function loadOptions(): Promise<void> {
   if (source.type === 'collection' && source.collection) {
     loading.value = true
     try {
-      const data = await get<any[]>(`/${source.collection}`)
+      const response = await get<{ data: any[]; total: number }>(`/${source.collection}`, { pageSize: 10000 })
+      const data = response.data || []
       options.value = data.map((item) => ({
         label: String(item[source.labelField || 'id'] ?? item.id),
         value: item[source.valueField || 'id'] ?? item.id

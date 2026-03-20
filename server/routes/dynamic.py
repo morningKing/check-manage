@@ -112,6 +112,116 @@ def get_validation_script(cur, collection):
     return script_row[0] if script_row and script_row[0] else None
 
 
+def get_display_field(fields):
+    """获取用于显示的字段名（第一个 text/textarea/autoSequence 字段）"""
+    for f in fields:
+        if f.get('controlType') in ('text', 'textarea', 'autoSequence'):
+            return f['fieldName']
+    return None
+
+
+def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
+    """
+    构建关键字搜索条件，支持普通字段、关联字段和记录ID精确匹配。
+    返回 (where_fragment, params, matching_ids) 三元组。
+    - where_fragment: 用于普通字段的 WHERE 条件片段
+    - params: 对应的参数
+    - matching_ids: 关联字段匹配的记录 ID 集合（用于 UNION 合并）
+    """
+    if not keyword or not keyword.strip():
+        return None, [], set()
+
+    keyword = keyword.strip()
+    keyword_pattern = f'%{keyword}%'
+    conditions = []
+    params = []
+    matching_ids = set()
+
+    # 首先添加 ID 精确匹配条件
+    conditions.append("id = %s")
+    params.append(keyword)
+
+    # 可直接在 JSONB 中搜索的字段类型
+    direct_searchable = {'text', 'textarea', 'number', 'autoSequence', 'select', 'radio', 'date', 'datetime', 'autoTimestamp'}
+
+    for field in fields:
+        field_name = field.get('fieldName')
+        control_type = field.get('controlType', 'text')
+
+        if control_type in direct_searchable:
+            # 直接在 JSONB data 字段中搜索
+            conditions.append(f"data->>%s ILIKE %s")
+            params.extend([field_name, keyword_pattern])
+
+        elif control_type == 'relation':
+            # M:N 关联字段：通过 data_relations 表搜索
+            rel_config = field.get('relationConfig', {})
+            target_collection = rel_config.get('targetCollection')
+            if target_collection:
+                # 获取目标集合的显示字段
+                target_page_id = f'page-{target_collection}'
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
+                target_row = cur.fetchone()
+                if target_row and target_row[0]:
+                    target_display = get_display_field(target_row[0])
+                    if target_display:
+                        # 查找关联记录显示值匹配的主记录 ID
+                        sql = '''
+                            SELECT DISTINCT dr.record_id
+                            FROM data_relations dr
+                            JOIN dynamic_data dd ON dd.id = dr.related_id AND dd.collection = dr.related_collection
+                            WHERE dr.collection = %s AND dr.field_name = %s AND dr.branch_id = %s
+                            AND dd.data->>%s ILIKE %s
+                        '''
+                        cur.execute(sql, (collection, field_name, branch_id, target_display, keyword_pattern))
+                        matching_ids.update(row[0] for row in cur.fetchall())
+
+        elif control_type == 'reference':
+            # 1:N 引用字段：字段值是引用记录的 ID
+            ref_config = field.get('referenceConfig', {})
+            target_collection = ref_config.get('targetCollection')
+            if target_collection:
+                # 获取目标集合的显示字段
+                target_page_id = f'page-{target_collection}'
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
+                target_row = cur.fetchone()
+                if target_row and target_row[0]:
+                    target_display = get_display_field(target_row[0])
+                    if target_display:
+                        # 查找引用记录显示值匹配的记录
+                        sql = '''
+                            SELECT dd.id FROM dynamic_data dd
+                            JOIN dynamic_data ref ON ref.id = dd.data->>%s
+                            WHERE dd.collection = %s AND dd.branch_id = %s
+                            AND ref.collection = %s AND ref.data->>%s ILIKE %s
+                        '''
+                        cur.execute(sql, (field_name, collection, branch_id, target_collection, target_display, keyword_pattern))
+                        matching_ids.update(row[0] for row in cur.fetchall())
+
+        elif control_type == 'quoteSelect':
+            # 引用选择字段：类似 relation，通过 data_relations 搜索
+            quote_config = field.get('quoteConfig', {}) or field.get('relationConfig', {})
+            target_collection = quote_config.get('targetCollection')
+            if target_collection:
+                target_page_id = f'page-{target_collection}'
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
+                target_row = cur.fetchone()
+                if target_row and target_row[0]:
+                    target_display = get_display_field(target_row[0])
+                    if target_display:
+                        sql = '''
+                            SELECT DISTINCT dr.record_id
+                            FROM data_relations dr
+                            JOIN dynamic_data dd ON dd.id = dr.related_id AND dd.collection = dr.related_collection
+                            WHERE dr.collection = %s AND dr.field_name = %s AND dr.branch_id = %s
+                            AND dd.data->>%s ILIKE %s
+                        '''
+                        cur.execute(sql, (collection, field_name, branch_id, target_display, keyword_pattern))
+                        matching_ids.update(row[0] for row in cur.fetchall())
+
+    return conditions, params, matching_ids
+
+
 def apply_pending_relations(cur, collection, record_id, pending_relations, branch_id=None):
     """Apply relation operations queued by validation script (bidirectional sync)."""
     for rel in pending_relations:
@@ -171,40 +281,108 @@ def list_items(collection):
         return jsonify({"error": "Not found"}), 404
 
     query_str = request.args.get('q', '')
+    keyword = request.args.get('keyword', '')
+    # 分页参数
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('pageSize', 50, type=int)
+    # 全量加载参数（用于 Excel 视图等需要加载所有数据的场景）
+    load_all = request.args.get('all', 'false').lower() == 'true'
+    # 限制 page_size 最大值（全量加载时不限制）
+    if not load_all:
+        page_size = min(page_size, 1000)
+    offset = (page - 1) * page_size if not load_all else 0
+
     branch_id = _get_current_user_branch(collection)
 
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 获取页面配置（用于关键字搜索和标签重映射）
+        page_id = f'page-{collection}'
+        cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+        pc_row = cur.fetchone()
+        fields = pc_row[0] if pc_row and pc_row[0] else []
+
+        # 构建基础查询条件
+        base_conditions = ['collection = %s', 'branch_id = %s']
+        base_params = [collection, branch_id]
+
+        # 处理 MongoDB 查询
+        query_conditions = []
+        query_params = []
         if query_str:
             try:
                 query = json.loads(query_str)
-                # Remap Chinese labels to fieldNames
-                page_id = f'page-{collection}'
-                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
-                pc_row = cur.fetchone()
-                if pc_row and pc_row[0]:
-                    query = remap_labels(query, pc_row[0])
+                if fields:
+                    query = remap_labels(query, fields)
                 where_fragment, q_params = mongo_translate(query)
-                sql = (
-                    'SELECT id, collection, data, created_at, updated_at, version, branch_id '
-                    'FROM dynamic_data WHERE collection = %s AND branch_id = %s AND (' + where_fragment + ') '
-                    'ORDER BY created_at'
-                )
-                cur.execute(sql, [collection, branch_id] + q_params)
+                query_conditions.append(f'({where_fragment})')
+                query_params = q_params
             except json.JSONDecodeError as e:
                 return jsonify({"error": f"查询语法错误: JSON 解析失败 - {e}"}), 400
             except MongoQueryError as e:
                 return jsonify({"error": f"查询语法错误: {e}"}), 400
-        else:
-            cur.execute(
-                'SELECT id, collection, data, created_at, updated_at, version, branch_id '
-                'FROM dynamic_data WHERE collection = %s AND branch_id = %s ORDER BY created_at',
-                (collection, branch_id),
+
+        # 处理关键字搜索（支持关联字段）
+        keyword_conditions = []
+        keyword_params = []
+        keyword_matching_ids = set()
+        if keyword and keyword.strip():
+            keyword_conditions, keyword_params, keyword_matching_ids = build_keyword_conditions(
+                cur, collection, keyword, fields, branch_id
             )
 
+        # 合并所有条件
+        all_conditions = base_conditions + query_conditions
+        all_params = base_params + query_params
+
+        # 构建最终的 WHERE 子句
+        if keyword_conditions or keyword_matching_ids:
+            # 关键字搜索：普通字段 OR 关联字段匹配的 ID
+            keyword_parts = []
+            if keyword_conditions:
+                keyword_parts.append('(' + ' OR '.join(keyword_conditions) + ')')
+            if keyword_matching_ids:
+                # 将匹配的 ID 转为列表
+                id_list = list(keyword_matching_ids)
+                placeholders = ','.join(['%s'] * len(id_list))
+                keyword_parts.append(f'id IN ({placeholders})')
+                keyword_params.extend(id_list)
+
+            if keyword_parts:
+                all_conditions.append('(' + ' OR '.join(keyword_parts) + ')')
+            all_params.extend(keyword_params)
+
+        where_clause = ' AND '.join(all_conditions)
+
+        # 获取总数
+        count_sql = f'SELECT COUNT(*) FROM dynamic_data WHERE {where_clause}'
+        cur.execute(count_sql, all_params)
+        total = cur.fetchone()[0]
+
+        # 获取数据（全量加载时不分页）
+        if load_all:
+            data_sql = (
+                'SELECT id, collection, data, created_at, updated_at, version, branch_id '
+                f'FROM dynamic_data WHERE {where_clause} '
+                'ORDER BY created_at'
+            )
+            cur.execute(data_sql, all_params)
+        else:
+            data_sql = (
+                'SELECT id, collection, data, created_at, updated_at, version, branch_id '
+                f'FROM dynamic_data WHERE {where_clause} '
+                'ORDER BY created_at LIMIT %s OFFSET %s'
+            )
+            cur.execute(data_sql, all_params + [page_size, offset])
         rows = cur.fetchall()
-    return jsonify([row_to_record(r) for r in rows])
+
+    return jsonify({
+        'data': [row_to_record(r) for r in rows],
+        'total': total,
+        'page': page if not load_all else 1,
+        'pageSize': page_size if not load_all else total
+    })
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['GET'])

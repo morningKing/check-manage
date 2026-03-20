@@ -150,7 +150,7 @@
         />
       </el-tooltip>
       <span class="search-result-count">
-        共 {{ filteredData.length }} 条记录
+        共 {{ totalCount }} 条记录
         <template v-if="activeMongoQuery">
           （已筛选）
         </template>
@@ -173,7 +173,7 @@
         :data="paginatedData"
         :fields="effectiveFields"
         :loading="tableLoading"
-        :total="filteredData.length"
+        :total="totalCount"
         :show-pagination="true"
         :show-actions="!isGuest"
         show-selection
@@ -241,21 +241,21 @@
       />
     </el-card>
 
-    <!-- Excel 视图 - 使用原始数据，让 ExcelView 自己处理过滤 -->
+    <!-- Excel 视图 - 使用全量数据 -->
     <el-card v-show="viewMode === 'excel'" class="table-card excel-card">
       <!-- loading placeholder 覆盖在 ExcelView 上方 -->
-      <div v-show="!excelReady" class="excel-loading-placeholder">
+      <div v-show="!excelReady || excelLoading" class="excel-loading-placeholder">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>正在加载 Excel 视图...</span>
       </div>
       <!-- ExcelView 延迟挂载，挂载后用 v-show 控制可见性 -->
       <ExcelView
         v-if="excelInitialized"
-        v-show="excelReady"
+        v-show="excelReady && !excelLoading"
         ref="excelViewRef"
-        :data="tableData"
+        :data="excelData"
         :fields="effectiveFields"
-        :loading="tableLoading"
+        :loading="excelLoading"
         :collection-id="pageId"
         @row-click="handleView"
         @reference-click="handleReferenceClick"
@@ -752,9 +752,19 @@ const submitLoading = ref(false)
 const tableData = ref<DynamicRecord[]>([])
 
 /**
+ * 数据总数（后端分页）
+ */
+const totalCount = ref(0)
+
+/**
  * 搜索关键字
  */
 const searchKeyword = ref('')
+
+/**
+ * 关键字搜索的防抖定时器
+ */
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * 列筛选条件
@@ -937,6 +947,12 @@ const excelReady = ref(false)
 /** Excel 视图是否已初始化（用于延迟挂载） */
 const excelInitialized = ref(false)
 
+/** Excel 视图全量数据 */
+const excelData = ref<DynamicRecord[]>([])
+
+/** Excel 视图数据加载状态 */
+const excelLoading = ref(false)
+
 /**
  * 分页状态
  */
@@ -1076,77 +1092,13 @@ const viewDisplayFields = computed<FieldConfig[]>(() => {
 })
 
 /**
- * 按关键字和列筛选条件过滤后的表格数据
+ * 表格显示数据（后端分页，直接使用 tableData）
+ * 注：关键字搜索已由后端处理，此处仅处理列筛选（当前页内生效）
  */
 const filteredData = computed<DynamicRecord[]>(() => {
   let result = tableData.value
-  const keyword = searchKeyword.value.trim().toLowerCase()
 
-  if (keyword) {
-    result = result.filter(record => {
-      for (const field of pageFields.value) {
-        const val = record[field.fieldName]
-        if (val === null || val === undefined) continue
-
-        if (['text', 'textarea', 'number', 'autoSequence'].includes(field.controlType)) {
-          if (String(val).toLowerCase().includes(keyword)) return true
-        }
-
-        if (['select', 'radio'].includes(field.controlType)) {
-          const opt = field.options?.find(o => o.value === val)
-          const label = opt?.label || String(val)
-          if (label.toLowerCase().includes(keyword)) return true
-        }
-
-        if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-          if (Array.isArray(val)) {
-            const matched = val.some(v => {
-              const opt = field.options?.find(o => o.value === v)
-              return (opt?.label || String(v)).toLowerCase().includes(keyword)
-            })
-            if (matched) return true
-          }
-        }
-
-        if (['date', 'datetime', 'autoTimestamp'].includes(field.controlType)) {
-          if (String(val).toLowerCase().includes(keyword)) return true
-        }
-
-        if (field.controlType === 'relation') {
-          const labels = record[`_rel_${field.fieldName}_labels`]
-          if (Array.isArray(labels)) {
-            const matched = labels.some((item: { id: string; label: string }) =>
-              item.label.toLowerCase().includes(keyword)
-            )
-            if (matched) return true
-          }
-        }
-
-        if (field.controlType === 'reference') {
-          const displayVal = record[`_ref_${field.fieldName}_display`]
-          if (displayVal && String(displayVal).toLowerCase().includes(keyword)) return true
-          if (field.referenceConfig?.inheritFields) {
-            for (const inh of field.referenceConfig.inheritFields) {
-              const refVal = record[`_ref_${field.fieldName}_${inh}`]
-              if (refVal && String(refVal).toLowerCase().includes(keyword)) return true
-            }
-          }
-        }
-
-        if (field.controlType === 'quoteSelect') {
-          const labels = record[`_quote_${field.fieldName}_labels`]
-          if (Array.isArray(labels)) {
-            const matched = labels.some((item: { id: string; label: string }) =>
-              item.label.toLowerCase().includes(keyword)
-            )
-            if (matched) return true
-          }
-        }
-      }
-      return false
-    })
-  }
-
+  // 关键字搜索已由后端处理（keyword 参数），此处仅处理列筛选
   const filterEntries = Object.entries(columnFilters.value)
   if (filterEntries.length > 0) {
     result = result.filter(record => {
@@ -1236,12 +1188,10 @@ const filteredData = computed<DynamicRecord[]>(() => {
 })
 
 /**
- * 分页后的数据（基于 filteredData 切片）
+ * 分页后的数据（后端分页，直接使用 filteredData）
  */
 const paginatedData = computed<DynamicRecord[]>(() => {
-  const start = (currentPage.value - 1) * currentPageSize.value
-  const end = start + currentPageSize.value
-  return filteredData.value.slice(start, end)
+  return filteredData.value
 })
 
 /**
@@ -1288,11 +1238,12 @@ const deleteBindingInheritDisplayFields = computed<{ sourceField: string; target
 // ==================== 方法 ====================
 
 /**
- * 处理分页变化
+ * 处理分页变化（后端分页）
  */
-function handlePageChange(page: number, pageSize: number): void {
+async function handlePageChange(page: number, pageSize: number): Promise<void> {
   currentPage.value = page
   currentPageSize.value = pageSize
+  await loadPageData()
 }
 
 /**
@@ -1335,26 +1286,49 @@ function formatViewDate(value: any, controlType: string): string {
 }
 
 /**
- * 加载页面数据
+ * 加载页面数据（后端分页）
  */
 async function loadPageData(): Promise<void> {
   if (!pageId.value) return
 
   tableLoading.value = true
   try {
-    const query = activeMongoQuery.value || undefined
-    const data = await pageConfigStore.fetchPageData(pageId.value, query)
-    tableData.value = data
-    // 如果有 recordId query 参数，高亮定位到该记录
-    const recordId = route.query.recordId as string
-    if (recordId) {
-      highlightRecord(recordId)
-    }
+    const result = await pageConfigStore.fetchPageData(pageId.value, {
+      query: activeMongoQuery.value || undefined,
+      page: currentPage.value,
+      pageSize: currentPageSize.value,
+      keyword: searchKeyword.value || undefined
+    })
+    tableData.value = result.data
+    totalCount.value = result.total
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
   } finally {
     tableLoading.value = false
+  }
+}
+
+/**
+ * 加载 Excel 视图全量数据
+ * Excel 视图需要展示所有数据，不使用分页
+ */
+async function loadExcelData(): Promise<void> {
+  if (!pageId.value) return
+
+  excelLoading.value = true
+  try {
+    const result = await pageConfigStore.fetchPageData(pageId.value, {
+      query: activeMongoQuery.value || undefined,
+      keyword: searchKeyword.value || undefined,
+      loadAll: true // 加载全量数据，不受 pageSize 限制
+    })
+    excelData.value = result.data
+  } catch (error) {
+    console.error('加载 Excel 数据失败:', error)
+    ElMessage.error('加载 Excel 数据失败')
+  } finally {
+    excelLoading.value = false
   }
 }
 
@@ -1392,6 +1366,10 @@ async function executeMongoQuery(): Promise<void> {
     activeMongoQuery.value = query
     currentPage.value = 1
     await loadPageData()
+    // 如果当前是 Excel 视图，同时刷新全量数据
+    if (viewMode.value === 'excel') {
+      await loadExcelData()
+    }
   } catch (e: any) {
     if (e instanceof SyntaxError) {
       ElMessage.error('JSON 格式错误: ' + e.message)
@@ -1409,6 +1387,10 @@ async function clearMongoQuery(): Promise<void> {
   mongoQueryText.value = ''
   currentPage.value = 1
   await loadPageData()
+  // 如果当前是 Excel 视图，同时刷新全量数据
+  if (viewMode.value === 'excel') {
+    await loadExcelData()
+  }
 }
 
 /**
@@ -1451,6 +1433,10 @@ async function executeAiQuery(): Promise<void> {
     activeMongoQuery.value = filter
     currentPage.value = 1
     await loadPageData()
+    // 如果当前是 Excel 视图，同时刷新全量数据
+    if (viewMode.value === 'excel') {
+      await loadExcelData()
+    }
     ElMessage.success('AI 查询已应用')
   } catch (e: any) {
     ElMessage.error(e.message || e.error || 'AI 查询失败')
@@ -1468,6 +1454,10 @@ async function clearAiQuery(): Promise<void> {
   activeMongoQuery.value = null
   currentPage.value = 1
   await loadPageData()
+  // 如果当前是 Excel 视图，同时刷新全量数据
+  if (viewMode.value === 'excel') {
+    await loadExcelData()
+  }
 }
 
 /**
@@ -2223,11 +2213,15 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
  */
 async function handleRefresh(): Promise<void> {
   await loadPageData()
+  // 如果当前是 Excel 视图，同时刷新全量数据
+  if (viewMode.value === 'excel') {
+    await loadExcelData()
+  }
   ElMessage.success('数据已刷新')
 }
 
 /**
- * 处理引用字段点击 — 跳转到被引用数据所在页面
+ * 处理引用字段点击 — 跳转到被引用数据所在页面，通过 ID 搜索定位
  */
 function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   const targetCollection = field.referenceConfig?.targetCollection
@@ -2241,11 +2235,12 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   }
 
   const recordId = row[field.fieldName]
-  router.push({ path: targetMenu.path, query: { recordId } })
+  // 通过 searchId 参数触发搜索定位
+  router.push({ path: targetMenu.path, query: { searchId: recordId } })
 }
 
 /**
- * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面
+ * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面，通过 ID 搜索定位
  */
 function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
   const targetCollection = field.relationConfig?.targetCollection
@@ -2258,11 +2253,12 @@ function handleRelationClick(relatedRecordId: string, field: FieldConfig): void 
     return
   }
 
-  router.push({ path: targetMenu.path, query: { recordId: relatedRecordId } })
+  // 通过 searchId 参数触发搜索定位
+  router.push({ path: targetMenu.path, query: { searchId: relatedRecordId } })
 }
 
 /**
- * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面
+ * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面，通过 ID 搜索定位
  */
 function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
   const targetCollection = field.quoteConfig?.targetCollection
@@ -2275,7 +2271,8 @@ function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
     return
   }
 
-  router.push({ path: targetMenu.path, query: { recordId: quotedRecordId } })
+  // 通过 searchId 参数触发搜索定位
+  router.push({ path: targetMenu.path, query: { searchId: quotedRecordId } })
 }
 
 /**
@@ -2296,36 +2293,21 @@ function handleGraphNodeNavigate(targetCollection: string, targetRecordId: strin
     ElMessage.warning('未找到目标数据的页面')
     return
   }
-  router.push({ path: targetMenu.path, query: { recordId: targetRecordId } })
+  // 通过 searchId 参数触发搜索定位
+  router.push({ path: targetMenu.path, query: { searchId: targetRecordId } })
 }
 
 /**
- * 高亮定位指定记录（从引用跳转过来时调用）
- *
- * 自动切换到目标记录所在的分页，然后滚动并高亮闪烁。
+ * 高亮定位指定记录（搜索结果中只有一条时调用）
  */
 async function highlightRecord(recordId: string): Promise<void> {
   await nextTick()
 
-  // 在 filteredData 中查找记录的索引，确定所在分页
-  const index = filteredData.value.findIndex(r => r.id === recordId)
-  if (index === -1) return
-
-  // 切换到目标记录所在的分页
-  const targetPage = Math.floor(index / currentPageSize.value) + 1
-  if (currentPage.value !== targetPage) {
-    currentPage.value = targetPage
-    // 同步通知 DataTable 组件更新内部页码
-    const elDataTable = dataTableRef.value
-    if (elDataTable) {
-      handlePageChange(targetPage, currentPageSize.value)
-    }
-    await nextTick()
+  // 在当前页数据中查找记录
+  const row = tableData.value.find(r => r.id === recordId)
+  if (!row) {
+    return
   }
-
-  // 在分页后的数据中找到该行
-  const row = paginatedData.value.find(r => r.id === recordId)
-  if (!row) return
 
   // 通过 el-table 高亮该行
   const elTable = dataTableRef.value?.tableRef
@@ -2359,6 +2341,13 @@ watch(
   (newPageId) => {
     if (newPageId) {
       currentPage.value = 1
+      // 检查是否有 searchId 参数（关联跳转场景），直接用 ID 搜索
+      const searchId = route.query.searchId as string
+      if (searchId) {
+        // 直接带关键字加载数据，不设置 searchKeyword（避免残留）
+        loadPageDataWithHighlight(searchId)
+        return
+      }
       loadPageData()
     }
   },
@@ -2366,11 +2355,76 @@ watch(
 )
 
 /**
- * 搜索关键字变化时重置到第一页
+ * 监听 route.query.searchId 变化（关联跳转场景）
+ */
+watch(
+  () => route.query.searchId,
+  (newSearchId) => {
+    if (newSearchId) {
+      currentPage.value = 1
+      loadPageDataWithHighlight(String(newSearchId))
+    }
+  }
+)
+
+/**
+ * 加载数据并高亮目标记录（用于关联跳转）
+ * 直接用 targetId 作为搜索参数，不修改 searchKeyword（避免搜索栏残留）
+ */
+async function loadPageDataWithHighlight(targetId: string): Promise<void> {
+  if (!pageId.value) return
+
+  tableLoading.value = true
+  try {
+    const result = await pageConfigStore.fetchPageData(pageId.value, {
+      query: activeMongoQuery.value || undefined,
+      page: 1,
+      pageSize: currentPageSize.value,
+      keyword: targetId
+    })
+    tableData.value = result.data
+    totalCount.value = result.total
+
+    // 如果搜索结果只有一条，高亮该记录
+    if (result.total === 1 && result.data.length === 1 && result.data[0].id === targetId) {
+      highlightRecord(targetId)
+    }
+  } catch (error) {
+    console.error('加载数据失败:', error)
+    ElMessage.error('加载数据失败')
+  } finally {
+    tableLoading.value = false
+  }
+}
+
+/**
+ * 搜索关键字变化时触发后端搜索（防抖 300ms）
+ * 关键字搜索由后端处理，支持普通字段和关联字段
  */
 watch(searchKeyword, () => {
-  currentPage.value = 1
+  // 清除之前的定时器
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer)
+  }
+
+  // 防抖处理
+  searchDebounceTimer = setTimeout(async () => {
+    currentPage.value = 1
+    await loadPageData()
+    // 如果当前是 Excel 视图，同时刷新全量数据
+    if (viewMode.value === 'excel') {
+      await loadExcelData()
+    }
+  }, 300)
 })
+
+/**
+ * 数据变化时清除 DataTable 单元格缓存
+ * 确保新数据能正确显示
+ */
+watch(tableData, () => {
+  dataTableRef.value?.clearCellValueCache?.()
+}, { deep: false })
 
 /**
  * 页面ID变化时清除筛选条件
@@ -2384,6 +2438,7 @@ watch(pageId, () => {
   aiSearchText.value = ''
   aiSearchLoading.value = false
   aiGeneratedFilter.value = null
+  searchKeyword.value = ''
   // Set default view mode from config
   viewMode.value = pageConfig.value?.viewConfig?.defaultView || 'table'
 })
@@ -2405,10 +2460,13 @@ watch(viewMode, (newMode, oldMode) => {
     }
     // 显示加载占位，延迟显示实际组件
     excelReady.value = false
-    // 使用 setTimeout 让浏览器先完成当前渲染帧
-    setTimeout(() => {
-      excelReady.value = true
-    }, 50)
+    // 加载全量数据
+    loadExcelData().then(() => {
+      // 使用 setTimeout 让浏览器先完成当前渲染帧
+      setTimeout(() => {
+        excelReady.value = true
+      }, 50)
+    })
   } else {
     // 切换到其他视图时立即隐藏 Excel 视图
     excelReady.value = false
@@ -2417,9 +2475,35 @@ watch(viewMode, (newMode, oldMode) => {
 
 // ==================== 生命周期 ====================
 
+/** 标记是否需要立即刷新数据（用于跨页面操作后强制刷新） */
+const needsRefresh = ref(false)
+
+/**
+ * 暴露刷新方法供外部调用
+ * 用于双向关联同步后强制刷新
+ */
+function markNeedsRefresh(): void {
+  needsRefresh.value = true
+}
+
 onActivated(async () => {
-  // 重新加载页面数据（keep-alive 缓存可能显示过时数据，如双向关联同步后）
-  await loadPageData()
+  // 获取缓存数据
+  const cachedData = pageConfigStore.getCachedPageData(pageId.value)
+
+  // 策略：
+  // 1. 如果标记需要刷新，立即刷新
+  // 2. 如果没有缓存数据，加载数据
+  // 3. 如果有缓存数据，使用缓存（不阻塞 UI）
+  if (needsRefresh.value) {
+    needsRefresh.value = false
+    await loadPageData()
+  } else if (cachedData.length === 0) {
+    // 无缓存数据，加载
+    await loadPageData()
+  }
+  // 有缓存数据时，直接使用 keep-alive 缓存的组件状态
+  // 用户可通过刷新按钮手动更新
+
   // 加载导出脚本列表（用于绑定展示）
   try {
     allExportScripts.value = await getExportScripts()

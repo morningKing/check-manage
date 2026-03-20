@@ -81,32 +81,55 @@ class TestListCollection:
     def test_list_returns_records(self, setup):
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
+        mock_cursor.fetchone.return_value = (1,)  # total count
         mock_cursor.fetchall.return_value = [
             ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 1),
         ]
         resp = client.get('/test-collection', headers=headers)
         assert resp.status_code == 200
         data = resp.get_json()
-        assert isinstance(data, list)
+        assert isinstance(data, dict)
+        assert 'data' in data
+        assert 'total' in data
+        assert data['total'] == 1
 
     def test_list_returns_version(self, setup):
         """列表接口返回 _version 字段"""
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
+        mock_cursor.fetchone.return_value = (1,)  # total count
         mock_cursor.fetchall.return_value = [
             ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 3),
         ]
         resp = client.get('/test-collection', headers=headers)
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data[0]['_version'] == 3
+        assert data['data'][0]['_version'] == 3
 
     def test_list_empty_collection(self, setup):
         client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)  # total count = 0
         mock_cursor.fetchall.return_value = []
         resp = client.get('/my-data', headers=headers)
         assert resp.status_code == 200
-        assert resp.get_json() == []
+        result = resp.get_json()
+        assert result['data'] == []
+        assert result['total'] == 0
+
+    def test_list_pagination(self, setup):
+        """测试分页参数"""
+        client, mock_cursor, _, headers = setup
+        now = datetime.now(timezone.utc)
+        mock_cursor.fetchone.return_value = (100,)  # total count
+        mock_cursor.fetchall.return_value = [
+            ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 1),
+        ]
+        resp = client.get('/test-collection?page=2&pageSize=20', headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['page'] == 2
+        assert data['pageSize'] == 20
+        assert data['total'] == 100
 
 
 class TestCreateRecord:

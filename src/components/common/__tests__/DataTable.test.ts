@@ -158,10 +158,10 @@ describe('DataTable — 列搜索功能', () => {
 
     const html = wrapper.html()
     expect(html).toContain('column-header')
-    expect(html).toContain('el-popover')
+    expect(html).toContain('filter-icon')
   })
 
-  it('不可筛选字段不显示筛选结构', () => {
+  it('不可筛选字段不显示筛选图标', () => {
     const wrapper = mount(DataTable, {
       props: {
         data: [{ id: '1', file: [] }],
@@ -171,7 +171,7 @@ describe('DataTable — 列搜索功能', () => {
     })
 
     const html = wrapper.html()
-    expect(html).not.toContain('el-popover')
+    expect(html).not.toContain('filter-icon')
   })
 
   it('isFilterable 方法正确判断可筛选类型', () => {

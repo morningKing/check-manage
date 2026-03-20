@@ -331,17 +331,23 @@ describe('PageConfig Store — quoteSelect', () => {
     // fetchPageData('page-test') calls:
     // 1. get('/test') — main data
     // 2. get('/cases') — resolveQuoteLabels target records
-    mockedGet.mockResolvedValueOnce([
-      { id: 'r1', quotedCases: ['case-1', 'case-2'] },
-      { id: 'r2', quotedCases: [] },
-    ])
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseName: '用例A' },
-      { id: 'case-2', caseName: '用例B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', quotedCases: ['case-1', 'case-2'] },
+        { id: 'r2', quotedCases: [] },
+      ],
+      total: 2,
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseName: '用例A' },
+        { id: 'case-2', caseName: '用例B' },
+      ],
+      total: 2,
+    })
 
     const result = await store.fetchPageData('page-test')
-    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    const labels = result.data[0]?.[`_quote_quotedCases_labels`]
     expect(labels).toHaveLength(2)
     expect(labels[0].label).toBe('用例A')
     expect(labels[1].label).toBe('用例B')
@@ -368,17 +374,23 @@ describe('PageConfig Store — quoteSelect', () => {
     })
 
     // 引用顺序为 case-3, case-1, case-2（非自然排序）
-    mockedGet.mockResolvedValueOnce([
-      { id: 'r1', quotedCases: ['case-3', 'case-1', 'case-2'] },
-    ])
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseName: '用例A' },
-      { id: 'case-2', caseName: '用例B' },
-      { id: 'case-3', caseName: '用例C' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', quotedCases: ['case-3', 'case-1', 'case-2'] },
+      ],
+      total: 1,
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseName: '用例A' },
+        { id: 'case-2', caseName: '用例B' },
+        { id: 'case-3', caseName: '用例C' },
+      ],
+      total: 3,
+    })
 
     const result = await store.fetchPageData('page-test')
-    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    const labels = result.data[0]?.[`_quote_quotedCases_labels`]
     expect(labels).toHaveLength(3)
     // 验证标签顺序与原始 ID 数组一致，而非按目标集合顺序
     expect(labels[0]).toEqual({ id: 'case-3', label: '用例C' })
@@ -407,17 +419,23 @@ describe('PageConfig Store — quoteSelect', () => {
     })
 
     // 原始引用 B, C, D → 目标集合中 C 已被删除
-    mockedGet.mockResolvedValueOnce([
-      { id: 'r1', quotedCases: ['id-B', 'id-C', 'id-D'] },
-    ])
-    mockedGet.mockResolvedValueOnce([
-      { id: 'id-B', caseName: '记录B' },
-      // id-C 已删除，不在目标集合中
-      { id: 'id-D', caseName: '记录D' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', quotedCases: ['id-B', 'id-C', 'id-D'] },
+      ],
+      total: 1,
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'id-B', caseName: '记录B' },
+        // id-C 已删除，不在目标集合中
+        { id: 'id-D', caseName: '记录D' },
+      ],
+      total: 2,
+    })
 
     const result = await store.fetchPageData('page-test')
-    const labels = result[0]?.[`_quote_quotedCases_labels`]
+    const labels = result.data[0]?.[`_quote_quotedCases_labels`]
     expect(labels).toHaveLength(3)
     // B 和 D 保持原始顺序，C 的 ID 作为 fallback 显示
     expect(labels[0]).toEqual({ id: 'id-B', label: '记录B' })
@@ -451,10 +469,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001' },
-      { id: 'case-2', caseId: 'IC-002' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001' },
+        { id: 'case-2', caseId: 'IC-002' },
+      ],
+      total: 2,
+    })
 
     const maps = await store.fetchQuoteDisplayMaps('page-test')
     expect(maps.quotedCases).toBeDefined()
@@ -488,10 +509,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001' },
-      { id: 'case-2', caseId: 'IC-002' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001' },
+        { id: 'case-2', caseId: 'IC-002' },
+      ],
+      total: 2,
+    })
 
     const records = [
       { quotedCases: ['IC-001', 'IC-002'] },
@@ -529,11 +553,14 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001' },
-      { id: 'case-2', caseId: 'IC-002' },
-      { id: 'case-3', caseId: 'IC-003' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001' },
+        { id: 'case-2', caseId: 'IC-002' },
+        { id: 'case-3', caseId: 'IC-003' },
+      ],
+      total: 3,
+    })
 
     // 导入顺序为 IC-003, IC-001, IC-002（非自然排序）
     const records = [
@@ -571,10 +598,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001' },
-      { id: 'case-3', caseId: 'IC-003' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001' },
+        { id: 'case-3', caseId: 'IC-003' },
+      ],
+      total: 2,
+    })
 
     // IC-002 不存在，应被过滤但不影响 IC-001 和 IC-003 的顺序
     const records = [
@@ -611,10 +641,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001', caseName: '用例A' },
-      { id: 'case-2', caseId: 'IC-002', caseName: '用例B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001', caseName: '用例A' },
+        { id: 'case-2', caseId: 'IC-002', caseName: '用例B' },
+      ],
+      total: 2,
+    })
 
     // 用户在 Excel 中填写的是 displayField 的值（下拉框中看到的名称）
     const records = [
@@ -652,10 +685,13 @@ describe('PageConfig Store — quoteSelect', () => {
     })
 
     // caseId='X' 的记录和 caseName='X' 的记录不同
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'X', caseName: '用例1' },
-      { id: 'case-2', caseId: 'Y', caseName: 'X' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'X', caseName: '用例1' },
+        { id: 'case-2', caseId: 'Y', caseName: 'X' },
+      ],
+      total: 2,
+    })
 
     const records = [{ quotedCases: ['X'] }]
     await store.resolveQuoteImportValues('page-test', records)
@@ -690,11 +726,14 @@ describe('PageConfig Store — quoteSelect', () => {
     })
 
     // 三条记录的 caseName 相同
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001', caseName: '同名用例' },
-      { id: 'case-2', caseId: 'IC-002', caseName: '同名用例' },
-      { id: 'case-3', caseId: 'IC-003', caseName: '同名用例' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001', caseName: '同名用例' },
+        { id: 'case-2', caseId: 'IC-002', caseName: '同名用例' },
+        { id: 'case-3', caseId: 'IC-003', caseName: '同名用例' },
+      ],
+      total: 3,
+    })
 
     const records = [{ quotedCases: ['同名用例'] }]
     await store.resolveQuoteImportValues('page-test', records)
@@ -729,10 +768,13 @@ describe('PageConfig Store — quoteSelect', () => {
     })
 
     // 两条记录的 caseId 相同
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-DUP', caseName: '用例A' },
-      { id: 'case-2', caseId: 'IC-DUP', caseName: '用例B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-DUP', caseName: '用例A' },
+        { id: 'case-2', caseId: 'IC-DUP', caseName: '用例B' },
+      ],
+      total: 2,
+    })
 
     const records = [{ quotedCases: ['IC-DUP'] }]
     await store.resolveQuoteImportValues('page-test', records)
@@ -765,10 +807,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001', caseName: '机房安全检查' },
-      { id: 'case-2', caseId: 'IC-002', caseName: '机房安全检查' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001', caseName: '机房安全检查' },
+        { id: 'case-2', caseId: 'IC-002', caseName: '机房安全检查' },
+      ],
+      total: 2,
+    })
 
     // 导入值中同名出现两次，解析后应去重，只保留 2 条而非 4 条
     const records = [{ quotedCases: ['机房安全检查', '机房安全检查'] }]
@@ -822,10 +867,13 @@ describe('PageConfig Store — quoteSelect', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'case-1', caseId: 'IC-001' },
-      { id: 'case-2', caseId: 'IC-002' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001' },
+        { id: 'case-2', caseId: 'IC-002' },
+      ],
+      total: 2,
+    })
 
     const maps = await store.fetchQuoteDisplayMaps('page-test')
     expect(maps.quotedCases).toBeDefined()
@@ -871,21 +919,27 @@ describe('PageConfig Store — 批量关联加载', () => {
     })
 
     // 1. get('/test') — main data
-    mockedGet.mockResolvedValueOnce([
-      { id: 'r1', name: 'Record 1' },
-      { id: 'r2', name: 'Record 2' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', name: 'Record 1' },
+        { id: 'r2', name: 'Record 2' },
+      ],
+      total: 2,
+    })
     // 2. getCollectionRelations('test') — batch relations
     mockedGetCollectionRelations.mockResolvedValueOnce({
       'r1': { relItems: ['item-1', 'item-2'] },
       'r2': { relItems: ['item-3'] },
     })
     // 3. get('/items') — resolve relation labels
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', itemName: '物品A' },
-      { id: 'item-2', itemName: '物品B' },
-      { id: 'item-3', itemName: '物品C' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', itemName: '物品A' },
+        { id: 'item-2', itemName: '物品B' },
+        { id: 'item-3', itemName: '物品C' },
+      ],
+      total: 3,
+    })
 
     const result = await store.fetchPageData('page-test')
 
@@ -894,12 +948,12 @@ describe('PageConfig Store — 批量关联加载', () => {
     expect(mockedGetCollectionRelations).toHaveBeenCalledTimes(1)
 
     // 验证关联数据正确分配
-    expect(result[0].relItems).toEqual(['item-1', 'item-2'])
-    expect(result[1].relItems).toEqual(['item-3'])
+    expect(result.data[0].relItems).toEqual(['item-1', 'item-2'])
+    expect(result.data[1].relItems).toEqual(['item-3'])
 
     // 验证标签解析正确
-    expect(result[0]._rel_relItems_labels).toHaveLength(2)
-    expect(result[0]._rel_relItems_labels[0].label).toBe('物品A')
+    expect(result.data[0]._rel_relItems_labels).toHaveLength(2)
+    expect(result.data[0]._rel_relItems_labels[0].label).toBe('物品A')
   })
 
   it('resolveRelationLabels 使用共享缓存避免重复请求', async () => {
@@ -933,18 +987,24 @@ describe('PageConfig Store — 批量关联加载', () => {
     })
 
     // 1. get('/test') — main data
-    mockedGet.mockResolvedValueOnce([
-      { id: 'r1', name: 'Record 1', refB: 'item-1' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', name: 'Record 1', refB: 'item-1' },
+      ],
+      total: 1,
+    })
     // 2. batch relations
     mockedGetCollectionRelations.mockResolvedValueOnce({
       'r1': { relA: ['item-2'] },
     })
     // 3. get('/items') — shared between resolveRelationLabels and resolveReferences
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', itemName: '物品A' },
-      { id: 'item-2', itemName: '物品B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', itemName: '物品A' },
+        { id: 'item-2', itemName: '物品B' },
+      ],
+      total: 2,
+    })
 
     await store.fetchPageData('page-test')
 
@@ -983,10 +1043,13 @@ describe('PageConfig Store — resolveRelationImportValues displayField', () => 
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', itemName: '物品A' },
-      { id: 'item-2', itemName: '物品B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', itemName: '物品A' },
+        { id: 'item-2', itemName: '物品B' },
+      ],
+      total: 2,
+    })
 
     // 用户在 Excel 中填写的是 displayField 值
     const records = [
@@ -1023,10 +1086,13 @@ describe('PageConfig Store — resolveRelationImportValues displayField', () => 
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', code: 'X', itemName: '物品1' },
-      { id: 'item-2', code: 'Y', itemName: 'X' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', code: 'X', itemName: '物品1' },
+        { id: 'item-2', code: 'Y', itemName: 'X' },
+      ],
+      total: 2,
+    })
 
     const records = [{ relItems: ['X'] }]
     await store.resolveRelationImportValues('page-test', records)
@@ -1063,10 +1129,13 @@ describe('PageConfig Store — resolveReferenceImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'tpl-001', templateName: '模板A' },
-      { id: 'tpl-002', templateName: '模板B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'tpl-001', templateName: '模板A' },
+        { id: 'tpl-002', templateName: '模板B' },
+      ],
+      total: 2,
+    })
 
     const records = [
       { templateRef: '模板A' },
@@ -1104,10 +1173,13 @@ describe('PageConfig Store — resolveReferenceImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'tpl-001', tplCode: 'TPL-A', templateName: '模板A' },
-      { id: 'tpl-002', tplCode: 'TPL-B', templateName: '模板B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'tpl-001', tplCode: 'TPL-A', templateName: '模板A' },
+        { id: 'tpl-002', tplCode: 'TPL-B', templateName: '模板B' },
+      ],
+      total: 2,
+    })
 
     const records = [
       { templateRef: 'TPL-A' },
@@ -1139,9 +1211,12 @@ describe('PageConfig Store — resolveReferenceImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'tpl-001', templateName: '模板A' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'tpl-001', templateName: '模板A' },
+      ],
+      total: 1,
+    })
 
     const records = [
       { templateRef: 'tpl-001' },
@@ -1178,10 +1253,13 @@ describe('PageConfig Store — resolveReferenceImportValues', () => {
     })
 
     // code='X' 的记录和 name='X' 的记录不同
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', code: 'X', name: '物品1' },
-      { id: 'item-2', code: 'Y', name: 'X' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', code: 'X', name: '物品1' },
+        { id: 'item-2', code: 'Y', name: 'X' },
+      ],
+      total: 2,
+    })
 
     const records = [{ ref: 'X' }]
     await store.resolveReferenceImportValues('page-test', records)
@@ -1209,9 +1287,12 @@ describe('PageConfig Store — resolveReferenceImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', name: '物品A' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', name: '物品A' },
+      ],
+      total: 1,
+    })
 
     const records = [
       { ref: '' },
@@ -1279,10 +1360,13 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     })
 
     // 目标集合已有记录
-    mockedGet.mockResolvedValueOnce([
-      { id: 'cat-001', catName: '分类A' },
-      { id: 'cat-002', catName: '分类B' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'cat-001', catName: '分类A' },
+        { id: 'cat-002', catName: '分类B' },
+      ],
+      total: 2,
+    })
 
     const records = [
       { category: '分类A' },
@@ -1319,11 +1403,14 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'tag-1', tagName: '标签X' },
-      { id: 'tag-2', tagName: '标签Y' },
-      { id: 'tag-3', tagName: '标签Z' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'tag-1', tagName: '标签X' },
+        { id: 'tag-2', tagName: '标签Y' },
+        { id: 'tag-3', tagName: '标签Z' },
+      ],
+      total: 3,
+    })
 
     const records = [
       { tags: ['标签X', '标签Z'] },
@@ -1361,7 +1448,7 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     })
 
     // 当前集合为空（所有数据都是新导入的）
-    mockedGet.mockResolvedValueOnce([])
+    mockedGet.mockResolvedValueOnce({ data: [], total: 0 })
 
     const records: Record<string, any>[] = [
       { colA: '1', colB: '2', colC: '' },    // Row 1
@@ -1404,7 +1491,7 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([])
+    mockedGet.mockResolvedValueOnce({ data: [], total: 0 })
 
     const records: Record<string, any>[] = [
       { colA: '1', colB: '2', colC: '' },
@@ -1451,9 +1538,12 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
       ],
     })
 
-    mockedGet.mockResolvedValueOnce([
-      { id: 'item-1', name: '物品A' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'item-1', name: '物品A' },
+      ],
+      total: 1,
+    })
 
     const records = [
       { staticSelect: 'a', dynSelect: '' },    // dynSelect 为空
@@ -1526,9 +1616,12 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     })
 
     // 数据库中已有一条记录 colA='existing'
-    mockedGet.mockResolvedValueOnce([
-      { id: 'test-existing', colA: 'existing' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'test-existing', colA: 'existing' },
+      ],
+      total: 1,
+    })
 
     const records: Record<string, any>[] = [
       { colA: 'new1', colC: 'existing' },   // 引用已有记录
@@ -1700,7 +1793,10 @@ describe('PageConfig Store — refreshSingleRecord', () => {
     // 获取记录关联
     mockedGetRecordRelations.mockResolvedValueOnce({ relItems: ['item-1'] })
     // 获取关联标签
-    mockedGet.mockResolvedValueOnce([{ id: 'item-1', itemName: '物品A' }])
+    mockedGet.mockResolvedValueOnce({
+      data: [{ id: 'item-1', itemName: '物品A' }],
+      total: 1,
+    })
 
     const result = await store.refreshSingleRecord('page-test', 'r1')
 
@@ -1795,7 +1891,7 @@ describe('PageConfig Store — refreshSingleRecord', () => {
 
     mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test Record' })
     mockedGetRecordRelations.mockRejectedValueOnce(new Error('关联获取失败'))
-    mockedGet.mockResolvedValueOnce([])
+    mockedGet.mockResolvedValueOnce({ data: [], total: 0 })
 
     const result = await store.refreshSingleRecord('page-test', 'r1')
 
@@ -1832,9 +1928,12 @@ describe('PageConfig Store — refreshSingleRecord', () => {
     mockedGet.mockResolvedValueOnce({ id: 'r1', name: 'Test', templateRef: 'tpl-1' })
     mockedGetRecordRelations.mockResolvedValueOnce({})
     // 获取引用记录
-    mockedGet.mockResolvedValueOnce([
-      { id: 'tpl-1', tplName: '模板A', desc: '描述A' },
-    ])
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'tpl-1', tplName: '模板A', desc: '描述A' },
+      ],
+      total: 1,
+    })
 
     const result = await store.refreshSingleRecord('page-test', 'r1')
 

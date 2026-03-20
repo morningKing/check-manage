@@ -73,11 +73,14 @@ describe('SelectInput — loadOptions', () => {
   })
 
   it('collection 类型从数据页加载选项', async () => {
-    mockGet.mockResolvedValueOnce([
-      { id: 'r1', caseName: '用例A' },
-      { id: 'r2', caseName: '用例B' },
-      { id: 'r3', caseName: '用例C' },
-    ] as any)
+    mockGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', caseName: '用例A' },
+        { id: 'r2', caseName: '用例B' },
+        { id: 'r3', caseName: '用例C' },
+      ],
+      total: 3,
+    } as any)
 
     const field = makeField({
       optionsSource: {
@@ -93,13 +96,16 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/inspection-case')
+    expect(mockGet).toHaveBeenCalledWith('/inspection-case', { pageSize: 10000 })
   })
 
   it('collection 类型 labelField/valueField 缺省时使用 id', async () => {
-    mockGet.mockResolvedValueOnce([
-      { id: 'r1', name: '记录1' },
-    ] as any)
+    mockGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', name: '记录1' },
+      ],
+      total: 1,
+    } as any)
 
     const field = makeField({
       optionsSource: {
@@ -114,7 +120,7 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/items')
+    expect(mockGet).toHaveBeenCalledWith('/items', { pageSize: 10000 })
   })
 
   it('collection 类型加载失败时选项为空', async () => {
@@ -134,7 +140,7 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/nonexistent')
+    expect(mockGet).toHaveBeenCalledWith('/nonexistent', { pageSize: 10000 })
     // 不抛出错误，组件正常渲染
   })
 })
@@ -145,10 +151,13 @@ describe('MultiSelect — loadOptions', () => {
   })
 
   it('collection 类型从数据页加载选项', async () => {
-    mockGet.mockResolvedValueOnce([
-      { id: 'r1', tagName: '标签A' },
-      { id: 'r2', tagName: '标签B' },
-    ] as any)
+    mockGet.mockResolvedValueOnce({
+      data: [
+        { id: 'r1', tagName: '标签A' },
+        { id: 'r2', tagName: '标签B' },
+      ],
+      total: 2,
+    } as any)
 
     const field = makeField({
       controlType: 'multiSelect',
@@ -165,7 +174,7 @@ describe('MultiSelect — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/tags')
+    expect(mockGet).toHaveBeenCalledWith('/tags', { pageSize: 10000 })
   })
 
   it('static 类型不发起请求', async () => {

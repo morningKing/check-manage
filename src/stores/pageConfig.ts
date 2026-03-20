@@ -267,6 +267,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
   /**
    * 辅助函数：获取目标集合数据，使用共享缓存避免重复请求
+   * 注：用于解析关联/引用字段，获取全量数据（不分页）
    */
   async function fetchCollectionData(
     collection: string,
@@ -276,7 +277,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       return cache.get(collection)!
     }
     try {
-      const records = await get<any[]>(`/${collection}`)
+      // 使用大页量获取全量数据（用于解析关联/引用字段）
+      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { pageSize: 10000 })
+      const records = response.data || []
       cache.set(collection, records)
       return records
     } catch {
@@ -286,18 +289,52 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
-   * 获取页面数据列表
+   * 获取页面数据列表（支持后端分页）
    *
    * @param pageId - 页面ID
-   * @returns 数据列表
+   * @param options - 可选参数
+   * @param options.query - MongoDB 查询条件
+   * @param options.page - 页码（从1开始）
+   * @param options.pageSize - 每页数量
+   * @returns 包含数据和分页信息的对象
    */
-  async function fetchPageData(pageId: string, query?: Record<string, any>): Promise<DynamicRecord[]> {
+  async function fetchPageData(
+    pageId: string,
+    options?: {
+      query?: Record<string, any>
+      page?: number
+      pageSize?: number
+      keyword?: string
+      loadAll?: boolean
+    }
+  ): Promise<{ data: DynamicRecord[]; total: number }> {
+    const { query, page = 1, pageSize = 50, keyword, loadAll } = options || {}
     try {
       // 根据页面配置获取对应的数据端点
-      // 使用简化的端点名称（从pageId提取）
       const endpoint = pageId.replace('page-', '')
-      const qs = query ? `?q=${encodeURIComponent(JSON.stringify(query))}` : ''
-      const data = await get<DynamicRecord[]>(`/${endpoint}${qs}`)
+
+      // 构建查询参数
+      const params: Record<string, any> = { page, pageSize }
+      if (query) {
+        params.q = JSON.stringify(query)
+      }
+      if (keyword && keyword.trim()) {
+        params.keyword = keyword.trim()
+      }
+      if (loadAll) {
+        params.all = 'true'
+      }
+
+      // 请求后端分页数据
+      const response = await get<{
+        data: DynamicRecord[]
+        total: number
+        page: number
+        pageSize: number
+      }>(`/${endpoint}`, params)
+
+      const data = response.data || []
+      const total = response.total || 0
 
       // 共享集合缓存，避免多个 resolve 函数重复请求同一集合
       const collectionCache = new Map<string, any[]>()
@@ -339,13 +376,13 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         await resolveQuoteLabels(data, quoteFields, collectionCache)
       }
 
+      // 更新缓存（仅缓存当前页数据）
       pageDataCache.value[pageId] = data
-      return data
+      return { data, total }
     } catch (error) {
       console.error(`获取页面数据失败 [${pageId}]:`, error)
-      // 如果API不存在，返回空数组
       pageDataCache.value[pageId] = []
-      return []
+      return { data: [], total: 0 }
     }
   }
 
@@ -916,7 +953,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const pkField = getTargetPrimaryKeyField(config.targetCollection)
       if (!pkField) continue
       try {
-        const records = await get<any[]>(`/${config.targetCollection}`)
+        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
+        const records = response.data || []
         const idToPk = new Map<string, string>()
         for (const r of records) {
           const pkVal = r[pkField]
@@ -1064,7 +1102,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const pkField = getTargetPrimaryKeyField(config.targetCollection)
       if (!pkField) continue
       try {
-        const records = await get<any[]>(`/${config.targetCollection}`)
+        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
+        const records = response.data || []
         const idToPk = new Map<string, string>()
         for (const r of records) {
           const pkVal = r[pkField]

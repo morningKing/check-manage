@@ -48,7 +48,8 @@ async function loadOptions(): Promise<void> {
 
   loading.value = true
   try {
-    const data = await get<any[]>(`/${config.targetCollection}`)
+    const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
+    const data = response.data || []
     options.value = data.map((item) => ({
       label: item[config.displayField] || item.id,
       value: item.id

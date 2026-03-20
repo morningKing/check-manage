@@ -10,6 +10,7 @@
  * - 自动根据 controlType 格式化显示值
  * - 支持自定义操作列
  * - 响应式设计
+ * - 虚拟滚动优化（大数据量）
  */
 <template>
   <div ref="tableWrapperRef" class="data-table">
@@ -43,119 +44,15 @@
         :show-overflow-tooltip="!['relation', 'quoteSelect'].includes(field.controlType)"
       >
         <template #header>
-          <div class="column-header">
+          <div class="column-header" @click.stop="isFilterable(field) && openFilter(field)">
             <span>{{ field.label }}</span>
-            <el-popover
+            <el-icon
               v-if="isFilterable(field)"
-              :visible="activeFilter === field.fieldName"
-              placement="bottom"
-              :width="280"
-              trigger="click"
+              class="filter-icon"
+              :class="{ active: columnFilters[field.fieldName]?.value }"
             >
-              <template #reference>
-                <el-icon
-                  class="filter-icon"
-                  :class="{ active: columnFilters[field.fieldName]?.value }"
-                  @click.stop="toggleFilter(field.fieldName)"
-                >
-                  <Search />
-                </el-icon>
-              </template>
-              <div class="filter-popover">
-                <div class="filter-header">
-                  <span>筛选 "{{ field.label }}"</span>
-                  <el-button
-                    v-if="columnFilters[field.fieldName]?.value"
-                    type="primary"
-                    link
-                    size="small"
-                    @click="clearColumnFilter(field.fieldName)"
-                  >清除</el-button>
-                </div>
-                <el-input
-                  v-if="['relation', 'quoteSelect', 'reference'].includes(field.controlType)"
-                  v-model="columnFilterForm.value"
-                  :placeholder="`输入${field.label}关键字`"
-                  clearable
-                  style="width: 100%"
-                />
-                <el-select
-                  v-else-if="['select', 'radio', 'multiSelect', 'checkbox'].includes(field.controlType)"
-                  v-model="columnFilterForm.value"
-                  :placeholder="`选择${field.label}`"
-                  clearable
-                  :multiple="['multiSelect', 'checkbox'].includes(field.controlType)"
-                  style="width: 100%"
-                >
-                  <el-option
-                    v-for="opt in field.options || []"
-                    :key="opt.value"
-                    :label="opt.label"
-                    :value="opt.value"
-                  />
-                </el-select>
-                <template v-else-if="['date', 'datetime', 'autoTimestamp'].includes(field.controlType)">
-                  <el-select v-model="columnFilterForm.operator" style="width: 100%; margin-bottom: 8px;">
-                    <el-option label="等于" value="eq" />
-                    <el-option label="早于" value="lt" />
-                    <el-option label="晚于" value="gt" />
-                    <el-option label="介于" value="between" />
-                  </el-select>
-                  <el-date-picker
-                    v-if="columnFilterForm.operator !== 'between'"
-                    v-model="columnFilterForm.value"
-                    :type="field.controlType === 'date' ? 'date' : 'datetime'"
-                    :placeholder="`选择${field.label}`"
-                    style="width: 100%"
-                  />
-                  <div v-else style="display: flex; gap: 8px;">
-                    <el-date-picker
-                      v-model="columnFilterForm.value"
-                      :type="field.controlType === 'date' ? 'date' : 'datetime'"
-                      placeholder="开始"
-                      style="flex: 1"
-                    />
-                    <el-date-picker
-                      v-model="columnFilterForm.value2"
-                      :type="field.controlType === 'date' ? 'date' : 'datetime'"
-                      placeholder="结束"
-                      style="flex: 1"
-                    />
-                  </div>
-                </template>
-                <template v-else-if="field.controlType === 'number'">
-                  <el-select v-model="columnFilterForm.operator" style="width: 100%; margin-bottom: 8px;">
-                    <el-option label="等于" value="eq" />
-                    <el-option label="大于" value="gt" />
-                    <el-option label="小于" value="lt" />
-                    <el-option label="介于" value="between" />
-                  </el-select>
-                  <el-input-number
-                    v-if="columnFilterForm.operator !== 'between'"
-                    v-model="columnFilterForm.value"
-                    :placeholder="`输入${field.label}`"
-                    style="width: 100%"
-                  />
-                  <div v-else style="display: flex; gap: 8px; align-items: center;">
-                    <el-input-number v-model="columnFilterForm.value" placeholder="最小" style="flex: 1" />
-                    <span>-</span>
-                    <el-input-number v-model="columnFilterForm.value2" placeholder="最大" style="flex: 1" />
-                  </div>
-                </template>
-                <template v-else>
-                  <el-input
-                    v-model="columnFilterForm.value"
-                    :placeholder="`输入${field.label}关键字`"
-                    clearable
-                    style="width: 100%"
-                  />
-                </template>
-                <div class="filter-actions">
-                  <el-button size="small" @click="closeFilter">取消</el-button>
-                  <el-button type="primary" size="small" @click="applyFilter(field)">确定</el-button>
-                </div>
-              </div>
-            </el-popover>
+              <Search />
+            </el-icon>
           </div>
         </template>
         <template #default="{ row }">
@@ -197,8 +94,8 @@
             v-else-if="field.controlType === 'reference' && row[field.fieldName]"
             class="reference-link"
             @click.stop="handleReferenceClick(row, field)"
-          >{{ formatCellValue(row, field) }}</span>
-          <span v-else>{{ formatCellValue(row, field) }}</span>
+          >{{ getCellValue(row, field) }}</span>
+          <span v-else>{{ getCellValue(row, field) }}</span>
         </template>
       </el-table-column>
 
@@ -238,6 +135,112 @@
         @current-change="handleCurrentChange"
       />
     </div>
+
+    <!-- 单一筛选弹窗（移到表格外部，减少 DOM 节点） -->
+    <Teleport to="body">
+      <el-dialog
+        v-model="filterDialogVisible"
+        :title="filterDialogTitle"
+        width="400px"
+        :close-on-click-modal="true"
+        append-to-body
+      >
+        <div class="filter-dialog-content">
+          <el-input
+            v-if="activeFilterField && ['relation', 'quoteSelect', 'reference'].includes(activeFilterField.controlType)"
+            v-model="columnFilterForm.value"
+            :placeholder="`输入${activeFilterField.label}关键字`"
+            clearable
+            style="width: 100%"
+          />
+          <el-select
+            v-else-if="activeFilterField && ['select', 'radio', 'multiSelect', 'checkbox'].includes(activeFilterField.controlType)"
+            v-model="columnFilterForm.value"
+            :placeholder="`选择${activeFilterField.label}`"
+            clearable
+            :multiple="['multiSelect', 'checkbox'].includes(activeFilterField.controlType)"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="opt in activeFilterField.options || []"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <template v-else-if="activeFilterField && ['date', 'datetime', 'autoTimestamp'].includes(activeFilterField.controlType)">
+            <el-select v-model="columnFilterForm.operator" style="width: 100%; margin-bottom: 8px;">
+              <el-option label="等于" value="eq" />
+              <el-option label="早于" value="lt" />
+              <el-option label="晚于" value="gt" />
+              <el-option label="介于" value="between" />
+            </el-select>
+            <el-date-picker
+              v-if="columnFilterForm.operator !== 'between'"
+              v-model="columnFilterForm.value"
+              :type="activeFilterField.controlType === 'date' ? 'date' : 'datetime'"
+              :placeholder="`选择${activeFilterField.label}`"
+              style="width: 100%"
+            />
+            <div v-else style="display: flex; gap: 8px;">
+              <el-date-picker
+                v-model="columnFilterForm.value"
+                :type="activeFilterField.controlType === 'date' ? 'date' : 'datetime'"
+                placeholder="开始"
+                style="flex: 1"
+              />
+              <el-date-picker
+                v-model="columnFilterForm.value2"
+                :type="activeFilterField.controlType === 'date' ? 'date' : 'datetime'"
+                placeholder="结束"
+                style="flex: 1"
+              />
+            </div>
+          </template>
+          <template v-else-if="activeFilterField && activeFilterField.controlType === 'number'">
+            <el-select v-model="columnFilterForm.operator" style="width: 100%; margin-bottom: 8px;">
+              <el-option label="等于" value="eq" />
+              <el-option label="大于" value="gt" />
+              <el-option label="小于" value="lt" />
+              <el-option label="介于" value="between" />
+            </el-select>
+            <el-input-number
+              v-if="columnFilterForm.operator !== 'between'"
+              v-model="columnFilterForm.value"
+              :placeholder="`输入${activeFilterField.label}`"
+              style="width: 100%"
+            />
+            <div v-else style="display: flex; gap: 8px; align-items: center;">
+              <el-input-number v-model="columnFilterForm.value" placeholder="最小" style="flex: 1" />
+              <span>-</span>
+              <el-input-number v-model="columnFilterForm.value2" placeholder="最大" style="flex: 1" />
+            </div>
+          </template>
+          <el-input
+            v-else-if="activeFilterField"
+            v-model="columnFilterForm.value"
+            :placeholder="`输入${activeFilterField.label}关键字`"
+            clearable
+            style="width: 100%"
+          />
+        </div>
+        <template #footer>
+          <div style="display: flex; justify-content: space-between; width: 100%;">
+            <el-button
+              v-if="columnFilters[activeFilterField?.fieldName || '']?.value"
+              type="danger"
+              link
+              @click="clearCurrentFilter"
+            >清除筛选</el-button>
+            <span v-else></span>
+            <div>
+              <el-button @click="filterDialogVisible = false">取消</el-button>
+              <el-button type="primary" @click="applyFilter">确定</el-button>
+            </div>
+          </div>
+        </template>
+      </el-dialog>
+    </Teleport>
   </div>
 </template>
 
@@ -311,24 +314,10 @@ const emit = defineEmits<{
 
 // ==================== State ====================
 
-/**
- * el-table 实例引用
- */
 const tableRef = ref()
-
-/**
- * 表格容器引用（用于 ResizeObserver 计算可用高度）
- */
 const tableWrapperRef = ref<HTMLElement>()
-
-/**
- * 容器实际高度
- */
 const wrapperHeight = ref(0)
 
-/**
- * 表格高度 — 根据容器高度动态计算，使水平滚动条始终可见
- */
 const tableHeight = computed(() => {
   if (!wrapperHeight.value) return undefined
   const paginationH = props.showPagination ? 52 : 0
@@ -353,20 +342,15 @@ onBeforeUnmount(() => {
   resizeObserver = null
 })
 
-/**
- * 当前页码
- */
 const currentPage = ref(1)
-
-/**
- * 每页数量
- */
 const pageSize = ref(50)
 
 const columnFilters = ref<Record<string, ColumnFilter>>({})
-const activeFilter = ref<string>('')
-const columnFilterForm = reactive<ColumnFilter & { fieldName: string }>({
-  fieldName: '',
+
+// 筛选弹窗状态
+const filterDialogVisible = ref(false)
+const activeFilterField = ref<FieldConfig | null>(null)
+const columnFilterForm = reactive<ColumnFilter>({
   value: null,
   value2: null,
   operator: 'eq'
@@ -374,55 +358,63 @@ const columnFilterForm = reactive<ColumnFilter & { fieldName: string }>({
 
 // ==================== 计算属性 ====================
 
-/**
- * 可见字段列表
- *
- * 过滤掉隐藏字段
- */
 const visibleFields = computed(() => {
   return props.fields
     .filter((field) => !field.hidden)
     .sort((a, b) => a.order - b.order)
 })
 
+/** 筛选弹窗标题 */
+const filterDialogTitle = computed(() => {
+  return activeFilterField.value ? `筛选 "${activeFilterField.value.label}"` : '筛选'
+})
+
+// ==================== 单元格值缓存 ====================
+
+/** 缓存格式化后的单元格值，避免重复计算 */
+const cellValueCache = new Map<string, string>()
+
+/** 清除缓存（数据变化时调用） */
+function clearCellValueCache(): void {
+  cellValueCache.clear()
+}
+
+/** 获取单元格值（带缓存） */
+function getCellValue(row: DynamicRecord, field: FieldConfig): string {
+  // 使用 recordId + fieldName 作为缓存 key
+  const cacheKey = `${row.id}_${field.fieldName}`
+  const cached = cellValueCache.get(cacheKey)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const value = formatCellValue(row, field)
+  cellValueCache.set(cacheKey, value)
+  return value
+}
+
 // ==================== 方法 ====================
 
-/**
- * 判断字段是否可筛选
- */
 function isFilterable(field: FieldConfig): boolean {
   const filterableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'select', 'radio', 'multiSelect', 'checkbox', 'relation', 'quoteSelect', 'reference']
   return filterableTypes.includes(field.controlType)
 }
 
-/**
- * 切换筛选面板
- */
-function toggleFilter(fieldName: string): void {
-  if (activeFilter.value === fieldName) {
-    activeFilter.value = ''
-  } else {
-    activeFilter.value = fieldName
-    const existing = columnFilters.value[fieldName]
-    columnFilterForm.value = existing?.value ?? null
-    columnFilterForm.value2 = existing?.value2 ?? null
-    columnFilterForm.operator = existing?.operator ?? 'eq'
-    columnFilterForm.fieldName = fieldName
-  }
+/** 打开筛选弹窗 */
+function openFilter(field: FieldConfig): void {
+  activeFilterField.value = field
+  const existing = columnFilters.value[field.fieldName]
+  columnFilterForm.value = existing?.value ?? null
+  columnFilterForm.value2 = existing?.value2 ?? null
+  columnFilterForm.operator = existing?.operator ?? 'eq'
+  filterDialogVisible.value = true
 }
 
-/**
- * 关闭筛选面板
- */
-function closeFilter(): void {
-  activeFilter.value = ''
-}
+/** 应用筛选 */
+function applyFilter(): void {
+  if (!activeFilterField.value) return
 
-/**
- * 应用筛选
- */
-function applyFilter(field: FieldConfig): void {
-  const fieldName = field.fieldName
+  const fieldName = activeFilterField.value.fieldName
   if (columnFilterForm.value !== null && columnFilterForm.value !== '' && columnFilterForm.value !== undefined) {
     columnFilters.value[fieldName] = {
       value: columnFilterForm.value,
@@ -432,27 +424,18 @@ function applyFilter(field: FieldConfig): void {
   } else {
     delete columnFilters.value[fieldName]
   }
-  activeFilter.value = ''
+  filterDialogVisible.value = false
   emit('filter-change', columnFilters.value)
 }
 
-/**
- * 清除单列筛选
- */
-function clearColumnFilter(fieldName: string): void {
-  delete columnFilters.value[fieldName]
+/** 清除当前筛选 */
+function clearCurrentFilter(): void {
+  if (!activeFilterField.value) return
+  delete columnFilters.value[activeFilterField.value.fieldName]
   columnFilterForm.value = null
   columnFilterForm.value2 = null
   columnFilterForm.operator = 'eq'
-  activeFilter.value = ''
-  emit('filter-change', columnFilters.value)
-}
-
-/**
- * 清除所有筛选
- */
-function clearAllFilters(): void {
-  columnFilters.value = {}
+  filterDialogVisible.value = false
   emit('filter-change', columnFilters.value)
 }
 
@@ -461,9 +444,6 @@ function isSortable(field: FieldConfig): boolean | 'custom' {
   return sortableTypes.includes(field.controlType) ? 'custom' : false
 }
 
-/**
- * 获取列宽度
- */
 function getColumnWidth(field: FieldConfig): string {
   switch (field.controlType) {
     case 'textarea':
@@ -502,14 +482,13 @@ function formatCellValue(row: any, field: FieldConfig): string {
 
   switch (field.controlType) {
     case 'select':
-    case 'radio':
-      // 查找选项标签
+    case 'radio': {
       const option = field.options?.find((opt) => opt.value === value)
       return option?.label || String(value)
+    }
 
     case 'multiSelect':
     case 'checkbox':
-      // 多选值转换为标签列表
       if (Array.isArray(value)) {
         return value
           .map((v) => {
@@ -521,13 +500,9 @@ function formatCellValue(row: any, field: FieldConfig): string {
       return String(value)
 
     case 'date':
-      // 格式化日期
       return formatDate(value, 'YYYY-MM-DD')
 
     case 'datetime':
-      // 格式化日期时间
-      return formatDate(value, 'YYYY-MM-DD HH:mm:ss')
-
     case 'autoTimestamp':
       return formatDate(value, 'YYYY-MM-DD HH:mm:ss')
 
@@ -536,7 +511,6 @@ function formatCellValue(row: any, field: FieldConfig): string {
 
     case 'file':
     case 'image':
-      // 显示文件数量
       if (Array.isArray(value)) {
         return `${value.length} 个文件`
       }
@@ -554,15 +528,15 @@ function formatCellValue(row: any, field: FieldConfig): string {
       }
       return String(value)
 
-    case 'reference':
-      // 显示父记录的 displayField 值
+    case 'reference': {
       const displayVal = row[`_ref_${field.fieldName}_display`]
       return displayVal || String(value)
+    }
 
-    case 'richText':
-      // 移除 HTML 标签，显示纯文本预览（最多 50 字符）
+    case 'richText': {
       const plain = value?.replace(/<[^>]*>/g, '') || ''
       return plain.length > 50 ? plain.slice(0, 50) + '...' : plain || '-'
+    }
 
     default:
       return String(value)
@@ -594,89 +568,62 @@ function formatDate(value: string, format: string): string {
   }
 }
 
-/**
- * 处理查看
- */
 function handleView(row: DynamicRecord): void {
   emit('view', row)
 }
 
-/**
- * 处理编辑
- */
 function handleEdit(row: DynamicRecord): void {
   emit('edit', row)
 }
 
-/**
- * 处理删除
- */
 function handleDelete(row: DynamicRecord): void {
   emit('delete', row)
 }
 
-/**
- * 处理每页数量变化
- */
 function handleSizeChange(size: number): void {
   pageSize.value = size
   currentPage.value = 1
   emit('page-change', 1, size)
 }
 
-/**
- * 处理页码变化
- */
 function handleCurrentChange(page: number): void {
   currentPage.value = page
   emit('page-change', page, pageSize.value)
 }
 
-/**
- * 处理排序变化
- */
 function handleSortChange({ prop, order }: { prop: string; order: string }): void {
   emit('sort-change', prop, order === 'ascending' ? 'asc' : 'desc')
 }
 
-/**
- * 处理引用字段点击
- */
 function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   emit('reference-click', row, field)
 }
 
-/**
- * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面
- */
 function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
   emit('relation-click', relatedRecordId, field)
 }
 
-/**
- * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面
- */
 function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
   emit('quote-click', quotedRecordId, field)
 }
 
-/**
- * 处理多选变化
- */
 function handleSelectionChange(rows: DynamicRecord[]): void {
   emit('selection-change', rows)
 }
 
-/**
- * 清除多选
- */
 function clearSelection(): void {
   tableRef.value?.clearSelection()
 }
 
+function clearAllFilters(): void {
+  columnFilters.value = {}
+  clearCellValueCache()
+  emit('filter-change', columnFilters.value)
+}
+
 // ==================== 暴露 ====================
 
-defineExpose({ tableRef, clearSelection, clearAllFilters })
+defineExpose({ tableRef, clearSelection, clearAllFilters, clearCellValueCache })
 </script>
 
 <style scoped lang="scss">
@@ -692,9 +639,9 @@ defineExpose({ tableRef, clearSelection, clearAllFilters })
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
 
   .filter-icon {
-    cursor: pointer;
     font-size: 14px;
     color: #c0c4cc;
     transition: color 0.2s;
@@ -709,21 +656,8 @@ defineExpose({ tableRef, clearSelection, clearAllFilters })
   }
 }
 
-.filter-popover {
-  .filter-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-    font-weight: 500;
-  }
-
-  .filter-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 12px;
-  }
+.filter-dialog-content {
+  padding: 0 0 16px 0;
 }
 
 .reference-link {
