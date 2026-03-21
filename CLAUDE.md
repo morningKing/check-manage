@@ -26,11 +26,14 @@ npm run dev     # Frontend only (port 5173, proxies /api to :3001)
 ### Testing
 ```bash
 # Frontend (Vitest)
-npm run test              # Run all 316 tests
+npm run test              # Run all frontend tests
 npm run test:watch        # Watch mode
 
 # Backend (Pytest)
-npm run test:server       # Run all 233 tests
+npm run test:server       # Run all backend tests
+
+# Both frontend and backend
+npm run test:all
 
 # Run single test file
 npx vitest run src/stores/__tests__/menu.test.ts
@@ -39,18 +42,23 @@ cd server && python -m pytest tests/test_backup.py -v
 
 ### Build
 ```bash
-npm run build  # Outputs to dist/
+npm run build  # vue-tsc type check + vite build → dist/
 ```
 
 ## Architecture Overview
 
 This is a **configuration-driven** dynamic data management platform. Unlike traditional CRUD apps, you do **not** create new Vue pages or database tables for new business entities. Instead, you define a `PageConfig` (field schema) and a `Menu` entry, and the system auto-generates the UI and API endpoints.
 
+**Tech stack**: Vue 3 + TypeScript + Element Plus + Pinia (frontend), Python Flask + psycopg2 (backend), PostgreSQL with JSONB (database).
+
 ### Key Architectural Patterns
 
 1.  **Single-Table Dynamic Data**: All business data is stored in `dynamic_data` table using PostgreSQL JSONB. The `collection` field (derived from `pageId`) separates entities. This eliminates the need for schema migrations when adding new entities or fields.
 
-2.  **Frontend Dynamic Rendering**: `src/views/dynamic/DynamicPage.vue` is the only page for business data. It reads `pageId` from the route, fetches the `PageConfig` schema, and renders `DynamicForm` (for editing) and `DataTable` (for listing) based on field definitions.
+2.  **Frontend Dynamic Rendering**: `src/views/dynamic/DynamicPage.vue` is the only page for business data. It reads `pageId` from the route, fetches the `PageConfig` schema, and renders three view modes based on field definitions:
+    *   **Table view** (default): `DataTable` + `DynamicForm` dialog
+    *   **Kanban view**: `KanbanBoard` with configurable group/card fields
+    *   **Excel view**: `ExcelView` using Univer.js spreadsheet
 
 3.  **Dynamic Route Generation**: `src/router/dynamicRoutes.ts` reads the `menus` table at runtime and generates Vue Router routes pointing to `DynamicPage.vue`.
 
@@ -58,19 +66,42 @@ This is a **configuration-driven** dynamic data management platform. Unlike trad
     *   `controlType: 'relation'` triggers M:N relationship handling via `data_relations` table.
     *   `controlType: 'autoSequence'` triggers sequence generation logic in the store.
     *   `controlType: 'reference'` creates a 1:N link and inherits parent fields into child records.
+    *   `controlType: 'quoteSelect'` creates a single-direction multi-select reference.
+
+### All Control Types
+
+Defined in `src/types/field.ts`. The `controlType` value determines which component renders the field:
+
+| Type | Description |
+|------|-------------|
+| `text`, `textarea`, `richText`, `number` | Input controls |
+| `select`, `multiSelect`, `radio`, `checkbox` | Selection controls |
+| `date`, `datetime` | Date/time pickers |
+| `file`, `image` | Upload controls |
+| `relation` | M:N bidirectional association via `data_relations` table |
+| `reference` | 1:N parent-child with field inheritance |
+| `quoteSelect` | Single-direction multi-select quote |
+| `autoSequence` | Auto-incrementing ID (e.g., "IC-001") |
+| `autoTimestamp` | Auto-filled on create/update |
 
 ### Database Design
 
-*   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB.
+*   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB. Has `branch_id` for version isolation.
 *   **`data_relations`**: Stores M:N relationships. Queried by `(collection, record_id, field_name)`.
 *   **`page_configs`**: The schema definition. `fields` JSONB column drives the entire UI.
 *   **`menus`**: Tree structure with `roles` JSONB for RBAC.
+*   **`users`**: Accounts with `role` (admin / developer / guest).
+*   Other tables: `export_scripts`, `validation_scripts`, `etl_tasks`, `etl_logs`, `api_keys`, `operation_logs`, `backups`, `backup_settings`, `ai_settings`, `collection_versions`, `version_snapshots`, `dashboards`, `record_comments`.
 
 ### Backend Structure
 
-*   `app.py`: Registers blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
-*   `routes/dynamic.py`: The generic CRUD handler. It inspects `page_configs` to validate data and manage relations.
+*   `app.py`: Registers 22 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
+*   `routes/dynamic.py`: The generic CRUD handler. Supports pagination (`page`, `pageSize`, `all=true`), filtering (`q` for MongoDB-style query, `keyword` for full-text search). Validates primary key uniqueness and manages relations.
 *   `utils/script_runner.py`: Sandboxed Python execution for validation/export scripts.
+*   `utils/auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `admin_required`, `api_key_required`.
+*   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
+
+**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`.
 
 ### Frontend Structure
 
@@ -78,7 +109,20 @@ This is a **configuration-driven** dynamic data management platform. Unlike trad
     *   Resolving relation/reference/quote field imports.
     *   Generating auto-sequence values.
     *   Batch data operations.
-*   `src/components/dynamic-form/controls/`: 15 field control components. Mapped by `controlType`.
+*   `src/stores/menu.ts`: Menu tree with shallowRef caching + role-based filtering.
+*   `src/stores/auth.ts`: JWT token management. localStorage keys prefixed `check-manage:`.
+*   `src/components/dynamic-form/controls/`: Field control components. Mapped by `controlType`.
+*   `src/api/`: Axios-based API layer. Base URL `/api`, 30s timeout. Request interceptor injects Bearer token.
+
+### API Proxy
+
+Vite proxies `/api` to backend port 3001 **with path rewrite**: frontend calls `/api/menus` → backend receives `/menus`. This is why backend routes don't have an `/api` prefix.
+
+### User Roles
+
+*   **admin**: Full access to all features and admin pages.
+*   **developer**: Read/write data, but no admin page access.
+*   **guest**: Read-only access. `write_required` decorator blocks mutations.
 
 ## Development Workflow
 
@@ -102,18 +146,29 @@ This is a **configuration-driven** dynamic data management platform. Unlike trad
 
 1.  **Frontend**: Create `src/components/dynamic-form/controls/NewControl.vue`.
 2.  Register it in `DynamicForm.vue` and `DataTable.vue` column rendering.
-3.  Update `FieldConfig` type in `src/types/index.ts`.
+3.  Update `ControlType` in `src/types/field.ts` and re-export from `src/types/index.ts`.
 4.  **Backend**: If validation is needed, update `routes/dynamic.py` validation logic.
+
+### Script Runner Sandbox
+
+Validation and export scripts execute in a sandboxed Python environment (`utils/script_runner.py`):
+*   **Timeout**: 60s for row-level scripts, 300s for collection-level scripts.
+*   **Forbidden**: `import`, `eval`, `exec`, `open`, `getattr`, `type`, etc.
+*   **Pre-injected modules**: `json`, `csv`, `io`, `re`, `math`, `collections`, `xml.etree.ElementTree`, `datetime`, `pandas` (as `pd`), `numpy` (as `np`).
+*   **No `print()`** — scripts communicate via return values.
 
 ## Key Technical Details
 
-*   **Authentication**: JWT in `Authorization: Bearer <token>` header. Middleware in `auth.py` decorator.
-*   **API Proxy**: Vite config proxies `/api` to backend port 3001.
+*   **Authentication**: JWT in `Authorization: Bearer <token>` header. Middleware decorators in `server/utils/auth.py`.
 *   **Default Credentials**: admin / admin123 (set in `server/seed_data.py`).
-*   **Database Config**: `server/config.py`.
-*   **Testing**: Frontend uses Vitest with `@/` path alias mocking. Backend uses Pytest with `unittest.mock` for database patching.
+*   **Database Config**: `server/config.py` — PostgreSQL on localhost:5432, database `casemanage`.
+*   **TypeScript**: Strict mode enabled (`noUnusedLocals`, `noUnusedParameters`). Path alias `@/` → `src/`.
+*   **SCSS**: Global variables via `src/assets/styles/variables.scss` (auto-imported in all SCSS).
+*   **Production**: `start.sh` builds frontend, starts backend + reverse proxy on port 8080.
 
 ## Testing Patterns
+
+Frontend tests: `src/**/__tests__/**/*.test.ts` with jsdom environment. Setup file: `src/test/setup.ts` (provides localStorage mock).
 
 ### ResizeObserver Polyfill
 jsdom environment lacks ResizeObserver. Add this polyfill in test files when components use Element Plus or resize-dependent features:

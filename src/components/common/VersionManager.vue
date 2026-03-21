@@ -208,8 +208,8 @@
       @merge="handleMergeFromDiff"
     />
 
-    <!-- 合并冲突对话框 -->
-    <MergeConflictDialog
+    <!-- 合并对话框 (Beyond Compare 风格) -->
+    <BeyondCompareMerge
       v-model="showMergeConflictDialog"
       :collection="collection"
       :source-version="mergeConflictTarget"
@@ -254,7 +254,7 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Sort, RefreshRight, Delete, Connection, Switch, FolderOpened, Document } from '@element-plus/icons-vue'
 import BackupDiffDialog from './BackupDiffDialog.vue'
-import MergeConflictDialog from './MergeConflictDialog.vue'
+import BeyondCompareMerge from './BeyondCompareMerge.vue'
 import {
   getVersions,
   createVersion,
