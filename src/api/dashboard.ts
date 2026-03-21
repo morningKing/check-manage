@@ -1,20 +1,41 @@
 import { get, post, put, del } from '@/utils/request'
 
+// ==================== Types ====================
+
+export type WidgetType = 'metric' | 'bar' | 'line' | 'pie' | 'area' | 'dataTable'
+export type MetricType = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'uniqueCount'
+export type GroupByType = 'terms' | 'dateHistogram'
+export type SortType = 'value_desc' | 'value_asc' | 'key_desc' | 'key_asc'
+
+export interface MetricDef {
+  type: MetricType
+  field?: string
+}
+
+export interface GroupByDef {
+  field: string
+  type: GroupByType
+  interval?: 'day' | 'week' | 'month' | 'year'
+}
+
+export interface WidgetConfig {
+  collection: string
+  metrics: MetricDef[]
+  groupBy?: GroupByDef
+  filter?: Record<string, any>
+  sort?: SortType
+  limit?: number
+}
+
 export interface DashboardWidget {
   id: string
-  type: 'statCard' | 'barChart' | 'lineChart' | 'pieChart' | 'table'
+  type: WidgetType
   title: string
   x: number
   y: number
   w: number
   h: number
-  config: {
-    collection: string
-    metric: 'count' | 'sum' | 'avg' | 'min' | 'max'
-    field?: string
-    groupField?: string
-    filter?: Record<string, any>
-  }
+  config: WidgetConfig
 }
 
 export interface Dashboard {
@@ -33,6 +54,28 @@ export interface AggregateResult {
   value?: number
   data?: Array<{ key: string; value: number }>
 }
+
+// ==================== Consts ====================
+
+export const WIDGET_TYPE_OPTIONS: { label: string; value: WidgetType; icon: string }[] = [
+  { label: '指标卡', value: 'metric', icon: 'Odometer' },
+  { label: '柱状图', value: 'bar', icon: 'Histogram' },
+  { label: '折线图', value: 'line', icon: 'TrendCharts' },
+  { label: '饼图', value: 'pie', icon: 'PieChart' },
+  { label: '面积图', value: 'area', icon: 'DataLine' },
+  { label: '数据表', value: 'dataTable', icon: 'Grid' },
+]
+
+export const METRIC_TYPE_OPTIONS: { label: string; value: MetricType; needField: boolean }[] = [
+  { label: '计数', value: 'count', needField: false },
+  { label: '求和', value: 'sum', needField: true },
+  { label: '平均值', value: 'avg', needField: true },
+  { label: '最小值', value: 'min', needField: true },
+  { label: '最大值', value: 'max', needField: true },
+  { label: '去重计数', value: 'uniqueCount', needField: true },
+]
+
+// ==================== API ====================
 
 export function getDashboards() {
   return get<Dashboard[]>('/dashboards')
@@ -55,10 +98,14 @@ export function deleteDashboard(id: string) {
 
 export function aggregate(params: {
   collection: string
-  metric: string
+  metrics?: MetricDef[]
+  metric?: string
   field?: string
+  groupBy?: GroupByDef
   groupField?: string
   filter?: Record<string, any>
+  sort?: SortType
+  limit?: number
 }) {
   return post<AggregateResult>('/dashboards/aggregate', params)
 }

@@ -100,61 +100,140 @@ def delete_dashboard(dash_id):
     return jsonify({})
 
 
+# ---------------------------------------------------------------------------
+# Aggregation API
+# ---------------------------------------------------------------------------
+
+VALID_METRICS = {'count', 'sum', 'avg', 'min', 'max', 'uniqueCount'}
+SORT_MAP = {
+    'value_desc': 'agg_value DESC',
+    'value_asc': 'agg_value ASC',
+    'key_desc': 'group_key DESC',
+    'key_asc': 'group_key ASC',
+}
+DATE_TRUNC_MAP = {
+    'day': 'day',
+    'week': 'week',
+    'month': 'month',
+    'year': 'year',
+}
+
+
+def _build_where(collection, filter_query):
+    """Build WHERE clause parts and params."""
+    parts = ["collection = %s", "branch_id = 'main'"]
+    params = [collection]
+    for key, val in (filter_query or {}).items():
+        if key.startswith('$'):
+            continue
+        parts.append("data->>%s = %s")
+        params.extend([key, str(val)])
+    return ' AND '.join(parts), params
+
+
+def _metric_expr(metric_type, field):
+    """Return SQL expression and extra params for a metric."""
+    if metric_type == 'count':
+        return 'COUNT(*)', []
+    elif metric_type == 'uniqueCount':
+        return 'COUNT(DISTINCT data->>%s)', [field]
+    elif metric_type in ('sum', 'avg', 'min', 'max'):
+        return f'{metric_type.upper()}((data->>%s)::numeric)', [field]
+    return None, []
+
+
 @dashboards_bp.route('/dashboards/aggregate', methods=['POST'])
 @login_required
-def aggregate():
-    """Run aggregation queries on dynamic_data for dashboard widgets."""
+def aggregate_data():
+    """Run aggregation queries on dynamic_data for dashboard widgets.
+
+    Supports both legacy params (metric/field/groupField) and new format
+    (metrics/groupBy/sort/limit).
+    """
     body = request.get_json(force=True)
     collection = body.get('collection', '')
-    metric = body.get('metric', 'count')
-    field = body.get('field')
-    group_field = body.get('groupField')
-    filter_query = body.get('filter', {})
-
     if not collection:
         return jsonify({"error": "collection is required"}), 400
+
+    filter_query = body.get('filter', {})
+    where_clause, where_params = _build_where(collection, filter_query)
+
+    # Resolve metric (support new and legacy format)
+    metrics_raw = body.get('metrics')
+    if metrics_raw and isinstance(metrics_raw, list) and len(metrics_raw) > 0:
+        metric_type = metrics_raw[0].get('type', 'count')
+        field = metrics_raw[0].get('field')
+    else:
+        metric_type = body.get('metric', 'count')
+        field = body.get('field')
+
+    if metric_type not in VALID_METRICS:
+        return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
+
+    # Resolve groupBy (support new and legacy format)
+    group_by = body.get('groupBy')
+    if group_by and isinstance(group_by, dict):
+        group_field = group_by.get('field')
+        group_type = group_by.get('type', 'terms')
+        interval = group_by.get('interval', 'month')
+    else:
+        group_field = body.get('groupField')
+        group_type = 'terms'
+        interval = 'month'
+
+    sort_key = body.get('sort', 'value_desc')
+    limit = min(int(body.get('limit', 20)), 200)
+    order_clause = SORT_MAP.get(sort_key, 'agg_value DESC')
 
     with get_db() as conn:
         cur = conn.cursor()
 
-        # Build WHERE clause
-        where_parts = ["collection = %s"]
-        params = [collection]
-        for key, val in filter_query.items():
-            if key.startswith('$'):
-                continue  # Skip complex operators for now
-            where_parts.append("data->>%s = %s")
-            params.extend([key, str(val)])
-
-        where_clause = ' AND '.join(where_parts)
-
         if group_field:
-            # Grouped aggregation
-            if metric == 'count':
-                sql = f"SELECT data->>%s as group_key, COUNT(*) FROM dynamic_data WHERE {where_clause} GROUP BY data->>%s"
-                params_final = [group_field] + params + [group_field]
-            elif metric in ('sum', 'avg', 'min', 'max'):
-                agg_fn = metric.upper()
-                sql = f"SELECT data->>%s as group_key, {agg_fn}((data->>%s)::numeric) FROM dynamic_data WHERE {where_clause} GROUP BY data->>%s"
-                params_final = [group_field, field] + params + [group_field]
+            # --- Grouped aggregation ---
+            metric_sql, metric_params = _metric_expr(metric_type, field)
+            if metric_sql is None:
+                return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
+
+            if group_type == 'dateHistogram':
+                trunc = DATE_TRUNC_MAP.get(interval, 'month')
+                group_expr = f"date_trunc('{trunc}', (data->>%s)::timestamptz)"
+                group_params = [group_field]
             else:
-                return jsonify({"error": f"Unsupported metric: {metric}"}), 400
-            cur.execute(sql, params_final)
+                group_expr = "data->>%s"
+                group_params = [group_field]
+
+            sql = (
+                f"SELECT {group_expr} AS group_key, {metric_sql} AS agg_value "
+                f"FROM dynamic_data WHERE {where_clause} "
+                f"GROUP BY group_key "
+                f"ORDER BY {order_clause} "
+                f"LIMIT %s"
+            )
+            params = group_params + metric_params + where_params + [limit]
+            cur.execute(sql, params)
             rows = cur.fetchall()
-            result = [{'key': r[0], 'value': float(r[1]) if r[1] is not None else 0} for r in rows]
-            return jsonify({'type': 'grouped', 'data': result})
+
+            data = []
+            for r in rows:
+                key = r[0]
+                if key is None:
+                    key = '(空)'
+                elif hasattr(key, 'isoformat'):
+                    key = key.strftime('%Y-%m-%d') if interval == 'day' else key.strftime('%Y-%m')
+                else:
+                    key = str(key)
+                data.append({'key': key, 'value': float(r[1]) if r[1] is not None else 0})
+
+            return jsonify({'type': 'grouped', 'data': data})
         else:
-            # Single value aggregation
-            if metric == 'count':
-                sql = f"SELECT COUNT(*) FROM dynamic_data WHERE {where_clause}"
-                params_final = params
-            elif metric in ('sum', 'avg', 'min', 'max'):
-                agg_fn = metric.upper()
-                sql = f"SELECT {agg_fn}((data->>%s)::numeric) FROM dynamic_data WHERE {where_clause}"
-                params_final = [field] + params
-            else:
-                return jsonify({"error": f"Unsupported metric: {metric}"}), 400
-            cur.execute(sql, params_final)
+            # --- Single-value aggregation ---
+            metric_sql, metric_params = _metric_expr(metric_type, field)
+            if metric_sql is None:
+                return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
+
+            sql = f"SELECT {metric_sql} FROM dynamic_data WHERE {where_clause}"
+            params = metric_params + where_params
+            cur.execute(sql, params)
             row = cur.fetchone()
             value = float(row[0]) if row and row[0] is not None else 0
             return jsonify({'type': 'single', 'value': value})

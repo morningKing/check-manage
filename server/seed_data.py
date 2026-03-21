@@ -1,4 +1,5 @@
 MENUS = [
+    {"id": "menu-dashboard", "name": "仪表盘", "icon": "DataLine", "pageId": None, "parentId": None, "order": 0, "path": "/dashboard", "roles": ["admin", "developer", "guest"]},
     {"id": "menu-1", "name": "首页", "icon": "House", "pageId": None, "parentId": None, "order": 1, "path": "/home", "roles": ["admin", "developer", "guest"]},
     {"id": "menu-2", "name": "巡检管理", "icon": "Monitor", "pageId": None, "parentId": None, "order": 2, "path": None, "roles": ["admin", "developer"]},
     {"id": "menu-2-1", "name": "巡检用例", "icon": "Document", "pageId": "page-inspection-case", "parentId": "menu-2", "order": 1, "path": "/inspection/case", "roles": ["admin", "developer"]},

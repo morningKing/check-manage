@@ -29,6 +29,7 @@
     "@vueup/vue-quill": "^1.2.0",
     "axios": "^1.6.8",
     "codemirror": "^6.0.2",
+    "echarts": "^6.0.0",
     "element-plus": "^2.6.1",
     "force-graph": "^1.51.1",
     "pinia": "^2.1.7",
