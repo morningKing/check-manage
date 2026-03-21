@@ -12,6 +12,9 @@ import { ref, computed } from 'vue'
 import { getStorage, setStorage, STORAGE_KEYS } from '@/utils/storage'
 import { useMenuStore } from './menu'
 
+export type ThemeMode = 'light' | 'dark' | 'auto'
+export type FontSize = 'small' | 'default' | 'large'
+
 /**
  * 应用 Store
  *
@@ -25,6 +28,27 @@ export const useAppStore = defineStore('app', () => {
    */
   const sidebarCollapsed = ref<boolean>(
     getStorage(STORAGE_KEYS.SIDEBAR_COLLAPSED, false)
+  )
+
+  /**
+   * 主题模式
+   */
+  const themeMode = ref<ThemeMode>(
+    (getStorage(STORAGE_KEYS.APP_SETTINGS, { theme: 'light' }).theme || 'light') as ThemeMode
+  )
+
+  /**
+   * 字体大小
+   */
+  const fontSize = ref<FontSize>(
+    (getStorage(STORAGE_KEYS.APP_SETTINGS, { fontSize: 'default' }).fontSize || 'default') as FontSize
+  )
+
+  /**
+   * 紧凑模式
+   */
+  const compactMode = ref<boolean>(
+    getStorage(STORAGE_KEYS.APP_SETTINGS, { compact: false }).compact || false
   )
 
   /**
@@ -91,6 +115,59 @@ export const useAppStore = defineStore('app', () => {
     loadingText.value = ''
   }
 
+  // ==================== Theme Actions ====================
+
+  const FONT_SIZE_MAP: Record<FontSize, string> = {
+    small: '13px',
+    default: '14px',
+    large: '16px',
+  }
+
+  function _persistSettings(): void {
+    setStorage(STORAGE_KEYS.APP_SETTINGS, {
+      theme: themeMode.value,
+      fontSize: fontSize.value,
+      compact: compactMode.value,
+    })
+  }
+
+  /**
+   * 应用当前主题到 DOM
+   */
+  function applyTheme(): void {
+    const html = document.documentElement
+    // 判断实际模式
+    let isDark = themeMode.value === 'dark'
+    if (themeMode.value === 'auto') {
+      isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    }
+    html.classList.toggle('dark', isDark)
+
+    // 字体大小
+    html.style.fontSize = FONT_SIZE_MAP[fontSize.value]
+
+    // 紧凑模式
+    html.classList.toggle('compact-mode', compactMode.value)
+  }
+
+  function setThemeMode(mode: ThemeMode): void {
+    themeMode.value = mode
+    _persistSettings()
+    applyTheme()
+  }
+
+  function setFontSize(size: FontSize): void {
+    fontSize.value = size
+    _persistSettings()
+    applyTheme()
+  }
+
+  function setCompactMode(compact: boolean): void {
+    compactMode.value = compact
+    _persistSettings()
+    applyTheme()
+  }
+
   /**
    * 初始化应用
    *
@@ -135,6 +212,9 @@ export const useAppStore = defineStore('app', () => {
     initialized,
     globalLoading,
     loadingText,
+    themeMode,
+    fontSize,
+    compactMode,
     // Getters
     sidebarWidth,
     // Actions
@@ -143,6 +223,10 @@ export const useAppStore = defineStore('app', () => {
     showLoading,
     hideLoading,
     initializeApp,
-    reloadAppData
+    reloadAppData,
+    applyTheme,
+    setThemeMode,
+    setFontSize,
+    setCompactMode,
   }
 })

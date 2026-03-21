@@ -45,6 +45,45 @@
         </div>
         <div class="header-right">
           <NotificationBell />
+          <!-- 外观设置 -->
+          <el-popover trigger="click" :width="280" placement="bottom-end">
+            <template #reference>
+              <el-button text class="setting-btn">
+                <el-icon :size="18"><Setting /></el-icon>
+              </el-button>
+            </template>
+            <div class="settings-panel">
+              <div class="settings-title">外观设置</div>
+              <!-- 主题 -->
+              <div class="settings-row">
+                <span class="settings-label">主题模式</span>
+                <el-segmented
+                  :model-value="appStore.themeMode"
+                  :options="themeOptions"
+                  @change="(v: any) => appStore.setThemeMode(v)"
+                  size="small"
+                />
+              </div>
+              <!-- 字体大小 -->
+              <div class="settings-row">
+                <span class="settings-label">字体大小</span>
+                <el-segmented
+                  :model-value="appStore.fontSize"
+                  :options="fontSizeOptions"
+                  @change="(v: any) => appStore.setFontSize(v)"
+                  size="small"
+                />
+              </div>
+              <!-- 紧凑模式 -->
+              <div class="settings-row">
+                <span class="settings-label">紧凑模式</span>
+                <el-switch
+                  :model-value="appStore.compactMode"
+                  @change="(v: any) => appStore.setCompactMode(v)"
+                />
+              </div>
+            </div>
+          </el-popover>
           <el-dropdown @command="handleUserCommand">
             <span class="user-info">
               <el-icon><UserIcon /></el-icon>
@@ -109,7 +148,7 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Loading, ArrowDown, User as UserIcon } from '@element-plus/icons-vue'
+import { Loading, ArrowDown, User as UserIcon, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore, useMenuStore, useAuthStore, useTabStore } from '@/stores'
 import { ROLE_LABELS } from '@/types'
@@ -126,6 +165,19 @@ const authStore = useAuthStore()
 const tabStore = useTabStore()
 const route = useRoute()
 const router = useRouter()
+
+// ==================== 外观设置选项 ====================
+
+const themeOptions = [
+  { label: '浅色', value: 'light' },
+  { label: '深色', value: 'dark' },
+  { label: '跟随系统', value: 'auto' },
+]
+const fontSizeOptions = [
+  { label: '小', value: 'small' },
+  { label: '默认', value: 'default' },
+  { label: '大', value: 'large' },
+]
 
 // ==================== 计算属性 ====================
 
@@ -282,6 +334,9 @@ function toggleSidebar(): void {
  * 组件挂载时初始化应用
  */
 onMounted(async () => {
+  // 应用保存的主题设置
+  appStore.applyTheme()
+
   await appStore.initializeApp()
 
   // 注册全局键盘快捷键
@@ -440,6 +495,70 @@ onUnmounted(() => {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+.setting-btn {
+  color: #606266;
+  &:hover { color: #409eff; }
+}
+
+// ==================== Dark mode ====================
+
+:global(html.dark) {
+  .app-aside {
+    background-color: #1d1e1f;
+  }
+  .app-header {
+    background-color: #141414;
+    border-bottom-color: #363637;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+
+    .collapse-btn { color: #a3a6ad; }
+  }
+  .app-content {
+    background-color: #0a0a0a;
+  }
+  .global-loading {
+    background-color: rgba(0, 0, 0, 0.85);
+    .loading-text { color: #a3a6ad; }
+  }
+  .user-info { color: #a3a6ad !important; }
+  .setting-btn { color: #a3a6ad; }
+}
+
+// ==================== Compact mode ====================
+
+:global(html.compact-mode) {
+  .app-header {
+    height: 48px;
+    padding: 0 12px;
+  }
+  .app-content {
+    padding: 12px;
+  }
+}
+</style>
+
+<!-- 设置面板样式（非 scoped） -->
+<style lang="scss">
+.settings-panel {
+  .settings-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--el-text-color-primary);
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    &:last-child { margin-bottom: 0; }
+  }
+  .settings-label {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
   }
 }
 </style>

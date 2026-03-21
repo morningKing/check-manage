@@ -176,3 +176,41 @@ a {
 .el-menu {
   border-right: none !important;
 }
+
+// ==================== Dark Mode 全局覆盖 ====================
+
+html.dark {
+  color-scheme: dark;
+  background-color: #0a0a0a;
+
+  // Element Plus card / dialog backgrounds
+  .el-card {
+    --el-card-bg-color: #1d1e1f;
+  }
+
+  // Scrollbar
+  ::-webkit-scrollbar-track {
+    background: #1d1e1f;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #4a4a4a;
+    &:hover { background: #5a5a5a; }
+  }
+}
+
+// ==================== Compact Mode ====================
+
+html.compact-mode {
+  .el-card__header {
+    padding: 8px 12px;
+  }
+  .el-card__body {
+    padding: 12px;
+  }
+  .el-table {
+    font-size: 12px;
+  }
+  .el-form-item {
+    margin-bottom: 12px;
+  }
+}
