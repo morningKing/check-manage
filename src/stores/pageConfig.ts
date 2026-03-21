@@ -43,6 +43,12 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   const pageDataCache = ref<Record<string, DynamicRecord[]>>({})
 
+  /**
+   * 集合选项全局缓存（跨控件共享，带 TTL）
+   * 供 RelationSelect / ReferenceSelect / QuoteSelect 共用
+   */
+  const collectionOptionCache = new Map<string, { data: any[]; timestamp: number }>()
+  const COLLECTION_CACHE_TTL = 5 * 60 * 1000 // 5 分钟
   // ==================== Getters ====================
 
   /**
@@ -284,6 +290,27 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       return records
     } catch {
       cache.set(collection, [])
+      return []
+    }
+  }
+
+  /**
+   * 获取集合选项数据（全局缓存，供表单控件共享）
+   *
+   * 与 fetchCollectionData 的区别：此函数使用持久缓存（带 TTL），
+   * 同一集合在 TTL 内只请求一次，跨对话框/控件复用。
+   */
+  async function fetchCollectionOptions(collection: string): Promise<any[]> {
+    const cached = collectionOptionCache.get(collection)
+    if (cached && Date.now() - cached.timestamp < COLLECTION_CACHE_TTL) {
+      return cached.data
+    }
+    try {
+      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { pageSize: 10000 })
+      const records = response.data || []
+      collectionOptionCache.set(collection, { data: records, timestamp: Date.now() })
+      return records
+    } catch {
       return []
     }
   }
@@ -1393,6 +1420,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     resolveCollectionSelectImportValues,
     // 自动字段
     generateNextSequenceValue,
-    batchGenerateSequenceValues
+    batchGenerateSequenceValues,
+    // 集合选项缓存
+    fetchCollectionOptions
   }
 })

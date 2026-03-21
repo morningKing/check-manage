@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS dynamic_data (
 );
 
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_collection ON dynamic_data(collection);
+CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch ON dynamic_data(collection, branch_id);
+CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch_created ON dynamic_data(collection, branch_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_dynamic_data_gin ON dynamic_data USING gin(data);
 
 CREATE TABLE IF NOT EXISTS data_relations (
     collection          VARCHAR(200) NOT NULL,
@@ -51,6 +54,10 @@ CREATE TABLE IF NOT EXISTS data_relations (
 
 CREATE INDEX IF NOT EXISTS idx_data_relations_reverse
     ON data_relations(related_collection, related_id);
+CREATE INDEX IF NOT EXISTS idx_data_relations_forward
+    ON data_relations(collection, record_id, field_name, branch_id);
+CREATE INDEX IF NOT EXISTS idx_data_relations_reverse_branch
+    ON data_relations(related_collection, related_id, branch_id);
 
 CREATE TABLE IF NOT EXISTS user_current_branch (
     id              VARCHAR(100) PRIMARY KEY,

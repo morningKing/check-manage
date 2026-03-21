@@ -11,7 +11,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getStorage, setStorage, STORAGE_KEYS } from '@/utils/storage'
 import { useMenuStore } from './menu'
-import { usePageConfigStore } from './pageConfig'
 
 /**
  * 应用 Store
@@ -106,13 +105,9 @@ export const useAppStore = defineStore('app', () => {
 
     try {
       const menuStore = useMenuStore()
-      const pageConfigStore = usePageConfigStore()
 
-      // 并行加载菜单和页面配置
-      await Promise.all([
-        menuStore.fetchMenus(),
-        pageConfigStore.fetchPageConfigs()
-      ])
+      // 只加载菜单（路由依赖）；page_configs 延迟到首次访问动态页时加载
+      await menuStore.fetchMenus()
 
       initialized.value = true
     } catch (error) {

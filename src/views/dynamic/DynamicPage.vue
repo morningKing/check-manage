@@ -1291,6 +1291,11 @@ function formatViewDate(value: any, controlType: string): string {
 async function loadPageData(): Promise<void> {
   if (!pageId.value) return
 
+  // 按需加载 page_configs（首次访问动态页时触发）
+  if (!pageConfigStore.pageConfigs.length) {
+    await pageConfigStore.fetchPageConfigs()
+  }
+
   tableLoading.value = true
   try {
     const result = await pageConfigStore.fetchPageData(pageId.value, {
@@ -1314,7 +1319,7 @@ async function loadPageData(): Promise<void> {
  * Excel 视图需要展示所有数据，不使用分页
  */
 async function loadExcelData(): Promise<void> {
-  if (!pageId.value) return
+  if (!pageId.value || excelLoading.value) return
 
   excelLoading.value = true
   try {

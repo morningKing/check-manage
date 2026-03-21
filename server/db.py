@@ -4,7 +4,7 @@ import psycopg2.extras
 from contextlib import contextmanager
 from config import DB_CONFIG
 
-pool = psycopg2.pool.SimpleConnectionPool(minconn=1, maxconn=10, **DB_CONFIG)
+pool = psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=20, **DB_CONFIG)
 
 
 @contextmanager

@@ -7,12 +7,17 @@ Endpoints:
   GET    /operationLogs/export   - export filtered logs as Excel/CSV
 """
 import io
+import time
 from flask import Blueprint, request, jsonify, send_file
 from db import get_db
 from auth import admin_required
 from datetime import timezone
 
 operation_logs_bp = Blueprint('operation_logs', __name__)
+
+# 分支名称缓存（避免每次请求都 SELECT 全表 collection_versions）
+_branch_name_cache = {'map': {}, 'ts': 0}
+_BRANCH_CACHE_TTL = 60  # 秒
 
 ACTION_LABELS = {'create': '新增', 'update': '修改', 'delete': '删除'}
 TARGET_LABELS = {
@@ -37,6 +42,18 @@ def row_to_dict(row, branch_name_map=None):
         branch_name = branch_name_map.get(raw_branch_id, raw_branch_id) if branch_name_map else raw_branch_id
     else:
         branch_name = '主分支'
+
+
+def _get_branch_name_map(cur):
+    """获取分支名称映射（带模块级缓存）"""
+    now = time.time()
+    if now - _branch_name_cache['ts'] < _BRANCH_CACHE_TTL and _branch_name_cache['map']:
+        return _branch_name_cache['map']
+    cur.execute('SELECT id, name FROM collection_versions')
+    m = {row[0]: row[1] for row in cur.fetchall()}
+    _branch_name_cache['map'] = m
+    _branch_name_cache['ts'] = now
+    return m
     return {
         'id': row[0],
         'action': row[1],
@@ -105,9 +122,8 @@ def list_logs():
     with get_db() as conn:
         cur = conn.cursor()
 
-        # 构建分支ID到名称的映射
-        cur.execute('SELECT id, name FROM collection_versions')
-        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
+        # 获取分支名称映射（带缓存）
+        branch_name_map = _get_branch_name_map(cur)
 
         cur.execute(f'SELECT COUNT(*) FROM operation_logs {where}', params)
         total = cur.fetchone()[0]
@@ -143,9 +159,8 @@ def export_logs():
 
     with get_db() as conn:
         cur = conn.cursor()
-        # 构建分支ID到名称的映射
-        cur.execute('SELECT id, name FROM collection_versions')
-        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
+        # 获取分支名称映射（带缓存）
+        branch_name_map = _get_branch_name_map(cur)
 
         cur.execute(
             f'SELECT {COLUMNS} FROM operation_logs {where} ORDER BY created_at DESC',

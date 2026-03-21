@@ -17,7 +17,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
 import type { FieldConfig } from '@/types'
-import { get } from '@/utils/request'
+import { usePageConfigStore } from '@/stores/pageConfig'
 
 interface SelectOption {
   label: string
@@ -36,6 +36,7 @@ const emit = defineEmits<{
 
 const options = ref<SelectOption[]>([])
 const loading = ref(false)
+const pageConfigStore = usePageConfigStore()
 
 const selectValue = computed({
   get: () => props.modelValue || [],
@@ -51,8 +52,7 @@ async function loadOptions(): Promise<void> {
 
   loading.value = true
   try {
-    const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
-    const data = response.data || []
+    const data = await pageConfigStore.fetchCollectionOptions(config.targetCollection)
     options.value = data.map((item) => ({
       label: item[config.displayField] || item.id,
       value: item.id

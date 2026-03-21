@@ -141,6 +141,28 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
     conditions.append("id = %s")
     params.append(keyword)
 
+    # 批量预加载目标集合的 page_configs（消除 N+1）
+    target_collections = set()
+    for field in fields:
+        ct = field.get('controlType', 'text')
+        if ct == 'relation':
+            tc = (field.get('relationConfig') or {}).get('targetCollection')
+        elif ct == 'reference':
+            tc = (field.get('referenceConfig') or {}).get('targetCollection')
+        elif ct == 'quoteSelect':
+            tc = (field.get('quoteConfig') or field.get('relationConfig') or {}).get('targetCollection')
+        else:
+            tc = None
+        if tc:
+            target_collections.add(tc)
+
+    target_configs = {}
+    if target_collections:
+        page_ids = [f'page-{c}' for c in target_collections]
+        cur.execute('SELECT id, fields FROM page_configs WHERE id = ANY(%s)', (page_ids,))
+        for row in cur.fetchall():
+            target_configs[row[0]] = row[1]
+
     # 可直接在 JSONB 中搜索的字段类型
     direct_searchable = {'text', 'textarea', 'number', 'autoSequence', 'select', 'radio', 'date', 'datetime', 'autoTimestamp'}
 
@@ -158,14 +180,11 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
             rel_config = field.get('relationConfig', {})
             target_collection = rel_config.get('targetCollection')
             if target_collection:
-                # 获取目标集合的显示字段
                 target_page_id = f'page-{target_collection}'
-                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
-                target_row = cur.fetchone()
-                if target_row and target_row[0]:
-                    target_display = get_display_field(target_row[0])
+                target_fields = target_configs.get(target_page_id)
+                if target_fields:
+                    target_display = get_display_field(target_fields)
                     if target_display:
-                        # 查找关联记录显示值匹配的主记录 ID
                         sql = '''
                             SELECT DISTINCT dr.record_id
                             FROM data_relations dr
@@ -181,14 +200,11 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
             ref_config = field.get('referenceConfig', {})
             target_collection = ref_config.get('targetCollection')
             if target_collection:
-                # 获取目标集合的显示字段
                 target_page_id = f'page-{target_collection}'
-                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
-                target_row = cur.fetchone()
-                if target_row and target_row[0]:
-                    target_display = get_display_field(target_row[0])
+                target_fields = target_configs.get(target_page_id)
+                if target_fields:
+                    target_display = get_display_field(target_fields)
                     if target_display:
-                        # 查找引用记录显示值匹配的记录
                         sql = '''
                             SELECT dd.id FROM dynamic_data dd
                             JOIN dynamic_data ref ON ref.id = dd.data->>%s
@@ -204,10 +220,9 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
             target_collection = quote_config.get('targetCollection')
             if target_collection:
                 target_page_id = f'page-{target_collection}'
-                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (target_page_id,))
-                target_row = cur.fetchone()
-                if target_row and target_row[0]:
-                    target_display = get_display_field(target_row[0])
+                target_fields = target_configs.get(target_page_id)
+                if target_fields:
+                    target_display = get_display_field(target_fields)
                     if target_display:
                         sql = '''
                             SELECT DISTINCT dr.record_id
@@ -639,6 +654,8 @@ def check_reference_dependencies(cur, collection, record_id, branch_id=None):
     cur.execute('SELECT id, name, fields FROM page_configs')
     rows = cur.fetchall()
 
+    # 先收集所有需要检查的 (child_collection, field_name, page_name)
+    checks = []
     for page_id, page_name, fields in rows:
         if not fields:
             continue
@@ -649,15 +666,26 @@ def check_reference_dependencies(cur, collection, record_id, branch_id=None):
             ref_config = field.get('referenceConfig', {})
             if ref_config.get('targetCollection') != collection:
                 continue
-            # This page has a reference field pointing to our collection
-            field_name = field['fieldName']
-            cur.execute(
-                "SELECT count(*) FROM dynamic_data WHERE collection = %s AND data->>%s = %s AND branch_id = %s",
-                (child_collection, field_name, record_id, branch_id),
-            )
-            count = cur.fetchone()[0]
-            if count > 0:
-                return f'无法删除：被「{page_name}」的 {count} 条记录引用'
+            checks.append((child_collection, field['fieldName'], page_name))
+
+    if not checks:
+        return None
+
+    # 合并为一条 UNION ALL SQL，避免 N 次查询
+    parts = []
+    params = []
+    for child_col, fn, pn in checks:
+        parts.append(
+            "SELECT %s AS page_name, count(*) AS cnt "
+            "FROM dynamic_data WHERE collection = %s AND data->>%s = %s AND branch_id = %s"
+        )
+        params.extend([pn, child_col, fn, record_id, branch_id])
+
+    sql = ' UNION ALL '.join(parts)
+    cur.execute(sql, params)
+    for row in cur.fetchall():
+        if row[1] > 0:
+            return f'无法删除：被「{row[0]}」的 {row[1]} 条记录引用'
     return None
 
 
