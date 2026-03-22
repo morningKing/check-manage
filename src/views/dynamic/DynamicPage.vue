@@ -2663,8 +2663,8 @@ onActivated(async () => {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  color: #909399;
-  background: #fff;
+  color: var(--el-text-color-secondary);
+  background: var(--el-bg-color);
   z-index: 10;
 
   .el-icon {

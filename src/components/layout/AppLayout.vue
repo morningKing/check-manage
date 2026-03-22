@@ -413,8 +413,8 @@ onUnmounted(() => {
   justify-content: space-between;
   height: 60px;
   padding: 0 20px;
-  background-color: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background-color: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color-lighter);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 
   .header-left {
@@ -425,10 +425,10 @@ onUnmounted(() => {
 
   .collapse-btn {
     font-size: 20px;
-    color: #606266;
+    color: var(--el-text-color-regular);
 
     &:hover {
-      color: #409eff;
+      color: var(--el-color-primary);
     }
   }
 
@@ -442,10 +442,10 @@ onUnmounted(() => {
       align-items: center;
       gap: 8px;
       cursor: pointer;
-      color: #606266;
+      color: var(--el-text-color-regular);
 
       &:hover {
-        color: #409eff;
+        color: var(--el-color-primary);
       }
 
       .user-name {
@@ -458,7 +458,7 @@ onUnmounted(() => {
 .app-content {
   flex: 1;
   padding: 20px;
-  background-color: #f5f7fa;
+  background-color: var(--el-bg-color-page);
   overflow: auto;
 }
 
@@ -469,7 +469,7 @@ onUnmounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(255, 255, 255, 0.9);
+  background-color: var(--el-mask-color);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -478,14 +478,14 @@ onUnmounted(() => {
 
   .loading-icon {
     font-size: 48px;
-    color: #409eff;
+    color: var(--el-color-primary);
     animation: rotate 1.5s linear infinite;
   }
 
   .loading-text {
     margin-top: 16px;
     font-size: 16px;
-    color: #606266;
+    color: var(--el-text-color-regular);
   }
 }
 
@@ -499,8 +499,8 @@ onUnmounted(() => {
 }
 
 .setting-btn {
-  color: #606266;
-  &:hover { color: #409eff; }
+  color: var(--el-text-color-regular);
+  &:hover { color: var(--el-color-primary); }
 }
 
 // ==================== Dark mode ====================
@@ -509,22 +509,6 @@ onUnmounted(() => {
   .app-aside {
     background-color: #1d1e1f;
   }
-  .app-header {
-    background-color: #141414;
-    border-bottom-color: #363637;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-
-    .collapse-btn { color: #a3a6ad; }
-  }
-  .app-content {
-    background-color: #0a0a0a;
-  }
-  .global-loading {
-    background-color: rgba(0, 0, 0, 0.85);
-    .loading-text { color: #a3a6ad; }
-  }
-  .user-info { color: #a3a6ad !important; }
-  .setting-btn { color: #a3a6ad; }
 }
 
 // ==================== Compact mode ====================

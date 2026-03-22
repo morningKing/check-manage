@@ -181,21 +181,24 @@ a {
 
 html.dark {
   color-scheme: dark;
-  background-color: #0a0a0a;
 
-  // Element Plus card / dialog backgrounds
-  .el-card {
-    --el-card-bg-color: #1d1e1f;
+  // ---- Element Plus 组件补充覆盖 ----
+  .el-table {
+    --el-table-bg-color: #141414;
+    --el-table-tr-bg-color: #141414;
+    --el-table-header-bg-color: #1d1e1f;
+    --el-table-row-hover-bg-color: #262727;
+    --el-table-border-color: #363637;
+    --el-table-text-color: #cfd3dc;
+    --el-table-header-text-color: #a3a6ad;
+  }
+  .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+    background: #1a1a1b !important;
   }
 
-  // Scrollbar
-  ::-webkit-scrollbar-track {
-    background: #1d1e1f;
-  }
-  ::-webkit-scrollbar-thumb {
-    background: #4a4a4a;
-    &:hover { background: #5a5a5a; }
-  }
+  // ---- Scrollbar ----
+  ::-webkit-scrollbar-track { background: #1d1e1f; }
+  ::-webkit-scrollbar-thumb { background: #4a4a4a; &:hover { background: #5a5a5a; } }
 }
 
 // ==================== Compact Mode ====================

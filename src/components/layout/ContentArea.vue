@@ -211,8 +211,8 @@ onUnmounted(() => {
 /* 标签栏 */
 .tab-bar {
   flex-shrink: 0;
-  background-color: #fff;
-  border-bottom: 1px solid #e4e7ed;
+  background-color: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color-lighter);
   padding: 6px 12px 0;
 }
 
@@ -236,27 +236,27 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color-lighter);
   border-bottom: none;
   border-radius: 4px 4px 0 0;
-  background-color: #f5f7fa;
+  background-color: var(--el-fill-color-light);
   cursor: pointer;
   white-space: nowrap;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   user-select: none;
   transition: background-color 0.2s, color 0.2s;
 
   &:hover {
-    background-color: #ecf5ff;
-    color: #409eff;
+    background-color: var(--el-color-primary-light-9);
+    color: var(--el-color-primary);
   }
 
   &.active {
-    background-color: #fff;
-    color: #409eff;
+    background-color: var(--el-bg-color);
+    color: var(--el-color-primary);
     font-weight: 500;
-    border-bottom: 1px solid #fff;
+    border-bottom: 1px solid var(--el-bg-color);
     margin-bottom: -1px;
   }
 
@@ -296,8 +296,8 @@ onUnmounted(() => {
 .tab-context-menu {
   position: fixed;
   z-index: 9999;
-  background: #fff;
-  border: 1px solid #e4e7ed;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
   padding: 4px 0;
@@ -306,12 +306,12 @@ onUnmounted(() => {
   .context-menu-item {
     padding: 6px 16px;
     font-size: 13px;
-    color: #606266;
+    color: var(--el-text-color-regular);
     cursor: pointer;
     white-space: nowrap;
 
     &:hover {
-      background-color: #ecf5ff;
+      background-color: var(--el-color-primary-light-9);
       color: #409eff;
     }
   }
