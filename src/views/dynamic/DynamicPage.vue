@@ -2226,7 +2226,7 @@ async function handleRefresh(): Promise<void> {
 }
 
 /**
- * 处理引用字段点击 — 跳转到被引用数据所在页面，通过 ID 搜索定位
+ * 处理引用字段点击 — 跳转到被引用数据所在页面，智能定位目标记录
  */
 function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   const targetCollection = field.referenceConfig?.targetCollection
@@ -2240,12 +2240,15 @@ function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   }
 
   const recordId = row[field.fieldName]
-  // 通过 searchId 参数触发搜索定位
-  router.push({ path: targetMenu.path, query: { searchId: recordId } })
+  // 使用智能跳转参数，保持跳转上下文
+  router.push({
+    path: targetMenu.path,
+    query: { _jump: 'reference', _from: pageId.value!, _to: recordId }
+  })
 }
 
 /**
- * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面，通过 ID 搜索定位
+ * 处理关联字段 Tag 点击 — 跳转到关联记录所在页面，智能定位目标记录
  */
 function handleRelationClick(relatedRecordId: string, field: FieldConfig): void {
   const targetCollection = field.relationConfig?.targetCollection
@@ -2258,12 +2261,15 @@ function handleRelationClick(relatedRecordId: string, field: FieldConfig): void 
     return
   }
 
-  // 通过 searchId 参数触发搜索定位
-  router.push({ path: targetMenu.path, query: { searchId: relatedRecordId } })
+  // 使用智能跳转参数，保持跳转上下文
+  router.push({
+    path: targetMenu.path,
+    query: { _jump: 'relation', _from: pageId.value!, _to: relatedRecordId }
+  })
 }
 
 /**
- * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面，通过 ID 搜索定位
+ * 处理引用选择字段 Tag 点击 — 跳转到引用记录所在页面，智能定位目标记录
  */
 function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
   const targetCollection = field.quoteConfig?.targetCollection
@@ -2276,8 +2282,11 @@ function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
     return
   }
 
-  // 通过 searchId 参数触发搜索定位
-  router.push({ path: targetMenu.path, query: { searchId: quotedRecordId } })
+  // 使用智能跳转参数，保持跳转上下文
+  router.push({
+    path: targetMenu.path,
+    query: { _jump: 'quote', _from: pageId.value!, _to: quotedRecordId }
+  })
 }
 
 /**
@@ -2329,6 +2338,12 @@ async function highlightRecord(recordId: string): Promise<void> {
       currentRow.scrollIntoView({ behavior: 'smooth', block: 'center' })
       currentRow.classList.add('highlight-flash')
       setTimeout(() => currentRow.classList.remove('highlight-flash'), 2000)
+
+      // 显示成功提示
+      ElMessage.success({
+        message: '已定位到目标记录',
+        duration: 2000
+      })
     }
   }
 
@@ -2360,7 +2375,7 @@ watch(
 )
 
 /**
- * 监听 route.query.searchId 变化（关联跳转场景）
+ * 监听路由参数变化，处理智能跳转定位
  */
 watch(
   () => route.query.searchId,
@@ -2371,6 +2386,116 @@ watch(
     }
   }
 )
+
+/**
+ * 监听智能跳转参数（_jump, _from, _to）
+ * 支持跨页定位，跳转后自动清除 URL 参数
+ */
+watch(
+  () => route.query._jump as string | undefined,
+  async (jumpType) => {
+    if (!jumpType) return
+
+    const targetId = route.query._to as string
+    if (!targetId) return
+
+    // 清除跳转参数（保留可书签的 URL）
+    router.replace({
+      query: {
+        ...route.query,
+        _jump: undefined,
+        _from: undefined,
+        _to: undefined
+      }
+    }).catch(() => {})
+
+    // 智能定位目标记录
+    await locateRecord(targetId)
+  }
+)
+
+/**
+ * 智能定位目标记录
+ * 1. 先在当前页查找
+ * 2. 未找到则遍历所有页
+ * 3. 最后才使用搜索
+ */
+async function locateRecord(targetId: string): Promise<void> {
+  if (!pageId.value) return
+
+  tableLoading.value = true
+
+  try {
+    // 1. 先在当前页查找
+    let found = tableData.value.find(r => r.id === targetId)
+
+    if (found) {
+      // 已在当前页，直接高亮
+      highlightRecord(targetId)
+      return
+    }
+
+    // 2. 从第一页开始查找（优先翻页，避免搜索）
+    const pageSize = currentPageSize.value
+    const firstResult = await pageConfigStore.fetchPageData(pageId.value, {
+      page: 1,
+      pageSize,
+      query: activeMongoQuery.value || undefined
+    })
+
+    const totalPages = Math.ceil(firstResult.total / pageSize)
+    let foundPage = -1
+    let foundData: DynamicRecord[] = []
+
+    // 遍历所有页查找
+    for (let page = 1; page <= totalPages; page++) {
+      const result = page === 1 ? firstResult : await pageConfigStore.fetchPageData(pageId.value!, {
+        page,
+        pageSize,
+        query: activeMongoQuery.value || undefined
+      })
+
+      found = result.data.find(r => r.id === targetId)
+      if (found) {
+        foundPage = page
+        foundData = result.data
+        break
+      }
+    }
+
+    if (found && foundPage > 0) {
+      // 找到了，跳转到对应页并高亮
+      currentPage.value = foundPage
+      tableData.value = foundData
+      totalCount.value = firstResult.total
+      highlightRecord(targetId)
+    } else {
+      // 3. 所有页都没找到，尝试搜索（可能已被删除或不在当前筛选条件内）
+      const searchResult = await pageConfigStore.fetchPageData(pageId.value, {
+        page: 1,
+        pageSize,
+        keyword: targetId
+      })
+
+      if (searchResult.total === 1 && searchResult.data[0].id === targetId) {
+        // 通过搜索找到了
+        currentPage.value = 1
+        tableData.value = searchResult.data
+        totalCount.value = searchResult.total
+        highlightRecord(targetId)
+        ElMessage.info('已通过搜索定位到目标记录')
+      } else {
+        // 确实找不到
+        ElMessage.warning('未找到目标记录，可能已被删除或不在当前筛选条件内')
+      }
+    }
+  } catch (error) {
+    console.error('定位记录失败:', error)
+    ElMessage.error('定位记录失败')
+  } finally {
+    tableLoading.value = false
+  }
+}
 
 /**
  * 加载数据并高亮目标记录（用于关联跳转）

@@ -99,7 +99,11 @@
       "mcp__web-search-prime__web_search_prime",
       "Bash(cd:*)",
       "Bash(cat:*)",
-      "Bash(clawhub search:*)"
+      "Bash(clawhub search:*)",
+      "mcp__web-reader__webReader",
+      "Bash(find /e/Code/check-manage/src -type f -name *Layout* -o -name *Header* -o -name *Navbar*)",
+      "Bash(pkill -f \"npm run dev\")",
+      "Bash(pkill -f \"python app.py\")"
     ]
   }
 }
