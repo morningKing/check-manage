@@ -2226,25 +2226,30 @@ async function handleRefresh(): Promise<void> {
 }
 
 /**
+ * 统一的记录跳转方法
+ */
+function navigateToRecord(targetCollection: string, targetRecordId: string, jumpType: string): void {
+  const targetPageId = `page-${targetCollection}`;
+  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId);
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到目标数据的页面');
+    return;
+  }
+
+  router.push({
+    path: targetMenu.path,
+    query: { _jump: jumpType, _from: pageId.value!, _to: targetRecordId }
+  });
+}
+
+/**
  * 处理引用字段点击 — 跳转到被引用数据所在页面，智能定位目标记录
  */
 function handleReferenceClick(row: DynamicRecord, field: FieldConfig): void {
   const targetCollection = field.referenceConfig?.targetCollection
   if (!targetCollection) return
 
-  const targetPageId = `page-${targetCollection}`
-  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
-  if (!targetMenu?.path) {
-    ElMessage.warning('未找到被引用数据的页面')
-    return
-  }
-
-  const recordId = row[field.fieldName]
-  // 使用智能跳转参数，保持跳转上下文
-  router.push({
-    path: targetMenu.path,
-    query: { _jump: 'reference', _from: pageId.value!, _to: recordId }
-  })
+  navigateToRecord(targetCollection, recordId, 'reference')
 }
 
 /**
@@ -2254,18 +2259,7 @@ function handleRelationClick(relatedRecordId: string, field: FieldConfig): void 
   const targetCollection = field.relationConfig?.targetCollection
   if (!targetCollection) return
 
-  const targetPageId = `page-${targetCollection}`
-  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
-  if (!targetMenu?.path) {
-    ElMessage.warning('未找到关联数据的页面')
-    return
-  }
-
-  // 使用智能跳转参数，保持跳转上下文
-  router.push({
-    path: targetMenu.path,
-    query: { _jump: 'relation', _from: pageId.value!, _to: relatedRecordId }
-  })
+  navigateToRecord(targetCollection, relatedRecordId, 'relation')
 }
 
 /**
@@ -2275,18 +2269,7 @@ function handleQuoteClick(quotedRecordId: string, field: FieldConfig): void {
   const targetCollection = field.quoteConfig?.targetCollection
   if (!targetCollection) return
 
-  const targetPageId = `page-${targetCollection}`
-  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
-  if (!targetMenu?.path) {
-    ElMessage.warning('未找到引用数据的页面')
-    return
-  }
-
-  // 使用智能跳转参数，保持跳转上下文
-  router.push({
-    path: targetMenu.path,
-    query: { _jump: 'quote', _from: pageId.value!, _to: quotedRecordId }
-  })
+  navigateToRecord(targetCollection, quotedRecordId, 'quote')
 }
 
 /**
@@ -2301,14 +2284,7 @@ function handleShowRelationGraph(row: DynamicRecord): void {
  * 处理图谱节点双击跳转
  */
 function handleGraphNodeNavigate(targetCollection: string, targetRecordId: string): void {
-  const targetPageId = `page-${targetCollection}`
-  const targetMenu = menuStore.menuList.find(m => m.pageId === targetPageId)
-  if (!targetMenu?.path) {
-    ElMessage.warning('未找到目标数据的页面')
-    return
-  }
-  // 通过 searchId 参数触发搜索定位
-  router.push({ path: targetMenu.path, query: { searchId: targetRecordId } })
+  navigateToRecord(targetCollection, targetRecordId, 'graph')
 }
 
 /**
@@ -2346,9 +2322,6 @@ async function highlightRecord(recordId: string): Promise<void> {
       })
     }
   }
-
-  // 清除 query 参数，避免刷新时重复定位
-  router.replace({ query: {} })
 }
 
 // ==================== 监听 ====================
@@ -2361,31 +2334,13 @@ watch(
   (newPageId) => {
     if (newPageId) {
       currentPage.value = 1
-      // 检查是否有 searchId 参数（关联跳转场景），直接用 ID 搜索
-      const searchId = route.query.searchId as string
-      if (searchId) {
-        // 直接带关键字加载数据，不设置 searchKeyword（避免残留）
-        loadPageDataWithHighlight(searchId)
-        return
-      }
       loadPageData()
     }
   },
   { immediate: true }
 )
 
-/**
- * 监听路由参数变化，处理智能跳转定位
- */
-watch(
-  () => route.query.searchId,
-  (newSearchId) => {
-    if (newSearchId) {
-      currentPage.value = 1
-      loadPageDataWithHighlight(String(newSearchId))
-    }
-  }
-)
+
 
 /**
  * 监听智能跳转参数（_jump, _from, _to）
@@ -2410,7 +2365,16 @@ watch(
     }).catch(() => {})
 
     // 智能定位目标记录
-    await locateRecord(targetId)
+    if (targetId) {
+      await intelligentLocateRecord(targetId);
+    }
+    // 清除 query 参数，避免刷新时重复定位
+    // 注意：_jump, _from, _to 参数不清除，保持跳转上下文
+    const newQuery = { ...route.query };
+    delete newQuery._jump;
+    delete newQuery._from;
+    delete newQuery._to;
+    router.replace({ query: newQuery });
   }
 )
 
@@ -2420,112 +2384,70 @@ watch(
  * 2. 未找到则遍历所有页
  * 3. 最后才使用搜索
  */
-async function locateRecord(targetId: string): Promise<void> {
-  if (!pageId.value) return
+async function intelligentLocateRecord(targetId: string): Promise<void> {
+  if (!pageId.value) return;
 
-  tableLoading.value = true
-
+  tableLoading.value = true;
   try {
-    // 1. 先在当前页查找
-    let found = tableData.value.find(r => r.id === targetId)
-
-    if (found) {
-      // 已在当前页，直接高亮
-      highlightRecord(targetId)
-      return
+    // 1. 尝试在当前加载数据中查找
+    let foundRecord = tableData.value.find(r => r.id === targetId);
+    if (foundRecord) {
+      highlightRecord(targetId);
+      ElMessage.info('已定位到目标记录');
+      return;
     }
 
-    // 2. 从第一页开始查找（优先翻页，避免搜索）
-    const pageSize = currentPageSize.value
-    const firstResult = await pageConfigStore.fetchPageData(pageId.value, {
+    // 2. 尝试通过精确 ID 查询加载（无论当前页码或筛选条件）
+    const preciseQueryResult = await pageConfigStore.fetchPageData(pageId.value, {
       page: 1,
-      pageSize,
-      query: activeMongoQuery.value || undefined
-    })
+      pageSize: 1,
+      query: { _id: targetId }
+    });
 
-    const totalPages = Math.ceil(firstResult.total / pageSize)
-    let foundPage = -1
-    let foundData: DynamicRecord[] = []
-
-    // 遍历所有页查找
-    for (let page = 1; page <= totalPages; page++) {
-      const result = page === 1 ? firstResult : await pageConfigStore.fetchPageData(pageId.value!, {
-        page,
-        pageSize,
-        query: activeMongoQuery.value || undefined
-      })
-
-      found = result.data.find(r => r.id === targetId)
-      if (found) {
-        foundPage = page
-        foundData = result.data
-        break
-      }
+    if (preciseQueryResult.total === 1 && preciseQueryResult.data[0].id === targetId) {
+      // 找到了精确匹配的记录，更新数据并高亮
+      currentPage.value = 1;
+      tableData.value = preciseQueryResult.data;
+      totalCount.value = preciseQueryResult.total;
+      // 清除当前的筛选和搜索，确保只显示目标记录
+      activeMongoQuery.value = null;
+      searchKeyword.value = '';
+      highlightRecord(targetId);
+      ElMessage.success('已定位到目标记录');
+      return;
     }
 
-    if (found && foundPage > 0) {
-      // 找到了，跳转到对应页并高亮
-      currentPage.value = foundPage
-      tableData.value = foundData
-      totalCount.value = firstResult.total
-      highlightRecord(targetId)
-    } else {
-      // 3. 所有页都没找到，尝试搜索（可能已被删除或不在当前筛选条件内）
-      const searchResult = await pageConfigStore.fetchPageData(pageId.value, {
-        page: 1,
-        pageSize,
-        keyword: targetId
-      })
+    // 3. 如果精确 ID 查询未找到，尝试进行模糊关键字搜索
+    //    这会重置当前页码，并使用 targetId 作为搜索关键字
+    //    同时，清除任何现有的 MongoDB 查询，以确保搜索范围广
+    activeMongoQuery.value = null;
+    searchKeyword.value = targetId;
+    currentPage.value = 1;
+    await loadPageData(); // loadPageData 会使用 searchKeyword.value
 
-      if (searchResult.total === 1 && searchResult.data[0].id === targetId) {
-        // 通过搜索找到了
-        currentPage.value = 1
-        tableData.value = searchResult.data
-        totalCount.value = searchResult.total
-        highlightRecord(targetId)
-        ElMessage.info('已通过搜索定位到目标记录')
-      } else {
-        // 确实找不到
-        ElMessage.warning('未找到目标记录，可能已被删除或不在当前筛选条件内')
-      }
+    // 检查搜索结果中是否有目标记录
+    foundRecord = tableData.value.find(r => r.id === targetId);
+    if (foundRecord) {
+      highlightRecord(targetId);
+      ElMessage.success('已通过搜索定位到目标记录');
+      return;
+    } else if (totalCount.value > 0) {
+      // 搜索到其他记录但不是精确目标，提示用户
+      ElMessage.warning(`未找到精确匹配的目标记录 "${targetId}"，已显示相关搜索结果`);
+      return;
     }
+
+    // 4. 所有尝试都失败了
+    ElMessage.warning('未找到目标记录，可能已被删除或不在当前筛选条件内');
+
   } catch (error) {
-    console.error('定位记录失败:', error)
-    ElMessage.error('定位记录失败')
+    console.error('定位记录失败:', error);
+    ElMessage.error('定位记录失败');
   } finally {
-    tableLoading.value = false
+    tableLoading.value = false;
   }
 }
 
-/**
- * 加载数据并高亮目标记录（用于关联跳转）
- * 直接用 targetId 作为搜索参数，不修改 searchKeyword（避免搜索栏残留）
- */
-async function loadPageDataWithHighlight(targetId: string): Promise<void> {
-  if (!pageId.value) return
-
-  tableLoading.value = true
-  try {
-    const result = await pageConfigStore.fetchPageData(pageId.value, {
-      query: activeMongoQuery.value || undefined,
-      page: 1,
-      pageSize: currentPageSize.value,
-      keyword: targetId
-    })
-    tableData.value = result.data
-    totalCount.value = result.total
-
-    // 如果搜索结果只有一条，高亮该记录
-    if (result.total === 1 && result.data.length === 1 && result.data[0].id === targetId) {
-      highlightRecord(targetId)
-    }
-  } catch (error) {
-    console.error('加载数据失败:', error)
-    ElMessage.error('加载数据失败')
-  } finally {
-    tableLoading.value = false
-  }
-}
 
 /**
  * 搜索关键字变化时触发后端搜索（防抖 300ms）
@@ -2805,6 +2727,40 @@ onActivated(async () => {
 @keyframes row-flash {
   0%, 100% { background-color: transparent; }
   50% { background-color: #ecf5ff; }
+}
+
+// 针对深色模式的覆盖
+html.dark {
+  .dynamic-page {
+    :deep(.highlight-flash) {
+      animation: dark-row-flash 0.6s ease-in-out 3;
+    }
+  }
+}
+
+@keyframes dark-row-flash {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: rgba(255, 237, 153, 0.3); }
+  }
+
+// 定义高亮颜色变量
+// 亮色模式
+:root {
+  --dynamic-page-highlight-color: #ecf5ff;
+}
+// 深色模式
+html.dark {
+  --dynamic-page-highlight-color: rgba(255, 237, 153, 0.3); // 浅黄色，在深色模式下更明显
+}
+
+// 针对深色模式的覆盖
+html.dark .dynamic-page :deep(.highlight-flash) {
+  animation: dark-row-flash 0.6s ease-in-out 3;
+}
+
+@keyframes dark-row-flash {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: rgba(255, 237, 153, 0.3); } /* 深色模式的高亮颜色 */
 }
 
 .relation-tags {
