@@ -382,6 +382,11 @@ function eKey(e: GraphEdge): string {
   return `${e.source}|${e.target}|${e.label}|${e.relType}`
 }
 
+/** 检测当前是否暗色模式 */
+function isDark(): boolean {
+  return document.documentElement.classList.contains('dark')
+}
+
 function toNode(n: GraphNode) {
   const isCenter = n.id === centerId
   return {
@@ -441,9 +446,9 @@ function drawRingMenu(node: any, ctx: CanvasRenderingContext2D, gs: number) {
     ctx.arc(node.x, node.y, outer, seg.startAngle, seg.endAngle)
     ctx.arc(node.x, node.y, inner, seg.endAngle, seg.startAngle, true)
     ctx.closePath()
-    ctx.fillStyle = 'rgba(240, 240, 240, 0.92)'
+    ctx.fillStyle = isDark() ? 'rgba(40, 40, 40, 0.92)' : 'rgba(240, 240, 240, 0.92)'
     ctx.fill()
-    ctx.strokeStyle = 'rgba(200, 200, 200, 0.6)'
+    ctx.strokeStyle = isDark() ? 'rgba(80, 80, 80, 0.6)' : 'rgba(200, 200, 200, 0.6)'
     ctx.lineWidth = 0.8 / gs
     ctx.stroke()
 
@@ -454,8 +459,8 @@ function drawRingMenu(node: any, ctx: CanvasRenderingContext2D, gs: number) {
     const iy = node.y + Math.sin(midAngle) * midR
     const iconSize = RING_WIDTH * 0.32
 
-    ctx.fillStyle = '#555'
-    ctx.strokeStyle = '#555'
+    ctx.fillStyle = isDark() ? '#ccc' : '#555'
+    ctx.strokeStyle = isDark() ? '#ccc' : '#555'
     ctx.lineWidth = 1.2 / gs
     seg.icon(ctx, ix, iy, iconSize)
   }
@@ -520,7 +525,7 @@ async function initGraph() {
     fg = createGraph()(el)
       .width(w)
       .height(h)
-      .backgroundColor('#ffffff')
+      .backgroundColor(isDark() ? '#141414' : '#ffffff')
       .autoPauseRedraw(false)
       .graphData({ nodes: data.nodes.map(toNode), links: data.edges.map(toLink) })
       // Node
@@ -572,7 +577,7 @@ async function initGraph() {
           ctx.font = `${fs}px sans-serif`
           ctx.textAlign = 'center'
           ctx.textBaseline = 'top'
-          ctx.fillStyle = '#333'
+          ctx.fillStyle = isDark() ? '#cfd3dc' : '#333'
           ctx.fillText(node.short, node.x, node.y + r + 3 / gs)
         }
 
@@ -614,11 +619,11 @@ async function initGraph() {
         ctx.font = `${fs}px sans-serif`
         const tw = ctx.measureText(link.label).width
         const p = 2 / gs
-        ctx.fillStyle = 'rgba(255,255,255,0.85)'
+        ctx.fillStyle = isDark() ? 'rgba(20,20,20,0.85)' : 'rgba(255,255,255,0.85)'
         ctx.fillRect(mx - tw / 2 - p, my - fs / 2 - p, tw + p * 2, fs + p * 2)
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        ctx.fillStyle = '#999'
+        ctx.fillStyle = isDark() ? '#a3a6ad' : '#999'
         ctx.fillText(link.label, mx, my)
       })
       // Interaction
@@ -893,7 +898,7 @@ onBeforeUnmount(() => destroyGraph())
   display: flex;
   gap: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--el-text-color-regular, #666);
   align-items: center;
 }
 
@@ -904,7 +909,7 @@ onBeforeUnmount(() => destroyGraph())
 }
 
 .legend-tip {
-  color: #999;
+  color: var(--el-text-color-secondary, #999);
   font-size: 12px;
   margin-left: 8px;
 }
