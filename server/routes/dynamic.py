@@ -297,6 +297,7 @@ def list_items(collection):
 
     query_str = request.args.get('q', '')
     keyword = request.args.get('keyword', '')
+    locate_id = request.args.get('locateId', '')
     # 分页参数
     page = request.args.get('page', 1, type=int)
     page_size = request.args.get('pageSize', 50, type=int)
@@ -375,29 +376,72 @@ def list_items(collection):
         cur.execute(count_sql, all_params)
         total = cur.fetchone()[0]
 
+        # locateId: 定位指定记录所在的页码
+        located_page = None
+        located_index = None
+        locate_filter_miss = False
+
+        if locate_id and not load_all:
+            # 检查记录是否存在
+            cur.execute(
+                'SELECT id, created_at FROM dynamic_data '
+                'WHERE id = %s AND collection = %s AND branch_id = %s',
+                (locate_id, collection, branch_id)
+            )
+            locate_row = cur.fetchone()
+
+            if locate_row:
+                loc_created_at = locate_row[1]
+                # 计算在当前筛选条件下目标记录前面有多少条记录
+                position_sql = (
+                    f'SELECT COUNT(*) FROM dynamic_data WHERE {where_clause} '
+                    'AND (created_at < %s OR (created_at = %s AND id < %s))'
+                )
+                cur.execute(position_sql, all_params + [loc_created_at, loc_created_at, locate_id])
+                position = cur.fetchone()[0]
+
+                # 检查记录是否在当前筛选结果中
+                check_sql = f'SELECT 1 FROM dynamic_data WHERE {where_clause} AND id = %s LIMIT 1'
+                cur.execute(check_sql, all_params + [locate_id])
+                in_filter = cur.fetchone() is not None
+
+                if in_filter:
+                    located_page = position // page_size + 1
+                    located_index = position % page_size
+                    # 覆盖分页参数，返回目标记录所在页
+                    page = located_page
+                    offset = (page - 1) * page_size
+                else:
+                    locate_filter_miss = True
+
         # 获取数据（全量加载时不分页）
         if load_all:
             data_sql = (
                 'SELECT id, collection, data, created_at, updated_at, version, branch_id '
                 f'FROM dynamic_data WHERE {where_clause} '
-                'ORDER BY created_at'
+                'ORDER BY created_at, id'
             )
             cur.execute(data_sql, all_params)
         else:
             data_sql = (
                 'SELECT id, collection, data, created_at, updated_at, version, branch_id '
                 f'FROM dynamic_data WHERE {where_clause} '
-                'ORDER BY created_at LIMIT %s OFFSET %s'
+                'ORDER BY created_at, id LIMIT %s OFFSET %s'
             )
             cur.execute(data_sql, all_params + [page_size, offset])
         rows = cur.fetchall()
 
-    return jsonify({
+    result = {
         'data': [row_to_record(r) for r in rows],
         'total': total,
         'page': page if not load_all else 1,
         'pageSize': page_size if not load_all else total
-    })
+    }
+    if locate_id:
+        result['locatedPage'] = located_page
+        result['locatedIndex'] = located_index
+        result['locateFilterMiss'] = locate_filter_miss
+    return jsonify(result)
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['GET'])

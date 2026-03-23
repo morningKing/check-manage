@@ -21,3 +21,6 @@ export { useTabStore } from './tab'
 
 // 导出脚本状态
 export { useExportScriptStore } from './exportScript'
+
+// 跳转导航状态
+export { useJumpNavigationStore } from './jumpNavigation'

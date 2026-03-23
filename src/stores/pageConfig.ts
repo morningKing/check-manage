@@ -333,9 +333,16 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       pageSize?: number
       keyword?: string
       loadAll?: boolean
+      locateId?: string
     }
-  ): Promise<{ data: DynamicRecord[]; total: number }> {
-    const { query, page = 1, pageSize = 50, keyword, loadAll } = options || {}
+  ): Promise<{
+    data: DynamicRecord[]
+    total: number
+    locatedPage?: number | null
+    locatedIndex?: number | null
+    locateFilterMiss?: boolean
+  }> {
+    const { query, page = 1, pageSize = 50, keyword, loadAll, locateId } = options || {}
     try {
       // 根据页面配置获取对应的数据端点
       const endpoint = pageId.replace('page-', '')
@@ -351,6 +358,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       if (loadAll) {
         params.all = 'true'
       }
+      if (locateId) {
+        params.locateId = locateId
+      }
 
       // 请求后端分页数据
       const response = await get<{
@@ -358,10 +368,20 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         total: number
         page: number
         pageSize: number
+        locatedPage?: number | null
+        locatedIndex?: number | null
+        locateFilterMiss?: boolean
       }>(`/${endpoint}`, params)
 
       const data = response.data || []
       const total = response.total || 0
+
+      // 立即捕获定位信息，防止后续关联解析失败时丢失
+      const locateInfo = {
+        locatedPage: response.locatedPage,
+        locatedIndex: response.locatedIndex,
+        locateFilterMiss: response.locateFilterMiss,
+      }
 
       // 共享集合缓存，避免多个 resolve 函数重复请求同一集合
       const collectionCache = new Map<string, any[]>()
@@ -405,7 +425,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
 
       // 更新缓存（仅缓存当前页数据）
       pageDataCache.value[pageId] = data
-      return { data, total }
+      return { data, total, ...locateInfo }
     } catch (error) {
       console.error(`获取页面数据失败 [${pageId}]:`, error)
       pageDataCache.value[pageId] = []
