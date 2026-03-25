@@ -59,28 +59,25 @@ BACKUP_VERSION = 1
 
 # 还原时的表导入顺序（遵循外键依赖关系）
 # 被依赖的表排在前面，依赖其他表的表排在后面
-# 关键依赖关系：
-# - version_snapshots/version_relations 依赖 collection_versions
-# - collection_versions 有自引用 parent_version
 RESTORE_ORDER = [
-    # 第一层：无外键依赖或外键指向自身的表
-    'menus',
-    'page_configs',
+    # Level 1: No or few dependencies
     'users',
+    'page_configs',
     'export_scripts',
-    'api_keys',
     'validation_scripts',
+    'api_keys',
     'etl_tasks',
-    'etl_logs',
-    'operation_logs',
     'dynamic_data',
-    'data_relations',
-    'user_current_branch',
-    # 第二层：被 version_snapshots/version_relations 依赖
-    'collection_versions',
-    # 第三层：依赖 collection_versions
-    'version_snapshots',
-    'version_relations',
+    # Level 2: Self-referencing or simple dependencies
+    'collection_versions',  # Self-referencing, but parent to many
+    'menus',                # Depends on page_configs
+    'etl_logs',             # Depends on etl_tasks
+    # Level 3: Multiple dependencies
+    'data_relations',       # Depends on dynamic_data
+    'operation_logs',       # Depends on users, dynamic_data
+    'user_current_branch',  # Depends on users, collection_versions
+    'version_snapshots',    # Depends on collection_versions
+    'version_relations',    # Depends on collection_versions
 ]
 
 
@@ -490,9 +487,25 @@ def restore_backup(zip_path, tables=None):
         conn = pool.getconn()
         cur = conn.cursor()
 
-        # 临时禁用触发器以绕过外键约束检查
-        # 这允许我们按任意顺序插入数据，包括自引用的情况
-        cur.execute('SET session_replication_role = replica')
+        # 临时禁用外键约束：查询所有外键并逐个删除，还原完成后重建
+        # 这比 SET CONSTRAINTS ALL DEFERRED 更可靠（后者要求约束声明为 DEFERRABLE）
+        # 也不需要超级用户权限（session_replication_role 需要）
+        cur.execute("""
+            SELECT tc.constraint_name, tc.table_name,
+                   kcu.column_name,
+                   ccu.table_name AS foreign_table_name,
+                   ccu.column_name AS foreign_column_name
+            FROM information_schema.table_constraints AS tc
+            JOIN information_schema.key_column_usage AS kcu
+              ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+            JOIN information_schema.constraint_column_usage AS ccu
+              ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
+        """)
+        fk_constraints = cur.fetchall()
+        # 删除所有外键约束
+        for constraint_name, table_name_fk, *_ in fk_constraints:
+            cur.execute(f'ALTER TABLE {table_name_fk} DROP CONSTRAINT IF EXISTS {constraint_name}')
 
         # 对于 collection 级别的还原，使用 DELETE 而不是 TRUNCATE
         for table_name in tables_to_restore:
@@ -564,6 +577,13 @@ def restore_backup(zip_path, tables=None):
                          record.get('related_collection'), record.get('related_id'), record.get('branch_id'))
                     )
 
+        # 重建所有外键约束
+        for constraint_name, table_name_fk, col_name, foreign_table, foreign_col in fk_constraints:
+            cur.execute(
+                f'ALTER TABLE {table_name_fk} ADD CONSTRAINT {constraint_name} '
+                f'FOREIGN KEY ({col_name}) REFERENCES {foreign_table}({foreign_col})'
+            )
+
         conn.commit()
     except Exception:
         if conn:
@@ -571,12 +591,6 @@ def restore_backup(zip_path, tables=None):
         raise
     finally:
         if conn:
-            try:
-                # 恢复触发器（在单独的 try 中执行，避免影响主逻辑）
-                cur = conn.cursor()
-                cur.execute('SET session_replication_role = DEFAULT')
-            except Exception:
-                pass
             from db import pool
             pool.putconn(conn)
 
