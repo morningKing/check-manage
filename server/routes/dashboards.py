@@ -119,16 +119,48 @@ DATE_TRUNC_MAP = {
 }
 
 
-def _build_where(collection, filter_query):
+def _build_where(collection, filter_query, table_alias='', branch_id='main'):
     """Build WHERE clause parts and params."""
-    parts = ["collection = %s", "branch_id = 'main'"]
-    params = [collection]
+    prefix = f"{table_alias}." if table_alias else ''
+    parts = [f"{prefix}collection = %s", f"{prefix}branch_id = %s"]
+    params = [collection, branch_id]
     for key, val in (filter_query or {}).items():
         if key.startswith('$'):
             continue
-        parts.append("data->>%s = %s")
+        parts.append(f"{prefix}data->>%s = %s")
         params.extend([key, str(val)])
     return ' AND '.join(parts), params
+
+
+def _load_page_fields(cur, collection):
+    """Load field definitions for a collection from page_configs."""
+    cur.execute(
+        "SELECT fields FROM page_configs WHERE id = %s",
+        (f'page-{collection}',)
+    )
+    row = cur.fetchone()
+    if row and row[0]:
+        return row[0] if isinstance(row[0], list) else []
+    return []
+
+
+def _resolve_target_fields(cur, target_collections):
+    """Load page_configs for a set of target collections. Returns {pageId: fields}."""
+    if not target_collections:
+        return {}
+    result = {}
+    for col in target_collections:
+        page_id = f'page-{col}'
+        cur.execute("SELECT fields FROM page_configs WHERE id = %s", (page_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            result[page_id] = row[0] if isinstance(row[0], list) else []
+    return result
+
+
+def get_user_current_branch(user_id, collection):
+    """Get user's current branch for a collection."""
+    return 'main'
 
 
 def _metric_expr(metric_type, field):
@@ -156,7 +188,10 @@ def aggregate_data():
         return jsonify({"error": "collection is required"}), 400
 
     filter_query = body.get('filter', {})
-    where_clause, where_params = _build_where(collection, filter_query)
+
+    sort_key = body.get('sort', 'value_desc')
+    limit = min(int(body.get('limit', 20)), 200)
+    order_clause = SORT_MAP.get(sort_key, 'agg_value DESC')
 
     # Resolve metric (support new and legacy format)
     metrics_raw = body.get('metrics')
@@ -181,9 +216,8 @@ def aggregate_data():
         group_type = 'terms'
         interval = 'month'
 
-    sort_key = body.get('sort', 'value_desc')
-    limit = min(int(body.get('limit', 20)), 200)
-    order_clause = SORT_MAP.get(sort_key, 'agg_value DESC')
+    user = g.current_user
+    branch_id = get_user_current_branch(user.get('userId', ''), collection)
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -194,22 +228,95 @@ def aggregate_data():
             if metric_sql is None:
                 return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
 
-            if group_type == 'dateHistogram':
-                trunc = DATE_TRUNC_MAP.get(interval, 'month')
-                group_expr = f"date_trunc('{trunc}', (data->>%s)::timestamptz)"
-                group_params = [group_field]
-            else:
-                group_expr = "data->>%s"
-                group_params = [group_field]
+            # Check if group_field is a relation/reference/quoteSelect field
+            fields = _load_page_fields(cur, collection)
+            field_def = next((f for f in fields if f.get('fieldName') == group_field), None)
+            control_type = field_def.get('controlType', '') if field_def else ''
 
-            sql = (
-                f"SELECT {group_expr} AS group_key, {metric_sql} AS agg_value "
-                f"FROM dynamic_data WHERE {where_clause} "
-                f"GROUP BY group_key "
-                f"ORDER BY {order_clause} "
-                f"LIMIT %s"
-            )
-            params = group_params + metric_params + where_params + [limit]
+            if control_type == 'relation' and field_def:
+                # M:N relation — JOIN data_relations + target dynamic_data
+                rel_cfg = field_def.get('relationConfig', {})
+                target_col = rel_cfg.get('targetCollection', '')
+                display_field = rel_cfg.get('displayField', 'id')
+
+                where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
+
+                sql = (
+                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"FROM dynamic_data dd "
+                    f"JOIN data_relations dr ON dr.collection = %s AND dr.record_id = dd.id "
+                    f"AND dr.field_name = %s AND dr.branch_id = %s "
+                    f"JOIN dynamic_data tgt ON tgt.id = dr.related_id "
+                    f"AND tgt.collection = %s AND tgt.branch_id = %s "
+                    f"WHERE {where_clause} "
+                    f"GROUP BY group_key "
+                    f"ORDER BY {order_clause} "
+                    f"LIMIT %s"
+                )
+                params = [display_field, collection, group_field, branch_id, target_col, branch_id] + metric_params + where_params + [limit]
+
+            elif control_type == 'reference' and field_def:
+                # 1:N reference — LEFT JOIN parent record
+                ref_cfg = field_def.get('referenceConfig', {})
+                target_col = ref_cfg.get('targetCollection', '')
+                display_field = ref_cfg.get('displayField', 'id')
+
+                where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
+
+                sql = (
+                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"FROM dynamic_data dd "
+                    f"LEFT JOIN dynamic_data tgt ON tgt.id = dd.data->>%s "
+                    f"AND tgt.collection = %s AND tgt.branch_id = %s "
+                    f"WHERE {where_clause} "
+                    f"GROUP BY group_key "
+                    f"ORDER BY {order_clause} "
+                    f"LIMIT %s"
+                )
+                params = [display_field, group_field, target_col, branch_id] + metric_params + where_params + [limit]
+
+            elif control_type == 'quoteSelect' and field_def:
+                # Single-direction multi-select — CROSS JOIN unnested array
+                quote_cfg = field_def.get('quoteConfig', {})
+                target_col = quote_cfg.get('targetCollection', '')
+                display_field = quote_cfg.get('displayField', 'id')
+
+                where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
+
+                sql = (
+                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"FROM dynamic_data dd "
+                    f"CROSS JOIN jsonb_array_elements_text(dd.data->%s) AS elem_id "
+                    f"JOIN dynamic_data tgt ON tgt.id = elem_id "
+                    f"AND tgt.collection = %s AND tgt.branch_id = %s "
+                    f"WHERE {where_clause} "
+                    f"GROUP BY group_key "
+                    f"ORDER BY {order_clause} "
+                    f"LIMIT %s"
+                )
+                params = [display_field, group_field, target_col, branch_id] + metric_params + where_params + [limit]
+
+            else:
+                # Regular field grouping
+                where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
+
+                if group_type == 'dateHistogram':
+                    trunc = DATE_TRUNC_MAP.get(interval, 'month')
+                    group_expr = f"date_trunc('{trunc}', (data->>%s)::timestamptz)"
+                    group_params = [group_field]
+                else:
+                    group_expr = "data->>%s"
+                    group_params = [group_field]
+
+                sql = (
+                    f"SELECT {group_expr} AS group_key, {metric_sql} AS agg_value "
+                    f"FROM dynamic_data WHERE {where_clause} "
+                    f"GROUP BY group_key "
+                    f"ORDER BY {order_clause} "
+                    f"LIMIT %s"
+                )
+                params = group_params + metric_params + where_params + [limit]
+
             cur.execute(sql, params)
             rows = cur.fetchall()
 
@@ -231,6 +338,7 @@ def aggregate_data():
             if metric_sql is None:
                 return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
 
+            where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
             sql = f"SELECT {metric_sql} FROM dynamic_data WHERE {where_clause}"
             params = metric_params + where_params
             cur.execute(sql, params)
