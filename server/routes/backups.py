@@ -210,14 +210,23 @@ def list_backup_tables():
         )
         collections = [row[0] for row in cur.fetchall()]
 
-        # 获取每个 collection 的记录数
+        # 获取分支名称映射
+        cur.execute('SELECT id, name FROM collection_versions')
+        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
+
+        # 获取每个 collection 的记录数（按分支分组）
         collection_stats = {}
         for col in collections:
             cur.execute(
-                'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s',
+                'SELECT branch_id, COUNT(*) FROM dynamic_data WHERE collection = %s GROUP BY branch_id ORDER BY branch_id',
                 (col,),
             )
-            collection_stats[col] = cur.fetchone()[0]
+            branch_counts = []
+            for row in cur.fetchall():
+                bid = row[0]
+                label = '主分支' if bid == 'main' else branch_name_map.get(bid, f'未知分支({bid[:8]})')
+                branch_counts.append({'branch': label, 'count': row[1]})
+            collection_stats[col] = branch_counts
 
         # 获取每个 collection 对应的页面名称
         cur.execute(
@@ -238,7 +247,7 @@ def list_backup_tables():
                     {
                         'name': f'dynamic_data:{col}',
                         'label': page_names.get(col, col),
-                        'count': collection_stats.get(col, 0),
+                        'branchCounts': collection_stats.get(col, []),
                     }
                     for col in collections
                 ]

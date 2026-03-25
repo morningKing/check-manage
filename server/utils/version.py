@@ -410,18 +410,26 @@ def delete_version(version_id):
     with get_db() as conn:
         cur = conn.cursor()
         # 检查是否受保护
-        cur.execute('SELECT is_protected FROM collection_versions WHERE id = %s', (version_id,))
+        cur.execute('SELECT is_protected, collection, version_type FROM collection_versions WHERE id = %s', (version_id,))
         row = cur.fetchone()
         if not row:
             return False
         if row[0]:
             raise ValueError('无法删除受保护的版本')
+        collection = row[1]
+        version_type = row[2]
 
         # 检查是否有子版本
         cur.execute('SELECT COUNT(*) FROM collection_versions WHERE parent_version = %s', (version_id,))
         child_count = cur.fetchone()[0]
         if child_count > 0:
             raise ValueError(f'无法删除：存在 {child_count} 个子版本')
+
+        # 如果是分支类型，清理 dynamic_data 和 data_relations 中的分支数据
+        if version_type == 'branch':
+            cur.execute('DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s', (collection, version_id))
+            cur.execute('DELETE FROM data_relations WHERE collection = %s AND branch_id = %s', (collection, version_id))
+            cur.execute('DELETE FROM user_current_branch WHERE branch_id = %s', (version_id,))
 
         # 删除（CASCADE 会自动删除 version_snapshots 和 version_relations）
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))

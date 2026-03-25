@@ -176,7 +176,7 @@
                       @change="toggleChild(child.name, $event)"
                     >
                       {{ child.label }}
-                      <span class="record-count">({{ child.count || 0 }} 条)</span>
+                      <span class="record-count">({{ formatBranchCounts(child.branchCounts) }})</span>
                     </el-checkbox>
                   </div>
                 </template>
@@ -321,7 +321,7 @@ interface BackupTableItem {
   name: string
   label: string
   isGroup?: boolean
-  children?: { name: string; label: string; count?: number }[]
+  children?: { name: string; label: string; branchCounts?: { branch: string; count: number }[] }[]
 }
 const availableTables = ref<BackupTableItem[]>([])
 
@@ -449,9 +449,15 @@ function matchesSearch(label: string): boolean {
   return label.toLowerCase().includes(tableSearchKey.value.toLowerCase())
 }
 
-function filterChildren(children: { name: string; label: string; count?: number }[]) {
+function filterChildren(children: { name: string; label: string; branchCounts?: { branch: string; count: number }[] }[]) {
   if (!tableSearchKey.value) return children
   return children.filter(c => matchesSearch(c.label))
+}
+
+function formatBranchCounts(branchCounts?: { branch: string; count: number }[]): string {
+  if (!branchCounts || branchCounts.length === 0) return '0 条'
+  if (branchCounts.length === 1) return `${branchCounts[0].count} 条`
+  return branchCounts.map(b => `${b.branch}: ${b.count}`).join(', ')
 }
 
 function isGroupAllSelected(t: BackupTableItem): boolean {

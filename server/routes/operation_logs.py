@@ -35,15 +35,6 @@ def format_ts(dt):
     return dt.strftime('%Y-%m-%dT%H:%M:%S.000Z')
 
 
-def row_to_dict(row, branch_name_map=None):
-    raw_branch_id = row[12] if len(row) > 12 else None
-    # 根据分支ID获取显示名称
-    if raw_branch_id and raw_branch_id != 'main':
-        branch_name = branch_name_map.get(raw_branch_id, raw_branch_id) if branch_name_map else raw_branch_id
-    else:
-        branch_name = '主分支'
-
-
 def _get_branch_name_map(cur):
     """获取分支名称映射（带模块级缓存）"""
     now = time.time()
@@ -54,6 +45,15 @@ def _get_branch_name_map(cur):
     _branch_name_cache['map'] = m
     _branch_name_cache['ts'] = now
     return m
+
+
+def row_to_dict(row, branch_name_map=None):
+    raw_branch_id = row[12] if len(row) > 12 else None
+    # 根据分支ID获取显示名称
+    if raw_branch_id and raw_branch_id != 'main':
+        branch_name = branch_name_map.get(raw_branch_id, raw_branch_id) if branch_name_map else raw_branch_id
+    else:
+        branch_name = '主分支'
     return {
         'id': row[0],
         'action': row[1],
