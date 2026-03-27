@@ -13,9 +13,13 @@ import uuid
 import time
 import zipfile
 import threading
+import logging
 from datetime import datetime, timezone, timedelta
-from db import get_db
+from db import get_db, get_pool
 import psycopg2.extras
+
+
+logger = logging.getLogger(__name__)
 
 # 备份文件存储目录
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
@@ -83,6 +87,10 @@ RESTORE_ORDER = [
 
 def _ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+def _log_background_error(action):
+    logger.exception('Backup subsystem action failed: %s', action)
 
 
 def _serialize_value(val):
@@ -368,7 +376,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
                     (now, now),
                 )
         except Exception:
-            pass
+            _log_background_error('update scheduled backup timestamp')
 
     return {
         'id': backup_id,
@@ -482,8 +490,9 @@ def restore_backup(zip_path, tables=None):
 
     # 2. 在单个事务中还原
     conn = None
+    pool = None
     try:
-        from db import pool
+        pool = get_pool()
         conn = pool.getconn()
         cur = conn.cursor()
 
@@ -590,8 +599,7 @@ def restore_backup(zip_path, tables=None):
             conn.rollback()
         raise
     finally:
-        if conn:
-            from db import pool
+        if conn and pool:
             pool.putconn(conn)
 
     return manifest
@@ -603,7 +611,7 @@ def delete_backup_file(file_path):
         if file_path and os.path.isfile(file_path):
             os.remove(file_path)
     except OSError:
-        pass
+        logger.warning('Failed to delete backup file: %s', file_path, exc_info=True)
 
 
 def get_backup_settings():
@@ -690,7 +698,7 @@ def cleanup_old_backups(retention_count):
                 delete_backup_file(file_path)
                 cur.execute('DELETE FROM backups WHERE id = %s', (backup_id,))
     except Exception:
-        pass
+        _log_background_error('cleanup old scheduled backups')
 
 
 def start_backup_scheduler(app):
@@ -707,7 +715,7 @@ def start_backup_scheduler(app):
                         create_backup(backup_type='scheduled', created_by='系统定时')
                         cleanup_old_backups(settings['retentionCount'])
             except Exception:
-                pass
+                _log_background_error('scheduled backup loop')
 
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()

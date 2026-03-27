@@ -7,8 +7,10 @@
 import os
 import sys
 import json
+import shutil
 import zipfile
 import tempfile
+import uuid
 import pytest
 from unittest.mock import MagicMock, patch, mock_open
 from datetime import datetime, timezone, timedelta
@@ -22,6 +24,18 @@ def _make_mock_db(mock_conn):
     def fake_get_db():
         yield mock_conn
     return fake_get_db
+
+
+@contextmanager
+def workspace_temp_dir():
+    base_dir = os.path.join(os.path.dirname(__file__), '_tmp')
+    os.makedirs(base_dir, exist_ok=True)
+    tmpdir = os.path.join(base_dir, f'tmp-{uuid.uuid4().hex}')
+    os.makedirs(tmpdir, exist_ok=True)
+    try:
+        yield tmpdir
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class TestCreateBackup:
@@ -46,7 +60,7 @@ class TestCreateBackup:
 
         mock_getsize.return_value = 1024
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 result = create_backup(backup_type='manual', created_by='admin')
 
@@ -72,7 +86,7 @@ class TestCreateBackup:
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 1024
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 result = create_backup()
                 zip_path = result['filePath']
@@ -124,7 +138,7 @@ class TestCreateBackup:
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 2048
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 result = create_backup()
 
@@ -150,7 +164,7 @@ class TestRestoreBackup:
         from utils.backup import restore_backup, BACKUP_VERSION
 
         # 创建临时备份文件
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
 
             # 创建模拟的备份数据
@@ -201,7 +215,7 @@ class TestRestoreBackup:
         """还原失败应回滚事务"""
         from utils.backup import restore_backup
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
 
             manifest = {'version': 1, 'id': 'bk-1', 'name': 'test', 'type': 'manual', 'createdAt': '', 'tables': {}, 'totalRecords': 0}
@@ -377,12 +391,14 @@ class TestDeleteBackupFile:
         """删除存在的文件"""
         from utils.backup import delete_backup_file
 
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            temp_path = f.name
+        with workspace_temp_dir() as tmpdir:
+            temp_path = os.path.join(tmpdir, 'delete-me.zip')
+            with open(temp_path, 'wb') as f:
+                f.write(b'test')
 
-        assert os.path.isfile(temp_path)
-        delete_backup_file(temp_path)
-        assert not os.path.isfile(temp_path)
+            assert os.path.isfile(temp_path)
+            delete_backup_file(temp_path)
+            assert not os.path.isfile(temp_path)
 
     def test_delete_nonexistent_file_no_error(self):
         """删除不存在的文件不应报错"""
@@ -417,7 +433,7 @@ class TestTableLevelBackup:
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 1024
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 # 只备份 menus 和 users 两张表
                 result = create_backup(
@@ -463,7 +479,7 @@ class TestTableLevelBackup:
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 1024
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 result = create_backup(backup_type='manual')
 
@@ -487,7 +503,7 @@ class TestTableLevelBackup:
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 1024
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 # 传入无效表名和有效表名
                 result = create_backup(
@@ -511,7 +527,7 @@ class TestTableLevelBackup:
         mock_conn.cursor.return_value = mock_cursor
         mock_get_db.return_value = mock_conn
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 with pytest.raises(ValueError, match='没有有效的表需要备份'):
                     create_backup(tables=['invalid_table', 'another_invalid'])
@@ -525,7 +541,7 @@ class TestTableLevelRestore:
         """只还原指定的表"""
         from utils.backup import restore_backup, BACKUP_VERSION
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
 
             # 创建包含多张表的备份
@@ -566,7 +582,7 @@ class TestTableLevelRestore:
         """还原时指定的表不在备份中应被过滤"""
         from utils.backup import restore_backup, BACKUP_VERSION
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
 
             manifest = {
@@ -603,7 +619,7 @@ class TestTableLevelRestore:
         """还原时指定的表都不在备份中应抛出错误"""
         from utils.backup import restore_backup, BACKUP_VERSION
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-backup.zip')
 
             manifest = {
@@ -630,7 +646,7 @@ class TestTableLevelRestore:
         """还原旧版备份（无 tables 字段）应从文件名推断"""
         from utils.backup import restore_backup
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'legacy-backup.zip')
 
             # 旧版 manifest 无 tables 字段
@@ -727,7 +743,7 @@ class TestRestoreOrder:
         """还原时应按 RESTORE_ORDER 顺序执行 INSERT"""
         from utils.backup import restore_backup, BACKUP_VERSION, RESTORE_ORDER
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with workspace_temp_dir() as tmpdir:
             zip_path = os.path.join(tmpdir, 'test-order.zip')
 
             # 创建包含多张表的备份

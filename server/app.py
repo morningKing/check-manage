@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask
 from flask_cors import CORS
-from config import FLASK_PORT, FLASK_DEBUG
+from config import FLASK_PORT, FLASK_DEBUG, CORS_ALLOWED_ORIGINS
 from routes.menus import menus_bp
 from routes.page_configs import page_configs_bp
 from routes.relations import relations_bp
@@ -30,7 +30,10 @@ from routes.versions import versions_bp
 from routes.menu_export import menu_export_bp
 
 app = Flask(__name__)
-CORS(app)
+if CORS_ALLOWED_ORIGINS:
+    CORS(app, origins=CORS_ALLOWED_ORIGINS)
+elif FLASK_DEBUG:
+    CORS(app)
 
 # Register blueprints - auth first, then static routes, then catch-all dynamic routes
 app.register_blueprint(auth_bp)

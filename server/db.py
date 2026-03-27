@@ -4,11 +4,19 @@ import psycopg2.extras
 from contextlib import contextmanager
 from config import DB_CONFIG
 
-pool = psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=20, **DB_CONFIG)
+pool = None
+
+
+def get_pool():
+    global pool
+    if pool is None:
+        pool = psycopg2.pool.ThreadedConnectionPool(minconn=2, maxconn=20, **DB_CONFIG)
+    return pool
 
 
 @contextmanager
 def get_db():
+    pool = get_pool()
     conn = pool.getconn()
     try:
         yield conn

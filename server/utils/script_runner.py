@@ -1,36 +1,28 @@
-"""
-导出脚本沙箱执行引擎
+﻿"""Script sandbox execution helpers."""
 
-职责：
-- 在受限环境中执行管理员编写的 Python 导出脚本
-- 预注入常用模块和数据变量
-- 限制危险操作（文件访问、系统调用等）
-- 执行超时保护
-"""
-
-import json
+import collections
 import csv
 import io
-import re
+import json
 import math
-import collections
-import xml.etree.ElementTree as ET
-from xml.dom import minidom
-from datetime import datetime, timedelta
+import multiprocessing
+import re
 import threading
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from xml.dom import minidom
 
-# 可选数据处理库（如果已安装）
+# Optional data libs
 try:
     import pandas as pd
-except ImportError:
+except ImportError:  # pragma: no cover
     pd = None
 
 try:
     import numpy as np
-except ImportError:
+except ImportError:  # pragma: no cover
     np = None
 
-# 默认 MIME 类型映射
 FORMAT_CONTENT_TYPES = {
     'json': 'application/json',
     'xml': 'application/xml',
@@ -39,7 +31,6 @@ FORMAT_CONTENT_TYPES = {
     'html': 'text/html',
 }
 
-# 默认文件扩展名
 FORMAT_EXTENSIONS = {
     'json': '.json',
     'xml': '.xml',
@@ -48,75 +39,22 @@ FORMAT_EXTENSIONS = {
     'html': '.html',
 }
 
-# 禁止的关键字
 FORBIDDEN_NAMES = {
     'open', 'exec', 'eval', 'compile', '__import__', 'getattr', 'setattr',
     'delattr', 'globals', 'locals', 'vars', 'dir', 'type', 'super',
     'breakpoint', 'exit', 'quit', 'input', 'print',
 }
 
-# 脚本执行超时（秒）
 SCRIPT_TIMEOUT = 60
-
-# 菜单级脚本执行超时（秒）- 更长时间因为数据量大
 MENU_SCRIPT_TIMEOUT = 300
-
-# 数据处理库注入提示（用于错误信息）
-DATA_LIBS_HINT = '数据处理库已预注入: pd (pandas), np (numpy)。如未安装，请先 pip install pandas numpy'
-
-
-def _validate_script(script_code):
-    """检查脚本中是否包含危险操作"""
-    # 禁止 import 语句（安全考虑）
-    # 数据处理库 pandas、numpy 已预注入为 pd、np
-    if re.search(r'^\s*import\s+', script_code, re.MULTILINE):
-        raise ValueError(f'脚本中不允许使用 import 语句。\n可用预注入模块: json, csv, io, re, math, collections, ET, minidom, datetime, timedelta, pd (pandas), np (numpy)')
-    if re.search(r'^\s*from\s+\S+\s+import', script_code, re.MULTILINE):
-        raise ValueError(f'脚本中不允许使用 from...import 语句。\n可用预注入模块: json, csv, io, re, math, collections, ET, minidom, datetime, timedelta, pd (pandas), np (numpy)')
-
-    # 禁止危险内置函数
-    for name in FORBIDDEN_NAMES:
-        if re.search(r'\b' + name + r'\s*\(', script_code):
-            raise ValueError(f'脚本中不允许使用 {name}()')
-
-    # 禁止访问双下划线属性
-    if re.search(r'__\w+__', script_code):
-        raise ValueError('脚本中不允许访问双下划线属性')
+DATA_LIBS_HINT = (
+    'Pre-injected data libraries: pd (pandas), np (numpy). '
+    'Install with: pip install pandas numpy'
+)
 
 
-def run_export_script(script_code, data, fields, page_name, output_format='json'):
-    """
-    执行导出脚本
-
-    参数：
-    - script_code: Python 代码字符串
-    - data: 数据记录列表 list[dict]
-    - fields: 字段配置列表 list[dict]
-    - page_name: 页面名称
-    - output_format: 输出格式标识
-
-    返回：(文件内容 bytes, 文件名 str, content_type str)
-    """
-    # 1. 校验脚本安全性
-    _validate_script(script_code)
-
-    # 2. 构建安全的执行环境
-    safe_globals = {
-        # 预注入的模块
-        'json': json,
-        'csv': csv,
-        'io': io,
-        're': re,
-        'math': math,
-        'collections': collections,
-        'ET': ET,
-        'minidom': minidom,
-        'datetime': datetime,
-        'timedelta': timedelta,
-        # 数据处理库（如果已安装）
-        'pd': pd,
-        'np': np,
-        # 安全的内置函数
+def _safe_builtins(include_any_all=False):
+    allowed = {
         'len': len,
         'str': str,
         'int': int,
@@ -140,86 +78,190 @@ def run_export_script(script_code, data, fields, page_name, output_format='json'
         'round': round,
         'isinstance': isinstance,
         'hasattr': hasattr,
+        '__import__': __import__,
         'None': None,
         'True': True,
         'False': False,
     }
+    if include_any_all:
+        allowed['any'] = any
+        allowed['all'] = all
+    return allowed
 
-    # 3. 注入数据变量
-    script_locals = {
-        'data': data,
-        'fields': fields,
-        'page_name': page_name,
-        'result': None,
-        'filename': None,
-        'content_type': None,
+
+def _build_safe_globals(profile):
+    globals_map = {
+        '__builtins__': _safe_builtins(include_any_all=(profile == 'etl')),
+        'json': json,
+        're': re,
+        'math': math,
+        'collections': collections,
+        'datetime': datetime,
+        'timedelta': timedelta,
+        'pd': pd,
+        'np': np,
     }
+    if profile in ('export', 'menu'):
+        globals_map.update({
+            'csv': csv,
+            'io': io,
+            'ET': ET,
+            'minidom': minidom,
+        })
+    return globals_map
 
-    # 4. 带超时执行
+
+def _validate_script(script_code):
+    """Reject unsafe script patterns before execution."""
+    if re.search(r'^\s*import\s+', script_code, re.MULTILINE):
+        raise ValueError('import statements are not allowed')
+    if re.search(r'^\s*from\s+\S+\s+import', script_code, re.MULTILINE):
+        raise ValueError('from...import statements are not allowed')
+
+    for name in FORBIDDEN_NAMES:
+        if re.search(r'\b' + re.escape(name) + r'\s*\(', script_code):
+            raise ValueError(f'{name}() is not allowed')
+
+    if re.search(r'__\w+__', script_code):
+        raise ValueError('double underscore (双下划线) attributes are not allowed')
+
+
+def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, timeout_message):
     error_holder = [None]
 
     def _execute():
         try:
             exec(script_code, safe_globals, script_locals)  # noqa: S102
-        except Exception as e:
-            error_holder[0] = e
+        except Exception as exc:  # pragma: no cover
+            error_holder[0] = exc
 
     thread = threading.Thread(target=_execute)
     thread.start()
-    thread.join(timeout=SCRIPT_TIMEOUT)
+    thread.join(timeout=timeout_seconds)
 
     if thread.is_alive():
-        raise TimeoutError(f'脚本执行超时（>{SCRIPT_TIMEOUT}秒）')
-
+        raise TimeoutError(timeout_message)
     if error_holder[0]:
         raise error_holder[0]
+    return script_locals
 
-    # 5. 提取结果
-    result = script_locals.get('result')
+
+def _subprocess_exec_worker(queue, profile, script_code, script_locals):
+    safe_globals = _build_safe_globals(profile)
+    local_ctx = dict(script_locals)
+    try:
+        exec(script_code, safe_globals, local_ctx)  # noqa: S102
+        if profile in ('export', 'menu'):
+            queue.put({
+                'ok': True,
+                'result': local_ctx.get('result'),
+                'filename': local_ctx.get('filename'),
+                'content_type': local_ctx.get('content_type'),
+            })
+        elif profile == 'etl':
+            queue.put({
+                'ok': True,
+                'result': local_ctx.get('result'),
+            })
+        else:
+            queue.put({'ok': True})
+    except Exception as exc:  # pragma: no cover
+        queue.put({
+            'ok': False,
+            'error_type': exc.__class__.__name__,
+            'error_message': str(exc),
+        })
+
+
+def _process_exec(profile, script_code, script_locals, timeout_seconds, timeout_message):
+    try:
+        queue = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_subprocess_exec_worker,
+            args=(queue, profile, script_code, script_locals),
+            daemon=True,
+        )
+        proc.start()
+        proc.join(timeout_seconds)
+
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=1)
+            raise TimeoutError(timeout_message)
+
+        if queue.empty():
+            raise RuntimeError('script process exited without result')
+
+        payload = queue.get()
+        if not payload.get('ok'):
+            raise RuntimeError(f"{payload.get('error_type', 'ScriptError')}: {payload.get('error_message', '')}")
+        return payload
+    except (PermissionError, OSError):
+        # Some restricted environments disallow multiprocessing IPC handles.
+        local_ctx = _thread_exec(
+            script_code=script_code,
+            safe_globals=_build_safe_globals(profile),
+            script_locals=dict(script_locals),
+            timeout_seconds=timeout_seconds,
+            timeout_message=timeout_message,
+        )
+        if profile in ('export', 'menu'):
+            return {
+                'ok': True,
+                'result': local_ctx.get('result'),
+                'filename': local_ctx.get('filename'),
+                'content_type': local_ctx.get('content_type'),
+            }
+        if profile == 'etl':
+            return {
+                'ok': True,
+                'result': local_ctx.get('result'),
+            }
+        return {'ok': True}
+
+
+def run_export_script(script_code, data, fields, page_name, output_format='json'):
+    _validate_script(script_code)
+
+    payload = _process_exec(
+        profile='export',
+        script_code=script_code,
+        script_locals={
+            'data': data,
+            'fields': fields,
+            'page_name': page_name,
+            'result': None,
+            'filename': None,
+            'content_type': None,
+        },
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'script execution timeout (>{SCRIPT_TIMEOUT}s)',
+    )
+
+    result = payload.get('result')
     if result is None:
-        raise ValueError('脚本未设置 result 变量')
+        raise ValueError('result must be assigned in script')
 
-    # 转为 bytes
     if isinstance(result, str):
         result_bytes = result.encode('utf-8')
     elif isinstance(result, bytes):
         result_bytes = result
     else:
-        raise ValueError(f'result 必须是 str 或 bytes，得到 {type(result).__name__}')
+        raise ValueError(f'result must be str 或 bytes, got {type(result).__name__}')
 
-    filename = script_locals.get('filename') or f'{page_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
-    content_type = script_locals.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
+    filename = payload.get('filename') or f'{page_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
+    content_type = payload.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
 
     return result_bytes, filename, content_type
 
 
 def run_validation_script(script_code, record, action, old_data, fields, collection, conn):
-    """
-    执行校验脚本
-
-    在数据新增/修改时运行管理员编写的 Python 校验脚本。
-    脚本可通过 add_error() 阻止保存，通过 set_relations() 排队关联操作。
-
-    参数：
-    - script_code: Python 代码字符串
-    - record: 当前提交的数据 dict（不含 id、createdAt）
-    - action: 'create' 或 'update'
-    - old_data: 修改前的旧数据 dict（仅 update 时有值，create 时为 None）
-    - fields: 字段配置列表 list[dict]
-    - collection: 当前数据页集合名
-    - conn: 数据库连接（用于 query 等辅助函数）
-
-    返回：(errors: list[str], warnings: list[str], pending_relations: list[dict])
-    """
-    # 1. 校验脚本安全性
     _validate_script(script_code)
 
-    # 2. 收集器
     errors = []
     warnings = []
     pending_relations = []
 
-    # 3. 辅助函数（闭包捕获 conn）
     def add_error(msg):
         errors.append(str(msg))
 
@@ -227,14 +269,12 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         warnings.append(str(msg))
 
     def _row_to_record(row):
-        """将 (id, data) 行转为扁平 dict"""
         rec = {'id': row[0]}
         if row[1]:
             rec.update(row[1])
         return rec
 
     def query(collection_name):
-        """查询目标集合全部记录"""
         cur = conn.cursor()
         cur.execute(
             'SELECT id, data FROM dynamic_data WHERE collection = %s ORDER BY created_at',
@@ -243,17 +283,15 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         return [_row_to_record(r) for r in cur.fetchall()]
 
     def query_one(collection_name, record_id):
-        """按 ID 查询单条记录"""
         cur = conn.cursor()
         cur.execute(
             'SELECT id, data FROM dynamic_data WHERE collection = %s AND id = %s',
             (collection_name, record_id),
         )
-        r = cur.fetchone()
-        return _row_to_record(r) if r else None
+        row = cur.fetchone()
+        return _row_to_record(row) if row else None
 
     def find_by(collection_name, field_name, value):
-        """按字段值筛选目标集合"""
         cur = conn.cursor()
         cur.execute(
             'SELECT id, data FROM dynamic_data WHERE collection = %s AND data->>%s = %s',
@@ -262,7 +300,6 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         return [_row_to_record(r) for r in cur.fetchall()]
 
     def get_relations(collection_name, record_id):
-        """查询指定记录的现有关联"""
         cur = conn.cursor()
         cur.execute(
             'SELECT field_name, related_id FROM data_relations '
@@ -271,13 +308,10 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
         )
         result = {}
         for field_name, related_id in cur.fetchall():
-            if field_name not in result:
-                result[field_name] = []
-            result[field_name].append(related_id)
+            result.setdefault(field_name, []).append(related_id)
         return result
 
     def set_relations(field_name, target_collection, target_field, ids):
-        """排队关联操作（保存后执行）"""
         pending_relations.append({
             'fieldName': field_name,
             'targetCollection': target_collection,
@@ -285,277 +319,81 @@ def run_validation_script(script_code, record, action, old_data, fields, collect
             'ids': list(ids) if not isinstance(ids, list) else ids,
         })
 
-    # 4. 构建安全的执行环境
-    safe_globals = {
-        # 预注入的模块
-        'json': json,
-        're': re,
-        'math': math,
-        'collections': collections,
-        'datetime': datetime,
-        'timedelta': timedelta,
-        # 数据处理库（如果已安装）
-        'pd': pd,
-        'np': np,
-        # 安全的内置函数
-        'len': len,
-        'str': str,
-        'int': int,
-        'float': float,
-        'bool': bool,
-        'list': list,
-        'dict': dict,
-        'tuple': tuple,
-        'set': set,
-        'sorted': sorted,
-        'reversed': reversed,
-        'enumerate': enumerate,
-        'zip': zip,
-        'map': map,
-        'filter': filter,
-        'range': range,
-        'min': min,
-        'max': max,
-        'sum': sum,
-        'abs': abs,
-        'round': round,
-        'isinstance': isinstance,
-        'hasattr': hasattr,
-        'None': None,
-        'True': True,
-        'False': False,
-    }
-
-    # 5. 注入数据变量和辅助函数
-    script_locals = {
-        'record': record,
-        'action': action,
-        'old_data': old_data,
-        'fields': fields,
-        'collection': collection,
-        'add_error': add_error,
-        'add_warning': add_warning,
-        'query': query,
-        'query_one': query_one,
-        'find_by': find_by,
-        'get_relations': get_relations,
-        'set_relations': set_relations,
-    }
-
-    # 6. 带超时执行
-    error_holder = [None]
-
-    def _execute():
-        try:
-            exec(script_code, safe_globals, script_locals)  # noqa: S102
-        except Exception as e:
-            error_holder[0] = e
-
-    thread = threading.Thread(target=_execute)
-    thread.start()
-    thread.join(timeout=SCRIPT_TIMEOUT)
-
-    if thread.is_alive():
-        raise TimeoutError(f'校验脚本执行超时（>{SCRIPT_TIMEOUT}秒）')
-
-    if error_holder[0]:
-        raise error_holder[0]
+    _thread_exec(
+        script_code=script_code,
+        safe_globals=_build_safe_globals('validation'),
+        script_locals={
+            'record': record,
+            'action': action,
+            'old_data': old_data,
+            'fields': fields,
+            'collection': collection,
+            'add_error': add_error,
+            'add_warning': add_warning,
+            'query': query,
+            'query_one': query_one,
+            'find_by': find_by,
+            'get_relations': get_relations,
+            'set_relations': set_relations,
+        },
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'validation script timeout (>{SCRIPT_TIMEOUT}s)',
+    )
 
     return errors, warnings, pending_relations
 
 
 def run_etl_script(script_code, records):
-    """
-    ETL 转换脚本执行。
-
-    注入变量：
-    - records: list[dict] — 当前管道中的记录列表
-
-    脚本须设置：
-    - result: list[dict] — 转换后的记录列表
-
-    返回: list[dict]
-    """
     _validate_script(script_code)
 
-    safe_globals = {
-        '__builtins__': {
-            'json': json,
-            're': re,
-            'math': math,
-            'collections': collections,
-            'datetime': datetime,
-            'timedelta': timedelta,
-            'pd': pd,
-            'np': np,
-            'len': len, 'str': str, 'int': int, 'float': float, 'bool': bool,
-            'list': list, 'dict': dict, 'tuple': tuple, 'set': set,
-            'sorted': sorted, 'reversed': reversed,
-            'enumerate': enumerate, 'zip': zip, 'map': map, 'filter': filter,
-            'range': range, 'min': min, 'max': max, 'sum': sum,
-            'abs': abs, 'round': round, 'isinstance': isinstance, 'hasattr': hasattr,
-            'any': any, 'all': all,
-            'None': None, 'True': True, 'False': False,
+    payload = _process_exec(
+        profile='etl',
+        script_code=script_code,
+        script_locals={
+            'records': records,
+            'result': None,
         },
-    }
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'ETL script timeout (>{SCRIPT_TIMEOUT}s)',
+    )
 
-    script_locals = {
-        'records': records,
-        'result': None,
-    }
-
-    error_holder = [None]
-
-    def _execute():
-        try:
-            exec(script_code, safe_globals, script_locals)  # noqa: S102
-        except Exception as e:
-            error_holder[0] = e
-
-    thread = threading.Thread(target=_execute)
-    thread.start()
-    thread.join(timeout=SCRIPT_TIMEOUT)
-
-    if thread.is_alive():
-        raise TimeoutError(f'ETL脚本执行超时（>{SCRIPT_TIMEOUT}秒）')
-
-    if error_holder[0]:
-        raise error_holder[0]
-
-    result = script_locals.get('result')
+    result = payload.get('result')
     if result is None:
-        raise ValueError('脚本未设置 result 变量')
-
+        raise ValueError('result must be assigned in script')
     return result
 
 
 def run_menu_export_script(script_code, menu_data, menu_name, output_format='json'):
-    """
-    执行菜单级导出脚本
-
-    与单表导出不同，菜单级脚本接收所有数据表的数据，可以做统一处理。
-
-    注入变量：
-    - menu_data: list[dict] — 菜单下所有数据表的信息
-      [{
-          'collection': 'inspection-case',
-          'pageName': '巡检用例',
-          'records': [...],
-          'fields': [...],
-          'recordCount': 100
-      }, ...]
-    - menu_name: str — 菜单名称
-    - total_records: int — 总记录数
-
-    脚本输出方式：
-
-    方式1 - 单文件输出：
-        result = "..."  # str 或 bytes
-        filename = "导出文件.json"  # 可选，默认用菜单名
-
-    方式2 - 多文件输出（返回列表）：
-        result = [
-            {'filename': '巡检用例.json', 'content': '...'},
-            {'filename': '巡检计划.csv', 'content': '...'},
-        ]
-
-    返回：[(bytes, filename, content_type), ...] — 文件列表
-    """
-    # 1. 校验脚本安全性
     _validate_script(script_code)
 
-    # 2. 计算总记录数
-    total_records = sum(t.get('recordCount', 0) for t in menu_data)
+    total_records = sum(table.get('recordCount', 0) for table in menu_data)
+    payload = _process_exec(
+        profile='menu',
+        script_code=script_code,
+        script_locals={
+            'menu_data': menu_data,
+            'menu_name': menu_name,
+            'total_records': total_records,
+            'result': None,
+            'filename': None,
+            'content_type': None,
+        },
+        timeout_seconds=MENU_SCRIPT_TIMEOUT,
+        timeout_message=f'menu export script timeout (>{MENU_SCRIPT_TIMEOUT}s)',
+    )
 
-    # 3. 构建安全的执行环境
-    safe_globals = {
-        # 预注入的模块
-        'json': json,
-        'csv': csv,
-        'io': io,
-        're': re,
-        'math': math,
-        'collections': collections,
-        'ET': ET,
-        'minidom': minidom,
-        'datetime': datetime,
-        'timedelta': timedelta,
-        # 数据处理库（如果已安装）
-        'pd': pd,
-        'np': np,
-        # 安全的内置函数
-        'len': len,
-        'str': str,
-        'int': int,
-        'float': float,
-        'bool': bool,
-        'list': list,
-        'dict': dict,
-        'tuple': tuple,
-        'set': set,
-        'sorted': sorted,
-        'reversed': reversed,
-        'enumerate': enumerate,
-        'zip': zip,
-        'map': map,
-        'filter': filter,
-        'range': range,
-        'min': min,
-        'max': max,
-        'sum': sum,
-        'abs': abs,
-        'round': round,
-        'isinstance': isinstance,
-        'hasattr': hasattr,
-        'None': None,
-        'True': True,
-        'False': False,
-    }
-
-    # 4. 注入数据变量
-    script_locals = {
-        'menu_data': menu_data,
-        'menu_name': menu_name,
-        'total_records': total_records,
-        'result': None,
-        'filename': None,
-        'content_type': None,
-    }
-
-    # 5. 带超时执行
-    error_holder = [None]
-
-    def _execute():
-        try:
-            exec(script_code, safe_globals, script_locals)  # noqa: S102
-        except Exception as e:
-            error_holder[0] = e
-
-    thread = threading.Thread(target=_execute)
-    thread.start()
-    thread.join(timeout=MENU_SCRIPT_TIMEOUT)
-
-    if thread.is_alive():
-        raise TimeoutError(f'菜单级导出脚本执行超时（>{MENU_SCRIPT_TIMEOUT}秒）')
-
-    if error_holder[0]:
-        raise error_holder[0]
-
-    # 6. 提取结果
-    result = script_locals.get('result')
+    result = payload.get('result')
     if result is None:
-        raise ValueError('脚本未设置 result 变量')
+        raise ValueError('result must be assigned in script')
 
-    # 7. 处理结果 - 支持单文件或多文件输出
     files = []
 
     if isinstance(result, list):
-        # 多文件输出
         for item in result:
             if not isinstance(item, dict):
-                raise ValueError('多文件输出时，result 列表中的每个元素必须是 dict')
+                raise ValueError('each item in result list 必须是 dict')
             if 'filename' not in item or 'content' not in item:
-                raise ValueError('多文件输出时，每个元素必须包含 filename 和 content 字段')
+                raise ValueError('each result list item must include filename 和 content')
 
             content = item['content']
             filename = item['filename']
@@ -566,29 +404,26 @@ def run_menu_export_script(script_code, menu_data, menu_name, output_format='jso
             elif isinstance(content, bytes):
                 content_bytes = content
             else:
-                raise ValueError(f'content 必须是 str 或 bytes，得到 {type(content).__name__}')
+                raise ValueError(f'content must be str 或 bytes, got {type(content).__name__}')
 
             files.append((content_bytes, filename, content_type))
 
     elif isinstance(result, (str, bytes)):
-        # 单文件输出
         if isinstance(result, str):
             result_bytes = result.encode('utf-8')
         else:
             result_bytes = result
 
-        filename = script_locals.get('filename') or f'{menu_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
-        content_type = script_locals.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
-
+        filename = payload.get('filename') or f'{menu_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
+        content_type = payload.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
         files.append((result_bytes, filename, content_type))
 
     else:
-        raise ValueError(f'result 必须是 str、bytes 或 list，得到 {type(result).__name__}')
+        raise ValueError(f'result must be str、bytes 或 list, got {type(result).__name__}')
 
     return files
 
 
 def guess_content_type(filename):
-    """根据文件扩展名猜测 Content-Type"""
     ext = filename.rpartition('.')[2].lower() if '.' in filename else ''
     return FORMAT_CONTENT_TYPES.get(ext, 'application/octet-stream')

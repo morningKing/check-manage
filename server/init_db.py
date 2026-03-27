@@ -31,12 +31,14 @@ CREATE TABLE IF NOT EXISTS page_configs (
 );
 
 CREATE TABLE IF NOT EXISTS dynamic_data (
-    id          VARCHAR(100) PRIMARY KEY,
+    id          VARCHAR(100) NOT NULL,
     collection  VARCHAR(200) NOT NULL,
     data        JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW(),
-    version     INTEGER NOT NULL DEFAULT 1
+    version     INTEGER NOT NULL DEFAULT 1,
+    branch_id   VARCHAR(100) NOT NULL DEFAULT 'main',
+    PRIMARY KEY (id, branch_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_collection ON dynamic_data(collection);
@@ -49,7 +51,9 @@ CREATE TABLE IF NOT EXISTS data_relations (
     record_id           VARCHAR(100) NOT NULL,
     field_name          VARCHAR(200) NOT NULL,
     related_collection  VARCHAR(200) NOT NULL,
-    related_id          VARCHAR(100) NOT NULL
+    related_id          VARCHAR(100) NOT NULL,
+    branch_id           VARCHAR(100) NOT NULL DEFAULT 'main',
+    PRIMARY KEY (collection, record_id, field_name, related_id, branch_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_relations_reverse
@@ -675,8 +679,7 @@ def init_db():
                     max_tokens      INTEGER NOT NULL DEFAULT 1024,
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
-                INSERT INTO ai_settings (id, enabled, api_key)
-                VALUES (1, TRUE, 'sk-d234f87ccfce4893be2b17781a054546');
+                INSERT INTO ai_settings (id) VALUES (1);
             """)
             conn.commit()
             print("Created ai_settings table.")
@@ -785,7 +788,7 @@ def init_db():
         if not cur.fetchone():
             cur.execute("ALTER TABLE dynamic_data ADD COLUMN branch_id VARCHAR(100) NOT NULL DEFAULT 'main'")
             # Drop the existing primary key and create a composite one
-            cur.execute("ALTER TABLE dynamic_data DROP CONSTRAINT dynamic_data_pkey")
+            cur.execute("ALTER TABLE dynamic_data DROP CONSTRAINT IF EXISTS dynamic_data_pkey")
             cur.execute("ALTER TABLE dynamic_data ADD PRIMARY KEY (id, branch_id)")
             conn.commit()
             print("Added branch_id column to dynamic_data table and updated primary key.")
@@ -814,6 +817,21 @@ def init_db():
             cur.execute("ALTER TABLE data_relations ADD PRIMARY KEY (collection, record_id, field_name, related_id, branch_id)")
             conn.commit()
             print("Updated data_relations primary key to include branch_id.")
+
+        # Migration: ensure dynamic_data primary key includes branch_id
+        cur.execute("""
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            WHERE i.indrelid = 'dynamic_data'::regclass AND i.indisprimary
+            ORDER BY array_position(i.indkey, a.attnum)
+        """)
+        dynamic_pk_cols = [row[0] for row in cur.fetchall()]
+        if dynamic_pk_cols != ['id', 'branch_id']:
+            cur.execute("ALTER TABLE dynamic_data DROP CONSTRAINT IF EXISTS dynamic_data_pkey")
+            cur.execute("ALTER TABLE dynamic_data ADD PRIMARY KEY (id, branch_id)")
+            conn.commit()
+            print("Updated dynamic_data primary key to (id, branch_id).")
 
         # Migration: create user_current_branch table
         cur.execute("""
@@ -920,12 +938,17 @@ def init_db():
         cur.execute("SELECT COUNT(*) FROM users")
         user_count = cur.fetchone()[0]
         if user_count == 0:
-            from werkzeug.security import generate_password_hash
-            cur.execute(
-                "INSERT INTO users (id, username, password_hash, display_name, role) VALUES (%s, %s, %s, %s, %s)",
-                ('user-admin', 'admin', generate_password_hash('admin123'), '管理员', 'admin'),
-            )
-            print("Default admin user created (admin / admin123)")
+            initial_admin_password = os.getenv('INIT_ADMIN_PASSWORD', '').strip()
+            initial_admin_username = os.getenv('INIT_ADMIN_USERNAME', 'admin').strip() or 'admin'
+            if initial_admin_password:
+                from werkzeug.security import generate_password_hash
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) VALUES (%s, %s, %s, %s, %s)",
+                    ('user-admin', initial_admin_username, generate_password_hash(initial_admin_password), '管理员', 'admin'),
+                )
+                print(f"Default admin user created ({initial_admin_username} / env INIT_ADMIN_PASSWORD)")
+            else:
+                print("Users table is empty. Skip default admin creation because INIT_ADMIN_PASSWORD is not set.")
 
         conn.commit()
         print("Seed data inserted successfully.")

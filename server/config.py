@@ -1,13 +1,38 @@
+import os
+
+
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _to_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _split_csv(value):
+    if not value:
+        return []
+    return [item.strip() for item in str(value).split(',') if item.strip()]
+
+
 DB_CONFIG = {
-    'host': 'localhost',
-    'dbname': 'casemanage',
-    'user': 'postgres',
-    'password': 'jay123',
-    'port': 5432,
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'dbname': os.getenv('DB_NAME', 'casemanage'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', ''),
+    'port': _to_int(os.getenv('DB_PORT'), 5432),
 }
 
-FLASK_PORT = 3001
-FLASK_DEBUG = True
+FLASK_PORT = _to_int(os.getenv('FLASK_PORT'), 3001)
+FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), False)
 
-JWT_SECRET = 'check-manage-secret-key-change-in-production'
-JWT_EXPIRY_HOURS = 24
+JWT_SECRET = os.getenv('JWT_SECRET', 'dev-only-change-me')
+JWT_EXPIRY_HOURS = _to_int(os.getenv('JWT_EXPIRY_HOURS'), 24)
+
+CORS_ALLOWED_ORIGINS = _split_csv(os.getenv('CORS_ALLOWED_ORIGINS', ''))
+OPEN_API_BRANCH = os.getenv('OPEN_API_BRANCH', 'main').strip() or 'main'

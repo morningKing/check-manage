@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import api_key_required
+from config import OPEN_API_BRANCH
 from datetime import timezone
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 import uuid
@@ -84,7 +85,7 @@ def get_primary_key_fields(cur, collection):
     return [f['fieldName'] for f in row[0] if f.get('isPrimaryKey')]
 
 
-def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
+def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, branch_id=OPEN_API_BRANCH):
     """Check if primary key combination is unique. Returns error message or None."""
     if not pk_fields:
         return None
@@ -92,8 +93,8 @@ def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None):
     for field in pk_fields:
         pk_values[field] = data.get(field)
 
-    conditions = ['collection = %s']
-    params = [collection]
+    conditions = ['collection = %s', 'branch_id = %s']
+    params = [collection, branch_id]
     for field, value in pk_values.items():
         if value is None:
             conditions.append("(data->>%s IS NULL)")
@@ -171,16 +172,16 @@ def list_collection_data(collection):
                 return jsonify({'error': f'Query syntax error: {e}'}), 400
 
         cur.execute(
-            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s' + extra_where,
-            [collection] + q_params,
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s' + extra_where,
+            [collection, OPEN_API_BRANCH] + q_params,
         )
         total = cur.fetchone()[0]
 
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
-            'WHERE collection = %s' + extra_where + ' ORDER BY created_at '
+            'WHERE collection = %s AND branch_id = %s' + extra_where + ' ORDER BY created_at '
             'LIMIT %s OFFSET %s',
-            [collection] + q_params + [page_size, offset],
+            [collection, OPEN_API_BRANCH] + q_params + [page_size, offset],
         )
         rows = cur.fetchall()
 
@@ -208,8 +209,8 @@ def get_collection_item(collection, item_id):
 
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
-            'WHERE collection = %s AND id = %s',
-            (collection, item_id),
+            'WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, OPEN_API_BRANCH),
         )
         data_row = cur.fetchone()
 
@@ -283,7 +284,8 @@ def create_collection_item(collection):
 
         # Check ID uniqueness
         cur.execute(
-            'SELECT id FROM dynamic_data WHERE id = %s', (record_id,)
+            'SELECT id FROM dynamic_data WHERE id = %s AND branch_id = %s',
+            (record_id, OPEN_API_BRANCH),
         )
         if cur.fetchone():
             return jsonify({'error': 'Record ID already exists'}), 409
@@ -291,7 +293,7 @@ def create_collection_item(collection):
         # Check primary key uniqueness
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
-            pk_error = check_primary_key_unique(cur, collection, body, pk_fields)
+            pk_error = check_primary_key_unique(cur, collection, body, pk_fields, branch_id=OPEN_API_BRANCH)
             if pk_error:
                 return jsonify({'error': pk_error}), 409
 
@@ -299,9 +301,9 @@ def create_collection_item(collection):
         data = {k: v for k, v in body.items() if k not in ('createdAt', 'updatedAt', '_version')}
 
         cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data) VALUES (%s, %s, %s) '
+            'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s) '
             'RETURNING id, collection, data, created_at',
-            (record_id, collection, psycopg2.extras.Json(data)),
+            (record_id, collection, psycopg2.extras.Json(data), OPEN_API_BRANCH),
         )
         new_row = cur.fetchone()
 
@@ -326,8 +328,8 @@ def update_collection_item(collection, item_id):
 
         # Check record exists
         cur.execute(
-            'SELECT id, data, version FROM dynamic_data WHERE collection = %s AND id = %s',
-            (collection, item_id),
+            'SELECT id, data, version FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, OPEN_API_BRANCH),
         )
         existing = cur.fetchone()
         if not existing:
@@ -360,15 +362,17 @@ def update_collection_item(collection, item_id):
         # Check primary key uniqueness
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
-            pk_error = check_primary_key_unique(cur, collection, merged, pk_fields, exclude_id=item_id)
+            pk_error = check_primary_key_unique(
+                cur, collection, merged, pk_fields, exclude_id=item_id, branch_id=OPEN_API_BRANCH
+            )
             if pk_error:
                 return jsonify({'error': pk_error}), 409
 
         new_version = db_version + 1
         cur.execute(
             'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
-            'WHERE collection = %s AND id = %s AND version = %s',
-            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version),
+            'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
+            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version, OPEN_API_BRANCH),
         )
         if cur.rowcount == 0:
             return jsonify({
@@ -378,8 +382,8 @@ def update_collection_item(collection, item_id):
 
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
-            'WHERE collection = %s AND id = %s',
-            (collection, item_id),
+            'WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, item_id, OPEN_API_BRANCH),
         )
         updated_row = cur.fetchone()
 
