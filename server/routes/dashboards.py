@@ -237,6 +237,29 @@ def _normalize_group_by(body):
     }
 
 
+def _normalize_optional_group_config(config):
+    """Normalize an optional secondary grouping config."""
+    if not config:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError('breakdownBy must be an object')
+
+    field = config.get('field')
+    group_type = config.get('type', 'terms')
+    if not field:
+        raise ValueError('breakdownBy.field is required')
+    if group_type not in VALID_GROUP_TYPES:
+        raise ValueError(f'Unsupported group type: {group_type}')
+
+    return {
+        'field': field,
+        'type': group_type,
+        'interval': config.get('interval', 'month'),
+        'ranges': config.get('ranges', []),
+        'offset': config.get('offset', 0),
+    }
+
+
 def _build_metric_selects(metrics, data_expr='data'):
     """Build metric select fragments and params."""
     select_parts = []
@@ -352,6 +375,47 @@ def _format_single_row(row, metrics):
     return payload
 
 
+def _format_matrix_rows(rows, metrics, primary_group, breakdown_group):
+    """Format two-dimensional grouped rows."""
+    row_keys = []
+    col_keys = []
+    seen_rows = set()
+    seen_cols = set()
+    cells = []
+
+    for row in rows:
+        row_key = _format_group_key(row[0], primary_group)
+        col_key = _format_group_key(row[1], breakdown_group)
+
+        if row_key not in seen_rows:
+            seen_rows.add(row_key)
+            row_keys.append(row_key)
+        if col_key not in seen_cols:
+            seen_cols.add(col_key)
+            col_keys.append(col_key)
+
+        metric_values = {}
+        for idx, metric in enumerate(metrics, start=2):
+            raw_value = row[idx]
+            metric_values[_format_metric_name(metric)] = float(raw_value) if raw_value is not None else 0
+
+        cell = {
+            'rowKey': row_key,
+            'columnKey': col_key,
+            'value': metric_values[_format_metric_name(metrics[0])],
+        }
+        if len(metrics) > 1:
+            cell['metrics'] = metric_values
+        cells.append(cell)
+
+    return {
+        'type': 'matrix',
+        'rows': row_keys,
+        'columns': col_keys,
+        'data': cells,
+    }
+
+
 @dashboards_bp.route('/dashboards/aggregate', methods=['POST'])
 @login_required
 def aggregate_data():
@@ -372,6 +436,7 @@ def aggregate_data():
     try:
         metrics = _normalize_metrics(body)
         group_by = _normalize_group_by(body)
+        breakdown_by = _normalize_optional_group_config(body.get('breakdownBy'))
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -389,6 +454,32 @@ def aggregate_data():
             fields = _load_page_fields(cur, collection)
             field_def = next((f for f in fields if f.get('fieldName') == group_field), None)
             control_type = field_def.get('controlType', '') if field_def else ''
+            breakdown_field_def = next((f for f in fields if f.get('fieldName') == breakdown_by['field']), None) if breakdown_by else None
+            breakdown_control_type = breakdown_field_def.get('controlType', '') if breakdown_field_def else ''
+
+            if breakdown_by:
+                if control_type in ('relation', 'reference', 'quoteSelect') or breakdown_control_type in ('relation', 'reference', 'quoteSelect'):
+                    return jsonify({"error": "二维交叉统计当前仅支持普通字段"}), 400
+
+                where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
+                try:
+                    primary_expr, primary_params = _build_scalar_group_expr(group_by, data_expr='data')
+                    secondary_expr, secondary_params = _build_scalar_group_expr(breakdown_by, data_expr='data')
+                except ValueError as exc:
+                    return jsonify({"error": str(exc)}), 400
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
+
+                sql = (
+                    f"SELECT {primary_expr} AS row_key, {secondary_expr} AS column_key, {', '.join(metric_selects)} "
+                    f"FROM dynamic_data WHERE {where_clause} "
+                    f"GROUP BY row_key, column_key "
+                    f"ORDER BY {order_clause} "
+                    f"LIMIT %s"
+                )
+                params = primary_params + secondary_params + metric_params + where_params + [limit]
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+                return jsonify(_format_matrix_rows(rows, metrics, group_by, breakdown_by))
 
             if control_type == 'relation' and field_def:
                 if group_type != 'terms':

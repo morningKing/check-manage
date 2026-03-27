@@ -343,3 +343,73 @@ def test_relation_grouping_uses_source_data_for_sum_metric(client, mock_cursor, 
 
     executed_sql = mock_cursor.execute.call_args[0][0]
     assert 'SUM((dd.data->>%s)::numeric) AS agg_value' in executed_sql
+
+
+def test_matrix_aggregate_supports_secondary_breakdown(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('open', 'high', 3, 15),
+        ('open', 'low', 2, 6),
+        ('closed', 'high', 1, 8),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [
+                {'type': 'count', 'name': 'records'},
+                {'type': 'sum', 'field': 'score', 'name': 'totalScore'},
+            ],
+            'groupBy': {'field': 'status', 'type': 'terms'},
+            'breakdownBy': {'field': 'severity', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'matrix'
+    assert payload['rows'] == ['open', 'closed']
+    assert payload['columns'] == ['high', 'low']
+    assert payload['data'] == [
+        {'rowKey': 'open', 'columnKey': 'high', 'value': 3.0, 'metrics': {'records': 3.0, 'totalScore': 15.0}},
+        {'rowKey': 'open', 'columnKey': 'low', 'value': 2.0, 'metrics': {'records': 2.0, 'totalScore': 6.0}},
+        {'rowKey': 'closed', 'columnKey': 'high', 'value': 1.0, 'metrics': {'records': 1.0, 'totalScore': 8.0}},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'GROUP BY row_key, column_key' in executed_sql
+    assert 'SUM((data->>%s)::numeric) AS metric_1' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    assert params[:3] == ['status', 'severity', 'score']
+
+
+def test_matrix_aggregate_rejects_relation_dimensions(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [
+        {
+            'fieldName': 'assignedTemplates',
+            'controlType': 'relation',
+            'relationConfig': {'targetCollection': 'demo-template', 'displayField': 'templateName'},
+        },
+        {'fieldName': 'status', 'controlType': 'text'},
+    ])
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'count'}],
+            'groupBy': {'field': 'assignedTemplates', 'type': 'terms'},
+            'breakdownBy': {'field': 'status', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 400
+    assert '二维交叉统计当前仅支持普通字段' in resp.get_json()['error']
