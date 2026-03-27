@@ -193,3 +193,153 @@ def test_quote_select_grouping_unwinds_array(client, mock_cursor, admin_headers,
     params = mock_cursor.execute.call_args[0][1]
     assert params[:4] == ['caseName', 'quotedCases', 'demo-case', 'main']
     assert params[-3:-1] == ['dashboard-demo', 'main']
+
+
+def test_single_aggregate_supports_multiple_metrics(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    mock_cursor.fetchone.return_value = (7, 42.5)
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [
+                {'type': 'count', 'name': 'records'},
+                {'type': 'sum', 'field': 'cost', 'name': 'totalCost'},
+            ],
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload == {
+        'type': 'single',
+        'value': 7.0,
+        'metrics': {
+            'records': 7.0,
+            'totalCost': 42.5,
+        },
+    }
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'COUNT(*) AS agg_value' in executed_sql
+    assert 'SUM((data->>%s)::numeric) AS metric_1' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    assert params == ['cost', 'dashboard-demo', 'main']
+
+
+def test_histogram_grouping_returns_numeric_buckets(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        (0, 2),
+        (10, 5),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'count'}],
+            'groupBy': {'field': 'score', 'type': 'histogram', 'interval': 10},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'] == [
+        {'key': 0, 'value': 2.0},
+        {'key': 10, 'value': 5.0},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'FLOOR' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    assert params[:6] == ['score', 'score', 0.0, 10.0, 10.0, 0.0]
+
+
+def test_range_grouping_supports_multiple_metrics(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('low', 2, 15),
+        ('high', 1, 30),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [
+                {'type': 'count', 'name': 'records'},
+                {'type': 'sum', 'field': 'score', 'name': 'totalScore'},
+            ],
+            'groupBy': {
+                'field': 'score',
+                'type': 'range',
+                'ranges': [
+                    {'key': 'low', 'to': 20},
+                    {'key': 'high', 'from': 20},
+                ],
+            },
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    assert payload['data'] == [
+        {'key': 'low', 'value': 2.0, 'metrics': {'records': 2.0, 'totalScore': 15.0}},
+        {'key': 'high', 'value': 1.0, 'metrics': {'records': 1.0, 'totalScore': 30.0}},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'CASE WHEN' in executed_sql
+    assert 'SUM((data->>%s)::numeric) AS metric_1' in executed_sql
+
+
+def test_relation_grouping_uses_source_data_for_sum_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {
+            'fieldName': 'assignedTemplates',
+            'label': '关联模板',
+            'controlType': 'relation',
+            'relationConfig': {
+                'targetCollection': 'demo-template',
+                'displayField': 'templateName',
+                'targetField': 'tasks',
+            },
+        },
+    ]
+    _mock_page_fields(monkeypatch, fields, {'page-demo-template': [{'fieldName': 'templateName'}]})
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('模板A', 23),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'sum', 'field': 'cost'}],
+            'groupBy': {'field': 'assignedTemplates', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'] == [{'key': '模板A', 'value': 23.0}]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'SUM((dd.data->>%s)::numeric) AS agg_value' in executed_sql

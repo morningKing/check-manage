@@ -3,6 +3,7 @@ from db import get_db
 from auth import login_required, admin_required
 import psycopg2.extras
 import uuid
+from utils.version import get_user_current_branch as resolve_user_current_branch
 
 dashboards_bp = Blueprint('dashboards', __name__)
 
@@ -106,8 +107,8 @@ def delete_dashboard(dash_id):
 
 VALID_METRICS = {'count', 'sum', 'avg', 'min', 'max', 'uniqueCount'}
 SORT_MAP = {
-    'value_desc': 'agg_value DESC',
-    'value_asc': 'agg_value ASC',
+    'value_desc': '{metric_alias} DESC',
+    'value_asc': '{metric_alias} ASC',
     'key_desc': 'group_key DESC',
     'key_asc': 'group_key ASC',
 }
@@ -117,6 +118,7 @@ DATE_TRUNC_MAP = {
     'month': 'month',
     'year': 'year',
 }
+VALID_GROUP_TYPES = {'terms', 'dateHistogram', 'histogram', 'range', 'exists'}
 
 
 def _build_where(collection, filter_query, table_alias='', branch_id='main'):
@@ -160,18 +162,194 @@ def _resolve_target_fields(cur, target_collections):
 
 def get_user_current_branch(user_id, collection):
     """Get user's current branch for a collection."""
-    return 'main'
+    return resolve_user_current_branch(user_id, collection)
 
 
-def _metric_expr(metric_type, field):
+def _metric_expr(metric_type, field, data_expr='data'):
     """Return SQL expression and extra params for a metric."""
     if metric_type == 'count':
         return 'COUNT(*)', []
     elif metric_type == 'uniqueCount':
-        return 'COUNT(DISTINCT data->>%s)', [field]
+        return f'COUNT(DISTINCT {data_expr}->>%s)', [field]
     elif metric_type in ('sum', 'avg', 'min', 'max'):
-        return f'{metric_type.upper()}((data->>%s)::numeric)', [field]
+        return f'{metric_type.upper()}(({data_expr}->>%s)::numeric)', [field]
     return None, []
+
+
+def _normalize_metrics(body):
+    """Normalize metrics in request order."""
+    metrics_raw = body.get('metrics')
+    if metrics_raw and isinstance(metrics_raw, list):
+        metrics = metrics_raw
+    else:
+        metrics = [{
+            'type': body.get('metric', 'count'),
+            'field': body.get('field'),
+        }]
+
+    normalized = []
+    for idx, metric in enumerate(metrics):
+        metric_type = metric.get('type', 'count')
+        field = metric.get('field')
+        if metric_type not in VALID_METRICS:
+            raise ValueError(f'Unsupported metric: {metric_type}')
+        if metric_type != 'count' and not field:
+            raise ValueError(f'Metric field is required for {metric_type}')
+
+        metric_name = metric.get('name')
+        if not metric_name:
+            metric_name = metric_type if metric_type == 'count' else f'{metric_type}_{field}'
+
+        normalized.append({
+            'type': metric_type,
+            'field': field,
+            'name': metric_name,
+            'alias': 'agg_value' if idx == 0 else f'metric_{idx}',
+        })
+    return normalized
+
+
+def _normalize_group_by(body):
+    """Normalize groupBy configuration from request body."""
+    group_by = body.get('groupBy')
+    if group_by and isinstance(group_by, dict):
+        group_field = group_by.get('field')
+        group_type = group_by.get('type', 'terms')
+        interval = group_by.get('interval', 'month')
+        ranges = group_by.get('ranges', [])
+        offset = group_by.get('offset', 0)
+    else:
+        group_field = body.get('groupField')
+        group_type = 'terms'
+        interval = 'month'
+        ranges = []
+        offset = 0
+
+    if group_field and group_type not in VALID_GROUP_TYPES:
+        raise ValueError(f'Unsupported group type: {group_type}')
+
+    return {
+        'field': group_field,
+        'type': group_type,
+        'interval': interval,
+        'ranges': ranges,
+        'offset': offset,
+    }
+
+
+def _build_metric_selects(metrics, data_expr='data'):
+    """Build metric select fragments and params."""
+    select_parts = []
+    params = []
+    for metric in metrics:
+        expr, expr_params = _metric_expr(metric['type'], metric['field'], data_expr=data_expr)
+        if expr is None:
+            raise ValueError(f"Unsupported metric: {metric['type']}")
+        select_parts.append(f'{expr} AS {metric["alias"]}')
+        params.extend(expr_params)
+    return select_parts, params
+
+
+def _build_scalar_group_expr(group_by, data_expr='data'):
+    """Build grouping expression for scalar fields."""
+    group_field = group_by['field']
+    group_type = group_by['type']
+
+    if group_type == 'dateHistogram':
+        trunc = DATE_TRUNC_MAP.get(group_by['interval'], 'month')
+        return f"date_trunc('{trunc}', ({data_expr}->>%s)::timestamptz)", [group_field]
+    if group_type == 'histogram':
+        interval = group_by.get('interval')
+        if interval in (None, 0, '0'):
+            raise ValueError('Histogram interval must be greater than 0')
+        interval_value = float(interval)
+        offset_value = float(group_by.get('offset', 0) or 0)
+        expr = (
+            'CASE WHEN {data_expr}->>%s IS NULL THEN NULL '
+            'ELSE FLOOR((({data_expr}->>%s)::numeric - %s) / %s) * %s + %s END'
+        ).format(data_expr=data_expr)
+        return expr, [group_field, group_field, offset_value, interval_value, interval_value, offset_value]
+    if group_type == 'range':
+        ranges = group_by.get('ranges') or []
+        if not ranges:
+            raise ValueError('Range grouping requires at least one range')
+
+        parts = []
+        params = []
+        for idx, item in enumerate(ranges):
+            key = item.get('key') or f'range_{idx + 1}'
+            start = item.get('from')
+            end = item.get('to')
+            conditions = [f'{data_expr}->>%s IS NOT NULL']
+            current_params = [group_field]
+            if start is not None:
+                conditions.append(f'({data_expr}->>%s)::numeric >= %s')
+                current_params.extend([group_field, float(start)])
+            if end is not None:
+                conditions.append(f'({data_expr}->>%s)::numeric < %s')
+                current_params.extend([group_field, float(end)])
+            parts.append(f"WHEN {' AND '.join(conditions)} THEN %s")
+            current_params.append(key)
+            params.extend(current_params)
+
+        return f"CASE {' '.join(parts)} ELSE %s END", params + ['(other)']
+    if group_type == 'exists':
+        return (
+            "CASE WHEN NULLIF(BTRIM(COALESCE({data_expr}->>%s, '')), '') IS NULL "
+            "THEN 'empty' ELSE 'nonEmpty' END"
+        ).format(data_expr=data_expr), [group_field]
+
+    return f'{data_expr}->>%s', [group_field]
+
+
+def _format_metric_name(metric):
+    return metric['name']
+
+
+def _format_group_key(key, group_by):
+    """Format group keys for API response."""
+    if key is None:
+        return '(空)'
+    if hasattr(key, 'isoformat'):
+        interval = group_by.get('interval', 'month')
+        return key.strftime('%Y-%m-%d') if interval == 'day' else key.strftime('%Y-%m')
+    if group_by.get('type') == 'histogram':
+        numeric = float(key)
+        return int(numeric) if numeric.is_integer() else numeric
+    return str(key)
+
+
+def _format_grouped_rows(rows, metrics, group_by):
+    """Format grouped aggregation rows."""
+    data = []
+    for row in rows:
+        key = _format_group_key(row[0], group_by)
+        item = {'key': key}
+        metric_values = {}
+        for idx, metric in enumerate(metrics, start=1):
+            raw_value = row[idx]
+            metric_values[_format_metric_name(metric)] = float(raw_value) if raw_value is not None else 0
+        item['value'] = metric_values[_format_metric_name(metrics[0])]
+        if len(metrics) > 1:
+            item['metrics'] = metric_values
+        data.append(item)
+    return data
+
+
+def _format_single_row(row, metrics):
+    """Format single-value aggregation result."""
+    metric_values = {}
+    for idx, metric in enumerate(metrics):
+        raw_value = row[idx] if row and idx < len(row) else None
+        metric_values[_format_metric_name(metric)] = float(raw_value) if raw_value is not None else 0
+
+    payload = {
+        'type': 'single',
+        'value': metric_values[_format_metric_name(metrics[0])],
+    }
+    if len(metrics) > 1:
+        payload['metrics'] = metric_values
+    return payload
 
 
 @dashboards_bp.route('/dashboards/aggregate', methods=['POST'])
@@ -191,30 +369,15 @@ def aggregate_data():
 
     sort_key = body.get('sort', 'value_desc')
     limit = min(int(body.get('limit', 20)), 200)
-    order_clause = SORT_MAP.get(sort_key, 'agg_value DESC')
+    try:
+        metrics = _normalize_metrics(body)
+        group_by = _normalize_group_by(body)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    # Resolve metric (support new and legacy format)
-    metrics_raw = body.get('metrics')
-    if metrics_raw and isinstance(metrics_raw, list) and len(metrics_raw) > 0:
-        metric_type = metrics_raw[0].get('type', 'count')
-        field = metrics_raw[0].get('field')
-    else:
-        metric_type = body.get('metric', 'count')
-        field = body.get('field')
-
-    if metric_type not in VALID_METRICS:
-        return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
-
-    # Resolve groupBy (support new and legacy format)
-    group_by = body.get('groupBy')
-    if group_by and isinstance(group_by, dict):
-        group_field = group_by.get('field')
-        group_type = group_by.get('type', 'terms')
-        interval = group_by.get('interval', 'month')
-    else:
-        group_field = body.get('groupField')
-        group_type = 'terms'
-        interval = 'month'
+    order_clause = SORT_MAP.get(sort_key, '{metric_alias} DESC').format(metric_alias=metrics[0]['alias'])
+    group_field = group_by['field']
+    group_type = group_by['type']
 
     user = g.current_user
     branch_id = get_user_current_branch(user.get('userId', ''), collection)
@@ -223,26 +386,21 @@ def aggregate_data():
         cur = conn.cursor()
 
         if group_field:
-            # --- Grouped aggregation ---
-            metric_sql, metric_params = _metric_expr(metric_type, field)
-            if metric_sql is None:
-                return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
-
-            # Check if group_field is a relation/reference/quoteSelect field
             fields = _load_page_fields(cur, collection)
             field_def = next((f for f in fields if f.get('fieldName') == group_field), None)
             control_type = field_def.get('controlType', '') if field_def else ''
 
             if control_type == 'relation' and field_def:
-                # M:N relation — JOIN data_relations + target dynamic_data
+                if group_type != 'terms':
+                    return jsonify({"error": "Relation grouping only supports terms"}), 400
                 rel_cfg = field_def.get('relationConfig', {})
                 target_col = rel_cfg.get('targetCollection', '')
                 display_field = rel_cfg.get('displayField', 'id')
-
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
-                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"SELECT tgt.data->>%s AS group_key, {', '.join(metric_selects)} "
                     f"FROM dynamic_data dd "
                     f"JOIN data_relations dr ON dr.collection = %s AND dr.record_id = dd.id "
                     f"AND dr.field_name = %s AND dr.branch_id = %s "
@@ -254,17 +412,17 @@ def aggregate_data():
                     f"LIMIT %s"
                 )
                 params = [display_field, collection, group_field, branch_id, target_col, branch_id] + metric_params + where_params + [limit]
-
             elif control_type == 'reference' and field_def:
-                # 1:N reference — LEFT JOIN parent record
+                if group_type != 'terms':
+                    return jsonify({"error": "Reference grouping only supports terms"}), 400
                 ref_cfg = field_def.get('referenceConfig', {})
                 target_col = ref_cfg.get('targetCollection', '')
                 display_field = ref_cfg.get('displayField', 'id')
-
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
-                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"SELECT tgt.data->>%s AS group_key, {', '.join(metric_selects)} "
                     f"FROM dynamic_data dd "
                     f"LEFT JOIN dynamic_data tgt ON tgt.id = dd.data->>%s "
                     f"AND tgt.collection = %s AND tgt.branch_id = %s "
@@ -274,17 +432,17 @@ def aggregate_data():
                     f"LIMIT %s"
                 )
                 params = [display_field, group_field, target_col, branch_id] + metric_params + where_params + [limit]
-
             elif control_type == 'quoteSelect' and field_def:
-                # Single-direction multi-select — CROSS JOIN unnested array
+                if group_type != 'terms':
+                    return jsonify({"error": "QuoteSelect grouping only supports terms"}), 400
                 quote_cfg = field_def.get('quoteConfig', {})
                 target_col = quote_cfg.get('targetCollection', '')
                 display_field = quote_cfg.get('displayField', 'id')
-
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
-                    f"SELECT tgt.data->>%s AS group_key, {metric_sql} AS agg_value "
+                    f"SELECT tgt.data->>%s AS group_key, {', '.join(metric_selects)} "
                     f"FROM dynamic_data dd "
                     f"CROSS JOIN jsonb_array_elements_text(dd.data->%s) AS elem_id "
                     f"JOIN dynamic_data tgt ON tgt.id = elem_id "
@@ -295,21 +453,16 @@ def aggregate_data():
                     f"LIMIT %s"
                 )
                 params = [display_field, group_field, target_col, branch_id] + metric_params + where_params + [limit]
-
             else:
-                # Regular field grouping
                 where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
-
-                if group_type == 'dateHistogram':
-                    trunc = DATE_TRUNC_MAP.get(interval, 'month')
-                    group_expr = f"date_trunc('{trunc}', (data->>%s)::timestamptz)"
-                    group_params = [group_field]
-                else:
-                    group_expr = "data->>%s"
-                    group_params = [group_field]
+                try:
+                    group_expr, group_params = _build_scalar_group_expr(group_by, data_expr='data')
+                except ValueError as exc:
+                    return jsonify({"error": str(exc)}), 400
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
 
                 sql = (
-                    f"SELECT {group_expr} AS group_key, {metric_sql} AS agg_value "
+                    f"SELECT {group_expr} AS group_key, {', '.join(metric_selects)} "
                     f"FROM dynamic_data WHERE {where_clause} "
                     f"GROUP BY group_key "
                     f"ORDER BY {order_clause} "
@@ -319,29 +472,12 @@ def aggregate_data():
 
             cur.execute(sql, params)
             rows = cur.fetchall()
+            return jsonify({'type': 'grouped', 'data': _format_grouped_rows(rows, metrics, group_by)})
 
-            data = []
-            for r in rows:
-                key = r[0]
-                if key is None:
-                    key = '(空)'
-                elif hasattr(key, 'isoformat'):
-                    key = key.strftime('%Y-%m-%d') if interval == 'day' else key.strftime('%Y-%m')
-                else:
-                    key = str(key)
-                data.append({'key': key, 'value': float(r[1]) if r[1] is not None else 0})
-
-            return jsonify({'type': 'grouped', 'data': data})
-        else:
-            # --- Single-value aggregation ---
-            metric_sql, metric_params = _metric_expr(metric_type, field)
-            if metric_sql is None:
-                return jsonify({"error": f"Unsupported metric: {metric_type}"}), 400
-
-            where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
-            sql = f"SELECT {metric_sql} FROM dynamic_data WHERE {where_clause}"
-            params = metric_params + where_params
-            cur.execute(sql, params)
-            row = cur.fetchone()
-            value = float(row[0]) if row and row[0] is not None else 0
-            return jsonify({'type': 'single', 'value': value})
+        metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
+        where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
+        sql = f"SELECT {', '.join(metric_selects)} FROM dynamic_data WHERE {where_clause}"
+        params = metric_params + where_params
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        return jsonify(_format_single_row(row, metrics))
