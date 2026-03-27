@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, g as flask_g
 from db import get_db
 from auth import login_required
+from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 import json
 
 relation_graph_bp = Blueprint('relation_graph', __name__)
@@ -28,6 +29,15 @@ def _get_field_label(fields, field_name):
     return field_name
 
 
+def _get_current_user_branch(collection):
+    """Get the current user's branch for the given collection."""
+    user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+    user_id = user.get('userId')
+    if not user_id:
+        return MAIN_BRANCH_ID
+    return get_user_current_branch(user_id, collection)
+
+
 @relation_graph_bp.route('/relation-graph/<collection>/<record_id>', methods=['GET'])
 @login_required
 def get_relation_graph(collection, record_id):
@@ -35,9 +45,15 @@ def get_relation_graph(collection, record_id):
     seen_edges = set()
     # Collect (id, collection) pairs to batch-fetch at the end
     pending_nodes = {}  # id -> collection
+    branch_cache = {}
 
     with get_db() as conn:
         cur = conn.cursor()
+
+        def branch_for(target_collection):
+            if target_collection not in branch_cache:
+                branch_cache[target_collection] = _get_current_user_branch(target_collection)
+            return branch_cache[target_collection]
 
         # ── Pre-load all page_configs in ONE query ──
         cur.execute('SELECT id, name, fields FROM page_configs')
@@ -48,9 +64,10 @@ def get_relation_graph(collection, record_id):
             page_cache[col] = (pc_name, pc_fields or [])
 
         # ── 1. Center record ──
+        center_branch_id = branch_for(collection)
         cur.execute(
-            'SELECT id, data FROM dynamic_data WHERE id = %s AND collection = %s',
-            (record_id, collection),
+            'SELECT id, data FROM dynamic_data WHERE id = %s AND collection = %s AND branch_id = %s',
+            (record_id, collection, center_branch_id),
         )
         center_row = cur.fetchone()
         if not center_row:
@@ -74,8 +91,8 @@ def get_relation_graph(collection, record_id):
         # ── 2. Forward M2M ──
         cur.execute(
             'SELECT field_name, related_collection, related_id '
-            'FROM data_relations WHERE collection = %s AND record_id = %s',
-            (collection, record_id),
+            'FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+            (collection, record_id, center_branch_id),
         )
         for field_name, related_col, related_id in cur.fetchall():
             edge_key = (record_id, related_id, field_name, 'relation')
@@ -92,11 +109,13 @@ def get_relation_graph(collection, record_id):
 
         # ── 3. Reverse M2M ──
         cur.execute(
-            'SELECT collection, record_id, field_name '
+            'SELECT collection, record_id, field_name, branch_id '
             'FROM data_relations WHERE related_collection = %s AND related_id = %s',
             (collection, record_id),
         )
-        for src_col, src_id, field_name in cur.fetchall():
+        for src_col, src_id, field_name, branch_id in cur.fetchall():
+            if branch_id != branch_for(src_col):
+                continue
             edge_key = (src_id, record_id, field_name, 'relation')
             if edge_key in seen_edges:
                 continue
@@ -155,9 +174,9 @@ def get_relation_graph(collection, record_id):
             for src_col, fn, _ in ref_queries:
                 parts.append(
                     "SELECT id, data, collection FROM dynamic_data "
-                    "WHERE collection = %s AND data->>%s = %s"
+                    "WHERE collection = %s AND branch_id = %s AND data->>%s = %s"
                 )
-                params.extend([src_col, fn, record_id])
+                params.extend([src_col, branch_for(src_col), fn, record_id])
 
             if parts:
                 sql = ' UNION ALL '.join(parts)
@@ -232,9 +251,9 @@ def get_relation_graph(collection, record_id):
             for src_col, fn, _ in quote_queries:
                 parts.append(
                     "SELECT id, data, collection FROM dynamic_data "
-                    "WHERE collection = %s AND data->%s @> %s::jsonb"
+                    "WHERE collection = %s AND branch_id = %s AND data->%s @> %s::jsonb"
                 )
-                params.extend([src_col, fn, json_val])
+                params.extend([src_col, branch_for(src_col), fn, json_val])
 
             if parts:
                 sql = ' UNION ALL '.join(parts)
@@ -262,20 +281,26 @@ def get_relation_graph(collection, record_id):
         # Remove already-resolved IDs
         ids_to_fetch = [nid for nid in pending_nodes if nid not in resolved_nodes]
         if ids_to_fetch:
-            # Single query for all IDs (regardless of collection)
+            conditions = []
+            params = []
+            for nid in ids_to_fetch:
+                ncol = pending_nodes[nid]
+                conditions.append('(id = %s AND collection = %s AND branch_id = %s)')
+                params.extend([nid, ncol, branch_for(ncol)])
+
             cur.execute(
-                'SELECT id, collection, data FROM dynamic_data WHERE id = ANY(%s)',
-                (ids_to_fetch,),
+                'SELECT id, collection, data FROM dynamic_data WHERE ' + ' OR '.join(conditions),
+                params,
             )
             fetched = {}
             for nid, ncol, ndata in cur.fetchall():
-                fetched[nid] = (ncol, ndata or {})
+                fetched[(nid, ncol)] = ndata or {}
 
             for nid in ids_to_fetch:
                 ncol = pending_nodes[nid]
                 p_label, p_fields = page_cache.get(ncol, (ncol, []))
-                if nid in fetched:
-                    _, ndata = fetched[nid]
+                if (nid, ncol) in fetched:
+                    ndata = fetched[(nid, ncol)]
                     display = _get_display_name(ndata, p_fields) or nid
                 else:
                     ndata = {}

@@ -1,4 +1,4 @@
-"""
+﻿"""
 版本管理核心逻辑
 
 职责：
@@ -131,18 +131,19 @@ def copy_data_to_branch(collection, source_branch_id, target_branch_id):
         # 复制 dynamic_data
         cur.execute(
             "INSERT INTO dynamic_data (id, collection, data, created_at, updated_at, version, branch_id) "
-            "SELECT CONCAT(id, '-', $1), collection, data, created_at, updated_at, version, $2 "
-            "FROM dynamic_data WHERE collection = $3 AND branch_id = $4",
-            (target_branch_id[:8], target_branch_id, collection, source_branch),
+            "SELECT id, collection, data, created_at, updated_at, version, %s "
+            "FROM dynamic_data WHERE collection = %s AND branch_id = %s "
+            "ON CONFLICT (id, branch_id) DO NOTHING",
+            (target_branch_id, collection, source_branch),
         )
 
         # 复制 data_relations
         cur.execute(
             "INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) "
-            "SELECT collection, CONCAT(record_id, '-', $1), field_name, related_collection, "
-            "CONCAT(related_id, '-', $1), $2 "
-            "FROM data_relations WHERE collection = $3 AND branch_id = $4",
-            (target_branch_id[:8], target_branch_id, collection, source_branch),
+            "SELECT collection, record_id, field_name, related_collection, related_id, %s "
+            "FROM data_relations WHERE collection = %s AND branch_id = %s "
+            "ON CONFLICT DO NOTHING",
+            (target_branch_id, collection, source_branch),
         )
 
 
@@ -284,6 +285,89 @@ def create_version_snapshot(collection, name, description, version_type, parent_
         'createdBy': created_by,
         'createdAt': now.isoformat(),
     }
+
+
+def _load_relation_field_map(cur, collection):
+    """Load relation field definitions for a collection."""
+    page_id = f'page-{collection}'
+    cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+    try:
+        row = cur.fetchone()
+    except StopIteration:
+        return {}
+
+    fields = row[0] if row and isinstance(row[0], list) else []
+
+    relation_map = {}
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        if field.get('controlType') != 'relation':
+            continue
+        field_name = field.get('fieldName')
+        relation_config = field.get('relationConfig') or {}
+        if not field_name:
+            continue
+        relation_map[field_name] = {
+            'target_collection': relation_config.get('targetCollection'),
+            'target_field': relation_config.get('targetField'),
+        }
+    return relation_map
+
+
+def _replace_collection_relations(cur, collection, branch_id, relation_rows):
+    """Replace a collection's forward relations and rebuild reverse rows."""
+    relation_map = _load_relation_field_map(cur, collection)
+
+    cur.execute(
+        'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s',
+        (collection, branch_id),
+    )
+
+    managed_reverse_fields = {
+        (cfg['target_collection'], cfg['target_field'])
+        for cfg in relation_map.values()
+        if cfg.get('target_collection') and cfg.get('target_field')
+    }
+    for target_collection, target_field in managed_reverse_fields:
+        cur.execute(
+            'DELETE FROM data_relations '
+            'WHERE collection = %s AND field_name = %s AND related_collection = %s AND branch_id = %s',
+            (target_collection, target_field, collection, branch_id),
+        )
+
+    for rel_collection, record_id, field_name, related_collection, related_id in relation_rows:
+        cur.execute(
+            'INSERT INTO data_relations '
+            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+            (rel_collection, record_id, field_name, related_collection, related_id, branch_id),
+        )
+
+        field_config = relation_map.get(field_name) or {}
+        target_collection = field_config.get('target_collection')
+        target_field = field_config.get('target_field')
+        if not target_collection or not target_field:
+            continue
+        if target_collection != related_collection:
+            continue
+
+        cur.execute(
+            'INSERT INTO data_relations '
+            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+            (target_collection, related_id, target_field, collection, record_id, branch_id),
+        )
+
+
+def _load_collection_relation_rows(cur, collection, branch_id):
+    """Load forward relation rows for one collection and branch."""
+    cur.execute(
+        'SELECT collection, record_id, field_name, related_collection, related_id '
+        'FROM data_relations WHERE collection = %s AND branch_id = %s',
+        (collection, branch_id),
+    )
+    return cur.fetchall()
 
 
 def get_version_list(collection=None, status=None):
@@ -727,33 +811,20 @@ def merge_version_to_current(version_id, strategy, merged_by, user_id=None):
                 )
                 summary['recordsUpdated'] += 1
 
-            # 4. 重建关联数据
-            # 先清空该集合在目标分支的所有关联
-            cur.execute(
-                'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s',
-                (collection, target_branch_id)
-            )
-            # 从源数据恢复关联
+            # 4. Rebuild forward and reverse relations from the source state.
             if version_type == 'branch':
-                # 从 dynamic_data 的 data_relations 加载
                 cur.execute(
                     'SELECT collection, record_id, field_name, related_collection, related_id '
                     'FROM data_relations WHERE collection = %s AND branch_id = %s',
                     (collection, version_id),
                 )
             else:
-                # 从 version_relations 加载
                 cur.execute(
                     'SELECT collection, record_id, field_name, related_collection, related_id '
                     'FROM version_relations WHERE version_id = %s',
                     (version_id,),
                 )
-            for rel_row in cur.fetchall():
-                cur.execute(
-                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
-                    'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
-                    (*rel_row, target_branch_id),
-                )
+            _replace_collection_relations(cur, collection, target_branch_id, cur.fetchall())
 
         elif strategy == 'ours':
             # 保留当前数据，不做任何修改
@@ -855,10 +926,10 @@ def apply_partial_merge(source_version_id, target_branch, decisions, merged_by):
             record = source_record_map[record_id]
             data = {k: v for k, v in record.items() if k != 'id'}
 
-            # 插入记录，检查冲突
+            # Insert by the branch-aware natural key.
             cur.execute(
                 'INSERT INTO dynamic_data (id, collection, data, branch_id) '
-                'VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO NOTHING',
+                'VALUES (%s, %s, %s, %s) ON CONFLICT (id, branch_id) DO NOTHING',
                 (record_id, collection, psycopg2.extras.Json(data), target_branch_id),
             )
             if cur.rowcount == 0:
@@ -945,6 +1016,13 @@ def apply_partial_merge(source_version_id, target_branch, decisions, merged_by):
                 # 目标记录不存在
                 summary['recordsNotFound'] += 1
 
+        _replace_collection_relations(
+            cur,
+            collection,
+            target_branch_id,
+            _load_collection_relation_rows(cur, collection, target_branch_id),
+        )
+
         # 6. 更新 data_hash（计算新状态的哈希）
         cur.execute(
             'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
@@ -1021,10 +1099,6 @@ def restore_from_version(version_id, restored_by, user_id=None):
             'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
             (collection, target_branch_id)
         )
-        cur.execute(
-            'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s',
-            (collection, target_branch_id)
-        )
 
         # 插入快照数据（带目标分支 ID）
         for rec in version_records:
@@ -1040,12 +1114,7 @@ def restore_from_version(version_id, restored_by, user_id=None):
             'FROM version_relations WHERE version_id = %s',
             (version_id,),
         )
-        for rel_row in cur.fetchall():
-            cur.execute(
-                'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
-                'VALUES (%s, %s, %s, %s, %s, %s)',
-                (*rel_row, target_branch_id),
-            )
+        _replace_collection_relations(cur, collection, target_branch_id, cur.fetchall())
 
     return {
         'success': True,
@@ -1130,13 +1199,7 @@ def switch_to_version(version_id, switched_by, user_id=None):
                     (rid, collection, psycopg2.extras.Json(flat_data), version_id),
                 )
 
-            # 插入关联（带 branch_id）
-            for rel in target_relations:
-                cur.execute(
-                    'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
-                    'VALUES (%s, %s, %s, %s, %s, %s)',
-                    (rel[0], rel[1], rel[2], rel[3], rel[4], version_id),
-                )
+            _replace_collection_relations(cur, collection, version_id, target_relations)
 
             existing_count = len(target_records)
             initialized = True
