@@ -1,26 +1,15 @@
-/**
- * DashboardView - Kibana 风格仪表盘
- *
- * 功能：
- * - 多仪表盘切换/创建/编辑/删除
- * - 添加/编辑/删除 widget（图表）
- * - 6 种图表类型：指标卡、柱状图、折线图、饼图、面积图、数据表
- * - ECharts 专业渲染
- * - Widget 配置对话框（左侧配置 + 右侧实时预览）
- */
-<template>
+﻿<template>
   <div class="dashboard-view">
-    <!-- Header -->
     <div class="dashboard-header">
       <div class="dashboard-title">
         <h2>{{ dashboard?.name || '仪表盘' }}</h2>
         <el-select
           v-model="selectedDashId"
           placeholder="选择仪表盘"
-          style="width: 200px"
+          style="width: 220px"
           @change="loadDashboard"
         >
-          <el-option v-for="d in dashboards" :key="d.id" :label="d.name" :value="d.id" />
+          <el-option v-for="item in dashboards" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
       </div>
       <div class="dashboard-actions">
@@ -44,7 +33,6 @@
       </div>
     </div>
 
-    <!-- Widget Grid -->
     <div v-if="dashboard && dashboard.layout.length > 0" class="dashboard-grid">
       <div
         v-for="widget in dashboard.layout"
@@ -72,24 +60,24 @@
               <el-icon class="is-loading" :size="20"><Loading /></el-icon>
             </div>
             <template v-else-if="widgetData[widget.id]">
-              <!-- Metric Card -->
               <MetricCard
                 v-if="widget.type === 'metric'"
-                :value="widgetData[widget.id]?.value ?? 0"
-                :subtitle="getMetricLabel(widget)"
+                :value="getSingleValue(widgetData[widget.id])"
+                :subtitle="getPrimaryMetricLabel(widget)"
               />
-              <!-- Data Table -->
               <DataTableWidget
                 v-else-if="widget.type === 'dataTable'"
-                :data="widgetData[widget.id]?.data || []"
-                :key-label="getGroupLabel(widget)"
-                :value-label="getMetricLabel(widget)"
+                :result="widgetData[widget.id]"
+                :group-label="getGroupLabel(widget)"
+                :column-label="getBreakdownLabel(widget)"
+                :metric-labels="getMetricLabelMap(widget)"
+                :value-label="getPrimaryMetricLabel(widget)"
               />
-              <!-- Chart (bar/line/pie/area) -->
               <ChartRenderer
                 v-else
                 :type="widget.type"
-                :data="widgetData[widget.id]?.data || []"
+                :result="widgetData[widget.id]"
+                :metric-key="getPrimaryMetricKey(widget)"
               />
             </template>
             <el-empty v-else :image-size="40" description="暂无数据" />
@@ -98,7 +86,6 @@
       </div>
     </div>
 
-    <!-- Empty state -->
     <div v-else-if="dashboard && dashboard.layout.length === 0" class="empty-dashboard">
       <el-empty description="暂无图表">
         <el-button type="primary" @click="handleAddWidget">
@@ -107,9 +94,8 @@
       </el-empty>
     </div>
 
-    <el-empty v-else-if="!loading" description="暂无仪表盘，请新建" />
+    <el-empty v-else-if="!loading" description="暂无仪表盘，请先新建" />
 
-    <!-- Dashboard meta dialog -->
     <el-dialog v-model="metaDialogVisible" :title="metaForm.id ? '编辑仪表盘' : '新建仪表盘'" width="450px">
       <el-form label-width="80px">
         <el-form-item label="名称">
@@ -128,7 +114,6 @@
       </template>
     </el-dialog>
 
-    <!-- Widget editor dialog -->
     <WidgetEditor
       v-model="widgetEditorVisible"
       :widget="editingWidget"
@@ -138,23 +123,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { Plus, Edit, Delete, Refresh, Close, Loading, PieChart } from '@element-plus/icons-vue'
+import { onMounted, reactive, ref } from 'vue'
+import { Close, Delete, Edit, Loading, PieChart, Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  getDashboards, getDashboard, saveDashboard, deleteDashboard, aggregate,
+  aggregate,
+  deleteDashboard,
+  getDashboard,
+  getDashboards,
+  getMetricName,
   METRIC_TYPE_OPTIONS,
+  saveDashboard,
 } from '@/api/dashboard'
-import type { Dashboard, DashboardWidget, AggregateResult } from '@/api/dashboard'
-import MetricCard from '@/components/dashboard/MetricCard.vue'
+import type { AggregateResult, Dashboard, DashboardWidget, MetricDef } from '@/api/dashboard'
 import DataTableWidget from '@/components/dashboard/DataTableWidget.vue'
 import ChartRenderer from '@/components/dashboard/ChartRenderer.vue'
+import MetricCard from '@/components/dashboard/MetricCard.vue'
 import WidgetEditor from '@/components/dashboard/WidgetEditor.vue'
 import { usePageConfigStore } from '@/stores/pageConfig'
 
 const pageConfigStore = usePageConfigStore()
-
-// ==================== State ====================
 
 const dashboards = ref<Dashboard[]>([])
 const dashboard = ref<Dashboard | null>(null)
@@ -171,16 +159,21 @@ const metaForm = reactive({ id: '', name: '', description: '', isGlobal: false }
 const widgetEditorVisible = ref(false)
 const editingWidget = ref<DashboardWidget | null>(null)
 
-// ==================== Data loading ====================
-
 async function loadDashboards() {
   try {
     dashboards.value = await getDashboards()
-    if (dashboards.value.length > 0 && !selectedDashId.value) {
-      selectedDashId.value = dashboards.value[0].id
-      await loadDashboard()
+    if (!dashboards.value.length) {
+      dashboard.value = null
+      selectedDashId.value = ''
+      return
     }
-  } catch { /* */ }
+    if (!selectedDashId.value || !dashboards.value.some(item => item.id === selectedDashId.value)) {
+      selectedDashId.value = dashboards.value[0].id
+    }
+    await loadDashboard()
+  } catch {
+    ElMessage.error('加载仪表盘失败')
+  }
 }
 
 async function loadDashboard() {
@@ -189,68 +182,102 @@ async function loadDashboard() {
   try {
     dashboard.value = await getDashboard(selectedDashId.value)
     await refreshAll()
-  } catch { /* */ } finally {
+  } catch {
+    ElMessage.error('加载仪表盘详情失败')
+  } finally {
     loading.value = false
   }
+}
+
+async function loadWidgetData(widget: DashboardWidget) {
+  const config = widget.config
+  return aggregate({
+    collection: config.collection,
+    metrics: config.metrics,
+    groupBy: config.groupBy,
+    breakdownBy: config.breakdownBy,
+    filter: config.filter,
+    sort: config.sort,
+    limit: config.limit,
+    metric: config.metrics?.[0]?.type,
+    field: config.metrics?.[0]?.field,
+    groupField: config.groupBy?.field,
+  })
 }
 
 async function refreshAll() {
   if (!dashboard.value) return
   refreshing.value = true
+
+  const nextLoading: Record<string, boolean> = {}
+  dashboard.value.layout.forEach(widget => {
+    nextLoading[widget.id] = true
+  })
+  widgetLoading.value = nextLoading
+
   const results: Record<string, AggregateResult> = {}
-  const loadingState: Record<string, boolean> = {}
+  await Promise.all(dashboard.value.layout.map(async (widget) => {
+    try {
+      results[widget.id] = await loadWidgetData(widget)
+    } catch {
+      ElMessage.error(`图表“${widget.title}”数据加载失败`)
+    } finally {
+      widgetLoading.value = { ...widgetLoading.value, [widget.id]: false }
+    }
+  }))
 
-  dashboard.value.layout.forEach(w => { loadingState[w.id] = true })
-  widgetLoading.value = loadingState
-
-  await Promise.all(
-    dashboard.value.layout.map(async (w) => {
-      try {
-        const cfg = w.config
-        results[w.id] = await aggregate({
-          collection: cfg.collection,
-          metrics: cfg.metrics,
-          groupBy: cfg.groupBy,
-          filter: cfg.filter,
-          sort: cfg.sort,
-          limit: cfg.limit,
-          // Legacy compat
-          metric: cfg.metrics?.[0]?.type,
-          field: cfg.metrics?.[0]?.field,
-          groupField: cfg.groupBy?.field,
-        })
-      } catch { /* */ } finally {
-        widgetLoading.value = { ...widgetLoading.value, [w.id]: false }
-      }
-    })
-  )
   widgetData.value = results
   refreshing.value = false
 }
 
-// ==================== Helpers ====================
-
-function widgetStyle(w: DashboardWidget) {
+function widgetStyle(widget: DashboardWidget) {
   return {
-    gridColumn: `span ${w.w || 6}`,
-    gridRow: `span ${w.h || 2}`,
+    gridColumn: `span ${widget.w || 6}`,
+    gridRow: `span ${widget.h || 2}`,
   }
 }
 
-function getMetricLabel(w: DashboardWidget): string {
-  const mt = w.config.metrics?.[0]?.type || 'count'
-  return METRIC_TYPE_OPTIONS.find(m => m.value === mt)?.label || mt
+function findFieldLabel(collection: string, fieldName?: string, fallback = '值') {
+  if (!fieldName) return fallback
+  const pageId = `page-${collection}`
+  const page = pageConfigStore.pageConfigs.find(item => item.id === pageId)
+  const field = page?.fields?.find((item: any) => item.fieldName === fieldName)
+  return field?.label || fieldName
 }
 
-function getGroupLabel(w: DashboardWidget): string {
-  const gf = w.config.groupBy?.field
-  if (!gf) return '分组'
-  const pc = pageConfigStore.pageConfigs.find(p => p.id === `page-${w.config.collection}`)
-  const field = pc?.fields?.find((f: any) => f.fieldName === gf)
-  return field?.label || gf
+function formatMetricLabel(widget: DashboardWidget, metric?: MetricDef) {
+  if (!metric) return '值'
+  const metricTypeLabel = METRIC_TYPE_OPTIONS.find(item => item.value === metric.type)?.label || metric.type
+  if (metric.type === 'count' || !metric.field) return metricTypeLabel
+  return `${metricTypeLabel}(${findFieldLabel(widget.config.collection, metric.field, metric.field)})`
 }
 
-// ==================== Dashboard CRUD ====================
+function getMetricLabelMap(widget: DashboardWidget) {
+  return Object.fromEntries((widget.config.metrics || []).map(metric => {
+    const metricName = getMetricName(metric) || metric.type
+    return [metricName, formatMetricLabel(widget, metric)]
+  }))
+}
+
+function getPrimaryMetricKey(widget: DashboardWidget) {
+  return getMetricName(widget.config.metrics?.[0])
+}
+
+function getPrimaryMetricLabel(widget: DashboardWidget) {
+  return formatMetricLabel(widget, widget.config.metrics?.[0])
+}
+
+function getGroupLabel(widget: DashboardWidget) {
+  return findFieldLabel(widget.config.collection, widget.config.groupBy?.field, '分组')
+}
+
+function getBreakdownLabel(widget: DashboardWidget) {
+  return findFieldLabel(widget.config.collection, widget.config.breakdownBy?.field, '系列')
+}
+
+function getSingleValue(result?: AggregateResult | null) {
+  return result?.type === 'single' ? result.value ?? 0 : 0
+}
 
 function handleCreateDashboard() {
   Object.assign(metaForm, { id: '', name: '', description: '', isGlobal: false })
@@ -270,17 +297,19 @@ function handleEditDashboard() {
 
 async function handleSaveDashboard() {
   if (!metaForm.name.trim()) {
-    ElMessage.warning('请输入名称')
+    ElMessage.warning('请输入仪表盘名称')
     return
   }
+
   try {
     const saved = await saveDashboard({
       id: metaForm.id || undefined,
-      name: metaForm.name,
+      name: metaForm.name.trim(),
       description: metaForm.description,
       isGlobal: metaForm.isGlobal,
       layout: metaForm.id ? dashboard.value?.layout || [] : [],
     })
+
     metaDialogVisible.value = false
     ElMessage.success('保存成功')
     await loadDashboards()
@@ -295,17 +324,19 @@ async function handleSaveDashboard() {
 
 async function handleDeleteDashboard() {
   if (!dashboard.value) return
+
   try {
-    await ElMessageBox.confirm('确定删除此仪表盘？', '确认', { type: 'warning' })
+    await ElMessageBox.confirm('确定删除当前仪表盘？', '确认', { type: 'warning' })
     await deleteDashboard(dashboard.value.id)
     ElMessage.success('已删除')
     dashboard.value = null
     selectedDashId.value = ''
+    widgetData.value = {}
     await loadDashboards()
-  } catch { /* cancel */ }
+  } catch {
+    // ignore cancel
+  }
 }
-
-// ==================== Widget CRUD ====================
 
 function handleAddWidget() {
   editingWidget.value = null
@@ -319,22 +350,27 @@ function handleEditWidget(widget: DashboardWidget) {
 
 async function handleDeleteWidget(widgetId: string) {
   if (!dashboard.value) return
+
   try {
-    await ElMessageBox.confirm('确定删除此图表？', '确认', { type: 'warning' })
-    dashboard.value.layout = dashboard.value.layout.filter(w => w.id !== widgetId)
+    await ElMessageBox.confirm('确定删除这个图表？', '确认', { type: 'warning' })
+    dashboard.value.layout = dashboard.value.layout.filter(item => item.id !== widgetId)
     await saveDashboard(dashboard.value)
-    delete widgetData.value[widgetId]
-  } catch { /* cancel */ }
+
+    const nextData = { ...widgetData.value }
+    delete nextData[widgetId]
+    widgetData.value = nextData
+  } catch {
+    // ignore cancel
+  }
 }
 
 async function handleWidgetConfirm(widget: DashboardWidget) {
   if (!dashboard.value) return
 
-  const idx = dashboard.value.layout.findIndex(w => w.id === widget.id)
-  if (idx >= 0) {
-    dashboard.value.layout[idx] = widget
+  const index = dashboard.value.layout.findIndex(item => item.id === widget.id)
+  if (index >= 0) {
+    dashboard.value.layout[index] = widget
   } else {
-    // Auto-flow layout: x/y not used for rendering, just append
     widget.x = 0
     widget.y = 0
     dashboard.value.layout.push(widget)
@@ -342,24 +378,15 @@ async function handleWidgetConfirm(widget: DashboardWidget) {
 
   await saveDashboard(dashboard.value)
 
-  // Load data for this widget
   try {
-    const cfg = widget.config
-    widgetData.value[widget.id] = await aggregate({
-      collection: cfg.collection,
-      metrics: cfg.metrics,
-      groupBy: cfg.groupBy,
-      filter: cfg.filter,
-      sort: cfg.sort,
-      limit: cfg.limit,
-      metric: cfg.metrics?.[0]?.type,
-      field: cfg.metrics?.[0]?.field,
-      groupField: cfg.groupBy?.field,
-    })
-  } catch { /* */ }
+    widgetData.value = {
+      ...widgetData.value,
+      [widget.id]: await loadWidgetData(widget),
+    }
+  } catch {
+    ElMessage.error('图表数据加载失败')
+  }
 }
-
-// ==================== Init ====================
 
 onMounted(async () => {
   if (!pageConfigStore.pageConfigs.length) {
@@ -388,7 +415,10 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
 
-  h2 { margin: 0; font-size: 18px; }
+  h2 {
+    margin: 0;
+    font-size: 18px;
+  }
 }
 
 .dashboard-actions {

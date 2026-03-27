@@ -1,27 +1,36 @@
-import { get, post, put, del } from '@/utils/request'
-
-// ==================== Types ====================
+﻿import { get, post, put, del } from '@/utils/request'
 
 export type WidgetType = 'metric' | 'bar' | 'line' | 'pie' | 'area' | 'dataTable'
 export type MetricType = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'uniqueCount'
-export type GroupByType = 'terms' | 'dateHistogram'
+export type GroupByType = 'terms' | 'dateHistogram' | 'histogram' | 'range' | 'exists'
 export type SortType = 'value_desc' | 'value_asc' | 'key_desc' | 'key_asc'
+export type DateHistogramInterval = 'day' | 'week' | 'month' | 'year'
 
 export interface MetricDef {
   type: MetricType
   field?: string
+  name?: string
+}
+
+export interface RangeDef {
+  key?: string
+  from?: number
+  to?: number
 }
 
 export interface GroupByDef {
   field: string
   type: GroupByType
-  interval?: 'day' | 'week' | 'month' | 'year'
+  interval?: DateHistogramInterval | number
+  ranges?: RangeDef[]
+  offset?: number
 }
 
 export interface WidgetConfig {
   collection: string
   metrics: MetricDef[]
   groupBy?: GroupByDef
+  breakdownBy?: GroupByDef
   filter?: Record<string, any>
   sort?: SortType
   limit?: number
@@ -49,13 +58,37 @@ export interface Dashboard {
   updatedAt?: string
 }
 
-export interface AggregateResult {
-  type: 'single' | 'grouped'
-  value?: number
-  data?: Array<{ key: string; value: number }>
+export type AggregateMetricMap = Record<string, number>
+
+export interface AggregateGroupedRow {
+  key: string | number
+  value: number
+  metrics?: AggregateMetricMap
 }
 
-// ==================== Consts ====================
+export interface AggregateMatrixCell {
+  rowKey: string | number
+  columnKey: string | number
+  value: number
+  metrics?: AggregateMetricMap
+}
+
+export type AggregateResult =
+  | {
+      type: 'single'
+      value: number
+      metrics?: AggregateMetricMap
+    }
+  | {
+      type: 'grouped'
+      data: AggregateGroupedRow[]
+    }
+  | {
+      type: 'matrix'
+      rows: Array<string | number>
+      columns: Array<string | number>
+      data: AggregateMatrixCell[]
+    }
 
 export const WIDGET_TYPE_OPTIONS: { label: string; value: WidgetType; icon: string }[] = [
   { label: '指标卡', value: 'metric', icon: 'Odometer' },
@@ -75,7 +108,12 @@ export const METRIC_TYPE_OPTIONS: { label: string; value: MetricType; needField:
   { label: '去重计数', value: 'uniqueCount', needField: true },
 ]
 
-// ==================== API ====================
+export function getMetricName(metric?: MetricDef | null): string | undefined {
+  if (!metric) return undefined
+  if (metric.name) return metric.name
+  if (metric.type === 'count') return 'count'
+  return metric.field ? `${metric.type}_${metric.field}` : metric.type
+}
 
 export function getDashboards() {
   return get<Dashboard[]>('/dashboards')
@@ -102,6 +140,7 @@ export function aggregate(params: {
   metric?: string
   field?: string
   groupBy?: GroupByDef
+  breakdownBy?: GroupByDef
   groupField?: string
   filter?: Record<string, any>
   sort?: SortType
