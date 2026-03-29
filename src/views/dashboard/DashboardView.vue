@@ -56,10 +56,10 @@
           </template>
 
           <div class="widget-body">
-            <div v-if="widgetLoading[widget.id]" class="widget-center">
+            <div v-if="widgetLoading[widget.id]" class="widget-loading-overlay">
               <el-icon class="is-loading" :size="20"><Loading /></el-icon>
             </div>
-            <template v-else-if="widgetData[widget.id]">
+            <template v-if="widgetData[widget.id]">
               <MetricCard
                 v-if="widget.type === 'metric'"
                 :value="getSingleValue(widgetData[widget.id])"
@@ -209,9 +209,11 @@ async function refreshAll() {
   if (!dashboard.value) return
   refreshing.value = true
 
+  // 只对已有数据的 widget 显示 loading 覆盖层
   const nextLoading: Record<string, boolean> = {}
   dashboard.value.layout.forEach(widget => {
-    nextLoading[widget.id] = true
+    // 只有已有数据的 widget 才显示 loading 覆盖层
+    nextLoading[widget.id] = !!widgetData.value[widget.id]
   })
   widgetLoading.value = nextLoading
 
@@ -220,13 +222,13 @@ async function refreshAll() {
     try {
       results[widget.id] = await loadWidgetData(widget)
     } catch {
-      ElMessage.error(`图表“${widget.title}”数据加载失败`)
-    } finally {
-      widgetLoading.value = { ...widgetLoading.value, [widget.id]: false }
+      ElMessage.error(`图表”${widget.title}”数据加载失败`)
     }
   }))
 
+  // 一次性更新数据和 loading 状态
   widgetData.value = results
+  widgetLoading.value = {}
   refreshing.value = false
 }
 
@@ -475,6 +477,20 @@ onMounted(async () => {
 
 .widget-body {
   height: 100%;
+  position: relative;
+}
+
+.widget-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.7);
+  z-index: 10;
 }
 
 .widget-center {
