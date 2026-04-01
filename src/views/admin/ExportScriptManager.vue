@@ -7,10 +7,23 @@
           <template #header>
             <div class="card-header">
               <span>导出脚本列表</span>
-              <el-button type="primary" size="small" @click="handleAdd">
-                <el-icon><Plus /></el-icon>
-                新增
-              </el-button>
+              <div>
+                <el-button type="primary" size="small" @click="handleAdd">
+                  <el-icon><Plus /></el-icon>
+                  新增
+                </el-button>
+                <el-button type="success" size="small" @click="triggerUpload">
+                  <el-icon><Upload /></el-icon>
+                  上传脚本
+                </el-button>
+                <input
+                  ref="fileInputRef"
+                  type="file"
+                  accept=".py"
+                  style="display: none"
+                  @change="handleFileUpload"
+                />
+              </div>
             </div>
           </template>
 
@@ -480,7 +493,7 @@ result = output.getvalue()</pre>
 import { ref, watch, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Upload } from '@element-plus/icons-vue'
 import { Codemirror } from 'vue-codemirror'
 import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -696,6 +709,7 @@ const scaffoldValues = new Set(Object.values(SCAFFOLD_TEMPLATES))
 // ==================== Refs ====================
 
 const formRef = ref<FormInstance>()
+const fileInputRef = ref<HTMLInputElement>()
 
 const scripts = ref<ExportScript[]>([])
 const currentScriptId = ref<string | null>(null)
@@ -815,6 +829,54 @@ function handleAdd() {
     script: SCAFFOLD_TEMPLATES['json'],
   }
   testResult.value = null
+}
+
+function triggerUpload() {
+  fileInputRef.value?.click()
+}
+
+function handleFileUpload(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  // Validate file type
+  if (!file.name.endsWith('.py')) {
+    ElMessage.error('仅支持 .py 文件')
+    return
+  }
+
+  // Validate file size (100KB limit)
+  if (file.size > 100 * 1024) {
+    ElMessage.error('文件大小不能超过 100KB')
+    return
+  }
+
+  // Read file content
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    const content = e.target?.result as string
+    if (content) {
+      // Switch to new mode with content filled
+      currentScriptId.value = '__new__'
+      formData.value = {
+        name: file.name.replace('.py', ''),
+        description: '',
+        outputFormat: 'json',
+        scope: 'page',
+        script: content,
+      }
+      testResult.value = null
+      ElMessage.success('脚本已加载，请填写信息后保存')
+    }
+  }
+  reader.onerror = () => {
+    ElMessage.error('文件读取失败')
+  }
+  reader.readAsText(file, 'UTF-8')
+
+  // Clear input to allow re-upload same file
+  input.value = ''
 }
 
 async function handleSave() {
