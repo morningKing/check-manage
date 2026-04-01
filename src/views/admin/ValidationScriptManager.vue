@@ -364,6 +364,54 @@ if case_type:
         add_warning('未找到类型为「' + str(case_type) + '」的巡检项')</pre>
                 </div>
               </el-tab-pane>
+
+              <el-tab-pane label="上传脚本">
+                <div class="help-content">
+                  <h4>操作步骤</h4>
+                  <ol>
+                    <li>点击「上传脚本」按钮，选择本地 .py 文件</li>
+                    <li>脚本内容自动填充到编辑器</li>
+                    <li>填写脚本名称、描述（文件名会作为默认名称）</li>
+                    <li>可继续在线编辑调整代码</li>
+                    <li>点击「保存」完成创建</li>
+                  </ol>
+
+                  <h4>文件要求</h4>
+                  <ul>
+                    <li>文件类型：<code>.py</code>（Python 脚本）</li>
+                    <li>文件编码：<code>UTF-8</code></li>
+                    <li>文件大小：不超过 100KB</li>
+                  </ul>
+
+                  <h4>本地开发建议</h4>
+                  <p>推荐使用 VSCode 或 PyCharm 编写脚本：</p>
+                  <ul>
+                    <li>安装 Python 插件获得语法高亮和补全</li>
+                    <li>脚本变量参考本页面「变量参考」Tab</li>
+                    <li>上传后使用「测试」功能验证脚本正确性</li>
+                  </ul>
+
+                  <h4>示例脚本结构</h4>
+<pre class="help-code"># ============================================
+# 校验脚本
+# ============================================
+# 入参变量（系统自动注入）：
+#   record     : dict         — 当前提交的数据
+#   action     : str          — 'create' 或 'update'
+#   old_data   : dict | None  — 修改前的旧数据
+#   fields     : list[dict]   — 字段配置
+#   collection : str          — 当前集合名
+#
+# 校验输出：
+#   add_error(msg)   — 添加错误（阻止保存）
+#   add_warning(msg) — 添加警告（不阻止）
+# ============================================
+
+# 示例：必填校验
+if not record.get('name'):
+    add_error('名称不能为空')</pre>
+                </div>
+              </el-tab-pane>
             </el-tabs>
           </div>
 
