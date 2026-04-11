@@ -240,6 +240,21 @@
           <p>目标分支：<b>{{ switchTarget?.name }}</b></p>
         </template>
       </el-alert>
+      <div v-if="switchResult?.affectedCollections?.length > 1" style="margin-top: 12px">
+        <el-divider />
+        <p><b>影响的集合：</b></p>
+        <el-tag
+          v-for="coll in switchResult.affectedCollections"
+          :key="coll"
+          style="margin: 4px"
+          type="warning"
+        >
+          {{ getCollectionDisplayName(coll) }}
+        </el-tag>
+        <p style="color: #909399; font-size: 13px; margin-top: 8px">
+          以上集合将一起切换到分支 <b>{{ switchTarget?.name }}</b>
+        </p>
+      </div>
       <template #footer>
         <el-button @click="showSwitchDialog = false">取消</el-button>
         <el-button type="primary" @click="confirmSwitch" :loading="switching">
@@ -279,7 +294,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'refresh'): void
+  (e: 'refresh', affectedCollections?: string[]): void
 }>()
 
 // ==================== Constants ====================
@@ -326,8 +341,18 @@ const showSwitchDialog = ref(false)
 const switchTarget = ref<CollectionVersion | null>(null)
 const switching = ref(false)
 const switchingToMain = ref(false)
+const switchResult = ref<any>(null)
 
 // ==================== Methods ====================
+
+function getCollectionDisplayName(collection: string): string {
+  const collectionNames: Record<string, string> = {
+    'inspection-case': '巡检用例',
+    'inspection-plan': '巡检计划',
+    // Add more mappings as needed
+  }
+  return collectionNames[collection] || collection
+}
 
 function getStatusTagType(status: string): string {
   const map: Record<string, string> = {
@@ -464,14 +489,23 @@ async function confirmSwitch() {
   switching.value = true
   try {
     const result = await switchToVersion(switchTarget.value.id)
+    switchResult.value = result
+
+    // Enhanced success message
     let msg = `已切换到分支「${result.branchName}」，加载 ${result.recordsInBranch} 条记录`
     if (result.initialized) {
       msg += '（分支数据已从快照初始化）'
     }
+    if (result.affectedCollections?.length > 1) {
+      msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
+    }
+
     ElMessage.success(msg)
     showSwitchDialog.value = false
     loadVersions()
-    emit('refresh')
+
+    // Emit refresh with affected collections list
+    emit('refresh', result.affectedCollections)
   } catch (e: any) {
     const msg = e?.response?.data?.error || '切换失败'
     ElMessage.error(msg)
@@ -491,9 +525,18 @@ async function handleSwitchToMain() {
     switchingToMain.value = true
     try {
       const result = await switchToMainBranch(props.collection)
-      ElMessage.success(`已切换回主分支，加载 ${result.recordsInBranch} 条记录`)
+
+      // Enhanced success message with affected collections
+      let msg = `已切换回主分支，加载 ${result.recordsInBranch} 条记录`
+      if (result.affectedCollections?.length > 1) {
+        msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
+      }
+
+      ElMessage.success(msg)
       loadVersions()
-      emit('refresh')
+
+      // Emit refresh with affected collections list
+      emit('refresh', result.affectedCollections)
     } catch (e: any) {
       const msg = e?.response?.data?.error || '切换失败'
       ElMessage.error(msg)
