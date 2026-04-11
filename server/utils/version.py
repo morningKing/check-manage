@@ -1513,9 +1513,28 @@ def switch_to_main_branch(collection, switched_by, user_id=None):
         )
         main_count = cur.fetchone()[0]
 
-        # 设置用户当前分支为主分支
+        # 获取当前用户在同一分支的所有 Collection
         if user_id:
-            set_user_current_branch(user_id, switched_by, collection, MAIN_BRANCH_ID)
+            current_branch = get_user_current_branch(user_id, collection)
+            if current_branch != MAIN_BRANCH_ID:
+                # 查询所有在同一分支的 Collection
+                cur.execute(
+                    'SELECT collection FROM user_current_branch '
+                    'WHERE user_id = %s AND branch_id = %s',
+                    (user_id, current_branch)
+                )
+                affected_collections = [row[0] for row in cur.fetchall()]
+            else:
+                # 已在主分支，只处理当前 Collection
+                affected_collections = [collection]
+        else:
+            # 无用户 ID，只处理当前 Collection
+            affected_collections = [collection]
+
+        # 批量切换所有 Collection 到主分支
+        if user_id:
+            for coll in affected_collections:
+                set_user_current_branch(user_id, switched_by, coll, MAIN_BRANCH_ID)
 
     return {
         'success': True,
@@ -1523,6 +1542,7 @@ def switch_to_main_branch(collection, switched_by, user_id=None):
         'branchName': '主分支',
         'recordsInBranch': main_count,
         'initialized': False,
+        'affectedCollections': affected_collections,
     }
 
 
