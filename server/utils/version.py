@@ -1466,6 +1466,10 @@ def switch_to_version(version_id, switched_by, user_id=None):
         )
         affected_collections = [row[0] for row in cur.fetchall()]
 
+        # Fallback: if no tracking data, use metadata collection
+        if not affected_collections:
+            affected_collections = [collection]
+
         # 5. 批量更新所有 Collection 的用户当前分支
         if user_id:
             for coll in affected_collections:
