@@ -272,7 +272,7 @@ def create_version_snapshot(collection, name, description, version_type, parent_
             )
 
         # 7. 追踪版本涉及的所有 Collection（用于跨 Collection 分支切换）
-        track_version_collections(version_id, collection, actual_branch_id)
+        track_version_collections(version_id, collection, actual_branch_id, conn)
 
     return {
         'id': version_id,
@@ -290,7 +290,7 @@ def create_version_snapshot(collection, name, description, version_type, parent_
     }
 
 
-def track_version_collections(version_id, collection, branch_id):
+def track_version_collections(version_id, collection, branch_id, conn=None):
     """
     追踪版本涉及的所有 Collection
 
@@ -302,42 +302,68 @@ def track_version_collections(version_id, collection, branch_id):
         版本创建时的主 Collection
     branch_id : str
         分支 ID
+    conn : connection, optional
+        已有的数据库连接，如果提供则复用（用于事务内调用）
     """
     now = datetime.now(timezone.utc)
 
-    with get_db() as conn:
+    # 复用现有连接或创建新连接
+    if conn:
         cur = conn.cursor()
+        _track_collections_internal(cur, version_id, collection, branch_id, now)
+    else:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _track_collections_internal(cur, version_id, collection, branch_id, now)
 
-        # 1. 扫描直接数据（dynamic_data）
+
+def _track_collections_internal(cur, version_id, collection, branch_id, now):
+    """
+    内部追踪逻辑（共享游标）
+
+    Parameters
+    ----------
+    cur : cursor
+        数据库游标
+    version_id : str
+        版本 ID
+    collection : str
+        版本创建时的主 Collection
+    branch_id : str
+        分支 ID
+    now : datetime
+        当前时间戳
+    """
+    # 1. 扫描直接数据（dynamic_data）
+    cur.execute(
+        'SELECT DISTINCT collection FROM dynamic_data WHERE branch_id = %s',
+        (branch_id,)
+    )
+    direct_collections = [row[0] for row in cur.fetchall()]
+
+    # 2. 扫描关联数据（data_relations）- 源和目标Collection
+    cur.execute(
+        'SELECT DISTINCT collection FROM data_relations WHERE branch_id = %s '
+        'UNION '
+        'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
+        (branch_id, branch_id)
+    )
+    relation_collections = [row[0] for row in cur.fetchall()]
+
+    # 3. 合并去重
+    all_collections = set(direct_collections + relation_collections)
+
+    # 如果没有任何数据，至少记录主Collection
+    if not all_collections:
+        all_collections = {collection}
+
+    # 4. 插入追踪数据
+    for coll in all_collections:
         cur.execute(
-            'SELECT DISTINCT collection FROM dynamic_data WHERE branch_id = %s',
-            (branch_id,)
+            'INSERT INTO version_collections (version_id, collection, created_at) '
+            'VALUES (%s, %s, %s) ON CONFLICT DO NOTHING',
+            (version_id, coll, now)
         )
-        direct_collections = [row[0] for row in cur.fetchall()]
-
-        # 2. 扫描关联数据（data_relations）- 源和目标Collection
-        cur.execute(
-            'SELECT DISTINCT collection FROM data_relations WHERE branch_id = %s '
-            'UNION '
-            'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
-            (branch_id, branch_id)
-        )
-        relation_collections = [row[0] for row in cur.fetchall()]
-
-        # 3. 合并去重
-        all_collections = set(direct_collections + relation_collections)
-
-        # 如果没有任何数据，至少记录主Collection
-        if not all_collections:
-            all_collections = {collection}
-
-        # 4. 插入追踪数据
-        for coll in all_collections:
-            cur.execute(
-                'INSERT INTO version_collections (version_id, collection, created_at) '
-                'VALUES (%s, %s, %s) ON CONFLICT DO NOTHING',
-                (version_id, coll, now)
-            )
 
 
 def get_version_delete_impact(version_id):
