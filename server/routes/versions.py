@@ -411,3 +411,122 @@ def get_current_branch_route():
     return jsonify(branch)
 
 
+@versions_bp.route('/versions/<version_id>/delete-impact', methods=['GET'])
+@login_required
+def get_delete_impact_route(version_id):
+    """
+    获取删除版本的影响范围报告
+
+    前端调用此接口获取影响范围，展示确认对话框
+    """
+    try:
+        from utils.version import get_version_delete_impact
+
+        impact = get_version_delete_impact(version_id)
+        return jsonify({
+            'success': True,
+            'data': impact
+        })
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 404
+    except Exception as e:
+        logger.error(f'获取删除影响报告失败: {str(e)}')
+        return jsonify({'success': False, 'error': f'服务器错误: {str(e)}'}), 500
+
+
+@versions_bp.route('/versions/<version_id>/delete-detail', methods=['GET'])
+@login_required
+def get_delete_detail_route(version_id):
+    """
+    获取删除数据详情（支持分页）
+
+    Query参数：
+      - collection: 查询哪个Collection
+      - page: 页码（默认1）
+      - pageSize: 每页数量（默认20）
+      - sortBy: 排序字段（默认createdAt）
+      - sortOrder: 排序方向（默认desc）
+    """
+    from db import get_db
+
+    collection = request.args.get('collection')
+    if not collection:
+        return jsonify({'error': 'collection 是必填项'}), 400
+
+    page = int(request.args.get('page', 1))
+    page_size = int(request.args.get('pageSize', 20))
+    sort_by = request.args.get('sortBy', 'createdAt')
+    sort_order = request.args.get('sortOrder', 'desc')
+
+    # 验证分页参数
+    if page < 1:
+        page = 1
+    if page_size not in (10, 20, 50, 100):
+        page_size = 20
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 统计总数
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, version_id)
+        )
+        total_count = cur.fetchone()[0]
+
+        # 计算偏移量
+        offset = (page - 1) * page_size
+
+        # 排序字段验证
+        allowed_sort_fields = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
+        sort_column = allowed_sort_fields.get(sort_by, 'created_at')
+        sort_direction = 'DESC' if sort_order == 'desc' else 'ASC'
+
+        # 查询数据（分页）
+        cur.execute(
+            f'SELECT id, data, created_at, updated_at '
+            f'FROM dynamic_data '
+            f'WHERE collection = %s AND branch_id = %s '
+            f'ORDER BY {sort_column} {sort_direction} '
+            f'LIMIT %s OFFSET %s',
+            (collection, version_id, page_size, offset)
+        )
+        data_rows = cur.fetchall()
+
+        records = []
+        for data_row in data_rows:
+            record_id = data_row[0]
+            data_json = data_row[1] or {}
+
+            display_name = (
+                data_json.get('name') or
+                data_json.get('title') or
+                data_json.get('caseName') or
+                data_json.get('planName') or
+                record_id
+            )
+
+            records.append({
+                'id': record_id,
+                'displayName': display_name,
+                'createdAt': data_row[2].isoformat() if data_row[2] else None,
+                'updatedAt': data_row[3].isoformat() if data_row[3] else None
+            })
+
+        total_pages = (total_count + page_size - 1) // page_size
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'collection': collection,
+            'versionId': version_id,
+            'totalCount': total_count,
+            'totalPages': total_pages,
+            'currentPage': page,
+            'pageSize': page_size,
+            'records': records,
+            'hasMore': page < total_pages
+        }
+    })
+
+
