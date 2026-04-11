@@ -444,7 +444,10 @@ def get_version_delete_impact(version_id):
         # 5. 生成警告信息
         has_cross = len(collections) > 1
         warning_msg = ''
-        if has_cross:
+        if len(affected_collections) == 0:
+            # 版本无追踪数据（可能创建后未调用 track_version_collections）
+            warning_msg = '该版本暂无追踪数据，建议先运行数据迁移脚本'
+        elif has_cross:
             collection_list = ', '.join([
                 f"{item['collection']}({item['recordCount']}条)"
                 for item in affected_collections
@@ -712,6 +715,11 @@ def delete_version(version_id, confirmed=False):
                 (version_id,)
             )
             collections = [row[0] for row in cur.fetchall()]
+
+            # 如果无追踪数据，使用旧方法（仅清理主Collection）
+            # 兼容 Task 1-3 实施前创建的旧版本
+            if not collections:
+                collections = [collection]
 
             # 精确清理每个 Collection
             for coll in collections:

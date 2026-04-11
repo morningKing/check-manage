@@ -96,7 +96,7 @@ def test_track_single_collection():
         assert tracked[0] == collection, f'应为{collection}'
 
     # 5. 清理
-    delete_version(version_id)
+    delete_version(version_id, confirmed=True)
     print('[OK] 单Collection追踪测试通过')
 
 
@@ -164,7 +164,7 @@ def test_track_cross_collection():
         assert 'inspection-plan' in tracked
 
     # 5. 清理
-    delete_version(version_id)
+    delete_version(version_id, confirmed=True)
     print('[OK] 跨Collection追踪测试通过')
 
 
@@ -226,7 +226,7 @@ def test_track_collection_only_in_relation():
         assert 'inspection-plan' in tracked, 'inspection-plan应被追踪'
 
     # 5. 清理
-    delete_version(version_id)
+    delete_version(version_id, confirmed=True)
     print('[OK] Relation-only Collection追踪测试通过')
 
 
@@ -308,7 +308,7 @@ def test_get_delete_impact():
             assert item['records'][0]['displayName'] == '测试计划B'
 
     # 5. 清理
-    delete_version(version_id)
+    delete_version(version_id, confirmed=True)
     print('[OK] 影响报告测试通过')
 
 
