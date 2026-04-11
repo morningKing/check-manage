@@ -312,10 +312,94 @@ def test_get_delete_impact():
     print('[OK] 影响报告测试通过')
 
 
+def test_delete_with_confirmation():
+    """测试两阶段确认删除"""
+    from utils.version import create_version_snapshot, delete_version, track_version_collections
+    import psycopg2.extras
+
+    collection = 'inspection-case'
+    test_user = 'test_user_confirm'
+
+    # 1. 创建版本并添加跨Collection数据
+    version_info = create_version_snapshot(
+        collection=collection,
+        name='确认删除测试版本',
+        description='测试确认删除',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_user,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('test-confirm-case-001', collection, psycopg2.extras.Json({'caseName': '测试'}), version_id, 1)
+        )
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('test-confirm-plan-001', 'inspection-plan', psycopg2.extras.Json({'planName': '测试'}), version_id, 1)
+        )
+        conn.commit()
+
+    track_version_collections(version_id, collection, version_id)
+
+    # 2. 测试未确认时返回影响报告
+    result = delete_version(version_id, confirmed=False)
+
+    assert isinstance(result, dict), '未确认时应返回dict'
+    assert result['totalRecords'] == 2
+    assert result['hasCrossCollectionData'] == True
+
+    # 3. 验证数据仍然存在
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT(*) FROM dynamic_data WHERE branch_id = %s', (version_id,))
+        count = cur.fetchone()[0]
+        assert count == 2, '未确认时数据应保留'
+
+    # 4. 测试确认后删除
+    success = delete_version(version_id, confirmed=True)
+    assert success == True
+
+    # 5. 验证所有数据被清理（关键：跨Collection清理）
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (collection, version_id)
+        )
+        case_count = cur.fetchone()[0]
+        assert case_count == 0, 'inspection-case应被删除'
+
+        # 关键验证：inspection-plan也应该被删除
+        cur.execute(
+            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            ('inspection-plan', version_id)
+        )
+        plan_count = cur.fetchone()[0]
+        assert plan_count == 0, 'inspection-plan应被删除（跨Collection清理）'
+
+        cur.execute(
+            'SELECT COUNT(*) FROM version_collections WHERE version_id = %s',
+            (version_id,)
+        )
+        vc_count = cur.fetchone()[0]
+        assert vc_count == 0, 'version_collections应被CASCADE清理'
+
+    print('[OK] 两阶段确认删除测试通过')
+
+
 if __name__ == '__main__':
     test_version_collections_table_exists()
     test_track_single_collection()
     test_track_cross_collection()
     test_track_collection_only_in_relation()
     test_get_delete_impact()
+    test_delete_with_confirmation()
     print('\n所有测试通过！')

@@ -657,24 +657,36 @@ def get_version_detail(version_id):
     }
 
 
-def delete_version(version_id):
+def delete_version(version_id, confirmed=False):
     """
-    删除版本
+    删除版本（改造版：支持用户确认机制）
 
     Parameters
     ----------
     version_id : str
         版本 ID
+    confirmed : bool
+        是否已确认删除（前端确认后传入 True）
 
     Returns
     -------
-    bool
-        是否成功删除
+    dict | bool
+        如果 confirmed=False，返回影响报告 dict
+        如果 confirmed=True，返回删除成功 bool
     """
+    # 未确认：返回影响报告
+    if not confirmed:
+        return get_version_delete_impact(version_id)
+
+    # 已确认：执行删除
     with get_db() as conn:
         cur = conn.cursor()
-        # 检查是否受保护
-        cur.execute('SELECT is_protected, collection, version_type FROM collection_versions WHERE id = %s', (version_id,))
+
+        # 1. 检查版本状态
+        cur.execute(
+            'SELECT is_protected, collection, version_type FROM collection_versions WHERE id = %s',
+            (version_id,)
+        )
         row = cur.fetchone()
         if not row:
             return False
@@ -683,24 +695,46 @@ def delete_version(version_id):
         collection = row[1]
         version_type = row[2]
 
-        # 检查是否有子版本
-        cur.execute('SELECT COUNT(*) FROM collection_versions WHERE parent_version = %s', (version_id,))
+        # 2. 检查子版本
+        cur.execute(
+            'SELECT COUNT(*) FROM collection_versions WHERE parent_version = %s',
+            (version_id,)
+        )
         child_count = cur.fetchone()[0]
         if child_count > 0:
             raise ValueError(f'无法删除：存在 {child_count} 个子版本')
 
-        # 如果是分支类型，清理 dynamic_data 和 data_relations 中的分支数据
+        # 3. 如果是分支，精确清理数据
         if version_type == 'branch':
-            cur.execute('DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s', (collection, version_id))
-            # 同时清理正向和反向关联关系，避免悬空引用
+            # 查询涉及的 Collection
             cur.execute(
-                'DELETE FROM data_relations WHERE (collection = %s OR related_collection = %s) AND branch_id = %s',
-                (collection, collection, version_id)
+                'SELECT collection FROM version_collections WHERE version_id = %s',
+                (version_id,)
             )
-            cur.execute('DELETE FROM user_current_branch WHERE branch_id = %s', (version_id,))
+            collections = [row[0] for row in cur.fetchall()]
 
-        # 删除（CASCADE 会自动删除 version_snapshots 和 version_relations）
+            # 精确清理每个 Collection
+            for coll in collections:
+                cur.execute(
+                    'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                    (coll, version_id)
+                )
+
+            # 清理关联关系
+            cur.execute(
+                'DELETE FROM data_relations WHERE branch_id = %s',
+                (version_id,)
+            )
+
+            # 清理用户分支设置
+            cur.execute(
+                'DELETE FROM user_current_branch WHERE branch_id = %s',
+                (version_id,)
+            )
+
+        # 4. 删除版本元数据（CASCADE 清理 version_collections）
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
+
     return True
 
 
