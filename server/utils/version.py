@@ -1459,9 +1459,17 @@ def switch_to_version(version_id, switched_by, user_id=None):
             existing_count = len(target_records)
             initialized = True
 
-        # 4. 设置用户当前工作分支
+        # 4. 获取版本涉及的所有 Collection
+        cur.execute(
+            'SELECT collection FROM version_collections WHERE version_id = %s',
+            (version_id,)
+        )
+        affected_collections = [row[0] for row in cur.fetchall()]
+
+        # 5. 批量更新所有 Collection 的用户当前分支
         if user_id:
-            set_user_current_branch(user_id, switched_by, collection, version_id)
+            for coll in affected_collections:
+                set_user_current_branch(user_id, switched_by, coll, version_id)
 
     return {
         'success': True,
@@ -1469,6 +1477,7 @@ def switch_to_version(version_id, switched_by, user_id=None):
         'branchName': target_name,
         'recordsInBranch': existing_count,
         'initialized': initialized,
+        'affectedCollections': affected_collections,
     }
 
 
