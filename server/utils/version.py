@@ -1470,10 +1470,18 @@ def switch_to_version(version_id, switched_by, user_id=None):
         if not affected_collections:
             affected_collections = [collection]
 
-        # 5. 批量更新所有 Collection 的用户当前分支
+        # 5. 批量更新所有 Collection 的用户当前分支（原子操作）
         if user_id:
+            now = datetime.now(timezone.utc)
             for coll in affected_collections:
-                set_user_current_branch(user_id, switched_by, coll, version_id)
+                record_id = f'ucb-{user_id}-{coll}'
+                # 使用 UPSERT 在同一事务中原子更新
+                cur.execute(
+                    'INSERT INTO user_current_branch (id, user_id, username, collection, branch_id, updated_at) '
+                    'VALUES (%s, %s, %s, %s, %s, %s) '
+                    'ON CONFLICT (user_id, collection) DO UPDATE SET branch_id = %s, updated_at = %s',
+                    (record_id, user_id, switched_by, coll, version_id, now, version_id, now),
+                )
 
     return {
         'success': True,
@@ -1514,8 +1522,16 @@ def switch_to_main_branch(collection, switched_by, user_id=None):
         main_count = cur.fetchone()[0]
 
         # 获取当前用户在同一分支的所有 Collection
+        current_branch = MAIN_BRANCH_ID
         if user_id:
-            current_branch = get_user_current_branch(user_id, collection)
+            # 直接查询用户当前分支（避免调用打开新连接的辅助函数）
+            cur.execute(
+                'SELECT branch_id FROM user_current_branch WHERE user_id = %s AND collection = %s',
+                (user_id, collection),
+            )
+            row = cur.fetchone()
+            current_branch = row[0] if row else MAIN_BRANCH_ID
+
             if current_branch != MAIN_BRANCH_ID:
                 # 查询所有在同一分支的 Collection
                 cur.execute(
@@ -1531,10 +1547,16 @@ def switch_to_main_branch(collection, switched_by, user_id=None):
             # 无用户 ID，只处理当前 Collection
             affected_collections = [collection]
 
-        # 批量切换所有 Collection 到主分支
-        if user_id:
-            for coll in affected_collections:
-                set_user_current_branch(user_id, switched_by, coll, MAIN_BRANCH_ID)
+        # 批量切换所有 Collection 到主分支（原子操作）
+        if user_id and current_branch != MAIN_BRANCH_ID:
+            # 使用单个 UPDATE 语句原子更新所有匹配的行
+            now = datetime.now(timezone.utc)
+            cur.execute(
+                'UPDATE user_current_branch '
+                'SET branch_id = %s, updated_at = %s '
+                'WHERE user_id = %s AND branch_id = %s',
+                (MAIN_BRANCH_ID, now, user_id, current_branch)
+            )
 
     return {
         'success': True,
