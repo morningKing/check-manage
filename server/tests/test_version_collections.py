@@ -282,10 +282,12 @@ def test_get_delete_impact():
     assert 'versionInfo' in impact
     assert 'affectedCollections' in impact
     assert 'totalRecords' in impact
+    assert 'totalRelations' in impact
     assert 'hasCrossCollectionData' in impact
     assert 'warningMessage' in impact
 
     assert impact['totalRecords'] == 2
+    assert impact['totalRelations'] == 1
     assert impact['hasCrossCollectionData'] == True
     assert len(impact['affectedCollections']) == 2
 
