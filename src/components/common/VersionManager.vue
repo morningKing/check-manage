@@ -144,6 +144,7 @@
                 type="danger"
                 @click="handleDelete(row)"
                 :disabled="row.isProtected || row.status === 'merged'"
+                :loading="deletingVersionId === row.id"
               >
                 <el-icon><Delete /></el-icon>
               </el-button>
@@ -253,7 +254,7 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Sort, RefreshRight, Delete, Connection, Switch, FolderOpened, Document } from '@element-plus/icons-vue'
-import axios from 'axios'
+import { del } from '@/utils/request'
 import BackupDiffDialog from './BackupDiffDialog.vue'
 import BeyondCompareMerge from './BeyondCompareMerge.vue'
 import {
@@ -299,6 +300,7 @@ const visible = computed({
 const versions = ref<CollectionVersion[]>([])
 const currentBranch = ref<UserBranch | null>(null)
 const loading = ref(false)
+const deletingVersionId = ref<string | null>(null)
 
 // 创建版本
 const showCreateDialog = ref(false)
@@ -505,11 +507,13 @@ async function handleSwitchToMain() {
 
 async function handleDelete(row: CollectionVersion) {
   try {
-    // Phase 1: Get impact report with confirmed=false
-    const response = await axios.delete(`/api/versions/${row.id}?confirmed=false`)
+    deletingVersionId.value = row.id
 
-    if (response.data.requiresConfirmation) {
-      const impact = response.data.data
+    // Phase 1: Get impact report with confirmed=false
+    const response = await del<{ requiresConfirmation: boolean; data: any }>(`/versions/${row.id}?confirmed=false`)
+
+    if (response.requiresConfirmation) {
+      const impact = response.data
 
       // Phase 2: Show confirmation dialog with impact details
       await ElMessageBox.confirm(
@@ -524,7 +528,12 @@ async function handleDelete(row: CollectionVersion) {
       )
 
       // Phase 3: User confirmed, execute deletion with confirmed=true
-      await axios.delete(`/api/versions/${row.id}?confirmed=true`)
+      await del(`/versions/${row.id}?confirmed=true`)
+      ElMessage.success('版本已删除')
+      loadVersions()
+    } else {
+      // No confirmation required, delete directly
+      await del(`/versions/${row.id}?confirmed=true`)
       ElMessage.success('版本已删除')
       loadVersions()
     }
@@ -533,6 +542,8 @@ async function handleDelete(row: CollectionVersion) {
       const msg = e?.response?.data?.error || '删除失败'
       ElMessage.error(msg)
     }
+  } finally {
+    deletingVersionId.value = null
   }
 }
 
