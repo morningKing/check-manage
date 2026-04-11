@@ -287,6 +287,54 @@ def create_version_snapshot(collection, name, description, version_type, parent_
     }
 
 
+def track_version_collections(version_id, collection, branch_id):
+    """
+    追踪版本涉及的所有 Collection
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+    collection : str
+        版本创建时的主 Collection
+    branch_id : str
+        分支 ID
+    """
+    now = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 1. 扫描直接数据（dynamic_data）
+        cur.execute(
+            'SELECT DISTINCT collection FROM dynamic_data WHERE branch_id = %s',
+            (branch_id,)
+        )
+        direct_collections = [row[0] for row in cur.fetchall()]
+
+        # 2. 扫描关联数据（data_relations）
+        cur.execute(
+            'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
+            (branch_id,)
+        )
+        related_collections = [row[0] for row in cur.fetchall()]
+
+        # 3. 合并去重
+        all_collections = set(direct_collections + related_collections)
+
+        # 如果没有任何数据，至少记录主Collection
+        if not all_collections:
+            all_collections = {collection}
+
+        # 4. 插入追踪数据
+        for coll in all_collections:
+            cur.execute(
+                'INSERT INTO version_collections (version_id, collection, created_at) '
+                'VALUES (%s, %s, %s) ON CONFLICT DO NOTHING',
+                (version_id, coll, now)
+            )
+
+
 def _load_relation_field_map(cur, collection):
     """Load relation field definitions for a collection."""
     page_id = f'page-{collection}'
@@ -512,7 +560,11 @@ def delete_version(version_id):
         # 如果是分支类型，清理 dynamic_data 和 data_relations 中的分支数据
         if version_type == 'branch':
             cur.execute('DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s', (collection, version_id))
-            cur.execute('DELETE FROM data_relations WHERE collection = %s AND branch_id = %s', (collection, version_id))
+            # 同时清理正向和反向关联关系，避免悬空引用
+            cur.execute(
+                'DELETE FROM data_relations WHERE (collection = %s OR related_collection = %s) AND branch_id = %s',
+                (collection, collection, version_id)
+            )
             cur.execute('DELETE FROM user_current_branch WHERE branch_id = %s', (version_id,))
 
         # 删除（CASCADE 会自动删除 version_snapshots 和 version_relations）
