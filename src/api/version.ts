@@ -89,6 +89,7 @@ export interface SwitchResult {
   branchName: string
   recordsInBranch: number
   initialized: boolean
+  affectedCollections?: string[]
 }
 
 export function switchToVersion(id: string) {
