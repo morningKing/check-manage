@@ -95,14 +95,37 @@ def get_version(version_id):
 @versions_bp.route('/versions/<version_id>', methods=['DELETE'])
 @write_required
 def delete_version_route(version_id):
-    """删除版本"""
+    """
+    删除版本（改造版：支持确认机制）
+
+    Query参数：
+      confirmed: bool
+        - false: 返回影响报告（不执行删除）
+        - true: 执行删除（用户已确认）
+    """
+    confirmed = request.args.get('confirmed', 'false').lower() == 'true'
+
     try:
-        success = delete_version(version_id, confirmed=True)
-        if not success:
-            return jsonify({'error': '版本不存在'}), 404
-        return jsonify({'success': True})
+        result = delete_version(version_id, confirmed=confirmed)
+
+        if confirmed:
+            # 已确认并执行删除
+            return jsonify({
+                'success': True,
+                'message': '版本已删除'
+            })
+        else:
+            # 未确认，返回影响报告
+            return jsonify({
+                'success': True,
+                'data': result,
+                'requiresConfirmation': True
+            })
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'删除版本失败: {str(e)}')
+        return jsonify({'error': f'服务器错误: {str(e)}'}), 500
 
 
 @versions_bp.route('/versions/diff', methods=['POST'])
