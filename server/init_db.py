@@ -255,6 +255,18 @@ CREATE TABLE IF NOT EXISTS version_relations (
     PRIMARY KEY (version_id, collection, record_id, field_name, related_id),
     FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
 );
+
+-- version_collections 表：追踪版本涉及的Collection
+CREATE TABLE IF NOT EXISTS version_collections (
+    version_id  VARCHAR(100) NOT NULL,
+    collection  VARCHAR(200) NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (version_id, collection),
+    FOREIGN KEY (version_id) REFERENCES collection_versions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_version_collections_version ON version_collections(version_id);
+CREATE INDEX IF NOT EXISTS idx_version_collections_collection ON version_collections(collection);
 """
 
 
