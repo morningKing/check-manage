@@ -253,12 +253,12 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Sort, RefreshRight, Delete, Connection, Switch, FolderOpened, Document } from '@element-plus/icons-vue'
+import axios from 'axios'
 import BackupDiffDialog from './BackupDiffDialog.vue'
 import BeyondCompareMerge from './BeyondCompareMerge.vue'
 import {
   getVersions,
   createVersion,
-  deleteVersion,
   restoreVersion,
   switchToVersion,
   switchToMainBranch,
@@ -505,21 +505,54 @@ async function handleSwitchToMain() {
 
 async function handleDelete(row: CollectionVersion) {
   try {
-    await ElMessageBox.confirm(
-      `确定要删除版本「${row.name}」吗？此操作不可撤销。`,
-      '删除确认',
-      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' }
-    )
+    // Phase 1: Get impact report with confirmed=false
+    const response = await axios.delete(`/api/versions/${row.id}?confirmed=false`)
 
-    await deleteVersion(row.id)
-    ElMessage.success('删除成功')
-    loadVersions()
+    if (response.data.requiresConfirmation) {
+      const impact = response.data.data
+
+      // Phase 2: Show confirmation dialog with impact details
+      await ElMessageBox.confirm(
+        generateDeleteWarningMessage(impact),
+        '删除版本确认',
+        {
+          type: 'warning',
+          confirmButtonText: '确认删除',
+          cancelButtonText: '取消',
+          customClass: 'delete-version-dialog'
+        }
+      )
+
+      // Phase 3: User confirmed, execute deletion with confirmed=true
+      await axios.delete(`/api/versions/${row.id}?confirmed=true`)
+      ElMessage.success('版本已删除')
+      loadVersions()
+    }
   } catch (e: any) {
     if (e !== 'cancel') {
       const msg = e?.response?.data?.error || '删除失败'
       ElMessage.error(msg)
     }
   }
+}
+
+function generateDeleteWarningMessage(impact: any): string {
+  let message = impact.warningMessage + '\n\n'
+
+  if (impact.hasCrossCollectionData) {
+    message += '将要删除的数据详情：\n'
+    impact.affectedCollections.forEach((coll: any) => {
+      message += `\n${coll.collection} (${coll.recordCount}条记录):\n`
+      coll.records.slice(0, 5).forEach((rec: any) => {
+        message += `  • ${rec.displayName}\n`
+      })
+      if (coll.recordCount > 5) {
+        message += `  ...还有 ${coll.recordCount - 5} 条\n`
+      }
+    })
+  }
+
+  return message
 }
 
 // ==================== Watch ====================
