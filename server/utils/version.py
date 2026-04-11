@@ -337,6 +337,136 @@ def track_version_collections(version_id, collection, branch_id):
             )
 
 
+def get_version_delete_impact(version_id):
+    """
+    获取删除版本的影响范围报告
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    dict
+        {
+            'versionInfo': {...},
+            'affectedCollections': [...],
+            'totalRecords': N,
+            'totalRelations': M,
+            'hasCrossCollectionData': bool,
+            'warningMessage': str
+        }
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 1. 获取版本基本信息
+        cur.execute(
+            'SELECT id, name, collection, version_type, records_count, relations_count '
+            'FROM collection_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+
+        version_info = {
+            'id': row[0],
+            'name': row[1],
+            'collection': row[2],
+            'versionType': row[3],
+            'recordsCount': row[4],
+            'relationsCount': row[5]
+        }
+
+        # 2. 查询涉及的 Collection
+        cur.execute(
+            'SELECT collection FROM version_collections WHERE version_id = %s ORDER BY collection',
+            (version_id,)
+        )
+        collections = [row[0] for row in cur.fetchall()]
+
+        # 3. 查询每个 Collection 的数据详情
+        affected_collections = []
+        for coll in collections:
+            # 统计总数
+            cur.execute(
+                'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                (coll, version_id)
+            )
+            total_count = cur.fetchone()[0]
+
+            # 查询数据详情（前100条）
+            cur.execute(
+                'SELECT id, data, created_at, updated_at '
+                'FROM dynamic_data '
+                'WHERE collection = %s AND branch_id = %s '
+                'ORDER BY created_at DESC LIMIT 100',
+                (coll, version_id)
+            )
+            data_rows = cur.fetchall()
+
+            records = []
+            for data_row in data_rows:
+                record_id = data_row[0]
+                data_json = data_row[1] or {}
+
+                display_name = (
+                    data_json.get('name') or
+                    data_json.get('title') or
+                    data_json.get('caseName') or
+                    data_json.get('planName') or
+                    record_id
+                )
+
+                records.append({
+                    'id': record_id,
+                    'displayName': display_name,
+                    'createdAt': data_row[2].isoformat() if data_row[2] else None,
+                    'updatedAt': data_row[3].isoformat() if data_row[3] else None
+                })
+
+            affected_collections.append({
+                'collection': coll,
+                'recordCount': total_count,
+                'records': records,
+                'hasMore': total_count > 100
+            })
+
+        # 4. 统计关联关系数量
+        cur.execute(
+            'SELECT COUNT(*) FROM data_relations WHERE branch_id = %s',
+            (version_id,)
+        )
+        total_relations = cur.fetchone()[0]
+
+        # 5. 生成警告信息
+        has_cross = len(collections) > 1
+        warning_msg = ''
+        if has_cross:
+            collection_list = ', '.join([
+                f"{item['collection']}({item['recordCount']}条)"
+                for item in affected_collections
+            ])
+            warning_msg = (
+                f'该版本涉及 {len(collections)} 个 Collection 的数据：\n'
+                f'{collection_list}\n'
+                f'删除将同时清理这些数据及 {total_relations} 条关联关系。'
+            )
+        else:
+            warning_msg = f'将删除 {affected_collections[0]["collection"]} 的 {affected_collections[0]["recordCount"]} 条数据'
+
+        return {
+            'versionInfo': version_info,
+            'affectedCollections': affected_collections,
+            'totalRecords': sum(item['recordCount'] for item in affected_collections),
+            'totalRelations': total_relations,
+            'hasCrossCollectionData': has_cross,
+            'warningMessage': warning_msg
+        }
+
+
 def _load_relation_field_map(cur, collection):
     """Load relation field definitions for a collection."""
     page_id = f'page-{collection}'

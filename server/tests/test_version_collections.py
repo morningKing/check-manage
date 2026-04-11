@@ -230,9 +230,90 @@ def test_track_collection_only_in_relation():
     print('[OK] Relation-only Collection追踪测试通过')
 
 
+def test_get_delete_impact():
+    """测试删除影响报告生成"""
+    from utils.version import create_version_snapshot, delete_version, track_version_collections, get_version_delete_impact
+    import psycopg2.extras
+
+    collection = 'inspection-case'
+    test_user = 'test_user_impact'
+
+    # 1. 创建版本并添加数据
+    version_info = create_version_snapshot(
+        collection=collection,
+        name='影响报告测试版本',
+        description='测试影响报告',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_user,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('test-impact-case-001', collection, psycopg2.extras.Json({'caseName': '测试用例A'}), version_id, 1)
+        )
+
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('test-impact-plan-001', 'inspection-plan', psycopg2.extras.Json({'planName': '测试计划B'}), version_id, 1)
+        )
+
+        cur.execute(
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            (collection, 'test-impact-case-001', 'relatedPlan', 'inspection-plan', 'test-impact-plan-001', version_id)
+        )
+
+        conn.commit()
+
+    track_version_collections(version_id, collection, version_id)
+
+    # 2. 获取影响报告
+    impact = get_version_delete_impact(version_id)
+
+    # 3. 验证报告结构
+    assert 'versionInfo' in impact
+    assert 'affectedCollections' in impact
+    assert 'totalRecords' in impact
+    assert 'hasCrossCollectionData' in impact
+    assert 'warningMessage' in impact
+
+    assert impact['totalRecords'] == 2
+    assert impact['hasCrossCollectionData'] == True
+    assert len(impact['affectedCollections']) == 2
+
+    # 4. 验证数据详情
+    for item in impact['affectedCollections']:
+        assert 'collection' in item
+        assert 'recordCount' in item
+        assert 'records' in item
+
+        if item['collection'] == 'inspection-case':
+            assert item['recordCount'] == 1
+            assert len(item['records']) == 1
+            assert item['records'][0]['displayName'] == '测试用例A'
+
+        if item['collection'] == 'inspection-plan':
+            assert item['recordCount'] == 1
+            assert len(item['records']) == 1
+            assert item['records'][0]['displayName'] == '测试计划B'
+
+    # 5. 清理
+    delete_version(version_id)
+    print('[OK] 影响报告测试通过')
+
+
 if __name__ == '__main__':
     test_version_collections_table_exists()
     test_track_single_collection()
     test_track_cross_collection()
     test_track_collection_only_in_relation()
+    test_get_delete_impact()
     print('\n所有测试通过！')
