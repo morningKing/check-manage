@@ -109,6 +109,8 @@ def delete_version_route(version_id):
         result = delete_version(version_id, confirmed=confirmed)
 
         if confirmed:
+            if not result:  # result is False when version not found
+                return jsonify({'error': '版本不存在'}), 404
             # 已确认并执行删除
             return jsonify({
                 'success': True,
