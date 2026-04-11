@@ -44,6 +44,7 @@ def test_version_collections_table_exists():
         for i, (col_name, col_type, nullable) in enumerate(expected_columns):
             assert columns[i][0] == col_name, f'列名应为{col_name}'
             assert columns[i][1] == col_type, f'列类型应为{col_type}'
+            assert columns[i][2] == nullable, f'{col_name} nullable应为{nullable}'
 
     print('[OK] version_collections 表结构验证通过')
 
