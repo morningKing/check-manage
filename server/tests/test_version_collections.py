@@ -168,8 +168,71 @@ def test_track_cross_collection():
     print('[OK] 跨Collection追踪测试通过')
 
 
+def test_track_collection_only_in_relation():
+    """测试Collection只出现在relation中（无direct data）的追踪"""
+    from utils.version import create_version_snapshot, delete_version, track_version_collections
+    import psycopg2.extras
+
+    collection = 'inspection-case'
+    test_user = 'test_user_relation_only'
+
+    # 1. 创建版本
+    version_info = create_version_snapshot(
+        collection=collection,
+        name='Relation-only追踪测试',
+        description='测试只在relation中出现的Collection追踪',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_user,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    # 2. 添加数据：只有inspection-plan在dynamic_data中
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # inspection-plan 有直接数据
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('test-rel-plan-001', 'inspection-plan', psycopg2.extras.Json({'planName': '测试计划'}), version_id, 1)
+        )
+
+        # inspection-case 无直接数据，只在relation中作为源出现！
+        # 关系：inspection-case.case-001 -> inspection-plan.plan-001
+        cur.execute(
+            'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            ('inspection-case', 'case-rel-001', 'relatedPlan', 'inspection-plan', 'test-rel-plan-001', version_id)
+        )
+
+        conn.commit()
+
+    # 3. 追踪
+    track_version_collections(version_id, collection, version_id)
+
+    # 4. 验证：应追踪到2个Collection（inspection-case来自relation，inspection-plan来自direct+relation）
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT collection FROM version_collections WHERE version_id = %s ORDER BY collection',
+            (version_id,)
+        )
+        tracked = [row[0] for row in cur.fetchall()]
+
+        assert len(tracked) == 2, f'应追踪到2个Collection，实际{len(tracked)}（Bug：inspection-case被遗漏）'
+        assert 'inspection-case' in tracked, 'inspection-case应被追踪（即使无direct data，出现在relation中）'
+        assert 'inspection-plan' in tracked, 'inspection-plan应被追踪'
+
+    # 5. 清理
+    delete_version(version_id)
+    print('[OK] Relation-only Collection追踪测试通过')
+
+
 if __name__ == '__main__':
     test_version_collections_table_exists()
     test_track_single_collection()
     test_track_cross_collection()
+    test_track_collection_only_in_relation()
     print('\n所有测试通过！')

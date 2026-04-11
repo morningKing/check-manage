@@ -312,15 +312,17 @@ def track_version_collections(version_id, collection, branch_id):
         )
         direct_collections = [row[0] for row in cur.fetchall()]
 
-        # 2. 扫描关联数据（data_relations）
+        # 2. 扫描关联数据（data_relations）- 源和目标Collection
         cur.execute(
+            'SELECT DISTINCT collection FROM data_relations WHERE branch_id = %s '
+            'UNION '
             'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
-            (branch_id,)
+            (branch_id, branch_id)
         )
-        related_collections = [row[0] for row in cur.fetchall()]
+        relation_collections = [row[0] for row in cur.fetchall()]
 
         # 3. 合并去重
-        all_collections = set(direct_collections + related_collections)
+        all_collections = set(direct_collections + relation_collections)
 
         # 如果没有任何数据，至少记录主Collection
         if not all_collections:
