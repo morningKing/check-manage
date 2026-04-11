@@ -271,6 +271,9 @@ def create_version_snapshot(collection, name, description, version_type, parent_
                 rel_values,
             )
 
+        # 7. 追踪版本涉及的所有 Collection（用于跨 Collection 分支切换）
+        track_version_collections(version_id, collection, actual_branch_id)
+
     return {
         'id': version_id,
         'collection': collection,
