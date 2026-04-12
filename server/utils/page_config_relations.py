@@ -8,6 +8,26 @@ from db import get_db
 import psycopg2.extras
 
 
+def extract_target_collection(field: dict) -> str | None:
+    """根据字段类型提取目标集合ID"""
+
+    control_type = field.get('controlType')
+
+    if control_type == 'relation':
+        config = field.get('relationConfig', {})
+        return config.get('targetCollection')
+
+    elif control_type == 'reference':
+        config = field.get('referenceConfig', {})
+        return config.get('targetCollection')
+
+    elif control_type == 'quoteSelect':
+        config = field.get('quoteConfig', {})
+        return config.get('targetCollection')
+
+    return None
+
+
 def get_page_config_relations(page_id: str, max_depth: int = 3):
     """
     获取页面配置的关联关系
@@ -52,5 +72,22 @@ def get_page_config_relations(page_id: str, max_depth: int = 3):
                 'name': page_config[1],
                 'fields': len(page_config[2]) if page_config[2] else 0
             })
+
+            # 扫描字段关联
+            fields = page_config[2] or []
+            for field in fields:
+                target = extract_target_collection(field)
+
+                if target:
+                    edges.append({
+                        'source': current_id,
+                        'target': target,
+                        'type': field['controlType'],
+                        'field': field['fieldName'],
+                        'label': field.get('label', field['fieldName'])
+                    })
+
+                    if target not in visited:
+                        queue.append((target, depth + 1))
 
     return {'nodes': nodes, 'edges': edges}
