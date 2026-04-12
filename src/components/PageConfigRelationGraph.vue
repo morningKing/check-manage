@@ -90,15 +90,21 @@ async function loadRelations() {
       }
     }))
 
-    edges.value = result.edges.map(e => ({
-      id: `${e.source}-${e.target}`,
-      source: e.source,
-      target: e.target,
-      label: e.label,
-      type: 'smoothstep',
-      style: getEdgeStyle(e.type),
-      animated: e.type === 'relation'
-    }))
+    edges.value = result.edges.map(e => {
+      // 将 collection 名称转换为 page_id（后端可能返回collection名称）
+      const sourceId = e.source.startsWith('page-') ? e.source : `page-${e.source}`
+      const targetId = e.target.startsWith('page-') ? e.target : `page-${e.target}`
+
+      return {
+        id: `${sourceId}-${targetId}`,
+        source: sourceId,
+        target: targetId,
+        label: e.label,
+        type: 'smoothstep',
+        style: getEdgeStyle(e.type),
+        animated: e.type === 'relation'
+      }
+    })
 
   } catch (error: any) {
     const msg = error?.response?.data?.error || '加载关系图谱失败'
