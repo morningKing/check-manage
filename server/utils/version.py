@@ -280,7 +280,14 @@ def create_version_snapshot(collection, name, description, version_type, parent_
             )
 
         # 7. Track version涉及的所有 Collection（用于跨 Collection 分支切换）
-        track_version_collections(version_id, collection, actual_branch_id, conn)
+        # 传递实际的 Collection 列表，避免数据库扫描
+        track_version_collections(
+            version_id,
+            collection,
+            actual_branch_id,
+            conn,
+            list(all_collections_data.keys())  # 显式传递实际参与的 Collection
+        )
 
     return {
         'id': version_id,
@@ -299,7 +306,7 @@ def create_version_snapshot(collection, name, description, version_type, parent_
     }
 
 
-def track_version_collections(version_id, collection, branch_id, conn=None):
+def track_version_collections(version_id, collection, branch_id, conn=None, affected_collections=None):
     """
     追踪版本涉及的所有 Collection
 
@@ -313,20 +320,22 @@ def track_version_collections(version_id, collection, branch_id, conn=None):
         分支 ID
     conn : connection, optional
         已有的数据库连接，如果提供则复用（用于事务内调用）
+    affected_collections : list, optional
+        实际参与版本的 Collection 列表。如果提供，则直接使用；否则扫描数据库（向后兼容）
     """
     now = datetime.now(timezone.utc)
 
     # 复用现有连接或创建新连接
     if conn:
         cur = conn.cursor()
-        _track_collections_internal(cur, version_id, collection, branch_id, now)
+        _track_collections_internal(cur, version_id, collection, branch_id, now, affected_collections)
     else:
         with get_db() as conn:
             cur = conn.cursor()
-            _track_collections_internal(cur, version_id, collection, branch_id, now)
+            _track_collections_internal(cur, version_id, collection, branch_id, now, affected_collections)
 
 
-def _track_collections_internal(cur, version_id, collection, branch_id, now):
+def _track_collections_internal(cur, version_id, collection, branch_id, now, affected_collections=None):
     """
     内部追踪逻辑（共享游标）
 
@@ -342,29 +351,39 @@ def _track_collections_internal(cur, version_id, collection, branch_id, now):
         分支 ID
     now : datetime
         当前时间戳
+    affected_collections : list, optional
+        实际参与版本的 Collection 列表。如果提供，则直接使用；否则扫描数据库（向后兼容）
     """
-    # 1. 扫描直接数据（dynamic_data）
-    cur.execute(
-        'SELECT DISTINCT collection FROM dynamic_data WHERE branch_id = %s',
-        (branch_id,)
-    )
-    direct_collections = [row[0] for row in cur.fetchall()]
+    # 如果提供了显式列表，直接使用（避免数据库扫描）
+    if affected_collections is not None:
+        all_collections = set(affected_collections)
+        # 如果列表为空，至少记录主 Collection
+        if not all_collections:
+            all_collections = {collection}
+    else:
+        # 向后兼容：扫描数据库获取所有涉及的 Collection
+        # 1. 扫描直接数据（dynamic_data）
+        cur.execute(
+            'SELECT DISTINCT collection FROM dynamic_data WHERE branch_id = %s',
+            (branch_id,)
+        )
+        direct_collections = [row[0] for row in cur.fetchall()]
 
-    # 2. 扫描关联数据（data_relations）- 源和目标Collection
-    cur.execute(
-        'SELECT DISTINCT collection FROM data_relations WHERE branch_id = %s '
-        'UNION '
-        'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
-        (branch_id, branch_id)
-    )
-    relation_collections = [row[0] for row in cur.fetchall()]
+        # 2. 扫描关联数据（data_relations）- 源和目标Collection
+        cur.execute(
+            'SELECT DISTINCT collection FROM data_relations WHERE branch_id = %s '
+            'UNION '
+            'SELECT DISTINCT related_collection FROM data_relations WHERE branch_id = %s',
+            (branch_id, branch_id)
+        )
+        relation_collections = [row[0] for row in cur.fetchall()]
 
-    # 3. 合并去重
-    all_collections = set(direct_collections + relation_collections)
+        # 3. 合并去重
+        all_collections = set(direct_collections + relation_collections)
 
-    # 如果没有任何数据，至少记录主Collection
-    if not all_collections:
-        all_collections = {collection}
+        # 如果没有任何数据，至少记录主Collection
+        if not all_collections:
+            all_collections = {collection}
 
     # 4. 插入追踪数据
     for coll in all_collections:
