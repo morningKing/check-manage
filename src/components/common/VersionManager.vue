@@ -496,7 +496,7 @@ async function confirmSwitch() {
     if (result.initialized) {
       msg += '（分支数据已从快照初始化）'
     }
-    if (result.affectedCollections?.length > 1) {
+    if (result.affectedCollections && result.affectedCollections.length > 1) {
       msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
     }
 
@@ -528,7 +528,7 @@ async function handleSwitchToMain() {
 
       // Enhanced success message with affected collections
       let msg = `已切换回主分支，加载 ${result.recordsInBranch} 条记录`
-      if (result.affectedCollections?.length > 1) {
+      if (result.affectedCollections && result.affectedCollections.length > 1) {
         msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
       }
 
