@@ -1451,43 +1451,7 @@ def switch_to_version(version_id, switched_by, user_id=None):
         if version_type != 'branch':
             raise ValueError('只能切换到分支类型版本，快照不支持切换')
 
-        # 2. 检查分支是否已有数据
-        cur.execute(
-            'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
-            (collection, version_id),
-        )
-        existing_count = cur.fetchone()[0]
-        initialized = False
-
-        # 3. 如果分支没有数据，从快照初始化
-        if existing_count == 0:
-            cur.execute(
-                'SELECT record_id, record_data FROM version_snapshots WHERE version_id = %s',
-                (version_id,),
-            )
-            target_records = cur.fetchall()
-
-            cur.execute(
-                'SELECT collection, record_id, field_name, related_collection, related_id '
-                'FROM version_relations WHERE version_id = %s',
-                (version_id,),
-            )
-            target_relations = cur.fetchall()
-
-            # 插入数据（带 branch_id）
-            for rid, data in target_records:
-                flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
-                cur.execute(
-                    'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
-                    (rid, collection, psycopg2.extras.Json(flat_data), version_id),
-                )
-
-            _replace_collection_relations(cur, collection, version_id, target_relations)
-
-            existing_count = len(target_records)
-            initialized = True
-
-        # 4. 获取版本涉及的所有 Collection
+        # 2. 获取版本涉及的所有 Collection（提前获取，用于后续检查和初始化）
         cur.execute(
             'SELECT collection FROM version_collections WHERE version_id = %s',
             (version_id,)
@@ -1497,6 +1461,70 @@ def switch_to_version(version_id, switched_by, user_id=None):
         # Fallback: if no tracking data, use metadata collection
         if not affected_collections:
             affected_collections = [collection]
+
+        # 3. 检查每个 Collection 是否已有数据
+        cur.execute(
+            'SELECT collection, COUNT(*) FROM dynamic_data WHERE branch_id = %s GROUP BY collection',
+            (version_id,),
+        )
+        existing_counts = {row[0]: row[1] for row in cur.fetchall()}
+        initialized = False
+
+        # 4. 如果有 Collection 缺失数据，从快照初始化
+        needs_init = any(coll not in existing_counts or existing_counts[coll] == 0
+                        for coll in affected_collections)
+
+        if needs_init:
+            # 清空目标分支的所有 Collection 数据（避免重复）
+            for coll in affected_collections:
+                cur.execute(
+                    'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                    (coll, version_id)
+                )
+
+            # 读取所有 Collection 的快照数据（使用 snapshot 的 collection 字段）
+            cur.execute(
+                'SELECT collection, record_id, record_data, created_at FROM version_snapshots WHERE version_id = %s',
+                (version_id,),
+            )
+            target_records = cur.fetchall()
+
+            # 读取所有关联数据
+            cur.execute(
+                'SELECT collection, record_id, field_name, related_collection, related_id '
+                'FROM version_relations WHERE version_id = %s',
+                (version_id,),
+            )
+            target_relations = cur.fetchall()
+
+            # 按 Collection 分组插入数据
+            records_by_collection = {}
+            for coll, rid, data, created_at in target_records:
+                if coll not in records_by_collection:
+                    records_by_collection[coll] = []
+                records_by_collection[coll].append((rid, data, created_at))
+
+            # 插入每个 Collection 的数据（使用快照的 collection 值）
+            total_inserted = 0
+            for coll, records in records_by_collection.items():
+                for rid, data, created_at in records:
+                    flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
+                    cur.execute(
+                        'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at, version) '
+                        'VALUES (%s, %s, %s, %s, %s, %s)',
+                        (rid, coll, psycopg2.extras.Json(flat_data), version_id, created_at, 1),
+                    )
+                    total_inserted += 1
+
+            # 恢复所有 Collection 的关联数据
+            for coll in affected_collections:
+                _replace_collection_relations(cur, coll, version_id, target_relations)
+
+            existing_count = total_inserted
+            initialized = True
+        else:
+            # 所有 Collection 都有数据，计算总数
+            existing_count = sum(existing_counts.get(coll, 0) for coll in affected_collections)
 
         # 5. 批量更新所有 Collection 的用户当前分支（原子操作）
         if user_id:
