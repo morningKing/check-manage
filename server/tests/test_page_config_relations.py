@@ -177,3 +177,61 @@ def test_two_pages_with_quote_select():
         cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
             ('page-test-quote-a', 'page-test-quote-b'))
         conn.commit()
+
+
+def test_circular_reference():
+    """测试循环引用 A → B → A"""
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # A relates to B
+        cur.execute(
+            'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
+            ('page-test-circ-a', '页面A', psycopg2.extras.Json([
+                {
+                    'fieldName': 'relatedB',
+                    'label': '关联B',
+                    'controlType': 'relation',
+                    'relationConfig': {
+                        'targetCollection': 'page-test-circ-b',
+                        'displayField': 'name',
+                        'targetField': 'relatedA'
+                    }
+                }
+            ]))
+        )
+
+        # B relates to A (circular)
+        cur.execute(
+            'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
+            ('page-test-circ-b', '页面B', psycopg2.extras.Json([
+                {
+                    'fieldName': 'relatedA',
+                    'label': '关联A',
+                    'controlType': 'relation',
+                    'relationConfig': {
+                        'targetCollection': 'page-test-circ-a',
+                        'displayField': 'name',
+                        'targetField': 'relatedB'
+                    }
+                }
+            ]))
+        )
+        conn.commit()
+
+    # Test
+    result = get_page_config_relations('page-test-circ-a')
+
+    # Should not infinite loop
+    # Should have exactly 2 nodes (not duplicated)
+    assert len(result['nodes']) == 2
+
+    # Should have 2 edges (A→B and B→A)
+    assert len(result['edges']) == 2
+
+    # Cleanup
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
+            ('page-test-circ-a', 'page-test-circ-b'))
+        conn.commit()
