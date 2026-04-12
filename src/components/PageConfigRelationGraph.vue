@@ -44,6 +44,7 @@ import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { getPageConfigRelations } from '@/api/page'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 
@@ -76,11 +77,32 @@ async function loadRelations() {
   loading.value = true
 
   try {
-    // TODO: Call API in Task 7
-    nodes.value = []
-    edges.value = []
-  } catch (error) {
-    ElMessage.error('加载关系图谱失败')
+    const result = await getPageConfigRelations(props.pageId, 3)
+
+    nodes.value = result.nodes.map(n => ({
+      id: n.id,
+      type: 'custom',
+      position: { x: 0, y: 0 },
+      data: {
+        name: n.name,
+        fields: n.fields,
+        id: n.id
+      }
+    }))
+
+    edges.value = result.edges.map(e => ({
+      id: `${e.source}-${e.target}`,
+      source: e.source,
+      target: e.target,
+      label: e.label,
+      type: 'smoothstep',
+      style: getEdgeStyle(e.type),
+      animated: e.type === 'relation'
+    }))
+
+  } catch (error: any) {
+    const msg = error?.response?.data?.error || '加载关系图谱失败'
+    ElMessage.error(msg)
     nodes.value = []
     edges.value = []
   } finally {
