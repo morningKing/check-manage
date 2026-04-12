@@ -75,51 +75,31 @@ def test_switch_to_version_cross_collection():
     )
     version_id = version_info['id']
 
-    # 4. 在版本分支中添加额外数据
+    # 4. 删除分支数据(模拟未初始化状态)
+    # 这会测试switch_to_version的初始化逻辑
     with get_db() as conn:
         cur = conn.cursor()
-
-        cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
-            'VALUES (%s, %s, %s, %s, %s)',
-            ('test-switch-case-001', collection_a,
-             psycopg2.extras.Json({'caseName': '测试用例'}), version_id, 1)
-        )
-
-        cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
-            'VALUES (%s, %s, %s, %s, %s)',
-            ('test-switch-plan-001', collection_b,
-             psycopg2.extras.Json({'planName': '测试计划'}), version_id, 1)
-        )
-
-        cur.execute(
-            'INSERT INTO data_relations '
-            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
-            'VALUES (%s, %s, %s, %s, %s, %s)',
-            (collection_a, 'test-switch-case-001', 'relatedPlan',
-             collection_b, 'test-switch-plan-001', version_id)
-        )
-
+        cur.execute('DELETE FROM dynamic_data WHERE branch_id = %s', (version_id,))
+        cur.execute('DELETE FROM data_relations WHERE branch_id = %s', (version_id,))
         conn.commit()
 
-    # 5. 切换到版本
+    # 5. 切换到版本(应从快照初始化分支数据)
     result = switch_to_version(version_id, test_username, test_user_id)
 
-    # 4. 验证返回结果
+    # 6. 验证返回结果
     assert 'affectedCollections' in result
     assert len(result['affectedCollections']) >= 2
     assert collection_a in result['affectedCollections']
     assert collection_b in result['affectedCollections']
 
-    # 5. 验证user_current_branch更新(关键验证)
+    # 7. 验证user_current_branch更新
     branch_a = get_user_current_branch(test_user_id, collection_a)
     branch_b = get_user_current_branch(test_user_id, collection_b)
 
     assert branch_a == version_id, f'{collection_a} 应切换到 {version_id}'
-    assert branch_b == version_id, f'{collection_b} 应切换到 {version_id}(关键验证)'
+    assert branch_b == version_id, f'{collection_b} 应切换到 {version_id}'
 
-    # 6. 验证两个Collection都有分支数据(关键验证)
+    # 8. 验证switch_to_version从快照初始化了分支数据(关键验证:bug修复)
     with get_db() as conn:
         cur = conn.cursor()
 
@@ -127,13 +107,13 @@ def test_switch_to_version_cross_collection():
         cur.execute('SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
             (collection_a, version_id))
         count_a = cur.fetchone()[0]
-        assert count_a > 0, 'Collection A应该有分支数据'
+        assert count_a > 0, 'Collection A应该有从快照初始化的分支数据'
 
-        # 检查Collection B分支数据(关键验证)
+        # 检查Collection B分支数据(关键验证:跨Collection初始化)
         cur.execute('SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
             (collection_b, version_id))
         count_b = cur.fetchone()[0]
-        assert count_b > 0, 'Collection B应该有分支数据(这是bug修复的验证)'
+        assert count_b > 0, 'Collection B应该有从快照初始化的分支数据(跨Collection bug修复验证)'
 
     # 7. 清理
     with get_db() as conn:
