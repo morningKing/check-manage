@@ -399,6 +399,14 @@
                   </el-form-item>
                 </el-form>
               </el-tab-pane>
+
+              <!-- Tab 5: 关系图谱 -->
+              <el-tab-pane label="关系图谱" name="relations">
+                <PageConfigRelationGraph
+                  :page-id="currentPageId!"
+                  @navigate="handleNavigateToPage"
+                />
+              </el-tab-pane>
             </el-tabs>
           </div>
 
@@ -481,6 +489,7 @@ import { Plus, Search, Right } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import FieldConfigEditor from './FieldConfigEditor.vue'
+import PageConfigRelationGraph from '@/components/PageConfigRelationGraph.vue'
 import type { PageConfig, PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
 import type { ExportScript } from '@/types'
 import type { ValidationScript } from '@/types'
@@ -901,6 +910,19 @@ async function handleDelete(): Promise<void> {
     }
   } catch (error) {
     ElMessage.error('删除失败')
+  }
+}
+
+/**
+ * 处理导航到目标页面配置
+ */
+function handleNavigateToPage(targetPageId: string): void {
+  const targetConfig = pageConfigStore.getPageConfigById(targetPageId)
+
+  if (targetConfig) {
+    handleSelect(targetConfig)
+  } else {
+    ElMessage.warning('目标页面配置不存在')
   }
 }
 
