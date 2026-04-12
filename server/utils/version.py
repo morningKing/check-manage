@@ -1489,6 +1489,15 @@ def switch_to_version(version_id, switched_by, user_id=None):
             )
             target_records = cur.fetchall()
 
+            # 验证所有 Collection 都有快照数据
+            snapshot_collections = {row[0] for row in target_records}
+            missing_snapshots = set(affected_collections) - snapshot_collections
+            if missing_snapshots:
+                raise ValueError(
+                    f'无法初始化版本：以下 Collection 缺少快照数据: {sorted(missing_snapshots)}。'
+                    f'该版本可能在多 Collection 支持完善前创建，快照数据不完整。'
+                )
+
             # 读取所有关联数据
             cur.execute(
                 'SELECT collection, record_id, field_name, related_collection, related_id '
