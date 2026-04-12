@@ -24,12 +24,12 @@ DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
     'dbname': os.getenv('DB_NAME', 'casemanage'),
     'user': os.getenv('DB_USER', 'postgres'),
-    'password': os.getenv('DB_PASSWORD', ''),
+    'password': os.getenv('DB_PASSWORD', 'jay123'),
     'port': _to_int(os.getenv('DB_PORT'), 5432),
 }
 
-FLASK_PORT = _to_int(os.getenv('FLASK_PORT'), 3001)
-FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), False)
+FLASK_PORT = _to_int(os.getenv('FLASK_PORT'), 3002)
+FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), True)
 
 JWT_SECRET = os.getenv('JWT_SECRET', 'dev-only-change-me')
 JWT_EXPIRY_HOURS = _to_int(os.getenv('JWT_EXPIRY_HOURS'), 24)

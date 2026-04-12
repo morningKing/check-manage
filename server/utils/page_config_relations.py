@@ -39,6 +39,8 @@ def get_page_config_relations(page_id: str, max_depth: int = 3):
     Returns:
         dict: {nodes: [...], edges: [...]}
     """
+    print(f"[DEBUG] get_page_config_relations called with page_id={page_id}, max_depth={max_depth}")
+
     visited = set()
     nodes = []
     edges = []
@@ -49,7 +51,10 @@ def get_page_config_relations(page_id: str, max_depth: int = 3):
     while queue:
         current_id, depth = queue.pop(0)
 
+        print(f"[DEBUG] Processing: current_id={current_id}, depth={depth}")
+
         if current_id in visited or depth > max_depth:
+            print(f"[DEBUG] Skipping (visited={current_id in visited}, depth>{max_depth})")
             continue
 
         visited.add(current_id)
@@ -65,7 +70,10 @@ def get_page_config_relations(page_id: str, max_depth: int = 3):
             page_config = cur.fetchone()
 
             if not page_config:
+                print(f"[DEBUG] Page config not found for {current_id}")
                 continue
+
+            print(f"[DEBUG] Found page config: {page_config[1]}")
 
             nodes.append({
                 'id': current_id,
@@ -76,18 +84,26 @@ def get_page_config_relations(page_id: str, max_depth: int = 3):
             # 扫描字段关联
             fields = page_config[2] or []
             for field in fields:
-                target = extract_target_collection(field)
+                target_collection = extract_target_collection(field)
 
-                if target:
+                if target_collection:
+                    print(f"[DEBUG] Found relation: field={field['fieldName']}, target_collection={target_collection}")
+
+                    # 将 collection 名称转换为 page_id
+                    target_page_id = f'page-{target_collection}'
+                    print(f"[DEBUG] Converted to target_page_id={target_page_id}")
+
                     edges.append({
                         'source': current_id,
-                        'target': target,
+                        'target': target_page_id,
                         'type': field['controlType'],
                         'field': field['fieldName'],
                         'label': field.get('label', field['fieldName'])
                     })
 
-                    if target not in visited:
-                        queue.append((target, depth + 1))
+                    if target_page_id not in visited:
+                        queue.append((target_page_id, depth + 1))
+                        print(f"[DEBUG] Added to queue: {target_page_id}")
 
+    print(f"[DEBUG] Final result: {len(nodes)} nodes, {len(edges)} edges")
     return {'nodes': nodes, 'edges': edges}

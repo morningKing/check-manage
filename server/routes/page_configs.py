@@ -154,6 +154,12 @@ def delete_page_config(config_id):
 @login_required
 def get_relations(page_id):
     """获取页面配置的关联关系图谱"""
+    # 强制重新导入模块（解决缓存问题）
+    import importlib
+    import utils.page_config_relations
+    importlib.reload(utils.page_config_relations)
+    from utils.page_config_relations import get_page_config_relations as get_relations_func
+
     try:
         # 验证depth参数
         depth = request.args.get('depth', '3')
@@ -164,7 +170,7 @@ def get_relations(page_id):
         except ValueError:
             return jsonify({'error': 'depth参数必须是整数'}), 400
 
-        result = get_page_config_relations(page_id, max_depth=depth)
+        result = get_relations_func(page_id, max_depth=depth)
 
         if len(result['nodes']) == 0:
             return jsonify({'error': '页面配置不存在'}), 404

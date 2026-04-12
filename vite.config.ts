@@ -27,7 +27,7 @@ export default defineConfig({
     // API 代理配置，将 /api 请求转发到 Flask server
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://localhost:3002',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }
