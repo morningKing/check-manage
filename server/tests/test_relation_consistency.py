@@ -104,13 +104,12 @@ def test_switch_to_version_rebuilds_relations_on_initialize():
         mock_conn.__exit__ = lambda self, *args: None
         mock_get_db.return_value = mock_conn
 
-        mock_cur.fetchone.side_effect = [
-            ('project', 'Project Branch', 'active', 'branch'),
-            (0,),
-        ]
+        mock_cur.fetchone.return_value = ('project', 'Project Branch', 'active', 'branch')
         mock_cur.fetchall.side_effect = [
-            [('p-1', {'name': 'Project 1'})],
-            [('project', 'p-1', 'tags', 'tag', 't-1')],
+            [],  # affected_collections (version_collections table is empty)
+            [],  # existing_counts (no data in branch yet)
+            [('project', 'p-1', {'name': 'Project 1'}, None)],  # target_records from version_snapshots
+            [('project', 'p-1', 'tags', 'tag', 't-1')],  # target_relations from version_relations
         ]
 
         result = switch_to_version('ver-1', switched_by='admin')
