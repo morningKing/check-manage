@@ -50,3 +50,44 @@ export function updatePageConfig(id: string, config: Partial<PageConfig>) {
 export function deletePageConfig(id: string) {
   return del(`/pageConfigs/${id}`)
 }
+
+/**
+ * 关系图谱节点
+ */
+export interface RelationNode {
+  id: string
+  name: string
+  fields: number
+}
+
+/**
+ * 关系图谱边
+ */
+export interface RelationEdge {
+  source: string
+  target: string
+  type: string
+  field: string
+  label: string
+}
+
+/**
+ * 关系图谱数据
+ */
+export interface RelationGraph {
+  nodes: RelationNode[]
+  edges: RelationEdge[]
+}
+
+/**
+ * 获取页面配置的关系图谱
+ *
+ * @param pageId - 页面ID
+ * @param depth - 关系深度（可选）
+ */
+export function getPageConfigRelations(pageId: string, depth?: number) {
+  const params: Record<string, any> = {}
+  if (depth) params.depth = depth
+
+  return get<RelationGraph>(`/pageConfigs/${pageId}/relations`, params)
+}

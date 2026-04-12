@@ -3,6 +3,7 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, admin_required
 from utils.operation_log import log_operation
+from utils.page_config_relations import get_page_config_relations
 import psycopg2.extras
 
 page_configs_bp = Blueprint('page_configs', __name__)
@@ -147,3 +148,34 @@ def delete_page_config(config_id):
     log_operation('delete', 'page_config', config_id, config_name,
                   f'删除页面配置「{config_name}」')
     return jsonify({})
+
+
+@page_configs_bp.route('/pageConfigs/<page_id>/relations', methods=['GET'])
+@login_required
+def get_relations(page_id):
+    """获取页面配置的关联关系图谱"""
+    try:
+        # 验证depth参数
+        depth = request.args.get('depth', '3')
+        try:
+            depth = int(depth)
+            if depth < 1 or depth > 10:
+                return jsonify({'error': 'depth参数必须在1-10之间'}), 400
+        except ValueError:
+            return jsonify({'error': 'depth参数必须是整数'}), 400
+
+        result = get_page_config_relations(page_id, max_depth=depth)
+
+        if len(result['nodes']) == 0:
+            return jsonify({'error': '页面配置不存在'}), 404
+
+        if len(result['nodes']) > 50:
+            return jsonify({
+                'error': '关联节点过多（>50），建议减少递归深度',
+                'hint': '请使用depth参数限制层级'
+            }), 400
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
