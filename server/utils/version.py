@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from db import get_db
 import psycopg2.extras
 from utils.errors import MergeError, VERSION_NOT_FOUND, VERSION_ALREADY_MERGED
+from utils.version_scan import scan_all_related_data
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -214,54 +215,61 @@ def create_version_snapshot(collection, name, description, version_type, parent_
     with get_db() as conn:
         cur = conn.cursor()
 
-        # 1. 查询当前 dynamic_data（按分支过滤）
-        cur.execute(
-            'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
-            (collection, actual_branch_id),
-        )
-        data_rows = cur.fetchall()
+        # 1. Recursively scan all related collections' data
+        try:
+            all_collections_data = scan_all_related_data(
+                start_collection=collection,
+                branch_id=actual_branch_id,
+                max_records=10000
+            )
+        except ValueError as e:
+            conn.rollback()
+            raise ValueError(f'Failed to create version: {str(e)}')
 
-        # 2. 查询当前 data_relations（按分支过滤）
-        cur.execute(
-            'SELECT collection, record_id, field_name, related_collection, related_id '
-            'FROM data_relations WHERE collection = %s AND branch_id = %s',
-            (collection, actual_branch_id),
-        )
-        rel_rows = cur.fetchall()
+        # 2. Query relations from ALL collections
+        all_relations = []
+        for coll in all_collections_data.keys():
+            cur.execute(
+                'SELECT collection, record_id, field_name, related_collection, related_id '
+                'FROM data_relations WHERE collection = %s AND branch_id = %s',
+                (coll, actual_branch_id),
+            )
+            all_relations.extend(cur.fetchall())
 
-        # 3. 计算哈希
-        records = [{'id': r[0], 'data': r[1], 'created_at': r[2]} for r in data_rows]
-        relations = [list(r) for r in rel_rows]
-        data_hash = _compute_data_hash(records, relations)
+        # 3. Calculate hash and counts
+        records_count = sum(len(records) for records in all_collections_data.values())
+        relations_count = len(all_relations)
+        data_hash = _compute_data_hash(all_collections_data, all_relations)
 
-        # 4. 插入版本元数据
+        # 4. Insert version metadata
         cur.execute(
             'INSERT INTO collection_versions '
             '(id, collection, name, description, version_type, parent_version, status, '
             'data_hash, records_count, relations_count, created_by, created_at) '
             'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
             (version_id, collection, name, description, version_type, parent_version,
-             'active', data_hash, len(data_rows), len(rel_rows), created_by, now),
+             'active', data_hash, records_count, relations_count, created_by, now),
         )
 
-        # 5. 批量插入 version_snapshots
-        if data_rows:
-            snapshot_values = [
-                (version_id, row[0], psycopg2.extras.Json(row[1]), row[2])
-                for row in data_rows
-            ]
-            psycopg2.extras.execute_values(
-                cur,
-                'INSERT INTO version_snapshots (version_id, record_id, record_data, created_at) '
-                'VALUES %s',
-                snapshot_values,
-            )
+        # 5. Insert all collections' data to version_snapshots
+        for coll, records in all_collections_data.items():
+            if records:
+                snapshot_values = [
+                    (version_id, coll, record['id'], psycopg2.extras.Json(record['data']), record['created_at'])
+                    for record in records
+                ]
+                psycopg2.extras.execute_values(
+                    cur,
+                    'INSERT INTO version_snapshots (version_id, collection, record_id, record_data, created_at) '
+                    'VALUES %s',
+                    snapshot_values,
+                )
 
-        # 6. 批量插入 version_relations
-        if rel_rows:
+        # 6. Insert all relations to version_relations
+        if all_relations:
             rel_values = [
                 (version_id, r[0], r[1], r[2], r[3], r[4])
-                for r in rel_rows
+                for r in all_relations
             ]
             psycopg2.extras.execute_values(
                 cur,
@@ -271,7 +279,7 @@ def create_version_snapshot(collection, name, description, version_type, parent_
                 rel_values,
             )
 
-        # 7. 追踪版本涉及的所有 Collection（用于跨 Collection 分支切换）
+        # 7. Track version涉及的所有 Collection（用于跨 Collection 分支切换）
         track_version_collections(version_id, collection, actual_branch_id, conn)
 
     return {
@@ -283,10 +291,11 @@ def create_version_snapshot(collection, name, description, version_type, parent_
         'parentVersion': parent_version,
         'status': 'active',
         'dataHash': data_hash,
-        'recordsCount': len(data_rows),
-        'relationsCount': len(rel_rows),
+        'recordsCount': records_count,
+        'relationsCount': relations_count,
         'createdBy': created_by,
         'createdAt': now.isoformat(),
+        'affectedCollections': list(all_collections_data.keys()),
     }
 
 
