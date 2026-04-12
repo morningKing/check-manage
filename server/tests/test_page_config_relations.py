@@ -6,6 +6,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import psycopg2.extras
+import pytest
+from unittest.mock import patch
 from utils.page_config_relations import get_page_config_relations
 from db import get_db
 
@@ -235,3 +237,79 @@ def test_circular_reference():
         cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
             ('page-test-circ-a', 'page-test-circ-b'))
         conn.commit()
+
+
+@pytest.fixture
+def relations_route_setup(mock_conn, mock_cursor):
+    """Setup for testing actual relations route"""
+    from contextlib import contextmanager
+    from auth import create_token
+
+    @contextmanager
+    def fake_get_db():
+        yield mock_conn
+
+    patches = [
+        patch('db.get_db', fake_get_db),
+        patch('routes.page_configs.get_db', fake_get_db),
+        patch('utils.page_config_relations.get_db', fake_get_db),
+    ]
+
+    for p in patches:
+        p.start()
+
+    from app import app
+    app.config['TESTING'] = True
+
+    # Create admin token for authentication
+    admin_token = create_token({'id': 'u1', 'username': 'admin', 'role': 'admin'})
+
+    yield (
+        app.test_client(),
+        mock_cursor,
+        {'Authorization': f'Bearer {admin_token}'}
+    )
+
+    for p in patches:
+        p.stop()
+
+
+def test_relations_route_parameter_validation(relations_route_setup):
+    """测试relations API路由参数验证（测试实际路由）"""
+    client, mock_cursor, headers = relations_route_setup
+
+    # Mock empty result for non-existent page
+    mock_cursor.fetchall.return_value = []
+
+    # Test 1: Invalid depth string (returns 400)
+    response = client.get('/pageConfigs/page-test-nonexistent/relations?depth=abc', headers=headers)
+    assert response.status_code == 400
+    data = response.get_json()
+    assert 'depth参数必须是整数' in data['error']
+
+    # Test 2: Out-of-bounds depth (> 10)
+    response = client.get('/pageConfigs/page-test-nonexistent/relations?depth=20', headers=headers)
+    assert response.status_code == 400
+    data = response.get_json()
+    assert 'depth参数必须在1-10之间' in data['error']
+
+    # Test 3: Zero depth (out of bounds)
+    response = client.get('/pageConfigs/page-test-nonexistent/relations?depth=0', headers=headers)
+    assert response.status_code == 400
+    data = response.get_json()
+    assert 'depth参数必须在1-10之间' in data['error']
+
+    # Test 4: Negative depth (out of bounds)
+    response = client.get('/pageConfigs/page-test-nonexistent/relations?depth=-5', headers=headers)
+    assert response.status_code == 400
+    data = response.get_json()
+    assert 'depth参数必须在1-10之间' in data['error']
+
+
+def test_relations_route_requires_authentication(relations_route_setup):
+    """测试relations API路由需要认证"""
+    client, mock_cursor, headers = relations_route_setup
+
+    # Test without authentication headers - should return 401
+    response = client.get('/pageConfigs/page-test/relations?depth=3')
+    assert response.status_code == 401
