@@ -6,7 +6,7 @@
  * - 只读模式，不可编辑
  * - 支持列筛选、列宽拖拽、冻结窗格
  * - 双击单元格触发导航事件
- * - 支持跨路由状态缓存（筛选、样式等）
+ * - 支持跨路由及刷新后的状态缓存（筛选、样式等，存储在 sessionStorage）
  */
 <template>
   <div class="excel-view">
@@ -34,21 +34,81 @@ import sheetsCoreZhCN from '@univerjs/preset-sheets-core/lib/locales/zh-CN'
 // @ts-ignore - locale files exist at runtime
 import sheetsFilterZhCN from '@univerjs/preset-sheets-filter/lib/locales/zh-CN'
 
-// ==================== 全局快照缓存 ====================
+// ==================== sessionStorage 快照缓存 ====================
+
+const CACHE_PREFIX = 'check-manage:excel-snapshot:'
+const CACHE_INDEX_KEY = 'check-manage:excel-snapshot-index'
+const MAX_CACHE_ENTRIES = 20
 
 interface CacheEntry {
   snapshot: any
   dataHash: string
 }
 
-/** 按 collection 缓存 Excel 快照 */
-const excelSnapshotCache = new Map<string, CacheEntry>()
-
 /** 生成数据 hash（简单基于记录数和第一条数据） */
 function generateDataHash(data: DynamicRecord[]): string {
   if (data.length === 0) return 'empty'
   const first = data[0]
   return `${data.length}-${first.id || 'no-id'}`
+}
+
+/** 读取 LRU 索引（最近使用的 collectionId 列表） */
+function readCacheIndex(): string[] {
+  try {
+    const raw = sessionStorage.getItem(CACHE_INDEX_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+/** 写入 LRU 索引 */
+function writeCacheIndex(index: string[]) {
+  sessionStorage.setItem(CACHE_INDEX_KEY, JSON.stringify(index))
+}
+
+/** 从 sessionStorage 读取缓存 */
+function readSnapshotCache(collectionId: string): CacheEntry | null {
+  try {
+    const raw = sessionStorage.getItem(CACHE_PREFIX + collectionId)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+/** 写入缓存并维护 LRU */
+function writeSnapshotCache(collectionId: string, entry: CacheEntry) {
+  try {
+    const json = JSON.stringify(entry)
+    sessionStorage.setItem(CACHE_PREFIX + collectionId, json)
+
+    // 更新 LRU 索引：将当前 id 提到最前
+    const index = readCacheIndex().filter(id => id !== collectionId)
+    index.unshift(collectionId)
+
+    // 淘汰超出上限的旧条目
+    while (index.length > MAX_CACHE_ENTRIES) {
+      const evicted = index.pop()!
+      sessionStorage.removeItem(CACHE_PREFIX + evicted)
+    }
+
+    writeCacheIndex(index)
+  } catch {
+    // sessionStorage 满了，清理最旧的一半条目后重试
+    const index = readCacheIndex()
+    const half = Math.ceil(index.length / 2)
+    for (let i = half; i < index.length; i++) {
+      sessionStorage.removeItem(CACHE_PREFIX + index[i])
+    }
+    const trimmed = index.slice(0, half)
+    writeCacheIndex(trimmed)
+    try {
+      sessionStorage.setItem(CACHE_PREFIX + collectionId, JSON.stringify(entry))
+    } catch {
+      // 仍然失败则放弃缓存
+    }
+  }
 }
 
 // ==================== Props & Emits ====================
@@ -90,11 +150,13 @@ onMounted(() => {
   if (univerContainerRef.value) {
     initUniver()
   }
+  window.addEventListener('beforeunload', saveSnapshotToCache)
 })
 
 onBeforeUnmount(() => {
   // 保存快照到缓存
   saveSnapshotToCache()
+  window.removeEventListener('beforeunload', saveSnapshotToCache)
   disposeUniver()
 })
 
@@ -161,7 +223,7 @@ function loadWorkbook() {
   currentDataHash = dataHash
 
   // 检查是否有缓存
-  const cached = props.collectionId ? excelSnapshotCache.get(props.collectionId) : null
+  const cached = props.collectionId ? readSnapshotCache(props.collectionId) : null
 
   if (cached && cached.dataHash === dataHash) {
     // 数据未变化，恢复快照（保留筛选、样式等）
@@ -184,7 +246,7 @@ function saveSnapshotToCache() {
 
   try {
     const snapshot = activeWorkbook.save()
-    excelSnapshotCache.set(props.collectionId, {
+    writeSnapshotCache(props.collectionId, {
       snapshot,
       dataHash: currentDataHash
     })
