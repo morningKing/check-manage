@@ -60,6 +60,8 @@ const loading = ref(false)
 const nodes = ref<any[]>([])
 const edges = ref<any[]>([])
 
+defineExpose({ nodes, edges, loading })
+
 function getEdgeStyle(type: string) {
   switch (type) {
     case 'relation':
