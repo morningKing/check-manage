@@ -528,7 +528,7 @@ def create_item(collection):
             tcur = tconn.cursor()
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
             fire_triggers('create', collection, rid, None, data,
-                          user.get('username', ''), tcur)
+                          user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
     body['_version'] = 1
@@ -684,7 +684,7 @@ def update_item(collection, item_id):
             tcur = tconn.cursor()
             user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
             fire_triggers('update', collection, item_id, old_data, data,
-                          user.get('username', ''), tcur)
+                          user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
     return jsonify(body)

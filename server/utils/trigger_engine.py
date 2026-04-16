@@ -7,9 +7,10 @@ in source collections, executing actions on target collections.
 import uuid
 import psycopg2.extras
 from datetime import datetime, timezone
+from utils.notifier import create_notification
 
 
-def fire_triggers(event, collection, record_id, old_data, new_data, operator, cur):
+def fire_triggers(event, collection, record_id, old_data, new_data, operator, cur, operator_user_id=None):
     """
     Find and execute matching trigger rules.
 
@@ -21,7 +22,12 @@ def fire_triggers(event, collection, record_id, old_data, new_data, operator, cu
         new_data: current record data (None for delete)
         operator: operator username string
         cur: database cursor (within existing transaction)
+        operator_user_id: optional user ID for sending failure notifications
+
+    Returns:
+        list of trigger errors (empty if all succeeded)
     """
+    trigger_errors = []
     try:
         cur.execute(
             'SELECT id, name, trigger_event, trigger_condition, target_collection, '
@@ -71,7 +77,27 @@ def fire_triggers(event, collection, record_id, old_data, new_data, operator, cu
                             new_data or {}, record_id, operator)
             _log_trigger(cur, rule_id, rule_name, collection, record_id, target_collection, None, 'success', None)
         except Exception as e:
-            _log_trigger(cur, rule_id, rule_name, collection, record_id, target_collection, None, 'error', str(e))
+            error_msg = str(e)
+            _log_trigger(cur, rule_id, rule_name, collection, record_id, target_collection, None, 'error', error_msg)
+            trigger_errors.append({
+                'rule_id': rule_id,
+                'rule_name': rule_name,
+                'error': error_msg
+            })
+
+    # Notify operator if any trigger failed
+    if trigger_errors and operator_user_id:
+        for err in trigger_errors:
+            create_notification(
+                operator_user_id,
+                'triggerError',
+                f'触发器执行失败：{err["rule_name"]}',
+                err['error'],
+                collection,
+                record_id
+            )
+
+    return trigger_errors
 
 
 def _execute_action(cur, action_type, action_config, target_collection, source_data, source_id, operator):

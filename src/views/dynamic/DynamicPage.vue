@@ -700,7 +700,7 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back } from '@element-plus/icons-vue'
-import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore } from '@/stores'
+import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useBranchRefreshStore } from '@/stores'
 import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager, ExcelView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
@@ -723,6 +723,7 @@ const pageConfigStore = usePageConfigStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const jumpStore = useJumpNavigationStore()
+const branchRefreshStore = useBranchRefreshStore()
 const isAdmin = computed(() => authStore.isAdmin)
 const isGuest = computed(() => authStore.isGuest)
 
@@ -2603,6 +2604,22 @@ watch(viewMode, (newMode, oldMode) => {
     excelReady.value = false
   }
 })
+
+/**
+ * 监听跨 Collection 分支切换刷新事件
+ * 当在其他页面切换分支涉及当前 Collection 时，自动刷新数据
+ */
+watch(
+  () => branchRefreshStore.refreshTimestamp,
+  () => {
+    if (branchRefreshStore.needsRefresh(collection.value)) {
+      // 刷新当前页面数据
+      loadPageData()
+      // 清除刷新标记
+      branchRefreshStore.clearRefresh()
+    }
+  }
+)
 
 // ==================== 生命周期 ====================
 

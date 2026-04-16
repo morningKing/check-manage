@@ -28,9 +28,22 @@ def test_switch_to_version_cross_collection():
         cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
         cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
                    (collection_a, collection_b, collection_a, collection_b))
-        cur.execute('DELETE FROM version_snapshots WHERE version_id LIKE %s', ('ver-test-switch%',))
-        cur.execute('DELETE FROM version_relations WHERE version_id LIKE %s', ('ver-test-switch%',))
-        cur.execute('DELETE FROM version_collections WHERE version_id LIKE %s', ('ver-test-switch%',))
+        # 先删除 collection 相关的 version_snapshots 和 version_relations，避免 FK 约束错误
+        cur.execute(
+            'DELETE FROM version_snapshots WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_relations WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_collections WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
         cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
         cur.execute('DELETE FROM collection_versions WHERE collection IN (%s, %s)', (collection_a, collection_b))
         conn.commit()
@@ -121,6 +134,8 @@ def test_switch_to_version_cross_collection():
         cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
         cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s)', (collection_a, collection_b))
         cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
         cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
         conn.commit()
@@ -143,9 +158,22 @@ def test_switch_fallback_without_tracking():
         cur.execute('DELETE FROM dynamic_data WHERE collection = %s', (collection,))
         cur.execute('DELETE FROM data_relations WHERE collection = %s OR related_collection = %s',
                    (collection, collection))
-        cur.execute('DELETE FROM version_snapshots WHERE version_id LIKE %s', ('ver-test-fallback%',))
-        cur.execute('DELETE FROM version_relations WHERE version_id LIKE %s', ('ver-test-fallback%',))
-        cur.execute('DELETE FROM version_collections WHERE version_id LIKE %s', ('ver-test-fallback%',))
+        # 先删除 collection 相关的 version_snapshots 和 version_relations
+        cur.execute(
+            'DELETE FROM version_snapshots WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection = %s)',
+            (collection,)
+        )
+        cur.execute(
+            'DELETE FROM version_relations WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection = %s)',
+            (collection,)
+        )
+        cur.execute(
+            'DELETE FROM version_collections WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection = %s)',
+            (collection,)
+        )
         cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
         cur.execute('DELETE FROM collection_versions WHERE collection = %s', (collection,))
         conn.commit()
@@ -195,6 +223,8 @@ def test_switch_fallback_without_tracking():
         cur = conn.cursor()
         cur.execute('DELETE FROM dynamic_data WHERE collection = %s', (collection,))
         cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
         cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
         conn.commit()

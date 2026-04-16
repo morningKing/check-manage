@@ -48,6 +48,11 @@ def test_two_pages_with_relation():
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 先清理可能存在的旧数据
+        cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
+            ('page-test-a', 'page-test-b'))
+        conn.commit()
+
         # Create page A with relation to page B
         cur.execute(
             'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
@@ -57,7 +62,7 @@ def test_two_pages_with_relation():
                     'label': '关联B',
                     'controlType': 'relation',
                     'relationConfig': {
-                        'targetCollection': 'page-test-b',
+                        'targetCollection': 'test-b',
                         'displayField': 'name',
                         'targetField': 'relatedA'
                     }
@@ -100,6 +105,11 @@ def test_two_pages_with_reference():
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 先清理可能存在的旧数据
+        cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
+            ('page-test-ref-a', 'page-test-ref-b'))
+        conn.commit()
+
         # Create page A with reference to page B
         cur.execute(
             'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
@@ -109,7 +119,7 @@ def test_two_pages_with_reference():
                     'label': '父页面B',
                     'controlType': 'reference',
                     'referenceConfig': {
-                        'targetCollection': 'page-test-ref-b',
+                        'targetCollection': 'test-ref-b',
                         'displayField': 'name',
                         'inheritFields': ['field1', 'field2']
                     }
@@ -144,6 +154,11 @@ def test_two_pages_with_quote_select():
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 先清理可能存在的旧数据
+        cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
+            ('page-test-quote-a', 'page-test-quote-b'))
+        conn.commit()
+
         cur.execute(
             'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
             ('page-test-quote-a', '页面A', psycopg2.extras.Json([
@@ -152,7 +167,7 @@ def test_two_pages_with_quote_select():
                     'label': '引用B',
                     'controlType': 'quoteSelect',
                     'quoteConfig': {
-                        'targetCollection': 'page-test-quote-b',
+                        'targetCollection': 'test-quote-b',
                         'displayField': 'name'
                     }
                 }
@@ -186,6 +201,11 @@ def test_circular_reference():
     with get_db() as conn:
         cur = conn.cursor()
 
+        # 先清理可能存在的旧数据
+        cur.execute('DELETE FROM page_configs WHERE id IN (%s, %s)',
+            ('page-test-circ-a', 'page-test-circ-b'))
+        conn.commit()
+
         # A relates to B
         cur.execute(
             'INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s)',
@@ -195,7 +215,7 @@ def test_circular_reference():
                     'label': '关联B',
                     'controlType': 'relation',
                     'relationConfig': {
-                        'targetCollection': 'page-test-circ-b',
+                        'targetCollection': 'test-circ-b',
                         'displayField': 'name',
                         'targetField': 'relatedA'
                     }
@@ -212,7 +232,7 @@ def test_circular_reference():
                     'label': '关联A',
                     'controlType': 'relation',
                     'relationConfig': {
-                        'targetCollection': 'page-test-circ-a',
+                        'targetCollection': 'test-circ-a',
                         'displayField': 'name',
                         'targetField': 'relatedB'
                     }

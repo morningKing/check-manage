@@ -226,6 +226,8 @@ CREATE TABLE IF NOT EXISTS collection_versions (
     merged_at       TIMESTAMPTZ,
     merged_by       VARCHAR(200),
     merged_into     VARCHAR(100),
+    initialized_at  TIMESTAMPTZ,
+                    -- 分支数据初始化时间，防止并发初始化
     is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
     FOREIGN KEY (parent_version) REFERENCES collection_versions(id) ON DELETE SET NULL
 );
@@ -741,6 +743,7 @@ def init_db():
                     merged_at       TIMESTAMPTZ,
                     merged_by       VARCHAR(200),
                     merged_into     VARCHAR(100),
+                    initialized_at  TIMESTAMPTZ,
                     is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
                     FOREIGN KEY (parent_version) REFERENCES collection_versions(id) ON DELETE SET NULL
                 );
@@ -866,6 +869,16 @@ def init_db():
             """)
             conn.commit()
             print("Created user_current_branch table.")
+
+        # Migration: add initialized_at column to collection_versions
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'collection_versions' AND column_name = 'initialized_at'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE collection_versions ADD COLUMN initialized_at TIMESTAMPTZ")
+            conn.commit()
+            print("Added initialized_at column to collection_versions table.")
 
         # Migration: add branch_id column to operation_logs
         cur.execute("""

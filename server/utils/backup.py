@@ -13,13 +13,9 @@ import uuid
 import time
 import zipfile
 import threading
-import logging
 from datetime import datetime, timezone, timedelta
-from db import get_db, get_pool
+from db import get_db
 import psycopg2.extras
-
-
-logger = logging.getLogger(__name__)
 
 # 备份文件存储目录
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
@@ -87,10 +83,6 @@ RESTORE_ORDER = [
 
 def _ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
-
-
-def _log_background_error(action):
-    logger.exception('Backup subsystem action failed: %s', action)
 
 
 def _serialize_value(val):
@@ -376,7 +368,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
                     (now, now),
                 )
         except Exception:
-            _log_background_error('update scheduled backup timestamp')
+            pass
 
     return {
         'id': backup_id,
@@ -490,31 +482,15 @@ def restore_backup(zip_path, tables=None):
 
     # 2. 在单个事务中还原
     conn = None
-    pool = None
+    main_success = False  # 跟踪主操作是否成功
     try:
-        pool = get_pool()
+        from db import pool
         conn = pool.getconn()
         cur = conn.cursor()
 
-        # 临时禁用外键约束：查询所有外键并逐个删除，还原完成后重建
-        # 这比 SET CONSTRAINTS ALL DEFERRED 更可靠（后者要求约束声明为 DEFERRABLE）
-        # 也不需要超级用户权限（session_replication_role 需要）
-        cur.execute("""
-            SELECT tc.constraint_name, tc.table_name,
-                   kcu.column_name,
-                   ccu.table_name AS foreign_table_name,
-                   ccu.column_name AS foreign_column_name
-            FROM information_schema.table_constraints AS tc
-            JOIN information_schema.key_column_usage AS kcu
-              ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-            JOIN information_schema.constraint_column_usage AS ccu
-              ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
-        """)
-        fk_constraints = cur.fetchall()
-        # 删除所有外键约束
-        for constraint_name, table_name_fk, *_ in fk_constraints:
-            cur.execute(f'ALTER TABLE {table_name_fk} DROP CONSTRAINT IF EXISTS {constraint_name}')
+        # 临时禁用触发器以绕过外键约束检查
+        # 这允许我们按任意顺序插入数据，包括自引用的情况
+        cur.execute('SET session_replication_role = replica')
 
         # 对于 collection 级别的还原，使用 DELETE 而不是 TRUNCATE
         for table_name in tables_to_restore:
@@ -539,15 +515,16 @@ def restore_backup(zip_path, tables=None):
                         cur.execute('DELETE FROM collection_versions WHERE collection = %s', (col,))
                         cur.execute('DELETE FROM user_current_branch WHERE collection = %s', (col,))
             else:
-                # 全表还原，使用 TRUNCATE
-                cur.execute(f'TRUNCATE TABLE {table_name} CASCADE')
+                # 全表还原，使用 DELETE 代替 TRUNCATE CASCADE 避免意外删除关联表数据
+                # DELETE 不会级联删除，更加安全可控
+                cur.execute(f'DELETE FROM {table_name}')
                 # 如果是 dynamic_data，也需要清理相关表
                 if table_name == 'dynamic_data':
-                    cur.execute('TRUNCATE TABLE data_relations CASCADE')
-                    cur.execute('TRUNCATE TABLE version_snapshots CASCADE')
-                    cur.execute('TRUNCATE TABLE version_relations CASCADE')
-                    cur.execute('TRUNCATE TABLE collection_versions CASCADE')
-                    cur.execute('TRUNCATE TABLE user_current_branch CASCADE')
+                    cur.execute('DELETE FROM data_relations')
+                    cur.execute('DELETE FROM version_snapshots')
+                    cur.execute('DELETE FROM version_relations')
+                    cur.execute('DELETE FROM collection_versions')
+                    cur.execute('DELETE FROM user_current_branch')
 
         # INSERT 数据（按 RESTORE_ORDER 顺序）
         for table_name in tables_to_restore:
@@ -586,21 +563,43 @@ def restore_backup(zip_path, tables=None):
                          record.get('related_collection'), record.get('related_id'), record.get('branch_id'))
                     )
 
-        # 重建所有外键约束
-        for constraint_name, table_name_fk, col_name, foreign_table, foreign_col in fk_constraints:
-            cur.execute(
-                f'ALTER TABLE {table_name_fk} ADD CONSTRAINT {constraint_name} '
-                f'FOREIGN KEY ({col_name}) REFERENCES {foreign_table}({foreign_col})'
-            )
-
         conn.commit()
+        main_success = True  # 主操作成功
     except Exception:
         if conn:
             conn.rollback()
         raise
     finally:
-        if conn and pool:
-            pool.putconn(conn)
+        if conn:
+            # 只有主操作成功时才尝试恢复触发器
+            if main_success:
+                try:
+                    # 恢复触发器（在单独的 try 中执行）
+                    cur = conn.cursor()
+                    cur.execute('SET session_replication_role = DEFAULT')
+                    # 验证恢复是否成功
+                    cur.execute('SHOW session_replication_role')
+                    result = cur.fetchone()
+                    if result and result[0] != 'origin':
+                        import logging
+                        logging.error(f'Failed to restore session_replication_role: {result[0]}')
+                except Exception as e:
+                    import logging
+                    logging.error(f'Exception restoring session_replication_role: {e}')
+                    # 关闭连接而不是返回到池中（连接可能处于异常状态）
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    return manifest
+                from db import pool
+                pool.putconn(conn)
+            else:
+                # 主操作失败，直接关闭连接
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     return manifest
 
@@ -611,7 +610,7 @@ def delete_backup_file(file_path):
         if file_path and os.path.isfile(file_path):
             os.remove(file_path)
     except OSError:
-        logger.warning('Failed to delete backup file: %s', file_path, exc_info=True)
+        pass
 
 
 def get_backup_settings():
@@ -698,7 +697,7 @@ def cleanup_old_backups(retention_count):
                 delete_backup_file(file_path)
                 cur.execute('DELETE FROM backups WHERE id = %s', (backup_id,))
     except Exception:
-        _log_background_error('cleanup old scheduled backups')
+        pass
 
 
 def start_backup_scheduler(app):
@@ -715,7 +714,7 @@ def start_backup_scheduler(app):
                         create_backup(backup_type='scheduled', created_by='系统定时')
                         cleanup_old_backups(settings['retentionCount'])
             except Exception:
-                _log_background_error('scheduled backup loop')
+                pass
 
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()

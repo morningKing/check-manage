@@ -572,10 +572,10 @@ class TestTableLevelRestore:
             result = restore_backup(zip_path, tables=['menus', 'users'])
 
             assert result['id'] == 'backup-test'
-            # 应该只执行了 2 张表的 TRUNCATE
-            truncate_calls = [call for call in mock_cursor.execute.call_args_list
-                            if 'TRUNCATE' in str(call)]
-            assert len(truncate_calls) == 2
+            # 应该只执行了 2 张表的 DELETE（已从 TRUNCATE CASCADE 改为 DELETE）
+            delete_calls = [call for call in mock_cursor.execute.call_args_list
+                            if 'DELETE FROM' in str(call)]
+            assert len(delete_calls) == 2
 
     @patch('db.pool')
     def test_restore_filters_tables_not_in_backup(self, mock_pool):
@@ -609,10 +609,10 @@ class TestTableLevelRestore:
             # 请求还原 menus 和不在备份中的 page_configs
             result = restore_backup(zip_path, tables=['menus', 'page_configs'])
 
-            # 只有 menus 被还原
-            truncate_calls = [call for call in mock_cursor.execute.call_args_list
-                            if 'TRUNCATE' in str(call)]
-            assert len(truncate_calls) == 1
+            # 只有 menus 被还原（已从 TRUNCATE CASCADE 改为 DELETE）
+            delete_calls = [call for call in mock_cursor.execute.call_args_list
+                            if 'DELETE FROM' in str(call)]
+            assert len(delete_calls) == 1
 
     @patch('db.pool')
     def test_restore_raises_error_when_no_tables_match(self, mock_pool):

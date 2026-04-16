@@ -104,10 +104,16 @@ def test_switch_to_version_rebuilds_relations_on_initialize():
         mock_conn.__exit__ = lambda self, *args: None
         mock_get_db.return_value = mock_conn
 
-        mock_cur.fetchone.return_value = ('project', 'Project Branch', 'active', 'branch')
+        # 新代码首先检查 initialized_at 字段是否存在
+        # 然后查询版本信息（包含 initialized_at）
+        # 获取 advisory lock 后检查现有数据量
+        mock_cur.fetchone.side_effect = [
+            (True,),  # has_initialized_at column check
+            ('project', 'Project Branch', 'active', 'branch', None),  # version info with initialized_at=None
+            (0,),  # pre_existing_count (no data yet)
+        ]
         mock_cur.fetchall.side_effect = [
             [],  # affected_collections (version_collections table is empty)
-            [],  # existing_counts (no data in branch yet)
             [('project', 'p-1', {'name': 'Project 1'}, None)],  # target_records from version_snapshots
             [('project', 'p-1', 'tags', 'tag', 't-1')],  # target_relations from version_relations
         ]
@@ -158,7 +164,7 @@ def test_merge_version_to_current_rebuilds_relations():
 def test_apply_partial_merge_uses_branch_scoped_conflict_key_and_rebuilds_relations():
     with patch('utils.version.get_db') as mock_get_db, \
             patch('utils.version.load_version_data') as mock_load_version_data, \
-            patch('utils.version._replace_collection_relations') as mock_replace:
+            patch('utils.version._load_relation_field_map') as mock_load_relation_map:
         mock_conn = MagicMock()
         mock_cur = MagicMock()
         mock_conn.cursor.return_value = mock_cur
@@ -168,12 +174,15 @@ def test_apply_partial_merge_uses_branch_scoped_conflict_key_and_rebuilds_relati
 
         mock_cur.fetchone.side_effect = [
             ('project', 'active', 'snapshot'),
+            ({},),  # field config from page_configs (empty - no relation fields)
+            ({'name': 'old'},),  # current record data
         ]
         mock_cur.fetchall.return_value = []
         mock_load_version_data.return_value = (
             [{'id': 'p-1', 'name': 'Project 1'}],
             {},
         )
+        mock_load_relation_map.return_value = {}  # no relation fields
 
         result = apply_partial_merge(
             source_version_id='ver-1',
@@ -192,8 +201,9 @@ def test_apply_partial_merge_uses_branch_scoped_conflict_key_and_rebuilds_relati
         for call in mock_cur.execute.call_args_list
         if call.args and isinstance(call.args[0], str)
     )
+    # Verify branch-scoped conflict handling for added records
     assert 'ON CONFLICT (id, branch_id) DO NOTHING' in executed_sql
-    mock_replace.assert_called_once()
+    # 新实现不再调用 _replace_collection_relations，而是在 modified_records 处理时清理孤立关联
 
 
 @pytest.fixture

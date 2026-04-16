@@ -90,9 +90,10 @@ class TestPartialMerge:
     def test_partial_merge_modified_records(self, mock_db_setup):
         """测试部分合并修改记录"""
         # 为修改记录测试重新设置 fetchone 返回值
-        # 需要: 版本信息、当前记录数据
+        # 需要: 版本信息、字段配置（用于区分关联字段）、当前记录数据
         mock_db_setup['cur'].fetchone.side_effect = [
             ('test_collection', 'active', 'snapshot'),  # 版本信息
+            ([],),  # 字段配置（空字段，表示无关联字段）
             ({'name': '旧名称'},),  # 当前记录数据 (tuple with dict)
         ]
 
