@@ -24,6 +24,7 @@ from utils.version import (
     apply_partial_merge,
 )
 from utils.errors import MergeError
+from routes.backups import _resolve_relation_labels
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,25 @@ versions_bp = Blueprint('versions', __name__)
 @versions_bp.route('/versions', methods=['GET'])
 @login_required
 def list_versions():
-    """获取版本列表"""
+    """获取版本列表（支持分页和搜索）"""
     collection = request.args.get('collection')
     status = request.args.get('status')
+    page = request.args.get('page', type=int)
+    pageSize = request.args.get('pageSize', type=int)
+    keyword = request.args.get('keyword')
 
+    # If pagination params provided, return paginated response
+    if page is not None:
+        result = get_version_list(
+            collection=collection,
+            status=status,
+            page=page,
+            pageSize=pageSize or 10,
+            keyword=keyword
+        )
+        return jsonify(result)
+
+    # Backward compatible: return full list
     versions = get_version_list(collection=collection, status=status)
     return jsonify(versions)
 
@@ -199,6 +215,11 @@ def diff_versions():
     fields = row[0] if row and row[0] else []
     field_names = [f['fieldName'] for f in fields]
     relation_fields = [f for f in fields if f.get('controlType') == 'relation']
+
+    # 将关联字段的 ID 转换为可读标签
+    if relation_fields:
+        _resolve_relation_labels(base_records, relation_fields)
+        _resolve_relation_labels(target_records, relation_fields)
 
     # 计算差异
     diff = compute_diff(
@@ -504,7 +525,18 @@ def get_delete_detail_route(version_id):
 
         # 排序字段验证
         allowed_sort_fields = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
-        sort_column = allowed_sort_fields.get(sort_by, 'created_at')
+        sort_column = allowed_sort_fields.get(sort_by)
+
+        # 验证排序字段：如果用户提供了无效的排序字段，返回错误
+        if sort_by and sort_column is None:
+            return jsonify({
+                'error': f'无效的排序字段: {sort_by}。可选字段: createdAt, updatedAt, id'
+            }), 400
+
+        # 如果没有提供排序字段，使用默认值
+        if sort_column is None:
+            sort_column = 'created_at'
+
         sort_direction = 'DESC' if sort_order == 'desc' else 'ASC'
 
         # 查询数据（分页）
