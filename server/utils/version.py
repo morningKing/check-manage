@@ -610,7 +610,7 @@ def _load_collection_relation_rows(cur, collection, branch_id):
     return cur.fetchall()
 
 
-def get_version_list(collection=None, status=None):
+def get_version_list(collection=None, status=None, page=None, pageSize=None, keyword=None):
     """
     获取版本列表
 
@@ -620,11 +620,18 @@ def get_version_list(collection=None, status=None):
         筛选集合，None 表示所有集合
     status : str | None
         筛选状态，None 表示所有状态
+    page : int | None
+        页码（从1开始），提供时启用分页
+    pageSize : int | None
+        每页数量，与 page 配合使用
+    keyword : str | None
+        关键词搜索，匹配 name 或 description
 
     Returns
     -------
-    list[dict]
-        版本列表
+    list[dict] | dict
+        无分页时返回版本列表
+        有分页时返回 {items: list, total: int}
     """
     with get_db() as conn:
         cur = conn.cursor()
@@ -637,8 +644,55 @@ def get_version_list(collection=None, status=None):
         if status:
             conditions.append('status = %s')
             params.append(status)
+        if keyword:
+            conditions.append('(name ILIKE %s OR description ILIKE %s)')
+            keyword_pattern = f'%{keyword}%'
+            params.extend([keyword_pattern, keyword_pattern])
 
         where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
+
+        # When pagination is requested, first get total count
+        if page is not None and pageSize is not None:
+            count_sql = f'SELECT COUNT(*) FROM collection_versions {where_clause}'
+            cur.execute(count_sql, params)
+            total = cur.fetchone()[0]
+
+            # Then get paginated results
+            offset = (page - 1) * pageSize
+            sql = f'''
+                SELECT id, collection, name, description, version_type, parent_version, status,
+                       data_hash, records_count, relations_count, created_by, created_at,
+                       merged_at, merged_by, merged_into, is_protected
+                FROM collection_versions
+                {where_clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            '''
+            cur.execute(sql, params + [pageSize, offset])
+            rows = cur.fetchall()
+
+            items = [{
+                'id': r[0],
+                'collection': r[1],
+                'name': r[2],
+                'description': r[3],
+                'versionType': r[4],
+                'parentVersion': r[5],
+                'status': r[6],
+                'dataHash': r[7],
+                'recordsCount': r[8],
+                'relationsCount': r[9],
+                'createdBy': r[10],
+                'createdAt': r[11].isoformat() if r[11] else None,
+                'mergedAt': r[12].isoformat() if r[12] else None,
+                'mergedBy': r[13],
+                'mergedInto': r[14],
+                'isProtected': r[15],
+            } for r in rows]
+
+            return {'items': items, 'total': total}
+
+        # Non-paginated query (backward compatible)
         sql = f'''
             SELECT id, collection, name, description, version_type, parent_version, status,
                    data_hash, records_count, relations_count, created_by, created_at,
@@ -773,10 +827,19 @@ def delete_version(version_id, confirmed=False):
             )
             collections = [row[0] for row in cur.fetchall()]
 
-            # 如果无追踪数据，使用旧方法（仅清理主Collection）
+            # 如果无追踪数据，扫描 version_snapshots 获取所有涉及的 Collection
             # 兼容 Task 1-3 实施前创建的旧版本
             if not collections:
-                collections = [collection]
+                cur.execute(
+                    'SELECT DISTINCT collection FROM version_snapshots WHERE version_id = %s',
+                    (version_id,)
+                )
+                snapshot_collections = [row[0] for row in cur.fetchall()]
+                if snapshot_collections:
+                    collections = snapshot_collections
+                else:
+                    # 最终 fallback：使用 metadata collection
+                    collections = [collection]
 
             # 精确清理每个 Collection
             for coll in collections:
@@ -797,7 +860,14 @@ def delete_version(version_id, confirmed=False):
                 (version_id,)
             )
 
-        # 4. 删除版本元数据（CASCADE 清理 version_collections）
+        # 4. 删除版本相关数据（显式删除，不依赖 CASCADE）
+        # 删除 version_snapshots
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        # 删除 version_relations
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
+        # 删除 version_collections（CASCADE 应该也会删除，但显式删除更安全）
+        cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
+        # 最后删除版本元数据
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
 
     return True
@@ -1271,13 +1341,28 @@ def apply_partial_merge(source_version_id, target_branch, decisions, merged_by):
 
         # 5. 处理修改记录
         modified_records = decisions.get('modified_records', [])
+
+        # 加载关联字段配置，区分普通字段和关联字段
+        relation_field_map = _load_relation_field_map(cur, collection)
+
         for mod in modified_records:
             record_id = mod.get('record_id')
             field_values = mod.get('field_values', {})
+            relation_changes = mod.get('relation_changes', {})  # 新增：关联字段变更
 
-            if not record_id or not field_values:
+            if not record_id:
                 summary['recordsSkipped'] += 1
                 continue
+
+            # 分离普通字段和关联字段
+            regular_field_values = {}
+            relation_field_values = {}
+
+            for fn, val in field_values.items():
+                if fn in relation_field_map:
+                    relation_field_values[fn] = val  # 关联字段的 ID 列表
+                else:
+                    regular_field_values[fn] = val  # 普通字段
 
             # 获取当前记录数据
             cur.execute(
@@ -1287,23 +1372,71 @@ def apply_partial_merge(source_version_id, target_branch, decisions, merged_by):
             current_row = cur.fetchone()
             if current_row:
                 current_data = current_row[0] or {}
-                # 合并字段更新
-                current_data.update(field_values)
+
+                # 仅更新普通字段到 data JSONB
+                current_data.update(regular_field_values)
                 cur.execute(
                     'UPDATE dynamic_data SET data = %s, updated_at = %s, version = version + 1 '
                     'WHERE collection = %s AND id = %s AND branch_id = %s',
                     (psycopg2.extras.Json(current_data), now, collection, record_id, target_branch_id),
                 )
+
+                # 处理关联字段变更
+                all_relation_changes = relation_field_values.copy()
+                all_relation_changes.update(relation_changes)  # 合并显式的 relation_changes
+
+                for field_name, related_ids in all_relation_changes.items():
+                    field_config = relation_field_map.get(field_name, {})
+                    target_collection = field_config.get('target_collection', collection)
+                    target_field = field_config.get('target_field')
+
+                    if isinstance(related_ids, list):
+                        related_ids_set = set(related_ids)
+                    else:
+                        related_ids_set = set([related_ids]) if related_ids else set()
+
+                    # 删除该字段的所有现有关联（正向）
+                    cur.execute(
+                        'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND field_name = %s AND branch_id = %s',
+                        (collection, record_id, field_name, target_branch_id),
+                    )
+
+                    # 删除反向关联（如果配置了 target_field）
+                    if target_field:
+                        cur.execute(
+                            'DELETE FROM data_relations WHERE collection = %s AND field_name = %s AND related_collection = %s AND related_id = %s AND branch_id = %s',
+                            (target_collection, target_field, collection, record_id, target_branch_id),
+                        )
+
+                    # 插入新关联
+                    for related_id in related_ids_set:
+                        cur.execute(
+                            'INSERT INTO data_relations '
+                            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+                            'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                            (collection, record_id, field_name, target_collection, related_id, target_branch_id),
+                        )
+
+                        # 插入反向关联（如果配置了 target_field）
+                        if target_field:
+                            cur.execute(
+                                'INSERT INTO data_relations '
+                                '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+                                'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                                (target_collection, related_id, target_field, collection, record_id, target_branch_id),
+                            )
+
                 summary['recordsUpdated'] += 1
             else:
                 # 目标记录不存在
                 summary['recordsNotFound'] += 1
 
-        _replace_collection_relations(
-            cur,
-            collection,
-            target_branch_id,
-            _load_collection_relation_rows(cur, collection, target_branch_id),
+        # 不再需要全量替换 relations，因为已经在上面按决策处理了
+        # 仅清理未处理的孤立关联（删除不存在记录的关联）
+        cur.execute(
+            'DELETE FROM data_relations WHERE collection = %s AND branch_id = %s '
+            'AND record_id NOT IN (SELECT id FROM dynamic_data WHERE collection = %s AND branch_id = %s)',
+            (collection, target_branch_id, collection, target_branch_id),
         )
 
         # 6. 更新 data_hash（计算新状态的哈希）
@@ -1436,14 +1569,32 @@ def switch_to_version(version_id, switched_by, user_id=None):
         cur = conn.cursor()
 
         # 1. 获取目标版本信息
+        # 先检查 initialized_at 字段是否存在（向后兼容）
         cur.execute(
-            'SELECT collection, name, status, version_type FROM collection_versions WHERE id = %s',
-            (version_id,),
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'collection_versions' AND column_name = 'initialized_at')"
         )
-        row = cur.fetchone()
-        if not row:
-            raise ValueError('目标版本不存在')
-        collection, target_name, status, version_type = row
+        has_initialized_at = cur.fetchone()[0]
+
+        if has_initialized_at:
+            cur.execute(
+                'SELECT collection, name, status, version_type, initialized_at FROM collection_versions WHERE id = %s',
+                (version_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError('目标版本不存在')
+            collection, target_name, status, version_type, initialized_at = row
+        else:
+            cur.execute(
+                'SELECT collection, name, status, version_type FROM collection_versions WHERE id = %s',
+                (version_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError('目标版本不存在')
+            collection, target_name, status, version_type = row
+            initialized_at = None  # 字段不存在时默认为 None
 
         # 只能切换到活跃的分支版本
         if status != 'active':
@@ -1462,78 +1613,102 @@ def switch_to_version(version_id, switched_by, user_id=None):
         if not affected_collections:
             affected_collections = [collection]
 
-        # 3. 检查每个 Collection 是否已有数据
-        cur.execute(
-            'SELECT collection, COUNT(*) FROM dynamic_data WHERE branch_id = %s GROUP BY collection',
-            (version_id,),
-        )
-        existing_counts = {row[0]: row[1] for row in cur.fetchall()}
+        # 3. 检查是否已初始化（防止并发初始化）
         initialized = False
+        existing_count = 0
 
-        # 4. 如果有 Collection 缺失数据，从快照初始化
-        needs_init = any(coll not in existing_counts or existing_counts[coll] == 0
-                        for coll in affected_collections)
-
-        if needs_init:
-            # 清空目标分支的所有 Collection 数据（避免重复）
-            for coll in affected_collections:
-                cur.execute(
-                    'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
-                    (coll, version_id)
-                )
-
-            # 读取所有 Collection 的快照数据（使用 snapshot 的 collection 字段）
+        if initialized_at is not None:
+            # 分支已初始化（initialized_at 有值），直接计算数据量
             cur.execute(
-                'SELECT collection, record_id, record_data, created_at FROM version_snapshots WHERE version_id = %s',
-                (version_id,),
+                'SELECT SUM(cnt) FROM (SELECT COUNT(*) as cnt FROM dynamic_data WHERE branch_id = %s AND collection = ANY(%s)) sub',
+                (version_id, affected_collections)
             )
-            target_records = cur.fetchall()
-
-            # 验证所有 Collection 都有快照数据
-            snapshot_collections = {row[0] for row in target_records}
-            missing_snapshots = set(affected_collections) - snapshot_collections
-            if missing_snapshots:
-                raise ValueError(
-                    f'无法初始化版本：以下 Collection 缺少快照数据: {sorted(missing_snapshots)}。'
-                    f'该版本可能在多 Collection 支持完善前创建，快照数据不完整。'
-                )
-
-            # 读取所有关联数据
-            cur.execute(
-                'SELECT collection, record_id, field_name, related_collection, related_id '
-                'FROM version_relations WHERE version_id = %s',
-                (version_id,),
-            )
-            target_relations = cur.fetchall()
-
-            # 按 Collection 分组插入数据
-            records_by_collection = {}
-            for coll, rid, data, created_at in target_records:
-                if coll not in records_by_collection:
-                    records_by_collection[coll] = []
-                records_by_collection[coll].append((rid, data, created_at))
-
-            # 插入每个 Collection 的数据（使用快照的 collection 值）
-            total_inserted = 0
-            for coll, records in records_by_collection.items():
-                for rid, data, created_at in records:
-                    flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
-                    cur.execute(
-                        'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at, version) '
-                        'VALUES (%s, %s, %s, %s, %s, %s)',
-                        (rid, coll, psycopg2.extras.Json(flat_data), version_id, created_at, 1),
-                    )
-                    total_inserted += 1
-
-            # 恢复所有 Collection 的关联数据
-            for coll in affected_collections:
-                _replace_collection_relations(cur, coll, version_id, target_relations)
-
-            existing_count = total_inserted
-            initialized = True
+            result = cur.fetchone()
+            existing_count = result[0] if result and result[0] else 0
+            initialized = False  # 数据已存在，不是本次切换时初始化的
         else:
-            # 所有 Collection 都有数据，计算总数
-            existing_count = sum(existing_counts.get(coll, 0) for coll in affected_collections)
+            # initialized_at 为 None（字段不存在或值为 NULL）
+            # 需要初始化 - 使用 PostgreSQL advisory lock 防止并发
+            import hashlib
+            lock_key = int(hashlib.md5(version_id.encode()).hexdigest()[:8], 16)
+            cur.execute('SELECT pg_advisory_xact_lock(%s)', (lock_key,))
+
+            # 锁定后再次检查是否已有数据（另一个事务可能已初始化）
+            cur.execute(
+                'SELECT SUM(cnt) FROM (SELECT COUNT(*) as cnt FROM dynamic_data WHERE branch_id = %s AND collection = ANY(%s)) sub',
+                (version_id, affected_collections)
+            )
+            result = cur.fetchone()
+            pre_existing_count = result[0] if result and result[0] else 0
+
+            if pre_existing_count > 0:
+                # 已经有数据，跳过初始化
+                existing_count = pre_existing_count
+                initialized = False
+            else:
+                # 执行初始化：清空目标分支的所有 Collection 数据（避免重复）
+                for coll in affected_collections:
+                    cur.execute(
+                        'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                        (coll, version_id)
+                    )
+
+                # 读取所有 Collection 的快照数据（使用 snapshot 的 collection 字段）
+                cur.execute(
+                    'SELECT collection, record_id, record_data, created_at FROM version_snapshots WHERE version_id = %s',
+                    (version_id,),
+                )
+                target_records = cur.fetchall()
+
+                # 验证所有 Collection 都有快照数据
+                snapshot_collections = {row[0] for row in target_records}
+                missing_snapshots = set(affected_collections) - snapshot_collections
+                if missing_snapshots:
+                    raise ValueError(
+                        f'无法初始化版本：以下 Collection 缺少快照数据: {sorted(missing_snapshots)}。'
+                        f'该版本可能在多 Collection 支持完善前创建，快照数据不完整。'
+                    )
+
+                # 读取所有关联数据
+                cur.execute(
+                    'SELECT collection, record_id, field_name, related_collection, related_id '
+                    'FROM version_relations WHERE version_id = %s',
+                    (version_id,),
+                )
+                target_relations = cur.fetchall()
+
+                # 按 Collection 分组插入数据
+                records_by_collection = {}
+                for coll, rid, data, created_at in target_records:
+                    if coll not in records_by_collection:
+                        records_by_collection[coll] = []
+                    records_by_collection[coll].append((rid, data, created_at))
+
+                # 插入每个 Collection 的数据（使用快照的 collection 值）
+                total_inserted = 0
+                for coll, records in records_by_collection.items():
+                    for rid, data, created_at in records:
+                        flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
+                        cur.execute(
+                            'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at, version) '
+                            'VALUES (%s, %s, %s, %s, %s, %s)',
+                            (rid, coll, psycopg2.extras.Json(flat_data), version_id, created_at, 1),
+                        )
+                        total_inserted += 1
+
+                # 恢复所有 Collection 的关联数据
+                for coll in affected_collections:
+                    _replace_collection_relations(cur, coll, version_id, target_relations)
+
+                # 标记初始化完成（仅在 initialized_at 字段存在时更新）
+                if has_initialized_at:
+                    cur.execute(
+                        'UPDATE collection_versions SET initialized_at = %s WHERE id = %s',
+                        (now, version_id)
+                    )
+
+                existing_count = total_inserted
+                initialized = True
 
         # 5. 批量更新所有 Collection 的用户当前分支（原子操作）
         if user_id:
