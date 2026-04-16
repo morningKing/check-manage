@@ -125,56 +125,47 @@
           {{ formatTime(row.createdAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
-          <el-button-group>
+          <!-- 已合并状态：无操作 -->
+          <span v-if="row.status === 'merged'" class="merged-label">已合并</span>
+
+          <!-- 活跃状态：切换按钮 + 更多下拉 -->
+          <div v-else class="action-buttons">
             <!-- 切换按钮：仅分支类型显示 -->
-            <el-tooltip v-if="row.versionType === 'branch'" :content="getSwitchTooltip(row)">
-              <el-button
-                size="small"
-                type="success"
-                @click="handleSwitch(row)"
-                :disabled="!canSwitch(row)"
-              >
-                <el-icon><Switch /></el-icon>
+            <el-button
+              v-if="row.versionType === 'branch'"
+              size="small"
+              type="success"
+              @click="handleSwitch(row)"
+              :disabled="isCurrentBranch(row)"
+            >
+              切换
+            </el-button>
+
+            <!-- 更多操作下拉菜单 -->
+            <el-dropdown trigger="click" @command="(cmd: string) => handleAction(cmd, row)">
+              <el-button size="small">
+                更多 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
               </el-button>
-            </el-tooltip>
-            <el-tooltip content="对比">
-              <el-button size="small" @click="handleDiff(row)" :disabled="row.status === 'merged'">
-                <el-icon><Sort /></el-icon>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip content="合并到当前">
-              <el-button
-                size="small"
-                @click="handleMerge(row)"
-                :disabled="row.status === 'merged'"
-              >
-                <el-icon><Connection /></el-icon>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip content="恢复">
-              <el-button
-                size="small"
-                type="warning"
-                @click="handleRestore(row)"
-                :disabled="row.status === 'merged'"
-              >
-                <el-icon><RefreshRight /></el-icon>
-              </el-button>
-            </el-tooltip>
-            <el-tooltip content="删除">
-              <el-button
-                size="small"
-                type="danger"
-                @click="handleDelete(row)"
-                :disabled="row.isProtected || row.status === 'merged'"
-                :loading="deletingVersionId === row.id"
-              >
-                <el-icon><Delete /></el-icon>
-              </el-button>
-            </el-tooltip>
-          </el-button-group>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="diff" :disabled="row.status === 'merged'">
+                    对比
+                  </el-dropdown-item>
+                  <el-dropdown-item command="merge" :disabled="row.status === 'merged'">
+                    合并
+                  </el-dropdown-item>
+                  <el-dropdown-item command="restore" :disabled="row.status === 'merged'">
+                    恢复
+                  </el-dropdown-item>
+                  <el-dropdown-item divided command="delete" :disabled="row.isProtected || row.status === 'merged'">
+                    <span style="color: #f56c6c">删除</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -307,7 +298,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Sort, RefreshRight, Delete, Connection, Switch, FolderOpened, Document } from '@element-plus/icons-vue'
+import { Plus, Refresh, ArrowDown, FolderOpened, Document } from '@element-plus/icons-vue'
 import { del } from '@/utils/request'
 import BackupDiffDialog from './BackupDiffDialog.vue'
 import BeyondCompareMerge from './BeyondCompareMerge.vue'
@@ -429,18 +420,6 @@ function isCurrentBranch(row: CollectionVersion): boolean {
   return currentBranch.value?.branchId === row.id
 }
 
-function canSwitch(row: CollectionVersion): boolean {
-  if (row.status !== 'active') return false
-  if (isCurrentBranch(row)) return false
-  return true
-}
-
-function getSwitchTooltip(row: CollectionVersion): string {
-  if (row.status !== 'active') return '版本状态非活跃'
-  if (isCurrentBranch(row)) return '当前已在此分支'
-  return '切换到此分支'
-}
-
 async function loadVersions() {
   loading.value = true
   try {
@@ -551,6 +530,23 @@ async function handleRestore(row: CollectionVersion) {
 function handleSwitch(row: CollectionVersion) {
   switchTarget.value = row
   showSwitchDialog.value = true
+}
+
+function handleAction(command: string, row: CollectionVersion) {
+  switch (command) {
+    case 'diff':
+      handleDiff(row)
+      break
+    case 'merge':
+      handleMerge(row)
+      break
+    case 'restore':
+      handleRestore(row)
+      break
+    case 'delete':
+      handleDelete(row)
+      break
+  }
 }
 
 async function confirmSwitch() {
@@ -748,5 +744,16 @@ watch(visible, (v) => {
   margin-top: 16px;
   display: flex;
   justify-content: center;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.merged-label {
+  color: #909399;
+  font-size: 13px;
 }
 </style>
