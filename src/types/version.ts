@@ -33,6 +33,14 @@ export interface CollectionVersion {
 }
 
 /**
+ * 分页版本列表响应
+ */
+export interface PaginatedVersionsResponse {
+  items: CollectionVersion[]
+  total: number
+}
+
+/**
  * 创建版本请求
  */
 export interface CreateVersionRequest {

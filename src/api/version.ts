@@ -11,18 +11,51 @@ import type {
   RestoreResult,
   PartialMergeRequest,
   PartialMergeResponse,
+  PaginatedVersionsResponse,
 } from '@/types'
 import type { DiffResult } from '@/types'
 
 /**
- * 获取版本列表
- * @param collection 筛选集合
- * @param status 筛选状态
+ * 获取版本列表（支持分页和搜索）
+ * 重载签名用于 TypeScript 类型推断
  */
-export function getVersions(collection?: string, status?: string) {
-  const params: Record<string, string> = {}
+
+// 无分页时返回数组
+export function getVersions(
+  collection?: string,
+  status?: string
+): Promise<CollectionVersion[]>
+
+// 有分页时返回分页响应
+export function getVersions(
+  collection?: string,
+  status?: string,
+  page?: number,
+  pageSize?: number,
+  keyword?: string
+): Promise<PaginatedVersionsResponse>
+
+// 实现
+export function getVersions(
+  collection?: string,
+  status?: string,
+  page?: number,
+  pageSize?: number,
+  keyword?: string
+): Promise<CollectionVersion[] | PaginatedVersionsResponse> {
+  const params: Record<string, string | number> = {}
   if (collection) params.collection = collection
   if (status) params.status = status
+  if (page) params.page = page
+  if (pageSize) params.pageSize = pageSize
+  if (keyword) params.keyword = keyword
+
+  // If pagination requested, expect paginated response
+  if (page) {
+    return get<PaginatedVersionsResponse>('/versions', params)
+  }
+
+  // Backward compatible: return array
   return get<CollectionVersion[]>('/versions', params)
 }
 
