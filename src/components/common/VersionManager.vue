@@ -184,8 +184,8 @@
     </div>
 
     <!-- 空状态 -->
-    <el-empty v-if="!loading && versions.length === 0 && !searchKeyword && !filterStatus && !filterType" description="暂无版本快照" />
-    <el-empty v-else-if="!loading && versions.length === 0" description="未找到匹配的版本" />
+    <el-empty v-if="!loading && !versions?.length && !searchKeyword && !filterStatus && !filterType" description="暂无版本快照" />
+    <el-empty v-else-if="!loading && !versions?.length" description="未找到匹配的版本" />
 
     <!-- 创建版本对话框 -->
     <el-dialog
@@ -425,13 +425,13 @@ async function loadVersions() {
   try {
     const result = await getVersionsPaginated(
       props.collection,
-      filterStatus.value,
+      filterStatus.value || undefined,
       currentPage.value,
       pageSize.value,
-      searchKeyword.value
+      searchKeyword.value || undefined
     )
-    versions.value = result.items
-    totalVersions.value = result.total
+    versions.value = result?.items || []
+    totalVersions.value = result?.total || 0
     currentBranch.value = await getCurrentBranch(props.collection)
   } catch {
     versions.value = []
