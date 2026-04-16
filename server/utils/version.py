@@ -651,6 +651,15 @@ def get_version_list(collection=None, status=None, page=None, pageSize=None, key
 
         where_clause = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
 
+        # Validate pagination parameters
+        if page is not None:
+            if page < 1:
+                page = 1  # Normalize invalid page to first page
+            if pageSize is None:
+                pageSize = 10  # Default when only page provided
+            if pageSize < 1:
+                pageSize = 10  # Default for invalid pageSize
+
         # When pagination is requested, first get total count
         if page is not None and pageSize is not None:
             count_sql = f'SELECT COUNT(*) FROM collection_versions {where_clause}'
