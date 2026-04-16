@@ -37,16 +37,41 @@
       <span class="branch-hint">创建分支后可切换进行并行开发</span>
     </div>
 
-    <!-- 工具栏 -->
+    <!-- 工具栏：搜索、筛选、创建 -->
     <div class="toolbar">
-      <el-button type="primary" @click="showCreateDialog = true">
-        <el-icon><Plus /></el-icon>
-        创建版本
-      </el-button>
-      <el-button @click="loadVersions" :loading="loading">
-        <el-icon><Refresh /></el-icon>
-        刷新
-      </el-button>
+      <div class="toolbar-left">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索版本名称..."
+          clearable
+          style="width: 200px"
+          @keyup.enter="handleSearch"
+        />
+        <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 100px" @change="handleSearch">
+          <el-option label="全部" value="" />
+          <el-option label="活跃" value="active" />
+          <el-option label="已合并" value="merged" />
+          <el-option label="已归档" value="archived" />
+        </el-select>
+        <el-select v-model="filterType" placeholder="类型" clearable style="width: 100px" @change="handleSearch">
+          <el-option label="全部" value="" />
+          <el-option label="快照" value="snapshot" />
+          <el-option label="分支" value="branch" />
+        </el-select>
+        <el-button @click="handleSearch" :loading="loading">
+          搜索
+        </el-button>
+      </div>
+      <div class="toolbar-right">
+        <el-button type="primary" @click="showCreateDialog = true">
+          <el-icon><Plus /></el-icon>
+          创建版本
+        </el-button>
+        <el-button @click="loadVersions" :loading="loading">
+          <el-icon><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
     </div>
 
     <!-- 说明 -->
@@ -273,7 +298,7 @@ import { del } from '@/utils/request'
 import BackupDiffDialog from './BackupDiffDialog.vue'
 import BeyondCompareMerge from './BeyondCompareMerge.vue'
 import {
-  getVersions,
+  getVersionsPaginated,
   createVersion,
   restoreVersion,
   switchToVersion,
@@ -317,6 +342,14 @@ const versions = ref<CollectionVersion[]>([])
 const currentBranch = ref<UserBranch | null>(null)
 const loading = ref(false)
 const deletingVersionId = ref<string | null>(null)
+
+// 搜索和筛选
+const searchKeyword = ref('')
+const filterStatus = ref('')
+const filterType = ref('')
+const currentPage = ref(1)
+const pageSize = ref(10)
+const totalVersions = ref(0)
 
 // 创建版本
 const showCreateDialog = ref(false)
@@ -397,14 +430,28 @@ function getSwitchTooltip(row: CollectionVersion): string {
 async function loadVersions() {
   loading.value = true
   try {
-    versions.value = await getVersions(props.collection)
+    const result = await getVersionsPaginated(
+      props.collection,
+      filterStatus.value,
+      currentPage.value,
+      pageSize.value,
+      searchKeyword.value
+    )
+    versions.value = result.items
+    totalVersions.value = result.total
     currentBranch.value = await getCurrentBranch(props.collection)
   } catch {
     versions.value = []
     currentBranch.value = null
+    totalVersions.value = 0
   } finally {
     loading.value = false
   }
+}
+
+function handleSearch() {
+  currentPage.value = 1
+  loadVersions()
 }
 
 async function handleCreate() {
@@ -645,8 +692,21 @@ watch(visible, (v) => {
 
 .toolbar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  .toolbar-left {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .toolbar-right {
+    display: flex;
+    gap: 8px;
+  }
 }
 
 .version-table {
