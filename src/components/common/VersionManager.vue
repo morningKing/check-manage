@@ -11,11 +11,11 @@
  * - 删除版本
  */
 <template>
-  <el-drawer
+  <el-dialog
     v-model="visible"
-    title="版本管理"
-    direction="rtl"
-    size="700px"
+    :title="'版本管理 - ' + pageName"
+    width="80%"
+    top="5vh"
     :close-on-click-modal="false"
     destroy-on-close
   >
@@ -262,7 +262,7 @@
         </el-button>
       </template>
     </el-dialog>
-  </el-drawer>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -281,6 +281,7 @@ import {
   getCurrentBranch,
   type UserBranch,
 } from '@/api/version'
+import { useBranchRefreshStore } from '@/stores'
 import type { CollectionVersion, CreateVersionRequest } from '@/types'
 
 // ==================== Props & Emits ====================
@@ -342,6 +343,9 @@ const switchTarget = ref<CollectionVersion | null>(null)
 const switching = ref(false)
 const switchingToMain = ref(false)
 const switchResult = ref<any>(null)
+
+// Branch refresh store for cross-collection notification
+const branchRefreshStore = useBranchRefreshStore()
 
 // ==================== Methods ====================
 
@@ -498,6 +502,8 @@ async function confirmSwitch() {
     }
     if (result.affectedCollections && result.affectedCollections.length > 1) {
       msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
+      // Notify other collections to refresh via global store
+      branchRefreshStore.requestRefresh(result.affectedCollections)
     }
 
     ElMessage.success(msg)
@@ -530,6 +536,8 @@ async function handleSwitchToMain() {
       let msg = `已切换回主分支，加载 ${result.recordsInBranch} 条记录`
       if (result.affectedCollections && result.affectedCollections.length > 1) {
         msg += `\n同时切换了 ${result.affectedCollections.length - 1} 个关联集合`
+        // Notify other collections to refresh via global store
+        branchRefreshStore.requestRefresh(result.affectedCollections)
       }
 
       ElMessage.success(msg)
