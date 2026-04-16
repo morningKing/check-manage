@@ -179,8 +179,22 @@
       </el-table-column>
     </el-table>
 
+    <!-- 分页 -->
+    <div class="pagination-wrapper" v-if="totalVersions > 0">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50]"
+        :total="totalVersions"
+        layout="total, sizes, prev, pager, next, jumper"
+        @current-change="loadVersions"
+        @size-change="handlePageSizeChange"
+      />
+    </div>
+
     <!-- 空状态 -->
-    <el-empty v-if="!loading && versions.length === 0" description="暂无版本快照" />
+    <el-empty v-if="!loading && versions.length === 0 && !searchKeyword && !filterStatus && !filterType" description="暂无版本快照" />
+    <el-empty v-else-if="!loading && versions.length === 0" description="未找到匹配的版本" />
 
     <!-- 创建版本对话框 -->
     <el-dialog
@@ -454,6 +468,11 @@ function handleSearch() {
   loadVersions()
 }
 
+function handlePageSizeChange() {
+  currentPage.value = 1
+  loadVersions()
+}
+
 async function handleCreate() {
   if (!createForm.value.name) {
     ElMessage.warning('请输入版本名称')
@@ -723,5 +742,11 @@ watch(visible, (v) => {
 .data-count {
   color: #606266;
   font-size: 12px;
+}
+
+.pagination-wrapper {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
 }
 </style>
