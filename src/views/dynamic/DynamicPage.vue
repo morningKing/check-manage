@@ -17,55 +17,56 @@
     <!-- 页面标题和操作栏 -->
     <div class="page-header">
       <div class="page-title">
-        <h2>{{ pageConfig?.name || '数据页面' }}</h2>
-        <!-- 分支标签 -->
-        <el-tag
-          v-if="currentBranch"
-          :type="currentBranch.branchId ? 'primary' : 'success'"
-          size="small"
-          style="margin-left: 12px"
-        >
-          {{ currentBranch.branchName }}
-        </el-tag>
-        <!-- 切换下拉按钮（仅管理员可见） -->
-        <el-dropdown
-          v-if="isAdmin && currentBranch"
-          trigger="click"
-          @command="handleBranchSwitch"
-          @visible-change="(visible: boolean) => visible && loadBranchVersions()"
-          style="margin-left: 8px"
-        >
-          <span class="branch-switch-link">
-            切换 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+        <div class="page-title-left">
+          <h2>{{ pageConfig?.name || '数据页面' }}</h2>
+          <span v-if="pageConfig?.description" class="page-description">
+            {{ pageConfig.description }}
           </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                :command="'main'"
-                :disabled="!currentBranch.branchId"
-              >
-                <el-icon v-if="!currentBranch.branchId"><Check /></el-icon>
-                主分支
-              </el-dropdown-item>
-              <el-dropdown-item
-                v-for="branch in branchVersions"
-                :key="branch.id"
-                :command="branch.id"
-                :disabled="branch.id === currentBranch.branchId"
-              >
-                <el-icon v-if="branch.id === currentBranch.branchId"><Check /></el-icon>
-                {{ branch.name }}
-              </el-dropdown-item>
-              <el-dropdown-item divided command="manage">
-                <el-icon><Tickets /></el-icon>
-                管理版本...
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-        <span v-if="pageConfig?.description" class="page-description">
-          {{ pageConfig.description }}
-        </span>
+        </div>
+        <div class="page-title-right" v-if="currentBranch">
+          <!-- 分支标签 -->
+          <el-tag
+            :type="currentBranch.branchId ? 'primary' : 'success'"
+            size="small"
+          >
+            {{ currentBranch.branchName }}
+          </el-tag>
+          <!-- 切换下拉按钮（仅管理员可见） -->
+          <el-dropdown
+            v-if="isAdmin"
+            trigger="click"
+            @command="handleBranchSwitch"
+            @visible-change="(visible: boolean) => visible && loadBranchVersions()"
+          >
+            <span class="branch-switch-link">
+              切换 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  :command="'main'"
+                  :disabled="!currentBranch.branchId"
+                >
+                  <el-icon v-if="!currentBranch.branchId"><Check /></el-icon>
+                  主分支
+                </el-dropdown-item>
+                <el-dropdown-item
+                  v-for="branch in branchVersions"
+                  :key="branch.id"
+                  :command="branch.id"
+                  :disabled="branch.id === currentBranch.branchId"
+                >
+                  <el-icon v-if="branch.id === currentBranch.branchId"><Check /></el-icon>
+                  {{ branch.name }}
+                </el-dropdown-item>
+                <el-dropdown-item divided command="manage">
+                  <el-icon><Tickets /></el-icon>
+                  管理版本...
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </div>
       <div class="page-actions">
         <el-radio-group v-model="viewMode" size="small" class="view-toggle">
@@ -2862,11 +2863,31 @@ onActivated(async () => {
   margin-bottom: 16px;
 
   .page-title {
-    h2 {
-      margin: 0;
-      font-size: 20px;
-      font-weight: 600;
-      color: #303133;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 1;
+
+    .page-title-left {
+      h2 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+        color: #303133;
+      }
+
+      .page-description {
+        display: block;
+        margin-top: 4px;
+        font-size: 14px;
+        color: #909399;
+      }
+    }
+
+    .page-title-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .branch-switch-link {
@@ -2879,13 +2900,6 @@ onActivated(async () => {
       &:hover {
         color: #66b1ff;
       }
-    }
-
-    .page-description {
-      display: block;
-      margin-top: 4px;
-      font-size: 14px;
-      color: #909399;
     }
   }
 
