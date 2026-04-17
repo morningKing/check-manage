@@ -421,6 +421,12 @@ function isCurrentBranch(row: CollectionVersion): boolean {
 }
 
 async function loadVersions() {
+  if (!props.collection) {
+    versions.value = []
+    totalVersions.value = 0
+    return
+  }
+
   loading.value = true
   try {
     const result = await getVersionsPaginated(
