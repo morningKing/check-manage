@@ -9,6 +9,7 @@ import { getStorage, setStorage, removeStorage, STORAGE_KEYS } from '@/utils/sto
 import { login as loginApi, getCurrentUser as getMeApi } from '@/api/auth'
 import { useMenuStore } from '@/stores/menu'
 import type { UserInfo, UserRole, LoginParams } from '@/types'
+import type { UserBranch } from '@/api/version'
 
 export const useAuthStore = defineStore('auth', () => {
   // ==================== State ====================
@@ -18,6 +19,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** 当前用户信息 */
   const user = ref<UserInfo | null>(getStorage<UserInfo | null>(STORAGE_KEYS.USER_INFO, null))
+
+  /** 当前工作分支 */
+  const currentBranch = ref<UserBranch | null>(null)
 
   // ==================== Getters ====================
 
@@ -105,6 +109,7 @@ export const useAuthStore = defineStore('auth', () => {
     // State
     token,
     user,
+    currentBranch,
     // Getters
     isLoggedIn,
     userRole,

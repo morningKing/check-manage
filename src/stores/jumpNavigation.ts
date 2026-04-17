@@ -8,6 +8,7 @@
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 
 /** 跳转意图 — 发起跳转时设置，目标页到达后消费 */
 export interface JumpIntent {
@@ -55,9 +56,17 @@ export const useJumpNavigationStore = defineStore('jumpNavigation', () => {
 
   /**
    * 设置跳转意图并推入来源页面到历史栈
+   * 自动填充当前分支信息
    */
-  function setJump(intent: JumpIntent, sourceEntry?: JumpHistoryEntry): void {
-    pendingJump.value = intent
+  function setJump(intent: Omit<JumpIntent, 'branchId' | 'timestamp'>, sourceEntry?: JumpHistoryEntry): void {
+    const authStore = useAuthStore()
+    const currentBranch = authStore.currentBranch
+
+    pendingJump.value = {
+      ...intent,
+      timestamp: Date.now(),
+      branchId: currentBranch?.branchId || 'main',  // 自动填充
+    }
     if (sourceEntry) {
       jumpStack.value.push(sourceEntry)
       // 限制栈深度
