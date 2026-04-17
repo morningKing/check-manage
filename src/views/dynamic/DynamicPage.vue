@@ -706,8 +706,9 @@ import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
+import { getCurrentBranch, getVersions, switchToVersion, switchToMainBranch, type UserBranch } from '@/api/version'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CollectionVersion } from '@/types'
 
 // ==================== Props ====================
 
@@ -934,6 +935,26 @@ const diffDialogVisible = ref(false)
  * 版本管理抽屉可见性
  */
 const versionManagerVisible = ref(false)
+
+/**
+ * 当前用户分支信息
+ */
+const currentBranch = ref<UserBranch | null>(null)
+
+/**
+ * 分支列表（用于切换下拉菜单）
+ */
+const branchVersions = ref<CollectionVersion[]>([])
+
+/**
+ * 分支切换下拉菜单可见性
+ */
+const showBranchDropdown = ref(false)
+
+/**
+ * 分支切换加载状态
+ */
+const branchSwitching = ref(false)
 
 /**
  * 关系图谱对话框可见性
