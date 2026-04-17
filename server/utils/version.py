@@ -174,6 +174,110 @@ def get_branch_data_count(collection, branch_id):
         return cur.fetchone()[0]
 
 
+def get_version_collections(version_id):
+    """
+    获取版本涉及的所有collections
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    List[str]
+        所有参与的collection列表
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT collection FROM version_collections WHERE version_id = %s',
+            (version_id,)
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_version_collection_stats(version_id):
+    """
+    获取每个collection的记录数统计
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    Dict[str, int]
+        {collection: records_count}
+    """
+    stats = {}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT collection, COUNT(*) FROM version_snapshots '
+            'WHERE version_id = %s GROUP BY collection',
+            (version_id,)
+        )
+        for row in cur.fetchall():
+            stats[row[0]] = row[1]
+    return stats
+
+
+def get_primary_collection(version_id):
+    """
+    获取版本的主collection（创建点）
+
+    Primary collection的parent_version不自引用（null或指向其他版本）
+    Non-primary collection的parent_version = version_id（自引用）
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    str | None
+        主collection名称，未找到返回None
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        # Primary collection is stored in collection_versions.collection
+        cur.execute(
+            'SELECT collection FROM collection_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def count_collection_relations(collection, branch_id, cur):
+    """
+    统计collection在指定分支的关联数量
+
+    Parameters
+    ----------
+    collection : str
+        Collection名称
+    branch_id : str
+        分支 ID
+    cur : cursor
+        数据库游标（避免多次创建连接）
+
+    Returns
+    -------
+    int
+        关联数量
+    """
+    cur.execute(
+        'SELECT COUNT(*) FROM data_relations '
+        'WHERE collection = %s AND branch_id = %s',
+        (collection, branch_id)
+    )
+    return cur.fetchone()[0]
+
+
 def _compute_data_hash(records, relations):
     """计算数据和关联的 SHA256 哈希，用于快速判断数据是否相同"""
     data_str = json.dumps(records, sort_keys=True, ensure_ascii=False, cls=DateTimeEncoder)
