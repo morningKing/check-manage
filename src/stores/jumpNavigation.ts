@@ -16,6 +16,7 @@ export interface JumpIntent {
   jumpType: 'relation' | 'reference' | 'quote' | 'graph'
   sourcePageId: string
   sourceFilters?: SavedFilters
+  branchId?: string  // 目标分支ID，用于跨分支跳转时携带分支上下文
   timestamp: number
 }
 
