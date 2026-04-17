@@ -936,6 +936,11 @@ def get_version_list(collection=None, status=None, page=None, pageSize=None, key
                 'isProtected': r[15],
             } for r in rows]
 
+            # 为每个版本添加collections和collectionStats字段
+            for item in items:
+                item['collections'] = get_version_collections(item['id'])
+                item['collectionStats'] = get_version_collection_stats(item['id'])
+
             return {'items': items, 'total': total}
 
         # Non-paginated query (backward compatible)
@@ -950,7 +955,7 @@ def get_version_list(collection=None, status=None, page=None, pageSize=None, key
         cur.execute(sql, params)
         rows = cur.fetchall()
 
-    return [{
+    versions = [{
         'id': r[0],
         'collection': r[1],
         'name': r[2],
@@ -968,6 +973,13 @@ def get_version_list(collection=None, status=None, page=None, pageSize=None, key
         'mergedInto': r[14],
         'isProtected': r[15],
     } for r in rows]
+
+    # 为每个版本添加collections和collectionStats字段
+    for version in versions:
+        version['collections'] = get_version_collections(version['id'])
+        version['collectionStats'] = get_version_collection_stats(version['id'])
+
+    return versions
 
 
 def get_version_detail(version_id):
@@ -1014,6 +1026,8 @@ def get_version_detail(version_id):
         'mergedBy': row[13],
         'mergedInto': row[14],
         'isProtected': row[15],
+        'collections': get_version_collections(version_id),
+        'collectionStats': get_version_collection_stats(version_id),
     }
 
 

@@ -45,6 +45,209 @@ def test_count_collection_relations():
     pass
 
 
+def test_list_versions_returns_collections_field():
+    """测试list_versions API返回collections和collectionStats字段"""
+    collection_a = 'test-list-api-coll-a'
+    collection_b = 'test-list-api-coll-b'
+    test_user = 'test-list-api-user'
+
+    # 1. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute(
+            'DELETE FROM version_snapshots WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_relations WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_collections WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute('DELETE FROM collection_versions WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        conn.commit()
+
+    # 2. 创建测试数据和关联
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-list-api-a', collection_a,
+             psycopg2.extras.Json({'name': 'Record A'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-list-api-b', collection_b,
+             psycopg2.extras.Json({'name': 'Record B'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO data_relations '
+            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            (collection_a, 'record-list-api-a', 'relatedField',
+             collection_b, 'record-list-api-b', 'main')
+        )
+        conn.commit()
+
+    # 3. 创建跨collection版本
+    from utils.version import create_version_snapshot
+    version_info = create_version_snapshot(
+        collection=collection_a,
+        name='测试API列表版本',
+        description='测试list_versions返回collections字段',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_user,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    # 4. 测试get_version_list返回collections字段
+    from utils.version import get_version_list
+    versions = get_version_list(collection=collection_a)
+
+    # 找到我们创建的版本
+    target_version = None
+    for v in versions:
+        if v['id'] == version_id:
+            target_version = v
+            break
+
+    assert target_version is not None, '创建的版本应在列表中'
+
+    # 5. 验证collections字段存在
+    assert 'collections' in target_version, '版本应包含collections字段'
+    assert collection_a in target_version['collections'], f'{collection_a}应在collections中'
+    assert collection_b in target_version['collections'], f'{collection_b}应在collections中'
+
+    # 6. 验证collectionStats字段存在
+    assert 'collectionStats' in target_version, '版本应包含collectionStats字段'
+    assert collection_a in target_version['collectionStats'], f'{collection_a}应在collectionStats中'
+    assert collection_b in target_version['collectionStats'], f'{collection_b}应在collectionStats中'
+    assert target_version['collectionStats'][collection_a] >= 1, 'collection_a应有至少1条记录'
+    assert target_version['collectionStats'][collection_b] >= 1, 'collection_b应有至少1条记录'
+
+    # 7. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
+        conn.commit()
+
+
+def test_get_version_returns_collections_field():
+    """测试get_version API返回collections和collectionStats字段"""
+    collection_a = 'test-detail-api-coll-a'
+    collection_b = 'test-detail-api-coll-b'
+    test_user = 'test-detail-api-user'
+
+    # 1. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute(
+            'DELETE FROM version_snapshots WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_relations WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_collections WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute('DELETE FROM collection_versions WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        conn.commit()
+
+    # 2. 创建测试数据和关联
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-detail-api-a', collection_a,
+             psycopg2.extras.Json({'name': 'Record A'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-detail-api-b', collection_b,
+             psycopg2.extras.Json({'name': 'Record B'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO data_relations '
+            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            (collection_a, 'record-detail-api-a', 'relatedField',
+             collection_b, 'record-detail-api-b', 'main')
+        )
+        conn.commit()
+
+    # 3. 创建跨collection版本
+    from utils.version import create_version_snapshot
+    version_info = create_version_snapshot(
+        collection=collection_a,
+        name='测试API详情版本',
+        description='测试get_version返回collections字段',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_user,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    # 4. 测试get_version_detail返回collections字段
+    from utils.version import get_version_detail
+    version_detail = get_version_detail(version_id)
+
+    assert version_detail is not None, '版本详情应存在'
+
+    # 5. 验证collections字段存在
+    assert 'collections' in version_detail, '版本详情应包含collections字段'
+    assert collection_a in version_detail['collections'], f'{collection_a}应在collections中'
+    assert collection_b in version_detail['collections'], f'{collection_b}应在collections中'
+
+    # 6. 验证collectionStats字段存在
+    assert 'collectionStats' in version_detail, '版本详情应包含collectionStats字段'
+    assert collection_a in version_detail['collectionStats'], f'{collection_a}应在collectionStats中'
+    assert collection_b in version_detail['collectionStats'], f'{collection_b}应在collectionStats中'
+    assert version_detail['collectionStats'][collection_a] >= 1, 'collection_a应有至少1条记录'
+    assert version_detail['collectionStats'][collection_b] >= 1, 'collection_b应有至少1条记录'
+
+    # 7. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
+        conn.commit()
+
+
 def test_get_version_collections_integration():
     """集成测试：创建跨collection版本后获取collections列表"""
     pytest.skip('Requires Task 2 implementation (create_version_snapshot multi-collection support)')
