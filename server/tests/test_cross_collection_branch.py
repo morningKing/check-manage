@@ -145,3 +145,125 @@ def test_get_version_collections_integration():
         cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
         cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
         conn.commit()
+
+
+def test_switch_to_version_multi_collection():
+    """测试切换版本时同步更新所有参与的collections"""
+    collection_a = 'test-switch-coll-a'
+    collection_b = 'test-switch-coll-b'
+    test_user_id = 'test-switch-user-id'
+    test_username = 'test-switch-user'
+
+    # 1. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
+        cur.execute(
+            'DELETE FROM version_snapshots WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_relations WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute(
+            'DELETE FROM version_collections WHERE version_id IN '
+            '(SELECT id FROM collection_versions WHERE collection IN (%s, %s))',
+            (collection_a, collection_b)
+        )
+        cur.execute('DELETE FROM collection_versions WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        conn.commit()
+
+    # 2. 创建测试数据和关联
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-switch-a', collection_a,
+             psycopg2.extras.Json({'name': 'Record A'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, version) '
+            'VALUES (%s, %s, %s, %s, %s)',
+            ('record-switch-b', collection_b,
+             psycopg2.extras.Json({'name': 'Record B'}), 'main', 1)
+        )
+        cur.execute(
+            'INSERT INTO data_relations '
+            '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+            'VALUES (%s, %s, %s, %s, %s, %s)',
+            (collection_a, 'record-switch-a', 'relatedField',
+             collection_b, 'record-switch-b', 'main')
+        )
+        conn.commit()
+
+    # 3. 创建跨collection版本
+    from utils.version import create_version_snapshot
+    version_info = create_version_snapshot(
+        collection=collection_a,
+        name='测试切换版本',
+        description='测试switch_to_version多collection支持',
+        version_type='branch',
+        parent_version=None,
+        created_by=test_username,
+        branch_id='main'
+    )
+    version_id = version_info['id']
+
+    # 4. 切换到该版本
+    from utils.version import switch_to_version
+    result = switch_to_version(
+        version_id=version_id,
+        switched_by=test_username,
+        user_id=test_user_id
+    )
+
+    # 5. 验证返回结果
+    assert result['success'] is True
+    assert result['branchId'] == version_id
+    assert 'affectedCollections' in result
+    assert collection_a in result['affectedCollections']
+    assert collection_b in result['affectedCollections']
+
+    # 6. 验证所有collection的用户当前分支都已更新
+    with get_db() as conn:
+        cur = conn.cursor()
+        for coll in [collection_a, collection_b]:
+            cur.execute(
+                'SELECT branch_id FROM user_current_branch WHERE user_id = %s AND collection = %s',
+                (test_user_id, coll)
+            )
+            row = cur.fetchone()
+            assert row is not None, f'Collection {coll} 的用户分支设置不存在'
+            assert row[0] == version_id, f'Collection {coll} 的分支ID不正确'
+
+    # 7. 验证分支数据已初始化（首次切换）
+    assert result['initialized'] is True
+    with get_db() as conn:
+        cur = conn.cursor()
+        for coll in [collection_a, collection_b]:
+            cur.execute(
+                'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                (coll, version_id)
+            )
+            count = cur.fetchone()[0]
+            assert count >= 1, f'Collection {coll} 的分支数据未初始化'
+
+    # 8. 清理测试数据
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('DELETE FROM dynamic_data WHERE collection IN (%s, %s)', (collection_a, collection_b))
+        cur.execute('DELETE FROM data_relations WHERE collection IN (%s, %s) OR related_collection IN (%s, %s)',
+                   (collection_a, collection_b, collection_a, collection_b))
+        cur.execute('DELETE FROM user_current_branch WHERE user_id = %s', (test_user_id,))
+        cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_relations WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM version_collections WHERE version_id = %s', (version_id,))
+        cur.execute('DELETE FROM collection_versions WHERE id = %s', (version_id,))
+        conn.commit()

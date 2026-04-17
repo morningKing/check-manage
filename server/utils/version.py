@@ -252,6 +252,92 @@ def get_primary_collection(version_id):
         return row[0] if row else None
 
 
+def initialize_branch_from_snapshot(version_id, affected_collections, cur):
+    """
+    从快照初始化分支数据（首次切换场景）
+
+    该函数执行以下操作：
+    1. 清空目标分支的所有collection数据（避免重复）
+    2. 从version_snapshots读取并插入每个collection的数据
+    3. 从version_relations恢复每个collection的关联数据
+    4. 返回初始化的记录总数
+
+    Parameters
+    ----------
+    version_id : str
+        目标版本 ID
+    affected_collections : List[str]
+        需要初始化的collection列表
+    cur : cursor
+        数据库游标（必须在事务中）
+
+    Returns
+    -------
+    int
+        初始化的记录总数
+
+    Raises
+    -------
+    ValueError
+        如果某个collection缺少快照数据
+    """
+    # 1. 清空目标分支的所有collection数据
+    for coll in affected_collections:
+        cur.execute(
+            'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (coll, version_id)
+        )
+
+    # 2. 读取所有collection的快照数据
+    cur.execute(
+        'SELECT collection, record_id, record_data, created_at FROM version_snapshots WHERE version_id = %s',
+        (version_id,),
+    )
+    target_records = cur.fetchall()
+
+    # 3. 验证所有collection都有快照数据
+    snapshot_collections = {row[0] for row in target_records}
+    missing_snapshots = set(affected_collections) - snapshot_collections
+    if missing_snapshots:
+        raise ValueError(
+            f'无法初始化版本：以下 Collection 缺少快照数据: {sorted(missing_snapshots)}。'
+            f'该版本可能在多 Collection 支持完善前创建，快照数据不完整。'
+        )
+
+    # 4. 读取所有关联数据
+    cur.execute(
+        'SELECT collection, record_id, field_name, related_collection, related_id '
+        'FROM version_relations WHERE version_id = %s',
+        (version_id,),
+    )
+    target_relations = cur.fetchall()
+
+    # 5. 按 collection 分组插入数据
+    records_by_collection = {}
+    for coll, rid, data, created_at in target_records:
+        if coll not in records_by_collection:
+            records_by_collection[coll] = []
+        records_by_collection[coll].append((rid, data, created_at))
+
+    # 6. 插入每个 collection 的数据
+    total_inserted = 0
+    for coll, records in records_by_collection.items():
+        for rid, data, created_at in records:
+            flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
+            cur.execute(
+                'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at, version) '
+                'VALUES (%s, %s, %s, %s, %s, %s)',
+                (rid, coll, psycopg2.extras.Json(flat_data), version_id, created_at, 1),
+            )
+            total_inserted += 1
+
+    # 7. 恢复所有 collection 的关联数据
+    for coll in affected_collections:
+        _replace_collection_relations(cur, coll, version_id, target_relations)
+
+    return total_inserted
+
+
 def count_collection_relations(collection, branch_id, cur):
     """
     统计collection在指定分支的关联数量
@@ -1759,59 +1845,12 @@ def switch_to_version(version_id, switched_by, user_id=None):
                 existing_count = pre_existing_count
                 initialized = False
             else:
-                # 执行初始化：清空目标分支的所有 Collection 数据（避免重复）
-                for coll in affected_collections:
-                    cur.execute(
-                        'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
-                        (coll, version_id)
-                    )
-
-                # 读取所有 Collection 的快照数据（使用 snapshot 的 collection 字段）
-                cur.execute(
-                    'SELECT collection, record_id, record_data, created_at FROM version_snapshots WHERE version_id = %s',
-                    (version_id,),
+                # 执行初始化：调用辅助函数
+                total_inserted = initialize_branch_from_snapshot(
+                    version_id=version_id,
+                    affected_collections=affected_collections,
+                    cur=cur
                 )
-                target_records = cur.fetchall()
-
-                # 验证所有 Collection 都有快照数据
-                snapshot_collections = {row[0] for row in target_records}
-                missing_snapshots = set(affected_collections) - snapshot_collections
-                if missing_snapshots:
-                    raise ValueError(
-                        f'无法初始化版本：以下 Collection 缺少快照数据: {sorted(missing_snapshots)}。'
-                        f'该版本可能在多 Collection 支持完善前创建，快照数据不完整。'
-                    )
-
-                # 读取所有关联数据
-                cur.execute(
-                    'SELECT collection, record_id, field_name, related_collection, related_id '
-                    'FROM version_relations WHERE version_id = %s',
-                    (version_id,),
-                )
-                target_relations = cur.fetchall()
-
-                # 按 Collection 分组插入数据
-                records_by_collection = {}
-                for coll, rid, data, created_at in target_records:
-                    if coll not in records_by_collection:
-                        records_by_collection[coll] = []
-                    records_by_collection[coll].append((rid, data, created_at))
-
-                # 插入每个 Collection 的数据（使用快照的 collection 值）
-                total_inserted = 0
-                for coll, records in records_by_collection.items():
-                    for rid, data, created_at in records:
-                        flat_data = {k: v for k, v in data.items()} if isinstance(data, dict) else {}
-                        cur.execute(
-                            'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at, version) '
-                            'VALUES (%s, %s, %s, %s, %s, %s)',
-                            (rid, coll, psycopg2.extras.Json(flat_data), version_id, created_at, 1),
-                        )
-                        total_inserted += 1
-
-                # 恢复所有 Collection 的关联数据
-                for coll in affected_collections:
-                    _replace_collection_relations(cur, coll, version_id, target_relations)
 
                 # 标记初始化完成（仅在 initialized_at 字段存在时更新）
                 if has_initialized_at:
