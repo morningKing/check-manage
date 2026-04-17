@@ -366,10 +366,22 @@
     <!-- 查看记录对话框 -->
     <el-dialog
       v-model="viewDialogVisible"
-      title="查看记录"
       width="700px"
       destroy-on-close
     >
+      <template #header>
+        <div style="display: flex; align-items: center;">
+          <span style="font-weight: bold;">查看记录</span>
+          <el-tag
+            v-if="currentBranch"
+            :type="currentBranch.branchId ? 'primary' : 'success'"
+            size="small"
+            style="margin-left: auto;"
+          >
+            {{ currentBranch.branchName }}
+          </el-tag>
+        </div>
+      </template>
       <el-descriptions :column="1" border>
         <el-descriptions-item
           v-for="field in viewDisplayFields"
