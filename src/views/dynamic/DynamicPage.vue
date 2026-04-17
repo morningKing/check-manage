@@ -2789,9 +2789,8 @@ watch(
   () => branchRefreshStore.refreshTimestamp,
   () => {
     if (branchRefreshStore.needsRefresh(collection.value)) {
-      // 刷新当前页面数据
       loadPageData()
-      // 清除刷新标记
+      loadCurrentBranch()
       branchRefreshStore.clearRefresh()
     }
   }
