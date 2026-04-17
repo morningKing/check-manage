@@ -39,7 +39,7 @@
               切换 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
-              <el-dropdown-menu>
+              <el-dropdown-menu class="branch-dropdown-menu">
                 <el-dropdown-item
                   :command="'main'"
                   :disabled="!currentBranch.branchId"
@@ -3157,5 +3157,13 @@ html.dark .dynamic-page :deep(.highlight-flash) {
     margin-top: 12px;
     color: #909399;
   }
+}
+</style>
+
+<style>
+/* 分支切换下拉菜单滚动限制 */
+.branch-dropdown-menu {
+  max-height: 300px;
+  overflow-y: auto;
 }
 </style>
