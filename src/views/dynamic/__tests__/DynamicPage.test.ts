@@ -258,4 +258,121 @@ describe('DynamicPage — 查看功能', () => {
       expect(calcTargetPage('r1', [], 50)).toBe(-1)
     })
   })
+
+  /**
+   * 复刻 DynamicPage 中判断是否需要切换分支的逻辑
+   */
+  function shouldSwitchBranch(intent: { branchId?: string } | null): boolean {
+    // branchId 必须存在且不为空字符串、不为 'main'
+    const branchId = intent?.branchId
+    return branchId != null && branchId !== '' && branchId !== 'main'
+  }
+
+  /**
+   * DynamicPage 页面加载逻辑单元测试
+   */
+  describe('DynamicPage — 分支自动切换', () => {
+    describe('shouldSwitchBranch', () => {
+      it('branchId 为 main 时不应切换', () => {
+        expect(shouldSwitchBranch({ branchId: 'main' })).toBe(false)
+      })
+
+      it('branchId 为其他值时应切换', () => {
+        expect(shouldSwitchBranch({ branchId: 'branch-001' })).toBe(true)
+      })
+
+      it('branchId 未设置时应不切换', () => {
+        expect(shouldSwitchBranch({ branchId: undefined })).toBe(false)
+        expect(shouldSwitchBranch({})).toBe(false)
+      })
+
+      it('intent 为 null 时应不切换', () => {
+        expect(shouldSwitchBranch(null)).toBe(false)
+      })
+
+      it('branchId 为空字符串时应不切换', () => {
+        expect(shouldSwitchBranch({ branchId: '' })).toBe(false)
+      })
+    })
+
+    describe('跳转携带分支上下文场景', () => {
+      /**
+       * 模拟跳转意图处理流程
+       */
+      function processJumpIntent(
+        intent: { branchId?: string; targetRecordId?: string } | null,
+        currentBranchId: string | null,
+        switchBranch: (_id: string) => { success: boolean; branchName: string } | null
+      ): { switched: boolean; branchName?: string; locateId?: string } {
+        const result: { switched: boolean; branchName?: string; locateId?: string } = {
+          switched: false
+        }
+
+        if (!intent) return result
+
+        // 检查是否需要切换分支
+        if (shouldSwitchBranch(intent) && intent.branchId !== currentBranchId) {
+          const switchResult = switchBranch(intent.branchId!)
+          if (switchResult?.success) {
+            result.switched = true
+            result.branchName = switchResult.branchName
+          }
+        }
+
+        // 设置定位ID
+        if (intent.targetRecordId) {
+          result.locateId = intent.targetRecordId
+        }
+
+        return result
+      }
+
+      it('从主分支跳转到其他分支时应切换', () => {
+        const intent = { branchId: 'branch-001', targetRecordId: 'record-123' }
+        const result = processJumpIntent(intent, null, (_id) => ({
+          success: true,
+          branchName: '测试分支'
+        }))
+        expect(result.switched).toBe(true)
+        expect(result.branchName).toBe('测试分支')
+        expect(result.locateId).toBe('record-123')
+      })
+
+      it('已在目标分支时不应再次切换', () => {
+        const intent = { branchId: 'branch-001', targetRecordId: 'record-123' }
+        const result = processJumpIntent(intent, 'branch-001', (_id) => ({
+          success: true,
+          branchName: '测试分支'
+        }))
+        expect(result.switched).toBe(false)
+        expect(result.locateId).toBe('record-123')
+      })
+
+      it('跳转到 main 分支时不切换', () => {
+        const intent = { branchId: 'main', targetRecordId: 'record-123' }
+        const result = processJumpIntent(intent, 'branch-001', (_id) => ({
+          success: true,
+          branchName: '主分支'
+        }))
+        expect(result.switched).toBe(false)
+        expect(result.locateId).toBe('record-123')
+      })
+
+      it('切换失败时仍继续定位记录', () => {
+        const intent = { branchId: 'invalid-branch', targetRecordId: 'record-123' }
+        const result = processJumpIntent(intent, null, () => null)
+        expect(result.switched).toBe(false)
+        expect(result.locateId).toBe('record-123')
+      })
+
+      it('无跳转意图时不做任何操作', () => {
+        const result = processJumpIntent(null, null, (_id) => ({
+          success: true,
+          branchName: '测试分支'
+        }))
+        expect(result.switched).toBe(false)
+        expect(result.locateId).toBeUndefined()
+      })
+    })
+  })
 })

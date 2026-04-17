@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
-import { useJumpNavigationStore, type JumpIntent, type SavedFilters, type JumpHistoryEntry } from '../jumpNavigation'
+import { useJumpNavigationStore, type SavedFilters, type JumpHistoryEntry } from '../jumpNavigation'
 import { useAuthStore } from '../auth'
 
 describe('JumpNavigation Store', () => {

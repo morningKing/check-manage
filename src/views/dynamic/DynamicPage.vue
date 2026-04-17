@@ -2484,7 +2484,6 @@ function navigateToRecord(targetCollection: string, targetRecordId: string, jump
       targetRecordId,
       jumpType: jumpType as any,
       sourcePageId: pageId.value!,
-      timestamp: Date.now(),
     },
     sourceEntry
   )
@@ -2612,9 +2611,23 @@ watch(
     }
 
     if (pendingJump) {
-      // 跳转到达：使用 locateId 加载目标记录所在页
+      // 跳转到达：检查是否需要切换分支
       jumpLoadInProgress = true
       currentPage.value = 1
+
+      // 检查跳转意图是否携带分支ID且不是main
+      if (pendingJump.branchId && pendingJump.branchId !== 'main') {
+        // 自动切换到跳转携带的分支
+        try {
+          const result = await switchToVersion(pendingJump.branchId)
+          await loadCurrentBranch()
+          ElMessage.success(`已切换到分支：${result.branchName}`)
+        } catch (error) {
+          console.error('分支切换失败:', error)
+          ElMessage.warning('跳转携带的分支不存在或已失效，保持在当前分支')
+        }
+      }
+
       await loadPageDataWithLocate(pendingJump.targetRecordId)
       jumpLoadInProgress = false
       return
@@ -2826,7 +2839,20 @@ onActivated(async () => {
       currentPageSize.value = filters.pageSize
       await loadPageData()
     } else {
-      // 跳转到达：定位目标记录
+      // 跳转到达：检查是否需要切换分支
+      // 检查跳转意图是否携带分支ID且不是main
+      if (pendingJump.branchId && pendingJump.branchId !== 'main') {
+        // 自动切换到跳转携带的分支
+        try {
+          const result = await switchToVersion(pendingJump.branchId)
+          await loadCurrentBranch()
+          ElMessage.success(`已切换到分支：${result.branchName}`)
+        } catch (error) {
+          console.error('分支切换失败:', error)
+          ElMessage.warning('跳转携带的分支不存在或已失效，保持在当前分支')
+        }
+      }
+      // 定位目标记录
       await loadPageDataWithLocate(pendingJump.targetRecordId)
     }
     // 跳转完成，跳过正常缓存逻辑
