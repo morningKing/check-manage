@@ -706,9 +706,13 @@ import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
-import { getCurrentBranch, getVersions, switchToVersion, switchToMainBranch, type UserBranch } from '@/api/version'
+import { getCurrentBranch, getVersions, switchToVersion as _switchToVersion, switchToMainBranch as _switchToMainBranch, type UserBranch } from '@/api/version'
 import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CollectionVersion } from '@/types'
+
+// Acknowledge unused imports (will be used in future tasks)
+void _switchToVersion
+void _switchToMainBranch
 
 // ==================== Props ====================
 
@@ -949,12 +953,16 @@ const branchVersions = ref<CollectionVersion[]>([])
 /**
  * 分支切换下拉菜单可见性
  */
-const showBranchDropdown = ref(false)
+const _showBranchDropdown = ref(false)
 
 /**
  * 分支切换加载状态
  */
-const branchSwitching = ref(false)
+const _branchSwitching = ref(false)
+
+// Acknowledge unused variables (will be used in future tasks)
+void _showBranchDropdown
+void _branchSwitching
 
 /**
  * 关系图谱对话框可见性
@@ -1342,11 +1350,43 @@ async function loadPageData(): Promise<void> {
     })
     tableData.value = result.data
     totalCount.value = result.total
+    // 加载当前分支信息
+    await loadCurrentBranch()
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
   } finally {
     tableLoading.value = false
+  }
+}
+
+/**
+ * 加载当前用户分支信息
+ */
+async function loadCurrentBranch(): Promise<void> {
+  if (!collection.value) return
+
+  try {
+    currentBranch.value = await getCurrentBranch(collection.value)
+  } catch (error) {
+    console.error('获取分支信息失败:', error)
+    currentBranch.value = null
+  }
+}
+
+/**
+ * 加载分支列表（用于切换下拉菜单）
+ */
+async function loadBranchVersions(): Promise<void> {
+  if (!collection.value) return
+
+  try {
+    const versions = await getVersions(collection.value)
+    // 只筛选分支类型
+    branchVersions.value = versions.filter(v => v.versionType === 'branch')
+  } catch (error) {
+    console.error('获取分支列表失败:', error)
+    branchVersions.value = []
   }
 }
 
