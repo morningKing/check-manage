@@ -174,34 +174,30 @@ def get_branch_data_count(collection, branch_id):
         return cur.fetchone()[0]
 
 
-def get_users_on_branch(version_id):
+def get_users_on_branch(collection, branch_id):
     """
-    获取当前正在使用某分支的用户列表
+    获取正在使用指定collection的指定分支的用户列表
 
     Parameters
     ----------
-    version_id : str
+    collection : str
+        集合名称
+    branch_id : str
         分支版本 ID
 
     Returns
     -------
-    List[dict]
-        用户列表，每个元素包含 {user_id, username, collection}
+    List[str]
+        用户名列表
     """
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT user_id, username, collection FROM user_current_branch WHERE branch_id = %s',
-            (version_id,)
+            'SELECT username FROM user_current_branch '
+            'WHERE collection = %s AND branch_id = %s',
+            (collection, branch_id)
         )
-        users = []
-        for row in cur.fetchall():
-            users.append({
-                'userId': row[0],
-                'username': row[1],
-                'collection': row[2]
-            })
-        return users
+        return [row[0] for row in cur.fetchall()]
 
 
 def get_version_collections(version_id):
@@ -720,8 +716,15 @@ def get_version_delete_impact(version_id):
         )
         total_relations = cur.fetchone()[0]
 
-        # 5. 获取当前使用该分支的用户
-        users_on_branch = get_users_on_branch(version_id)
+        # 5. 获取当前使用该分支的用户（遍历所有collection）
+        users_on_branch = []
+        for coll in collections:
+            usernames = get_users_on_branch(coll, version_id)
+            for username in usernames:
+                users_on_branch.append({
+                    'username': username,
+                    'collection': coll
+                })
         has_users = len(users_on_branch) > 0
 
         # 6. 生成警告信息
@@ -1030,16 +1033,37 @@ def delete_version(version_id, confirmed=False):
     dict | bool
         如果 confirmed=False，返回影响报告 dict
         如果 confirmed=True，返回删除成功 bool
+
+    Raises
+    ------
+    ValueError
+        如果有用户正在使用该分支，或版本受保护、有子版本
     """
     # 未确认：返回影响报告
     if not confirmed:
         return get_version_delete_impact(version_id)
 
-    # 已确认：执行删除
+    # 已确认：执行删除前的检查
+    # 1. 获取所有参与的collections
+    collections = get_version_collections(version_id)
+
+    # 2. 检查是否有用户在使用（Critical fix）
+    users_using = []
+    for coll in collections:
+        users = get_users_on_branch(coll, version_id)
+        users_using.extend(users)
+
+    if users_using:
+        raise ValueError(
+            f'有用户正在使用该分支：{", ".join(set(users_using))}。'
+            f'请通知他们切换到其他分支后再删除。'
+        )
+
+    # 已确认且无用户使用：执行删除
     with get_db() as conn:
         cur = conn.cursor()
 
-        # 1. 检查版本状态
+        # 3. 检查版本状态
         cur.execute(
             'SELECT is_protected, collection, version_type FROM collection_versions WHERE id = %s',
             (version_id,)
@@ -1052,7 +1076,7 @@ def delete_version(version_id, confirmed=False):
         collection = row[1]
         version_type = row[2]
 
-        # 2. 检查子版本
+        # 4. 检查子版本
         cur.execute(
             'SELECT COUNT(*) FROM collection_versions WHERE parent_version = %s',
             (version_id,)
@@ -1061,31 +1085,31 @@ def delete_version(version_id, confirmed=False):
         if child_count > 0:
             raise ValueError(f'无法删除：存在 {child_count} 个子版本')
 
-        # 3. 如果是分支，精确清理数据
+        # 5. 如果是分支，精确清理数据
         if version_type == 'branch':
             # 查询涉及的 Collection
             cur.execute(
                 'SELECT collection FROM version_collections WHERE version_id = %s',
                 (version_id,)
             )
-            collections = [row[0] for row in cur.fetchall()]
+            db_collections = [row[0] for row in cur.fetchall()]
 
             # 如果无追踪数据，扫描 version_snapshots 获取所有涉及的 Collection
             # 兼容 Task 1-3 实施前创建的旧版本
-            if not collections:
+            if not db_collections:
                 cur.execute(
                     'SELECT DISTINCT collection FROM version_snapshots WHERE version_id = %s',
                     (version_id,)
                 )
                 snapshot_collections = [row[0] for row in cur.fetchall()]
                 if snapshot_collections:
-                    collections = snapshot_collections
+                    db_collections = snapshot_collections
                 else:
                     # 最终 fallback：使用 metadata collection
-                    collections = [collection]
+                    db_collections = [collection]
 
             # 精确清理每个 Collection
-            for coll in collections:
+            for coll in db_collections:
                 cur.execute(
                     'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
                     (coll, version_id)
@@ -1103,7 +1127,7 @@ def delete_version(version_id, confirmed=False):
                 (version_id,)
             )
 
-        # 4. 删除版本相关数据（显式删除，不依赖 CASCADE）
+        # 6. 删除版本相关数据（显式删除，不依赖 CASCADE）
         # 删除 version_snapshots
         cur.execute('DELETE FROM version_snapshots WHERE version_id = %s', (version_id,))
         # 删除 version_relations
