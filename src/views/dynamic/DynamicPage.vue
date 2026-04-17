@@ -18,6 +18,51 @@
     <div class="page-header">
       <div class="page-title">
         <h2>{{ pageConfig?.name || '数据页面' }}</h2>
+        <!-- 分支标签 -->
+        <el-tag
+          v-if="currentBranch"
+          :type="currentBranch.branchId ? 'primary' : 'success'"
+          size="small"
+          style="margin-left: 12px"
+        >
+          {{ currentBranch.branchName }}
+        </el-tag>
+        <!-- 切换下拉按钮（仅管理员可见） -->
+        <el-dropdown
+          v-if="isAdmin && currentBranch"
+          trigger="click"
+          @command="handleBranchSwitch"
+          @visible-change="(visible: boolean) => visible && loadBranchVersions()"
+          style="margin-left: 8px"
+        >
+          <span class="branch-switch-link">
+            切换 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                :command="'main'"
+                :disabled="!currentBranch.branchId"
+              >
+                <el-icon v-if="!currentBranch.branchId"><Check /></el-icon>
+                主分支
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-for="branch in branchVersions"
+                :key="branch.id"
+                :command="branch.id"
+                :disabled="branch.id === currentBranch.branchId"
+              >
+                <el-icon v-if="branch.id === currentBranch.branchId"><Check /></el-icon>
+                {{ branch.name }}
+              </el-dropdown-item>
+              <el-dropdown-item divided command="manage">
+                <el-icon><Tickets /></el-icon>
+                管理版本...
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <span v-if="pageConfig?.description" class="page-description">
           {{ pageConfig.description }}
         </span>
@@ -699,20 +744,16 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useBranchRefreshStore } from '@/stores'
 import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager, ExcelView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
-import { getCurrentBranch, getVersions, switchToVersion as _switchToVersion, switchToMainBranch as _switchToMainBranch, type UserBranch } from '@/api/version'
+import { getCurrentBranch, getVersions, switchToVersion, switchToMainBranch, type UserBranch } from '@/api/version'
 import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CollectionVersion } from '@/types'
-
-// Acknowledge unused imports (will be used in future tasks)
-void _switchToVersion
-void _switchToMainBranch
 
 // ==================== Props ====================
 
@@ -955,14 +996,13 @@ const branchVersions = ref<CollectionVersion[]>([])
  */
 const _showBranchDropdown = ref(false)
 
+// Acknowledge unused variable (will be used in future tasks)
+void _showBranchDropdown
+
 /**
  * 分支切换加载状态
  */
-const _branchSwitching = ref(false)
-
-// Acknowledge unused variables (will be used in future tasks)
-void _showBranchDropdown
-void _branchSwitching
+const branchSwitching = ref(false)
 
 /**
  * 关系图谱对话框可见性
@@ -1387,6 +1427,57 @@ async function loadBranchVersions(): Promise<void> {
   } catch (error) {
     console.error('获取分支列表失败:', error)
     branchVersions.value = []
+  }
+}
+
+/**
+ * 处理分支切换
+ */
+async function handleBranchSwitch(command: string): Promise<void> {
+  if (command === 'manage') {
+    versionManagerVisible.value = true
+    return
+  }
+
+  if (command === 'main') {
+    // 切换到主分支
+    branchSwitching.value = true
+    try {
+      await switchToMainBranch(collection.value)
+      await loadCurrentBranch()
+      await loadPageData()
+      ElMessage.success('已切换到主分支')
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || '切换失败'
+      ElMessage.error(msg)
+    } finally {
+      branchSwitching.value = false
+    }
+    return
+  }
+
+  // 切换到指定分支
+  branchSwitching.value = true
+  try {
+    const result = await switchToVersion(command)
+    await loadCurrentBranch()
+    await loadPageData()
+
+    let msg = `已切换到分支「${result.branchName}」`
+    if (result.initialized) {
+      msg += '（分支数据已初始化）'
+    }
+    ElMessage.success(msg)
+
+    // 如果影响多个Collection，通知其他页面刷新
+    if (result.affectedCollections && result.affectedCollections.length > 1) {
+      branchRefreshStore.requestRefresh(result.affectedCollections)
+    }
+  } catch (error: any) {
+    const msg = error?.response?.data?.error || '切换失败'
+    ElMessage.error(msg)
+  } finally {
+    branchSwitching.value = false
   }
 }
 
@@ -2753,6 +2844,18 @@ onActivated(async () => {
       font-size: 20px;
       font-weight: 600;
       color: #303133;
+    }
+
+    .branch-switch-link {
+      color: #409eff;
+      font-size: 14px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+
+      &:hover {
+        color: #66b1ff;
+      }
     }
 
     .page-description {
