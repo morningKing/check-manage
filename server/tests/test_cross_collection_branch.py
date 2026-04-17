@@ -370,6 +370,15 @@ def test_delete_version_cascading():
     assert 'hasCrossCollectionData' in impact_report
     assert impact_report['hasCrossCollectionData'] is True
 
+    # 清除用户分支设置，避免用户检查阻止删除
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'DELETE FROM user_current_branch WHERE branch_id = %s',
+            (version_id,)
+        )
+        conn.commit()
+
     # 7. 测试确认删除
     delete_result = delete_version(version_id, confirmed=True)
     assert delete_result is True
