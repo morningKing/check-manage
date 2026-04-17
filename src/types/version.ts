@@ -30,6 +30,9 @@ export interface CollectionVersion {
   isProtected: boolean
   lockedBy?: string
   lockedAt?: string
+  // 多集合支持字段
+  collections: string[]  // 参与的所有collection列表
+  collectionStats?: Record<string, number>  // 每个collection的记录数统计
 }
 
 /**

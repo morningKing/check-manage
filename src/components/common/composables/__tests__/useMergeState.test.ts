@@ -26,6 +26,7 @@ function createMockVersion(overrides: Partial<CollectionVersion> = {}): Collecti
     createdBy: 'admin',
     createdAt: '2024-01-01T00:00:00Z',
     isProtected: false,
+    collections: ['test-collection'],
     ...overrides,
   }
 }
