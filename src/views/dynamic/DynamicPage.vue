@@ -325,11 +325,23 @@
     <!-- 新增/编辑对话框 -->
     <el-dialog
       v-model="dialogVisible"
-      :title="dialogTitle"
       width="600px"
       :close-on-click-modal="false"
       destroy-on-close
     >
+      <template #header>
+        <div style="display: flex; align-items: center;">
+          <span style="font-weight: bold;">{{ dialogTitle }}</span>
+          <el-tag
+            v-if="currentBranch"
+            :type="currentBranch.branchId ? 'primary' : 'success'"
+            size="small"
+            style="margin-left: auto;"
+          >
+            {{ currentBranch.branchName }}
+          </el-tag>
+        </div>
+      </template>
       <DynamicForm
         ref="dynamicFormRef"
         :fields="pageFields"
