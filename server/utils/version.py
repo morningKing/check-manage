@@ -174,6 +174,36 @@ def get_branch_data_count(collection, branch_id):
         return cur.fetchone()[0]
 
 
+def get_users_on_branch(version_id):
+    """
+    获取当前正在使用某分支的用户列表
+
+    Parameters
+    ----------
+    version_id : str
+        分支版本 ID
+
+    Returns
+    -------
+    List[dict]
+        用户列表，每个元素包含 {user_id, username, collection}
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT user_id, username, collection FROM user_current_branch WHERE branch_id = %s',
+            (version_id,)
+        )
+        users = []
+        for row in cur.fetchall():
+            users.append({
+                'userId': row[0],
+                'username': row[1],
+                'collection': row[2]
+            })
+        return users
+
+
 def get_version_collections(version_id):
     """
     获取版本涉及的所有collections
@@ -599,9 +629,11 @@ def get_version_delete_impact(version_id):
         {
             'versionInfo': {...},
             'affectedCollections': [...],
+            'usersOnBranch': [...],
             'totalRecords': N,
             'totalRelations': M,
             'hasCrossCollectionData': bool,
+            'hasUsersOnBranch': bool,
             'warningMessage': str
         }
     """
@@ -688,12 +720,22 @@ def get_version_delete_impact(version_id):
         )
         total_relations = cur.fetchone()[0]
 
-        # 5. 生成警告信息
+        # 5. 获取当前使用该分支的用户
+        users_on_branch = get_users_on_branch(version_id)
+        has_users = len(users_on_branch) > 0
+
+        # 6. 生成警告信息
         has_cross = len(collections) > 1
         warning_msg = ''
         if len(affected_collections) == 0:
             # 版本无追踪数据（可能创建后未调用 track_version_collections）
             warning_msg = '该版本暂无追踪数据，建议先运行数据迁移脚本'
+        elif has_users:
+            user_list = ', '.join([f"{u['username']}({u['collection']})" for u in users_on_branch])
+            warning_msg = (
+                f'当前有 {len(users_on_branch)} 位用户正在使用此分支：{user_list}\n'
+                f'删除将强制清理这些用户的分支设置。'
+            )
         elif has_cross:
             collection_list = ', '.join([
                 f"{item['collection']}({item['recordCount']}条)"
@@ -710,9 +752,11 @@ def get_version_delete_impact(version_id):
         return {
             'versionInfo': version_info,
             'affectedCollections': affected_collections,
+            'usersOnBranch': users_on_branch,
             'totalRecords': sum(item['recordCount'] for item in affected_collections),
             'totalRelations': total_relations,
             'hasCrossCollectionData': has_cross,
+            'hasUsersOnBranch': has_users,
             'warningMessage': warning_msg
         }
 
