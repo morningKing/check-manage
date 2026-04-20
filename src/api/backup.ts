@@ -104,3 +104,17 @@ export function diffBackupCollection(
 ) {
   return post<DiffResult>('/backups/diff', { collection, baseSource, targetSource })
 }
+
+/**
+ * 恢复出厂设置
+ * @param confirmText 必须为 "RESET"
+ */
+export function factoryReset(confirmText: string) {
+  return post<{
+    message: string
+    deletedTables: string[]
+    deletedRecords: Record<string, number>
+    backupId: string
+    timestamp: string
+  }>('/backups/factory-reset', { confirmText })
+}

@@ -179,6 +179,16 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'Download',
         },
       },
+      // 隐藏页面：恢复出厂设置（不添加菜单项）
+      {
+        path: 'admin/factory-reset',
+        name: 'FactoryReset',
+        component: () => import('@/views/admin/FactoryReset.vue'),
+        meta: {
+          title: '恢复出厂设置',
+          hidden: true, // 隐藏路由，不在菜单中显示
+        },
+      },
       {
         path: 'dashboard/:id?',
         name: 'Dashboard',

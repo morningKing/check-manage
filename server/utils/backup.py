@@ -718,3 +718,145 @@ def start_backup_scheduler(app):
 
     thread = threading.Thread(target=scheduler_loop, daemon=True)
     thread.start()
+
+
+# 恢复出厂设置时需要删除的表（按依赖顺序）
+FACTORY_RESET_TABLES = [
+    'version_relations',     # 依赖 collection_versions
+    'version_snapshots',     # 依赖 collection_versions
+    'user_current_branch',   # 依赖 collection_versions
+    'data_relations',        # 依赖 dynamic_data
+    'dynamic_data',          # 核心数据表
+    'collection_versions',   # 版本元数据
+    'operation_logs',        # 操作日志
+    'etl_logs',              # ETL执行日志（保留任务定义）
+    'trigger_logs',          # 触发器日志
+    'notifications',         # 通知
+    'reminders',             # 提醒
+]
+
+# 系统默认菜单ID（首页、仪表盘、数据工具、系统配置相关）
+# 巡检管理(menu-2)及其子项是示例业务数据，恢复出厂时删除
+SYSTEM_DEFAULT_MENU_IDS = [
+    # 首页
+    'menu-1',
+    # 仪表盘
+    'menu-dashboard',
+    # 数据工具及其子项
+    'menu-3-b', 'menu-3-6', 'menu-3-8', 'menu-3-9', 'menu-3-10', 'menu-3-12',
+    # 系统配置及其子项
+    'menu-3', 'menu-3-a', 'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11',
+    'menu-3-c', 'menu-3-4', 'menu-3-5',
+]
+
+# 系统默认页面配置ID - 空列表
+# 所有页面配置都是业务相关的，恢复出厂时应全部删除
+SYSTEM_DEFAULT_PAGE_CONFIG_IDS = []
+
+
+def factory_reset(created_by=None):
+    """
+    恢复出厂设置
+
+    删除所有动态业务数据，保留系统配置。
+    执行前自动创建备份（标记为 pre-reset）。
+
+    Parameters
+    ----------
+    created_by : str
+        执行者用户名
+
+    Returns
+    -------
+    dict
+        包含删除统计信息
+    """
+    # 1. 自动创建备份
+    pre_reset_backup = create_backup(
+        backup_type='manual',
+        created_by=created_by or 'system',
+    )
+    # 更新备份备注
+    note = '恢复出厂设置前自动备份'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('UPDATE backups SET note = %s WHERE id = %s', (note, pre_reset_backup['id']))
+
+    # 2. 执行删除
+    deleted_stats = {}
+    conn = None
+    main_success = False
+
+    try:
+        from db import pool
+        conn = pool.getconn()
+        cur = conn.cursor()
+
+        # 禁用触发器/FK约束
+        cur.execute('SET session_replication_role = replica')
+
+        for table in FACTORY_RESET_TABLES:
+            # 检查表是否存在
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, (table,))
+            if cur.fetchone()[0]:
+                cur.execute(f'DELETE FROM {table}')
+                deleted_stats[table] = cur.rowcount
+            else:
+                deleted_stats[table] = 0
+
+        # 3. 删除动态创建的菜单（保留系统默认）
+        if SYSTEM_DEFAULT_MENU_IDS:
+            cur.execute(
+                f'DELETE FROM menus WHERE id NOT IN ({",".join(["%s"] * len(SYSTEM_DEFAULT_MENU_IDS))})',
+                SYSTEM_DEFAULT_MENU_IDS
+            )
+        else:
+            cur.execute('DELETE FROM menus')
+        deleted_stats['menus'] = cur.rowcount
+
+        # 4. 删除所有页面配置（业务数据，恢复出厂时应清空）
+        if SYSTEM_DEFAULT_PAGE_CONFIG_IDS:
+            cur.execute(
+                f'DELETE FROM page_configs WHERE id NOT IN ({",".join(["%s"] * len(SYSTEM_DEFAULT_PAGE_CONFIG_IDS))})',
+                SYSTEM_DEFAULT_PAGE_CONFIG_IDS
+            )
+        else:
+            cur.execute('DELETE FROM page_configs')
+        deleted_stats['page_configs'] = cur.rowcount
+
+        conn.commit()
+        main_success = True
+
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            if main_success:
+                try:
+                    cur = conn.cursor()
+                    cur.execute('SET session_replication_role = DEFAULT')
+                except Exception:
+                    conn.close()
+                    return {
+                        'deletedTables': list(deleted_stats.keys()),
+                        'deletedRecords': deleted_stats,
+                        'backupId': pre_reset_backup['id'],
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                    }
+                pool.putconn(conn)
+            else:
+                conn.close()
+
+    return {
+        'deletedTables': list(deleted_stats.keys()),
+        'deletedRecords': deleted_stats,
+        'backupId': pre_reset_backup['id'],
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }

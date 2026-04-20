@@ -18,6 +18,7 @@ from utils.backup import (
     get_backup_settings,
     update_backup_settings,
     get_backup_table_names,
+    factory_reset,
     BACKUP_DIR,
 )
 
@@ -589,3 +590,49 @@ def diff_collection():
     diff['fields'] = fields
 
     return jsonify(diff)
+
+
+# ==================== 恢复出厂设置 ====================
+
+
+@backups_bp.route('/backups/factory-reset', methods=['POST'])
+@admin_required
+def do_factory_reset():
+    """
+    恢复出厂设置
+
+    删除所有动态业务数据，保留系统配置。
+    执行前自动创建备份（标记为 pre-reset）。
+
+    Body:
+        confirmText: str - 必须为 "RESET"
+
+    Returns:
+        {
+            "message": "恢复出厂设置成功",
+            "deletedTables": ["dynamic_data", ...],
+            "deletedRecords": { "dynamic_data": 1234, ... },
+            "backupId": "backup-xxx",
+            "timestamp": "2026-04-20T..."
+        }
+    """
+    from flask import g
+    body = request.get_json(silent=True) or {}
+    confirm_text = body.get('confirmText')
+
+    # 安全验证
+    if confirm_text != 'RESET':
+        return jsonify({'error': '确认文字不正确'}), 400
+
+    try:
+        operator = g.current_user.get('username', 'admin')
+        result = factory_reset(created_by=operator)
+        return jsonify({
+            'message': '恢复出厂设置成功',
+            'deletedTables': result['deletedTables'],
+            'deletedRecords': result['deletedRecords'],
+            'backupId': result['backupId'],
+            'timestamp': result['timestamp'],
+        })
+    except Exception as e:
+        return jsonify({'error': f'恢复出厂设置失败: {str(e)}'}), 500
