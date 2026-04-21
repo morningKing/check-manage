@@ -1,10 +1,29 @@
 /**
  * 菜单相关类型定义
  *
- * 定义菜单项的数据结构，支持1-3级嵌套菜单
+ * 定义菜单项的数据结构，支持工作空间-项目-数据三层嵌套菜单
  */
 
 import type { UserRole } from './user'
+
+/**
+ * 菜单类型
+ *
+ * - system: 系统菜单（首页、仪表盘、数据工具、系统配置），不可编辑删除
+ * - workspace: 工作空间菜单（一级菜单）
+ * - project: 项目菜单（二级菜单，父级必须是workspace）
+ * - data: 数据菜单（三级菜单，父级必须是project，必须关联pageId）
+ */
+export type MenuType = 'system' | 'workspace' | 'project' | 'data'
+
+/**
+ * 菜单类型选项
+ */
+export const MENU_TYPE_OPTIONS: Array<{ value: MenuType; label: string; description: string; disabled?: boolean }> = [
+  { value: 'workspace', label: '工作空间', description: '一级菜单，可包含多个项目' },
+  { value: 'project', label: '项目', description: '二级菜单，可包含多个数据集' },
+  { value: 'data', label: '数据菜单', description: '三级菜单，必须关联页面配置' },
+]
 
 /**
  * 菜单项接口
@@ -12,8 +31,10 @@ import type { UserRole } from './user'
  * @property id - 菜单唯一标识
  * @property name - 菜单显示名称
  * @property icon - 菜单图标名称（Element Plus 图标）
+ * @property menuType - 菜单类型（system/workspace/project/data）
  * @property pageId - 关联的页面配置ID（可选，仅叶子菜单需要）
  * @property parentId - 父级菜单ID（null表示顶级菜单）
+ * @property projectId - 所属项目ID（数据菜单关联的项目菜单ID）
  * @property order - 排序序号（升序排列）
  * @property path - 路由路径（可选，用于导航）
  * @property roles - 可见此菜单的角色列表
@@ -25,8 +46,10 @@ export interface MenuItem {
   id: string
   name: string
   icon?: string
+  menuType: MenuType
   pageId?: string | null
   parentId?: string | null
+  projectId?: string | null
   order: number
   path?: string | null
   roles?: UserRole[]
@@ -44,8 +67,10 @@ export interface MenuFormData {
   id?: string
   name: string
   icon: string
+  menuType: MenuType
   pageId: string | null
   parentId: string | null
+  projectId?: string | null
   order: number
   path: string
   roles: UserRole[]
@@ -103,8 +128,10 @@ export function createEmptyMenuFormData(): MenuFormData {
   return {
     name: '',
     icon: 'Document',
+    menuType: 'workspace',
     pageId: null,
     parentId: null,
+    projectId: null,
     order: 1,
     path: '',
     roles: ['admin', 'developer', 'guest'],

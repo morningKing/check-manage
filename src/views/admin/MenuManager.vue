@@ -4,7 +4,8 @@
  * 职责：
  * - 可视化展示和编辑菜单树
  * - 支持菜单的增删改操作
- * - 支持菜单排序和层级调整
+ * - 支持菜单类型选择（workspace/project/data）
+ * - 工作空间-项目-数据三层层级结构
  *
  * 功能：
  * - 左侧：菜单树展示
@@ -21,7 +22,7 @@
               <span>菜单结构</span>
               <el-button type="primary" size="small" @click="handleAddRoot">
                 <el-icon><Plus /></el-icon>
-                新增顶级菜单
+                新增工作空间
               </el-button>
             </div>
           </template>
@@ -42,12 +43,15 @@
                   <component :is="data.icon" />
                 </el-icon>
                 <span class="node-label">{{ data.name }}</span>
-                <el-icon v-if="isBuiltinMenu(data)" class="system-lock">
+                <el-tag :type="getMenuTypeTag(data.menuType)" size="small" style="margin-left: 8px">
+                  {{ getMenuTypeLabel(data.menuType) }}
+                </el-tag>
+                <el-icon v-if="data.menuType === 'system'" class="system-lock">
                   <Lock />
                 </el-icon>
-                <div class="node-actions" v-if="!isBuiltinMenu(data)">
+                <div class="node-actions" v-if="data.menuType !== 'system'">
                   <el-button
-                    v-if="getNodeLevel(data) < 3"
+                    v-if="canAddChild(data)"
                     type="primary"
                     link
                     size="small"
@@ -84,20 +88,166 @@
             ref="formRef"
             :model="formData"
             :rules="formRules"
-            :disabled="isCurrentBuiltinMenu"
+            :disabled="isCurrentSystemMenu"
             label-width="100px"
           >
             <el-alert
-              v-if="isCurrentBuiltinMenu"
+              v-if="isCurrentSystemMenu"
               type="info"
               :closable="false"
-              title="内置菜单不可修改"
-              description="内置菜单不允许编辑或删除。"
+              title="系统菜单不可修改"
+              description="系统菜单不允许编辑或删除。"
               show-icon
               style="margin-bottom: 16px"
             />
+
+            <el-form-item label="菜单类型" prop="menuType">
+              <el-select
+                v-model="formData.menuType"
+                placeholder="请选择菜单类型"
+                style="width: 100%"
+                :disabled="isEditMode"
+              >
+                <el-option
+                  v-for="opt in availableMenuTypeOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                  :disabled="opt.disabled"
+                >
+                  <span>{{ opt.label }}</span>
+                  <span style="color: #909399; font-size: 12px; margin-left: 8px">{{ opt.description }}</span>
+                </el-option>
+              </el-select>
+              <div class="form-tip">
+                工作空间(一级) → 项目(二级) → 数据菜单(三级)
+              </div>
+            </el-form-item>
+
             <el-form-item label="菜单名称" prop="name">
               <el-input
+                v-model="formData.name"
+                placeholder="请输入菜单名称"
+                maxlength="20"
+                show-word-limit
+              />
+            </el-form-item>
+
+            <el-form-item label="菜单图标" prop="icon">
+              <el-select
+                v-model="formData.icon"
+                placeholder="请选择图标"
+                filterable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="icon in iconOptions"
+                  :key="icon"
+                  :label="icon"
+                  :value="icon"
+                >
+                  <el-icon style="margin-right: 8px">
+                    <component :is="icon" />
+                  </el-icon>
+                  <span>{{ icon }}</span>
+                </el-option>
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="路由路径" prop="path">
+              <el-input
+                v-model="formData.path"
+                placeholder="请输入路由路径，如 /inspection/case"
+              />
+            </el-form-item>
+
+            <el-form-item label="关联页面" prop="pageId" v-if="formData.menuType === 'data'">
+              <el-select
+                v-model="formData.pageId"
+                placeholder="请选择关联的页面配置"
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="page in pageOptions"
+                  :key="page.value"
+                  :label="page.label"
+                  :value="page.value"
+                />
+              </el-select>
+              <div class="form-tip">
+                数据菜单必须关联页面配置
+              </div>
+            </el-form-item>
+
+            <el-form-item label="排序序号" prop="order">
+              <el-input-number
+                v-model="formData.order"
+                :min="1"
+                :max="999"
+                controls-position="right"
+                style="width: 100%"
+              />
+            </el-form-item>
+
+            <el-form-item label="可见角色" prop="roles">
+              <el-checkbox-group v-model="formData.roles">
+                <el-checkbox
+                  v-for="opt in ROLE_OPTIONS"
+                  :key="opt.value"
+                  :label="opt.value"
+                  :value="opt.value"
+                >
+                  {{ opt.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-form-item label="父级菜单" prop="parentId" v-if="formData.menuType !== 'workspace'">
+              <el-select
+                v-model="formData.parentId"
+                placeholder="请选择父级菜单"
+                style="width: 100%"
+                :disabled="isAddingRoot"
+              >
+                <el-option
+                  v-for="opt in availableParentOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                  :disabled="opt.disabled"
+                />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="导出脚本" prop="exportScriptId">
+              <el-select
+                v-model="formData.exportScriptId"
+                placeholder="请选择导出脚本（可选）"
+                clearable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="opt in exportScriptOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item v-if="!isCurrentSystemMenu">
+              <el-button type="primary" @click="handleSubmit" :loading="submitLoading">
+                {{ isEditMode ? '更新' : '创建' }}
+              </el-button>
+              <el-button @click="resetForm">重置</el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-empty v-else description="请选择或新增菜单项" />
+        </el-card>
+      </el-col>
+    </el-row>
                 v-model="formData.name"
                 placeholder="请输入菜单名称"
                 maxlength="20"
@@ -218,7 +368,7 @@
               </div>
             </el-form-item>
 
-            <el-form-item v-if="!isCurrentBuiltinMenu">
+            <el-form-item v-if="!isCurrentSystemMenu">
               <el-button type="primary" @click="handleSubmit" :loading="submitLoading">
                 {{ isEditMode ? '更新' : '创建' }}
               </el-button>
@@ -250,7 +400,7 @@
  * 功能：
  * 1. 展示菜单树结构
  * 2. 菜单的增删改操作
- * 3. 支持最多3级菜单
+ * 3. 工作空间-项目-数据三层层级结构
  */
 import { ref, computed, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -258,8 +408,8 @@ import { ElMessage } from 'element-plus'
 import { Plus, Lock } from '@element-plus/icons-vue'
 import { useMenuStore, usePageConfigStore, useExportScriptStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
-import type { MenuItem, MenuFormData } from '@/types'
-import { createEmptyMenuFormData, ROLE_OPTIONS } from '@/types'
+import type { MenuItem, MenuFormData, MenuType } from '@/types'
+import { createEmptyMenuFormData, ROLE_OPTIONS, MENU_TYPE_OPTIONS } from '@/types'
 
 // ==================== Store ====================
 
@@ -274,54 +424,21 @@ const formRef = ref<FormInstance>()
 
 // ==================== State ====================
 
-/**
- * 表单数据
- */
 const formData = ref<MenuFormData>(createEmptyMenuFormData())
-
-/**
- * 是否显示表单
- */
 const showForm = ref(false)
-
-/**
- * 是否编辑模式
- */
 const isEditMode = ref(false)
-
-/**
- * 是否添加顶级菜单
- */
 const isAddingRoot = ref(false)
-
-/**
- * 提交加载状态
- */
 const submitLoading = ref(false)
-
-/**
- * 删除对话框可见性
- */
 const deleteDialogVisible = ref(false)
-
-/**
- * 待删除的菜单项
- */
 const menuToDelete = ref<MenuItem | null>(null)
 
 // ==================== 常量 ====================
 
-/**
- * 树形控件属性配置
- */
 const treeProps = {
   children: 'children',
   label: 'name'
 }
 
-/**
- * 可用图标列表
- */
 const iconOptions = [
   'House', 'Monitor', 'Document', 'Files', 'Calendar', 'Tickets',
   'Clock', 'Flag', 'Setting', 'Menu', 'User', 'Search',
@@ -329,9 +446,6 @@ const iconOptions = [
   'Warning', 'InfoFilled', 'Star', 'Location', 'Phone', 'Message'
 ]
 
-/**
- * 表单验证规则
- */
 const formRules: FormRules = {
   name: [
     { required: true, message: '请输入菜单名称', trigger: 'blur' },
@@ -340,40 +454,40 @@ const formRules: FormRules = {
   icon: [
     { required: true, message: '请选择菜单图标', trigger: 'change' }
   ],
+  menuType: [
+    { required: true, message: '请选择菜单类型', trigger: 'change' }
+  ],
   order: [
     { required: true, message: '请输入排序序号', trigger: 'blur' }
+  ],
+  pageId: [
+    {
+      required: true,
+      message: '数据菜单必须关联页面配置',
+      trigger: 'change',
+      validator: (_rule, value, callback) => {
+        if (formData.value.menuType === 'data' && !value) {
+          callback(new Error('数据菜单必须关联页面配置'))
+        } else {
+          callback()
+        }
+      }
+    }
   ]
 }
 
 // ==================== 计算属性 ====================
 
-/**
- * 菜单树数据
- */
 const menuTree = computed(() => menuStore.menuTree)
-
-/**
- * 页面配置选项
- */
 const pageOptions = computed(() => pageConfigStore.pageConfigOptions)
-
-/**
- * 导出脚本选项
- */
 const exportScriptOptions = computed(() => exportScriptStore.scriptOptions)
 
-/**
- * 表单标题
- */
 const formTitle = computed(() => {
   if (isEditMode.value) return '编辑菜单'
-  if (isAddingRoot.value) return '新增顶级菜单'
+  if (isAddingRoot.value) return '新增工作空间'
   return '新增子菜单'
 })
 
-/**
- * 删除确认消息
- */
 const deleteMessage = computed(() => {
   if (!menuToDelete.value) return ''
   const childCount = menuStore.getChildMenus(menuToDelete.value.id).length
@@ -383,104 +497,107 @@ const deleteMessage = computed(() => {
   return `确定要删除菜单"${menuToDelete.value.name}"吗？`
 })
 
-/**
- * 判断菜单是否属于系统配置菜单树
- */
-function isSystemConfigMenu(menu: MenuItem): boolean {
-  // 如果菜单路径以 /admin/ 开头，则是系统配置菜单
-  if (menu.path?.startsWith('/admin/')) return true
+// ==================== 菜单类型相关函数 ====================
 
-  // 如果有父级，递归检查父级
-  if (menu.parentId) {
-    const parent = menuStore.getMenuById(menu.parentId)
-    if (parent) return isSystemConfigMenu(parent)
+function getMenuTypeLabel(type: MenuType): string {
+  const labels: Record<MenuType, string> = {
+    system: '系统',
+    workspace: '工作空间',
+    project: '项目',
+    data: '数据'
   }
+  return labels[type] || type
+}
 
-  // 如果是根菜单（无父级）且无路径，检查其子菜单
-  if (!menu.parentId && !menu.path) {
-    // 使用 menuStore.getChildMenus 而不是 menu.children
-    const children = menuStore.getChildMenus(menu.id)
-    if (children.length > 0 && children.some(c => c.path?.startsWith('/admin/'))) return true
+function getMenuTypeTag(type: MenuType): '' | 'success' | 'warning' | 'info' | 'danger' {
+  const tags: Record<MenuType, '' | 'success' | 'warning' | 'info' | 'danger'> = {
+    system: 'info',
+    workspace: '',
+    project: 'success',
+    data: 'warning'
   }
+  return tags[type] || ''
+}
 
-  return false
+function canAddChild(menu: MenuItem): boolean {
+  // workspace 可以添加 project
+  // project 可以添加 data
+  // system 和 data 不能添加子菜单
+  return menu.menuType === 'workspace' || menu.menuType === 'project'
 }
 
 /**
- * 判断菜单是否为内置菜单（首页 + 系统配置树）
- * 内置菜单不允许编辑和删除，系统配置菜单还不允许增加子菜单
+ * 可选的菜单类型选项（根据父级动态计算）
  */
-function isBuiltinMenu(menu: MenuItem): boolean {
-  if (menu.id === 'menu-1') return true
-  return isSystemConfigMenu(menu)
-}
+const availableMenuTypeOptions = computed(() => {
+  const parent = formData.value.parentId
+    ? menuStore.getMenuById(formData.value.parentId)
+    : null
+
+  if (!parent) {
+    // 无父级（顶级）：只能选 workspace
+    return MENU_TYPE_OPTIONS.filter(opt => opt.value === 'workspace')
+  }
+
+  if (parent.menuType === 'workspace') {
+    // 父级是 workspace：只能选 project
+    return MENU_TYPE_OPTIONS.filter(opt => opt.value === 'project')
+  }
+
+  if (parent.menuType === 'project') {
+    // 父级是 project：只能选 data
+    return MENU_TYPE_OPTIONS.filter(opt => opt.value === 'data')
+  }
+
+  return []
+})
 
 /**
- * 当前编辑的菜单是否为内置菜单
+ * 当前编辑的菜单是否为系统菜单
  */
-const isCurrentBuiltinMenu = computed(() => {
+const isCurrentSystemMenu = computed(() => {
   if (!isEditMode.value || !formData.value.id) return false
   const menu = menuStore.getMenuById(formData.value.id)
-  return menu ? isBuiltinMenu(menu) : false
+  return menu ? menu.menuType === 'system' : false
 })
 
 /**
  * 可选的父级菜单选项
- * 排除当前菜单及其子菜单（避免循环引用）
- * 排除已经是第3级的菜单（不能再添加子菜单）
  */
 const availableParentOptions = computed(() => {
   const options: Array<{ value: string; label: string; disabled?: boolean }> = []
 
-  // 递归构建菜单选项
-  function buildOptions(menus: MenuItem[], level: number = 1, prefix: string = '') {
+  function buildOptions(menus: MenuItem[], prefix: string = '') {
     menus.forEach(menu => {
+      // 排除系统菜单
+      if (menu.menuType === 'system') return
+
       // 排除当前编辑的菜单及其子菜单
       if (isEditMode.value && formData.value.id) {
         if (menu.id === formData.value.id) return
-        // 检查是否是当前菜单的后代
         if (isDescendant(formData.value.id, menu.id)) return
       }
 
-      // 排除内置菜单（不允许作为父级）
-      if (isBuiltinMenu(menu)) return
-
-      // 排除已经是第3级的菜单（不能再添加子菜单）
-      if (level >= 3) return
-
-      const label = prefix + menu.name
-
-      // 如果当前菜单是第2级，选择父级后会成为第3级，需要确保目标父级是顶级菜单
-      // 如果当前菜单是第3级，选择父级后会成为第4级（不允许），所以只能选择顶级或第1级菜单
-      let disabled = false
-      if (isEditMode.value && formData.value.id) {
-        const currentLevel = getNodeLevel(menuStore.getMenuById(formData.value.id)!)
-        if (currentLevel === 3 && level >= 2) {
-          disabled = true // 第3级菜单只能移到顶级或第1级下
-        }
-      }
+      // 根据当前菜单类型限制可选父级
+      const menuType = formData.value.menuType
+      if (menuType === 'project' && menu.menuType !== 'workspace') return
+      if (menuType === 'data' && menu.menuType !== 'project') return
 
       options.push({
         value: menu.id,
-        label,
-        disabled
+        label: prefix + menu.name
       })
 
-      // 递归处理子菜单
       if (menu.children && menu.children.length > 0) {
-        buildOptions(menu.children, level + 1, label + ' / ')
+        buildOptions(menu.children, prefix + menu.name + ' / ')
       }
     })
   }
 
   buildOptions(menuTree.value)
-
   return options
 })
 
-/**
- * 检查目标菜单是否是源菜单的后代
- */
 function isDescendant(sourceId: string, targetId: string): boolean {
   const target = menuStore.getMenuById(targetId)
   if (!target) return false
@@ -496,21 +613,6 @@ function isDescendant(sourceId: string, targetId: string): boolean {
 // ==================== 方法 ====================
 
 /**
- * 获取节点层级
- */
-function getNodeLevel(node: MenuItem): number {
-  let level = 1
-  let current = node
-  while (current.parentId) {
-    level++
-    const parent = menuStore.getMenuById(current.parentId)
-    if (!parent) break
-    current = parent
-  }
-  return level
-}
-
-/**
  * 处理节点点击
  */
 function handleNodeClick(data: MenuItem): void {
@@ -520,8 +622,10 @@ function handleNodeClick(data: MenuItem): void {
     id: data.id,
     name: data.name,
     icon: data.icon || 'Document',
+    menuType: data.menuType,
     pageId: data.pageId || null,
     parentId: data.parentId || null,
+    projectId: data.projectId || null,
     order: data.order,
     path: data.path || '',
     roles: data.roles || ['admin', 'developer', 'guest'],
@@ -531,13 +635,14 @@ function handleNodeClick(data: MenuItem): void {
 }
 
 /**
- * 处理添加顶级菜单
+ * 处理添加顶级菜单（工作空间）
  */
 function handleAddRoot(): void {
   isEditMode.value = false
   isAddingRoot.value = true
   formData.value = {
     ...createEmptyMenuFormData(),
+    menuType: 'workspace',
     parentId: null,
     order: menuStore.topLevelMenus.length + 1
   }
@@ -552,9 +657,18 @@ function handleAddChild(parent: MenuItem): void {
   isEditMode.value = false
   isAddingRoot.value = false
   const children = menuStore.getChildMenus(parent.id)
+
+  // 根据父级类型确定子菜单类型
+  let childType: MenuType = 'data'
+  if (parent.menuType === 'workspace') {
+    childType = 'project'
+  }
+
   formData.value = {
     ...createEmptyMenuFormData(),
+    menuType: childType,
     parentId: parent.id,
+    projectId: parent.menuType === 'project' ? parent.id : null,
     order: children.length + 1
   }
   showForm.value = true
@@ -594,26 +708,37 @@ async function handleSubmit(): Promise<void> {
   const valid = await formRef.value?.validate()
   if (!valid) return
 
+  // 验证数据菜单必须关联页面
+  if (formData.value.menuType === 'data' && !formData.value.pageId) {
+    ElMessage.error('数据菜单必须关联页面配置')
+    return
+  }
+
   // 验证父级菜单选择
-  if (isEditMode.value && formData.value.id && formData.value.parentId) {
-    // 检查是否选择了自己作为父级
-    if (formData.value.parentId === formData.value.id) {
-      ElMessage.error('不能将自己设为父级菜单')
-      return
+  if (formData.value.menuType !== 'workspace' && formData.value.parentId) {
+    if (isEditMode.value && formData.value.id) {
+      // 检查是否选择了自己作为父级
+      if (formData.value.parentId === formData.value.id) {
+        ElMessage.error('不能将自己设为父级菜单')
+        return
+      }
+
+      // 检查是否选择了自己的子菜单作为父级（循环引用）
+      if (isDescendant(formData.value.id, formData.value.parentId)) {
+        ElMessage.error('不能将子菜单设为父级菜单')
+        return
+      }
     }
 
-    // 检查是否选择了自己的子菜单作为父级（循环引用）
-    if (isDescendant(formData.value.id, formData.value.parentId)) {
-      ElMessage.error('不能将子菜单设为父级菜单')
-      return
-    }
-
-    // 检查层级限制（最多3级）
-    const newParent = menuStore.getMenuById(formData.value.parentId)
-    if (newParent) {
-      const newParentLevel = getNodeLevel(newParent)
-      if (newParentLevel >= 3) {
-        ElMessage.error('父级菜单不能是第3级菜单（会导致第4级）')
+    // 验证父级类型匹配
+    const parent = menuStore.getMenuById(formData.value.parentId)
+    if (parent) {
+      if (formData.value.menuType === 'project' && parent.menuType !== 'workspace') {
+        ElMessage.error('项目菜单的父级必须是工作空间')
+        return
+      }
+      if (formData.value.menuType === 'data' && parent.menuType !== 'project') {
+        ElMessage.error('数据菜单的父级必须是项目')
         return
       }
     }
@@ -626,23 +751,26 @@ async function handleSubmit(): Promise<void> {
       await menuStore.updateMenu(formData.value.id, {
         name: formData.value.name,
         icon: formData.value.icon,
+        menuType: formData.value.menuType,
         pageId: formData.value.pageId,
         parentId: formData.value.parentId,
+        projectId: formData.value.projectId,
         order: formData.value.order,
         path: formData.value.path,
         roles: formData.value.roles,
         exportScriptId: formData.value.exportScriptId
       })
       ElMessage.success('更新成功')
-      // 更新成功后刷新表单数据
       const updated = menuStore.getMenuById(formData.value.id)
       if (updated) {
         formData.value = {
           id: updated.id,
           name: updated.name,
           icon: updated.icon || 'Document',
+          menuType: updated.menuType,
           pageId: updated.pageId || null,
           parentId: updated.parentId || null,
+          projectId: updated.projectId || null,
           order: updated.order,
           path: updated.path || '',
           roles: updated.roles || ['admin', 'developer', 'guest'],
@@ -654,8 +782,10 @@ async function handleSubmit(): Promise<void> {
       await menuStore.addMenu({
         name: formData.value.name,
         icon: formData.value.icon,
+        menuType: formData.value.menuType,
         pageId: formData.value.pageId,
         parentId: formData.value.parentId,
+        projectId: formData.value.projectId,
         order: formData.value.order,
         path: formData.value.path,
         roles: formData.value.roles,
