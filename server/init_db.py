@@ -912,6 +912,140 @@ def init_db():
             conn.commit()
             print("Added menu export page menu.")
 
+        # Migration: add menu_type and project_id columns to menus
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'menus' AND column_name = 'menu_type'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE menus ADD COLUMN menu_type VARCHAR(20) NOT NULL DEFAULT 'data'")
+            cur.execute("ALTER TABLE menus ADD COLUMN project_id VARCHAR(100) NULL")
+            cur.execute("CREATE INDEX idx_menus_menu_type ON menus(menu_type)")
+            cur.execute("CREATE INDEX idx_menus_project_id ON menus(project_id)")
+            conn.commit()
+            print("Added menu_type and project_id columns to menus table.")
+
+            # Update existing menus with correct menu_type
+            # System menus (首页、仪表盘、数据工具、系统配置)
+            system_menu_ids = [
+                'menu-1', 'menu-dashboard',  # 首页、仪表盘
+                'menu-3-b', 'menu-3-6', 'menu-3-8', 'menu-3-9', 'menu-3-10', 'menu-3-12',  # 数据工具及其子项
+                'menu-3', 'menu-3-a', 'menu-3-c',  # 系统配置分组
+                'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11',  # 平台管理子项
+                'menu-3-4', 'menu-3-5',  # 系统运维子项
+            ]
+            for mid in system_menu_ids:
+                cur.execute("UPDATE menus SET menu_type = 'system' WHERE id = %s", (mid,))
+
+            # 巡检管理及其子项是示例数据，标记为 workspace/project/data（待后续删除或重新分类）
+            # menu-2 及其子项暂时标记为 system，后续可根据需求调整
+            workspace_menu_ids = ['menu-2']
+            project_menu_ids = ['menu-2-1', 'menu-2-2', 'menu-2-3']
+            data_menu_ids = ['menu-2-3-1', 'menu-2-3-2']
+
+            for mid in workspace_menu_ids:
+                cur.execute("UPDATE menus SET menu_type = 'workspace' WHERE id = %s", (mid,))
+            for mid in project_menu_ids:
+                cur.execute("UPDATE menus SET menu_type = 'project' WHERE id = %s", (mid,))
+            for mid in data_menu_ids:
+                cur.execute("UPDATE menus SET menu_type = 'data' WHERE id = %s", (mid,))
+
+            conn.commit()
+            print("Updated menu_type for existing menus.")
+
+        # Migration: create project_versions table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_versions'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_versions (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    project_menu_id VARCHAR(100) NOT NULL,
+                    name            VARCHAR(200) NOT NULL,
+                    description     TEXT,
+                    version_type    VARCHAR(20) NOT NULL DEFAULT 'branch',
+                    parent_version  VARCHAR(100),
+                    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+                    created_by      VARCHAR(200),
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    merged_at       TIMESTAMPTZ,
+                    merged_by       VARCHAR(200),
+                    is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
+                    FOREIGN KEY (parent_version) REFERENCES project_versions(id) ON DELETE SET NULL
+                );
+                CREATE INDEX idx_pv_project ON project_versions(project_menu_id);
+                CREATE INDEX idx_pv_status ON project_versions(status);
+            """)
+            conn.commit()
+            print("Created project_versions table.")
+
+        # Migration: create user_current_project_branch table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'user_current_project_branch'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE user_current_project_branch (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    user_id         VARCHAR(100) NOT NULL,
+                    username        VARCHAR(100) NOT NULL,
+                    project_menu_id VARCHAR(100) NOT NULL,
+                    branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, project_menu_id)
+                );
+                CREATE INDEX idx_ucpb_user ON user_current_project_branch(user_id);
+                CREATE INDEX idx_ucpb_project ON user_current_project_branch(project_menu_id);
+            """)
+            conn.commit()
+            print("Created user_current_project_branch table.")
+
+        # Migration: create project_version_snapshots table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_version_snapshots'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_version_snapshots (
+                    version_id      VARCHAR(100) NOT NULL,
+                    collection      VARCHAR(200) NOT NULL,
+                    record_id       VARCHAR(100) NOT NULL,
+                    record_data     JSONB NOT NULL,
+                    created_at      TIMESTAMPTZ,
+                    PRIMARY KEY (version_id, collection, record_id),
+                    FOREIGN KEY (version_id) REFERENCES project_versions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_pvs_version ON project_version_snapshots(version_id);
+            """)
+            conn.commit()
+            print("Created project_version_snapshots table.")
+
+        # Migration: create project_version_relations table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_version_relations'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_version_relations (
+                    version_id          VARCHAR(100) NOT NULL,
+                    collection          VARCHAR(200) NOT NULL,
+                    record_id           VARCHAR(100) NOT NULL,
+                    field_name          VARCHAR(200) NOT NULL,
+                    related_collection  VARCHAR(200) NOT NULL,
+                    related_id          VARCHAR(100) NOT NULL,
+                    PRIMARY KEY (version_id, collection, record_id, field_name, related_id),
+                    FOREIGN KEY (version_id) REFERENCES project_versions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_pvr_version ON project_version_relations(version_id);
+            """)
+            conn.commit()
+            print("Created project_version_relations table.")
+
         # Seed menus (insert only if not exists)
         menus_inserted = 0
         for m in MENUS:
@@ -926,6 +1060,14 @@ def init_db():
             print(f"Inserted {menus_inserted} menus.")
         else:
             print("Menus already exist, skipping.")
+
+        # Update menu_type for seeded menus (巡检管理示例数据)
+        # menu-2 是一级菜单（workspace），menu-2-1/2-2/2-3 是二级菜单（project），menu-2-3-1/2-3-2 是三级菜单（data）
+        cur.execute("UPDATE menus SET menu_type = 'workspace' WHERE id = 'menu-2'")
+        cur.execute("UPDATE menus SET menu_type = 'project' WHERE id IN ('menu-2-1', 'menu-2-2', 'menu-2-3')")
+        cur.execute("UPDATE menus SET menu_type = 'data' WHERE id IN ('menu-2-3-1', 'menu-2-3-2')")
+        conn.commit()
+        print("Updated menu_type for seeded menus.")
 
         # Seed page_configs (insert only if not exists)
         configs_inserted = 0
