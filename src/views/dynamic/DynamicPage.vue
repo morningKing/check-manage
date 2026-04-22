@@ -22,15 +22,14 @@
           <h2>{{ pageConfig?.name || '数据页面' }}</h2>
           <!-- 分支标签（紧挨着标题后面） -->
           <el-tag
-            v-if="currentBranch"
-            :type="currentBranch.branchId ? 'primary' : 'success'"
+            :type="currentBranch?.branchId ? 'primary' : 'success'"
             size="small"
           >
-            {{ currentBranch.branchName }}
+            {{ currentBranch?.branchName || '主分支' }}
           </el-tag>
-          <!-- 切换下拉按钮（仅管理员可见） -->
+          <!-- 切换下拉按钮（仅管理员且属于项目时可见） -->
           <el-dropdown
-            v-if="isAdmin && currentBranch"
+            v-if="isAdmin && projectMenuId"
             trigger="click"
             @command="handleBranchSwitch"
             @visible-change="(visible: boolean) => visible && loadBranchVersions()"
@@ -42,18 +41,18 @@
               <el-dropdown-menu class="branch-dropdown-menu">
                 <el-dropdown-item
                   :command="'main'"
-                  :disabled="!currentBranch.branchId"
+                  :disabled="!currentBranch?.branchId"
                 >
-                  <el-icon v-if="!currentBranch.branchId"><Check /></el-icon>
+                  <el-icon v-if="!currentBranch?.branchId"><Check /></el-icon>
                   主分支
                 </el-dropdown-item>
                 <el-dropdown-item
                   v-for="branch in branchVersions"
                   :key="branch.id"
                   :command="branch.id"
-                  :disabled="branch.id === currentBranch.branchId"
+                  :disabled="branch.id === currentBranch?.branchId"
                 >
-                  <el-icon v-if="branch.id === currentBranch.branchId"><Check /></el-icon>
+                  <el-icon v-if="branch.id === currentBranch?.branchId"><Check /></el-icon>
                   {{ branch.name }}
                 </el-dropdown-item>
                 <el-dropdown-item divided command="manage">
@@ -100,8 +99,7 @@
               </el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" divided command="diff" :icon="DCaret">数据对比</el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" command="version" :icon="Tickets">版本管理</el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" divided command="version" :icon="Tickets">版本管理</el-dropdown-item>
               <el-dropdown-item
                 v-if="isAdmin"
                 command="batchDelete"
@@ -335,12 +333,11 @@
         <div style="display: flex; align-items: center;">
           <span style="font-weight: bold;">{{ dialogTitle }}</span>
           <el-tag
-            v-if="currentBranch"
-            :type="currentBranch.branchId ? 'primary' : 'success'"
+            :type="currentBranch?.branchId ? 'primary' : 'success'"
             size="small"
             style="margin-left: auto;"
           >
-            {{ currentBranch.branchName }}
+            {{ currentBranch?.branchName || '主分支' }}
           </el-tag>
         </div>
       </template>
@@ -375,12 +372,11 @@
         <div style="display: flex; align-items: center;">
           <span style="font-weight: bold;">查看记录</span>
           <el-tag
-            v-if="currentBranch"
-            :type="currentBranch.branchId ? 'primary' : 'success'"
+            :type="currentBranch?.branchId ? 'primary' : 'success'"
             size="small"
             style="margin-left: auto;"
           >
-            {{ currentBranch.branchName }}
+            {{ currentBranch?.branchName || '主分支' }}
           </el-tag>
         </div>
       </template>
@@ -729,18 +725,11 @@
       </template>
     </el-dialog>
 
-    <!-- 数据对比对话框 -->
-    <BackupDiffDialog
-      v-model="diffDialogVisible"
-      :collection="collection"
-      :page-name="pageConfig?.name || '数据'"
-    />
-
-    <!-- 版本管理抽屉 -->
-    <VersionManager
-      v-model="versionManagerVisible"
-      :collection="collection"
-      :page-name="pageConfig?.name || '数据'"
+    <!-- 项目版本管理抽屉 -->
+    <ProjectVersionManager
+      v-if="projectMenuId"
+      v-model="projectVersionManagerVisible"
+      :project-menu-id="projectMenuId"
       @refresh="loadPageData"
     />
 
@@ -771,15 +760,17 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check } from '@element-plus/icons-vue'
-import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useBranchRefreshStore } from '@/stores'
-import { DataTable, ConfirmDialog, BackupDiffDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, VersionManager, ExcelView } from '@/components/common'
+import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore } from '@/stores'
+import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
-import { getCurrentBranch, getVersions, switchToVersion, switchToMainBranch, type UserBranch } from '@/api/version'
+import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, switchToMainProjectBranch } from '@/api/projectVersion'
+import type { CurrentBranch } from '@/api/projectVersion'
+import type { ProjectVersion } from '@/types/version'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CollectionVersion } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig } from '@/types'
 
 // ==================== Props ====================
 
@@ -795,7 +786,6 @@ const pageConfigStore = usePageConfigStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const jumpStore = useJumpNavigationStore()
-const branchRefreshStore = useBranchRefreshStore()
 const isAdmin = computed(() => authStore.isAdmin)
 const isGuest = computed(() => authStore.isGuest)
 
@@ -998,24 +988,42 @@ const importResult = ref<{ success: number; failed: number } | null>(null)
 const allExportScripts = ref<ExportScript[]>([])
 
 /**
- * 数据对比对话框可见性
+ * 项目版本管理抽屉可见性
  */
-const diffDialogVisible = ref(false)
+const projectVersionManagerVisible = ref(false)
 
 /**
- * 版本管理抽屉可见性
+ * 当前菜单（通过pageId查找）
  */
-const versionManagerVisible = ref(false)
+const currentMenu = computed(() => {
+  return menuStore.menuList.find(m => m.pageId === pageId.value)
+})
+
+/**
+ * 当前数据菜单所属的项目菜单ID
+ * 优先使用 projectId，如果没有则使用 parentId（数据菜单的父级就是项目菜单）
+ */
+const projectMenuId = computed(() => {
+  // 如果 projectId 有值，直接使用
+  if (currentMenu.value?.projectId) {
+    return currentMenu.value.projectId
+  }
+  // 如果是数据菜单且 parentId 有值，使用 parentId（父级就是项目菜单）
+  if (currentMenu.value?.menuType === 'data' && currentMenu.value?.parentId) {
+    return currentMenu.value.parentId
+  }
+  return null
+})
 
 /**
  * 当前用户分支信息
  */
-const currentBranch = ref<UserBranch | null>(null)
+const currentBranch = ref<CurrentBranch | null>(null)
 
 /**
  * 分支列表（用于切换下拉菜单）
  */
-const branchVersions = ref<CollectionVersion[]>([])
+const branchVersions = ref<ProjectVersion[]>([])
 
 /**
  * 分支切换下拉菜单可见性
@@ -1430,13 +1438,28 @@ async function loadPageData(): Promise<void> {
  * 加载当前用户分支信息
  */
 async function loadCurrentBranch(): Promise<void> {
-  if (!collection.value) return
+  // 如果没有项目菜单ID，显示主分支状态
+  if (!projectMenuId.value) {
+    currentBranch.value = {
+      branchId: '',
+      branchName: '主分支'
+    }
+    return
+  }
 
   try {
-    currentBranch.value = await getCurrentBranch(collection.value)
+    const projectBranch = await getCurrentProjectBranch(projectMenuId.value)
+    currentBranch.value = {
+      branchId: projectBranch.branchId === 'main' ? '' : projectBranch.branchId,
+      branchName: projectBranch.branchName
+    }
   } catch (error) {
     console.error('获取分支信息失败:', error)
-    currentBranch.value = null
+    // 获取失败时也显示主分支
+    currentBranch.value = {
+      branchId: '',
+      branchName: '主分支'
+    }
   }
 }
 
@@ -1444,12 +1467,12 @@ async function loadCurrentBranch(): Promise<void> {
  * 加载分支列表（用于切换下拉菜单）
  */
 async function loadBranchVersions(): Promise<void> {
-  if (!collection.value) return
+  if (!projectMenuId.value) return
 
   try {
-    const versions = await getVersions(collection.value)
-    // 只筛选分支类型
-    branchVersions.value = versions.filter(v => v.versionType === 'branch')
+    const result = await listProjectVersions(projectMenuId.value, 1, 50)
+    // 只筛选分支类型且状态为 active
+    branchVersions.value = result.items.filter(v => v.versionType === 'branch' && v.status === 'active')
   } catch (error) {
     console.error('获取分支列表失败:', error)
     branchVersions.value = []
@@ -1461,7 +1484,31 @@ async function loadBranchVersions(): Promise<void> {
  */
 async function handleBranchSwitch(command: string): Promise<void> {
   if (command === 'manage') {
-    versionManagerVisible.value = true
+    // 如果数据菜单属于项目，使用项目版本管理
+    if (projectMenuId.value) {
+      projectVersionManagerVisible.value = true
+    } else {
+      ElMessage.warning('该数据页不属于任何项目，无法使用版本管理')
+    }
+    return
+  }
+
+  // 如果属于项目，分支切换需要通过项目版本管理
+  if (projectMenuId.value) {
+    if (command === 'main') {
+      // TODO: 实现项目分支切换到 main
+      ElMessage.warning('项目分支切换请在项目版本管理中进行')
+      return
+    }
+    try {
+      const result = await switchProjectBranch(command, projectMenuId.value)
+      await loadCurrentBranch()
+      await loadPageData()
+      ElMessage.success(`已切换到分支「${result.branchName}」`)
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || '切换失败'
+      ElMessage.error(msg)
+    }
     return
   }
 
@@ -1469,7 +1516,7 @@ async function handleBranchSwitch(command: string): Promise<void> {
     // 切换到主分支
     branchSwitching.value = true
     try {
-      await switchToMainBranch(collection.value)
+      await switchToMainProjectBranch(projectMenuId.value!)
       await loadCurrentBranch()
       await loadPageData()
       ElMessage.success('已切换到主分支')
@@ -1485,20 +1532,11 @@ async function handleBranchSwitch(command: string): Promise<void> {
   // 切换到指定分支
   branchSwitching.value = true
   try {
-    const result = await switchToVersion(command)
+    const result = await switchProjectBranch(command, projectMenuId.value!)
     await loadCurrentBranch()
     await loadPageData()
 
-    let msg = `已切换到分支「${result.branchName}」`
-    if (result.initialized) {
-      msg += '（分支数据已初始化）'
-    }
-    ElMessage.success(msg)
-
-    // 如果影响多个Collection，通知其他页面刷新
-    if (result.affectedCollections && result.affectedCollections.length > 1) {
-      branchRefreshStore.requestRefresh(result.affectedCollections)
-    }
+    ElMessage.success(`已切换到分支「${result.branchName}」`)
   } catch (error: any) {
     const msg = error?.response?.data?.error || '切换失败'
     ElMessage.error(msg)
@@ -2224,10 +2262,12 @@ function handleMoreCommand(command: string): void {
     handleImportCommand('import')
   } else if (command === 'template') {
     handleImportCommand('template')
-  } else if (command === 'diff') {
-    diffDialogVisible.value = true
   } else if (command === 'version') {
-    versionManagerVisible.value = true
+    if (projectMenuId.value) {
+      projectVersionManagerVisible.value = true
+    } else {
+      ElMessage.warning('该数据页不属于任何项目，无法使用版本管理')
+    }
   } else if (command === 'batchDelete') {
     handleBatchDeleteConfirm()
   }
@@ -2616,10 +2656,10 @@ watch(
       currentPage.value = 1
 
       // 检查跳转意图是否携带分支ID且不是main
-      if (pendingJump.branchId && pendingJump.branchId !== 'main') {
+      if (pendingJump.branchId && pendingJump.branchId !== 'main' && projectMenuId.value) {
         // 自动切换到跳转携带的分支
         try {
-          const result = await switchToVersion(pendingJump.branchId)
+          const result = await switchProjectBranch(pendingJump.branchId, projectMenuId.value)
           await loadCurrentBranch()
           ElMessage.success(`已切换到分支：${result.branchName}`)
         } catch (error) {
@@ -2796,21 +2836,6 @@ watch(viewMode, (newMode, oldMode) => {
   }
 })
 
-/**
- * 监听跨 Collection 分支切换刷新事件
- * 当在其他页面切换分支涉及当前 Collection 时，自动刷新数据
- */
-watch(
-  () => branchRefreshStore.refreshTimestamp,
-  () => {
-    if (branchRefreshStore.needsRefresh(collection.value)) {
-      loadPageData()
-      loadCurrentBranch()
-      branchRefreshStore.clearRefresh()
-    }
-  }
-)
-
 // ==================== 生命周期 ====================
 
 /** 标记是否需要立即刷新数据（用于跨页面操作后强制刷新） */
@@ -2841,10 +2866,10 @@ onActivated(async () => {
     } else {
       // 跳转到达：检查是否需要切换分支
       // 检查跳转意图是否携带分支ID且不是main
-      if (pendingJump.branchId && pendingJump.branchId !== 'main') {
+      if (pendingJump.branchId && pendingJump.branchId !== 'main' && projectMenuId.value) {
         // 自动切换到跳转携带的分支
         try {
-          const result = await switchToVersion(pendingJump.branchId)
+          const result = await switchProjectBranch(pendingJump.branchId, projectMenuId.value)
           await loadCurrentBranch()
           ElMessage.success(`已切换到分支：${result.branchName}`)
         } catch (error) {

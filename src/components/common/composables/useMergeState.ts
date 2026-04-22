@@ -5,18 +5,36 @@
  * - 差异结果
  * - 用户决策（新增、删除、修改记录的选择）
  * - 展开状态管理
+ *
+ * 适配项目级版本管理
  */
 import { reactive, computed } from 'vue'
-import { partialMergeVersion } from '@/api/version'
-import type {
-  MergeState,
-  MergeDecisions,
-  CollectionVersion,
-  PartialMergeRequest,
-  PartialMergeDecisions,
-  ModifiedRecordDecision,
-} from '@/types/version'
-import type { DiffResult } from '@/types/backup'
+import { mergeProjectVersion } from '@/api/projectVersion'
+import type { ProjectVersion } from '@/types/version'
+import type { CollectionDiff } from '@/api/projectVersion'
+
+/**
+ * 合并决策
+ */
+export interface MergeDecisions {
+  addedRecords: Set<string>
+  removedRecords: Set<string>
+  modifiedRecords: Map<string, {
+    recordId: string
+    fieldDecisions: Map<string, 'source' | 'target'>
+  }>
+}
+
+/**
+ * 合并状态
+ */
+export interface MergeState {
+  sourceVersion: ProjectVersion | null
+  targetBranch: string
+  diffResult: CollectionDiff | null
+  decisions: MergeDecisions
+  expandedRecords: Set<string>
+}
 
 /**
  * 创建空的决策对象
@@ -100,14 +118,14 @@ export function useMergeState() {
   /**
    * 设置源版本信息
    */
-  function setSourceVersion(version: CollectionVersion): void {
+  function setSourceVersion(version: ProjectVersion): void {
     state.sourceVersion = version
   }
 
   /**
    * 设置差异结果并初始化选择
    */
-  function setDiffResult(result: DiffResult): void {
+  function setDiffResult(result: CollectionDiff): void {
     state.diffResult = result
     state.decisions = createEmptyDecisions()
     state.expandedRecords = new Set<string>()
@@ -164,7 +182,7 @@ export function useMergeState() {
       const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
       if (modifiedItem) {
         const fieldDecisions = new Map<string, 'source' | 'target'>()
-        modifiedItem.fields.forEach(field => {
+        modifiedItem.fields.forEach((field: any) => {
           fieldDecisions.set(field.fieldName, 'source')
         })
         state.decisions.modifiedRecords.set(recordId, {
@@ -212,7 +230,7 @@ export function useMergeState() {
    */
   function selectAllAdded(selected: boolean): void {
     if (selected && state.diffResult) {
-      state.decisions.addedRecords = new Set(state.diffResult.added.map(r => r.id))
+      state.decisions.addedRecords = new Set(state.diffResult.added.map((r: any) => r.id))
     } else {
       state.decisions.addedRecords = new Set()
     }
@@ -223,7 +241,7 @@ export function useMergeState() {
    */
   function selectAllRemoved(selected: boolean): void {
     if (selected && state.diffResult) {
-      state.decisions.removedRecords = new Set(state.diffResult.removed.map(r => r.id))
+      state.decisions.removedRecords = new Set(state.diffResult.removed.map((r: any) => r.id))
     } else {
       state.decisions.removedRecords = new Set()
     }
@@ -235,9 +253,9 @@ export function useMergeState() {
   function selectAllModified(selected: boolean): void {
     if (selected && state.diffResult) {
       const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
-      state.diffResult.modified.forEach(item => {
+      state.diffResult.modified.forEach((item: any) => {
         const fieldDecisions = new Map<string, 'source' | 'target'>()
-        item.fields.forEach(field => {
+        item.fields.forEach((field: any) => {
           fieldDecisions.set(field.fieldName, 'source')
         })
         newMap.set(item.id, { recordId: item.id, fieldDecisions })
@@ -255,18 +273,18 @@ export function useMergeState() {
   function acceptAllSource(): void {
     if (!state.diffResult) return
 
-    state.diffResult.added.forEach(record => {
+    state.diffResult.added.forEach((record: any) => {
       state.decisions.addedRecords.add(record.id)
     })
 
-    state.diffResult.removed.forEach(record => {
+    state.diffResult.removed.forEach((record: any) => {
       state.decisions.removedRecords.add(record.id)
     })
 
     const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
-    state.diffResult.modified.forEach(item => {
+    state.diffResult.modified.forEach((item: any) => {
       const fieldDecisions = new Map<string, 'source' | 'target'>()
-      item.fields.forEach(field => {
+      item.fields.forEach((field: any) => {
         fieldDecisions.set(field.fieldName, 'source')
       })
       newMap.set(item.id, { recordId: item.id, fieldDecisions })
@@ -284,9 +302,9 @@ export function useMergeState() {
     state.decisions.removedRecords = new Set()
 
     const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
-    state.diffResult.modified.forEach(item => {
+    state.diffResult.modified.forEach((item: any) => {
       const fieldDecisions = new Map<string, 'source' | 'target'>()
-      item.fields.forEach(field => {
+      item.fields.forEach((field: any) => {
         fieldDecisions.set(field.fieldName, 'target')
       })
       newMap.set(item.id, { recordId: item.id, fieldDecisions })
@@ -301,69 +319,31 @@ export function useMergeState() {
     const recordDecision = state.decisions.modifiedRecords.get(recordId)
     if (!recordDecision) return
 
-    const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
+    const modifiedItem = state.diffResult?.modified?.find((m: any) => m.id === recordId)
     if (!modifiedItem) return
 
     const newFieldDecisions = new Map<string, 'source' | 'target'>()
-    modifiedItem.fields.forEach(field => {
+    modifiedItem.fields.forEach((field: any) => {
       newFieldDecisions.set(field.fieldName, choice)
     })
     recordDecision.fieldDecisions = newFieldDecisions
   }
 
   /**
-   * 构建合并请求负载
+   * 提交合并（项目级）
    */
-  function buildMergePayload(): PartialMergeRequest | null {
+  async function submitMerge(projectMenuId: string) {
     if (!state.sourceVersion) {
-      return null
-    }
-
-    const modifiedRecords: ModifiedRecordDecision[] = []
-
-    state.decisions.modifiedRecords.forEach((decision, recordId) => {
-      if (!state.diffResult) return
-
-      const modifiedItem = state.diffResult.modified.find(m => m.id === recordId)
-      if (!modifiedItem) return
-
-      const fieldValues: Record<string, any> = {}
-
-      decision.fieldDecisions.forEach((choice, fieldName) => {
-        const field = modifiedItem.fields.find(f => f.fieldName === fieldName)
-        if (field) {
-          fieldValues[fieldName] = choice === 'source' ? field.newValue : field.oldValue
-        }
-      })
-
-      modifiedRecords.push({
-        record_id: recordId,
-        field_values: fieldValues,
-      })
-    })
-
-    const decisions: PartialMergeDecisions = {
-      added_record_ids: Array.from(state.decisions.addedRecords),
-      removed_record_ids: Array.from(state.decisions.removedRecords),
-      modified_records: modifiedRecords,
-    }
-
-    return {
-      source_version_id: state.sourceVersion.id,
-      target_branch: state.targetBranch,
-      decisions,
-    }
-  }
-
-  /**
-   * 提交合并
-   */
-  async function submitMerge() {
-    const payload = buildMergePayload()
-    if (!payload) {
       throw new Error('Cannot build merge payload: source version not set')
     }
-    return await partialMergeVersion(payload)
+
+    // 使用 theirs 策略直接合并（简化版）
+    return await mergeProjectVersion(
+      state.sourceVersion.id,
+      projectMenuId,
+      state.targetBranch,
+      'theirs'
+    )
   }
 
   /**
@@ -398,7 +378,6 @@ export function useMergeState() {
     acceptAllSource,
     acceptAllTarget,
     setAllFieldsForRecord,
-    buildMergePayload,
     submitMerge,
     reset,
   }

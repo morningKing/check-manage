@@ -1,97 +1,12 @@
 /**
- * 版本管理相关类型定义
+ * 版本管理相关类型定义 - 项目级版本管理
+ *
+ * 注意：数据级版本管理已废弃，仅保留项目级版本类型
  */
-
-import type { DiffResult } from './backup'
 
 export type VersionType = 'snapshot' | 'branch'
 export type VersionStatus = 'active' | 'merged' | 'archived'
 export type MergeStrategy = 'theirs' | 'ours'
-
-/**
- * 集合版本
- */
-export interface CollectionVersion {
-  id: string
-  collection: string
-  name: string
-  description?: string
-  versionType: VersionType
-  parentVersion?: string
-  status: VersionStatus
-  dataHash: string
-  recordsCount: number
-  relationsCount: number
-  createdBy: string
-  createdAt: string
-  mergedAt?: string
-  mergedBy?: string
-  mergedInto?: string
-  isProtected: boolean
-  lockedBy?: string
-  lockedAt?: string
-  // 多集合支持字段
-  collections: string[]  // 参与的所有collection列表
-  collectionStats?: Record<string, number>  // 每个collection的记录数统计
-}
-
-/**
- * 分页版本列表响应
- */
-export interface PaginatedVersionsResponse {
-  items: CollectionVersion[]
-  total: number
-}
-
-/**
- * 创建版本请求
- */
-export interface CreateVersionRequest {
-  collection: string
-  name: string
-  description?: string
-  versionType?: VersionType
-  parentVersion?: string
-}
-
-/**
- * 版本对比请求
- */
-export interface DiffVersionRequest {
-  collection: string
-  baseVersion: string  // 'current' 或版本 ID
-  targetVersion: string
-}
-
-/**
- * 版本合并请求
- */
-export interface MergeVersionRequest {
-  sourceVersion: string
-  targetVersion?: string  // 目前只支持 'current'
-  strategy?: MergeStrategy
-}
-
-/**
- * 版本合并结果
- */
-export interface MergeResult {
-  success: boolean
-  summary: {
-    recordsCreated: number
-    recordsUpdated: number
-    recordsDeleted: number
-  }
-}
-
-/**
- * 版本恢复结果
- */
-export interface RestoreResult {
-  success: boolean
-  recordsCount: number
-  relationsCount: number
-}
 
 /**
  * 版本状态标签
@@ -122,60 +37,43 @@ export const VERSION_TYPE_TAG_TYPES: Record<string, string> = {
 }
 
 /**
- * 部分合并决策
+ * 项目版本（项目级分支/快照）
  */
-export interface PartialMergeDecisions {
-  added_record_ids: string[]
-  removed_record_ids: string[]
-  modified_records: ModifiedRecordDecision[]
+export interface ProjectVersion {
+  id: string
+  projectMenuId: string
+  name: string
+  description?: string
+  versionType: VersionType
+  status: VersionStatus
+  createdBy: string
+  createdAt: string
+  parentVersion?: string
+  recordsCount: number
+  isProtected: boolean
+  initializedAt?: string
+  collections?: ProjectVersionCollection[]
+  collectionStats?: Record<string, number>
 }
 
 /**
- * 修改记录的字段决策
+ * 项目版本中的collection信息
  */
-export interface ModifiedRecordDecision {
-  record_id: string
-  field_values: Record<string, any>
+export interface ProjectVersionCollection {
+  collection: string
+  pageId: string
+  pageName: string
+  menuId: string
 }
 
 /**
- * 部分合并请求
+ * 创建项目版本请求
  */
-export interface PartialMergeRequest {
-  source_version_id: string
-  target_branch: string
-  decisions: PartialMergeDecisions
-}
-
-/**
- * 部分合并响应
- */
-export interface PartialMergeResponse {
-  success: boolean
-  merged_count: number
-  message: string
-  snapshot_created?: boolean
-}
-
-/**
- * 合并决策状态
- */
-export interface MergeDecisions {
-  addedRecords: Set<string>
-  removedRecords: Set<string>
-  modifiedRecords: Map<string, {
-    recordId: string
-    fieldDecisions: Map<string, 'source' | 'target'>
-  }>
-}
-
-/**
- * 合并状态
- */
-export interface MergeState {
-  sourceVersion: CollectionVersion | null
-  targetBranch: string
-  diffResult: DiffResult | null
-  decisions: MergeDecisions
-  expandedRecords: Set<string>  // IDs of modified records with expanded field panels
+export interface ProjectVersionFormData {
+  projectMenuId: string
+  name: string
+  description?: string
+  versionType?: VersionType
+  createdBy: string
+  parentVersion?: string
 }

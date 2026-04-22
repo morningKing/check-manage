@@ -29,7 +29,7 @@ DB_CONFIG = {
 }
 
 FLASK_PORT = _to_int(os.getenv('FLASK_PORT'), 3002)
-FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), True)
+FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), False)  # Disabled for now to fix module loading issue
 
 JWT_SECRET = os.getenv('JWT_SECRET', 'dev-only-change-me')
 JWT_EXPIRY_HOURS = _to_int(os.getenv('JWT_EXPIRY_HOURS'), 24)

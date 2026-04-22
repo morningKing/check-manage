@@ -973,6 +973,8 @@ def init_db():
                     merged_at       TIMESTAMPTZ,
                     merged_by       VARCHAR(200),
                     is_protected    BOOLEAN NOT NULL DEFAULT FALSE,
+                    records_count   INTEGER DEFAULT 0,
+                    initialized_at  TIMESTAMPTZ,
                     FOREIGN KEY (parent_version) REFERENCES project_versions(id) ON DELETE SET NULL
                 );
                 CREATE INDEX idx_pv_project ON project_versions(project_menu_id);
@@ -980,6 +982,25 @@ def init_db():
             """)
             conn.commit()
             print("Created project_versions table.")
+
+        # Migration: add missing columns to project_versions
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'project_versions' AND column_name = 'records_count'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE project_versions ADD COLUMN records_count INTEGER DEFAULT 0")
+            conn.commit()
+            print("Added records_count column to project_versions.")
+
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'project_versions' AND column_name = 'initialized_at'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE project_versions ADD COLUMN initialized_at TIMESTAMPTZ")
+            conn.commit()
+            print("Added initialized_at column to project_versions.")
 
         # Migration: create user_current_project_branch table
         cur.execute("""

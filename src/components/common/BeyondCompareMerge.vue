@@ -1,11 +1,13 @@
 /**
- * BeyondCompareMerge - Beyond Compare 风格的版本合并对话框
+ * BeyondCompareMerge - Beyond Compare 风格的项目版本合并对话框
  *
  * 核心交互：
  * - 左右分栏对比：左侧版本数据，右侧当前数据
  * - 中间箭头按钮控制合并方向
  * - 差异导航（上一处/下一处）
  * - 修改记录支持字段级箭头选择
+ *
+ * 适配项目级版本管理：按Collection分组显示差异
  */
 <template>
   <el-dialog
@@ -34,6 +36,16 @@
 
     <!-- 主体内容 -->
     <template v-else>
+      <!-- Collection 选择器 -->
+      <div v-if="collections.length > 1" class="collection-selector">
+        <span>选择数据集：</span>
+        <el-radio-group v-model="selectedCollection" size="small">
+          <el-radio-button v-for="c in collections" :key="c.collection" :value="c.collection">
+            {{ c.pageName }}
+          </el-radio-button>
+        </el-radio-group>
+      </div>
+
       <!-- 工具栏 -->
       <div class="bc-toolbar">
         <div class="bc-toolbar-left">
@@ -69,7 +81,7 @@
         <div class="bc-panel-title bc-left">
           <el-icon><Document /></el-icon>
           版本数据
-          <el-tag size="small" type="warning">{{ sourceVersion?.name }}</el-tag>
+          <el-tag size="small" type="warning">{{ versionName }}</el-tag>
         </div>
         <div class="bc-gutter-title"></div>
         <div class="bc-panel-title bc-right">
@@ -81,14 +93,14 @@
       <!-- 对比主体 -->
       <div ref="compareBodyRef" class="bc-compare-body">
         <!-- 新增记录 -->
-        <template v-if="diffResult!.added.length > 0">
+        <template v-if="currentDiff!.added.length > 0">
           <div class="bc-section-label">
             <span class="bc-section-dot bc-dot-added"></span>
-            新增记录（{{ diffResult!.added.length }}）
+            新增记录（{{ currentDiff!.added.length }}）
           </div>
 
           <div
-            v-for="(record, idx) in diffResult!.added"
+            v-for="(record, idx) in currentDiff!.added"
             :key="'a-' + record.id"
             :ref="el => setDiffRef('added', idx, el as HTMLElement | null)"
             class="bc-row"
@@ -120,14 +132,14 @@
         </template>
 
         <!-- 删除记录 -->
-        <template v-if="diffResult!.removed.length > 0">
+        <template v-if="currentDiff!.removed.length > 0">
           <div class="bc-section-label">
             <span class="bc-section-dot bc-dot-removed"></span>
-            仅当前存在（{{ diffResult!.removed.length }}）
+            仅当前存在（{{ currentDiff!.removed.length }}）
           </div>
 
           <div
-            v-for="(record, idx) in diffResult!.removed"
+            v-for="(record, idx) in currentDiff!.removed"
             :key="'r-' + record.id"
             :ref="el => setDiffRef('removed', idx, el as HTMLElement | null)"
             class="bc-row"
@@ -159,14 +171,14 @@
         </template>
 
         <!-- 修改记录 -->
-        <template v-if="diffResult!.modified.length > 0">
+        <template v-if="currentDiff!.modified.length > 0">
           <div class="bc-section-label">
             <span class="bc-section-dot bc-dot-modified"></span>
-            修改记录（{{ diffResult!.modified.length }}）
+            修改记录（{{ currentDiff!.modified.length }}）
           </div>
 
           <div
-            v-for="(item, idx) in diffResult!.modified"
+            v-for="(item, idx) in currentDiff!.modified"
             :key="'m-' + item.id"
             :ref="el => setDiffRef('modified', idx, el as HTMLElement | null)"
             class="bc-row bc-row-modified"
@@ -311,17 +323,19 @@ import {
   Loading, CircleCloseFilled, ArrowUp, ArrowDown,
   Document, Monitor, Right, Back, Switch,
 } from '@element-plus/icons-vue'
-import { diffVersions } from '@/api/version'
+import { diffProjectVersions } from '@/api/projectVersion'
 import { useMergeState } from './composables/useMergeState'
-import type { CollectionVersion } from '@/types/version'
-import type { FieldConfig, DiffModifiedItem } from '@/types'
+import type { ProjectVersion } from '@/types/version'
+import type { DiffResult, CollectionDiff } from '@/api/projectVersion'
 
 // ==================== Props / Emits ====================
 
 interface Props {
   modelValue: boolean
-  collection: string
-  sourceVersion: CollectionVersion | null
+  projectMenuId: string
+  versionId: string
+  versionName: string
+  sourceVersion: ProjectVersion | null
 }
 
 const props = defineProps<Props>()
@@ -356,11 +370,14 @@ const {
 const loading = ref(false)
 const error = ref('')
 const submitting = ref(false)
-const fields = ref<FieldConfig[]>([])
+const fields = ref<string[]>([])
 const loadAborted = ref(false)
 const showCloseConfirm = ref(false)
 const diffIndex = ref(0)
 const compareBodyRef = ref<HTMLElement | null>(null)
+const selectedCollection = ref<string>('')
+const collections = ref<CollectionDiff[]>([])
+const fullDiffResult = ref<DiffResult | null>(null)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -368,16 +385,17 @@ const visible = computed({
 })
 
 const dialogTitle = computed(() => {
-  if (props.sourceVersion) {
-    return `版本合并 — 将「${props.sourceVersion.name}」合并到当前工作区`
-  }
-  return '版本合并'
+  return `版本合并 — 将「${props.versionName}」合并到当前工作区`
 })
 
-const diffResult = computed(() => state.diffResult)
-const addedCount = computed(() => diffResult.value?.added.length ?? 0)
-const removedCount = computed(() => diffResult.value?.removed.length ?? 0)
-const modifiedCount = computed(() => diffResult.value?.modified.length ?? 0)
+const currentDiff = computed(() => {
+  if (!selectedCollection.value || !collections.value.length) return null
+  return collections.value.find(c => c.collection === selectedCollection.value) || null
+})
+
+const addedCount = computed(() => currentDiff.value?.added.length ?? 0)
+const removedCount = computed(() => currentDiff.value?.removed.length ?? 0)
+const modifiedCount = computed(() => currentDiff.value?.modified.length ?? 0)
 
 // ==================== Constants ====================
 
@@ -389,10 +407,10 @@ interface DiffItem { type: 'added' | 'removed' | 'modified'; idx: number }
 
 const diffItems = computed<DiffItem[]>(() => {
   const items: DiffItem[] = []
-  if (!diffResult.value) return items
-  diffResult.value.added.forEach((_, i) => items.push({ type: 'added', idx: i }))
-  diffResult.value.removed.forEach((_, i) => items.push({ type: 'removed', idx: i }))
-  diffResult.value.modified.forEach((_, i) => items.push({ type: 'modified', idx: i }))
+  if (!currentDiff.value) return items
+  currentDiff.value.added.forEach((_, i) => items.push({ type: 'added', idx: i }))
+  currentDiff.value.removed.forEach((_, i) => items.push({ type: 'removed', idx: i }))
+  currentDiff.value.modified.forEach((_, i) => items.push({ type: 'modified', idx: i }))
   return items
 })
 
@@ -436,60 +454,42 @@ function navNext() {
 
 // ==================== Field helpers ====================
 
-const fieldLabelMap = computed(() => {
-  const map: Record<string, string> = {}
-  for (const f of fields.value) {
-    map[f.fieldName] = f.label
-  }
-  return map
-})
-
-const displayFields = computed(() => {
-  return fields.value
-    .filter(f => !f.hidden && !SYSTEM_FIELDS.includes(f.fieldName))
-    .sort((a, b) => {
-      if (a.isPrimaryKey) return -1
-      if (b.isPrimaryKey) return 1
-      if (a.controlType === 'autoSequence') return -1
-      if (b.controlType === 'autoSequence') return 1
-      return a.order - b.order
-    })
-})
-
 function getRecordDisplay(record: Record<string, any>): string {
   const parts: string[] = []
-  for (const field of displayFields.value.slice(0, 3)) {
-    const val = record[field.fieldName]
+  // 尝试常见字段名
+  const displayFields = ['name', 'Name', 'title', 'Title', 'id']
+  for (const field of displayFields) {
+    const val = record[field]
     if (val !== null && val !== undefined && val !== '') {
       parts.push(String(val))
+      if (parts.length >= 2) break
     }
   }
   return parts.length > 0 ? parts.join(' | ') : record.id || '未命名记录'
 }
 
-function getModifiedRecordDisplay(item: DiffModifiedItem): string {
+function getModifiedRecordDisplay(item: any): string {
   return getRecordDisplay(item.record || item.oldRecord || {})
 }
 
 function getVisibleFields(record: Record<string, any>): { name: string; label: string; value: string }[] {
-  return displayFields.value
-    .filter(f => {
-      const val = record[f.fieldName]
-      return val !== null && val !== undefined && val !== ''
-    })
-    .map(f => ({
-      name: f.fieldName,
-      label: f.label,
-      value: formatValue(record[f.fieldName]),
+  return Object.entries(record)
+    .filter(([key]) => !SYSTEM_FIELDS.includes(key) && !key.startsWith('_'))
+    .filter(([, val]) => val !== null && val !== undefined && val !== '')
+    .slice(0, 5)
+    .map(([key, val]) => ({
+      name: key,
+      label: key,
+      value: formatValue(val),
     }))
 }
 
-function getUserFields(item: DiffModifiedItem) {
-  return item.fields.filter(f => !SYSTEM_FIELDS.includes(f.fieldName))
+function getUserFields(item: any) {
+  return item.fields.filter((f: any) => !SYSTEM_FIELDS.includes(f.fieldName))
 }
 
 function getFieldLabel(fieldName: string): string {
-  return fieldLabelMap.value[fieldName] || fieldName
+  return fieldName
 }
 
 function formatValue(val: any): string {
@@ -560,13 +560,10 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    const result = await submitMerge()
-    if (result.success) {
-      const snap = result.snapshot_created ? '（已自动创建合并前快照）' : ''
-      ElMessage.success(`合并成功，共处理 ${result.merged_count} 项变更${snap}`)
-      emit('success')
-      visible.value = false
-    }
+    await submitMerge(props.projectMenuId)
+    ElMessage.success('合并成功')
+    emit('success')
+    visible.value = false
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || e?.message || '合并失败')
   } finally {
@@ -577,7 +574,7 @@ async function handleSubmit() {
 // ==================== Data loading ====================
 
 async function loadDiff() {
-  if (!props.sourceVersion) {
+  if (!props.versionId) {
     error.value = '未指定源版本'
     return
   }
@@ -586,15 +583,26 @@ async function loadDiff() {
   loadAborted.value = false
 
   try {
-    const result = await diffVersions({
-      collection: props.collection,
-      baseVersion: 'current',
-      targetVersion: props.sourceVersion.id,
-    })
+    const result = await diffProjectVersions(
+      props.projectMenuId,
+      'current',
+      props.versionId
+    )
     if (loadAborted.value) return
-    fields.value = result.fields || []
-    setDiffResult(result)
-    setSourceVersion(props.sourceVersion)
+
+    fullDiffResult.value = result
+    collections.value = result.collections
+
+    // 默认选中第一个 collection
+    if (collections.value.length > 0) {
+      selectedCollection.value = collections.value[0].collection
+      // 设置第一个 collection 的 diffResult 到 state
+      setDiffResult(collections.value[0])
+    }
+
+    if (props.sourceVersion) {
+      setSourceVersion(props.sourceVersion)
+    }
     diffIndex.value = 0
   } catch (e: any) {
     if (loadAborted.value) return
@@ -607,8 +615,17 @@ async function loadDiff() {
 
 // ==================== Watch ====================
 
+// 当切换 collection 时更新 diffResult
+watch(selectedCollection, (coll) => {
+  const diff = collections.value.find(c => c.collection === coll)
+  if (diff) {
+    setDiffResult(diff)
+    diffIndex.value = 0
+  }
+})
+
 watch(visible, (v) => {
-  if (v && props.sourceVersion) {
+  if (v && props.versionId) {
     reset()
     loadDiff()
   } else if (!v) {
@@ -618,6 +635,15 @@ watch(visible, (v) => {
 </script>
 
 <style scoped lang="scss">
+.collection-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+}
+
 /* ===== Dialog overrides ===== */
 .bc-merge-dialog {
   :deep(.el-dialog__body) {
@@ -919,7 +945,7 @@ watch(visible, (v) => {
   margin-bottom: 6px;
 }
 .bc-field-arrow {
-  height: 29px; // match bc-mod-field-row height (5+5 padding + ~19 content)
+  height: 29px;
   display: flex;
   align-items: center;
 }

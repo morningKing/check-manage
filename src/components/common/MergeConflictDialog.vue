@@ -5,6 +5,8 @@
  * - 无向导步骤，所有变更一页展示
  * - 新增/删除记录：复选框选择
  * - 修改记录：记录级选择 + 可展开的字段级选择
+ *
+ * 适配项目级版本管理
  */
 <template>
   <el-dialog
@@ -16,6 +18,16 @@
     destroy-on-close
     @close="handleClose"
   >
+    <!-- Collection 选择器 -->
+    <div v-if="collections.length > 1" class="collection-selector">
+      <span>选择数据集：</span>
+      <el-radio-group v-model="selectedCollection" size="small">
+        <el-radio-button v-for="c in collections" :key="c.collection" :value="c.collection">
+          {{ c.pageName }}
+        </el-radio-button>
+      </el-radio-group>
+    </div>
+
     <!-- 顶部批量操作按钮 -->
     <div v-if="!loading && !error && hasDiff" class="batch-actions">
       <el-tooltip content="接受版本中的所有新增、删除和字段修改" placement="top">
@@ -31,7 +43,7 @@
     </div>
 
     <!-- 统计条 -->
-    <div v-if="!loading && !error && diffResult" class="statistics-bar">
+    <div v-if="!loading && !error && currentDiff" class="statistics-bar">
       <span class="stat-item">
         <span class="stat-label">共</span>
         <span class="stat-value">{{ totalChanges }}</span>
@@ -39,13 +51,13 @@
       </span>
       <span class="stat-divider">|</span>
       <span class="stat-item stat-added">
-        新增 {{ diffResult.added.length }}
+        新增 {{ currentDiff.added.length }}
       </span>
       <span class="stat-item stat-removed">
-        删除 {{ diffResult.removed.length }}
+        删除 {{ currentDiff.removed.length }}
       </span>
       <span class="stat-item stat-modified">
-        修改 {{ diffResult.modified.length }}
+        修改 {{ currentDiff.modified.length }}
       </span>
       <span class="stat-divider">|</span>
       <span class="stat-item stat-selected">
@@ -77,37 +89,37 @@
       <el-collapse v-model="activePanels">
         <!-- 新增记录 -->
         <MergeRecordSection
-          v-if="diffResult"
+          v-if="currentDiff"
           type="added"
           title="新增记录"
           name="added"
-          :records="diffResult.added"
+          :records="currentDiff.added"
           :selected-ids="state.decisions.addedRecords"
-          :fields="fields"
+          :fields="[]"
           @toggle="handleToggleAdded"
           @select-all="handleSelectAllAdded"
         />
 
         <!-- 删除记录 -->
         <MergeRecordSection
-          v-if="diffResult"
+          v-if="currentDiff"
           type="removed"
           title="删除记录"
           name="removed"
-          :records="diffResult.removed"
+          :records="currentDiff.removed"
           :selected-ids="state.decisions.removedRecords"
-          :fields="fields"
+          :fields="[]"
           @toggle="handleToggleRemoved"
           @select-all="handleSelectAllRemoved"
         />
 
         <!-- 修改记录 -->
         <MergeModifiedSection
-          v-if="diffResult"
-          :records="diffResult.modified"
+          v-if="currentDiff"
+          :records="currentDiff.modified"
           :selected-records="state.decisions.modifiedRecords"
           :expanded-records="state.expandedRecords"
-          :fields="fields"
+          :fields="[]"
           @toggle-record="handleToggleModified"
           @toggle-expand="handleToggleExpand"
           @field-select="handleFieldSelect"
@@ -162,17 +174,19 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Loading, CircleCloseFilled } from '@element-plus/icons-vue'
-import { diffVersions } from '@/api/version'
+import { diffProjectVersions } from '@/api/projectVersion'
 import { useMergeState } from './composables/useMergeState'
 import MergeRecordSection from './MergeRecordSection.vue'
 import MergeModifiedSection from './MergeModifiedSection.vue'
-import type { CollectionVersion } from '@/types/version'
-import type { FieldConfig } from '@/types'
+import type { ProjectVersion } from '@/types/version'
+import type { DiffResult, CollectionDiff } from '@/api/projectVersion'
 
 interface Props {
   modelValue: boolean
-  collection: string
-  sourceVersion: CollectionVersion | null
+  projectMenuId: string
+  versionId: string
+  versionName: string
+  sourceVersion: ProjectVersion | null
 }
 
 const props = defineProps<Props>()
@@ -208,10 +222,12 @@ const {
 const loading = ref(false)
 const error = ref('')
 const submitting = ref(false)
-const fields = ref<FieldConfig[]>([])
 const loadAborted = ref(false)
 const showCloseConfirm = ref(false)
 const activePanels = ref<string[]>(['added', 'removed', 'modified'])
+const selectedCollection = ref<string>('')
+const collections = ref<CollectionDiff[]>([])
+const fullDiffResult = ref<DiffResult | null>(null)
 
 const visible = computed({
   get: () => props.modelValue,
@@ -219,21 +235,21 @@ const visible = computed({
 })
 
 const dialogTitle = computed(() => {
-  if (props.sourceVersion) {
-    return `版本合并 - 将「${props.sourceVersion.name}」合并到「当前工作区」`
-  }
-  return '版本合并'
+  return `版本合并 - 将「${props.versionName}」合并到「当前工作区」`
 })
 
-const diffResult = computed(() => state.diffResult)
+const currentDiff = computed(() => {
+  if (!selectedCollection.value || !collections.value.length) return null
+  return collections.value.find(c => c.collection === selectedCollection.value) || null
+})
 
 const totalChanges = computed(() => {
-  if (!state.diffResult) return 0
-  return state.diffResult.added.length + state.diffResult.removed.length + state.diffResult.modified.length
+  if (!currentDiff.value) return 0
+  return currentDiff.value.added.length + currentDiff.value.removed.length + currentDiff.value.modified.length
 })
 
 async function loadDiff(): Promise<void> {
-  if (!props.sourceVersion) {
+  if (!props.versionId) {
     error.value = '未指定源版本'
     return
   }
@@ -243,17 +259,26 @@ async function loadDiff(): Promise<void> {
   loadAborted.value = false
 
   try {
-    const result = await diffVersions({
-      collection: props.collection,
-      baseVersion: 'current',
-      targetVersion: props.sourceVersion.id,
-    })
+    const result = await diffProjectVersions(
+      props.projectMenuId,
+      'current',
+      props.versionId
+    )
 
     if (loadAborted.value) return
 
-    fields.value = result.fields || []
-    setDiffResult(result)
-    setSourceVersion(props.sourceVersion)
+    fullDiffResult.value = result
+    collections.value = result.collections
+
+    // 默认选中第一个 collection
+    if (collections.value.length > 0) {
+      selectedCollection.value = collections.value[0].collection
+      setDiffResult(collections.value[0])
+    }
+
+    if (props.sourceVersion) {
+      setSourceVersion(props.sourceVersion)
+    }
   } catch (e: any) {
     if (loadAborted.value) return
     const msg = e?.response?.data?.error || e?.message || '加载差异信息失败'
@@ -311,7 +336,6 @@ function handleAcceptAllTarget(): void {
 }
 
 function handleCancel(): void {
-  // Only show confirmation when user has significant selections (>=3) or modified field-level decisions
   if (selectedCount.value >= 3 || hasFieldDecisionChanged.value) {
     showCloseConfirm.value = true
   } else {
@@ -326,7 +350,6 @@ function confirmClose(): void {
 
 function handleClose(): void {
   reset()
-  fields.value = []
   error.value = ''
   loadAborted.value = true
 }
@@ -340,13 +363,10 @@ async function handleSubmit(): Promise<void> {
   submitting.value = true
 
   try {
-    const result = await submitMerge()
-    if (result.success) {
-      const snapshotMsg = result.snapshot_created ? '（已自动创建合并前快照）' : ''
-      ElMessage.success(`合并成功，共处理 ${result.merged_count} 项变更${snapshotMsg}`)
-      emit('success')
-      visible.value = false
-    }
+    await submitMerge(props.projectMenuId)
+    ElMessage.success('合并成功')
+    emit('success')
+    visible.value = false
   } catch (e: any) {
     const msg = e?.response?.data?.message || e?.message || '合并失败'
     ElMessage.error(msg)
@@ -355,8 +375,16 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+// 当切换 collection 时更新 diffResult
+watch(selectedCollection, (coll) => {
+  const diff = collections.value.find(c => c.collection === coll)
+  if (diff) {
+    setDiffResult(diff)
+  }
+})
+
 watch(visible, (v) => {
-  if (v && props.sourceVersion) {
+  if (v && props.versionId) {
     reset()
     loadDiff()
   } else if (!v) {
@@ -366,6 +394,16 @@ watch(visible, (v) => {
 </script>
 
 <style scoped lang="scss">
+.collection-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+
 .batch-actions {
   display: flex;
   gap: 12px;

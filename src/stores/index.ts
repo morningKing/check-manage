@@ -24,6 +24,3 @@ export { useExportScriptStore } from './exportScript'
 
 // 跳转导航状态
 export { useJumpNavigationStore } from './jumpNavigation'
-
-// 分支刷新状态
-export { useBranchRefreshStore } from './branchRefresh'

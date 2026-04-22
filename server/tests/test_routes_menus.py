@@ -61,7 +61,7 @@ class TestListMenus:
     def test_returns_list(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('menu-1', '首页', 'House', None, None, 0, '/home', '["admin"]', None),
+            ('menu-1', '首页', 'House', None, None, 0, '/home', '["admin"]', None, 'system', None),
         ]
         resp = client.get('/menus', headers=admin_h)
         assert resp.status_code == 200
@@ -79,31 +79,36 @@ class TestListMenus:
 class TestCreateMenu:
     def test_create_menu(self, setup):
         client, mock_cursor, admin_h, _ = setup
+        # 创建工作空间菜单（一级菜单）
         resp = client.post('/menus',
                            data=json.dumps({
                                'id': 'menu-new',
-                               'name': '新菜单',
+                               'name': '新工作空间',
                                'icon': 'Star',
                                'path': '/new',
+                               'menuType': 'workspace',
                            }),
                            content_type='application/json',
                            headers=admin_h)
         assert resp.status_code == 201
 
     def test_create_under_system_config_rejected(self, setup):
-        """不允许在系统配置菜单下添加子菜单"""
-        client, _, admin_h, _ = setup
+        """不允许在系统菜单下添加子菜单"""
+        client, mock_cursor, admin_h, _ = setup
+        # 系统菜单不允许添加子菜单
+        mock_cursor.fetchone.return_value = ('menu-3-a', 'system')
 
-        with patch('routes.menus._is_descendant_of', return_value=True):
-            resp = client.post('/menus',
-                               data=json.dumps({
-                                   'id': 'menu-forbidden',
-                                   'name': '禁止菜单',
-                                   'parentId': 'menu-3-a',
-                               }),
-                               content_type='application/json',
-                               headers=admin_h)
-        assert resp.status_code == 403
+        resp = client.post('/menus',
+                           data=json.dumps({
+                               'id': 'menu-forbidden',
+                               'name': '禁止菜单',
+                               'parentId': 'menu-3-a',
+                               'menuType': 'data',
+                           }),
+                           content_type='application/json',
+                           headers=admin_h)
+        # 验证父级类型失败返回 400
+        assert resp.status_code == 400
 
     def test_developer_cannot_create(self, setup):
         client, _, _, dev_h = setup
@@ -116,10 +121,10 @@ class TestCreateMenu:
 
 class TestUpdateMenu:
     def test_update_builtin_rejected(self, setup):
-        """内置菜单不允许编辑"""
+        """系统菜单不允许编辑"""
         client, _, admin_h, _ = setup
 
-        with patch('routes.menus._is_builtin_menu', return_value=True):
+        with patch('routes.menus._is_system_menu', return_value=True):
             resp = client.put('/menus/menu-1',
                               data=json.dumps({'name': '改名'}),
                               content_type='application/json',
@@ -130,7 +135,7 @@ class TestUpdateMenu:
         """普通菜单可以编辑"""
         client, _, admin_h, _ = setup
 
-        with patch('routes.menus._is_builtin_menu', return_value=False):
+        with patch('routes.menus._is_system_menu', return_value=False):
             resp = client.put('/menus/menu-custom',
                               data=json.dumps({'name': '改名'}),
                               content_type='application/json',
@@ -140,10 +145,10 @@ class TestUpdateMenu:
 
 class TestDeleteMenu:
     def test_delete_builtin_rejected(self, setup):
-        """内置菜单不允许删除"""
+        """系统菜单不允许删除"""
         client, _, admin_h, _ = setup
 
-        with patch('routes.menus._is_builtin_menu', return_value=True):
+        with patch('routes.menus._is_system_menu', return_value=True):
             resp = client.delete('/menus/menu-1', headers=admin_h)
         assert resp.status_code == 403
 
@@ -152,6 +157,6 @@ class TestDeleteMenu:
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.return_value = ('普通菜单',)
 
-        with patch('routes.menus._is_builtin_menu', return_value=False):
+        with patch('routes.menus._is_system_menu', return_value=False):
             resp = client.delete('/menus/menu-custom', headers=admin_h)
         assert resp.status_code == 200
