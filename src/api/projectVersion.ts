@@ -11,6 +11,10 @@ export interface ProjectCollection {
 export interface CurrentBranch {
   branchId: string
   branchName: string
+  mainLocked?: boolean
+  mainLockedBy?: string
+  currentLocked?: boolean
+  currentLockedBy?: string
 }
 
 export interface SwitchBranchResult {
@@ -196,4 +200,23 @@ export function lockProjectVersion(versionId: string, reason?: string): Promise<
 // 新增：解锁分支
 export function unlockProjectVersion(versionId: string): Promise<LockResult> {
   return request.post(`/project-versions/${versionId}/unlock`)
+}
+
+// Main 分支锁定相关类型
+export interface MainLockResult {
+  success: boolean
+  isLocked: boolean
+  lockedAt?: string
+  lockedBy?: string
+  branchId: string
+}
+
+// 新增：锁定 main 分支
+export function lockMainBranch(projectMenuId: string, reason?: string): Promise<MainLockResult> {
+  return request.post(`/project-versions/main/${projectMenuId}/lock`, { reason })
+}
+
+// 新增：解锁 main 分支
+export function unlockMainBranch(projectMenuId: string): Promise<MainLockResult> {
+  return request.post(`/project-versions/main/${projectMenuId}/unlock`)
 }

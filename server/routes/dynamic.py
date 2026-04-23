@@ -476,11 +476,10 @@ def create_item(collection):
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations')}
     branch_id = _get_current_user_branch(collection)
 
-    # 检查分支锁定
-    if branch_id != MAIN_BRANCH_ID:
-        lock_info = check_branch_lock(collection)
-        if lock_info:
-            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
+    # 检查分支锁定（包括 main 分支）
+    lock_info = check_branch_lock(collection)
+    if lock_info:
+        return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
 
     with get_db() as conn:
         cur = conn.cursor()

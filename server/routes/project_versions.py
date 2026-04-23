@@ -16,6 +16,8 @@ from utils.project_version import (
     get_project_version_delete_impact,
     lock_project_version,
     unlock_project_version,
+    lock_main_branch,
+    unlock_main_branch,
 )
 
 project_versions_bp = Blueprint('project_versions', __name__)
@@ -172,6 +174,40 @@ def unlock_version(version_id):
         return jsonify({'error': str(e)}), 500
 
 
+@project_versions_bp.route('/project-versions/main/<project_menu_id>/lock', methods=['POST'])
+@admin_required
+def lock_main_version(project_menu_id):
+    """锁定项目的 main 分支"""
+    try:
+        username = g.current_user.get('username')
+    except (AttributeError, KeyError):
+        return jsonify({'error': '用户信息不完整'}), 401
+
+    body = request.get_json(force=True) or {}
+    reason = body.get('reason')
+
+    try:
+        result = lock_main_branch(project_menu_id, username, reason)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@project_versions_bp.route('/project-versions/main/<project_menu_id>/unlock', methods=['POST'])
+@admin_required
+def unlock_main_version(project_menu_id):
+    """解锁项目的 main 分支"""
+    try:
+        result = unlock_main_branch(project_menu_id)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== 动态路由 ====================
 
 @project_versions_bp.route('/project-versions/<project_menu_id>/collections', methods=['GET'])
@@ -201,11 +237,12 @@ def get_current_branch(project_menu_id):
         branch_id = get_user_project_branch(user_id, project_menu_id)
         branch_name = 'main' if branch_id == 'main' else branch_id
 
-        # 查询分支名称
-        if branch_id != 'main':
-            from db import get_db
-            with get_db() as conn:
-                cur = conn.cursor()
+        from db import get_db
+        with get_db() as conn:
+            cur = conn.cursor()
+
+            # 查询分支名称
+            if branch_id != 'main':
                 cur.execute(
                     'SELECT name FROM project_versions WHERE id = %s',
                     (branch_id,)
@@ -214,10 +251,34 @@ def get_current_branch(project_menu_id):
                 if row:
                     branch_name = row[0]
 
-        return jsonify({
-            'branchId': branch_id,
-            'branchName': branch_name
-        })
+            # 查询 main 分支锁定状态
+            cur.execute(
+                'SELECT is_main_locked, main_locked_by FROM menus WHERE id = %s',
+                (project_menu_id,)
+            )
+            main_row = cur.fetchone()
+            main_locked = main_row and main_row[0]
+            main_locked_by = main_row and main_row[1] if main_row else None
+
+            result = {
+                'branchId': branch_id,
+                'branchName': branch_name,
+                'mainLocked': main_locked or False,
+                'mainLockedBy': main_locked_by,
+            }
+
+            # 如果当前在非 main 分支，也返回该分支的锁定状态
+            if branch_id != 'main':
+                cur.execute(
+                    'SELECT is_locked, locked_by FROM project_versions WHERE id = %s',
+                    (branch_id,)
+                )
+                version_row = cur.fetchone()
+                if version_row:
+                    result['currentLocked'] = version_row[0]
+                    result['currentLockedBy'] = version_row[1]
+
+            return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

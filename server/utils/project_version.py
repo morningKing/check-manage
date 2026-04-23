@@ -1338,3 +1338,103 @@ def unlock_project_version(version_id):
         'success': True,
         'isLocked': False,
     }
+
+
+def lock_main_branch(project_menu_id, locked_by, reason=None):
+    """
+    锁定项目的 main 分支
+
+    Parameters
+    ----------
+    project_menu_id : str
+        项目菜单 ID
+    locked_by : str
+        锁定者用户名
+    reason : str, optional
+        锁定原因
+
+    Returns
+    -------
+    dict
+        {success, is_locked, locked_at, locked_by}
+    """
+    now = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 检查是否为项目菜单
+        cur.execute(
+            'SELECT menu_type, is_main_locked FROM menus WHERE id = %s',
+            (project_menu_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('项目菜单不存在')
+
+        menu_type, is_locked = row
+        if menu_type != 'project':
+            raise ValueError('只能锁定项目类型的 main 分支')
+
+        if is_locked:
+            raise ValueError('main 分支已被锁定')
+
+        # 执行锁定
+        cur.execute(
+            'UPDATE menus SET is_main_locked = TRUE, main_locked_at = %s, main_locked_by = %s WHERE id = %s',
+            (now, locked_by, project_menu_id)
+        )
+
+    return {
+        'success': True,
+        'isLocked': True,
+        'lockedAt': now.isoformat(),
+        'lockedBy': locked_by,
+        'branchId': MAIN_BRANCH_ID,
+    }
+
+
+def unlock_main_branch(project_menu_id):
+    """
+    解锁项目的 main 分支
+
+    Parameters
+    ----------
+    project_menu_id : str
+        项目菜单 ID
+
+    Returns
+    -------
+    dict
+        {success, is_locked}
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 检查项目菜单
+        cur.execute(
+            'SELECT menu_type, is_main_locked FROM menus WHERE id = %s',
+            (project_menu_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('项目菜单不存在')
+
+        menu_type, is_locked = row
+        if menu_type != 'project':
+            raise ValueError('只能解锁项目类型的 main 分支')
+
+        if not is_locked:
+            raise ValueError('main 分支未被锁定')
+
+        # 执行解锁
+        cur.execute(
+            'UPDATE menus SET is_main_locked = FALSE, main_locked_at = NULL, main_locked_by = NULL WHERE id = %s',
+            (project_menu_id,)
+        )
+
+    return {
+        'success': True,
+        'isLocked': False,
+        'branchId': MAIN_BRANCH_ID,
+    }

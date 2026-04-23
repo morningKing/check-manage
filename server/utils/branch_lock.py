@@ -26,9 +26,6 @@ def check_branch_lock(collection: str) -> tuple[str, str] | None:
     from utils.version import get_user_current_branch
     branch_id = get_user_current_branch(user_id, collection)
 
-    if branch_id == MAIN_BRANCH_ID:
-        return None  # main 分支不锁定
-
     # 获取 collection 对应的项目菜单 ID
     with get_db() as conn:
         cur = conn.cursor()
@@ -41,7 +38,20 @@ def check_branch_lock(collection: str) -> tuple[str, str] | None:
         if not menu_row or not menu_row[0]:
             return None  # 未找到项目菜单，不检查锁定
 
-        # 检查分支锁定状态
+        project_menu_id = menu_row[0]
+
+        if branch_id == MAIN_BRANCH_ID:
+            # 检查 main 分支锁定状态（存储在 menus 表的项目菜单上）
+            cur.execute(
+                'SELECT is_main_locked, main_locked_by FROM menus WHERE id = %s',
+                (project_menu_id,)
+            )
+            project_row = cur.fetchone()
+            if project_row and project_row[0]:
+                return (MAIN_BRANCH_ID, project_row[1] or '管理员')
+            return None
+
+        # 检查非 main 分支锁定状态
         cur.execute(
             'SELECT is_locked, locked_by FROM project_versions WHERE id = %s',
             (branch_id,)
@@ -75,11 +85,21 @@ def check_branch_lock_by_project(user_id: str, project_menu_id: str) -> tuple[st
 
     branch_id = get_user_project_branch(user_id, project_menu_id)
 
-    if branch_id == MAIN_BRANCH_ID:
-        return None
-
     with get_db() as conn:
         cur = conn.cursor()
+
+        if branch_id == MAIN_BRANCH_ID:
+            # 检查 main 分支锁定状态
+            cur.execute(
+                'SELECT is_main_locked, main_locked_by FROM menus WHERE id = %s',
+                (project_menu_id,)
+            )
+            project_row = cur.fetchone()
+            if project_row and project_row[0]:
+                return (MAIN_BRANCH_ID, project_row[1] or '管理员')
+            return None
+
+        # 检查非 main 分支
         cur.execute(
             'SELECT is_locked, locked_by FROM project_versions WHERE id = %s',
             (branch_id,)
@@ -94,4 +114,29 @@ def check_branch_lock_by_project(user_id: str, project_menu_id: str) -> tuple[st
         if is_locked:
             return (branch_id, locked_by or '管理员')
 
+    return None
+
+
+def check_main_branch_lock(project_menu_id: str) -> tuple[bool, str] | None:
+    """
+    检查项目的 main 分支是否锁定。
+
+    Args:
+        project_menu_id: 项目菜单 ID
+
+    Returns:
+        None: 未锁定
+        (True, locked_by): 已锁定
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT is_main_locked, main_locked_by FROM menus WHERE id = %s AND menu_type = %s',
+            (project_menu_id, 'project')
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        if row[0]:
+            return (True, row[1] or '管理员')
     return None

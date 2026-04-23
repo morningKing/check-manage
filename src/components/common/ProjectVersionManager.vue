@@ -16,6 +16,9 @@
               <el-tag v-if="currentBranch" :type="currentBranch.branchId === 'main' ? 'success' : 'warning'">
                 {{ currentBranch.branchName }}
               </el-tag>
+              <el-tag v-if="currentBranch?.branchId === 'main' && mainBranchLocked" type="danger" size="small">
+                🔒 已锁定
+              </el-tag>
               <el-button
                 v-if="currentBranch && currentBranch.branchId !== 'main'"
                 type="primary"
@@ -23,6 +26,14 @@
                 @click="handleSwitchToMain"
               >
                 切换回主分支
+              </el-button>
+              <el-button
+                v-if="currentBranch?.branchId === 'main'"
+                :type="mainBranchLocked ? 'info' : 'warning'"
+                size="small"
+                @click="handleMainBranchLock"
+              >
+                {{ mainBranchLocked ? '解锁主分支' : '锁定主分支' }}
               </el-button>
             </div>
             <div class="header-actions">
@@ -294,6 +305,8 @@ import {
   getProjectVersionDeleteImpact,
   lockProjectVersion,
   unlockProjectVersion,
+  lockMainBranch,
+  unlockMainBranch,
 } from '@/api/projectVersion'
 import type { ProjectVersion, ProjectVersionFormData } from '@/types/version'
 import type { DiffResult } from '@/api/projectVersion'
@@ -322,7 +335,8 @@ const versions = ref<ProjectVersion[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
-const currentBranch = ref<{ branchId: string; branchName: string } | null>(null)
+const currentBranch = ref<{ branchId: string; branchName: string; mainLocked?: boolean; mainLockedBy?: string } | null>(null)
+const mainBranchLocked = ref(false)
 
 const createDialogVisible = ref(false)
 const createForm = ref<ProjectVersionFormData>({
@@ -382,6 +396,7 @@ async function refreshData() {
     versions.value = versionResult.items
     total.value = versionResult.total
     currentBranch.value = branchResult
+    mainBranchLocked.value = branchResult.mainLocked || false
   } catch (err: any) {
     ElMessage.error(err.message || '获取数据失败')
   } finally {
@@ -575,6 +590,41 @@ async function handleLock(version: ProjectVersion) {
 
       await lockProjectVersion(version.id, result.value)
       ElMessage.success('分支已锁定')
+    }
+    refreshData()
+  } catch (err: any) {
+    if (err !== 'cancel') {
+      ElMessage.error(err.message || '操作失败')
+    }
+  }
+}
+
+async function handleMainBranchLock() {
+  try {
+    if (mainBranchLocked.value) {
+      await ElMessageBox.confirm(
+        '确定解锁主分支？解锁后主分支可正常编辑。',
+        '解锁主分支',
+        { type: 'info' }
+      )
+      await unlockMainBranch(props.projectMenuId)
+      ElMessage.success('主分支已解锁')
+    } else {
+      const result = await ElMessageBox.prompt(
+        '请输入锁定原因（可选）',
+        '锁定主分支',
+        {
+          confirmButtonText: '锁定',
+          cancelButtonText: '取消',
+          inputPlaceholder: '例如：发布前冻结',
+          type: 'warning',
+        }
+      ).catch(() => ({ value: null }))
+
+      if (result.value === null) return // 用户取消
+
+      await lockMainBranch(props.projectMenuId, result.value)
+      ElMessage.success('主分支已锁定')
     }
     refreshData()
   } catch (err: any) {

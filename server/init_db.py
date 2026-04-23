@@ -1017,6 +1017,21 @@ def init_db():
             conn.commit()
             print("Added lock columns (is_locked, locked_at, locked_by) to project_versions.")
 
+        # Migration: add main branch lock to menus (project type)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'menus' AND column_name = 'is_main_locked'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE menus
+                ADD COLUMN is_main_locked BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN main_locked_at TIMESTAMPTZ,
+                ADD COLUMN main_locked_by VARCHAR(200)
+            """)
+            conn.commit()
+            print("Added main branch lock columns to menus table.")
+
         # Migration: create user_current_project_branch table
         cur.execute("""
             SELECT table_name FROM information_schema.tables
