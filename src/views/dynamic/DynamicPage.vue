@@ -100,6 +100,7 @@
               <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" divided command="version" :icon="Tickets">版本管理</el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" command="dependency" :icon="Operation">依赖管理</el-dropdown-item>
               <el-dropdown-item
                 v-if="isAdmin"
                 command="batchDelete"
@@ -730,6 +731,7 @@
       v-if="projectMenuId"
       v-model="projectVersionManagerVisible"
       :project-menu-id="projectMenuId"
+      :default-tab="projectVersionManagerDefaultTab"
       @refresh="loadPageData"
     />
 
@@ -991,6 +993,11 @@ const allExportScripts = ref<ExportScript[]>([])
  * 项目版本管理抽屉可见性
  */
 const projectVersionManagerVisible = ref(false)
+
+/**
+ * 项目版本管理默认打开的Tab
+ */
+const projectVersionManagerDefaultTab = ref<'versions' | 'dependencies'>('versions')
 
 /**
  * 当前菜单（通过pageId查找）
@@ -1486,6 +1493,7 @@ async function handleBranchSwitch(command: string): Promise<void> {
   if (command === 'manage') {
     // 如果数据菜单属于项目，使用项目版本管理
     if (projectMenuId.value) {
+      projectVersionManagerDefaultTab.value = 'versions'
       projectVersionManagerVisible.value = true
     } else {
       ElMessage.warning('该数据页不属于任何项目，无法使用版本管理')
@@ -2264,9 +2272,17 @@ function handleMoreCommand(command: string): void {
     handleImportCommand('template')
   } else if (command === 'version') {
     if (projectMenuId.value) {
+      projectVersionManagerDefaultTab.value = 'versions'
       projectVersionManagerVisible.value = true
     } else {
       ElMessage.warning('该数据页不属于任何项目，无法使用版本管理')
+    }
+  } else if (command === 'dependency') {
+    if (projectMenuId.value) {
+      projectVersionManagerDefaultTab.value = 'dependencies'
+      projectVersionManagerVisible.value = true
+    } else {
+      ElMessage.warning('该数据页不属于任何项目，无法使用依赖管理')
     }
   } else if (command === 'batchDelete') {
     handleBatchDeleteConfirm()

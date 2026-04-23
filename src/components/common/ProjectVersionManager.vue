@@ -426,6 +426,7 @@ import ProjectDependencyManager from './ProjectDependencyManager.vue'
 const props = defineProps<{
   modelValue: boolean
   projectMenuId: string
+  defaultTab?: 'versions' | 'dependencies'
 }>()
 
 const emit = defineEmits<{
@@ -785,6 +786,12 @@ onMounted(() => {
 watch(visible, (newVal) => {
   if (newVal) {
     refreshData()
+    // 根据defaultTab设置初始激活的Tab
+    if (props.defaultTab) {
+      activeTab.value = props.defaultTab
+    } else {
+      activeTab.value = 'versions'
+    }
   }
 })
 </script>
