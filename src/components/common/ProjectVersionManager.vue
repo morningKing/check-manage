@@ -575,21 +575,23 @@ async function handleLock(version: ProjectVersion) {
       await unlockProjectVersion(version.id)
       ElMessage.success('分支已解锁')
     } else {
-      const result = await ElMessageBox.prompt(
-        '请输入锁定原因（可选）',
-        '锁定分支',
-        {
-          confirmButtonText: '锁定',
-          cancelButtonText: '取消',
-          inputPlaceholder: '例如：发布前冻结',
-          type: 'warning',
-        }
-      ).catch(() => ({ value: null }))
-
-      if (result.value === null) return // 用户取消
-
-      await lockProjectVersion(version.id, result.value)
-      ElMessage.success('分支已锁定')
+      try {
+        const result = await ElMessageBox.prompt(
+          '请输入锁定原因（可选）',
+          '锁定分支',
+          {
+            confirmButtonText: '锁定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '例如：发布前冻结',
+            type: 'warning',
+          }
+        ) as { value: string }
+        await lockProjectVersion(version.id, result.value)
+        ElMessage.success('分支已锁定')
+      } catch {
+        // 用户取消
+        return
+      }
     }
     refreshData()
   } catch (err: any) {
@@ -610,21 +612,23 @@ async function handleMainBranchLock() {
       await unlockMainBranch(props.projectMenuId)
       ElMessage.success('主分支已解锁')
     } else {
-      const result = await ElMessageBox.prompt(
-        '请输入锁定原因（可选）',
-        '锁定主分支',
-        {
-          confirmButtonText: '锁定',
-          cancelButtonText: '取消',
-          inputPlaceholder: '例如：发布前冻结',
-          type: 'warning',
-        }
-      ).catch(() => ({ value: null }))
-
-      if (result.value === null) return // 用户取消
-
-      await lockMainBranch(props.projectMenuId, result.value)
-      ElMessage.success('主分支已锁定')
+      try {
+        const result = await ElMessageBox.prompt(
+          '请输入锁定原因（可选）',
+          '锁定主分支',
+          {
+            confirmButtonText: '锁定',
+            cancelButtonText: '取消',
+            inputPlaceholder: '例如：发布前冻结',
+            type: 'warning',
+          }
+        ) as { value: string }
+        await lockMainBranch(props.projectMenuId, result.value)
+        ElMessage.success('主分支已锁定')
+      } catch {
+        // 用户取消
+        return
+      }
     }
     refreshData()
   } catch (err: any) {
