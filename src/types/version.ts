@@ -54,6 +54,10 @@ export interface ProjectVersion {
   initializedAt?: string
   collections?: ProjectVersionCollection[]
   collectionStats?: Record<string, number>
+  // 锁定相关字段
+  isLocked: boolean
+  lockedAt?: string
+  lockedBy?: string
 }
 
 /**

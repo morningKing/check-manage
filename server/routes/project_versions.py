@@ -14,6 +14,8 @@ from utils.project_version import (
     restore_from_project_version,
     switch_to_main_project_branch,
     get_project_version_delete_impact,
+    lock_project_version,
+    unlock_project_version,
 )
 
 project_versions_bp = Blueprint('project_versions', __name__)
@@ -129,6 +131,40 @@ def merge_version():
             version_id, target_branch, strategy,
             username, user_id, project_menu_id
         )
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@project_versions_bp.route('/project-versions/<version_id>/lock', methods=['POST'])
+@admin_required
+def lock_version(version_id):
+    """锁定项目分支"""
+    try:
+        username = g.current_user.get('username')
+    except (AttributeError, KeyError):
+        return jsonify({'error': '用户信息不完整'}), 401
+
+    body = request.get_json(force=True) or {}
+    reason = body.get('reason')
+
+    try:
+        result = lock_project_version(version_id, username, reason)
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@project_versions_bp.route('/project-versions/<version_id>/unlock', methods=['POST'])
+@admin_required
+def unlock_version(version_id):
+    """解锁项目分支"""
+    try:
+        result = unlock_project_version(version_id)
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

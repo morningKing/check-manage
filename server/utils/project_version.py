@@ -276,7 +276,7 @@ def list_project_versions(project_menu_id, page=1, pageSize=20):
 
         cur.execute(
             'SELECT id, name, description, version_type, status, created_by, created_at, '
-            'parent_version, records_count, is_protected '
+            'parent_version, records_count, is_protected, is_locked, locked_at, locked_by '
             'FROM project_versions WHERE project_menu_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s',
             (project_menu_id, pageSize, offset)
         )
@@ -295,6 +295,9 @@ def list_project_versions(project_menu_id, page=1, pageSize=20):
                 'parentVersion': row[7],
                 'recordsCount': row[8],
                 'isProtected': row[9],
+                'isLocked': row[10],
+                'lockedAt': row[11].isoformat() if row[11] else None,
+                'lockedBy': row[12],
             })
 
         return {
@@ -450,7 +453,7 @@ def get_project_version_detail(version_id):
 
         cur.execute(
             'SELECT id, project_menu_id, name, description, version_type, status, created_by, created_at, '
-            'parent_version, records_count, is_protected '
+            'parent_version, records_count, is_protected, is_locked, locked_at, locked_by '
             'FROM project_versions WHERE id = %s',
             (version_id,)
         )
@@ -473,6 +476,9 @@ def get_project_version_detail(version_id):
             'parentVersion': row[8],
             'recordsCount': row[9],
             'isProtected': row[10],
+            'isLocked': row[11],
+            'lockedAt': row[12].isoformat() if row[12] else None,
+            'lockedBy': row[13],
             'collections': collections,
         }
 
@@ -1231,3 +1237,104 @@ def get_project_version_delete_impact(version_id):
             'warningMessage': warning_msg,
             'canDelete': not version_info['isProtected'] and child_count == 0,
         }
+
+
+# ==================== 分支锁定功能 ====================
+
+def lock_project_version(version_id, locked_by, reason=None):
+    """
+    锁定项目分支
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+    locked_by : str
+        锁定者用户名
+    reason : str, optional
+        锁定原因
+
+    Returns
+    -------
+    dict
+        {success, is_locked, locked_at, locked_by}
+    """
+    now = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 检查版本是否存在且为分支类型
+        cur.execute(
+            'SELECT version_type, status, is_locked FROM project_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+
+        version_type, status, is_locked = row
+
+        if version_type != 'branch':
+            raise ValueError('只有分支类型可以锁定，快照不可锁定')
+
+        if status != 'active':
+            raise ValueError('只有活跃状态的分支可以锁定')
+
+        if is_locked:
+            raise ValueError('该分支已被锁定')
+
+        # 执行锁定
+        cur.execute(
+            'UPDATE project_versions SET is_locked = TRUE, locked_at = %s, locked_by = %s WHERE id = %s',
+            (now, locked_by, version_id)
+        )
+
+    return {
+        'success': True,
+        'isLocked': True,
+        'lockedAt': now.isoformat(),
+        'lockedBy': locked_by,
+    }
+
+
+def unlock_project_version(version_id):
+    """
+    解锁项目分支
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+
+    Returns
+    -------
+    dict
+        {success, is_locked}
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 检查版本是否存在
+        cur.execute(
+            'SELECT is_locked FROM project_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+
+        is_locked = row[0]
+        if not is_locked:
+            raise ValueError('该分支未被锁定')
+
+        # 执行解锁
+        cur.execute(
+            'UPDATE project_versions SET is_locked = FALSE, locked_at = NULL, locked_by = NULL WHERE id = %s',
+            (version_id,)
+        )
+
+    return {
+        'success': True,
+        'isLocked': False,
+    }

@@ -47,8 +47,11 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="status" label="状态" width="100">
+          <el-table-column prop="status" label="状态" width="120">
             <template #default="{ row }">
+              <el-tag v-if="row.isLocked" type="danger" size="small" style="margin-right: 4px">
+                🔒 已锁定
+              </el-tag>
               <el-tag :type="getStatusTagType(row.status)" size="small">
                 {{ getStatusLabel(row.status) }}
               </el-tag>
@@ -80,6 +83,15 @@
                 @click="showMergeDialog(row)"
               >
                 合并
+              </el-button>
+              <el-button
+                v-if="row.versionType === 'branch' && row.status === 'active'"
+                :type="row.isLocked ? 'info' : 'warning'"
+                size="small"
+                link
+                @click="handleLock(row)"
+              >
+                {{ row.isLocked ? '解锁' : '锁定' }}
               </el-button>
               <el-button size="small" link @click="showDiffDialog(row)">对比</el-button>
               <el-button size="small" link @click="showDetail(row)">详情</el-button>
@@ -280,6 +292,8 @@ import {
   restoreProjectVersion,
   switchToMainProjectBranch,
   getProjectVersionDeleteImpact,
+  lockProjectVersion,
+  unlockProjectVersion,
 } from '@/api/projectVersion'
 import type { ProjectVersion, ProjectVersionFormData } from '@/types/version'
 import type { DiffResult } from '@/api/projectVersion'
@@ -531,6 +545,41 @@ async function handleDelete(version: ProjectVersion) {
   } catch (err: any) {
     if (err !== 'cancel') {
       ElMessage.error(err.message || '删除失败')
+    }
+  }
+}
+
+async function handleLock(version: ProjectVersion) {
+  try {
+    if (version.isLocked) {
+      await ElMessageBox.confirm(
+        `确定解锁分支「${version.name}」？解锁后该分支可正常编辑。`,
+        '解锁分支',
+        { type: 'info' }
+      )
+      await unlockProjectVersion(version.id)
+      ElMessage.success('分支已解锁')
+    } else {
+      const result = await ElMessageBox.prompt(
+        '请输入锁定原因（可选）',
+        '锁定分支',
+        {
+          confirmButtonText: '锁定',
+          cancelButtonText: '取消',
+          inputPlaceholder: '例如：发布前冻结',
+          type: 'warning',
+        }
+      ).catch(() => ({ value: null }))
+
+      if (result.value === null) return // 用户取消
+
+      await lockProjectVersion(version.id, result.value)
+      ElMessage.success('分支已锁定')
+    }
+    refreshData()
+  } catch (err: any) {
+    if (err !== 'cancel') {
+      ElMessage.error(err.message || '操作失败')
     }
   }
 }

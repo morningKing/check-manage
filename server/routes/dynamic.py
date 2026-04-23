@@ -5,6 +5,7 @@ from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
+from utils.branch_lock import check_branch_lock
 import psycopg2.extras
 import json
 
@@ -475,6 +476,12 @@ def create_item(collection):
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations')}
     branch_id = _get_current_user_branch(collection)
 
+    # 检查分支锁定
+    if branch_id != MAIN_BRANCH_ID:
+        lock_info = check_branch_lock(collection)
+        if lock_info:
+            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
+
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness (within the same branch)
@@ -547,6 +554,13 @@ def update_item(collection, item_id):
     client_relations = body.get('_relations')  # [{fieldName, targetCollection, targetField, ids}]
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt', '_relations')}
     branch_id = _get_current_user_branch(collection)
+
+    # 检查分支锁定
+    if branch_id != MAIN_BRANCH_ID:
+        lock_info = check_branch_lock(collection)
+        if lock_info:
+            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
+
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness (exclude current record, within same branch)
@@ -739,6 +753,13 @@ def delete_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
     branch_id = _get_current_user_branch(collection)
+
+    # 检查分支锁定
+    if branch_id != MAIN_BRANCH_ID:
+        lock_info = check_branch_lock(collection)
+        if lock_info:
+            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
+
     with get_db() as conn:
         cur = conn.cursor()
         # Check reference dependencies before deletion (within same branch)
@@ -787,6 +808,12 @@ def batch_create_items(collection):
     skip_validation = options.get('skipValidation', False)
     continue_on_error = options.get('continueOnError', False)
     branch_id = _get_current_user_branch(collection)
+
+    # 检查分支锁定
+    if branch_id != MAIN_BRANCH_ID:
+        lock_info = check_branch_lock(collection)
+        if lock_info:
+            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -998,6 +1025,12 @@ def batch_delete_items(collection, **kwargs):
         return jsonify({"error": "ids is required"}), 400
 
     branch_id = _get_current_user_branch(collection)
+
+    # 检查分支锁定
+    if branch_id != MAIN_BRANCH_ID:
+        lock_info = check_branch_lock(collection)
+        if lock_info:
+            return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
 
     with get_db() as conn:
         cur = conn.cursor()

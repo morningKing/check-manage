@@ -1002,6 +1002,21 @@ def init_db():
             conn.commit()
             print("Added initialized_at column to project_versions.")
 
+        # Migration: add lock columns to project_versions
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'project_versions' AND column_name = 'is_locked'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE project_versions
+                ADD COLUMN is_locked BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN locked_at TIMESTAMPTZ,
+                ADD COLUMN locked_by VARCHAR(200)
+            """)
+            conn.commit()
+            print("Added lock columns (is_locked, locked_at, locked_by) to project_versions.")
+
         # Migration: create user_current_project_branch table
         cur.execute("""
             SELECT table_name FROM information_schema.tables

@@ -179,3 +179,21 @@ export function switchToMainProjectBranch(projectMenuId: string): Promise<Switch
 export function getProjectVersionDeleteImpact(versionId: string): Promise<DeleteImpactResult> {
   return request.get(`/project-versions/${versionId}/delete-impact`)
 }
+
+// 锁定相关类型
+export interface LockResult {
+  success: boolean
+  isLocked: boolean
+  lockedAt?: string
+  lockedBy?: string
+}
+
+// 新增：锁定分支
+export function lockProjectVersion(versionId: string, reason?: string): Promise<LockResult> {
+  return request.post(`/project-versions/${versionId}/lock`, { reason })
+}
+
+// 新增：解锁分支
+export function unlockProjectVersion(versionId: string): Promise<LockResult> {
+  return request.post(`/project-versions/${versionId}/unlock`)
+}
