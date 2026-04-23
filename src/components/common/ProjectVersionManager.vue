@@ -7,47 +7,50 @@
     :close-on-click-modal="false"
     destroy-on-close
   >
-    <div class="project-version-manager">
-      <el-card class="header-card" shadow="never">
-        <template #header>
-          <div class="card-header">
-            <div class="header-left">
-              <span class="title">当前分支</span>
-              <el-tag v-if="currentBranch" :type="currentBranch.branchId === 'main' ? 'success' : 'warning'">
-                {{ currentBranch.branchName }}
-              </el-tag>
-              <el-tag v-if="currentBranch?.branchId === 'main' && mainBranchLocked" type="danger" size="small">
-                🔒 已锁定
-              </el-tag>
-              <el-button
-                v-if="currentBranch && currentBranch.branchId !== 'main'"
-                type="primary"
-                size="small"
-                @click="handleSwitchToMain"
-              >
-                切换回主分支
-              </el-button>
-              <el-button
-                v-if="currentBranch?.branchId === 'main'"
-                :type="mainBranchLocked ? 'info' : 'warning'"
-                size="small"
-                @click="handleMainBranchLock"
-              >
-                {{ mainBranchLocked ? '解锁主分支' : '锁定主分支' }}
-              </el-button>
-            </div>
-            <div class="header-actions">
-              <el-button type="primary" size="small" @click="showCreateDialog">
-                <el-icon><Plus /></el-icon>
-                创建版本
-              </el-button>
-              <el-button size="small" @click="refreshData">
-                <el-icon><Refresh /></el-icon>
-                刷新
-              </el-button>
-            </div>
-          </div>
-        </template>
+    <!-- 标签页切换 -->
+    <el-tabs v-model="activeTab" class="manager-tabs">
+      <el-tab-pane label="版本管理" name="versions">
+        <div class="project-version-manager">
+          <el-card class="header-card" shadow="never">
+            <template #header>
+              <div class="card-header">
+                <div class="header-left">
+                  <span class="title">当前分支</span>
+                  <el-tag v-if="currentBranch" :type="currentBranch.branchId === 'main' ? 'success' : 'warning'">
+                    {{ currentBranch.branchName }}
+                  </el-tag>
+                  <el-tag v-if="currentBranch?.branchId === 'main' && mainBranchLocked" type="danger" size="small">
+                    🔒 已锁定
+                  </el-tag>
+                  <el-button
+                    v-if="currentBranch && currentBranch.branchId !== 'main'"
+                    type="primary"
+                    size="small"
+                    @click="handleSwitchToMain"
+                  >
+                    切换回主分支
+                  </el-button>
+                  <el-button
+                    v-if="currentBranch?.branchId === 'main'"
+                    :type="mainBranchLocked ? 'info' : 'warning'"
+                    size="small"
+                    @click="handleMainBranchLock"
+                  >
+                    {{ mainBranchLocked ? '解锁主分支' : '锁定主分支' }}
+                  </el-button>
+                </div>
+                <div class="header-actions">
+                  <el-button type="primary" size="small" @click="showCreateDialog">
+                    <el-icon><Plus /></el-icon>
+                    创建版本
+                  </el-button>
+                  <el-button size="small" @click="refreshData">
+                    <el-icon><Refresh /></el-icon>
+                    刷新
+                  </el-button>
+                </div>
+              </div>
+            </template>
 
         <el-table v-loading="loading" :data="versions" stripe style="width: 100%">
           <el-table-column prop="name" label="名称" min-width="150" />
@@ -129,6 +132,16 @@
         />
       </el-card>
     </div>
+      </el-tab-pane>
+
+      <!-- 依赖管理标签页 -->
+      <el-tab-pane label="项目依赖" name="dependencies">
+        <ProjectDependencyManager
+          :project-menu-id="projectMenuId"
+          :current-branch="currentBranch"
+        />
+      </el-tab-pane>
+    </el-tabs>
 
     <!-- 创建版本对话框 -->
     <el-dialog v-model="createDialogVisible" title="创建项目版本" width="500px" append-to-body>
@@ -408,6 +421,7 @@ import type { ProjectVersion, ProjectVersionFormData } from '@/types/version'
 import type { DiffResult } from '@/api/projectVersion'
 import { useAuthStore } from '@/stores/auth'
 import BeyondCompareMerge from './BeyondCompareMerge.vue'
+import ProjectDependencyManager from './ProjectDependencyManager.vue'
 
 const props = defineProps<{
   modelValue: boolean
@@ -426,6 +440,7 @@ const visible = computed({
 
 const authStore = useAuthStore()
 
+const activeTab = ref('versions')
 const loading = ref(false)
 const versions = ref<ProjectVersion[]>([])
 const total = ref(0)
@@ -1091,5 +1106,11 @@ watch(visible, (newVal) => {
   align-items: center;
   justify-content: center;
   height: calc(100vh - 200px);
+}
+
+.manager-tabs {
+  :deep(.el-tabs__header) {
+    margin-bottom: 16px;
+  }
 }
 </style>

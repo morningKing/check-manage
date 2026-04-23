@@ -39,3 +39,6 @@ export * from './etl'
 
 // 版本管理相关类型
 export * from './version'
+
+// 跨项目依赖相关类型
+export * from './crossProjectDependency'

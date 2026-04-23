@@ -1127,6 +1127,92 @@ def init_db():
             conn.commit()
             print("Created project_version_relations table.")
 
+        # Migration: create project_dependencies table (跨项目依赖声明)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_dependencies'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_dependencies (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    source_project  VARCHAR(100) NOT NULL,
+                    source_branch   VARCHAR(100) NOT NULL,
+                    target_project  VARCHAR(100) NOT NULL,
+                    target_branch   VARCHAR(100) NOT NULL,
+                    relation_type   VARCHAR(20) NOT NULL,
+                    pinned_version  VARCHAR(100),
+                    is_validated    BOOLEAN NOT NULL DEFAULT FALSE,
+                    validation_error TEXT,
+                    declared_by     VARCHAR(200),
+                    declared_at     TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(source_project, source_branch, target_project),
+                    FOREIGN KEY (source_project) REFERENCES menus(id) ON DELETE CASCADE,
+                    FOREIGN KEY (target_project) REFERENCES menus(id) ON DELETE CASCADE,
+                    FOREIGN KEY (pinned_version) REFERENCES project_versions(id) ON DELETE SET NULL
+                );
+                CREATE INDEX idx_pd_source ON project_dependencies(source_project, source_branch);
+                CREATE INDEX idx_pd_target ON project_dependencies(target_project, target_branch);
+                CREATE INDEX idx_pd_relation_type ON project_dependencies(relation_type);
+            """)
+            conn.commit()
+            print("Created project_dependencies table.")
+
+        # Migration: create project_dependency_relations table (依赖涉及的关联关系)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_dependency_relations'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_dependency_relations (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    dependency_id   VARCHAR(100) NOT NULL,
+                    source_collection VARCHAR(200) NOT NULL,
+                    source_field    VARCHAR(200) NOT NULL,
+                    target_collection VARCHAR(200) NOT NULL,
+                    estimated_records INTEGER DEFAULT 0,
+                    validation_status VARCHAR(20) DEFAULT 'unknown',
+                    validation_detail TEXT,
+                    validated_at    TIMESTAMPTZ,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    FOREIGN KEY (dependency_id) REFERENCES project_dependencies(id) ON DELETE CASCADE
+                );
+                CREATE INDEX idx_pdr_dependency ON project_dependency_relations(dependency_id);
+                CREATE INDEX idx_pdr_source_coll ON project_dependency_relations(source_collection);
+                CREATE INDEX idx_pdr_target_coll ON project_dependency_relations(target_collection);
+            """)
+            conn.commit()
+            print("Created project_dependency_relations table.")
+
+        # Migration: create project_dependency_events table (依赖变更事件)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'project_dependency_events'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE project_dependency_events (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    event_type      VARCHAR(50) NOT NULL,
+                    source_project  VARCHAR(100),
+                    source_branch   VARCHAR(100),
+                    affected_dependencies VARCHAR[] DEFAULT '{}',
+                    severity        VARCHAR(20) NOT NULL,
+                    message         TEXT NOT NULL,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    resolved_at     TIMESTAMPTZ,
+                    resolved_by     VARCHAR(200)
+                );
+                CREATE INDEX idx_pde_event_type ON project_dependency_events(event_type);
+                CREATE INDEX idx_pde_source ON project_dependency_events(source_project, source_branch);
+                CREATE INDEX idx_pde_severity ON project_dependency_events(severity);
+                CREATE INDEX idx_pde_unresolved ON project_dependency_events(resolved_at) WHERE resolved_at IS NULL;
+            """)
+            conn.commit()
+            print("Created project_dependency_events table.")
+
         # Seed menus (insert only if not exists)
         menus_inserted = 0
         for m in MENUS:
