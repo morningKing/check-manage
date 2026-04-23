@@ -6,12 +6,12 @@
  * - 用户决策（新增、删除、修改记录的选择）
  * - 展开状态管理
  *
- * 适配项目级版本管理
+ * 适配项目级版本管理，支持跨 collection 存储决策
  */
 import { reactive, computed } from 'vue'
-import { mergeProjectVersion } from '@/api/projectVersion'
+import { mergeProjectVersionDetailed } from '@/api/projectVersion'
 import type { ProjectVersion } from '@/types/version'
-import type { CollectionDiff } from '@/api/projectVersion'
+import type { CollectionDiff, MergePayload, CollectionMergeDecision } from '@/api/projectVersion'
 
 /**
  * 合并决策
@@ -32,7 +32,8 @@ export interface MergeState {
   sourceVersion: ProjectVersion | null
   targetBranch: string
   diffResult: CollectionDiff | null
-  decisions: MergeDecisions
+  // 按 collection 存储决策，避免切换时丢失
+  collectionDecisions: Map<string, MergeDecisions>
   expandedRecords: Set<string>
 }
 
@@ -55,7 +56,7 @@ function createInitialState(): MergeState {
     sourceVersion: null,
     targetBranch: 'current',
     diffResult: null,
-    decisions: createEmptyDecisions(),
+    collectionDecisions: new Map<string, MergeDecisions>(),
     expandedRecords: new Set<string>(),
   }
 }
@@ -66,6 +67,18 @@ export function useMergeState() {
   const state = reactive<MergeState>(createInitialState())
 
   // ==================== Computed ====================
+
+  /**
+   * 获取当前 collection 的决策
+   */
+  const currentDecisions = computed<MergeDecisions>(() => {
+    const collection = state.diffResult?.collection
+    if (!collection) return createEmptyDecisions()
+    if (!state.collectionDecisions.has(collection)) {
+      state.collectionDecisions.set(collection, createEmptyDecisions())
+    }
+    return state.collectionDecisions.get(collection)!
+  })
 
   /**
    * 是否有任何差异（不关心是否已选择）
@@ -80,24 +93,43 @@ export function useMergeState() {
   })
 
   /**
-   * 是否有已选择的变更（用于提交按钮状态）
+   * 是否有已选择的变更（汇总所有 collection）
    */
   const hasSelection = computed(() => {
-    return (
-      state.decisions.addedRecords.size > 0 ||
-      state.decisions.removedRecords.size > 0 ||
-      state.decisions.modifiedRecords.size > 0
-    )
+    for (const [, decisions] of state.collectionDecisions) {
+      if (
+        decisions.addedRecords.size > 0 ||
+        decisions.removedRecords.size > 0 ||
+        decisions.modifiedRecords.size > 0
+      ) {
+        return true
+      }
+    }
+    return false
   })
 
   /**
-   * 已选择的变更总数
+   * 已选择的变更总数（汇总所有 collection）
    */
   const selectedCount = computed(() => {
+    let total = 0
+    for (const [, decisions] of state.collectionDecisions) {
+      total += decisions.addedRecords.size
+      total += decisions.removedRecords.size
+      total += decisions.modifiedRecords.size
+    }
+    return total
+  })
+
+  /**
+   * 当前 collection 已选择的变更数
+   */
+  const currentSelectedCount = computed(() => {
+    const decisions = currentDecisions.value
     return (
-      state.decisions.addedRecords.size +
-      state.decisions.removedRecords.size +
-      state.decisions.modifiedRecords.size
+      decisions.addedRecords.size +
+      decisions.removedRecords.size +
+      decisions.modifiedRecords.size
     )
   })
 
@@ -105,9 +137,11 @@ export function useMergeState() {
    * 是否有字段级决策被修改过（从默认的 source 改为 target 或反之）
    */
   const hasFieldDecisionChanged = computed(() => {
-    for (const [, decision] of state.decisions.modifiedRecords) {
-      for (const [, choice] of decision.fieldDecisions) {
-        if (choice === 'target') return true
+    for (const [, decisions] of state.collectionDecisions) {
+      for (const [, decision] of decisions.modifiedRecords) {
+        for (const [, choice] of decision.fieldDecisions) {
+          if (choice === 'target') return true
+        }
       }
     }
     return false
@@ -123,18 +157,24 @@ export function useMergeState() {
   }
 
   /**
-   * 设置差异结果并初始化选择
+   * 设置差异结果 - 不重置已有 collection 的决策
    */
   function setDiffResult(result: CollectionDiff): void {
     state.diffResult = result
-    state.decisions = createEmptyDecisions()
+    // 只在该 collection 没有决策时初始化，保留已有决策
+    if (!state.collectionDecisions.has(result.collection)) {
+      state.collectionDecisions.set(result.collection, createEmptyDecisions())
+    }
     state.expandedRecords = new Set<string>()
   }
 
   /**
-   * 设置整个决策对象
+   * 设置整个决策对象（用于当前 collection）
    */
   function setDecisions(decisions: MergeDecisions): void {
+    const collection = state.diffResult?.collection
+    if (!collection) return
+
     const modifiedRecordsMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
     decisions.modifiedRecords.forEach((value, key) => {
       modifiedRecordsMap.set(key, {
@@ -142,21 +182,22 @@ export function useMergeState() {
         fieldDecisions: new Map(value.fieldDecisions),
       })
     })
-    state.decisions = {
+    state.collectionDecisions.set(collection, {
       addedRecords: new Set(decisions.addedRecords),
       removedRecords: new Set(decisions.removedRecords),
       modifiedRecords: modifiedRecordsMap,
-    }
+    })
   }
 
   /**
    * 切换新增记录的选择状态
    */
   function toggleAddedRecord(recordId: string): void {
-    if (state.decisions.addedRecords.has(recordId)) {
-      state.decisions.addedRecords.delete(recordId)
+    const decisions = currentDecisions.value
+    if (decisions.addedRecords.has(recordId)) {
+      decisions.addedRecords.delete(recordId)
     } else {
-      state.decisions.addedRecords.add(recordId)
+      decisions.addedRecords.add(recordId)
     }
   }
 
@@ -164,10 +205,11 @@ export function useMergeState() {
    * 切换删除记录的选择状态
    */
   function toggleRemovedRecord(recordId: string): void {
-    if (state.decisions.removedRecords.has(recordId)) {
-      state.decisions.removedRecords.delete(recordId)
+    const decisions = currentDecisions.value
+    if (decisions.removedRecords.has(recordId)) {
+      decisions.removedRecords.delete(recordId)
     } else {
-      state.decisions.removedRecords.add(recordId)
+      decisions.removedRecords.add(recordId)
     }
   }
 
@@ -175,8 +217,9 @@ export function useMergeState() {
    * 切换修改记录的选择状态
    */
   function toggleModifiedRecord(recordId: string): void {
-    if (state.decisions.modifiedRecords.has(recordId)) {
-      state.decisions.modifiedRecords.delete(recordId)
+    const decisions = currentDecisions.value
+    if (decisions.modifiedRecords.has(recordId)) {
+      decisions.modifiedRecords.delete(recordId)
       state.expandedRecords.delete(recordId)
     } else {
       const modifiedItem = state.diffResult?.modified?.find(m => m.id === recordId)
@@ -185,7 +228,7 @@ export function useMergeState() {
         modifiedItem.fields.forEach((field: any) => {
           fieldDecisions.set(field.fieldName, 'source')
         })
-        state.decisions.modifiedRecords.set(recordId, {
+        decisions.modifiedRecords.set(recordId, {
           recordId,
           fieldDecisions,
         })
@@ -203,13 +246,14 @@ export function useMergeState() {
     fieldName: string,
     choice: 'source' | 'target'
   ): void {
-    let recordDecision = state.decisions.modifiedRecords.get(recordId)
+    const decisions = currentDecisions.value
+    let recordDecision = decisions.modifiedRecords.get(recordId)
     if (!recordDecision) {
       recordDecision = {
         recordId,
         fieldDecisions: new Map(),
       }
-      state.decisions.modifiedRecords.set(recordId, recordDecision)
+      decisions.modifiedRecords.set(recordId, recordDecision)
     }
     recordDecision.fieldDecisions.set(fieldName, choice)
   }
@@ -226,31 +270,34 @@ export function useMergeState() {
   }
 
   /**
-   * 全选/取消全选新增记录
+   * 全选/取消全选新增记录（当前 collection）
    */
   function selectAllAdded(selected: boolean): void {
+    const decisions = currentDecisions.value
     if (selected && state.diffResult) {
-      state.decisions.addedRecords = new Set(state.diffResult.added.map((r: any) => r.id))
+      decisions.addedRecords = new Set(state.diffResult.added.map((r: any) => r.id))
     } else {
-      state.decisions.addedRecords = new Set()
+      decisions.addedRecords = new Set()
     }
   }
 
   /**
-   * 全选/取消全选删除记录
+   * 全选/取消全选删除记录（当前 collection）
    */
   function selectAllRemoved(selected: boolean): void {
+    const decisions = currentDecisions.value
     if (selected && state.diffResult) {
-      state.decisions.removedRecords = new Set(state.diffResult.removed.map((r: any) => r.id))
+      decisions.removedRecords = new Set(state.diffResult.removed.map((r: any) => r.id))
     } else {
-      state.decisions.removedRecords = new Set()
+      decisions.removedRecords = new Set()
     }
   }
 
   /**
-   * 全选/取消全选修改记录
+   * 全选/取消全选修改记录（当前 collection）
    */
   function selectAllModified(selected: boolean): void {
+    const decisions = currentDecisions.value
     if (selected && state.diffResult) {
       const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
       state.diffResult.modified.forEach((item: any) => {
@@ -260,25 +307,26 @@ export function useMergeState() {
         })
         newMap.set(item.id, { recordId: item.id, fieldDecisions })
       })
-      state.decisions.modifiedRecords = newMap
+      decisions.modifiedRecords = newMap
     } else {
-      state.decisions.modifiedRecords = new Map()
+      decisions.modifiedRecords = new Map()
       state.expandedRecords = new Set()
     }
   }
 
   /**
-   * 接受所有源版本变更
+   * 接受所有源版本变更（当前 collection）
    */
   function acceptAllSource(): void {
     if (!state.diffResult) return
+    const decisions = currentDecisions.value
 
     state.diffResult.added.forEach((record: any) => {
-      state.decisions.addedRecords.add(record.id)
+      decisions.addedRecords.add(record.id)
     })
 
     state.diffResult.removed.forEach((record: any) => {
-      state.decisions.removedRecords.add(record.id)
+      decisions.removedRecords.add(record.id)
     })
 
     const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
@@ -289,17 +337,18 @@ export function useMergeState() {
       })
       newMap.set(item.id, { recordId: item.id, fieldDecisions })
     })
-    state.decisions.modifiedRecords = newMap
+    decisions.modifiedRecords = newMap
   }
 
   /**
-   * 接受所有目标版本变更
+   * 接受所有目标版本变更（当前 collection）
    */
   function acceptAllTarget(): void {
     if (!state.diffResult) return
+    const decisions = currentDecisions.value
 
-    state.decisions.addedRecords = new Set()
-    state.decisions.removedRecords = new Set()
+    decisions.addedRecords = new Set()
+    decisions.removedRecords = new Set()
 
     const newMap = new Map<string, { recordId: string; fieldDecisions: Map<string, 'source' | 'target'> }>()
     state.diffResult.modified.forEach((item: any) => {
@@ -309,14 +358,15 @@ export function useMergeState() {
       })
       newMap.set(item.id, { recordId: item.id, fieldDecisions })
     })
-    state.decisions.modifiedRecords = newMap
+    decisions.modifiedRecords = newMap
   }
 
   /**
    * 为单条修改记录设置所有字段选择
    */
   function setAllFieldsForRecord(recordId: string, choice: 'source' | 'target'): void {
-    const recordDecision = state.decisions.modifiedRecords.get(recordId)
+    const decisions = currentDecisions.value
+    const recordDecision = decisions.modifiedRecords.get(recordId)
     if (!recordDecision) return
 
     const modifiedItem = state.diffResult?.modified?.find((m: any) => m.id === recordId)
@@ -330,20 +380,67 @@ export function useMergeState() {
   }
 
   /**
-   * 提交合并（项目级）
+   * 构建合并请求 payload（包含所有 collection 的决策）
+   */
+  function buildMergePayload(): MergePayload | null {
+    if (!state.sourceVersion) return null
+
+    const collections: CollectionMergeDecision[] = []
+
+    for (const [collectionName, decisions] of state.collectionDecisions) {
+      if (
+        decisions.addedRecords.size > 0 ||
+        decisions.removedRecords.size > 0 ||
+        decisions.modifiedRecords.size > 0
+      ) {
+        const modified: MergePayload['collections'][0]['modified'] = []
+        for (const [recordId, rd] of decisions.modifiedRecords) {
+          const fieldDecisions: { fieldName: string; useSource: boolean }[] = []
+          for (const [fieldName, choice] of rd.fieldDecisions) {
+            fieldDecisions.push({
+              fieldName,
+              useSource: choice === 'source',
+            })
+          }
+          modified.push({
+            recordId,
+            fieldDecisions,
+          })
+        }
+
+        collections.push({
+          collection: collectionName,
+          added: Array.from(decisions.addedRecords),
+          removed: Array.from(decisions.removedRecords),
+          modified,
+        })
+      }
+    }
+
+    if (collections.length === 0) return null
+
+    return {
+      versionId: state.sourceVersion.id,
+      targetBranch: state.targetBranch,
+      collections,
+    }
+  }
+
+  /**
+   * 提交合并（项目级，支持详细决策）
    */
   async function submitMerge(projectMenuId: string) {
     if (!state.sourceVersion) {
       throw new Error('Cannot build merge payload: source version not set')
     }
 
-    // 使用 theirs 策略直接合并（简化版）
-    return await mergeProjectVersion(
-      state.sourceVersion.id,
-      projectMenuId,
-      state.targetBranch,
-      'theirs'
-    )
+    const payload = buildMergePayload()
+    if (!payload) {
+      throw new Error('No selections made for merge')
+    }
+
+    // 使用详细合并 API
+    return await mergeProjectVersionDetailed(payload, projectMenuId)
   }
 
   /**
@@ -354,15 +451,17 @@ export function useMergeState() {
     state.sourceVersion = initialState.sourceVersion
     state.targetBranch = initialState.targetBranch
     state.diffResult = initialState.diffResult
-    state.decisions = initialState.decisions
+    state.collectionDecisions = initialState.collectionDecisions
     state.expandedRecords = initialState.expandedRecords
   }
 
   return {
     state,
+    currentDecisions,
     hasDiff,
     hasSelection,
     selectedCount,
+    currentSelectedCount,
     hasFieldDecisionChanged,
     setSourceVersion,
     setDiffResult,
@@ -378,6 +477,7 @@ export function useMergeState() {
     acceptAllSource,
     acceptAllTarget,
     setAllFieldsForRecord,
+    buildMergePayload,
     submitMerge,
     reset,
   }

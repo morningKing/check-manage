@@ -23,7 +23,8 @@ def export_menus():
     请求体：
     {
         "menuIds": ["menu-2"],      // 选中的菜单ID列表
-        "scriptId": "script-xxx"    // 可选，指定导出脚本（覆盖菜单绑定）
+        "scriptId": "script-xxx",  // 可选，指定导出脚本（覆盖菜单绑定）
+        "branchId": "main"         // 可选，指定分支ID（默认 main）
     }
 
     返回：ZIP 文件
@@ -31,12 +32,13 @@ def export_menus():
     body = request.get_json(force=True)
     menu_ids = body.get('menuIds', [])
     script_id = body.get('scriptId')  # Optional override
+    branch_id = body.get('branchId', 'main')  # NEW: branch filter
 
     if not menu_ids:
         return jsonify({'error': '未选择菜单'}), 400
 
     with get_db() as conn:
-        zip_bytes, zip_filename, errors = execute_menu_export(conn, menu_ids, script_id)
+        zip_bytes, zip_filename, errors = execute_menu_export(conn, menu_ids, script_id, branch_id)
 
     if zip_bytes is None:
         error_msg = '所有导出任务均失败'
@@ -158,7 +160,8 @@ def preview_menu_export():
 
     请求体：
     {
-        "menuIds": ["menu-2"]
+        "menuIds": ["menu-2"],
+        "branchId": "main"  // 可选，指定分支ID（默认 main）
     }
 
     返回：
@@ -180,6 +183,7 @@ def preview_menu_export():
 
     body = request.get_json(force=True)
     menu_ids = body.get('menuIds', [])
+    branch_id = body.get('branchId', 'main')  # NEW: branch filter
 
     if not menu_ids:
         return jsonify({'error': '未选择菜单'}), 400
@@ -210,8 +214,8 @@ def preview_menu_export():
             menu_name = row[0]
             bound_script_id = row[1]
 
-            # Get pages under this menu
-            pages = get_menu_collections_with_info(cur, menu_id)
+            # Get pages under this menu (filtered by branch)
+            pages = get_menu_collections_with_info(cur, menu_id, branch_id)
 
             # Get bound script info
             bound_script = None

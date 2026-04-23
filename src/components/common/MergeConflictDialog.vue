@@ -94,7 +94,7 @@
           title="新增记录"
           name="added"
           :records="currentDiff.added"
-          :selected-ids="state.decisions.addedRecords"
+          :selected-ids="currentDecisions.addedRecords"
           :fields="[]"
           @toggle="handleToggleAdded"
           @select-all="handleSelectAllAdded"
@@ -107,7 +107,7 @@
           title="删除记录"
           name="removed"
           :records="currentDiff.removed"
-          :selected-ids="state.decisions.removedRecords"
+          :selected-ids="currentDecisions.removedRecords"
           :fields="[]"
           @toggle="handleToggleRemoved"
           @select-all="handleSelectAllRemoved"
@@ -117,7 +117,7 @@
         <MergeModifiedSection
           v-if="currentDiff"
           :records="currentDiff.modified"
-          :selected-records="state.decisions.modifiedRecords"
+          :selected-records="currentDecisions.modifiedRecords"
           :expanded-records="state.expandedRecords"
           :fields="[]"
           @toggle-record="handleToggleModified"
@@ -137,7 +137,7 @@
             ⚠️ 请至少选择一项变更
           </span>
           <span v-else class="status-info">
-            💡 已选择 {{ selectedCount }} 项变更：新增 {{ state.decisions.addedRecords.size }} / 删除 {{ state.decisions.removedRecords.size }} / 修改 {{ state.decisions.modifiedRecords.size }}
+            💡 已选择 {{ selectedCount }} 项变更：新增 {{ currentDecisions.addedRecords.size }} / 删除 {{ currentDecisions.removedRecords.size }} / 修改 {{ currentDecisions.modifiedRecords.size }}
           </span>
         </div>
         <div class="footer-actions">
@@ -198,6 +198,7 @@ const emit = defineEmits<{
 
 const {
   state,
+  currentDecisions,
   hasDiff,
   hasSelection,
   selectedCount,

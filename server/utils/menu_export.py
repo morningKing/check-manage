@@ -49,13 +49,14 @@ def get_menu_collections(cur, menu_id):
     return collections
 
 
-def get_menu_collections_with_info(cur, menu_id):
+def get_menu_collections_with_info(cur, menu_id, branch_id='main'):
     """
     递归获取菜单下所有叶子页面的详细信息（包含记录数）
 
     参数：
     - cur: 数据库游标
     - menu_id: 菜单ID
+    - branch_id: 分支ID（默认 'main'）
 
     返回：[{collection, pageName, recordCount}, ...]
     """
@@ -74,8 +75,8 @@ def get_menu_collections_with_info(cur, menu_id):
             pc_row = cur.fetchone()
             page_name = pc_row[0] if pc_row else collection
 
-            # Get record count
-            cur.execute('SELECT COUNT(*) FROM dynamic_data WHERE collection = %s', (collection,))
+            # Get record count (filtered by branch)
+            cur.execute('SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s', (collection, branch_id))
             count_row = cur.fetchone()
             record_count = count_row[0] if count_row else 0
 
@@ -88,12 +89,12 @@ def get_menu_collections_with_info(cur, menu_id):
     # 递归获取子菜单
     cur.execute('SELECT id FROM menus WHERE parent_id = %s', (menu_id,))
     for child_row in cur.fetchall():
-        pages.extend(get_menu_collections_with_info(cur, child_row[0]))
+        pages.extend(get_menu_collections_with_info(cur, child_row[0], branch_id))
 
     return pages
 
 
-def execute_menu_export(conn, menu_ids, script_id=None):
+def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
     """
     执行菜单级导出
 
@@ -101,6 +102,7 @@ def execute_menu_export(conn, menu_ids, script_id=None):
     - conn: 数据库连接
     - menu_ids: 菜单ID列表
     - script_id: 可选，指定的导出脚本ID（覆盖菜单绑定）
+    - branch_id: 分支ID（默认 'main'）
 
     返回：(zip_bytes, filename, error_messages)
 
@@ -167,11 +169,11 @@ def execute_menu_export(conn, menu_ids, script_id=None):
                     page_name = pc_row[0] if pc_row else collection
                     fields = pc_row[1] if pc_row else []
 
-                    # Fetch collection data
+                    # Fetch collection data (filtered by branch)
                     cur.execute(
                         'SELECT id, collection, data, created_at FROM dynamic_data '
-                        'WHERE collection = %s ORDER BY created_at',
-                        (collection,),
+                        'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                        (collection, branch_id),
                     )
                     rows = cur.fetchall()
                     records = []
@@ -233,11 +235,11 @@ def execute_menu_export(conn, menu_ids, script_id=None):
                     page_name = pc_row[0] if pc_row else collection
                     fields = pc_row[1] if pc_row else []
 
-                    # Fetch collection data
+                    # Fetch collection data (filtered by branch)
                     cur.execute(
                         'SELECT id, collection, data, created_at FROM dynamic_data '
-                        'WHERE collection = %s ORDER BY created_at',
-                        (collection,),
+                        'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                        (collection, branch_id),
                     )
                     rows = cur.fetchall()
                     data = []

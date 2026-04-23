@@ -367,24 +367,41 @@ def _load_backup_collection(backup_id, collection):
     return result, rel_map, None
 
 
-def _load_current_collection(collection):
+def _load_current_collection(collection, branch_id=None):
     """从数据库读取指定集合的当前 dynamic_data 和 data_relations 记录。
+
+    Parameters:
+        collection: str — 集合名称
+        branch_id: str | None — 分支ID，None 表示查询所有分支（兼容旧调用）
 
     返回 (records, relations_map)。
     """
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s',
-            (collection,),
-        )
+        if branch_id:
+            cur.execute(
+                'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+                (collection, branch_id),
+            )
+        else:
+            cur.execute(
+                'SELECT id, data, created_at FROM dynamic_data WHERE collection = %s',
+                (collection,),
+            )
         rows = cur.fetchall()
 
-        cur.execute(
-            'SELECT record_id, field_name, related_id FROM data_relations WHERE collection = %s '
-            'ORDER BY record_id, field_name, related_id',
-            (collection,),
-        )
+        if branch_id:
+            cur.execute(
+                'SELECT record_id, field_name, related_id FROM data_relations WHERE collection = %s AND branch_id = %s '
+                'ORDER BY record_id, field_name, related_id',
+                (collection, branch_id),
+            )
+        else:
+            cur.execute(
+                'SELECT record_id, field_name, related_id FROM data_relations WHERE collection = %s '
+                'ORDER BY record_id, field_name, related_id',
+                (collection,),
+            )
         rel_rows = cur.fetchall()
 
     result = []
@@ -532,11 +549,13 @@ def diff_collection():
         collection: str         — 集合名称
         baseSource: "current" | backupId
         targetSource: "current" | backupId
+        branchId: str           — 分支ID（可选，默认 'main'）
     """
     body = request.get_json(force=True)
     collection = body.get('collection')
     base_source = body.get('baseSource')
     target_source = body.get('targetSource')
+    branch_id = body.get('branchId', 'main')  # 新增：默认使用 main 分支
 
     if not collection or not base_source or not target_source:
         return jsonify({'error': '缺少必要参数'}), 400
@@ -545,7 +564,7 @@ def diff_collection():
 
     # 加载基准数据
     if base_source == 'current':
-        base_records, base_rels = _load_current_collection(collection)
+        base_records, base_rels = _load_current_collection(collection, branch_id)
     elif base_source.startswith('ver-'):
         # 版本 ID
         base_records, base_rels, err = _load_version_collection(base_source, collection)
@@ -558,7 +577,7 @@ def diff_collection():
 
     # 加载对比数据
     if target_source == 'current':
-        target_records, target_rels = _load_current_collection(collection)
+        target_records, target_rels = _load_current_collection(collection, branch_id)
     elif target_source.startswith('ver-'):
         # 版本 ID
         target_records, target_rels, err = _load_version_collection(target_source, collection)

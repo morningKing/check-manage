@@ -1032,6 +1032,36 @@ def init_db():
             conn.commit()
             print("Added main branch lock columns to menus table.")
 
+        # Migration: create merge_records table
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'merge_records'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE merge_records (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    source_version_id VARCHAR(100) NOT NULL,
+                    source_version_name VARCHAR(200),
+                    target_branch_id VARCHAR(100) NOT NULL,
+                    target_branch_name VARCHAR(200),
+                    project_menu_id VARCHAR(100) NOT NULL,
+                    strategy        VARCHAR(20) NOT NULL,
+                    merged_by       VARCHAR(200) NOT NULL,
+                    merged_at       TIMESTAMPTZ DEFAULT NOW(),
+                    records_created INTEGER DEFAULT 0,
+                    records_updated INTEGER DEFAULT 0,
+                    records_deleted INTEGER DEFAULT 0,
+                    description     TEXT,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_merge_source ON merge_records(source_version_id);
+                CREATE INDEX idx_merge_target ON merge_records(target_branch_id);
+                CREATE INDEX idx_merge_project ON merge_records(project_menu_id);
+            """)
+            conn.commit()
+            print("Created merge_records table.")
+
         # Migration: create user_current_project_branch table
         cur.execute("""
             SELECT table_name FROM information_schema.tables

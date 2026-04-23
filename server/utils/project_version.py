@@ -18,6 +18,7 @@ import hashlib
 from datetime import datetime, timezone
 from db import get_db
 import psycopg2.extras
+from utils.operation_log import log_operation, pick_display_name, get_page_info
 
 MAIN_BRANCH_ID = 'main'
 
@@ -728,6 +729,42 @@ def compute_collection_diff(base_records, target_records, field_names, base_rels
     }
 
 
+def load_project_version_data_by_type(version_id, collection, version_type=None):
+    """
+    根据版本类型加载版本数据
+
+    Parameters
+    ----------
+    version_id : str
+        版本 ID
+    collection : str
+        Collection 名称
+    version_type : str | None
+        版本类型，'snapshot' 或 'branch'。如果为 None，则从数据库查询
+
+    Returns
+    -------
+    tuple
+        (records, relations_map)
+    """
+    if version_type is None:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT version_type FROM project_versions WHERE id = %s', (version_id,))
+            row = cur.fetchone()
+            if row:
+                version_type = row[0]
+            else:
+                version_type = 'snapshot'  # 默认按快照处理
+
+    if version_type == 'branch':
+        # 分支类型：从 dynamic_data 加载当前分支数据
+        return load_project_version_data(collection, version_id)
+    else:
+        # 快照类型：从快照表加载
+        return load_project_snapshot_data(version_id, collection)
+
+
 def compute_project_version_diff(project_menu_id, base_version, target_version, user_id):
     """
     计算项目版本差异（跨所有 Collection）
@@ -788,8 +825,8 @@ def compute_project_version_diff(project_menu_id, base_version, target_version, 
             base_branch_id = current_branch
             base_records, base_rels = load_project_version_data(collection, base_branch_id)
         else:
-            # 从快照加载
-            base_records, base_rels = load_project_snapshot_data(base_version, collection)
+            # 根据版本类型加载（分支从 dynamic_data，快照从 snapshots）
+            base_records, base_rels = load_project_version_data_by_type(base_version, collection)
 
         # 解析目标版本
         if target_version == 'main':
@@ -799,8 +836,8 @@ def compute_project_version_diff(project_menu_id, base_version, target_version, 
             target_branch_id = current_branch
             target_records, target_rels = load_project_version_data(collection, target_branch_id)
         else:
-            # 从快照加载
-            target_records, target_rels = load_project_snapshot_data(target_version, collection)
+            # 根据版本类型加载（分支从 dynamic_data，快照从 snapshots）
+            target_records, target_rels = load_project_version_data_by_type(target_version, collection)
 
         # 获取字段配置
         fields = get_collection_fields(collection)
@@ -832,7 +869,7 @@ def compute_project_version_diff(project_menu_id, base_version, target_version, 
 
 def merge_project_version(version_id, target_branch, strategy, merged_by, user_id, project_menu_id):
     """
-    合并项目版本到目标分支
+    合并项目版本到目标分支（支持多次合并）
 
     Parameters
     ----------
@@ -854,12 +891,13 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
     dict
         {
             'success': True,
-            'collections': [
-                {'collection': 'xxx', 'recordsCreated': N, 'recordsUpdated': M, 'recordsDeleted': K}
-            ]
+            'mergeId': 'merge-xxx',
+            'collections': [...],
+            'canMergeAgain': True
         }
     """
     now = datetime.now(timezone.utc)
+    merge_id = f'merge-{uuid.uuid4().hex[:8]}'
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -874,25 +912,62 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             raise ValueError('版本不存在')
         version_name, version_type, status = row
 
-        if status == 'merged':
-            raise ValueError('该版本已被合并')
-
         # 获取目标分支
         if target_branch == 'current':
             target_branch_id = get_user_project_branch(user_id, project_menu_id)
         else:
             target_branch_id = MAIN_BRANCH_ID
 
+        # 获取目标分支名称
+        target_branch_name = '主分支' if target_branch_id == MAIN_BRANCH_ID else version_name
+        if target_branch_id != MAIN_BRANCH_ID:
+            cur.execute(
+                'SELECT name FROM project_versions WHERE id = %s',
+                (target_branch_id,)
+            )
+            tb_row = cur.fetchone()
+            if tb_row:
+                target_branch_name = tb_row[0]
+
+        # 创建合并记录
+        cur.execute(
+            'INSERT INTO merge_records '
+            '(id, source_version_id, source_version_name, target_branch_id, target_branch_name, '
+            'project_menu_id, strategy, merged_by, merged_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (merge_id, version_id, version_name, target_branch_id, target_branch_name,
+             project_menu_id, strategy, merged_by, now)
+        )
+
+        # 记录合并操作日志
+        log_operation(
+            action='merge',
+            target_type='project_version',
+            target_id=version_id,
+            target_name=version_name,
+            description=f'合并版本 {version_name} 到 {target_branch_name}',
+            branch_id=target_branch_id
+        )
+
         # 获取项目下所有 Collection
         collections = get_project_collections(project_menu_id)
 
-        merge_result = {'success': True, 'collections': []}
+        merge_result = {
+            'success': True,
+            'mergeId': merge_id,
+            'collections': [],
+            'canMergeAgain': True
+        }
+
+        total_created = 0
+        total_updated = 0
+        total_deleted = 0
 
         for coll_info in collections:
             collection = coll_info['collection']
 
-            # 加载源版本数据
-            source_records, source_rels = load_project_snapshot_data(version_id, collection)
+            # 加载源版本数据（根据版本类型选择数据源）
+            source_records, source_rels = load_project_version_data_by_type(version_id, collection, version_type)
 
             # 加载目标分支当前数据
             target_records, target_rels = load_project_version_data(collection, target_branch_id)
@@ -916,11 +991,30 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                 'recordsDeleted': 0,
             }
 
+            # 构建来源标记
+            merged_from = {
+                'mergeId': merge_id,
+                'versionId': version_id,
+                'versionName': version_name,
+                'mergedAt': now.isoformat(),
+                'mergedBy': merged_by
+            }
+
             if strategy == 'theirs':
                 # 使用源版本数据
 
                 # 1. 删除目标数据中不在源版本中的记录
                 for rec in diff['removed']:
+                    # 记录删除日志
+                    display_name = pick_display_name(rec, fields) or rec['id']
+                    log_operation(
+                        action='delete',
+                        target_type='dynamic_data',
+                        target_id=rec['id'],
+                        target_name=display_name,
+                        description=f'合并删除：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
                     cur.execute(
                         'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
                         (collection, rec['id'], target_branch_id),
@@ -931,18 +1025,40 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                     )
                     coll_result['recordsDeleted'] += 1
 
-                # 2. 插入新增记录
+                # 2. 插入新增记录（添加来源标记）
                 for rec in diff['added']:
                     data = {k: v for k, v in rec.items() if k != 'id'}
+                    data['_mergedFrom'] = merged_from
+                    # 记录创建日志
+                    display_name = pick_display_name(data, fields) or rec['id']
+                    log_operation(
+                        action='create',
+                        target_type='dynamic_data',
+                        target_id=rec['id'],
+                        target_name=display_name,
+                        description=f'合并创建：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
                     cur.execute(
                         'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
                         (rec['id'], collection, psycopg2.extras.Json(data), target_branch_id),
                     )
                     coll_result['recordsCreated'] += 1
 
-                # 3. 更新修改记录
+                # 3. 更新修改记录（添加来源标记）
                 for item in diff['modified']:
                     new_data = {k: v for k, v in item['record'].items() if k != 'id'}
+                    new_data['_mergedFrom'] = merged_from
+                    # 记录更新日志
+                    display_name = pick_display_name(new_data, fields) or item['id']
+                    log_operation(
+                        action='update',
+                        target_type='dynamic_data',
+                        target_id=item['id'],
+                        target_name=display_name,
+                        description=f'合并更新：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
                     cur.execute(
                         'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 '
                         'WHERE collection = %s AND id = %s AND branch_id = %s',
@@ -956,11 +1072,21 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                     (collection, target_branch_id)
                 )
 
-                cur.execute(
-                    'SELECT record_id, field_name, related_collection, related_id '
-                    'FROM project_version_relations WHERE version_id = %s AND collection = %s',
-                    (version_id, collection)
-                )
+                # 根据版本类型选择关联数据源
+                if version_type == 'branch':
+                    # 分支类型：从 data_relations 加载当前关联数据
+                    cur.execute(
+                        'SELECT record_id, field_name, related_collection, related_id '
+                        'FROM data_relations WHERE collection = %s AND branch_id = %s',
+                        (collection, version_id)
+                    )
+                else:
+                    # 快照类型：从快照表加载
+                    cur.execute(
+                        'SELECT record_id, field_name, related_collection, related_id '
+                        'FROM project_version_relations WHERE version_id = %s AND collection = %s',
+                        (version_id, collection)
+                    )
                 rel_rows = cur.fetchall()
                 for record_id, field_name, related_coll, related_id in rel_rows:
                     cur.execute(
@@ -971,11 +1097,269 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                     )
 
             merge_result['collections'].append(coll_result)
+            total_created += coll_result['recordsCreated']
+            total_updated += coll_result['recordsUpdated']
+            total_deleted += coll_result['recordsDeleted']
 
-        # 更新版本状态
+        # 更新合并记录统计
         cur.execute(
-            'UPDATE project_versions SET status = %s, merged_at = %s, merged_by = %s WHERE id = %s',
-            ('merged', now, merged_by, version_id)
+            'UPDATE merge_records SET records_created = %s, records_updated = %s, records_deleted = %s WHERE id = %s',
+            (total_created, total_updated, total_deleted, merge_id)
+        )
+
+        # 不再更新版本状态为 merged（保持 active，允许多次合并）
+        # 仅更新 merged_at 和 merged_by 作为最后一次合并记录
+        cur.execute(
+            'UPDATE project_versions SET merged_at = %s, merged_by = %s WHERE id = %s',
+            (now, merged_by, version_id)
+        )
+
+    return merge_result
+
+
+def merge_project_version_detailed(version_id, target_branch, collection_decisions, merged_by, user_id, project_menu_id):
+    """
+    合并项目版本到目标分支（详细决策模式 - 支持按记录/字段选择）
+
+    Parameters
+    ----------
+    version_id : str
+        源版本 ID
+    target_branch : str
+        目标分支，'main' 或 'current'
+    collection_decisions : list
+        用户选择的决策列表，每个元素包含：
+        {
+            'collection': str,
+            'added': [record_id, ...],
+            'removed': [record_id, ...],
+            'modified': [
+                {
+                    'recordId': str,
+                    'fieldDecisions': [
+                        {'fieldName': str, 'useSource': bool}
+                    ]
+                }
+            ]
+        }
+    merged_by : str
+        合并执行者
+    user_id : str
+        用户 ID
+    project_menu_id : str
+        项目菜单 ID
+
+    Returns
+    -------
+    dict
+        {
+            'success': True,
+            'mergeId': 'merge-xxx',
+            'collections': [...],
+        }
+    """
+    now = datetime.now(timezone.utc)
+    merge_id = f'merge-{uuid.uuid4().hex[:8]}'
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # 获取版本信息
+        cur.execute(
+            'SELECT name, version_type, status FROM project_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+        version_name, version_type, status = row
+
+        # 获取目标分支
+        if target_branch == 'current':
+            target_branch_id = get_user_project_branch(user_id, project_menu_id)
+        else:
+            target_branch_id = MAIN_BRANCH_ID
+
+        # 获取目标分支名称
+        target_branch_name = '主分支' if target_branch_id == MAIN_BRANCH_ID else version_name
+        if target_branch_id != MAIN_BRANCH_ID:
+            cur.execute(
+                'SELECT name FROM project_versions WHERE id = %s',
+                (target_branch_id,)
+            )
+            tb_row = cur.fetchone()
+            if tb_row:
+                target_branch_name = tb_row[0]
+
+        # 创建合并记录
+        cur.execute(
+            'INSERT INTO merge_records '
+            '(id, source_version_id, source_version_name, target_branch_id, target_branch_name, '
+            'project_menu_id, strategy, merged_by, merged_at) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            (merge_id, version_id, version_name, target_branch_id, target_branch_name,
+             project_menu_id, 'detailed', merged_by, now)
+        )
+
+        # 记录合并操作日志
+        log_operation(
+            action='merge',
+            target_type='project_version',
+            target_id=version_id,
+            target_name=version_name,
+            description=f'详细合并版本 {version_name} 到 {target_branch_name}',
+            branch_id=target_branch_id
+        )
+
+        merge_result = {
+            'success': True,
+            'mergeId': merge_id,
+            'collections': [],
+        }
+
+        total_created = 0
+        total_updated = 0
+        total_deleted = 0
+
+        # 构建来源标记
+        merged_from = {
+            'mergeId': merge_id,
+            'versionId': version_id,
+            'versionName': version_name,
+            'mergedAt': now.isoformat(),
+            'mergedBy': merged_by
+        }
+
+        # 处理每个 collection 的决策
+        for coll_decision in collection_decisions:
+            collection = coll_decision.get('collection')
+            added_ids = coll_decision.get('added', [])
+            removed_ids = coll_decision.get('removed', [])
+            modified_decisions = coll_decision.get('modified', [])
+
+            # 获取 pageName
+            cur.execute(
+                'SELECT name FROM menus WHERE page_id = %s AND menu_type = %s',
+                (f'page-{collection}', 'data')
+            )
+            page_row = cur.fetchone()
+            page_name = page_row[0] if page_row else collection
+
+            coll_result = {
+                'collection': collection,
+                'pageName': page_name,
+                'recordsCreated': 0,
+                'recordsUpdated': 0,
+                'recordsDeleted': 0,
+            }
+
+            # 加载源版本数据
+            source_records, source_rels = load_project_version_data_by_type(version_id, collection, version_type)
+            source_records_map = {r['id']: r for r in source_records}
+
+            # 加载目标分支当前数据
+            target_records, target_rels = load_project_version_data(collection, target_branch_id)
+            target_records_map = {r['id']: r for r in target_records}
+
+            # 获取字段配置
+            fields = get_collection_fields(collection)
+
+            # 1. 处理新增记录
+            for rec_id in added_ids:
+                source_rec = source_records_map.get(rec_id)
+                if source_rec:
+                    data = {k: v for k, v in source_rec.items() if k != 'id'}
+                    data['_mergedFrom'] = merged_from
+                    display_name = pick_display_name(data, fields) or rec_id
+                    log_operation(
+                        action='create',
+                        target_type='dynamic_data',
+                        target_id=rec_id,
+                        target_name=display_name,
+                        description=f'详细合并创建：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
+                    cur.execute(
+                        'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s)',
+                        (rec_id, collection, psycopg2.extras.Json(data), target_branch_id),
+                    )
+                    coll_result['recordsCreated'] += 1
+
+            # 2. 处理删除记录
+            for rec_id in removed_ids:
+                target_rec = target_records_map.get(rec_id)
+                if target_rec:
+                    display_name = pick_display_name(target_rec, fields) or rec_id
+                    log_operation(
+                        action='delete',
+                        target_type='dynamic_data',
+                        target_id=rec_id,
+                        target_name=display_name,
+                        description=f'详细合并删除：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
+                    cur.execute(
+                        'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                        (collection, rec_id, target_branch_id),
+                    )
+                    cur.execute(
+                        'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                        (collection, rec_id, target_branch_id),
+                    )
+                    coll_result['recordsDeleted'] += 1
+
+            # 3. 处理修改记录（按字段决策合并）
+            for mod_decision in modified_decisions:
+                rec_id = mod_decision.get('recordId')
+                field_decisions = mod_decision.get('fieldDecisions', [])
+
+                source_rec = source_records_map.get(rec_id)
+                target_rec = target_records_map.get(rec_id)
+
+                if target_rec and field_decisions:
+                    # 从目标数据开始，按决策更新字段
+                    merged_data = {k: v for k, v in target_rec.items() if k != 'id'}
+                    merged_data['_mergedFrom'] = merged_from
+
+                    for fd in field_decisions:
+                        field_name = fd.get('fieldName')
+                        use_source = fd.get('useSource', True)
+
+                        if use_source and source_rec and field_name in source_rec:
+                            merged_data[field_name] = source_rec[field_name]
+                        # 如果 useSource 为 False，保留目标数据（不修改）
+
+                    display_name = pick_display_name(merged_data, fields) or rec_id
+                    log_operation(
+                        action='update',
+                        target_type='dynamic_data',
+                        target_id=rec_id,
+                        target_name=display_name,
+                        description=f'详细合并更新：来自版本 {version_name}',
+                        branch_id=target_branch_id
+                    )
+                    cur.execute(
+                        'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 '
+                        'WHERE collection = %s AND id = %s AND branch_id = %s',
+                        (psycopg2.extras.Json(merged_data), collection, rec_id, target_branch_id),
+                    )
+                    coll_result['recordsUpdated'] += 1
+
+            merge_result['collections'].append(coll_result)
+            total_created += coll_result['recordsCreated']
+            total_updated += coll_result['recordsUpdated']
+            total_deleted += coll_result['recordsDeleted']
+
+        # 更新合并记录统计
+        cur.execute(
+            'UPDATE merge_records SET records_created = %s, records_updated = %s, records_deleted = %s WHERE id = %s',
+            (total_created, total_updated, total_deleted, merge_id)
+        )
+
+        # 更新版本合并时间
+        cur.execute(
+            'UPDATE project_versions SET merged_at = %s, merged_by = %s WHERE id = %s',
+            (now, merged_by, version_id)
         )
 
     return merge_result

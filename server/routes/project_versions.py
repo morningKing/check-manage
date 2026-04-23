@@ -11,6 +11,7 @@ from utils.project_version import (
     delete_project_version,
     compute_project_version_diff,
     merge_project_version,
+    merge_project_version_detailed,
     restore_from_project_version,
     switch_to_main_project_branch,
     get_project_version_delete_impact,
@@ -116,26 +117,119 @@ def merge_version():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@project_versions_bp.route('/project-versions/merge-detailed', methods=['POST'])
+@admin_required
+def merge_version_detailed():
+    """合并项目版本（详细决策模式 - 支持按记录/字段选择）"""
+    try:
+        user_id = g.current_user.get('userId')
+        username = g.current_user.get('username')
+    except (AttributeError, KeyError):
+        return jsonify({'error': '用户信息不完整'}), 401
+
     body = request.get_json(force=True)
     version_id = body.get('versionId')
     target_branch = body.get('targetBranch', 'current')
-    strategy = body.get('strategy', 'theirs')
     project_menu_id = body.get('projectMenuId')
+    collection_decisions = body.get('collections', [])
 
     if not version_id or not project_menu_id:
         return jsonify({'error': '缺少必要参数'}), 400
 
-    if strategy not in ['theirs', 'ours']:
-        return jsonify({'error': 'strategy 必须是 theirs 或 ours'}), 400
+    if not collection_decisions:
+        return jsonify({'error': '没有选择任何变更'}), 400
 
     try:
-        result = merge_project_version(
-            version_id, target_branch, strategy,
+        result = merge_project_version_detailed(
+            version_id, target_branch, collection_decisions,
             username, user_id, project_menu_id
         )
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@project_versions_bp.route('/project-versions/<version_id>/merge-history', methods=['GET'])
+@login_required
+def get_version_merge_history(version_id):
+    """获取版本的合并历史"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id, source_version_id, source_version_name, target_branch_id, target_branch_name, '
+                'strategy, merged_by, merged_at, records_created, records_updated, records_deleted, description '
+                'FROM merge_records WHERE source_version_id = %s ORDER BY merged_at DESC',
+                (version_id,)
+            )
+            rows = cur.fetchall()
+            merge_records = []
+            for row in rows:
+                merge_records.append({
+                    'id': row[0],
+                    'sourceVersionId': row[1],
+                    'sourceVersionName': row[2],
+                    'targetBranchId': row[3],
+                    'targetBranchName': row[4],
+                    'strategy': row[5],
+                    'mergedBy': row[6],
+                    'mergedAt': row[7].isoformat() if row[7] else None,
+                    'recordsCreated': row[8],
+                    'recordsUpdated': row[9],
+                    'recordsDeleted': row[10],
+                    'description': row[11],
+                })
+            return jsonify({'mergeRecords': merge_records, 'total': len(merge_records)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@project_versions_bp.route('/merge-records/<project_menu_id>', methods=['GET'])
+@login_required
+def get_project_merge_records(project_menu_id):
+    """获取项目的所有合并记录"""
+    from db import get_db
+    page = request.args.get('page', 1, type=int)
+    pageSize = request.args.get('pageSize', 20, type=int)
+    offset = (page - 1) * pageSize
+
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT COUNT(*) FROM merge_records WHERE project_menu_id = %s',
+                (project_menu_id,)
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                'SELECT id, source_version_id, source_version_name, target_branch_id, target_branch_name, '
+                'strategy, merged_by, merged_at, records_created, records_updated, records_deleted, description '
+                'FROM merge_records WHERE project_menu_id = %s ORDER BY merged_at DESC LIMIT %s OFFSET %s',
+                (project_menu_id, pageSize, offset)
+            )
+            rows = cur.fetchall()
+            merge_records = []
+            for row in rows:
+                merge_records.append({
+                    'id': row[0],
+                    'sourceVersionId': row[1],
+                    'sourceVersionName': row[2],
+                    'targetBranchId': row[3],
+                    'targetBranchName': row[4],
+                    'strategy': row[5],
+                    'mergedBy': row[6],
+                    'mergedAt': row[7].isoformat() if row[7] else None,
+                    'recordsCreated': row[8],
+                    'recordsUpdated': row[9],
+                    'recordsDeleted': row[10],
+                    'description': row[11],
+                })
+            return jsonify({'mergeRecords': merge_records, 'total': total, 'page': page, 'pageSize': pageSize})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

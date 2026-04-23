@@ -30,21 +30,30 @@
       <div class="bc-error-msg">{{ error }}</div>
       <el-button type="primary" @click="loadDiff">重试</el-button>
     </div>
-    <div v-else-if="!hasDiff" class="bc-center-state">
+    <div v-else-if="!hasAnyDiff" class="bc-center-state">
       <el-empty description="没有需要处理的变更" />
     </div>
 
     <!-- 主体内容 -->
     <template v-else>
-      <!-- Collection 选择器 -->
+      <!-- Collection 选择器 - 始终显示 -->
       <div v-if="collections.length > 1" class="collection-selector">
         <span>选择数据集：</span>
         <el-radio-group v-model="selectedCollection" size="small">
           <el-radio-button v-for="c in collections" :key="c.collection" :value="c.collection">
             {{ c.pageName }}
+            <el-badge v-if="getCollectionDiffCount(c) > 0" :value="getCollectionDiffCount(c)" type="primary" />
           </el-radio-button>
         </el-radio-group>
       </div>
+
+      <!-- 当前数据集无差异时的提示 -->
+      <div v-if="!currentCollectionHasDiff" class="bc-center-state bc-no-diff-state">
+        <el-empty description="当前数据集没有变更" />
+      </div>
+
+      <!-- 当前数据集有差异时显示对比内容 -->
+      <template v-else>
 
       <!-- 工具栏 -->
       <div class="bc-toolbar">
@@ -280,6 +289,7 @@
           </div>
         </template>
       </div>
+      </template>
     </template>
 
     <!-- 底部 -->
@@ -288,7 +298,7 @@
         <div class="bc-footer-status">
           <span v-if="!hasSelection" class="bc-status-warn">请至少选择一项变更</span>
           <span v-else class="bc-status-info">
-            已选 {{ selectedCount }} 项：新增 {{ state.decisions.addedRecords.size }} / 删除 {{ state.decisions.removedRecords.size }} / 修改 {{ state.decisions.modifiedRecords.size }}
+            已选 {{ selectedCount }} 项：新增 {{ currentDecisions.addedRecords.size }} / 删除 {{ currentDecisions.removedRecords.size }} / 修改 {{ currentDecisions.modifiedRecords.size }}
           </span>
         </div>
         <div class="bc-footer-actions">
@@ -347,8 +357,7 @@ const emit = defineEmits<{
 // ==================== Composable ====================
 
 const {
-  state,
-  hasDiff,
+  currentDecisions,
   hasSelection,
   selectedCount,
   hasFieldDecisionChanged,
@@ -396,6 +405,31 @@ const currentDiff = computed(() => {
 const addedCount = computed(() => currentDiff.value?.added.length ?? 0)
 const removedCount = computed(() => currentDiff.value?.removed.length ?? 0)
 const modifiedCount = computed(() => currentDiff.value?.modified.length ?? 0)
+
+// 整个项目是否有任何差异（基于 fullDiffResult）
+const hasAnyDiff = computed(() => {
+  if (!fullDiffResult.value) return false
+  return (
+    fullDiffResult.value.totalAdded > 0 ||
+    fullDiffResult.value.totalRemoved > 0 ||
+    fullDiffResult.value.totalModified > 0
+  )
+})
+
+// 当前选中的数据集是否有差异
+const currentCollectionHasDiff = computed(() => {
+  if (!currentDiff.value) return false
+  return (
+    currentDiff.value.added.length > 0 ||
+    currentDiff.value.removed.length > 0 ||
+    currentDiff.value.modified.length > 0
+  )
+})
+
+// 获取数据集的差异总数（用于页签 badge）
+function getCollectionDiffCount(collection: CollectionDiff): number {
+  return collection.added.length + collection.removed.length + collection.modified.length
+}
 
 // ==================== Constants ====================
 
@@ -502,19 +536,19 @@ function formatValue(val: any): string {
 // ==================== Selection helpers ====================
 
 function isAddedSelected(id: string): boolean {
-  return state.decisions.addedRecords.has(id)
+  return currentDecisions.value.addedRecords.has(id)
 }
 
 function isRemovedSelected(id: string): boolean {
-  return state.decisions.removedRecords.has(id)
+  return currentDecisions.value.removedRecords.has(id)
 }
 
 function isModifiedSelected(id: string): boolean {
-  return state.decisions.modifiedRecords.has(id)
+  return currentDecisions.value.modifiedRecords.has(id)
 }
 
 function getFieldChoice(recordId: string, fieldName: string): 'source' | 'target' {
-  const rd = state.decisions.modifiedRecords.get(recordId)
+  const rd = currentDecisions.value.modifiedRecords.get(recordId)
   return rd?.fieldDecisions.get(fieldName) ?? 'source'
 }
 
@@ -560,8 +594,15 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    await submitMerge(props.projectMenuId)
-    ElMessage.success('合并成功')
+    const result = await submitMerge(props.projectMenuId)
+    // 显示合并成功信息，提示可以再次合并
+    const totalRecords = result.collections?.reduce(
+      (sum: number, c: any) => sum + c.recordsCreated + c.recordsUpdated + c.recordsDeleted, 0
+    ) || 0
+    ElMessage.success({
+      message: `合并成功！共处理 ${totalRecords} 条记录。版本「${props.versionName}」仍可继续合并到其他分支。`,
+      duration: 5000,
+    })
     emit('success')
     visible.value = false
   } catch (e: any) {

@@ -197,6 +197,7 @@ def execute_script():
     script_id = body.get('scriptId')
     collection = body.get('collection')
     record_id = body.get('recordId')  # optional: for row-level export
+    branch_id = body.get('branchId', 'main')  # NEW: branch filter, default main
 
     if not script_id or not collection:
         return jsonify({'error': '缺少参数 scriptId 或 collection'}), 400
@@ -215,16 +216,16 @@ def execute_script():
         script_code = script_row[0]
         output_format = script_row[1]
 
-        # Fetch collection data (single record or all)
+        # Fetch collection data (single record or all), filtered by branch
         if record_id:
             cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND id = %s',
-                (collection, record_id),
+                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                (collection, record_id, branch_id),
             )
         else:
             cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s ORDER BY created_at',
-                (collection,),
+                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                (collection, branch_id),
             )
         rows = cur.fetchall()
         data = []
@@ -271,6 +272,7 @@ def batch_export():
     """Execute multiple export scripts and return results as a zip file."""
     body = request.get_json(force=True)
     tasks = body.get('tasks', [])
+    default_branch_id = body.get('branchId', 'main')  # NEW: default branch filter
     if not tasks:
         return jsonify({'error': '未选择导出任务'}), 400
 
@@ -285,6 +287,7 @@ def batch_export():
             for idx, task in enumerate(tasks):
                 script_id = task.get('scriptId')
                 collection = task.get('collection')
+                branch_id = task.get('branchId', default_branch_id)  # NEW: per-task branch override
                 if not script_id or not collection:
                     errors.append(f'任务 {idx + 1}: 缺少参数')
                     continue
@@ -302,11 +305,11 @@ def batch_export():
                 script_code = script_row[0]
                 output_format = script_row[1]
 
-                # Fetch collection data
+                # Fetch collection data, filtered by branch
                 cur.execute(
                     'SELECT id, collection, data, created_at FROM dynamic_data '
-                    'WHERE collection = %s ORDER BY created_at',
-                    (collection,),
+                    'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                    (collection, branch_id),
                 )
                 rows = cur.fetchall()
                 data = []

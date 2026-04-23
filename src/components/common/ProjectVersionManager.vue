@@ -197,82 +197,178 @@
       </template>
     </el-dialog>
 
-    <!-- 版本对比对话框 -->
-    <el-dialog v-model="diffDialogVisible" title="版本对比" width="80%" top="5vh" append-to-body>
-      <el-form :inline="true" style="margin-bottom: 16px">
-        <el-form-item label="对比版本">
-          <el-select v-model="diffTargetVersion" placeholder="选择对比版本" style="width: 200px">
+    <!-- 版本对比对话框 - Beyond Compare 风格 -->
+    <el-dialog
+      v-model="diffDialogVisible"
+      title="版本对比"
+      fullscreen
+      append-to-body
+      class="diff-dialog-fullscreen"
+    >
+      <!-- 顶部工具栏 -->
+      <div class="diff-toolbar">
+        <div class="toolbar-left">
+          <span class="version-label">源版本：</span>
+          <el-tag type="primary">{{ getVersionName(diffSourceVersion) }}</el-tag>
+          <span class="version-label" style="margin-left: 24px">目标版本：</span>
+          <el-select v-model="diffTargetVersion" placeholder="选择对比目标版本" style="width: 200px">
             <el-option label="主分支 (main)" value="main" />
             <el-option label="当前分支" value="current" />
             <el-option v-for="v in versions" :key="v.id" :label="v.name" :value="v.id" />
           </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="diffLoading" @click="loadDiff">对比</el-button>
-        </el-form-item>
-      </el-form>
+          <el-button type="primary" :loading="diffLoading" style="margin-left: 12px" @click="loadDiff">
+            对比
+          </el-button>
+        </div>
+        <div class="toolbar-right">
+          <el-button v-if="diffResult" type="success" @click="handleMergeFromDiff">
+            合并到目标版本
+          </el-button>
+        </div>
+      </div>
 
-      <div v-if="diffResult" class="diff-result">
-        <el-alert type="info" :closable="false" style="margin-bottom: 16px">
-          <template #title>
-            共 {{ diffResult.totalAdded }} 条新增，{{ diffResult.totalRemoved }} 条删除，{{ diffResult.totalModified }} 条修改
-          </template>
-        </el-alert>
+      <!-- Collection 选择器 -->
+      <div v-if="diffResult && diffResult.collections && diffResult.collections.length > 1" class="diff-collection-tabs">
+        <el-radio-group v-model="selectedDiffCollection" size="small">
+          <el-radio-button v-for="coll in diffResult.collections" :key="coll.collection" :value="coll.collection">
+            {{ coll.pageName }}
+            <span class="diff-count added">+{{ coll.added.length }}</span>
+            <span class="diff-count removed">-{{ coll.removed.length }}</span>
+            <span class="diff-count modified">~{{ coll.modified.length }}</span>
+          </el-radio-button>
+        </el-radio-group>
+      </div>
 
-        <el-collapse v-model="diffCollapseActive">
-          <el-collapse-item
-            v-for="coll in diffResult.collections"
-            :key="coll.collection"
-            :name="coll.collection"
-          >
-            <template #title>
-              <span style="font-weight: 600">{{ coll.pageName }} ({{ coll.collection }})</span>
-              <span style="margin-left: 12px; color: #67c23a">+{{ coll.added.length }}</span>
-              <span style="margin-left: 8px; color: #f56c6c">-{{ coll.removed.length }}</span>
-              <span style="margin-left: 8px; color: #e6a23c">~{{ coll.modified.length }}</span>
-            </template>
+      <!-- 统计条 -->
+      <div v-if="diffResult" class="diff-stats-bar">
+        <span class="stat-item">
+          共
+          <span class="stat-value">{{ diffResult.totalAdded + diffResult.totalRemoved + diffResult.totalModified }}</span>
+          处变更
+        </span>
+        <span class="stat-divider">|</span>
+        <span class="stat-item stat-added">新增 {{ diffResult.totalAdded }}</span>
+        <span class="stat-item stat-removed">删除 {{ diffResult.totalRemoved }}</span>
+        <span class="stat-item stat-modified">修改 {{ diffResult.totalModified }}</span>
+      </div>
 
-            <!-- 新增记录 -->
-            <div v-if="coll.added.length" class="diff-section">
-              <h5 style="color: #67c23a">新增记录 ({{ coll.added.length }})</h5>
-              <el-table :data="coll.added" stripe size="small" max-height="200">
-                <el-table-column prop="id" label="ID" width="150" />
-                <el-table-column prop="name" label="名称" />
-              </el-table>
+      <!-- 加载状态 -->
+      <div v-if="diffLoading" class="diff-loading">
+        <el-icon class="is-loading" :size="32"><Loading /></el-icon>
+        <span>正在对比版本...</span>
+      </div>
+
+      <!-- 左右对比视图 -->
+      <div v-else-if="currentDiffCollection" class="diff-compare-container">
+        <!-- 左侧：源版本 -->
+        <div class="diff-panel diff-panel-left">
+          <div class="panel-header">
+            <span class="panel-title">{{ getVersionName(diffSourceVersion) }}</span>
+            <span class="panel-subtitle">源版本</span>
+          </div>
+          <div class="panel-content">
+            <!-- 新增记录（在源版本中存在） -->
+            <div v-if="currentDiffCollection.added.length" class="diff-section">
+              <div class="section-header added">
+                <span class="section-icon">+</span>
+                <span>新增记录</span>
+                <span class="section-count">{{ currentDiffCollection.added.length }}</span>
+              </div>
+              <div class="record-list">
+                <div v-for="record in currentDiffCollection.added" :key="record.id" class="record-card added">
+                  <div class="record-id">{{ record.id }}</div>
+                  <div class="record-name">{{ (record.name as string) || '—' }}</div>
+                </div>
+              </div>
             </div>
-
-            <!-- 删除记录 -->
-            <div v-if="coll.removed.length" class="diff-section">
-              <h5 style="color: #f56c6c">删除记录 ({{ coll.removed.length }})</h5>
-              <el-table :data="coll.removed" stripe size="small" max-height="200">
-                <el-table-column prop="id" label="ID" width="150" />
-                <el-table-column prop="name" label="名称" />
-              </el-table>
-            </div>
-
-            <!-- 修改记录 -->
-            <div v-if="coll.modified.length" class="diff-section">
-              <h5 style="color: #e6a23c">修改记录 ({{ coll.modified.length }})</h5>
-              <el-table :data="coll.modified" stripe size="small" max-height="300">
-                <el-table-column prop="id" label="ID" width="150" />
-                <el-table-column label="变更字段">
-                  <template #default="{ row }">
-                    <div v-for="field in row.fields" :key="field.fieldName" class="field-change">
-                      <span class="field-name">{{ field.fieldName }}:</span>
-                      <span class="old-value">{{ field.oldValue }}</span>
-                      <span style="margin: 0 4px">→</span>
-                      <span class="new-value">{{ field.newValue }}</span>
+            <!-- 修改记录（源版本字段值） -->
+            <div v-if="currentDiffCollection.modified.length" class="diff-section">
+              <div class="section-header modified">
+                <span class="section-icon">~</span>
+                <span>修改记录</span>
+                <span class="section-count">{{ currentDiffCollection.modified.length }}</span>
+              </div>
+              <div class="record-list">
+                <div v-for="record in currentDiffCollection.modified" :key="record.id" class="record-card modified">
+                  <div class="record-header">
+                    <span class="record-id">{{ record.id }}</span>
+                    <span class="record-name">{{ (record.record?.name as string) || (record.oldRecord?.name as string) || '—' }}</span>
+                  </div>
+                  <div class="field-changes">
+                    <div v-for="field in record.fields" :key="field.fieldName" class="field-row source-value">
+                      <span class="field-name">{{ field.fieldName }}</span>
+                      <span class="field-value old">{{ field.oldValue || '—' }}</span>
                     </div>
-                  </template>
-                </el-table-column>
-              </el-table>
+                  </div>
+                </div>
+              </div>
             </div>
+            <!-- 空状态 -->
+            <div v-if="!currentDiffCollection.added.length && !currentDiffCollection.modified.length" class="panel-empty">
+              源版本无变更数据
+            </div>
+          </div>
+        </div>
 
-            <div v-if="coll.unchangedCount" style="color: #909399; margin-top: 8px">
-              未变更记录: {{ coll.unchangedCount }} 条
+        <!-- 中间分隔线 -->
+        <div class="diff-divider">
+          <span class="divider-arrow">→</span>
+        </div>
+
+        <!-- 右侧：目标版本 -->
+        <div class="diff-panel diff-panel-right">
+          <div class="panel-header">
+            <span class="panel-title">{{ getVersionName(diffTargetVersion) }}</span>
+            <span class="panel-subtitle">目标版本</span>
+          </div>
+          <div class="panel-content">
+            <!-- 删除记录（在目标版本中不存在） -->
+            <div v-if="currentDiffCollection.removed.length" class="diff-section">
+              <div class="section-header removed">
+                <span class="section-icon">-</span>
+                <span>删除记录</span>
+                <span class="section-count">{{ currentDiffCollection.removed.length }}</span>
+              </div>
+              <div class="record-list">
+                <div v-for="record in currentDiffCollection.removed" :key="record.id" class="record-card removed">
+                  <div class="record-id">{{ record.id }}</div>
+                  <div class="record-name">{{ (record.name as string) || '—' }}</div>
+                </div>
+              </div>
             </div>
-          </el-collapse-item>
-        </el-collapse>
+            <!-- 修改记录（目标版本字段值） -->
+            <div v-if="currentDiffCollection.modified.length" class="diff-section">
+              <div class="section-header modified">
+                <span class="section-icon">~</span>
+                <span>修改记录</span>
+                <span class="section-count">{{ currentDiffCollection.modified.length }}</span>
+              </div>
+              <div class="record-list">
+                <div v-for="record in currentDiffCollection.modified" :key="record.id" class="record-card modified">
+                  <div class="record-header">
+                    <span class="record-id">{{ record.id }}</span>
+                    <span class="record-name">{{ (record.record?.name as string) || (record.oldRecord?.name as string) || '—' }}</span>
+                  </div>
+                  <div class="field-changes">
+                    <div v-for="field in record.fields" :key="field.fieldName" class="field-row target-value">
+                      <span class="field-name">{{ field.fieldName }}</span>
+                      <span class="field-value new">{{ field.newValue || '—' }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- 空状态 -->
+            <div v-if="!currentDiffCollection.removed.length && !currentDiffCollection.modified.length" class="panel-empty">
+              目标版本无变更数据
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 无变更状态 -->
+      <div v-else-if="diffResult && !diffResult.collections.length" class="diff-empty">
+        <el-empty description="两个版本完全一致，没有变更" />
       </div>
     </el-dialog>
 
@@ -291,7 +387,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh } from '@element-plus/icons-vue'
+import { Plus, Refresh, Loading } from '@element-plus/icons-vue'
 import {
   listProjectVersions,
   createProjectVersion,
@@ -357,10 +453,16 @@ const diffSourceVersion = ref<string>('')
 const diffTargetVersion = ref<string>('main')
 const diffResult = ref<DiffResult | null>(null)
 const diffLoading = ref(false)
-const diffCollapseActive = ref<string[]>([])
+const selectedDiffCollection = ref<string>('')
 
 const mergeDialogVisible = ref(false)
 const mergeTarget = ref<ProjectVersion | null>(null)
+
+// 当前选中的对比数据集
+const currentDiffCollection = computed(() => {
+  if (!diffResult.value || !selectedDiffCollection.value) return null
+  return diffResult.value.collections.find(c => c.collection === selectedDiffCollection.value) || null
+})
 
 function getStatusTagType(status: string): string {
   const map: Record<string, string> = {
@@ -483,6 +585,14 @@ async function showDetail(version: ProjectVersion) {
   }
 }
 
+function getVersionName(versionId: string): string {
+  if (!versionId) return ''
+  if (versionId === 'main') return '主分支'
+  if (versionId === 'current') return '当前分支'
+  const version = versions.value.find(v => v.id === versionId)
+  return version?.name || versionId
+}
+
 function showDiffDialog(version: ProjectVersion) {
   diffSourceVersion.value = version.id
   diffTargetVersion.value = 'main'
@@ -493,18 +603,32 @@ function showDiffDialog(version: ProjectVersion) {
 async function loadDiff() {
   diffLoading.value = true
   try {
+    // 对比版本：用户点击的版本 (source) vs 用户选择的对比版本 (target)
     const result = await diffProjectVersions(
       props.projectMenuId,
-      'main',
-      diffTargetVersion.value
+      diffSourceVersion.value,    // 基准版本：用户点击的那个版本
+      diffTargetVersion.value     // 对比版本：用户选择的版本
     )
     diffResult.value = result
-    // 默认展开所有collection
-    diffCollapseActive.value = result.collections.map(c => c.collection)
+    // 默认选中第一个 collection
+    if (result.collections.length > 0) {
+      selectedDiffCollection.value = result.collections[0].collection
+    }
   } catch (err: any) {
     ElMessage.error(err.message || '对比失败')
   } finally {
     diffLoading.value = false
+  }
+}
+
+function handleMergeFromDiff() {
+  // 从对比对话框跳转到合并对话框
+  const sourceVersion = versions.value.find(v => v.id === diffSourceVersion.value)
+  if (sourceVersion) {
+    mergeTarget.value = sourceVersion
+    mergeDialogVisible.value = true
+  } else {
+    ElMessage.warning('无法找到源版本信息')
   }
 }
 
@@ -672,30 +796,300 @@ watch(visible, (newVal) => {
   }
 }
 
-.diff-result {
-  .diff-section {
-    margin-top: 12px;
+// Beyond Compare 风格对比对话框样式
+.diff-dialog-fullscreen {
+  :deep(.el-dialog__body) {
+    padding: 0;
+    height: calc(100vh - 54px);
+    overflow: hidden;
+  }
+}
 
-    h5 {
-      margin-bottom: 8px;
+.diff-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e4e7ed;
+
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+
+    .version-label {
+      font-weight: 500;
+      color: #606266;
+    }
+  }
+}
+
+.diff-collection-tabs {
+  padding: 12px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e4e7ed;
+
+  .el-radio-button {
+    .diff-count {
+      font-size: 12px;
+      margin-left: 4px;
+
+      &.added { color: #67c23a; }
+      &.removed { color: #f56c6c; }
+      &.modified { color: #e6a23c; }
+    }
+  }
+}
+
+.diff-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: #fafafa;
+  border-bottom: 1px solid #e4e7ed;
+  font-size: 14px;
+
+  .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .stat-value {
+    font-weight: 600;
+    color: #303133;
+  }
+
+  .stat-divider {
+    color: #dcdfe6;
+  }
+
+  .stat-added { color: #67c23a; }
+  .stat-removed { color: #f56c6c; }
+  .stat-modified { color: #e6a23c; }
+}
+
+.diff-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  gap: 12px;
+  color: #909399;
+
+  .is-loading {
+    animation: rotating 2s linear infinite;
+  }
+}
+
+@keyframes rotating {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.diff-compare-container {
+  display: flex;
+  height: calc(100vh - 180px);
+  padding: 16px 20px;
+  gap: 0;
+}
+
+.diff-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e4e7ed;
+  background: #fff;
+
+  &.diff-panel-left {
+    border-radius: 4px 0 0 4px;
+  }
+
+  &.diff-panel-right {
+    border-radius: 0 4px 4px 0;
+    border-left: none;
+  }
+
+  .panel-header {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    background: #f5f7fa;
+    border-bottom: 1px solid #e4e7ed;
+
+    .panel-title {
+      font-weight: 600;
+      font-size: 14px;
+      color: #303133;
+    }
+
+    .panel-subtitle {
+      font-size: 12px;
+      color: #909399;
     }
   }
 
-  .field-change {
-    margin: 4px 0;
+  .panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+
+  .panel-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #909399;
+    font-size: 14px;
+  }
+}
+
+.diff-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  background: #fafafa;
+  border-top: 1px solid #e4e7ed;
+  border-bottom: 1px solid #e4e7ed;
+
+  .divider-arrow {
+    font-size: 18px;
+    color: #909399;
+  }
+}
+
+.diff-section {
+  margin-bottom: 16px;
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-weight: 500;
+    font-size: 13px;
+
+    .section-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .section-count {
+      color: #909399;
+      font-size: 12px;
+    }
+
+    &.added {
+      background: #f0f9eb;
+      color: #67c23a;
+
+      .section-icon { background: #67c23a; color: #fff; }
+    }
+
+    &.removed {
+      background: #fef0f0;
+      color: #f56c6c;
+
+      .section-icon { background: #f56c6c; color: #fff; }
+    }
+
+    &.modified {
+      background: #fdf6ec;
+      color: #e6a23c;
+
+      .section-icon { background: #e6a23c; color: #fff; }
+    }
+  }
+
+  .record-list {
+    margin-top: 8px;
+  }
+}
+
+.record-card {
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+  border: 1px solid #e4e7ed;
+  background: #fff;
+  transition: all 0.2s;
+
+  &:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  }
+
+  .record-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .record-id {
+    font-size: 12px;
+    color: #909399;
+    font-family: monospace;
+  }
+
+  .record-name {
+    font-weight: 500;
+    color: #303133;
+  }
+
+  &.added {
+    border-color: #c2e7b0;
+    background: #f0f9eb;
+  }
+
+  &.removed {
+    border-color: #fbc4c4;
+    background: #fef0f0;
+  }
+
+  &.modified {
+    border-color: #e6d5c3;
+    background: #fdf6ec;
+  }
+}
+
+.field-changes {
+  .field-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 2px;
+    margin-bottom: 4px;
 
     .field-name {
-      font-weight: 500;
-      margin-right: 4px;
+      font-size: 12px;
+      color: #606266;
+      min-width: 100px;
     }
 
-    .old-value {
-      color: #f56c6c;
-    }
+    .field-value {
+      font-size: 12px;
+      font-family: monospace;
 
-    .new-value {
-      color: #67c23a;
+      &.old { color: #f56c6c; background: #fef0f0; }
+      &.new { color: #67c23a; background: #f0f9eb; }
     }
   }
+}
+
+.diff-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(100vh - 200px);
 }
 </style>

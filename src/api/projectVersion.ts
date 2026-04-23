@@ -74,6 +74,26 @@ export interface MergeResult {
   }[]
 }
 
+// 详细合并请求类型
+export interface CollectionMergeDecision {
+  collection: string
+  added: string[]
+  removed: string[]
+  modified: {
+    recordId: string
+    fieldDecisions: {
+      fieldName: string
+      useSource: boolean
+    }[]
+  }[]
+}
+
+export interface MergePayload {
+  versionId: string
+  targetBranch: string
+  collections: CollectionMergeDecision[]
+}
+
 // 版本恢复相关类型
 export interface RestoreResult {
   success: boolean
@@ -216,7 +236,56 @@ export function lockMainBranch(projectMenuId: string, reason?: string): Promise<
   return request.post(`/project-versions/main/${projectMenuId}/lock`, { reason })
 }
 
+// 合并历史相关类型
+export interface MergeRecord {
+  id: string
+  sourceVersionId: string
+  sourceVersionName: string
+  targetBranchId: string
+  targetBranchName: string
+  strategy: string
+  mergedBy: string
+  mergedAt: string
+  recordsCreated: number
+  recordsUpdated: number
+  recordsDeleted: number
+  description?: string
+}
+
+export interface MergeHistoryResult {
+  mergeRecords: MergeRecord[]
+  total: number
+}
+
+export interface ProjectMergeRecordsResult {
+  mergeRecords: MergeRecord[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+// 新增：获取版本的合并历史
+export function getVersionMergeHistory(versionId: string): Promise<MergeHistoryResult> {
+  return request.get(`/project-versions/${versionId}/merge-history`)
+}
+
+// 新增：获取项目的所有合并记录
+export function getProjectMergeRecords(projectMenuId: string, page = 1, pageSize = 20): Promise<ProjectMergeRecordsResult> {
+  return request.get(`/merge-records/${projectMenuId}`, { params: { page, pageSize } })
+}
+
 // 新增：解锁 main 分支
 export function unlockMainBranch(projectMenuId: string): Promise<MainLockResult> {
   return request.post(`/project-versions/main/${projectMenuId}/unlock`)
+}
+
+// 新增：详细合并（支持按记录/字段选择）
+export function mergeProjectVersionDetailed(
+  payload: MergePayload,
+  projectMenuId: string
+): Promise<MergeResult> {
+  return request.post('/project-versions/merge-detailed', {
+    ...payload,
+    projectMenuId,
+  })
 }
