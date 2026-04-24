@@ -54,9 +54,9 @@ def fire_webhooks(
                 'SELECT id, name, trigger_event, trigger_condition, webhook_url, secret, '
                 'timeout, retries, source_collections '
                 'FROM webhook_rules WHERE enabled = TRUE AND trigger_event = %s '
-                'AND (source_collections = \'[]\'::jsonb OR source_collections @> \'[%s]\'::jsonb) '
+                'AND (source_collections = \'[]\'::jsonb OR source_collections @> %s) '
                 'ORDER BY execution_order',
-                (event, collection)
+                (event, psycopg2.extras.Json([collection]))
             )
             rules = cur.fetchall()
         else:
@@ -68,9 +68,9 @@ def fire_webhooks(
                     'SELECT id, name, trigger_event, trigger_condition, webhook_url, secret, '
                     'timeout, retries, source_collections '
                     'FROM webhook_rules WHERE enabled = TRUE AND trigger_event = %s '
-                    'AND (source_collections = \'[]\'::jsonb OR source_collections @> \'[%s]\'::jsonb) '
+                    'AND (source_collections = \'[]\'::jsonb OR source_collections @> %s) '
                     'ORDER BY execution_order',
-                    (event, collection)
+                    (event, psycopg2.extras.Json([collection]))
                 )
                 rules = cur.fetchall()
     except Exception:
@@ -168,6 +168,13 @@ def _build_payload(
     """
     Build webhook payload for different event types
     """
+    # Merge event: payload is pre-built by build_merge_webhook_payload
+    if event == 'merge':
+        payload = new_data.copy() if new_data else {}
+        payload['ruleId'] = rule_id
+        payload['ruleName'] = rule_name
+        return payload
+
     payload = {
         'event': event,
         'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -207,9 +214,6 @@ def _build_payload(
         elif event == 'delete':
             payload['record'] = None
             payload['oldRecord'] = old_data
-
-    # Merge event - payload should be passed directly
-    # This function handles data events; merge payload is built separately
 
     return payload
 
