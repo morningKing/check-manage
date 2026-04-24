@@ -16,6 +16,20 @@ import type {
   MergeOrderResponse,
 } from '@/types/crossProjectDependency'
 
+// Re-export types for convenience
+export type {
+  ProjectDependency,
+  CreateDependencyRequest,
+  UpdateDependencyRequest,
+  ValidationResult,
+  DeleteProtectionResult,
+  ScanRelationsResult,
+  DependencyListResponse,
+  DependentListResponse,
+  MergeDependencyCheckResult,
+  MergeOrderResponse,
+}
+
 // ==================== 依赖声明管理 ====================
 
 /**

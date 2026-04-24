@@ -180,6 +180,15 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/dependency-manager',
+        name: 'DependencyManager',
+        component: () => import('@/views/admin/DependencyManager.vue'),
+        meta: {
+          title: '依赖管理',
+          icon: 'Share',
+        },
+      },
+      {
         path: 'admin/menu-export',
         name: 'MenuExport',
         component: () => import('@/views/admin/MenuExportPage.vue'),
