@@ -20,6 +20,13 @@ def start_dependency_scheduler(app):
         Flask 应用实例
     """
     def scheduler_loop():
+        # 启动时立即校验一次
+        with app.app_context():
+            try:
+                validate_all_dependencies()
+            except Exception:
+                pass  # 调度器失败不影响主应用
+
         while True:
             time.sleep(3600)  # 每小时检查一次
             with app.app_context():
