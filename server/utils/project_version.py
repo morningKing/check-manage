@@ -1114,6 +1114,25 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             (now, merged_by, version_id)
         )
 
+        # 获取项目名称
+        cur.execute('SELECT name FROM menus WHERE id = %s', (project_menu_id,))
+        proj_row = cur.fetchone()
+        project_name = proj_row[0] if proj_row else None
+
+    # 触发 webhook
+    from utils.webhook import fire_webhook, build_merge_webhook_payload
+    webhook_payload = build_merge_webhook_payload(
+        merge_result,
+        project_menu_id,
+        version_id,
+        version_name,
+        target_branch_id,
+        target_branch_name,
+        merged_by,
+        project_name,
+    )
+    fire_webhook('merge', webhook_payload)
+
     return merge_result
 
 
@@ -1361,6 +1380,25 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
             'UPDATE project_versions SET merged_at = %s, merged_by = %s WHERE id = %s',
             (now, merged_by, version_id)
         )
+
+        # 获取项目名称
+        cur.execute('SELECT name FROM menus WHERE id = %s', (project_menu_id,))
+        proj_row = cur.fetchone()
+        project_name = proj_row[0] if proj_row else None
+
+    # 触发 webhook
+    from utils.webhook import fire_webhook, build_merge_webhook_payload
+    webhook_payload = build_merge_webhook_payload(
+        merge_result,
+        project_menu_id,
+        version_id,
+        version_name,
+        target_branch_id,
+        target_branch_name,
+        merged_by,
+        project_name,
+    )
+    fire_webhook('merge', webhook_payload)
 
     return merge_result
 

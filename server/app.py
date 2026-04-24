@@ -28,6 +28,7 @@ from routes.trigger_rules import trigger_rules_bp
 from routes.ai import ai_bp
 from routes.project_versions import project_versions_bp
 from routes.cross_project_dependencies import cross_project_deps_bp
+from routes.webhooks import webhook_bp
 from routes.menu_export import menu_export_bp
 
 app = Flask(__name__)
@@ -59,6 +60,7 @@ app.register_blueprint(trigger_rules_bp)
 app.register_blueprint(ai_bp)
 app.register_blueprint(project_versions_bp)
 app.register_blueprint(cross_project_deps_bp)
+app.register_blueprint(webhook_bp)
 app.register_blueprint(menu_export_bp)
 app.register_blueprint(dynamic_bp)
 

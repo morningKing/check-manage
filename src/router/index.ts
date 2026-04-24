@@ -171,6 +171,15 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/webhook-settings',
+        name: 'WebhookSettings',
+        component: () => import('@/views/admin/WebhookSettings.vue'),
+        meta: {
+          title: 'Webhook 配置',
+          icon: 'Link',
+        },
+      },
+      {
         path: 'admin/menu-export',
         name: 'MenuExport',
         component: () => import('@/views/admin/MenuExportPage.vue'),

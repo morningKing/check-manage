@@ -269,6 +269,41 @@ CREATE TABLE IF NOT EXISTS version_collections (
 
 CREATE INDEX IF NOT EXISTS idx_version_collections_version ON version_collections(version_id);
 CREATE INDEX IF NOT EXISTS idx_version_collections_collection ON version_collections(collection);
+
+-- ==================== Webhook 配置表 ====================
+
+CREATE TABLE IF NOT EXISTS webhook_settings (
+    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+    name            VARCHAR(200) NOT NULL DEFAULT '合并通知',
+    webhook_url     VARCHAR(1000) NOT NULL DEFAULT '',
+    secret          VARCHAR(200) NOT NULL DEFAULT '',
+    events          JSONB NOT NULL DEFAULT '["merge"]'::jsonb,
+    timeout         INTEGER NOT NULL DEFAULT 30,
+    retries         INTEGER NOT NULL DEFAULT 3,
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_by      VARCHAR(200)
+);
+
+INSERT INTO webhook_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS webhook_logs (
+    id              VARCHAR(100) PRIMARY KEY,
+    webhook_url     VARCHAR(1000) NOT NULL,
+    event_type      VARCHAR(50) NOT NULL,
+    request_payload JSONB NOT NULL,
+    response_status INTEGER,
+    response_body   TEXT,
+    error_message   TEXT,
+    duration_ms     INTEGER,
+    retry_count     INTEGER DEFAULT 0,
+    success         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wl_event_type ON webhook_logs(event_type);
+CREATE INDEX IF NOT EXISTS idx_wl_created_at ON webhook_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wl_success ON webhook_logs(success);
 """
 
 
@@ -708,6 +743,17 @@ def init_db():
             )
             conn.commit()
             print("Added AI settings menu.")
+
+        # Migration: add Webhook settings menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-12'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
+                "VALUES ('menu-3-12', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s)",
+                ('Webhook 配置', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added Webhook settings menu.")
 
         # Migration: add backup_scope and backup_tables columns to backups
         cur.execute("""
@@ -1212,6 +1258,57 @@ def init_db():
             """)
             conn.commit()
             print("Created project_dependency_events table.")
+
+        # Migration: create webhook_settings table (Webhook 配置)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'webhook_settings'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE webhook_settings (
+                    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    enabled         BOOLEAN NOT NULL DEFAULT FALSE,
+                    name            VARCHAR(200) NOT NULL DEFAULT '合并通知',
+                    webhook_url     VARCHAR(1000) NOT NULL DEFAULT '',
+                    secret          VARCHAR(200) NOT NULL DEFAULT '',
+                    events          JSONB NOT NULL DEFAULT '["merge"]'::jsonb,
+                    timeout         INTEGER NOT NULL DEFAULT 30,
+                    retries         INTEGER NOT NULL DEFAULT 3,
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_by      VARCHAR(200)
+                );
+                INSERT INTO webhook_settings (id) VALUES (1);
+            """)
+            conn.commit()
+            print("Created webhook_settings table.")
+
+        # Migration: create webhook_logs table (Webhook 调用日志)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'webhook_logs'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE webhook_logs (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    webhook_url     VARCHAR(1000) NOT NULL,
+                    event_type      VARCHAR(50) NOT NULL,
+                    request_payload JSONB NOT NULL,
+                    response_status INTEGER,
+                    response_body   TEXT,
+                    error_message   TEXT,
+                    duration_ms     INTEGER,
+                    retry_count     INTEGER DEFAULT 0,
+                    success         BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_wl_event_type ON webhook_logs(event_type);
+                CREATE INDEX idx_wl_created_at ON webhook_logs(created_at DESC);
+                CREATE INDEX idx_wl_success ON webhook_logs(success);
+            """)
+            conn.commit()
+            print("Created webhook_logs table.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0
