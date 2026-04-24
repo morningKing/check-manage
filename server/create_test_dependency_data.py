@@ -38,31 +38,24 @@ def main():
     # 检查测试项目是否已存在
     cur.execute("SELECT id FROM menus WHERE id = 'test-project-A'")
     if not cur.fetchone():
-        # 创建父菜单（测试项目组）
+        # 项目A - 被依赖方（上游项目）- 直接作为 menu-2 的子菜单
         cur.execute(
             'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-            "VALUES ('menu-test-deps', '依赖测试项目组', 'Folder', NULL, 'menu-2', 99, '/test-deps', %s, 'folder')",
-            (psycopg2.extras.Json(['admin', 'developer']),)
-        )
-
-        # 项目A - 被依赖方（上游项目）
-        cur.execute(
-            'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-            "VALUES ('test-project-A', '项目A（上游）', 'Document', NULL, 'menu-test-deps', 1, '/test/project-a', %s, 'project')",
+            "VALUES ('test-project-A', '项目A（上游）', 'Document', NULL, 'menu-2', 10, NULL, %s, 'project')",
             (psycopg2.extras.Json(['admin', 'developer']),)
         )
 
         # 项目B - 依赖方（下游项目）
         cur.execute(
             'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-            "VALUES ('test-project-B', '项目B（下游）', 'Document', NULL, 'menu-test-deps', 2, '/test/project-b', %s, 'project')",
+            "VALUES ('test-project-B', '项目B（下游）', 'Document', NULL, 'menu-2', 11, NULL, %s, 'project')",
             (psycopg2.extras.Json(['admin', 'developer']),)
         )
 
         # 项目C - 另一个依赖方
         cur.execute(
             'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-            "VALUES ('test-project-C', '项目C（依赖方）', 'Document', NULL, 'menu-test-deps', 3, '/test/project-c', %s, 'project')",
+            "VALUES ('test-project-C', '项目C（依赖方）', 'Document', NULL, 'menu-2', 12, NULL, %s, 'project')",
             (psycopg2.extras.Json(['admin', 'developer']),)
         )
 
@@ -313,10 +306,15 @@ def main():
 
     print("""
 前端页面：
-  - 依赖管理: /admin/project-dependencies
-  - 项目A: /test/project-a
-  - 项目B: /test/project-b
-  - 项目C: /test/project-c
+  - 依赖管理: /admin/dependency-manager
+  - 项目A数据页: 在左侧菜单 工作空间 → 项目A（上游）
+  - 项目B数据页: 在左侧菜单 工作空间 → 项目B（下游）
+  - 项目C数据页: 在左侧菜单 工作空间 → 项目C（依赖方）
+
+菜单结构（标准3层）：
+  Level 1: 工作空间 (menu-2)
+  Level 2: 项目 (test-project-A, test-project-B, test-project-C)
+  Level 3: 数据页 (测试客户、测试产品、测试订单、测试任务)
 
 API端点：
   GET  /projects/test-project-B/dependencies     - 查看项目B的依赖列表
