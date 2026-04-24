@@ -282,10 +282,12 @@ export function unlockMainBranch(projectMenuId: string): Promise<MainLockResult>
 // 新增：详细合并（支持按记录/字段选择）
 export function mergeProjectVersionDetailed(
   payload: MergePayload,
-  projectMenuId: string
+  projectMenuId: string,
+  skipDependencyCheck = false
 ): Promise<MergeResult> {
   return request.post('/project-versions/merge-detailed', {
     ...payload,
     projectMenuId,
+    skipDependencyCheck,
   })
 }

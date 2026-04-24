@@ -429,7 +429,7 @@ export function useMergeState() {
   /**
    * 提交合并（项目级，支持详细决策）
    */
-  async function submitMerge(projectMenuId: string) {
+  async function submitMerge(projectMenuId: string, skipDependencyCheck = false) {
     if (!state.sourceVersion) {
       throw new Error('Cannot build merge payload: source version not set')
     }
@@ -440,7 +440,7 @@ export function useMergeState() {
     }
 
     // 使用详细合并 API
-    return await mergeProjectVersionDetailed(payload, projectMenuId)
+    return await mergeProjectVersionDetailed(payload, projectMenuId, skipDependencyCheck)
   }
 
   /**

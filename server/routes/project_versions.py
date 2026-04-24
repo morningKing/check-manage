@@ -99,6 +99,7 @@ def merge_version():
     target_branch = body.get('targetBranch', 'current')
     strategy = body.get('strategy', 'theirs')
     project_menu_id = body.get('projectMenuId')
+    skip_dependency_check = body.get('skipDependencyCheck', False)
 
     if not version_id or not project_menu_id:
         return jsonify({'error': '缺少必要参数'}), 400
@@ -106,11 +107,27 @@ def merge_version():
     if strategy not in ['theirs', 'ours']:
         return jsonify({'error': 'strategy 必须是 theirs 或 ours'}), 400
 
+    # 联合合并依赖检查
+    if not skip_dependency_check:
+        from utils.cross_project_dependency import check_merge_dependencies
+        dep_check = check_merge_dependencies(project_menu_id, version_id)
+        if not dep_check.get('canMerge'):
+            return jsonify({
+                'error': '存在阻塞依赖，无法合并',
+                'dependencyCheck': dep_check,
+            }), 400
+
     try:
         result = merge_project_version(
             version_id, target_branch, strategy,
             username, user_id, project_menu_id
         )
+
+        # 合并成功后更新依赖声明
+        if result.get('success'):
+            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+            batch_update_dependencies_after_merge(project_menu_id, version_id)
+
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -133,6 +150,7 @@ def merge_version_detailed():
     target_branch = body.get('targetBranch', 'current')
     project_menu_id = body.get('projectMenuId')
     collection_decisions = body.get('collections', [])
+    skip_dependency_check = body.get('skipDependencyCheck', False)
 
     if not version_id or not project_menu_id:
         return jsonify({'error': '缺少必要参数'}), 400
@@ -140,11 +158,27 @@ def merge_version_detailed():
     if not collection_decisions:
         return jsonify({'error': '没有选择任何变更'}), 400
 
+    # 联合合并依赖检查
+    if not skip_dependency_check:
+        from utils.cross_project_dependency import check_merge_dependencies
+        dep_check = check_merge_dependencies(project_menu_id, version_id)
+        if not dep_check.get('canMerge'):
+            return jsonify({
+                'error': '存在阻塞依赖，无法合并',
+                'dependencyCheck': dep_check,
+            }), 400
+
     try:
         result = merge_project_version_detailed(
             version_id, target_branch, collection_decisions,
             username, user_id, project_menu_id
         )
+
+        # 合并成功后更新依赖声明
+        if result.get('success'):
+            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+            batch_update_dependencies_after_merge(project_menu_id, version_id)
+
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

@@ -12,6 +12,8 @@ import type {
   ScanRelationsResult,
   DependencyListResponse,
   DependentListResponse,
+  MergeDependencyCheckResult,
+  MergeOrderResponse,
 } from '@/types/crossProjectDependency'
 
 // ==================== 依赖声明管理 ====================
@@ -111,4 +113,42 @@ export function checkBranchDeleteProtection(
   branchId: string
 ): Promise<DeleteProtectionResult> {
   return request.get(`/projects/${projectMenuId}/branches/${branchId}/delete-check`)
+}
+
+// ==================== 联合合并编排 ====================
+
+/**
+ * 检查合并前的依赖状态
+ */
+export function checkMergeDependencies(
+  projectMenuId: string,
+  sourceBranch: string
+): Promise<MergeDependencyCheckResult> {
+  return request.get(`/projects/${projectMenuId}/merge-check`, {
+    params: { sourceBranch },
+  })
+}
+
+/**
+ * 获取联合合并的执行顺序
+ */
+export function getCoordinatedMergeOrder(
+  projectMenuId: string,
+  sourceBranch: string
+): Promise<MergeOrderResponse> {
+  return request.get(`/projects/${projectMenuId}/merge-order`, {
+    params: { sourceBranch },
+  })
+}
+
+/**
+ * 合并成功后批量更新依赖声明
+ */
+export function updateDependenciesAfterMerge(
+  projectMenuId: string,
+  sourceBranch: string
+): Promise<{ success: boolean; updatedCount: number }> {
+  return request.post(`/projects/${projectMenuId}/update-dependencies-after-merge`, {
+    sourceBranch,
+  })
 }

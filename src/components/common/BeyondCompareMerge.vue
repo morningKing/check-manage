@@ -34,6 +34,71 @@
       <el-empty description="没有需要处理的变更" />
     </div>
 
+    <!-- 依赖阻塞警告 -->
+    <div v-else-if="dependencyCheckResult && !dependencyCheckResult.canMerge" class="bc-dependency-warning">
+      <el-alert type="error" :closable="false" show-icon>
+        <template #title>
+          <span class="bc-warning-title">存在阻塞依赖，无法合并</span>
+        </template>
+        <div class="bc-warning-content">
+          <p>以下依赖项阻塞了合并操作：</p>
+          <ul class="bc-blocking-list">
+            <li v-for="dep in dependencyCheckResult.blockingDependencies" :key="dep.id">
+              <el-tag size="small" type="warning">配套分支</el-tag>
+              <span class="bc-dep-name">{{ dep.targetProjectName || dep.targetProject }}</span>
+              <span class="bc-dep-branch">分支 {{ dep.targetBranch }}</span>
+              <span class="bc-dep-reason">{{ dep.reason }}</span>
+            </li>
+          </ul>
+          <p class="bc-warning-tip">请先合并被依赖的项目分支到主分支，或解除依赖声明后再进行合并。</p>
+        </div>
+      </el-alert>
+      <div class="bc-warning-actions">
+        <el-button @click="visible = false">关闭</el-button>
+        <el-button type="warning" @click="handleForceMerge">
+          强制合并（跳过检查）
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 依赖提示（可合并但有依赖） -->
+    <div v-else-if="dependencyCheckResult && dependencyCheckResult.canMerge && hasDependencies" class="bc-dependency-info">
+      <el-alert type="info" :closable="false" show-icon>
+        <template #title>
+          <span>依赖状态检查</span>
+        </template>
+        <div class="bc-info-content">
+          <template v-if="dependencyCheckResult.readyDependencies.length > 0">
+            <p>以下依赖已就绪，可合并：</p>
+            <ul class="bc-ready-list">
+              <li v-for="dep in dependencyCheckResult.readyDependencies" :key="dep.id">
+                <el-tag size="small" type="success">就绪</el-tag>
+                <span>{{ dep.targetProjectName || dep.targetProject }}</span>
+              </li>
+            </ul>
+          </template>
+          <template v-if="dependencyCheckResult.trackMainDependencies.length > 0">
+            <p class="bc-dep-section">跟随主干依赖：</p>
+            <ul class="bc-track-list">
+              <li v-for="dep in dependencyCheckResult.trackMainDependencies" :key="dep.id">
+                <el-tag size="small" type="success">跟随主干</el-tag>
+                <span>{{ dep.targetProjectName || dep.targetProject }}</span>
+              </li>
+            </ul>
+          </template>
+          <template v-if="dependencyCheckResult.readOnlyDependencies.length > 0">
+            <p class="bc-dep-section">精确钉住依赖（合并后保持不变）：</p>
+            <ul class="bc-readonly-list">
+              <li v-for="dep in dependencyCheckResult.readOnlyDependencies" :key="dep.id">
+                <el-tag size="small" type="info">精确钉住</el-tag>
+                <span>{{ dep.targetProjectName || dep.targetProject }}</span>
+              </li>
+            </ul>
+          </template>
+        </div>
+      </el-alert>
+    </div>
+
     <!-- 主体内容 -->
     <template v-else>
       <!-- Collection 选择器 - 始终显示 -->
@@ -334,9 +399,11 @@ import {
   Document, Monitor, Right, Back, Switch,
 } from '@element-plus/icons-vue'
 import { diffProjectVersions } from '@/api/projectVersion'
+import { checkMergeDependencies } from '@/api/crossProjectDependency'
 import { useMergeState } from './composables/useMergeState'
 import type { ProjectVersion } from '@/types/version'
 import type { DiffResult, CollectionDiff } from '@/api/projectVersion'
+import type { MergeDependencyCheckResult } from '@/types/crossProjectDependency'
 
 // ==================== Props / Emits ====================
 
@@ -387,6 +454,9 @@ const compareBodyRef = ref<HTMLElement | null>(null)
 const selectedCollection = ref<string>('')
 const collections = ref<CollectionDiff[]>([])
 const fullDiffResult = ref<DiffResult | null>(null)
+const dependencyCheckResult = ref<MergeDependencyCheckResult | null>(null)
+const dependencyLoading = ref(false)
+const skipDependencyCheck = ref(false) // 强制合并模式
 
 const visible = computed({
   get: () => props.modelValue,
@@ -423,6 +493,17 @@ const currentCollectionHasDiff = computed(() => {
     currentDiff.value.added.length > 0 ||
     currentDiff.value.removed.length > 0 ||
     currentDiff.value.modified.length > 0
+  )
+})
+
+// 是否有任何依赖声明
+const hasDependencies = computed(() => {
+  if (!dependencyCheckResult.value) return false
+  return (
+    dependencyCheckResult.value.readyDependencies.length > 0 ||
+    dependencyCheckResult.value.trackMainDependencies.length > 0 ||
+    dependencyCheckResult.value.readOnlyDependencies.length > 0 ||
+    dependencyCheckResult.value.blockingDependencies.length > 0
   )
 })
 
@@ -585,6 +666,8 @@ function handleClose() {
   error.value = ''
   loadAborted.value = true
   diffRefs.clear()
+  dependencyCheckResult.value = null
+  skipDependencyCheck.value = false
 }
 
 async function handleSubmit() {
@@ -594,7 +677,7 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    const result = await submitMerge(props.projectMenuId)
+    const result = await submitMerge(props.projectMenuId, skipDependencyCheck.value)
     // 显示合并成功信息，提示可以再次合并
     const totalRecords = result.collections?.reduce(
       (sum: number, c: any) => sum + c.recordsCreated + c.recordsUpdated + c.recordsDeleted, 0
@@ -622,8 +705,29 @@ async function loadDiff() {
   loading.value = true
   error.value = ''
   loadAborted.value = false
+  dependencyCheckResult.value = null
 
   try {
+    // 先检查依赖状态
+    dependencyLoading.value = true
+    try {
+      const depCheck = await checkMergeDependencies(props.projectMenuId, props.versionId)
+      if (loadAborted.value) return
+      dependencyCheckResult.value = depCheck
+    } catch (depErr: any) {
+      // 依赖检查失败不阻塞流程，只记录错误
+      console.warn('依赖检查失败:', depErr)
+    } finally {
+      dependencyLoading.value = false
+    }
+
+    // 如果有阻塞依赖，不加载差异信息
+    if (dependencyCheckResult.value && !dependencyCheckResult.value.canMerge) {
+      loading.value = false
+      return
+    }
+
+    // 加载差异信息
     const result = await diffProjectVersions(
       props.projectMenuId,
       'current',
@@ -654,6 +758,49 @@ async function loadDiff() {
   }
 }
 
+// 强制合并（跳过依赖检查）
+function handleForceMerge() {
+  skipDependencyCheck.value = true
+  dependencyCheckResult.value = null
+  loading.value = true
+  loadDiffInternal()
+}
+
+async function loadDiffInternal() {
+  if (!props.versionId) {
+    error.value = '未指定源版本'
+    return
+  }
+
+  try {
+    const result = await diffProjectVersions(
+      props.projectMenuId,
+      'current',
+      props.versionId
+    )
+    if (loadAborted.value) return
+
+    fullDiffResult.value = result
+    collections.value = result.collections
+
+    if (collections.value.length > 0) {
+      selectedCollection.value = collections.value[0].collection
+      setDiffResult(collections.value[0])
+    }
+
+    if (props.sourceVersion) {
+      setSourceVersion(props.sourceVersion)
+    }
+    diffIndex.value = 0
+  } catch (e: any) {
+    if (loadAborted.value) return
+    error.value = e?.response?.data?.error || e?.message || '加载差异信息失败'
+    ElMessage.error(error.value)
+  } finally {
+    loading.value = false
+  }
+}
+
 // ==================== Watch ====================
 
 // 当切换 collection 时更新 diffResult
@@ -668,6 +815,8 @@ watch(selectedCollection, (coll) => {
 watch(visible, (v) => {
   if (v && props.versionId) {
     reset()
+    skipDependencyCheck.value = false
+    dependencyCheckResult.value = null
     loadDiff()
   } else if (!v) {
     loadAborted.value = true
@@ -1012,5 +1161,77 @@ watch(visible, (v) => {
 @keyframes bc-spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
+}
+
+/* ===== Dependency warning ===== */
+.bc-dependency-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+}
+.bc-warning-title {
+  font-weight: 600;
+}
+.bc-warning-content {
+  margin-top: 8px;
+}
+.bc-blocking-list {
+  margin: 8px 0;
+  padding-left: 20px;
+  li {
+    margin: 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+}
+.bc-dep-name {
+  font-weight: 500;
+}
+.bc-dep-branch {
+  color: #909399;
+  margin-left: 4px;
+}
+.bc-dep-reason {
+  color: #f56c6c;
+  margin-left: 8px;
+  font-size: 13px;
+}
+.bc-warning-tip {
+  color: #909399;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.bc-warning-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* ===== Dependency info ===== */
+.bc-dependency-info {
+  padding: 12px 20px;
+}
+.bc-info-content {
+  margin-top: 6px;
+  p {
+    margin: 4px 0;
+    font-size: 13px;
+  }
+  ul {
+    margin: 4px 0 8px;
+    padding-left: 16px;
+    li {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: 12px;
+    }
+  }
+}
+.bc-dep-section {
+  color: #606266;
+  margin-top: 6px;
 }
 </style>

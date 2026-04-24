@@ -25,6 +25,9 @@ from utils.cross_project_dependency import (
     scan_dependency_relations,
     get_dependency_relations,
     check_branch_delete_protection,
+    check_merge_dependencies,
+    get_coordinated_merge_order,
+    batch_update_dependencies_after_merge,
 )
 
 cross_project_deps_bp = Blueprint('cross_project_dependencies', __name__)
@@ -237,5 +240,73 @@ def check_delete_protection(project_menu_id, branch_id):
     try:
         result = check_branch_delete_protection(project_menu_id, branch_id)
         return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ==================== 联合合并编排 ====================
+
+@cross_project_deps_bp.route('/projects/<project_menu_id>/merge-check', methods=['GET'])
+@login_required
+def check_merge(project_menu_id):
+    """
+    检查项目合并前的依赖状态
+
+    Query params:
+    - sourceBranch: 源分支ID（版本ID）
+    """
+    source_branch = request.args.get('sourceBranch')
+
+    if not source_branch:
+        return jsonify({'error': '缺少 sourceBranch 参数'}), 400
+
+    try:
+        result = check_merge_dependencies(project_menu_id, source_branch)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@cross_project_deps_bp.route('/projects/<project_menu_id>/merge-order', methods=['GET'])
+@login_required
+def get_merge_order(project_menu_id):
+    """
+    获取联合合并的执行顺序
+
+    Query params:
+    - sourceBranch: 源分支ID（版本ID）
+    """
+    source_branch = request.args.get('sourceBranch')
+
+    if not source_branch:
+        return jsonify({'error': '缺少 sourceBranch 参数'}), 400
+
+    try:
+        order = get_coordinated_merge_order(project_menu_id, source_branch)
+        return jsonify({'mergeOrder': order, 'total': len(order)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@cross_project_deps_bp.route('/projects/<project_menu_id>/update-dependencies-after-merge', methods=['POST'])
+@admin_required
+def update_deps_after_merge(project_menu_id):
+    """
+    合并成功后批量更新依赖声明（target_branch 改为 main）
+
+    Body:
+    {
+        "sourceBranch": "版本ID"
+    }
+    """
+    body = request.get_json(force=True)
+    source_branch = body.get('sourceBranch')
+
+    if not source_branch:
+        return jsonify({'error': '缺少 sourceBranch 参数'}), 400
+
+    try:
+        updated_count = batch_update_dependencies_after_merge(project_menu_id, source_branch)
+        return jsonify({'success': True, 'updatedCount': updated_count})
     except Exception as e:
         return jsonify({'error': str(e)}), 500

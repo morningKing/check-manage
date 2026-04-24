@@ -175,3 +175,85 @@ export interface DependentListResponse {
   dependents: ProjectDependency[]
   total: number
 }
+
+// ==================== 联合合并类型 ====================
+
+/**
+ * 合并依赖检查结果
+ */
+export interface MergeDependencyCheckResult {
+  canMerge: boolean
+  blockingDependencies: BlockingDependency[]
+  readyDependencies: ReadyDependency[]
+  trackMainDependencies: TrackMainDependency[]
+  readOnlyDependencies: ReadOnlyDependency[]
+}
+
+/**
+ * 阻塞依赖
+ */
+export interface BlockingDependency {
+  id: string
+  targetProject: string
+  targetBranch: string
+  relationType: DependencyRelationType
+  pinnedVersion?: string
+  targetProjectName?: string
+  reason: string
+}
+
+/**
+ * 就绪依赖
+ */
+export interface ReadyDependency {
+  id: string
+  targetProject: string
+  targetBranch: string
+  relationType: DependencyRelationType
+  pinnedVersion?: string
+  targetProjectName?: string
+}
+
+/**
+ * track-main 依赖
+ */
+export interface TrackMainDependency {
+  id: string
+  targetProject: string
+  targetBranch: string
+  relationType: 'track-main'
+  pinnedVersion?: string
+  targetProjectName?: string
+}
+
+/**
+ * read-only 依赖
+ */
+export interface ReadOnlyDependency {
+  id: string
+  targetProject: string
+  targetBranch: string
+  relationType: 'read-only'
+  pinnedVersion?: string
+  targetProjectName?: string
+}
+
+/**
+ * 联合合并顺序
+ */
+export interface CoordinatedMergeOrder {
+  order: number
+  projectMenuId: string
+  projectName: string
+  sourceBranch: string
+  sourceBranchName: string
+  dependencyCount: number
+}
+
+/**
+ * 联合合并顺序响应
+ */
+export interface MergeOrderResponse {
+  mergeOrder: CoordinatedMergeOrder[]
+  total: number
+}
