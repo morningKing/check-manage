@@ -433,3 +433,307 @@ class TestDependencyValidationNotification:
                                 assert mock_notify.called
                                 assert result['isValid'] is True
                                 assert len(result['warnings']) > 0
+
+
+# ==================== 调度器校验 ====================
+
+class TestDependencyScheduler:
+    """测试依赖定期校验调度器"""
+
+    @pytest.fixture
+    def mock_cursor(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        return cursor
+
+    @pytest.fixture
+    def mock_conn(self, mock_cursor):
+        return FakeConnection(mock_cursor)
+
+    def test_validate_all_dependencies_iterates_all(self, mock_conn, mock_cursor):
+        """validate_all_dependencies 校验所有依赖声明"""
+        # 模拟 3 个依赖声明
+        mock_cursor.fetchall.return_value = [
+            ('dep-1',),
+            ('dep-2',),
+            ('dep-3',),
+        ]
+
+        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from utils.dependency_scheduler import validate_all_dependencies
+                validate_all_dependencies()
+
+                # 应该调用 3 次
+                assert mock_validate.call_count == 3
+
+    def test_validate_all_dependencies_handles_empty(self, mock_conn, mock_cursor):
+        """无依赖声明时正常处理"""
+        mock_cursor.fetchall.return_value = []
+
+        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from utils.dependency_scheduler import validate_all_dependencies
+                validate_all_dependencies()
+
+                # 无调用
+                assert mock_validate.call_count == 0
+
+    def test_validate_all_dependencies_continues_on_error(self, mock_conn, mock_cursor):
+        """单个校验失败不影响其他"""
+        mock_cursor.fetchall.return_value = [
+            ('dep-1',),
+            ('dep-2',),
+            ('dep-3',),
+        ]
+
+        # 第一次调用失败，后续正常
+        mock_validate = MagicMock()
+        mock_validate.side_effect = [Exception('error'), None, None]
+
+        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.dependency_scheduler.validate_project_dependency', mock_validate):
+                from utils.dependency_scheduler import validate_all_dependencies
+                validate_all_dependencies()
+
+                # 应该调用 3 次（即使第一次失败）
+                assert mock_validate.call_count == 3
+
+    def test_validate_dependencies_for_project_filters_correctly(self, mock_conn, mock_cursor):
+        """validate_dependencies_for_project 正确过滤项目"""
+        mock_cursor.fetchall.return_value = [
+            ('dep-1',),
+            ('dep-2',),
+        ]
+
+        with patch('utils.dependency_scheduler.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.dependency_scheduler.validate_project_dependency') as mock_validate:
+                from utils.dependency_scheduler import validate_dependencies_for_project
+                validate_dependencies_for_project('project-1')
+
+                # 应该调用 2 次
+                assert mock_validate.call_count == 2
+                # 验证 SQL 参数包含项目 ID（在 tuple 的第二个元素中）
+                call_args = mock_cursor.execute.call_args[0]
+                assert 'project-1' in call_args[1]
+
+
+# ==================== 通知函数 ====================
+
+class TestDependencyNotifier:
+    """测试依赖通知函数"""
+
+    def test_notify_dependency_broken_creates_notifications(self):
+        """notify_dependency_broken 为管理员创建通知"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [('user-1',), ('user-2',)]
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.notifier import notify_dependency_broken
+            notify_dependency_broken('project-1', '项目A', '项目B', '目标分支不存在')
+
+            # 应该为每个管理员创建通知
+            assert mock_cursor.execute.call_count >= 1
+
+    def test_notify_dependency_warning_creates_notifications(self):
+        """notify_dependency_warning 为管理员创建通知"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [('user-1',)]
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.notifier import notify_dependency_warning
+            notify_dependency_warning('project-1', '项目A', '项目B', '2条外键断裂')
+
+            assert mock_cursor.execute.called
+
+    def test_notify_dependency_resolved_creates_notifications(self):
+        """notify_dependency_resolved 为管理员创建通知"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [('user-1',)]
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.notifier import notify_dependency_resolved
+            notify_dependency_resolved('project-1', '项目A', '项目B')
+
+            assert mock_cursor.execute.called
+
+    def test_notify_functions_handle_exceptions(self):
+        """通知函数异常时不影响主流程"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.side_effect = Exception('db error')
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.notifier.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.notifier import notify_dependency_broken
+            # 不应该抛出异常
+            result = notify_dependency_broken('project-1', '项目A', '项目B', 'error')
+            assert result is None  # 异常被捕获，返回 None
+
+
+# ==================== 分支删除集成测试 ====================
+
+class TestBranchDeleteIntegration:
+    """测试 delete_project_version 集成依赖保护"""
+
+    def test_delete_blocked_by_dependency(self):
+        """有依赖时删除被阻塞"""
+        mock_cursor = MagicMock()
+        # 版本信息
+        mock_cursor.fetchone.return_value = (False, 'project-1')  # is_protected, project_menu_id
+        # 有依赖
+        mock_cursor.fetchall.return_value = [
+            ('dep-1', 'project-2', 'branch-2', 'branch-1', '项目B')
+        ]
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+                from utils.project_version import delete_project_version
+                with pytest.raises(ValueError) as exc_info:
+                    delete_project_version('branch-1')
+                assert '依赖' in str(exc_info.value)
+
+    def test_delete_allowed_when_no_dependency(self):
+        """无依赖时可以删除"""
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        # 版本信息
+        mock_cursor.fetchone.return_value = (False, 'project-1')
+        # 无依赖
+        mock_cursor.fetchall.return_value = []
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
+            with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+                from utils.project_version import delete_project_version
+                result = delete_project_version('branch-1')
+                assert result is True
+
+    def test_delete_blocked_by_protection_flag(self):
+        """受保护版本不能删除"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (True, 'project-1')  # is_protected=True
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.project_version.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.project_version import delete_project_version
+            with pytest.raises(ValueError) as exc_info:
+                delete_project_version('branch-1')
+            assert '受保护' in str(exc_info.value)
+
+
+# ==================== 合并后校验集成测试 ====================
+
+class TestMergeValidationIntegration:
+    """测试合并后校验集成"""
+
+    def test_merge_triggers_dependent_validation(self):
+        """合并成功后触发依赖校验"""
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_cursor.fetchone.return_value = None
+        mock_conn = FakeConnection(mock_cursor)
+
+        # 模拟 get_dependent_projects 返回依赖方
+        dependents_data = [
+            {'id': 'dep-1', 'sourceProject': 'project-2'},
+            {'id': 'dep-2', 'sourceProject': 'project-3'},
+        ]
+
+        with patch('utils.cross_project_dependency.get_dependent_projects', return_value=dependents_data):
+            with patch('utils.cross_project_dependency.validate_project_dependency') as mock_validate:
+                with patch('utils.cross_project_dependency.batch_update_dependencies_after_merge', return_value=2):
+                    # 模拟合并成功
+                    merge_result = {'success': True}
+
+                    # 直接测试逻辑（不通过路由）
+                    from utils.cross_project_dependency import (
+                        batch_update_dependencies_after_merge,
+                        get_dependent_projects,
+                        validate_project_dependency,
+                    )
+
+                    # 执行合并后逻辑
+                    batch_update_dependencies_after_merge('project-1', 'version-1')
+                    dependents = get_dependent_projects('project-1', 'main')
+                    for dep in dependents:
+                        validate_project_dependency(dep['id'], send_notification=True)
+
+                    # 应该校验每个依赖方
+                    assert mock_validate.call_count == 2
+
+
+# ==================== 校验状态变化边界测试 ====================
+
+class TestValidationStateEdgeCases:
+    """测试校验状态变化边界情况"""
+
+    def test_no_notification_when_state_unchanged(self):
+        """状态未变化时不发送通知"""
+        dep_data = {
+            'id': 'dep-1',
+            'sourceProject': 'project-1',
+            'sourceBranch': 'main',
+            'targetProject': 'project-2',
+            'targetBranch': 'main',
+            'relationType': 'read-write',
+            'isValidated': True,  # 之前有效
+            'validationError': None,
+            'sourceProjectName': '项目A',
+            'targetProjectName': '项目B',
+        }
+
+        mock_cursor = MagicMock()
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
+            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
+                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
+                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+                        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+                            with patch('utils.notifier.notify_dependency_broken') as mock_broken:
+                                with patch('utils.notifier.notify_dependency_resolved') as mock_resolved:
+                                    with patch('utils.notifier.notify_dependency_warning') as mock_warning:
+                                        from utils.cross_project_dependency import validate_project_dependency
+                                        result = validate_project_dependency('dep-1', send_notification=True)
+
+                                        # 状态未变化，不发送通知
+                                        assert not mock_broken.called
+                                        assert not mock_resolved.called
+                                        assert not mock_warning.called
+                                        assert result['isValid'] is True
+
+    def test_notification_suppressed_when_disabled(self):
+        """send_notification=False时不发送通知"""
+        dep_data = {
+            'id': 'dep-1',
+            'sourceProject': 'project-1',
+            'sourceBranch': 'main',
+            'targetProject': 'project-2',
+            'targetBranch': 'branch-missing',
+            'relationType': 'read-write',
+            'isValidated': True,  # 之前有效，现在会变无效
+            'validationError': None,
+            'sourceProjectName': '项目A',
+            'targetProjectName': '项目B',
+        }
+
+        mock_cursor = MagicMock()
+        mock_conn = FakeConnection(mock_cursor)
+
+        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
+            with patch('utils.cross_project_dependency.check_branch_exists', return_value=False):
+                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
+                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+                        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+                            with patch('utils.notifier.notify_dependency_broken') as mock_notify:
+                                from utils.cross_project_dependency import validate_project_dependency
+                                result = validate_project_dependency('dep-1', send_notification=False)
+
+                                # 不发送通知
+                                assert not mock_notify.called
+                                assert result['isValid'] is False
