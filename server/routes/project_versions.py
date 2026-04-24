@@ -123,10 +123,22 @@ def merge_version():
             username, user_id, project_menu_id
         )
 
-        # 合并成功后更新依赖声明
+        # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
-            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+            from utils.cross_project_dependency import (
+                batch_update_dependencies_after_merge,
+                get_dependent_projects,
+                validate_project_dependency,
+            )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
+
+            # 校验依赖此项目的所有依赖声明
+            dependents = get_dependent_projects(project_menu_id, 'main')
+            for dep in dependents:
+                try:
+                    validate_project_dependency(dep['id'], send_notification=True)
+                except Exception:
+                    pass  # 校验失败不影响主流程
 
         return jsonify(result)
     except ValueError as e:
@@ -174,10 +186,22 @@ def merge_version_detailed():
             username, user_id, project_menu_id
         )
 
-        # 合并成功后更新依赖声明
+        # 合并成功后更新依赖声明并校验相关依赖
         if result.get('success'):
-            from utils.cross_project_dependency import batch_update_dependencies_after_merge
+            from utils.cross_project_dependency import (
+                batch_update_dependencies_after_merge,
+                get_dependent_projects,
+                validate_project_dependency,
+            )
             batch_update_dependencies_after_merge(project_menu_id, version_id)
+
+            # 校验依赖此项目的所有依赖声明
+            dependents = get_dependent_projects(project_menu_id, 'main')
+            for dep in dependents:
+                try:
+                    validate_project_dependency(dep['id'], send_notification=True)
+                except Exception:
+                    pass  # 校验失败不影响主流程
 
         return jsonify(result)
     except ValueError as e:

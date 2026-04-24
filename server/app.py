@@ -69,6 +69,10 @@ if not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     from utils.backup import start_backup_scheduler
     start_backup_scheduler(app)
 
+    # Start dependency validation scheduler
+    from utils.dependency_scheduler import start_dependency_scheduler
+    start_dependency_scheduler(app)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG,
             exclude_patterns=['*/backups/*'])

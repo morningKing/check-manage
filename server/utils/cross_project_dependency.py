@@ -688,7 +688,7 @@ def check_circular_dependency(source_project: str, target_project: str) -> bool:
         return False
 
 
-def validate_project_dependency(dependency_id: str) -> dict:
+def validate_project_dependency(dependency_id: str, send_notification: bool = True) -> dict:
     """
     校验依赖合法性
 
@@ -701,6 +701,8 @@ def validate_project_dependency(dependency_id: str) -> dict:
     ----------
     dependency_id : str
         依赖声明ID
+    send_notification : bool
+        是否发送通知（默认True）
 
     Returns
     -------
@@ -710,6 +712,10 @@ def validate_project_dependency(dependency_id: str) -> dict:
     dep = get_dependency_by_id(dependency_id)
     if not dep:
         raise ValueError(f'依赖声明不存在: {dependency_id}')
+
+    # 记录之前的校验状态（用于判断是否需要发送通知）
+    previous_is_valid = dep.get('isValidated', False)
+    previous_error = dep.get('validationError')
 
     errors = []
     warnings = []
@@ -773,6 +779,40 @@ def validate_project_dependency(dependency_id: str) -> dict:
             (is_valid, validation_error, datetime.now(timezone.utc), dependency_id)
         )
         conn.commit()
+
+    # 发送通知（仅在状态变化时）
+    if send_notification:
+        from utils.notifier import (
+            notify_dependency_broken,
+            notify_dependency_warning,
+            notify_dependency_resolved,
+        )
+        source_project_name = dep.get('sourceProjectName', '未知项目')
+        target_project_name = dep.get('targetProjectName', '未知项目')
+
+        # 从有效变为无效
+        if previous_is_valid and not is_valid:
+            notify_dependency_broken(
+                dep['sourceProject'],
+                source_project_name,
+                target_project_name,
+                validation_error or '未知原因'
+            )
+        # 无效变为有效
+        elif not previous_is_valid and is_valid:
+            notify_dependency_resolved(
+                dep['sourceProject'],
+                source_project_name,
+                target_project_name
+            )
+        # 有效但有警告
+        elif is_valid and warnings:
+            notify_dependency_warning(
+                dep['sourceProject'],
+                source_project_name,
+                target_project_name,
+                '; '.join(warnings)
+            )
 
     return {
         'isValid': is_valid,

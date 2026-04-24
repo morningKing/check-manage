@@ -47,3 +47,60 @@ def notify_mention(collection, record_id, mentioned_user_ids, author_name):
             create_notification(user_id, 'mention', title, None, collection, record_id)
     except Exception:
         pass
+
+
+def notify_dependency_broken(source_project_id, source_project_name, target_project_name, reason):
+    """Notify source project admins that their dependency is broken."""
+    try:
+        title = f'依赖断裂：{target_project_name}'
+        content = f'项目「{source_project_name}」对「{target_project_name}」的依赖已断裂。原因：{reason}'
+        # Get project admins
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id FROM users WHERE role = %s',
+                ('admin',)
+            )
+            admin_rows = cur.fetchall()
+            for row in admin_rows:
+                create_notification(row[0], 'dependencyBroken', title, content, source_project_id, None)
+    except Exception:
+        pass
+
+
+def notify_dependency_warning(source_project_id, source_project_name, target_project_name, detail):
+    """Notify source project admins about dependency warnings (e.g., broken foreign keys)."""
+    try:
+        title = f'依赖警告：{target_project_name}'
+        content = f'项目「{source_project_name}」对「{target_project_name}」的依赖存在警告。详情：{detail}'
+        # Get project admins
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id FROM users WHERE role = %s',
+                ('admin',)
+            )
+            admin_rows = cur.fetchall()
+            for row in admin_rows:
+                create_notification(row[0], 'dependencyWarning', title, content, source_project_id, None)
+    except Exception:
+        pass
+
+
+def notify_dependency_resolved(source_project_id, source_project_name, target_project_name):
+    """Notify source project admins that their dependency is now valid."""
+    try:
+        title = f'依赖恢复正常：{target_project_name}'
+        content = f'项目「{source_project_name}」对「{target_project_name}」的依赖已恢复正常'
+        # Get project admins
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT id FROM users WHERE role = %s',
+                ('admin',)
+            )
+            admin_rows = cur.fetchall()
+            for row in admin_rows:
+                create_notification(row[0], 'dependencyResolved', title, content, source_project_id, None)
+    except Exception:
+        pass

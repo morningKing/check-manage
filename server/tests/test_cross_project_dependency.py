@@ -2,6 +2,7 @@
 跨项目依赖核心函数单元测试
 
 测试 check_merge_dependencies, get_coordinated_merge_order, batch_update_dependencies_after_merge
+新增：分支删除阻塞、依赖通知、校验触发通知
 """
 
 import sys
@@ -277,3 +278,158 @@ class TestBatchUpdateDependenciesAfterMerge:
             count = batch_update_dependencies_after_merge('project-1', 'branch-1')
 
         assert count == 0
+
+
+# ==================== 分支删除依赖阻塞 ====================
+
+class TestBranchDeleteProtection:
+    """测试分支删除时的依赖保护"""
+
+    @pytest.fixture
+    def mock_cursor(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        return cursor
+
+    @pytest.fixture
+    def mock_conn(self, mock_cursor):
+        return FakeConnection(mock_cursor)
+
+    def test_no_dependents_can_delete(self, mock_conn, mock_cursor):
+        """无依赖方项目时可以删除"""
+        mock_cursor.fetchone.return_value = (False, 'project-1')  # is_protected=False, project_menu_id
+        mock_cursor.fetchall.return_value = []  # 无依赖
+
+        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.cross_project_dependency import check_branch_delete_protection
+            result = check_branch_delete_protection('project-1', 'branch-1')
+
+        assert result['canDelete'] is True
+        assert len(result['dependentProjects']) == 0
+
+    def test_has_dependents_cannot_delete(self, mock_conn, mock_cursor):
+        """有依赖方项目时不能删除"""
+        mock_cursor.fetchall.return_value = [
+            ('dep-1', 'project-2', 'branch-2', 'branch-1', '项目B')
+        ]
+
+        with patch('utils.cross_project_dependency.get_db', lambda: fake_get_db(mock_conn)):
+            from utils.cross_project_dependency import check_branch_delete_protection
+            result = check_branch_delete_protection('project-1', 'branch-1')
+
+        assert result['canDelete'] is False
+        assert len(result['dependentProjects']) == 1
+
+
+# ==================== 依赖校验通知 ====================
+
+class TestDependencyValidationNotification:
+    """测试依赖校验触发通知"""
+
+    @pytest.fixture
+    def mock_cursor(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        return cursor
+
+    @pytest.fixture
+    def mock_conn(self, mock_cursor):
+        return FakeConnection(mock_cursor)
+
+    def test_validation_broken_sends_notification(self, mock_conn, mock_cursor):
+        """校验失败时发送通知"""
+        # 模拟依赖声明数据
+        dep_data = {
+            'id': 'dep-1',
+            'sourceProject': 'project-1',
+            'sourceBranch': 'main',
+            'targetProject': 'project-2',
+            'targetBranch': 'branch-missing',
+            'relationType': 'read-write',
+            'isValidated': True,  # 之前是有效的
+            'validationError': None,
+            'sourceProjectName': '项目A',
+            'targetProjectName': '项目B',
+        }
+
+        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
+            with patch('utils.cross_project_dependency.check_branch_exists', return_value=False):
+                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
+                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+                        with patch('utils.notifier.notify_dependency_broken') as mock_notify:
+                            from utils.cross_project_dependency import validate_project_dependency
+                            result = validate_project_dependency('dep-1', send_notification=True)
+
+                            # 从有效变为无效，应该发送断裂通知
+                            assert mock_notify.called
+                            assert result['isValid'] is False
+
+    def test_validation_resolved_sends_notification(self, mock_conn, mock_cursor):
+        """校验从失败变为成功时发送恢复通知"""
+        dep_data = {
+            'id': 'dep-1',
+            'sourceProject': 'project-1',
+            'sourceBranch': 'main',
+            'targetProject': 'project-2',
+            'targetBranch': 'main',
+            'relationType': 'read-write',
+            'isValidated': False,  # 之前是无效的
+            'validationError': '目标分支不存在',
+            'sourceProjectName': '项目A',
+            'targetProjectName': '项目B',
+        }
+
+        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
+            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
+                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
+                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=[]):
+                        with patch('utils.notifier.notify_dependency_resolved') as mock_notify:
+                            from utils.cross_project_dependency import validate_project_dependency
+                            result = validate_project_dependency('dep-1', send_notification=True)
+
+                            # 从无效变为有效，应该发送恢复通知
+                            assert mock_notify.called
+                            assert result['isValid'] is True
+
+    def test_validation_warning_sends_notification(self, mock_conn, mock_cursor):
+        """校验成功但有警告时发送警告通知"""
+        dep_data = {
+            'id': 'dep-1',
+            'sourceProject': 'project-1',
+            'sourceBranch': 'main',
+            'targetProject': 'project-2',
+            'targetBranch': 'main',
+            'relationType': 'read-write',
+            'isValidated': True,  # 之前是有效的
+            'validationError': None,
+            'sourceProjectName': '项目A',
+            'targetProjectName': '项目B',
+        }
+
+        # 模拟有外键断裂
+        relation_data = [{
+            'id': 'rel-1',
+            'sourceCollection': 'orders',
+            'sourceField': 'productId',
+            'targetCollection': 'products',
+        }]
+
+        with patch('utils.cross_project_dependency.get_dependency_by_id', return_value=dep_data):
+            with patch('utils.cross_project_dependency.check_branch_exists', return_value=True):
+                with patch('utils.cross_project_dependency.check_circular_dependency', return_value=False):
+                    with patch('utils.cross_project_dependency.get_dependency_relations', return_value=relation_data):
+                        with patch('utils.cross_project_dependency.check_data_reachability', return_value={
+                            'reachableCount': 5,
+                            'brokenCount': 2,
+                            'brokenRecords': [],
+                        }):
+                            with patch('utils.notifier.notify_dependency_warning') as mock_notify:
+                                from utils.cross_project_dependency import validate_project_dependency
+                                result = validate_project_dependency('dep-1', send_notification=True)
+
+                                # 有效但有警告，应该发送警告通知
+                                assert mock_notify.called
+                                assert result['isValid'] is True
+                                assert len(result['warnings']) > 0

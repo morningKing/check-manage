@@ -501,13 +501,21 @@ def delete_project_version(version_id):
     with get_db() as conn:
         cur = conn.cursor()
 
-        # 检查是否受保护
-        cur.execute('SELECT is_protected FROM project_versions WHERE id = %s', (version_id,))
+        # 获取版本信息（包括项目ID）
+        cur.execute('SELECT is_protected, project_menu_id FROM project_versions WHERE id = %s', (version_id,))
         row = cur.fetchone()
         if not row:
             raise ValueError('版本不存在')
-        if row[0]:
+        is_protected, project_menu_id = row
+        if is_protected:
             raise ValueError('受保护的版本不能删除')
+
+        # 检查跨项目依赖保护
+        from utils.cross_project_dependency import check_branch_delete_protection
+        protection = check_branch_delete_protection(project_menu_id, version_id)
+        if not protection['canDelete']:
+            dependent_names = [p['projectName'] for p in protection['dependentProjects']]
+            raise ValueError(f'无法删除：以下项目依赖此分支: {", ".join(dependent_names)}')
 
         # 检查是否有子分支
         cur.execute('SELECT COUNT(*) FROM project_versions WHERE parent_version = %s', (version_id,))
