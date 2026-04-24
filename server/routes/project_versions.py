@@ -362,6 +362,20 @@ def unlock_main_version(project_menu_id):
 
 # ==================== 动态路由 ====================
 
+# 详情路由必须在列表路由之前定义，避免被 <project_menu_id> 拦截
+@project_versions_bp.route('/project-versions/detail/<version_id>', methods=['GET'])
+@login_required
+def get_version_detail(version_id):
+    """获取项目版本详情"""
+    try:
+        result = get_project_version_detail(version_id)
+        if not result:
+            return jsonify({'error': '版本不存在'}), 404
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @project_versions_bp.route('/project-versions/<project_menu_id>/collections', methods=['GET'])
 @login_required
 def get_collections(project_menu_id):
@@ -493,19 +507,6 @@ def switch_branch(version_id):
         return jsonify(result)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@project_versions_bp.route('/project-versions/<version_id>', methods=['GET'])
-@login_required
-def get_version_detail(version_id):
-    """获取项目版本详情"""
-    try:
-        result = get_project_version_detail(version_id)
-        if not result:
-            return jsonify({'error': '版本不存在'}), 404
-        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

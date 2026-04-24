@@ -151,7 +151,7 @@ export function switchProjectBranch(versionId: string, projectMenuId: string): P
 }
 
 export function getProjectVersionDetail(versionId: string): Promise<ProjectVersion> {
-  return request.get(`/project-versions/${versionId}`)
+  return request.get(`/project-versions/detail/${versionId}`)
 }
 
 export function deleteProjectVersion(versionId: string): Promise<{ success: boolean }> {

@@ -16,7 +16,7 @@
 ## 功能概览
 
 - **动态数据页面** — 通过配置定义字段结构，自动生成表单和表格，支持 15 种控件类型
-- **菜单管理** — 可视化树形菜单编辑，支持 3 级嵌套，基于角色的可见性控制
+- **菜单管理** — 可视化树形菜单编辑，支持 3 级嵌套（工作空间→项目→数据页），基于角色的可见性控制
 - **数据关联** — 多对多双向关联（relation）和一对多引用（reference），自动双向同步
 - **自动字段** — 自动时间戳（autoTimestamp）和自增序列（autoSequence），新增/编辑时自动填充
 - **导入导出** — Excel 模板导入、Excel 导出、自定义 Python 脚本导出（支持 json/csv/xml/txt/html）
@@ -27,6 +27,9 @@
 - **操作审计** — 全量操作日志，支持批次聚合、筛选、导出
 - **系统备份** — 手动/定时备份，支持下载、还原、跨环境迁移
 - **数据对比** — 当前数据与历史备份、不同备份之间的逐字段差异比较，支持导出对比报告
+- **项目版本管理** — 项目级分支/快照，支持创建、合并、锁定，跨分支数据隔离
+- **跨项目依赖** — 三种依赖类型（跟随主干、配套分支、精确钉住），依赖校验与通知机制
+- **Webhook 规则** — 事件触发 Webhook，支持条件过滤、HMAC-SHA256 签名、重试机制
 
 ## 快速开始
 
@@ -67,7 +70,7 @@ cd server
 python init_db.py
 ```
 
-将自动创建所有数据表（13 张业务表）并初始化系统菜单和默认管理员账号。
+将自动创建所有数据表（34 张业务表）并初始化系统菜单和默认管理员账号。
 
 ### 启动服务
 
@@ -136,11 +139,17 @@ check-manage/
 
 | 表名 | 说明 |
 |------|------|
-| menus | 菜单树结构 |
+| menus | 菜单树结构（工作空间→项目→数据页） |
 | page_configs | 页面配置（含 JSONB 字段定义） |
 | dynamic_data | 所有业务数据（JSONB 灵活存储） |
 | data_relations | 多对多关联关系 |
 | users | 用户账号 |
+| project_versions | 项目级分支/快照 |
+| project_dependencies | 跨项目依赖声明 |
+| project_dependency_relations | 依赖涉及的关联关系 |
+| webhook_rules | Webhook 规则定义 |
+| webhook_logs | Webhook 执行日志 |
+| notifications | 用户通知 |
 | export_scripts | 导出脚本 |
 | validation_scripts | 校验脚本 |
 | etl_tasks | ETL 任务定义 |
@@ -149,12 +158,19 @@ check-manage/
 | operation_logs | 操作审计日志 |
 | backups | 备份记录 |
 | backup_settings | 定时备份配置 |
+| trigger_rules | 联动规则 |
+| ai_settings | AI 配置 |
+| dashboards | 仪表盘配置 |
+| record_comments | 记录评论 |
+| collection_versions | 数据级版本（已废弃） |
+| version_snapshots | 版本快照（已废弃） |
 
 ## 文档
 
 - [使用说明](docs/使用说明.md) — 用户操作手册，覆盖所有功能的使用方法
 - [系统设计文档](docs/系统设计文档.md) — 架构设计、数据库结构、API 接口、安全模型
 - [数据关联使用说明](docs/数据关联使用说明.md) — 多对多关联功能的配置和使用详解
+- [跨项目依赖功能说明](docs/跨项目依赖功能说明.md) — 项目间依赖管理、协作合并、通知机制
 
 ## 构建部署
 

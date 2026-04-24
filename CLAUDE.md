@@ -84,24 +84,70 @@ Defined in `src/types/field.ts`. The `controlType` value determines which compon
 | `autoSequence` | Auto-incrementing ID (e.g., "IC-001") |
 | `autoTimestamp` | Auto-filled on create/update |
 
+### Project Versioning System
+
+Project-level branching for isolating work across multiple data pages within a project:
+
+*   **Branch Creation**: `project_versions` table tracks branches with `projectMenuId`. When creating a branch, records from all collections under that project menu are copied with the new `branch_id`.
+*   **Branch Locking**: Branches can be locked (`isLocked`, `lockedBy`, `lockedAt`) to prevent modifications during merge preparation.
+*   **Merge Flow**: Merge copies branch records to `main` branch, handling conflicts via `MergeStrategy` (`theirs` = branch wins, `ours` = main wins).
+*   **Delete Protection**: Branches referenced by cross-project dependencies cannot be deleted (checked via `check_branch_delete_protection`).
+*   **Post-Merge Validation**: After merge, dependent project dependencies are re-validated and notifications sent if state changed.
+
+Key files: `server/utils/project_version.py` (merge logic, branch CRUD), `server/routes/project_versions.py` (API), `src/types/version.ts`.
+
+### Cross-Project Dependencies
+
+Three dependency types for coordinating work across projects:
+
+| Type | Behavior |
+|------|----------|
+| `track-main` | Auto-follow target project's main branch. No merge blocking. |
+| `read-write` | Coordinated branch pairing. Merge blocked if target branch not merged. |
+| `read-only` | Pinned to specific version. No blocking, version must exist. |
+
+Validation triggers: on dependency creation/update, after target project merge, periodically via scheduler. Notifications (`dependencyBroken`, `dependencyWarning`, `dependencyResolved`) sent to source project admins on state changes.
+
+Key files: `server/utils/cross_project_dependency.py` (validation logic), `server/utils/dependency_scheduler.py` (hourly validation), `server/utils/notifier.py` (notifications), `server/routes/cross_project_dependencies.py` (API).
+
+### Webhook Rules System
+
+Event-driven webhooks with HMAC-SHA256 signature verification:
+
+*   **Trigger Events**: `create`, `update`, `delete`, `merge` on specified collections.
+*   **Trigger Conditions**: Optional JSON filter for conditional triggering (e.g., `{"status": "completed"}`).
+*   **Execution**: Retry logic with configurable timeout. Logs stored in `webhook_logs`.
+*   **Signature**: `X-Webhook-Signature` header contains HMAC-SHA256 of payload with rule's secret.
+
+Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server/routes/webhooks.py` (API), `src/types/webhook.ts`.
+
 ### Database Design
 
 *   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB. Has `branch_id` for version isolation.
 *   **`data_relations`**: Stores M:N relationships. Queried by `(collection, record_id, field_name)`.
 *   **`page_configs`**: The schema definition. `fields` JSONB column drives the entire UI.
-*   **`menus`**: Tree structure with `roles` JSONB for RBAC.
+*   **`menus`**: Tree structure with `roles` JSONB for RBAC. Three types: `workspace` (level 1), `project` (level 2), `data` (level 3).
 *   **`users`**: Accounts with `role` (admin / developer / guest).
-*   Other tables: `export_scripts`, `validation_scripts`, `etl_tasks`, `etl_logs`, `api_keys`, `operation_logs`, `backups`, `backup_settings`, `ai_settings`, `collection_versions`, `version_snapshots`, `dashboards`, `record_comments`.
+*   **`project_versions`**: Project-level branches/snapshots. Tracks status (`active`, `merged`, `archived`), parent version, and lock state.
+*   **`project_dependencies`**: Cross-project dependency declarations. Three relation types: `track-main`, `read-write`, `read-only`.
+*   **`project_dependency_relations`**: Records which data relations are involved in each dependency.
+*   **`webhook_rules`**: Event-triggered webhooks. Supports `create`, `update`, `delete`, `merge` events with HMAC-SHA256 signatures.
+*   **`webhook_logs`**: Webhook execution history with retry tracking.
+*   **`notifications`**: User notifications including dependency alerts (`dependencyBroken`, `dependencyWarning`, `dependencyResolved`).
+*   Other tables: `export_scripts`, `validation_scripts`, `etl_tasks`, `etl_logs`, `api_keys`, `operation_logs`, `backups`, `backup_settings`, `ai_settings`, `collection_versions`, `version_snapshots`, `dashboards`, `record_comments`, `trigger_rules`.
 
 ### Backend Structure
 
-*   `app.py`: Registers 22 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
+*   `app.py`: Registers 28 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
 *   `routes/dynamic.py`: The generic CRUD handler. Supports pagination (`page`, `pageSize`, `all=true`), filtering (`q` for MongoDB-style query, `keyword` for full-text search). Validates primary key uniqueness and manages relations.
+*   `routes/project_versions.py`: Project-level branch management. Create, merge, delete, lock/unlock branches.
+*   `routes/cross_project_dependencies.py`: Dependency declaration CRUD, validation, merge dependency check, branch delete protection.
+*   `routes/webhooks.py`: Webhook rule management, test execution, log retrieval.
 *   `utils/script_runner.py`: Sandboxed Python execution for validation/export scripts.
 *   `utils/auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `admin_required`, `api_key_required`.
 *   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
 
-**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`.
+**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `webhooks`, `dependencies`, `projects`.
 
 ### Frontend Structure
 
@@ -123,6 +169,18 @@ Vite proxies `/api` to backend port 3001 **with path rewrite**: frontend calls `
 *   **admin**: Full access to all features and admin pages.
 *   **developer**: Read/write data, but no admin page access.
 *   **guest**: Read-only access. `write_required` decorator blocks mutations.
+
+### Menu Structure (Standard 3-Layer Hierarchy)
+
+Menus follow a strict 3-level hierarchy enforced by `menuType` field:
+
+| Level | menuType | Description | Example |
+|-------|----------|-------------|---------|
+| 1 | `workspace` | Top-level container, no `page_id` | "测试工作空间" |
+| 2 | `project` | Project node, children are data pages | "项目A" |
+| 3 | `data` | Data page, has `page_id` pointing to `page_configs` | "测试订单" |
+
+Projects can be direct children of workspace (level 2) OR standalone level-1 menus with `menuType='project'`. Data pages must have valid `page_id` and `parent_id` pointing to a project.
 
 ## Development Workflow
 
@@ -156,6 +214,21 @@ Validation and export scripts execute in a sandboxed Python environment (`utils/
 *   **Forbidden**: `import`, `eval`, `exec`, `open`, `getattr`, `type`, etc.
 *   **Pre-injected modules**: `json`, `csv`, `io`, `re`, `math`, `collections`, `xml.etree.ElementTree`, `datetime`, `pandas` (as `pd`), `numpy` (as `np`).
 *   **No `print()`** — scripts communicate via return values.
+
+### Creating Test Dependency Data
+
+To test cross-project dependency features, run the test data creation script:
+
+```bash
+cd server && python create_test_dependency_data.py
+```
+
+This creates:
+*   Workspace "测试工作空间" with 3 test projects (A, B, C)
+*   Versions for each project (merged and active branches)
+*   Four dependency declarations demonstrating all three types
+*   Test data pages with relation fields (订单 → 产品 → 客户)
+*   Data relations between collections across projects
 
 ## Key Technical Details
 
