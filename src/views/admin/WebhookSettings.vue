@@ -1,120 +1,140 @@
-/**
- * Webhook 配置管理页面
- */
 <template>
-  <div class="webhook-settings-page">
-    <el-card class="settings-card">
-      <template #header>
-        <div class="card-header">
-          <span>合并通知 Webhook 配置</span>
-          <el-tag v-if="settings.enabled" type="success" size="small">已启用</el-tag>
-          <el-tag v-else type="info" size="small">未启用</el-tag>
-        </div>
-      </template>
+  <div class="webhook-rule-manager">
+    <div class="page-header">
+      <h2>Webhook 规则管理</h2>
+      <el-button type="primary" @click="handleAdd">新增规则</el-button>
+    </div>
 
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-width="120px"
-        v-loading="loading"
-      >
-        <el-form-item label="启用状态">
-          <el-switch v-model="form.enabled" />
+    <el-table :data="rules" v-loading="loading" border stripe>
+      <el-table-column prop="name" label="名称" width="180" />
+      <el-table-column prop="sourceCollections" label="数据页" width="200">
+        <template #default="{ row }">
+          <template v-if="row.sourceCollections && row.sourceCollections.length > 0">
+            <el-tag v-for="col in row.sourceCollections.slice(0, 3)" :key="col" size="small" class="collection-tag">
+              {{ getPageName(col) || col }}
+            </el-tag>
+            <span v-if="row.sourceCollections.length > 3" class="more-text">
+              +{{ row.sourceCollections.length - 3 }}
+            </span>
+          </template>
+          <el-tag v-else size="small" type="info">全局</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="triggerEvent" label="触发事件" width="120">
+        <template #default="{ row }">
+          <el-tag size="small">{{ eventLabels[row.triggerEvent] || row.triggerEvent }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="webhookUrl" label="Webhook URL" min-width="250">
+        <template #default="{ row }">
+          <span class="url-text">{{ row.webhookUrl }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="enabled" label="状态" width="80">
+        <template #default="{ row }">
+          <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
+            {{ row.enabled ? '启用' : '禁用' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="220">
+        <template #default="{ row }">
+          <el-button link @click="handleEdit(row)">编辑</el-button>
+          <el-button link @click="handleTest(row)">测试</el-button>
+          <el-button link @click="handleViewLogs(row)">日志</el-button>
+          <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- 编辑对话框 -->
+    <el-dialog v-model="editVisible" :title="editForm.id ? '编辑规则' : '新增规则'" width="650px">
+      <el-form ref="formRef" :model="editForm" :rules="formRules" label-width="110px">
+        <el-form-item label="规则名称" prop="name">
+          <el-input v-model="editForm.name" placeholder="如：订单创建通知" />
         </el-form-item>
-
-        <el-form-item label="配置名称" prop="name">
-          <el-input v-model="form.name" placeholder="如：合并通知" />
+        <el-form-item label="描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="2" placeholder="规则说明" />
         </el-form-item>
-
+        <el-form-item label="数据页">
+          <el-select
+            v-model="editForm.sourceCollections"
+            multiple
+            filterable
+            clearable
+            placeholder="选择数据页（可多选，留空表示全局）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="page in pageOptions"
+              :key="page.collection"
+              :label="page.name"
+              :value="page.collection"
+            />
+          </el-select>
+          <div class="form-tip">
+            选择数据页后，规则仅对这些数据页生效；留空表示全局规则（如 merge 事件）
+          </div>
+        </el-form-item>
+        <el-form-item label="触发事件" prop="triggerEvent">
+          <el-select v-model="editForm.triggerEvent">
+            <el-option label="创建" value="create" />
+            <el-option label="更新" value="update" />
+            <el-option label="删除" value="delete" />
+            <el-option label="合并" value="merge" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="触发条件">
+          <el-input v-model="conditionJson" type="textarea" :rows="2" placeholder='可选，如：{"field":"status","value":"completed"}' />
+          <div class="form-tip">满足条件时才触发 webhook，留空表示无条件触发</div>
+        </el-form-item>
         <el-form-item label="Webhook URL" prop="webhookUrl">
-          <el-input v-model="form.webhookUrl" placeholder="https://example.com/webhook" />
-          <div class="form-tip">
-            合并成功后将向此 URL 发送 POST 请求，携带合并数据信息
-          </div>
+          <el-input v-model="editForm.webhookUrl" placeholder="https://example.com/webhook" />
         </el-form-item>
-
-        <el-form-item label="签名密钥" prop="secret">
-          <el-input
-            v-model="form.secret"
-            placeholder="可选，用于签名验证"
-            show-password
-          />
-          <div class="form-tip">
-            使用 HMAC-SHA256 签名，请求头包含 X-Webhook-Signature 和 X-Webhook-Timestamp
-          </div>
+        <el-form-item label="签名密钥">
+          <el-input v-model="editForm.secret" placeholder="可选，用于 HMAC-SHA256 签名" show-password />
+          <div class="form-tip">使用 HMAC-SHA256 签名，请求头包含 X-Webhook-Signature</div>
         </el-form-item>
-
-        <el-form-item label="触发事件">
-          <el-checkbox-group v-model="form.events">
-            <el-checkbox value="merge">合并事件</el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-
         <el-form-item label="超时时间">
-          <el-input-number v-model="form.timeout" :min="5" :max="60" />
+          <el-input-number v-model="editForm.timeout" :min="5" :max="60" />
           <span class="unit">秒</span>
         </el-form-item>
-
         <el-form-item label="重试次数">
-          <el-input-number v-model="form.retries" :min="0" :max="5" />
+          <el-input-number v-model="editForm.retries" :min="0" :max="5" />
           <span class="unit">次</span>
         </el-form-item>
-
-        <el-form-item>
-          <el-button type="primary" :loading="saving" @click="handleSave">
-            保存配置
-          </el-button>
-          <el-button :loading="testing" @click="handleTest">
-            测试 Webhook
-          </el-button>
+        <el-form-item label="执行顺序">
+          <el-input-number v-model="editForm.executionOrder" :min="0" />
+        </el-form-item>
+        <el-form-item label="启用状态">
+          <el-switch v-model="editForm.enabled" />
         </el-form-item>
       </el-form>
-    </el-card>
-
-    <!-- 测试结果 -->
-    <el-card v-if="testResult" class="test-result-card">
-      <template #header>
-        <span>测试结果</span>
+      <template #footer>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </template>
-      <el-descriptions :column="2" border>
+    </el-dialog>
+
+    <!-- 测试结果对话框 -->
+    <el-dialog v-model="testVisible" title="Webhook 测试结果" width="500px">
+      <el-descriptions :column="1" border v-if="testResult">
         <el-descriptions-item label="状态">
           <el-tag :type="testResult.success ? 'success' : 'danger'">
             {{ testResult.success ? '成功' : '失败' }}
           </el-tag>
         </el-descriptions-item>
-        <el-descriptions-item label="响应状态码">
-          {{ testResult.responseStatus || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="重试次数">
-          {{ testResult.retryCount || 0 }}
-        </el-descriptions-item>
-        <el-descriptions-item label="日志ID">
-          {{ testResult.logId || '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="消息" :span="2">
-          {{ testResult.message || testResult.errorMessage || '-' }}
-        </el-descriptions-item>
+        <el-descriptions-item label="响应状态码">{{ testResult.responseStatus || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="重试次数">{{ testResult.retryCount || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="日志ID">{{ testResult.logId || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="错误信息">{{ testResult.errorMessage || '-' }}</el-descriptions-item>
       </el-descriptions>
-    </el-card>
+    </el-dialog>
 
-    <!-- 调用日志 -->
-    <el-card class="logs-card">
-      <template #header>
-        <div class="card-header">
-          <span>调用日志</span>
-          <div class="header-actions">
-            <el-select v-model="logFilter.success" placeholder="状态筛选" clearable size="small" style="width: 100px">
-              <el-option label="成功" value="true" />
-              <el-option label="失败" value="false" />
-            </el-select>
-            <el-button size="small" @click="loadLogs">刷新</el-button>
-          </div>
-        </div>
-      </template>
-
-      <el-table :data="logs" v-loading="logsLoading" stripe>
-        <el-table-column prop="createdAt" label="时间" width="180">
+    <!-- 日志对话框 -->
+    <el-dialog v-model="logVisible" title="调用日志" width="800px">
+      <el-table :data="logs" v-loading="logsLoading" border size="small">
+        <el-table-column prop="createdAt" label="时间" width="170">
           <template #default="{ row }">
             {{ formatTime(row.createdAt) }}
           </template>
@@ -133,108 +153,93 @@
         </el-table-column>
         <el-table-column prop="responseStatus" label="响应码" width="80" />
         <el-table-column prop="durationMs" label="耗时" width="80">
-          <template #default="{ row }">
-            {{ row.durationMs }}ms
-          </template>
+          <template #default="{ row }">{{ row.durationMs }}ms</template>
         </el-table-column>
         <el-table-column prop="retryCount" label="重试" width="60" />
-        <el-table-column prop="errorMessage" label="错误信息" min-width="200">
+        <el-table-column prop="errorMessage" label="错误信息" min-width="150">
           <template #default="{ row }">
             <span v-if="row.errorMessage" class="error-text">{{ row.errorMessage }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="showLogDetail(row)">
-              详情
-            </el-button>
-          </template>
-        </el-table-column>
       </el-table>
-    </el-card>
-
-    <!-- 日志详情对话框 -->
-    <el-dialog v-model="showDetailDialog" title="Webhook 调用详情" width="600px">
-      <el-descriptions v-if="currentLog" :column="1" border>
-        <el-descriptions-item label="日志ID">{{ currentLog.id }}</el-descriptions-item>
-        <el-descriptions-item label="时间">{{ formatTime(currentLog.createdAt) }}</el-descriptions-item>
-        <el-descriptions-item label="事件">{{ currentLog.eventType }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="currentLog.success ? 'success' : 'danger'">
-            {{ currentLog.success ? '成功' : '失败' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="Webhook URL">{{ currentLog.webhookUrl }}</el-descriptions-item>
-        <el-descriptions-item label="响应状态码">{{ currentLog.responseStatus || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="耗时">{{ currentLog.durationMs }}ms</el-descriptions-item>
-        <el-descriptions-item label="重试次数">{{ currentLog.retryCount }}</el-descriptions-item>
-      </el-descriptions>
-
-      <div class="payload-section">
-        <h4>请求 Payload</h4>
-        <pre class="code-block">{{ JSON.stringify(currentLog?.requestPayload, null, 2) }}</pre>
-      </div>
-
-      <div v-if="currentLog?.responseBody" class="response-section">
-        <h4>响应内容</h4>
-        <pre class="code-block">{{ currentLog.responseBody }}</pre>
-      </div>
-
-      <div v-if="currentLog?.errorMessage" class="error-section">
-        <h4>错误信息</h4>
-        <pre class="code-block error">{{ currentLog.errorMessage }}</pre>
-      </div>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import {
-  getWebhookSettings,
-  updateWebhookSettings,
-  testWebhook,
-  getWebhookLogs,
+  getWebhookRules,
+  createWebhookRule,
+  updateWebhookRule,
+  deleteWebhookRule,
+  testWebhookRule,
+  getWebhookRuleLogs,
 } from '@/api/webhook'
-import type { WebhookSettings, WebhookLog, WebhookTestResult } from '@/types/webhook'
+import { getPageConfigList } from '@/api/page'
+import type { WebhookRule, WebhookRuleTestResult, WebhookLog } from '@/types/webhook'
+import type { PageConfig } from '@/types'
+
+const eventLabels: Record<string, string> = {
+  create: '创建',
+  update: '更新',
+  delete: '删除',
+  merge: '合并',
+}
 
 const loading = ref(false)
 const saving = ref(false)
-const testing = ref(false)
+const rules = ref<WebhookRule[]>([])
+const pageConfigs = ref<PageConfig[]>([])
+const editVisible = ref(false)
+const testVisible = ref(false)
+const logVisible = ref(false)
 const logsLoading = ref(false)
 const formRef = ref<FormInstance>()
-const testResult = ref<WebhookTestResult | null>(null)
+const testResult = ref<WebhookRuleTestResult | null>(null)
 const logs = ref<WebhookLog[]>([])
-const showDetailDialog = ref(false)
-const currentLog = ref<WebhookLog | null>(null)
+const conditionJson = ref('{}')
 
-const logFilter = reactive({
-  success: '',
+// Compute page options for the select dropdown
+const pageOptions = computed(() => {
+  return pageConfigs.value.map(page => ({
+    collection: page.id.replace('page-', ''),
+    name: page.name,
+  }))
 })
 
-const settings = ref<WebhookSettings>({
-  enabled: false,
+// Create a map for quick lookup
+const pageNameMap = computed(() => {
+  const map: Record<string, string> = {}
+  for (const page of pageConfigs.value) {
+    map[page.id.replace('page-', '')] = page.name
+  }
+  return map
+})
+
+function getPageName(collection: string): string {
+  return pageNameMap.value[collection] || collection
+}
+
+const editForm = reactive({
+  id: '',
   name: '',
+  description: '',
+  sourceCollections: [] as string[],
+  triggerEvent: 'create' as 'create' | 'update' | 'delete' | 'merge',
   webhookUrl: '',
   secret: '',
-  events: ['merge'],
   timeout: 30,
   retries: 3,
+  executionOrder: 0,
+  enabled: true,
 })
 
-const form = reactive({
-  enabled: false,
-  name: '',
-  webhookUrl: '',
-  secret: '',
-  events: ['merge'],
-  timeout: 30,
-  retries: 3,
-})
-
-const rules: FormRules = {
+const formRules: FormRules = {
+  name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }],
+  triggerEvent: [{ required: true, message: '请选择触发事件', trigger: 'change' }],
   webhookUrl: [
     { required: true, message: '请输入 Webhook URL', trigger: 'blur' },
     { type: 'url', message: '请输入有效的 URL', trigger: 'blur' },
@@ -246,26 +251,126 @@ function formatTime(time: string): string {
   return new Date(time).toLocaleString()
 }
 
-async function loadSettings() {
+async function loadPageConfigs() {
+  try {
+    pageConfigs.value = await getPageConfigList()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载页面配置失败')
+  }
+}
+
+async function loadRules() {
   loading.value = true
   try {
-    const data = await getWebhookSettings()
-    settings.value = data
-    Object.assign(form, data)
+    rules.value = await getWebhookRules()
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载配置失败')
+    ElMessage.error(e?.message || '加载规则失败')
   } finally {
     loading.value = false
   }
 }
 
-async function loadLogs() {
-  logsLoading.value = true
+function handleAdd() {
+  Object.assign(editForm, {
+    id: '',
+    name: '',
+    description: '',
+    sourceCollections: [],
+    triggerEvent: 'create',
+    webhookUrl: '',
+    secret: '',
+    timeout: 30,
+    retries: 3,
+    executionOrder: 0,
+    enabled: true,
+  })
+  conditionJson.value = '{}'
+  editVisible.value = true
+}
+
+function handleEdit(row: WebhookRule) {
+  Object.assign(editForm, {
+    id: row.id,
+    name: row.name,
+    description: row.description || '',
+    sourceCollections: row.sourceCollections || [],
+    triggerEvent: row.triggerEvent,
+    webhookUrl: row.webhookUrl,
+    secret: row.secret || '',
+    timeout: row.timeout,
+    retries: row.retries,
+    executionOrder: row.executionOrder,
+    enabled: row.enabled,
+  })
+  conditionJson.value = JSON.stringify(row.triggerCondition || {}, null, 2)
+  editVisible.value = true
+}
+
+async function handleSave() {
+  if (!formRef.value) return
+  await formRef.value.validate()
+
+  let triggerCondition = {}
   try {
-    const result = await getWebhookLogs({
-      success: logFilter.success,
-      limit: 20,
-    })
+    triggerCondition = JSON.parse(conditionJson.value || '{}')
+  } catch {
+    ElMessage.error('触发条件 JSON 格式错误')
+    return
+  }
+
+  saving.value = true
+  try {
+    const payload = {
+      name: editForm.name,
+      description: editForm.description,
+      sourceCollections: editForm.sourceCollections,
+      triggerEvent: editForm.triggerEvent,
+      triggerCondition,
+      webhookUrl: editForm.webhookUrl,
+      secret: editForm.secret,
+      timeout: editForm.timeout,
+      retries: editForm.retries,
+      executionOrder: editForm.executionOrder,
+      enabled: editForm.enabled,
+    }
+
+    if (editForm.id) {
+      await updateWebhookRule(editForm.id, payload)
+    } else {
+      await createWebhookRule(payload)
+    }
+
+    editVisible.value = false
+    ElMessage.success('保存成功')
+    await loadRules()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleTest(row: WebhookRule) {
+  testResult.value = null
+  testVisible.value = true
+  try {
+    testResult.value = await testWebhookRule(row.id)
+    if (testResult.value.success) {
+      ElMessage.success('Webhook 测试成功')
+    } else {
+      ElMessage.warning(`Webhook 测试失败: ${testResult.value.errorMessage}`)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '测试失败')
+  }
+}
+
+async function handleViewLogs(row: WebhookRule) {
+  logsLoading.value = true
+  logs.value = []
+  logVisible.value = true
+  try {
+    const result = await getWebhookRuleLogs(row.id, { limit: 20 })
     logs.value = result.logs
   } catch (e: any) {
     ElMessage.error(e?.message || '加载日志失败')
@@ -274,84 +379,51 @@ async function loadLogs() {
   }
 }
 
-async function handleSave() {
-  if (!formRef.value) return
-  await formRef.value.validate()
-
-  saving.value = true
+async function handleDelete(row: WebhookRule) {
   try {
-    const data = await updateWebhookSettings({
-      enabled: form.enabled,
-      name: form.name,
-      webhookUrl: form.webhookUrl,
-      secret: form.secret,
-      events: form.events,
-      timeout: form.timeout,
-      retries: form.retries,
-    })
-    settings.value = data
-    ElMessage.success('配置已保存')
-    loadLogs()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
-  } finally {
-    saving.value = false
+    await ElMessageBox.confirm(`确定删除规则「${row.name}」？`, '确认删除')
+    await deleteWebhookRule(row.id)
+    ElMessage.success('已删除')
+    await loadRules()
+  } catch {
+    // cancelled
   }
-}
-
-async function handleTest() {
-  testing.value = true
-  testResult.value = null
-  try {
-    const result = await testWebhook({
-      webhookUrl: form.webhookUrl || undefined,
-    })
-    testResult.value = result
-    if (result.success) {
-      ElMessage.success('Webhook 测试成功')
-    } else {
-      ElMessage.warning(`Webhook 测试失败: ${result.errorMessage || result.message}`)
-    }
-    loadLogs()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '测试失败')
-  } finally {
-    testing.value = false
-  }
-}
-
-function showLogDetail(log: WebhookLog) {
-  currentLog.value = log
-  showDetailDialog.value = true
 }
 
 onMounted(() => {
-  loadSettings()
-  loadLogs()
+  loadPageConfigs()
+  loadRules()
 })
 </script>
 
-<style scoped lang="scss">
-.webhook-settings-page {
-  padding: 20px;
-  max-width: 900px;
+<style scoped>
+.webhook-rule-manager {
+  padding: 0;
 }
 
-.settings-card,
-.test-result-card,
-.logs-card {
-  margin-bottom: 20px;
-}
-
-.card-header {
+.page-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 16px;
 }
 
-.header-actions {
-  display: flex;
-  gap: 10px;
+.page-header h2 {
+  margin: 0;
+}
+
+.url-text {
+  color: #606266;
+  font-size: 13px;
+}
+
+.collection-tag {
+  margin-right: 4px;
+}
+
+.more-text {
+  color: #909399;
+  font-size: 12px;
 }
 
 .form-tip {
@@ -367,32 +439,5 @@ onMounted(() => {
 
 .error-text {
   color: #f56c6c;
-}
-
-.payload-section,
-.response-section,
-.error-section {
-  margin-top: 16px;
-
-  h4 {
-    margin-bottom: 8px;
-    font-size: 14px;
-    color: #606266;
-  }
-}
-
-.code-block {
-  background: #f5f7fa;
-  padding: 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-
-  &.error {
-    background: #fef0f0;
-    color: #f56c6c;
-  }
 }
 </style>

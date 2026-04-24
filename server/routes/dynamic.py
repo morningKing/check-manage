@@ -537,6 +537,14 @@ def create_item(collection):
                           user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
+    # Fire webhook triggers
+    try:
+        from utils.webhook_engine import fire_webhooks
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        fire_webhooks('create', collection, rid, None, data,
+                       user.get('username', ''), branch_id=branch_id)
+    except Exception:
+        pass
     body['_version'] = 1
     body.pop('_relations', None)
     return jsonify(body), 201
@@ -699,6 +707,14 @@ def update_item(collection, item_id):
                           user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
+    # Fire webhook triggers
+    try:
+        from utils.webhook_engine import fire_webhooks
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        fire_webhooks('update', collection, item_id, old_data, data,
+                       user.get('username', ''), branch_id=branch_id)
+    except Exception:
+        pass
     return jsonify(body)
 
 
@@ -783,6 +799,14 @@ def delete_item(collection, item_id):
             'DELETE FROM data_relations WHERE ((collection = %s AND record_id = %s) OR (related_collection = %s AND related_id = %s)) AND branch_id = %s',
             (collection, item_id, collection, item_id, branch_id),
         )
+        # Fire webhook triggers before commit
+        try:
+            from utils.webhook_engine import fire_webhooks
+            user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+            fire_webhooks('delete', collection, item_id, data_row[0] if data_row else None, None,
+                          user.get('username', ''), cur=cur, branch_id=branch_id)
+        except Exception:
+            pass
     log_operation('delete', 'dynamic_data', item_id, record_name,
                   f'删除{page_name}「{record_name}」', branch_id=branch_id)
     return jsonify({})
@@ -997,6 +1021,16 @@ def batch_create_items(collection):
         log_operation('create', 'dynamic_data', ','.join(r['id'] for r in prepared_records[:3]),
                       summary, f'批量新增{page_name}「{summary}」', branch_id=branch_id)
 
+    # Fire webhook triggers for batch create
+    try:
+        from utils.webhook_engine import fire_webhooks
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        for r in prepared_records:
+            fire_webhooks('create', collection, r['id'], None, r,
+                          user.get('username', ''), branch_id=branch_id)
+    except Exception:
+        pass
+
     result = {
         "success": True,
         "created": len(prepared_records),
@@ -1090,6 +1124,15 @@ def batch_delete_items(collection, **kwargs):
             summary += f' 等{len(record_names)}条'
         log_operation('delete', 'dynamic_data', ','.join(deletable_ids[:3]), summary,
                       f'批量删除{page_name}「{summary}」', branch_id=branch_id)
+        # Fire webhook triggers for batch delete
+        try:
+            from utils.webhook_engine import fire_webhooks
+            user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+            for del_id in deletable_ids:
+                fire_webhooks('delete', collection, del_id, None, None,
+                              user.get('username', ''), branch_id=branch_id)
+        except Exception:
+            pass
 
     result = {"deleted": deleted}
     if blocked_ids:

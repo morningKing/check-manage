@@ -298,12 +298,38 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
     duration_ms     INTEGER,
     retry_count     INTEGER DEFAULT 0,
     success         BOOLEAN NOT NULL DEFAULT FALSE,
+    rule_id         VARCHAR(100),
+    rule_name       VARCHAR(200),
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_wl_event_type ON webhook_logs(event_type);
 CREATE INDEX IF NOT EXISTS idx_wl_created_at ON webhook_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_wl_success ON webhook_logs(success);
+
+--- ==================== Webhook 规则表 ====================
+
+CREATE TABLE IF NOT EXISTS webhook_rules (
+    id              VARCHAR(100) PRIMARY KEY,
+    name            VARCHAR(200) NOT NULL,
+    description     TEXT,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    source_collections JSONB DEFAULT '[]'::jsonb, -- 数组，多个数据页；空数组表示全局（如 merge）
+    trigger_event   VARCHAR(50) NOT NULL, -- create/update/delete/merge
+    trigger_condition JSONB DEFAULT '{}'::jsonb,  -- 可选条件
+    webhook_url     VARCHAR(1000) NOT NULL,
+    secret          VARCHAR(200) DEFAULT '',
+    timeout         INTEGER DEFAULT 30,
+    retries         INTEGER DEFAULT 3,
+    execution_order INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    created_by      VARCHAR(200),
+    updated_by      VARCHAR(200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wr_event ON webhook_rules(trigger_event);
+CREATE INDEX IF NOT EXISTS idx_wr_enabled ON webhook_rules(enabled);
 """
 
 
@@ -1309,6 +1335,65 @@ def init_db():
             """)
             conn.commit()
             print("Created webhook_logs table.")
+
+        # Migration: create webhook_rules table (Webhook 规则配置)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'webhook_rules'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE webhook_rules (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    name            VARCHAR(200) NOT NULL,
+                    description     TEXT,
+                    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+                    source_collections JSONB DEFAULT '[]'::jsonb,
+                    trigger_event   VARCHAR(50) NOT NULL,
+                    trigger_condition JSONB DEFAULT '{}'::jsonb,
+                    webhook_url     VARCHAR(1000) NOT NULL,
+                    secret          VARCHAR(200) DEFAULT '',
+                    timeout         INTEGER DEFAULT 30,
+                    retries         INTEGER DEFAULT 3,
+                    execution_order INTEGER DEFAULT 0,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    created_by      VARCHAR(200),
+                    updated_by      VARCHAR(200)
+                );
+                CREATE INDEX idx_wr_event ON webhook_rules(trigger_event);
+                CREATE INDEX idx_wr_enabled ON webhook_rules(enabled);
+            """)
+            conn.commit()
+            print("Created webhook_rules table.")
+
+        # Migration: convert source_collection to source_collections array
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'webhook_rules' AND column_name = 'source_collection'
+        """)
+        if cur.fetchone():
+            cur.execute("""
+                ALTER TABLE webhook_rules
+                DROP COLUMN source_collection,
+                ADD COLUMN source_collections JSONB DEFAULT '[]'::jsonb
+            """)
+            conn.commit()
+            print("Converted source_collection to source_collections array.")
+
+        # Migration: add rule_id and rule_name columns to webhook_logs
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'webhook_logs' AND column_name = 'rule_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE webhook_logs
+                ADD COLUMN rule_id VARCHAR(100),
+                ADD COLUMN rule_name VARCHAR(200)
+            """)
+            conn.commit()
+            print("Added rule_id and rule_name columns to webhook_logs.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0

@@ -1120,18 +1120,21 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
         project_name = proj_row[0] if proj_row else None
 
     # 触发 webhook
-    from utils.webhook import fire_webhook, build_merge_webhook_payload
+    import uuid as uuid_module
+    from utils.webhook_engine import fire_webhooks, build_merge_webhook_payload
+    merge_id = merge_result.get('mergeId') or f'merge-{uuid_module.uuid4().hex[:12]}'
     webhook_payload = build_merge_webhook_payload(
+        merge_id,
         merge_result,
         project_menu_id,
+        project_name or '',
         version_id,
         version_name,
         target_branch_id,
         target_branch_name,
         merged_by,
-        project_name,
     )
-    fire_webhook('merge', webhook_payload)
+    fire_webhooks('merge', None, merge_id, None, webhook_payload, merged_by)
 
     return merge_result
 
@@ -1387,18 +1390,21 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
         project_name = proj_row[0] if proj_row else None
 
     # 触发 webhook
-    from utils.webhook import fire_webhook, build_merge_webhook_payload
+    import uuid as uuid_module
+    from utils.webhook_engine import fire_webhooks, build_merge_webhook_payload
+    merge_id = merge_result.get('mergeId') or f'merge-{uuid_module.uuid4().hex[:12]}'
     webhook_payload = build_merge_webhook_payload(
+        merge_id,
         merge_result,
         project_menu_id,
+        project_name or '',
         version_id,
         version_name,
         target_branch_id,
         target_branch_name,
         merged_by,
-        project_name,
     )
-    fire_webhook('merge', webhook_payload)
+    fire_webhooks('merge', None, merge_id, None, webhook_payload, merged_by)
 
     return merge_result
 

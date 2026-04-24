@@ -46,6 +46,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.dynamic.get_field_label_map', return_value={}),
         patch('routes.dynamic.log_operation'),
         patch('routes.dynamic.get_validation_script', return_value=None),
+        patch('routes.dynamic.check_branch_lock', return_value=None),
     ]
     for p in patches:
         p.start()
