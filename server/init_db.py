@@ -745,11 +745,11 @@ def init_db():
             print("Added AI settings menu.")
 
         # Migration: add Webhook settings menu if missing
-        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-12'")
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-13'")
         if not cur.fetchone():
             cur.execute(
                 'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
-                "VALUES ('menu-3-12', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s)",
+                "VALUES ('menu-3-13', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s)",
                 ('Webhook 配置', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
