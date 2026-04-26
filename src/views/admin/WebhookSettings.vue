@@ -1,7 +1,7 @@
 <template>
   <div class="webhook-rule-manager">
     <div class="page-header">
-      <h2>Webhook 规则管理</h2>
+      <h2>Webhook 管理</h2>
       <el-button type="primary" @click="handleAdd">新增规则</el-button>
     </div>
 

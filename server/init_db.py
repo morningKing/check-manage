@@ -776,7 +776,7 @@ def init_db():
             cur.execute(
                 'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
                 "VALUES ('menu-3-13', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s, 'system')",
-                ('Webhook 配置', psycopg2.extras.Json(['admin'])),
+                ('Webhook', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
             print("Added Webhook settings menu.")

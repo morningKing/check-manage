@@ -175,7 +175,7 @@ const staticRoutes: RouteRecordRaw[] = [
         name: 'WebhookSettings',
         component: () => import('@/views/admin/WebhookSettings.vue'),
         meta: {
-          title: 'Webhook 配置',
+          title: 'Webhook',
           icon: 'Link',
         },
       },
