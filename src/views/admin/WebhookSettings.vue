@@ -25,6 +25,13 @@
           <el-tag size="small">{{ eventLabels[row.triggerEvent] || row.triggerEvent }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column prop="triggerTiming" label="触发时机" width="100">
+        <template #default="{ row }">
+          <el-tag :type="row.triggerTiming === 'before' ? 'warning' : 'success'" size="small">
+            {{ row.triggerTiming === 'before' ? '操作前' : '操作后' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="webhookUrl" label="Webhook URL" min-width="250">
         <template #default="{ row }">
           <span class="url-text">{{ row.webhookUrl }}</span>
@@ -83,6 +90,19 @@
             <el-option label="删除" value="delete" />
             <el-option label="合并" value="merge" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="触发时机">
+          <el-radio-group v-model="editForm.triggerTiming">
+            <el-radio value="before">操作前（可阻断）</el-radio>
+            <el-radio value="after">操作后</el-radio>
+          </el-radio-group>
+          <div class="form-tip">
+            操作前：webhook失败会阻止操作执行；操作后：webhook失败不影响已执行的操作
+          </div>
+        </el-form-item>
+        <el-form-item label="失败回滚" v-if="editForm.triggerTiming === 'after' && editForm.triggerEvent === 'merge'">
+          <el-switch v-model="editForm.rollbackOnFailure" />
+          <div class="form-tip">启用后，after webhook失败时自动回滚merge操作（仅对merge事件有效）</div>
         </el-form-item>
         <el-form-item label="触发条件">
           <el-input v-model="conditionJson" type="textarea" :rows="2" placeholder='可选，如：{"field":"status","value":"completed"}' />
@@ -229,6 +249,8 @@ const editForm = reactive({
   description: '',
   sourceCollections: [] as string[],
   triggerEvent: 'create' as 'create' | 'update' | 'delete' | 'merge',
+  triggerTiming: 'after' as 'before' | 'after',
+  rollbackOnFailure: false,
   webhookUrl: '',
   secret: '',
   timeout: 30,
@@ -277,6 +299,8 @@ function handleAdd() {
     description: '',
     sourceCollections: [],
     triggerEvent: 'create',
+    triggerTiming: 'after',
+    rollbackOnFailure: false,
     webhookUrl: '',
     secret: '',
     timeout: 30,
@@ -295,6 +319,8 @@ function handleEdit(row: WebhookRule) {
     description: row.description || '',
     sourceCollections: row.sourceCollections || [],
     triggerEvent: row.triggerEvent,
+    triggerTiming: row.triggerTiming || 'after',
+    rollbackOnFailure: row.rollbackOnFailure || false,
     webhookUrl: row.webhookUrl,
     secret: row.secret || '',
     timeout: row.timeout,
@@ -325,6 +351,8 @@ async function handleSave() {
       description: editForm.description,
       sourceCollections: editForm.sourceCollections,
       triggerEvent: editForm.triggerEvent,
+      triggerTiming: editForm.triggerTiming,
+      rollbackOnFailure: editForm.rollbackOnFailure,
       triggerCondition,
       webhookUrl: editForm.webhookUrl,
       secret: editForm.secret,
