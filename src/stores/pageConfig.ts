@@ -183,6 +183,43 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 复制页面配置（duplicate）
+   *
+   * 复制字段、视图配置、校验脚本、删除绑定。出于安全考虑，副本 apiPublic / apiWritable
+   * 强制重置为 false，避免误开放外部 API。
+   */
+  async function duplicatePageConfig(sourceId: string): Promise<PageConfig> {
+    const source = pageConfigs.value.find((c) => c.id === sourceId)
+    if (!source) {
+      throw new Error(`源页面配置不存在: ${sourceId}`)
+    }
+
+    const newId = `page-${uuidv4().slice(0, 8)}`
+    const now = new Date().toISOString()
+    // 深拷贝避免共享引用
+    const cloned = JSON.parse(JSON.stringify(source)) as PageConfig
+    const newConfig: PageConfig = {
+      ...cloned,
+      id: newId,
+      name: `${source.name}（副本）`,
+      apiEndpoint: `/api/data/${newId.replace('page-', '')}`,
+      apiPublic: false,
+      apiWritable: false,
+      createdAt: now,
+      updatedAt: now,
+    }
+
+    try {
+      const created = await post<PageConfig>('/pageConfigs', newConfig)
+      pageConfigs.value.push(created)
+      return created
+    } catch (error) {
+      console.error('复制页面配置失败:', error)
+      throw error
+    }
+  }
+
+  /**
    * 设置当前编辑的页面配置
    *
    * @param config - 页面配置
@@ -1412,6 +1449,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     addPageConfig,
     updatePageConfig,
     deletePageConfig,
+    duplicatePageConfig,
     setCurrentPageConfig,
     updatePageFields,
     addField,

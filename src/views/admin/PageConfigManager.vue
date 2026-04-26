@@ -13,55 +13,17 @@
 <template>
   <div class="page-config-manager">
     <el-row :gutter="20" class="full-height">
-      <!-- 左侧：页面配置列表 -->
+      <!-- 左侧：页面配置列表（已抽取为独立组件） -->
       <el-col :span="8">
         <el-card class="list-card">
           <template #header>
-            <div class="card-header">
-              <span>页面配置列表</span>
-              <el-button type="primary" size="small" @click="handleAdd">
-                <el-icon><Plus /></el-icon>
-                新增
-              </el-button>
-            </div>
+            <span>页面配置列表</span>
           </template>
-
-          <el-input
-            v-model="searchKeyword"
-            placeholder="搜索页面名称..."
-            clearable
-            :prefix-icon="Search"
-            class="list-search"
+          <PageConfigList
+            v-model="currentPageId"
+            :configs="pageConfigs"
+            @add="handleAdd"
           />
-
-          <div class="page-list">
-            <div
-              v-for="config in filteredPageConfigs"
-              :key="config.id"
-              class="page-item"
-              :class="{ active: currentPageId === config.id }"
-              @click="handleSelect(config)"
-            >
-              <div class="page-info">
-                <div class="page-name">{{ config.name }}</div>
-                <div class="page-meta">
-                  {{ config.fields.length }} 个字段
-                </div>
-              </div>
-              <div class="page-actions">
-                <el-button
-                  type="danger"
-                  link
-                  size="small"
-                  @click.stop="handleDeleteConfirm(config)"
-                >
-                  删除
-                </el-button>
-              </div>
-            </div>
-
-            <el-empty v-if="filteredPageConfigs.length === 0" :description="searchKeyword ? '无匹配结果' : '暂无页面配置'" />
-          </div>
         </el-card>
       </el-col>
 
@@ -460,16 +422,6 @@
         </el-button>
       </template>
     </el-dialog>
-
-    <!-- 删除确认对话框 -->
-    <ConfirmDialog
-      v-model="deleteDialogVisible"
-      title="删除确认"
-      :message="`确定要删除页面配置「${pageToDelete?.name}」吗？删除后相关菜单将失去关联。`"
-      type="danger"
-      confirm-text="删除"
-      @confirm="handleDelete"
-    />
   </div>
 </template>
 
@@ -482,15 +434,16 @@
  * 2. 页面配置的增删改
  * 3. 字段配置编辑
  */
-import { ref, computed, onMounted, onActivated } from 'vue'
+import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus, Search, Right } from '@element-plus/icons-vue'
+import { Right } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
-import { ConfirmDialog } from '@/components/common'
+import { useMenuStore } from '@/stores'
 import FieldConfigEditor from './FieldConfigEditor.vue'
+import PageConfigList from './components/PageConfigList.vue'
 import PageConfigRelationGraph from '@/components/PageConfigRelationGraph.vue'
-import type { PageConfig, PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
+import type { PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
 import type { ExportScript } from '@/types'
 import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
@@ -500,6 +453,7 @@ import { getValidationScripts } from '@/api/validationScript'
 // ==================== Store ====================
 
 const pageConfigStore = usePageConfigStore()
+const menuStore = useMenuStore()
 
 // ==================== Refs ====================
 
@@ -512,11 +466,6 @@ const addFormRef = ref<FormInstance>()
  * 当前选中的页面ID
  */
 const currentPageId = ref<string | null>(null)
-
-/**
- * 搜索关键词
- */
-const searchKeyword = ref('')
 
 /**
  * 当前激活的 Tab
@@ -537,16 +486,6 @@ const addFormData = ref<PageFormData>(createEmptyPageFormData())
  * 新增对话框可见性
  */
 const addDialogVisible = ref(false)
-
-/**
- * 删除对话框可见性
- */
-const deleteDialogVisible = ref(false)
-
-/**
- * 待删除的页面配置
- */
-const pageToDelete = ref<PageConfig | null>(null)
 
 /**
  * 保存加载状态
@@ -624,15 +563,6 @@ const formRules: FormRules = {
 const pageConfigs = computed(() => pageConfigStore.pageConfigs)
 
 /**
- * 搜索过滤后的页面配置列表
- */
-const filteredPageConfigs = computed(() => {
-  const kw = searchKeyword.value.trim().toLowerCase()
-  if (!kw) return pageConfigs.value
-  return pageConfigs.value.filter(c => c.name.toLowerCase().includes(kw))
-})
-
-/**
  * 当前页面配置
  */
 const currentPageConfig = computed(() => {
@@ -684,10 +614,13 @@ const targetCollectionFields = computed<FieldConfig[]>(() => {
 // ==================== 方法 ====================
 
 /**
- * 处理选择页面配置
+ * 根据 pageId 加载表单数据
+ *
+ * 由 watch(currentPageId) 触发，currentPageId 由左侧 PageConfigList 的 v-model 驱动。
  */
-function handleSelect(config: PageConfig): void {
-  currentPageId.value = config.id
+function loadFormForPage(id: string): void {
+  const config = pageConfigStore.getPageConfigById(id)
+  if (!config) return
   formData.value = {
     id: config.id,
     name: config.name,
@@ -717,6 +650,10 @@ function handleSelect(config: PageConfig): void {
   deleteBindingInheritFields.value = db?.inheritFields ? [...db.inheritFields] : []
 }
 
+watch(currentPageId, (id) => {
+  if (id) loadFormForPage(id)
+})
+
 /**
  * 处理新增
  */
@@ -742,8 +679,8 @@ async function handleCreate(): Promise<void> {
     })
     ElMessage.success('创建成功')
     addDialogVisible.value = false
-    // 选中新创建的页面
-    handleSelect(created)
+    // 选中新创建的页面（watch 会自动 setup 表单）
+    currentPageId.value = created.id
   } catch (error) {
     ElMessage.error('创建失败')
   } finally {
@@ -887,40 +824,13 @@ async function handleSaveDeleteBinding(): Promise<void> {
 }
 
 /**
- * 处理删除确认
- */
-function handleDeleteConfirm(config: PageConfig): void {
-  pageToDelete.value = config
-  deleteDialogVisible.value = true
-}
-
-/**
- * 处理删除
- */
-async function handleDelete(): Promise<void> {
-  if (!pageToDelete.value) return
-
-  try {
-    await pageConfigStore.deletePageConfig(pageToDelete.value.id)
-    ElMessage.success('删除成功')
-    deleteDialogVisible.value = false
-    // 如果删除的是当前选中的，清空选择
-    if (currentPageId.value === pageToDelete.value.id) {
-      currentPageId.value = null
-    }
-  } catch (error) {
-    ElMessage.error('删除失败')
-  }
-}
-
-/**
  * 处理导航到目标页面配置
  */
 function handleNavigateToPage(targetPageId: string): void {
   const targetConfig = pageConfigStore.getPageConfigById(targetPageId)
 
   if (targetConfig) {
-    handleSelect(targetConfig)
+    currentPageId.value = targetPageId
   } else {
     ElMessage.warning('目标页面配置不存在')
   }
@@ -931,6 +841,14 @@ function handleNavigateToPage(targetPageId: string): void {
 onMounted(async () => {
   if (pageConfigStore.pageConfigs.length === 0) {
     await pageConfigStore.fetchPageConfigs()
+  }
+  // 确保菜单数据已加载（左侧列表的项目反查依赖此数据）
+  if (menuStore.menuList.length === 0) {
+    try {
+      await menuStore.fetchMenus()
+    } catch {
+      // 菜单加载失败时左侧仍能展示，只是项目分组为空
+    }
   }
 })
 
@@ -967,63 +885,18 @@ onActivated(async () => {
   }
 }
 
+.list-card {
+  :deep(.el-card__body) {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.list-search {
-  margin-bottom: 12px;
-}
-
-.page-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.page-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border: 1px solid #e4e7ed;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-
-  &:hover {
-    border-color: #409eff;
-    background-color: #f5f7fa;
-  }
-
-  &.active {
-    border-color: #409eff;
-    background-color: #ecf5ff;
-  }
-
-  .page-info {
-    .page-name {
-      font-weight: 500;
-      color: #303133;
-    }
-
-    .page-meta {
-      font-size: 12px;
-      color: #909399;
-      margin-top: 4px;
-    }
-  }
-
-  .page-actions {
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
-
-  &:hover .page-actions {
-    opacity: 1;
-  }
 }
 
 .page-detail {
