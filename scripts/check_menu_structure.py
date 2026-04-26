@@ -184,8 +184,8 @@ def infer_fixes(violations, menus):
                 fix['new_menuType'] = 'data'
                 fix['new_parentId'] = grandparent['id']
             else:
-                # 如果找不到project父级，挂载到默认workspace
-                fix['new_menuType'] = 'data'
+                # 如果找不到project父级，提升为project类型并挂载到默认workspace
+                fix['new_menuType'] = 'project'
                 fix['new_parentId'] = default_workspace
 
         # 情况5: parentId不存在或类型不匹配 → 挂载到默认workspace
