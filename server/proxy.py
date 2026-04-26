@@ -220,22 +220,56 @@ def main():
     print(f'       API proxy:    /api/* -> {BACKEND_URL}', flush=True)
     print(flush=True)
 
-    def shutdown(sig, frame):
-        print('\nShutting down ...')
-        backend_proc.terminate()
-        server.shutdown()
+    def shutdown(sig=None, frame=None):
+        print('\n[Shutdown] Stopping services...', flush=True)
+        try:
+            # Force kill backend process on Windows
+            if sys.platform == 'win32':
+                backend_proc.kill()
+            else:
+                backend_proc.terminate()
 
+            # Shutdown HTTP server in a thread to avoid blocking
+            import threading
+            shutdown_thread = threading.Thread(target=server.shutdown)
+            shutdown_thread.daemon = True
+            shutdown_thread.start()
+
+            # Wait for backend to terminate (with timeout)
+            try:
+                backend_proc.wait(timeout=3)
+                print('[Shutdown] Backend stopped.', flush=True)
+            except subprocess.TimeoutExpired:
+                print('[Shutdown] Backend kill forced.', flush=True)
+                backend_proc.kill()
+                backend_proc.wait()
+
+            print('[Shutdown] Done.', flush=True)
+            sys.exit(0)
+        except Exception as e:
+            print(f'[Shutdown] Error: {e}', flush=True)
+            sys.exit(1)
+
+    # Register signal handlers
     signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    if sys.platform != 'win32':
+        signal.signal(signal.SIGTERM, shutdown)
+    else:
+        # On Windows, also handle SIGBREAK (Ctrl+Break)
+        signal.signal(signal.SIGBREAK, shutdown)
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        shutdown()
+    except Exception as e:
+        print(f'[Error] Server error: {e}', flush=True)
+        shutdown()
     finally:
-        backend_proc.terminate()
-        backend_proc.wait(timeout=5)
-        print('Done.')
+        # Cleanup
+        if backend_proc.poll() is None:
+            backend_proc.kill()
+            backend_proc.wait()
 
 
 if __name__ == '__main__':
