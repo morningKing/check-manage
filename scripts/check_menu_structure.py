@@ -19,14 +19,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
 from db import get_db
 
 
+def query_non_system_menus(conn):
+    """查询所有非系统菜单
+
+    返回: list of dict，每个dict包含菜单信息
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, name, menu_type, parent_id, "order"
+        FROM menus
+        WHERE menu_type != 'system'
+        ORDER BY menu_type, "order"
+    """)
+
+    menus = []
+    for row in cur.fetchall():
+        menus.append({
+            'id': row[0],
+            'name': row[1],
+            'menuType': row[2],
+            'parentId': row[3],
+            'order': row[4]
+        })
+
+    return menus
+
+
 def main():
-    """主流程:检查并修复菜单结构"""
+    """主流程：检查并修复菜单结构"""
     print("=" * 70)
     print("菜单结构检查脚本")
     print("=" * 70)
 
     try:
         with get_db() as conn:
+            # 查询所有非系统菜单
+            menus = query_non_system_menus(conn)
+            print(f"\n[查询] 找到 {len(menus)} 个非系统菜单")
+
             # TODO: 实现检查和修复逻辑
             print("\n检查完成。")
     except Exception as e:
