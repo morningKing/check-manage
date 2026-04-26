@@ -250,6 +250,43 @@ def print_tree_structure(menus, title):
         print_menu(root)
 
 
+def execute_fixes(conn, fixes):
+    """执行修复操作（更新数据库）
+
+    返回: 成功修复的数量
+    """
+    if not fixes:
+        return 0
+
+    cur = conn.cursor()
+    success_count = 0
+
+    for fix in fixes:
+        try:
+            cur.execute("""
+                UPDATE menus
+                SET menu_type = %s, parent_id = %s
+                WHERE id = %s
+            """, (fix['new_menuType'], fix['new_parentId'], fix['menu']['id']))
+            success_count += 1
+        except Exception as e:
+            print(f"\n[错误] 修复菜单 {fix['menu']['id']} 失败: {e}")
+
+    return success_count
+
+
+def print_summary_report(total_menus, violations_count, fixed_count):
+    """输出最终摘要报告"""
+    print("\n" + "=" * 70)
+    print("检查结果摘要")
+    print("=" * 70)
+    print(f"总菜单数: {total_menus}")
+    print(f"违规菜单数: {violations_count}")
+    print(f"修复成功: {fixed_count}")
+    print(f"修复失败: {violations_count - fixed_count}")
+    print("=" * 70)
+
+
 def main():
     """主流程：检查并修复菜单结构"""
     print("=" * 70)
@@ -266,23 +303,42 @@ def main():
             violations = detect_violations(menus)
             print(f"[检查] 发现 {len(violations)} 个违规菜单")
 
-            # 推断修复方案
-            fixes = infer_fixes(violations, menus)
-            if fixes is None:
-                sys.exit(1)
+            if violations:
+                # 推断修复方案
+                fixes = infer_fixes(violations, menus)
+                if fixes is None:
+                    sys.exit(1)
 
-            print(f"[推断] 生成 {len(fixes)} 个修复方案")
+                print(f"[推断] 生成 {len(fixes)} 个修复方案")
 
-            # 输出修复预览报告
-            print_fix_report(fixes)
+                # 输出修复预览报告
+                print_fix_report(fixes)
 
-            # 输出修复前树结构
-            print_tree_structure(menus, "\n修复前菜单树结构")
+                # 输出修复前树结构
+                print_tree_structure(menus, "\n修复前菜单树结构")
 
-            # TODO: 实现修复执行和报告输出
-            print("\n检查完成。")
+                # 执行修复
+                fixed_count = execute_fixes(conn, fixes)
+                print(f"\n[执行] 成功修复 {fixed_count} 个菜单")
+
+                # 提交事务
+                conn.commit()
+
+                # 重新查询菜单，输出修复后树结构
+                updated_menus = query_non_system_menus(conn)
+                print_tree_structure(updated_menus, "\n修复后菜单树结构")
+
+                # 输出最终摘要报告
+                print_summary_report(len(menus), len(violations), fixed_count)
+
+                print("\n[成功] 检查完成，数据库已更新。")
+            else:
+                print("\n[成功] 检查完成，所有菜单结构正常。")
+
     except Exception as e:
-        print(f"\n[错误] 数据库连接失败: {e}")
+        print(f"\n[错误] 执行失败: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
