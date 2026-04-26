@@ -128,6 +128,86 @@ def detect_violations(menus):
     return violations
 
 
+def infer_fixes(violations, menus):
+    """为每个违规菜单推断正确的修复方案
+
+    返回: list of dict，每个dict包含修复操作详情
+    """
+    menu_map = build_menu_map(menus)
+    fixes = []
+
+    # 找到第一个workspace菜单作为默认父级
+    default_workspace = None
+    for menu in menus:
+        if menu['menuType'] == 'workspace' and menu['parentId'] is None:
+            default_workspace = menu['id']
+            break
+
+    if not default_workspace:
+        print("\n[警告] 找不到workspace菜单作为默认父级，请先创建workspace菜单")
+        return None
+
+    for violation in violations:
+        menu = violation['menu']
+        fix = {
+            'menu': menu,
+            'issue': violation['issue'],
+            'old_menuType': menu['menuType'],
+            'old_parentId': menu['parentId'],
+            'new_menuType': menu['menuType'],
+            'new_parentId': menu['parentId']
+        }
+
+        # 推断修复方案
+        parent = menu_map.get(menu['parentId']) if menu['parentId'] else None
+
+        # 情况1: parentId=null → 应该是workspace
+        if menu['parentId'] is None:
+            fix['new_menuType'] = 'workspace'
+            fix['new_parentId'] = None
+
+        # 情况2: parentId指向workspace → 应该是project
+        elif parent and parent['menuType'] == 'workspace':
+            fix['new_menuType'] = 'project'
+            fix['new_parentId'] = menu['parentId']
+
+        # 情况3: parentId指向project → 应该是data
+        elif parent and parent['menuType'] == 'project':
+            fix['new_menuType'] = 'data'
+            fix['new_parentId'] = menu['parentId']
+
+        # 情况4: parentId指向data → 层级过深，提升到project
+        elif parent and parent['menuType'] == 'data':
+            # 找到parent的父级project
+            grandparent = menu_map.get(parent['parentId']) if parent['parentId'] else None
+            if grandparent and grandparent['menuType'] == 'project':
+                fix['new_menuType'] = 'data'
+                fix['new_parentId'] = grandparent['id']
+            else:
+                # 如果找不到project父级，挂载到默认workspace
+                fix['new_menuType'] = 'data'
+                fix['new_parentId'] = default_workspace
+
+        # 情况5: parentId不存在或类型不匹配 → 挂载到默认workspace
+        else:
+            # 根据当前menuType推断正确层级
+            if menu['menuType'] == 'project':
+                fix['new_parentId'] = default_workspace
+            elif menu['menuType'] == 'data':
+                # 需要找到一个project菜单作为父级
+                # 简化处理：挂载到默认workspace下的第一个project
+                project_menus = [m for m in menus if m['menuType'] == 'project' and m['parentId'] == default_workspace]
+                if project_menus:
+                    fix['new_parentId'] = project_menus[0]['id']
+                else:
+                    fix['new_parentId'] = default_workspace
+                    fix['new_menuType'] = 'project'  # 提升为project
+
+        fixes.append(fix)
+
+    return fixes
+
+
 def main():
     """主流程：检查并修复菜单结构"""
     print("=" * 70)
@@ -144,7 +224,14 @@ def main():
             violations = detect_violations(menus)
             print(f"[检查] 发现 {len(violations)} 个违规菜单")
 
-            # TODO: 实现修复推断和执行
+            # 推断修复方案
+            fixes = infer_fixes(violations, menus)
+            if fixes is None:
+                sys.exit(1)
+
+            print(f"[推断] 生成 {len(fixes)} 个修复方案")
+
+            # TODO: 实现修复执行和报告输出
             print("\n检查完成。")
     except Exception as e:
         print(f"\n[错误] 数据库连接失败: {e}")
