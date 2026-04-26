@@ -60,7 +60,7 @@ class TestListWebhookRules:
     def test_admin_can_list(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('whrule-1', '规则1', None, True, [], 'merge', {}, 'https://example.com', '', 30, 3, 0, now, now, 'admin', None),
+            ('whrule-1', '规则1', None, True, [], 'merge', 'after', {}, 'https://example.com', '', 30, 3, 0, False, now, now, 'admin', None),
         ]
         resp = client.get('/webhook/rules', headers=admin_h)
         assert resp.status_code == 200
@@ -108,8 +108,8 @@ class TestGetWebhookRule:
     def test_get_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.return_value = (
-            'whrule-1', '规则1', '描述', True, ['orders'], 'create', {},
-            'https://example.com', '', 30, 3, 0, now, now, 'admin', None
+            'whrule-1', '规则1', '描述', True, ['orders'], 'create', 'after', {},
+            'https://example.com', '', 30, 3, 0, False, now, now, 'admin', None
         )
         resp = client.get('/webhook/rules/whrule-1', headers=admin_h)
         assert resp.status_code == 200
@@ -232,49 +232,53 @@ class TestWebhookEngine:
         mock_cursor.fetchall.return_value = []
 
         from utils.webhook_engine import fire_webhooks
-        errors = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
-        assert errors == []
+        result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
+        assert result['beforeErrors'] == []
+        assert result['afterErrors'] == []
+        assert result['beforeBlocked'] == False
+        assert result['rollbackNeeded'] == False
 
     def test_fire_webhooks_with_rules(self, setup):
         client, mock_cursor, _, _ = setup
-        # source_collections is a JSONB array
+        # source_collections is a JSONB array, added trigger_timing and rollback_on_failure fields
         mock_cursor.fetchall.return_value = [
-            ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders']),
+            ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders'], 'after', False),
         ]
 
         with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': True}
             from utils.webhook_engine import fire_webhooks
-            errors = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
-            assert errors == []
+            result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
+            assert result['afterErrors'] == []
+            assert result['beforeBlocked'] == False
             mock_fire.assert_called_once()
 
     def test_fire_webhooks_with_failure(self, setup):
         client, mock_cursor, _, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders']),
+            ('whrule-1', '规则1', 'create', {}, 'https://example.com', '', 30, 3, ['orders'], 'after', False),
         ]
 
         with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': False, 'errorMessage': 'Connection failed'}
             from utils.webhook_engine import fire_webhooks
-            errors = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
-            assert len(errors) == 1
-            assert errors[0]['rule_id'] == 'whrule-1'
+            result = fire_webhooks('create', 'orders', 'order-1', None, {'name': '订单1'}, 'admin')
+            assert len(result['afterErrors']) == 1
+            assert result['afterErrors'][0]['rule_id'] == 'whrule-1'
 
     def test_fire_webhooks_global_rule(self, setup):
         """测试全局规则（空数组）匹配所有 collection"""
         client, mock_cursor, _, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('whrule-1', '全局规则', 'merge', {}, 'https://example.com', '', 30, 3, []),
+            ('whrule-1', '全局规则', 'merge', {}, 'https://example.com', '', 30, 3, [], 'after', False),
         ]
 
         with patch('utils.webhook_engine._fire_single_webhook') as mock_fire:
             mock_fire.return_value = {'success': True}
             from utils.webhook_engine import fire_webhooks
             # merge event with None collection should match global rule
-            errors = fire_webhooks('merge', None, 'merge-1', None, {'summary': {}}, 'admin')
-            assert errors == []
+            result = fire_webhooks('merge', None, 'merge-1', None, {'summary': {}}, 'admin')
+            assert result['afterErrors'] == []
 
     def test_check_condition_field_change(self, setup):
         from utils.webhook_engine import _check_condition

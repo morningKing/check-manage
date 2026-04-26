@@ -11,6 +11,8 @@ export interface WebhookRule {
   enabled: boolean
   sourceCollections: string[]  // 数组，多个数据页；空数组表示全局（如 merge）
   triggerEvent: 'create' | 'update' | 'delete' | 'merge'
+  triggerTiming: 'before' | 'after'  // 新增：触发时机
+  rollbackOnFailure: boolean          // 新增：失败时是否回滚（仅 merge + after）
   triggerCondition?: Record<string, any>
   webhookUrl: string
   secret?: string
@@ -30,6 +32,8 @@ export interface CreateWebhookRuleRequest {
   enabled?: boolean
   sourceCollections?: string[]
   triggerEvent: 'create' | 'update' | 'delete' | 'merge'
+  triggerTiming?: 'before' | 'after'  // 新增
+  rollbackOnFailure?: boolean          // 新增
   triggerCondition?: Record<string, any>
   webhookUrl: string
   secret?: string
@@ -44,6 +48,8 @@ export interface UpdateWebhookRuleRequest {
   enabled?: boolean
   sourceCollections?: string[]
   triggerEvent?: 'create' | 'update' | 'delete' | 'merge'
+  triggerTiming?: 'before' | 'after'  // 新增
+  rollbackOnFailure?: boolean          // 新增
   triggerCondition?: Record<string, any>
   webhookUrl?: string
   secret?: string

@@ -763,8 +763,8 @@ def init_db():
         cur.execute("SELECT id FROM menus WHERE id = 'menu-3-11'")
         if not cur.fetchone():
             cur.execute(
-                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
-                "VALUES ('menu-3-11', %s, 'MagicStick', NULL, 'menu-3-a', 5, '/admin/ai-settings', %s)",
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-11', %s, 'MagicStick', NULL, 'menu-3-a', 5, '/admin/ai-settings', %s, 'system')",
                 ('AI 配置', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
@@ -774,8 +774,8 @@ def init_db():
         cur.execute("SELECT id FROM menus WHERE id = 'menu-3-13'")
         if not cur.fetchone():
             cur.execute(
-                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
-                "VALUES ('menu-3-13', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s)",
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-13', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s, 'system')",
                 ('Webhook 配置', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
@@ -1003,7 +1003,7 @@ def init_db():
                 'menu-1', 'menu-dashboard',  # 首页、仪表盘
                 'menu-3-b', 'menu-3-6', 'menu-3-8', 'menu-3-9', 'menu-3-10', 'menu-3-12',  # 数据工具及其子项
                 'menu-3', 'menu-3-a', 'menu-3-c',  # 系统配置分组
-                'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11',  # 平台管理子项
+                'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11', 'menu-3-13',  # 平台管理子项（新增menu-3-13）
                 'menu-3-4', 'menu-3-5',  # 系统运维子项
             ]
             for mid in system_menu_ids:
@@ -1394,6 +1394,45 @@ def init_db():
             """)
             conn.commit()
             print("Added rule_id and rule_name columns to webhook_logs.")
+
+        # Migration: add trigger_timing and rollback_on_failure to webhook_rules
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'webhook_rules' AND column_name = 'trigger_timing'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE webhook_rules
+                ADD COLUMN trigger_timing VARCHAR(10) DEFAULT 'after' CHECK (trigger_timing IN ('before', 'after')),
+                ADD COLUMN rollback_on_failure BOOLEAN DEFAULT FALSE
+            """)
+            conn.commit()
+            print("Added trigger_timing and rollback_on_failure columns to webhook_rules.")
+
+        # Migration: create merge_backups table (支持 merge 回滚)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'merge_backups'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE merge_backups (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    merge_id        VARCHAR(100) NOT NULL REFERENCES merge_records(id) ON DELETE CASCADE,
+                    collection      VARCHAR(100) NOT NULL,
+                    backup_type     VARCHAR(10) NOT NULL CHECK (backup_type IN ('created', 'updated', 'deleted')),
+                    record_id       VARCHAR(100) NOT NULL,
+                    old_data        JSONB,
+                    new_data        JSONB,
+                    old_relations   JSONB,
+                    new_relations   JSONB,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_mb_merge ON merge_backups(merge_id);
+                CREATE INDEX idx_mb_collection ON merge_backups(collection, merge_id);
+            """)
+            conn.commit()
+            print("Created merge_backups table for rollback support.")
 
         # Seed menus (insert only if not exists)
         menus_inserted = 0

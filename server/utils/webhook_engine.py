@@ -24,7 +24,8 @@ def fire_webhooks(
     operator: str,
     cur=None,
     branch_id: Optional[str] = None,
-) -> List[dict]:
+    timing: str = 'after',  # 新增参数：'before' 或 'after'
+) -> dict:  # 返回值改为 dict
     """
     查找并执行匹配的 webhook 规则
 
@@ -37,26 +38,35 @@ def fire_webhooks(
         operator: operator username
         cur: database cursor (optional, for transaction)
         branch_id: branch ID for data isolation
+        timing: 'before'（提交前）或 'after'（提交后）
 
     Returns:
-        list of webhook errors (empty if all succeeded)
+        {
+            'beforeErrors': [],   # before webhook 失败列表
+            'afterErrors': [],    # after webhook 失败列表
+            'beforeBlocked': bool, # 是否被 before webhook 阻止
+            'rollbackNeeded': bool, # 是否需要回滚（after webhook 失败 + rollback_on_failure）
+        }
     """
-    webhook_errors = []
+    result = {
+        'beforeErrors': [],
+        'afterErrors': [],
+        'beforeBlocked': False,
+        'rollbackNeeded': False,
+    }
 
-    # Query matching rules
+    # Query matching rules (增加 trigger_timing 过滤)
     try:
         if cur:
             # Use provided cursor (within transaction)
-            # Match rules where:
-            # - source_collections is empty (global rule like merge)
-            # - OR collection is in the source_collections array
             cur.execute(
                 'SELECT id, name, trigger_event, trigger_condition, webhook_url, secret, '
-                'timeout, retries, source_collections '
+                'timeout, retries, source_collections, trigger_timing, rollback_on_failure '
                 'FROM webhook_rules WHERE enabled = TRUE AND trigger_event = %s '
+                'AND trigger_timing = %s '
                 'AND (source_collections = \'[]\'::jsonb OR source_collections @> %s) '
                 'ORDER BY execution_order',
-                (event, psycopg2.extras.Json([collection]))
+                (event, timing, psycopg2.extras.Json([collection]))
             )
             rules = cur.fetchall()
         else:
@@ -66,20 +76,21 @@ def fire_webhooks(
                 cur = conn.cursor()
                 cur.execute(
                     'SELECT id, name, trigger_event, trigger_condition, webhook_url, secret, '
-                    'timeout, retries, source_collections '
+                    'timeout, retries, source_collections, trigger_timing, rollback_on_failure '
                     'FROM webhook_rules WHERE enabled = TRUE AND trigger_event = %s '
+                    'AND trigger_timing = %s '
                     'AND (source_collections = \'[]\'::jsonb OR source_collections @> %s) '
                     'ORDER BY execution_order',
-                    (event, psycopg2.extras.Json([collection]))
+                    (event, timing, psycopg2.extras.Json([collection]))
                 )
                 rules = cur.fetchall()
     except Exception:
         # Database not available or query failed - return empty (no webhooks triggered)
-        return []
+        return result
 
     for rule in rules:
         rule_id, rule_name, trigger_event, trigger_condition, webhook_url, secret, \
-            timeout, retries, source_collections = rule
+            timeout, retries, source_collections, trigger_timing_rule, rollback_on_failure = rule
 
         # Check trigger condition
         if trigger_condition and not _check_condition(trigger_condition, old_data, new_data, event):
@@ -87,24 +98,32 @@ def fire_webhooks(
 
         # Build payload
         payload = _build_payload(
-            event, collection, record_id, old_data, new_data,
+            timing, event, collection, record_id, old_data, new_data,
             operator, rule_id, rule_name, branch_id, cur
         )
 
         # Fire webhook
-        result = _fire_single_webhook(
+        fire_result = _fire_single_webhook(
             rule_id, rule_name, webhook_url, secret,
             event, payload, timeout, retries
         )
 
-        if not result['success']:
-            webhook_errors.append({
+        if not fire_result['success']:
+            error_info = {
                 'rule_id': rule_id,
                 'rule_name': rule_name,
-                'error': result.get('errorMessage', 'Unknown error'),
-            })
+                'error': fire_result.get('errorMessage', 'Unknown error'),
+            }
 
-    return webhook_errors
+            if timing == 'before':
+                result['beforeErrors'].append(error_info)
+                result['beforeBlocked'] = True
+            else:
+                result['afterErrors'].append(error_info)
+                if rollback_on_failure:
+                    result['rollbackNeeded'] = True
+
+    return result
 
 
 def _check_condition(condition: dict, old_data: Optional[dict], new_data: Optional[dict], event: str) -> bool:
@@ -154,6 +173,7 @@ def _check_condition(condition: dict, old_data: Optional[dict], new_data: Option
 
 
 def _build_payload(
+    timing: str,  # 新增参数
     event: str,
     collection: Optional[str],
     record_id: Optional[str],
@@ -166,17 +186,19 @@ def _build_payload(
     cur,
 ) -> dict:
     """
-    Build webhook payload for different event types
+    Build webhook payload for different event types and timing
     """
     # Merge event: payload is pre-built by build_merge_webhook_payload
     if event == 'merge':
         payload = new_data.copy() if new_data else {}
+        payload['timing'] = timing
         payload['ruleId'] = rule_id
         payload['ruleName'] = rule_name
         return payload
 
     payload = {
         'event': event,
+        'timing': timing,  # 新增字段
         'timestamp': datetime.now(timezone.utc).isoformat(),
         'ruleId': rule_id,
         'ruleName': rule_name,
@@ -205,15 +227,25 @@ def _build_payload(
         payload['pageName'] = page_name
         payload['recordId'] = record_id
 
-        if event == 'create':
-            payload['record'] = new_data
-            payload['oldRecord'] = None
-        elif event == 'update':
-            payload['record'] = new_data
-            payload['oldRecord'] = old_data
-        elif event == 'delete':
-            payload['record'] = None
-            payload['oldRecord'] = old_data
+        if timing == 'before':
+            # Before payload: 预览数据
+            payload['recordPreview'] = {
+                'recordId': record_id,
+                'action': event,
+                'previewData': new_data if event in ('create', 'update') else None,
+                'oldData': old_data if event in ('update', 'delete') else None,
+            }
+        else:
+            # After payload: 确认数据（与现有结构一致）
+            if event == 'create':
+                payload['record'] = new_data
+                payload['oldRecord'] = None
+            elif event == 'update':
+                payload['record'] = new_data
+                payload['oldRecord'] = old_data
+            elif event == 'delete':
+                payload['record'] = None
+                payload['oldRecord'] = old_data
 
     return payload
 

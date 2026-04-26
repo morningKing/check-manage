@@ -877,7 +877,7 @@ def compute_project_version_diff(project_menu_id, base_version, target_version, 
 
 def merge_project_version(version_id, target_branch, strategy, merged_by, user_id, project_menu_id):
     """
-    合并项目版本到目标分支（支持多次合并）
+    合并项目版本到目标分支（支持多次合并 + webhook 触发 + 回滚）
 
     Parameters
     ----------
@@ -906,6 +906,104 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
     """
     now = datetime.now(timezone.utc)
     merge_id = f'merge-{uuid.uuid4().hex[:8]}'
+
+    # === Phase 1: 计算合并预览（用于 before webhook） ===
+    preview_collections = []
+    preview_created = 0
+    preview_updated = 0
+    preview_deleted = 0
+
+    # 获取版本信息（需要提前获取）
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT name, version_type, status FROM project_versions WHERE id = %s',
+            (version_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError('版本不存在')
+        version_name, version_type, status = row
+
+        # 获取目标分支
+        if target_branch == 'current':
+            target_branch_id = get_user_project_branch(user_id, project_menu_id)
+        else:
+            target_branch_id = MAIN_BRANCH_ID
+
+        # 获取目标分支名称
+        target_branch_name = '主分支' if target_branch_id == MAIN_BRANCH_ID else version_name
+        if target_branch_id != MAIN_BRANCH_ID:
+            cur.execute(
+                'SELECT name FROM project_versions WHERE id = %s',
+                (target_branch_id,)
+            )
+            tb_row = cur.fetchone()
+            if tb_row:
+                target_branch_name = tb_row[0]
+
+        # 获取项目名称
+        cur.execute('SELECT name FROM menus WHERE id = %s', (project_menu_id,))
+        proj_row = cur.fetchone()
+        project_name = proj_row[0] if proj_row else ''
+
+        # 计算预览数据
+        collections = get_project_projects(project_menu_id)
+        for coll_info in collections:
+            collection = coll_info['collection']
+            source_records, source_rels = load_project_version_data_by_type(version_id, collection, version_type)
+            target_records, target_rels = load_project_version_data(collection, target_branch_id)
+            fields = get_collection_fields(collection)
+            field_names = [f['fieldName'] for f in fields]
+            relation_fields = [f for f in fields if f.get('controlType') == 'relation']
+            diff = compute_collection_diff(
+                target_records, source_records, field_names,
+                target_rels, source_rels, relation_fields
+            )
+
+            preview_created += len(diff['added'])
+            preview_updated += len(diff['modified'])
+            preview_deleted += len(diff['removed'])
+            preview_collections.append({
+                'collection': collection,
+                'pageName': coll_info['pageName'],
+                'previewCreated': len(diff['added']),
+                'previewUpdated': len(diff['modified']),
+                'previewDeleted': len(diff['removed']),
+            })
+
+    # === Phase 2: Before Webhook 触发 ===
+    from utils.webhook_engine import fire_webhooks
+    preview_payload = {
+        'event': 'merge',
+        'timing': 'before',
+        'mergePreview': {
+            'mergeId': merge_id,
+            'project': {'menuId': project_menu_id, 'name': project_name},
+            'version': {'id': version_id, 'name': version_name},
+            'targetBranch': {'id': target_branch_id, 'name': target_branch_name},
+            'collections': preview_collections,
+            'summary': {
+                'previewTotal': preview_created + preview_updated + preview_deleted,
+                'previewCreated': preview_created,
+                'previewUpdated': preview_updated,
+                'previewDeleted': preview_deleted,
+            }
+        }
+    }
+
+    before_result = fire_webhooks('merge', None, merge_id, None, preview_payload, merged_by, timing='before')
+
+    if before_result['beforeBlocked']:
+        return {
+            'success': False,
+            'error': 'Before webhook blocked the merge',
+            'webhookErrors': before_result['beforeErrors'],
+            'mergeId': None,
+        }
+
+    # === Phase 3: 执行合并（事务内）===
+    merge_backups_list = []  # 收集备份数据
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -1011,8 +1109,36 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             if strategy == 'theirs':
                 # 使用源版本数据
 
-                # 1. 删除目标数据中不在源版本中的记录
+                # 1. 删除目标数据中不在源版本中的记录（备份后删除）
                 for rec in diff['removed']:
+                    # 查询旧数据
+                    cur.execute(
+                        'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                        (collection, rec['id'], target_branch_id)
+                    )
+                    old_data_row = cur.fetchone()
+                    old_data = old_data_row[0] if old_data_row else None
+
+                    # 查询旧关联
+                    cur.execute(
+                        'SELECT field_name, related_collection, related_id '
+                        'FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                        (collection, rec['id'], target_branch_id)
+                    )
+                    old_rels = [{'field': r[0], 'relatedColl': r[1], 'relatedId': r[2]} for r in cur.fetchall()]
+
+                    # 备份数据（稍后批量插入）
+                    merge_backups_list.append({
+                        'id': f'backup-{uuid.uuid4().hex[:8]}',
+                        'collection': collection,
+                        'type': 'deleted',
+                        'record_id': rec['id'],
+                        'old_data': old_data,
+                        'new_data': None,
+                        'old_relations': old_rels,
+                        'new_relations': None,
+                    })
+
                     # 记录删除日志
                     display_name = pick_display_name(rec, fields) or rec['id']
                     log_operation(
@@ -1033,10 +1159,40 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                     )
                     coll_result['recordsDeleted'] += 1
 
-                # 2. 插入新增记录（添加来源标记）
+                # 2. 插入新增记录（添加来源标记 + 备份）
                 for rec in diff['added']:
                     data = {k: v for k, v in rec.items() if k != 'id'}
                     data['_mergedFrom'] = merged_from
+
+                    # 查询新关联数据（从源版本）
+                    new_rels = []
+                    if version_type == 'branch':
+                        cur.execute(
+                            'SELECT field_name, related_collection, related_id '
+                            'FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                            (collection, rec['id'], version_id)
+                        )
+                    else:
+                        cur.execute(
+                            'SELECT field_name, related_collection, related_id '
+                            'FROM project_version_relations WHERE version_id = %s AND collection = %s AND record_id = %s',
+                            (version_id, collection, rec['id'])
+                        )
+                    for r in cur.fetchall():
+                        new_rels.append({'field': r[0], 'relatedColl': r[1], 'relatedId': r[2]})
+
+                    # 备份数据
+                    merge_backups_list.append({
+                        'id': f'backup-{uuid.uuid4().hex[:8]}',
+                        'collection': collection,
+                        'type': 'created',
+                        'record_id': rec['id'],
+                        'old_data': None,
+                        'new_data': data,
+                        'old_relations': None,
+                        'new_relations': new_rels,
+                    })
+
                     # 记录创建日志
                     display_name = pick_display_name(data, fields) or rec['id']
                     log_operation(
@@ -1053,10 +1209,57 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
                     )
                     coll_result['recordsCreated'] += 1
 
-                # 3. 更新修改记录（添加来源标记）
+                # 3. 更新修改记录（添加来源标记 + 备份）
                 for item in diff['modified']:
+                    # 查询旧数据
+                    cur.execute(
+                        'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                        (collection, item['id'], target_branch_id)
+                    )
+                    old_data_row = cur.fetchone()
+                    old_data = old_data_row[0] if old_data_row else None
+
+                    # 查询旧关联
+                    cur.execute(
+                        'SELECT field_name, related_collection, related_id '
+                        'FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                        (collection, item['id'], target_branch_id)
+                    )
+                    old_rels = [{'field': r[0], 'relatedColl': r[1], 'relatedId': r[2]} for r in cur.fetchall()]
+
+                    # 新数据
                     new_data = {k: v for k, v in item['record'].items() if k != 'id'}
                     new_data['_mergedFrom'] = merged_from
+
+                    # 查询新关联（从源版本）
+                    new_rels = []
+                    if version_type == 'branch':
+                        cur.execute(
+                            'SELECT field_name, related_collection, related_id '
+                            'FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                            (collection, item['id'], version_id)
+                        )
+                    else:
+                        cur.execute(
+                            'SELECT field_name, related_collection, related_id '
+                            'FROM project_version_relations WHERE version_id = %s AND collection = %s AND record_id = %s',
+                            (version_id, collection, item['id'])
+                        )
+                    for r in cur.fetchall():
+                        new_rels.append({'field': r[0], 'relatedColl': r[1], 'relatedId': r[2]})
+
+                    # 备份数据
+                    merge_backups_list.append({
+                        'id': f'backup-{uuid.uuid4().hex[:8]}',
+                        'collection': collection,
+                        'type': 'updated',
+                        'record_id': item['id'],
+                        'old_data': old_data,
+                        'new_data': new_data,
+                        'old_relations': old_rels,
+                        'new_relations': new_rels,
+                    })
+
                     # 记录更新日志
                     display_name = pick_display_name(new_data, fields) or item['id']
                     log_operation(
@@ -1115,6 +1318,21 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             (total_created, total_updated, total_deleted, merge_id)
         )
 
+        # 插入备份数据到 merge_backups 表
+        for backup in merge_backups_list:
+            cur.execute(
+                'INSERT INTO merge_backups '
+                '(id, merge_id, collection, backup_type, record_id, old_data, new_data, '
+                'old_relations, new_relations) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                (backup['id'], merge_id, backup['collection'], backup['type'],
+                 backup['record_id'],
+                 psycopg2.extras.Json(backup['old_data']) if backup['old_data'] else None,
+                 psycopg2.extras.Json(backup['new_data']) if backup['new_data'] else None,
+                 psycopg2.extras.Json(backup['old_relations']) if backup['old_relations'] else None,
+                 psycopg2.extras.Json(backup['new_relations']) if backup['new_relations'] else None)
+            )
+
         # 不再更新版本状态为 merged（保持 active，允许多次合并）
         # 仅更新 merged_at 和 merged_by 作为最后一次合并记录
         cur.execute(
@@ -1122,27 +1340,49 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             (now, merged_by, version_id)
         )
 
-        # 获取项目名称
-        cur.execute('SELECT name FROM menus WHERE id = %s', (project_menu_id,))
-        proj_row = cur.fetchone()
-        project_name = proj_row[0] if proj_row else None
+        # 获取项目名称已在前面获取，此处无需重复查询
 
-    # 触发 webhook
-    import uuid as uuid_module
-    from utils.webhook_engine import fire_webhooks, build_merge_webhook_payload
-    merge_id = merge_result.get('mergeId') or f'merge-{uuid_module.uuid4().hex[:12]}'
-    webhook_payload = build_merge_webhook_payload(
+    # === Phase 4: After Webhook 触发 + 回滚检查 ===
+    from utils.webhook_engine import build_merge_webhook_payload
+    after_payload = build_merge_webhook_payload(
         merge_id,
         merge_result,
         project_menu_id,
-        project_name or '',
+        project_name,
         version_id,
         version_name,
         target_branch_id,
         target_branch_name,
         merged_by,
     )
-    fire_webhooks('merge', None, merge_id, None, webhook_payload, merged_by)
+
+    after_result = fire_webhooks('merge', None, merge_id, None, after_payload, merged_by, timing='after')
+
+    # 检查是否需要回滚
+    if after_result['rollbackNeeded']:
+        rollback_success = _rollback_merge(merge_id)
+
+        if rollback_success:
+            return {
+                'success': False,
+                'error': 'Merge rollback triggered by webhook failure',
+                'webhookErrors': after_result['afterErrors'],
+                'rollbackExecuted': True,
+                'mergeId': merge_id,
+            }
+        else:
+            # 回滚失败（罕见情况）
+            return {
+                'success': True,  # 操作已执行，回滚失败
+                'error': 'Webhook failed but rollback also failed',
+                'webhookErrors': after_result['afterErrors'],
+                'rollbackFailed': True,
+                'mergeId': merge_id,
+            }
+
+    # 返回 webhook 错误信息（即使成功也返回，供前端展示）
+    if after_result['afterErrors']:
+        merge_result['webhookErrors'] = after_result['afterErrors']
 
     return merge_result
 
@@ -1774,6 +2014,125 @@ def unlock_project_version(version_id):
         'success': True,
         'isLocked': False,
     }
+
+
+# ==================== Merge Rollback Support ====================
+
+def _rollback_merge(merge_id: str) -> bool:
+    """
+    回滚合并操作（从 merge_backups 恢复数据）
+
+    Parameters
+    ----------
+    merge_id : str
+        合并记录 ID
+
+    Returns
+    -------
+    bool
+        回滚是否成功
+    """
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+
+            # 获取目标分支 ID
+            cur.execute(
+                'SELECT target_branch_id, source_version_id FROM merge_records WHERE id = %s',
+                (merge_id,)
+            )
+            merge_row = cur.fetchone()
+            if not merge_row:
+                return False
+
+            target_branch_id, source_version_id = merge_row
+
+            # 获取备份数据
+            cur.execute(
+                'SELECT id, collection, backup_type, record_id, old_data, new_data, '
+                'old_relations, new_relations '
+                'FROM merge_backups WHERE merge_id = %s',
+                (merge_id,)
+            )
+            backups = cur.fetchall()
+
+            # 按类型回滚
+            for backup in backups:
+                backup_id, collection, backup_type, record_id, old_data, new_data, \
+                    old_relations, new_relations = backup
+
+                if backup_type == 'created':
+                    # 回滚创建：删除新记录
+                    cur.execute(
+                        'DELETE FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                        (collection, record_id, target_branch_id)
+                    )
+                    cur.execute(
+                        'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                        (collection, record_id, target_branch_id)
+                    )
+
+                elif backup_type == 'deleted':
+                    # 回滚删除：恢复旧记录
+                    if old_data:
+                        cur.execute(
+                            'INSERT INTO dynamic_data (id, collection, data, branch_id, created_at) '
+                            'VALUES (%s, %s, %s, %s, NOW())',
+                            (record_id, collection, psycopg2.extras.Json(old_data), target_branch_id)
+                        )
+
+                    # 恢复旧关联
+                    if old_relations:
+                        for rel in old_relations:
+                            cur.execute(
+                                'INSERT INTO data_relations '
+                                '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+                                'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                                (collection, record_id, rel.get('field'), rel.get('relatedColl'),
+                                 rel.get('relatedId'), target_branch_id)
+                            )
+
+                elif backup_type == 'updated':
+                    # 回滚更新：恢复旧数据
+                    if old_data:
+                        cur.execute(
+                            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 '
+                            'WHERE collection = %s AND id = %s AND branch_id = %s',
+                            (psycopg2.extras.Json(old_data), collection, record_id, target_branch_id)
+                        )
+
+                    # 恢复旧关联（先删除新关联，再恢复旧关联）
+                    cur.execute(
+                        'DELETE FROM data_relations WHERE collection = %s AND record_id = %s AND branch_id = %s',
+                        (collection, record_id, target_branch_id)
+                    )
+                    if old_relations:
+                        for rel in old_relations:
+                            cur.execute(
+                                'INSERT INTO data_relations '
+                                '(collection, record_id, field_name, related_collection, related_id, branch_id) '
+                                'VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING',
+                                (collection, record_id, rel.get('field'), rel.get('relatedColl'),
+                                 rel.get('relatedId'), target_branch_id)
+                            )
+
+            # 删除合并记录
+            cur.execute('DELETE FROM merge_records WHERE id = %s', (merge_id,))
+
+            # 删除备份数据
+            cur.execute('DELETE FROM merge_backups WHERE merge_id = %s', (merge_id,))
+
+            conn.commit()
+
+            # 记录回滚日志
+            log_operation('rollback', 'merge', merge_id, '合并回滚',
+                         f'Webhook 失败触发回滚，merge_id={merge_id}')
+
+            return True
+
+    except Exception as e:
+        log_operation('rollback_failed', 'merge', merge_id, '回滚失败', str(e))
+        return False
 
 
 def lock_main_branch(project_menu_id, locked_by, reason=None):

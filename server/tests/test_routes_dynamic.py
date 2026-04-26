@@ -47,6 +47,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.dynamic.log_operation'),
         patch('routes.dynamic.get_validation_script', return_value=None),
         patch('routes.dynamic.check_branch_lock', return_value=None),
+        patch('routes.dynamic._get_current_user_branch', return_value='main'),
     ]
     for p in patches:
         p.start()
@@ -161,9 +162,11 @@ class TestUpdateRecord:
         """更新记录后 version 递增"""
         client, mock_cursor, _, headers = setup
         # fetchone 调用序列：
-        # 1. get_primary_key_fields → None (无主键配置)
-        # 2. SELECT data, version → 返回旧数据和版本号
+        # 1. before webhook: SELECT data → 返回旧数据
+        # 2. get_primary_key_fields → None (无主键配置)
+        # 3. SELECT data, version → 返回旧数据和版本号
         mock_cursor.fetchone.side_effect = [
+            {'name': '旧记录'},                     # before webhook: old_data
             None,                                  # pk_fields: no page config
             ({'name': '旧记录'}, 2),               # old data + version
         ]
@@ -180,6 +183,7 @@ class TestUpdateRecord:
         """客户端版本不匹配时返回 409"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
+            {'name': '旧记录'},                     # before webhook: old_data
             None,                                  # pk_fields
             ({'name': '旧记录'}, 5),               # old data + version=5
         ]
@@ -196,6 +200,7 @@ class TestUpdateRecord:
         """不携带 _version 的更新请求仍然成功（向后兼容）"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
+            {'name': '旧记录'},                     # before webhook: old_data
             None,                                  # pk_fields
             ({'name': '旧记录'}, 1),               # old data + version
         ]
@@ -210,6 +215,7 @@ class TestUpdateRecord:
         """版本匹配但 UPDATE rowcount=0 时返回 409（竞态条件）"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
+            {'name': '旧记录'},                     # before webhook: old_data
             None,                                  # pk_fields
             ({'name': '旧记录'}, 2),               # old data + version
         ]
@@ -224,6 +230,7 @@ class TestUpdateRecord:
         """更新不存在的记录返回 404"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
+            None,   # before webhook: old_data (record not found)
             None,   # pk_fields
             None,   # old data → record not found
         ]

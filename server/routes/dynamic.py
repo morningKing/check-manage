@@ -481,6 +481,23 @@ def create_item(collection):
     if lock_info:
         return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
 
+    # Before webhook trigger
+    try:
+        from utils.webhook_engine import fire_webhooks
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        before_result = fire_webhooks(
+            'create', collection, rid, None, data,
+            user.get('username', ''), branch_id=branch_id, timing='before'
+        )
+        if before_result['beforeBlocked']:
+            return jsonify({
+                'error': 'Before webhook blocked the operation',
+                'webhookErrors': before_result['beforeErrors']
+            }), 400
+    except Exception as e:
+        import logging
+        logging.error(f'Before webhook trigger failed for create operation: {e}')
+
     with get_db() as conn:
         cur = conn.cursor()
         # Check primary key uniqueness (within the same branch)
@@ -537,12 +554,12 @@ def create_item(collection):
                           user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
-    # Fire webhook triggers
+    # Fire webhook triggers (after)
     try:
         from utils.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         fire_webhooks('create', collection, rid, None, data,
-                       user.get('username', ''), branch_id=branch_id)
+                       user.get('username', ''), branch_id=branch_id, timing='after')
     except Exception:
         pass
     body['_version'] = 1
@@ -566,6 +583,33 @@ def update_item(collection, item_id):
     lock_info = check_branch_lock(collection)
     if lock_info:
         return jsonify({"error": f"当前分支已被 {lock_info[1]} 锁定，无法进行修改操作"}), 403
+
+    # Before webhook trigger
+    try:
+        from utils.webhook_engine import fire_webhooks
+        user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
+        # Fetch old data for before webhook payload
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT data FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
+                (collection, item_id, branch_id)
+            )
+            old_row = cur.fetchone()
+            old_data = old_row[0] if old_row and old_row[0] else {}
+
+        before_result = fire_webhooks(
+            'update', collection, item_id, old_data, data,
+            user.get('username', ''), branch_id=branch_id, timing='before'
+        )
+        if before_result['beforeBlocked']:
+            return jsonify({
+                'error': 'Before webhook blocked the operation',
+                'webhookErrors': before_result['beforeErrors']
+            }), 400
+    except Exception as e:
+        import logging
+        logging.error(f'Before webhook trigger failed for update operation: {e}')
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -612,7 +656,6 @@ def update_item(collection, item_id):
             }), 409
         new_version = db_version + 1
         # Workflow validation: check status field transitions
-        from flask import g as flask_g
         from utils.workflow import validate_transition, execute_actions
         user_role = getattr(flask_g, 'current_user', {}).get('role', 'guest') if hasattr(flask_g, 'current_user') else 'guest'
         for field_cfg in (fields or []):
@@ -707,12 +750,12 @@ def update_item(collection, item_id):
                           user.get('username', ''), tcur, user.get('id'))
     except Exception:
         pass
-    # Fire webhook triggers
+    # Fire webhook triggers (after)
     try:
         from utils.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         fire_webhooks('update', collection, item_id, old_data, data,
-                       user.get('username', ''), branch_id=branch_id)
+                       user.get('username', ''), branch_id=branch_id, timing='after')
     except Exception:
         pass
     return jsonify(body)

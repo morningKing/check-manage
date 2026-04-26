@@ -35,16 +35,18 @@ def row_to_dict(row):
         'enabled': row[3],
         'sourceCollections': row[4] or [],  # JSONB array
         'triggerEvent': row[5],
-        'triggerCondition': row[6] or {},
-        'webhookUrl': row[7],
-        'secret': row[8],
-        'timeout': row[9],
-        'retries': row[10],
-        'executionOrder': row[11],
-        'createdAt': row[12].isoformat() if row[12] else None,
-        'updatedAt': row[13].isoformat() if row[13] else None,
-        'createdBy': row[14],
-        'updatedBy': row[15],
+        'triggerTiming': row[6] or 'after',  # 新增字段
+        'triggerCondition': row[7] or {},
+        'webhookUrl': row[8],
+        'secret': row[9],
+        'timeout': row[10],
+        'retries': row[11],
+        'executionOrder': row[12],
+        'rollbackOnFailure': row[13] or False,  # 新增字段
+        'createdAt': row[14].isoformat() if row[14] else None,
+        'updatedAt': row[15].isoformat() if row[15] else None,
+        'createdBy': row[16],
+        'updatedBy': row[17],
     }
 
 
@@ -61,8 +63,8 @@ def list_rules():
             cur = conn.cursor()
             cur.execute(
                 'SELECT id, name, description, enabled, source_collections, trigger_event, '
-                'trigger_condition, webhook_url, secret, timeout, retries, execution_order, '
-                'created_at, updated_at, created_by, updated_by '
+                'trigger_timing, trigger_condition, webhook_url, secret, timeout, retries, '
+                'execution_order, rollback_on_failure, created_at, updated_at, created_by, updated_by '
                 'FROM webhook_rules ORDER BY execution_order'
             )
             rows = cur.fetchall()
@@ -105,16 +107,16 @@ def create_rule():
             cur = conn.cursor()
             cur.execute(
                 'INSERT INTO webhook_rules (id, name, description, enabled, source_collections, '
-                'trigger_event, trigger_condition, webhook_url, secret, timeout, retries, '
-                'execution_order, created_by) '
-                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+                'trigger_event, trigger_timing, trigger_condition, webhook_url, secret, timeout, retries, '
+                'execution_order, rollback_on_failure, created_by) '
+                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
                 (rule_id, body.get('name', ''), body.get('description', ''),
                  body.get('enabled', True), psycopg2.extras.Json(body.get('sourceCollections', [])),
-                 body.get('triggerEvent', 'create'),
+                 body.get('triggerEvent', 'create'), body.get('triggerTiming', 'after'),
                  psycopg2.extras.Json(body.get('triggerCondition', {})),
                  body.get('webhookUrl', ''), body.get('secret', ''),
                  body.get('timeout', 30), body.get('retries', 3),
-                 body.get('executionOrder', 0), username)
+                 body.get('executionOrder', 0), body.get('rollbackOnFailure', False), username)
             )
             conn.commit()
 
@@ -137,8 +139,8 @@ def get_rule(rule_id):
             cur = conn.cursor()
             cur.execute(
                 'SELECT id, name, description, enabled, source_collections, trigger_event, '
-                'trigger_condition, webhook_url, secret, timeout, retries, execution_order, '
-                'created_at, updated_at, created_by, updated_by '
+                'trigger_timing, trigger_condition, webhook_url, secret, timeout, retries, '
+                'execution_order, rollback_on_failure, created_at, updated_at, created_by, updated_by '
                 'FROM webhook_rules WHERE id = %s',
                 (rule_id,)
             )
@@ -171,6 +173,8 @@ def update_rule(rule_id):
         ('description', 'description'),
         ('enabled', 'enabled'),
         ('triggerEvent', 'trigger_event'),
+        ('triggerTiming', 'trigger_timing'),
+        ('rollbackOnFailure', 'rollback_on_failure'),
         ('webhookUrl', 'webhook_url'),
         ('secret', 'secret'),
         ('timeout', 'timeout'),
