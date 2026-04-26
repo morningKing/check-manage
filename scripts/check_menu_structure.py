@@ -208,6 +208,48 @@ def infer_fixes(violations, menus):
     return fixes
 
 
+def print_fix_report(fixes):
+    """输出详细的修复报告"""
+    if not fixes:
+        print("\n[结果] 所有菜单结构正常，无需修复。")
+        return
+
+    print("\n" + "=" * 70)
+    print("修复报告详情")
+    print("=" * 70)
+
+    for i, fix in enumerate(fixes, 1):
+        menu = fix['menu']
+        print(f"\n{i}. 菜单ID: {menu['id']} ({menu['name']})")
+        print(f"   问题: {fix['issue']}")
+        print(f"   当前: menuType={fix['old_menuType']}, parentId={fix['old_parentId']}")
+        print(f"   修复: menuType={fix['new_menuType']}, parentId={fix['new_parentId']}")
+
+
+def print_tree_structure(menus, title):
+    """输出菜单树结构"""
+    print(f"\n{title}")
+    print("-" * 70)
+
+    menu_map = build_menu_map(menus)
+
+    # 构建树结构
+    roots = [m for m in menus if m['parentId'] is None]
+
+    def print_menu(menu, indent=0):
+        prefix = "  " * indent
+        marker = "├─" if indent > 0 else ""
+        print(f"{prefix}{marker}{menu['name']} ({menu['menuType']}) [{menu['id']}]")
+
+        # 找到子菜单
+        children = [m for m in menus if m['parentId'] == menu['id']]
+        for child in children:
+            print_menu(child, indent + 1)
+
+    for root in roots:
+        print_menu(root)
+
+
 def main():
     """主流程：检查并修复菜单结构"""
     print("=" * 70)
@@ -230,6 +272,12 @@ def main():
                 sys.exit(1)
 
             print(f"[推断] 生成 {len(fixes)} 个修复方案")
+
+            # 输出修复预览报告
+            print_fix_report(fixes)
+
+            # 输出修复前树结构
+            print_tree_structure(menus, "\n修复前菜单树结构")
 
             # TODO: 实现修复执行和报告输出
             print("\n检查完成。")
