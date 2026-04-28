@@ -87,16 +87,17 @@ sequenceDiagram
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/v1/collections` | 获取所有已开放的集合列表 |
-| GET | `/api/v1/collections/{collection}` | 获取集合中的数据（分页） |
-| GET | `/api/v1/collections/{collection}/{id}` | 获取单条记录详情 |
+| GET | `/api/v1/branches` | 获取所有可用分支列表 |
+| GET | `/api/v1/collections/{collection}` | 获取集合中的数据（分页，支持 branchId 参数） |
+| GET | `/api/v1/collections/{collection}/{id}` | 获取单条记录详情（支持 branchId 参数） |
 | GET | `/api/v1/collections/{collection}/schema` | 获取集合的字段定义 |
 
 ### 4.2 写入接口（需开启「允许写入」）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/collections/{collection}` | 新增一条记录 |
-| PUT | `/api/v1/collections/{collection}/{id}` | 修改一条记录（支持部分更新） |
+| POST | `/api/v1/collections/{collection}` | 新增一条记录（支持 branchId 参数） |
+| PUT | `/api/v1/collections/{collection}/{id}` | 修改一条记录（支持部分更新，支持 branchId 参数） |
 
 ---
 
@@ -151,14 +152,69 @@ GET /api/v1/collections
 
 ---
 
-### 5.2 获取集合数据（分页）
+### 5.2 获取分支列表
 
-获取指定集合中的所有记录，支持分页。
+获取所有可用于查询的分支。`main` 分支始终可用，其他分支来自项目版本管理中的活跃分支。
 
 **请求**
 
 ```
-GET /api/v1/collections/{collection}?page=1&pageSize=20
+GET /api/v1/branches
+```
+
+**请求头**
+
+| 名称 | 必填 | 说明 |
+|------|------|------|
+| X-API-Key | 是 | API 密钥 |
+
+**响应 — 200**
+
+```json
+{
+  "data": [
+    {
+      "id": "main",
+      "name": "main",
+      "description": "Default main branch",
+      "status": "active"
+    },
+    {
+      "id": "pv-abc123",
+      "name": "版本A",
+      "description": "测试版本",
+      "projectMenuId": "menu-project-1",
+      "versionType": "branch",
+      "status": "active",
+      "createdAt": "2025-12-01T08:30:00.000Z"
+    }
+  ]
+}
+```
+
+**响应字段说明**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `data` | array | 分支列表 |
+| `data[].id` | string | 分支标识（用于后续接口的 branchId 参数） |
+| `data[].name` | string | 分支显示名称 |
+| `data[].description` | string | 分支描述 |
+| `data[].status` | string | 分支状态（仅返回 active 状态的分支） |
+| `data[].projectMenuId` | string | 所属项目菜单ID（仅非 main 分支） |
+| `data[].versionType` | string | 版本类型（仅非 main 分支） |
+| `data[].createdAt` | string | 创建时间（仅非 main 分支） |
+
+---
+
+### 5.3 获取集合数据（分页）
+
+获取指定集合中的所有记录，支持分页和分支选择。
+
+**请求**
+
+```
+GET /api/v1/collections/{collection}?page=1&pageSize=20&branchId=main
 ```
 
 **路径参数**
@@ -173,6 +229,7 @@ GET /api/v1/collections/{collection}?page=1&pageSize=20
 |------|------|--------|------|
 | page | integer | 1 | 页码（从 1 开始） |
 | pageSize | integer | 20 | 每页条数（最大 100） |
+| branchId | string | main | 分支标识（来自分支列表接口，`main` 或项目版本ID） |
 
 **响应 — 200**
 
@@ -199,7 +256,8 @@ GET /api/v1/collections/{collection}?page=1&pageSize=20
     "pageSize": 20,
     "total": 128,
     "totalPages": 7
-  }
+  },
+  "branchId": "main"
 }
 ```
 
@@ -215,23 +273,25 @@ GET /api/v1/collections/{collection}?page=1&pageSize=20
 | `pagination.pageSize` | integer | 每页条数 |
 | `pagination.total` | integer | 总记录数 |
 | `pagination.totalPages` | integer | 总页数 |
+| `branchId` | string | 当前查询使用的分支标识 |
 
 **错误响应**
 
 | HTTP 状态码 | error | 触发条件 |
 |-------------|-------|---------|
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
+| 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
 
 ---
 
-### 5.3 获取单条记录
+### 5.4 获取单条记录
 
-根据记录 ID 获取单条记录的完整数据。
+根据记录 ID 获取单条记录的完整数据，支持分支选择。
 
 **请求**
 
 ```
-GET /api/v1/collections/{collection}/{id}
+GET /api/v1/collections/{collection}/{id}?branchId=main
 ```
 
 **路径参数**
@@ -240,6 +300,12 @@ GET /api/v1/collections/{collection}/{id}
 |------|------|------|
 | collection | string | 集合标识 |
 | id | string | 记录 ID |
+
+**查询参数**
+
+| 名称 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| branchId | string | main | 分支标识（来自分支列表接口） |
 
 **响应 — 200**
 
@@ -252,7 +318,8 @@ GET /api/v1/collections/{collection}/{id}
     "status": "active",
     "description": "验证登录功能在各种场景下的行为",
     "tags": ["smoke", "login"],
-    "createdAt": "2025-12-01T08:30:00.000Z"
+    "createdAt": "2025-12-01T08:30:00.000Z",
+    "branchId": "main"
   }
 }
 ```
@@ -263,10 +330,11 @@ GET /api/v1/collections/{collection}/{id}
 |-------------|-------|---------|
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
 | 404 | `Record not found` | 记录 ID 不存在 |
+| 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
 
 ---
 
-### 5.4 获取集合字段定义
+### 5.5 获取集合字段定义
 
 获取指定集合的字段配置信息，用于了解数据结构。
 
@@ -371,14 +439,14 @@ GET /api/v1/collections/{collection}/schema
 
 ---
 
-### 5.5 新增记录
+### 5.6 新增记录
 
-向指定集合中新增一条记录。集合必须开启「允许写入」。
+向指定集合中新增一条记录。集合必须开启「允许写入」，支持指定分支。
 
 **请求**
 
 ```
-POST /api/v1/collections/{collection}
+POST /api/v1/collections/{collection}?branchId=main
 Content-Type: application/json
 ```
 
@@ -387,6 +455,12 @@ Content-Type: application/json
 | 名称 | 类型 | 说明 |
 |------|------|------|
 | collection | string | 集合标识 |
+
+**查询参数**
+
+| 名称 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| branchId | string | main | 分支标识（来自分支列表接口） |
 
 **请求体**
 
@@ -414,7 +488,8 @@ Content-Type: application/json
     "priority": "high",
     "status": "active",
     "description": "通过 API 创建的测试用例",
-    "createdAt": "2026-03-05T10:30:00.000Z"
+    "createdAt": "2026-03-05T10:30:00.000Z",
+    "branchId": "main"
   }
 }
 ```
@@ -427,19 +502,20 @@ Content-Type: application/json
 | 400 | `Validation failed` | 必填字段缺失（`details` 数组包含具体字段） |
 | 403 | `Collection is read-only` | 集合未开启「允许写入」 |
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
-| 409 | `Record ID already exists` | 自定义 ID 已存在 |
+| 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
+| 409 | `Record ID already exists` | 自定义 ID 已存在（在同一分支下） |
 | 409 | `Primary key conflict` | 主键字段值与已有记录重复 |
 
 ---
 
-### 5.6 修改记录
+### 5.7 修改记录
 
-修改指定集合中的一条记录。支持**部分更新**：只传需要修改的字段即可，未传的字段保持原值。
+修改指定集合中的一条记录。支持**部分更新**：只传需要修改的字段即可，未传的字段保持原值，支持指定分支。
 
 **请求**
 
 ```
-PUT /api/v1/collections/{collection}/{id}
+PUT /api/v1/collections/{collection}/{id}?branchId=main
 Content-Type: application/json
 ```
 
@@ -449,6 +525,12 @@ Content-Type: application/json
 |------|------|------|
 | collection | string | 集合标识 |
 | id | string | 记录 ID |
+
+**查询参数**
+
+| 名称 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| branchId | string | main | 分支标识（来自分支列表接口） |
 
 **请求体**
 
@@ -475,7 +557,8 @@ Content-Type: application/json
     "status": "inactive",
     "description": "已通过 API 更新",
     "createdAt": "2025-12-01T08:30:00.000Z",
-    "_version": 2
+    "_version": 2,
+    "branchId": "main"
   }
 }
 ```
@@ -488,7 +571,8 @@ Content-Type: application/json
 | 400 | `Validation failed` | 更新后必填字段为空（`details` 数组包含具体字段） |
 | 403 | `Collection is read-only` | 集合未开启「允许写入」 |
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
-| 404 | `Record not found` | 记录 ID 不存在 |
+| 404 | `Record not found` | 记录 ID 不存在（或在该分支下不存在） |
+| 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
 | 409 | `Record has been modified...` | 乐观锁冲突（`code: "VERSION_CONFLICT"`） |
 | 409 | `Primary key conflict` | 主键字段值与已有记录重复 |
 
@@ -506,31 +590,37 @@ BASE_URL="http://localhost:7001/api/v1"
 # 1. 查看所有已开放的集合
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections" | jq
 
-# 2. 获取第一页数据（默认每页 20 条）
+# 2. 查看所有可用分支
+curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/branches" | jq
+
+# 3. 获取第一页数据（默认每页 20 条，默认 main 分支）
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases" | jq
 
-# 3. 获取第 2 页，每页 50 条
+# 4. 获取第 2 页，每页 50 条
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases?page=2&pageSize=50" | jq
 
-# 4. 获取单条记录
-curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases/a1b2c3d4" | jq
+# 5. 获取指定分支的数据
+curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases?branchId=pv-abc123" | jq
 
-# 5. 查看集合字段定义
+# 6. 获取单条记录（指定分支）
+curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases/a1b2c3d4?branchId=main" | jq
+
+# 7. 查看集合字段定义
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections/inspection-cases/schema" | jq
 
-# 6. 新增一条记录
+# 8. 新增一条记录（指定分支）
 curl -s -X POST \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"caseName":"API新增用例","priority":"high","status":"active"}' \
-  "$BASE_URL/collections/inspection-cases" | jq
+  "$BASE_URL/collections/inspection-cases?branchId=main" | jq
 
-# 7. 修改一条记录（部分更新）
+# 9. 修改一条记录（部分更新，指定分支）
 curl -s -X PUT \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"status":"inactive"}' \
-  "$BASE_URL/collections/inspection-cases/a1b2c3d4" | jq
+  "$BASE_URL/collections/inspection-cases/a1b2c3d4?branchId=main" | jq
 ```
 
 ### 6.2 Python
@@ -550,15 +640,22 @@ def get_collections():
     return resp.json()["data"]
 
 
-def get_all_records(collection):
-    """遍历分页获取集合中的所有记录"""
+def get_branches():
+    """获取所有可用分支"""
+    resp = requests.get(f"{BASE_URL}/branches", headers=HEADERS)
+    resp.raise_for_status()
+    return resp.json()["data"]
+
+
+def get_all_records(collection, branch_id="main"):
+    """遍历分页获取集合中的所有记录（可指定分支）"""
     all_records = []
     page = 1
     while True:
         resp = requests.get(
             f"{BASE_URL}/collections/{collection}",
             headers=HEADERS,
-            params={"page": page, "pageSize": 100},
+            params={"page": page, "pageSize": 100, "branchId": branch_id},
         )
         resp.raise_for_status()
         body = resp.json()
@@ -569,11 +666,12 @@ def get_all_records(collection):
     return all_records
 
 
-def get_record(collection, record_id):
-    """获取单条记录"""
+def get_record(collection, record_id, branch_id="main"):
+    """获取单条记录（可指定分支）"""
     resp = requests.get(
         f"{BASE_URL}/collections/{collection}/{record_id}",
         headers=HEADERS,
+        params={"branchId": branch_id},
     )
     resp.raise_for_status()
     return resp.json()["data"]
@@ -589,23 +687,25 @@ def get_schema(collection):
     return resp.json()["data"]
 
 
-def create_record(collection, data):
-    """新增一条记录"""
+def create_record(collection, data, branch_id="main"):
+    """新增一条记录（可指定分支）"""
     resp = requests.post(
         f"{BASE_URL}/collections/{collection}",
         headers={**HEADERS, "Content-Type": "application/json"},
         json=data,
+        params={"branchId": branch_id},
     )
     resp.raise_for_status()
     return resp.json()["data"]
 
 
-def update_record(collection, record_id, data):
-    """修改一条记录（部分更新）"""
+def update_record(collection, record_id, data, branch_id="main"):
+    """修改一条记录（部分更新，可指定分支）"""
     resp = requests.put(
         f"{BASE_URL}/collections/{collection}/{record_id}",
         headers={**HEADERS, "Content-Type": "application/json"},
         json=data,
+        params={"branchId": branch_id},
     )
     resp.raise_for_status()
     return resp.json()["data"]
@@ -619,15 +719,28 @@ if __name__ == "__main__":
         rw = "读写" if c["writable"] else "只读"
         print(f"[{c['collection']}] {c['name']} ({rw})")
 
-    # 获取第一个集合的所有数据
+    # 列出所有可用分支
+    branches = get_branches()
+    print("\n可用分支:")
+    for b in branches:
+        print(f"  {b['id']}: {b['name']}")
+
+    # 获取第一个集合的所有数据（指定分支）
     if collections:
         name = collections[0]["collection"]
-        records = get_all_records(name)
-        print(f"\n共 {len(records)} 条记录")
+        # 获取 main 分支数据
+        records = get_all_records(name, branch_id="main")
+        print(f"\nmain 分支共 {len(records)} 条记录")
         for r in records[:3]:
             print(f"  {r['id']}: {r}")
 
-    # 新增记录
+        # 也可以获取其他分支数据
+        if len(branches) > 1:
+            branch_id = branches[1]["id"]
+            branch_records = get_all_records(name, branch_id=branch_id)
+            print(f"\n{branch_id} 分支共 {len(branch_records)} 条记录")
+
+    # 新增记录（指定分支）
     if collections:
         writable = [c for c in collections if c["writable"]]
         if writable:
@@ -636,14 +749,14 @@ if __name__ == "__main__":
                 "caseName": "API 新增用例",
                 "priority": "medium",
                 "status": "active",
-            })
-            print(f"\n新增成功: {new_record['id']}")
+            }, branch_id="main")
+            print(f"\n新增成功: {new_record['id']} (分支: {new_record['branchId']})")
 
-            # 修改记录
+            # 修改记录（指定分支）
             updated = update_record(col, new_record["id"], {
                 "status": "inactive",
-            })
-            print(f"修改成功: status={updated['status']}")
+            }, branch_id="main")
+            print(f"修改成功: status={updated['status']} (分支: {updated['branchId']})")
 ```
 
 ### 6.3 JavaScript / Node.js
@@ -682,19 +795,25 @@ async function getCollections() {
   return data;
 }
 
-// 分页获取数据
-async function getRecords(collection, page = 1, pageSize = 20) {
+// 获取所有分支
+async function getBranches() {
+  const { data } = await fetchAPI("/branches");
+  return data;
+}
+
+// 分页获取数据（可指定分支）
+async function getRecords(collection, page = 1, pageSize = 20, branchId = "main") {
   return fetchAPI(`/collections/${collection}`, {
-    params: { page, pageSize },
+    params: { page, pageSize, branchId },
   });
 }
 
-// 获取所有数据（自动遍历分页）
-async function getAllRecords(collection) {
+// 获取所有数据（自动遍历分页，可指定分支）
+async function getAllRecords(collection, branchId = "main") {
   const all = [];
   let page = 1;
   while (true) {
-    const body = await getRecords(collection, page, 100);
+    const body = await getRecords(collection, page, 100, branchId);
     all.push(...body.data);
     if (page >= body.pagination.totalPages) break;
     page++;
@@ -702,9 +821,11 @@ async function getAllRecords(collection) {
   return all;
 }
 
-// 获取单条记录
-async function getRecord(collection, id) {
-  const { data } = await fetchAPI(`/collections/${collection}/${id}`);
+// 获取单条记录（可指定分支）
+async function getRecord(collection, id, branchId = "main") {
+  const { data } = await fetchAPI(`/collections/${collection}/${id}`, {
+    params: { branchId },
+  });
   return data;
 }
 
@@ -714,20 +835,22 @@ async function getSchema(collection) {
   return data;
 }
 
-// 新增记录
-async function createRecord(collection, recordData) {
+// 新增记录（可指定分支）
+async function createRecord(collection, recordData, branchId = "main") {
   const { data } = await fetchAPI(`/collections/${collection}`, {
     method: "POST",
     body: recordData,
+    params: { branchId },
   });
   return data;
 }
 
-// 修改记录（部分更新）
-async function updateRecord(collection, id, recordData) {
+// 修改记录（部分更新，可指定分支）
+async function updateRecord(collection, id, recordData, branchId = "main") {
   const { data } = await fetchAPI(`/collections/${collection}/${id}`, {
     method: "PUT",
     body: recordData,
+    params: { branchId },
   });
   return data;
 }
@@ -737,26 +860,38 @@ async function updateRecord(collection, id, recordData) {
   const collections = await getCollections();
   console.log("可用集合:", collections);
 
+  // 列出所有可用分支
+  const branches = await getBranches();
+  console.log("可用分支:", branches);
+
   if (collections.length > 0) {
     const name = collections[0].collection;
-    const records = await getAllRecords(name);
-    console.log(`${name} 共 ${records.length} 条记录`);
+    // 获取 main 分支数据
+    const records = await getAllRecords(name, "main");
+    console.log(`${name} main分支共 ${records.length} 条记录`);
+
+    // 也可以获取其他分支数据
+    if (branches.length > 1) {
+      const branchId = branches[1].id;
+      const branchRecords = await getAllRecords(name, branchId);
+      console.log(`${name} ${branchId}分支共 ${branchRecords.length} 条记录`);
+    }
   }
 
-  // 新增记录
+  // 新增记录（指定分支）
   const writable = collections.filter((c) => c.writable);
   if (writable.length > 0) {
     const col = writable[0].collection;
     const newRecord = await createRecord(col, {
       caseName: "API 新增用例",
       priority: "medium",
-    });
-    console.log("新增:", newRecord.id);
+    }, "main");
+    console.log("新增:", newRecord.id, "分支:", newRecord.branchId);
 
-    // 修改记录
+    // 修改记录（指定分支）
     const updated = await updateRecord(col, newRecord.id, {
       status: "inactive",
-    });
+    }, "main");
     console.log("修改:", updated);
   }
 })();
@@ -878,8 +1013,9 @@ public class OpenApiClient {
 | 401 | `API key has been revoked` | API Key 已被停用 |
 | 403 | `Collection is read-only` | 集合未开启写入权限 |
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API |
-| 404 | `Record not found` | 记录不存在 |
-| 409 | `Record ID already exists` | 新增时 ID 冲突 |
+| 404 | `Record not found` | 记录不存在（或在该分支下不存在） |
+| 404 | `Branch not found or not active` | 分支不存在或非活跃状态 |
+| 409 | `Record ID already exists` | 新增时 ID 冲突（在同一分支下） |
 | 409 | `Primary key conflict` | 主键字段值重复 |
 | 409 | `Record has been modified...` | 乐观锁版本冲突 |
 
@@ -966,6 +1102,22 @@ flowchart TD
 **Q: 如何判断哪些集合已开放 API 访问？**
 
 调用 `GET /api/v1/collections` 即可获取所有已开放的集合列表。未开放的集合不会出现在返回结果中。返回结果中 `writable` 字段标识该集合是否允许写入。
+
+**Q: 如何查看有哪些可用的分支？**
+
+调用 `GET /api/v1/branches` 即可获取所有可用分支列表。`main` 分支始终可用，其他分支来自项目版本管理中的活跃分支（`status = 'active'`）。
+
+**Q: 如何查询特定分支的数据？**
+
+在请求中添加 `branchId` 查询参数即可。例如：
+```
+GET /api/v1/collections/inspection-cases?branchId=pv-abc123
+```
+默认情况下（不传 `branchId`），查询的是 `main` 分支的数据。
+
+**Q: 能否通过 API 写入数据到特定分支？**
+
+可以。在 POST/PUT 请求中添加 `branchId` 参数即可向指定分支写入数据。注意：写入前需要确保分支存在且处于活跃状态，否则将返回 `404 Branch not found or not active` 错误。
 
 **Q: 能否通过 API 写入数据？**
 

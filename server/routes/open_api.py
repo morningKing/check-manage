@@ -39,6 +39,29 @@ def check_collection_public(cur, page_id):
     return row[0], row[1]
 
 
+def validate_branch_id(cur, branch_id):
+    """Validate branch_id exists. Returns True if valid, False otherwise.
+    'main' is always valid. For other branches, check project_versions table."""
+    if branch_id == 'main':
+        return True
+    cur.execute(
+        'SELECT id FROM project_versions WHERE id = %s AND status = %s',
+        (branch_id, 'active')
+    )
+    return cur.fetchone() is not None
+
+
+def get_request_branch_id(cur):
+    """Get branch_id from request query params and validate it.
+    Returns (branch_id, error_response) tuple. error_response is None if valid."""
+    branch_id = request.args.get('branchId', OPEN_API_BRANCH)
+    if not branch_id:
+        branch_id = OPEN_API_BRANCH
+    if branch_id != OPEN_API_BRANCH and not validate_branch_id(cur, branch_id):
+        return None, (jsonify({'error': 'Branch not found or not active'}), 404)
+    return branch_id, None
+
+
 def check_collection_writable(cur, collection):
     """Check if collection is both public and writable. Returns error response or None."""
     page_id = f'page-{collection}'
@@ -85,8 +108,10 @@ def get_primary_key_fields(cur, collection):
     return [f['fieldName'] for f in row[0] if f.get('isPrimaryKey')]
 
 
-def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, branch_id=OPEN_API_BRANCH):
+def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, branch_id=None):
     """Check if primary key combination is unique. Returns error message or None."""
+    if branch_id is None:
+        branch_id = OPEN_API_BRANCH
     if not pk_fields:
         return None
     pk_values = {}
@@ -136,6 +161,34 @@ def list_collections():
     return jsonify({'data': collections})
 
 
+@open_api_bp.route('/branches', methods=['GET'])
+@api_key_required
+def list_branches():
+    """List all active branches available for Open API queries."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        # Get all active branches from project_versions
+        cur.execute(
+            'SELECT id, name, description, project_menu_id, version_type, status, created_at '
+            'FROM project_versions WHERE status = %s ORDER BY created_at DESC',
+            ('active',)
+        )
+        rows = cur.fetchall()
+
+    branches = [{'id': 'main', 'name': 'main', 'description': 'Default main branch', 'status': 'active'}]
+    for row in rows:
+        branches.append({
+            'id': row[0],
+            'name': row[1],
+            'description': row[2],
+            'projectMenuId': row[3],
+            'versionType': row[4],
+            'status': row[5],
+            'createdAt': format_ts(row[6]),
+        })
+    return jsonify({'data': branches})
+
+
 @open_api_bp.route('/collections/<collection>', methods=['GET'])
 @api_key_required
 def list_collection_data(collection):
@@ -146,6 +199,11 @@ def list_collection_data(collection):
         api_public, _ = check_collection_public(cur, page_id)
         if not api_public:
             return jsonify({'error': 'Collection not found or not public'}), 404
+
+        # Get and validate branch_id
+        branch_id, branch_error = get_request_branch_id(cur)
+        if branch_error:
+            return branch_error
 
         page = request.args.get('page', 1, type=int)
         page_size = request.args.get('pageSize', 20, type=int)
@@ -173,7 +231,7 @@ def list_collection_data(collection):
 
         cur.execute(
             'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND branch_id = %s' + extra_where,
-            [collection, OPEN_API_BRANCH] + q_params,
+            [collection, branch_id] + q_params,
         )
         total = cur.fetchone()[0]
 
@@ -181,7 +239,7 @@ def list_collection_data(collection):
             'SELECT id, collection, data, created_at FROM dynamic_data '
             'WHERE collection = %s AND branch_id = %s' + extra_where + ' ORDER BY created_at '
             'LIMIT %s OFFSET %s',
-            [collection, OPEN_API_BRANCH] + q_params + [page_size, offset],
+            [collection, branch_id] + q_params + [page_size, offset],
         )
         rows = cur.fetchall()
 
@@ -193,6 +251,7 @@ def list_collection_data(collection):
             'total': total,
             'totalPages': (total + page_size - 1) // page_size if page_size > 0 else 0,
         },
+        'branchId': branch_id,
     })
 
 
@@ -207,16 +266,23 @@ def get_collection_item(collection, item_id):
         if not api_public:
             return jsonify({'error': 'Collection not found or not public'}), 404
 
+        # Get and validate branch_id
+        branch_id, branch_error = get_request_branch_id(cur)
+        if branch_error:
+            return branch_error
+
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
             'WHERE collection = %s AND id = %s AND branch_id = %s',
-            (collection, item_id, OPEN_API_BRANCH),
+            (collection, item_id, branch_id),
         )
         data_row = cur.fetchone()
 
     if not data_row:
         return jsonify({'error': 'Record not found'}), 404
-    return jsonify({'data': row_to_record(data_row)})
+    result = row_to_record(data_row)
+    result['branchId'] = branch_id
+    return jsonify({'data': result})
 
 
 @open_api_bp.route('/collections/<collection>/schema', methods=['GET'])
@@ -268,6 +334,11 @@ def create_collection_item(collection):
         if error_resp:
             return error_resp
 
+        # Get and validate branch_id
+        branch_id, branch_error = get_request_branch_id(cur)
+        if branch_error:
+            return branch_error
+
         body = request.get_json(silent=True)
         if not body:
             return jsonify({'error': 'Request body is required'}), 400
@@ -285,7 +356,7 @@ def create_collection_item(collection):
         # Check ID uniqueness
         cur.execute(
             'SELECT id FROM dynamic_data WHERE id = %s AND branch_id = %s',
-            (record_id, OPEN_API_BRANCH),
+            (record_id, branch_id),
         )
         if cur.fetchone():
             return jsonify({'error': 'Record ID already exists'}), 409
@@ -293,7 +364,7 @@ def create_collection_item(collection):
         # Check primary key uniqueness
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
-            pk_error = check_primary_key_unique(cur, collection, body, pk_fields, branch_id=OPEN_API_BRANCH)
+            pk_error = check_primary_key_unique(cur, collection, body, pk_fields, branch_id=branch_id)
             if pk_error:
                 return jsonify({'error': pk_error}), 409
 
@@ -303,11 +374,13 @@ def create_collection_item(collection):
         cur.execute(
             'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s) '
             'RETURNING id, collection, data, created_at',
-            (record_id, collection, psycopg2.extras.Json(data), OPEN_API_BRANCH),
+            (record_id, collection, psycopg2.extras.Json(data), branch_id),
         )
         new_row = cur.fetchone()
 
-    return jsonify({'data': row_to_record(new_row)}), 201
+    result = row_to_record(new_row)
+    result['branchId'] = branch_id
+    return jsonify({'data': result}), 201
 
 
 @open_api_bp.route('/collections/<collection>/<item_id>', methods=['PUT'])
@@ -322,6 +395,11 @@ def update_collection_item(collection, item_id):
         if error_resp:
             return error_resp
 
+        # Get and validate branch_id
+        branch_id, branch_error = get_request_branch_id(cur)
+        if branch_error:
+            return branch_error
+
         body = request.get_json(silent=True)
         if not body:
             return jsonify({'error': 'Request body is required'}), 400
@@ -329,7 +407,7 @@ def update_collection_item(collection, item_id):
         # Check record exists
         cur.execute(
             'SELECT id, data, version FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
-            (collection, item_id, OPEN_API_BRANCH),
+            (collection, item_id, branch_id),
         )
         existing = cur.fetchone()
         if not existing:
@@ -363,7 +441,7 @@ def update_collection_item(collection, item_id):
         pk_fields = get_primary_key_fields(cur, collection)
         if pk_fields:
             pk_error = check_primary_key_unique(
-                cur, collection, merged, pk_fields, exclude_id=item_id, branch_id=OPEN_API_BRANCH
+                cur, collection, merged, pk_fields, exclude_id=item_id, branch_id=branch_id
             )
             if pk_error:
                 return jsonify({'error': pk_error}), 409
@@ -372,7 +450,7 @@ def update_collection_item(collection, item_id):
         cur.execute(
             'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
             'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version, OPEN_API_BRANCH),
+            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version, branch_id),
         )
         if cur.rowcount == 0:
             return jsonify({
@@ -383,10 +461,11 @@ def update_collection_item(collection, item_id):
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
             'WHERE collection = %s AND id = %s AND branch_id = %s',
-            (collection, item_id, OPEN_API_BRANCH),
+            (collection, item_id, branch_id),
         )
         updated_row = cur.fetchone()
 
     result = row_to_record(updated_row)
     result['_version'] = new_version
+    result['branchId'] = branch_id
     return jsonify({'data': result})
