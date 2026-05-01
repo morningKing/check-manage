@@ -276,7 +276,8 @@ onUnmounted(() => {
 /* 路由内容区域 */
 .content-main {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* 页面切换过渡动画 - 优化性能 */
