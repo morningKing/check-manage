@@ -457,9 +457,10 @@ onUnmounted(() => {
 
 .app-content {
   flex: 1;
+  min-height: 0;
   padding: 20px;
   background-color: var(--el-bg-color-page);
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* 全局加载遮罩 */

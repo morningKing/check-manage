@@ -2920,8 +2920,10 @@ onActivated(async () => {
 <style scoped lang="scss">
 .dynamic-page {
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .page-header {
