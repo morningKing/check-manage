@@ -159,8 +159,13 @@
                     <el-select v-model="kanbanDefaultView" placeholder="表格" style="width: 200px">
                       <el-option label="表格视图" value="table" />
                       <el-option label="看板视图" value="kanban" />
+                      <el-option label="Excel视图" value="excel" />
+                      <el-option label="日历视图" value="calendar" />
                     </el-select>
                   </el-form-item>
+
+                  <!-- 看板视图配置 -->
+                  <el-divider content-position="left">看板视图</el-divider>
 
                   <el-form-item label="分组字段">
                     <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
@@ -211,9 +216,69 @@
                     </el-form-item>
                   </template>
 
-                  <el-empty v-if="selectTypeFields.length === 0" :image-size="60" description="暂无 select 类型字段，请先在「字段配置」中添加" />
+                  <!-- 日历视图配置 -->
+                  <el-divider content-position="left">日历视图</el-divider>
 
-                  <el-form-item>
+                  <el-form-item label="日期字段">
+                    <el-select v-model="calendarDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
+                      <el-option
+                        v-for="f in dateTypeFields"
+                        :key="f.fieldName"
+                        :label="f.label"
+                        :value="f.fieldName"
+                      />
+                    </el-select>
+                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      选择日期字段作为日历视图的时间轴，必须有日期字段才能启用日历视图
+                    </div>
+                  </el-form-item>
+
+                  <template v-if="calendarDateField">
+                    <el-form-item label="结束日期">
+                      <el-select v-model="calendarEndDateField" clearable placeholder="可选：支持跨天事件" style="width: 100%">
+                        <el-option
+                          v-for="f in dateTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        选择结束日期字段可支持多天事件，用户可拖拽边缘调整时长
+                      </div>
+                    </el-form-item>
+
+                    <el-form-item label="卡片标题">
+                      <el-select v-model="calendarCardTitle" placeholder="选择标题字段" style="width: 100%">
+                        <el-option
+                          v-for="f in currentFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="颜色字段">
+                      <el-select v-model="calendarColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
+                        <el-option
+                          v-for="f in selectTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="默认模式">
+                      <el-radio-group v-model="calendarDefaultMode">
+                        <el-radio value="month">月视图</el-radio>
+                        <el-radio value="week">周视图</el-radio>
+                      </el-radio-group>
+                    </el-form-item>
+                  </template>
+
+                  <el-form-item style="margin-top: 16px">
                     <el-button
                       type="primary"
                       @click="handleSavePageInfo"
@@ -517,6 +582,15 @@ const kanbanCardFields = ref<string[]>([])
 const kanbanColorField = ref('')
 
 /**
+ * 日历视图配置响应式状态
+ */
+const calendarDateField = ref('')
+const calendarEndDateField = ref('')
+const calendarCardTitle = ref('')
+const calendarColorField = ref('')
+const calendarDefaultMode = ref<'month' | 'week'>('month')
+
+/**
  * 删除绑定配置响应式状态
  */
 const deleteBindingEnabled = ref(false)
@@ -538,6 +612,10 @@ const rowExportScripts = computed(() =>
 
 const selectTypeFields = computed<FieldConfig[]>(() =>
   currentFields.value.filter(f => f.controlType === 'select')
+)
+
+const dateTypeFields = computed<FieldConfig[]>(() =>
+  currentFields.value.filter(f => f.controlType === 'date' || f.controlType === 'datetime')
 )
 
 // ==================== 常量 ====================
@@ -640,6 +718,12 @@ function loadFormForPage(id: string): void {
   kanbanCardTitle.value = vc.kanban?.cardTitle || ''
   kanbanCardFields.value = vc.kanban?.cardFields || []
   kanbanColorField.value = vc.kanban?.cardColorField || ''
+  // Load calendar config
+  calendarDateField.value = vc.calendar?.dateField || ''
+  calendarEndDateField.value = vc.calendar?.endDateField || ''
+  calendarCardTitle.value = vc.calendar?.cardTitle || ''
+  calendarColorField.value = vc.calendar?.cardColorField || ''
+  calendarDefaultMode.value = vc.calendar?.defaultMode || 'month'
   // Load delete binding config
   const db = config.deleteBinding
   deleteBindingEnabled.value = db?.enabled || false
@@ -705,6 +789,16 @@ async function handleSavePageInfo(): Promise<void> {
       cardTitle: kanbanCardTitle.value,
       cardFields: kanbanCardFields.value,
       cardColorField: kanbanColorField.value || undefined,
+    }
+  }
+  // Build calendar config
+  if (calendarDateField.value) {
+    viewConfig.calendar = {
+      dateField: calendarDateField.value,
+      endDateField: calendarEndDateField.value || undefined,
+      cardTitle: calendarCardTitle.value,
+      cardColorField: calendarColorField.value || undefined,
+      defaultMode: calendarDefaultMode.value,
     }
   }
 

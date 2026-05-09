@@ -17,6 +17,7 @@
         <div class="page-badges">
           <el-tag v-if="config.apiPublic" type="success" size="small" effect="plain">API</el-tag>
           <el-tag v-if="hasKanban" type="primary" size="small" effect="plain">看板</el-tag>
+          <el-tag v-if="hasCalendar" type="warning" size="small" effect="plain">日历</el-tag>
           <el-tag v-if="config.validationScript" size="small" effect="plain" style="--el-tag-bg-color: #f3e8ff; --el-tag-text-color: #7c3aed; --el-tag-border-color: #ddd6fe">校验</el-tag>
           <el-tag v-if="isOrphan" type="info" size="small" effect="plain">未引用</el-tag>
         </div>
@@ -73,6 +74,7 @@ defineEmits<{
 }>()
 
 const hasKanban = computed(() => !!props.config.viewConfig?.kanban?.groupField)
+const hasCalendar = computed(() => !!props.config.viewConfig?.calendar?.dateField)
 
 function formatTime(value: string): string {
   if (!value) return ''
