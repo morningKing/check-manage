@@ -613,13 +613,7 @@ def update_item(collection, item_id):
 
     with get_db() as conn:
         cur = conn.cursor()
-        # Check primary key uniqueness (exclude current record, within same branch)
-        pk_fields = get_primary_key_fields(cur, collection)
-        if pk_fields:
-            error = check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=item_id, branch_id=branch_id)
-            if error:
-                return jsonify({"error": error}), 409
-        # Fetch old data for diff (and current version for optimistic locking)
+        # Fetch old data FIRST for primary key check and optimistic locking
         cur.execute(
             'SELECT data, version FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
             (collection, item_id, branch_id)
@@ -629,6 +623,16 @@ def update_item(collection, item_id):
             return jsonify({"error": "记录不存在"}), 404
         old_data = old_row[0] if old_row[0] else {}
         db_version = old_row[1] if old_row[1] is not None else 1
+
+        # Merge old_data with new data for primary key uniqueness check
+        merged_data = {**old_data, **data}
+
+        # Check primary key uniqueness (exclude current record, within same branch)
+        pk_fields = get_primary_key_fields(cur, collection)
+        if pk_fields:
+            error = check_primary_key_unique(cur, collection, merged_data, pk_fields, exclude_id=item_id, branch_id=branch_id)
+            if error:
+                return jsonify({"error": error}), 409
         # Run validation script if configured
         page_name, fields = get_page_info(cur, collection)
         validation_script = get_validation_script(cur, collection)
