@@ -73,6 +73,7 @@
           <el-radio-button value="table"><el-icon><Grid /></el-icon></el-radio-button>
           <el-radio-button value="excel"><el-icon><Document /></el-icon></el-radio-button>
           <el-radio-button v-if="hasKanbanConfig" value="kanban"><el-icon><Operation /></el-icon></el-radio-button>
+          <el-radio-button v-if="hasCalendarConfig" value="calendar"><el-icon><Calendar /></el-icon></el-radio-button>
         </el-radio-group>
         <el-button v-if="!isGuest" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
@@ -297,6 +298,19 @@
         :search-keyword="searchKeyword"
         @card-move="handleKanbanCardMove"
         @card-click="handleView"
+      />
+    </el-card>
+
+    <!-- 日历视图 -->
+    <el-card v-show="viewMode === 'calendar'" class="table-card calendar-card">
+      <CalendarView
+        v-if="calendarConfig"
+        :data="filteredData"
+        :fields="pageFields"
+        :config="calendarConfig"
+        @card-click="handleView"
+        @date-change="handleCalendarDateChange"
+        @date-click="handleCalendarDateClick"
       />
     </el-card>
 
@@ -761,9 +775,9 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore } from '@/stores'
-import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView } from '@/components/common'
+import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -772,7 +786,7 @@ import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, swit
 import type { CurrentBranch } from '@/api/projectVersion'
 import type { ProjectVersion } from '@/types/version'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig } from '@/types'
 
 // ==================== Props ====================
 
@@ -1119,6 +1133,16 @@ const kanbanConfig = computed<KanbanConfig | undefined>(() => {
 
 const hasKanbanConfig = computed(() => {
   return !!kanbanConfig.value?.groupField
+})
+
+const calendarConfig = computed<CalendarConfig | undefined>(() => {
+  return pageConfig.value?.viewConfig?.calendar
+})
+
+const hasCalendarConfig = computed(() => {
+  if (!calendarConfig.value) return false
+  const dateField = pageFields.value.find(f => f.fieldName === calendarConfig.value!.dateField)
+  return dateField && ['date', 'datetime'].includes(dateField.controlType)
 })
 
 const kanbanGroupOptions = computed<FieldOption[]>(() => {
@@ -1778,6 +1802,28 @@ async function handleKanbanCardMove(recordId: string, newGroupValue: string): Pr
     // Reload to revert kanban state
     await loadPageData()
   }
+}
+
+async function handleCalendarDateChange(payload: { recordId: string; updates: Record<string, any> }): Promise<void> {
+  try {
+    await pageConfigStore.updatePageData(pageId.value, payload.recordId, payload.updates)
+    ElMessage.success('日期已更新')
+    await loadPageData()
+  } catch (error: any) {
+    const resp = error.response?.data
+    ElMessage.error(resp?.error || '日期更新失败')
+    await loadPageData()
+  }
+}
+
+function handleCalendarDateClick(date: Date): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  isEditMode.value = false
+  const dateStr = date.toISOString().split('T')[0]
+  currentRecord.value = {
+    [calendarConfig.value!.dateField]: dateStr
+  }
+  dialogVisible.value = true
 }
 
 /**
@@ -3082,6 +3128,19 @@ onActivated(async () => {
 
   :deep(.el-card__body) {
     overflow: auto;
+  }
+}
+
+.calendar-card {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+
+  :deep(.el-card__body) {
+    height: 100%;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
 }
 
