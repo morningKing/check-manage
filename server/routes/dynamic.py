@@ -666,25 +666,25 @@ def update_item(collection, item_id):
             wf = field_cfg.get('workflowConfig')
             if wf and wf.get('enabled') and field_cfg['fieldName'] in data:
                 old_val = old_data.get(field_cfg['fieldName'])
-                new_val = data[field_cfg['fieldName']]
+                new_val = merged_data[field_cfg['fieldName']]
                 if old_val != new_val and old_val is not None:
                     allowed, error, actions = validate_transition(
-                        fields, field_cfg['fieldName'], old_val, new_val, data, user_role
+                        fields, field_cfg['fieldName'], old_val, new_val, merged_data, user_role
                     )
                     if not allowed:
                         return jsonify({"error": error}), 400
-                    execute_actions(actions, data, collection, item_id, cur)
+                    execute_actions(actions, merged_data, collection, item_id, cur)
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
                 'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-                (psycopg2.extras.Json(data), created_at, new_version, collection, item_id, db_version, branch_id),
+                (psycopg2.extras.Json(merged_data), created_at, new_version, collection, item_id, db_version, branch_id),
             )
         else:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
                 'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-                (psycopg2.extras.Json(data), new_version, collection, item_id, db_version, branch_id),
+                (psycopg2.extras.Json(merged_data), new_version, collection, item_id, db_version, branch_id),
             )
         if cur.rowcount == 0:
             # Another request changed the version between our SELECT and UPDATE
