@@ -510,7 +510,7 @@ const allValidationScripts = ref<ValidationScript[]>([])
 /**
  * 看板配置响应式状态
  */
-const kanbanDefaultView = ref<'table' | 'kanban' | 'excel'>('table')
+const kanbanDefaultView = ref<'table' | 'kanban' | 'excel' | 'calendar'>('table')
 const kanbanGroupField = ref('')
 const kanbanCardTitle = ref('')
 const kanbanCardFields = ref<string[]>([])

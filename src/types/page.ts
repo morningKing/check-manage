@@ -64,6 +64,19 @@ export interface KanbanConfig {
   cardColorField?: string
 }
 
+export interface CalendarConfig {
+  /** 日期字段名（必填，必须是 date 或 datetime 类型） */
+  dateField: string
+  /** 结束日期字段名（可选，支持跨天事件） */
+  endDateField?: string
+  /** 卡片标题字段 */
+  cardTitle: string
+  /** 颜色标记字段（可选，按状态/优先级着色） */
+  cardColorField?: string
+  /** 默认视图模式 */
+  defaultMode?: 'month' | 'week'
+}
+
 export interface ExcelViewConfig {
   /** 是否启用 Excel 视图 */
   enabled?: boolean
@@ -74,9 +87,10 @@ export interface ExcelViewConfig {
 }
 
 export interface ViewConfig {
-  defaultView?: 'table' | 'kanban' | 'excel'
+  defaultView?: 'table' | 'kanban' | 'excel' | 'calendar'
   kanban?: KanbanConfig
   excel?: ExcelViewConfig
+  calendar?: CalendarConfig
 }
 
 export interface PageConfig {
