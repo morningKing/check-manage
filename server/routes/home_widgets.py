@@ -4,6 +4,7 @@ from auth import login_required, admin_required
 import psycopg2.extras
 import json
 import time
+import uuid
 
 home_widgets_bp = Blueprint('home_widgets', __name__)
 
@@ -111,8 +112,8 @@ def create_home_widget():
     if widget_type not in ('custom-markdown', 'data-card'):
         return jsonify({"error": "Only custom-markdown or data-card types are allowed"}), 400
 
-    # Generate ID: custom-{type}-{timestamp}
-    widget_id = f'custom-{widget_type}-{int(time.time() * 1000)}'
+    # Generate ID: custom-{type}-{uuid8}
+    widget_id = f'custom-{widget_type}-{uuid.uuid4().hex[:8]}'
 
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
