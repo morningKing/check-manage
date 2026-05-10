@@ -858,39 +858,7 @@ def init_db():
             conn.commit()
             print("Created home_widgets table with default widgets.")
 
-        # Migration: add AI settings menu if missing
-        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-11'")
-        if not cur.fetchone():
-            cur.execute(
-                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-                "VALUES ('menu-3-11', %s, 'MagicStick', NULL, 'menu-3-a', 5, '/admin/ai-settings', %s, 'system')",
-                ('AI 配置', psycopg2.extras.Json(['admin'])),
-            )
-            conn.commit()
-            print("Added AI settings menu.")
-
-        # Migration: add Webhook settings menu if missing
-        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-13'")
-        if not cur.fetchone():
-            cur.execute(
-                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-                "VALUES ('menu-3-13', %s, 'Link', NULL, 'menu-3-a', 6, '/admin/webhook-settings', %s, 'system')",
-                ('Webhook', psycopg2.extras.Json(['admin'])),
-            )
-            conn.commit()
-            print("Added Webhook settings menu.")
-
-        # Migration: add SystemSettings menu if missing
-        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-14'")
-        if not cur.fetchone():
-            cur.execute(
-                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-                "VALUES ('menu-3-14', %s, 'Setting', NULL, 'menu-3-a', 7, '/admin/system-settings', %s, 'system')",
-                ('系统设置', psycopg2.extras.Json(['admin'])),
-            )
-            conn.commit()
-            print("Added SystemSettings menu.")
-
+        
         # Migration: add backup_scope and backup_tables columns to backups
         cur.execute("""
             SELECT column_name FROM information_schema.columns
@@ -1113,7 +1081,7 @@ def init_db():
                 'menu-1', 'menu-dashboard',  # 首页、仪表盘
                 'menu-3-b', 'menu-3-6', 'menu-3-8', 'menu-3-9', 'menu-3-10', 'menu-3-12',  # 数据工具及其子项
                 'menu-3', 'menu-3-a', 'menu-3-c',  # 系统配置分组
-                'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11', 'menu-3-13',  # 平台管理子项（新增menu-3-13）
+                'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11', 'menu-3-13', 'menu-3-14',  # 平台管理子项
                 'menu-3-4', 'menu-3-5',  # 系统运维子项
             ]
             for mid in system_menu_ids:
@@ -1134,6 +1102,23 @@ def init_db():
 
             conn.commit()
             print("Updated menu_type for existing menus.")
+
+        # Migration: add AI settings, Webhook, and SystemSettings menus if missing
+        # These must run AFTER menu_type column is added
+        for menu_id, name, icon, parent, order, path in [
+            ('menu-3-11', 'AI 配置', 'MagicStick', 'menu-3-a', 5, '/admin/ai-settings'),
+            ('menu-3-13', 'Webhook', 'Link', 'menu-3-a', 6, '/admin/webhook-settings'),
+            ('menu-3-14', '系统设置', 'Setting', 'menu-3-a', 7, '/admin/system-settings'),
+        ]:
+            cur.execute("SELECT id FROM menus WHERE id = %s", (menu_id,))
+            if not cur.fetchone():
+                cur.execute(
+                    'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                    'VALUES (%s, %s, %s, NULL, %s, %s, %s, %s, %s)',
+                    (menu_id, name, icon, parent, order, path, psycopg2.extras.Json(['admin']), 'system'),
+                )
+                conn.commit()
+                print(f"Added {name} menu.")
 
         # Migration: create project_versions table
         cur.execute("""
