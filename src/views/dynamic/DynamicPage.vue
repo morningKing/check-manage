@@ -1082,9 +1082,9 @@ const graphDialogVisible = ref(false)
 const graphRecordId = ref('')
 
 /**
- * 视图模式（table / kanban / excel / calendar）
+ * 视图模式（table / kanban / excel / calendar / gantt）
  */
-const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar'>('table')
+const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table')
 
 /** Excel 视图组件引用 */
 const excelViewRef = ref<{ saveSnapshot: () => void } | null>(null)

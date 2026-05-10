@@ -103,7 +103,17 @@
       "mcp__web-reader__webReader",
       "Bash(find /e/Code/check-manage/src -type f -name *Layout* -o -name *Header* -o -name *Navbar*)",
       "Bash(pkill -f \"npm run dev\")",
-      "Bash(pkill -f \"python app.py\")"
+      "Bash(pkill -f \"python app.py\")",
+      "Bash(npx skills *)",
+      "Read(//e/Code/check-manage/**)",
+      "Bash(echo \"Server PID: $!\")",
+      "Bash(tee /tmp/dev-server.log)",
+      "Bash(awk '{print $1}')",
+      "Bash(awk '{print $5}')",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(PGPASSWORD=casemanage psql *)",
+      "Bash(sed -n '27,65p')",
+      "Read(//tmp/**)"
     ]
   }
 }

@@ -26,6 +26,38 @@ project_versions_bp = Blueprint('project_versions', __name__)
 
 # ==================== 静态路由（放在动态路由前面）====================
 
+@project_versions_bp.route('/project-versions/all-branches', methods=['GET'])
+@login_required
+def list_all_branches():
+    """获取所有项目的分支列表（用于数据卡片配置）"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            # 获取所有活跃分支
+            cur.execute("""
+                SELECT pv.id, pv.name, pv.project_menu_id, m.name as project_name, pv.status
+                FROM project_versions pv
+                JOIN menus m ON pv.project_menu_id = m.id
+                WHERE pv.status = 'active'
+                ORDER BY m.name, pv.name
+            """)
+            rows = cur.fetchall()
+
+            branches = [{'id': 'main', 'name': '主分支', 'projectMenuId': None, 'projectName': None}]
+            for row in rows:
+                branches.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'projectMenuId': row[2],
+                    'projectName': row[3],
+                    'status': row[4]
+                })
+            return jsonify(branches)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @project_versions_bp.route('/project-versions', methods=['POST'])
 @admin_required
 def create_version():

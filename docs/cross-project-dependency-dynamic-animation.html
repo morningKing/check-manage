@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>跨项目依赖协作流程 - 动态组装动画</title>
+<style>
+  body {
+    margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh;
+    overflow: hidden; font-family: system-ui, -apple-system, sans-serif;
+    background-color: #f4f4f5;
+    background-image:
+      linear-gradient(45deg, #e4e4e7 25%, transparent 25%),
+      linear-gradient(-45deg, #e4e4e7 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #e4e4e7 75%),
+      linear-gradient(-45deg, transparent 75%, #e4e4e7 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+  }
+  .container {
+    position: relative;
+    width: 900px;
+    height: 600px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+  }
+  svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .controls {
+    position: absolute;
+    bottom: 30px;
+    display: flex;
+    gap: 15px;
+    z-index: 10;
+  }
+  button {
+    padding: 12px 24px;
+    background: white;
+    border: 2px solid #18181b;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 14px;
+    transition: all 0.2s;
+  }
+  button:hover {
+    background: #18181b;
+    color: white;
+  }
+  #status {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    font-size: 14px;
+    background: rgba(255,255,255,0.95);
+    padding: 8px 16px;
+    border-radius: 6px;
+    display: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+<div class="container">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600">
+    <defs>
+      <!-- 渐变定义 -->
+      <linearGradient id="gradA" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+        <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:1" />
+      </linearGradient>
+      <linearGradient id="gradB" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
+        <stop offset="100%" style="stop-color:#16a34a;stop-opacity:1" />
+      </linearGradient>
+      <linearGradient id="gradC" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" style="stop-color:#a855f7;stop-opacity:1" />
+        <stop offset="100%" style="stop-color:#7c3aed;stop-opacity:1" />
+      </linearGradient>
+
+      <!-- 箭头标记 -->
+      <marker id="arrowTrackMain" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#22c55e"/>
+      </marker>
+      <marker id="arrowReadWrite" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#f59e0b"/>
+      </marker>
+      <marker id="arrowReadOnly" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L9,3 z" fill="#6366f1"/>
+      </marker>
+
+      <!-- 发光效果 -->
+      <filter id="glow">
+        <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+        <feMerge>
+          <feMergeNode in="coloredBlur"/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+
+      <!-- 阻塞状态发光 -->
+      <filter id="blockGlow">
+        <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+        <feFlood flood-color="#ef4444" flood-opacity="0.5"/>
+        <feComposite in2="coloredBlur" operator="in"/>
+        <feMerge>
+          <feMergeNode/>
+          <feMergeNode in="SourceGraphic"/>
+        </feMerge>
+      </filter>
+    </defs>
+
+    <!-- 背景 -->
+    <rect width="900" height="600" fill="#f8fafc"/>
+
+    <!-- 标题 -->
+    <text id="title-main" x="450" y="35" text-anchor="middle" font-size="24" font-weight="bold" fill="#1f2937">跨项目依赖协作流程</text>
+    <text id="title-sub" x="450" y="55" text-anchor="middle" font-size="16" fill="#6b7280">三种依赖类型 · 合并阻塞检查 · 联合合并顺序 · 删除保护</text>
+
+    <!-- ===================== 第一阶段：项目结构 ===================== -->
+    <g id="project-group" transform="translate(0, 70)">
+      <!-- 项目A（上游） -->
+      <g id="project-a" transform="translate(100, 20)">
+        <rect id="card-a" x="0" y="0" width="160" height="100" rx="8" fill="url(#gradA)" filter="url(#glow)"/>
+        <text x="80" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="white">项目A（上游）</text>
+        <!-- 分支列表 -->
+        <g transform="translate(15, 50)">
+          <circle cx="8" cy="8" r="6" fill="#22c55e"/>
+          <text x="20" y="12" font-size="13" fill="#374151">v1.0 (merged)</text>
+        </g>
+        <g transform="translate(15, 70)">
+          <circle cx="8" cy="8" r="6" fill="#22c55e"/>
+          <text x="20" y="12" font-size="13" fill="#374151">v2.0 (merged)</text>
+        </g>
+        <g transform="translate(85, 50)">
+          <circle id="branch-active-a" cx="8" cy="8" r="6" fill="#fbbf24"/>
+          <text x="20" y="12" font-size="13" fill="#374151">feature-x</text>
+        </g>
+      </g>
+
+      <!-- 项目B（下游） -->
+      <g id="project-b" transform="translate(370, 20)">
+        <rect id="card-b" x="0" y="0" width="160" height="100" rx="8" fill="url(#gradB)"/>
+        <text x="80" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="white">项目B（下游）</text>
+        <g transform="translate(15, 50)">
+          <circle cx="8" cy="8" r="6" fill="#22c55e"/>
+          <text x="20" y="12" font-size="13" fill="#374151">v1.0 (merged)</text>
+        </g>
+        <g transform="translate(85, 50)">
+          <circle id="branch-blocked" cx="8" cy="8" r="6" fill="#ef4444"/>
+          <text x="20" y="12" font-size="13" fill="#374151">feature-y ⚠</text>
+        </g>
+        <!-- 阻塞标记 -->
+        <g id="block-marker" transform="translate(130, 10)">
+          <circle cx="10" cy="10" r="10" fill="#ef4444" opacity="0.9"/>
+          <text x="10" y="14" text-anchor="middle" fill="white" font-size="12" font-weight="bold">!</text>
+        </g>
+      </g>
+
+      <!-- 项目C（依赖方） -->
+      <g id="project-c" transform="translate(640, 20)">
+        <rect id="card-c" x="0" y="0" width="160" height="100" rx="8" fill="url(#gradC)" filter="url(#glow)"/>
+        <text x="80" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="white">项目C</text>
+        <g transform="translate(15, 50)">
+          <circle cx="8" cy="8" r="6" fill="#22c55e"/>
+          <text x="20" y="12" font-size="13" fill="#374151">v1.0 (merged)</text>
+        </g>
+        <g transform="translate(85, 50)">
+          <circle id="branch-active-c" cx="8" cy="8" r="6" fill="#fbbf24"/>
+          <text x="20" y="12" font-size="13" fill="#374151">feature-z</text>
+        </g>
+      </g>
+
+      <!-- ===================== 依赖连接线 ===================== -->
+
+      <!-- dep-1: 项目B[main] → 项目A[main] (track-main) -->
+      <path id="dep-track-1" d="M370 60 Q 280 60 260 60" stroke="#22c55e" stroke-width="3" fill="none" marker-end="url(#arrowTrackMain)"/>
+      <g id="label-track-1" transform="translate(295, 40)">
+        <rect x="0" y="0" width="70" height="20" rx="3" fill="#22c55e" opacity="0.2"/>
+        <text x="35" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#22c55e">track-main</text>
+      </g>
+
+      <!-- dep-2: 项目B[feature-y] → 项目A[feature-x] (read-write) - 阻塞状态 -->
+      <path id="dep-rw-2" d="M370 90 Q 280 90 260 80" stroke="#f59e0b" stroke-width="3" fill="none" marker-end="url(#arrowReadWrite)"/>
+      <g id="label-rw-2" transform="translate(290, 75)">
+        <rect x="0" y="0" width="80" height="22" rx="3" fill="#f59e0b" opacity="0.3"/>
+        <text x="40" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#f59e0b">read-write</text>
+        <text id="status-rw-2" x="40" y="28" text-anchor="middle" font-size="11" fill="#ef4444">阻塞中</text>
+      </g>
+
+      <!-- dep-3: 项目C[feature-z] → 项目A[v2.0] (read-write) - 就绪 -->
+      <path id="dep-rw-3" d="M640 80 Q 450 80 260 70" stroke="#f59e0b" stroke-width="3" fill="none" marker-end="url(#arrowReadWrite)"/>
+      <g id="label-rw-3" transform="translate(420, 65)">
+        <rect x="0" y="0" width="80" height="22" rx="3" fill="#f59e0b" opacity="0.2"/>
+        <text x="40" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#f59e0b">read-write</text>
+        <text x="40" y="28" text-anchor="middle" font-size="11" fill="#22c55e">就绪 ✓</text>
+      </g>
+
+      <!-- dep-4: 项目C[main] → 项目A[v1.0] (read-only) -->
+      <path id="dep-ro-4" d="M640 60 Q 500 50 260 50" stroke="#6366f1" stroke-width="2" fill="none" marker-end="url(#arrowReadOnly)"/>
+      <g id="label-ro-4" transform="translate(480, 35)">
+        <rect x="0" y="0" width="70" height="20" rx="3" fill="#6366f1" opacity="0.2"/>
+        <text x="35" y="14" text-anchor="middle" font-size="11" font-weight="bold" fill="#6366f1">read-only</text>
+      </g>
+    </g>
+
+    <!-- ===================== 第二阶段：合并流程动画 ===================== -->
+    <g id="merge-group" transform="translate(0, 220)">
+      <!-- 阶段标题 -->
+      <text id="merge-title" x="450" y="20" text-anchor="middle" font-size="16" font-weight="bold" fill="#6b7280">联合合并流程：先上游，后下游</text>
+
+      <!-- 步骤1：合并项目A -->
+      <g id="step-1" transform="translate(100, 40)">
+        <rect x="0" y="0" width="200" height="80" rx="6" fill="#e0f2fe" stroke="#3b82f6" stroke-width="2"/>
+        <text x="100" y="25" text-anchor="middle" font-size="13" font-weight="bold" fill="#374151">步骤 1</text>
+        <text x="100" y="50" text-anchor="middle" font-size="13" fill="#374151">合并项目A[feature-x]</text>
+        <text x="100" y="70" text-anchor="middle" font-size="12" fill="#22c55e">✓ 上游先行</text>
+      </g>
+
+      <!-- 步骤间连接 -->
+      <path id="arrow-1-2" d="M300 80 L 350 80" stroke="#9ca3af" stroke-width="2" opacity="0.5"/>
+
+      <!-- 步骤2：解锁项目B -->
+      <g id="step-2" transform="translate(370, 40)">
+        <rect x="0" y="0" width="200" height="80" rx="6" fill="#dcfce7" stroke="#22c55e" stroke-width="2"/>
+        <text x="100" y="25" text-anchor="middle" font-size="13" font-weight="bold" fill="#374151">步骤 2</text>
+        <text x="100" y="50" text-anchor="middle" font-size="13" fill="#374151">依赖变为"就绪"</text>
+        <!-- 解锁图标 -->
+        <g id="unlock-icon" transform="translate(85, 55)">
+          <circle cx="15" cy="10" r="15" fill="#22c55e" opacity="0.8"/>
+          <text x="15" y="14" text-anchor="middle" fill="white" font-size="14">✓</text>
+        </g>
+      </g>
+
+      <!-- 步骤间连接 -->
+      <path id="arrow-2-3" d="M570 80 L 620 80" stroke="#9ca3af" stroke-width="2" opacity="0.5"/>
+
+      <!-- 步骤3：合并项目B -->
+      <g id="step-3" transform="translate(640, 40)">
+        <rect x="0" y="0" width="200" height="80" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+        <text x="100" y="25" text-anchor="middle" font-size="13" font-weight="bold" fill="#374151">步骤 3</text>
+        <text x="100" y="50" text-anchor="middle" font-size="13" fill="#374151">合并项目B[feature-y]</text>
+        <text x="100" y="70" text-anchor="middle" font-size="12" fill="#22c55e">✓ 下游跟随</text>
+      </g>
+    </g>
+
+    <!-- ===================== 第三阶段：三种依赖类型详解 ===================== -->
+    <g id="types-group" transform="translate(0, 350)">
+      <text id="types-title" x="450" y="20" text-anchor="middle" font-size="16" font-weight="bold" fill="#6b7280">三种依赖类型对比</text>
+
+      <!-- track-main -->
+      <g id="type-track" transform="translate(50, 40)">
+        <rect x="0" y="0" width="250" height="100" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+        <circle cx="20" cy="20" r="12" fill="#22c55e"/>
+        <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">TM</text>
+        <text x="45" y="24" font-size="13" font-weight="bold" fill="#22c55e">track-main · 跟随主干</text>
+
+        <text x="20" y="50" font-size="12" fill="#4b5563">✓ 自动跟随上游 main 分支</text>
+        <text x="20" y="65" font-size="12" fill="#4b5563">✓ 不阻塞下游合并</text>
+        <text x="20" y="80" font-size="12" fill="#4b5563">✓ 上游变更自动通知</text>
+        <text x="20" y="95" font-size="12" fill="#6b7280">适用：稳定依赖，始终使用最新版本</text>
+      </g>
+
+      <!-- read-write -->
+      <g id="type-rw" transform="translate(320, 40)">
+        <rect x="0" y="0" width="250" height="100" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+        <circle cx="20" cy="20" r="12" fill="#f59e0b"/>
+        <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">RW</text>
+        <text x="45" y="24" font-size="13" font-weight="bold" fill="#f59e0b">read-write · 配套分支</text>
+
+        <text x="20" y="50" font-size="12" fill="#ef4444">⚠ 上游未合并 → 阻塞下游</text>
+        <text x="20" y="65" font-size="12" fill="#22c55e">✓ 上游合并 → 下游解锁</text>
+        <text x="20" y="80" font-size="12" fill="#4b5563">✓ 系统计算联合合并顺序</text>
+        <text x="20" y="95" font-size="12" fill="#6b7280">适用：并行开发，需协调发布</text>
+      </g>
+
+      <!-- read-only -->
+      <g id="type-ro" transform="translate(590, 40)">
+        <rect x="0" y="0" width="250" height="100" rx="6" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+        <circle cx="20" cy="20" r="12" fill="#6366f1"/>
+        <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">RO</text>
+        <text x="45" y="24" font-size="13" font-weight="bold" fill="#6366f1">read-only · 精确钉住</text>
+
+        <text x="20" y="50" font-size="12" fill="#4b5563">✓ 固定特定版本，不变更</text>
+        <text x="20" y="65" font-size="12" fill="#4b5563">✓ 不阻塞下游合并</text>
+        <text x="20" y="80" font-size="12" fill="#ef4444">⚠ 被钉版本禁止删除</text>
+        <text x="20" y="95" font-size="12" fill="#6b7280">适用：历史版本引用，审计追溯</text>
+      </g>
+    </g>
+
+    <!-- ===================== 底部：删除保护示意 ===================== -->
+    <g id="delete-group" transform="translate(0, 500)">
+      <text id="delete-title" x="450" y="15" text-anchor="middle" font-size="16" fill="#6b7280">分支删除保护：被依赖的分支无法删除</text>
+
+      <!-- 删除尝试 -->
+      <g id="delete-attempt" transform="translate(200, 30)">
+        <rect x="0" y="0" width="150" height="50" rx="6" fill="#fef2f2" stroke="#ef4444" stroke-width="2"/>
+        <text x="75" y="20" text-anchor="middle" font-size="13" fill="#ef4444">删除项目A[v1.0]</text>
+        <text x="75" y="38" text-anchor="middle" font-size="12" fill="#ef4444">✗ 被项目C依赖</text>
+        <!-- 禁止图标 -->
+        <g transform="translate(120, 5)">
+          <circle cx="15" cy="15" r="14" fill="#ef4444"/>
+          <line x1="5" y1="25" x2="25" y2="5" stroke="white" stroke-width="3"/>
+        </g>
+      </g>
+
+      <!-- 保护连接 -->
+      <path id="protect-line" d="M350 55 L 400 55" stroke="#ef4444" stroke-width="2" stroke-dasharray="4 2"/>
+
+      <!-- 依赖方 -->
+      <g id="dependent" transform="translate(420, 30)">
+        <rect x="0" y="0" width="150" height="50" rx="6" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+        <text x="75" y="20" text-anchor="middle" font-size="13" fill="#6366f1">项目C[main]</text>
+        <text x="75" y="38" text-anchor="middle" font-size="12" fill="#6366f1">read-only → v1.0</text>
+      </g>
+
+      <!-- 提示 -->
+      <g id="delete-tip" transform="translate(600, 30)">
+        <rect x="0" y="0" width="200" height="50" rx="6" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1"/>
+        <text x="100" y="25" text-anchor="middle" font-size="12" fill="#0ea5e9">需先解除依赖声明</text>
+        <text x="100" y="42" text-anchor="middle" font-size="12" fill="#0ea5e9">或修改目标分支</text>
+      </g>
+    </g>
+
+    <!-- 版本信息 -->
+    <text x="880" y="590" text-anchor="end" font-size="10" fill="#9ca3af">跨项目依赖功能 · Dynamic Animation v1.0</text>
+  </svg>
+</div>
+<div id="status">Exporting...</div>
+<div class="controls">
+  <button onclick="playAnimation()">Replay Animation</button>
+  <button id="export-btn" onclick="exportSequence()">Export Frames (30fps)</button>
+</div>
+
+<script>
+  let tl;
+
+  function initAnimation() {
+    const scene = document.querySelector("svg");
+
+    // 所有元素初始隐藏并打散到视口外（力量感组装风格）
+    const projects = ['#project-a', '#project-b', '#project-c'];
+    const deps = ['#dep-track-1', '#dep-rw-2', '#dep-rw-3', '#dep-ro-4'];
+    const depLabels = ['#label-track-1', '#label-rw-2', '#label-rw-3', '#label-ro-4'];
+    const steps = ['#step-1', '#step-2', '#step-3'];
+    const arrows = ['#arrow-1-2', '#arrow-2-3'];
+    const types = ['#type-track', '#type-rw', '#type-ro'];
+    const deleteItems = ['#delete-attempt', '#protect-line', '#dependent', '#delete-tip'];
+
+    // 设置所有元素的 transform origin
+    gsap.set([scene, ...projects, ...deps, ...depLabels, ...steps, ...arrows, ...types, ...deleteItems], {
+      transformOrigin: "50% 50%"
+    });
+
+    // 打散状态（反向逻辑）
+    // 标题先显示
+    gsap.set(['#title-main', '#title-sub', '#merge-title', '#types-title', '#delete-title'], {
+      opacity: 0,
+      y: -30
+    });
+
+    // 项目卡片随机抛射
+    projects.forEach((id, i) => {
+      const angle = (Math.PI / 3) * i + Math.random() * 0.5; // 不同角度
+      const distance = 3000 + Math.random() * 2000;
+      gsap.set(id, {
+        opacity: 0,
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        scaleX: 0.05,
+        scaleY: 4,
+        rotation: -360 + Math.random() * 180
+      });
+    });
+
+    // 依赖连线水平抛射
+    deps.forEach((id, i) => {
+      gsap.set(id, {
+        opacity: 0,
+        x: -2000 - i * 500,
+        scaleX: 0.1,
+        scaleY: 3
+      });
+    });
+
+    // 依赖标签随机抛射
+    depLabels.forEach((id) => {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 1500 + Math.random() * 1000;
+      gsap.set(id, {
+        opacity: 0,
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        scale: 0.3
+      });
+    });
+
+    // 合并步骤垂直抛射
+    steps.forEach((id, i) => {
+      gsap.set(id, {
+        opacity: 0,
+        y: -1500 - i * 500,
+        scaleX: 0.05,
+        scaleY: 5
+      });
+    });
+
+    // 箭头隐藏
+    arrows.forEach((id) => {
+      gsap.set(id, { opacity: 0, scaleX: 0 });
+    });
+
+    // 类型卡片随机抛射
+    types.forEach((id, i) => {
+      const angle = Math.PI + (Math.PI / 4) * i;
+      const distance = 2500 + Math.random() * 1500;
+      gsap.set(id, {
+        opacity: 0,
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        scaleX: 0.05,
+        scaleY: 4,
+        rotation: 180 + Math.random() * 90
+      });
+    });
+
+    // 删除保护元素随机抛射
+    deleteItems.forEach((id, i) => {
+      const angle = Math.PI * 1.5 + (Math.PI / 6) * i;
+      const distance = 2000 + Math.random() * 1000;
+      gsap.set(id, {
+        opacity: 0,
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        scaleX: 0.05,
+        scaleY: 4
+      });
+    });
+
+    // 整体场景旋转（力量感）
+    gsap.set(scene, { rotation: -180, scale: 0.1 });
+
+    // ==================== 动画时间线 ====================
+    tl = gsap.timeline({ paused: true });
+
+    // 阶段0：场景进入
+    tl.fromTo(scene,
+      { rotation: -180, scale: 0.1 },
+      { rotation: 0, scale: 1, duration: 3, ease: "power4.out" },
+      0
+    );
+
+    // 阶段1：标题显现
+    tl.to('#title-main', { opacity: 1, y: 0, duration: 1, ease: "power3.out" }, 0.2);
+    tl.to('#title-sub', { opacity: 1, y: 0, duration: 1, ease: "power3.out" }, 0.3);
+
+    // 阶段2：项目卡片组装（力量感：duration 0.7, back.out(5), rotation -360）
+    tl.to(projects, {
+      opacity: 1,
+      x: 0,
+      y: 0,
+      scaleX: 1,
+      scaleY: 1,
+      rotation: 0,
+      duration: 0.7,
+      stagger: { each: 0.15, from: "random" },
+      ease: "back.out(5)"
+    }, 0.5);
+
+    // 阶段3：依赖连线显现
+    tl.to(deps, {
+      opacity: 1,
+      x: 0,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 0.6,
+      stagger: 0.1,
+      ease: "power3.out"
+    }, 1.2);
+
+    // 阶段4：依赖标签飞入
+    tl.to(depLabels, {
+      opacity: 1,
+      x: 0,
+      y: 0,
+      scale: 1,
+      duration: 0.8,
+      stagger: { each: 0.05, from: "random" },
+      ease: "back.out(2.5)"
+    }, 1.5);
+
+    // 阶段5：阻塞状态闪烁（项目B）
+    tl.to('#branch-blocked', {
+      fill: "#ef4444",
+      duration: 0.3,
+      repeat: 3,
+      yoyo: true,
+      ease: "power2.inOut"
+    }, 2.2);
+
+    tl.to('#block-marker', {
+      scale: 1.2,
+      duration: 0.4,
+      repeat: 2,
+      yoyo: true,
+      ease: "power2.inOut"
+    }, 2.3);
+
+    // 阶段6：合并流程标题
+    tl.to('#merge-title', { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }, 2.8);
+
+    // 阶段7：合并步骤卡片组装
+    tl.to(steps, {
+      opacity: 1,
+      y: 0,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 0.7,
+      stagger: 0.12,
+      ease: "back.out(4)"
+    }, 3.0);
+
+    // 阶段8：步骤间箭头显现
+    tl.to(arrows, {
+      opacity: 0.5,
+      scaleX: 1,
+      duration: 0.3,
+      stagger: 0.15,
+      ease: "power2.out"
+    }, 3.6);
+
+    // 阶段9：解锁图标弹性显现
+    tl.fromTo('#unlock-icon',
+      { scale: 0, opacity: 0 },
+      { scale: 1.3, opacity: 1, duration: 0.5, ease: "elastic.out(1, 0.5)" },
+    3.9);
+
+    // 阶段10：状态变化（阻塞 → 就绪）
+    tl.to('#status-rw-2', {
+      fill: "#22c55e",
+      text: "就绪 ✓",
+      duration: 0.4,
+      ease: "power2.out"
+    }, 4.2);
+
+    tl.to('#branch-blocked', {
+      fill: "#22c55e",
+      duration: 0.3,
+      ease: "power2.out"
+    }, 4.3);
+
+    tl.to('#block-marker', {
+      scale: 0,
+      opacity: 0,
+      duration: 0.3,
+      ease: "power2.in"
+    }, 4.3);
+
+    // 阶段11：三种依赖类型标题
+    tl.to('#types-title', { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }, 4.5);
+
+    // 阶段12：类型卡片组装（力量感）
+    tl.to(types, {
+      opacity: 1,
+      x: 0,
+      y: 0,
+      scaleX: 1,
+      scaleY: 1,
+      rotation: 0,
+      duration: 0.7,
+      stagger: { each: 0.08, from: "random" },
+      ease: "back.out(5)"
+    }, 4.7);
+
+    // 阶段13：删除保护标题
+    tl.to('#delete-title', { opacity: 1, y: 0, duration: 0.8, ease: "power3.out" }, 5.5);
+
+    // 阶段14：删除保护元素组装
+    tl.to(deleteItems, {
+      opacity: 1,
+      x: 0,
+      y: 0,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 0.6,
+      stagger: { each: 0.08, from: "random" },
+      ease: "back.out(3)"
+    }, 5.7);
+  }
+
+  function playAnimation() {
+    if (tl) tl.kill();
+    initAnimation();
+    tl.play();
+  }
+
+  async function exportSequence() {
+    if (!tl) return;
+    const btn = document.getElementById('export-btn');
+    const status = document.getElementById('status');
+    btn.disabled = true;
+    status.style.display = 'block';
+    tl.pause();
+
+    const fps = 30;
+    const totalFrames = Math.ceil(tl.duration() * fps);
+    const zip = new JSZip();
+    const folder = zip.folder("animation_frames");
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 900;
+    canvas.height = 600;
+    const ctx = canvas.getContext('2d');
+    const svg = document.querySelector("svg");
+
+    for(let i = 0; i <= totalFrames; i++) {
+      status.innerText = `Rendering: ${i} / ${totalFrames}`;
+      tl.progress(i / totalFrames);
+
+      svg.setAttribute('width', canvas.width);
+      svg.setAttribute('height', canvas.height);
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const url = URL.createObjectURL(new Blob([svgData], {type: "image/svg+xml;charset=utf-8"}));
+
+      await new Promise(r => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          folder.file(`frame_${i.toString().padStart(4, '0')}.png`,
+            canvas.toDataURL("image/png").split(',')[1],
+            {base64: true});
+          URL.revokeObjectURL(url);
+          r();
+        };
+        img.src = url;
+      });
+    }
+
+    const content = await zip.generateAsync({type: "blob"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(content);
+    a.download = "cross-project-dependency-frames.zip";
+    a.click();
+
+    status.innerText = "Done! ZIP downloaded.";
+    btn.disabled = false;
+    tl.play();
+  }
+
+  document.addEventListener("DOMContentLoaded", playAnimation);
+</script>
+</body>
+</html>

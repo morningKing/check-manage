@@ -12,7 +12,7 @@ import json
 dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
-RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules', 'ai', 'versions', 'project-versions', 'webhook', 'dependencies'}
+RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules', 'ai', 'versions', 'project-versions', 'webhook', 'dependencies', 'system-config', 'home-widgets'}
 
 
 def _get_current_user_branch(collection):

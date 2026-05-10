@@ -216,11 +216,14 @@ function isCustomWidget(widget: WidgetConfig): boolean {
 // ==================== 事件处理 ====================
 
 async function handleSaveConfig() {
-  if (!systemName.value.trim()) {
+  const name = (systemName.value || '').trim()
+  const shortName = (systemShortName.value || '').trim()
+
+  if (!name) {
     ElMessage.warning('系统名称不能为空')
     return
   }
-  if (!systemShortName.value.trim()) {
+  if (!shortName) {
     ElMessage.warning('系统简称不能为空')
     return
   }
@@ -228,9 +231,9 @@ async function handleSaveConfig() {
   saving.value = true
   try {
     await systemConfigStore.updateConfig({
-      systemName: systemName.value.trim(),
-      systemShortName: systemShortName.value.trim(),
-      logoUrl: logoUrl.value.trim() || null
+      systemName: name,
+      systemShortName: shortName,
+      logoUrl: (logoUrl.value || '').trim() || null
     })
     ElMessage.success('保存成功')
   } catch {
@@ -327,9 +330,9 @@ onMounted(async () => {
 
   try {
     await systemConfigStore.initialize()
-    systemName.value = systemConfigStore.systemName
-    systemShortName.value = systemConfigStore.systemShortName
-    logoUrl.value = systemConfigStore.systemConfig.logoUrl || ''
+    systemName.value = systemConfigStore.systemName || ''
+    systemShortName.value = systemConfigStore.systemShortName || ''
+    logoUrl.value = systemConfigStore.systemConfig?.logoUrl || ''
     widgetsList.value = [...systemConfigStore.widgets].sort((a, b) => a.order - b.order)
   } catch {
     ElMessage.error('加载配置失败')

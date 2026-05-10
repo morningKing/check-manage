@@ -100,6 +100,7 @@ const displayCount = computed(() => totalCount.value)
 // 统计标签
 const countLabel = computed(() => {
   const collection = dataSource.value.collection
+  // pageConfig id 格式为 page-{collection}
   const pageConfig = pageConfigStore.pageConfigs.find(
     (c) => c.id === `page-${collection}`
   )

@@ -1,6 +1,14 @@
 import request from '@/utils/request'
 import type { ProjectVersion, ProjectVersionFormData } from '@/types/version'
 
+export interface BranchOption {
+  id: string
+  name: string
+  projectMenuId?: string
+  projectName?: string
+  status?: string
+}
+
 export interface ProjectCollection {
   collection: string
   pageId: string
@@ -128,6 +136,10 @@ export interface DeleteImpactResult {
 
 export function getProjectCollections(projectMenuId: string): Promise<{ collections: ProjectCollection[]; total: number }> {
   return request.get(`/project-versions/${projectMenuId}/collections`)
+}
+
+export function getAllBranches(): Promise<BranchOption[]> {
+  return request.get('/project-versions/all-branches')
 }
 
 export function getCurrentProjectBranch(projectMenuId: string): Promise<CurrentBranch> {

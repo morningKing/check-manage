@@ -16,11 +16,11 @@ cd server && python init_db.py
 # Start development (both frontend and backend)
 npm run dev:all
 # Frontend: http://localhost:5173
-# Backend: http://localhost:3001
+# Backend: http://localhost:3002
 
 # Run individually
-npm run server  # Backend only (port 3001)
-npm run dev     # Frontend only (port 5173, proxies /api to :3001)
+npm run server  # Backend only (port 3002)
+npm run dev     # Frontend only (port 5173, proxies /api to :3002)
 ```
 
 ### Testing
@@ -138,7 +138,7 @@ Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server
 
 ### Backend Structure
 
-*   `app.py`: Registers 28 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
+*   `app.py`: Registers 25 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
 *   `routes/dynamic.py`: The generic CRUD handler. Supports pagination (`page`, `pageSize`, `all=true`), filtering (`q` for MongoDB-style query, `keyword` for full-text search). Validates primary key uniqueness and manages relations.
 *   `routes/project_versions.py`: Project-level branch management. Create, merge, delete, lock/unlock branches.
 *   `routes/cross_project_dependencies.py`: Dependency declaration CRUD, validation, merge dependency check, branch delete protection.
@@ -147,7 +147,7 @@ Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server
 *   `utils/auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `admin_required`, `api_key_required`.
 *   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
 
-**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `webhooks`, `dependencies`, `projects`.
+**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `favicon.ico`.
 
 ### Frontend Structure
 
@@ -162,7 +162,7 @@ Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server
 
 ### API Proxy
 
-Vite proxies `/api` to backend port 3001 **with path rewrite**: frontend calls `/api/menus` → backend receives `/menus`. This is why backend routes don't have an `/api` prefix.
+Vite proxies `/api` to backend port 3002 **with path rewrite**: frontend calls `/api/menus` → backend receives `/menus`. This is why backend routes don't have an `/api` prefix.
 
 ### User Roles
 

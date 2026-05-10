@@ -94,11 +94,12 @@
       label-width="80px"
     >
       <el-form-item label="内容">
-        <el-input
+        <MdEditor
           v-model="form.content.markdown"
-          type="textarea"
-          :rows="8"
-          placeholder="Markdown 内容"
+          language="zh-CN"
+          :preview="true"
+          :style="{ height: '400px' }"
+          placeholder="请输入 Markdown 内容..."
         />
       </el-form-item>
     </el-form>
@@ -106,16 +107,35 @@
     <!-- data-card 类型 -->
     <el-form v-if="widget?.widgetType === 'data-card'" label-width="80px">
       <el-form-item label="数据集合">
-        <el-input
+        <el-select
           v-model="form.content.dataSource.collection"
-          placeholder="如：task-calendar"
-        />
+          placeholder="选择数据集合"
+          filterable
+          clearable
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in collectionOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="分支ID">
-        <el-input
+        <el-select
           v-model="form.content.dataSource.branchId"
-          placeholder="可选，指定数据分支"
-        />
+          placeholder="选择分支"
+          clearable
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in branchOptions"
+            :key="opt.id"
+            :label="opt.projectName ? `${opt.projectName} - ${opt.name}` : opt.name"
+            :value="opt.id"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="数据过滤">
         <el-input
@@ -141,13 +161,36 @@
         </el-radio-group>
       </el-form-item>
       <el-form-item label="显示字段">
-        <el-input
-          v-model="columnsStr"
-          placeholder="字段名逗号分隔，如：taskName,status"
-        />
+        <el-select
+          v-model="selectedColumns"
+          multiple
+          filterable
+          placeholder="选择要显示的字段"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in fieldOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="标题字段">
-        <el-input v-model="form.content.titleField" placeholder="如：taskName" />
+        <el-select
+          v-model="form.content.titleField"
+          filterable
+          clearable
+          placeholder="选择标题字段"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in fieldOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
       </el-form-item>
       <el-form-item label="点击跳转">
         <el-switch v-model="form.content.linkToDetail" />
@@ -182,8 +225,12 @@
  *
  * 编辑首页区块配置，根据 widgetType 显示不同的表单字段
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
+import { MdEditor } from 'md-editor-v3'
+import 'md-editor-v3/lib/style.css'
 import type { WidgetConfig } from '@/types'
+import { useMenuStore, usePageConfigStore } from '@/stores'
+import { getAllBranches, type BranchOption } from '@/api/projectVersion'
 
 const props = defineProps<{
   modelValue: boolean
@@ -226,15 +273,52 @@ const form = ref<FormData>({
   visibleRoles: ['admin', 'developer', 'guest']
 })
 
-// data-card 的 columns 字符串
-const columnsStr = computed({
+// 数据集合选项（从菜单获取，collection 名称从 pageId 推导）
+const menuStore = useMenuStore()
+const pageConfigStore = usePageConfigStore()
+
+const collectionOptions = computed(() => {
+  const dataMenus = menuStore.menuList.filter(m => m.menuType === 'data' && m.pageId)
+  return dataMenus.map(m => {
+    // pageId 格式为 page-{collection}，如 page-special-record
+    // 从 pageId 提取真正的 collection 名称
+    const collection = m.pageId?.replace(/^page-/, '') || ''
+    return {
+      value: collection,
+      label: m.name,
+      pageId: m.pageId
+    }
+  })
+})
+
+// 当前选中的数据集合对应的字段列表
+const fieldOptions = computed(() => {
+  const collection = form.value.content?.dataSource?.collection
+  if (!collection) return []
+
+  // pageConfig id 格式为 page-{collection}
+  const pageConfigId = `page-${collection}`
+  const pageConfig = pageConfigStore.pageConfigs.find(p => p.id === pageConfigId)
+  if (!pageConfig?.fields) return []
+
+  return pageConfig.fields.map(f => ({
+    value: f.fieldName,
+    label: f.label || f.fieldName
+  }))
+})
+
+// 分支选项
+const branchOptions = ref<BranchOption[]>([])
+
+// data-card 的显示字段（多选）
+const selectedColumns = computed({
   get: () => {
     const columns = form.value.content?.columns as string[] | undefined
-    return columns ? columns.join(',') : ''
+    return columns || []
   },
-  set: (val: string) => {
+  set: (val: string[]) => {
     if (!form.value.content) form.value.content = {}
-    form.value.content.columns = val.split(',').map(s => s.trim()).filter(Boolean)
+    form.value.content.columns = val
   }
 })
 
@@ -259,14 +343,33 @@ const filterStr = computed({
   }
 })
 
+// 加载分支列表和页面配置
+onMounted(async () => {
+  try {
+    branchOptions.value = await getAllBranches()
+  } catch {
+    branchOptions.value = [{ id: 'main', name: '主分支' }]
+  }
+
+  // 加载页面配置以获取字段列表
+  if (pageConfigStore.pageConfigs.length === 0) {
+    await pageConfigStore.fetchPageConfigs()
+  }
+})
+
 // 监听 widget 变化，初始化表单
 watch(
   () => props.widget,
   (w) => {
     if (w) {
+      const content = JSON.parse(JSON.stringify(w.content || {}))
+      // 确保 data-card 有 dataSource 对象
+      if (w.widgetType === 'data-card' && !content.dataSource) {
+        content.dataSource = { collection: '', branchId: 'main' }
+      }
       form.value = {
         title: w.title || '',
-        content: JSON.parse(JSON.stringify(w.content || {})),
+        content,
         visibleRoles: [...(w.visibleRoles || ['admin', 'developer', 'guest'])]
       }
     }

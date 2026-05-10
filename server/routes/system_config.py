@@ -13,9 +13,8 @@ system_config_bp = Blueprint('system_config', __name__, url_prefix='/system-conf
 
 
 @system_config_bp.route('', methods=['GET'])
-@login_required
 def get_system_config():
-    """获取系统配置"""
+    """获取系统配置（公开访问，无需登录）"""
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute('SELECT system_name, system_short_name, logo_url FROM system_config WHERE id = 1')

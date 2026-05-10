@@ -48,7 +48,7 @@ export interface GanttTask {
 export function transformToGanttTasks(
   records: DynamicRecord[],
   config: GanttConfig,
-  fields: FieldConfig[]
+  _fields: FieldConfig[]
 ): GanttTask[] {
   return records
     .filter(r => r[config.startDateField] && r[config.endDateField])

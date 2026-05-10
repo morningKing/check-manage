@@ -42,6 +42,7 @@
     "echarts": "^6.0.0",
     "element-plus": "^2.6.1",
     "force-graph": "^1.51.1",
+    "md-editor-v3": "^6.5.0",
     "pinia": "^2.1.7",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

@@ -59,16 +59,15 @@ function formatTime(timestamp: number): string {
 
 // 构建依赖连线数据
 const dependencyLines = computed(() => {
-  const lines: any[] = []
+  const lines: { coords: [number, number][]; lineStyle: { color: string; width: number; type: string } }[] = []
   const taskIndexMap = new Map<string, number>()
-  tasks.value.forEach((t, idx) => taskIndexMap.set(t.id, idx))
+  tasks.forEach((t: { id: string }, idx: number) => taskIndexMap.set(t.id, idx))
 
-  tasks.value.forEach((task, taskIdx) => {
-    task.dependencies.forEach(depId => {
+  tasks.forEach((task: { dependencies: string[]; startDate: number; endDate: number }, taskIdx: number) => {
+    task.dependencies.forEach((depId: string) => {
       const depIdx = taskIndexMap.get(depId)
       if (depIdx !== undefined) {
-        const depTask = tasks.value[depIdx]
-        // 连线：从依赖任务的结束点到当前任务的开始点
+        const depTask = tasks[depIdx] as { endDate: number; startDate: number }
         lines.push({
           coords: [
             [depTask.endDate, depIdx],
@@ -87,20 +86,20 @@ const dependencyLines = computed(() => {
 })
 
 function buildOption(): echarts.EChartsCoreOption {
-  if (tasks.value.length === 0) {
+  if (tasks.length === 0) {
     return {}
   }
 
   // 扩展时间范围（前后加7天）
-  const extendedMin = minDate.value - 7 * 24 * 3600 * 1000
-  const extendedMax = maxDate.value + 7 * 24 * 3600 * 1000
+  const extendedMin = minDate - 7 * 24 * 3600 * 1000
+  const extendedMax = maxDate + 7 * 24 * 3600 * 1000
 
   return {
     tooltip: {
       trigger: 'item',
       formatter: (params: any) => {
         if (params.seriesType === 'custom') {
-          const task = tasks.value[params.dataIndex]
+          const task = tasks[params.dataIndex] as { name: string; startDate: number; endDate: number; progress: number }
           const durationDays = Math.ceil((task.endDate - task.startDate) / (24 * 3600 * 1000))
           return `
             <strong>${task.name}</strong><br/>
@@ -135,14 +134,14 @@ function buildOption(): echarts.EChartsCoreOption {
     },
     yAxis: {
       type: 'category',
-      data: tasks.value.map(t => t.name),
+      data: tasks.map((t: { name: string }) => t.name),
       axisLabel: {
         fontSize: 12,
         width: 130,
         overflow: 'truncate',
         ellipsis: '...'
       },
-      inverse: true,  // 从上到下排列
+      inverse: true,
       splitLine: { show: false }
     },
     dataZoom: [
@@ -163,11 +162,10 @@ function buildOption(): echarts.EChartsCoreOption {
       }
     ],
     series: [
-      // 任务条形（custom series）
       {
         type: 'custom',
         renderItem: (params: any, api: any) => {
-          const task = tasks.value[params.dataIndex]
+          const task = tasks[params.dataIndex] as { startDate: number; endDate: number; progress: number; color: string }
           const categoryIndex = params.dataIndex
           const start = task.startDate
           const end = task.endDate
@@ -177,7 +175,6 @@ function buildOption(): echarts.EChartsCoreOption {
           const pointEnd = api.coord([end, categoryIndex])
           const height = 24
 
-          // 背景（完整任务条）
           const bgRect = {
             type: 'rect',
             shape: {
@@ -192,7 +189,6 @@ function buildOption(): echarts.EChartsCoreOption {
             }
           }
 
-          // 进度条
           const progressWidth = (pointEnd[0] - pointStart[0]) * (progress / 100)
           const progressRect = {
             type: 'rect',
@@ -213,73 +209,8 @@ function buildOption(): echarts.EChartsCoreOption {
             children: [bgRect, progressRect]
           }
         },
-        data: tasks.value.map(t => [t.startDate, t.endDate]),
-        z: 10
-      },
-      // 依赖连线（lines series）
-      {
-        type: 'lines',
-        coordinateSystem: 'cartesian2d',
-        data: dependencyLines.value,
-        symbol: ['none', 'arrow'],
-        symbolSize: 6,
-        z: 5
-      }
-    ],
-    // 今日标记线
-    series: [
-      {
-        type: 'custom',
-        renderItem: (params: any, api: any) => {
-          const task = tasks.value[params.dataIndex]
-          const categoryIndex = params.dataIndex
-          const start = task.startDate
-          const end = task.endDate
-          const progress = task.progress
-
-          const pointStart = api.coord([start, categoryIndex])
-          const pointEnd = api.coord([end, categoryIndex])
-          const height = 24
-
-          // 背景（完整任务条）
-          const bgRect = {
-            type: 'rect',
-            shape: {
-              x: pointStart[0],
-              y: pointStart[1] - height / 2,
-              width: pointEnd[0] - pointStart[0],
-              height: height
-            },
-            style: {
-              fill: task.color,
-              opacity: 0.3
-            }
-          }
-
-          // 进度条
-          const progressWidth = (pointEnd[0] - pointStart[0]) * (progress / 100)
-          const progressRect = {
-            type: 'rect',
-            shape: {
-              x: pointStart[0],
-              y: pointStart[1] - height / 2,
-              width: progressWidth,
-              height: height
-            },
-            style: {
-              fill: task.color,
-              opacity: 0.8
-            }
-          }
-
-          return {
-            type: 'group',
-            children: [bgRect, progressRect]
-          }
-        },
-        data: tasks.value.map(t => [t.startDate, t.endDate]),
+        data: tasks.map((t: { startDate: number; endDate: number }) => [t.startDate, t.endDate]),
         z: 10,
-        // 今日标记线
         markLine: {
           silent: true,
           symbol: 'none',
@@ -297,7 +228,6 @@ function buildOption(): echarts.EChartsCoreOption {
           }]
         }
       },
-      // 依赖连线（lines series）
       {
         type: 'lines',
         coordinateSystem: 'cartesian2d',
@@ -311,7 +241,7 @@ function buildOption(): echarts.EChartsCoreOption {
 }
 
 function render() {
-  if (!chart.value || tasks.value.length === 0) {
+  if (!chart.value || tasks.length === 0) {
     chart.value?.clear()
     return
   }
@@ -320,7 +250,7 @@ function render() {
 
 function handleClick(params: any) {
   if (params.seriesType === 'custom') {
-    const task = tasks.value[params.dataIndex]
+    const task = tasks[params.dataIndex] as { record: DynamicRecord }
     emit('task-click', task.record)
   }
 }

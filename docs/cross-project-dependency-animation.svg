@@ -1,0 +1,384 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600">
+  <defs>
+    <!-- 渐变定义 -->
+    <linearGradient id="gradA" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1d4ed8;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="gradB" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#22c55e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#16a34a;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="gradC" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#a855f7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7c3aed;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- 箭头标记 -->
+    <marker id="arrowTrackMain" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowReadWrite" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowReadOnly" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#6366f1"/>
+    </marker>
+
+    <!-- 发光效果 -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 阻塞状态发光 -->
+    <filter id="blockGlow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feFlood flood-color="#ef4444" flood-opacity="0.5"/>
+      <feComposite in2="coloredBlur" operator="in"/>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    .title { font: bold 24px sans-serif; fill: #1f2937; }
+    .subtitle { font: 16px sans-serif; fill: #6b7280; }
+    .project-name { font: bold 18px sans-serif; fill: white; }
+    .branch-name { font: 13px sans-serif; fill: #374151; }
+    .label { font: 12px sans-serif; fill: #4b5563; }
+    .type-label { font: bold 11px sans-serif; }
+    .status-label { font: 11px sans-serif; }
+
+    /* 依赖线条动画 */
+    .dep-line-track {
+      stroke: #22c55e;
+      stroke-width: 3;
+      fill: none;
+      stroke-dasharray: 8 4;
+      animation: flowTrack 1s linear infinite;
+    }
+    .dep-line-rw {
+      stroke: #f59e0b;
+      stroke-width: 3;
+      fill: none;
+      stroke-dasharray: 8 4;
+      animation: flowRW 1s linear infinite;
+    }
+    .dep-line-ro {
+      stroke: #6366f1;
+      stroke-width: 2;
+      fill: none;
+      stroke-dasharray: 4 4;
+    }
+
+    @keyframes flowTrack {
+      from { stroke-dashoffset: 12; }
+      to { stroke-dashoffset: 0; }
+    }
+    @keyframes flowRW {
+      from { stroke-dashoffset: 12; }
+      to { stroke-dashoffset: 0; }
+    }
+
+    /* 项目卡片脉冲 */
+    .project-card {
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .project-card-blocked {
+      animation: blockPulse 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.95; }
+    }
+    @keyframes blockPulse {
+      0%, 100% { transform: scale(1); filter: none; }
+      50% { transform: scale(1.02); filter: url(#blockGlow); }
+    }
+
+    /* 分支状态指示器 */
+    .branch-active {
+      fill: #fbbf24;
+      animation: blink 1.5s ease-in-out infinite;
+    }
+    .branch-merged {
+      fill: #22c55e;
+    }
+    .branch-blocked {
+      fill: #ef4444;
+      animation: blink 1s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* 合并流程动画 */
+    .merge-arrow {
+      stroke: #22c55e;
+      stroke-width: 4;
+      fill: none;
+      opacity: 0;
+      animation: mergeFlow 4s ease-in-out infinite;
+    }
+
+    @keyframes mergeFlow {
+      0% { opacity: 0; stroke-dashoffset: 100; }
+      20% { opacity: 1; }
+      40% { stroke-dashoffset: 0; }
+      60% { opacity: 1; stroke-dashoffset: 0; }
+      80% { opacity: 0; }
+      100% { opacity: 0; stroke-dashoffset: 100; }
+    }
+
+    /* 解锁动画 */
+    .unlock-indicator {
+      animation: unlock 4s ease-in-out infinite;
+    }
+
+    @keyframes unlock {
+      0%, 40% { opacity: 0; transform: scale(0); }
+      50% { opacity: 1; transform: scale(1); }
+      70% { opacity: 1; transform: scale(1.2); }
+      80% { opacity: 0; transform: scale(0); }
+      100% { opacity: 0; transform: scale(0); }
+    }
+
+    /* 数据流动粒子 */
+    .data-particle {
+      animation: particleFlow 2s linear infinite;
+    }
+
+    @keyframes particleFlow {
+      0% { offset-distance: 0%; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+  </style>
+
+  <!-- 背景 -->
+  <rect width="900" height="600" fill="#f8fafc"/>
+
+  <!-- 标题 -->
+  <text x="450" y="35" text-anchor="middle" class="title">跨项目依赖协作流程</text>
+  <text x="450" y="55" text-anchor="middle" class="subtitle">三种依赖类型 · 合并阻塞检查 · 联合合并顺序 · 删除保护</text>
+
+  <!-- ===================== 第一阶段：项目结构 ===================== -->
+  <g transform="translate(0, 70)">
+    <!-- 项目A（上游） -->
+    <g transform="translate(100, 20)" class="project-card">
+      <rect x="0" y="0" width="160" height="100" rx="8" fill="url(#gradA)" filter="url(#glow)"/>
+      <text x="80" y="30" text-anchor="middle" class="project-name">项目A（上游）</text>
+      <!-- 分支列表 -->
+      <g transform="translate(15, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-merged"/>
+        <text x="20" y="12" class="branch-name">v1.0 (merged)</text>
+      </g>
+      <g transform="translate(15, 70)">
+        <circle cx="8" cy="8" r="6" class="branch-merged"/>
+        <text x="20" y="12" class="branch-name">v2.0 (merged)</text>
+      </g>
+      <g transform="translate(85, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-active"/>
+        <text x="20" y="12" class="branch-name">feature-x</text>
+      </g>
+    </g>
+
+    <!-- 项目B（下游） -->
+    <g transform="translate(370, 20)" class="project-card-blocked">
+      <rect x="0" y="0" width="160" height="100" rx="8" fill="url(#gradB)"/>
+      <text x="80" y="30" text-anchor="middle" class="project-name">项目B（下游）</text>
+      <g transform="translate(15, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-merged"/>
+        <text x="20" y="12" class="branch-name">v1.0 (merged)</text>
+      </g>
+      <g transform="translate(85, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-blocked"/>
+        <text x="20" y="12" class="branch-name">feature-y ⚠</text>
+      </g>
+      <!-- 阻塞标记 -->
+      <g transform="translate(130, 10)">
+        <circle cx="10" cy="10" r="10" fill="#ef4444" opacity="0.9"/>
+        <text x="10" y="14" text-anchor="middle" fill="white" font-size="12" font-weight="bold">!</text>
+      </g>
+    </g>
+
+    <!-- 项目C（依赖方） -->
+    <g transform="translate(640, 20)" class="project-card">
+      <rect x="0" y="0" width="160" height="100" rx="8" fill="url(#gradC)" filter="url(#glow)"/>
+      <text x="80" y="30" text-anchor="middle" class="project-name">项目C</text>
+      <g transform="translate(15, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-merged"/>
+        <text x="20" y="12" class="branch-name">v1.0 (merged)</text>
+      </g>
+      <g transform="translate(85, 50)">
+        <circle cx="8" cy="8" r="6" class="branch-active"/>
+        <text x="20" y="12" class="branch-name">feature-z</text>
+      </g>
+    </g>
+
+    <!-- ===================== 依赖连接线 ===================== -->
+
+    <!-- dep-1: 项目B[main] → 项目A[main] (track-main) -->
+    <path d="M370 60 Q 280 60 260 60" class="dep-line-track" marker-end="url(#arrowTrackMain)"/>
+    <g transform="translate(295, 40)">
+      <rect x="0" y="0" width="70" height="20" rx="3" fill="#22c55e" opacity="0.2"/>
+      <text x="35" y="14" text-anchor="middle" class="type-label" fill="#22c55e">track-main</text>
+    </g>
+
+    <!-- dep-2: 项目B[feature-y] → 项目A[feature-x] (read-write) - 阻塞状态 -->
+    <path d="M370 90 Q 280 90 260 80" class="dep-line-rw" marker-end="url(#arrowReadWrite)"/>
+    <g transform="translate(290, 75)">
+      <rect x="0" y="0" width="80" height="22" rx="3" fill="#f59e0b" opacity="0.3"/>
+      <text x="40" y="14" text-anchor="middle" class="type-label" fill="#f59e0b">read-write</text>
+      <text x="40" y="28" text-anchor="middle" class="status-label" fill="#ef4444">阻塞中</text>
+    </g>
+
+    <!-- dep-3: 项目C[feature-z] → 项目A[v2.0] (read-write) - 就绪 -->
+    <path d="M640 80 Q 450 80 260 70" class="dep-line-rw" marker-end="url(#arrowReadWrite)"/>
+    <g transform="translate(420, 65)">
+      <rect x="0" y="0" width="80" height="22" rx="3" fill="#f59e0b" opacity="0.2"/>
+      <text x="40" y="14" text-anchor="middle" class="type-label" fill="#f59e0b">read-write</text>
+      <text x="40" y="28" text-anchor="middle" class="status-label" fill="#22c55e">就绪 ✓</text>
+    </g>
+
+    <!-- dep-4: 项目C[main] → 项目A[v1.0] (read-only) -->
+    <path d="M640 60 Q 500 50 260 50" class="dep-line-ro" marker-end="url(#arrowReadOnly)"/>
+    <g transform="translate(480, 35)">
+      <rect x="0" y="0" width="70" height="20" rx="3" fill="#6366f1" opacity="0.2"/>
+      <text x="35" y="14" text-anchor="middle" class="type-label" fill="#6366f1">read-only</text>
+    </g>
+  </g>
+
+  <!-- ===================== 第二阶段：合并流程动画 ===================== -->
+  <g transform="translate(0, 220)">
+    <!-- 阶段标题 -->
+    <text x="450" y="20" text-anchor="middle" class="subtitle" font-weight="bold">联合合并流程：先上游，后下游</text>
+
+    <!-- 步骤1：合并项目A -->
+    <g transform="translate(100, 40)">
+      <rect x="0" y="0" width="200" height="80" rx="6" fill="#e0f2fe" stroke="#3b82f6" stroke-width="2"/>
+      <text x="100" y="25" text-anchor="middle" class="branch-name" font-weight="bold">步骤 1</text>
+      <text x="100" y="50" text-anchor="middle" class="branch-name">合并项目A[feature-x]</text>
+      <text x="100" y="70" text-anchor="middle" class="label" fill="#22c55e">✓ 上游先行</text>
+      <!-- 合并箭头 -->
+      <path d="M180 35 L 180 55" class="merge-arrow" stroke-dasharray="5 3"/>
+    </g>
+
+    <!-- 步骤间连接 -->
+    <path d="M300 80 L 350 80" stroke="#9ca3af" stroke-width="2" marker-end="url(#arrowTrackMain)" opacity="0.5"/>
+
+    <!-- 步骤2：解锁项目B -->
+    <g transform="translate(370, 40)">
+      <rect x="0" y="0" width="200" height="80" rx="6" fill="#dcfce7" stroke="#22c55e" stroke-width="2"/>
+      <text x="100" y="25" text-anchor="middle" class="branch-name" font-weight="bold">步骤 2</text>
+      <text x="100" y="50" text-anchor="middle" class="branch-name">依赖变为"就绪"</text>
+      <!-- 解锁图标 -->
+      <g transform="translate(85, 55)" class="unlock-indicator">
+        <circle cx="15" cy="10" r="15" fill="#22c55e" opacity="0.8"/>
+        <text x="15" y="14" text-anchor="middle" fill="white" font-size="14">✓</text>
+      </g>
+    </g>
+
+    <!-- 步骤间连接 -->
+    <path d="M570 80 L 620 80" stroke="#9ca3af" stroke-width="2" marker-end="url(#arrowTrackMain)" opacity="0.5"/>
+
+    <!-- 步骤3：合并项目B -->
+    <g transform="translate(640, 40)">
+      <rect x="0" y="0" width="200" height="80" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+      <text x="100" y="25" text-anchor="middle" class="branch-name" font-weight="bold">步骤 3</text>
+      <text x="100" y="50" text-anchor="middle" class="branch-name">合并项目B[feature-y]</text>
+      <text x="100" y="70" text-anchor="middle" class="label" fill="#22c55e">✓ 下游跟随</text>
+    </g>
+  </g>
+
+  <!-- ===================== 第三阶段：三种依赖类型详解 ===================== -->
+  <g transform="translate(0, 350)">
+    <text x="450" y="20" text-anchor="middle" class="subtitle" font-weight="bold">三种依赖类型对比</text>
+
+    <!-- track-main -->
+    <g transform="translate(50, 40)">
+      <rect x="0" y="0" width="250" height="100" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+      <circle cx="20" cy="20" r="12" fill="#22c55e"/>
+      <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">TM</text>
+      <text x="45" y="24" class="branch-name" font-weight="bold" fill="#22c55e">track-main · 跟随主干</text>
+
+      <text x="20" y="50" class="label">✓ 自动跟随上游 main 分支</text>
+      <text x="20" y="65" class="label">✓ 不阻塞下游合并</text>
+      <text x="20" y="80" class="label">✓ 上游变更自动通知</text>
+      <text x="20" y="95" class="label" fill="#6b7280">适用：稳定依赖，始终使用最新版本</text>
+    </g>
+
+    <!-- read-write -->
+    <g transform="translate(320, 40)">
+      <rect x="0" y="0" width="250" height="100" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="2"/>
+      <circle cx="20" cy="20" r="12" fill="#f59e0b"/>
+      <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">RW</text>
+      <text x="45" y="24" class="branch-name" font-weight="bold" fill="#f59e0b">read-write · 配套分支</text>
+
+      <text x="20" y="50" class="label" fill="#ef4444">⚠ 上游未合并 → 阻塞下游</text>
+      <text x="20" y="65" class="label" fill="#22c55e">✓ 上游合并 → 下游解锁</text>
+      <text x="20" y="80" class="label">✓ 系统计算联合合并顺序</text>
+      <text x="20" y="95" class="label" fill="#6b7280">适用：并行开发，需协调发布</text>
+    </g>
+
+    <!-- read-only -->
+    <g transform="translate(590, 40)">
+      <rect x="0" y="0" width="250" height="100" rx="6" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+      <circle cx="20" cy="20" r="12" fill="#6366f1"/>
+      <text x="20" y="24" text-anchor="middle" fill="white" font-size="10" font-weight="bold">RO</text>
+      <text x="45" y="24" class="branch-name" font-weight="bold" fill="#6366f1">read-only · 精确钉住</text>
+
+      <text x="20" y="50" class="label">✓ 固定特定版本，不变更</text>
+      <text x="20" y="65" class="label">✓ 不阻塞下游合并</text>
+      <text x="20" y="80" class="label" fill="#ef4444">⚠ 被钉版本禁止删除</text>
+      <text x="20" y="95" class="label" fill="#6b7280">适用：历史版本引用，审计追溯</text>
+    </g>
+  </g>
+
+  <!-- ===================== 底部：删除保护示意 ===================== -->
+  <g transform="translate(0, 500)">
+    <text x="450" y="15" text-anchor="middle" class="subtitle">分支删除保护：被依赖的分支无法删除</text>
+
+    <!-- 删除尝试 -->
+    <g transform="translate(200, 30)">
+      <rect x="0" y="0" width="150" height="50" rx="6" fill="#fef2f2" stroke="#ef4444" stroke-width="2"/>
+      <text x="75" y="20" text-anchor="middle" class="branch-name" fill="#ef4444">删除项目A[v1.0]</text>
+      <text x="75" y="38" text-anchor="middle" class="label" fill="#ef4444">✗ 被项目C依赖</text>
+      <!-- 禁止图标 -->
+      <g transform="translate(120, 5)">
+        <circle cx="15" cy="15" r="14" fill="#ef4444"/>
+        <line x1="5" y1="25" x2="25" y2="5" stroke="white" stroke-width="3"/>
+      </g>
+    </g>
+
+    <!-- 保护连接 -->
+    <path d="M350 55 L 400 55" stroke="#ef4444" stroke-width="2" stroke-dasharray="4 2"/>
+
+    <!-- 依赖方 -->
+    <g transform="translate(420, 30)">
+      <rect x="0" y="0" width="150" height="50" rx="6" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+      <text x="75" y="20" text-anchor="middle" class="branch-name" fill="#6366f1">项目C[main]</text>
+      <text x="75" y="38" text-anchor="middle" class="label" fill="#6366f1">read-only → v1.0</text>
+    </g>
+
+    <!-- 提示 -->
+    <g transform="translate(600, 30)">
+      <rect x="0" y="0" width="200" height="50" rx="6" fill="#f0f9ff" stroke="#0ea5e9" stroke-width="1"/>
+      <text x="100" y="25" text-anchor="middle" class="label" fill="#0ea5e9">需先解除依赖声明</text>
+      <text x="100" y="42" text-anchor="middle" class="label" fill="#0ea5e9">或修改目标分支</text>
+    </g>
+  </g>
+
+  <!-- 版本信息 -->
+  <text x="880" y="590" text-anchor="end" font-size="10" fill="#9ca3af">跨项目依赖功能 · v1.0</text>
+</svg>
