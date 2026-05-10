@@ -155,6 +155,7 @@
               <!-- Tab 2: 视图配置 -->
               <el-tab-pane label="视图配置" name="view">
                 <el-form label-width="100px" class="page-form">
+                  <!-- 默认视图选择 -->
                   <el-form-item label="默认视图">
                     <el-select v-model="kanbanDefaultView" placeholder="表格" style="width: 200px">
                       <el-option label="表格视图" value="table" />
@@ -165,48 +166,21 @@
                     </el-select>
                   </el-form-item>
 
-                  <!-- 看板视图配置 -->
-                  <el-divider content-position="left">看板视图</el-divider>
-
-                  <el-form-item label="分组字段">
-                    <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
-                      <el-option
-                        v-for="f in selectTypeFields"
-                        :key="f.fieldName"
-                        :label="f.label"
-                        :value="f.fieldName"
-                      />
-                    </el-select>
-                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                      选择一个下拉选择类型的字段作为看板列的分组依据
-                    </div>
+                  <!-- 视图类型选择器 -->
+                  <el-form-item label="配置视图">
+                    <el-radio-group v-model="viewConfigType">
+                      <el-radio-button value="kanban">看板</el-radio-button>
+                      <el-radio-button value="calendar">日历</el-radio-button>
+                      <el-radio-button value="gantt">甘特图</el-radio-button>
+                    </el-radio-group>
                   </el-form-item>
 
-                  <template v-if="kanbanGroupField">
-                    <el-form-item label="卡片标题">
-                      <el-select v-model="kanbanCardTitle" placeholder="选择标题字段" style="width: 100%">
-                        <el-option
-                          v-for="f in currentFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
+                  <!-- 看板视图配置 -->
+                  <template v-if="viewConfigType === 'kanban'">
+                    <el-divider content-position="left">看板视图</el-divider>
 
-                    <el-form-item label="卡片摘要">
-                      <el-select v-model="kanbanCardFields" multiple placeholder="选择显示字段" style="width: 100%">
-                        <el-option
-                          v-for="f in currentFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
-
-                    <el-form-item label="颜色字段">
-                      <el-select v-model="kanbanColorField" clearable placeholder="可选：按此字段着色" style="width: 100%">
+                    <el-form-item label="分组字段">
+                      <el-select v-model="kanbanGroupField" clearable placeholder="选择 select 类型字段" style="width: 100%">
                         <el-option
                           v-for="f in selectTypeFields"
                           :key="f.fieldName"
@@ -214,29 +188,53 @@
                           :value="f.fieldName"
                         />
                       </el-select>
+                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        选择一个下拉选择类型的字段作为看板列的分组依据
+                      </div>
                     </el-form-item>
+
+                    <template v-if="kanbanGroupField">
+                      <el-form-item label="卡片标题">
+                        <el-select v-model="kanbanCardTitle" placeholder="选择标题字段" style="width: 100%">
+                          <el-option
+                            v-for="f in currentFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="卡片摘要">
+                        <el-select v-model="kanbanCardFields" multiple placeholder="选择显示字段" style="width: 100%">
+                          <el-option
+                            v-for="f in currentFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="颜色字段">
+                        <el-select v-model="kanbanColorField" clearable placeholder="可选：按此字段着色" style="width: 100%">
+                          <el-option
+                            v-for="f in selectTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+                    </template>
                   </template>
 
                   <!-- 日历视图配置 -->
-                  <el-divider content-position="left">日历视图</el-divider>
+                  <template v-if="viewConfigType === 'calendar'">
+                    <el-divider content-position="left">日历视图</el-divider>
 
-                  <el-form-item label="日期字段">
-                    <el-select v-model="calendarDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
-                      <el-option
-                        v-for="f in dateTypeFields"
-                        :key="f.fieldName"
-                        :label="f.label"
-                        :value="f.fieldName"
-                      />
-                    </el-select>
-                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                      选择日期字段作为日历视图的时间轴，必须有日期字段才能启用日历视图
-                    </div>
-                  </el-form-item>
-
-                  <template v-if="calendarDateField">
-                    <el-form-item label="结束日期">
-                      <el-select v-model="calendarEndDateField" clearable placeholder="可选：支持跨天事件" style="width: 100%">
+                    <el-form-item label="日期字段">
+                      <el-select v-model="calendarDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
                         <el-option
                           v-for="f in dateTypeFields"
                           :key="f.fieldName"
@@ -245,60 +243,62 @@
                         />
                       </el-select>
                       <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                        选择结束日期字段可支持多天事件，用户可拖拽边缘调整时长
+                        选择日期字段作为日历视图的时间轴，必须有日期字段才能启用日历视图
                       </div>
                     </el-form-item>
 
-                    <el-form-item label="卡片标题">
-                      <el-select v-model="calendarCardTitle" placeholder="选择标题字段" style="width: 100%">
-                        <el-option
-                          v-for="f in currentFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
+                    <template v-if="calendarDateField">
+                      <el-form-item label="结束日期">
+                        <el-select v-model="calendarEndDateField" clearable placeholder="可选：支持跨天事件" style="width: 100%">
+                          <el-option
+                            v-for="f in dateTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                        <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                          选择结束日期字段可支持多天事件，用户可拖拽边缘调整时长
+                        </div>
+                      </el-form-item>
 
-                    <el-form-item label="颜色字段">
-                      <el-select v-model="calendarColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
-                        <el-option
-                          v-for="f in selectTypeFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
+                      <el-form-item label="卡片标题">
+                        <el-select v-model="calendarCardTitle" placeholder="选择标题字段" style="width: 100%">
+                          <el-option
+                            v-for="f in currentFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
 
-                    <el-form-item label="默认模式">
-                      <el-radio-group v-model="calendarDefaultMode">
-                        <el-radio value="month">月视图</el-radio>
-                        <el-radio value="week">周视图</el-radio>
-                      </el-radio-group>
-                    </el-form-item>
+                      <el-form-item label="颜色字段">
+                        <el-select v-model="calendarColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
+                          <el-option
+                            v-for="f in selectTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="默认模式">
+                        <el-radio-group v-model="calendarDefaultMode">
+                          <el-radio value="month">月视图</el-radio>
+                          <el-radio value="week">周视图</el-radio>
+                        </el-radio-group>
+                      </el-form-item>
+                    </template>
                   </template>
 
                   <!-- 甘特图视图配置 -->
-                  <el-divider content-position="left">甘特图</el-divider>
+                  <template v-if="viewConfigType === 'gantt'">
+                    <el-divider content-position="left">甘特图</el-divider>
 
-                  <el-form-item label="开始日期">
-                    <el-select v-model="ganttStartDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
-                      <el-option
-                        v-for="f in dateTypeFields"
-                        :key="f.fieldName"
-                        :label="f.label"
-                        :value="f.fieldName"
-                      />
-                    </el-select>
-                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                      选择开始日期字段，必须有开始和结束日期才能启用甘特图
-                    </div>
-                  </el-form-item>
-
-                  <template v-if="ganttStartDateField">
-                    <el-form-item label="结束日期">
-                      <el-select v-model="ganttEndDateField" placeholder="选择结束日期字段" style="width: 100%">
+                    <el-form-item label="开始日期">
+                      <el-select v-model="ganttStartDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
                         <el-option
                           v-for="f in dateTypeFields"
                           :key="f.fieldName"
@@ -306,54 +306,70 @@
                           :value="f.fieldName"
                         />
                       </el-select>
-                    </el-form-item>
-
-                    <el-form-item label="标题字段">
-                      <el-select v-model="ganttTitleField" placeholder="选择任务标题字段" style="width: 100%">
-                        <el-option
-                          v-for="f in currentFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
-
-                    <el-form-item label="进度字段">
-                      <el-select v-model="ganttProgressField" clearable placeholder="可选：0-100 数字字段" style="width: 100%">
-                        <el-option
-                          v-for="f in numberTypeFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
-
-                    <el-form-item label="颜色字段">
-                      <el-select v-model="ganttColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
-                        <el-option
-                          v-for="f in selectTypeFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
-                    </el-form-item>
-
-                    <el-form-item label="依赖字段">
-                      <el-select v-model="ganttDependenciesField" clearable placeholder="可选：多选字段存储依赖ID" style="width: 100%">
-                        <el-option
-                          v-for="f in multiSelectTypeFields"
-                          :key="f.fieldName"
-                          :label="f.label"
-                          :value="f.fieldName"
-                        />
-                      </el-select>
                       <div style="color: #909399; font-size: 12px; margin-top: 4px">
-                        选择多选字段存储依赖任务ID，用于显示依赖连线
+                        选择开始日期字段，必须有开始和结束日期才能启用甘特图
                       </div>
                     </el-form-item>
+
+                    <template v-if="ganttStartDateField">
+                      <el-form-item label="结束日期">
+                        <el-select v-model="ganttEndDateField" placeholder="选择结束日期字段" style="width: 100%">
+                          <el-option
+                            v-for="f in dateTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="标题字段">
+                        <el-select v-model="ganttTitleField" placeholder="选择任务标题字段" style="width: 100%">
+                          <el-option
+                            v-for="f in currentFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="进度字段">
+                        <el-select v-model="ganttProgressField" clearable placeholder="可选：0-100 数字字段" style="width: 100%">
+                          <el-option
+                            v-for="f in numberTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="颜色字段">
+                        <el-select v-model="ganttColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
+                          <el-option
+                            v-for="f in selectTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                      </el-form-item>
+
+                      <el-form-item label="依赖字段">
+                        <el-select v-model="ganttDependenciesField" clearable placeholder="可选：多选字段存储依赖ID" style="width: 100%">
+                          <el-option
+                            v-for="f in multiSelectTypeFields"
+                            :key="f.fieldName"
+                            :label="f.label"
+                            :value="f.fieldName"
+                          />
+                        </el-select>
+                        <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                          选择多选字段存储依赖任务ID，用于显示依赖连线
+                        </div>
+                      </el-form-item>
+                    </template>
                   </template>
 
                   <el-form-item style="margin-top: 16px">
@@ -651,6 +667,11 @@ const allExportScripts = ref<ExportScript[]>([])
 const allValidationScripts = ref<ValidationScript[]>([])
 
 /**
+ * 视图配置类型选择
+ */
+const viewConfigType = ref<'kanban' | 'calendar' | 'gantt'>('kanban')
+
+/**
  * 看板配置响应式状态
  */
 const kanbanDefaultView = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table')
@@ -810,6 +831,14 @@ function loadFormForPage(id: string): void {
   // Load kanban config
   const vc = config.viewConfig || {}
   kanbanDefaultView.value = vc.defaultView || 'table'
+  // Initialize viewConfigType based on defaultView
+  if (vc.defaultView === 'calendar') {
+    viewConfigType.value = 'calendar'
+  } else if (vc.defaultView === 'gantt') {
+    viewConfigType.value = 'gantt'
+  } else {
+    viewConfigType.value = 'kanban'
+  }
   kanbanGroupField.value = vc.kanban?.groupField || ''
   kanbanCardTitle.value = vc.kanban?.cardTitle || ''
   kanbanCardFields.value = vc.kanban?.cardFields || []
