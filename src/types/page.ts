@@ -86,11 +86,27 @@ export interface ExcelViewConfig {
   freezeColumns?: number
 }
 
+export interface GanttConfig {
+  /** 开始日期字段（必填，必须是 date 或 datetime 类型） */
+  startDateField: string
+  /** 结束日期字段（必填，必须是 date 或 datetime 类型） */
+  endDateField: string
+  /** 任务标题字段（必填，用于 Y 轴显示） */
+  titleField: string
+  /** 进度字段（可选，0-100 数字，显示完成百分比） */
+  progressField?: string
+  /** 依赖字段（可选，存储依赖任务 ID 数组） */
+  dependenciesField?: string
+  /** 颜色标记字段（可选，按状态/优先级着色） */
+  colorField?: string
+}
+
 export interface ViewConfig {
-  defaultView?: 'table' | 'kanban' | 'excel' | 'calendar'
+  defaultView?: 'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'
   kanban?: KanbanConfig
   excel?: ExcelViewConfig
   calendar?: CalendarConfig
+  gantt?: GanttConfig
 }
 
 export interface PageConfig {
