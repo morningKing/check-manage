@@ -31,6 +31,7 @@ from routes.cross_project_dependencies import cross_project_deps_bp
 from routes.webhooks import webhook_bp
 from routes.menu_export import menu_export_bp
 from routes.system_config import system_config_bp
+from routes.home_widgets import home_widgets_bp
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
@@ -64,6 +65,7 @@ app.register_blueprint(cross_project_deps_bp)
 app.register_blueprint(webhook_bp)
 app.register_blueprint(menu_export_bp)
 app.register_blueprint(system_config_bp)
+app.register_blueprint(home_widgets_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start)
