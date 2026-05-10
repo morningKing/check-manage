@@ -97,6 +97,7 @@ def batch_update_home_widgets():
             'FROM home_widgets ORDER BY "order"'
         )
         rows = cur.fetchall()
+        conn.commit()
 
     return jsonify([_row_to_json(row) for row in rows])
 
@@ -139,6 +140,7 @@ def create_home_widget():
             )
         )
         new_row = cur.fetchone()
+        conn.commit()
 
     return jsonify(_row_to_json(new_row)), 201
 
@@ -157,6 +159,7 @@ def delete_home_widget(widget_id):
 
         if cur.rowcount == 0:
             return jsonify({"error": "Widget not found"}), 404
+        conn.commit()
 
     return jsonify({"success": True})
 
@@ -182,5 +185,6 @@ def update_home_widgets_order():
                     'UPDATE home_widgets SET "order" = %s, updated_at = NOW() WHERE id = %s',
                     (new_order, widget_id)
                 )
+        conn.commit()
 
     return jsonify({"success": True})
