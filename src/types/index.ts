@@ -42,3 +42,6 @@ export * from './version'
 
 // 跨项目依赖相关类型
 export * from './crossProjectDependency'
+
+// 系统配置相关类型
+export * from './systemConfig'
