@@ -161,6 +161,7 @@
                       <el-option label="看板视图" value="kanban" />
                       <el-option label="Excel视图" value="excel" />
                       <el-option label="日历视图" value="calendar" />
+                      <el-option label="甘特图" value="gantt" />
                     </el-select>
                   </el-form-item>
 
@@ -275,6 +276,83 @@
                         <el-radio value="month">月视图</el-radio>
                         <el-radio value="week">周视图</el-radio>
                       </el-radio-group>
+                    </el-form-item>
+                  </template>
+
+                  <!-- 甘特图视图配置 -->
+                  <el-divider content-position="left">甘特图</el-divider>
+
+                  <el-form-item label="开始日期">
+                    <el-select v-model="ganttStartDateField" clearable placeholder="选择 date/datetime 类型字段" style="width: 100%">
+                      <el-option
+                        v-for="f in dateTypeFields"
+                        :key="f.fieldName"
+                        :label="f.label"
+                        :value="f.fieldName"
+                      />
+                    </el-select>
+                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      选择开始日期字段，必须有开始和结束日期才能启用甘特图
+                    </div>
+                  </el-form-item>
+
+                  <template v-if="ganttStartDateField">
+                    <el-form-item label="结束日期">
+                      <el-select v-model="ganttEndDateField" placeholder="选择结束日期字段" style="width: 100%">
+                        <el-option
+                          v-for="f in dateTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="标题字段">
+                      <el-select v-model="ganttTitleField" placeholder="选择任务标题字段" style="width: 100%">
+                        <el-option
+                          v-for="f in currentFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="进度字段">
+                      <el-select v-model="ganttProgressField" clearable placeholder="可选：0-100 数字字段" style="width: 100%">
+                        <el-option
+                          v-for="f in numberTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="颜色字段">
+                      <el-select v-model="ganttColorField" clearable placeholder="可选：按状态字段着色" style="width: 100%">
+                        <el-option
+                          v-for="f in selectTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                    </el-form-item>
+
+                    <el-form-item label="依赖字段">
+                      <el-select v-model="ganttDependenciesField" clearable placeholder="可选：多选字段存储依赖ID" style="width: 100%">
+                        <el-option
+                          v-for="f in multiSelectTypeFields"
+                          :key="f.fieldName"
+                          :label="f.label"
+                          :value="f.fieldName"
+                        />
+                      </el-select>
+                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        选择多选字段存储依赖任务ID，用于显示依赖连线
+                      </div>
                     </el-form-item>
                   </template>
 
@@ -591,6 +669,16 @@ const calendarColorField = ref('')
 const calendarDefaultMode = ref<'month' | 'week'>('month')
 
 /**
+ * 甘特图视图配置响应式状态
+ */
+const ganttStartDateField = ref('')
+const ganttEndDateField = ref('')
+const ganttTitleField = ref('')
+const ganttProgressField = ref('')
+const ganttColorField = ref('')
+const ganttDependenciesField = ref('')
+
+/**
  * 删除绑定配置响应式状态
  */
 const deleteBindingEnabled = ref(false)
@@ -616,6 +704,14 @@ const selectTypeFields = computed<FieldConfig[]>(() =>
 
 const dateTypeFields = computed<FieldConfig[]>(() =>
   currentFields.value.filter(f => f.controlType === 'date' || f.controlType === 'datetime')
+)
+
+const numberTypeFields = computed<FieldConfig[]>(() =>
+  currentFields.value.filter(f => f.controlType === 'number')
+)
+
+const multiSelectTypeFields = computed<FieldConfig[]>(() =>
+  currentFields.value.filter(f => f.controlType === 'multiSelect')
 )
 
 // ==================== 常量 ====================
@@ -724,6 +820,13 @@ function loadFormForPage(id: string): void {
   calendarCardTitle.value = vc.calendar?.cardTitle || ''
   calendarColorField.value = vc.calendar?.cardColorField || ''
   calendarDefaultMode.value = vc.calendar?.defaultMode || 'month'
+  // Load gantt config
+  ganttStartDateField.value = vc.gantt?.startDateField || ''
+  ganttEndDateField.value = vc.gantt?.endDateField || ''
+  ganttTitleField.value = vc.gantt?.titleField || ''
+  ganttProgressField.value = vc.gantt?.progressField || ''
+  ganttColorField.value = vc.gantt?.colorField || ''
+  ganttDependenciesField.value = vc.gantt?.dependenciesField || ''
   // Load delete binding config
   const db = config.deleteBinding
   deleteBindingEnabled.value = db?.enabled || false
@@ -799,6 +902,18 @@ async function handleSavePageInfo(): Promise<void> {
       cardTitle: calendarCardTitle.value,
       cardColorField: calendarColorField.value || undefined,
       defaultMode: calendarDefaultMode.value,
+    }
+  }
+
+  // Build gantt config
+  if (ganttStartDateField.value && ganttEndDateField.value) {
+    viewConfig.gantt = {
+      startDateField: ganttStartDateField.value,
+      endDateField: ganttEndDateField.value,
+      titleField: ganttTitleField.value,
+      progressField: ganttProgressField.value || undefined,
+      colorField: ganttColorField.value || undefined,
+      dependenciesField: ganttDependenciesField.value || undefined,
     }
   }
 
