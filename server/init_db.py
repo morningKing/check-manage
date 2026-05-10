@@ -145,6 +145,47 @@ CREATE TABLE IF NOT EXISTS ai_settings (
 
 INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 
+-- ==================== system_config 表 ====================
+CREATE TABLE IF NOT EXISTS system_config (
+    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    system_name     VARCHAR(200) NOT NULL DEFAULT '巡检用例管理系统',
+    system_short_name VARCHAR(50) NOT NULL DEFAULT '巡检管理',
+    logo_url        VARCHAR(500),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_by      VARCHAR(100)
+);
+
+INSERT INTO system_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- ==================== home_widgets 表 ====================
+CREATE TABLE IF NOT EXISTS home_widgets (
+    id              VARCHAR(100) PRIMARY KEY,
+    widget_type     VARCHAR(50) NOT NULL,
+    title           VARCHAR(200),
+    content         JSONB,
+    enabled         BOOLEAN DEFAULT TRUE,
+    "order"         INTEGER DEFAULT 0,
+    visible_roles   JSONB DEFAULT '["admin","developer","guest"]',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 默认首页区块数据
+INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order") VALUES
+('welcome', 'welcome', '欢迎',
+ '{"heading": "欢迎使用巡检用例管理系统", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
+ true, 1),
+('stats', 'stats', '系统概览',
+ '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
+ true, 2),
+('quick-links', 'quick-links', '快捷入口',
+ '{"links": [{"name": "菜单管理", "path": "/admin/menu", "icon": "Menu"}, {"name": "页面配置", "path": "/admin/page-config", "icon": "Files"}, {"name": "批量导出", "path": "", "icon": "Download", "action": "batchExport"}]}',
+ true, 3),
+('system-info', 'system-info', '系统说明',
+ '{"markdown": "**技术栈：** Vue 3 + TypeScript + Element Plus + Pinia\\n\\n**主要功能：**\\n- 支持 1-3 级嵌套菜单配置\\n- 页面字段可视化配置\\n- 多种表单控件类型支持\\n- 动态数据页面渲染"}',
+ true, 4)
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS export_scripts (
     id              VARCHAR(100) PRIMARY KEY,
     name            VARCHAR(200) NOT NULL,
@@ -758,6 +799,64 @@ def init_db():
             """)
             conn.commit()
             print("Created ai_settings table.")
+
+        # Migration: create system_config table if missing
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'system_config'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE system_config (
+                    id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    system_name     VARCHAR(200) NOT NULL DEFAULT '巡检用例管理系统',
+                    system_short_name VARCHAR(50) NOT NULL DEFAULT '巡检管理',
+                    logo_url        VARCHAR(500),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_by      VARCHAR(100)
+                );
+                INSERT INTO system_config (id) VALUES (1);
+            """)
+            conn.commit()
+            print("Created system_config table.")
+
+        # Migration: create home_widgets table if missing
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'home_widgets'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE home_widgets (
+                    id              VARCHAR(100) PRIMARY KEY,
+                    widget_type     VARCHAR(50) NOT NULL,
+                    title           VARCHAR(200),
+                    content         JSONB,
+                    enabled         BOOLEAN DEFAULT TRUE,
+                    "order"         INTEGER DEFAULT 0,
+                    visible_roles   JSONB DEFAULT '["admin","developer","guest"]',
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            # Insert default widgets
+            cur.execute("""
+                INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order") VALUES
+                ('welcome', 'welcome', '欢迎',
+                 '{"heading": "欢迎使用巡检用例管理系统", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
+                 true, 1),
+                ('stats', 'stats', '系统概览',
+                 '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
+                 true, 2),
+                ('quick-links', 'quick-links', '快捷入口',
+                 '{"links": [{"name": "菜单管理", "path": "/admin/menu", "icon": "Menu"}, {"name": "页面配置", "path": "/admin/page-config", "icon": "Files"}, {"name": "批量导出", "path": "", "icon": "Download", "action": "batchExport"}]}',
+                 true, 3),
+                ('system-info', 'system-info', '系统说明',
+                 '{"markdown": "**技术栈：** Vue 3 + TypeScript + Element Plus + Pinia\\n\\n**主要功能：**\\n- 支持 1-3 级嵌套菜单配置\\n- 页面字段可视化配置\\n- 多种表单控件类型支持\\n- 动态数据页面渲染"}',
+                 true, 4)
+            """)
+            conn.commit()
+            print("Created home_widgets table with default widgets.")
 
         # Migration: add AI settings menu if missing
         cur.execute("SELECT id FROM menus WHERE id = 'menu-3-11'")
