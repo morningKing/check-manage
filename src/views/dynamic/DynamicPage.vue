@@ -74,6 +74,7 @@
           <el-radio-button value="excel"><el-icon><Document /></el-icon></el-radio-button>
           <el-radio-button v-if="hasKanbanConfig" value="kanban"><el-icon><Operation /></el-icon></el-radio-button>
           <el-radio-button v-if="hasCalendarConfig" value="calendar"><el-icon><Calendar /></el-icon></el-radio-button>
+          <el-radio-button v-if="hasGanttConfig" value="gantt"><el-icon><DataLine /></el-icon></el-radio-button>
         </el-radio-group>
         <el-button v-if="!isGuest" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
@@ -311,6 +312,17 @@
         @card-click="handleView"
         @date-change="handleCalendarDateChange"
         @date-click="handleCalendarDateClick"
+      />
+    </el-card>
+
+    <!-- 甘特图视图 -->
+    <el-card v-show="viewMode === 'gantt'" class="table-card gantt-card">
+      <GanttView
+        v-if="ganttConfig"
+        :data="filteredData"
+        :fields="pageFields"
+        :config="ganttConfig"
+        @task-click="handleView"
       />
     </el-card>
 
@@ -775,9 +787,9 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore } from '@/stores'
-import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView } from '@/components/common'
+import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
@@ -786,7 +798,7 @@ import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, swit
 import type { CurrentBranch } from '@/api/projectVersion'
 import type { ProjectVersion } from '@/types/version'
 import { post } from '@/utils/request'
-import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig } from '@/types'
+import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 
 // ==================== Props ====================
 
@@ -1143,6 +1155,19 @@ const hasCalendarConfig = computed(() => {
   if (!calendarConfig.value) return false
   const dateField = pageFields.value.find(f => f.fieldName === calendarConfig.value!.dateField)
   return dateField && ['date', 'datetime'].includes(dateField.controlType)
+})
+
+const ganttConfig = computed<GanttConfig | undefined>(() => {
+  return pageConfig.value?.viewConfig?.gantt
+})
+
+const hasGanttConfig = computed(() => {
+  if (!ganttConfig.value) return false
+  const startField = pageFields.value.find(f => f.fieldName === ganttConfig.value!.startDateField)
+  const endField = pageFields.value.find(f => f.fieldName === ganttConfig.value!.endDateField)
+  return startField && endField &&
+    ['date', 'datetime'].includes(startField.controlType) &&
+    ['date', 'datetime'].includes(endField.controlType)
 })
 
 const kanbanGroupOptions = computed<FieldOption[]>(() => {
