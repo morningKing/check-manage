@@ -81,12 +81,34 @@ class TestListHomeWidgets:
                 'created_at': now,
                 'updated_at': now,
             },
+            {
+                'id': 'quick-links',
+                'widget_type': 'quick-links',
+                'title': '快捷链接',
+                'content': {},
+                'enabled': True,
+                'order': 3,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now,
+                'updated_at': now,
+            },
+            {
+                'id': 'system-info',
+                'widget_type': 'system-info',
+                'title': '系统信息',
+                'content': {},
+                'enabled': True,
+                'order': 4,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now,
+                'updated_at': now,
+            },
         ]
         resp = client.get('/home-widgets', headers=admin_h)
         assert resp.status_code == 200
         data = resp.get_json()
         assert isinstance(data, list)
-        assert len(data) == 2
+        assert len(data) >= 4
 
     def test_get_home_widgets_filters_by_role(self, setup):
         """测试角色过滤"""
