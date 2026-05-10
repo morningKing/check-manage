@@ -197,6 +197,15 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'Download',
         },
       },
+      {
+        path: 'admin/system-settings',
+        name: 'SystemSettings',
+        component: () => import('@/views/admin/SystemSettings.vue'),
+        meta: {
+          title: '系统设置',
+          icon: 'Setting',
+        },
+      },
       // 隐藏页面：恢复出厂设置（不添加菜单项）
       {
         path: 'admin/factory-reset',

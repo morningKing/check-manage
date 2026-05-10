@@ -880,6 +880,17 @@ def init_db():
             conn.commit()
             print("Added Webhook settings menu.")
 
+        # Migration: add SystemSettings menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-14'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-14', %s, 'Setting', NULL, 'menu-3-a', 7, '/admin/system-settings', %s, 'system')",
+                ('系统设置', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added SystemSettings menu.")
+
         # Migration: add backup_scope and backup_tables columns to backups
         cur.execute("""
             SELECT column_name FROM information_schema.columns
