@@ -29,6 +29,26 @@ const props = defineProps<{
 }>()
 
 /**
+ * Sanitize HTML to prevent XSS attacks
+ * - Removes script and style tags
+ * - Filters dangerous URL schemes in links (only allows http, https, mailto, tel)
+ */
+function sanitizeHtml(html: string): string {
+  // Remove script and style tags
+  let result = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+  result = result.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+
+  // Filter dangerous URLs in href attributes
+  result = result.replace(/href="([^"]*)"/g, (match, url) => {
+    const safeProtocols = ['http://', 'https://', 'mailto:', 'tel:', '/', '#']
+    const isSafe = safeProtocols.some(p => url.startsWith(p)) || !url.includes(':')
+    return isSafe ? match : 'href="#"'
+  })
+
+  return result
+}
+
+/**
  * Markdown 渲染
  * 支持：Headers, bold, italic, code, links, lists
  */
@@ -117,7 +137,7 @@ const renderedMarkdown = computed(() => {
     result.push('</ol>')
   }
 
-  return result.join('')
+  return sanitizeHtml(result.join(''))
 })
 
 /**
