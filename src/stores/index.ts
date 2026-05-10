@@ -24,3 +24,6 @@ export { useExportScriptStore } from './exportScript'
 
 // 跳转导航状态
 export { useJumpNavigationStore } from './jumpNavigation'
+
+// 系统配置状态
+export { useSystemConfigStore } from './systemConfig'
