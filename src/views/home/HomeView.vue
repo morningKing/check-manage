@@ -16,7 +16,6 @@
         class="widget-wrapper"
       />
     </template>
-    <BatchExportDialog v-model="batchExportVisible" />
   </div>
 </template>
 
@@ -26,9 +25,8 @@
  *
  * 动态渲染首页区块，支持配置化管理
  */
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useSystemConfigStore, usePageConfigStore } from '@/stores'
-import { BatchExportDialog } from '@/components/common'
 import { widgetComponentMap } from '@/components/home'
 import type { WidgetType } from '@/types'
 
@@ -36,8 +34,6 @@ import type { WidgetType } from '@/types'
 
 const systemConfigStore = useSystemConfigStore()
 const pageConfigStore = usePageConfigStore()
-
-const batchExportVisible = ref(false)
 
 // ==================== 计算属性 ====================
 
