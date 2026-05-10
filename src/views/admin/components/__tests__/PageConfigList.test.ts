@@ -167,10 +167,10 @@ describe('PageConfigList', () => {
       makeConfig({ id: 'page-c', name: '孤立' }), // 不被任何菜单引用
     ]
     const menus: MenuItem[] = [
-      makeMenu({ id: 'menu-proj-1', name: 'QA项目', menuType: 'project', projectId: null }),
-      makeMenu({ id: 'menu-proj-2', name: '运维项目', menuType: 'project', projectId: null }),
-      makeMenu({ id: 'menu-da', menuType: 'data', pageId: 'page-a', projectId: 'menu-proj-1' }),
-      makeMenu({ id: 'menu-db', menuType: 'data', pageId: 'page-b', projectId: 'menu-proj-2' }),
+      makeMenu({ id: 'menu-proj-1', name: 'QA项目', menuType: 'project', parentId: null }),
+      makeMenu({ id: 'menu-proj-2', name: '运维项目', menuType: 'project', parentId: null }),
+      makeMenu({ id: 'menu-da', menuType: 'data', pageId: 'page-a', parentId: 'menu-proj-1' }),
+      makeMenu({ id: 'menu-db', menuType: 'data', pageId: 'page-b', parentId: 'menu-proj-2' }),
     ]
 
     it('全部项目（默认）', async () => {

@@ -190,9 +190,10 @@ const pendingDelete = ref<{ mode: 'single'; config: PageConfig } | { mode: 'batc
 const pageIdToProjectIds = computed(() => {
   const map = new Map<string, Set<string>>()
   for (const m of menuStore.menuList) {
-    if (m.menuType === 'data' && m.pageId && m.projectId) {
+    // data类型菜单通过parent_id指向所属项目（project_id字段可能为空）
+    if (m.menuType === 'data' && m.pageId && m.parentId) {
       if (!map.has(m.pageId)) map.set(m.pageId, new Set())
-      map.get(m.pageId)!.add(m.projectId)
+      map.get(m.pageId)!.add(m.parentId)
     }
   }
   return map
