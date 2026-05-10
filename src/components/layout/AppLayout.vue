@@ -150,7 +150,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Loading, ArrowDown, User as UserIcon, Setting } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useAppStore, useMenuStore, useAuthStore, useTabStore } from '@/stores'
+import { useAppStore, useMenuStore, useAuthStore, useTabStore, useSystemConfigStore } from '@/stores'
 import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
@@ -163,6 +163,7 @@ const appStore = useAppStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const tabStore = useTabStore()
+const systemConfigStore = useSystemConfigStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -336,6 +337,9 @@ function toggleSidebar(): void {
 onMounted(async () => {
   // 应用保存的主题设置
   appStore.applyTheme()
+
+  // 先初始化系统配置（initializeApp 可能依赖系统名称）
+  await systemConfigStore.initialize()
 
   await appStore.initializeApp()
 

@@ -11,7 +11,7 @@
     <div class="login-card">
       <div class="login-header">
         <el-icon class="login-logo"><Monitor /></el-icon>
-        <h1>巡检用例管理系统</h1>
+        <h1>{{ systemName }}</h1>
       </div>
       <el-form
         ref="formRef"
@@ -53,15 +53,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Monitor, User, Lock } from '@element-plus/icons-vue'
-import { useAuthStore } from '@/stores'
+import { useAuthStore, useSystemConfigStore } from '@/stores'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const systemConfigStore = useSystemConfigStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
@@ -74,6 +75,18 @@ const formRules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
+
+/**
+ * 系统名称（登录页标题）
+ */
+const systemName = computed(() => systemConfigStore.systemName)
+
+/**
+ * 登录页无需登录态，直接获取系统配置
+ */
+onMounted(() => {
+  systemConfigStore.fetchSystemConfig()
+})
 
 async function handleLogin(): Promise<void> {
   const valid = await formRef.value?.validate()

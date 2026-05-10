@@ -16,7 +16,7 @@
     <!-- Logo 区域 -->
     <div class="menu-logo" :class="{ collapsed: sidebarCollapsed }">
       <el-icon class="logo-icon"><Monitor /></el-icon>
-      <span v-if="!sidebarCollapsed" class="logo-text">巡检管理</span>
+      <span v-if="!sidebarCollapsed" class="logo-text">{{ systemShortName }}</span>
     </div>
 
     <!-- 菜单列表 -->
@@ -56,7 +56,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Monitor } from '@element-plus/icons-vue'
-import { useAppStore, useMenuStore, useAuthStore } from '@/stores'
+import { useAppStore, useMenuStore, useAuthStore, useSystemConfigStore } from '@/stores'
 import MenuItem from './MenuItem.vue'
 
 // ==================== Store ====================
@@ -64,6 +64,7 @@ import MenuItem from './MenuItem.vue'
 const appStore = useAppStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
+const systemConfigStore = useSystemConfigStore()
 const route = useRoute()
 
 // ==================== 计算属性 ====================
@@ -72,6 +73,11 @@ const route = useRoute()
  * 侧边栏是否折叠
  */
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
+
+/**
+ * 系统简称（Logo 文字）
+ */
+const systemShortName = computed(() => systemConfigStore.systemShortName)
 
 /**
  * 根据角色过滤后的菜单树
