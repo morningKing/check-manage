@@ -186,6 +186,7 @@ import { ref, computed, watch } from 'vue'
 import type { WidgetConfig } from '@/types'
 
 const props = defineProps<{
+  modelValue: boolean
   widget: WidgetConfig | null
 }>()
 
@@ -194,7 +195,10 @@ const emit = defineEmits<{
   'save': [widget: Partial<WidgetConfig>]
 }>()
 
-const visible = ref(false)
+const visible = computed({
+  get: () => props.modelValue,
+  set: (v) => emit('update:modelValue', v)
+})
 
 const dialogTitle = computed(() => {
   if (!props.widget) return '编辑区块'
@@ -265,7 +269,6 @@ watch(
         content: JSON.parse(JSON.stringify(w.content || {})),
         visibleRoles: [...(w.visibleRoles || ['admin', 'developer', 'guest'])]
       }
-      visible.value = true
     }
   },
   { immediate: true }
@@ -294,8 +297,6 @@ function handleSave() {
 function handleClose() {
   emit('update:modelValue', false)
 }
-
-watch(visible, (v) => emit('update:modelValue', v))
 </script>
 
 <style scoped lang="scss">
