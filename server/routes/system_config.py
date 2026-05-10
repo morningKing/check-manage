@@ -47,10 +47,15 @@ def update_system_config():
         return jsonify({'error': '系统简称不能为空'}), 400
 
     # 获取当前用户名作为更新人
-    updated_by = g.user.get('username', '')
+    updated_by = g.current_user.get('username', '')
 
     with get_db() as conn:
         cur = conn.cursor()
+        # 检查系统配置是否存在
+        cur.execute('SELECT id FROM system_config WHERE id = 1')
+        if not cur.fetchone():
+            return jsonify({'error': '系统配置不存在'}), 404
+
         cur.execute("""
             UPDATE system_config
             SET system_name = %s, system_short_name = %s, logo_url = %s, updated_at = NOW(), updated_by = %s
