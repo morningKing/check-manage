@@ -122,7 +122,7 @@
           v-model="filterStr"
           type="textarea"
           :rows="2"
-          placeholder="可选，JSON 格式过滤条件，如：{\"status\":\"active\"}"
+          placeholder="可选，JSON 格式过滤条件，如：status:active"
         />
       </el-form-item>
       <el-form-item label="显示数量">
