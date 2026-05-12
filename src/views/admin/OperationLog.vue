@@ -395,6 +395,19 @@ onMounted(() => {
   height: 100%;
 }
 
+// 让 el-card 使用 flex 布局，card body 可滚动
+.operation-log > .el-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  :deep(.el-card__body) {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;

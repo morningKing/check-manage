@@ -37,7 +37,7 @@
           </template>
 
           <div v-if="showDetail" class="page-detail">
-            <el-tabs v-model="activeTab" type="border-card">
+            <el-tabs v-model="activeTab" type="border-card" class="scrollable-tabs">
               <!-- Tab 1: 基本信息 -->
               <el-tab-pane label="基本信息" name="basic">
                 <el-form
@@ -1107,27 +1107,37 @@ onActivated(async () => {
 <style scoped lang="scss">
 .page-config-manager {
   height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .full-height {
   height: 100%;
+  flex: 1;
+
+  // 确保 el-col 继承高度
+  > .el-col {
+    height: 100%;
+  }
 }
 
+// 使用 flex 布局让 card 内容正确滚动
 .list-card,
 .detail-card {
   height: 100%;
+  display: flex;
+  flex-direction: column;
 
   :deep(.el-card__body) {
-    height: calc(100% - 60px);
+    flex: 1;
     overflow: auto;
+    min-height: 0; // 关键：允许 flex 子项收缩并滚动
   }
 }
 
 .list-card {
   :deep(.el-card__body) {
     padding: 12px;
-    display: flex;
-    flex-direction: column;
   }
 }
 
@@ -1137,14 +1147,40 @@ onActivated(async () => {
   align-items: center;
 }
 
+// 页面详情 - 占满 card body，内部滚动由 card body 处理
 .page-detail {
-  .page-form {
-    max-width: 600px;
+  height: 100%;
+}
+
+// Element Plus border-card tabs - 去掉默认样式并启用滚动
+.page-detail :deep(.el-tabs--border-card) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+
+  > .el-tabs__header {
+    flex-shrink: 0;
+    background-color: var(--el-fill-color-light);
+    border-bottom: 1px solid var(--el-border-color-light);
   }
 
-  :deep(.el-tabs__content) {
-    padding: 16px 8px;
+  > .el-tabs__content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
   }
+
+  > .el-tabs__content > .el-tab-pane {
+    height: 100%;
+  }
+}
+
+.page-form {
+  max-width: 600px;
 }
 
 .inherit-fields-config {

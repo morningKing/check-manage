@@ -344,18 +344,30 @@ async function loadMenuTree(): Promise<void> {
 .menu-export-page {
   height: 100%;
   padding: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .full-height {
   height: 100%;
+  flex: 1;
+
+  // 确保 el-col 继承高度
+  > .el-col {
+    height: 100%;
+  }
 }
 
+// 使用 flex 布局让 card body 可滚动
 .tree-card,
 .preview-card {
   height: 100%;
+  display: flex;
+  flex-direction: column;
 
   :deep(.el-card__body) {
-    height: calc(100% - 60px);
+    flex: 1;
+    min-height: 0;
     overflow: auto;
   }
 }
