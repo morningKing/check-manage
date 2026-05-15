@@ -1,6 +1,27 @@
 <!-- src/components/common/GanttView.vue -->
 <template>
-  <div ref="chartRef" class="gantt-view" />
+  <div class="gantt-container">
+    <!-- 时间轴头部 -->
+    <div class="timeline-header" v-if="tasks.length > 0">
+      <div class="timeline-label-column">
+        <span class="timeline-title">时间轴</span>
+      </div>
+      <div class="timeline-axis" ref="timelineAxisRef">
+        <div
+          v-for="marker in timelineMarkers"
+          :key="marker.key"
+          class="timeline-marker"
+          :style="{ left: marker.left + '%' }"
+        >
+          <span class="marker-label">{{ marker.label }}</span>
+        </div>
+      </div>
+    </div>
+    <!-- 甘特图主体 -->
+    <div class="gantt-body">
+      <div ref="chartRef" class="gantt-view" />
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -38,6 +59,7 @@ const emit = defineEmits<{
 }>()
 
 const chartRef = ref<HTMLElement | null>(null)
+const timelineAxisRef = ref<HTMLElement | null>(null)
 const chart = shallowRef<echarts.ECharts | null>(null)
 let resizeObserver: ResizeObserver | null = null
 
@@ -59,6 +81,39 @@ const minDate = computed(() => {
 const maxDate = computed(() => {
   if (tasks.value.length === 0) return Date.now() + 7 * 24 * 3600 * 1000
   return Math.max(...tasks.value.map(t => t.endDate))
+})
+
+// 扩展时间范围
+const extendedMin = computed(() => minDate.value - 7 * 24 * 3600 * 1000)
+const extendedMax = computed(() => maxDate.value + 7 * 24 * 3600 * 1000)
+
+// 时间轴标记点（显示月份）
+const timelineMarkers = computed(() => {
+  if (tasks.value.length === 0) return []
+
+  const markers: { key: string; label: string; left: number }[] = []
+  const start = new Date(extendedMin.value)
+  const end = new Date(extendedMax.value)
+  const totalRange = extendedMax.value - extendedMin.value
+
+  // 从起始月份开始
+  let currentMonth = new Date(start.getFullYear(), start.getMonth(), 1)
+
+  while (currentMonth.getTime() <= end.getTime()) {
+    const position = ((currentMonth.getTime() - extendedMin.value) / totalRange) * 100
+    const monthLabel = `${currentMonth.getFullYear()}/${String(currentMonth.getMonth() + 1).padStart(2, '0')}`
+
+    markers.push({
+      key: monthLabel,
+      label: monthLabel,
+      left: Math.max(0, Math.min(100, position))
+    })
+
+    // 下一个月
+    currentMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1)
+  }
+
+  return markers
 })
 
 // 今日时间戳
@@ -107,10 +162,6 @@ function buildOption(): echarts.EChartsCoreOption {
     return {}
   }
 
-  // 扩展时间范围（前后加7天）
-  const extendedMin = minDate.value - 7 * 24 * 3600 * 1000
-  const extendedMax = maxDate.value + 7 * 24 * 3600 * 1000
-
   return {
     tooltip: {
       trigger: 'item',
@@ -132,18 +183,21 @@ function buildOption(): echarts.EChartsCoreOption {
     grid: {
       left: 150,
       right: 30,
-      top: 30,
+      top: 20,
       bottom: 50,
       containLabel: false
     },
     xAxis: {
       type: 'time',
-      min: extendedMin,
-      max: extendedMax,
+      min: extendedMin.value,
+      max: extendedMax.value,
       axisLabel: {
-        formatter: (value: number) => formatTime(value),
+        formatter: (value: number) => {
+          const d = new Date(value)
+          return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+        },
         fontSize: 11,
-        rotate: 30
+        rotate: 0
       },
       splitLine: {
         lineStyle: { type: 'dashed', color: '#E4E7ED' }
@@ -167,9 +221,12 @@ function buildOption(): echarts.EChartsCoreOption {
         xAxisIndex: 0,
         height: 20,
         bottom: 10,
-        startValue: extendedMin,
-        endValue: extendedMax,
-        labelFormatter: (value: number) => formatTime(value)
+        startValue: extendedMin.value,
+        endValue: extendedMax.value,
+        labelFormatter: (value: number) => {
+          const d = new Date(value)
+          return `${d.getMonth() + 1}/${d.getDate()}`
+        }
       },
       {
         type: 'inside',
@@ -294,9 +351,70 @@ watch([tasks, minDate, maxDate], render, { deep: true })
 </script>
 
 <style scoped>
+.gantt-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.timeline-header {
+  display: flex;
+  height: 36px;
+  border-bottom: 2px solid var(--el-border-color);
+  background: var(--el-fill-color-light);
+  flex-shrink: 0;
+}
+
+.timeline-label-column {
+  width: 150px;
+  padding: 8px 12px;
+  border-right: 1px solid var(--el-border-color);
+  display: flex;
+  align-items: center;
+}
+
+.timeline-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.timeline-axis {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.timeline-marker {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-left: 4px;
+}
+
+.marker-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  background: var(--el-color-primary-light-9);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.gantt-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .gantt-view {
   width: 100%;
-  height: 500px;
+  height: 100%;
   min-height: 300px;
 }
 </style>
