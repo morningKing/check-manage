@@ -52,6 +52,7 @@ const calendarOptions = computed(() => ({
   plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
   initialView: props.config.defaultMode === 'week' ? 'timeGridWeek' : 'dayGridMonth',
   locale: 'zh-cn',
+  timeZone: 'local',
   headerToolbar: {
     left: 'prev,next today',
     center: 'title',

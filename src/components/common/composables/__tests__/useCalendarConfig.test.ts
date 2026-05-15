@@ -24,8 +24,9 @@ describe('useCalendarConfig', () => {
   })
 
   describe('formatDateToISO', () => {
-    it('formats date to YYYY-MM-DD', () => {
-      const date = new Date('2026-05-09T12:00:00Z')
+    it('formats date to YYYY-MM-DD using local time', () => {
+      // 使用本地时间创建日期对象，避免时区影响
+      const date = new Date(2026, 4, 9, 12, 0, 0) // 2026-05-09 12:00 local
       expect(formatDateToISO(date)).toBe('2026-05-09')
     })
   })

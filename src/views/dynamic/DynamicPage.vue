@@ -305,6 +305,7 @@
     <!-- 日历视图 -->
     <el-card v-show="viewMode === 'calendar'" class="table-card calendar-card">
       <CalendarView
+        ref="calendarViewRef"
         v-if="calendarConfig"
         :data="filteredData"
         :fields="pageFields"
@@ -1088,6 +1089,7 @@ const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table
 
 /** Excel 视图组件引用 */
 const excelViewRef = ref<{ saveSnapshot: () => void } | null>(null)
+const calendarViewRef = ref<{ getApi: () => any } | null>(null)
 
 /**
  * Excel 视图延迟加载状态
@@ -1844,7 +1846,11 @@ async function handleCalendarDateChange(payload: { recordId: string; updates: Re
 function handleCalendarDateClick(date: Date): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   isEditMode.value = false
-  const dateStr = date.toISOString().split('T')[0]
+  // 使用本地日期而非 UTC 日期，避免时区导致日期偏移一天
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const dateStr = `${year}-${month}-${day}`
   currentRecord.value = {
     [calendarConfig.value!.dateField]: dateStr
   }
@@ -2916,6 +2922,14 @@ watch(viewMode, (newMode, oldMode) => {
       setTimeout(() => {
         excelReady.value = true
       }, 50)
+    })
+  } else if (newMode === 'calendar') {
+    // 切换到日历视图时，等待 DOM 渲染完成后刷新尺寸
+    // 避免 v-show 隐藏时初始化导致的布局压缩问题
+    nextTick(() => {
+      setTimeout(() => {
+        calendarViewRef.value?.getApi()?.updateSize()
+      }, 100)
     })
   } else {
     // 切换到其他视图时立即隐藏 Excel 视图
