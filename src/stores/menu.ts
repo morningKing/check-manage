@@ -158,7 +158,7 @@ export const useMenuStore = defineStore('menu', () => {
 
     try {
       const created = await post<MenuItem>('/menus', newMenu)
-      menuList.value.push(created)
+      menuList.value = [...menuList.value, created]
       syncDynamicRoutes()
       return created
     } catch (error) {
@@ -177,10 +177,7 @@ export const useMenuStore = defineStore('menu', () => {
   async function updateMenu(id: string, menu: Partial<MenuItem>): Promise<MenuItem> {
     try {
       const updated = await put<MenuItem>(`/menus/${id}`, { ...menu, id })
-      const index = menuList.value.findIndex((item) => item.id === id)
-      if (index !== -1) {
-        menuList.value[index] = updated
-      }
+      menuList.value = menuList.value.map((item) => item.id === id ? updated : item)
       syncDynamicRoutes()
       return updated
     } catch (error) {
@@ -239,11 +236,9 @@ export const useMenuStore = defineStore('menu', () => {
         })
       }
       // 更新本地状态
-      updates.forEach((update) => {
-        const menu = menuList.value.find((item) => item.id === update.id)
-        if (menu) {
-          menu.order = update.order
-        }
+      menuList.value = menuList.value.map((item) => {
+        const update = updates.find((u) => u.id === item.id)
+        return update ? { ...item, order: update.order } : item
       })
     } catch (error) {
       console.error('更新菜单顺序失败:', error)

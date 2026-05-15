@@ -487,9 +487,20 @@ const availableMenuTypeOptions = computed(() => {
 /**
  * 可选的父级菜单选项
  * 根据菜单类型规则过滤
+ *
+ * 特殊规则：数据菜单当前挂在工作空间下时（非标准层级），
+ * 允许将其父级改为工作空间或项目，用于将错位菜单归位。
+ * 其他情况严格按层级规则：项目→工作空间，数据→项目。
  */
 const availableParentOptions = computed(() => {
   const options: Array<{ value: string; label: string; disabled?: boolean }> = []
+
+  // 判断当前数据菜单是否挂在工作空间下（非标准层级）
+  function isDataMisplacedUnderWorkspace(): boolean {
+    if (!isEditMode.value || formData.value.menuType !== 'data' || !formData.value.parentId) return false
+    const parent = menuStore.getMenuById(formData.value.parentId)
+    return parent?.menuType === 'workspace'
+  }
 
   // 递归构建菜单选项
   function buildOptions(menus: MenuItem[], prefix: string = '') {
@@ -503,14 +514,15 @@ const availableParentOptions = computed(() => {
         if (isDescendant(formData.value.id, menu.id)) return
       }
 
-      // 根据目标菜单类型过滤可用的父级
       const targetMenuType = formData.value.menuType
       if (targetMenuType === 'project') {
         // 项目只能选择工作空间作为父级
         if (menu.menuType !== 'workspace') return
       } else if (targetMenuType === 'data') {
-        // 数据菜单只能选择项目作为父级
-        if (menu.menuType !== 'project') return
+        // 标准情况：数据菜单只能选择项目作为父级
+        if (!isDataMisplacedUnderWorkspace() && menu.menuType !== 'project') return
+        // 非标准情况（挂在 workspace 下）：允许选择 workspace 或 project
+        if (isDataMisplacedUnderWorkspace() && menu.menuType !== 'workspace' && menu.menuType !== 'project') return
       }
 
       const label = prefix + menu.name
