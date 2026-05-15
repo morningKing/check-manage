@@ -390,6 +390,7 @@
                   :page-id="currentPageId!"
                   :fields="currentFields"
                   @update="handleFieldsUpdate"
+                  @import="openImportDialog"
                 />
               </el-tab-pane>
 
@@ -581,6 +582,119 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 导入字段对话框 -->
+    <el-dialog
+      v-model="importDialogVisible"
+      title="导入字段配置"
+      width="800px"
+      :close-on-click-modal="false"
+    >
+      <el-tabs v-model="importActiveTab" class="import-tabs">
+        <!-- Tab 1: 模板与说明 -->
+        <el-tab-pane label="模板与说明" name="template">
+          <div class="template-section">
+            <h4>下载导入模板</h4>
+            <p class="desc">下载 Excel 模板，按照模板格式填写字段配置后上传导入。</p>
+            <div class="template-buttons">
+              <el-button type="primary" @click="downloadTemplate('xlsx')">
+                <el-icon><Download /></el-icon>
+                下载 Excel 模板
+              </el-button>
+              <el-button @click="downloadTemplate('csv')">
+                <el-icon><Download /></el-icon>
+                下载 CSV 模板
+              </el-button>
+            </div>
+
+            <el-divider>字段配置说明</el-divider>
+
+            <el-table :data="fieldTypeGuide" size="small" border max-height="400">
+              <el-table-column prop="type" label="字段类型" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info">{{ row.type }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="label" label="说明" width="160" />
+              <el-table-column label="配置示例" min-width="280">
+                <template #default="{ row }">
+                  <code class="code-example">{{ row.example }}</code>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <!-- Tab 2: 上传文件 -->
+        <el-tab-pane label="上传文件" name="upload">
+          <el-upload
+            ref="uploadRef"
+            drag
+            :auto-upload="false"
+            :limit="1"
+            accept=".xlsx,.xls,.csv"
+            :on-change="handleFileChange"
+          >
+            <el-icon class="el-icon--upload"><Upload /></el-icon>
+            <div class="el-upload__text">
+              将文件拖到此处，或<em>点击上传</em>
+            </div>
+            <template #tip>
+              <div class="el-upload__tip">
+                支持 .xlsx / .xls / .csv 格式，每行一个字段配置
+              </div>
+            </template>
+          </el-upload>
+
+          <!-- 预览区域 -->
+          <div v-if="importPreview" class="import-preview">
+            <el-divider>解析预览</el-divider>
+            <el-descriptions :column="3" border size="small">
+              <el-descriptions-item label="解析字段数">{{ importPreview.total }}</el-descriptions-item>
+              <el-descriptions-item label="将更新">{{ importPreview.updated }}</el-descriptions-item>
+              <el-descriptions-item label="将新增">{{ importPreview.added }}</el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              v-if="importPreview.errors.length > 0"
+              type="warning"
+              :closable="false"
+              show-icon
+              style="margin-top: 12px"
+            >
+              <template #title>解析警告</template>
+              <div v-for="(err, i) in importPreview.errors" :key="i" style="font-size: 12px; margin-top: 4px">
+                第 {{ err.row }} 行: {{ err.message }}
+              </div>
+            </el-alert>
+
+            <el-table :data="importPreview.fields" size="small" max-height="300" style="margin-top: 12px">
+              <el-table-column prop="id" label="ID" width="120" />
+              <el-table-column prop="fieldName" label="字段名" width="140" />
+              <el-table-column prop="label" label="标签" width="140" />
+              <el-table-column prop="controlType" label="类型" width="120" />
+              <el-table-column prop="required" label="必填" width="60">
+                <template #default="{ row }">
+                  <el-tag :type="row.required ? 'success' : 'info'" size="small">{{ row.required ? '是' : '否' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="80">
+                <template #default="{ row }">
+                  <el-tag v-if="row._action === 'update'" type="warning" size="small">更新</el-tag>
+                  <el-tag v-else type="success" size="small">新增</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button v-if="importActiveTab === 'upload'" type="primary" @click="handleImportFields" :loading="importLoading" :disabled="!importPreview">
+          确认导入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -596,7 +710,7 @@
 import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Right } from '@element-plus/icons-vue'
+import { Right, Upload, Download } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { useMenuStore } from '@/stores'
 import FieldConfigEditor from './FieldConfigEditor.vue'
@@ -608,6 +722,8 @@ import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
 import { getExportScripts } from '@/api/exportScript'
 import { getValidationScripts } from '@/api/validationScript'
+import { v4 as uuidv4 } from 'uuid'
+import * as XLSX from 'xlsx'
 
 // ==================== Store ====================
 
@@ -670,6 +786,37 @@ const allValidationScripts = ref<ValidationScript[]>([])
  * 视图配置类型选择
  */
 const viewConfigType = ref<'kanban' | 'calendar' | 'gantt'>('kanban')
+
+/**
+ * 导入字段对话框可见性
+ */
+const importDialogVisible = ref(false)
+
+/**
+ * 导入加载状态
+ */
+const importLoading = ref(false)
+
+/**
+ * 导入预览数据
+ */
+const importPreview = ref<{
+  total: number
+  updated: number
+  added: number
+  fields: Array<Record<string, any>>
+  errors: Array<{ row: number; message: string }>
+} | null>(null)
+
+/**
+ * 待导入的字段数据（确认导入时使用）
+ */
+const pendingFields = ref<Partial<FieldConfig>[]>([])
+
+/**
+ * 导入对话框当前激活的 tab
+ */
+const importActiveTab = ref('template')
 
 /**
  * 看板配置响应式状态
@@ -749,6 +896,40 @@ const formRules: FormRules = {
     { required: true, message: '请输入API端点', trigger: 'blur' }
   ]
 }
+
+/**
+ * 字段类型配置说明表
+ */
+const fieldTypeGuide = [
+  { type: 'text', label: '单行文本', example: 'fieldName: name, label: 名称' },
+  { type: 'textarea', label: '多行文本', example: 'controlType: textarea' },
+  { type: 'number', label: '数字', example: 'controlType: number, min: 0, max: 100' },
+  { type: 'select', label: '下拉选择', example: 'options: [{"label":"A","value":"a"}]' },
+  { type: 'multiSelect', label: '多选', example: 'options: [{"label":"A","value":"a"}]' },
+  { type: 'radio', label: '单选按钮', example: 'options: [{"label":"A","value":"a"}]' },
+  { type: 'checkbox', label: '复选框', example: 'controlType: checkbox' },
+  { type: 'date', label: '日期', example: 'controlType: date' },
+  { type: 'datetime', label: '日期时间', example: 'controlType: datetime' },
+  { type: 'file', label: '文件上传', example: 'controlType: file' },
+  { type: 'image', label: '图片上传', example: 'controlType: image' },
+  {
+    type: 'relation',
+    label: '多对多双向关联',
+    example: '{"targetCollection":"test-products","displayField":"productName","targetField":"relatedCases"}'
+  },
+  {
+    type: 'reference',
+    label: '一对多引用+继承',
+    example: '{"targetCollection":"test-templates","displayField":"templateName","inheritFields":["description","category"]}'
+  },
+  {
+    type: 'quoteSelect',
+    label: '单向多选引用',
+    example: '{"targetCollection":"test-cases","displayField":"name"}'
+  },
+  { type: 'autoSequence', label: '自动编号', example: '{"prefix":"IC-","max":999}' },
+  { type: 'autoTimestamp', label: '自动时间戳', example: 'controlType: autoTimestamp' },
+]
 
 // ==================== 计算属性 ====================
 
@@ -997,6 +1178,259 @@ async function handleFieldsUpdate(fields: FieldConfig[]): Promise<void> {
   }
 }
 
+// ==================== 导入字段相关 ====================
+
+const COMPLEX_FIELD_KEYS = [
+  'options', 'relationConfig', 'referenceConfig', 'quoteConfig',
+  'sequenceConfig', 'workflowConfig', 'optionsSource'
+] as const
+
+const BOOL_FIELD_KEYS = [
+  'required', 'isPrimaryKey', 'hidden', 'disabled', 'readonly'
+] as const
+
+const NUMBER_FIELD_KEYS = ['order', 'min', 'max'] as const
+
+/**
+ * 下载导入模板
+ */
+function downloadTemplate(format: 'xlsx' | 'csv'): void {
+  const templateData = [
+    { id: 'field-1', fieldName: 'name', label: '名称', controlType: 'text', required: true, order: 1, placeholder: '请输入名称', isPrimaryKey: true },
+    { id: 'field-2', fieldName: 'status', label: '状态', controlType: 'select', required: true, order: 2, options: JSON.stringify([{ label: '开启', value: '1' }, { label: '关闭', value: '0' }]) },
+    { fieldName: 'description', label: '描述', controlType: 'textarea', required: false, order: 3, placeholder: '请输入描述' },
+    { fieldName: 'priority', label: '优先级', controlType: 'radio', required: false, order: 4, options: JSON.stringify([{ label: '高', value: 'high' }, { label: '中', value: 'medium' }, { label: '低', value: 'low' }]) },
+    { fieldName: 'startDate', label: '开始日期', controlType: 'date', required: false, order: 5 },
+    { fieldName: 'version', label: '版本号', controlType: 'number', required: false, order: 6, min: 1, max: 99 },
+    { fieldName: 'attachment', label: '附件', controlType: 'file', required: false, order: 7 },
+    { fieldName: 'tags', label: '标签', controlType: 'multiSelect', required: false, order: 8, options: JSON.stringify([{ label: '标签A', value: 'a' }, { label: '标签B', value: 'b' }]) },
+    { fieldName: 'caseNo', label: '编号', controlType: 'autoSequence', required: false, order: 9, sequenceConfig: JSON.stringify({ prefix: 'TC-', max: 9999 }) },
+    { fieldName: 'createdAt', label: '创建时间', controlType: 'autoTimestamp', required: false, order: 10, hidden: true },
+    // 数据关联：多对多双向，需配置目标集合、显示字段、反向关联字段名
+    { fieldName: 'relatedProduct', label: '关联产品', controlType: 'relation', required: false, order: 11, relationConfig: JSON.stringify({ targetCollection: 'test-products', displayField: 'productName', targetField: 'relatedCases' }) },
+    // 数据引用：一对多引用+字段继承，需配置目标集合、显示字段、继承字段列表
+    { fieldName: 'template', label: '测试模板', controlType: 'reference', required: false, order: 12, referenceConfig: JSON.stringify({ targetCollection: 'test-templates', displayField: 'templateName', inheritFields: ['description', 'category'] }) },
+    // 引用选择：单向多选引用，只需配置目标集合和显示字段
+    { fieldName: 'relatedCases', label: '引用用例', controlType: 'quoteSelect', required: false, order: 13, quoteConfig: JSON.stringify({ targetCollection: 'test-cases', displayField: 'name' }) },
+  ]
+
+  if (format === 'csv') {
+    const headers = ['id', 'fieldName', 'label', 'controlType', 'required', 'order', 'placeholder', 'isPrimaryKey', 'min', 'max', 'hidden', 'options', 'relationConfig', 'referenceConfig', 'quoteConfig', 'sequenceConfig']
+    const rows = [
+      headers.join(','),
+      ...templateData.map(d => headers.map(h => {
+        const v = (d as any)[h]
+        if (v === undefined || v === null || v === '') return ''
+        if (typeof v === 'string' && (v.includes(',') || v.includes('"'))) return '"' + v.replace(/"/g, '""') + '"'
+        return v
+      }).join(','))
+    ]
+    const blob = new Blob(['﻿' + rows.join('\n')], { type: 'text/csv;charset=utf-8' })
+    triggerDownload(blob, '字段导入模板.csv')
+  } else {
+    const ws = XLSX.utils.json_to_sheet(templateData)
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 8 }, { wch: 6 },
+      { wch: 18 }, { wch: 10 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 50 },
+      { wch: 50 }, { wch: 50 }, { wch: 50 }, { wch: 40 }
+    ]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '字段配置')
+    XLSX.writeFile(wb, '字段导入模板.xlsx')
+  }
+}
+
+/**
+ * 触发浏览器下载
+ */
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+/**
+ * 打开导入对话框
+ */
+function openImportDialog(): void {
+  if (!currentPageId.value) {
+    ElMessage.warning('请先选择一个页面配置')
+    return
+  }
+  importDialogVisible.value = true
+  importPreview.value = null
+  pendingFields.value = []
+}
+
+/**
+ * 处理文件选择
+ */
+function handleFileChange(file: any): void {
+  const rawFile = file.raw
+  if (!rawFile) return
+
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    try {
+      const data = e.target?.result
+      const workbook = XLSX.read(data, { type: 'array' })
+      const sheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[sheetName]
+      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet)
+
+      if (rows.length === 0) {
+        ElMessage.warning('文件中没有数据')
+        return
+      }
+
+      parseAndPreview(rows)
+    } catch (error: any) {
+      ElMessage.error('文件解析失败: ' + (error.message || '未知错误'))
+    }
+  }
+  reader.readAsArrayBuffer(rawFile)
+}
+
+/**
+ * 解析 Excel 行数据为字段配置
+ */
+function parseFieldRow(row: Record<string, any>): Partial<FieldConfig> {
+  const field: Partial<FieldConfig> = {}
+  for (const [key, value] of Object.entries(row)) {
+    if (value === undefined || value === null || value === '') continue
+
+    if ((COMPLEX_FIELD_KEYS as readonly string[]).includes(key)) {
+      try {
+        (field as any)[key] = typeof value === 'string' ? JSON.parse(value) : value
+      } catch {
+        (field as any)[key] = value
+      }
+    } else if ((BOOL_FIELD_KEYS as readonly string[]).includes(key)) {
+      (field as any)[key] = value === 'true' || value === true || value === 1 || value === '1'
+    } else if ((NUMBER_FIELD_KEYS as readonly string[]).includes(key)) {
+      (field as any)[key] = Number(value) || 0
+    } else {
+      (field as any)[key] = value
+    }
+  }
+  return field
+}
+
+/**
+ * 合并导入字段到现有字段中
+ */
+function mergeFields(existing: FieldConfig[], imported: Partial<FieldConfig>[]): {
+  merged: FieldConfig[]
+  updated: number
+  added: number
+} {
+  const result: FieldConfig[] = [...existing]
+  let updated = 0
+  let added = 0
+
+  for (const imp of imported) {
+    if (!imp.id) {
+      // 无 id → 生成新 id 追加
+      const newField = { ...imp, id: `field-${uuidv4().slice(0, 8)}` } as FieldConfig
+      result.push(newField)
+      added++
+    } else {
+      const idx = result.findIndex(f => f.id === imp.id)
+      if (idx >= 0) {
+        // 已存在 → 合并更新
+        result[idx] = { ...result[idx], ...imp }
+        updated++
+      } else {
+        // 不存在 → 追加
+        result.push(imp as FieldConfig)
+        added++
+      }
+    }
+  }
+
+  // 按 order 排序
+  result.sort((a, b) => (a.order || 0) - (b.order || 0))
+  return { merged: result, updated, added }
+}
+
+/**
+ * 解析并预览导入数据
+ */
+function parseAndPreview(rows: Record<string, any>[]): void {
+  const errors: Array<{ row: number; message: string }> = []
+  const parsed: Partial<FieldConfig>[] = []
+
+  rows.forEach((row, index) => {
+    const field = parseFieldRow(row)
+    if (!field.fieldName) {
+      errors.push({ row: index + 2, message: '缺少 fieldName 列' })
+      return
+    }
+    if (!field.label) {
+      errors.push({ row: index + 2, message: '缺少 label 列' })
+      return
+    }
+    if (!field.controlType) {
+      errors.push({ row: index + 2, message: '缺少 controlType 列' })
+      return
+    }
+    // 确保有 order
+    if (!field.order) {
+      field.order = index + 1
+    }
+    parsed.push(field)
+  })
+
+  pendingFields.value = parsed
+
+  // 合并预览
+  const existing = currentFields.value
+  const { updated, added } = mergeFields(existing, parsed)
+
+  // 构建预览表格数据
+  const previewFields = parsed.map(f => {
+    const exists = f.id ? existing.some(e => e.id === f.id) : false
+    return {
+      ...f,
+      _action: exists ? 'update' : 'add'
+    }
+  })
+
+  importPreview.value = {
+    total: parsed.length,
+    updated,
+    added,
+    fields: previewFields,
+    errors
+  }
+}
+
+/**
+ * 确认导入字段
+ */
+async function handleImportFields(): Promise<void> {
+  if (!currentPageId.value || pendingFields.value.length === 0) return
+
+  importLoading.value = true
+  try {
+    const { merged, updated, added } = mergeFields(currentFields.value, pendingFields.value)
+    await pageConfigStore.updatePageFields(currentPageId.value, merged)
+    ElMessage.success(`导入完成：更新 ${updated} 个，新增 ${added} 个`)
+    importDialogVisible.value = false
+    importPreview.value = null
+    pendingFields.value = []
+  } catch (error: any) {
+    ElMessage.error('导入失败: ' + (error.response?.data?.error || error.message || '未知错误'))
+  } finally {
+    importLoading.value = false
+  }
+}
+
 /**
  * 添加继承字段映射
  */
@@ -1181,6 +1615,43 @@ onActivated(async () => {
 
 .page-form {
   max-width: 600px;
+}
+
+.import-preview {
+  margin-top: 16px;
+}
+
+.template-section {
+  h4 {
+    margin: 0 0 8px;
+    font-size: 15px;
+  }
+
+  .desc {
+    color: #606266;
+    font-size: 13px;
+    margin: 0 0 16px;
+  }
+
+  .template-buttons {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+}
+
+.code-example {
+  font-size: 12px;
+  color: #409eff;
+  background: #f5f7fa;
+  padding: 2px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+.import-tabs :deep(.el-tabs__content) {
+  padding-top: 16px;
+  min-height: 300px;
 }
 
 .inherit-fields-config {

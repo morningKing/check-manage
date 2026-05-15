@@ -15,6 +15,10 @@
         <el-icon><Plus /></el-icon>
         添加字段
       </el-button>
+      <el-button size="small" @click="$emit('import')">
+        <el-icon><Upload /></el-icon>
+        导入字段
+      </el-button>
       <el-button size="small" @click="handleSaveAll" :loading="saving">
         <el-icon><Check /></el-icon>
         保存配置
@@ -570,7 +574,7 @@
 import { ref, computed, watch } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Plus, Check, Rank, Delete, DocumentAdd } from '@element-plus/icons-vue'
+import { Plus, Check, Rank, Delete, DocumentAdd, Upload } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import type { FieldConfig, FieldFormData } from '@/types'
 import { CONTROL_TYPE_OPTIONS, createEmptyFieldFormData } from '@/types'
@@ -589,6 +593,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'update', fields: FieldConfig[]): void
+  (e: 'import'): void
 }>()
 
 // ==================== Store ====================
