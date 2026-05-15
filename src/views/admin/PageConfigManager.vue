@@ -717,6 +717,7 @@ import FieldConfigEditor from './FieldConfigEditor.vue'
 import PageConfigList from './components/PageConfigList.vue'
 import PageConfigRelationGraph from '@/components/PageConfigRelationGraph.vue'
 import type { PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
+import { parseFieldRow, mergeFields } from '@/utils/fieldImport'
 import type { ExportScript } from '@/types'
 import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
@@ -1180,17 +1181,6 @@ async function handleFieldsUpdate(fields: FieldConfig[]): Promise<void> {
 
 // ==================== 导入字段相关 ====================
 
-const COMPLEX_FIELD_KEYS = [
-  'options', 'relationConfig', 'referenceConfig', 'quoteConfig',
-  'sequenceConfig', 'workflowConfig', 'optionsSource'
-] as const
-
-const BOOL_FIELD_KEYS = [
-  'required', 'isPrimaryKey', 'hidden', 'disabled', 'readonly'
-] as const
-
-const NUMBER_FIELD_KEYS = ['order', 'min', 'max'] as const
-
 /**
  * 下载导入模板
  */
@@ -1294,68 +1284,6 @@ function handleFileChange(file: any): void {
     }
   }
   reader.readAsArrayBuffer(rawFile)
-}
-
-/**
- * 解析 Excel 行数据为字段配置
- */
-function parseFieldRow(row: Record<string, any>): Partial<FieldConfig> {
-  const field: Partial<FieldConfig> = {}
-  for (const [key, value] of Object.entries(row)) {
-    if (value === undefined || value === null || value === '') continue
-
-    if ((COMPLEX_FIELD_KEYS as readonly string[]).includes(key)) {
-      try {
-        (field as any)[key] = typeof value === 'string' ? JSON.parse(value) : value
-      } catch {
-        (field as any)[key] = value
-      }
-    } else if ((BOOL_FIELD_KEYS as readonly string[]).includes(key)) {
-      (field as any)[key] = value === 'true' || value === true || value === 1 || value === '1'
-    } else if ((NUMBER_FIELD_KEYS as readonly string[]).includes(key)) {
-      (field as any)[key] = Number(value) || 0
-    } else {
-      (field as any)[key] = value
-    }
-  }
-  return field
-}
-
-/**
- * 合并导入字段到现有字段中
- */
-function mergeFields(existing: FieldConfig[], imported: Partial<FieldConfig>[]): {
-  merged: FieldConfig[]
-  updated: number
-  added: number
-} {
-  const result: FieldConfig[] = [...existing]
-  let updated = 0
-  let added = 0
-
-  for (const imp of imported) {
-    if (!imp.id) {
-      // 无 id → 生成新 id 追加
-      const newField = { ...imp, id: `field-${uuidv4().slice(0, 8)}` } as FieldConfig
-      result.push(newField)
-      added++
-    } else {
-      const idx = result.findIndex(f => f.id === imp.id)
-      if (idx >= 0) {
-        // 已存在 → 合并更新
-        result[idx] = { ...result[idx], ...imp }
-        updated++
-      } else {
-        // 不存在 → 追加
-        result.push(imp as FieldConfig)
-        added++
-      }
-    }
-  }
-
-  // 按 order 排序
-  result.sort((a, b) => (a.order || 0) - (b.order || 0))
-  return { merged: result, updated, added }
 }
 
 /**

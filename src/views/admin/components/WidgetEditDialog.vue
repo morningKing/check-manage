@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     :title="dialogTitle"
-    width="600px"
+    :width="widget?.widgetType === 'custom-markdown' || widget?.widgetType === 'system-info' ? '900px' : '600px'"
     :close-on-click-modal="false"
     @close="handleClose"
   >
@@ -98,7 +98,7 @@
           v-model="form.content.markdown"
           language="zh-CN"
           :preview="true"
-          :style="{ height: '400px' }"
+          :style="{ height: '520px' }"
           placeholder="请输入 Markdown 内容..."
         />
       </el-form-item>
