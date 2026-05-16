@@ -1,3 +1,9 @@
+import sys
+import os
+
+# 添加 server 目录到路径，以便导入 config
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 import psycopg2
 import psycopg2.extras
 import json

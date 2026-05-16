@@ -51,7 +51,7 @@
               style="flex: 1"
               filterable
             >
-              <el-option v-for="item in numericFields" :key="item.value" :label="item.label" :value="item.value" />
+              <el-option v-for="item in metricFields" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </div>
         </div>
@@ -394,6 +394,18 @@ const allFields = computed(() => currentFields.value
 
 const numericFields = computed(() => allFields.value
   .filter(field => ['number', 'autoSequence'].includes(field.controlType)))
+
+const arrayFields = computed(() => allFields.value
+  .filter(field => ['relation', 'quoteSelect', 'multiSelect', 'checkbox'].includes(field.controlType)))
+
+const relationFields = computed(() => allFields.value
+  .filter(field => field.controlType === 'relation'))
+
+const metricFields = computed(() => {
+  if (form.metricType.startsWith('relationCount')) return relationFields.value
+  if (form.metricType.startsWith('arrayLength')) return arrayFields.value
+  return numericFields.value
+})
 
 const dateFields = computed(() => allFields.value
   .filter(field => ['date', 'datetime', 'autoTimestamp'].includes(field.controlType)))

@@ -105,7 +105,7 @@ def delete_dashboard(dash_id):
 # Aggregation API
 # ---------------------------------------------------------------------------
 
-VALID_METRICS = {'count', 'sum', 'avg', 'min', 'max', 'uniqueCount'}
+VALID_METRICS = {'count', 'sum', 'avg', 'min', 'max', 'uniqueCount', 'arrayLengthSum', 'arrayLengthAvg', 'arrayLengthMax', 'arrayLengthMin', 'relationCountSum', 'relationCountAvg', 'relationCountMax', 'relationCountMin'}
 SORT_MAP = {
     'value_desc': '{metric_alias} DESC',
     'value_asc': '{metric_alias} ASC',
@@ -165,14 +165,30 @@ def get_user_current_branch(user_id, collection):
     return resolve_user_current_branch(user_id, collection)
 
 
-def _metric_expr(metric_type, field, data_expr='data'):
-    """Return SQL expression and extra params for a metric."""
+def _metric_expr(metric_type, field, data_expr='data', is_relation=False, collection=None, branch_id='main', table_alias='dd'):
+    """Return SQL expression and extra params for a metric.
+
+    For relation fields, use subquery to count relations via data_relations table.
+    """
     if metric_type == 'count':
         return 'COUNT(*)', []
     elif metric_type == 'uniqueCount':
         return f'COUNT(DISTINCT {data_expr}->>%s)', [field]
     elif metric_type in ('sum', 'avg', 'min', 'max'):
         return f'{metric_type.upper()}(({data_expr}->>%s)::numeric)', [field]
+    elif metric_type in ('arrayLengthSum', 'arrayLengthAvg', 'arrayLengthMax', 'arrayLengthMin'):
+        agg_func = metric_type.replace('arrayLength', '').upper()
+        return f'{agg_func}(COALESCE(jsonb_array_length({data_expr}->%s), 0))', [field]
+    elif metric_type in ('relationCountSum', 'relationCountAvg', 'relationCountMax', 'relationCountMin'):
+        # For relation fields, aggregate the count of relations per record
+        agg_func = metric_type.replace('relationCount', '').upper()
+        prefix = f"{table_alias}." if table_alias else ''
+        subquery = (
+            f"(SELECT COUNT(*) FROM data_relations dr "
+            f"WHERE dr.collection = %s AND dr.record_id = {prefix}id "
+            f"AND dr.field_name = %s AND dr.branch_id = %s)"
+        )
+        return f'{agg_func}({subquery})', [collection, field, branch_id]
     return None, []
 
 
@@ -260,14 +276,50 @@ def _normalize_optional_group_config(config):
     }
 
 
-def _build_metric_selects(metrics, data_expr='data'):
-    """Build metric select fragments and params."""
+def _build_metric_selects(metrics, data_expr='data', collection=None, branch_id='main', table_alias='dd', fields=None):
+    """Build metric select fragments and params.
+
+    Supports relation field aggregation via subquery on data_relations.
+    """
     select_parts = []
     params = []
     for metric in metrics:
-        expr, expr_params = _metric_expr(metric['type'], metric['field'], data_expr=data_expr)
+        metric_type = metric['type']
+        field = metric.get('field')
+
+        # Check if field is relation type for arrayLength aggregations
+        is_relation = False
+        if fields and field and metric_type.startswith('arrayLength'):
+            field_def = next((f for f in fields if f.get('fieldName') == field), None)
+            if field_def and field_def.get('controlType') == 'relation':
+                is_relation = True
+                # Convert arrayLength to relationCount for relation fields
+                agg_func = metric_type.replace('arrayLength', '').upper()
+                prefix = f"{table_alias}." if table_alias else ''
+                subquery = (
+                    f"(SELECT COUNT(*) FROM data_relations dr "
+                    f"WHERE dr.collection = %s AND dr.record_id = {prefix}id "
+                    f"AND dr.field_name = %s AND dr.branch_id = %s)"
+                )
+                expr = f'{agg_func}({subquery})'
+                expr_params = [collection, field, branch_id]
+            else:
+                expr, expr_params = _metric_expr(metric_type, field, data_expr=data_expr)
+        elif metric_type.startswith('relationCount'):
+            agg_func = metric_type.replace('relationCount', '').upper()
+            prefix = f"{table_alias}." if table_alias else ''
+            subquery = (
+                f"(SELECT COUNT(*) FROM data_relations dr "
+                f"WHERE dr.collection = %s AND dr.record_id = {prefix}id "
+                f"AND dr.field_name = %s AND dr.branch_id = %s)"
+            )
+            expr = f'{agg_func}({subquery})'
+            expr_params = [collection, field, branch_id]
+        else:
+            expr, expr_params = _metric_expr(metric_type, field, data_expr=data_expr)
+
         if expr is None:
-            raise ValueError(f"Unsupported metric: {metric['type']}")
+            raise ValueError(f"Unsupported metric: {metric_type}")
         select_parts.append(f'{expr} AS {metric["alias"]}')
         params.extend(expr_params)
     return select_parts, params
@@ -440,7 +492,14 @@ def aggregate_data():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
-    order_clause = SORT_MAP.get(sort_key, '{metric_alias} DESC').format(metric_alias=metrics[0]['alias'])
+    # For matrix queries, ORDER BY uses row_key alias (not group_key)
+    if breakdown_by:
+        order_clause = SORT_MAP.get(sort_key, '{metric_alias} DESC').format(metric_alias=metrics[0]['alias'])
+        # Replace group_key with row_key for key-based sorting
+        if 'group_key' in order_clause:
+            order_clause = order_clause.replace('group_key', 'row_key')
+    else:
+        order_clause = SORT_MAP.get(sort_key, '{metric_alias} DESC').format(metric_alias=metrics[0]['alias'])
     group_field = group_by['field']
     group_type = group_by['type']
 
@@ -467,7 +526,7 @@ def aggregate_data():
                     secondary_expr, secondary_params = _build_scalar_group_expr(breakdown_by, data_expr='data')
                 except ValueError as exc:
                     return jsonify({"error": str(exc)}), 400
-                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data', collection=collection, branch_id=branch_id, table_alias='', fields=fields)
 
                 sql = (
                     f"SELECT {primary_expr} AS row_key, {secondary_expr} AS column_key, {', '.join(metric_selects)} "
@@ -487,7 +546,7 @@ def aggregate_data():
                 rel_cfg = field_def.get('relationConfig', {})
                 target_col = rel_cfg.get('targetCollection', '')
                 display_field = rel_cfg.get('displayField', 'id')
-                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data', collection=collection, branch_id=branch_id, table_alias='dd', fields=fields)
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
@@ -509,7 +568,7 @@ def aggregate_data():
                 ref_cfg = field_def.get('referenceConfig', {})
                 target_col = ref_cfg.get('targetCollection', '')
                 display_field = ref_cfg.get('displayField', 'id')
-                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data', collection=collection, branch_id=branch_id, table_alias='dd', fields=fields)
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
@@ -529,7 +588,7 @@ def aggregate_data():
                 quote_cfg = field_def.get('quoteConfig', {})
                 target_col = quote_cfg.get('targetCollection', '')
                 display_field = quote_cfg.get('displayField', 'id')
-                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data')
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='dd.data', collection=collection, branch_id=branch_id, table_alias='dd', fields=fields)
                 where_clause, where_params = _build_where(collection, filter_query, table_alias='dd', branch_id=branch_id)
 
                 sql = (
@@ -550,7 +609,7 @@ def aggregate_data():
                     group_expr, group_params = _build_scalar_group_expr(group_by, data_expr='data')
                 except ValueError as exc:
                     return jsonify({"error": str(exc)}), 400
-                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
+                metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data', collection=collection, branch_id=branch_id, table_alias='', fields=fields)
 
                 sql = (
                     f"SELECT {group_expr} AS group_key, {', '.join(metric_selects)} "
@@ -565,7 +624,9 @@ def aggregate_data():
             rows = cur.fetchall()
             return jsonify({'type': 'grouped', 'data': _format_grouped_rows(rows, metrics, group_by)})
 
-        metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data')
+        # No grouping - single aggregate value
+        fields = _load_page_fields(cur, collection)
+        metric_selects, metric_params = _build_metric_selects(metrics, data_expr='data', collection=collection, branch_id=branch_id, table_alias='', fields=fields)
         where_clause, where_params = _build_where(collection, filter_query, branch_id=branch_id)
         sql = f"SELECT {', '.join(metric_selects)} FROM dynamic_data WHERE {where_clause}"
         params = metric_params + where_params

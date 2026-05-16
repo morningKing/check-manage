@@ -15,7 +15,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from config import DB_CONFIG
 
 # Fix Windows console encoding

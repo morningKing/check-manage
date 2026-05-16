@@ -77,7 +77,7 @@
                 v-else
                 :type="widget.type"
                 :result="widgetData[widget.id]"
-                :metric-key="getPrimaryMetricKey(widget)"
+                :metric-key="shouldShowAllMetrics(widget) ? undefined : getPrimaryMetricKey(widget)"
               />
             </template>
             <el-empty v-else :image-size="40" description="暂无数据" />
@@ -265,6 +265,12 @@ function getPrimaryMetricKey(widget: DashboardWidget) {
   return getMetricName(widget.config.metrics?.[0])
 }
 
+function shouldShowAllMetrics(widget: DashboardWidget) {
+  // For bar/line/area charts with multiple metrics, show all as separate series
+  const multiSeriesTypes = ['bar', 'line', 'area']
+  return multiSeriesTypes.includes(widget.type) && (widget.config.metrics?.length || 0) > 1
+}
+
 function getPrimaryMetricLabel(widget: DashboardWidget) {
   return formatMetricLabel(widget, widget.config.metrics?.[0])
 }
@@ -401,6 +407,8 @@ onMounted(async () => {
 <style scoped lang="scss">
 .dashboard-view {
   padding: 0;
+  height: 100%;
+  overflow-y: auto;
 }
 
 .dashboard-header {
@@ -410,6 +418,7 @@ onMounted(async () => {
   margin-bottom: 16px;
   flex-wrap: wrap;
   gap: 8px;
+  padding: 16px 16px 0;
 }
 
 .dashboard-title {
@@ -435,6 +444,7 @@ onMounted(async () => {
   gap: 12px;
   grid-auto-rows: 140px;
   grid-auto-flow: dense;
+  padding: 0 16px 16px;
 }
 
 .widget-card {

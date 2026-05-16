@@ -277,7 +277,7 @@ onUnmounted(() => {
 .content-main {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 /* 页面切换过渡动画 - 优化性能 */

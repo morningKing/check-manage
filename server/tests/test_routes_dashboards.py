@@ -413,3 +413,434 @@ def test_matrix_aggregate_rejects_relation_dimensions(client, mock_cursor, admin
 
     assert resp.status_code == 400
     assert '二维交叉统计当前仅支持普通字段' in resp.get_json()['error']
+
+
+def test_array_length_sum_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test arrayLengthSum aggregates the count of array elements."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 5, 12),
+        ('V2.0', 3, 8),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'requirements',
+            'metrics': [
+                {'type': 'count', 'name': '需求数'},
+                {'type': 'arrayLengthSum', 'field': 'issues', 'name': '问题数'},
+            ],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    assert payload['data'] == [
+        {'key': 'V1.0', 'value': 5.0, 'metrics': {'需求数': 5.0, '问题数': 12.0}},
+        {'key': 'V2.0', 'value': 3.0, 'metrics': {'需求数': 3.0, '问题数': 8.0}},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'COUNT(*) AS agg_value' in executed_sql
+    # jsonb_array_length requires JSONB access (data->field), not text access (data->>field)
+    assert 'SUM(COALESCE(jsonb_array_length(data->%s), 0)) AS metric_1' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    # First param is group field (version), then metric field (issues)
+    assert params[0] == 'version'
+    assert params[1] == 'issues'
+
+
+def test_array_length_avg_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test arrayLengthAvg calculates average array length per record."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 2.4),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'requirements',
+            'metrics': [{'type': 'arrayLengthAvg', 'field': 'issues', 'name': '平均问题数'}],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    # Single metric does not include 'metrics' field in response
+    assert payload['data'] == [{'key': 'V1.0', 'value': 2.4}]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'AVG(COALESCE(jsonb_array_length(data->%s), 0)) AS agg_value' in executed_sql
+
+
+def test_relation_count_sum_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test relationCountSum aggregates relation counts via data_relations subquery."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    # Need to mock fields to have relation field definition
+    fields = [
+        {'fieldName': 'version', 'controlType': 'select'},
+        {'fieldName': 'relatedBugs', 'controlType': 'relation',
+         'relationConfig': {'targetCollection': 'quality-bug', 'displayField': 'bugNo', 'targetField': 'relatedReq'}},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 5, 7),
+        ('V2.0', 4, 6),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-project',
+            'metrics': [
+                {'type': 'count', 'name': '需求数'},
+                {'type': 'relationCountSum', 'field': 'relatedBugs', 'name': '问题数'},
+            ],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    assert payload['data'] == [
+        {'key': 'V1.0', 'value': 5.0, 'metrics': {'需求数': 5.0, '问题数': 7.0}},
+        {'key': 'V2.0', 'value': 4.0, 'metrics': {'需求数': 4.0, '问题数': 6.0}},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'COUNT(*) AS agg_value' in executed_sql
+    # relationCountSum uses subquery with data_relations
+    assert 'SUM((SELECT COUNT(*) FROM data_relations dr' in executed_sql
+    assert 'dr.field_name = %s AND dr.branch_id = %s' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    # Check that relation field name is in params
+    assert 'relatedBugs' in params
+
+
+def test_array_length_sum_on_relation_field(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test arrayLengthSum on relation field automatically uses data_relations subquery."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {'fieldName': 'version', 'controlType': 'select'},
+        {'fieldName': 'relatedBugs', 'controlType': 'relation',
+         'relationConfig': {'targetCollection': 'quality-bug', 'displayField': 'bugNo', 'targetField': 'relatedReq'}},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 7),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-project',
+            'metrics': [{'type': 'arrayLengthSum', 'field': 'relatedBugs', 'name': '问题数'}],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'] == [{'key': 'V1.0', 'value': 7.0}]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    # When field is relation, arrayLengthSum should use data_relations subquery
+    assert 'SUM((SELECT COUNT(*) FROM data_relations dr' in executed_sql
+
+
+def test_relation_count_avg_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test relationCountAvg calculates average relation count per record."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {'fieldName': 'version', 'controlType': 'select'},
+        {'fieldName': 'relatedBugs', 'controlType': 'relation',
+         'relationConfig': {'targetCollection': 'quality-bug', 'displayField': 'bugNo', 'targetField': 'relatedReq'}},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 5, 1.4),  # 5 requirements, avg 1.4 bugs each
+        ('V2.0', 4, 1.5),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-project',
+            'metrics': [
+                {'type': 'count', 'name': '需求数'},
+                {'type': 'relationCountAvg', 'field': 'relatedBugs', 'name': '平均问题数'},
+            ],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'] == [
+        {'key': 'V1.0', 'value': 5.0, 'metrics': {'需求数': 5.0, '平均问题数': 1.4}},
+        {'key': 'V2.0', 'value': 4.0, 'metrics': {'需求数': 4.0, '平均问题数': 1.5}},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'AVG((SELECT COUNT(*) FROM data_relations dr' in executed_sql
+
+
+def test_relation_count_max_min_metrics(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test relationCountMax and relationCountMin metrics."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {'fieldName': 'relatedBugs', 'controlType': 'relation',
+         'relationConfig': {'targetCollection': 'quality-bug', 'displayField': 'bugNo', 'targetField': 'relatedReq'}},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    mock_cursor.fetchone.return_value = (5, 3)  # max 5, min 3
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-project',
+            'metrics': [
+                {'type': 'relationCountMax', 'field': 'relatedBugs', 'name': '最大问题数'},
+                {'type': 'relationCountMin', 'field': 'relatedBugs', 'name': '最小问题数'},
+            ],
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'single'
+    assert payload['metrics'] == {'最大问题数': 5.0, '最小问题数': 3.0}
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'MAX((SELECT COUNT(*) FROM data_relations dr' in executed_sql
+    assert 'MIN((SELECT COUNT(*) FROM data_relations dr' in executed_sql
+
+
+def test_exists_grouping(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test exists grouping returns 'empty' and 'nonEmpty' keys."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('empty', 3),
+        ('nonEmpty', 7),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'count'}],
+            'groupBy': {'field': 'description', 'type': 'exists'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    assert payload['data'] == [
+        {'key': 'empty', 'value': 3.0},
+        {'key': 'nonEmpty', 'value': 7.0},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'CASE WHEN NULLIF(BTRIM(COALESCE' in executed_sql
+    assert 'THEN \'empty\' ELSE \'nonEmpty\' END' in executed_sql
+
+
+def test_date_histogram_grouping(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test dateHistogram grouping with various intervals."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {'fieldName': 'createdAt', 'controlType': 'datetime'},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    # Return datetime objects that will be formatted
+    from datetime import datetime
+    mock_cursor.fetchall.return_value = [
+        (datetime(2024, 1, 1), 5),  # January 2024
+        (datetime(2024, 2, 1), 3),  # February 2024
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'count'}],
+            'groupBy': {'field': 'createdAt', 'type': 'dateHistogram', 'interval': 'month'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    # Keys should be formatted as YYYY-MM
+    assert payload['data'][0]['key'] == '2024-01'
+    assert payload['data'][1]['key'] == '2024-02'
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'date_trunc(\'month\'' in executed_sql
+
+
+def test_date_histogram_with_day_interval(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test dateHistogram with day interval formats keys as YYYY-MM-DD."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    fields = [
+        {'fieldName': 'createdAt', 'controlType': 'datetime'},
+    ]
+    _mock_page_fields(monkeypatch, fields)
+    _mock_where(monkeypatch)
+    from datetime import datetime
+    mock_cursor.fetchall.return_value = [
+        (datetime(2024, 1, 15), 5),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'count'}],
+            'groupBy': {'field': 'createdAt', 'type': 'dateHistogram', 'interval': 'day'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'][0]['key'] == '2024-01-15'
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'date_trunc(\'day\'' in executed_sql
+
+
+def test_unique_count_metric(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test uniqueCount returns count of distinct values."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('张三', 3),
+        ('李四', 2),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'dashboard-demo',
+            'metrics': [{'type': 'uniqueCount', 'field': 'assignee', 'name': '处理人数'}],
+            'groupBy': {'field': 'version', 'type': 'terms'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['data'] == [
+        {'key': '张三', 'value': 3.0},
+        {'key': '李四', 'value': 2.0},
+    ]
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'COUNT(DISTINCT data->>%s) AS agg_value' in executed_sql
+
+
+def test_matrix_aggregate_with_key_asc_sort(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test matrix query uses row_key for key-based sorting (not group_key)."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('V1.0', 'released', 5),
+        ('V1.1', 'released', 3),
+        ('V2.0', 'testing', 2),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-project',
+            'metrics': [{'type': 'count', 'name': '需求数'}],
+            'groupBy': {'type': 'terms', 'field': 'version'},
+            'breakdownBy': {'type': 'terms', 'field': 'status'},
+            'sort': 'key_asc',
+            'limit': 20,
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'matrix'
+    assert payload['rows'] == ['V1.0', 'V1.1', 'V2.0']
+
+    # Verify SQL uses row_key (not group_key) for ORDER BY
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'AS row_key' in executed_sql
+    assert 'ORDER BY row_key ASC' in executed_sql
+    # Should NOT have group_key in ORDER BY
+    assert 'ORDER BY group_key' not in executed_sql
+
+
+def test_filter_parameter_in_aggregation(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test filter parameter adds WHERE conditions."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    mock_cursor.fetchone.return_value = (7,)
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [{'type': 'count'}],
+            'filter': {'severity': 'fatal', 'status': 'new'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['value'] == 7.0
+
+    # Filter conditions should be in the SQL
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'data->>%s = %s' in executed_sql
+    params = mock_cursor.execute.call_args[0][1]
+    assert 'severity' in params
+    assert 'fatal' in params
+    assert 'status' in params
+    assert 'new' in params

@@ -1,7 +1,7 @@
 ﻿import { get, post, put, del } from '@/utils/request'
 
 export type WidgetType = 'metric' | 'bar' | 'line' | 'pie' | 'area' | 'dataTable'
-export type MetricType = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'uniqueCount'
+export type MetricType = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'uniqueCount' | 'arrayLengthSum' | 'arrayLengthAvg' | 'arrayLengthMax' | 'arrayLengthMin' | 'relationCountSum' | 'relationCountAvg' | 'relationCountMax' | 'relationCountMin'
 export type GroupByType = 'terms' | 'dateHistogram' | 'histogram' | 'range' | 'exists'
 export type SortType = 'value_desc' | 'value_asc' | 'key_desc' | 'key_asc'
 export type DateHistogramInterval = 'day' | 'week' | 'month' | 'year'
@@ -106,6 +106,14 @@ export const METRIC_TYPE_OPTIONS: { label: string; value: MetricType; needField:
   { label: '最小值', value: 'min', needField: true },
   { label: '最大值', value: 'max', needField: true },
   { label: '去重计数', value: 'uniqueCount', needField: true },
+  { label: '数组长度求和', value: 'arrayLengthSum', needField: true },
+  { label: '数组长度平均', value: 'arrayLengthAvg', needField: true },
+  { label: '数组长度最大', value: 'arrayLengthMax', needField: true },
+  { label: '数组长度最小', value: 'arrayLengthMin', needField: true },
+  { label: '关联计数求和', value: 'relationCountSum', needField: true },
+  { label: '关联计数平均', value: 'relationCountAvg', needField: true },
+  { label: '关联计数最大', value: 'relationCountMax', needField: true },
+  { label: '关联计数最小', value: 'relationCountMin', needField: true },
 ]
 
 export function getMetricName(metric?: MetricDef | null): string | undefined {
