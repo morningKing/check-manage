@@ -1,0 +1,9 @@
+﻿id,fieldName,label,controlType,required,order,placeholder,isPrimaryKey,min,max,hidden,options,relationConfig,referenceConfig,quoteConfig,sequenceConfig
+field-1,name,用例名称,text,true,1,请输入用例名称,true,,,,,,,,
+field-2,status,用例状态,select,true,2,,,,,"[{\"label\":\"未执行\",\"value\":\"pending\"},{\"label\":\"通过\",\"value\":\"pass\"},{\"label\":\"失败\",\"value\":\"fail\"}]",,,,,,
+,priority,优先级,radio,false,3,,,,,"[{\"label\":\"高\",\"value\":\"high\"},{\"label\":\"中\",\"value\":\"medium\"},{\"label\":\"低\",\"value\":\"low\"}]",,,,,,
+,description,用例描述,textarea,false,4,请输入详细描述,,,,,,,,,,
+,startDate,开始日期,date,false,5,,,,,,,,,,
+,version,版本号,number,false,7,,,1,999,,,,,,,,
+,caseNo,用例编号,autoSequence,false,14,,,,,,,,"{\"prefix\":\"TC-\",\"max\":9999}",
+,isReviewed,是否已评审,checkbox,false,16,,,,,true,,,,,,
