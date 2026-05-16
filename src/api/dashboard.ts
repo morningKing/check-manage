@@ -1,6 +1,6 @@
 ﻿import { get, post, put, del } from '@/utils/request'
 
-export type WidgetType = 'metric' | 'bar' | 'line' | 'pie' | 'area' | 'dataTable'
+export type WidgetType = 'metric' | 'bar' | 'line' | 'pie' | 'area' | 'dataTable' | 'ring' | 'gauge' | 'radar' | 'funnel'
 export type MetricType = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'uniqueCount' | 'arrayLengthSum' | 'arrayLengthAvg' | 'arrayLengthMax' | 'arrayLengthMin' | 'relationCountSum' | 'relationCountAvg' | 'relationCountMax' | 'relationCountMin'
 export type GroupByType = 'terms' | 'dateHistogram' | 'histogram' | 'range' | 'exists'
 export type SortType = 'value_desc' | 'value_asc' | 'key_desc' | 'key_asc'
@@ -34,6 +34,8 @@ export interface WidgetConfig {
   filter?: Record<string, any>
   sort?: SortType
   limit?: number
+  gaugeTarget?: number
+  funnelShowRate?: boolean
 }
 
 export interface DashboardWidget {
@@ -95,7 +97,11 @@ export const WIDGET_TYPE_OPTIONS: { label: string; value: WidgetType; icon: stri
   { label: '柱状图', value: 'bar', icon: 'Histogram' },
   { label: '折线图', value: 'line', icon: 'TrendCharts' },
   { label: '饼图', value: 'pie', icon: 'PieChart' },
+  { label: '环形图', value: 'ring', icon: 'PieChart' },
   { label: '面积图', value: 'area', icon: 'DataLine' },
+  { label: '仪表盘', value: 'gauge', icon: 'Odometer' },
+  { label: '雷达图', value: 'radar', icon: 'Aim' },
+  { label: '漏斗图', value: 'funnel', icon: 'Filter' },
   { label: '数据表', value: 'dataTable', icon: 'Grid' },
 ]
 

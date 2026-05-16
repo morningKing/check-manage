@@ -183,6 +183,28 @@
         <div class="config-section">
           <div class="config-label">显示选项</div>
           <el-input v-model="form.title" placeholder="图表标题" style="margin-bottom: 8px" />
+
+          <!-- Gauge config -->
+          <div v-if="form.type === 'gauge'" class="config-row" style="margin-bottom: 8px">
+            <el-input-number v-model="form.gaugeTarget" :min="1" :max="10000" placeholder="目标值" style="flex: 1" />
+            <span class="config-sublabel" style="flex: 1; padding-left: 8px">目标值（默认100）</span>
+          </div>
+
+          <!-- Funnel config -->
+          <div v-if="form.type === 'funnel'" style="margin-bottom: 8px">
+            <el-checkbox v-model="form.funnelShowRate">显示转化率百分比</el-checkbox>
+          </div>
+
+          <!-- Radar config hint -->
+          <div v-if="form.type === 'radar'" style="margin-bottom: 8px; color: #909399; font-size: 12px">
+            雷达图将使用所有配置的指标作为维度，请添加多个指标
+          </div>
+
+          <!-- Ring config hint -->
+          <div v-if="form.type === 'ring'" style="margin-bottom: 8px; color: #909399; font-size: 12px">
+            环形图中间显示各分组值的总和
+          </div>
+
           <div class="config-row">
             <div style="flex: 1">
               <div class="config-sublabel">宽度 (1-12)</div>
@@ -322,6 +344,8 @@ interface EditorFormState {
   title: string
   w: number
   h: number
+  gaugeTarget: number
+  funnelShowRate: boolean
 }
 
 interface Props {
@@ -371,6 +395,8 @@ function createDefaultForm(): EditorFormState {
     title: '',
     w: 6,
     h: 2,
+    gaugeTarget: 100,
+    funnelShowRate: false,
   }
 }
 
@@ -547,6 +573,8 @@ function buildRequestPayload() {
     filter: buildFilterPayload(),
     sort: form.sort,
     limit: form.limit,
+    gaugeTarget: form.type === 'gauge' ? form.gaugeTarget : undefined,
+    funnelShowRate: form.type === 'funnel' ? form.funnelShowRate : undefined,
   }
 }
 
@@ -607,6 +635,8 @@ function fillFormFromWidget(widget?: DashboardWidget | null) {
   form.title = widget.title
   form.w = widget.w
   form.h = widget.h
+  form.gaugeTarget = widget.config.gaugeTarget || 100
+  form.funnelShowRate = widget.config.funnelShowRate || false
 }
 
 function handleConfirm() {

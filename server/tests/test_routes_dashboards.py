@@ -844,3 +844,197 @@ def test_filter_parameter_in_aggregation(client, mock_cursor, admin_headers, moc
     assert 'fatal' in params
     assert 'status' in params
     assert 'new' in params
+
+
+def test_per_metric_filter_for_radar_chart(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test per-metric filter for radar chart multi-metric aggregation.
+
+    Each metric can have its own filter to create separate dimensions
+    for radar chart visualization.
+    """
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    # Return counts for each severity level: fatal=6, major=9, minor=3, suggestion=2
+    mock_cursor.fetchone.return_value = (6, 9, 3, 2)
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [
+                {'type': 'count', 'filter': {'severity': 'fatal'}, 'name': 'fatal'},
+                {'type': 'count', 'filter': {'severity': 'major'}, 'name': 'major'},
+                {'type': 'count', 'filter': {'severity': 'minor'}, 'name': 'minor'},
+                {'type': 'count', 'filter': {'severity': 'suggestion'}, 'name': 'suggestion'},
+            ],
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'single'
+    assert payload['value'] == 6.0
+    assert payload['metrics'] == {
+        'fatal': 6.0,
+        'major': 9.0,
+        'minor': 3.0,
+        'suggestion': 2.0,
+    }
+
+    # Each metric filter should use CASE WHEN in SQL
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'CASE WHEN' in executed_sql
+    assert 'SUM(CASE WHEN' in executed_sql
+    # Should have 4 CASE WHEN expressions for 4 metrics
+    params = mock_cursor.execute.call_args[0][1]
+    # Each filter contributes 2 params: field name and value
+    assert 'severity' in params
+    assert 'fatal' in params
+    assert 'major' in params
+    assert 'minor' in params
+    assert 'suggestion' in params
+
+
+def test_per_metric_filter_with_assignee_dimension(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test per-metric filter for radar chart with assignee dimension."""
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    # Return counts per assignee
+    mock_cursor.fetchone.return_value = (7, 5, 8)
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [
+                {'type': 'count', 'filter': {'assignee': '张三'}, 'name': '张三'},
+                {'type': 'count', 'filter': {'assignee': '李四'}, 'name': '李四'},
+                {'type': 'count', 'filter': {'assignee': '王五'}, 'name': '王五'},
+            ],
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['metrics'] == {
+        '张三': 7.0,
+        '李四': 5.0,
+        '王五': 8.0,
+    }
+
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'assignee' in executed_sql.lower() or 'assignee' in mock_cursor.execute.call_args[0][1]
+
+
+def test_grouped_aggregation_for_funnel_chart(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test grouped aggregation produces correct funnel chart data format.
+
+    Funnel chart requires grouped result with descending values.
+    """
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    # Return status distribution: closed=12, new=6, fixed=2
+    mock_cursor.fetchall.return_value = [
+        ('closed', 12),
+        ('new', 6),
+        ('fixed', 2),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [{'type': 'count', 'name': 'count'}],
+            'groupBy': {'type': 'terms', 'field': 'status'},
+            'sort': 'value_desc',
+            'limit': 10,
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+    assert payload['data'] == [
+        {'key': 'closed', 'value': 12.0},
+        {'key': 'new', 'value': 6.0},
+        {'key': 'fixed', 'value': 2.0},
+    ]
+
+    # SQL should have ORDER BY value DESC
+    executed_sql = mock_cursor.execute.call_args[0][0]
+    assert 'ORDER BY' in executed_sql
+    assert 'DESC' in executed_sql
+
+
+def test_gauge_chart_single_value_aggregation(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test single value aggregation for gauge chart.
+
+    Gauge chart needs a single numeric value with optional target.
+    """
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch, clause="collection = %s AND branch_id = %s AND data->>'severity' = %s",
+                params=['quality-bug', 'main', 'fatal'])
+    mock_cursor.fetchone.return_value = (6,)
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [{'type': 'count', 'name': 'fatal'}],
+            'filter': {'severity': 'fatal'},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'single'
+    assert payload['value'] == 6.0
+
+
+def test_ring_chart_total_calculation(client, mock_cursor, admin_headers, mock_conn, monkeypatch):
+    """Test grouped aggregation for ring chart total center value.
+
+    Ring chart displays sum of all group values in the center.
+    """
+    _mock_get_db(monkeypatch, mock_conn)
+    _mock_branch(monkeypatch, 'main')
+    _mock_page_fields(monkeypatch, [])
+    _mock_where(monkeypatch)
+    mock_cursor.fetchall.return_value = [
+        ('fatal', 6),
+        ('major', 9),
+        ('minor', 3),
+        ('suggestion', 2),
+    ]
+
+    resp = client.post(
+        '/dashboards/aggregate',
+        json={
+            'collection': 'quality-bug',
+            'metrics': [{'type': 'count', 'name': 'count'}],
+            'groupBy': {'type': 'terms', 'field': 'severity'},
+            'sort': 'value_desc',
+            'limit': 10,
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload['type'] == 'grouped'
+
+    # Verify total can be calculated from grouped data
+    total = sum(item['value'] for item in payload['data'])
+    assert total == 20.0  # 6 + 9 + 3 + 2 = 20

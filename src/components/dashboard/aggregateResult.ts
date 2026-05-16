@@ -25,6 +25,11 @@ export interface TableModel {
   rows: Array<Record<string, string | number>>
 }
 
+export interface RadarDataModel {
+  dimensions: string[]
+  values: number[]
+}
+
 interface TableLabelOptions {
   groupLabel?: string
   columnLabel?: string
@@ -121,6 +126,46 @@ export function toPieChartData(
     name: `${item.rowKey} / ${item.columnKey}`,
     value: getMetricValue(item, metricKey),
   }))
+}
+
+export function toGaugeValue(result?: AggregateResult | null): number {
+  if (!result || result.type !== 'single') return 0
+  return result.value ?? 0
+}
+
+export function toRadarDataModel(result?: AggregateResult | null): RadarDataModel {
+  if (!result || result.type !== 'single') {
+    return { dimensions: [], values: [] }
+  }
+  const metrics = result.metrics || {}
+  return {
+    dimensions: Object.keys(metrics),
+    values: Object.values(metrics),
+  }
+}
+
+export function toFunnelData(
+  result?: AggregateResult | null,
+): Array<{ name: string; value: number }> {
+  if (!result || result.type !== 'grouped') return []
+  return result.data.map(item => ({
+    name: String(item.key),
+    value: item.value ?? 0,
+  }))
+}
+
+export function getRingTotalValue(
+  result?: AggregateResult | null,
+  metricKey?: string,
+): number {
+  if (!result) return 0
+  if (result.type === 'single') {
+    return getMetricValue(result, metricKey)
+  }
+  if (result.type === 'grouped') {
+    return result.data.reduce((sum, item) => sum + getMetricValue(item, metricKey), 0)
+  }
+  return result.data.reduce((sum, item) => sum + getMetricValue(item, metricKey), 0)
 }
 
 export function toTableModel(

@@ -6,6 +6,10 @@ import {
   toCartesianChartModel,
   toPieChartData,
   toTableModel,
+  toGaugeValue,
+  toRadarDataModel,
+  toFunnelData,
+  getRingTotalValue,
 } from '../aggregateResult'
 
 describe('aggregateResult helpers', () => {
@@ -284,6 +288,174 @@ describe('aggregateResult helpers', () => {
 
       expect(getDefaultMetricKey(result)).toBe('total')
       expect(toPieChartData(result, 'total')).toEqual([{ name: 'A', value: 10 }])
+    })
+  })
+
+  describe('toGaugeValue', () => {
+    it('returns 0 for null/undefined result', () => {
+      expect(toGaugeValue(null)).toBe(0)
+      expect(toGaugeValue(undefined)).toBe(0)
+    })
+
+    it('returns 0 for non-single result types', () => {
+      const groupedResult: AggregateResult = {
+        type: 'grouped',
+        data: [{ key: 'A', value: 10 }],
+      }
+      expect(toGaugeValue(groupedResult)).toBe(0)
+    })
+
+    it('returns value from single result', () => {
+      const result: AggregateResult = { type: 'single', value: 42 }
+      expect(toGaugeValue(result)).toBe(42)
+    })
+
+    it('returns 0 when value is null', () => {
+      const result: AggregateResult = { type: 'single', value: null as any }
+      expect(toGaugeValue(result)).toBe(0)
+    })
+  })
+
+  describe('toRadarDataModel', () => {
+    it('returns empty model for null/undefined result', () => {
+      expect(toRadarDataModel(null)).toEqual({ dimensions: [], values: [] })
+      expect(toRadarDataModel(undefined)).toEqual({ dimensions: [], values: [] })
+    })
+
+    it('returns empty model for non-single result types', () => {
+      const groupedResult: AggregateResult = {
+        type: 'grouped',
+        data: [{ key: 'A', value: 10 }],
+      }
+      expect(toRadarDataModel(groupedResult)).toEqual({ dimensions: [], values: [] })
+    })
+
+    it('extracts metrics as dimensions and values', () => {
+      const result: AggregateResult = {
+        type: 'single',
+        value: 20,
+        metrics: { fatal: 6, major: 9, minor: 3, suggestion: 2 },
+      }
+      const model = toRadarDataModel(result)
+      expect(model.dimensions).toEqual(['fatal', 'major', 'minor', 'suggestion'])
+      expect(model.values).toEqual([6, 9, 3, 2])
+    })
+
+    it('returns empty arrays when no metrics', () => {
+      const result: AggregateResult = { type: 'single', value: 10 }
+      expect(toRadarDataModel(result)).toEqual({ dimensions: [], values: [] })
+    })
+  })
+
+  describe('toFunnelData', () => {
+    it('returns empty array for null/undefined result', () => {
+      expect(toFunnelData(null)).toEqual([])
+      expect(toFunnelData(undefined)).toEqual([])
+    })
+
+    it('returns empty array for non-grouped result types', () => {
+      const singleResult: AggregateResult = { type: 'single', value: 42 }
+      expect(toFunnelData(singleResult)).toEqual([])
+    })
+
+    it('converts grouped result to funnel stages', () => {
+      const result: AggregateResult = {
+        type: 'grouped',
+        data: [
+          { key: 'closed', value: 12 },
+          { key: 'new', value: 6 },
+          { key: 'fixed', value: 2 },
+        ],
+      }
+      expect(toFunnelData(result)).toEqual([
+        { name: 'closed', value: 12 },
+        { name: 'new', value: 6 },
+        { name: 'fixed', value: 2 },
+      ])
+    })
+
+    it('handles numeric keys by converting to string', () => {
+      const result: AggregateResult = {
+        type: 'grouped',
+        data: [
+          { key: 100, value: 5 },
+          { key: 50, value: 3 },
+        ],
+      }
+      expect(toFunnelData(result)).toEqual([
+        { name: '100', value: 5 },
+        { name: '50', value: 3 },
+      ])
+    })
+
+    it('uses 0 for null values', () => {
+      const result: AggregateResult = {
+        type: 'grouped',
+        data: [
+          { key: 'A', value: null as any },
+        ],
+      }
+      expect(toFunnelData(result)).toEqual([{ name: 'A', value: 0 }])
+    })
+  })
+
+  describe('getRingTotalValue', () => {
+    it('returns 0 for null/undefined result', () => {
+      expect(getRingTotalValue(null)).toBe(0)
+      expect(getRingTotalValue(undefined)).toBe(0)
+    })
+
+    it('returns value from single result', () => {
+      const result: AggregateResult = { type: 'single', value: 100 }
+      expect(getRingTotalValue(result)).toBe(100)
+    })
+
+    it('returns metric value from single result when metricKey specified', () => {
+      const result: AggregateResult = {
+        type: 'single',
+        value: 20,
+        metrics: { fatal: 6, major: 9 },
+      }
+      expect(getRingTotalValue(result, 'fatal')).toBe(6)
+      expect(getRingTotalValue(result, 'major')).toBe(9)
+    })
+
+    it('sums all grouped values', () => {
+      const result: AggregateResult = {
+        type: 'grouped',
+        data: [
+          { key: 'fatal', value: 6 },
+          { key: 'major', value: 9 },
+          { key: 'minor', value: 3 },
+        ],
+      }
+      expect(getRingTotalValue(result)).toBe(18)
+    })
+
+    it('sums metric values from grouped result', () => {
+      const result: AggregateResult = {
+        type: 'grouped',
+        data: [
+          { key: 'V1', value: 5, metrics: { bugs: 7, score: 10 } },
+          { key: 'V2', value: 3, metrics: { bugs: 4, score: 8 } },
+        ],
+      }
+      expect(getRingTotalValue(result, 'bugs')).toBe(11)
+      expect(getRingTotalValue(result, 'score')).toBe(18)
+    })
+
+    it('sums matrix data values', () => {
+      const result: AggregateResult = {
+        type: 'matrix',
+        rows: ['open', 'closed'],
+        columns: ['high', 'low'],
+        data: [
+          { rowKey: 'open', columnKey: 'high', value: 3 },
+          { rowKey: 'open', columnKey: 'low', value: 2 },
+          { rowKey: 'closed', columnKey: 'high', value: 5 },
+        ],
+      }
+      expect(getRingTotalValue(result)).toBe(10)
     })
   })
 })

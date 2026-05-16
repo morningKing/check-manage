@@ -78,6 +78,7 @@
                 :type="widget.type"
                 :result="widgetData[widget.id]"
                 :metric-key="shouldShowAllMetrics(widget) ? undefined : getPrimaryMetricKey(widget)"
+                :widget="widget"
               />
             </template>
             <el-empty v-else :image-size="40" description="暂无数据" />

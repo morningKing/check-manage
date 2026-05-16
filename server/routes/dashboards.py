@@ -221,6 +221,7 @@ def _normalize_metrics(body):
             'field': field,
             'name': metric_name,
             'alias': 'agg_value' if idx == 0 else f'metric_{idx}',
+            'filter': metric.get('filter'),
         })
     return normalized
 
@@ -280,12 +281,19 @@ def _build_metric_selects(metrics, data_expr='data', collection=None, branch_id=
     """Build metric select fragments and params.
 
     Supports relation field aggregation via subquery on data_relations.
+    Supports per-metric filter using CASE WHEN expressions.
+
+    Note: data_expr is expected to be the complete path (e.g., 'dd.data' or 'data').
+    The table_alias is only used for subquery record_id references.
     """
     select_parts = []
     params = []
+    prefix = f"{table_alias}." if table_alias else ''
+
     for metric in metrics:
         metric_type = metric['type']
         field = metric.get('field')
+        metric_filter = metric.get('filter')
 
         # Check if field is relation type for arrayLength aggregations
         is_relation = False
@@ -295,7 +303,6 @@ def _build_metric_selects(metrics, data_expr='data', collection=None, branch_id=
                 is_relation = True
                 # Convert arrayLength to relationCount for relation fields
                 agg_func = metric_type.replace('arrayLength', '').upper()
-                prefix = f"{table_alias}." if table_alias else ''
                 subquery = (
                     f"(SELECT COUNT(*) FROM data_relations dr "
                     f"WHERE dr.collection = %s AND dr.record_id = {prefix}id "
@@ -307,7 +314,6 @@ def _build_metric_selects(metrics, data_expr='data', collection=None, branch_id=
                 expr, expr_params = _metric_expr(metric_type, field, data_expr=data_expr)
         elif metric_type.startswith('relationCount'):
             agg_func = metric_type.replace('relationCount', '').upper()
-            prefix = f"{table_alias}." if table_alias else ''
             subquery = (
                 f"(SELECT COUNT(*) FROM data_relations dr "
                 f"WHERE dr.collection = %s AND dr.record_id = {prefix}id "
@@ -320,9 +326,49 @@ def _build_metric_selects(metrics, data_expr='data', collection=None, branch_id=
 
         if expr is None:
             raise ValueError(f"Unsupported metric: {metric_type}")
+
+        # Apply per-metric filter using CASE WHEN
+        if metric_filter and not metric_type.startswith('relationCount'):
+            filter_clause, filter_params = _build_metric_filter_condition(metric_filter, data_expr)
+            agg_func = 'SUM' if metric_type == 'count' else _get_agg_func(metric_type)
+            # For count, wrap 1 in CASE WHEN; for other aggregations, wrap the expression
+            if metric_type == 'count':
+                inner_expr = '1'
+            else:
+                # Extract inner expression for aggregation (e.g., data->>'field' for sum)
+                inner_expr = expr
+            expr = f'{agg_func}(CASE WHEN {filter_clause} THEN {inner_expr} ELSE NULL END)'
+            params.extend(filter_params)
+
         select_parts.append(f'{expr} AS {metric["alias"]}')
         params.extend(expr_params)
     return select_parts, params
+
+
+def _get_agg_func(metric_type):
+    """Get aggregation function name for metric type."""
+    AGG_MAP = {
+        'count': 'COUNT',
+        'sum': 'SUM',
+        'avg': 'AVG',
+        'min': 'MIN',
+        'max': 'MAX',
+    }
+    return AGG_MAP.get(metric_type, 'COUNT')
+
+
+def _build_metric_filter_condition(filter_dict, data_expr='data'):
+    """Build filter condition for a single metric.
+
+    For simple equality filters like {"severity": "fatal"},
+    builds: (data->>'severity' = 'fatal')
+    """
+    conditions = []
+    params = []
+    for key, value in filter_dict.items():
+        conditions.append(f"({data_expr}->>%s = %s)")
+        params.extend([key, str(value)])
+    return ' AND '.join(conditions) if len(conditions) > 1 else conditions[0] if conditions else 'TRUE', params
 
 
 def _build_scalar_group_expr(group_by, data_expr='data'):
