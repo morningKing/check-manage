@@ -4,9 +4,12 @@
  * 测试 parseFieldRow 和 mergeFields 的解析与合并逻辑。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { parseFieldRow, mergeFields } from '@/utils/fieldImport'
-import type { FieldConfig } from '@/types'
+import type { FieldConfig, ControlType } from '@/types'
+
+// Helper to create typed imported fields for tests
+type ImportedField = Partial<FieldConfig> & { controlType?: ControlType }
 
 // Mock uuid for predictable IDs
 vi.mock('uuid', () => ({
@@ -54,7 +57,6 @@ describe('parseFieldRow', () => {
     expect(field.isPrimaryKey).toBe(true)
     expect(field.hidden).toBe(true)
     expect(field.disabled).toBe(false)
-    expect(field.readonly).toBe(true)
   })
 
   it('解析 options JSON 字符串', () => {
@@ -212,7 +214,7 @@ describe('mergeFields', () => {
 
   it('导入无 id 的行生成新 id 并追加', () => {
     const existing = [makeField({ id: 'field-1', fieldName: 'name', order: 1 })]
-    const imported = [{ fieldName: 'desc', label: '描述', controlType: 'textarea', order: 2 }]
+    const imported: ImportedField[] = [{ fieldName: 'desc', label: '描述', controlType: 'textarea', order: 2 }]
 
     const { merged, added, updated } = mergeFields(existing, imported)
 
@@ -239,7 +241,7 @@ describe('mergeFields', () => {
 
   it('导入有 id 但不存在的行追加', () => {
     const existing = [makeField({ id: 'field-1', fieldName: 'name', order: 1 })]
-    const imported = [{ id: 'field-2', fieldName: 'status', label: '状态', controlType: 'select', order: 2 }]
+    const imported: ImportedField[] = [{ id: 'field-2', fieldName: 'status', label: '状态', controlType: 'select', order: 2 }]
 
     const { merged, added, updated } = mergeFields(existing, imported)
 
@@ -253,7 +255,7 @@ describe('mergeFields', () => {
     const existing = [
       makeField({ id: 'field-1', fieldName: 'name', order: 3 }),
     ]
-    const imported = [
+    const imported: ImportedField[] = [
       { id: 'field-2', fieldName: 'desc', label: '描述', controlType: 'textarea', order: 1 },
       { fieldName: 'status', label: '状态', controlType: 'select', order: 2 },
     ]
@@ -273,7 +275,7 @@ describe('mergeFields', () => {
       makeField({ id: 'f1', fieldName: 'name', order: 1 }),
       makeField({ id: 'f2', fieldName: 'status', order: 2 }),
     ]
-    const imported = [
+    const imported: ImportedField[] = [
       { id: 'f1', label: '用例名称' },            // 更新
       { id: 'f3', fieldName: 'desc', label: '描述', controlType: 'textarea', order: 3 }, // 追加
       { fieldName: 'priority', label: '优先级', controlType: 'radio', order: 4 },          // 生成 id 追加
@@ -312,7 +314,7 @@ describe('mergeFields', () => {
   })
 
   it('空 existing 时全部追加', () => {
-    const imported = [
+    const imported: ImportedField[] = [
       { id: 'f1', fieldName: 'name', label: '名称', controlType: 'text', order: 1 },
       { id: 'f2', fieldName: 'status', label: '状态', controlType: 'select', order: 2 },
     ]

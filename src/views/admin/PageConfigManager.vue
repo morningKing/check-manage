@@ -723,7 +723,6 @@ import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
 import { getExportScripts } from '@/api/exportScript'
 import { getValidationScripts } from '@/api/validationScript'
-import { v4 as uuidv4 } from 'uuid'
 import * as XLSX from 'xlsx'
 
 // ==================== Store ====================
