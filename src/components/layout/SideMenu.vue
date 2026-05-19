@@ -6,6 +6,11 @@
  * - 处理菜单点击和路由跳转
  * - 支持菜单折叠/展开
  *
+ * 性能优化：
+ * - 懒加载：只渲染已展开的子菜单，减少初始 DOM 数量
+ * - 追踪展开状态：通过 @open/@close 事件维护 openedMenuIds
+ * - 使用 Set 存储展开状态，查找性能 O(1)
+ *
  * 特性：
  * - 使用 Element Plus Menu 组件
  * - 递归渲染子菜单
@@ -30,10 +35,12 @@
         active-text-color="#409eff"
         router
         class="side-menu-list"
+        @open="handleMenuOpen"
+        @close="handleMenuClose"
       >
-        <!-- 递归渲染菜单项 -->
+        <!-- 递归渲染菜单项（传递展开状态实现懒加载 + 预渲染） -->
         <template v-for="menu in menuTree" :key="menu.id">
-          <MenuItem :menu="menu" />
+          <MenuItem :menu="menu" :opened-menu-ids="openedMenuIds" :preloaded-ids="preloadedIds" />
         </template>
       </el-menu>
     </el-scrollbar>
@@ -48,12 +55,14 @@
  * 1. 从 Store 获取菜单树数据（使用缓存）
  * 2. 根据当前路由计算激活菜单
  * 3. 响应侧边栏折叠状态
+ * 4. 追踪菜单展开状态（用于懒加载）
  *
  * 性能优化：
  * - 使用 store 中的 getFilteredMenuTree 方法获取缓存结果
  * - 避免本地重复计算菜单过滤
+ * - 使用 Set 存储展开菜单ID，查找性能 O(1)
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Monitor } from '@element-plus/icons-vue'
 import { useAppStore, useMenuStore, useAuthStore, useSystemConfigStore } from '@/stores'
@@ -66,6 +75,36 @@ const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const systemConfigStore = useSystemConfigStore()
 const route = useRoute()
+
+// ==================== 展开状态追踪（懒加载关键） ====================
+
+/**
+ * 已展开的菜单ID集合
+ * 使用 Set 实现 O(1) 查找性能
+ */
+const openedMenuIds = ref(new Set<string>())
+
+/**
+ * 已预加载的菜单ID集合（hover预渲染）
+ * 用于在鼠标 hover 时提前渲染子菜单
+ */
+const preloadedIds = ref(new Set<string>())
+
+/**
+ * 菜单展开事件处理
+ * 将展开的菜单ID加入集合
+ */
+function handleMenuOpen(index: string): void {
+  openedMenuIds.value.add(index)
+}
+
+/**
+ * 菜单折叠事件处理
+ * 将折叠的菜单ID从集合移除
+ */
+function handleMenuClose(index: string): void {
+  openedMenuIds.value.delete(index)
+}
 
 // ==================== 计算属性 ====================
 
@@ -187,5 +226,14 @@ const activeMenu = computed(() => {
   &.is-active {
     background-color: #409eff !important;
   }
+}
+
+/* 子菜单展开动画优化 - 加速动画 */
+:deep(.el-sub-menu__title) {
+  transition: all 0.1s ease !important;
+}
+
+:deep(.el-sub-menu .el-menu) {
+  transition: all 0.1s ease !important;
 }
 </style>
