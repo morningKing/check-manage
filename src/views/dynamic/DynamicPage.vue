@@ -370,7 +370,6 @@
             size="small"
             style="margin-left: 8px;"
           >
-            <el-icon style="vertical-align: -1px; margin-right: 2px;"><View /></el-icon>
             {{ columnViewStore.currentView.name }}
           </el-tag>
           <el-tag
@@ -418,7 +417,6 @@
             size="small"
             style="margin-left: 8px;"
           >
-            <el-icon style="vertical-align: -1px; margin-right: 2px;"><View /></el-icon>
             {{ columnViewStore.currentView.name }}
           </el-tag>
           <el-tag
@@ -826,7 +824,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, View } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
