@@ -69,6 +69,10 @@
         </span>
       </div>
       <div class="page-actions">
+        <ViewSelector
+          @select="handleViewSelect"
+          @manage="handleOpenManage"
+        />
         <el-radio-group v-model="viewMode" size="small" class="view-toggle">
           <el-radio-button value="table"><el-icon><Grid /></el-icon></el-radio-button>
           <el-radio-button value="excel"><el-icon><Document /></el-icon></el-radio-button>
@@ -770,6 +774,22 @@
       @navigate="handleGraphNodeNavigate"
       @updated="loadPageData"
     />
+
+    <!-- 视图管理弹窗 -->
+    <ViewManageDialog
+      v-if="pageId"
+      ref="viewManageDialogRef"
+      :page-id="pageId"
+      :fields="effectiveFields"
+      @edit-columns="handleEditColumns"
+    />
+
+    <!-- 列配置弹窗 -->
+    <ColumnConfigDialog
+      ref="columnConfigDialogRef"
+      :fields="effectiveFields"
+      @save="handleColumnConfigSave"
+    />
   </div>
 </template>
 
@@ -789,9 +809,10 @@ import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine } from '@element-plus/icons-vue'
-import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore } from '@/stores'
+import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
+import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
@@ -815,6 +836,7 @@ const pageConfigStore = usePageConfigStore()
 const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const jumpStore = useJumpNavigationStore()
+const columnViewStore = useColumnViewStore()
 const isAdmin = computed(() => authStore.isAdmin)
 const isGuest = computed(() => authStore.isGuest)
 
@@ -1083,6 +1105,16 @@ const graphDialogVisible = ref(false)
 const graphRecordId = ref('')
 
 /**
+ * 视图管理弹窗引用
+ */
+const viewManageDialogRef = ref<InstanceType<typeof ViewManageDialog>>()
+
+/**
+ * 列配置弹窗引用
+ */
+const columnConfigDialogRef = ref<InstanceType<typeof ColumnConfigDialog>>()
+
+/**
  * 视图模式（table / kanban / excel / calendar / gantt）
  */
 const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table')
@@ -1199,6 +1231,7 @@ const boundRowExportScripts = computed<ExportScript[]>(() => {
 /**
  * 有效字段列表（含引用字段展开的继承虚拟列）
  * 用于 DataTable 显示，在每个 reference 字段后插入继承字段列
+ * 如果选择了列视图，则应用视图的列配置（过滤、排序、宽度）
  */
 const effectiveFields = computed<FieldConfig[]>(() => {
   const result: FieldConfig[] = []
@@ -1226,7 +1259,9 @@ const effectiveFields = computed<FieldConfig[]>(() => {
       }
     }
   }
-  return result
+
+  // 应用列视图配置
+  return columnViewStore.getTableColumns(result)
 })
 
 /**
@@ -2682,6 +2717,69 @@ function handleGraphNodeNavigate(targetCollection: string, targetRecordId: strin
   navigateToRecord(targetCollection, targetRecordId, 'graph')
 }
 
+// ==================== 列视图方法 ====================
+
+/**
+ * 处理视图选择
+ */
+function handleViewSelect(viewId: number | null): void {
+  columnViewStore.selectView(pageId.value, viewId)
+}
+
+/**
+ * 打开视图管理弹窗
+ */
+function handleOpenManage(): void {
+  viewManageDialogRef.value?.open()
+}
+
+/**
+ * 处理列配置编辑（从视图管理弹窗触发）
+ */
+function handleEditColumns(view: any): void {
+  columnConfigDialogRef.value?.open(
+    view.columns,
+    view.sortConfig || [],
+    view.groupConfig?.field || null
+  )
+}
+
+/**
+ * 处理列配置保存
+ */
+async function handleColumnConfigSave(
+  columns: any[],
+  sortConfig: any[],
+  groupField: string | null
+): Promise<void> {
+  const view = columnViewStore.currentView
+  if (!view) return
+
+  try {
+    const groupConfig = groupField ? { field: groupField } : null
+    await columnViewStore.updateView(pageId.value, view.id, {
+      columns,
+      sortConfig,
+      groupConfig
+    })
+    ElMessage.success('列配置已保存')
+  } catch (error) {
+    ElMessage.error('保存失败')
+  }
+}
+
+/**
+ * 加载列视图
+ */
+async function loadColumnViews(): Promise<void> {
+  if (!pageId.value) return
+  try {
+    await columnViewStore.loadViews(pageId.value)
+  } catch {
+    // 加载失败不影响页面功能
+  }
+}
+
 /**
  * 高亮定位指定记录
  */
@@ -2883,9 +2981,9 @@ watch(tableData, () => {
 }, { deep: false })
 
 /**
- * 页面ID变化时清除筛选条件
+ * 页面ID变化时清除筛选条件并加载列视图
  */
-watch(pageId, () => {
+watch(pageId, (newPageId) => {
   columnFilters.value = {}
   queryMode.value = false
   activeMongoQuery.value = null
@@ -2897,6 +2995,11 @@ watch(pageId, () => {
   searchKeyword.value = ''
   // Set default view mode from config
   viewMode.value = pageConfig.value?.viewConfig?.defaultView || 'table'
+  // 清除并重新加载列视图
+  columnViewStore.clearState()
+  if (newPageId) {
+    loadColumnViews()
+  }
 })
 
 /**

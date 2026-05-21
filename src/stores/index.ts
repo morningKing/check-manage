@@ -25,5 +25,8 @@ export { useExportScriptStore } from './exportScript'
 // 跳转导航状态
 export { useJumpNavigationStore } from './jumpNavigation'
 
+// 列视图状态
+export { useColumnViewStore } from './columnView'
+
 // 系统配置状态
 export { useSystemConfigStore } from './systemConfig'
