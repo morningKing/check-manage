@@ -20,7 +20,7 @@ export type RelationDisplayMap = Record<string, Map<string, string>>
 /**
  * 可导入导出的字段类型（排除文件、图片、关联）
  */
-const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect', 'richText']
+const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect', 'richText', 'compositeText']
 
 /**
  * 筛选可导入导出的字段
@@ -129,6 +129,10 @@ function labelToValue(label: string, field: FieldConfig): any {
     return null
   }
 
+  if (field.controlType === 'compositeText') {
+    return null
+  }
+
   if (field.controlType === 'richText') {
     return label
   }
@@ -219,6 +223,7 @@ export function generateImportTemplate(
       reference: '引用记录ID',
       autoTimestamp: '自动时间戳（无需填写）',
       autoSequence: '自增序列（无需填写，自动生成）',
+      compositeText: '组合文本（自动生成，无需填写）',
       quoteSelect: '引用选择（用 、 分隔多个主键值）',
       richText: '富文本（纯文本导入，不保留格式）'
     }

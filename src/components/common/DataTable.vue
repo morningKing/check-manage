@@ -396,7 +396,7 @@ function getCellValue(row: DynamicRecord, field: FieldConfig): string {
 // ==================== 方法 ====================
 
 function isFilterable(field: FieldConfig): boolean {
-  const filterableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'select', 'radio', 'multiSelect', 'checkbox', 'relation', 'quoteSelect', 'reference']
+  const filterableTypes = ['text', 'textarea', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'select', 'radio', 'multiSelect', 'checkbox', 'relation', 'quoteSelect', 'reference', 'compositeText']
   return filterableTypes.includes(field.controlType)
 }
 
@@ -440,7 +440,7 @@ function clearCurrentFilter(): void {
 }
 
 function isSortable(field: FieldConfig): boolean | 'custom' {
-  const sortableTypes = ['text', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence']
+  const sortableTypes = ['text', 'number', 'date', 'datetime', 'autoTimestamp', 'autoSequence', 'compositeText']
   return sortableTypes.includes(field.controlType) ? 'custom' : false
 }
 
@@ -462,6 +462,8 @@ function getColumnWidth(field: FieldConfig): string {
     case 'relation':
       return '200'
     case 'quoteSelect':
+      return '200'
+    case 'compositeText':
       return '200'
     case 'richText':
       return '200'

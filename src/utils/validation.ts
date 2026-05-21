@@ -93,7 +93,7 @@ export const PATTERNS = {
  * @returns Element Plus 验证规则数组
  */
 export function generateFieldRules(field: FieldConfig): FormItemRule[] {
-  if (field.controlType === 'autoTimestamp' || field.controlType === 'autoSequence') return []
+  if (field.controlType === 'autoTimestamp' || field.controlType === 'autoSequence' || field.controlType === 'compositeText') return []
 
   const rules: FormItemRule[] = []
 

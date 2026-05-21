@@ -34,6 +34,7 @@
         :is="getControlComponent(field.controlType)"
         :field="field"
         :model-value="formData[field.fieldName]"
+        :form-data="formData"
         @update:model-value="updateFieldValue(field.fieldName, $event)"
       />
     </el-form-item>

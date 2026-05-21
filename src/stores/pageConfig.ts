@@ -502,6 +502,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       newRecord[field.fieldName] = generateNextSequenceValue(pageId, field)
     }
 
+    // 自动计算 compositeText 字段
+    for (const field of getCompositeTextFields(pageId)) {
+      newRecord[field.fieldName] = computeCompositeValue(newRecord, field)
+    }
+
     // 将关联数据合并到同一请求，实现原子性事务
     if (relationData) {
       const relationFields = getRelationFields(pageId)
@@ -566,6 +571,11 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       // 自动更新 autoTimestamp 字段
       for (const field of getAutoTimestampFields(pageId)) {
         updateData[field.fieldName] = now
+      }
+
+      // 自动计算 compositeText 字段
+      for (const field of getCompositeTextFields(pageId)) {
+        updateData[field.fieldName] = computeCompositeValue(updateData, field)
       }
 
       // 携带版本号用于乐观锁检测
@@ -694,6 +704,22 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     const config = pageConfigs.value.find((c) => c.id === pageId)
     if (!config) return []
     return config.fields.filter((f) => f.controlType === 'autoSequence')
+  }
+
+  function getCompositeTextFields(pageId: string): FieldConfig[] {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return []
+    return config.fields.filter((f) => f.controlType === 'compositeText')
+  }
+
+  function computeCompositeValue(record: Record<string, any>, field: FieldConfig): string {
+    const config = field.compositeTextConfig
+    if (!config || !config.sourceFields?.length) return ''
+    const values = config.sourceFields
+      .map(fn => record[fn])
+      .filter(v => v !== null && v !== undefined && v !== '')
+      .map(v => String(v))
+    return values.join(config.separator ?? ' - ')
   }
 
   /**

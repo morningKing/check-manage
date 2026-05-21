@@ -31,8 +31,8 @@ describe('Field Types', () => {
       expect(opt!.label).toBe('引用选择')
     })
 
-    it('共 17 种控件类型', () => {
-      expect(CONTROL_TYPE_OPTIONS).toHaveLength(17)
+    it('共 18 种控件类型', () => {
+      expect(CONTROL_TYPE_OPTIONS).toHaveLength(18)
     })
   })
 
@@ -64,6 +64,13 @@ describe('Field Types', () => {
       expect(data.quoteConfig).toBeDefined()
       expect(data.quoteConfig!.targetCollection).toBe('')
       expect(data.quoteConfig!.displayField).toBe('')
+    })
+
+    it('包含 compositeTextConfig 默认值', () => {
+      const data = createEmptyFieldFormData()
+      expect(data.compositeTextConfig).toBeDefined()
+      expect(data.compositeTextConfig!.sourceFields).toEqual([])
+      expect(data.compositeTextConfig!.separator).toBe(' - ')
     })
 
     it('接受自定义 order', () => {

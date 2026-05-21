@@ -27,6 +27,7 @@ export type ControlType =
   | 'autoSequence'  // 自增序列（新增时自动生成递增编号）
   | 'quoteSelect'   // 引用选择（单向多选引用另一集合记录）
   | 'richText'      // 富文本编辑器
+  | 'compositeText' // 组合文本（自动拼接其他字段值）
 
 /**
  * 控件类型配置
@@ -50,7 +51,8 @@ export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '数据引用', value: 'reference' },
   { label: '自动时间戳', value: 'autoTimestamp' },
   { label: '自增序列', value: 'autoSequence' },
-  { label: '引用选择', value: 'quoteSelect' }
+  { label: '引用选择', value: 'quoteSelect' },
+  { label: '组合文本', value: 'compositeText' }
 ]
 
 /**
@@ -133,6 +135,11 @@ export interface SequenceConfig {
   max: number
 }
 
+export interface CompositeTextConfig {
+  sourceFields: string[]
+  separator: string
+}
+
 /**
  * 验证规则接口
  *
@@ -213,6 +220,7 @@ export interface FieldConfig {
   sequenceConfig?: SequenceConfig
   quoteConfig?: QuoteConfig
   workflowConfig?: WorkflowConfig
+  compositeTextConfig?: CompositeTextConfig
 }
 
 /**
@@ -237,6 +245,7 @@ export interface FieldFormData {
   sequenceConfig?: SequenceConfig
   quoteConfig?: QuoteConfig
   workflowConfig?: WorkflowConfig
+  compositeTextConfig?: CompositeTextConfig
 }
 
 /**
@@ -260,6 +269,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     isPrimaryKey: false,
     referenceConfig: { targetCollection: '', displayField: '', inheritFields: [] },
     sequenceConfig: { prefix: '', max: 999 },
-    quoteConfig: { targetCollection: '', displayField: '' }
+    quoteConfig: { targetCollection: '', displayField: '' },
+    compositeTextConfig: { sourceFields: [], separator: ' - ' }
   }
 }

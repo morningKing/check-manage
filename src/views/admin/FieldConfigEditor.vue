@@ -452,6 +452,40 @@
           </div>
         </el-form-item>
 
+        <!-- 组合文本配置（仅组合文本类型显示） -->
+        <el-form-item
+          v-if="showCompositeTextConfig"
+          label="组合配置"
+        >
+          <div class="composite-text-config">
+            <el-form-item label="源字段" label-width="80px">
+              <el-select
+                v-model="fieldFormData.compositeTextConfig!.sourceFields"
+                multiple
+                placeholder="选择要拼接的文本字段"
+                filterable
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="opt in compositeSourceFieldOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="分隔符" label-width="80px">
+              <el-input
+                v-model="fieldFormData.compositeTextConfig!.separator"
+                placeholder="如： - "
+              />
+            </el-form-item>
+            <div v-if="compositeTextPreview" class="sequence-preview">
+              预览：{{ compositeTextPreview }}
+            </div>
+          </div>
+        </el-form-item>
+
         <!-- 引用选择配置（仅引用选择类型显示） -->
         <el-form-item
           v-if="showQuoteConfig"
@@ -687,6 +721,27 @@ const showQuoteConfig = computed(() => {
   return fieldFormData.value.controlType === 'quoteSelect'
 })
 
+const showCompositeTextConfig = computed(() => {
+  return fieldFormData.value.controlType === 'compositeText'
+})
+
+const compositeSourceFieldOptions = computed(() => {
+  return localFields.value
+    .filter(f => ['text', 'textarea'].includes(f.controlType)
+      && f.fieldName !== fieldFormData.value.fieldName)
+    .map(f => ({ label: `${f.label}（${f.fieldName}）`, value: f.fieldName }))
+})
+
+const compositeTextPreview = computed(() => {
+  const cfg = fieldFormData.value.compositeTextConfig
+  if (!cfg || !cfg.sourceFields?.length) return ''
+  const labels = cfg.sourceFields.map(fn => {
+    const f = localFields.value.find(f => f.fieldName === fn)
+    return f?.label || fn
+  })
+  return labels.join(cfg.separator || ' - ')
+})
+
 const showWorkflowConfig = computed(() => {
   return fieldFormData.value.controlType === 'select'
 })
@@ -914,7 +969,10 @@ function handleEditField(field: FieldConfig, index: number): void {
       : { prefix: '', max: 999 },
     quoteConfig: field.quoteConfig
       ? { ...field.quoteConfig }
-      : { targetCollection: '', displayField: '' }
+      : { targetCollection: '', displayField: '' },
+    compositeTextConfig: field.compositeTextConfig
+      ? { ...field.compositeTextConfig, sourceFields: [...field.compositeTextConfig.sourceFields] }
+      : { sourceFields: [], separator: ' - ' }
   }
   // Load workflow config
   const wf = field.workflowConfig
@@ -964,6 +1022,7 @@ async function handleSaveField(): Promise<void> {
     referenceConfig: showReferenceConfig.value ? fieldFormData.value.referenceConfig : undefined,
     sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined,
     quoteConfig: showQuoteConfig.value ? fieldFormData.value.quoteConfig : undefined,
+    compositeTextConfig: showCompositeTextConfig.value ? fieldFormData.value.compositeTextConfig : undefined,
     workflowConfig: showWorkflowConfig.value && workflowEnabled.value
       ? {
           enabled: true,

@@ -116,7 +116,7 @@ def get_validation_script(cur, collection):
 def get_display_field(fields):
     """获取用于显示的字段名（第一个 text/textarea/autoSequence 字段）"""
     for f in fields:
-        if f.get('controlType') in ('text', 'textarea', 'autoSequence'):
+        if f.get('controlType') in ('text', 'textarea', 'autoSequence', 'compositeText'):
             return f['fieldName']
     return None
 
@@ -165,7 +165,7 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
             target_configs[row[0]] = row[1]
 
     # 可直接在 JSONB 中搜索的字段类型
-    direct_searchable = {'text', 'textarea', 'number', 'autoSequence', 'select', 'radio', 'date', 'datetime', 'autoTimestamp'}
+    direct_searchable = {'text', 'textarea', 'number', 'autoSequence', 'select', 'radio', 'date', 'datetime', 'autoTimestamp', 'compositeText'}
 
     for field in fields:
         field_name = field.get('fieldName')
