@@ -6,6 +6,19 @@
     :close-on-click-modal="false"
   >
     <div class="column-config">
+      <div class="column-toolbar">
+        <el-input
+          v-model="searchText"
+          placeholder="搜索字段..."
+          :prefix-icon="Search"
+          clearable
+          size="small"
+          style="flex: 1"
+        />
+        <el-button size="small" @click="checkAll">全选</el-button>
+        <el-button size="small" @click="uncheckAll">全不选</el-button>
+      </div>
+
       <draggable
         v-model="localColumns"
         item-key="fieldId"
@@ -14,7 +27,11 @@
         class="column-list"
       >
         <template #item="{ element }">
-          <div class="column-item" :class="{ hidden: !element.visible }">
+          <div
+            v-show="matchSearch(element.fieldId)"
+            class="column-item"
+            :class="{ hidden: !element.visible }"
+          >
             <el-icon class="drag-handle"><Rank /></el-icon>
             <el-checkbox
               :model-value="element.visible"
@@ -33,6 +50,7 @@
           </div>
         </template>
       </draggable>
+      <div v-if="searchText && filteredCount === 0" class="empty-search">无匹配字段</div>
 
       <el-divider />
 
@@ -81,7 +99,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import draggable from 'vuedraggable'
-import { Rank, Delete } from '@element-plus/icons-vue'
+import { Rank, Delete, Search } from '@element-plus/icons-vue'
 import type { FieldConfig, ColumnConfigItem, SortConfigItem } from '@/types'
 
 const props = defineProps<{
@@ -96,6 +114,18 @@ const visible = ref(false)
 const localColumns = ref<ColumnConfigItem[]>([])
 const localSortConfig = ref<SortConfigItem[]>([])
 const localGroupField = ref<string | null>(null)
+const searchText = ref('')
+
+const filteredCount = computed(() =>
+  localColumns.value.filter(c => matchSearch(c.fieldId)).length
+)
+
+function matchSearch(fieldId: string): boolean {
+  if (!searchText.value) return true
+  const keyword = searchText.value.toLowerCase()
+  const label = getFieldLabel(fieldId).toLowerCase()
+  return label.includes(keyword) || fieldId.toLowerCase().includes(keyword)
+}
 
 const sortableFields = computed(() =>
   props.fields.filter(f => !['relation', 'file', 'image'].includes(f.controlType))
@@ -112,6 +142,14 @@ function getFieldLabel(fieldId: string): string {
 function toggleVisible(fieldId: string, visible: boolean) {
   const col = localColumns.value.find(c => c.fieldId === fieldId)
   if (col) col.visible = visible
+}
+
+function checkAll() {
+  localColumns.value.forEach(c => { c.visible = true })
+}
+
+function uncheckAll() {
+  localColumns.value.forEach(c => { c.visible = false })
 }
 
 function updateWidth(fieldId: string, width: string) {
@@ -131,6 +169,7 @@ function open(columns: ColumnConfigItem[], sortConfig: SortConfigItem[], groupFi
   localColumns.value = columns.map(c => ({ ...c }))
   localSortConfig.value = sortConfig.map(s => ({ ...s }))
   localGroupField.value = groupField || null
+  searchText.value = ''
   visible.value = true
 }
 
@@ -148,6 +187,7 @@ defineExpose({ open, close })
 </script>
 
 <style scoped>
+.column-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .column-list { max-height: 300px; overflow-y: auto; }
 .column-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #ebeef5; border-radius: 4px; margin-bottom: 4px; background: #fff; transition: all 0.2s; }
 .column-item.hidden { opacity: 0.5; }
@@ -156,6 +196,7 @@ defineExpose({ open, close })
 .drag-handle:active { cursor: grabbing; }
 .field-label { flex: 1; font-size: 14px; }
 .width-disabled { width: 80px; text-align: center; color: #c0c4cc; }
+.empty-search { padding: 20px; text-align: center; color: #909399; font-size: 13px; }
 .config-section { margin-bottom: 16px; }
 .config-section h4 { margin: 0 0 8px 0; font-size: 14px; color: #606266; }
 .sort-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
