@@ -796,14 +796,14 @@
       v-if="pageId"
       ref="viewManageDialogRef"
       :page-id="pageId"
-      :fields="effectiveFields"
+      :fields="allExpandedFields"
       @edit-columns="handleEditColumns"
     />
 
     <!-- 列配置弹窗 -->
     <ColumnConfigDialog
       ref="columnConfigDialogRef"
-      :fields="effectiveFields"
+      :fields="allExpandedFields"
       @save="handleColumnConfigSave"
     />
   </div>
@@ -1245,18 +1245,15 @@ const boundRowExportScripts = computed<ExportScript[]>(() => {
 })
 
 /**
- * 有效字段列表（含引用字段展开的继承虚拟列）
- * 用于 DataTable 显示，在每个 reference 字段后插入继承字段列
- * 如果选择了列视图，则应用视图的列配置（过滤、排序、宽度）
+ * 全量展开字段列表（含引用字段展开的继承虚拟列，不做视图过滤）
+ * 用于列配置弹窗、视图管理弹窗等需要展示所有字段的场景
  */
-const effectiveFields = computed<FieldConfig[]>(() => {
+const allExpandedFields = computed<FieldConfig[]>(() => {
   const result: FieldConfig[] = []
   for (const field of pageFields.value) {
     result.push(field)
-    // 对 reference 字段，展开继承字段为虚拟列
     if (field.controlType === 'reference' && field.referenceConfig?.inheritFields?.length) {
       const config = field.referenceConfig
-      // 获取目标集合的字段配置，用于取 label 和 controlType
       const targetPageConfig = pageConfigStore.getPageConfigById(`page-${config.targetCollection}`)
       const targetFields = targetPageConfig?.fields || []
       for (const inheritFieldName of config.inheritFields) {
@@ -1275,9 +1272,16 @@ const effectiveFields = computed<FieldConfig[]>(() => {
       }
     }
   }
+  return result
+})
 
-  // 应用列视图配置
-  return columnViewStore.getTableColumns(result)
+/**
+ * 有效字段列表（含引用字段展开的继承虚拟列）
+ * 用于 DataTable / 查看 / 编辑弹窗显示
+ * 如果选择了列视图，则应用视图的列配置（过滤、排序、宽度）
+ */
+const effectiveFields = computed<FieldConfig[]>(() => {
+  return columnViewStore.getTableColumns(allExpandedFields.value)
 })
 
 /**
