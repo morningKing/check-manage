@@ -39,6 +39,7 @@ def up():
             CREATE INDEX idx_column_views_page ON column_views(page_id);
             CREATE INDEX idx_column_views_creator ON column_views(creator_id);
             CREATE INDEX idx_column_views_public ON column_views(is_public) WHERE is_public = true;
+            CREATE UNIQUE INDEX idx_one_default_per_page ON column_views(page_id) WHERE is_default = true;
         """)
 
         conn.commit()
