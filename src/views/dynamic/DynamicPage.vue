@@ -375,7 +375,7 @@
       </template>
       <DynamicForm
         ref="dynamicFormRef"
-        :fields="pageFields"
+        :fields="effectiveFields"
         :initial-data="currentRecord"
         :show-actions="false"
         @submit="handleSubmit"
@@ -1272,34 +1272,12 @@ const dialogTitle = computed(() => {
 })
 
 /**
- * 查看对话框中显示的字段列表（含 reference 继承字段，按 order 排序）
+ * 查看对话框中显示的字段列表
+ * 当选择了列视图时，只显示视图中可见的字段；否则显示所有非隐藏字段
  */
 const viewDisplayFields = computed<FieldConfig[]>(() => {
-  const result: FieldConfig[] = []
-  for (const field of pageFields.value) {
-    if (field.hidden) continue
-    result.push(field)
-    if (field.controlType === 'reference' && field.referenceConfig?.inheritFields?.length) {
-      const config = field.referenceConfig
-      const targetPageConfig = pageConfigStore.getPageConfigById(`page-${config.targetCollection}`)
-      const targetFields = targetPageConfig?.fields || []
-      for (const inheritFieldName of config.inheritFields) {
-        const parentField = targetFields.find((f) => f.fieldName === inheritFieldName)
-        result.push({
-          id: `_ref_${field.fieldName}_${inheritFieldName}`,
-          fieldName: `_ref_${field.fieldName}_${inheritFieldName}`,
-          label: parentField?.label || inheritFieldName,
-          controlType: parentField?.controlType || 'text',
-          required: false,
-          order: field.order + 0.1,
-          hidden: false,
-          disabled: true,
-          options: parentField?.options
-        })
-      }
-    }
-  }
-  return result.sort((a, b) => a.order - b.order)
+  // 使用 effectiveFields（已含列视图过滤和 reference 继承字段展开）
+  return effectiveFields.value
 })
 
 /**
