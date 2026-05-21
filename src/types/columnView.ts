@@ -56,6 +56,7 @@ export interface CreateViewRequest {
 
 export interface UpdateViewRequest {
   name?: string
+  isPublic?: boolean
   columns?: ColumnConfigItem[]
   sortConfig?: SortConfigItem[]
   filterConfig?: FilterConfigItem[]

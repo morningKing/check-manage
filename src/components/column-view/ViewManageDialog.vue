@@ -49,12 +49,16 @@
 import { ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useColumnViewStore } from '@/stores/columnView'
+import { useAuthStore } from '@/stores/auth'
 import ViewEditPanel from './ViewEditPanel.vue'
 
 const props = defineProps<{
   pageId: string
   fields: any[]
 }>()
+
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.isAdmin)
 
 const emit = defineEmits<{
   'edit-columns': [view: any]
@@ -87,6 +91,26 @@ function close() {
 
 async function handleCreate() {
   try {
+    let isPublic = false
+    if (isAdmin.value) {
+      try {
+        await ElMessageBox.confirm(
+          '视图类型：公共视图所有用户可见，私人视图仅自己可见',
+          '新建视图',
+          {
+            distinguishCancelAndClose: true,
+            confirmButtonText: '公共视图',
+            cancelButtonText: '私人视图',
+            type: 'info',
+          }
+        )
+        isPublic = true
+      } catch (action) {
+        if (action !== 'cancel') return
+        isPublic = false
+      }
+    }
+
     const { value: name } = await ElMessageBox.prompt('请输入视图名称', '新建视图', {
       inputPattern: /^.{1,50}$/,
       inputErrorMessage: '名称长度1-50个字符'
@@ -103,23 +127,23 @@ async function handleCreate() {
 
     const newView = await columnViewStore.createView(props.pageId, {
       name,
-      isPublic: false,
+      isPublic,
       columns: defaultColumns
     })
 
     selectedViewId.value = newView.id
     ElMessage.success('创建成功')
   } catch (error) {
-    if (error !== 'cancel') {
+    if (error !== 'cancel' && error !== 'close') {
       ElMessage.error('创建失败')
     }
   }
 }
 
-async function handleSave(name: string, isDefault: boolean) {
+async function handleSave(name: string, isDefault: boolean, isPublic: boolean) {
   if (!selectedView.value) return
   try {
-    await columnViewStore.updateView(props.pageId, selectedView.value.id, { name })
+    await columnViewStore.updateView(props.pageId, selectedView.value.id, { name, isPublic })
     if (isDefault) {
       await columnViewStore.setDefault(props.pageId, selectedView.value.id)
     }

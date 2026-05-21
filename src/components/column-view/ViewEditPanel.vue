@@ -6,7 +6,15 @@
       </el-form-item>
 
       <el-form-item label="视图类型">
-        <el-tag :type="view.isPublic ? 'success' : 'info'">
+        <el-radio-group
+          v-if="isAdmin"
+          v-model="formData.isPublic"
+          size="small"
+        >
+          <el-radio-button :value="false">私人</el-radio-button>
+          <el-radio-button :value="true">公共</el-radio-button>
+        </el-radio-group>
+        <el-tag v-else :type="view.isPublic ? 'success' : 'info'">
           {{ view.isPublic ? '公共视图' : '私人视图' }}
         </el-tag>
       </el-form-item>
@@ -59,7 +67,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  save: [name: string, isDefault: boolean]
+  save: [name: string, isDefault: boolean, isPublic: boolean]
   copy: []
   delete: []
   'edit-columns': []
@@ -70,23 +78,26 @@ const isAdmin = computed(() => authStore.isAdmin)
 
 const formData = ref({
   name: '',
-  isDefault: false
+  isDefault: false,
+  isPublic: false
 })
 
 const hasChanges = computed(() => {
   if (!props.view) return false
-  return formData.value.name !== props.view.name
+  return formData.value.name !== props.view.name ||
+    formData.value.isPublic !== props.view.isPublic
 })
 
 watch(() => props.view, (newView) => {
   if (newView) {
     formData.value.name = newView.name
     formData.value.isDefault = newView.isDefault
+    formData.value.isPublic = newView.isPublic
   }
 }, { immediate: true })
 
 function handleSave() {
-  emit('save', formData.value.name, formData.value.isDefault)
+  emit('save', formData.value.name, formData.value.isDefault, formData.value.isPublic)
 }
 
 async function handleDelete() {
@@ -96,7 +107,7 @@ async function handleDelete() {
 
 function handleSetDefault(value: boolean) {
   if (value) {
-    emit('save', formData.value.name, true)
+    emit('save', formData.value.name, true, formData.value.isPublic)
   }
 }
 </script>
