@@ -3054,6 +3054,11 @@ function markNeedsRefresh(): void {
 defineExpose({ markNeedsRefresh })
 
 onActivated(async () => {
+  // 重新加载当前页面的列视图，防止 keep-alive 缓存导致跨页面视图配置串扰
+  if (pageId.value) {
+    await loadColumnViews()
+  }
+
   // 检查是否有待消费的跳转（从缓存页面返回或跳转到缓存页面时）
   const pendingJump = jumpStore.consumeJump()
   if (pendingJump) {
