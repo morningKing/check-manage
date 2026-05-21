@@ -445,6 +445,7 @@ function isSortable(field: FieldConfig): boolean | 'custom' {
 }
 
 function getColumnWidth(field: FieldConfig): string {
+  if (field.width) return field.width
   switch (field.controlType) {
     case 'textarea':
       return '200'
