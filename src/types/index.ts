@@ -45,3 +45,6 @@ export * from './crossProjectDependency'
 
 // 系统配置相关类型
 export * from './systemConfig'
+
+// 列视图相关类型
+export * from './columnView'
