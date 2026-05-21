@@ -1529,6 +1529,35 @@ def init_db():
             conn.commit()
             print("Created merge_backups table for rollback support.")
 
+        # Migration: create column_views table (自定义列视图)
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'column_views'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                CREATE TABLE column_views (
+                    id              SERIAL PRIMARY KEY,
+                    page_id         VARCHAR(100) NOT NULL REFERENCES page_configs(id) ON DELETE CASCADE,
+                    name            VARCHAR(100) NOT NULL,
+                    is_public       BOOLEAN DEFAULT false,
+                    creator_id      VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL,
+                    is_default      BOOLEAN DEFAULT false,
+                    columns         JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    sort_config     JSONB DEFAULT '[]'::jsonb,
+                    filter_config   JSONB DEFAULT '[]'::jsonb,
+                    group_config    JSONB DEFAULT NULL,
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE INDEX idx_column_views_page ON column_views(page_id);
+                CREATE INDEX idx_column_views_creator ON column_views(creator_id);
+                CREATE INDEX idx_column_views_public ON column_views(is_public) WHERE is_public = true;
+                CREATE UNIQUE INDEX idx_one_default_per_page ON column_views(page_id) WHERE is_default = true;
+            """)
+            conn.commit()
+            print("Created column_views table.")
+
         # Seed menus (insert only if not exists)
         menus_inserted = 0
         for m in MENUS:
