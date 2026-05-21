@@ -48,6 +48,12 @@ def setup(mock_conn, mock_cursor):
         patch('routes.dynamic.get_validation_script', return_value=None),
         patch('routes.dynamic.check_branch_lock', return_value=None),
         patch('routes.dynamic._get_current_user_branch', return_value='main'),
+        patch('utils.webhook_engine.fire_webhooks', return_value={
+            'beforeErrors': [],
+            'afterErrors': [],
+            'beforeBlocked': False,
+            'rollbackNeeded': False,
+        }),
     ]
     for p in patches:
         p.start()
@@ -163,12 +169,12 @@ class TestUpdateRecord:
         client, mock_cursor, _, headers = setup
         # fetchone 调用序列：
         # 1. before webhook: SELECT data → 返回旧数据
-        # 2. get_primary_key_fields → None (无主键配置)
-        # 3. SELECT data, version → 返回旧数据和版本号
+        # 2. SELECT data, version → 返回旧数据和版本号
+        # 3. get_primary_key_fields → None (无主键配置)
         mock_cursor.fetchone.side_effect = [
-            {'name': '旧记录'},                     # before webhook: old_data
-            None,                                  # pk_fields: no page config
-            ({'name': '旧记录'}, 2),               # old data + version
+            {'name': '旧记录'},                     # 1. before webhook: old_data
+            ({'name': '旧记录'}, 2),               # 2. old data + version
+            None,                                  # 3. pk_fields: no page config
         ]
         mock_cursor.rowcount = 1  # UPDATE affected 1 row
         resp = client.put('/test-collection/rec-1',
@@ -183,9 +189,9 @@ class TestUpdateRecord:
         """客户端版本不匹配时返回 409"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
-            {'name': '旧记录'},                     # before webhook: old_data
-            None,                                  # pk_fields
-            ({'name': '旧记录'}, 5),               # old data + version=5
+            {'name': '旧记录'},                     # 1. before webhook: old_data
+            ({'name': '旧记录'}, 5),               # 2. old data + version=5
+            None,                                  # 3. pk_fields
         ]
         # 客户端携带 _version=3，但数据库已经是 version=5
         resp = client.put('/test-collection/rec-1',
@@ -200,9 +206,9 @@ class TestUpdateRecord:
         """不携带 _version 的更新请求仍然成功（向后兼容）"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
-            {'name': '旧记录'},                     # before webhook: old_data
-            None,                                  # pk_fields
-            ({'name': '旧记录'}, 1),               # old data + version
+            {'name': '旧记录'},                     # 1. before webhook: old_data
+            ({'name': '旧记录'}, 1),               # 2. old data + version
+            None,                                  # 3. pk_fields
         ]
         mock_cursor.rowcount = 1
         resp = client.put('/test-collection/rec-1',
@@ -215,9 +221,9 @@ class TestUpdateRecord:
         """版本匹配但 UPDATE rowcount=0 时返回 409（竞态条件）"""
         client, mock_cursor, _, headers = setup
         mock_cursor.fetchone.side_effect = [
-            {'name': '旧记录'},                     # before webhook: old_data
-            None,                                  # pk_fields
-            ({'name': '旧记录'}, 2),               # old data + version
+            {'name': '旧记录'},                     # 1. before webhook: old_data
+            ({'name': '旧记录'}, 2),               # 2. old data + version
+            None,                                  # 3. pk_fields
         ]
         mock_cursor.rowcount = 0  # UPDATE 匹配0行（被其他请求先改了）
         resp = client.put('/test-collection/rec-1',
