@@ -12,7 +12,6 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import { createEventStream } from '../aiChat'
-import { post } from '@/utils/request'
 
 class FakeEventSource {
   static last: FakeEventSource | null = null

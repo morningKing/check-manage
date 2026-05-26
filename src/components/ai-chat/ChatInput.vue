@@ -14,9 +14,10 @@ function send() {
   text.value = ''
 }
 
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
+function onKey(e: Event) {
+  const ev = e as KeyboardEvent
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault()
     send()
   }
 }
