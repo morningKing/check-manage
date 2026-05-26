@@ -36,3 +36,10 @@ JWT_EXPIRY_HOURS = _to_int(os.getenv('JWT_EXPIRY_HOURS'), 24)
 
 CORS_ALLOWED_ORIGINS = _split_csv(os.getenv('CORS_ALLOWED_ORIGINS', ''))
 OPEN_API_BRANCH = os.getenv('OPEN_API_BRANCH', 'main').strip() or 'main'
+
+# AI chat / Agent integration
+AI_WORKSPACE_ROOT     = os.getenv('AI_WORKSPACE_ROOT', os.path.join(os.path.dirname(__file__), '..', 'ai-workspaces'))
+OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
+MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
+AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
+AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
