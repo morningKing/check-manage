@@ -130,3 +130,21 @@ def test_sse_events_returns_event_stream_headers(setup):
     body = b''.join(resp.response).decode('utf-8')
     assert 'event: message.part.delta' in body
     assert '"text": "hi"' in body
+
+
+def test_delete_session_cleans_everything(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    # Pre-create the workspace dir so cleanup has something to remove
+    target = ws_root / 'user-1' / 'sess_x' / 'uploads'
+    target.mkdir(parents=True, exist_ok=True)
+
+    resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
+    assert resp.status_code == 204
+    oc.delete_session.assert_called_once_with('oc_sess_42')
+    assert not (ws_root / 'user-1' / 'sess_x').exists()
+
+    # DB updates: revoke token + soft-flag (or DELETE)
+    statements = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any('UPDATE ai_chat_sessions' in s and 'status' in s for s in statements) or \
+           any('DELETE FROM ai_chat_sessions' in s for s in statements)

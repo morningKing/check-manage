@@ -215,3 +215,30 @@ def sse_events(sid):
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+
+
+@ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])
+@write_required
+def delete_session(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
+    opencode_session_id = sess[2]
+    if opencode_session_id:
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
+        except Exception:
+            pass  # 404 from OpenCode = already gone (§7 #11)
+
+    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
+    revoke_token(sid)
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s",
+            (sid,),
+        )
+    return '', 204
