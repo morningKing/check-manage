@@ -151,3 +151,67 @@ def get_messages(sid):
             for r in rows
         ],
     })
+
+
+def _format_sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _persist_assistant_message(session_id: str, content_parts: list) -> None:
+    """Called when a message.finished event arrives. Records to DB."""
+    msg_id = 'msg_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'assistant', %s)",
+            (msg_id, session_id, json.dumps(content_parts)),
+        )
+
+
+@ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
+@login_required
+def sse_events(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
+    opencode_session_id = sess[2]
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+
+    def generate():
+        buffered_parts = []
+        try:
+            for evt in client.subscribe_events():
+                # Filter: only forward events for this session
+                payload = evt.get('data') or {}
+                if payload.get('sessionId') and payload['sessionId'] != opencode_session_id:
+                    continue
+
+                # Accumulate parts in memory for DB persistence at end-of-message
+                if evt['event'] == 'message.part.delta':
+                    buffered_parts.append({'type': 'text', 'text': payload.get('text', '')})
+                elif evt['event'] == 'tool.use':
+                    buffered_parts.append({
+                        'type': 'tool_use',
+                        'name': payload.get('name'),
+                        'input': payload.get('input'),
+                        'result': payload.get('result'),
+                    })
+                elif evt['event'] == 'message.finished':
+                    try:
+                        _persist_assistant_message(sid, buffered_parts)
+                    except Exception:
+                        pass  # don't break the stream on DB hiccup (§7 #9)
+                    buffered_parts = []
+
+                yield _format_sse(evt['event'], payload)
+        except GeneratorExit:
+            return
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )

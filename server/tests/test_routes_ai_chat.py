@@ -113,3 +113,20 @@ def test_get_messages_returns_history(setup):
     body = resp.get_json()
     assert len(body['messages']) == 2
     assert body['messages'][0]['role'] == 'user'
+
+
+def test_sse_events_returns_event_stream_headers(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+
+    # OpenCode iterator yields one event then stops
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.part.delta', 'data': {'text': 'hi'}},
+    ])
+
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.headers['Content-Type'].startswith('text/event-stream')
+    body = b''.join(resp.response).decode('utf-8')
+    assert 'event: message.part.delta' in body
+    assert '"text": "hi"' in body
