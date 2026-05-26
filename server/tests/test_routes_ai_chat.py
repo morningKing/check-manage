@@ -70,3 +70,46 @@ def test_create_session_guest_403(setup):
     client, *_, guest_h, _ = setup
     resp = client.post('/ai/chat/sessions', json={}, headers=guest_h)
     assert resp.status_code == 403
+
+
+def test_send_message_persists_user_and_calls_opencode(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    # Make the session lookup succeed
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': 'hello agent'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    oc.send_prompt_async.assert_called_once_with('oc_sess_42', 'hello agent')
+
+    # An INSERT into ai_chat_messages must have happened
+    inserts = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any("INSERT INTO ai_chat_messages" in s for s in inserts)
+
+
+def test_send_message_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None  # not found for this user
+    resp = client.post(
+        '/ai/chat/sessions/sess_other/messages',
+        json={'content': 'hi'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 404
+
+
+def test_get_messages_returns_history(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    # owner check + history fetch
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    cursor.fetchall.return_value = [
+        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None),
+        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None),
+    ]
+    resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body['messages']) == 2
+    assert body['messages'][0]['role'] == 'user'

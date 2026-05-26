@@ -77,3 +77,77 @@ def create_session():
         'title': '新会话',
         'workspacePath': workspace_path,
     }), 201
+
+
+def _load_session_for_user(session_id: str, user_id: str):
+    """Return (id, user_id, opencode_session_id, status) or None."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, user_id, opencode_session_id, status "
+            "FROM ai_chat_sessions "
+            "WHERE id = %s AND user_id = %s",
+            (session_id, user_id),
+        )
+        return cur.fetchone()
+
+
+@ai_chat_bp.route('/sessions/<sid>/messages', methods=['POST'])
+@write_required
+def send_message(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
+    body = request.get_json(force=True)
+    content = (body.get('content') or '').strip()
+    if not content:
+        return jsonify({'error': 'content required', 'code': 'CONTENT_REQUIRED'}), 400
+
+    msg_id = 'msg_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'user', %s)",
+            (msg_id, sid, json.dumps([{'type': 'text', 'text': content}])),
+        )
+
+    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(sess[2], content)
+    return jsonify({'messageId': msg_id}), 202
+
+
+@ai_chat_bp.route('/sessions/<sid>/messages', methods=['GET'])
+@login_required
+def get_messages(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
+    since = request.args.get('since')
+    with get_db() as conn:
+        cur = conn.cursor()
+        if since:
+            cur.execute(
+                "SELECT id, role, content, created_at FROM ai_chat_messages "
+                "WHERE session_id = %s AND id > %s "
+                "ORDER BY created_at ASC",
+                (sid, since),
+            )
+        else:
+            cur.execute(
+                "SELECT id, role, content, created_at FROM ai_chat_messages "
+                "WHERE session_id = %s ORDER BY created_at ASC",
+                (sid,),
+            )
+        rows = cur.fetchall()
+
+    return jsonify({
+        'messages': [
+            {'id': r[0], 'role': r[1], 'content': r[2],
+             'createdAt': r[3].isoformat() if r[3] else None}
+            for r in rows
+        ],
+    })
