@@ -371,6 +371,35 @@ CREATE TABLE IF NOT EXISTS webhook_rules (
 
 CREATE INDEX IF NOT EXISTS idx_wr_event ON webhook_rules(trigger_event);
 CREATE INDEX IF NOT EXISTS idx_wr_enabled ON webhook_rules(enabled);
+
+CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+    id                  VARCHAR(100) PRIMARY KEY,
+    user_id             VARCHAR(100) NOT NULL,
+    title               VARCHAR(500),
+    opencode_session_id VARCHAR(200),
+    workspace_path      TEXT NOT NULL,
+    session_token       VARCHAR(64) NOT NULL UNIQUE,
+    token_expires_at    TIMESTAMPTZ NOT NULL,
+    project_menu_id     VARCHAR(100),
+    branch_id           VARCHAR(100) DEFAULT 'main',
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    last_active_at      TIMESTAMPTZ DEFAULT NOW(),
+    status              VARCHAR(20) DEFAULT 'active'
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sess_user
+    ON ai_chat_sessions(user_id, last_active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sess_token
+    ON ai_chat_sessions(session_token);
+
+CREATE TABLE IF NOT EXISTS ai_chat_messages (
+    id          VARCHAR(100) PRIMARY KEY,
+    session_id  VARCHAR(100) NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    role        VARCHAR(20) NOT NULL,
+    content     JSONB NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
+    ON ai_chat_messages(session_id, created_at);
 """
 
 
