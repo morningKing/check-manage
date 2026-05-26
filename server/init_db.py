@@ -372,9 +372,10 @@ CREATE TABLE IF NOT EXISTS webhook_rules (
 CREATE INDEX IF NOT EXISTS idx_wr_event ON webhook_rules(trigger_event);
 CREATE INDEX IF NOT EXISTS idx_wr_enabled ON webhook_rules(enabled);
 
+-- ==================== AI Chat 表 ====================
 CREATE TABLE IF NOT EXISTS ai_chat_sessions (
     id                  VARCHAR(100) PRIMARY KEY,
-    user_id             VARCHAR(100) NOT NULL,
+    user_id             VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title               VARCHAR(500),
     opencode_session_id VARCHAR(200),
     workspace_path      TEXT NOT NULL,
