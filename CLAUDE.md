@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Install dependencies
 npm install
-pip install flask flask-cors psycopg2-binary PyJWT pytest
+pip install flask flask-cors psycopg2-binary PyJWT pytest apscheduler
 
 # Initialize database (runs DDL and seeds default admin)
 cd server && python init_db.py
@@ -37,7 +37,8 @@ npm run test:all
 
 # Run single test file
 npx vitest run src/stores/__tests__/menu.test.ts
-cd server && python -m pytest tests/test_backup.py -v
+cd server && set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest tests/test_backup.py -v
+# (PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 is required on Windows — matches `npm run test:server`)
 ```
 
 ### Build
@@ -83,6 +84,9 @@ Defined in `src/types/field.ts`. The `controlType` value determines which compon
 | `quoteSelect` | Single-direction multi-select quote |
 | `autoSequence` | Auto-incrementing ID (e.g., "IC-001") |
 | `autoTimestamp` | Auto-filled on create/update |
+| `compositeText` | Read-only, auto-computed by joining other field values with a configurable separator (`compositeTextConfig.sourceFields`) |
+
+Fields may also carry a `workflowConfig` (transitions, role gating, conditions, and actions) — used to drive status-style fields through a state machine. See `WorkflowConfig` in `src/types/field.ts`.
 
 ### Project Versioning System
 
@@ -121,6 +125,16 @@ Event-driven webhooks with HMAC-SHA256 signature verification:
 
 Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server/routes/webhooks.py` (API), `src/types/webhook.ts`.
 
+### AI Agent Chat (M1)
+
+A Claude-style chat drawer that connects to an **OpenCode** agent runtime (not a raw LLM). The browser talks only to Flask; Flask is the gateway and SSE proxy, and OpenCode reaches platform capabilities through a **standalone MCP server** (decoupled from Flask).
+
+*   **Flow**: Flask creates a per-session workspace dir + an opaque session token, asks OpenCode (`opencode serve` HTTP API) to start a session bound to that workspace, and registers the MCP url `http://<mcp>/mcp?token=<token>` with OpenCode. The MCP server validates the token by DB lookup (supports revocation) and derives the user/role for RBAC.
+*   **Streaming**: `GET /ai/chat/sessions/:id/events` is a `text/event-stream` proxy over OpenCode's SSE; assistant messages are persisted to `ai_chat_messages` on `message.finished`. The frontend `EventSource` auto-reconnects (1s→2s→5s→10s).
+*   **Design intent**: adding a skill to OpenCode grants the frontend capability with zero frontend changes (generic tool-call rendering). M1 renders tool calls as plain JSON; the `ToolCallBubble` + `tool-renderers` registry is deferred to M2.
+
+Key files: `server/routes/ai_chat.py` (`ai_chat_bp`: sessions/messages/SSE/delete), `server/utils/opencode_client.py`, `server/utils/workspace.py` (path-traversal-safe per-session dirs), `server/utils/session_token.py`, `mcp-server/` (standalone FastAPI + MCP Streamable-HTTP service, run from its own `.venv`), `src/components/ai-chat/` (drawer, message list/item, markdown view, input), `src/stores/aiChat.ts`, `src/api/aiChat.ts`. Design + plan: `docs/superpowers/specs/2026-05-26-ai-agent-frontend-design.md`, `docs/superpowers/plans/2026-05-26-ai-agent-frontend-m1.md`. E2E smoke: `e2e/ai-chat-smoke.spec.ts` (`npm run test:e2e`, requires OpenCode + MCP running).
+
 ### Database Design
 
 *   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB. Has `branch_id` for version isolation.
@@ -134,11 +148,14 @@ Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server
 *   **`webhook_rules`**: Event-triggered webhooks. Supports `create`, `update`, `delete`, `merge` events with HMAC-SHA256 signatures.
 *   **`webhook_logs`**: Webhook execution history with retry tracking.
 *   **`notifications`**: User notifications including dependency alerts (`dependencyBroken`, `dependencyWarning`, `dependencyResolved`).
-*   Other tables: `export_scripts`, `validation_scripts`, `etl_tasks`, `etl_logs`, `api_keys`, `operation_logs`, `backups`, `backup_settings`, `ai_settings`, `collection_versions`, `version_snapshots`, `dashboards`, `record_comments`, `trigger_rules`.
+*   **`column_views`**: Per-page saved column-view configurations (visibility, order, width, filters). Frontend reloads these on keep-alive reactivation to prevent cross-page view leak (see commit `932b2d6`).
+*   **`ai_chat_sessions`** / **`ai_chat_messages`**: AI Agent chat sessions (opaque `session_token`, `workspace_path`, `opencode_session_id`, status) and their messages (`content` JSONB of typed parts). See the AI Agent Chat section above.
+*   Other tables: `export_scripts`, `validation_scripts`, `etl_tasks`, `etl_logs`, `api_keys`, `operation_logs`, `backups`, `backup_settings`, `ai_settings`, `collection_versions`, `version_snapshots`, `dashboards`, `record_comments`, `trigger_rules`, `system_config`, `home_widgets`.
 
 ### Backend Structure
 
-*   `app.py`: Registers 25 blueprints. **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes.
+*   `app.py`: Registers ~29 blueprints (auth, users, menus, page_configs, relations, operation_logs, backups, export_scripts, api_keys, open_api, validation_scripts, etl_tasks, relation_graph, query, comments, timeline, dashboards, notifications, trigger_rules, ai, project_versions, cross_project_deps, webhook, menu_export, system_config, home_widgets, column_views, ai_chat, dynamic). **Order matters**: `dynamic_bp` (catch-all `/<collection>`) must be registered last to avoid shadowing specific routes; `ai_chat_bp` (`/ai/chat/*`) is registered just before it.
+*   Two background schedulers start in `app.py` (guarded by `WERKZEUG_RUN_MAIN` to avoid double-start in Flask reloader): `start_backup_scheduler` (scheduled backups) and `start_dependency_scheduler` (hourly cross-project dependency revalidation).
 *   `routes/dynamic.py`: The generic CRUD handler. Supports pagination (`page`, `pageSize`, `all=true`), filtering (`q` for MongoDB-style query, `keyword` for full-text search). Validates primary key uniqueness and manages relations.
 *   `routes/project_versions.py`: Project-level branch management. Create, merge, delete, lock/unlock branches.
 *   `routes/cross_project_dependencies.py`: Dependency declaration CRUD, validation, merge dependency check, branch delete protection.
@@ -147,7 +164,7 @@ Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server
 *   `utils/auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `admin_required`, `api_key_required`.
 *   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
 
-**Reserved collection paths** (cannot be used as dynamic data collection names): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `favicon.ico`.
+**Reserved collection paths** (cannot be used as dynamic data collection names; authoritative list lives in `RESERVED` at `server/routes/dynamic.py:15`): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `system-config`, `home-widgets`, `favicon.ico`.
 
 ### Frontend Structure
 
