@@ -1,6 +1,13 @@
-"""Per-session workspace directory: create, cleanup, path-traversal defense."""
+"""Per-session workspace directory: create, cleanup, path-traversal defense.
+
+Also writes the per-session opencode.json so OpenCode (scoped to this
+directory) connects to our MCP server with the session's token. This is how
+per-session MCP identity works — OpenCode has no per-session MCP API, only
+per-directory config (see spec §12).
+"""
 
 import os
+import json
 import shutil
 from pathlib import Path
 
@@ -24,6 +31,26 @@ def cleanup_session_workspace(workspace_root: str, user_id: str, session_id: str
     p = session_path(workspace_root, user_id, session_id)
     if p.exists():
         shutil.rmtree(p)
+
+
+def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str) -> str:
+    """Write opencode.json into the workspace so OpenCode (scoped to this dir)
+    connects to our MCP server at `mcp_url` (which carries the session token).
+    Returns the config file path.
+    """
+    cfg = {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": {
+            mcp_name: {
+                "type": "remote",
+                "url": mcp_url,
+                "enabled": True,
+            },
+        },
+    }
+    cfg_path = Path(workspace_path) / "opencode.json"
+    cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return str(cfg_path)
 
 
 def safe_resolve(root: str, rel_path: str) -> str:

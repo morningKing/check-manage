@@ -40,3 +40,21 @@ def test_cleanup_removes_session_dir(tmp_path):
     assert Path(p).exists()
     cleanup_session_workspace(str(tmp_path), "u", "s")
     assert not Path(p).exists()
+
+
+def test_write_opencode_config_writes_mcp_with_token(tmp_path):
+    import json
+    from utils.workspace import write_opencode_config
+    ws = create_ws(tmp_path)
+    write_opencode_config(ws, mcp_name="check-manage",
+                          mcp_url="http://127.0.0.1:3003/mcp?token=tok123")
+    cfg = json.loads((Path(ws) / "opencode.json").read_text(encoding="utf-8"))
+    entry = cfg["mcp"]["check-manage"]
+    assert entry["type"] == "remote"
+    assert entry["url"].endswith("?token=tok123")
+    assert entry["enabled"] is True
+
+
+def create_ws(tmp_path):
+    from utils.workspace import create_session_workspace
+    return create_session_workspace(str(tmp_path), "u", "s")
