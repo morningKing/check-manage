@@ -2,13 +2,14 @@
 import { computed } from 'vue'
 import { ElButton, ElIcon, ElMessage } from 'element-plus'
 import { Document, View, CopyDocument, Download } from '@element-plus/icons-vue'
-import { artifactFilename, artifactLabel, downloadText } from '@/utils/artifacts'
+import { artifactFilename, artifactLabel, downloadText, sniffLang } from '@/utils/artifacts'
 
 const props = defineProps<{ lang: string; code: string; index: number }>()
 const emit = defineEmits<{ (e: 'preview'): void }>()
 
-const filename = computed(() => artifactFilename(props.lang, props.index))
-const label = computed(() => artifactLabel(props.lang, props.index))
+const effLang = computed(() => sniffLang(props.lang, props.code))
+const filename = computed(() => artifactFilename(effLang.value, props.index))
+const label = computed(() => artifactLabel(effLang.value, props.index))
 const lineCount = computed(() => props.code.split('\n').length)
 
 async function copy() {

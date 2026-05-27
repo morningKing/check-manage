@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang } from '../artifacts'
 
 describe('splitArtifacts', () => {
   it('lifts a large code block into a code segment', () => {
@@ -41,5 +41,32 @@ describe('isMarkdownLang', () => {
     expect(isMarkdownLang('md')).toBe(true)
     expect(isMarkdownLang('markdown')).toBe(true)
     expect(isMarkdownLang('python')).toBe(false)
+  })
+})
+
+describe('sniffLang', () => {
+  it('detects html and svg from content', () => {
+    expect(sniffLang('', '<!DOCTYPE html><html><body>hi</body></html>')).toBe('html')
+    expect(sniffLang('text', '<svg viewBox="0 0 10 10"><rect/></svg>')).toBe('svg')
+  })
+  it('reclassifies Python mislabeled as bash', () => {
+    expect(sniffLang('bash', 'import os\ndef main():\n    print(os.getcwd())')).toBe('python')
+  })
+  it('infers python/js/json/sql when label is generic', () => {
+    expect(sniffLang('', 'def f():\n    return 1')).toBe('python')
+    expect(sniffLang('', 'const a = () => 1\nconsole.log(a())')).toBe('javascript')
+    expect(sniffLang('', 'SELECT * FROM users;')).toBe('sql')
+  })
+  it('keeps a correct explicit label', () => {
+    expect(sniffLang('python', 'x = 1')).toBe('python')
+    expect(sniffLang('go', 'package main')).toBe('go')
+  })
+})
+
+describe('isRenderableLang', () => {
+  it('is true for html/svg only', () => {
+    expect(isRenderableLang('html')).toBe(true)
+    expect(isRenderableLang('svg')).toBe(true)
+    expect(isRenderableLang('python')).toBe(false)
   })
 })

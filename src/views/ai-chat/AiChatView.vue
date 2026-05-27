@@ -13,7 +13,8 @@ import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
-import { splitArtifacts, isMarkdownLang, artifactFilename, downloadText, type CodeSegment } from '@/utils/artifacts'
+import ArtifactPreview from '@/components/ai-chat/ArtifactPreview.vue'
+import { splitArtifacts, sniffLang, artifactFilename, downloadText, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
 import type { AiMessage } from '@/api/aiChat'
 
@@ -40,13 +41,9 @@ function hasText(m: AiMessage): boolean {
 // ---- Artifacts (Claude-style file preview) ----
 const previewOpen = ref(false)
 const preview = ref<{ lang: string; code: string; filename: string } | null>(null)
-const previewMarkdown = computed(() => {
-  if (!preview.value) return ''
-  const { lang, code } = preview.value
-  return isMarkdownLang(lang) ? code : '```' + (lang || '') + '\n' + code + '\n```'
-})
 function openPreview(seg: CodeSegment, idx: number) {
-  preview.value = { lang: seg.lang, code: seg.code, filename: artifactFilename(seg.lang, idx) }
+  const lang = sniffLang(seg.lang, seg.code)
+  preview.value = { lang, code: seg.code, filename: artifactFilename(lang, idx) }
   previewOpen.value = true
 }
 async function copyPreview() {
@@ -237,7 +234,7 @@ function onKey(e: Event) {
         </div>
       </template>
       <div class="preview-body">
-        <MarkdownView :text="previewMarkdown" />
+        <ArtifactPreview v-if="preview" :lang="preview.lang" :code="preview.code" />
       </div>
     </ElDrawer>
   </div>

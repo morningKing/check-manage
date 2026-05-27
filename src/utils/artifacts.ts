@@ -60,6 +60,41 @@ export function isMarkdownLang(lang: string): boolean {
   return l === 'md' || l === 'markdown' || l.endsWith('.md')
 }
 
+/** html/svg can be rendered live in a sandboxed iframe. */
+export function isRenderableLang(lang: string): boolean {
+  const l = lang.toLowerCase()
+  return l === 'html' || l === 'svg'
+}
+
+/**
+ * Infer a better language than the fence label. Models (e.g. MiMo) often mislabel
+ * code (Python tagged as bash) or omit the label; sniff from the content.
+ */
+export function sniffLang(lang: string, code: string): string {
+  const l = (lang || '').toLowerCase().trim()
+  if (l.includes('.')) return l // looks like a filename, trust it
+  const head = code.slice(0, 400)
+  const looksSvg = /^\s*<svg[\s>]/i.test(head)
+  const looksHtml = /^\s*<!doctype html/i.test(head) || /^\s*<html[\s>]/i.test(head)
+    || /<\/(div|body|head|p|span|table|h[1-6]|ul|section)>/i.test(code)
+  const looksPy = /^\s*(import \w|from [\w.]+ import |def \w+\s*\(|class \w+\s*[:(]|print\()/m.test(code)
+  const looksSh = /^#!.*\b(bash|sh)\b/.test(head) || /^\s*(echo |cd |grep |awk |sudo |export )/m.test(code)
+  if (looksSvg) return 'svg'
+  if (looksHtml) return 'html'
+  const generic = !l || l === 'text' || l === 'code' || l === 'plaintext'
+  if (generic) {
+    if (looksPy) return 'python'
+    if (/\bfunction\b|=>|\bconst \w|console\.|document\./.test(code)) return 'javascript'
+    if (/^\s*[{[]/.test(head) && /[}\]]\s*$/.test(code.trim())) return 'json'
+    if (/\bSELECT\b|\bCREATE TABLE\b|\bINSERT INTO\b/i.test(code)) return 'sql'
+    if (looksSh) return 'bash'
+    return l || 'text'
+  }
+  // explicit but likely wrong: Python mislabeled as a shell
+  if ((l === 'bash' || l === 'sh' || l === 'shell') && looksPy && !looksSh) return 'python'
+  return l
+}
+
 export function downloadText(filename: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
