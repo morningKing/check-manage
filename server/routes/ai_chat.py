@@ -198,17 +198,17 @@ def sse_events(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     opencode_session_id = sess[2]
-    workspace_path = sess[4]
     client = OpenCodeClient(OPENCODE_BASE_URL)
 
     def generate():
         # OpenCode text parts arrive as full snapshots keyed by part id; track the
         # latest snapshot per assistant part so we can persist on session.idle.
+        # subscribe_events() reads the GLOBAL bus; we filter to this session below.
         assistant_msg_ids = set()
         text_by_part = {}
         part_order = []
         try:
-            for evt in client.subscribe_events(directory=workspace_path):
+            for evt in client.subscribe_events():
                 etype = evt.get('event', '')
                 obj = evt.get('data') or {}
                 props = obj.get('properties') or {}

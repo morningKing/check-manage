@@ -13,7 +13,7 @@ emits a {type, properties} envelope; callers map event names themselves.
 
 import json
 import requests
-from typing import Iterator, Optional
+from typing import Iterator
 
 
 class OpenCodeError(RuntimeError):
@@ -67,18 +67,19 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
-    def subscribe_events(self, directory: Optional[str] = None) -> Iterator[dict]:
+    def subscribe_events(self) -> Iterator[dict]:
         """Yield parsed SSE events as {"event": <type>, "data": <full object>}.
 
         OpenCode sends `data:`-only frames (no SSE `event:` line); the event name
         lives in the JSON `type` field, e.g.
             data: {"type":"message.part.updated","properties":{...}}
-        `directory` scopes the stream to a project when provided.
+
+        Must use the GLOBAL /event bus (NO ?directory= param): in OpenCode
+        1.2.26 the directory-scoped stream delivers no session events. Callers
+        filter by sessionID.
         """
-        params = {"directory": directory} if directory else None
         with requests.get(
             self._url("/event"),
-            params=params,
             stream=True,
             timeout=None,
             headers={"Accept": "text/event-stream"},

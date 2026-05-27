@@ -72,7 +72,7 @@ def test_delete_session_calls_delete():
     assert args[0].endswith("/session/ses_42")
 
 
-def test_subscribe_events_yields_parsed_events_and_passes_directory():
+def test_subscribe_events_uses_global_bus_and_parses_data_frames():
     # OpenCode emits data:-only frames; the event name is the JSON `type` field.
     raw = [
         b'data: {"type":"message.part.updated","properties":{"part":{"text":"hi"}}}\n',
@@ -88,10 +88,11 @@ def test_subscribe_events_yields_parsed_events_and_passes_directory():
 
     with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
         from utils.opencode_client import OpenCodeClient
-        events = list(OpenCodeClient("http://127.0.0.1:4096").subscribe_events(directory="/tmp/ws"))
-    # directory forwarded as query param
-    _, kwargs = get.call_args
-    assert kwargs["params"] == {"directory": "/tmp/ws"}
+        events = list(OpenCodeClient("http://127.0.0.1:4096").subscribe_events())
+    # GLOBAL bus: must NOT scope by directory (that stream delivers no events)
+    args, kwargs = get.call_args
+    assert args[0].endswith("/event")
+    assert not kwargs.get("params")
     assert len(events) == 2
     assert events[0]["event"] == "message.part.updated"
     assert events[0]["data"]["properties"]["part"]["text"] == "hi"
