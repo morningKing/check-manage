@@ -418,3 +418,55 @@ DB_HOST / DB_NAME / DB_USER / DB_PASSWORD / DB_PORT
 | `search_knowledge_base` ILIKE 在大数据量下性能差 | 已建 GIN 索引（`idx_dynamic_data_gin`）；超出后再考虑 PGroonga / pgvector |
 | 长会话 token 上下文爆炸 | OpenCode 自带消息压缩；前端可加"开新会话"提示 |
 | Agent 生成的脚本可能含敏感操作（rm/curl 外网） | 第一期不自动执行，仅提供下载；执行权限由人决定 |
+
+---
+
+## 12. 课程修正：OpenCode 1.2.26 实测契约（2026-05-27）
+
+M1 实现完成后，针对真实 `opencode serve` v1.2.26 做了集成验证，发现原 §4-5 假设的若干 HTTP 契约与实际不符。**架构本身（P2 共享 server + 会话工作区 + 每会话 token MCP）依然成立**，但落地机制需按下表修正。以下契约均已对运行中的 OpenCode 实测确认。
+
+### 12.1 会话与目录绑定
+
+* `POST /session`，body `{title}`，**目录通过 query 参数绑定**：`POST /session?directory=<abs path>`（或 header `x-opencode-directory`）。原计划在 body 传 `cwd` **被忽略**，目录会回退到 server 启动目录。
+* 返回 `{id: "ses_...", directory, projectID, slug, version, title, time}`。`create_session` 取 `id` 不变。
+* `DELETE /session/{id}` → 200（与原计划一致）。
+
+### 12.2 发消息
+
+* `POST /session/{id}/prompt_async`，body **`{parts:[{type:"text","text":"..."}]}`** → 204。原计划的 `{content}` 会 400（`parts` 必填数组）。
+* 目录相关请求建议同样带 `?directory=<workspace>`。
+
+### 12.3 MCP 注册（关键修正）
+
+* **不存在每会话 MCP 注册**：`/session/{id}/mcp` 无此路由；`POST /mcp` 是**全局**且无删除端点，shape 为 `{name, config:{type:"remote", url}}`（`type:"http"` 不合法）。
+* **正确做法**：在每个会话的 workspace 目录写入 `opencode.json`，内含
+  ```json
+  { "$schema": "https://opencode.ai/config.json",
+    "mcp": { "check-manage": { "type": "remote",
+      "url": "http://127.0.0.1:3003/mcp?token=<session_token>", "enabled": true } } }
+  ```
+  再以 `?directory=<workspace>` 创建会话。OpenCode 会按目录读取该配置（实测 `GET /mcp?directory=<ws>` 与 `GET /config?directory=<ws>` 均反映该 MCP，且会带 token 连接我们的 MCP server）。这样**每会话 token 仍然成立**——隔离由「每会话独立 workspace + 独立 opencode.json」实现，而非 API 调用。
+
+### 12.4 事件流（SSE 词表修正）
+
+`GET /event` 推送的是 `{type, properties:{...}}` 信封，会话键为 **`sessionID`（大写 ID）**，且嵌在 `properties` 内。原计划的 `message.part.delta` / `tool.use` / `message.finished` **均不存在**。实际相关事件：
+
+| 实际事件 | 含义 | 关键字段 |
+|----------|------|----------|
+| `message.part.updated` | 流式内容片段 | `properties.part = {id, sessionID, messageID, type, text}`；**`text` 是当前快照（按 `part.id` 覆盖，而非累加 delta）** |
+| `session.idle` | 一轮结束 | `properties.sessionID` → 落库 assistant 消息、关流式标志 |
+| `session.error` | 出错 | `properties.sessionID` |
+| `message.updated` | 消息元数据 | `properties.info` |
+
+### 12.5 §4.3 身份流（修正版）
+
+1. 用户开新会话 → Flask `POST /ai/chat/sessions`
+2. Flask 生成 opaque `session_token`，写入 `ai_chat_sessions`
+3. Flask 在 workspace 目录写 `opencode.json`（含带 token 的 MCP url）
+4. Flask 调 OpenCode `POST /session?directory=<workspace>`，拿 `opencode_session_id`
+5. Agent 调工具时 OpenCode 按目录配置连接 MCP（带 token）；MCP 查表得 `user_id / session_id` 做 RBAC
+
+### 12.6 仍阻塞项
+
+* **端到端回复（L5）**：本机 OpenCode `auth.json` 无任何 provider 凭证（0 credentials），LLM 无法实际生成回复，故全链路流式渲染未能实测。`message.part.updated` 的「快照覆盖」语义基于 OpenCode part 模型推断，待有凭证后验证。
+* **EventSource 鉴权缺口**：SSE 路由用 `@login_required`（Bearer header），但浏览器原生 `EventSource` 无法设置 header → 实际浏览器会 401。需改为 query token 或短期 cookie（待办）。
