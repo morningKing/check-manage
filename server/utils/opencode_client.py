@@ -1,12 +1,19 @@
-"""Thin wrapper over `opencode serve` HTTP API.
+"""Thin wrapper over `opencode serve` HTTP API (verified against v1.2.26).
 
-Methods cover only what M1 needs. SSE is exposed as an iterator of
-{"event": str, "data": dict} dicts so the route layer can re-emit them.
+Contracts (see spec §12):
+- A session binds to a directory via the ?directory= query param. The body
+  `cwd`/`directory` are ignored by OpenCode.
+- prompt_async body is {parts:[{type:"text","text":...}]}.
+- MCP is NOT registered through this client; each session's workspace carries
+  an opencode.json with the MCP entry (see utils.workspace).
+
+SSE is exposed as an iterator of {"event": str, "data": dict} dicts. OpenCode
+emits a {type, properties} envelope; callers map event names themselves.
 """
 
 import json
 import requests
-from typing import Iterator
+from typing import Iterator, Optional
 
 
 class OpenCodeError(RuntimeError):
@@ -21,10 +28,11 @@ class OpenCodeClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
-    def create_session(self, *, cwd: str, title: str = "") -> str:
+    def create_session(self, *, directory: str, title: str = "") -> str:
         resp = requests.post(
             self._url("/session"),
-            json={"cwd": cwd, "title": title},
+            params={"directory": directory},
+            json={"title": title},
             timeout=self.timeout,
         )
         resp.raise_for_status()
@@ -41,26 +49,23 @@ class OpenCodeClient:
         except requests.RequestException as e:
             raise OpenCodeError(str(e))
 
-    def register_mcp(self, *, session_id: str, url: str) -> None:
-        resp = requests.post(
-            self._url("/mcp"),
-            json={"sessionId": session_id, "url": url, "type": "http"},
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-
     def send_prompt_async(self, opencode_session_id: str, content: str) -> None:
         resp = requests.post(
             self._url(f"/session/{opencode_session_id}/prompt_async"),
-            json={"content": content},
+            json={"parts": [{"type": "text", "text": content}]},
             timeout=self.timeout,
         )
         resp.raise_for_status()
 
-    def subscribe_events(self) -> Iterator[dict]:
-        """Yield parsed SSE events. Caller is responsible for filtering by session."""
+    def subscribe_events(self, directory: Optional[str] = None) -> Iterator[dict]:
+        """Yield parsed SSE events. Caller filters by session.
+
+        `directory` scopes the stream to a project when provided.
+        """
+        params = {"directory": directory} if directory else None
         with requests.get(
             self._url("/event"),
+            params=params,
             stream=True,
             timeout=None,
             headers={"Accept": "text/event-stream"},
@@ -87,4 +92,4 @@ class OpenCodeClient:
                     event_name = line[len("event:"):].strip()
                 elif line.startswith("data:"):
                     data_buf.append(line[len("data:"):].strip())
-                # other SSE fields (id:, retry:) are ignored in M1
+                # other SSE fields (id:, retry:) are ignored
