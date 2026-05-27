@@ -1,12 +1,17 @@
 """Tool: list_collections — returns data pages visible to the current user."""
 
 import mcp.types as types
-from mcp.server import Server
 from db import get_db
 from context import ToolContext
 
 
-_TOOL_NAME = "list_collections"
+NAME = "list_collections"
+
+TOOL = types.Tool(
+    name=NAME,
+    description="List business data collections visible to the caller.",
+    inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
+)
 
 
 def handle(_input: dict, ctx: ToolContext) -> list[dict]:
@@ -34,24 +39,3 @@ def handle(_input: dict, ctx: ToolContext) -> list[dict]:
             "fields": fields or [],
         })
     return result
-
-
-def register(server: Server) -> None:
-    @server.list_tools()
-    async def _list_tools():
-        return [
-            types.Tool(
-                name=_TOOL_NAME,
-                description="List business data collections visible to the caller.",
-                inputSchema={"type": "object", "properties": {}, "additionalProperties": False},
-            ),
-        ]
-
-    @server.call_tool()
-    async def _call(name: str, arguments: dict):
-        if name != _TOOL_NAME:
-            raise ValueError(f"unknown tool: {name}")
-        from main import _resolve_context  # imported lazily to avoid cycle
-        ctx = _resolve_context()
-        result = handle(arguments or {}, ctx)
-        return [types.TextContent(type="text", text=str(result))]
