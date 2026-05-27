@@ -121,7 +121,7 @@ def send_message(sid):
             (msg_id, sid, json.dumps([{'type': 'text', 'text': content}])),
         )
 
-    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(sess[2], content)
+    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(sess[2], content, model=OPENCODE_MODEL)
     return jsonify({'messageId': msg_id}), 202
 
 

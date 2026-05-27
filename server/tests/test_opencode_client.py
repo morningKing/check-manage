@@ -42,6 +42,19 @@ def test_send_prompt_async_sends_parts_array():
     assert kwargs["json"] == {"parts": [{"type": "text", "text": "hello"}]}
 
 
+def test_send_prompt_async_includes_model_when_given():
+    fake_resp = MagicMock()
+    fake_resp.status_code = 204
+    fake_resp.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
+            "ses_42", "hi", model="mimo/mimo-v2.5")
+    _, kwargs = post.call_args
+    assert kwargs["json"]["model"] == {"providerID": "mimo", "modelID": "mimo-v2.5"}
+    assert kwargs["json"]["parts"] == [{"type": "text", "text": "hi"}]
+
+
 def test_no_register_mcp_method():
     """MCP is wired via per-directory opencode.json, not an API call."""
     from utils.opencode_client import OpenCodeClient

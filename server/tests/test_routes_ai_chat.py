@@ -92,7 +92,10 @@ def test_send_message_persists_user_and_calls_opencode(setup):
         headers=dev_h,
     )
     assert resp.status_code == 202
-    oc.send_prompt_async.assert_called_once_with('oc_sess_42', 'hello agent')
+    # model is passed explicitly (config field alone isn't honored by OpenCode)
+    args, kwargs = oc.send_prompt_async.call_args
+    assert args[0] == 'oc_sess_42' and args[1] == 'hello agent'
+    assert kwargs.get('model')
 
     # An INSERT into ai_chat_messages must have happened
     inserts = [c.args[0] for c in cursor.execute.call_args_list]

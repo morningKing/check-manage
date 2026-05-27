@@ -49,10 +49,20 @@ class OpenCodeClient:
         except requests.RequestException as e:
             raise OpenCodeError(str(e))
 
-    def send_prompt_async(self, opencode_session_id: str, content: str) -> None:
+    def send_prompt_async(self, opencode_session_id: str, content: str,
+                          model: str = "") -> None:
+        """Send a prompt. `model` ("<providerID>/<modelID>") is passed explicitly
+        because OpenCode does NOT honor the per-directory opencode.json `model`
+        field for prompt selection — without it the server falls back to its
+        own default model.
+        """
+        body = {"parts": [{"type": "text", "text": content}]}
+        if model and "/" in model:
+            provider_id, model_id = model.split("/", 1)
+            body["model"] = {"providerID": provider_id, "modelID": model_id}
         resp = requests.post(
             self._url(f"/session/{opencode_session_id}/prompt_async"),
-            json={"parts": [{"type": "text", "text": content}]},
+            json=body,
             timeout=self.timeout,
         )
         resp.raise_for_status()
