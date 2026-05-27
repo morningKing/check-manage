@@ -43,3 +43,6 @@ OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
 AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
+# OpenCode model id, "<providerID>/<modelID>". Written into each session's
+# opencode.json so the agent uses this model.
+OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', 'opencode/deepseek-v4-flash-free')

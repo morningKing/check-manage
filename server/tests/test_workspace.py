@@ -55,6 +55,17 @@ def test_write_opencode_config_writes_mcp_with_token(tmp_path):
     assert entry["enabled"] is True
 
 
+def test_write_opencode_config_includes_model_when_given(tmp_path):
+    import json
+    from utils.workspace import write_opencode_config
+    ws = create_ws(tmp_path)
+    write_opencode_config(ws, mcp_name="check-manage",
+                          mcp_url="http://x/mcp?token=t",
+                          model="opencode/deepseek-v4-flash-free")
+    cfg = json.loads((Path(ws) / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["model"] == "opencode/deepseek-v4-flash-free"
+
+
 def create_ws(tmp_path):
     from utils.workspace import create_session_workspace
     return create_session_workspace(str(tmp_path), "u", "s")

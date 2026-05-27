@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, g as flask_g, Response, stream_with_context
 from db import get_db
-from auth import login_required, write_required
+from auth import login_required, login_required_sse, write_required
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
     create_session_workspace, cleanup_session_workspace, write_opencode_config,
@@ -22,7 +22,7 @@ from utils.workspace import (
 from utils.session_token import generate_token, revoke_token
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
-    AI_SESSION_TTL_HOURS,
+    AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
 )
 
 MCP_NAME = 'check-manage'
@@ -64,7 +64,8 @@ def create_session():
     #    connects to our MCP server with this session's token. OpenCode has no
     #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
-    write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url)
+    write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
+                          model=OPENCODE_MODEL)
 
     # 4) ask OpenCode to start a session bound to this workspace (directory query param)
     client = OpenCodeClient(OPENCODE_BASE_URL)
@@ -189,7 +190,7 @@ def _event_session_id(props: dict):
 
 
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
-@login_required
+@login_required_sse
 def sse_events(sid):
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])

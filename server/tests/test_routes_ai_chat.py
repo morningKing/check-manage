@@ -71,6 +71,9 @@ def test_create_session_201_writes_config_and_binds_directory(setup):
     assert not oc.register_mcp.called
     cfg = _json.loads((Path(body['workspacePath']) / 'opencode.json').read_text(encoding='utf-8'))
     assert 'token=' in cfg['mcp']['check-manage']['url']
+    # configured model is written so the agent uses it
+    from config import OPENCODE_MODEL
+    assert cfg['model'] == OPENCODE_MODEL
 
 
 def test_create_session_guest_403(setup):
@@ -147,6 +150,24 @@ def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     # session.idle persisted the accumulated assistant text
     inserts = [c.args[0] for c in cursor.execute.call_args_list]
     assert any("INSERT INTO ai_chat_messages" in s for s in inserts)
+
+
+def test_sse_events_auth_via_query_token(setup):
+    """EventSource can't set headers, so the SSE route accepts ?access_token=."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    oc.subscribe_events.return_value = iter([])
+    jwt = dev_h['Authorization'].split(' ', 1)[1]
+    # no Authorization header — token only in the query string
+    resp = client.get(f'/ai/chat/sessions/sess_x/events?access_token={jwt}')
+    assert resp.status_code == 200
+    assert resp.headers['Content-Type'].startswith('text/event-stream')
+
+
+def test_sse_events_401_without_any_auth(setup):
+    client, *_ = setup
+    resp = client.get('/ai/chat/sessions/sess_x/events')
+    assert resp.status_code == 401
 
 
 def test_sse_events_filters_other_sessions(setup):

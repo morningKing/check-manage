@@ -60,6 +60,28 @@ def write_required(f):
     return decorated
 
 
+def login_required_sse(f):
+    """Like login_required, but also accepts the JWT via an ?access_token=
+    query param. The browser EventSource API cannot set request headers, so
+    SSE endpoints fall back to the query param.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header.split(' ', 1)[1]
+        else:
+            token = request.args.get('access_token', '')
+        if not token:
+            return jsonify({'error': '未登录'}), 401
+        payload = decode_token(token)
+        if not payload:
+            return jsonify({'error': '登录已过期'}), 401
+        g.current_user = payload
+        return f(*args, **kwargs)
+    return decorated
+
+
 def admin_required(f):
     """Decorator: require admin role (implies login_required)."""
     @wraps(f)

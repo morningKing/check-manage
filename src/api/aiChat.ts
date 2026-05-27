@@ -53,8 +53,23 @@ export interface StreamHandlers {
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
 
+// EventSource can't set an Authorization header, so the SSE endpoint accepts
+// the JWT via ?access_token=. Read the same token the axios layer uses.
+function authQuery(): string {
+  const raw = localStorage.getItem('check-manage:token')
+  if (!raw) return ''
+  let token = raw
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed) token = parsed
+  } catch {
+    /* raw is already the token string */
+  }
+  return token ? `?access_token=${encodeURIComponent(token)}` : ''
+}
+
 export function createEventStream(sessionId: string, h: StreamHandlers) {
-  const url = `/api/ai/chat/sessions/${encodeURIComponent(sessionId)}/events`
+  const url = `/api/ai/chat/sessions/${encodeURIComponent(sessionId)}/events${authQuery()}`
   let es: EventSource | null = null
   let closed = false
   let attempt = 0

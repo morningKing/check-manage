@@ -36,9 +36,11 @@ def cleanup_session_workspace(workspace_root: str, user_id: str, session_id: str
         shutil.rmtree(p, ignore_errors=True)
 
 
-def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str) -> str:
+def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
+                          model: str = "") -> str:
     """Write opencode.json into the workspace so OpenCode (scoped to this dir)
-    connects to our MCP server at `mcp_url` (which carries the session token).
+    connects to our MCP server at `mcp_url` (which carries the session token)
+    and, when given, uses `model` ("<providerID>/<modelID>").
     Returns the config file path.
     """
     cfg = {
@@ -51,6 +53,8 @@ def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str) -
             },
         },
     }
+    if model:
+        cfg["model"] = model
     cfg_path = Path(workspace_path) / "opencode.json"
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return str(cfg_path)
