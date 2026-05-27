@@ -184,12 +184,13 @@ function onKey(e: Event) {
               </Bubble>
             </div>
 
-            <!-- 思考过程 -->
+            <!-- 思考过程：完成后自动收起 -->
             <Thinking
               v-if="reasoning"
               class="ai-thinking"
               :content="reasoning"
               :status="thinking ? 'thinking' : 'end'"
+              :auto-collapse="true"
             />
 
             <div v-if="streaming && !messages.some(m => m.role === 'assistant' && hasText(m)) && !reasoning" class="ai-chat__pending">

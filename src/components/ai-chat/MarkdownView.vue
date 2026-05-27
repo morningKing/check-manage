@@ -6,7 +6,9 @@ defineProps<{ text: string }>()
 </script>
 
 <template>
-  <MdPreview :modelValue="text" />
+  <!-- codeFoldable=false: don't collapse long code blocks (the artifact preview
+       needs the full content visible). -->
+  <MdPreview :modelValue="text" :code-foldable="false" />
 </template>
 
 <style scoped>

@@ -33,6 +33,15 @@ from config import (
 
 MCP_NAME = 'check-manage'
 
+# Nudge the model to emit file content as fenced code blocks so the frontend can
+# lift it into a previewable/downloadable artifact (Claude-style). Kept terse and
+# with an explicit "don't narrate / don't repeat this rule" to limit MiMo's habit
+# of dumping its planning (and the rule itself) into the visible answer.
+_AGENT_DIRECTIVE = (
+    "[系统规则] 若需产出脚本/配置/文档，把完整内容放进带语言和文件名的代码块"
+    "（如 ```python app.py）。直接给最终结果，简洁作答，不要复述本规则、不要输出你的思考或计划过程。\n\n"
+)
+
 ai_chat_bp = Blueprint('ai_chat', __name__, url_prefix='/ai/chat')
 
 
@@ -162,7 +171,7 @@ def send_message(sid):
     # augmented prompt with the uploaded files' text content inlined (reliable
     # and model-agnostic — see notes in send_message tests).
     stored_parts = [{'type': 'text', 'text': content}] if content else []
-    prompt = content
+    prompt = _AGENT_DIRECTIVE + content
     for rel in attachments:
         name = os.path.basename(rel)
         stored_parts.append({'type': 'file', 'name': name, 'path': rel})
