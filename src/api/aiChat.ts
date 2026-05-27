@@ -30,7 +30,7 @@ export interface AiMessage {
 
 export type AiContentPart =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; input: unknown; result?: unknown }
+  | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown }
   | { type: 'file'; name: string; path: string }
 
 export interface AiFile {

@@ -182,10 +182,21 @@ export const useAiChatStore = defineStore('aiChat', {
           const part = data?.part
           if (!part || !_assistantMsgIds[sid]?.has(part?.messageID)) break
           if (part.type === 'text') {
-            this._upsertAssistantTextPart(sid, part.id, part.text ?? '')
+            this._upsertAssistantPart(sid, part.id, { type: 'text', text: part.text ?? '' })
           } else if (part.type === 'reasoning') {
             this.thinking[sid] = true
             this._upsertReasoning(sid, part.id, part.text ?? '')
+          } else if (part.type === 'tool') {
+            // MCP / built-in tool call — render inline as a collapsible card.
+            const st = part.state || {}
+            this._upsertAssistantPart(sid, part.id, {
+              type: 'tool_use',
+              name: part.tool || 'tool',
+              title: st.title,
+              status: st.status,
+              input: st.input,
+              result: st.output ?? st.result,
+            })
           }
           break
         }
@@ -214,7 +225,9 @@ export const useAiChatStore = defineStore('aiChat', {
       this.reasoning[sid] = Object.values(map).join('\n')
     },
 
-    _upsertAssistantTextPart(sid: string, partId: string, text: string) {
+    _upsertAssistantPart(sid: string, partId: string, partData: AiContentPart) {
+      // Upsert a part by its OpenCode part id so text/tool parts render in
+      // arrival order and snapshots replace (not append) in place.
       const list = this.messages[sid] ?? (this.messages[sid] = [])
       let msgId = _streamingAssistantMsgId[sid]
       if (!msgId) {
@@ -228,9 +241,9 @@ export const useAiChatStore = defineStore('aiChat', {
       const existing = idxMap[partId]
       if (existing === undefined) {
         idxMap[partId] = msg.content.length
-        msg.content.push({ type: 'text', text })
+        msg.content.push(partData)
       } else {
-        ;(msg.content[existing] as Extract<AiContentPart, { type: 'text' }>).text = text
+        msg.content[existing] = partData
       }
     },
   },

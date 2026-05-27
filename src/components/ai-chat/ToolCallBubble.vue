@@ -1,0 +1,90 @@
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import { ElIcon } from 'element-plus'
+import { Tools, Loading, CircleCheck, CircleClose, ArrowRight } from '@element-plus/icons-vue'
+
+const props = defineProps<{
+  name: string
+  title?: string
+  status?: string
+  input?: unknown
+  result?: unknown
+}>()
+
+const open = ref(false)
+
+const label = computed(() => props.title || props.name)
+const inputText = computed(() => fmt(props.input))
+const resultText = computed(() => fmt(props.result))
+
+function fmt(v: unknown): string {
+  if (v == null) return ''
+  if (typeof v === 'string') return v
+  try { return JSON.stringify(v, null, 2) } catch { return String(v) }
+}
+</script>
+
+<template>
+  <div class="tool-call" :class="`tool-call--${status || 'running'}`">
+    <div class="tool-call__head" @click="open = !open">
+      <ElIcon class="tool-call__chev" :class="{ open }"><ArrowRight /></ElIcon>
+      <ElIcon class="tool-call__icon"><Tools /></ElIcon>
+      <span class="tool-call__name">调用工具 · {{ label }}</span>
+      <span class="tool-call__status">
+        <ElIcon v-if="status === 'completed'" class="ok"><CircleCheck /></ElIcon>
+        <ElIcon v-else-if="status === 'error'" class="err"><CircleClose /></ElIcon>
+        <ElIcon v-else class="run spin"><Loading /></ElIcon>
+      </span>
+    </div>
+    <div v-show="open" class="tool-call__body">
+      <template v-if="inputText">
+        <div class="tool-call__sub">输入</div>
+        <pre class="tool-call__code">{{ inputText }}</pre>
+      </template>
+      <template v-if="resultText">
+        <div class="tool-call__sub">结果</div>
+        <pre class="tool-call__code">{{ resultText }}</pre>
+      </template>
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.tool-call {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  margin: 8px 0;
+  background: var(--el-fill-color-lighter);
+  font-size: 13px;
+  overflow: hidden;
+}
+.tool-call__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  &:hover { background: var(--el-fill-color-light); }
+}
+.tool-call__chev { transition: transform 0.15s; color: var(--el-text-color-secondary); &.open { transform: rotate(90deg); } }
+.tool-call__icon { color: var(--el-color-primary); }
+.tool-call__name { font-weight: 500; color: var(--el-text-color-primary); }
+.tool-call__status { margin-left: auto; .ok { color: var(--el-color-success); } .err { color: var(--el-color-danger); } .run { color: var(--el-color-primary); } }
+.tool-call__body { padding: 4px 12px 12px; border-top: 1px solid var(--el-border-color-lighter); }
+.tool-call__sub { font-size: 12px; color: var(--el-text-color-secondary); margin: 8px 0 4px; }
+.tool-call__code {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--el-fill-color-dark);
+  border-radius: 6px;
+  font-family: var(--el-font-family-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>

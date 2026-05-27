@@ -7,8 +7,9 @@ import { Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading }
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
+import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import { useAiChatStore } from '@/stores/aiChat'
-import type { AiMessage, AiContentPart } from '@/api/aiChat'
+import type { AiMessage } from '@/api/aiChat'
 
 const store = useAiChatStore()
 
@@ -26,13 +27,8 @@ const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.valu
 
 const canSend = computed(() => !streaming.value && (input.value.trim() || attachments.value.length))
 
-function textOf(m: AiMessage): string {
-  return m.content
-    .filter((p): p is Extract<AiContentPart, { type: 'text' }> => p.type === 'text')
-    .map(p => p.text).join('\n')
-}
-function filesOf(m: AiMessage) {
-  return m.content.filter((p): p is Extract<AiContentPart, { type: 'file' }> => p.type === 'file')
+function hasText(m: AiMessage): boolean {
+  return m.content.some(p => p.type === 'text' && p.text)
 }
 
 async function scrollToBottom() {
@@ -124,30 +120,44 @@ function onKey(e: Event) {
         </div>
 
         <template v-else>
-          <Bubble
-            v-for="m in messages" :key="m.id"
-            :placement="m.role === 'user' ? 'end' : 'start'"
-            :variant="m.role === 'user' ? 'filled' : 'outlined'"
-            class="ai-bubble"
-          >
-            <template #content>
-              <div v-for="(f, i) in filesOf(m)" :key="'f' + i" class="file-chip">
-                <ElIcon><Document /></ElIcon><span>{{ f.name }}</span>
-              </div>
-              <MarkdownView v-if="textOf(m)" :text="textOf(m)" />
-            </template>
-          </Bubble>
+          <div class="ai-thread">
+            <div
+              v-for="m in messages" :key="m.id"
+              class="msg" :class="`msg--${m.role}`"
+            >
+              <div class="msg__role" v-if="m.role !== 'user'">AI 助手</div>
+              <Bubble
+                :placement="m.role === 'user' ? 'end' : 'start'"
+                :variant="m.role === 'user' ? 'filled' : 'borderless'"
+                :class="['ai-bubble', 'ai-bubble--' + m.role]"
+              >
+                <template #content>
+                  <template v-for="(p, i) in m.content" :key="i">
+                    <div v-if="p.type === 'file'" class="file-chip">
+                      <ElIcon><Document /></ElIcon><span>{{ p.name }}</span>
+                    </div>
+                    <ToolCallBubble
+                      v-else-if="p.type === 'tool_use'"
+                      :name="p.name" :title="p.title" :status="p.status"
+                      :input="p.input" :result="p.result"
+                    />
+                    <MarkdownView v-else-if="p.type === 'text' && p.text" :text="p.text" />
+                  </template>
+                </template>
+              </Bubble>
+            </div>
 
-          <!-- 思考过程 -->
-          <Thinking
-            v-if="reasoning"
-            class="ai-thinking"
-            :content="reasoning"
-            :status="thinking ? 'thinking' : 'end'"
-          />
+            <!-- 思考过程 -->
+            <Thinking
+              v-if="reasoning"
+              class="ai-thinking"
+              :content="reasoning"
+              :status="thinking ? 'thinking' : 'end'"
+            />
 
-          <div v-if="streaming && !messages.some(m => m.role === 'assistant' && textOf(m)) && !reasoning" class="ai-chat__pending">
-            <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
+            <div v-if="streaming && !messages.some(m => m.role === 'assistant' && hasText(m)) && !reasoning" class="ai-chat__pending">
+              <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
+            </div>
           </div>
         </template>
       </ElScrollbar>
@@ -213,10 +223,40 @@ function onKey(e: Event) {
   &:hover &__actions { display: flex; }
 }
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.ai-chat__messages { flex: 1; min-height: 0; padding: 20px; }
+.ai-chat__messages { flex: 1; min-height: 0; }
 .ai-chat__welcome { height: 100%; display: flex; align-items: center; justify-content: center; }
-.ai-bubble { margin-bottom: 16px; }
-.ai-thinking { margin-bottom: 16px; }
+
+/* Claude-like document column: centered, generous whitespace */
+.ai-thread {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 28px 20px 40px;
+}
+.msg { margin-bottom: 24px; }
+.msg__role {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
+/* User: subtle gray rounded block on the right */
+.msg--user { display: flex; justify-content: flex-end; }
+.ai-bubble--user :deep(.el-bubble-content),
+.ai-bubble--user :deep([class*='content']) {
+  background: var(--el-fill-color) !important;
+  color: var(--el-text-color-primary) !important;
+  border-radius: 14px !important;
+}
+/* Assistant: borderless, full width, document feel */
+.ai-bubble--assistant { width: 100%; }
+.ai-bubble--assistant :deep([class*='content']) {
+  background: transparent !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  max-width: 100% !important;
+}
+.ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
+.ai-thinking { max-width: 780px; margin: 0 auto 24px; }
 .ai-chat__pending { color: var(--el-text-color-secondary); font-size: 13px; .spin { animation: spin 1s linear infinite; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .file-chip, .attach-chip {
@@ -227,7 +267,12 @@ function onKey(e: Event) {
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
 .ai-chat__composer {
   border-top: 1px solid var(--el-border-color-light);
-  padding: 12px 16px;
+  padding: 12px 16px 16px;
+}
+.ai-chat__composer > * {
+  max-width: 780px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .composer-attachments { margin-bottom: 6px; }
 .composer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; }
