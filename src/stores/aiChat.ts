@@ -10,8 +10,8 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
-  getMessages, sendMessage, uploadFile, createEventStream,
-  type AiMessage, type AiContentPart,
+  getMessages, sendMessage, uploadFile, listFiles, createEventStream,
+  type AiMessage, type AiContentPart, type AiFile,
 } from '@/api/aiChat'
 
 interface SessionMeta {
@@ -32,6 +32,7 @@ interface State {
   reasoning: Record<string, string>
   thinking: Record<string, boolean>
   attachments: Record<string, PendingAttachment[]>
+  outputs: Record<string, AiFile[]>
   uploading: boolean
   drawerOpen: boolean
   _stream: { close(): void } | null
@@ -51,6 +52,7 @@ export const useAiChatStore = defineStore('aiChat', {
     reasoning: {},
     thinking: {},
     attachments: {},
+    outputs: {},
     uploading: false,
     drawerOpen: false,
     _stream: null,
@@ -65,6 +67,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeAttachments(state): PendingAttachment[] {
       return state.activeSessionId ? state.attachments[state.activeSessionId] ?? [] : []
+    },
+    activeOutputs(state): AiFile[] {
+      return state.activeSessionId ? state.outputs[state.activeSessionId] ?? [] : []
     },
   },
 
@@ -100,7 +105,15 @@ export const useAiChatStore = defineStore('aiChat', {
       this._resetStreamState(id)
       const history = await getMessages(id)
       this.messages[id] = history.messages
+      this.loadFiles(id)
       this._openStream(id)
+    },
+
+    async loadFiles(id: string) {
+      try {
+        const { files } = await listFiles(id)
+        this.outputs[id] = files.filter(f => f.dir === 'outputs')
+      } catch { /* non-fatal */ }
     },
 
     async renameSession(id: string, title: string) {
@@ -204,6 +217,7 @@ export const useAiChatStore = defineStore('aiChat', {
           this.streaming[sid] = false
           this.thinking[sid] = false
           this._resetStreamState(sid)
+          this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           break
         case 'session.error':
           this.streaming[sid] = false

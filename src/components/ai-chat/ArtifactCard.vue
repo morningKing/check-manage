@@ -4,13 +4,14 @@ import { ElButton, ElIcon, ElMessage } from 'element-plus'
 import { Document, View, CopyDocument, Download } from '@element-plus/icons-vue'
 import { artifactFilename, artifactLabel, downloadText, sniffLang } from '@/utils/artifacts'
 
-const props = defineProps<{ lang: string; code: string; index: number }>()
+const props = defineProps<{ lang: string; code: string; index: number; versions?: number }>()
 const emit = defineEmits<{ (e: 'preview'): void }>()
 
 const effLang = computed(() => sniffLang(props.lang, props.code))
 const filename = computed(() => artifactFilename(effLang.value, props.index))
 const label = computed(() => artifactLabel(effLang.value, props.index))
 const lineCount = computed(() => props.code.split('\n').length)
+const versionCount = computed(() => props.versions ?? 1)
 
 async function copy() {
   try {
@@ -30,7 +31,9 @@ function download() {
     <div class="artifact-card__icon"><ElIcon :size="22"><Document /></ElIcon></div>
     <div class="artifact-card__meta">
       <div class="artifact-card__name">{{ label }}</div>
-      <div class="artifact-card__sub">{{ filename }} · {{ lineCount }} 行</div>
+      <div class="artifact-card__sub">
+        {{ filename }} · {{ lineCount }} 行<span v-if="versionCount > 1"> · 共 {{ versionCount }} 版</span>
+      </div>
     </div>
     <div class="artifact-card__actions" @click.stop>
       <ElButton size="small" text :icon="View" @click="emit('preview')">预览</ElButton>

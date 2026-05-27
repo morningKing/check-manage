@@ -5,18 +5,17 @@ import {
   ElDrawer,
 } from 'element-plus'
 import {
-  Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading,
-  CopyDocument, Download,
+  Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading, Download,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
-import ArtifactPreview from '@/components/ai-chat/ArtifactPreview.vue'
-import { splitArtifacts, sniffLang, artifactFilename, downloadText, type CodeSegment } from '@/utils/artifacts'
+import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
+import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
-import type { AiMessage } from '@/api/aiChat'
+import { downloadFileUrl, type AiMessage } from '@/api/aiChat'
 
 const store = useAiChatStore()
 
@@ -29,7 +28,9 @@ const activeId = computed(() => store.activeSessionId)
 const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
+const outputs = computed(() => store.activeOutputs)
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
+const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 
 const canSend = computed(() => !streaming.value && (input.value.trim() || attachments.value.length))
@@ -38,21 +39,42 @@ function hasText(m: AiMessage): boolean {
   return m.content.some(p => p.type === 'text' && p.text)
 }
 
-// ---- Artifacts (Claude-style file preview) ----
+// ---- Artifacts (Claude-style file preview + version history) ----
+// Group artifacts by filename across the whole session. Named files (the fence
+// info string is a filename) accumulate versions; generic blocks stay singletons.
+const versionMap = computed(() => {
+  const map = new Map<string, ArtifactVersion[]>()
+  for (const m of messages.value) {
+    if (m.role !== 'assistant') continue
+    for (const p of m.content) {
+      if (p.type !== 'text' || !p.text) continue
+      let ci = 0
+      for (const seg of splitArtifacts(p.text)) {
+        if (seg.type !== 'code') continue
+        const lang = sniffLang(seg.lang, seg.code)
+        const fn = artifactFilename(lang, ci)
+        ci++
+        const arr = map.get(fn) ?? []
+        arr.push({ lang, code: seg.code })
+        map.set(fn, arr)
+      }
+    }
+  }
+  return map
+})
+function fileNameOf(seg: CodeSegment, idx: number): string {
+  return artifactFilename(sniffLang(seg.lang, seg.code), idx)
+}
+function versionsForSeg(seg: CodeSegment, idx: number): ArtifactVersion[] {
+  const fn = fileNameOf(seg, idx)
+  return versionMap.value.get(fn) ?? [{ lang: sniffLang(seg.lang, seg.code), code: seg.code }]
+}
+
 const previewOpen = ref(false)
-const preview = ref<{ lang: string; code: string; filename: string } | null>(null)
+const preview = ref<{ filename: string; versions: ArtifactVersion[] } | null>(null)
 function openPreview(seg: CodeSegment, idx: number) {
-  const lang = sniffLang(seg.lang, seg.code)
-  preview.value = { lang, code: seg.code, filename: artifactFilename(lang, idx) }
+  preview.value = { filename: fileNameOf(seg, idx), versions: versionsForSeg(seg, idx) }
   previewOpen.value = true
-}
-async function copyPreview() {
-  if (!preview.value) return
-  try { await navigator.clipboard.writeText(preview.value.code); ElMessage.success('已复制') }
-  catch { ElMessage.error('复制失败') }
-}
-function downloadPreview() {
-  if (preview.value) downloadText(preview.value.filename, preview.value.code)
 }
 
 async function scrollToBottom() {
@@ -173,6 +195,7 @@ function onKey(e: Event) {
                           <ArtifactCard
                             v-else-if="seg.type === 'code'"
                             :lang="seg.lang" :code="seg.code" :index="si"
+                            :versions="versionsForSeg(seg, si).length"
                             @preview="openPreview(seg, si)"
                           />
                         </template>
@@ -195,6 +218,20 @@ function onKey(e: Event) {
 
             <div v-if="streaming && !messages.some(m => m.role === 'assistant' && hasText(m)) && !reasoning" class="ai-chat__pending">
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
+            </div>
+
+            <!-- 产出文件（agent 写入 outputs/ 的真实文件） -->
+            <div v-if="outputs.length" class="ai-outputs">
+              <div class="ai-outputs__title">产出文件</div>
+              <a
+                v-for="f in outputs" :key="f.path"
+                class="output-file" :href="fileUrl(f.path)" target="_blank" rel="noopener"
+              >
+                <ElIcon><Document /></ElIcon>
+                <span class="output-file__name">{{ f.name }}</span>
+                <span class="output-file__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
+                <ElIcon class="output-file__dl"><Download /></ElIcon>
+              </a>
             </div>
           </div>
         </template>
@@ -223,19 +260,10 @@ function onKey(e: Event) {
       </div>
     </section>
 
-    <!-- 制品预览面板（Claude 风格） -->
+    <!-- 制品预览面板（Claude 风格，含版本切换） -->
     <ElDrawer v-model="previewOpen" :title="preview?.filename || '预览'" direction="rtl" size="52%">
-      <template #header>
-        <div class="preview-head">
-          <span class="preview-head__name">{{ preview?.filename }}</span>
-          <span class="preview-head__actions">
-            <ElButton size="small" :icon="CopyDocument" @click="copyPreview">复制</ElButton>
-            <ElButton size="small" type="primary" :icon="Download" @click="downloadPreview">下载</ElButton>
-          </span>
-        </div>
-      </template>
       <div class="preview-body">
-        <ArtifactPreview v-if="preview" :lang="preview.lang" :code="preview.code" />
+        <ArtifactPreview v-if="preview" :filename="preview.filename" :versions="preview.versions" />
       </div>
     </ElDrawer>
   </div>
@@ -311,6 +339,23 @@ function onKey(e: Event) {
 }
 .ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
 .ai-thinking { max-width: 780px; margin: 0 auto 24px; }
+.ai-outputs {
+  margin: 4px 0 24px;
+  padding: 12px 14px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  &__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+}
+.output-file {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; text-decoration: none;
+  color: var(--el-text-color-primary); font-size: 14px;
+  &:hover { background: var(--el-fill-color); }
+  &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__size { font-size: 12px; color: var(--el-text-color-secondary); }
+  &__dl { color: var(--el-color-primary); }
+}
 .ai-chat__pending { color: var(--el-text-color-secondary); font-size: 13px; .spin { animation: spin 1s linear infinite; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .file-chip, .attach-chip {
