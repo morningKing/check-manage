@@ -8,16 +8,22 @@ Routes registered:
     DELETE /ai/chat/sessions/:id          delete_session
 """
 
+import os
 import json
 import secrets
 from datetime import datetime, timezone
 
-from flask import Blueprint, request, jsonify, g as flask_g, Response, stream_with_context
+from flask import (
+    Blueprint, request, jsonify, g as flask_g, Response, stream_with_context,
+    send_file,
+)
+from werkzeug.utils import secure_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
     create_session_workspace, cleanup_session_workspace, write_opencode_config,
+    safe_resolve,
 )
 from utils.session_token import generate_token, revoke_token
 from config import (
@@ -86,6 +92,44 @@ def create_session():
     }), 201
 
 
+@ai_chat_bp.route('/sessions', methods=['GET'])
+@login_required
+def list_sessions():
+    """List the current user's active sessions (newest first) for the sidebar."""
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, title, last_active_at FROM ai_chat_sessions "
+            "WHERE user_id = %s AND status = 'active' "
+            "ORDER BY last_active_at DESC",
+            (user['userId'],),
+        )
+        rows = cur.fetchall()
+    return jsonify({
+        'sessions': [
+            {'id': r[0], 'title': r[1] or '新会话',
+             'lastActiveAt': r[2].isoformat() if r[2] else None}
+            for r in rows
+        ],
+    })
+
+
+@ai_chat_bp.route('/sessions/<sid>', methods=['PATCH'])
+@write_required
+def rename_session(sid):
+    user = flask_g.current_user
+    if not _load_session_for_user(sid, user['userId']):
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    title = (request.get_json(force=True).get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'title required', 'code': 'TITLE_REQUIRED'}), 400
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET title = %s WHERE id = %s", (title[:500], sid))
+    return jsonify({'id': sid, 'title': title[:500]})
+
+
 def _load_session_for_user(session_id: str, user_id: str):
     """Return (id, user_id, opencode_session_id, status, workspace_path) or None."""
     with get_db() as conn:
@@ -109,8 +153,25 @@ def send_message(sid):
 
     body = request.get_json(force=True)
     content = (body.get('content') or '').strip()
-    if not content:
+    attachments = body.get('attachments') or []  # relative paths under the workspace
+    if not content and not attachments:
         return jsonify({'error': 'content required', 'code': 'CONTENT_REQUIRED'}), 400
+
+    workspace_path = sess[4]
+    # Stored message keeps the user's text + file chips; the agent gets an
+    # augmented prompt with the uploaded files' text content inlined (reliable
+    # and model-agnostic — see notes in send_message tests).
+    stored_parts = [{'type': 'text', 'text': content}] if content else []
+    prompt = content
+    for rel in attachments:
+        name = os.path.basename(rel)
+        stored_parts.append({'type': 'file', 'name': name, 'path': rel})
+        inlined = _read_text_attachment(workspace_path, rel)
+        if inlined is not None:
+            prompt += f"\n\n[用户上传的文件 {name}]\n```\n{inlined}\n```"
+        else:
+            abs_path = _safe_workspace_path(workspace_path, rel)
+            prompt += f"\n\n[用户上传的文件 {name}，路径：{abs_path}（如需要可用工具读取）]"
 
     msg_id = 'msg_' + secrets.token_hex(6)
     with get_db() as conn:
@@ -118,11 +179,33 @@ def send_message(sid):
         cur.execute(
             "INSERT INTO ai_chat_messages (id, session_id, role, content) "
             "VALUES (%s, %s, 'user', %s)",
-            (msg_id, sid, json.dumps([{'type': 'text', 'text': content}])),
+            (msg_id, sid, json.dumps(stored_parts or [{'type': 'text', 'text': ''}])),
         )
 
-    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(sess[2], content, model=OPENCODE_MODEL)
+    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(sess[2], prompt.strip(), model=OPENCODE_MODEL)
     return jsonify({'messageId': msg_id}), 202
+
+
+def _safe_workspace_path(workspace_path: str, rel: str):
+    try:
+        return safe_resolve(workspace_path, rel)
+    except Exception:
+        return None
+
+
+def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_000):
+    """Return decoded text of an uploaded file, or None if missing/binary/too big."""
+    abs_path = _safe_workspace_path(workspace_path, rel)
+    if not abs_path or not os.path.isfile(abs_path):
+        return None
+    try:
+        if os.path.getsize(abs_path) > max_bytes:
+            return None
+        with open(abs_path, 'rb') as f:
+            raw = f.read()
+        return raw.decode('utf-8')
+    except (UnicodeDecodeError, OSError):
+        return None
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages', methods=['GET'])
@@ -248,6 +331,66 @@ def sse_events(sid):
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+
+
+@ai_chat_bp.route('/sessions/<sid>/files', methods=['POST'])
+@write_required
+def upload_file(sid):
+    """Upload a file into the session workspace's uploads/ dir."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'file required', 'code': 'FILE_REQUIRED'}), 400
+
+    workspace_path = sess[4]
+    safe_name = secure_filename(f.filename) or ('upload_' + secrets.token_hex(4))
+    rel = f"uploads/{safe_name}"
+    dest = safe_resolve(workspace_path, rel)  # raises on traversal
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    f.save(dest)
+    return jsonify({'name': safe_name, 'path': rel, 'size': os.path.getsize(dest)}), 201
+
+
+@ai_chat_bp.route('/sessions/<sid>/files', methods=['GET'])
+@login_required
+def list_files(sid):
+    """List files in the session's uploads/ and outputs/ dirs."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    workspace_path = sess[4]
+    out = []
+    for sub in ('uploads', 'outputs'):
+        d = os.path.join(workspace_path, sub)
+        if os.path.isdir(d):
+            for name in sorted(os.listdir(d)):
+                fp = os.path.join(d, name)
+                if os.path.isfile(fp):
+                    out.append({'name': name, 'path': f"{sub}/{name}",
+                                'dir': sub, 'size': os.path.getsize(fp)})
+    return jsonify({'files': out})
+
+
+@ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
+@login_required_sse
+def download_file(sid):
+    """Download a file from the session workspace (uploads/ or outputs/)."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    rel = request.args.get('path', '')
+    try:
+        abs_path = safe_resolve(sess[4], rel)
+    except Exception:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
+    return send_file(abs_path, as_attachment=True, download_name=os.path.basename(abs_path))
 
 
 @ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])

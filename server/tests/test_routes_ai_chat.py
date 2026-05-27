@@ -202,3 +202,64 @@ def test_delete_session_cleans_everything(setup):
     statements = [c.args[0] for c in cursor.execute.call_args_list]
     assert any('UPDATE ai_chat_sessions' in s and 'status' in s for s in statements) or \
            any('DELETE FROM ai_chat_sessions' in s for s in statements)
+
+
+def test_list_sessions_returns_user_sessions(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchall.return_value = [
+        ('sess_a', '会话A', None),
+        ('sess_b', '会话B', None),
+    ]
+    resp = client.get('/ai/chat/sessions', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert [s['id'] for s in body['sessions']] == ['sess_a', 'sess_b']
+    assert body['sessions'][0]['title'] == '会话A'
+
+
+def test_rename_session_updates_title(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    resp = client.patch('/ai/chat/sessions/sess_x', json={'title': '新标题'}, headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['title'] == '新标题'
+    assert any('UPDATE ai_chat_sessions SET title' in c.args[0] for c in cursor.execute.call_args_list)
+
+
+def test_upload_file_saves_into_uploads(setup):
+    import io
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsupload'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/files',
+        data={'file': (io.BytesIO(b'print(1)'), 'script.py')},
+        content_type='multipart/form-data',
+        headers=dev_h,
+    )
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body['path'] == 'uploads/script.py'
+    assert (ws / 'uploads' / 'script.py').read_bytes() == b'print(1)'
+
+
+def test_send_message_inlines_uploaded_text_for_agent(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsinline'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'uploads' / 'a.txt').write_text('SECRET-DATA', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', str(ws))
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': '看看这个文件', 'attachments': ['uploads/a.txt']},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    # the prompt sent to the agent must include the inlined file content
+    args, kwargs = oc.send_prompt_async.call_args
+    assert 'SECRET-DATA' in args[1]
+    assert '看看这个文件' in args[1]
+    # stored user message keeps a file chip
+    inserts = [c.args for c in cursor.execute.call_args_list if 'INSERT INTO ai_chat_messages' in c.args[0]]
+    assert any('"type": "file"' in a[1][2] for a in inserts)
