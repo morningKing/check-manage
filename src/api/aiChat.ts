@@ -7,12 +7,18 @@
  *   close at any time.
  */
 
-import { get, post, del } from '@/utils/request'
+import { get, post, del, patch } from '@/utils/request'
 
 export interface AiSession {
   id: string
   title: string
   workspacePath: string
+}
+
+export interface AiSessionSummary {
+  id: string
+  title: string
+  lastActiveAt?: string
 }
 
 export interface AiMessage {
@@ -25,9 +31,27 @@ export interface AiMessage {
 export type AiContentPart =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; name: string; input: unknown; result?: unknown }
+  | { type: 'file'; name: string; path: string }
+
+export interface AiFile {
+  name: string
+  path: string
+  dir: 'uploads' | 'outputs'
+  size: number
+}
 
 export function createSession(projectMenuId?: string) {
   return post<AiSession>('/ai/chat/sessions', { projectMenuId })
+}
+
+export function listSessions() {
+  return get<{ sessions: AiSessionSummary[] }>('/ai/chat/sessions')
+}
+
+export function renameSession(id: string, title: string) {
+  return patch<{ id: string; title: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}`, { title },
+  )
 }
 
 export function deleteSession(id: string) {
@@ -39,11 +63,28 @@ export function getMessages(id: string, since?: string) {
   return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
 }
 
-export function sendMessage(id: string, content: string) {
+export function sendMessage(id: string, content: string, attachments: string[] = []) {
   return post<{ messageId: string }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages`,
-    { content },
+    { content, attachments },
   )
+}
+
+export function uploadFile(id: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return post<{ name: string; path: string; size: number }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/files`, form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}
+
+export function listFiles(id: string) {
+  return get<{ files: AiFile[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/files`)
+}
+
+export function downloadFileUrl(id: string, path: string): string {
+  return `/api/ai/chat/sessions/${encodeURIComponent(id)}/files/download?path=${encodeURIComponent(path)}${authParam('&')}`
 }
 
 export interface StreamHandlers {
@@ -53,9 +94,9 @@ export interface StreamHandlers {
 
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
 
-// EventSource can't set an Authorization header, so the SSE endpoint accepts
-// the JWT via ?access_token=. Read the same token the axios layer uses.
-function authQuery(): string {
+// EventSource / download links can't set an Authorization header, so those
+// endpoints accept the JWT via ?access_token=. Read the same token axios uses.
+function authParam(prefix: '?' | '&' = '?'): string {
   const raw = localStorage.getItem('check-manage:token')
   if (!raw) return ''
   let token = raw
@@ -65,11 +106,11 @@ function authQuery(): string {
   } catch {
     /* raw is already the token string */
   }
-  return token ? `?access_token=${encodeURIComponent(token)}` : ''
+  return token ? `${prefix}access_token=${encodeURIComponent(token)}` : ''
 }
 
 export function createEventStream(sessionId: string, h: StreamHandlers) {
-  const url = `/api/ai/chat/sessions/${encodeURIComponent(sessionId)}/events${authQuery()}`
+  const url = `/api/ai/chat/sessions/${encodeURIComponent(sessionId)}/events${authParam('?')}`
   let es: EventSource | null = null
   let closed = false
   let attempt = 0

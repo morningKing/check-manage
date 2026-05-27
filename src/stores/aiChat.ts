@@ -1,38 +1,46 @@
 /**
  * AI Chat Pinia store.
  *
- * State shape per spec §5.4. M1 only handles a single active session
- * (no SessionList), but the state is already keyed by sessionId so M2
- * can add multi-session without rewrite.
+ * Holds the multi-session chat state for the full-page assistant: session list,
+ * per-session messages, live streaming text + reasoning, and pending uploads.
+ * OpenCode sends part snapshots keyed by part id (not deltas), so we upsert
+ * parts by id and only render parts belonging to an assistant message.
  */
 
 import { defineStore } from 'pinia'
 import {
-  createSession, deleteSession, getMessages, sendMessage, createEventStream,
+  createSession, listSessions, renameSession as apiRenameSession, deleteSession,
+  getMessages, sendMessage, uploadFile, createEventStream,
   type AiMessage, type AiContentPart,
 } from '@/api/aiChat'
 
-interface AiSessionMeta {
+interface SessionMeta {
   id: string
   title: string
-  workspacePath: string
+}
+
+interface PendingAttachment {
+  name: string
+  path: string
 }
 
 interface State {
-  sessions: AiSessionMeta[]
+  sessions: SessionMeta[]
   activeSessionId: string | null
   messages: Record<string, AiMessage[]>
   streaming: Record<string, boolean>
+  reasoning: Record<string, string>
+  thinking: Record<string, boolean>
+  attachments: Record<string, PendingAttachment[]>
+  uploading: boolean
   drawerOpen: boolean
   _stream: { close(): void } | null
 }
 
-// Per-session streaming bookkeeping. OpenCode sends text parts as full
-// snapshots keyed by part id (not deltas), so we upsert parts by id and only
-// render parts that belong to an assistant message (spec §12.4).
 let _streamingAssistantMsgId: Record<string, string | null> = {}
 let _assistantMsgIds: Record<string, Set<string>> = {}
 let _partIndexById: Record<string, Record<string, number>> = {}
+let _reasoningByPart: Record<string, Record<string, string>> = {}
 
 export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
@@ -40,47 +48,110 @@ export const useAiChatStore = defineStore('aiChat', {
     activeSessionId: null,
     messages: {},
     streaming: {},
+    reasoning: {},
+    thinking: {},
+    attachments: {},
+    uploading: false,
     drawerOpen: false,
     _stream: null,
   }),
+
+  getters: {
+    activeMessages(state): AiMessage[] {
+      return state.activeSessionId ? state.messages[state.activeSessionId] ?? [] : []
+    },
+    isStreaming(state): boolean {
+      return state.activeSessionId ? !!state.streaming[state.activeSessionId] : false
+    },
+    activeAttachments(state): PendingAttachment[] {
+      return state.activeSessionId ? state.attachments[state.activeSessionId] ?? [] : []
+    },
+  },
 
   actions: {
     toggleDrawer(open?: boolean) {
       this.drawerOpen = open ?? !this.drawerOpen
     },
 
+    async loadSessions() {
+      const { sessions } = await listSessions()
+      this.sessions = sessions.map(s => ({ id: s.id, title: s.title }))
+    },
+
     async startNewSession(projectMenuId?: string) {
       const meta = await createSession(projectMenuId)
-      this.sessions.push(meta)
+      this.sessions.unshift({ id: meta.id, title: meta.title })
       this.activeSessionId = meta.id
       this.messages[meta.id] = []
       this.streaming[meta.id] = false
+      this.attachments[meta.id] = []
       this._resetStreamState(meta.id)
       const history = await getMessages(meta.id)
       this.messages[meta.id] = history.messages
       this._openStream(meta.id)
+      return meta.id
+    },
+
+    async openSession(id: string) {
+      if (this.activeSessionId === id && this.messages[id]) return
+      this.activeSessionId = id
+      this.attachments[id] = this.attachments[id] ?? []
+      this.streaming[id] = this.streaming[id] ?? false
+      this._resetStreamState(id)
+      const history = await getMessages(id)
+      this.messages[id] = history.messages
+      this._openStream(id)
+    },
+
+    async renameSession(id: string, title: string) {
+      await apiRenameSession(id, title)
+      const s = this.sessions.find(x => x.id === id)
+      if (s) s.title = title
     },
 
     async sendUserMessage(content: string) {
       if (!this.activeSessionId) throw new Error('no active session')
       const sid = this.activeSessionId
-      const userMsg: AiMessage = {
-        id: 'local_' + Date.now(),
-        role: 'user',
-        content: [{ type: 'text', text: content }],
-      }
-      this.messages[sid].push(userMsg)
+      const pending = this.attachments[sid] ?? []
+      const parts: AiContentPart[] = []
+      if (content) parts.push({ type: 'text', text: content })
+      for (const a of pending) parts.push({ type: 'file', name: a.name, path: a.path })
+
+      this.messages[sid].push({ id: 'local_' + Date.now(), role: 'user', content: parts })
       this.streaming[sid] = true
+      this.reasoning[sid] = ''
+      this.thinking[sid] = true
       this._resetStreamState(sid)
-      await sendMessage(sid, content)
+      const paths = pending.map(a => a.path)
+      this.attachments[sid] = []
+      await sendMessage(sid, content, paths)
+    },
+
+    async uploadAttachment(file: File) {
+      if (!this.activeSessionId) throw new Error('no active session')
+      const sid = this.activeSessionId
+      this.uploading = true
+      try {
+        const res = await uploadFile(sid, file)
+        ;(this.attachments[sid] ?? (this.attachments[sid] = [])).push({ name: res.name, path: res.path })
+      } finally {
+        this.uploading = false
+      }
+    },
+
+    removeAttachment(path: string) {
+      const sid = this.activeSessionId
+      if (!sid) return
+      this.attachments[sid] = (this.attachments[sid] ?? []).filter(a => a.path !== path)
     },
 
     async closeSession(id: string) {
-      this._closeStream()
+      if (this.activeSessionId === id) this._closeStream()
       await deleteSession(id)
       this.sessions = this.sessions.filter(s => s.id !== id)
       delete this.messages[id]
       delete this.streaming[id]
+      delete this.reasoning[id]
       this._resetStreamState(id)
       if (this.activeSessionId === id) this.activeSessionId = null
     },
@@ -89,7 +160,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this._closeStream()
       this._stream = createEventStream(sid, {
         onEvent: ({ event, data }) => this._handleEvent(sid, event, data as any),
-        onError: () => { /* api layer handles reconnect; UI banner in M2 */ },
+        onError: () => { /* api layer handles reconnect */ },
       })
     },
 
@@ -99,8 +170,6 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     _handleEvent(sid: string, event: string, data: any) {
-      // `data` is the OpenCode event `properties` object (the Flask proxy
-      // strips the {type, properties} envelope to just properties).
       switch (event) {
         case 'message.updated': {
           const info = data?.info
@@ -111,17 +180,23 @@ export const useAiChatStore = defineStore('aiChat', {
         }
         case 'message.part.updated': {
           const part = data?.part
-          if (part?.type === 'text' && _assistantMsgIds[sid]?.has(part?.messageID)) {
+          if (!part || !_assistantMsgIds[sid]?.has(part?.messageID)) break
+          if (part.type === 'text') {
             this._upsertAssistantTextPart(sid, part.id, part.text ?? '')
+          } else if (part.type === 'reasoning') {
+            this.thinking[sid] = true
+            this._upsertReasoning(sid, part.id, part.text ?? '')
           }
           break
         }
         case 'session.idle':
           this.streaming[sid] = false
+          this.thinking[sid] = false
           this._resetStreamState(sid)
           break
         case 'session.error':
           this.streaming[sid] = false
+          this.thinking[sid] = false
           break
       }
     },
@@ -130,6 +205,13 @@ export const useAiChatStore = defineStore('aiChat', {
       _streamingAssistantMsgId[sid] = null
       _assistantMsgIds[sid] = new Set()
       _partIndexById[sid] = {}
+      _reasoningByPart[sid] = {}
+    },
+
+    _upsertReasoning(sid: string, partId: string, text: string) {
+      const map = _reasoningByPart[sid] ?? (_reasoningByPart[sid] = {})
+      map[partId] = text
+      this.reasoning[sid] = Object.values(map).join('\n')
     },
 
     _upsertAssistantTextPart(sid: string, partId: string, text: string) {
@@ -148,7 +230,6 @@ export const useAiChatStore = defineStore('aiChat', {
         idxMap[partId] = msg.content.length
         msg.content.push({ type: 'text', text })
       } else {
-        // OpenCode resends the full snapshot for a part; replace, don't append.
         ;(msg.content[existing] as Extract<AiContentPart, { type: 'text' }>).text = text
       }
     },

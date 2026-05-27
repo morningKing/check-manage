@@ -52,6 +52,16 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'House',
         },
       },
+      // AI 助手（全屏对话页）
+      {
+        path: 'ai-chat',
+        name: 'AiChat',
+        component: () => import('@/views/ai-chat/AiChatView.vue'),
+        meta: {
+          title: 'AI 助手',
+          icon: 'ChatDotRound',
+        },
+      },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',

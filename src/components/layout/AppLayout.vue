@@ -44,7 +44,7 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
-          <el-button text class="ai-chat-btn" @click="aiChat.toggleDrawer()">
+          <el-button text class="ai-chat-btn" @click="router.push('/ai-chat')">
             <el-icon :size="18"><ChatDotRound /></el-icon>
             <span style="margin-left:4px">AI 助手</span>
           </el-button>
@@ -138,9 +138,6 @@
 
     <!-- 命令面板 -->
     <CommandPalette v-model:visible="showCommandPalette" />
-
-    <!-- AI 助手抽屉 -->
-    <AiChatDrawer />
   </el-container>
 </template>
 
@@ -158,12 +155,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { Loading, ArrowDown, User as UserIcon, Setting, ChatDotRound } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore, useMenuStore, useAuthStore, useTabStore, useSystemConfigStore } from '@/stores'
-import { useAiChatStore } from '@/stores/aiChat'
 import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
 import ContentArea from './ContentArea.vue'
-import AiChatDrawer from '@/components/ai-chat/AiChatDrawer.vue'
 import { NotificationBell, CommandPalette } from '@/components/common'
 
 // ==================== Store ====================
@@ -173,7 +168,6 @@ const menuStore = useMenuStore()
 const authStore = useAuthStore()
 const tabStore = useTabStore()
 const systemConfigStore = useSystemConfigStore()
-const aiChat = useAiChatStore()
 const route = useRoute()
 const router = useRouter()
 

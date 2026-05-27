@@ -111,7 +111,7 @@ describe('useAiChatStore', () => {
     await store.sendUserMessage('how are you')
 
     expect(store.messages['sess_1'][0].role).toBe('user')
-    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you')
+    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [])
     expect(store.streaming['sess_1']).toBe(true)
   })
 })
