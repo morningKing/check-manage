@@ -2,12 +2,18 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElTooltip, ElEmpty, ElMessageBox, ElMessage,
+  ElDrawer,
 } from 'element-plus'
-import { Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading } from '@element-plus/icons-vue'
+import {
+  Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading,
+  CopyDocument, Download,
+} from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
+import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
+import { splitArtifacts, isMarkdownLang, artifactFilename, downloadText, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
 import type { AiMessage } from '@/api/aiChat'
 
@@ -29,6 +35,27 @@ const canSend = computed(() => !streaming.value && (input.value.trim() || attach
 
 function hasText(m: AiMessage): boolean {
   return m.content.some(p => p.type === 'text' && p.text)
+}
+
+// ---- Artifacts (Claude-style file preview) ----
+const previewOpen = ref(false)
+const preview = ref<{ lang: string; code: string; filename: string } | null>(null)
+const previewMarkdown = computed(() => {
+  if (!preview.value) return ''
+  const { lang, code } = preview.value
+  return isMarkdownLang(lang) ? code : '```' + (lang || '') + '\n' + code + '\n```'
+})
+function openPreview(seg: CodeSegment, idx: number) {
+  preview.value = { lang: seg.lang, code: seg.code, filename: artifactFilename(seg.lang, idx) }
+  previewOpen.value = true
+}
+async function copyPreview() {
+  if (!preview.value) return
+  try { await navigator.clipboard.writeText(preview.value.code); ElMessage.success('已复制') }
+  catch { ElMessage.error('复制失败') }
+}
+function downloadPreview() {
+  if (preview.value) downloadText(preview.value.filename, preview.value.code)
 }
 
 async function scrollToBottom() {
@@ -141,7 +168,20 @@ function onKey(e: Event) {
                       :name="p.name" :title="p.title" :status="p.status"
                       :input="p.input" :result="p.result"
                     />
-                    <MarkdownView v-else-if="p.type === 'text' && p.text" :text="p.text" />
+                    <template v-else-if="p.type === 'text' && p.text">
+                      <!-- assistant: lift big code/doc blocks into artifact cards -->
+                      <template v-if="m.role === 'assistant'">
+                        <template v-for="(seg, si) in splitArtifacts(p.text)" :key="si">
+                          <MarkdownView v-if="seg.type === 'text' && seg.text.trim()" :text="seg.text" />
+                          <ArtifactCard
+                            v-else-if="seg.type === 'code'"
+                            :lang="seg.lang" :code="seg.code" :index="si"
+                            @preview="openPreview(seg, si)"
+                          />
+                        </template>
+                      </template>
+                      <MarkdownView v-else :text="p.text" />
+                    </template>
                   </template>
                 </template>
               </Bubble>
@@ -184,6 +224,22 @@ function onKey(e: Event) {
         </div>
       </div>
     </section>
+
+    <!-- 制品预览面板（Claude 风格） -->
+    <ElDrawer v-model="previewOpen" :title="preview?.filename || '预览'" direction="rtl" size="52%">
+      <template #header>
+        <div class="preview-head">
+          <span class="preview-head__name">{{ preview?.filename }}</span>
+          <span class="preview-head__actions">
+            <ElButton size="small" :icon="CopyDocument" @click="copyPreview">复制</ElButton>
+            <ElButton size="small" type="primary" :icon="Download" @click="downloadPreview">下载</ElButton>
+          </span>
+        </div>
+      </template>
+      <div class="preview-body">
+        <MarkdownView :text="previewMarkdown" />
+      </div>
+    </ElDrawer>
   </div>
 </template>
 
@@ -276,4 +332,9 @@ function onKey(e: Event) {
 }
 .composer-attachments { margin-bottom: 6px; }
 .composer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; }
+.preview-head { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px;
+  &__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__actions { display: flex; gap: 8px; flex-shrink: 0; }
+}
+.preview-body { height: 100%; overflow: auto; }
 </style>
