@@ -30,7 +30,10 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
 def cleanup_session_workspace(workspace_root: str, user_id: str, session_id: str) -> None:
     p = session_path(workspace_root, user_id, session_id)
     if p.exists():
-        shutil.rmtree(p)
+        # Best-effort: a shared OpenCode process may still hold a handle on the
+        # workspace (Windows then raises PermissionError). Don't let leftover
+        # files block session teardown; they can be reclaimed later.
+        shutil.rmtree(p, ignore_errors=True)
 
 
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str) -> str:

@@ -264,13 +264,16 @@ def delete_session(sid):
         except Exception:
             pass  # 404 from OpenCode = already gone (§7 #11)
 
-    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
+    # Security-critical first: kill the token and mark the session dead so a
+    # failure to remove files (e.g. Windows handle held by OpenCode) can't leave
+    # an authenticated session alive.
     revoke_token(sid)
-
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s",
             (sid,),
         )
+
+    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)  # best-effort
     return '', 204
