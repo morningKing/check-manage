@@ -27,7 +27,12 @@ interface State {
   _stream: { close(): void } | null
 }
 
+// Per-session streaming bookkeeping. OpenCode sends text parts as full
+// snapshots keyed by part id (not deltas), so we upsert parts by id and only
+// render parts that belong to an assistant message (spec §12.4).
 let _streamingAssistantMsgId: Record<string, string | null> = {}
+let _assistantMsgIds: Record<string, Set<string>> = {}
+let _partIndexById: Record<string, Record<string, number>> = {}
 
 export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
@@ -50,7 +55,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.activeSessionId = meta.id
       this.messages[meta.id] = []
       this.streaming[meta.id] = false
-      _streamingAssistantMsgId[meta.id] = null
+      this._resetStreamState(meta.id)
       const history = await getMessages(meta.id)
       this.messages[meta.id] = history.messages
       this._openStream(meta.id)
@@ -66,7 +71,7 @@ export const useAiChatStore = defineStore('aiChat', {
       }
       this.messages[sid].push(userMsg)
       this.streaming[sid] = true
-      _streamingAssistantMsgId[sid] = null
+      this._resetStreamState(sid)
       await sendMessage(sid, content)
     },
 
@@ -76,7 +81,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.sessions = this.sessions.filter(s => s.id !== id)
       delete this.messages[id]
       delete this.streaming[id]
-      delete _streamingAssistantMsgId[id]
+      this._resetStreamState(id)
       if (this.activeSessionId === id) this.activeSessionId = null
     },
 
@@ -94,54 +99,58 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     _handleEvent(sid: string, event: string, data: any) {
+      // `data` is the OpenCode event `properties` object (the Flask proxy
+      // strips the {type, properties} envelope to just properties).
       switch (event) {
-        case 'message.part.delta':
-          this._appendAssistantDelta(sid, data?.text ?? '')
+        case 'message.updated': {
+          const info = data?.info
+          if (info?.role === 'assistant' && info?.id) {
+            ;(_assistantMsgIds[sid] ?? (_assistantMsgIds[sid] = new Set())).add(info.id)
+          }
           break
-        case 'tool.use':
-          this._appendAssistantPart(sid, {
-            type: 'tool_use',
-            name: data?.name,
-            input: data?.input,
-            result: data?.result,
-          })
+        }
+        case 'message.part.updated': {
+          const part = data?.part
+          if (part?.type === 'text' && _assistantMsgIds[sid]?.has(part?.messageID)) {
+            this._upsertAssistantTextPart(sid, part.id, part.text ?? '')
+          }
           break
-        case 'message.finished':
+        }
+        case 'session.idle':
           this.streaming[sid] = false
-          _streamingAssistantMsgId[sid] = null
+          this._resetStreamState(sid)
           break
-        case 'error':
+        case 'session.error':
           this.streaming[sid] = false
           break
       }
     },
 
-    _appendAssistantDelta(sid: string, text: string) {
+    _resetStreamState(sid: string) {
+      _streamingAssistantMsgId[sid] = null
+      _assistantMsgIds[sid] = new Set()
+      _partIndexById[sid] = {}
+    },
+
+    _upsertAssistantTextPart(sid: string, partId: string, text: string) {
       const list = this.messages[sid] ?? (this.messages[sid] = [])
-      let id = _streamingAssistantMsgId[sid]
-      if (!id) {
-        id = 'streaming_' + Date.now()
-        _streamingAssistantMsgId[sid] = id
-        list.push({ id, role: 'assistant', content: [{ type: 'text', text: '' }] })
+      let msgId = _streamingAssistantMsgId[sid]
+      if (!msgId) {
+        msgId = 'streaming_' + Date.now()
+        _streamingAssistantMsgId[sid] = msgId
+        _partIndexById[sid] = {}
+        list.push({ id: msgId, role: 'assistant', content: [] })
       }
       const msg = list[list.length - 1]
-      const lastPart = msg.content[msg.content.length - 1] as AiContentPart
-      if (lastPart && lastPart.type === 'text') {
-        lastPart.text += text
-      } else {
+      const idxMap = _partIndexById[sid] ?? (_partIndexById[sid] = {})
+      const existing = idxMap[partId]
+      if (existing === undefined) {
+        idxMap[partId] = msg.content.length
         msg.content.push({ type: 'text', text })
+      } else {
+        // OpenCode resends the full snapshot for a part; replace, don't append.
+        ;(msg.content[existing] as Extract<AiContentPart, { type: 'text' }>).text = text
       }
-    },
-
-    _appendAssistantPart(sid: string, part: AiContentPart) {
-      const list = this.messages[sid] ?? (this.messages[sid] = [])
-      let id = _streamingAssistantMsgId[sid]
-      if (!id) {
-        id = 'streaming_' + Date.now()
-        _streamingAssistantMsgId[sid] = id
-        list.push({ id, role: 'assistant', content: [] })
-      }
-      list[list.length - 1].content.push(part)
     },
   },
 })

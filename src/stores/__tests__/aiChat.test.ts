@@ -35,7 +35,7 @@ describe('useAiChatStore', () => {
     expect(api.createEventStream).toHaveBeenCalledWith('sess_1', expect.any(Object))
   })
 
-  it('SSE message.part.delta appends to streaming assistant message', async () => {
+  it('message.part.updated replaces the part text snapshot (assistant only)', async () => {
     vi.mocked(api.createSession).mockResolvedValue({
       id: 'sess_1', title: '新会话', workspacePath: '/ws',
     })
@@ -50,16 +50,35 @@ describe('useAiChatStore', () => {
     const store = useAiChatStore()
     await store.startNewSession()
 
-    handlers.onEvent({ event: 'message.part.delta', data: { text: 'he' } })
-    handlers.onEvent({ event: 'message.part.delta', data: { text: 'llo' } })
+    // assistant message announced, then its text part streams as full snapshots
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'p1', type: 'text', messageID: 'm1', text: 'he' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'p1', type: 'text', messageID: 'm1', text: 'hello' } } })
 
     const msgs = store.messages['sess_1']
     expect(msgs).toHaveLength(1)
     expect(msgs[0].role).toBe('assistant')
+    // snapshot semantics: replaced, not appended → "hello", not "hehello"
+    expect(msgs[0].content).toHaveLength(1)
     expect((msgs[0].content[0] as any).text).toBe('hello')
   })
 
-  it('message.finished flips streaming flag off', async () => {
+  it('ignores parts that do not belong to an assistant message (e.g. user echo)', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 'sess_1', title: '新会话', workspacePath: '/ws',
+    })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    // user message part (messageID never registered as assistant) must not render
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'pu', type: 'text', messageID: 'muser', text: 'echo' } } })
+    expect(store.messages['sess_1']).toHaveLength(0)
+  })
+
+  it('session.idle flips streaming flag off', async () => {
     vi.mocked(api.createSession).mockResolvedValue({
       id: 'sess_1', title: '新会话', workspacePath: '/ws',
     })
@@ -73,8 +92,9 @@ describe('useAiChatStore', () => {
 
     const store = useAiChatStore()
     await store.startNewSession()
-    handlers.onEvent({ event: 'message.part.delta', data: { text: 'hi' } })
-    handlers.onEvent({ event: 'message.finished', data: {} })
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'p1', type: 'text', messageID: 'm1', text: 'hi' } } })
+    handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
 
     expect(store.streaming['sess_1']).toBe(false)
   })

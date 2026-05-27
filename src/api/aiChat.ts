@@ -70,8 +70,8 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
         h.onEvent({ event: 'message', data: e.data })
       }
     }
-    // Listen to known event names from spec §6.2
-    for (const name of ['message.part.start', 'message.part.delta', 'tool.use', 'message.finished', 'error']) {
+    // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy
+    for (const name of ['message.updated', 'message.part.updated', 'session.idle', 'session.error']) {
       es.addEventListener(name, (e: MessageEvent) => {
         try {
           h.onEvent({ event: name, data: JSON.parse(e.data) })
