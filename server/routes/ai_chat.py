@@ -16,12 +16,16 @@ from flask import Blueprint, request, jsonify, g as flask_g, Response, stream_wi
 from db import get_db
 from auth import login_required, write_required
 from utils.opencode_client import OpenCodeClient
-from utils.workspace import create_session_workspace, cleanup_session_workspace
+from utils.workspace import (
+    create_session_workspace, cleanup_session_workspace, write_opencode_config,
+)
 from utils.session_token import generate_token, revoke_token
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS,
 )
+
+MCP_NAME = 'check-manage'
 
 ai_chat_bp = Blueprint('ai_chat', __name__, url_prefix='/ai/chat')
 
@@ -56,13 +60,15 @@ def create_session():
     # 2) overwrite the token via the dedicated utility (single source of truth for TTL math)
     token = generate_token(session_id, AI_SESSION_TTL_HOURS)
 
-    # 3) ask OpenCode to start a session bound to this workspace
-    client = OpenCodeClient(OPENCODE_BASE_URL)
-    opencode_session_id = client.create_session(cwd=workspace_path, title='新会话')
-
-    # 4) register our MCP server, scoped by token
+    # 3) write opencode.json into the workspace so OpenCode (scoped to this dir)
+    #    connects to our MCP server with this session's token. OpenCode has no
+    #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
-    client.register_mcp(session_id=opencode_session_id, url=mcp_url)
+    write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url)
+
+    # 4) ask OpenCode to start a session bound to this workspace (directory query param)
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    opencode_session_id = client.create_session(directory=workspace_path, title='新会话')
 
     # 5) persist opencode_session_id
     with get_db() as conn:
@@ -80,11 +86,11 @@ def create_session():
 
 
 def _load_session_for_user(session_id: str, user_id: str):
-    """Return (id, user_id, opencode_session_id, status) or None."""
+    """Return (id, user_id, opencode_session_id, status, workspace_path) or None."""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, user_id, opencode_session_id, status "
+            "SELECT id, user_id, opencode_session_id, status, workspace_path "
             "FROM ai_chat_sessions "
             "WHERE id = %s AND user_id = %s",
             (session_id, user_id),
@@ -158,7 +164,7 @@ def _format_sse(event: str, data: dict) -> str:
 
 
 def _persist_assistant_message(session_id: str, content_parts: list) -> None:
-    """Called when a message.finished event arrives. Records to DB."""
+    """Persist a completed assistant message (called on session.idle)."""
     msg_id = 'msg_' + secrets.token_hex(6)
     with get_db() as conn:
         cur = conn.cursor()
@@ -167,6 +173,19 @@ def _persist_assistant_message(session_id: str, content_parts: list) -> None:
             "VALUES (%s, %s, 'assistant', %s)",
             (msg_id, session_id, json.dumps(content_parts)),
         )
+
+
+def _event_session_id(props: dict):
+    """OpenCode puts the session id in different nested spots per event type."""
+    if not isinstance(props, dict):
+        return None
+    if props.get('sessionID'):
+        return props['sessionID']
+    for k in ('part', 'info'):
+        v = props.get(k)
+        if isinstance(v, dict) and v.get('sessionID'):
+            return v['sessionID']
+    return None
 
 
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
@@ -178,35 +197,48 @@ def sse_events(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     opencode_session_id = sess[2]
+    workspace_path = sess[4]
     client = OpenCodeClient(OPENCODE_BASE_URL)
 
     def generate():
-        buffered_parts = []
+        # OpenCode text parts arrive as full snapshots keyed by part id; track the
+        # latest snapshot per assistant part so we can persist on session.idle.
+        assistant_msg_ids = set()
+        text_by_part = {}
+        part_order = []
         try:
-            for evt in client.subscribe_events():
-                # Filter: only forward events for this session
-                payload = evt.get('data') or {}
-                if payload.get('sessionId') and payload['sessionId'] != opencode_session_id:
+            for evt in client.subscribe_events(directory=workspace_path):
+                etype = evt.get('event', '')
+                obj = evt.get('data') or {}
+                props = obj.get('properties') or {}
+
+                ev_sid = _event_session_id(props)
+                if ev_sid and ev_sid != opencode_session_id:
                     continue
 
-                # Accumulate parts in memory for DB persistence at end-of-message
-                if evt['event'] == 'message.part.delta':
-                    buffered_parts.append({'type': 'text', 'text': payload.get('text', '')})
-                elif evt['event'] == 'tool.use':
-                    buffered_parts.append({
-                        'type': 'tool_use',
-                        'name': payload.get('name'),
-                        'input': payload.get('input'),
-                        'result': payload.get('result'),
-                    })
-                elif evt['event'] == 'message.finished':
-                    try:
-                        _persist_assistant_message(sid, buffered_parts)
-                    except Exception:
-                        pass  # don't break the stream on DB hiccup (§7 #9)
-                    buffered_parts = []
+                if etype == 'message.updated':
+                    info = props.get('info') or {}
+                    if info.get('role') == 'assistant' and info.get('id'):
+                        assistant_msg_ids.add(info['id'])
+                elif etype == 'message.part.updated':
+                    part = props.get('part') or {}
+                    if part.get('type') == 'text' and part.get('messageID') in assistant_msg_ids:
+                        pid = part.get('id')
+                        if pid not in text_by_part:
+                            part_order.append(pid)
+                        text_by_part[pid] = part.get('text', '')
+                elif etype == 'session.idle':
+                    text = ''.join(text_by_part[p] for p in part_order)
+                    if text.strip():
+                        try:
+                            _persist_assistant_message(sid, [{'type': 'text', 'text': text}])
+                        except Exception:
+                            pass  # don't break the stream on DB hiccup (§7 #9)
+                    assistant_msg_ids = set()
+                    text_by_part = {}
+                    part_order = []
 
-                yield _format_sse(evt['event'], payload)
+                yield _format_sse(etype, props)
         except GeneratorExit:
             return
 

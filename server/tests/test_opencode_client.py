@@ -60,12 +60,11 @@ def test_delete_session_calls_delete():
 
 
 def test_subscribe_events_yields_parsed_events_and_passes_directory():
+    # OpenCode emits data:-only frames; the event name is the JSON `type` field.
     raw = [
-        b"event: message.part.updated\n",
-        b'data: {"properties":{"part":{"text":"hi"}}}\n',
+        b'data: {"type":"message.part.updated","properties":{"part":{"text":"hi"}}}\n',
         b"\n",
-        b"event: session.idle\n",
-        b'data: {"properties":{"sessionID":"ses_42"}}\n',
+        b'data: {"type":"session.idle","properties":{"sessionID":"ses_42"}}\n',
         b"\n",
     ]
     fake_resp = MagicMock()

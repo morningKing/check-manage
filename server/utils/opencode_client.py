@@ -58,8 +58,11 @@ class OpenCodeClient:
         resp.raise_for_status()
 
     def subscribe_events(self, directory: Optional[str] = None) -> Iterator[dict]:
-        """Yield parsed SSE events. Caller filters by session.
+        """Yield parsed SSE events as {"event": <type>, "data": <full object>}.
 
+        OpenCode sends `data:`-only frames (no SSE `event:` line); the event name
+        lives in the JSON `type` field, e.g.
+            data: {"type":"message.part.updated","properties":{...}}
         `directory` scopes the stream to a project when provided.
         """
         params = {"directory": directory} if directory else None
@@ -71,7 +74,6 @@ class OpenCodeClient:
             headers={"Accept": "text/event-stream"},
         ) as resp:
             resp.raise_for_status()
-            event_name = None
             data_buf: list[str] = []
             for raw in resp.iter_lines():
                 if raw is None:
@@ -79,17 +81,15 @@ class OpenCodeClient:
                 line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 line = line.rstrip("\r\n")
                 if line == "":
-                    if event_name is not None:
+                    if data_buf:
                         joined = "".join(data_buf)
                         try:
-                            data = json.loads(joined) if joined else {}
+                            obj = json.loads(joined)
                         except json.JSONDecodeError:
-                            data = {"_raw": joined}
-                        yield {"event": event_name, "data": data}
-                    event_name = None
+                            obj = {"_raw": joined}
+                        event = obj.get("type", "") if isinstance(obj, dict) else ""
+                        yield {"event": event, "data": obj}
                     data_buf = []
-                elif line.startswith("event:"):
-                    event_name = line[len("event:"):].strip()
                 elif line.startswith("data:"):
                     data_buf.append(line[len("data:"):].strip())
-                # other SSE fields (id:, retry:) are ignored
+                # event:/id:/retry: lines are not emitted by OpenCode; ignored

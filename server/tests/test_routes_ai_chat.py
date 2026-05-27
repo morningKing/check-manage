@@ -54,7 +54,9 @@ def setup(mock_conn, mock_cursor, tmp_path):
         p.stop()
 
 
-def test_create_session_201_returns_id_title_workspace(setup):
+def test_create_session_201_writes_config_and_binds_directory(setup):
+    import json as _json
+    from pathlib import Path
     client, cursor, oc, dev_h, _, ws_root = setup
     resp = client.post('/ai/chat/sessions', json={}, headers=dev_h)
     assert resp.status_code == 201
@@ -62,8 +64,13 @@ def test_create_session_201_returns_id_title_workspace(setup):
     assert body['id'].startswith('sess_')
     assert body['title'] == '新会话'
     assert 'workspacePath' in body
+    # OpenCode session created with directory bound to the workspace
     oc.create_session.assert_called_once()
-    oc.register_mcp.assert_called_once()
+    assert oc.create_session.call_args.kwargs.get('directory') == body['workspacePath']
+    # MCP is wired via opencode.json (with the session token), not an API call
+    assert not oc.register_mcp.called
+    cfg = _json.loads((Path(body['workspacePath']) / 'opencode.json').read_text(encoding='utf-8'))
+    assert 'token=' in cfg['mcp']['check-manage']['url']
 
 
 def test_create_session_guest_403(setup):
@@ -75,7 +82,7 @@ def test_create_session_guest_403(setup):
 def test_send_message_persists_user_and_calls_opencode(setup):
     client, cursor, oc, dev_h, _, _ = setup
     # Make the session lookup succeed
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
     resp = client.post(
         '/ai/chat/sessions/sess_x/messages',
         json={'content': 'hello agent'},
@@ -103,7 +110,7 @@ def test_send_message_other_users_session_404(setup):
 def test_get_messages_returns_history(setup):
     client, cursor, oc, dev_h, _, _ = setup
     # owner check + history fetch
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
     cursor.fetchall.return_value = [
         ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None),
         ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None),
@@ -115,26 +122,49 @@ def test_get_messages_returns_history(setup):
     assert body['messages'][0]['role'] == 'user'
 
 
-def test_sse_events_returns_event_stream_headers(setup):
+def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     client, cursor, oc, dev_h, _, _ = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
 
-    # OpenCode iterator yields one event then stops
+    # Real OpenCode event shapes: data-only frames with {type, properties}.
     oc.subscribe_events.return_value = iter([
-        {'event': 'message.part.delta', 'data': {'text': 'hi'}},
+        {'event': 'message.updated', 'data': {'type': 'message.updated',
+            'properties': {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
+            'properties': {'part': {'id': 'p1', 'type': 'text', 'text': 'hi',
+                                    'messageID': 'm1', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'session.idle', 'data': {'type': 'session.idle',
+            'properties': {'sessionID': 'oc_sess_42'}}},
     ])
 
     resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
     assert resp.status_code == 200
     assert resp.headers['Content-Type'].startswith('text/event-stream')
     body = b''.join(resp.response).decode('utf-8')
-    assert 'event: message.part.delta' in body
+    assert 'event: message.part.updated' in body
+    assert 'event: session.idle' in body
     assert '"text": "hi"' in body
+    # session.idle persisted the accumulated assistant text
+    inserts = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any("INSERT INTO ai_chat_messages" in s for s in inserts)
+
+
+def test_sse_events_filters_other_sessions(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
+            'properties': {'part': {'id': 'p9', 'type': 'text', 'text': 'OTHER',
+                                    'messageID': 'mX', 'sessionID': 'someone_else'}}}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    assert 'OTHER' not in body
 
 
 def test_delete_session_cleans_everything(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
     # Pre-create the workspace dir so cleanup has something to remove
     target = ws_root / 'user-1' / 'sess_x' / 'uploads'
     target.mkdir(parents=True, exist_ok=True)
