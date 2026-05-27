@@ -466,7 +466,11 @@ M1 实现完成后，针对真实 `opencode serve` v1.2.26 做了集成验证，
 4. Flask 调 OpenCode `POST /session?directory=<workspace>`，拿 `opencode_session_id`
 5. Agent 调工具时 OpenCode 按目录配置连接 MCP（带 token）；MCP 查表得 `user_id / session_id` 做 RBAC
 
-### 12.6 仍阻塞项
+### 12.6 模型与鉴权（已落地）
 
-* **端到端回复（L5）**：本机 OpenCode `auth.json` 无任何 provider 凭证（0 credentials），LLM 无法实际生成回复，故全链路流式渲染未能实测。`message.part.updated` 的「快照覆盖」语义基于 OpenCode part 模型推断，待有凭证后验证。
-* **EventSource 鉴权缺口**：SSE 路由用 `@login_required`（Bearer header），但浏览器原生 `EventSource` 无法设置 header → 实际浏览器会 401。需改为 query token 或短期 cookie（待办）。
+* **模型**：`config.OPENCODE_MODEL`（默认 `opencode/deepseek-v4-flash-free`，可用 `OPENCODE_MODEL` 环境变量覆盖）写入每会话 `opencode.json` 的 `model` 字段。`deepseek-v4-flash-free` 属 `opencode` provider。
+* **EventSource 鉴权**：SSE 路由改用 `login_required_sse`，除 Bearer header 外亦接受 `?access_token=<JWT>` query 参数（浏览器 `EventSource` 无法设 header）；前端从 localStorage 取 token 追加到 URL。原 401 缺口已修复。
+
+### 12.7 仍阻塞项（环境，非代码）
+
+* **端到端回复（L5）**：`opencode` provider（Zen 网关）需 `opencode auth login` 登录账号，本机 `auth.json` 为 0 credentials，故免费模型 `deepseek-v4-flash-free` 也不会真正生成（`session.idle` 到来时 assistant 文本为空）。登录后即可验证全链路流式渲染。`message.part.updated` 的「快照覆盖」语义基于 OpenCode part 模型推断（用户回显 part 已实测为快照）。
