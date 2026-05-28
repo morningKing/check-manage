@@ -6,7 +6,7 @@ logic in sync with that file.
 """
 import json
 from openpyxl import Workbook
-from mongo_query import translate as mongo_translate, remap_labels
+from mongo_query import translate as mongo_translate, remap_labels, _validate_field
 
 MAX_TABLE_ROWS = 400
 MAX_XLSX_ROWS = 50000
@@ -49,6 +49,7 @@ def _order_clause(sort_spec, label_map):
     parts = []
     for k, direction in (sort_spec or {}).items():
         fname = label_map.get(k, k)
+        _validate_field(fname)  # ORDER BY field is interpolated, not parameterized
         if fname == 'createdAt':
             col = 'created_at'
         elif fname == 'updatedAt':

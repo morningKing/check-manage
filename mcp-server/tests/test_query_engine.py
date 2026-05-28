@@ -34,6 +34,14 @@ def test_run_query_no_lookup_builds_rows_and_columns():
     assert "no" in keys and "status" in keys
 
 
+def test_order_clause_rejects_injection_in_sort_field():
+    import pytest
+    from query_engine import _order_clause
+    from mongo_query import MongoQueryError
+    with pytest.raises(MongoQueryError):
+        _order_clause({"x'; DROP TABLE t--": 1}, {})
+
+
 def test_write_xlsx_roundtrip(tmp_path):
     from query_engine import write_xlsx
     out = os.path.join(tmp_path, "o.xlsx")
