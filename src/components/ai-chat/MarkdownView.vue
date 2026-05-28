@@ -24,4 +24,11 @@ defineProps<{ text: string }>()
 .markdown-view :deep(.md-editor-preview) {
   font-size: 14px;
 }
+/* echarts default container is a small 4:3 box; give it a proper chat-width
+   landscape size (echarts reads this at init, so it renders full size). */
+.markdown-view :deep(.md-editor-echarts) {
+  width: 100% !important;
+  height: 360px !important;
+  aspect-ratio: auto !important;
+}
 </style>

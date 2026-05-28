@@ -398,6 +398,9 @@ function onKey(e: Event) {
   border: none !important;
   border-radius: 0 !important;
   padding: 0 !important;
+  /* Full width (not shrink-to-content) so 100%-width children like echarts
+     charts don't collapse to a tiny default size. */
+  width: 100% !important;
   max-width: 100% !important;
 }
 .ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
