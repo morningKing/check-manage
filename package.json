@@ -51,6 +51,7 @@
     "uuid": "^9.0.1",
     "vue": "^3.4.21",
     "vue-codemirror": "^6.1.1",
+    "vue-element-plus-x": "^2.0.3",
     "vue-router": "^4.3.0",
     "vuedraggable": "^4.1.0",
     "xlsx": "^0.18.5"
