@@ -46,7 +46,8 @@ _AGENT_DIRECTIVE = (
     "（如 ```python app.py）。画流程图用 ```mermaid 代码块；画数据图表用 ```echarts 代码块"
     "（块内为 ECharts 的 JSON option，纯 JSON、不要函数）。"
     "回答数据查询类问题时，用 query_collection 工具查询真实数据（必要时先用 list_collections 看字段），"
-    "不要臆造数据、不要写直连数据库的脚本。"
+    "不要臆造数据、不要写直连数据库的脚本；查询结果会自动以表格呈现给用户，"
+    "你不要再用文字或 markdown 表格复述查询到的数据，只需简要说明（例如查到多少条）。"
     "直接给最终结果，简洁作答，不要复述本规则、不要输出你的思考或计划过程。\n\n"
 )
 
@@ -282,6 +283,23 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _build_assistant_content(parts_by_id: dict, part_order: list) -> list:
+    """Build the persisted assistant content from accumulated parts, in arrival
+    order. Empty text parts are dropped; tool parts (tool_use) are kept so the
+    rendered result (e.g. a query_collection table) survives a reload."""
+    content = []
+    for pid in part_order:
+        p = parts_by_id.get(pid)
+        if not p:
+            continue
+        if p['type'] == 'text':
+            if (p.get('text') or '').strip():
+                content.append({'type': 'text', 'text': p['text']})
+        elif p['type'] == 'tool_use':
+            content.append(p)
+    return content
+
+
 def _persist_assistant_message(session_id: str, content_parts: list) -> None:
     """Persist a completed assistant message (called on session.idle)."""
     msg_id = 'msg_' + secrets.token_hex(6)
@@ -322,8 +340,11 @@ def sse_events(sid):
         # OpenCode text parts arrive as full snapshots keyed by part id; track the
         # latest snapshot per assistant part so we can persist on session.idle.
         # subscribe_events() reads the GLOBAL bus; we filter to this session below.
+        # Track the latest snapshot of each assistant part (text + tool) keyed by
+        # part id, preserving arrival order, so the persisted message matches the
+        # live stream — including rendered tool results (e.g. query_collection).
         assistant_msg_ids = set()
-        text_by_part = {}
+        parts_by_id = {}
         part_order = []
         try:
             for evt in client.subscribe_events():
@@ -341,20 +362,34 @@ def sse_events(sid):
                         assistant_msg_ids.add(info['id'])
                 elif etype == 'message.part.updated':
                     part = props.get('part') or {}
-                    if part.get('type') == 'text' and part.get('messageID') in assistant_msg_ids:
-                        pid = part.get('id')
-                        if pid not in text_by_part:
-                            part_order.append(pid)
-                        text_by_part[pid] = part.get('text', '')
+                    pid = part.get('id')
+                    if pid and part.get('messageID') in assistant_msg_ids:
+                        ptype = part.get('type')
+                        if ptype == 'text':
+                            if pid not in parts_by_id:
+                                part_order.append(pid)
+                            parts_by_id[pid] = {'type': 'text', 'text': part.get('text', '')}
+                        elif ptype == 'tool':
+                            if pid not in parts_by_id:
+                                part_order.append(pid)
+                            st = part.get('state') or {}
+                            parts_by_id[pid] = {
+                                'type': 'tool_use',
+                                'name': part.get('tool') or 'tool',
+                                'title': st.get('title'),
+                                'status': st.get('status'),
+                                'input': st.get('input'),
+                                'result': st.get('output') if st.get('output') is not None else st.get('result'),
+                            }
                 elif etype == 'session.idle':
-                    text = ''.join(text_by_part[p] for p in part_order)
-                    if text.strip():
+                    content = _build_assistant_content(parts_by_id, part_order)
+                    if content:
                         try:
-                            _persist_assistant_message(sid, [{'type': 'text', 'text': text}])
+                            _persist_assistant_message(sid, content)
                         except Exception:
                             pass  # don't break the stream on DB hiccup (§7 #9)
                     assistant_msg_ids = set()
-                    text_by_part = {}
+                    parts_by_id = {}
                     part_order = []
 
                 yield _format_sse(etype, props)

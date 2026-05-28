@@ -16,3 +16,9 @@ def test_agent_directive_mentions_diagram_fences():
 def test_agent_directive_mentions_query_collection():
     from routes.ai_chat import _AGENT_DIRECTIVE
     assert 'query_collection' in _AGENT_DIRECTIVE
+
+
+def test_agent_directive_says_results_render_as_table():
+    """Agent should not re-state query data as text; results render as a table."""
+    from routes.ai_chat import _AGENT_DIRECTIVE
+    assert '表格呈现' in _AGENT_DIRECTIVE

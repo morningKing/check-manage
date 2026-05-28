@@ -155,6 +155,40 @@ def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     assert any("INSERT INTO ai_chat_messages" in s for s in inserts)
 
 
+def test_sse_events_persists_tool_parts_on_idle(setup):
+    """Tool calls (e.g. query_collection) must be persisted alongside text so the
+    rendered result survives a reload — not just the assistant's prose."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.updated', 'data': {'type': 'message.updated',
+            'properties': {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
+            'properties': {'part': {'id': 'p1', 'type': 'text', 'text': '查到 2 条',
+                                    'messageID': 'm1', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
+            'properties': {'part': {'id': 'p2', 'type': 'tool', 'tool': 'query_collection',
+                                    'messageID': 'm1', 'sessionID': 'oc_sess_42',
+                                    'state': {'status': 'completed',
+                                              'output': '{"mode":"table","total":2}'}}}}},
+        {'event': 'session.idle', 'data': {'type': 'session.idle',
+            'properties': {'sessionID': 'oc_sess_42'}}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    b''.join(resp.response)  # drain the generator so idle-persistence runs
+    persisted = None
+    for c in cursor.execute.call_args_list:
+        sql = c.args[0]
+        if "INSERT INTO ai_chat_messages" in sql and "'assistant'" in sql:
+            persisted = json.loads(c.args[1][2])
+    assert persisted is not None
+    types = [p['type'] for p in persisted]
+    assert 'text' in types and 'tool_use' in types
+    tool = next(p for p in persisted if p['type'] == 'tool_use')
+    assert tool['name'] == 'query_collection'
+    assert tool['result'] == '{"mode":"table","total":2}'
+
+
 def test_sse_events_auth_via_query_token(setup):
     """EventSource can't set headers, so the SSE route accepts ?access_token=."""
     client, cursor, oc, dev_h, _, _ = setup
