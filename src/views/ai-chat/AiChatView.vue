@@ -5,7 +5,7 @@ import {
   ElDrawer,
 } from 'element-plus'
 import {
-  Plus, Promotion, Delete, EditPen, Paperclip, Close, Document, Loading, Download,
+  Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -237,26 +237,37 @@ function onKey(e: Event) {
         </template>
       </ElScrollbar>
 
-      <!-- 输入区 -->
+      <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">
         <div class="composer-inner">
-          <div v-if="attachments.length" class="composer-attachments">
-            <span v-for="a in attachments" :key="a.path" class="attach-chip">
-              <ElIcon><Document /></ElIcon>{{ a.name }}
-              <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
-            </span>
-          </div>
-          <ElInput
-            v-model="input" type="textarea" :rows="3" resize="none"
-            placeholder="给 AI 助手发消息（Enter 发送，Shift+Enter 换行）"
-            @keydown="onKey"
-          />
-          <div class="composer-bar">
-            <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
-            <ElTooltip content="上传文件">
-              <ElButton :icon="Paperclip" circle :loading="store.uploading" @click="pickFiles" />
-            </ElTooltip>
-            <ElButton type="primary" :icon="Promotion" :disabled="!canSend" @click="send">发送</ElButton>
+          <div class="composer-card">
+            <div v-if="attachments.length" class="composer-attachments">
+              <span v-for="a in attachments" :key="a.path" class="attach-chip">
+                <ElIcon><Document /></ElIcon>{{ a.name }}
+                <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
+              </span>
+            </div>
+            <ElInput
+              v-model="input" type="textarea" :autosize="{ minRows: 1, maxRows: 8 }"
+              class="composer-input"
+              placeholder="给 AI 助手发消息…（Enter 发送，Shift+Enter 换行）"
+              @keydown="onKey"
+            />
+            <div class="composer-bar">
+              <div class="composer-bar__left">
+                <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
+                <ElTooltip content="上传文件">
+                  <ElButton class="composer-add" :icon="Plus" circle text :loading="store.uploading" @click="pickFiles" />
+                </ElTooltip>
+              </div>
+              <div class="composer-bar__right">
+                <span class="composer-model">MiMo</span>
+                <ElButton
+                  class="composer-send" type="primary" circle :icon="Top"
+                  :disabled="!canSend" @click="send"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -370,20 +381,51 @@ function onKey(e: Event) {
 }
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
 .ai-chat__composer {
-  border-top: 1px solid var(--el-border-color-light);
-  padding: 12px 16px 16px;
+  padding: 8px 16px 18px;
 }
-/* one centered column so textarea and action bar share the same width/edges */
+/* one centered column */
 .composer-inner {
   max-width: 780px;
   margin: 0 auto;
 }
-.composer-inner :deep(.el-textarea),
-.composer-inner :deep(.el-textarea__inner) {
-  width: 100%;
+/* unified rounded card holding attachments + input + actions (Claude-style) */
+.composer-card {
+  border: 1px solid var(--el-border-color);
+  border-radius: 20px;
+  background: var(--el-bg-color);
+  padding: 10px 14px 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.composer-attachments { margin-bottom: 6px; }
-.composer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; }
+.composer-card:focus-within {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 3px var(--el-color-primary-light-8);
+}
+/* borderless input that blends into the card */
+.composer-input :deep(.el-textarea__inner) {
+  border: none;
+  box-shadow: none !important;
+  background: transparent;
+  padding: 4px 4px 0;
+  resize: none;
+  font-size: 15px;
+  line-height: 1.6;
+}
+.composer-attachments { margin-bottom: 4px; }
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+.composer-bar__right { display: flex; align-items: center; gap: 10px; }
+.composer-model { font-size: 13px; color: var(--el-text-color-secondary); }
+.composer-add {
+  color: var(--el-text-color-secondary);
+  font-size: 18px;
+  &:hover { color: var(--el-color-primary); background: var(--el-fill-color); }
+}
+.composer-send { font-size: 16px; }
 .preview-head { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px;
   &__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   &__actions { display: flex; gap: 8px; flex-shrink: 0; }
