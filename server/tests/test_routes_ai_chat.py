@@ -263,3 +263,47 @@ def test_send_message_inlines_uploaded_text_for_agent(setup):
     # stored user message keeps a file chip
     inserts = [c.args for c in cursor.execute.call_args_list if 'INSERT INTO ai_chat_messages' in c.args[0]]
     assert any('"type": "file"' in a[1][2] for a in inserts)
+
+
+def test_list_files_returns_uploads_and_outputs(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wslist'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    (ws / 'uploads' / 'in.txt').write_text('hi', encoding='utf-8')
+    (ws / 'outputs' / 'out.py').write_text('print(1)', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files', headers=dev_h)
+    assert resp.status_code == 200
+    files = {f['path']: f for f in resp.get_json()['files']}
+    assert files['uploads/in.txt']['dir'] == 'uploads'
+    assert files['outputs/out.py']['dir'] == 'outputs'
+
+
+def test_download_file_returns_content(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsdl'
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs' / 'report.txt').write_text('DOWNLOAD-OK', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    jwt = dev_h['Authorization'].split(' ', 1)[1]
+    resp = client.get(f'/ai/chat/sessions/sess_x/files/download?path=outputs/report.txt&access_token={jwt}')
+    assert resp.status_code == 200
+    assert b'DOWNLOAD-OK' in resp.data
+
+
+def test_download_file_rejects_path_traversal(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wstrav'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    jwt = dev_h['Authorization'].split(' ', 1)[1]
+    resp = client.get(f'/ai/chat/sessions/sess_x/files/download?path=../../secret.txt&access_token={jwt}')
+    assert resp.status_code == 400
+
+
+def test_list_files_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None  # not owned by this user
+    resp = client.get('/ai/chat/sessions/sess_other/files', headers=dev_h)
+    assert resp.status_code == 404

@@ -7,9 +7,13 @@ import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('@/api/aiChat', () => ({
   createSession: vi.fn(),
+  listSessions: vi.fn(),
+  renameSession: vi.fn(),
   deleteSession: vi.fn(),
   getMessages: vi.fn(),
   sendMessage: vi.fn(),
+  uploadFile: vi.fn(),
+  listFiles: vi.fn(() => Promise.resolve({ files: [] })),
   createEventStream: vi.fn(() => ({ close: vi.fn() })),
 }))
 
@@ -113,5 +117,63 @@ describe('useAiChatStore', () => {
     expect(store.messages['sess_1'][0].role).toBe('user')
     expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [])
     expect(store.streaming['sess_1']).toBe(true)
+  })
+
+  it('captures tool-use parts (MCP/built-in tool calls) on the assistant message', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: {
+      id: 'tp', type: 'tool', messageID: 'm1', tool: 'list_collections',
+      state: { status: 'completed', title: 'list', input: { x: 1 }, output: 'ok' },
+    } } })
+
+    const parts = store.messages['sess_1'][0].content
+    const tool = parts.find((p: any) => p.type === 'tool_use') as any
+    expect(tool).toBeTruthy()
+    expect(tool.name).toBe('list_collections')
+    expect(tool.status).toBe('completed')
+    expect(tool.result).toBe('ok')
+  })
+
+  it('accumulates reasoning text and toggles thinking', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'r1', type: 'reasoning', messageID: 'm1', text: '思考中…' } } })
+    expect(store.reasoning['sess_1']).toBe('思考中…')
+    expect(store.thinking['sess_1']).toBe(true)
+
+    handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
+    expect(store.thinking['sess_1']).toBe(false)
+  })
+
+  it('loads outputs/ files after a turn finishes (session.idle)', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+    vi.mocked(api.listFiles).mockResolvedValue({ files: [
+      { name: 'out.py', path: 'outputs/out.py', dir: 'outputs', size: 12 },
+      { name: 'in.txt', path: 'uploads/in.txt', dir: 'uploads', size: 5 },
+    ] })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
+    await Promise.resolve(); await Promise.resolve()  // let loadFiles promise settle
+
+    // only outputs/ files are surfaced as downloadable artifacts
+    expect(store.outputs['sess_1'].map(f => f.name)).toEqual(['out.py'])
   })
 })
