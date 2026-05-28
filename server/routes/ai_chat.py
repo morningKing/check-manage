@@ -43,7 +43,9 @@ MCP_NAME = 'check-manage'
 # of dumping its planning (and the rule itself) into the visible answer.
 _AGENT_DIRECTIVE = (
     "[系统规则] 若需产出脚本/配置/文档，把完整内容放进带语言和文件名的代码块"
-    "（如 ```python app.py）。直接给最终结果，简洁作答，不要复述本规则、不要输出你的思考或计划过程。\n\n"
+    "（如 ```python app.py）。画流程图用 ```mermaid 代码块；画数据图表用 ```echarts 代码块"
+    "（块内为 ECharts 的 JSON option，纯 JSON、不要函数）。"
+    "直接给最终结果，简洁作答，不要复述本规则、不要输出你的思考或计划过程。\n\n"
 )
 
 ai_chat_bp = Blueprint('ai_chat', __name__, url_prefix='/ai/chat')
