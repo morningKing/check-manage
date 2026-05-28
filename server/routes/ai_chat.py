@@ -29,6 +29,7 @@ from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
+from utils.py_runner import run_python_in_workspace
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -421,6 +422,24 @@ def download_file(sid):
     if not os.path.isfile(abs_path):
         return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
     return send_file(abs_path, as_attachment=True, download_name=os.path.basename(abs_path))
+
+
+@ai_chat_bp.route('/sessions/<sid>/run', methods=['POST'])
+@write_required
+def run_script(sid):
+    """User-triggered: run a (Python) script in the session workspace to produce
+    the actual result file when the agent only gave a script. Deterministic,
+    independent of the model. Returns stdout/stderr + files written to outputs/."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    body = request.get_json(force=True) or {}
+    code = body.get('code') or ''
+    if not code.strip():
+        return jsonify({'error': 'code required', 'code': 'CODE_REQUIRED'}), 400
+    result = run_python_in_workspace(code, sess[4])
+    return jsonify(result)
 
 
 @ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])

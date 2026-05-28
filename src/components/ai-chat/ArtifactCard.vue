@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElButton, ElIcon, ElMessage } from 'element-plus'
-import { Document, View, CopyDocument, Download } from '@element-plus/icons-vue'
-import { artifactFilename, artifactLabel, downloadText, sniffLang } from '@/utils/artifacts'
+import { Document, View, CopyDocument, Download, VideoPlay } from '@element-plus/icons-vue'
+import { artifactFilename, artifactLabel, downloadText, sniffLang, isRunnableLang } from '@/utils/artifacts'
 
-const props = defineProps<{ lang: string; code: string; index: number; versions?: number }>()
-const emit = defineEmits<{ (e: 'preview'): void }>()
+const props = defineProps<{ lang: string; code: string; index: number; versions?: number; running?: boolean }>()
+const emit = defineEmits<{ (e: 'preview'): void; (e: 'run'): void }>()
 
 const effLang = computed(() => sniffLang(props.lang, props.code))
 const filename = computed(() => artifactFilename(effLang.value, props.index))
 const label = computed(() => artifactLabel(effLang.value, props.index))
 const lineCount = computed(() => props.code.split('\n').length)
 const versionCount = computed(() => props.versions ?? 1)
+const runnable = computed(() => isRunnableLang(effLang.value))
 
 async function copy() {
   try {
@@ -36,6 +37,10 @@ function download() {
       </div>
     </div>
     <div class="artifact-card__actions" @click.stop>
+      <ElButton
+        v-if="runnable" size="small" type="primary" text :icon="VideoPlay"
+        :loading="running" @click="emit('run')"
+      >运行</ElButton>
       <ElButton size="small" text :icon="View" @click="emit('preview')">预览</ElButton>
       <ElButton size="small" text :icon="CopyDocument" @click="copy">复制</ElButton>
       <ElButton size="small" text :icon="Download" @click="download">下载</ElButton>

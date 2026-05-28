@@ -27,7 +27,7 @@
   - 用户消息:右侧灰色圆角块;助手消息:无框、整宽、文档式 Markdown。
   - **思考过程**:可折叠的「思考完成」面板(reasoning),完成后自动收起。
   - **工具调用**:折叠卡片,显示「调用工具 · 工具名」+ 状态(运行中/完成/出错)+ 输入/结果。
-  - **制品卡片**:显示文件名、语言、行数、「共 N 版」;按钮「预览 / 复制 / 下载」。
+  - **制品卡片**:显示文件名、语言、行数、「共 N 版」;按钮「预览 / 复制 / 下载」;Python 制品额外有「运行」按钮——用户手动触发在会话工作区执行,产出的结果文件出现在「产出文件」(确定性、不依赖模型;自动剥除模型常见的"首行文件名"瑕疵)。
   - **产出文件**:agent 写入 `outputs/` 的真实文件,列在"产出文件"区,可直接下载。
 - **底部输入框**(Claude 风格统一圆角卡片):
   - 无边框自适应输入(1–8 行),聚焦时整卡出现蓝色光环;
@@ -125,6 +125,7 @@ PostgreSQL(:5432)
 | POST | `/sessions/:id/files` | write_required | 上传文件到 `uploads/` |
 | GET | `/sessions/:id/files` | login_required | 列出 `uploads/`+`outputs/` |
 | GET | `/sessions/:id/files/download` | login_required_sse | 下载(`?path=`) |
+| POST | `/sessions/:id/run` | write_required | 用户手动运行脚本(Python),在会话工作区执行,产出文件落 `outputs/` |
 
 工具模块:
 - `server/utils/opencode_client.py`:OpenCode HTTP/SSE 封装(§4)。

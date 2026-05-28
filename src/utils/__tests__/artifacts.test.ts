@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang } from '../artifacts'
 
 describe('splitArtifacts', () => {
   it('lifts a large code block into a code segment', () => {
@@ -70,5 +70,15 @@ describe('isRenderableLang', () => {
     expect(isRenderableLang('html')).toBe(true)
     expect(isRenderableLang('svg')).toBe(true)
     expect(isRenderableLang('python')).toBe(false)
+  })
+})
+
+describe('isRunnableLang', () => {
+  it('is true for python only', () => {
+    expect(isRunnableLang('python')).toBe(true)
+    expect(isRunnableLang('py')).toBe(true)
+    expect(isRunnableLang('check_disk.py')).toBe(true)
+    expect(isRunnableLang('javascript')).toBe(false)
+    expect(isRunnableLang('svg')).toBe(false)
   })
 })

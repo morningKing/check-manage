@@ -83,6 +83,18 @@ export function listFiles(id: string) {
   return get<{ files: AiFile[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/files`)
 }
 
+export interface RunResult {
+  exitCode: number
+  timedOut: boolean
+  stdout: string
+  stderr: string
+  outputFiles: string[]
+}
+
+export function runScript(id: string, code: string) {
+  return post<RunResult>(`/ai/chat/sessions/${encodeURIComponent(id)}/run`, { code })
+}
+
 export function downloadFileUrl(id: string, path: string): string {
   return `/api/ai/chat/sessions/${encodeURIComponent(id)}/files/download?path=${encodeURIComponent(path)}${authParam('&')}`
 }

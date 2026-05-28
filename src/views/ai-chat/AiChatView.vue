@@ -15,7 +15,7 @@ import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
-import { downloadFileUrl, type AiMessage } from '@/api/aiChat'
+import { downloadFileUrl, runScript, type AiMessage } from '@/api/aiChat'
 
 const store = useAiChatStore()
 
@@ -75,6 +75,29 @@ const preview = ref<{ filename: string; versions: ArtifactVersion[] } | null>(nu
 function openPreview(seg: CodeSegment, idx: number) {
   preview.value = { filename: fileNameOf(seg, idx), versions: versionsForSeg(seg, idx) }
   previewOpen.value = true
+}
+
+// User-triggered script run: execute the artifact's code server-side to produce
+// the result file, then refresh 产出文件. Keyed by the artifact's code so the
+// card shows a per-card running spinner.
+const runningCode = ref<string | null>(null)
+async function runArtifact(seg: CodeSegment) {
+  if (!activeId.value || runningCode.value) return
+  runningCode.value = seg.code
+  try {
+    const res = await runScript(activeId.value, seg.code)
+    await store.loadFiles(activeId.value)
+    if (res.exitCode === 0) {
+      const n = res.outputFiles.length
+      ElMessage.success(n ? `运行完成，生成 ${n} 个文件，见「产出文件」` : '运行完成（无文件产出）')
+    } else {
+      ElMessage.error('脚本运行出错：' + (res.stderr || '').split('\n').slice(-3).join(' ').slice(0, 160))
+    }
+  } catch {
+    ElMessage.error('运行失败')
+  } finally {
+    runningCode.value = null
+  }
 }
 
 async function scrollToBottom() {
@@ -196,7 +219,9 @@ function onKey(e: Event) {
                             v-else-if="seg.type === 'code'"
                             :lang="seg.lang" :code="seg.code" :index="si"
                             :versions="versionsForSeg(seg, si).length"
+                            :running="runningCode === seg.code"
                             @preview="openPreview(seg, si)"
+                            @run="runArtifact(seg)"
                           />
                         </template>
                       </template>

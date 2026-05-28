@@ -345,3 +345,38 @@ def test_send_message_non_export_does_not_export(setup):
         )
     assert resp.status_code == 202
     exp.assert_not_called()
+
+
+def test_run_script_executes_and_returns_outputs(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsrun'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    code = "import os\nos.makedirs('outputs',exist_ok=True)\nopen('outputs/r.txt','w').write('done')\nprint('ran')\n"
+    resp = client.post('/ai/chat/sessions/sess_x/run', json={'code': code}, headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['exitCode'] == 0
+    assert 'ran' in body['stdout']
+    assert 'outputs/r.txt' in body['outputFiles']
+
+
+def test_run_script_requires_code(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsrun2'; ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.post('/ai/chat/sessions/sess_x/run', json={'code': '  '}, headers=dev_h)
+    assert resp.status_code == 400
+
+
+def test_run_script_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/run', json={'code': 'print(1)'}, headers=guest_h)
+    assert resp.status_code == 403
+
+
+def test_run_script_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.post('/ai/chat/sessions/sess_o/run', json={'code': 'print(1)'}, headers=dev_h)
+    assert resp.status_code == 404

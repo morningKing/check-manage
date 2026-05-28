@@ -66,6 +66,12 @@ export function isRenderableLang(lang: string): boolean {
   return l === 'html' || l === 'svg'
 }
 
+/** python artifacts can be executed server-side to produce a result file. */
+export function isRunnableLang(lang: string): boolean {
+  const l = lang.toLowerCase()
+  return l === 'python' || l === 'py' || l.endsWith('.py')
+}
+
 /**
  * Infer a better language than the fence label. Models (e.g. MiMo) often mislabel
  * code (Python tagged as bash) or omit the label; sniff from the content.
