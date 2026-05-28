@@ -1131,6 +1131,11 @@ const viewManageDialogRef = ref<InstanceType<typeof ViewManageDialog>>()
 const columnConfigDialogRef = ref<InstanceType<typeof ColumnConfigDialog>>()
 
 /**
+ * 正在编辑列配置的视图 id（来自视图管理弹窗的选中项，可能不是当前应用的视图）
+ */
+const editingViewId = ref<number | null>(null)
+
+/**
  * 视图模式（table / kanban / excel / calendar / gantt）
  */
 const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table')
@@ -2735,6 +2740,7 @@ function handleOpenManage(): void {
  * 处理列配置编辑（从视图管理弹窗触发）
  */
 function handleEditColumns(view: any): void {
+  editingViewId.value = view.id
   columnConfigDialogRef.value?.open(
     view.columns,
     view.sortConfig || [],
@@ -2744,18 +2750,21 @@ function handleEditColumns(view: any): void {
 
 /**
  * 处理列配置保存
+ *
+ * 保存到「正在编辑的视图」(editingViewId)，而不是当前应用的视图——二者可能不同
+ * （在视图管理弹窗里可以编辑任意视图，包括尚未应用的视图）。
  */
 async function handleColumnConfigSave(
   columns: any[],
   sortConfig: any[],
   groupField: string | null
 ): Promise<void> {
-  const view = columnViewStore.currentView
-  if (!view) return
+  const viewId = editingViewId.value
+  if (viewId == null) return
 
   try {
     const groupConfig = groupField ? { field: groupField } : null
-    await columnViewStore.updateView(pageId.value, view.id, {
+    await columnViewStore.updateView(pageId.value, viewId, {
       columns,
       sortConfig,
       groupConfig
