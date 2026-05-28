@@ -7,12 +7,16 @@ centralized here: list_tools returns every tool, call_tool dispatches by name.
 import mcp.types as types
 from mcp.server import Server
 
-from tools import list_collections, save_artifact, read_upload
+from tools import (
+    list_collections, save_artifact, read_upload, export_collection_excel, run_python,
+)
 
 _TOOLS = {
     list_collections.NAME: (list_collections.TOOL, list_collections.handle),
     save_artifact.NAME: (save_artifact.TOOL, save_artifact.handle),
     read_upload.NAME: (read_upload.TOOL, read_upload.handle),
+    export_collection_excel.NAME: (export_collection_excel.TOOL, export_collection_excel.handle),
+    run_python.NAME: (run_python.TOOL, run_python.handle),
 }
 
 

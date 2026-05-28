@@ -142,7 +142,12 @@ PostgreSQL(:5432)
   - `list_collections` — 当前角色可见的数据集(RBAC)。
   - `save_artifact(filename, content)` — 写入会话 `outputs/`,用户可下载。
   - `read_upload(filename?)` — 读会话 `uploads/`(无参列出文件),会话作用域、限 `uploads/`、200KB、二进制/超大返回错误。
+  - `export_collection_excel(collection)` — 把某集合的**真实数据**导出为 `.xlsx` 写入 `outputs/`(RBAC、字段标签作表头),产出**结果文件**而非脚本。
+  - `run_python(code)` — 在会话工作目录执行 Python(超时、cwd 限会话目录、guest 禁用),返回 stdout + 写入 `outputs/` 的结果文件;非强沙箱(见限制)。
 - 新增工具只需实现 `NAME/TOOL/handle` 并在注册表挂上,**前端无需改动**。
+
+#### 3.5 导出意图后端兜底(不依赖模型)
+鉴于 MiMo 常不主动调 MCP 工具,`send_message` 内置**导出意图兜底**:`utils/data_export.py` 的 `is_export_intent` + `resolve_collection_from_text` 命中(如"把巡检用例数据导出成 excel")时,Flask **确定性地**用真实数据生成 `.xlsx` 写入会话 `outputs/`,并在 prompt 里告知 agent。无论模型是否调用工具,用户都能在「产出文件」拿到真实结果文件。
 
 #### 3.4 前端(Vue 3)
 - `src/views/ai-chat/AiChatView.vue`:全屏页(会话栏 + 消息区 + 统一圆角输入卡 + 预览抽屉)。

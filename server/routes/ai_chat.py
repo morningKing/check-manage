@@ -26,6 +26,9 @@ from utils.workspace import (
     safe_resolve,
 )
 from utils.session_token import generate_token, revoke_token
+from utils.data_export import (
+    is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
+)
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -181,6 +184,24 @@ def send_message(sid):
         else:
             abs_path = _safe_workspace_path(workspace_path, rel)
             prompt += f"\n\n[用户上传的文件 {name}，路径：{abs_path}（如需要可用工具读取）]"
+
+    # Export-intent fallback: if the user asks to export a known collection to
+    # Excel, do it server-side and deterministically (real platform data), so a
+    # real .xlsx lands in outputs/ even when the model doesn't call the MCP tool.
+    # The produced file is surfaced via the outputs/ list on session.idle.
+    role = user.get('role')
+    if is_export_intent(content):
+        match = resolve_collection_from_text(content)
+        if match:
+            collection, label = match
+            try:
+                res = export_collection_to_xlsx(collection, workspace_path, role=role)
+                prompt += (
+                    f"\n\n[系统已将「{label}」的 {res['rows']} 条数据导出为文件 {res['path']}，"
+                    "用户可在「产出文件」处下载。请简要告知用户已导出，不要重复生成脚本。]"
+                )
+            except ExportError:
+                pass  # unknown collection / no permission → let the agent handle it
 
     msg_id = 'msg_' + secrets.token_hex(6)
     with get_db() as conn:

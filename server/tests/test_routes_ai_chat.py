@@ -307,3 +307,41 @@ def test_list_files_other_users_session_404(setup):
     cursor.fetchone.return_value = None  # not owned by this user
     resp = client.get('/ai/chat/sessions/sess_other/files', headers=dev_h)
     assert resp.status_code == 404
+
+
+def test_send_message_export_intent_fallback_writes_xlsx(setup):
+    from unittest.mock import patch
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsexport'
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    # stub the export so we don't need real DB collections; assert it's invoked + noted
+    fake = {'path': 'outputs/inspection-case-x.xlsx', 'rows': 2, 'columns': 6, 'label': '巡检用例'}
+    with patch('routes.ai_chat.resolve_collection_from_text', return_value=('inspection-case', '巡检用例')), \
+         patch('routes.ai_chat.export_collection_to_xlsx', return_value=fake) as exp:
+        resp = client.post(
+            '/ai/chat/sessions/sess_x/messages',
+            json={'content': '请把巡检用例数据导出成 excel 文件'},
+            headers=dev_h,
+        )
+    assert resp.status_code == 202
+    exp.assert_called_once()
+    # the agent prompt should mention the produced file so it tells the user
+    args, _ = oc.send_prompt_async.call_args
+    assert 'outputs/inspection-case-x.xlsx' in args[1]
+
+
+def test_send_message_non_export_does_not_export(setup):
+    from unittest.mock import patch
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsnoexport'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    with patch('routes.ai_chat.export_collection_to_xlsx') as exp:
+        resp = client.post(
+            '/ai/chat/sessions/sess_x/messages',
+            json={'content': '你好，帮我解释一下什么是巡检'},
+            headers=dev_h,
+        )
+    assert resp.status_code == 202
+    exp.assert_not_called()
