@@ -40,3 +40,7 @@ npm-debug.log*
 # TypeScript cache
 *.tsbuildinfo
 .pw-shots/
+.playwright-mcp/
+/home.png
+/artifact-preview-live.png
+/svg-render-live.png

@@ -38,7 +38,7 @@ export function splitArtifacts(src: string): Segment[] {
 const LANG_EXT: Record<string, string> = {
   python: 'py', py: 'py', javascript: 'js', js: 'js', typescript: 'ts', ts: 'ts',
   tsx: 'tsx', jsx: 'jsx', bash: 'sh', sh: 'sh', shell: 'sh', json: 'json',
-  yaml: 'yaml', yml: 'yml', sql: 'sql', html: 'html', css: 'css', xml: 'xml',
+  yaml: 'yaml', yml: 'yml', sql: 'sql', html: 'html', svg: 'svg', css: 'css', xml: 'xml',
   markdown: 'md', md: 'md', go: 'go', java: 'java', rust: 'rs', c: 'c', cpp: 'cpp',
   text: 'txt', '': 'txt',
 }

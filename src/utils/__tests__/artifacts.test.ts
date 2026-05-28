@@ -30,6 +30,8 @@ describe('artifactFilename', () => {
     expect(artifactFilename('python', 0)).toBe('artifact-1.py')
     expect(artifactFilename('typescript', 1)).toBe('artifact-2.ts')
     expect(artifactFilename('', 0)).toBe('artifact-1.txt')
+    expect(artifactFilename('svg', 0)).toBe('artifact-1.svg')
+    expect(artifactFilename('html', 0)).toBe('artifact-1.html')
   })
   it('uses the info string directly when it looks like a filename', () => {
     expect(artifactFilename('check_disk.py', 0)).toBe('check_disk.py')
