@@ -321,20 +321,23 @@ function onKey(e: Event) {
   color: var(--el-text-color-secondary);
   margin-bottom: 6px;
 }
-/* User: subtle gray rounded block on the right */
+/* User: a single gray rounded block on the right (no inner box) */
 .msg--user { display: flex; justify-content: flex-end; }
-.ai-bubble--user :deep(.el-bubble-content),
-.ai-bubble--user :deep([class*='content']) {
+.ai-bubble--user :deep(.elx-bubble__content-wrapper),
+.ai-bubble--user :deep(.elx-bubble__content) {
   background: var(--el-fill-color) !important;
   color: var(--el-text-color-primary) !important;
+  border: none !important;
   border-radius: 14px !important;
 }
-/* Assistant: borderless, full width, document feel */
+/* Assistant: borderless, full width, document feel — no frame around content */
 .ai-bubble--assistant { width: 100%; }
-.ai-bubble--assistant :deep([class*='content']) {
+.ai-bubble--assistant :deep(.elx-bubble__content-wrapper),
+.ai-bubble--assistant :deep(.elx-bubble__content) {
   background: transparent !important;
-  padding-left: 0 !important;
-  padding-right: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
   max-width: 100% !important;
 }
 .ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }

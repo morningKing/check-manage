@@ -6,13 +6,21 @@ defineProps<{ text: string }>()
 </script>
 
 <template>
-  <!-- codeFoldable=false: don't collapse long code blocks (the artifact preview
-       needs the full content visible). -->
-  <MdPreview :modelValue="text" :code-foldable="false" />
+  <!-- wrapper so :deep can reach the MdPreview root (.md-editor); codeFoldable
+       =false keeps long code blocks fully visible in the artifact preview. -->
+  <div class="markdown-view">
+    <MdPreview :modelValue="text" :code-foldable="false" />
+  </div>
 </template>
 
 <style scoped>
-:deep(.md-editor-preview) {
+/* md-editor paints a white background by default; make it transparent so it
+   inherits the bubble/drawer background (no white box inside colored bubbles). */
+.markdown-view :deep(.md-editor) {
+  background: transparent;
+  --md-bk-color: transparent;
+}
+.markdown-view :deep(.md-editor-preview) {
   font-size: 14px;
 }
 </style>
