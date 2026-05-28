@@ -44,6 +44,17 @@ describe('splitArtifacts', () => {
     const segs = splitArtifacts('```python\n' + code + '\n```')
     expect(segs.some(s => s.type === 'code')).toBe(true)
   })
+
+  it('keeps an inline mermaid block while still lifting a following large code block', () => {
+    const py = Array.from({ length: 8 }, (_, i) => `line ${i}`).join('\n')
+    const src = `图：\n\n\`\`\`mermaid\ngraph TD\nA-->B\n\`\`\`\n\n代码：\n\n\`\`\`python\n${py}\n\`\`\`\n`
+    const segs = splitArtifacts(src)
+    const codeSegs = segs.filter(s => s.type === 'code')
+    expect(codeSegs).toHaveLength(1)
+    expect((codeSegs[0] as any).lang).toBe('python')
+    // the mermaid fence stays as raw markdown inside a text segment
+    expect(segs.some(s => s.type === 'text' && (s as any).text.includes('graph TD'))).toBe(true)
+  })
 })
 
 describe('artifactFilename', () => {

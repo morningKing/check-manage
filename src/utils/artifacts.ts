@@ -33,7 +33,10 @@ export function splitArtifacts(src: string): Segment[] {
   while ((m = FENCE.exec(src))) {
     const lang = (m[1] || '').trim()
     const code = m[2].replace(/\n+$/, '')
-    if (isInlineRenderLang(lang)) continue // mermaid/echarts render inline via md-editor
+    // Leave mermaid/echarts in place: by NOT advancing `last`, the fenced block
+    // stays inside the surrounding text segment and md-editor renders it inline
+    // as a diagram/chart. (Advancing `last` here would drop the diagram.)
+    if (isInlineRenderLang(lang)) continue
     if (!isArtifact(code)) continue // leave small snippets inline in the prose
     if (m.index > last) segs.push({ type: 'text', text: src.slice(last, m.index) })
     segs.push({ type: 'code', lang, code })
