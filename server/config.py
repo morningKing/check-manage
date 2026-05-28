@@ -38,7 +38,15 @@ CORS_ALLOWED_ORIGINS = _split_csv(os.getenv('CORS_ALLOWED_ORIGINS', ''))
 OPEN_API_BRANCH = os.getenv('OPEN_API_BRANCH', 'main').strip() or 'main'
 
 # AI chat / Agent integration
-AI_WORKSPACE_ROOT     = os.getenv('AI_WORKSPACE_ROOT', os.path.join(os.path.dirname(__file__), '..', 'ai-workspaces'))
+# Workspace root lives OUTSIDE the repo on purpose: OpenCode's built-in file
+# tools (read/glob/bash) run from the server's launch cwd (the repo root), so
+# keeping session workspaces outside that tree stops the agent from globbing
+# into other sessions' uploads. Agents reach uploads only via the read_upload
+# MCP tool (session-scoped) or server-side inlining. Override with AI_WORKSPACE_ROOT.
+AI_WORKSPACE_ROOT     = os.getenv(
+    'AI_WORKSPACE_ROOT',
+    os.path.join(os.path.expanduser('~'), '.check-manage', 'ai-workspaces'),
+)
 OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
