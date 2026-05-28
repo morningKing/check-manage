@@ -239,23 +239,25 @@ function onKey(e: Event) {
 
       <!-- 输入区 -->
       <div class="ai-chat__composer">
-        <div v-if="attachments.length" class="composer-attachments">
-          <span v-for="a in attachments" :key="a.path" class="attach-chip">
-            <ElIcon><Document /></ElIcon>{{ a.name }}
-            <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
-          </span>
-        </div>
-        <ElInput
-          v-model="input" type="textarea" :rows="3" resize="none"
-          placeholder="给 AI 助手发消息（Enter 发送，Shift+Enter 换行）"
-          @keydown="onKey"
-        />
-        <div class="composer-bar">
-          <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
-          <ElTooltip content="上传文件">
-            <ElButton :icon="Paperclip" circle :loading="store.uploading" @click="pickFiles" />
-          </ElTooltip>
-          <ElButton type="primary" :icon="Promotion" :disabled="!canSend" @click="send">发送</ElButton>
+        <div class="composer-inner">
+          <div v-if="attachments.length" class="composer-attachments">
+            <span v-for="a in attachments" :key="a.path" class="attach-chip">
+              <ElIcon><Document /></ElIcon>{{ a.name }}
+              <ElIcon class="attach-chip__x" @click="store.removeAttachment(a.path)"><Close /></ElIcon>
+            </span>
+          </div>
+          <ElInput
+            v-model="input" type="textarea" :rows="3" resize="none"
+            placeholder="给 AI 助手发消息（Enter 发送，Shift+Enter 换行）"
+            @keydown="onKey"
+          />
+          <div class="composer-bar">
+            <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
+            <ElTooltip content="上传文件">
+              <ElButton :icon="Paperclip" circle :loading="store.uploading" @click="pickFiles" />
+            </ElTooltip>
+            <ElButton type="primary" :icon="Promotion" :disabled="!canSend" @click="send">发送</ElButton>
+          </div>
         </div>
       </div>
     </section>
@@ -371,10 +373,14 @@ function onKey(e: Event) {
   border-top: 1px solid var(--el-border-color-light);
   padding: 12px 16px 16px;
 }
-.ai-chat__composer > * {
+/* one centered column so textarea and action bar share the same width/edges */
+.composer-inner {
   max-width: 780px;
-  margin-left: auto;
-  margin-right: auto;
+  margin: 0 auto;
+}
+.composer-inner :deep(.el-textarea),
+.composer-inner :deep(.el-textarea__inner) {
+  width: 100%;
 }
 .composer-attachments { margin-bottom: 6px; }
 .composer-bar { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 8px; }
