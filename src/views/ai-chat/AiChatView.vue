@@ -14,6 +14,7 @@ import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
+import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
 import { downloadFileUrl, runScript, type AiMessage } from '@/api/aiChat'
@@ -116,6 +117,15 @@ async function runArtifact(seg: CodeSegment, idx: number) {
 
 function isRunResultOnly(m: AiMessage): boolean {
   return m.content.length > 0 && m.content.every(p => p.type === 'run_result')
+}
+
+function parseQueryResult(p: any): any | null {
+  if (p?.name !== 'query_collection') return null
+  let r: any = p.result
+  if (typeof r === 'string') {
+    try { r = JSON.parse(r) } catch { return null }
+  }
+  return r && typeof r === 'object' && typeof r.mode === 'string' ? r : null
 }
 
 async function scrollToBottom() {
@@ -223,11 +233,17 @@ function onKey(e: Event) {
                     <div v-if="p.type === 'file'" class="file-chip">
                       <ElIcon><Document /></ElIcon><span>{{ p.name }}</span>
                     </div>
-                    <ToolCallBubble
-                      v-else-if="p.type === 'tool_use'"
-                      :name="p.name" :title="p.title" :status="p.status"
-                      :input="p.input" :result="p.result"
-                    />
+                    <template v-else-if="p.type === 'tool_use'">
+                      <QueryResultBlock
+                        v-if="parseQueryResult(p)"
+                        :result="parseQueryResult(p)!" :download-url="fileUrl"
+                      />
+                      <ToolCallBubble
+                        v-else
+                        :name="p.name" :title="p.title" :status="p.status"
+                        :input="p.input" :result="p.result"
+                      />
+                    </template>
                     <RunResultBlock
                       v-else-if="p.type === 'run_result'"
                       :result="p" :download-url="fileUrl"

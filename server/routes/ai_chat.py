@@ -45,6 +45,8 @@ _AGENT_DIRECTIVE = (
     "[系统规则] 若需产出脚本/配置/文档，把完整内容放进带语言和文件名的代码块"
     "（如 ```python app.py）。画流程图用 ```mermaid 代码块；画数据图表用 ```echarts 代码块"
     "（块内为 ECharts 的 JSON option，纯 JSON、不要函数）。"
+    "回答数据查询类问题时，用 query_collection 工具查询真实数据（必要时先用 list_collections 看字段），"
+    "不要臆造数据、不要写直连数据库的脚本。"
     "直接给最终结果，简洁作答，不要复述本规则、不要输出你的思考或计划过程。\n\n"
 )
 

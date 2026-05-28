@@ -11,3 +11,8 @@ def test_agent_directive_mentions_diagram_fences():
     from routes.ai_chat import _AGENT_DIRECTIVE
     assert 'mermaid' in _AGENT_DIRECTIVE
     assert 'echarts' in _AGENT_DIRECTIVE
+
+
+def test_agent_directive_mentions_query_collection():
+    from routes.ai_chat import _AGENT_DIRECTIVE
+    assert 'query_collection' in _AGENT_DIRECTIVE
