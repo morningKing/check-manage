@@ -18,16 +18,25 @@ function isArtifact(code: string): boolean {
   return lines >= 6 || code.length >= 240
 }
 
+/** Diagram/chart langs md-editor renders inline; never lift these into artifacts. */
+const INLINE_RENDER_LANGS = new Set(['mermaid', 'echarts'])
+
+export function isInlineRenderLang(lang: string): boolean {
+  return INLINE_RENDER_LANGS.has((lang || '').trim().toLowerCase())
+}
+
 export function splitArtifacts(src: string): Segment[] {
   const segs: Segment[] = []
   let last = 0
   let m: RegExpExecArray | null
   FENCE.lastIndex = 0
   while ((m = FENCE.exec(src))) {
+    const lang = (m[1] || '').trim()
     const code = m[2].replace(/\n+$/, '')
+    if (isInlineRenderLang(lang)) continue // mermaid/echarts render inline via md-editor
     if (!isArtifact(code)) continue // leave small snippets inline in the prose
     if (m.index > last) segs.push({ type: 'text', text: src.slice(last, m.index) })
-    segs.push({ type: 'code', lang: (m[1] || '').trim(), code })
+    segs.push({ type: 'code', lang, code })
     last = m.index + m[0].length
   }
   if (last < src.length) segs.push({ type: 'text', text: src.slice(last) })

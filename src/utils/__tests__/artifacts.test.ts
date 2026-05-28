@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang } from '../artifacts'
 
 describe('splitArtifacts', () => {
   it('lifts a large code block into a code segment', () => {
@@ -22,6 +22,27 @@ describe('splitArtifacts', () => {
   it('returns the whole text when there are no code blocks', () => {
     const segs = splitArtifacts('just prose')
     expect(segs).toEqual([{ type: 'text', text: 'just prose' }])
+  })
+
+  it('keeps a large mermaid block inline (not lifted to an artifact)', () => {
+    const diagram = ['graph TD', 'A-->B', 'B-->C', 'C-->D', 'D-->E', 'E-->F', 'F-->G'].join('\n')
+    const src = `流程：\n\n\`\`\`mermaid\n${diagram}\n\`\`\`\n\n完。`
+    const segs = splitArtifacts(src)
+    expect(segs.every(s => s.type === 'text')).toBe(true)
+    expect(segs.map(s => (s as any).text).join('')).toContain('graph TD')
+  })
+
+  it('keeps a large echarts block inline (not lifted to an artifact)', () => {
+    const opt = ['{', '"xAxis": {"type":"category","data":["A","B"]},', '"yAxis": {"type":"value"},', '"series": [{"type":"bar","data":[1,2]}],', '"tooltip": {},', '"legend": {}', '}'].join('\n')
+    const src = `图：\n\n\`\`\`echarts\n${opt}\n\`\`\`\n`
+    const segs = splitArtifacts(src)
+    expect(segs.every(s => s.type === 'text')).toBe(true)
+  })
+
+  it('still lifts a large non-diagram code block', () => {
+    const code = Array.from({ length: 8 }, (_, i) => `line ${i}`).join('\n')
+    const segs = splitArtifacts('```python\n' + code + '\n```')
+    expect(segs.some(s => s.type === 'code')).toBe(true)
   })
 })
 
@@ -80,5 +101,18 @@ describe('isRunnableLang', () => {
     expect(isRunnableLang('check_disk.py')).toBe(true)
     expect(isRunnableLang('javascript')).toBe(false)
     expect(isRunnableLang('svg')).toBe(false)
+  })
+})
+
+describe('isInlineRenderLang', () => {
+  it('matches mermaid and echarts case-insensitively', () => {
+    expect(isInlineRenderLang('mermaid')).toBe(true)
+    expect(isInlineRenderLang('ECharts')).toBe(true)
+    expect(isInlineRenderLang(' echarts ')).toBe(true)
+  })
+  it('does not match normal code langs', () => {
+    expect(isInlineRenderLang('python')).toBe(false)
+    expect(isInlineRenderLang('svg')).toBe(false)
+    expect(isInlineRenderLang('')).toBe(false)
   })
 })
