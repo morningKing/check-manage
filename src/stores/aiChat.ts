@@ -24,16 +24,6 @@ interface PendingAttachment {
   path: string
 }
 
-export interface RunResultEntry {
-  id: string
-  filename: string
-  exitCode: number
-  timedOut: boolean
-  stdout: string
-  stderr: string
-  outputFiles: string[]
-}
-
 interface State {
   sessions: SessionMeta[]
   activeSessionId: string | null
@@ -43,7 +33,6 @@ interface State {
   thinking: Record<string, boolean>
   attachments: Record<string, PendingAttachment[]>
   outputs: Record<string, AiFile[]>
-  runResults: Record<string, RunResultEntry[]>
   uploading: boolean
   drawerOpen: boolean
   _stream: { close(): void } | null
@@ -64,7 +53,6 @@ export const useAiChatStore = defineStore('aiChat', {
     thinking: {},
     attachments: {},
     outputs: {},
-    runResults: {},
     uploading: false,
     drawerOpen: false,
     _stream: null,
@@ -82,9 +70,6 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeOutputs(state): AiFile[] {
       return state.activeSessionId ? state.outputs[state.activeSessionId] ?? [] : []
-    },
-    activeRunResults(state): RunResultEntry[] {
-      return state.activeSessionId ? state.runResults[state.activeSessionId] ?? [] : []
     },
   },
 
@@ -131,8 +116,8 @@ export const useAiChatStore = defineStore('aiChat', {
       } catch { /* non-fatal */ }
     },
 
-    recordRunResult(id: string, entry: RunResultEntry) {
-      ;(this.runResults[id] ?? (this.runResults[id] = [])).push(entry)
+    appendMessage(id: string, msg: AiMessage) {
+      ;(this.messages[id] ?? (this.messages[id] = [])).push(msg)
     },
 
     async renameSession(id: string, title: string) {

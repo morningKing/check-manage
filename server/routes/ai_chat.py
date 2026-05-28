@@ -436,9 +436,30 @@ def run_script(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     body = request.get_json(force=True) or {}
     code = body.get('code') or ''
+    filename = body.get('filename') or 'script'
     if not code.strip():
         return jsonify({'error': 'code required', 'code': 'CODE_REQUIRED'}), 400
     result = run_python_in_workspace(code, sess[4])
+
+    # Persist the run result as a message so it survives reload (part of history).
+    msg_id = 'msg_' + secrets.token_hex(6)
+    part = {
+        'type': 'run_result',
+        'filename': filename,
+        'exitCode': result['exitCode'],
+        'timedOut': result['timedOut'],
+        'stdout': result['stdout'],
+        'stderr': result['stderr'],
+        'outputFiles': result['outputFiles'],
+    }
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'assistant', %s)",
+            (msg_id, sid, json.dumps([part])),
+        )
+    result['messageId'] = msg_id
     return jsonify(result)
 
 

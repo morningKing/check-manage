@@ -2,9 +2,16 @@
 import { ref, computed } from 'vue'
 import { ElIcon } from 'element-plus'
 import { CircleCheck, CircleClose, Clock, Download, Document, ArrowRight } from '@element-plus/icons-vue'
-import type { RunResultEntry } from '@/stores/aiChat'
 
-const props = defineProps<{ result: RunResultEntry; downloadUrl: (path: string) => string }>()
+interface RunResult {
+  filename: string
+  exitCode: number
+  timedOut: boolean
+  stdout: string
+  stderr: string
+  outputFiles: string[]
+}
+const props = defineProps<{ result: RunResult; downloadUrl: (path: string) => string }>()
 
 const ok = computed(() => props.result.exitCode === 0 && !props.result.timedOut)
 const open = ref(!ok.value)  // expand by default on error

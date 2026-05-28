@@ -30,7 +30,6 @@ const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
-const runResults = computed(() => store.activeRunResults)
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
 const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
@@ -86,19 +85,20 @@ const runningCode = ref<string | null>(null)
 async function runArtifact(seg: CodeSegment, idx: number) {
   if (!activeId.value || runningCode.value) return
   const sid = activeId.value
+  const filename = fileNameOf(seg, idx)
   runningCode.value = seg.code
   try {
-    const res = await runScript(sid, seg.code)
+    const res = await runScript(sid, seg.code, filename)
     await store.loadFiles(sid)
-    // record an in-flow result block (status + stdout/stderr + produced files)
-    store.recordRunResult(sid, {
-      id: 'run_' + Date.now(),
-      filename: fileNameOf(seg, idx),
-      exitCode: res.exitCode,
-      timedOut: res.timedOut,
-      stdout: res.stdout,
-      stderr: res.stderr,
-      outputFiles: res.outputFiles,
+    // append the run result as a (persisted) message so it stays in history
+    store.appendMessage(sid, {
+      id: res.messageId || 'run_' + Date.now(),
+      role: 'assistant',
+      content: [{
+        type: 'run_result', filename,
+        exitCode: res.exitCode, timedOut: res.timedOut,
+        stdout: res.stdout, stderr: res.stderr, outputFiles: res.outputFiles,
+      }],
     })
     if (res.exitCode === 0) {
       const n = res.outputFiles.length
@@ -112,6 +112,10 @@ async function runArtifact(seg: CodeSegment, idx: number) {
   } finally {
     runningCode.value = null
   }
+}
+
+function isRunResultOnly(m: AiMessage): boolean {
+  return m.content.length > 0 && m.content.every(p => p.type === 'run_result')
 }
 
 async function scrollToBottom() {
@@ -208,7 +212,7 @@ function onKey(e: Event) {
               v-for="m in messages" :key="m.id"
               class="msg" :class="`msg--${m.role}`"
             >
-              <div class="msg__role" v-if="m.role !== 'user'">AI 助手</div>
+              <div class="msg__role" v-if="m.role !== 'user' && !isRunResultOnly(m)">AI 助手</div>
               <Bubble
                 :placement="m.role === 'user' ? 'end' : 'start'"
                 :variant="m.role === 'user' ? 'filled' : 'borderless'"
@@ -223,6 +227,10 @@ function onKey(e: Event) {
                       v-else-if="p.type === 'tool_use'"
                       :name="p.name" :title="p.title" :status="p.status"
                       :input="p.input" :result="p.result"
+                    />
+                    <RunResultBlock
+                      v-else-if="p.type === 'run_result'"
+                      :result="p" :download-url="fileUrl"
                     />
                     <template v-else-if="p.type === 'text' && p.text">
                       <!-- assistant: lift big code/doc blocks into artifact cards -->
@@ -258,12 +266,6 @@ function onKey(e: Event) {
             <div v-if="streaming && !messages.some(m => m.role === 'assistant' && hasText(m)) && !reasoning" class="ai-chat__pending">
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
             </div>
-
-            <!-- 运行结果（用户手动运行脚本的输出，在对话流内展示） -->
-            <RunResultBlock
-              v-for="r in runResults" :key="r.id"
-              :result="r" :download-url="fileUrl"
-            />
 
             <!-- 产出文件（agent 写入 outputs/ 的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">

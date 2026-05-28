@@ -32,6 +32,7 @@ export type AiContentPart =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown }
   | { type: 'file'; name: string; path: string }
+  | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
 
 export interface AiFile {
   name: string
@@ -89,10 +90,13 @@ export interface RunResult {
   stdout: string
   stderr: string
   outputFiles: string[]
+  messageId?: string
 }
 
-export function runScript(id: string, code: string) {
-  return post<RunResult>(`/ai/chat/sessions/${encodeURIComponent(id)}/run`, { code })
+export function runScript(id: string, code: string, filename?: string) {
+  return post<RunResult & { messageId: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/run`, { code, filename },
+  )
 }
 
 export function downloadFileUrl(id: string, path: string): string {
