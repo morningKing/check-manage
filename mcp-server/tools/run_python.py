@@ -24,12 +24,20 @@ NAME = "run_python"
 _TIMEOUT = 30          # seconds
 _MAX_OUT = 8000        # chars of stdout/stderr returned
 
+
+def _interpreter() -> str:
+    """Python used to run user code. Defaults to this server's interpreter
+    (the mcp venv, which carries pandas + openpyxl), overridable per-deployment
+    via RUN_PYTHON_EXECUTABLE to point at an interpreter with more libraries."""
+    return os.getenv("RUN_PYTHON_EXECUTABLE") or sys.executable
+
 TOOL = types.Tool(
     name=NAME,
     description=(
         "在本次会话的工作目录中执行 Python 代码,并返回标准输出以及写入 outputs/ 的结果文件"
         "(用户可下载)。当你需要真正运行脚本产出文件(如生成 Excel/图表/报告)时调用。"
-        "请把结果文件写入相对路径 outputs/ 下。参数:code=完整 Python 代码。"
+        "运行环境已内置 pandas 与 openpyxl。请把结果文件写入相对路径 outputs/ 下。"
+        "参数:code=完整 Python 代码。"
     ),
     inputSchema={
         "type": "object",
@@ -89,7 +97,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             f.write(code)
         try:
             proc = subprocess.run(
-                [sys.executable, script],
+                [_interpreter(), script],
                 cwd=ws, capture_output=True, text=True, timeout=_TIMEOUT,
             )
             stdout, stderr, rc = proc.stdout, proc.stderr, proc.returncode

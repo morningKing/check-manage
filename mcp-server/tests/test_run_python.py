@@ -64,3 +64,35 @@ def test_requires_code(tmp_path):
         from tools.run_python import handle, RunPythonError
         with pytest.raises(RunPythonError):
             handle({}, _ctx())
+
+
+def test_interpreter_has_pandas_and_openpyxl(tmp_path):
+    with patch('tools.run_python.get_db', _fake_db(str(tmp_path))):
+        from tools.run_python import handle
+        res = handle({'code': 'import pandas, openpyxl; print("ok", pandas.__version__)'}, _ctx())
+    assert res['exit_code'] == 0, res['stderr']
+    assert 'ok' in res['stdout']
+
+
+def test_produces_xlsx_via_pandas(tmp_path):
+    code = (
+        "import pandas as pd, os\n"
+        "os.makedirs('outputs', exist_ok=True)\n"
+        "pd.DataFrame({'a':[1,2],'b':[3,4]}).to_excel('outputs/data.xlsx', index=False)\n"
+        "print('done')\n"
+    )
+    with patch('tools.run_python.get_db', _fake_db(str(tmp_path))):
+        from tools.run_python import handle
+        res = handle({'code': code}, _ctx())
+    assert res['exit_code'] == 0, res['stderr']
+    assert 'outputs/data.xlsx' in res['output_files']
+    assert (tmp_path / 'outputs' / 'data.xlsx').exists()
+
+
+def test_interpreter_override_env(tmp_path, monkeypatch):
+    from tools import run_python
+    monkeypatch.setenv('RUN_PYTHON_EXECUTABLE', '/custom/python')
+    assert run_python._interpreter() == '/custom/python'
+    monkeypatch.delenv('RUN_PYTHON_EXECUTABLE')
+    import sys as _sys
+    assert run_python._interpreter() == _sys.executable
