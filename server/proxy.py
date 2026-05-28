@@ -14,7 +14,7 @@ import urllib.error
 import subprocess
 import time
 import signal
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -22,6 +22,13 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 8080))
 BACKEND_URL = os.environ.get('BACKEND_URL', 'http://127.0.0.1:3001')
 DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'))
+
+# AI chat dependencies (see CLAUDE.md "AI Agent Chat"):
+#   - MCP server: standalone service started here, has its OWN venv.
+#   - OpenCode: external agent runtime (`opencode serve`), NOT started here
+#     because it holds provider API keys in its own global config.
+MCP_HEALTH_URL = os.environ.get('MCP_HEALTH_URL', 'http://127.0.0.1:3003/health')
+OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
@@ -37,7 +44,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     # -- Proxy /api/* to backend ------------------------------------------
 
-    def _proxy_to_backend(self):
+    def _is_sse(self):
+        """AI chat SSE event stream: /api/ai/chat/sessions/<id>/events."""
+        path = self.path.split('?')[0]
+        return path.endswith('/events') and '/ai/chat/' in path
+
+    def _proxy_to_backend(self, stream=False):
         # Strip /api prefix: /api/auth/login -> /auth/login
         backend_path = self.path[4:]  # remove leading "/api"
         if not backend_path:
@@ -55,17 +67,15 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             if value:
                 req.add_header(header, value)
 
+        # SSE streams are long-lived and must never be read to completion or
+        # buffered; disable the read timeout and relay chunk-by-chunk.
+        timeout = None if stream else 120
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                resp_body = resp.read()
-                self.send_response(resp.status)
-                for key, val in resp.getheaders():
-                    if key.lower() in ('content-type', 'content-disposition',
-                                       'x-total-count', 'cache-control'):
-                        self.send_header(key, val)
-                self.send_header('Content-Length', len(resp_body))
-                self.end_headers()
-                self.wfile.write(resp_body)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if stream:
+                    self._relay_stream(resp)
+                else:
+                    self._relay_buffered(resp)
         except urllib.error.HTTPError as e:
             resp_body = e.read()
             self.send_response(e.code)
@@ -81,6 +91,40 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.send_header('Content-Length', len(msg))
             self.end_headers()
             self.wfile.write(msg)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected
+
+    def _relay_buffered(self, resp):
+        """Read the whole upstream response, then forward it (normal API calls)."""
+        resp_body = resp.read()
+        self.send_response(resp.status)
+        for key, val in resp.getheaders():
+            if key.lower() in ('content-type', 'content-disposition',
+                               'x-total-count', 'cache-control'):
+                self.send_header(key, val)
+        self.send_header('Content-Length', len(resp_body))
+        self.end_headers()
+        self.wfile.write(resp_body)
+
+    def _relay_stream(self, resp):
+        """Forward a streaming (SSE) response line-by-line without buffering.
+
+        No Content-Length is sent: the connection stays open for the life of
+        the stream and closes when the upstream generator ends or the client
+        disconnects. Each chunk is flushed so events reach the browser live.
+        """
+        self.send_response(resp.status)
+        self.send_header('Content-Type',
+                         resp.headers.get('Content-Type', 'text/event-stream'))
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+        try:
+            for chunk in resp:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # client went away; context manager closes the upstream
 
     # -- Static file serving with SPA fallback ----------------------------
 
@@ -132,7 +176,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith('/api/') or self.path == '/api':
-            self._proxy_to_backend()
+            self._proxy_to_backend(stream=self._is_sse())
         else:
             self._serve_static_or_fallback()
 
@@ -193,6 +237,65 @@ def wait_for_backend(url, timeout=15):
     return False
 
 
+def _mcp_python():
+    """Interpreter for the MCP server. It has its OWN venv (fastapi/uvicorn/mcp),
+    so we must not assume the production interpreter has those deps. Override
+    with MCP_PYTHON; otherwise probe mcp-server/.venv, else fall back."""
+    override = os.environ.get('MCP_PYTHON')
+    if override:
+        return override
+    mcp_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'mcp-server'))
+    if sys.platform == 'win32':
+        cand = os.path.join(mcp_dir, '.venv', 'Scripts', 'python.exe')
+    else:
+        cand = os.path.join(mcp_dir, '.venv', 'bin', 'python')
+    return cand if os.path.isfile(cand) else sys.executable
+
+
+def start_mcp():
+    """Start the standalone MCP server. Returns the process, or None if it can't
+    be located (the rest of the app still serves; only AI chat is degraded)."""
+    mcp_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'mcp-server'))
+    if not os.path.isfile(os.path.join(mcp_dir, 'main.py')):
+        print(f'       [WARN] mcp-server not found at {mcp_dir}; AI chat disabled', flush=True)
+        return None
+    proc = subprocess.Popen(
+        [_mcp_python(), 'main.py'],
+        cwd=mcp_dir,
+        env=os.environ.copy(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc
+
+
+def wait_for_mcp(url, timeout=15):
+    """Wait until the MCP server's /health responds."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except urllib.error.HTTPError:
+            return True  # responded
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
+def check_opencode(base_url, timeout=3):
+    """Probe whether OpenCode is reachable. It's an external prerequisite (holds
+    provider API keys in its own global config); we only warn if it's down."""
+    try:
+        urllib.request.urlopen(base_url, timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        return True  # any HTTP response means it's up
+    except Exception:
+        return False
+
+
 def main():
     if not os.path.isdir(DIST_DIR):
         print(f'[ERROR] dist/ not found at {DIST_DIR}')
@@ -203,18 +306,38 @@ def main():
         print(f'[ERROR] index.html not found in {DIST_DIR}')
         sys.exit(1)
 
-    # Start Flask backend
-    print(f'[1/2] Starting backend (Flask) ...', flush=True)
-    backend_proc = start_backend()
+    # Subprocesses we manage; killed on shutdown (OpenCode is NOT one of them).
+    procs = []
 
+    # Start Flask backend
+    print('[1/3] Starting backend (Flask) ...', flush=True)
+    backend_proc = start_backend()
+    procs.append(backend_proc)
     if wait_for_backend(BACKEND_URL):
         print(f'       Backend ready at {BACKEND_URL}', flush=True)
     else:
-        print(f'       [WARN] Backend may not be ready yet', flush=True)
+        print('       [WARN] Backend may not be ready yet', flush=True)
 
-    # Start reverse proxy
-    print(f'[2/2] Starting reverse proxy ...', flush=True)
-    server = HTTPServer(('0.0.0.0', PROXY_PORT), ProxyHandler)
+    # Start MCP server (AI chat capability provider)
+    print('[2/3] Starting MCP server ...', flush=True)
+    mcp_proc = start_mcp()
+    if mcp_proc is not None:
+        procs.append(mcp_proc)
+        if wait_for_mcp(MCP_HEALTH_URL):
+            print(f'       MCP ready ({MCP_HEALTH_URL})', flush=True)
+        else:
+            print('       [WARN] MCP server may not be ready yet', flush=True)
+
+    # OpenCode is an external prerequisite for AI chat: probe and warn only.
+    if check_opencode(OPENCODE_BASE_URL):
+        print(f'       OpenCode reachable ({OPENCODE_BASE_URL})', flush=True)
+    else:
+        print(f'       [WARN] OpenCode not reachable at {OPENCODE_BASE_URL}; '
+              'AI chat needs it (run: opencode serve)', flush=True)
+
+    # Start reverse proxy (threaded so long-lived SSE streams don't block others)
+    print('[3/3] Starting reverse proxy ...', flush=True)
+    server = ThreadingHTTPServer(('0.0.0.0', PROXY_PORT), ProxyHandler)
     print(f'       Serving at http://localhost:{PROXY_PORT}', flush=True)
     print(f'       Static files: {DIST_DIR}', flush=True)
     print(f'       API proxy:    /api/* -> {BACKEND_URL}', flush=True)
@@ -223,11 +346,13 @@ def main():
     def shutdown(sig=None, frame=None):
         print('\n[Shutdown] Stopping services...', flush=True)
         try:
-            # Force kill backend process on Windows
-            if sys.platform == 'win32':
-                backend_proc.kill()
-            else:
-                backend_proc.terminate()
+            for p in procs:
+                if p is None or p.poll() is not None:
+                    continue
+                if sys.platform == 'win32':
+                    p.kill()
+                else:
+                    p.terminate()
 
             # Shutdown HTTP server in a thread to avoid blocking
             import threading
@@ -235,14 +360,15 @@ def main():
             shutdown_thread.daemon = True
             shutdown_thread.start()
 
-            # Wait for backend to terminate (with timeout)
-            try:
-                backend_proc.wait(timeout=3)
-                print('[Shutdown] Backend stopped.', flush=True)
-            except subprocess.TimeoutExpired:
-                print('[Shutdown] Backend kill forced.', flush=True)
-                backend_proc.kill()
-                backend_proc.wait()
+            # Wait for each managed process to terminate (with timeout)
+            for p in procs:
+                if p is None:
+                    continue
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
 
             print('[Shutdown] Done.', flush=True)
             sys.exit(0)
@@ -267,9 +393,10 @@ def main():
         shutdown()
     finally:
         # Cleanup
-        if backend_proc.poll() is None:
-            backend_proc.kill()
-            backend_proc.wait()
+        for p in procs:
+            if p is not None and p.poll() is None:
+                p.kill()
+                p.wait()
 
 
 if __name__ == '__main__':

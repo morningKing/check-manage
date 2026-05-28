@@ -6,15 +6,22 @@
 #   ./start.sh              # Build frontend + start all
 #   ./start.sh --skip-build # Skip frontend build, use existing dist/
 #
-# Services started:
+# Services started (by proxy.py):
 #   1. Flask backend       -> http://localhost:3001
-#   2. Reverse proxy       -> http://localhost:8080
+#   2. MCP server          -> http://localhost:3003   (AI chat capabilities)
+#   3. Reverse proxy       -> http://localhost:8080
 #      - Static files from dist/
-#      - /api/* proxied to backend
+#      - /api/* proxied to backend (incl. AI chat SSE)
+#
+# External prerequisite (NOT started here):
+#   - OpenCode agent runtime: `opencode serve` on http://localhost:4096
+#     (holds provider API keys in its own global config). proxy.py only warns
+#     if it is unreachable.
 #
 # Environment variables:
 #   PROXY_PORT   - Proxy listen port  (default: 8080)
 #   BACKEND_URL  - Backend origin     (default: http://127.0.0.1:3001)
+#   MCP_PYTHON   - Interpreter for the MCP server (default: mcp-server/.venv)
 # -----------------------------------------------------------
 
 set -e
@@ -52,16 +59,20 @@ if command -v netstat.exe &>/dev/null; then
     done
 fi
 
-# Kill processes on backend port (3001)
+# Kill processes on backend port (3001) and MCP port (3003).
+# NOTE: port 4096 (OpenCode) is intentionally left alone — it is an external
+# service managed outside this script.
 if command -v netstat.exe &>/dev/null; then
-    pids=$(netstat.exe -ano 2>/dev/null \
-        | grep -E "LISTENING" \
-        | grep -E ":3001\s" \
-        | awk '{print $NF}' \
-        | sort -u)
-    for pid in $pids; do
-        echo "       Killing PID $pid (port 3001)"
-        taskkill.exe /F /PID "$pid" 2>/dev/null || true
+    for port in 3001 3003; do
+        pids=$(netstat.exe -ano 2>/dev/null \
+            | grep -E "LISTENING" \
+            | grep -E ":${port}\s" \
+            | awk '{print $NF}' \
+            | sort -u)
+        for pid in $pids; do
+            echo "       Killing PID $pid (port $port)"
+            taskkill.exe /F /PID "$pid" 2>/dev/null || true
+        done
     done
 fi
 
