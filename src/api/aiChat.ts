@@ -105,6 +105,18 @@ export function getMcpServices(id: string) {
   )
 }
 
+export interface PaletteCommand { name: string; description: string }
+export function getCommands(id: string) {
+  return get<{ commands: PaletteCommand[]; skills: PaletteCommand[] }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/commands`,
+  )
+}
+export function postCommand(id: string, command: string, args: string) {
+  return post<{ messageId: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/command`, { command, arguments: args },
+  )
+}
+
 export interface RunResult {
   exitCode: number
   timedOut: boolean
