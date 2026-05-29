@@ -78,6 +78,15 @@ export function isRenderableLang(lang: string): boolean {
   return l === 'html' || l === 'svg'
 }
 
+const IMAGE_EXTS = new Set(['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp'])
+
+/** True if a filename looks like an inline-renderable image (by extension). */
+export function isImageFile(name: string): boolean {
+  const i = name.lastIndexOf('.')
+  if (i < 0) return false
+  return IMAGE_EXTS.has(name.slice(i + 1).trim().toLowerCase())
+}
+
 /** python artifacts can be executed server-side to produce a result file. */
 export function isRunnableLang(lang: string): boolean {
   const l = lang.toLowerCase()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile } from '../artifacts'
 
 describe('splitArtifacts', () => {
   it('lifts a large code block into a code segment', () => {
@@ -125,5 +125,21 @@ describe('isInlineRenderLang', () => {
     expect(isInlineRenderLang('python')).toBe(false)
     expect(isInlineRenderLang('svg')).toBe(false)
     expect(isInlineRenderLang('')).toBe(false)
+  })
+})
+
+describe('isImageFile', () => {
+  it('detects image extensions case-insensitively', () => {
+    expect(isImageFile('a.svg')).toBe(true)
+    expect(isImageFile('a.PNG')).toBe(true)
+    expect(isImageFile('photo.jpeg')).toBe(true)
+    expect(isImageFile('x.webp')).toBe(true)
+    expect(isImageFile('y.gif')).toBe(true)
+  })
+  it('returns false for non-images and names without an extension', () => {
+    expect(isImageFile('a.txt')).toBe(false)
+    expect(isImageFile('script.py')).toBe(false)
+    expect(isImageFile('noext')).toBe(false)
+    expect(isImageFile('svg')).toBe(false)
   })
 })
