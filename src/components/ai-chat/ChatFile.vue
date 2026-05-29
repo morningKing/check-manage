@@ -12,7 +12,7 @@ const showImage = computed(() => isImageFile(props.name) && !failed.value)
 <template>
   <a
     v-if="showImage"
-    class="chat-file__img" :href="src" target="_blank" rel="noopener"
+    class="chat-file__img" :href="src" target="_blank" rel="noopener noreferrer"
   >
     <img :src="src" :alt="name" @error="failed = true" />
     <span class="chat-file__caption">{{ name }}</span>
@@ -42,6 +42,7 @@ const showImage = computed(() => isImageFile(props.name) && !failed.value)
   font-size: 12px;
   color: var(--el-text-color-secondary);
 }
+// Scoped copy — AiChatView's .file-chip is shared with .attach-chip there and can't be removed.
 .file-chip {
   display: inline-flex;
   align-items: center;
