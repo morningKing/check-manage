@@ -121,10 +121,8 @@ def test_run_command_posts_command_and_arguments():
     assert k["params"] == {"directory": "/ws"}
     assert k["json"]["command"] == "init"
     assert k["json"]["arguments"] == "do it"
-    assert k["json"]["model"] == {"providerID": "mimo", "modelID": "mimo-v2.5"}
+    assert k["json"]["model"] == "mimo/mimo-v2.5"   # command endpoint wants model as a STRING (verified in Task 1)
 ```
-
-> 注：`model` 断言按 Task 1 Step 2 确认的形态写；若 Task 1 确认是**字符串**，把最后一行改为 `assert k["json"]["model"] == "mimo/mimo-v2.5"`，且 Step 3 实现里相应改。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -148,9 +146,10 @@ def list_skills(self, directory: str = "") -> list:
 def run_command(self, opencode_session_id: str, command: str, arguments: str = "",
                 model: str = "", directory: str = "") -> None:
     body = {"command": command, "arguments": arguments}
-    if model and "/" in model:
-        provider_id, model_id = model.split("/", 1)
-        body["model"] = {"providerID": provider_id, "modelID": model_id}
+    # NOTE: unlike prompt_async (which wants {providerID, modelID}), the command
+    # endpoint wants `model` as a "provider/model" STRING (verified in Task 1).
+    if model:
+        body["model"] = model
     params = {"directory": directory} if directory else None
     resp = requests.post(
         self._url(f"/session/{opencode_session_id}/command"),
