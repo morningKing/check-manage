@@ -17,6 +17,8 @@ import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
+import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
+import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
 import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/api/aiChat'
@@ -24,11 +26,25 @@ import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/
 const store = useAiChatStore()
 
 const input = ref('')
+const activeIndex = ref(0)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const scroller = ref<InstanceType<typeof ElScrollbar> | null>(null)
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
+const palette = computed<PaletteItem[]>(() => {
+  const t = input.value.trim()
+  if (!t.startsWith('/')) return []
+  const q = t.slice(1).split(' ')[0].toLowerCase()
+  const sid = activeId.value
+  const cached = sid ? store.paletteItems[sid] : undefined
+  const builtin: PaletteItem[] = FRONTEND_COMMANDS.map((c) => ({ kind: 'builtin', name: c.name, description: c.description }))
+  const commands: PaletteItem[] = (cached?.commands ?? []).map((c) => ({ kind: 'command', name: c.name, description: c.description }))
+  const skills: PaletteItem[] = (cached?.skills ?? []).map((s) => ({ kind: 'skill', name: s.name, description: s.description }))
+  return [...builtin, ...commands, ...skills].filter((it) => !q || it.name.toLowerCase().includes(q))
+})
+const paletteOpen = computed(() => palette.value.length > 0)
+watch(palette, () => { activeIndex.value = 0 })
 const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
@@ -192,20 +208,38 @@ async function onFilesPicked(e: Event) {
   ;(e.target as HTMLInputElement).value = ''
 }
 
+function acceptItem(item: PaletteItem) {
+  if (item.kind === 'skill') input.value = '使用 `' + item.name + '` 技能:'
+  else input.value = '/' + item.name + ' '
+  activeIndex.value = 0
+}
+
 async function send() {
   if (!canSend.value) return
   const text = input.value.trim()
-  const cmd = text.toLowerCase()
   input.value = ''
   if (!activeId.value) await newSession()
-  if (cmd === '/mcps' || cmd === '/mcp') {
-    await store.showMcpServices()
-    return
+  const sid = activeId.value!
+  const parsed = parseCommandLine(text)
+  if (parsed) {
+    const fc = findFrontendCommand(parsed.name)
+    if (fc) { await fc.run(store); return }
+    if (store.isOpencodeCommand(sid, parsed.name)) {
+      try { await store.runCommand(sid, parsed.name, parsed.args) } catch { ElMessage.error('执行失败') }
+      return
+    }
+    // unknown /xxx → fall through to a normal message
   }
   try { await store.sendUserMessage(text) } catch { ElMessage.error('发送失败') }
 }
+
 function onKey(e: Event) {
   const ev = e as KeyboardEvent
+  if (paletteOpen.value) {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); activeIndex.value = (activeIndex.value + 1) % palette.value.length; return }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); activeIndex.value = (activeIndex.value - 1 + palette.value.length) % palette.value.length; return }
+    if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); acceptItem(palette.value[activeIndex.value]); return }
+  }
   if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send() }
 }
 </script>
@@ -342,6 +376,7 @@ function onKey(e: Event) {
 
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">
+        <CommandPalette :items="palette" :active-index="activeIndex" @select="acceptItem" />
         <div class="composer-inner">
           <div class="composer-card">
             <div v-if="attachments.length" class="composer-attachments">
@@ -488,6 +523,7 @@ function onKey(e: Event) {
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
 .ai-chat__composer {
   padding: 8px 16px 18px;
+  position: relative;
 }
 /* one centered column */
 .composer-inner {

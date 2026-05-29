@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
-import CommandPalette from '@/components/ai-chat/CommandPalette.vue'
+import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 
-const items = [
+const items: PaletteItem[] = [
   { kind: 'builtin', name: 'mcps', description: '列出 MCP' },
   { kind: 'command', name: 'init', description: '建 AGENTS.md' },
   { kind: 'skill', name: 'clawhub', description: '技能' },
