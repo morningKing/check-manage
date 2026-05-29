@@ -146,3 +146,34 @@ def test_list_mcp_omits_directory_when_empty():
         from utils.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").list_mcp()
     assert get.call_args.kwargs.get("params") is None
+
+
+def test_list_commands_scopes_by_directory():
+    fake = MagicMock(); fake.json.return_value = [{"name": "init", "description": "x"}]; fake.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.get", return_value=fake) as get:
+        from utils.opencode_client import OpenCodeClient
+        out = OpenCodeClient("http://x").list_commands("/ws")
+    assert out == [{"name": "init", "description": "x"}]
+    a, k = get.call_args; assert a[0].endswith("/command"); assert k["params"] == {"directory": "/ws"}
+
+
+def test_list_skills_scopes_by_directory():
+    fake = MagicMock(); fake.json.return_value = [{"name": "clawhub", "description": "y"}]; fake.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.get", return_value=fake) as get:
+        from utils.opencode_client import OpenCodeClient
+        out = OpenCodeClient("http://x").list_skills("/ws")
+    assert out[0]["name"] == "clawhub"
+    a, k = get.call_args; assert a[0].endswith("/skill"); assert k["params"] == {"directory": "/ws"}
+
+
+def test_run_command_posts_command_and_arguments():
+    fake = MagicMock(); fake.status_code = 202; fake.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.post", return_value=fake) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://x").run_command("ses_1", "init", "do it", model="mimo/mimo-v2.5", directory="/ws")
+    a, k = post.call_args
+    assert a[0].endswith("/session/ses_1/command")
+    assert k["params"] == {"directory": "/ws"}
+    assert k["json"]["command"] == "init"
+    assert k["json"]["arguments"] == "do it"
+    assert k["json"]["model"] == "mimo/mimo-v2.5"   # command endpoint wants model as a STRING

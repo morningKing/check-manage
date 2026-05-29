@@ -73,6 +73,32 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def list_commands(self, directory: str = "") -> list:
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/command"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_skills(self, directory: str = "") -> list:
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/skill"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def run_command(self, opencode_session_id: str, command: str, arguments: str = "",
+                    model: str = "", directory: str = "") -> None:
+        body = {"command": command, "arguments": arguments}
+        # NOTE: unlike prompt_async (which wants {providerID, modelID}), the command
+        # endpoint wants `model` as a "provider/model" STRING (verified live; object -> 400).
+        if model:
+            body["model"] = model
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/session/{opencode_session_id}/command"),
+            params=params, json=body, timeout=self.timeout,
+        )
+        resp.raise_for_status()
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.
