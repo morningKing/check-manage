@@ -33,9 +33,14 @@ const scroller = ref<InstanceType<typeof ElScrollbar> | null>(null)
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
 const palette = computed<PaletteItem[]>(() => {
-  const t = input.value.trim()
-  if (!t.startsWith('/')) return []
-  const q = t.slice(1).split(' ')[0].toLowerCase()
+  const raw = input.value.trimStart()
+  if (!raw.startsWith('/')) return []
+  const afterSlash = raw.slice(1)
+  // The palette only helps pick a command NAME. Once a space follows it (typing
+  // args, or right after accepting a command — acceptItem appends a space), close
+  // so Enter sends/runs instead of re-accepting the highlighted item.
+  if (afterSlash.includes(' ')) return []
+  const q = afterSlash.toLowerCase()
   const sid = activeId.value
   const cached = sid ? store.paletteItems[sid] : undefined
   const builtin: PaletteItem[] = FRONTEND_COMMANDS.map((c) => ({ kind: 'builtin', name: c.name, description: c.description }))
