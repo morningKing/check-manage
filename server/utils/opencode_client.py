@@ -50,18 +50,24 @@ class OpenCodeClient:
             raise OpenCodeError(str(e))
 
     def send_prompt_async(self, opencode_session_id: str, content: str,
-                          model: str = "") -> None:
+                          model: str = "", directory: str = "") -> None:
         """Send a prompt. `model` ("<providerID>/<modelID>") is passed explicitly
         because OpenCode does NOT honor the per-directory opencode.json `model`
         field for prompt selection — without it the server falls back to its
         own default model.
+
+        `directory` (absolute path) is passed as the ?directory= query param so
+        this turn's tools (bash/write/edit) run with cwd=directory — i.e. the
+        session's workspace. Without it OpenCode uses the server's launch cwd.
         """
         body = {"parts": [{"type": "text", "text": content}]}
         if model and "/" in model:
             provider_id, model_id = model.split("/", 1)
             body["model"] = {"providerID": provider_id, "modelID": model_id}
+        params = {"directory": directory} if directory else None
         resp = requests.post(
             self._url(f"/session/{opencode_session_id}/prompt_async"),
+            params=params,
             json=body,
             timeout=self.timeout,
         )

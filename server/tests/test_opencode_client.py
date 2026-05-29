@@ -97,3 +97,26 @@ def test_subscribe_events_uses_global_bus_and_parses_data_frames():
     assert events[0]["event"] == "message.part.updated"
     assert events[0]["data"]["properties"]["part"]["text"] == "hi"
     assert events[1]["event"] == "session.idle"
+
+
+def test_send_prompt_async_includes_directory_when_given():
+    fake_resp = MagicMock()
+    fake_resp.status_code = 204
+    fake_resp.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hi", directory="/tmp/ws")
+    _, kwargs = post.call_args
+    assert kwargs["params"] == {"directory": "/tmp/ws"}
+    assert kwargs["json"]["parts"] == [{"type": "text", "text": "hi"}]
+
+
+def test_send_prompt_async_omits_directory_when_empty():
+    fake_resp = MagicMock()
+    fake_resp.status_code = 204
+    fake_resp.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hi")
+    _, kwargs = post.call_args
+    assert kwargs.get("params") is None
