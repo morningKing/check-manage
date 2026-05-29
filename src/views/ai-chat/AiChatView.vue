@@ -14,6 +14,7 @@ import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
+import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
@@ -193,8 +194,13 @@ async function onFilesPicked(e: Event) {
 async function send() {
   if (!canSend.value) return
   const text = input.value.trim()
+  const cmd = text.toLowerCase()
   input.value = ''
   if (!activeId.value) await newSession()
+  if (cmd === '/mcps' || cmd === '/mcp') {
+    await store.showMcpServices()
+    return
+  }
   try { await store.sendUserMessage(text) } catch { ElMessage.error('发送失败') }
 }
 function onKey(e: Event) {
@@ -264,6 +270,10 @@ function onKey(e: Event) {
                     <RunResultBlock
                       v-else-if="p.type === 'run_result'"
                       :result="p" :download-url="fileUrl"
+                    />
+                    <McpServicesBlock
+                      v-else-if="p.type === 'mcp_services'"
+                      :servers="p.servers"
                     />
                     <template v-else-if="p.type === 'text' && p.text">
                       <!-- assistant: lift big code/doc blocks into artifact cards -->
