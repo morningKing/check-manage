@@ -350,7 +350,7 @@ def sse_events(sid):
         parts_by_id = {}
         part_order = []
         try:
-            for evt in client.subscribe_events():
+            for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
                 obj = evt.get('data') or {}
                 props = obj.get('properties') or {}

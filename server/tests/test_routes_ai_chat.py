@@ -152,6 +152,8 @@ def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     assert 'event: message.part.updated' in body
     assert 'event: session.idle' in body
     assert '"text": "hi"' in body
+    # events must be subscribed scoped to the session's workspace directory
+    assert oc.subscribe_events.call_args.kwargs.get('directory') == '/tmp/ws'
     # session.idle persisted the accumulated assistant text
     inserts = [c.args[0] for c in cursor.execute.call_args_list]
     assert any("INSERT INTO ai_chat_messages" in s for s in inserts)

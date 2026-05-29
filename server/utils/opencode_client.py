@@ -73,19 +73,23 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
-    def subscribe_events(self) -> Iterator[dict]:
+    def subscribe_events(self, directory: str = "") -> Iterator[dict]:
         """Yield parsed SSE events as {"event": <type>, "data": <full object>}.
 
         OpenCode sends `data:`-only frames (no SSE `event:` line); the event name
         lives in the JSON `type` field, e.g.
             data: {"type":"message.part.updated","properties":{...}}
 
-        Must use the GLOBAL /event bus (NO ?directory= param): in OpenCode
-        1.2.26 the directory-scoped stream delivers no session events. Callers
-        filter by sessionID.
+        Scope by ?directory=<dir> (the session's workspace). Because prompts run
+        with that directory, OpenCode routes the turn's message/session events to
+        the per-directory event stream; the un-scoped /event yields only global
+        heartbeats. Each session has a unique workspace dir, so this stream
+        carries only that session's events; callers still filter by sessionID.
         """
+        params = {"directory": directory} if directory else None
         with requests.get(
             self._url("/event"),
+            params=params,
             stream=True,
             timeout=None,
             headers={"Accept": "text/event-stream"},
