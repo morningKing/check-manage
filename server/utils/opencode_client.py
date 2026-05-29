@@ -73,6 +73,15 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def list_mcp(self, directory: str = "") -> dict:
+        """Return configured MCP servers + connection status for `directory`, e.g.
+        {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.
+        """
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/mcp"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
     def subscribe_events(self, directory: str = "") -> Iterator[dict]:
         """Yield parsed SSE events as {"event": <type>, "data": <full object>}.
 

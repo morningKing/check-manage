@@ -122,3 +122,27 @@ def test_send_prompt_async_omits_directory_when_empty():
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async("ses_42", "hi")
     _, kwargs = post.call_args
     assert kwargs.get("params") is None
+
+
+def test_list_mcp_scopes_by_directory_and_returns_servers():
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"check-manage": {"status": "connected"}}
+    fake_resp.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
+        from utils.opencode_client import OpenCodeClient
+        out = OpenCodeClient("http://127.0.0.1:4096").list_mcp("/ws")
+    assert out == {"check-manage": {"status": "connected"}}
+    args, kwargs = get.call_args
+    assert args[0].endswith("/mcp")
+    assert kwargs["params"] == {"directory": "/ws"}
+
+
+def test_list_mcp_omits_directory_when_empty():
+    fake_resp = MagicMock()
+    fake_resp.json.return_value = {}
+    fake_resp.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.get", return_value=fake_resp) as get:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://127.0.0.1:4096").list_mcp()
+    assert get.call_args.kwargs.get("params") is None
