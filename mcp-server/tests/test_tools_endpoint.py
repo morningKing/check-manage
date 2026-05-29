@@ -14,10 +14,13 @@ def test_tool_specs_lists_registered_tools():
 
 def test_tools_endpoint_returns_name_and_description():
     from main import app
+    from tools import tool_specs
     with TestClient(app) as c:
         resp = c.get("/tools")
     assert resp.status_code == 200
     body = resp.json()
     by_name = {t["name"]: t for t in body}
+    # endpoint returns every registered tool, each with a string description
+    assert set(by_name) == {n for n, _ in tool_specs()}
     assert "list_collections" in by_name
-    assert by_name["list_collections"]["description"]  # non-empty
+    assert isinstance(by_name["list_collections"]["description"], str)
