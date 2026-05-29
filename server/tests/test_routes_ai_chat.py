@@ -397,6 +397,26 @@ def test_run_script_executes_and_returns_outputs(setup):
     assert 'outputs/r.txt' in body['outputFiles']
 
 
+def test_list_changes_returns_git_changes(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    with patch('routes.ai_chat.git_changes',
+               return_value=([{'path': 'repo/new.txt', 'status': 'added'}], False)) as gc:
+        resp = client.get('/ai/chat/sessions/sess_x/changes', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['changes'] == [{'path': 'repo/new.txt', 'status': 'added'}]
+    assert body['truncated'] is False
+    assert gc.call_args[0][0] == '/tmp/ws'  # called with the session workspace
+
+
+def test_list_changes_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.get('/ai/chat/sessions/sess_other/changes', headers=dev_h)
+    assert resp.status_code == 404
+
+
 def test_run_script_requires_code(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wsrun2'; ws.mkdir(parents=True, exist_ok=True)

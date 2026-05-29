@@ -25,6 +25,7 @@ from utils.workspace import (
     create_session_workspace, cleanup_session_workspace, write_opencode_config,
     safe_resolve,
 )
+from utils.workspace_changes import git_changes
 from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
@@ -447,10 +448,23 @@ def list_files(sid):
     return jsonify({'files': out})
 
 
+@ai_chat_bp.route('/sessions/<sid>/changes', methods=['GET'])
+@login_required
+def list_changes(sid):
+    """List files the session changed (added/modified/deleted) in its workspace
+    git repos, via git status. Used by the chat's 变更文件 panel."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    changes, truncated = git_changes(sess[4])
+    return jsonify({'changes': changes, 'truncated': truncated})
+
+
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
 @login_required_sse
 def download_file(sid):
-    """Download a file from the session workspace (uploads/ or outputs/)."""
+    """Download any file under the session workspace (path is safe_resolve'd)."""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
