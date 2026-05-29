@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElTooltip, ElEmpty, ElMessageBox, ElMessage,
-  ElDrawer,
+  ElDrawer, ElTag,
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
@@ -17,7 +17,7 @@ import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
-import { downloadFileUrl, runScript, type AiMessage } from '@/api/aiChat'
+import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/api/aiChat'
 
 const store = useAiChatStore()
 
@@ -31,6 +31,23 @@ const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
+const changes = computed<ChangedFile[]>(() => store.activeChanges)
+function changeBadge(status: string): { label: string; type: any } {
+  if (status === 'added') return { label: '新增', type: 'success' }
+  if (status === 'deleted') return { label: '删除', type: 'info' }
+  return { label: '修改', type: 'warning' }
+}
+async function previewChange(c: ChangedFile) {
+  if (c.status === 'deleted') return
+  try {
+    const text = await fetch(fileUrl(c.path)).then((r) => r.text())
+    const lang = (c.path.split('.').pop() || 'txt').toLowerCase()
+    preview.value = { filename: c.path, versions: [{ lang, code: text }] }
+    previewOpen.value = true
+  } catch {
+    ElMessage.error('预览失败')
+  }
+}
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
 const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
@@ -296,6 +313,20 @@ function onKey(e: Event) {
                 <ElIcon class="output-file__dl"><Download /></ElIcon>
               </a>
             </div>
+
+            <!-- 变更文件（会话 workspace 内 git 仓库的新增/修改/删除） -->
+            <div v-if="changes.length" class="ai-changes">
+              <div class="ai-changes__title">变更文件</div>
+              <div v-for="c in changes" :key="c.path" class="change-file">
+                <ElTag size="small" :type="changeBadge(c.status).type">{{ changeBadge(c.status).label }}</ElTag>
+                <span class="change-file__name">{{ c.path }}</span>
+                <ElButton v-if="c.status !== 'deleted'" size="small" text @click="previewChange(c)">预览</ElButton>
+                <a
+                  v-if="c.status !== 'deleted'"
+                  class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener"
+                >下载</a>
+              </div>
+            </div>
           </div>
         </template>
       </ElScrollbar>
@@ -497,4 +528,19 @@ function onKey(e: Event) {
   &__actions { display: flex; gap: 8px; flex-shrink: 0; }
 }
 .preview-body { height: 100%; overflow: auto; }
+.ai-changes {
+  margin: 4px 0 24px;
+  padding: 12px 14px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  &__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+}
+.change-file {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; font-size: 14px;
+  &:hover { background: var(--el-fill-color); }
+  &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--el-font-family-mono, monospace); }
+  &__dl { color: var(--el-color-primary); text-decoration: none; font-size: 13px; }
+}
 </style>
