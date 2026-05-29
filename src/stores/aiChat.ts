@@ -11,8 +11,10 @@ import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
   getMessages, sendMessage, uploadFile, listFiles, getChanges, getMcpServices,
+  getCommands, postCommand,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
+  type PaletteCommand,
 } from '@/api/aiChat'
 
 interface SessionMeta {
@@ -35,6 +37,7 @@ interface State {
   attachments: Record<string, PendingAttachment[]>
   outputs: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
+  paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
   uploading: boolean
   drawerOpen: boolean
   _stream: { close(): void } | null
@@ -56,6 +59,7 @@ export const useAiChatStore = defineStore('aiChat', {
     attachments: {},
     outputs: {},
     changes: {} as Record<string, ChangedFile[]>,
+    paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     uploading: false,
     drawerOpen: false,
     _stream: null,
@@ -113,6 +117,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.messages[id] = history.messages
       this.loadFiles(id)
       this.loadChanges(id)
+      this.loadPaletteItems(id)
       this._openStream(id)
     },
 
@@ -128,6 +133,27 @@ export const useAiChatStore = defineStore('aiChat', {
         const { changes } = await getChanges(id)
         this.changes[id] = changes
       } catch { /* non-fatal */ }
+    },
+
+    async loadPaletteItems(id: string) {
+      try {
+        const { commands, skills } = await getCommands(id)
+        this.paletteItems[id] = { commands, skills }
+      } catch { /* non-fatal; palette shows builtin only */ }
+    },
+    isOpencodeCommand(id: string, name: string): boolean {
+      const n = name.toLowerCase()
+      return (this.paletteItems[id]?.commands ?? []).some((c) => c.name.toLowerCase() === n)
+    },
+    async runCommand(id: string, name: string, args: string) {
+      const shown = '/' + name + (args ? ' ' + args : '')
+      ;(this.messages[id] ?? (this.messages[id] = [])).push({
+        id: 'local_' + Date.now(), role: 'user', content: [{ type: 'text', text: shown }],
+      })
+      this.streaming[id] = true
+      this.thinking[id] = true
+      this._resetStreamState(id)
+      await postCommand(id, name, args)
     },
 
     async showMcpServices() {
