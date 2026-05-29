@@ -1,11 +1,18 @@
-"""AI chat blueprint (M1: sessions + messages + SSE + history).
+"""AI chat blueprint: sessions + messages + SSE + history, plus files,
+workspace changes, MCP services, and command-palette endpoints.
 
 Routes registered:
-    POST   /ai/chat/sessions             create_session
+    POST   /ai/chat/sessions              create_session
     GET    /ai/chat/sessions/:id/messages history
     POST   /ai/chat/sessions/:id/messages send_message
     GET    /ai/chat/sessions/:id/events   sse_proxy
     DELETE /ai/chat/sessions/:id          delete_session
+    POST   /ai/chat/sessions/:id/files    upload; GET .../files, .../files/download
+    GET    /ai/chat/sessions/:id/changes  workspace git changes
+    POST   /ai/chat/sessions/:id/run      run a python artifact
+    GET    /ai/chat/sessions/:id/mcp      list MCP servers + tools
+    GET    /ai/chat/sessions/:id/commands list OpenCode commands + skills
+    POST   /ai/chat/sessions/:id/command  run an OpenCode command
 """
 
 import os

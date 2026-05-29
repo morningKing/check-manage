@@ -498,6 +498,7 @@ def test_list_commands_merges_commands_and_skills(setup):
     assert body['commands'] == [{'name': 'init', 'description': 'a'}]
     assert body['skills'] == [{'name': 'clawhub', 'description': 'b'}]
     assert oc.list_commands.call_args[0][0] == '/tmp/ws'
+    assert oc.list_skills.call_args[0][0] == '/tmp/ws'
 
 
 def test_list_commands_degrades_on_error(setup):
@@ -521,7 +522,7 @@ def test_run_command_calls_opencode(setup):
     a, k = oc.run_command.call_args
     assert a[0] == 'oc_sess'
     assert a[1] == 'init'
-    assert (k.get('arguments') == 'go') or (len(a) > 2 and a[2] == 'go')
+    assert a[2] == 'go'  # positional: run_command(oc_sess, command, arguments, ...)
     assert k.get('directory') == '/tmp/ws'
 
 
