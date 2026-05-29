@@ -22,6 +22,11 @@ _TOOLS = {
 }
 
 
+def tool_specs() -> list[tuple[str, str]]:
+    """(name, description) for every registered tool — used by GET /tools."""
+    return [(spec.name, spec.description or "") for spec, _ in _TOOLS.values()]
+
+
 def register_all(server: Server) -> None:
     @server.list_tools()
     async def _list_tools():

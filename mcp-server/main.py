@@ -41,7 +41,7 @@ def _resolve_context() -> ToolContext:
 
 
 # Defer tool registration so /health is reachable even if a tool module errors
-from tools import register_all
+from tools import register_all, tool_specs
 register_all(mcp_server)
 
 session_manager = StreamableHTTPSessionManager(app=mcp_server, stateless=True)
@@ -80,6 +80,11 @@ app.add_middleware(TokenMiddleware)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/tools")
+def tools():
+    return [{"name": n, "description": d} for n, d in tool_specs()]
 
 
 # Mount MCP at /mcp as an ASGI handler
