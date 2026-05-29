@@ -10,8 +10,9 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
-  getMessages, sendMessage, uploadFile, listFiles, getChanges, createEventStream,
-  type AiMessage, type AiContentPart, type AiFile, type ChangedFile,
+  getMessages, sendMessage, uploadFile, listFiles, getChanges, getMcpServices,
+  createEventStream,
+  type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
 } from '@/api/aiChat'
 
 interface SessionMeta {
@@ -127,6 +128,21 @@ export const useAiChatStore = defineStore('aiChat', {
         const { changes } = await getChanges(id)
         this.changes[id] = changes
       } catch { /* non-fatal */ }
+    },
+
+    async showMcpServices() {
+      const sid = this.activeSessionId
+      if (!sid) return
+      let servers: McpServer[] = []
+      try {
+        const res = await getMcpServices(sid)
+        servers = res.error ? [] : res.servers
+      } catch { /* leave empty; the block renders 无法获取 */ }
+      ;(this.messages[sid] ?? (this.messages[sid] = [])).push({
+        id: 'mcp_' + Date.now(),
+        role: 'assistant',
+        content: [{ type: 'mcp_services', servers }],
+      })
     },
 
     appendMessage(id: string, msg: AiMessage) {
