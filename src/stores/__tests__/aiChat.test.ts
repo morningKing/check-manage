@@ -14,6 +14,7 @@ vi.mock('@/api/aiChat', () => ({
   sendMessage: vi.fn(),
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
+  getChanges: vi.fn(),
   createEventStream: vi.fn(() => ({ close: vi.fn() })),
 }))
 
@@ -156,6 +157,17 @@ describe('useAiChatStore', () => {
 
     handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
     expect(store.thinking['sess_1']).toBe(false)
+  })
+
+  it('loadChanges populates changes for the session', async () => {
+    const store = useAiChatStore()
+    ;(api.getChanges as any).mockResolvedValue({
+      changes: [{ path: 'repo/new.txt', status: 'added' }], truncated: false,
+    })
+    store.activeSessionId = 's1'
+    await store.loadChanges('s1')
+    expect(store.changes['s1']).toEqual([{ path: 'repo/new.txt', status: 'added' }])
+    expect(store.activeChanges).toEqual([{ path: 'repo/new.txt', status: 'added' }])
   })
 
   it('loads outputs/ files after a turn finishes (session.idle)', async () => {

@@ -41,6 +41,11 @@ export interface AiFile {
   size: number
 }
 
+export interface ChangedFile {
+  path: string
+  status: 'added' | 'modified' | 'deleted'
+}
+
 export function createSession(projectMenuId?: string) {
   return post<AiSession>('/ai/chat/sessions', { projectMenuId })
 }
@@ -82,6 +87,12 @@ export function uploadFile(id: string, file: File) {
 
 export function listFiles(id: string) {
   return get<{ files: AiFile[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/files`)
+}
+
+export function getChanges(id: string) {
+  return get<{ changes: ChangedFile[]; truncated: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/changes`,
+  )
 }
 
 export interface RunResult {

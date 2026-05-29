@@ -10,8 +10,8 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
-  getMessages, sendMessage, uploadFile, listFiles, createEventStream,
-  type AiMessage, type AiContentPart, type AiFile,
+  getMessages, sendMessage, uploadFile, listFiles, getChanges, createEventStream,
+  type AiMessage, type AiContentPart, type AiFile, type ChangedFile,
 } from '@/api/aiChat'
 
 interface SessionMeta {
@@ -33,6 +33,7 @@ interface State {
   thinking: Record<string, boolean>
   attachments: Record<string, PendingAttachment[]>
   outputs: Record<string, AiFile[]>
+  changes: Record<string, ChangedFile[]>
   uploading: boolean
   drawerOpen: boolean
   _stream: { close(): void } | null
@@ -53,6 +54,7 @@ export const useAiChatStore = defineStore('aiChat', {
     thinking: {},
     attachments: {},
     outputs: {},
+    changes: {} as Record<string, ChangedFile[]>,
     uploading: false,
     drawerOpen: false,
     _stream: null,
@@ -70,6 +72,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeOutputs(state): AiFile[] {
       return state.activeSessionId ? state.outputs[state.activeSessionId] ?? [] : []
+    },
+    activeChanges(state): ChangedFile[] {
+      return state.activeSessionId ? state.changes[state.activeSessionId] ?? [] : []
     },
   },
 
@@ -106,6 +111,7 @@ export const useAiChatStore = defineStore('aiChat', {
       const history = await getMessages(id)
       this.messages[id] = history.messages
       this.loadFiles(id)
+      this.loadChanges(id)
       this._openStream(id)
     },
 
@@ -113,6 +119,13 @@ export const useAiChatStore = defineStore('aiChat', {
       try {
         const { files } = await listFiles(id)
         this.outputs[id] = files.filter(f => f.dir === 'outputs')
+      } catch { /* non-fatal */ }
+    },
+
+    async loadChanges(id: string) {
+      try {
+        const { changes } = await getChanges(id)
+        this.changes[id] = changes
       } catch { /* non-fatal */ }
     },
 
@@ -222,6 +235,7 @@ export const useAiChatStore = defineStore('aiChat', {
           this.thinking[sid] = false
           this._resetStreamState(sid)
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
+          this.loadChanges(sid)
           break
         case 'session.error':
           this.streaming[sid] = false
