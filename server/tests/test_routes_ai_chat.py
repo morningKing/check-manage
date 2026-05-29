@@ -474,3 +474,14 @@ def test_list_mcp_services_opencode_down_returns_empty(setup):
     body = resp.get_json()
     assert body['servers'] == []
     assert body['error'] == 'opencode unavailable'
+
+
+def test_list_mcp_services_tools_unavailable_yields_empty_tools(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    oc.list_mcp.return_value = {'check-manage': {'status': 'connected'}}
+    with patch('routes.ai_chat.requests.get', side_effect=Exception('boom')):
+        resp = client.get('/ai/chat/sessions/sess_x/mcp', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['servers'] == [{'name': 'check-manage', 'status': 'connected', 'tools': []}]

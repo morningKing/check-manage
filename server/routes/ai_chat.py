@@ -477,7 +477,11 @@ def list_mcp_services(sid):
     except Exception:
         return jsonify({'servers': [], 'error': 'opencode unavailable'})
     try:
-        our_tools = requests.get(f"{MCP_SERVER_URL}/tools", timeout=5).json()
+        resp = requests.get(f"{MCP_SERVER_URL}/tools", timeout=5)
+        resp.raise_for_status()
+        our_tools = resp.json()
+        if not isinstance(our_tools, list):
+            our_tools = []
     except Exception:
         our_tools = []
     servers = [
