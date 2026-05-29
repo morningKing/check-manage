@@ -93,9 +93,12 @@ class OpenCodeClient:
         if model:
             body["model"] = model
         params = {"directory": directory} if directory else None
+        # Unlike /prompt_async, /command blocks until the model turn completes — that
+        # can be minutes. Keep a short connect timeout but no read timeout so a slow
+        # command doesn't 500 the route (output still streams via SSE in parallel).
         resp = requests.post(
             self._url(f"/session/{opencode_session_id}/command"),
-            params=params, json=body, timeout=self.timeout,
+            params=params, json=body, timeout=(10, None),
         )
         resp.raise_for_status()
 
