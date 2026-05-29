@@ -5,7 +5,6 @@ Tools are registered in tools/__init__.py.
 """
 
 import contextlib
-from contextvars import ContextVar
 from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
@@ -21,15 +20,24 @@ from context import context_from_token, ToolContext
 
 mcp_server = Server("check-manage-mcp")
 
-# Per-request context (token-derived user identity)
-_current_ctx: ContextVar[ToolContext | None] = ContextVar("mcp_ctx", default=None)
-
 
 def _resolve_context() -> ToolContext:
-    ctx = _current_ctx.get()
-    if ctx is None:
-        raise PermissionError("no token in request")
-    return ctx
+    """Derive the caller's identity from the per-request ?token= query param.
+
+    The token is read from the MCP request context's HTTP request — which the
+    Streamable-HTTP transport sets in the SAME task as the tool handler, right
+    before dispatch — NOT from a middleware-set ContextVar. A ContextVar set in
+    BaseHTTPMiddleware.dispatch is reset when call_next returns, but the tool
+    handler runs later in the session manager's lifespan task group, so by then
+    the ContextVar reads as None ("no token in request"). request_context.request
+    is reliable because it travels with the message into the handler's task.
+    """
+    try:
+        request = mcp_server.request_context.request
+    except LookupError:
+        request = None
+    token = request.query_params.get("token", "") if request is not None else ""
+    return context_from_token(token)
 
 
 # Defer tool registration so /health is reachable even if a tool module errors
@@ -49,18 +57,20 @@ app = FastAPI(title="check-manage MCP server", lifespan=lifespan)
 
 
 class TokenMiddleware(BaseHTTPMiddleware):
+    """Reject /mcp requests whose ?token= is missing or invalid (HTTP 401).
+
+    Per-call identity is resolved separately in _resolve_context from the request
+    context (see its docstring); this middleware only guards the door so bad
+    tokens never reach MCP processing.
+    """
+
     async def dispatch(self, request, call_next):
         if request.url.path.startswith("/mcp"):
             token = request.query_params.get("token", "")
             try:
-                ctx = context_from_token(token)
+                context_from_token(token)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=401)
-            tok = _current_ctx.set(ctx)
-            try:
-                return await call_next(request)
-            finally:
-                _current_ctx.reset(tok)
         return await call_next(request)
 
 

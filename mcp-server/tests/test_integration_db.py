@@ -133,6 +133,63 @@ def test_expired_token_raises(seeded):
         validate_session_token(EXPIRED_TOKEN)
 
 
+def test_streamable_http_call_resolves_token_end_to_end(seeded):
+    """Cross the REAL Streamable-HTTP transport: a tools/call carrying ?token=
+    must resolve the caller and return data — not 'no token in request'.
+
+    Every other test here calls handle(input, ctx) directly, bypassing the
+    transport, which is exactly why a transport-level regression went unnoticed:
+    the token rode in a BaseHTTPMiddleware ContextVar that is reset before the
+    tool handler (running in the session manager's lifespan task group) executes.
+    The fix reads the token from request_context.request instead. This is the
+    only test that exercises uvicorn + middleware + stateless handler together,
+    so it is the one that guards that wiring.
+    """
+    import socket
+    import threading
+    import time
+
+    import anyio
+    import uvicorn
+
+    from main import app
+    from tools import list_collections
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.client.session import ClientSession
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started, "uvicorn did not start in time"
+
+        async def _call(token: str):
+            url = f"http://127.0.0.1:{port}/mcp?token={token}"
+            async with streamable_http_client(url) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await session.call_tool(list_collections.NAME, {})
+
+        result = anyio.run(_call, GOOD_TOKEN)
+        text = "".join(getattr(c, "text", "") for c in result.content)
+        assert "no token in request" not in text, text[:200]
+        assert "itest-public" in text
+        # developer RBAC must hold end-to-end (admin-only page hidden)
+        assert "itest-adminonly" not in text
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+
+
 def test_bogus_token_raises(seeded):
     from auth import validate_session_token, TokenInvalid
     with pytest.raises(TokenInvalid):
