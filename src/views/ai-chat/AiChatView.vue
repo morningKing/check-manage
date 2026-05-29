@@ -15,6 +15,7 @@ import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
+import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
@@ -253,9 +254,7 @@ function onKey(e: Event) {
               >
                 <template #content>
                   <template v-for="(p, i) in m.content" :key="i">
-                    <div v-if="p.type === 'file'" class="file-chip">
-                      <ElIcon><Document /></ElIcon><span>{{ p.name }}</span>
-                    </div>
+                    <ChatFile v-if="p.type === 'file'" :name="p.name" :src="fileUrl(p.path)" />
                     <template v-else-if="p.type === 'tool_use'">
                       <QueryResultBlock
                         v-if="parseQueryResult(p)"
