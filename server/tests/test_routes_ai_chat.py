@@ -96,6 +96,8 @@ def test_send_message_persists_user_and_calls_opencode(setup):
     args, kwargs = oc.send_prompt_async.call_args
     assert args[0] == 'oc_sess_42' and 'hello agent' in args[1]
     assert kwargs.get('model')
+    # directory must be the session workspace so the agent's tools run there
+    assert kwargs.get('directory') == '/tmp/ws'
 
     # An INSERT into ai_chat_messages must have happened
     inserts = [c.args[0] for c in cursor.execute.call_args_list]
