@@ -495,6 +495,56 @@ def list_mcp_services(sid):
     return jsonify({'servers': servers})
 
 
+@ai_chat_bp.route('/sessions/<sid>/commands', methods=['GET'])
+@login_required
+def list_session_commands(sid):
+    """List OpenCode commands + skills for the chat's command palette."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    try:
+        commands = [{'name': c['name'], 'description': c.get('description', '')}
+                    for c in client.list_commands(sess[4])]
+    except Exception:
+        commands = []
+    try:
+        skills = [{'name': s['name'], 'description': s.get('description', '')}
+                  for s in client.list_skills(sess[4])]
+    except Exception:
+        skills = []
+    return jsonify({'commands': commands, 'skills': skills})
+
+
+@ai_chat_bp.route('/sessions/<sid>/command', methods=['POST'])
+@write_required
+def run_session_command(sid):
+    """Run an OpenCode command in the session; its turn streams via the SSE proxy."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    body = request.get_json(force=True)
+    command = (body.get('command') or '').strip()
+    arguments = (body.get('arguments') or '').strip()
+    if not command:
+        return jsonify({'error': 'command required', 'code': 'COMMAND_REQUIRED'}), 400
+    shown = '/' + command + (' ' + arguments if arguments else '')
+    msg_id = 'msg_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'user', %s)",
+            (msg_id, sid, json.dumps([{'type': 'text', 'text': shown}])),
+        )
+    OpenCodeClient(OPENCODE_BASE_URL).run_command(
+        sess[2], command, arguments, model=OPENCODE_MODEL, directory=sess[4],
+    )
+    return jsonify({'messageId': msg_id}), 202
+
+
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
 @login_required_sse
 def download_file(sid):

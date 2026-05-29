@@ -485,3 +485,54 @@ def test_list_mcp_services_tools_unavailable_yields_empty_tools(setup):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body['servers'] == [{'name': 'check-manage', 'status': 'connected', 'tools': []}]
+
+
+def test_list_commands_merges_commands_and_skills(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    oc.list_commands.return_value = [{'name': 'init', 'description': 'a', 'source': 'command', 'template': 't'}]
+    oc.list_skills.return_value = [{'name': 'clawhub', 'description': 'b', 'location': 'L', 'content': 'C'}]
+    resp = client.get('/ai/chat/sessions/sess_x/commands', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['commands'] == [{'name': 'init', 'description': 'a'}]
+    assert body['skills'] == [{'name': 'clawhub', 'description': 'b'}]
+    assert oc.list_commands.call_args[0][0] == '/tmp/ws'
+
+
+def test_list_commands_degrades_on_error(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    oc.list_commands.side_effect = Exception('boom')
+    oc.list_skills.return_value = [{'name': 'clawhub', 'description': 'b'}]
+    resp = client.get('/ai/chat/sessions/sess_x/commands', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['commands'] == []
+    assert body['skills'] == [{'name': 'clawhub', 'description': 'b'}]
+
+
+def test_run_command_calls_opencode(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/command',
+                       json={'command': 'init', 'arguments': 'go'}, headers=dev_h)
+    assert resp.status_code == 202
+    a, k = oc.run_command.call_args
+    assert a[0] == 'oc_sess'
+    assert a[1] == 'init'
+    assert (k.get('arguments') == 'go') or (len(a) > 2 and a[2] == 'go')
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_run_command_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/command', json={'command': 'init'}, headers=guest_h)
+    assert resp.status_code == 403
+
+
+def test_run_command_requires_command(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/command', json={'command': '  '}, headers=dev_h)
+    assert resp.status_code == 400
