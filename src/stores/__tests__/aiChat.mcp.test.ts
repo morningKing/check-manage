@@ -24,7 +24,8 @@ describe('showMcpServices', () => {
       servers: [{ name: 'check-manage', status: 'connected', tools: [{ name: 'list_collections', description: 'x' }] }],
     })
     await store.showMcpServices()
-    const last = store.messages['s1'].at(-1)!
+    const msgs = store.messages['s1']
+    const last = msgs[msgs.length - 1]
     expect(last.role).toBe('assistant')
     expect(last.content[0]).toMatchObject({ type: 'mcp_services' })
     expect((last.content[0] as any).servers[0].name).toBe('check-manage')
@@ -36,6 +37,7 @@ describe('showMcpServices', () => {
     store.messages['s1'] = []
     ;(getMcpServices as any).mockResolvedValue({ servers: [], error: 'opencode unavailable' })
     await store.showMcpServices()
-    expect((store.messages['s1'].at(-1)!.content[0] as any).servers).toEqual([])
+    const msgs = store.messages['s1']
+    expect((msgs[msgs.length - 1].content[0] as any).servers).toEqual([])
   })
 })
