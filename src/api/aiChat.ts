@@ -33,6 +33,7 @@ export type AiContentPart =
   | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown }
   | { type: 'file'; name: string; path: string }
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
+  | { type: 'mcp_services'; servers: McpServer[] }
 
 export interface AiFile {
   name: string
@@ -45,6 +46,9 @@ export interface ChangedFile {
   path: string
   status: 'added' | 'modified' | 'deleted'
 }
+
+export interface McpTool { name: string; description: string }
+export interface McpServer { name: string; status: string; tools: McpTool[] }
 
 export function createSession(projectMenuId?: string) {
   return post<AiSession>('/ai/chat/sessions', { projectMenuId })
@@ -92,6 +96,12 @@ export function listFiles(id: string) {
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`,
+  )
+}
+
+export function getMcpServices(id: string) {
+  return get<{ servers: McpServer[]; error?: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/mcp`,
   )
 }
 
