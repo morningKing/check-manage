@@ -438,3 +438,39 @@ def test_run_script_other_users_session_404(setup):
     cursor.fetchone.return_value = None
     resp = client.post('/ai/chat/sessions/sess_o/run', json={'code': 'print(1)'}, headers=dev_h)
     assert resp.status_code == 404
+
+
+def test_list_mcp_services_merges_servers_and_tools(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    oc.list_mcp.return_value = {'check-manage': {'status': 'connected'}}
+    tools_resp = MagicMock()
+    tools_resp.json.return_value = [{'name': 'list_collections', 'description': 'List collections.'}]
+    with patch('routes.ai_chat.requests.get', return_value=tools_resp):
+        resp = client.get('/ai/chat/sessions/sess_x/mcp', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['servers'] == [{
+        'name': 'check-manage',
+        'status': 'connected',
+        'tools': [{'name': 'list_collections', 'description': 'List collections.'}],
+    }]
+    assert oc.list_mcp.call_args[0][0] == '/tmp/ws'  # scoped to the workspace
+
+
+def test_list_mcp_services_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.get('/ai/chat/sessions/sess_other/mcp', headers=dev_h)
+    assert resp.status_code == 404
+
+
+def test_list_mcp_services_opencode_down_returns_empty(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    oc.list_mcp.side_effect = Exception('boom')
+    resp = client.get('/ai/chat/sessions/sess_x/mcp', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['servers'] == []
+    assert body['error'] == 'opencode unavailable'

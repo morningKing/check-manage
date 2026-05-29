@@ -11,6 +11,7 @@ Routes registered:
 import os
 import json
 import secrets
+import requests
 from datetime import datetime, timezone
 
 from flask import (
@@ -459,6 +460,35 @@ def list_changes(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     changes, truncated = git_changes(sess[4])
     return jsonify({'changes': changes, 'truncated': truncated})
+
+
+@ai_chat_bp.route('/sessions/<sid>/mcp', methods=['GET'])
+@login_required
+def list_mcp_services(sid):
+    """List configured MCP servers + their tools for the chat's MCP 服务 block.
+    Deterministic: servers/status from OpenCode, tools from our MCP server — never
+    via the model."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    try:
+        servers_raw = OpenCodeClient(OPENCODE_BASE_URL).list_mcp(sess[4])
+    except Exception:
+        return jsonify({'servers': [], 'error': 'opencode unavailable'})
+    try:
+        our_tools = requests.get(f"{MCP_SERVER_URL}/tools", timeout=5).json()
+    except Exception:
+        our_tools = []
+    servers = [
+        {
+            'name': name,
+            'status': (servers_raw.get(name) or {}).get('status', 'unknown'),
+            'tools': our_tools if name == MCP_NAME else [],
+        }
+        for name in sorted(servers_raw.keys())
+    ]
+    return jsonify({'servers': servers})
 
 
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
