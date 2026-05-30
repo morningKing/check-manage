@@ -45,6 +45,18 @@ describe('splitArtifacts', () => {
     expect(segs.some(s => s.type === 'code')).toBe(true)
   })
 
+  it('never lifts prose-language fences (text / plaintext / empty), regardless of size', () => {
+    // A wall of plain text the model happened to wrap in ``` ought to stay
+    // inline (rendered as a markdown code block), not become a "click to
+    // preview" artifact card.
+    const longText = Array.from({ length: 20 }, (_, i) => `line ${i} of plain prose`).join('\n')
+    for (const lang of ['', 'text', 'plaintext']) {
+      const src = '说明：\n\n```' + lang + '\n' + longText + '\n```\n'
+      const segs = splitArtifacts(src)
+      expect(segs.every(s => s.type === 'text')).toBe(true)
+    }
+  })
+
   it('keeps an inline mermaid block while still lifting a following large code block', () => {
     const py = Array.from({ length: 8 }, (_, i) => `line ${i}`).join('\n')
     const src = `图：\n\n\`\`\`mermaid\ngraph TD\nA-->B\n\`\`\`\n\n代码：\n\n\`\`\`python\n${py}\n\`\`\`\n`

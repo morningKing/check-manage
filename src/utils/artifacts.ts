@@ -12,10 +12,18 @@ export type Segment = TextSegment | CodeSegment
 
 const FENCE = /```([^\n`]*)\n([\s\S]*?)```/g
 
-/** A fenced block becomes an artifact when it's big enough to be worth lifting. */
-function isArtifact(code: string): boolean {
+// Langs that are not "code" — they're just formatted prose. Always render inline
+// (markdown will style them as a regular fenced code block) and NEVER lift into
+// an artifact card. Otherwise a short paragraph the model happened to fence with
+// ``` would show up as a "click to preview" bubble.
+const PROSE_LANGS = new Set(['', 'text', 'txt', 'plaintext', 'plain'])
+
+/** A fenced block becomes an artifact when it's big enough to be worth lifting.
+ *  Thresholds are intentionally permissive — small snippets read better inline. */
+function isArtifact(lang: string, code: string): boolean {
+  if (PROSE_LANGS.has((lang || '').trim().toLowerCase())) return false
   const lines = code.replace(/\n+$/, '').split('\n').length
-  return lines >= 6 || code.length >= 240
+  return lines >= 8 || code.length >= 320
 }
 
 /** Diagram/chart langs md-editor renders inline; never lift these into artifacts. */
@@ -37,7 +45,7 @@ export function splitArtifacts(src: string): Segment[] {
     // stays inside the surrounding text segment and md-editor renders it inline
     // as a diagram/chart. (Advancing `last` here would drop the diagram.)
     if (isInlineRenderLang(lang)) continue
-    if (!isArtifact(code)) continue // leave small snippets inline in the prose
+    if (!isArtifact(lang, code)) continue // leave small snippets / prose blocks inline
     if (m.index > last) segs.push({ type: 'text', text: src.slice(last, m.index) })
     segs.push({ type: 'code', lang, code })
     last = m.index + m[0].length
