@@ -366,7 +366,14 @@ function onKey(e: Event) {
               :auto-collapse="true"
             />
 
-            <div v-if="streaming && !messages.some(m => m.role === 'assistant' && hasText(m)) && !reasoning" class="ai-chat__pending">
+            <!-- Show "thinking" until the assistant's first part arrives in THIS
+                 turn: streaming + no reasoning visible + the latest message is
+                 still the user's. The previous `.some(... hasText)` over all
+                 history hid the spinner forever after the first reply. -->
+            <div
+              v-if="streaming && !reasoning && messages[messages.length - 1]?.role === 'user'"
+              class="ai-chat__pending"
+            >
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
             </div>
 
