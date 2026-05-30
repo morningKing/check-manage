@@ -37,7 +37,7 @@ def test_single_top_dir_layout_strips_prefix(tmp_path):
 
 
 def test_missing_frontmatter_name_falls_back_to_zip_filename(tmp_path):
-    from utils.skill_upload import extract_skill_zip, SkillUploadError
+    from utils.skill_upload import extract_skill_zip
     z = _make_zip({'SKILL.md': b'no frontmatter here'})
     z.filename = 'my-skill.zip'
     res = extract_skill_zip(str(tmp_path), z)
@@ -85,3 +85,32 @@ def test_invalid_name_rejected(tmp_path):
     with pytest.raises(SkillUploadError) as ei:
         extract_skill_zip(str(tmp_path), z)
     assert ei.value.code == 'INVALID_SKILL_NAME'
+
+
+def test_too_large_zip_rejected(tmp_path):
+    from utils.skill_upload import extract_skill_zip, SkillUploadError, MAX_ZIP_BYTES
+    payload = io.BytesIO(b'\0' * (MAX_ZIP_BYTES + 1))
+    fs = FileStorage(stream=payload, filename='big.zip', content_type='application/zip')
+    with pytest.raises(SkillUploadError) as ei:
+        extract_skill_zip(str(tmp_path), fs)
+    assert ei.value.code == 'SKILL_ZIP_TOO_LARGE'
+
+
+def test_too_many_files_zip_rejected(tmp_path):
+    from utils.skill_upload import extract_skill_zip, SkillUploadError, MAX_ZIP_ENTRIES
+    entries = {'SKILL.md': b'---\nname: ok\n---\n'}
+    for i in range(MAX_ZIP_ENTRIES + 1):
+        entries[f'f{i}.txt'] = b'x'
+    z = _make_zip(entries)
+    with pytest.raises(SkillUploadError) as ei:
+        extract_skill_zip(str(tmp_path), z)
+    assert ei.value.code == 'SKILL_ZIP_TOO_MANY_FILES'
+
+
+def test_corrupted_zip_rejected(tmp_path):
+    from utils.skill_upload import extract_skill_zip, SkillUploadError
+    fs = FileStorage(stream=io.BytesIO(b'not a zip at all'), filename='broken.zip',
+                     content_type='application/zip')
+    with pytest.raises(SkillUploadError) as ei:
+        extract_skill_zip(str(tmp_path), fs)
+    assert ei.value.code == 'SKILL_ZIP_INVALID'
