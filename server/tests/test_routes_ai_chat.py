@@ -537,3 +537,61 @@ def test_run_command_requires_command(setup):
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
     resp = client.post('/ai/chat/sessions/sess_x/command', json={'command': '  '}, headers=dev_h)
     assert resp.status_code == 400
+
+
+def test_upload_skill_success(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    with patch('routes.ai_chat.extract_skill_zip',
+               return_value={'name': 'hello', 'path': '.opencode/skills/hello'}) as ex:
+        from io import BytesIO
+        resp = client.post('/ai/chat/sessions/sess_x/skills',
+                           data={'file': (BytesIO(b'fake-zip'), 'hello.zip')},
+                           headers=dev_h, content_type='multipart/form-data')
+    assert resp.status_code == 201
+    assert resp.get_json() == {'name': 'hello', 'path': '.opencode/skills/hello'}
+    assert ex.call_args[0][0] == '/tmp/ws'   # workspace path passed first
+
+
+def test_upload_skill_guest_403(setup):
+    from io import BytesIO
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/skills',
+                       data={'file': (BytesIO(b'z'), 'h.zip')},
+                       headers=guest_h, content_type='multipart/form-data')
+    assert resp.status_code == 403
+
+
+def test_upload_skill_other_users_session_404(setup):
+    from io import BytesIO
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.post('/ai/chat/sessions/sess_other/skills',
+                       data={'file': (BytesIO(b'z'), 'h.zip')},
+                       headers=dev_h, content_type='multipart/form-data')
+    assert resp.status_code == 404
+
+
+def test_upload_skill_no_file_400(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/skills',
+                       data={}, headers=dev_h, content_type='multipart/form-data')
+    assert resp.status_code == 400
+    assert resp.get_json()['code'] == 'BAD_FILE'
+
+
+def test_upload_skill_util_error_400(setup):
+    from io import BytesIO
+    from utils.skill_upload import SkillUploadError
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    with patch('routes.ai_chat.extract_skill_zip',
+               side_effect=SkillUploadError('INVALID_SKILL_ZIP', 'missing SKILL.md')):
+        resp = client.post('/ai/chat/sessions/sess_x/skills',
+                           data={'file': (BytesIO(b'z'), 'h.zip')},
+                           headers=dev_h, content_type='multipart/form-data')
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body['code'] == 'INVALID_SKILL_ZIP'
+    assert body['error'] == 'missing SKILL.md'

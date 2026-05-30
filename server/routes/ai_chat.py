@@ -39,6 +39,7 @@ from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
 from utils.py_runner import run_python_in_workspace
+from utils.skill_upload import extract_skill_zip, SkillUploadError
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -433,6 +434,26 @@ def upload_file(sid):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     f.save(dest)
     return jsonify({'name': safe_name, 'path': rel, 'size': os.path.getsize(dest)}), 201
+
+
+@ai_chat_bp.route('/sessions/<sid>/skills', methods=['POST'])
+@write_required
+def upload_skill(sid):
+    """Install an OpenCode skill zip into <workspace>/.opencode/skills/<name>/.
+    OpenCode then discovers it via GET /skill?directory=<workspace>; the chat's
+    command palette picks it up after loadPaletteItems refresh."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'file required', 'code': 'BAD_FILE'}), 400
+    try:
+        res = extract_skill_zip(sess[4], f)
+    except SkillUploadError as e:
+        return jsonify({'error': e.message, 'code': e.code}), 400
+    return jsonify(res), 201
 
 
 @ai_chat_bp.route('/sessions/<sid>/files', methods=['GET'])
