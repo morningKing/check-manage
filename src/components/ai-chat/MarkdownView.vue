@@ -10,10 +10,24 @@ const props = defineProps<{ text: string }>()
 // URL of the raw SVG. md-editor renders it as a normal <img> — inline, no
 // "click to preview" bubble. <img>-loaded SVG cannot execute scripts (the
 // browser disables them), so this is XSS-safe without needing DOMPurify.
+//
+// IMPORTANT: encode as base64. encodeURIComponent leaves `(` and `)` alone,
+// and SVGs are full of them (transform="translate(...)" etc.) — those raw
+// parens would close the markdown image's `(url)` early and turn the rest
+// of the SVG into mojibake in the chat.
+function svgToDataUrl(svg: string): string {
+  const bytes = new TextEncoder().encode(svg)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return `data:image/svg+xml;base64,${btoa(bin)}`
+}
+
 function inlineSvgFences(src: string): string {
-  return src.replace(/```svg\s*\n([\s\S]*?)\n```/g, (_, body) => {
-    const url = `data:image/svg+xml;utf8,${encodeURIComponent(body.trim())}`
-    return `![inline svg](${url})`
+  return src.replace(/```svg[^\n]*\n([\s\S]*?)```/g, (orig, body) => {
+    const trimmed = (body as string).replace(/\n+$/, '').trim()
+    if (!trimmed) return orig
+    try { return `![inline svg](${svgToDataUrl(trimmed)})` }
+    catch { return orig }
   })
 }
 
