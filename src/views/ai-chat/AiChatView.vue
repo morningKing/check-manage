@@ -7,6 +7,7 @@ import {
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
+  CopyDocument, RefreshRight,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -254,6 +255,44 @@ function acceptItem(item: PaletteItem) {
   activeIndex.value = 0
 }
 
+// User-bubble Copy / Edit / Retry. Edit + Retry are destructive (delete the
+// message and everything after it), so they go through ElMessageBox.confirm.
+function messageText(m: AiMessage): string {
+  return m.content
+    .filter((p) => p.type === 'text' && (p as any).text)
+    .map((p) => (p as any).text as string)
+    .join('\n')
+}
+
+async function copyMessage(m: AiMessage) {
+  const text = messageText(m)
+  if (!text) return
+  try { await navigator.clipboard.writeText(text); ElMessage.success('已复制') }
+  catch { ElMessage.error('复制失败') }
+}
+
+async function editMessage(m: AiMessage) {
+  const text = messageText(m)
+  if (!activeId.value) return
+  if (m.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
+  try {
+    await ElMessageBox.confirm('将删除该消息及其之后的全部对话，然后把文本载入输入框便于修改。继续？',
+      '编辑这条消息', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  await store.deleteFromMessage(activeId.value, m.id)
+  input.value = text
+}
+
+async function retryMessage(m: AiMessage) {
+  if (!activeId.value) return
+  if (m.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
+  try {
+    await ElMessageBox.confirm('将删除该消息及其之后的全部对话，然后重新发送。继续？',
+      '重新生成回答', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  try { await store.retryUserMessage(m.id) } catch { ElMessage.error('重新发送失败') }
+}
+
 async function send() {
   if (!canSend.value) return
   const text = input.value.trim()
@@ -371,6 +410,20 @@ function onKey(e: Event) {
                   </template>
                 </template>
               </Bubble>
+              <div v-if="m.role === 'user' && messageText(m)" class="msg__actions">
+                <button
+                  class="msg__action-btn" type="button" title="复制" aria-label="复制"
+                  @click="copyMessage(m)"
+                ><ElIcon><CopyDocument /></ElIcon></button>
+                <button
+                  class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
+                  :disabled="streaming" @click="editMessage(m)"
+                ><ElIcon><EditPen /></ElIcon></button>
+                <button
+                  class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
+                  :disabled="streaming" @click="retryMessage(m)"
+                ><ElIcon><RefreshRight /></ElIcon></button>
+              </div>
             </div>
 
             <!-- 思考过程：完成后自动收起 -->
@@ -558,7 +611,30 @@ function onKey(e: Event) {
   margin-bottom: 6px;
 }
 /* User: a single gray rounded block on the right (no inner box) */
-.msg--user { display: flex; justify-content: flex-end; }
+.msg--user { display: flex; flex-direction: column; align-items: flex-end; }
+.msg__actions {
+  display: flex; gap: 4px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.msg--user:hover .msg__actions { opacity: 0.9; }
+.msg__action-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  padding: 0;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  cursor: pointer;
+}
+.msg__action-btn:hover:not(:disabled) {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.msg__action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .ai-bubble--user :deep(.elx-bubble__content-wrapper),
 .ai-bubble--user :deep(.elx-bubble__content) {
   background: var(--el-fill-color) !important;

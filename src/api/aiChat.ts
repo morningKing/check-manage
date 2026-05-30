@@ -130,6 +130,12 @@ export function abortSession(id: string) {
   return post<{ ok: boolean }>(`/ai/chat/sessions/${encodeURIComponent(id)}/abort`)
 }
 
+export function deleteFromMessage(id: string, msgId: string) {
+  return del<{ deleted: number }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/messages/${encodeURIComponent(msgId)}`,
+  )
+}
+
 export function postCommand(id: string, command: string, args: string) {
   return post<{ messageId: string }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/command`, { command, arguments: args },

@@ -463,6 +463,41 @@ def test_run_script_other_users_session_404(setup):
     assert resp.status_code == 404
 
 
+def test_delete_message_onwards_drops_from_created_at(setup):
+    from datetime import datetime, timezone
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws'),
+        (datetime(2026, 5, 30, tzinfo=timezone.utc),),
+    ]
+    cursor.rowcount = 3
+    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_dead', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'deleted': 3}
+    # asserts: (1) we looked up created_at for the target msg, (2) DELETE used it
+    sqls = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any('SELECT created_at FROM ai_chat_messages' in s for s in sqls)
+    assert any('DELETE FROM ai_chat_messages' in s and 'created_at' in s for s in sqls)
+    oc.abort_session.assert_called_once()  # best-effort abort
+
+
+def test_delete_message_unknown_msg_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.side_effect = [
+        ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws'),
+        None,  # message not found
+    ]
+    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_nope', headers=dev_h)
+    assert resp.status_code == 404
+    assert resp.get_json()['code'] == 'MESSAGE_NOT_FOUND'
+
+
+def test_delete_message_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.delete('/ai/chat/sessions/sess_x/messages/msg_x', headers=guest_h)
+    assert resp.status_code == 403
+
+
 def test_abort_session_calls_opencode(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')

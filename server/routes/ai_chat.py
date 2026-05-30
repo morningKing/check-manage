@@ -14,6 +14,8 @@ Routes registered:
     GET    /ai/chat/sessions/:id/mcp      list MCP servers + tools
     GET    /ai/chat/sessions/:id/commands list OpenCode commands + skills
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
+    POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
+    DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
 """
 
 import os
@@ -600,6 +602,38 @@ def abort_session(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
     return jsonify({'ok': True}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/messages/<msg_id>', methods=['DELETE'])
+@write_required
+def delete_message_onwards(sid, msg_id):
+    """Remove a message and every message after it in the session — used by the
+    user-bubble Edit / Retry affordances. Also aborts any in-flight turn so the
+    next prompt isn't stacked on top of a still-streaming one (best-effort)."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT created_at FROM ai_chat_messages WHERE id = %s AND session_id = %s",
+            (msg_id, sid),
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'message not found', 'code': 'MESSAGE_NOT_FOUND'}), 404
+        cur.execute(
+            "DELETE FROM ai_chat_messages "
+            "WHERE session_id = %s AND created_at >= %s",
+            (sid, row[0]),
+        )
+        deleted = cur.rowcount
+    try:
+        OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+    except Exception:
+        pass  # best-effort: a non-streaming session returns 4xx and that's fine
+    return jsonify({'deleted': deleted}), 200
 
 
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])

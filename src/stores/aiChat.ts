@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
-  getCommands, postCommand, abortSession,
+  getCommands, postCommand, abortSession, deleteFromMessage,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type PaletteCommand, type StreamStatus,
@@ -207,14 +207,37 @@ export const useAiChatStore = defineStore('aiChat', {
       if (content) parts.push({ type: 'text', text: content })
       for (const a of pending) parts.push({ type: 'file', name: a.name, path: a.path })
 
-      this.messages[sid].push({ id: 'local_' + Date.now(), role: 'user', content: parts })
+      const localId = 'local_' + Date.now()
+      this.messages[sid].push({ id: localId, role: 'user', content: parts })
       this.streaming[sid] = true
       this.reasoning[sid] = ''
       this.thinking[sid] = true
       this._resetStreamState(sid)
       const paths = pending.map(a => a.path)
       this.attachments[sid] = []
-      await sendMessage(sid, content, paths)
+      const { messageId } = await sendMessage(sid, content, paths)
+      // adopt the real DB id so Edit/Retry can target this row server-side
+      const msg = this.messages[sid].find((m) => m.id === localId)
+      if (msg && messageId) msg.id = messageId
+    },
+
+    async deleteFromMessage(id: string, msgId: string) {
+      try { await deleteFromMessage(id, msgId) } catch { /* still trim locally */ }
+      const arr = this.messages[id] ?? []
+      const idx = arr.findIndex((m) => m.id === msgId)
+      if (idx >= 0) this.messages[id] = arr.slice(0, idx)
+      this.streaming[id] = false
+      this.thinking[id] = false
+    },
+
+    async retryUserMessage(msgId: string) {
+      const sid = this.activeSessionId
+      if (!sid) return
+      const target = (this.messages[sid] ?? []).find((m) => m.id === msgId)
+      if (!target) return
+      const text = target.content.find((p) => p.type === 'text')?.text ?? ''
+      await this.deleteFromMessage(sid, msgId)
+      if (text) await this.sendUserMessage(text)
     },
 
     async uploadAttachment(file: File) {
