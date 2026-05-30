@@ -290,6 +290,9 @@ function onKey(e: Event) {
 
     <!-- 对话主区 -->
     <section class="ai-chat__main">
+      <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
+        <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
+      </div>
       <ElScrollbar ref="scroller" class="ai-chat__messages">
         <div v-if="!activeId" class="ai-chat__welcome">
           <ElEmpty description="开启一个会话，向 AI 助手提问或上传文件">
@@ -507,6 +510,14 @@ function onKey(e: Event) {
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ai-chat__messages { flex: 1; min-height: 0; }
 .ai-chat__welcome { height: 100%; display: flex; align-items: center; justify-content: center; }
+.ai-chat__reconnect {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 16px; font-size: 13px;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning-dark-2);
+  border-bottom: 1px solid var(--el-color-warning-light-7);
+  .spin { animation: spin 1s linear infinite; }
+}
 
 /* Claude-like document column: centered, generous whitespace */
 .ai-thread {

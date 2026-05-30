@@ -151,12 +151,20 @@ export function downloadFileUrl(id: string, path: string): string {
   return `/api/ai/chat/sessions/${encodeURIComponent(id)}/files/download?path=${encodeURIComponent(path)}${authParam('&')}`
 }
 
+export type StreamStatus = 'open' | 'reconnecting' | 'closed'
+
 export interface StreamHandlers {
   onEvent: (event: { event: string; data: unknown }) => void
   onError: (err: Event) => void
+  onStatus?: (status: StreamStatus) => void
 }
 
-const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000]
+// Backoff schedule for SSE reconnects (ms). The last value is held as the
+// steady-state interval — previously we gave up after the 4th try (~18s) and
+// silently stopped polling; now we keep retrying indefinitely so a long
+// backend/network blip just appears as "reconnecting" in the UI and resumes
+// when service returns.
+const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 60000]
 
 // EventSource / download links can't set an Authorization header, so those
 // endpoints accept the JWT via ?access_token=. Read the same token axios uses.
@@ -204,12 +212,12 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
       h.onError(err)
       es?.close()
       if (closed) return
-      if (attempt < RECONNECT_DELAYS_MS.length) {
-        timer = setTimeout(open, RECONNECT_DELAYS_MS[attempt])
-        attempt += 1
-      }
+      h.onStatus?.('reconnecting')
+      const i = Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)
+      timer = setTimeout(open, RECONNECT_DELAYS_MS[i])
+      attempt += 1
     }
-    es.onopen = () => { attempt = 0 }
+    es.onopen = () => { attempt = 0; h.onStatus?.('open') }
   }
 
   open()
@@ -219,6 +227,7 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
       closed = true
       if (timer) clearTimeout(timer)
       es?.close()
+      h.onStatus?.('closed')
     },
   }
 }

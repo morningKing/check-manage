@@ -14,7 +14,7 @@ import {
   getCommands, postCommand,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
-  type PaletteCommand,
+  type PaletteCommand, type StreamStatus,
 } from '@/api/aiChat'
 
 interface SessionMeta {
@@ -38,6 +38,7 @@ interface State {
   outputs: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
+  streamStatus: Record<string, StreamStatus>
   uploading: boolean
   _stream: { close(): void } | null
 }
@@ -59,6 +60,7 @@ export const useAiChatStore = defineStore('aiChat', {
     outputs: {},
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
+    streamStatus: {} as Record<string, StreamStatus>,
     uploading: false,
     _stream: null,
   }),
@@ -78,6 +80,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeChanges(state): ChangedFile[] {
       return state.activeSessionId ? state.changes[state.activeSessionId] ?? [] : []
+    },
+    activeStreamStatus(state): StreamStatus {
+      return state.activeSessionId ? state.streamStatus[state.activeSessionId] ?? 'closed' : 'closed'
     },
   },
 
@@ -243,6 +248,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this._stream = createEventStream(sid, {
         onEvent: ({ event, data }) => this._handleEvent(sid, event, data as any),
         onError: () => { /* api layer handles reconnect */ },
+        onStatus: (s) => { this.streamStatus[sid] = s },
       })
     },
 
