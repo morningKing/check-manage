@@ -293,6 +293,30 @@ async function retryMessage(m: AiMessage) {
   try { await store.retryUserMessage(m.id) } catch { ElMessage.error('重新发送失败') }
 }
 
+// Assistant-bubble retry: find the user message that produced this answer
+// and re-run it (delete from there + resend).
+function previousUserMessage(m: AiMessage): AiMessage | undefined {
+  const arr = messages.value
+  const idx = arr.findIndex((x) => x.id === m.id)
+  if (idx <= 0) return undefined
+  for (let i = idx - 1; i >= 0; i--) {
+    if (arr[i].role === 'user') return arr[i]
+  }
+  return undefined
+}
+
+async function retryAssistantMessage(m: AiMessage) {
+  if (!activeId.value) return
+  const userMsg = previousUserMessage(m)
+  if (!userMsg) { ElMessage.warning('找不到对应的用户消息'); return }
+  if (userMsg.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
+  try {
+    await ElMessageBox.confirm('将删除该回答及其之后的对话，然后重新生成。继续？',
+      '重新生成回答', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  try { await store.retryUserMessage(userMsg.id) } catch { ElMessage.error('重新发送失败') }
+}
+
 // 手动重新扫描「变更文件」面板。Skill 写出的新文件如果没落在某个 git 仓库里、
 // 或者扫描时刚好赶在 session.idle 之前的窗口里，可能会漏 —— 给用户一个明确的
 // "再扫一遍" 出口。
@@ -421,18 +445,25 @@ function onKey(e: Event) {
                   </template>
                 </template>
               </Bubble>
-              <div v-if="m.role === 'user' && messageText(m)" class="msg__actions">
+              <div v-if="messageText(m)" class="msg__actions" :class="`msg__actions--${m.role}`">
                 <button
                   class="msg__action-btn" type="button" title="复制" aria-label="复制"
                   @click="copyMessage(m)"
                 ><ElIcon><CopyDocument /></ElIcon></button>
+                <template v-if="m.role === 'user'">
+                  <button
+                    class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
+                    :disabled="streaming" @click="editMessage(m)"
+                  ><ElIcon><EditPen /></ElIcon></button>
+                  <button
+                    class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
+                    :disabled="streaming" @click="retryMessage(m)"
+                  ><ElIcon><RefreshRight /></ElIcon></button>
+                </template>
                 <button
-                  class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
-                  :disabled="streaming" @click="editMessage(m)"
-                ><ElIcon><EditPen /></ElIcon></button>
-                <button
+                  v-else-if="m.role === 'assistant'"
                   class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
-                  :disabled="streaming" @click="retryMessage(m)"
+                  :disabled="streaming" @click="retryAssistantMessage(m)"
                 ><ElIcon><RefreshRight /></ElIcon></button>
               </div>
             </div>
@@ -639,8 +670,10 @@ function onKey(e: Event) {
   margin-top: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
+  width: fit-content;
 }
-.msg--user:hover .msg__actions { opacity: 0.9; }
+.msg__actions--assistant { margin-left: 0; }
+.msg:hover .msg__actions { opacity: 0.9; }
 .msg__action-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px;
