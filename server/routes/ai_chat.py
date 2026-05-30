@@ -8,6 +8,7 @@ Routes registered:
     GET    /ai/chat/sessions/:id/events   sse_proxy
     DELETE /ai/chat/sessions/:id          delete_session
     POST   /ai/chat/sessions/:id/files    upload; GET .../files, .../files/download
+    POST   /ai/chat/sessions/:id/skills   install a skill zip
     GET    /ai/chat/sessions/:id/changes  workspace git changes
     POST   /ai/chat/sessions/:id/run      run a python artifact
     GET    /ai/chat/sessions/:id/mcp      list MCP servers + tools
