@@ -217,6 +217,20 @@ function handleAddMenu(cmd: string) {
   else if (cmd === 'skill') skillInput.value?.click()
 }
 
+// Backend emits a specific `code` for every validation failure; map them to
+// friendly Chinese hints so the user can act on the error (instead of a
+// generic "技能添加失败").
+const SKILL_ERR_MSG: Record<string, string> = {
+  SKILL_EXISTS: '该技能已存在；请改 zip 里的 name 后再传',
+  SKILL_ZIP_INVALID: 'zip 文件已损坏',
+  SKILL_ZIP_TOO_LARGE: 'zip 超过 5 MiB 上限',
+  SKILL_ZIP_TOO_MANY_FILES: 'zip 文件数过多（>200）',
+  SKILL_ZIP_UNSAFE: 'zip 含非法路径，已拒绝',
+  INVALID_SKILL_ZIP: 'zip 里缺少 SKILL.md',
+  INVALID_SKILL_NAME: '技能名只能包含字母/数字/下划线/短横线',
+  BAD_FILE: '请选择一个 .zip 文件',
+}
+
 async function onSkillPicked(e: Event) {
   const input = e.target as HTMLInputElement
   const f = input.files?.[0]
@@ -227,7 +241,10 @@ async function onSkillPicked(e: Event) {
     const res = await store.uploadSkill(f)
     ElMessage.success(`已添加技能：${res.name}`)
   } catch (err: any) {
-    ElMessage.error(err?.response?.data?.error || '技能添加失败')
+    const code: string | undefined = err?.response?.data?.code
+    ElMessage.error(
+      (code && SKILL_ERR_MSG[code]) || err?.response?.data?.error || '技能添加失败',
+    )
   }
 }
 

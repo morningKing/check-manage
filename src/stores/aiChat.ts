@@ -39,7 +39,9 @@ interface State {
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
   streamStatus: Record<string, StreamStatus>
-  uploading: boolean
+  // Concurrent uploads (file + skill) used to clobber a single boolean; this is
+  // a refcount so the spinner only clears when ALL in-flight uploads finish.
+  uploadingCount: number
   _stream: { close(): void } | null
 }
 
@@ -61,7 +63,7 @@ export const useAiChatStore = defineStore('aiChat', {
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     streamStatus: {} as Record<string, StreamStatus>,
-    uploading: false,
+    uploadingCount: 0,
     _stream: null,
   }),
 
@@ -83,6 +85,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeStreamStatus(state): StreamStatus {
       return state.activeSessionId ? state.streamStatus[state.activeSessionId] ?? 'closed' : 'closed'
+    },
+    uploading(state): boolean {
+      return state.uploadingCount > 0
     },
   },
 
@@ -215,24 +220,24 @@ export const useAiChatStore = defineStore('aiChat', {
     async uploadAttachment(file: File) {
       if (!this.activeSessionId) throw new Error('no active session')
       const sid = this.activeSessionId
-      this.uploading = true
+      this.uploadingCount++
       try {
         const res = await uploadFile(sid, file)
         ;(this.attachments[sid] ?? (this.attachments[sid] = [])).push({ name: res.name, path: res.path })
       } finally {
-        this.uploading = false
+        this.uploadingCount--
       }
     },
 
     async uploadSkill(file: File): Promise<{ name: string; path: string }> {
       const sid = this.activeSessionId
       if (!sid) throw new Error('no active session')
-      this.uploading = true
+      this.uploadingCount++
       try {
         const res = await uploadSkill(sid, file)
         await this.loadPaletteItems(sid)
         return res
-      } finally { this.uploading = false }
+      } finally { this.uploadingCount-- }
     },
 
     removeAttachment(path: string) {
