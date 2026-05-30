@@ -89,6 +89,15 @@ export function uploadFile(id: string, file: File) {
   )
 }
 
+export function uploadSkill(id: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return post<{ name: string; path: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/skills`, form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}
+
 export function listFiles(id: string) {
   return get<{ files: AiFile[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/files`)
 }

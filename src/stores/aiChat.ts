@@ -10,7 +10,7 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
-  getMessages, sendMessage, uploadFile, listFiles, getChanges, getMcpServices,
+  getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
@@ -214,6 +214,17 @@ export const useAiChatStore = defineStore('aiChat', {
       } finally {
         this.uploading = false
       }
+    },
+
+    async uploadSkill(file: File): Promise<{ name: string; path: string }> {
+      const sid = this.activeSessionId
+      if (!sid) throw new Error('no active session')
+      this.uploading = true
+      try {
+        const res = await uploadSkill(sid, file)
+        await this.loadPaletteItems(sid)
+        return res
+      } finally { this.uploading = false }
     },
 
     removeAttachment(path: string) {
