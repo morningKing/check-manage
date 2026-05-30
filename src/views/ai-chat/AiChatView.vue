@@ -453,8 +453,16 @@ function onKey(e: Event) {
               <div class="composer-bar__right">
                 <span class="composer-model">MiMo</span>
                 <ElButton
+                  v-if="streaming"
+                  class="composer-send composer-send--stop" type="danger" circle :icon="Close"
+                  title="停止生成" aria-label="停止生成"
+                  @click="store.abortStreaming()"
+                />
+                <ElButton
+                  v-else
                   class="composer-send" type="primary" circle :icon="Top"
                   :disabled="!canSend" @click="send"
+                  title="发送" aria-label="发送"
                 />
               </div>
             </div>

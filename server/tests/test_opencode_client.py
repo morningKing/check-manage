@@ -166,6 +166,16 @@ def test_list_skills_scopes_by_directory():
     a, k = get.call_args; assert a[0].endswith("/skill"); assert k["params"] == {"directory": "/ws"}
 
 
+def test_abort_session_posts_to_abort_with_directory():
+    fake = MagicMock(); fake.status_code = 200; fake.raise_for_status = MagicMock()
+    with patch("utils.opencode_client.requests.post", return_value=fake) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://x").abort_session("ses_1", directory="/ws")
+    a, k = post.call_args
+    assert a[0].endswith("/session/ses_1/abort")
+    assert k["params"] == {"directory": "/ws"}
+
+
 def test_run_command_posts_command_and_arguments():
     fake = MagicMock(); fake.status_code = 202; fake.raise_for_status = MagicMock()
     with patch("utils.opencode_client.requests.post", return_value=fake) as post:

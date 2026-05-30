@@ -463,6 +463,30 @@ def test_run_script_other_users_session_404(setup):
     assert resp.status_code == 404
 
 
+def test_abort_session_calls_opencode(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/abort', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'ok': True}
+    a, k = oc.abort_session.call_args
+    assert a[0] == 'oc_sess'
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_abort_session_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/abort', headers=guest_h)
+    assert resp.status_code == 403
+
+
+def test_abort_session_other_users_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.post('/ai/chat/sessions/sess_other/abort', headers=dev_h)
+    assert resp.status_code == 404
+
+
 def test_list_mcp_services_merges_servers_and_tools(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')

@@ -102,6 +102,16 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def abort_session(self, opencode_session_id: str, directory: str = "") -> None:
+        """Abort the in-flight turn for this session. OpenCode then emits a
+        session.idle on the SSE so the UI clears its "thinking" state."""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/session/{opencode_session_id}/abort"),
+            params=params, timeout=self.timeout,
+        )
+        resp.raise_for_status()
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.

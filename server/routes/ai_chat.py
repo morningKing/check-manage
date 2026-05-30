@@ -589,6 +589,19 @@ def run_session_command(sid):
     return jsonify({'messageId': msg_id}), 202
 
 
+@ai_chat_bp.route('/sessions/<sid>/abort', methods=['POST'])
+@write_required
+def abort_session(sid):
+    """Abort the in-flight turn (prompt or command). OpenCode then emits
+    session.idle on the SSE so the UI clears its 'thinking' state."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+    return jsonify({'ok': True}), 200
+
+
 @ai_chat_bp.route('/sessions/<sid>/files/download', methods=['GET'])
 @login_required_sse
 def download_file(sid):

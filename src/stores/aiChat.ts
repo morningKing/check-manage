@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession, deleteSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
-  getCommands, postCommand,
+  getCommands, postCommand, abortSession,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type PaletteCommand, type StreamStatus,
@@ -158,6 +158,15 @@ export const useAiChatStore = defineStore('aiChat', {
       this.thinking[id] = true
       this._resetStreamState(id)
       await postCommand(id, name, args)
+    },
+
+    async abortStreaming() {
+      const sid = this.activeSessionId
+      if (!sid || !this.streaming[sid]) return
+      try { await abortSession(sid) } catch { /* SSE.idle clears state regardless */ }
+      // optimistic UI: clear locally; session.idle event will re-affirm
+      this.streaming[sid] = false
+      this.thinking[sid] = false
     },
 
     async showMcpServices() {

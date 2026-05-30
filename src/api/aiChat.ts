@@ -126,6 +126,10 @@ export function getCommands(id: string) {
     `/ai/chat/sessions/${encodeURIComponent(id)}/commands`, undefined, { silent: true },
   )
 }
+export function abortSession(id: string) {
+  return post<{ ok: boolean }>(`/ai/chat/sessions/${encodeURIComponent(id)}/abort`)
+}
+
 export function postCommand(id: string, command: string, args: string) {
   return post<{ messageId: string }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/command`, { command, arguments: args },
