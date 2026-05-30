@@ -130,6 +130,29 @@ def test_get_messages_returns_history(setup):
     assert body['messages'][0]['role'] == 'user'
 
 
+def test_loading_session_touches_last_active_and_extends_token(setup):
+    """Every route that loads a session also bumps last_active_at and
+    extends token_expires_at — keeps MCP token alive + powers the sidebar
+    recency sort."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    cursor.fetchall.return_value = []
+    client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+    sqls = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any('UPDATE ai_chat_sessions' in s
+               and 'last_active_at = NOW()' in s
+               and 'token_expires_at = NOW()' in s for s in sqls), sqls
+
+
+def test_unknown_session_does_not_touch(setup):
+    """If _load_session_for_user finds no row, no UPDATE should fire."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    client.get('/ai/chat/sessions/sess_nope/messages', headers=dev_h)
+    sqls = [c.args[0] for c in cursor.execute.call_args_list]
+    assert not any('UPDATE ai_chat_sessions' in s and 'token_expires_at' in s for s in sqls)
+
+
 def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')

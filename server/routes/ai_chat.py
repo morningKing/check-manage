@@ -20,7 +20,7 @@ import os
 import json
 import secrets
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import (
     Blueprint, request, jsonify, g as flask_g, Response, stream_with_context,
@@ -160,7 +160,13 @@ def rename_session(sid):
 
 
 def _load_session_for_user(session_id: str, user_id: str):
-    """Return (id, user_id, opencode_session_id, status, workspace_path) or None."""
+    """Return (id, user_id, opencode_session_id, status, workspace_path) or None.
+
+    On a successful load, also bump `last_active_at` and extend `token_expires_at`
+    by `AI_SESSION_TTL_HOURS` — every user action keeps the session's MCP token
+    alive so the chat doesn't 401 partway through a long day, and feeds the
+    sidebar's recency sort (which previously only saw creation time).
+    """
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -169,7 +175,16 @@ def _load_session_for_user(session_id: str, user_id: str):
             "WHERE id = %s AND user_id = %s",
             (session_id, user_id),
         )
-        return cur.fetchone()
+        row = cur.fetchone()
+        if row is None:
+            return None
+        cur.execute(
+            "UPDATE ai_chat_sessions "
+            "SET last_active_at = NOW(), token_expires_at = NOW() + %s "
+            "WHERE id = %s",
+            (timedelta(hours=AI_SESSION_TTL_HOURS), session_id),
+        )
+        return row
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages', methods=['POST'])
