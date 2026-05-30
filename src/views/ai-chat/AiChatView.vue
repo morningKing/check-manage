@@ -78,10 +78,6 @@ const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.valu
 
 const canSend = computed(() => !streaming.value && (input.value.trim() || attachments.value.length))
 
-function hasText(m: AiMessage): boolean {
-  return m.content.some(p => p.type === 'text' && p.text)
-}
-
 // ---- Artifacts (Claude-style file preview + version history) ----
 // Group artifacts by filename across the whole session. Named files (the fence
 // info string is a filename) accumulate versions; generic blocks stay singletons.
