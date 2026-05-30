@@ -45,15 +45,15 @@ describe('splitArtifacts', () => {
     expect(segs.some(s => s.type === 'code')).toBe(true)
   })
 
-  it('never lifts prose-language fences (text / plaintext / empty), regardless of size', () => {
-    // A wall of plain text the model happened to wrap in ``` ought to stay
-    // inline (rendered as a markdown code block), not become a "click to
-    // preview" artifact card.
-    const longText = Array.from({ length: 20 }, (_, i) => `line ${i} of plain prose`).join('\n')
-    for (const lang of ['', 'text', 'plaintext']) {
+  it('never lifts prose-language fences (text/plaintext/empty/bash/sh), regardless of size', () => {
+    // Prose + shell are best read inline; markdown still styles them as a
+    // fenced code block, so the user never sees a "click to preview" bubble
+    // for a wall of bash commands they're meant to read in context.
+    const longText = Array.from({ length: 20 }, (_, i) => `line ${i} of content`).join('\n')
+    for (const lang of ['', 'text', 'plaintext', 'bash', 'sh', 'shell']) {
       const src = '说明：\n\n```' + lang + '\n' + longText + '\n```\n'
       const segs = splitArtifacts(src)
-      expect(segs.every(s => s.type === 'text')).toBe(true)
+      expect(segs.every(s => s.type === 'text'), `lang=${lang}`).toBe(true)
     }
   })
 

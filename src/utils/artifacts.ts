@@ -12,11 +12,14 @@ export type Segment = TextSegment | CodeSegment
 
 const FENCE = /```([^\n`]*)\n([\s\S]*?)```/g
 
-// Langs that are not "code" — they're just formatted prose. Always render inline
-// (markdown will style them as a regular fenced code block) and NEVER lift into
-// an artifact card. Otherwise a short paragraph the model happened to fence with
-// ``` would show up as a "click to preview" bubble.
-const PROSE_LANGS = new Set(['', 'text', 'txt', 'plaintext', 'plain'])
+// Langs that should NEVER be lifted into an artifact card — they read better
+// inline in the chat flow than as a separate file bubble. This covers plain
+// prose (no/empty/text/plaintext lang) and shell commands (bash/sh/shell),
+// which are almost always meant to be read alongside the surrounding text.
+const PROSE_LANGS = new Set([
+  '', 'text', 'txt', 'plaintext', 'plain',
+  'bash', 'sh', 'shell', 'zsh', 'console',
+])
 
 /** A fenced block becomes an artifact when it's big enough to be worth lifting.
  *  Thresholds are intentionally permissive — small snippets read better inline. */
