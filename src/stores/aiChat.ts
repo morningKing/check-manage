@@ -103,11 +103,16 @@ export const useAiChatStore = defineStore('aiChat', {
       this._resetStreamState(meta.id)
       const history = await getMessages(meta.id)
       this.messages[meta.id] = history.messages
+      this.loadPaletteItems(meta.id)
       this._openStream(meta.id)
       return meta.id
     },
 
     async openSession(id: string) {
+      // Always (re)load palette items so a transient backend hiccup during the
+      // first load doesn't leave the "/" dropdown empty forever — earlier path
+      // only ran this once and the early-return then masked the failure.
+      this.loadPaletteItems(id)
       if (this.activeSessionId === id && this.messages[id]) return
       this.activeSessionId = id
       this.attachments[id] = this.attachments[id] ?? []
