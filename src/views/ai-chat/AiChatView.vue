@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import {
-  ElButton, ElInput, ElScrollbar, ElIcon, ElTooltip, ElEmpty, ElMessageBox, ElMessage,
+  ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
+  ElDropdown, ElDropdownMenu, ElDropdownItem,
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
@@ -213,6 +214,27 @@ async function onFilesPicked(e: Event) {
   ;(e.target as HTMLInputElement).value = ''
 }
 
+const skillInput = ref<HTMLInputElement | null>(null)
+
+function handleAddMenu(cmd: string) {
+  if (cmd === 'file') pickFiles()
+  else if (cmd === 'skill') skillInput.value?.click()
+}
+
+async function onSkillPicked(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  input.value = ''
+  if (!f) return
+  if (!activeId.value) await newSession()
+  try {
+    const res = await store.uploadSkill(f)
+    ElMessage.success(`已添加技能：${res.name}`)
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.error || '技能添加失败')
+  }
+}
+
 function acceptItem(item: PaletteItem) {
   if (item.kind === 'skill') input.value = '使用 `' + item.name + '` 技能:'
   else input.value = '/' + item.name + ' '
@@ -399,9 +421,16 @@ function onKey(e: Event) {
             <div class="composer-bar">
               <div class="composer-bar__left">
                 <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
-                <ElTooltip content="上传文件">
-                  <ElButton class="composer-add" :icon="Plus" circle text :loading="store.uploading" @click="pickFiles" />
-                </ElTooltip>
+                <input ref="skillInput" type="file" accept=".zip" hidden @change="onSkillPicked" />
+                <ElDropdown trigger="click" @command="handleAddMenu">
+                  <ElButton class="composer-add" :icon="Plus" circle text :loading="store.uploading" />
+                  <template #dropdown>
+                    <ElDropdownMenu>
+                      <ElDropdownItem command="file">上传附件</ElDropdownItem>
+                      <ElDropdownItem command="skill">添加技能 (zip)</ElDropdownItem>
+                    </ElDropdownMenu>
+                  </template>
+                </ElDropdown>
               </div>
               <div class="composer-bar__right">
                 <span class="composer-model">MiMo</span>
