@@ -13,6 +13,50 @@ def test_create_session_workspace_makes_uploads_outputs(tmp_path):
     assert Path(p).name == "sess-1"
 
 
+def test_create_session_workspace_inits_git_and_writes_gitignore(tmp_path):
+    """New sessions get a workspace-level git repo + a .gitignore for the noise
+    dirs so the 变更文件 panel sees agent-written files without needing the
+    skill to git-clone something first."""
+    from utils.workspace import create_session_workspace
+    p = Path(create_session_workspace(str(tmp_path), "u", "s"))
+    assert (p / ".gitignore").is_file()
+    gitignore = (p / ".gitignore").read_text(encoding="utf-8")
+    for noisy in ("uploads/", "outputs/", ".opencode/", "node_modules/"):
+        assert noisy in gitignore
+    # git init is best-effort — only assert the .git dir exists if git is on PATH
+    import shutil as _sh
+    if _sh.which("git"):
+        assert (p / ".git").is_dir()
+
+
+def test_create_session_workspace_commits_gitignore_so_no_noise(tmp_path):
+    """The auto-generated .gitignore is base-committed so it doesn't show up
+    in 变更文件 every session, and opencode.json is ignored so it doesn't
+    either. git status on a fresh workspace must come back empty."""
+    import shutil as _sh, subprocess as _sp
+    if not _sh.which("git"):
+        return
+    from utils.workspace import create_session_workspace
+    p = Path(create_session_workspace(str(tmp_path), "u", "s"))
+    out = _sp.run(["git", "-C", str(p), "status", "--porcelain"],
+                  capture_output=True, text=True)
+    assert out.stdout == "", f"unexpected: {out.stdout!r}"
+    # opencode.json appearing later (real flow) must also stay hidden
+    (p / "opencode.json").write_text("{}", encoding="utf-8")
+    out = _sp.run(["git", "-C", str(p), "status", "--porcelain"],
+                  capture_output=True, text=True)
+    assert "opencode.json" not in out.stdout
+
+
+def test_create_session_workspace_skips_git_init_when_already_initialized(tmp_path):
+    """Idempotency: a second call doesn't reinit or overwrite the .gitignore."""
+    from utils.workspace import create_session_workspace
+    p = Path(create_session_workspace(str(tmp_path), "u", "s"))
+    (p / ".gitignore").write_text("custom\n", encoding="utf-8")
+    create_session_workspace(str(tmp_path), "u", "s")
+    assert (p / ".gitignore").read_text(encoding="utf-8") == "custom\n"
+
+
 def test_safe_resolve_rejects_traversal(tmp_path):
     from utils.workspace import safe_resolve, WorkspacePathError
     root = str(tmp_path)

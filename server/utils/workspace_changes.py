@@ -11,8 +11,10 @@ _SKIP_DIRS = {'uploads', 'outputs', 'node_modules', '.venv', '__pycache__'}
 
 
 def _find_git_repos(workspace_path, max_depth=3):
-    """Return dirs under workspace_path that are git repos (contain .git),
-    bounded depth, skipping well-known noise dirs. Does not descend into a repo."""
+    """Return dirs that are git repos under workspace_path (bounded depth,
+    skipping noise dirs). The workspace root itself counts — we still descend
+    INTO it to discover nested clones (the skill-clone workflow); we do not
+    descend into any other repo we find."""
     repos = []
     base_depth = workspace_path.rstrip(os.sep).count(os.sep)
     for dirpath, dirnames, _files in os.walk(workspace_path):
@@ -22,7 +24,10 @@ def _find_git_repos(workspace_path, max_depth=3):
             dirnames[:] = []
         if '.git' in os.listdir(dirpath):
             repos.append(dirpath)
-            dirnames[:] = []  # don't descend into the repo
+            # Don't descend into nested repos, but DO descend into the workspace
+            # root so we still find the skill-clone scenarios inside it.
+            if os.path.realpath(dirpath) != os.path.realpath(workspace_path):
+                dirnames[:] = []
     return repos
 
 
@@ -41,7 +46,18 @@ def git_changes(workspace_path):
     """Return (changes, truncated) where changes is
     [{'path': <rel-to-workspace POSIX>, 'status': 'added'|'modified'|'deleted'}]."""
     changes = []
-    for repo in _find_git_repos(workspace_path):
+    repos = _find_git_repos(workspace_path)
+    # If the workspace root is also a repo (new sessions: we git init it on
+    # creation) and nested clones exist below it, the outer's `git status`
+    # will see each nested clone as a single untracked dir entry. Suppress
+    # those — the nested repo's own changes are already reported separately.
+    nested_repo_paths = set()
+    for repo in repos:
+        rel = os.path.relpath(repo, workspace_path).replace(os.sep, '/').rstrip('/')
+        if rel and rel != '.':
+            nested_repo_paths.add(rel)
+            nested_repo_paths.add(rel + '/')
+    for repo in repos:
         try:
             out = subprocess.run(
                 ['git', '-C', repo, 'status', '--porcelain', '-z'],
@@ -62,6 +78,10 @@ def git_changes(workspace_path):
             if 'R' in xy or 'C' in xy:
                 i += 1  # rename/copy: the next NUL field is the original path
             rel = os.path.relpath(os.path.join(repo, path), workspace_path).replace(os.sep, '/')
+            cleaned = rel.rstrip('/')
+            if cleaned in nested_repo_paths or rel in nested_repo_paths:
+                i += 1
+                continue  # already reported by the nested repo itself
             changes.append({'path': rel, 'status': _map_status(xy)})
             i += 1
     changes.sort(key=lambda c: c['path'])

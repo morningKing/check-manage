@@ -7,7 +7,7 @@ import {
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
-  CopyDocument, RefreshRight,
+  CopyDocument, RefreshRight, Refresh,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -293,6 +293,17 @@ async function retryMessage(m: AiMessage) {
   try { await store.retryUserMessage(m.id) } catch { ElMessage.error('重新发送失败') }
 }
 
+// 手动重新扫描「变更文件」面板。Skill 写出的新文件如果没落在某个 git 仓库里、
+// 或者扫描时刚好赶在 session.idle 之前的窗口里，可能会漏 —— 给用户一个明确的
+// "再扫一遍" 出口。
+const changesLoading = ref(false)
+async function refreshChanges() {
+  if (!activeId.value) return
+  changesLoading.value = true
+  try { await store.loadChanges(activeId.value) }
+  finally { changesLoading.value = false }
+}
+
 async function send() {
   if (!canSend.value) return
   const text = input.value.trim()
@@ -461,8 +472,19 @@ function onKey(e: Event) {
             </div>
 
             <!-- 变更文件（会话 workspace 内 git 仓库的新增/修改/删除） -->
-            <div v-if="changes.length" class="ai-changes">
-              <div class="ai-changes__title">变更文件</div>
+            <div v-if="activeId" class="ai-changes">
+              <div class="ai-changes__title">
+                <span>变更文件 <span v-if="changes.length" class="ai-changes__count">({{ changes.length }})</span></span>
+                <button
+                  class="ai-changes__refresh" type="button"
+                  title="重新扫描变更文件" aria-label="重新扫描变更文件"
+                  :disabled="changesLoading"
+                  @click="refreshChanges"
+                >
+                  <ElIcon :class="{ spin: changesLoading }"><Refresh /></ElIcon>
+                </button>
+              </div>
+              <div v-if="!changes.length" class="ai-changes__empty">暂无变更（点击 🔄 重新扫描）</div>
               <div v-for="c in changes" :key="c.path" class="change-file">
                 <div class="change-file__row">
                   <ElTag size="small" :type="changeBadge(c.status).type">{{ changeBadge(c.status).label }}</ElTag>
@@ -740,7 +762,30 @@ function onKey(e: Event) {
   border: 1px dashed var(--el-border-color);
   border-radius: 10px;
   background: var(--el-fill-color-lighter);
-  &__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+  &__title {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary);
+    margin-bottom: 8px;
+  }
+  &__count { font-weight: 400; color: var(--el-text-color-secondary); }
+  &__empty { font-size: 12px; color: var(--el-text-color-secondary); padding: 4px 0; }
+  &__refresh {
+    margin-left: auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--el-text-color-secondary);
+    cursor: pointer;
+    border-radius: 4px;
+    .spin { animation: spin 0.8s linear infinite; }
+    &:hover:not(:disabled) {
+      background: var(--el-fill-color);
+      color: var(--el-color-primary);
+    }
+    &:disabled { opacity: 0.5; cursor: not-allowed; }
+  }
 }
 .change-file {
   display: flex; flex-direction: column; gap: 6px;
