@@ -98,26 +98,32 @@ export function uploadSkill(id: string, file: File) {
   )
 }
 
+// The four loaders below run in the background on every openSession (and on
+// session.idle); the store catches their failures on purpose. Pass `silent` so
+// a transient backend blip doesn't fire a toast storm or 401-boot the user.
+
 export function listFiles(id: string) {
-  return get<{ files: AiFile[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/files`)
+  return get<{ files: AiFile[] }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/files`, undefined, { silent: true },
+  )
 }
 
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean }>(
-    `/ai/chat/sessions/${encodeURIComponent(id)}/changes`,
+    `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },
   )
 }
 
 export function getMcpServices(id: string) {
   return get<{ servers: McpServer[]; error?: string }>(
-    `/ai/chat/sessions/${encodeURIComponent(id)}/mcp`,
+    `/ai/chat/sessions/${encodeURIComponent(id)}/mcp`, undefined, { silent: true },
   )
 }
 
 export interface PaletteCommand { name: string; description: string }
 export function getCommands(id: string) {
   return get<{ commands: PaletteCommand[]; skills: PaletteCommand[] }>(
-    `/ai/chat/sessions/${encodeURIComponent(id)}/commands`,
+    `/ai/chat/sessions/${encodeURIComponent(id)}/commands`, undefined, { silent: true },
   )
 }
 export function postCommand(id: string, command: string, args: string) {

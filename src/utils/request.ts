@@ -13,6 +13,14 @@ import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse 
 import { ElMessage } from 'element-plus'
 import { getBatchHeaders } from './batch'
 
+// Per-request opt-out: callers that swallow errors themselves can set `silent`
+// so the global toast/401-redirect doesn't fire (e.g. aux loaders polled in the
+// background — a transient backend blip would otherwise toast-storm or boot
+// the user to /login on a single mistimed 401).
+declare module 'axios' {
+  export interface AxiosRequestConfig { silent?: boolean }
+}
+
 /**
  * 创建 axios 实例
  *
@@ -78,42 +86,47 @@ service.interceptors.response.use(
     return response.data
   },
   (error) => {
-    // 处理HTTP错误
+    // Callers can opt out of the global toast/redirect with `{ silent: true }`
+    // — meant for auxiliary loaders whose failure the caller swallows on
+    // purpose (otherwise a transient backend blip fires a toast storm and a
+    // single mistimed 401 wipes the user out to /login).
+    const silent = (error.config as AxiosRequestConfig | undefined)?.silent === true
     const message = error.response?.data?.error || error.response?.data?.message || error.message || '请求失败'
 
-    // 根据状态码显示不同提示
-    if (error.response) {
-      switch (error.response.status) {
-        case 400:
-          ElMessage.error('请求参数错误')
-          break
-        case 401:
-          ElMessage.error('未授权，请重新登录')
-          // Clear auth data and redirect to login
-          localStorage.removeItem('check-manage:token')
-          localStorage.removeItem('check-manage:userInfo')
-          window.location.href = '/login'
-          break
-        case 403:
-          ElMessage.error('拒绝访问')
-          break
-        case 404:
-          ElMessage.error('请求资源不存在')
-          break
-        case 409:
-          // VERSION_CONFLICT is handled by the caller, skip duplicate message
-          if (error.response?.data?.code !== 'VERSION_CONFLICT') {
+    if (!silent) {
+      if (error.response) {
+        switch (error.response.status) {
+          case 400:
+            ElMessage.error('请求参数错误')
+            break
+          case 401:
+            ElMessage.error('未授权，请重新登录')
+            // Clear auth data and redirect to login
+            localStorage.removeItem('check-manage:token')
+            localStorage.removeItem('check-manage:userInfo')
+            window.location.href = '/login'
+            break
+          case 403:
+            ElMessage.error('拒绝访问')
+            break
+          case 404:
+            ElMessage.error('请求资源不存在')
+            break
+          case 409:
+            // VERSION_CONFLICT is handled by the caller, skip duplicate message
+            if (error.response?.data?.code !== 'VERSION_CONFLICT') {
+              ElMessage.error(message)
+            }
+            break
+          case 500:
+            ElMessage.error('服务器内部错误')
+            break
+          default:
             ElMessage.error(message)
-          }
-          break
-        case 500:
-          ElMessage.error('服务器内部错误')
-          break
-        default:
-          ElMessage.error(message)
+        }
+      } else {
+        ElMessage.error('网络连接失败，请检查网络')
       }
-    } else {
-      ElMessage.error('网络连接失败，请检查网络')
     }
 
     return Promise.reject(error)

@@ -39,7 +39,6 @@ interface State {
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
   uploading: boolean
-  drawerOpen: boolean
   _stream: { close(): void } | null
 }
 
@@ -61,7 +60,6 @@ export const useAiChatStore = defineStore('aiChat', {
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     uploading: false,
-    drawerOpen: false,
     _stream: null,
   }),
 
@@ -84,10 +82,6 @@ export const useAiChatStore = defineStore('aiChat', {
   },
 
   actions: {
-    toggleDrawer(open?: boolean) {
-      this.drawerOpen = open ?? !this.drawerOpen
-    },
-
     async loadSessions() {
       const { sessions } = await listSessions()
       this.sessions = sessions.map(s => ({ id: s.id, title: s.title }))
