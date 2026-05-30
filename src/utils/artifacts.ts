@@ -13,12 +13,13 @@ export type Segment = TextSegment | CodeSegment
 const FENCE = /```([^\n`]*)\n([\s\S]*?)```/g
 
 // Langs that should NEVER be lifted into an artifact card — they read better
-// inline in the chat flow than as a separate file bubble. This covers plain
-// prose (no/empty/text/plaintext lang) and shell commands (bash/sh/shell),
-// which are almost always meant to be read alongside the surrounding text.
+// inline in the chat flow than as a separate file bubble. Covers prose, shell
+// commands, and SVG (which MarkdownView pre-processes into an inline image so
+// the user sees the picture in place instead of a "click to preview" bubble).
 const PROSE_LANGS = new Set([
   '', 'text', 'txt', 'plaintext', 'plain',
   'bash', 'sh', 'shell', 'zsh', 'console',
+  'svg',
 ])
 
 /** A fenced block becomes an artifact when it's big enough to be worth lifting.

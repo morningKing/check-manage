@@ -45,12 +45,12 @@ describe('splitArtifacts', () => {
     expect(segs.some(s => s.type === 'code')).toBe(true)
   })
 
-  it('never lifts prose-language fences (text/plaintext/empty/bash/sh), regardless of size', () => {
-    // Prose + shell are best read inline; markdown still styles them as a
-    // fenced code block, so the user never sees a "click to preview" bubble
-    // for a wall of bash commands they're meant to read in context.
+  it('never lifts prose-/shell-/svg-language fences, regardless of size', () => {
+    // Prose, shell, and svg are best read/seen inline; markdown styles them as
+    // a fenced code block (and MarkdownView converts ```svg``` into an inline
+    // image), so the user never sees a "click to preview" bubble.
     const longText = Array.from({ length: 20 }, (_, i) => `line ${i} of content`).join('\n')
-    for (const lang of ['', 'text', 'plaintext', 'bash', 'sh', 'shell']) {
+    for (const lang of ['', 'text', 'plaintext', 'bash', 'sh', 'shell', 'svg']) {
       const src = '说明：\n\n```' + lang + '\n' + longText + '\n```\n'
       const segs = splitArtifacts(src)
       expect(segs.every(s => s.type === 'text'), `lang=${lang}`).toBe(true)
