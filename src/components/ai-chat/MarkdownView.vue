@@ -6,39 +6,65 @@ import './md-editor-setup' // register bundled mermaid/echarts (side effect)
 
 const props = defineProps<{ text: string }>()
 
-// Convert ```svg ... ``` fences into a markdown image whose source is a data:
-// URL of the raw SVG. md-editor renders it as a normal <img> — inline, no
-// "click to preview" bubble. <img>-loaded SVG cannot execute scripts (the
-// browser disables them), so this is XSS-safe without needing DOMPurify.
-//
-// IMPORTANT: encode as base64. encodeURIComponent leaves `(` and `)` alone,
-// and SVGs are full of them (transform="translate(...)" etc.) — those raw
-// parens would close the markdown image's `(url)` early and turn the rest
-// of the SVG into mojibake in the chat.
+// We render ```svg``` fences as inline <img> ourselves rather than letting
+// markdown-it do it, because md-editor's default validateLink only accepts
+// data: URLs whose MIME is image/{gif,png,jpeg,webp} — image/svg+xml is
+// rejected, so the markdown `![alt](data:image/svg+xml;...)` would render
+// as literal text (the base64 looks like mojibake in the bubble). By
+// splitting the text and dropping an <img> directly, we sidestep the
+// validation entirely. <img>-loaded SVG is XSS-safe (browser disables
+// scripts inside it), so no DOMPurify needed.
+
+interface MdSeg { type: 'md'; text: string }
+interface SvgSeg { type: 'svg'; src: string }
+type Seg = MdSeg | SvgSeg
+
+// Models routinely emit "Add & Norm" or "X & Y" in <text> nodes — a bare `&`
+// is invalid XML and the browser refuses to render the whole SVG
+// ("xmlParseEntityRef: no name"). Escape any `&` that isn't already part of a
+// proper entity reference (&amp;, &#10;, &#x1F;, …) before encoding.
+function sanitizeSvgEntities(svg: string): string {
+  return svg.replace(/&(?!(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#x[0-9A-Fa-f]+);)/g, '&amp;')
+}
+
 function svgToDataUrl(svg: string): string {
-  const bytes = new TextEncoder().encode(svg)
+  const safe = sanitizeSvgEntities(svg)
+  const bytes = new TextEncoder().encode(safe)
   let bin = ''
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
   return `data:image/svg+xml;base64,${btoa(bin)}`
 }
 
-function inlineSvgFences(src: string): string {
-  return src.replace(/```svg[^\n]*\n([\s\S]*?)```/g, (orig, body) => {
-    const trimmed = (body as string).replace(/\n+$/, '').trim()
-    if (!trimmed) return orig
-    try { return `![inline svg](${svgToDataUrl(trimmed)})` }
-    catch { return orig }
-  })
-}
-
-const rendered = computed(() => inlineSvgFences(props.text))
+const segments = computed<Seg[]>(() => {
+  const src = props.text
+  const fence = /```svg[^\n]*\n([\s\S]*?)```/g
+  const out: Seg[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  fence.lastIndex = 0
+  while ((m = fence.exec(src))) {
+    if (m.index > last) out.push({ type: 'md', text: src.slice(last, m.index) })
+    const body = m[1].replace(/\n+$/, '').trim()
+    if (body) out.push({ type: 'svg', src: svgToDataUrl(body) })
+    last = m.index + m[0].length
+  }
+  if (last < src.length) out.push({ type: 'md', text: src.slice(last) })
+  if (!out.length) out.push({ type: 'md', text: src })
+  return out
+})
 </script>
 
 <template>
   <!-- wrapper so :deep can reach the MdPreview root (.md-editor); codeFoldable
        =false keeps long code blocks fully visible in the artifact preview. -->
   <div class="markdown-view">
-    <MdPreview :modelValue="rendered" :code-foldable="false" />
+    <template v-for="(seg, i) in segments" :key="i">
+      <img
+        v-if="seg.type === 'svg'"
+        class="markdown-view__svg" :src="seg.src" alt="inline svg"
+      />
+      <MdPreview v-else :modelValue="seg.text" :code-foldable="false" />
+    </template>
   </div>
 </template>
 
@@ -61,11 +87,13 @@ const rendered = computed(() => inlineSvgFences(props.text))
 }
 /* Inlined ```svg``` blocks become <img>; constrain so a huge graphic doesn't
    overrun the bubble. Border matches other inline media (ChatFile). */
-.markdown-view :deep(img[alt="inline svg"]) {
+.markdown-view__svg {
   display: block;
   max-width: 100%;
   max-height: 360px;
+  margin: 6px 0;
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
+  background: #fff;
 }
 </style>
