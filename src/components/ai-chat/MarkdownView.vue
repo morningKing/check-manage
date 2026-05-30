@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { MdPreview } from 'md-editor-v3'
+import { ElIcon, ElMessage } from 'element-plus'
+import { CopyDocument, Download } from '@element-plus/icons-vue'
 import 'md-editor-v3/lib/preview.css'
 import './md-editor-setup' // register bundled mermaid/echarts (side effect)
 
@@ -16,7 +18,7 @@ const props = defineProps<{ text: string }>()
 // scripts inside it), so no DOMPurify needed.
 
 interface MdSeg { type: 'md'; text: string }
-interface SvgSeg { type: 'svg'; src: string }
+interface SvgSeg { type: 'svg'; src: string; raw: string }
 type Seg = MdSeg | SvgSeg
 
 // Models routinely emit "Add & Norm" or "X & Y" in <text> nodes — a bare `&`
@@ -45,13 +47,25 @@ const segments = computed<Seg[]>(() => {
   while ((m = fence.exec(src))) {
     if (m.index > last) out.push({ type: 'md', text: src.slice(last, m.index) })
     const body = m[1].replace(/\n+$/, '').trim()
-    if (body) out.push({ type: 'svg', src: svgToDataUrl(body) })
+    if (body) {
+      const safe = sanitizeSvgEntities(body)
+      out.push({ type: 'svg', src: svgToDataUrl(body), raw: safe })
+    }
     last = m.index + m[0].length
   }
   if (last < src.length) out.push({ type: 'md', text: src.slice(last) })
   if (!out.length) out.push({ type: 'md', text: src })
   return out
 })
+
+async function copySvg(raw: string) {
+  try {
+    await navigator.clipboard.writeText(raw)
+    ElMessage.success('已复制 SVG 源码')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
 </script>
 
 <template>
@@ -59,10 +73,25 @@ const segments = computed<Seg[]>(() => {
        =false keeps long code blocks fully visible in the artifact preview. -->
   <div class="markdown-view">
     <template v-for="(seg, i) in segments" :key="i">
-      <img
-        v-if="seg.type === 'svg'"
-        class="markdown-view__svg" :src="seg.src" alt="inline svg"
-      />
+      <div v-if="seg.type === 'svg'" class="markdown-view__svg-wrap">
+        <img class="markdown-view__svg" :src="seg.src" alt="inline svg" />
+        <div class="markdown-view__svg-actions">
+          <button
+            class="markdown-view__svg-btn" type="button"
+            title="复制 SVG 源码" aria-label="复制 SVG 源码"
+            @click="copySvg(seg.raw)"
+          >
+            <ElIcon><CopyDocument /></ElIcon>
+          </button>
+          <a
+            class="markdown-view__svg-btn"
+            title="下载 SVG" aria-label="下载 SVG"
+            :href="seg.src" :download="`diagram-${i + 1}.svg`"
+          >
+            <ElIcon><Download /></ElIcon>
+          </a>
+        </div>
+      </div>
       <MdPreview v-else :modelValue="seg.text" :code-foldable="false" />
     </template>
   </div>
@@ -85,15 +114,50 @@ const segments = computed<Seg[]>(() => {
   height: 360px !important;
   aspect-ratio: auto !important;
 }
-/* Inlined ```svg``` blocks become <img>; constrain so a huge graphic doesn't
-   overrun the bubble. Border matches other inline media (ChatFile). */
+/* Inlined ```svg``` blocks: fill the bubble width with Claude-style copy /
+   download buttons floating top-right of the image. */
+.markdown-view__svg-wrap {
+  position: relative;
+  display: block;
+  margin: 6px 0;
+}
 .markdown-view__svg {
   display: block;
-  max-width: 100%;
-  max-height: 360px;
-  margin: 6px 0;
+  width: 100%;          /* fill the bubble — a vector at the bubble's natural
+                           width is what makes inline rendering useful */
+  height: auto;
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
   background: #fff;
+}
+.markdown-view__svg-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0.85;
+  transition: opacity 0.15s ease;
+}
+.markdown-view__svg-wrap:hover .markdown-view__svg-actions { opacity: 1; }
+.markdown-view__svg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.markdown-view__svg-btn:hover {
+  background: #fff;
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
 }
 </style>
