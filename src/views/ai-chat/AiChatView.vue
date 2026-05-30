@@ -20,7 +20,7 @@ import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
-import { splitArtifacts, sniffLang, artifactFilename, type CodeSegment } from '@/utils/artifacts'
+import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
 import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/api/aiChat'
 
@@ -391,13 +391,21 @@ function onKey(e: Event) {
             <div v-if="changes.length" class="ai-changes">
               <div class="ai-changes__title">变更文件</div>
               <div v-for="c in changes" :key="c.path" class="change-file">
-                <ElTag size="small" :type="changeBadge(c.status).type">{{ changeBadge(c.status).label }}</ElTag>
-                <span class="change-file__name">{{ c.path }}</span>
-                <ElButton v-if="c.status !== 'deleted'" size="small" text @click="previewChange(c)">预览</ElButton>
+                <div class="change-file__row">
+                  <ElTag size="small" :type="changeBadge(c.status).type">{{ changeBadge(c.status).label }}</ElTag>
+                  <span class="change-file__name">{{ c.path }}</span>
+                  <ElButton v-if="c.status !== 'deleted'" size="small" text @click="previewChange(c)">预览</ElButton>
+                  <a
+                    v-if="c.status !== 'deleted'"
+                    class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener"
+                  >下载</a>
+                </div>
                 <a
-                  v-if="c.status !== 'deleted'"
-                  class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener"
-                >下载</a>
+                  v-if="c.status !== 'deleted' && isImageFile(c.path)"
+                  class="change-file__img" :href="fileUrl(c.path)" target="_blank" rel="noopener noreferrer"
+                >
+                  <img :src="fileUrl(c.path)" :alt="c.path" />
+                </a>
               </div>
             </div>
           </div>
@@ -623,10 +631,22 @@ function onKey(e: Event) {
   &__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
 }
 .change-file {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 6px 8px; border-radius: 6px; font-size: 14px;
   &:hover { background: var(--el-fill-color); }
+  &__row { display: flex; align-items: center; gap: 8px; }
   &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--el-font-family-mono, monospace); }
   &__dl { color: var(--el-color-primary); text-decoration: none; font-size: 13px; }
+  &__img {
+    display: block;
+    margin-left: 56px; /* line up under the filename, past the status tag */
+    text-decoration: none;
+    img {
+      display: block;
+      max-width: 100%; max-height: 240px;
+      border: 1px solid var(--el-border-color); border-radius: 6px;
+      background: var(--el-bg-color);
+    }
+  }
 }
 </style>
