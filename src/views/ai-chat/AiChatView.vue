@@ -423,11 +423,15 @@ function onKey(e: Event) {
                 <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
                 <input ref="skillInput" type="file" accept=".zip" hidden @change="onSkillPicked" />
                 <ElDropdown trigger="click" @command="handleAddMenu">
-                  <ElButton class="composer-add" :icon="Plus" circle text :loading="store.uploading" />
+                  <ElButton
+                    class="composer-add" :icon="Plus" circle text
+                    :loading="store.uploading"
+                    aria-label="添加附件或技能" title="添加附件或技能"
+                  />
                   <template #dropdown>
                     <ElDropdownMenu>
-                      <ElDropdownItem command="file">上传附件</ElDropdownItem>
-                      <ElDropdownItem command="skill">添加技能 (zip)</ElDropdownItem>
+                      <ElDropdownItem command="file" :disabled="store.uploading">上传附件</ElDropdownItem>
+                      <ElDropdownItem command="skill" :disabled="store.uploading">添加技能 (zip)</ElDropdownItem>
                     </ElDropdownMenu>
                   </template>
                 </ElDropdown>
