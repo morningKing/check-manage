@@ -306,6 +306,10 @@ class BatchWorker:
         user_id = session_row['user_id']
         batch_id = session_row['batch_id']
         prompt = self._fetch_batch_prompt(batch_id)
+        if prompt is None:
+            # Batch was deleted between claim and prompt fetch.
+            # FK CASCADE has already removed our session row; nothing to mark.
+            return
 
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
@@ -321,14 +325,15 @@ class BatchWorker:
             self._mark_failed(sid, batch_id,
                               error=f'{type(e).__name__}: {e}'[:500])
 
-    def _fetch_batch_prompt(self, batch_id: str) -> str:
+    def _fetch_batch_prompt(self, batch_id: str) -> str | None:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT prompt FROM ai_chat_batches WHERE id = %s",
                     (batch_id,),
                 )
-                return cur.fetchone()[0]
+                row = cur.fetchone()
+                return row[0] if row else None
 
     def _set_opencode_id(self, session_id: str, oc_session_id: str):
         with get_db() as conn:
