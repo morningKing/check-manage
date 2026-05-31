@@ -269,6 +269,16 @@ export const useAiChatStore = defineStore('aiChat', {
       this.attachments[sid] = (this.attachments[sid] ?? []).filter(a => a.path !== path)
     },
 
+    async jumpToSession(sessionId: string): Promise<boolean> {
+      if (!this.sessions.find(s => s.id === sessionId)) {
+        await this.loadSessions()
+      }
+      const target = this.sessions.find(s => s.id === sessionId)
+      if (!target) return false
+      await this.openSession(target.id)
+      return true
+    },
+
     async closeSession(id: string) {
       if (this.activeSessionId === id) this._closeStream()
       await deleteSession(id)
