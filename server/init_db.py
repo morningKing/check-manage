@@ -446,6 +446,10 @@ ALTER TABLE ai_chat_sessions
   ADD COLUMN IF NOT EXISTS last_message_preview  TEXT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_batch
   ON ai_chat_sessions(batch_id, batch_seq);
+ALTER TABLE ai_chat_sessions
+  ALTER COLUMN workspace_path DROP NOT NULL,
+  ALTER COLUMN session_token DROP NOT NULL,
+  ALTER COLUMN token_expires_at DROP NOT NULL;
 """
 
 

@@ -1,0 +1,188 @@
+"""HTTP tests for /ai/chat/batches CRUD."""
+import io
+import os
+import sys
+import pytest
+from contextlib import contextmanager
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from auth import create_token
+
+
+def _make_mock_db(mock_conn):
+    @contextmanager
+    def fake_get_db():
+        yield mock_conn
+    return fake_get_db
+
+
+@pytest.fixture
+def setup_app():
+    """Setup Flask app with real DB for batch routes."""
+    import psycopg2
+    from config import DB_CONFIG
+
+    @contextmanager
+    def real_get_db():
+        conn = psycopg2.connect(**DB_CONFIG)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    patches = [
+        patch('db.get_db', real_get_db),
+        patch('db.pool', MagicMock()),
+    ]
+    for p in patches:
+        p.start()
+
+    from app import app
+    app.config['TESTING'] = True
+    admin = create_token({'id': 'user-admin', 'username': 'admin', 'role': 'admin'})
+
+    yield (
+        app.test_client(),
+        {'Authorization': f'Bearer {admin}'},
+    )
+
+    for p in patches:
+        p.stop()
+
+
+def _stage_one(client, headers, content=b'hi', name='f.txt',
+               upload_session_id='upload-sess-001'):
+    data = {
+        'file': (io.BytesIO(content), name),
+        'upload_session_id': upload_session_id,
+    }
+    r = client.post('/ai/chat/batches/staging/upload',
+                    data=data, content_type='multipart/form-data',
+                    headers=headers)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    return r.get_json()  # {name, path}
+
+
+def test_create_batch_returns_201_and_seeds_sessions(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u1')
+    f2 = _stage_one(client, admin_headers, name='b.txt', upload_session_id='u1')
+
+    r = client.post('/ai/chat/batches', json={
+        'name': 'batch-test',
+        'prompt': 'do the thing',
+        'files': [f1, f2],
+    }, headers=admin_headers)
+    assert r.status_code == 201
+    body = r.get_json()
+    assert body['batch']['name'] == 'batch-test'
+    assert body['batch']['total'] == 2
+    assert body['batch']['status'] == 'pending'
+    assert len(body['sessions']) == 2
+    seqs = sorted(s['batch_seq'] for s in body['sessions'])
+    assert seqs == [0, 1]
+    # cleanup
+    client.delete(f'/ai/chat/batches/{body["batch"]["id"]}', headers=admin_headers)
+
+
+def test_create_rejects_empty_files(setup_app):
+    client, admin_headers = setup_app
+    r = client.post('/ai/chat/batches',
+                    json={'name': 'x', 'prompt': 'p', 'files': []},
+                    headers=admin_headers)
+    assert r.status_code == 400
+
+
+def test_create_rejects_too_many_files(setup_app):
+    client, admin_headers = setup_app
+    files = [{'name': f'{i}.txt', 'path': f'batch-staging/x/y/{i}.txt'}
+             for i in range(51)]
+    r = client.post('/ai/chat/batches',
+                    json={'name': 'x', 'prompt': 'p', 'files': files},
+                    headers=admin_headers)
+    assert r.status_code == 400
+
+
+def test_list_returns_user_batches(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u-list')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'list-me', 'prompt': 'p', 'files': [f1],
+    }, headers=admin_headers)
+    bid = r.get_json()['batch']['id']
+    try:
+        r2 = client.get('/ai/chat/batches?page=1&pageSize=20', headers=admin_headers)
+        assert r2.status_code == 200
+        items = r2.get_json()['items']
+        assert any(b['id'] == bid for b in items)
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+def test_detail_returns_children(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u-d')
+    f2 = _stage_one(client, admin_headers, name='b.txt', upload_session_id='u-d')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'detail', 'prompt': 'p', 'files': [f1, f2],
+    }, headers=admin_headers)
+    bid = r.get_json()['batch']['id']
+    try:
+        r2 = client.get(f'/ai/chat/batches/{bid}', headers=admin_headers)
+        assert r2.status_code == 200
+        body = r2.get_json()
+        assert body['batch']['id'] == bid
+        assert len(body['sessions']) == 2
+        assert [s['batch_seq'] for s in body['sessions']] == [0, 1]
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+def test_delete_cascades_sessions(setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='c.txt', upload_session_id='u-del')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'gone', 'prompt': 'p', 'files': [f1],
+    }, headers=admin_headers)
+    bid = r.get_json()['batch']['id']
+    r2 = client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+    assert r2.status_code == 204
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE batch_id = %s", (bid,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_retry_failed_resets_failed_to_pending(setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='r.txt', upload_session_id='u-r')
+    r = client.post('/ai/chat/batches', json={
+        'name': 'retry', 'prompt': 'p', 'files': [f1],
+    }, headers=admin_headers)
+    bid = r.get_json()['batch']['id']
+    # Manually force the child to 'failed'
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='failed' WHERE batch_id = %s",
+                    (bid,))
+        cur.execute("UPDATE ai_chat_batches SET failed = 1, status='partial' WHERE id = %s",
+                    (bid,))
+    db_conn.commit()
+    try:
+        r2 = client.post(f'/ai/chat/batches/{bid}/retry-failed', headers=admin_headers)
+        assert r2.status_code == 200
+        assert r2.get_json()['retried'] == 1
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_chat_sessions WHERE batch_id = %s", (bid,))
+            assert cur.fetchone()[0] == 'pending'
+            cur.execute("SELECT failed, status FROM ai_chat_batches WHERE id = %s", (bid,))
+            failed, status = cur.fetchone()
+            assert failed == 0
+            assert status == 'pending'
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)

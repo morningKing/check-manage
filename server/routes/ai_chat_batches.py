@@ -11,6 +11,14 @@ from werkzeug.utils import secure_filename
 
 from auth import login_required
 from utils.workspace import batch_staging_dir, WorkspacePathError
+from utils.batch_repo import (
+    MAX_FILES_PER_BATCH,
+    create_batch,
+    delete_batch,
+    get_batch_detail,
+    list_batches,
+    reset_failed_to_pending,
+)
 
 
 ai_chat_batches_bp = Blueprint('ai_chat_batches', __name__,
@@ -43,3 +51,78 @@ def staging_upload():
 
     rel = dest.relative_to(workspace_root).as_posix()
     return jsonify({'name': filename, 'path': rel}), 201
+
+
+@ai_chat_batches_bp.post('')
+@login_required
+def create():
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    prompt = (body.get('prompt') or '').strip()
+    template_id = body.get('template_id')
+    files = body.get('files') or []
+    if not name or not prompt:
+        return jsonify({'error': 'name and prompt required'}), 400
+    if not isinstance(files, list) or not files:
+        return jsonify({'error': 'at least one file required'}), 400
+    if len(files) > MAX_FILES_PER_BATCH:
+        return jsonify({'error': f'max {MAX_FILES_PER_BATCH} files'}), 400
+    for f in files:
+        if not isinstance(f, dict) or not f.get('path') or not f.get('name'):
+            return jsonify({'error': 'each file must have {name, path}'}), 400
+
+    result = create_batch(g.current_user['userId'],
+                          name=name, prompt=prompt,
+                          template_id=template_id, files=files)
+    # Wake the worker so it picks up the new pending sessions immediately.
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result), 201
+
+
+@ai_chat_batches_bp.get('')
+@login_required
+def list_():
+    page = int(request.args.get('page', 1))
+    page_size = min(int(request.args.get('pageSize', 20)), 100)
+    return jsonify(list_batches(g.current_user['userId'],
+                                page=page, page_size=page_size))
+
+
+@ai_chat_batches_bp.get('/<batch_id>')
+@login_required
+def detail(batch_id):
+    body = get_batch_detail(g.current_user['userId'], batch_id)
+    if not body:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(body)
+
+
+@ai_chat_batches_bp.delete('/<batch_id>')
+@login_required
+def remove(batch_id):
+    # Tear down per-child workspaces before DB cascade
+    body = get_batch_detail(g.current_user['userId'], batch_id)
+    if not body:
+        return jsonify({'error': 'not found'}), 404
+    from utils.workspace import cleanup_session_workspace
+    workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
+        or os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    for s in body['sessions']:
+        try:
+            cleanup_session_workspace(workspace_root,
+                                      g.current_user['userId'], s['id'])
+        except Exception:
+            pass  # best-effort
+    delete_batch(g.current_user['userId'], batch_id)
+    return '', 204
+
+
+@ai_chat_batches_bp.post('/<batch_id>/retry-failed')
+@login_required
+def retry_failed(batch_id):
+    count = reset_failed_to_pending(g.current_user['userId'], batch_id)
+    if count:
+        from utils.batch_engine import get_worker
+        get_worker().notify()
+    return jsonify({'retried': count})
