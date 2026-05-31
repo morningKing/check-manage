@@ -76,8 +76,12 @@ app.register_blueprint(ai_chat_prompt_templates_bp)
 app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(dynamic_bp)
 
-# Start backup scheduler (only in the reloader child process to avoid double-start)
-if not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+# Start backup scheduler (only in the reloader child process to avoid double-start).
+# Also skip background workers when pytest is driving the process — otherwise the
+# batch worker steals pending rows the route tests just inserted.
+_RUNNING_UNDER_PYTEST = 'pytest' in sys.modules
+if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
+        and not _RUNNING_UNDER_PYTEST:
     from utils.backup import start_backup_scheduler
     start_backup_scheduler(app)
 

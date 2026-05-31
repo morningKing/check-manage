@@ -3,53 +3,60 @@ import io
 import os
 import sys
 import pytest
-from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from auth import create_token
 
 
-def _make_mock_db(mock_conn):
-    @contextmanager
-    def fake_get_db():
-        yield mock_conn
-    return fake_get_db
-
-
 @pytest.fixture
-def setup_app():
-    """Setup Flask app with real DB for batch routes."""
-    import psycopg2
-    from config import DB_CONFIG
+def setup_app(db_conn):
+    """Setup Flask app talking to the real dev DB.
 
-    @contextmanager
-    def real_get_db():
-        conn = psycopg2.connect(**DB_CONFIG)
-        try:
-            yield conn
-        finally:
-            conn.close()
+    Earlier-running tests (test_prompt_template_routes) patch `db.pool` to a
+    MagicMock and mutate the shared `mock_cursor.fetchone.return_value`. After
+    those patches stop, the module-level `db.pool` may have been restored to
+    None, but if any other test in the same process eagerly initialised it,
+    the saved-original is a real pool — or, in some interleavings, the cursor
+    state lingers. To guarantee a clean baseline, force-reset `db.pool` to
+    None here so the real connection pool is freshly created against the dev
+    DB. Also seed a `user-admin` row so the FK on `ai_chat_batches.user_id`
+    resolves; teardown deletes it (CASCADE cleans up batches/sessions).
+    """
+    # If `utils.batch_repo` (or `utils.batch_engine`) was first imported while
+    # an earlier test's `patch('db.get_db', ...)` was active, the module-level
+    # `get_db` reference inside those modules is the MOCK function — and
+    # `patch.stop()` only restores `db.get_db`, not the dangling binding in
+    # the importer. Rebind explicitly so we hit the real DB.
+    import db as db_module
+    import utils.batch_repo as batch_repo
+    import utils.batch_engine as batch_engine
+    db_module.pool = None  # force the real pool to be (re)created
+    batch_repo.get_db = db_module.get_db
+    batch_engine.get_db = db_module.get_db
 
-    patches = [
-        patch('db.get_db', real_get_db),
-        patch('db.pool', MagicMock()),
-    ]
-    for p in patches:
-        p.start()
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, role, display_name) "
+            "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            ('test-user-batch-routes', 'user-admin-test', 'x', 'admin', 'admin-test'),
+        )
+    db_conn.commit()
 
     from app import app
     app.config['TESTING'] = True
-    admin = create_token({'id': 'user-admin', 'username': 'admin', 'role': 'admin'})
+    admin = create_token({'id': 'test-user-batch-routes', 'username': 'admin', 'role': 'admin'})
 
     yield (
         app.test_client(),
         {'Authorization': f'Bearer {admin}'},
     )
 
-    for p in patches:
-        p.stop()
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_chat_batches WHERE user_id = 'test-user-batch-routes'")
+        cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = 'test-user-batch-routes'")
+        cur.execute("DELETE FROM users WHERE id = 'test-user-batch-routes'")
+    db_conn.commit()
 
 
 def _stage_one(client, headers, content=b'hi', name='f.txt',

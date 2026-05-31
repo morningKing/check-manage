@@ -230,9 +230,24 @@ class BatchWorker:
             target=self._dispatcher_loop, daemon=True, name='batch-worker')
         self._dispatcher.start()
 
-    def stop(self):
+    def stop(self, *, wait: bool = True, timeout: float = 5.0):
+        """Stop the dispatcher and (optionally) wait for it + the executor.
+
+        Without `wait`, the dispatcher receives the stop signal but its daemon
+        thread may still be inside a DB poll cycle when this returns — that
+        leaks into subsequent tests under pytest because the next claim picks
+        up rows the next test just seeded. Default to waiting so tests behave.
+        """
         self._stop.set()
         self._wake.set()
+        if not wait:
+            return
+        if self._dispatcher and self._dispatcher.is_alive():
+            self._dispatcher.join(timeout=timeout)
+        # cancel_futures so pending submissions don't keep the threadpool alive
+        self._executor.shutdown(wait=True, cancel_futures=True)
+        # Allow a follow-on start() to spin up a fresh executor.
+        self._executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT)
 
     def notify(self):
         self._wake.set()
