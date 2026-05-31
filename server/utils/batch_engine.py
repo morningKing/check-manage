@@ -332,7 +332,8 @@ class BatchWorker:
             self._set_opencode_id(sid, oc_session_id)
             opencode_client.send_message(oc_session_id, prompt, directory=ws)
 
-            preview = self._await_finished(oc_session_id, directory=ws)
+            preview, final_msg = self._await_finished(oc_session_id, directory=ws)
+            self._persist_conversation(sid, prompt, final_msg)
             self._mark_done(sid, batch_id, last_preview=preview)
         except _SessionTimeout as e:
             self._mark_failed(sid, batch_id, error=f'timeout after {e.seconds}s')
@@ -361,17 +362,25 @@ class BatchWorker:
             conn.commit()
 
     def _await_finished(self, oc_session_id: str,
-                        directory: str = '') -> str | None:
+                        directory: str = '') -> tuple[str | None, dict | None]:
+        """Poll until the latest assistant message reports finished.
+
+        Returns (preview_first_line, full_message_dict). The full message is
+        what gets persisted to ai_chat_messages so the user can read the
+        conversation via the 查看 button on the batch dashboard.
+        """
         deadline = time.time() + self.SESSION_TIMEOUT_SEC
         last_preview = None
+        last_message = None
         while time.time() < deadline:
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
                     last_preview = self._preview_from(m)
+                    last_message = m
                     if m.get('finished'):
-                        return last_preview
+                        return last_preview, last_message
                     break
             time.sleep(self.POLL_INTERVAL_SEC)
         raise _SessionTimeout(self.SESSION_TIMEOUT_SEC)
@@ -383,6 +392,38 @@ class BatchWorker:
                 t = part['text'].strip().splitlines()
                 return (t[0] if t else '')[:200]
         return None
+
+    def _persist_conversation(self, session_id: str,
+                              prompt: str, assistant_msg: dict | None):
+        """Write the user prompt + assistant final message into ai_chat_messages.
+
+        Without this, the 查看 button on the batch dashboard opens an empty
+        thread — the worker drove the conversation through OpenCode's SSE and
+        never touched Flask's message store. Best-effort; never raises.
+        """
+        try:
+            import uuid as _uuid
+            import json as _json
+            user_content = [{'type': 'text', 'text': prompt}]
+            parts = (assistant_msg or {}).get('content') or []
+            assistant_content = parts if parts else [{'type': 'text', 'text': ''}]
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                        "VALUES (%s, %s, %s, %s::jsonb)",
+                        (str(_uuid.uuid4()), session_id, 'user',
+                         _json.dumps(user_content)),
+                    )
+                    cur.execute(
+                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                        "VALUES (%s, %s, %s, %s::jsonb)",
+                        (str(_uuid.uuid4()), session_id, 'assistant',
+                         _json.dumps(assistant_content)),
+                    )
+                conn.commit()
+        except Exception:
+            traceback.print_exc()  # best-effort; don't crash _run_one
 
     def _mark_done(self, session_id: str, batch_id: str,
                    last_preview: str | None):
