@@ -35,6 +35,7 @@ from routes.home_widgets import home_widgets_bp
 from routes.column_views import column_views_bp
 from routes.ai_chat import ai_chat_bp
 from routes.ai_chat_prompt_templates import ai_chat_prompt_templates_bp
+from routes.ai_chat_batches import ai_chat_batches_bp
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
@@ -72,6 +73,7 @@ app.register_blueprint(home_widgets_bp)
 app.register_blueprint(column_views_bp)
 app.register_blueprint(ai_chat_bp)
 app.register_blueprint(ai_chat_prompt_templates_bp)
+app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start)
