@@ -111,7 +111,6 @@
                 v-if="isAdmin"
                 command="batchDelete"
                 :icon="Delete"
-                :disabled="selectedRows.length === 0"
               >
                 批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
               </el-dropdown-item>
@@ -758,7 +757,13 @@
           :title="importResult.failed === 0 ? '导入完成' : '导入完成（部分失败）'"
         >
           <template #sub-title>
-            <p>成功：{{ importResult.success }} 条，失败：{{ importResult.failed }} 条</p>
+            <p>
+              成功 {{ importResult.success }} 条
+              <template v-if="importResult.updated">
+                （新增 {{ importResult.created || 0 }} / 更新 {{ importResult.updated }}）
+              </template>
+              ,失败 {{ importResult.failed }} 条
+            </p>
           </template>
         </el-result>
       </div>
@@ -1047,7 +1052,7 @@ const importTotal = ref(0)
 /**
  * 导入结果
  */
-const importResult = ref<{ success: number; failed: number } | null>(null)
+const importResult = ref<{ success: number; failed: number; created?: number; updated?: number } | null>(null)
 
 /**
  * 所有导出脚本（缓存）
@@ -2084,7 +2089,10 @@ function handleSelectionChange(rows: DynamicRecord[]): void {
  */
 function handleBatchDeleteConfirm(): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
-  if (selectedRows.value.length === 0) return
+  if (selectedRows.value.length === 0) {
+    ElMessage.warning('请先勾选要删除的记录')
+    return
+  }
 
   // 检测是否启用删除绑定
   if (pageConfig.value?.deleteBinding?.enabled) {
@@ -2467,9 +2475,13 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
 
   let success = 0
   let failed = 0
+  let created = 0
+  let updated = 0
 
-  // 使用批量 API（≥ 10 条记录）
-  if (records.length >= 10) {
+  // 使用批量 API (统一走 batch-create:主键冲突时 upsert)。
+  // 之前 < 10 条会走逐条 addPageData,行为不一致 (单条 POST 仍是 409 冲突),
+  // 现在阈值改成 1 保证所有导入都享受同一份 upsert 语义。
+  if (records.length >= 1) {
     const BATCH_SIZE = 500
     const batches = Math.ceil(records.length / BATCH_SIZE)
 
@@ -2513,6 +2525,7 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
         const result = await post<{
           success: boolean
           created: number
+          updated?: number
           failed: number
           errors?: Array<{ index: number; error: string; record: any }>
           sequenceValues?: Record<string, string>
@@ -2525,7 +2538,9 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
           }
         })
 
-        success += result.created
+        success += result.created + (result.updated || 0)
+        created += result.created
+        updated += result.updated || 0
         failed += result.failed
 
         // 处理失败记录
@@ -2540,37 +2555,10 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
       importCurrent.value = end
       importProgress.value = Math.round((end / records.length) * 100)
     }
-  } else {
-    // 少量记录使用原有逐条导入
-    await withBatch(`导入 ${records.length} 条${pageConfig.value?.name || '数据'}`, async () => {
-      for (let i = 0; i < records.length; i++) {
-        try {
-          const importId = records[i]._importId as string | undefined
-          const regularData = pageConfigStore.stripRelationFields(pageId.value, records[i])
-          delete regularData._importId
-
-          // 填充自增序列值
-          for (const fieldName of sequenceFields) {
-            if (!regularData[fieldName]) {
-              regularData[fieldName] = sequenceValues[fieldName][i]
-            }
-          }
-
-          const created = await pageConfigStore.addPageData(pageId.value, regularData, importId)
-          // 保存关联关系数据
-          await pageConfigStore.saveRelations(pageId.value, created.id, records[i])
-          success++
-        } catch {
-          failed++
-        }
-        importCurrent.value = i + 1
-        importProgress.value = Math.round(((i + 1) / records.length) * 100)
-      }
-    })
   }
 
   importLoading.value = false
-  importResult.value = { success, failed }
+  importResult.value = { success, failed, created, updated }
 
   if (success > 0) {
     await loadPageData()

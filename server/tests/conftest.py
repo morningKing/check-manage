@@ -101,3 +101,34 @@ def db_conn():
     conn = psycopg2.connect(**DB_CONFIG)
     yield conn
     conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _rebind_module_get_db_to_real():
+    """Heal `from db import get_db` bindings polluted by earlier tests.
+
+    Some route-test fixtures do `patch('utils.prompt_template.get_db', fake_db)`
+    AFTER the importer module already bound its own local `get_db = db.get_db`.
+    `patch.stop()` only restores the attribute on `utils.prompt_template` to
+    whatever it was when the patch started — which might already be the mock if
+    the patches stack across tests. Force-rebind every module that does
+    `from db import get_db` back to the real `db.get_db` before each test.
+    Also drop a possibly-mocked `db.pool` so the next call recreates the real
+    ThreadedConnectionPool.
+    """
+    import importlib
+    import db as db_module
+    # If pool was previously mocked (MagicMock left from a `patch('db.pool',
+    # MagicMock())` call), reset it to None so the next get_db() rebuilds the
+    # real ThreadedConnectionPool against the dev DB.
+    if hasattr(db_module.pool, '_mock_name'):
+        db_module.pool = None
+    for mod_name in ('utils.prompt_template', 'utils.batch_repo',
+                     'utils.batch_engine'):
+        try:
+            mod = importlib.import_module(mod_name)
+            if hasattr(mod, 'get_db'):
+                mod.get_db = db_module.get_db
+        except ImportError:
+            pass
+    yield

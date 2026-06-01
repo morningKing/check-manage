@@ -9,6 +9,17 @@
  */
 <template>
   <div class="field-config-editor">
+    <!-- 锁定提示:页面已有数据时 -->
+    <el-alert
+      v-if="lockExistingFields"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="该页面已存在数据"
+      description="已有字段被锁定,只能新增字段。重命名/改类型/删除现有字段会让旧数据语义错位,因此被禁止。"
+      style="margin-bottom: 12px"
+    />
+
     <!-- 工具栏 -->
     <div class="editor-toolbar">
       <el-button type="primary" size="small" @click="handleAddField">
@@ -61,10 +72,25 @@
 
             <!-- 操作按钮 -->
             <div class="field-actions">
-              <el-button type="primary" link @click="handleEditField(element, index)">
+              <el-tooltip
+                v-if="isLockedField(element.fieldName)"
+                content="该页面已存在数据,已有字段不可修改"
+                placement="top"
+              >
+                <el-tag size="small" type="info">已锁定</el-tag>
+              </el-tooltip>
+              <el-button
+                v-else
+                type="primary" link
+                @click="handleEditField(element, index)"
+              >
                 编辑
               </el-button>
-              <el-button type="danger" link @click="handleDeleteField(index)">
+              <el-button
+                v-if="!isLockedField(element.fieldName)"
+                type="danger" link
+                @click="handleDeleteField(index)"
+              >
                 删除
               </el-button>
             </div>
@@ -622,9 +648,16 @@ interface Props {
   pageId: string
   /** 字段配置列表 */
   fields: FieldConfig[]
+  /**
+   * 页面已有数据时,锁定已存在字段的编辑/删除入口
+   * (重命名/改类型会让旧 JSONB 数据语义错位)。新字段始终可加。
+   */
+  lockExistingFields?: boolean
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  lockExistingFields: false,
+})
 const emit = defineEmits<{
   (e: 'update', fields: FieldConfig[]): void
   (e: 'import'): void
@@ -1121,12 +1154,30 @@ function confirmBatchAdd(): void {
 // ==================== 监听 ====================
 
 /**
+ * Snapshot of field names that existed when the editor opened — these are the
+ * ones we have to lock when the underlying collection already has data.
+ * Fields added during this session are tracked as "new" and stay editable.
+ *
+ * Must be declared BEFORE the `watch` below — that watch runs with
+ * `immediate: true` and writes to this ref on first tick.
+ */
+const originalFieldNames = ref<Set<string>>(new Set())
+
+function isLockedField(fieldName: string): boolean {
+  return props.lockExistingFields && originalFieldNames.value.has(fieldName)
+}
+
+/**
  * 监听 props.fields 变化，同步到本地
  */
 watch(
   () => props.fields,
   (newFields) => {
     localFields.value = newFields.map((f) => ({ ...f }))
+    // Refresh the "originals" snapshot so locked-when-has-data semantics
+    // pin to the fields that existed at edit-time, not to whatever's been
+    // added during this session.
+    originalFieldNames.value = new Set(newFields.map((f) => f.fieldName))
   },
   { immediate: true, deep: true }
 )

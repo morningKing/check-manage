@@ -126,20 +126,39 @@ def create_session():
 @ai_chat_bp.route('/sessions', methods=['GET'])
 @login_required
 def list_sessions():
-    """List the current user's active sessions (newest first) for the sidebar."""
+    """List the current user's sessions for the sidebar (newest first).
+
+    Includes both regular `active` sessions and batch-child sessions (whose
+    status is one of pending/running/completed/failed). Batch children must
+    show up so the 查看 button on the batch dashboard can switch into them.
+    For batch children we synthesize a title from the input file basename
+    so the user can distinguish them in the list.
+    """
     user = flask_g.current_user
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, title, last_active_at FROM ai_chat_sessions "
-            "WHERE user_id = %s AND status = 'active' "
-            "ORDER BY last_active_at DESC",
+            "SELECT id, title, last_active_at, batch_id, batch_input_file "
+            "FROM ai_chat_sessions "
+            "WHERE user_id = %s "
+            "  AND (status = 'active' OR batch_id IS NOT NULL) "
+            "ORDER BY last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )
         rows = cur.fetchall()
+
+    def _title(stored_title, batch_id, batch_input_file):
+        if stored_title:
+            return stored_title
+        if batch_id and batch_input_file:
+            basename = batch_input_file.rsplit('/', 1)[-1]
+            return f'[批] {basename}'
+        return '新会话'
+
     return jsonify({
         'sessions': [
-            {'id': r[0], 'title': r[1] or '新会话',
+            {'id': r[0],
+             'title': _title(r[1], r[3], r[4]),
              'lastActiveAt': r[2].isoformat() if r[2] else None}
             for r in rows
         ],
