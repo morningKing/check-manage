@@ -934,14 +934,21 @@ def batch_create_items(collection):
                 errors.append({"index": idx, "error": "ID 重复", "record": record})
                 continue
 
-            # Skip records with existing IDs
-            if rid and rid in existing_ids:
-                errors.append({"index": idx, "error": "主键已存在", "record": record})
-                continue
+            # Records with existing IDs are upserted (UPDATE the data row);
+            # previous behaviour was to skip them, but users expected re-import
+            # to refresh data. Composite-PK uniqueness still applies to NEW rows
+            # only — for an UPDATE on the same id we don't re-check the PK because
+            # the row we'd "collide" with is the row we're about to overwrite.
+            is_update = bool(rid and rid in existing_ids)
 
-            # Check primary key uniqueness for composite keys (within same branch)
+            # Check primary key uniqueness for composite keys (within same branch).
+            # Pass exclude_id so the row about to be updated does not flag itself.
             if pk_fields:
-                error = check_primary_key_unique(cur, collection, data, pk_fields, branch_id=branch_id)
+                error = check_primary_key_unique(
+                    cur, collection, data, pk_fields,
+                    branch_id=branch_id,
+                    exclude_id=rid if is_update else None,
+                )
                 if error:
                     errors.append({"index": idx, "error": error, "record": record})
                     continue
@@ -975,7 +982,8 @@ def batch_create_items(collection):
                 "id": rid,
                 "data": data,
                 "relations": relations,
-                "index": idx
+                "index": idx,
+                "is_update": is_update,
             })
 
         # 6. Handle errors based on continue_on_error flag
@@ -986,7 +994,10 @@ def batch_create_items(collection):
                 "errors": errors
             }), 400
 
-        # 7. Batch insert records using execute_values (with branch_id)
+        # 7. Batch upsert records using execute_values (with branch_id).
+        # ON CONFLICT (id, branch_id) — matches the PRIMARY KEY on dynamic_data —
+        # updates the data + bumps version/updated_at so existing records get
+        # refreshed instead of skipped.
         if prepared_records:
             values = [
                 (r['id'], collection, psycopg2.extras.Json(r['data']), branch_id)
@@ -994,7 +1005,11 @@ def batch_create_items(collection):
             ]
             psycopg2.extras.execute_values(
                 cur,
-                'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES %s',
+                'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES %s '
+                'ON CONFLICT (id, branch_id) DO UPDATE SET '
+                '  data = EXCLUDED.data, '
+                '  updated_at = NOW(), '
+                '  version = dynamic_data.version + 1',
                 values
             )
 
@@ -1061,26 +1076,34 @@ def batch_create_items(collection):
                     all_reverse_values
                 )
 
-    # Log the batch creation
+    # Log the batch upsert (created + updated counts)
+    updated_count = sum(1 for r in prepared_records if r.get('is_update'))
+    created_count = len(prepared_records) - updated_count
     if prepared_records:
-        created_count = len(prepared_records)
-        summary = f'{created_count} 条记录'
+        if updated_count and created_count:
+            summary = f'新增 {created_count} 条 / 更新 {updated_count} 条'
+        elif updated_count:
+            summary = f'更新 {updated_count} 条记录'
+        else:
+            summary = f'{created_count} 条记录'
         log_operation('create', 'dynamic_data', ','.join(r['id'] for r in prepared_records[:3]),
-                      summary, f'批量新增{page_name}「{summary}」', branch_id=branch_id)
+                      summary, f'批量导入{page_name}「{summary}」', branch_id=branch_id)
 
-    # Fire webhook triggers for batch create
+    # Fire webhook triggers for batch create / update
     try:
         from utils.webhook_engine import fire_webhooks
         user = getattr(flask_g, 'current_user', {}) if hasattr(flask_g, 'current_user') else {}
         for r in prepared_records:
-            fire_webhooks('create', collection, r['id'], None, r,
+            event = 'update' if r.get('is_update') else 'create'
+            fire_webhooks(event, collection, r['id'], None, r,
                           user.get('username', ''), branch_id=branch_id)
     except Exception:
         pass
 
     result = {
         "success": True,
-        "created": len(prepared_records),
+        "created": created_count,
+        "updated": updated_count,
         "failed": len(errors),
         "sequenceValues": sequence_values
     }

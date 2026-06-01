@@ -76,12 +76,67 @@ def create_page_config():
     return jsonify(body), 201
 
 
+@page_configs_bp.route('/pageConfigs/<config_id>/has-data', methods=['GET'])
+@admin_required
+def page_config_has_data(config_id):
+    """Return whether the collection backing this page has any rows.
+
+    Used by the page-config editor to lock existing field definitions:
+    once data exists, field name/controlType/etc. can't change.
+    """
+    collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT 1 FROM dynamic_data WHERE collection = %s LIMIT 1', (collection,))
+        has_data = cur.fetchone() is not None
+    return jsonify({"hasData": has_data})
+
+
 @page_configs_bp.route('/pageConfigs/<config_id>', methods=['PUT'])
 @admin_required
 def update_page_config(config_id):
     body = request.get_json(force=True)
     with get_db() as conn:
         cur = conn.cursor()
+
+        # If the page already has data rows, lock existing field definitions:
+        # only ADDING new fields is allowed. This protects data consistency
+        # (renaming or retyping a field would orphan stored JSONB values).
+        if 'fields' in body:
+            collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
+            cur.execute(
+                'SELECT 1 FROM dynamic_data WHERE collection = %s LIMIT 1',
+                (collection,),
+            )
+            has_data = cur.fetchone() is not None
+            if has_data:
+                cur.execute('SELECT fields FROM page_configs WHERE id = %s', (config_id,))
+                row = cur.fetchone()
+                current_fields = (row[0] if row else []) or []
+                new_fields = body['fields'] or []
+                current_by_name = {f.get('fieldName'): f for f in current_fields if isinstance(f, dict)}
+                new_by_name = {f.get('fieldName'): f for f in new_fields if isinstance(f, dict)}
+                # 1. Removed fields
+                removed = [n for n in current_by_name if n not in new_by_name]
+                if removed:
+                    return jsonify({
+                        "error": "该页面已存在数据,不能删除已有字段",
+                        "code": "FIELDS_LOCKED",
+                        "removedFields": removed,
+                    }), 409
+                # 2. Modified fields (any non-identical attribute on an existing field)
+                modified = []
+                for name, cur_field in current_by_name.items():
+                    new_field = new_by_name.get(name)
+                    if new_field != cur_field:
+                        modified.append(name)
+                if modified:
+                    return jsonify({
+                        "error": "该页面已存在数据,只能新增字段,不能修改已有字段的任何属性",
+                        "code": "FIELDS_LOCKED",
+                        "modifiedFields": modified,
+                    }), 409
+
         # Build SET clause dynamically to avoid overwriting fields not present in the body
         sets = []
         params = []

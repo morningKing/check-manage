@@ -389,6 +389,7 @@
                 <FieldConfigEditor
                   :page-id="currentPageId!"
                   :fields="currentFields"
+                  :lock-existing-fields="currentPageHasData"
                   @update="handleFieldsUpdate"
                   @import="openImportDialog"
                 />
@@ -723,6 +724,7 @@ import type { ValidationScript } from '@/types'
 import { createEmptyPageFormData } from '@/types'
 import { getExportScripts } from '@/api/exportScript'
 import { getValidationScripts } from '@/api/validationScript'
+import { get } from '@/utils/request'
 import * as XLSX from 'xlsx'
 
 // ==================== Store ====================
@@ -741,6 +743,12 @@ const addFormRef = ref<FormInstance>()
  * 当前选中的页面ID
  */
 const currentPageId = ref<string | null>(null)
+
+/**
+ * 当前页面在数据库中是否已有数据。已有数据时,字段编辑器锁定已有字段
+ * 的所有属性,只允许追加新字段(防止重命名/改类型导致旧 JSONB 值不可用)。
+ */
+const currentPageHasData = ref(false)
 
 /**
  * 当前激活的 Tab
@@ -1047,8 +1055,21 @@ function loadFormForPage(id: string): void {
   deleteBindingInheritFields.value = db?.inheritFields ? [...db.inheritFields] : []
 }
 
-watch(currentPageId, (id) => {
-  if (id) loadFormForPage(id)
+watch(currentPageId, async (id) => {
+  if (!id) {
+    currentPageHasData.value = false
+    return
+  }
+  loadFormForPage(id)
+  // Probe whether this collection has any data — drives field-locking in the
+  // 字段配置 tab. Best-effort: if the request fails we default to "no data"
+  // (most permissive), the backend PUT still enforces the constraint.
+  try {
+    const r = await get<{ hasData: boolean }>(`/pageConfigs/${id}/has-data`)
+    currentPageHasData.value = !!r.hasData
+  } catch {
+    currentPageHasData.value = false
+  }
 })
 
 /**
