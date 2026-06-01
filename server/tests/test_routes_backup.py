@@ -188,7 +188,7 @@ class TestRestoreBackup:
 
         assert res.status_code == 200
         assert res.json['message'] == '还原成功'
-        mock_restore.assert_called_once_with('/tmp/bk-1.zip', tables=None)
+        mock_restore.assert_called_once_with('/tmp/bk-1.zip', tables=None, mode='upsert')
 
     @patch('routes.backups.restore_backup')
     @patch('routes.backups.os.path.isfile')
@@ -207,7 +207,8 @@ class TestRestoreBackup:
         })
 
         assert res.status_code == 200
-        mock_restore.assert_called_once_with('/tmp/bk-2.zip', tables=['menus'])
+        # Selective restore defaults to mode='upsert' — see routes/backups.py.
+        mock_restore.assert_called_once_with('/tmp/bk-2.zip', tables=['menus'], mode='upsert')
 
     def test_restore_nonexistent_backup(self, setup):
         client, mock_cursor, admin_h, _ = setup

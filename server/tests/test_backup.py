@@ -558,8 +558,9 @@ class TestTableLevelRestore:
             mock_pool.getconn.return_value = mock_conn
             mock_pool.putconn.return_value = None
 
-            # 只还原 menus 和 users
-            result = restore_backup(zip_path, tables=['menus', 'users'])
+            # 只还原 menus 和 users — 显式用 replace 模式才会跑 DELETE。
+            # (默认的 upsert 模式不 DELETE,所以这里要显式声明走旧语义。)
+            result = restore_backup(zip_path, tables=['menus', 'users'], mode='replace')
 
             assert result['id'] == 'backup-test'
             # 应该只执行了 2 张表的 DELETE（已从 TRUNCATE CASCADE 改为 DELETE）
@@ -596,8 +597,8 @@ class TestTableLevelRestore:
             mock_pool.getconn.return_value = mock_conn
             mock_pool.putconn.return_value = None
 
-            # 请求还原 menus 和不在备份中的 page_configs
-            result = restore_backup(zip_path, tables=['menus', 'page_configs'])
+            # 请求还原 menus 和不在备份中的 page_configs（显式 replace 模式跑 DELETE）
+            result = restore_backup(zip_path, tables=['menus', 'page_configs'], mode='replace')
 
             # 只有 menus 被还原（已从 TRUNCATE CASCADE 改为 DELETE）
             delete_calls = [call for call in mock_cursor.execute.call_args_list
@@ -815,7 +816,10 @@ class TestCollectionLevelRestoreCleansReverseRelations:
             mock_pool.getconn.return_value = mock_conn
             mock_pool.putconn.return_value = None
 
-            restore_backup(zip_path, tables=['dynamic_data:orders'])
+            # Explicitly request replace mode — DELETE only happens then.
+            # Upsert mode (the new default) skips DELETE entirely, so the
+            # reverse-relation cleanup is moot there.
+            restore_backup(zip_path, tables=['dynamic_data:orders'], mode='replace')
 
             # The fix must use a single statement covering both directions.
             deleted_with_both = [
@@ -831,3 +835,126 @@ class TestCollectionLevelRestoreCleansReverseRelations:
             # repeated twice (forward + reverse).
             call = deleted_with_both[0]
             assert call[0][1] == ('orders', 'orders'), call[0][1]
+
+
+class TestUpsertModeRestore:
+    """Default 'upsert' mode skips DELETE entirely and uses
+    `INSERT ... ON CONFLICT DO UPDATE` so existing rows that aren't
+    in the backup stay put (no orphan FKs in other tables)."""
+
+    @patch('db.pool')
+    def test_upsert_mode_does_not_delete(self, mock_pool):
+        from utils.backup import restore_backup, BACKUP_VERSION
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'upsert.zip')
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-upsert',
+                'name': 'upsert mode test',
+                'type': 'manual',
+                'scope': 'partial',
+                'tables': ['users'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 1,
+            }
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('users.json', json.dumps([
+                    {'id': 'u-keep', 'username': 'keep', 'password_hash': 'h',
+                     'display_name': 'k', 'role': 'admin', 'created_at': None}
+                ]))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+            # _get_pk_columns query for `users` table → return ['id']
+            mock_cursor.fetchall.return_value = [('id',)]
+
+            restore_backup(zip_path, tables=['users'])  # mode defaults to 'upsert'
+
+            sqls = [str(call[0][0]) for call in mock_cursor.execute.call_args_list]
+            assert not any('DELETE FROM users' in s for s in sqls), \
+                'upsert mode must not DELETE'
+            assert any('ON CONFLICT' in s and 'DO UPDATE' in s for s in sqls), \
+                'upsert mode must use ON CONFLICT DO UPDATE'
+
+    @patch('db.pool')
+    def test_replace_mode_still_deletes(self, mock_pool):
+        from utils.backup import restore_backup, BACKUP_VERSION
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'replace.zip')
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-replace',
+                'name': 'replace mode test',
+                'type': 'manual',
+                'tables': ['users'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 0,
+            }
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('users.json', '[]')
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path, tables=['users'], mode='replace')
+
+            sqls = [str(call[0][0]) for call in mock_cursor.execute.call_args_list]
+            assert any('DELETE FROM users' in s for s in sqls), \
+                'replace mode must DELETE'
+
+
+class TestComputeRestoreWarnings:
+    """compute_restore_warnings should flag tables whose dependents would be
+    left with orphan FKs after a selective replace-mode restore."""
+
+    def test_upsert_mode_never_warns(self):
+        from utils.backup import compute_restore_warnings
+        assert compute_restore_warnings(['users'], mode='upsert') == []
+
+    def test_no_tables_never_warns(self):
+        from utils.backup import compute_restore_warnings
+        assert compute_restore_warnings([], mode='replace') == []
+        assert compute_restore_warnings(None, mode='replace') == []
+
+    def test_replace_users_alone_warns_about_dependents(self):
+        """Replacing `users` alone should flag the tables that declare an
+        explicit FK to users.id (e.g. ai_chat_sessions, ai_chat_batches,
+        column_views). Older tables that store user_id as a plain column
+        without a real FK won't be flagged — that's an honest limitation
+        of FK-based detection, called out separately if needed."""
+        from utils.backup import compute_restore_warnings
+        warnings = compute_restore_warnings(['users'], mode='replace')
+        assert warnings, 'restoring users alone must produce warnings'
+        users_warning = next(w for w in warnings if w['table'] == 'users')
+        deps = users_warning['dependentsAtRisk']
+        # At minimum the AI-chat tables (created with explicit FKs) must be flagged.
+        for expected in ['ai_chat_sessions', 'ai_chat_batches', 'ai_chat_prompt_templates']:
+            assert expected in deps, f'{expected} should be flagged as dependent of users'
+
+    def test_replace_with_all_dependents_no_warning(self):
+        """If user includes ALL dependents alongside, no warning for that
+        table. Trivial check: dynamic_data + data_relations + all version
+        tables → no orphan path from dynamic_data."""
+        from utils.backup import compute_restore_warnings
+        # not exhaustive — just ensures dependents inside the set don't show up
+        warnings = compute_restore_warnings(
+            ['dynamic_data', 'data_relations', 'version_snapshots',
+             'version_relations', 'collection_versions', 'user_current_branch',
+             'project_version_snapshots', 'project_version_relations',
+             'record_comments', 'reminders', 'notifications', 'trigger_logs',
+             'operation_logs'],
+            mode='replace',
+        )
+        # dynamic_data shouldn't have any dependents flagged as at-risk in this set
+        dyn = [w for w in warnings if w['table'] == 'dynamic_data']
+        if dyn:
+            assert dyn[0]['dependentsAtRisk'] == [], \
+                f'dynamic_data deps should all be in the set: {dyn[0]}'

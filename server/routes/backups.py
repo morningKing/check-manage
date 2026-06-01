@@ -116,9 +116,27 @@ def download_backup(backup_id):
 @backups_bp.route('/backups/<backup_id>/restore', methods=['POST'])
 @admin_required
 def restore_from_backup(backup_id):
-    """从已有备份还原"""
+    """从已有备份还原。
+
+    body 字段:
+      tables: list[str] | None
+        None = 全量还原(所有备份内的表一并替换)
+        [...] = 选择性还原
+      mode: 'upsert' (默认) | 'replace'
+        仅在选择性还原下生效。
+        - 'upsert' 安全:不会让其他表的外键变孤儿。
+        - 'replace' 兼容旧行为,会 DELETE 表;选择性 replace 触发依赖检查,
+          若发现风险且未带 confirmUnsafe=true,返回 409 + warnings。
+      confirmUnsafe: bool
+        replace 模式专用的二次确认。
+    """
+    from utils.backup import compute_restore_warnings
     body = request.get_json(silent=True) or {}
-    tables = body.get('tables')  # None = 还原所有表
+    tables = body.get('tables')
+    mode = (body.get('mode') or 'upsert').lower()
+    confirm_unsafe = bool(body.get('confirmUnsafe'))
+    if mode not in ('upsert', 'replace'):
+        return jsonify({'error': f'invalid mode: {mode!r}'}), 400
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -130,11 +148,28 @@ def restore_from_backup(backup_id):
     if not file_path or not os.path.isfile(file_path):
         return jsonify({'error': '备份文件不存在'}), 404
 
+    # Selective replace → check orphan risk before doing anything
+    warnings = []
+    if tables and mode == 'replace':
+        # Compute warnings against the BASE table names (strip the
+        # `dynamic_data:collection-foo` suffix some entries may carry).
+        base_tables = [t.split(':', 1)[0] for t in tables]
+        warnings = compute_restore_warnings(base_tables, mode='replace')
+        if warnings and not confirm_unsafe:
+            return jsonify({
+                'error': '检测到选择性 replace 还原会让其他表产生孤儿外键引用',
+                'code': 'RESTORE_ORPHAN_RISK',
+                'warnings': warnings,
+                'hint': '改用 upsert 模式(只覆盖备份里有的行)或带 confirmUnsafe=true 强制 replace。',
+            }), 409
+
     try:
-        manifest = restore_backup(file_path, tables=tables)
+        manifest = restore_backup(file_path, tables=tables, mode=mode)
         return jsonify({
             'message': '还原成功',
             'manifest': manifest,
+            'mode': 'replace' if not tables else mode,  # full restore is always replace-like
+            'warnings': warnings,
         })
     except Exception as e:
         return jsonify({'error': f'还原失败: {str(e)}'}), 500
