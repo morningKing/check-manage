@@ -49,6 +49,85 @@ BACKUP_TABLES = [
     ('version_snapshots', ['version_id', 'record_id', 'record_data', 'created_at'], {2}, '版本快照'),
     ('version_relations', ['version_id', 'collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '版本关联'),
     ('user_current_branch', ['id', 'user_id', 'username', 'collection', 'branch_id', 'updated_at'], set(), '用户分支映射'),
+
+    # 项目级版本管理 (跨 collection 的项目快照)
+    ('project_versions', ['id', 'project_menu_id', 'name', 'description', 'version_type', 'parent_version',
+                          'status', 'created_by', 'created_at', 'merged_at', 'merged_by', 'is_protected',
+                          'records_count', 'initialized_at', 'is_locked', 'locked_at', 'locked_by'], set(), '项目版本'),
+    ('project_version_snapshots', ['version_id', 'collection', 'record_id', 'record_data', 'created_at'], {3}, '项目版本快照'),
+    ('project_version_relations', ['version_id', 'collection', 'record_id', 'field_name', 'related_collection', 'related_id'], set(), '项目版本关联'),
+    ('user_current_project_branch', ['id', 'user_id', 'username', 'project_menu_id', 'branch_id', 'updated_at'], set(), '用户项目分支映射'),
+
+    # 项目依赖
+    ('project_dependencies', ['id', 'source_project', 'source_branch', 'target_project', 'target_branch',
+                              'relation_type', 'pinned_version', 'is_validated', 'validation_error',
+                              'declared_by', 'declared_at', 'updated_at'], set(), '项目依赖'),
+    ('project_dependency_relations', ['id', 'dependency_id', 'source_collection', 'source_field',
+                                      'target_collection', 'estimated_records', 'validation_status',
+                                      'validation_detail', 'validated_at', 'created_at'], set(), '项目依赖关联'),
+    ('project_dependency_events', ['id', 'event_type', 'source_project', 'source_branch',
+                                   'affected_dependencies', 'severity', 'message', 'created_at',
+                                   'resolved_at', 'resolved_by'], set(), '项目依赖事件'),
+
+    # 合并记录
+    ('merge_records', ['id', 'source_version_id', 'source_version_name', 'target_branch_id',
+                       'target_branch_name', 'project_menu_id', 'strategy', 'merged_by', 'merged_at',
+                       'records_created', 'records_updated', 'records_deleted', 'description', 'created_at'], set(), '合并记录'),
+    ('merge_backups', ['id', 'merge_id', 'collection', 'backup_type', 'record_id',
+                       'old_data', 'new_data', 'old_relations', 'new_relations', 'created_at'], {5, 6, 7, 8}, '合并回滚备份'),
+
+    # Webhook
+    ('webhook_rules', ['id', 'name', 'description', 'enabled', 'trigger_event', 'trigger_condition',
+                       'webhook_url', 'secret', 'timeout', 'retries', 'execution_order', 'created_at',
+                       'updated_at', 'created_by', 'updated_by', 'source_collections',
+                       'trigger_timing', 'rollback_on_failure'], {5, 15}, 'Webhook规则'),
+    ('webhook_logs', ['id', 'webhook_url', 'event_type', 'request_payload', 'response_status',
+                      'response_body', 'error_message', 'duration_ms', 'retry_count', 'success',
+                      'created_at', 'rule_id', 'rule_name'], {3}, 'Webhook日志'),
+    ('webhook_settings', ['id', 'enabled', 'name', 'webhook_url', 'secret', 'events',
+                          'timeout', 'retries', 'updated_at', 'updated_by'], {5}, 'Webhook全局设置'),
+
+    # 触发规则
+    ('trigger_rules', ['id', 'name', 'description', 'enabled', 'source_collection', 'trigger_event',
+                       'trigger_condition', 'target_collection', 'action_type', 'action_config',
+                       'execution_order', 'created_at', 'updated_at'], {6, 9}, '触发规则'),
+    ('trigger_logs', ['id', 'rule_id', 'rule_name', 'source_collection', 'source_record_id',
+                      'target_collection', 'target_record_id', 'status', 'error_message', 'created_at'], set(), '触发日志'),
+
+    # 通知 / 提醒 / 评论
+    ('notifications', ['id', 'user_id', 'type', 'title', 'content', 'source_collection',
+                       'source_record_id', 'is_read', 'created_at'], set(), '通知'),
+    ('reminders', ['id', 'collection', 'record_id', 'user_id', 'remind_at', 'message',
+                   'is_sent', 'created_at'], set(), '提醒'),
+    ('record_comments', ['id', 'collection', 'record_id', 'content', 'mentions',
+                         'author_id', 'author_name', 'created_at', 'updated_at'], {4}, '记录评论'),
+
+    # UI 配置
+    ('column_views', ['id', 'page_id', 'name', 'is_public', 'creator_id', 'is_default',
+                      'columns', 'sort_config', 'filter_config', 'group_config',
+                      'created_at', 'updated_at'], {6, 7, 8, 9}, '列视图'),
+    ('dashboards', ['id', 'name', 'description', 'layout', 'owner_id', 'is_global',
+                    'created_at', 'updated_at'], {3}, '仪表盘'),
+    ('home_widgets', ['id', 'widget_type', 'title', 'content', 'enabled', '"order"',
+                      'visible_roles', 'created_at', 'updated_at'], {3, 6}, '首页组件'),
+
+    # 系统 / AI 全局配置
+    ('system_config', ['id', 'system_name', 'system_short_name', 'logo_url',
+                       'updated_at', 'updated_by'], set(), '系统配置'),
+    ('ai_settings', ['id', 'enabled', 'api_key', 'endpoint', 'model', 'timeout',
+                     'max_tokens', 'updated_at'], set(), 'AI设置'),
+
+    # AI Chat (会话 / 消息 / 批任务 / 提示模板)
+    ('ai_chat_prompt_templates', ['id', 'user_id', 'name', 'content',
+                                  'created_at', 'updated_at'], set(), 'AI提示模板'),
+    ('ai_chat_batches', ['id', 'user_id', 'name', 'prompt', 'template_id', 'status',
+                         'total', 'done', 'failed', 'created_at', 'completed_at'], set(), 'AI批任务'),
+    ('ai_chat_sessions', ['id', 'user_id', 'title', 'opencode_session_id', 'workspace_path',
+                          'session_token', 'token_expires_at', 'project_menu_id', 'branch_id',
+                          'created_at', 'last_active_at', 'status',
+                          'batch_id', 'batch_seq', 'batch_input_file',
+                          'error_message', 'last_message_preview'], set(), 'AI会话'),
+    ('ai_chat_messages', ['id', 'session_id', 'role', 'content', 'created_at'], {3}, 'AI消息'),
 ]
 
 # 表名到定义的映射
@@ -68,16 +147,44 @@ RESTORE_ORDER = [
     'api_keys',
     'etl_tasks',
     'dynamic_data',
+    'system_config',
+    'ai_settings',
+    'dashboards',
+    'home_widgets',
+    'webhook_settings',
+    'webhook_rules',
+    'trigger_rules',
+    'ai_chat_prompt_templates',
     # Level 2: Self-referencing or simple dependencies
-    'collection_versions',  # Self-referencing, but parent to many
+    'collection_versions',
+    'project_versions',
     'menus',                # Depends on page_configs
     'etl_logs',             # Depends on etl_tasks
-    # Level 3: Multiple dependencies
-    'data_relations',       # Depends on dynamic_data
-    'operation_logs',       # Depends on users, dynamic_data
-    'user_current_branch',  # Depends on users, collection_versions
-    'version_snapshots',    # Depends on collection_versions
-    'version_relations',    # Depends on collection_versions
+    'column_views',         # Depends on page_configs
+    # Level 3: Multiple dependencies on Level 1/2
+    'data_relations',
+    'operation_logs',
+    'user_current_branch',
+    'user_current_project_branch',
+    'version_snapshots',
+    'version_relations',
+    'project_version_snapshots',
+    'project_version_relations',
+    'project_dependencies',         # Depends on project_versions/menus
+    'merge_records',
+    'record_comments',
+    'reminders',
+    'notifications',
+    'ai_chat_batches',              # Depends on users, ai_chat_prompt_templates
+    # Level 4: Deeper dependencies
+    'project_dependency_relations', # Depends on project_dependencies
+    'project_dependency_events',
+    'merge_backups',                # Depends on merge_records
+    'webhook_logs',                 # Depends on webhook_rules
+    'trigger_logs',                 # Depends on trigger_rules
+    'ai_chat_sessions',             # Depends on users, ai_chat_batches
+    # Level 5
+    'ai_chat_messages',             # Depends on ai_chat_sessions
 ]
 
 
@@ -498,9 +605,13 @@ def restore_backup(zip_path, tables=None):
                 # 只删除指定 collection 的数据
                 for col in collection_filters[table_name]:
                     cur.execute(f'DELETE FROM {table_name} WHERE collection = %s', (col,))
-                    # 删除相关的 data_relations
+                    # 删除相关的 data_relations(正向 + 反向都要删,否则反向那一行变孤儿)
                     if table_name == 'dynamic_data':
-                        cur.execute('DELETE FROM data_relations WHERE collection = %s', (col,))
+                        cur.execute(
+                            'DELETE FROM data_relations '
+                            'WHERE collection = %s OR related_collection = %s',
+                            (col, col),
+                        )
                         # 删除相关的版本数据
                         cur.execute(
                             'DELETE FROM version_snapshots WHERE version_id IN '
@@ -720,19 +831,45 @@ def start_backup_scheduler(app):
     thread.start()
 
 
-# 恢复出厂设置时需要删除的表（按依赖顺序）
+# 恢复出厂设置时需要删除的表（按依赖顺序）。
+# 分两类:
+#   - 业务"数据" (用户输入产生的内容、历史记录、临时状态) → 出厂时清空
+#   - 管理员"配置" (webhook 规则、触发规则、UI 自定义、AI 模板、系统设置) → 保留
+# 如果某项你觉得分类不对,改下面这张表就好。
 FACTORY_RESET_TABLES = [
-    'version_relations',     # 依赖 collection_versions
-    'version_snapshots',     # 依赖 collection_versions
-    'user_current_branch',   # 依赖 collection_versions
-    'data_relations',        # 依赖 dynamic_data
-    'dynamic_data',          # 核心数据表
-    'collection_versions',   # 版本元数据
-    'operation_logs',        # 操作日志
-    'etl_logs',              # ETL执行日志（保留任务定义）
-    'trigger_logs',          # 触发器日志
-    'notifications',         # 通知
-    'reminders',             # 提醒
+    # 子表 → 父表的顺序(replica role 已禁外键,但维持顺序便于阅读)
+    # AI Chat 数据
+    'ai_chat_messages',          # → ai_chat_sessions
+    'ai_chat_sessions',          # → users, ai_chat_batches
+    'ai_chat_batches',           # → users, ai_chat_prompt_templates
+    # 项目级版本管理
+    'project_version_relations', # → project_versions
+    'project_version_snapshots', # → project_versions
+    'user_current_project_branch',
+    'project_versions',
+    # 项目依赖
+    'project_dependency_relations',
+    'project_dependency_events',
+    'project_dependencies',
+    # 合并记录
+    'merge_backups',             # → merge_records
+    'merge_records',
+    # Collection 级版本
+    'version_relations',
+    'version_snapshots',
+    'user_current_branch',
+    'collection_versions',
+    # 动态数据 + 关联
+    'data_relations',
+    'dynamic_data',
+    # 日志/历史/通知/评论
+    'webhook_logs',
+    'trigger_logs',
+    'operation_logs',
+    'etl_logs',
+    'notifications',
+    'reminders',
+    'record_comments',
 ]
 
 # 系统默认菜单ID（首页、仪表盘、数据工具、系统配置相关）

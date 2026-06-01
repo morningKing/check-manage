@@ -117,23 +117,13 @@ class TestCreateBackup:
         mock_conn.__exit__ = lambda self, *args: None
         mock_conn.cursor.return_value = mock_cursor
 
-        # 模拟 menus 表有数据
+        # menus 表有一条数据,其它表都返回空。BACKUP_TABLES 长度会增长 ——
+        # side_effect 必须能匹配实际的表数量,否则会 StopIteration。
+        from utils.backup import BACKUP_TABLES
+        menus_row = [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None)]
         mock_cursor.fetchall.side_effect = [
-            [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None)],  # menus
-            [],  # page_configs
-            [],  # dynamic_data
-            [],  # data_relations
-            [],  # users
-            [],  # operation_logs
-            [],  # export_scripts
-            [],  # api_keys
-            [],  # validation_scripts
-            [],  # etl_tasks
-            [],  # etl_logs
-            [],  # collection_versions
-            [],  # version_snapshots
-            [],  # version_relations
-            [],  # user_current_branch
+            menus_row if name == 'menus' else []
+            for (name, _cols, _jsonb, _label) in BACKUP_TABLES
         ]
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 2048
@@ -787,3 +777,57 @@ class TestRestoreOrder:
             # 验证顺序符合 RESTORE_ORDER
             expected_order = [t for t in RESTORE_ORDER if t in insert_order]
             assert insert_order == expected_order, f"INSERT 顺序应为 {expected_order}，实际为 {insert_order}"
+
+
+class TestCollectionLevelRestoreCleansReverseRelations:
+    """Collection-level restore 必须清掉反向 data_relations 行,否则会留下孤儿。
+
+    Bug 描述:routes/dynamic.py 在建立 A↔B 关联时插入两行:
+      (collection=A, related_collection=B)  -- 正向
+      (collection=B, related_collection=A)  -- 反向
+    早期的 restore_backup 在 collection 级还原时只删 `collection = %s` 的行,
+    反向那行没被删,record_id 指向已删除的记录 → 孤儿。
+    """
+
+    @patch('db.pool')
+    def test_restore_dynamic_data_collection_deletes_both_directions(self, mock_pool):
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'reverse-rel.zip')
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-reverse-rel',
+                'name': '反向关联测试',
+                'type': 'manual',
+                'tables': ['dynamic_data:orders'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 0,
+            }
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('dynamic_data.json', json.dumps([]))
+                zf.writestr('data_relations.json', json.dumps([]))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path, tables=['dynamic_data:orders'])
+
+            # The fix must use a single statement covering both directions.
+            deleted_with_both = [
+                call for call in mock_cursor.execute.call_args_list
+                if 'DELETE FROM data_relations' in str(call[0][0])
+                and 'collection = %s OR related_collection = %s' in str(call[0][0])
+            ]
+            assert deleted_with_both, (
+                "Restore must DELETE FROM data_relations with both "
+                "collection AND related_collection so reverse relations don't leak."
+            )
+            # And the parameters supplied to that DELETE must be the collection
+            # repeated twice (forward + reverse).
+            call = deleted_with_both[0]
+            assert call[0][1] == ('orders', 'orders'), call[0][1]
