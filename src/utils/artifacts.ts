@@ -106,8 +106,8 @@ export function isRunnableLang(lang: string): boolean {
 }
 
 /**
- * Infer a better language than the fence label. Models (e.g. MiMo) often mislabel
- * code (Python tagged as bash) or omit the label; sniff from the content.
+ * Infer a better language than the fence label. Some LLMs mislabel
+ * code (e.g. Python tagged as bash) or omit the label; sniff from the content.
  */
 export function sniffLang(lang: string, code: string): string {
   const l = (lang || '').toLowerCase().trim()

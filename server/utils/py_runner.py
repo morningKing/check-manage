@@ -20,7 +20,7 @@ import tempfile
 _TIMEOUT = 30
 _MAX_OUT = 8000
 
-# Models (e.g. MiMo) often put the bare filename as the first code line
+# Some LLMs put the bare filename as the first code line
 # (`squares.py`), which is never valid Python. Strip such a leading line so the
 # user-triggered run doesn't fail on the model's formatting quirk.
 _BARE_FILENAME = re.compile(r'^[A-Za-z0-9_\-./]+\.(py|python)$')

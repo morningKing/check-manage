@@ -109,14 +109,15 @@ describe('useAiChatStore', () => {
       id: 'sess_1', title: '新会话', workspacePath: '/ws',
     })
     vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
-    vi.mocked(api.sendMessage).mockResolvedValue({ messageId: 'msg_1' })
+    vi.mocked(api.sendMessage).mockResolvedValue({ messageId: 'msg_1', model: null })
 
     const store = useAiChatStore()
     await store.startNewSession()
     await store.sendUserMessage('how are you')
 
     expect(store.messages['sess_1'][0].role).toBe('user')
-    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [])
+    // 4th arg is the per-session model preference (empty → backend default).
+    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [], '')
     expect(store.streaming['sess_1']).toBe(true)
   })
 

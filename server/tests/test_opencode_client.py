@@ -49,9 +49,9 @@ def test_send_prompt_async_includes_model_when_given():
     with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
         from utils.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
-            "ses_42", "hi", model="mimo/mimo-v2.5")
+            "ses_42", "hi", model="testprovider/test-model-v1")
     _, kwargs = post.call_args
-    assert kwargs["json"]["model"] == {"providerID": "mimo", "modelID": "mimo-v2.5"}
+    assert kwargs["json"]["model"] == {"providerID": "testprovider", "modelID": "test-model-v1"}
     assert kwargs["json"]["parts"] == [{"type": "text", "text": "hi"}]
 
 
@@ -180,10 +180,11 @@ def test_run_command_posts_command_and_arguments():
     fake = MagicMock(); fake.status_code = 202; fake.raise_for_status = MagicMock()
     with patch("utils.opencode_client.requests.post", return_value=fake) as post:
         from utils.opencode_client import OpenCodeClient
-        OpenCodeClient("http://x").run_command("ses_1", "init", "do it", model="mimo/mimo-v2.5", directory="/ws")
+        OpenCodeClient("http://x").run_command("ses_1", "init", "do it",
+                                                model="testprovider/test-model-v1", directory="/ws")
     a, k = post.call_args
     assert a[0].endswith("/session/ses_1/command")
     assert k["params"] == {"directory": "/ws"}
     assert k["json"]["command"] == "init"
     assert k["json"]["arguments"] == "do it"
-    assert k["json"]["model"] == "mimo/mimo-v2.5"   # command endpoint wants model as a STRING
+    assert k["json"]["model"] == "testprovider/test-model-v1"   # command endpoint wants model as a STRING
