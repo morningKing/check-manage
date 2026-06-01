@@ -192,6 +192,77 @@ def _ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Helpers for selective restore (upsert mode + dependency warnings)
+# ---------------------------------------------------------------------------
+
+def _get_pk_columns(cur, table_name):
+    """Return the PK column names for a table, in PK order.
+
+    Used by upsert-mode restore to build
+    `INSERT ... ON CONFLICT (pk_cols) DO UPDATE SET ...`.
+    """
+    cur.execute("""
+        SELECT a.attname
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+        WHERE c.conrelid = %s::regclass AND c.contype = 'p'
+        ORDER BY array_position(c.conkey, a.attnum)
+    """, (table_name,))
+    return [r[0] for r in cur.fetchall()]
+
+
+def _get_fk_dependents_map(cur):
+    """Return {parent_table: [child_table, ...]} extracted from pg_constraint.
+
+    `child_table` rows reference `parent_table` via a foreign key. In a
+    replace-mode selective restore, deleting + reinserting a parent_table
+    leaves rows in any child_table not also being restored as orphan
+    references — that's the case `compute_restore_warnings` flags.
+    """
+    cur.execute("""
+        SELECT DISTINCT
+          c.conrelid::regclass::text AS child_table,
+          c.confrelid::regclass::text AS parent_table
+        FROM pg_constraint c
+        WHERE c.contype = 'f'
+    """)
+    deps = {}
+    for child, parent in cur.fetchall():
+        # strip schema prefix if any
+        child = child.split('.')[-1]
+        parent = parent.split('.')[-1]
+        deps.setdefault(parent, set()).add(child)
+    return {k: sorted(v) for k, v in deps.items()}
+
+
+def compute_restore_warnings(tables_to_restore, mode):
+    """Identify tables that would be left with orphan FK references after a
+    selective replace-mode restore. Returns [{table, dependentsAtRisk}, ...].
+
+    * `mode == 'upsert'` → always empty (upsert never DELETEs, no orphans).
+    * `tables_to_restore` empty → empty (full restore, all tables wiped
+      together, no selective orphan risk inside the backup scope).
+    * Otherwise, for each table in the set, list FK-dependent tables that
+      are NOT in the set.
+    """
+    if mode != 'replace' or not tables_to_restore:
+        return []
+    restore_set = set(tables_to_restore)
+    with get_db() as conn:
+        cur = conn.cursor()
+        deps = _get_fk_dependents_map(cur)
+    warnings = []
+    for t in sorted(restore_set):
+        dependents_at_risk = [d for d in deps.get(t, []) if d not in restore_set]
+        if dependents_at_risk:
+            warnings.append({
+                'table': t,
+                'dependentsAtRisk': dependents_at_risk,
+            })
+    return warnings
+
+
 def _serialize_value(val):
     """将数据库值序列化为 JSON 可存储的格式"""
     if val is None:
@@ -494,27 +565,31 @@ def create_backup(backup_type='manual', created_by=None, tables=None):
     }
 
 
-def restore_backup(zip_path, tables=None):
+def restore_backup(zip_path, tables=None, mode='upsert'):
     """
-    从 ZIP 备份文件还原数据
-
-    在单个事务中还原数据。
-    不清空 backups 和 backup_settings 表。
-    失败则全部回滚。
+    从 ZIP 备份文件还原数据(单事务,失败回滚)。
 
     Parameters
     ----------
     zip_path : str
         ZIP 备份文件路径
     tables : list[str] | None
-        None = 还原备份中的所有表
-        ['table1'] = 只还原指定表（必须是备份中包含的表）
+        None = 还原备份中的所有表(始终走 replace 语义,因为所有表一起被替换,不会产生跨表孤儿)
+        ['table1'] = 只还原指定表(必须在备份中)
         ['dynamic_data:collection1'] = 只还原指定 collection 的数据
+    mode : str
+        仅在 `tables` 非空时生效:
+        * 'upsert' (默认) — 不 DELETE,逐行 INSERT ... ON CONFLICT DO UPDATE。
+          备份里的行会覆盖现存行,备份没有但 DB 里有的行保留。这意味着
+          其他表的外键不会因为我们 DELETE 了被引用方而变孤儿。
+        * 'replace' — 沿用旧行为:DELETE FROM <table> (或 collection 范围)
+          + 普通 INSERT。会让备份当时不存在的行从 DB 消失;路由层应已经
+          根据 `compute_restore_warnings` 让用户确认过孤儿风险。
 
     Returns
     -------
     dict
-        manifest 信息
+        manifest 信息(仅包含 backup 自带元数据;路由层负责把 warnings 拼上)
     """
     # 1. 解压并校验
     if not os.path.isfile(zip_path):
@@ -599,45 +674,49 @@ def restore_backup(zip_path, tables=None):
         # 这允许我们按任意顺序插入数据，包括自引用的情况
         cur.execute('SET session_replication_role = replica')
 
-        # 对于 collection 级别的还原，使用 DELETE 而不是 TRUNCATE
-        for table_name in tables_to_restore:
-            if table_name in collection_filters:
-                # 只删除指定 collection 的数据
-                for col in collection_filters[table_name]:
-                    cur.execute(f'DELETE FROM {table_name} WHERE collection = %s', (col,))
-                    # 删除相关的 data_relations(正向 + 反向都要删,否则反向那一行变孤儿)
-                    if table_name == 'dynamic_data':
-                        cur.execute(
-                            'DELETE FROM data_relations '
-                            'WHERE collection = %s OR related_collection = %s',
-                            (col, col),
-                        )
-                        # 删除相关的版本数据
-                        cur.execute(
-                            'DELETE FROM version_snapshots WHERE version_id IN '
-                            '(SELECT id FROM collection_versions WHERE collection = %s)',
-                            (col,)
-                        )
-                        cur.execute(
-                            'DELETE FROM version_relations WHERE version_id IN '
-                            '(SELECT id FROM collection_versions WHERE collection = %s)',
-                            (col,)
-                        )
-                        cur.execute('DELETE FROM collection_versions WHERE collection = %s', (col,))
-                        cur.execute('DELETE FROM user_current_branch WHERE collection = %s', (col,))
-            else:
-                # 全表还原，使用 DELETE 代替 TRUNCATE CASCADE 避免意外删除关联表数据
-                # DELETE 不会级联删除，更加安全可控
-                cur.execute(f'DELETE FROM {table_name}')
-                # 如果是 dynamic_data，也需要清理相关表
-                if table_name == 'dynamic_data':
-                    cur.execute('DELETE FROM data_relations')
-                    cur.execute('DELETE FROM version_snapshots')
-                    cur.execute('DELETE FROM version_relations')
-                    cur.execute('DELETE FROM collection_versions')
-                    cur.execute('DELETE FROM user_current_branch')
+        # tables=None 是全量还原 → 永远走 replace 语义(所有表一起被替换,
+        # 跨表孤儿不会跨出备份本身的范围)。tables 非空时才看 mode。
+        effective_mode = 'replace' if not tables else mode
 
-        # INSERT 数据（按 RESTORE_ORDER 顺序）
+        # ----- DELETE 阶段(仅 replace 模式) -----
+        if effective_mode == 'replace':
+            for table_name in tables_to_restore:
+                if table_name in collection_filters:
+                    for col in collection_filters[table_name]:
+                        cur.execute(f'DELETE FROM {table_name} WHERE collection = %s', (col,))
+                        if table_name == 'dynamic_data':
+                            # 正向 + 反向 data_relations 都要删,否则反向那一行变孤儿
+                            cur.execute(
+                                'DELETE FROM data_relations '
+                                'WHERE collection = %s OR related_collection = %s',
+                                (col, col),
+                            )
+                            cur.execute(
+                                'DELETE FROM version_snapshots WHERE version_id IN '
+                                '(SELECT id FROM collection_versions WHERE collection = %s)',
+                                (col,)
+                            )
+                            cur.execute(
+                                'DELETE FROM version_relations WHERE version_id IN '
+                                '(SELECT id FROM collection_versions WHERE collection = %s)',
+                                (col,)
+                            )
+                            cur.execute('DELETE FROM collection_versions WHERE collection = %s', (col,))
+                            cur.execute('DELETE FROM user_current_branch WHERE collection = %s', (col,))
+                else:
+                    cur.execute(f'DELETE FROM {table_name}')
+                    if table_name == 'dynamic_data':
+                        cur.execute('DELETE FROM data_relations')
+                        cur.execute('DELETE FROM version_snapshots')
+                        cur.execute('DELETE FROM version_relations')
+                        cur.execute('DELETE FROM collection_versions')
+                        cur.execute('DELETE FROM user_current_branch')
+
+        # ----- INSERT 阶段 -----
+        # replace 模式:已经 DELETE 干净了,普通 INSERT。
+        # upsert 模式:没 DELETE,需要 ON CONFLICT (pk) DO UPDATE,跳过完全
+        # 相同的现存行/覆盖被改的现存行。PK 列从 pg_constraint 实时查。
+        pk_cache = {}  # {table_name: [pk_col1, pk_col2, ...]}
         for table_name in tables_to_restore:
             if table_name not in BACKUP_TABLE_MAP:
                 continue
@@ -647,6 +726,29 @@ def restore_backup(zip_path, tables=None):
             col_str = ', '.join(columns)
             placeholders = ', '.join(['%s'] * len(columns))
 
+            if effective_mode == 'upsert':
+                if table_name not in pk_cache:
+                    pk_cache[table_name] = _get_pk_columns(cur, table_name)
+                pk_cols = pk_cache[table_name]
+                if pk_cols:
+                    non_pk = [c for c in clean_cols if c not in pk_cols]
+                    set_clause = ', '.join(f'{c} = EXCLUDED.{c}' for c in non_pk) \
+                        if non_pk else None
+                    pk_target = ', '.join(pk_cols)
+                    if set_clause:
+                        sql = (f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders}) '
+                               f'ON CONFLICT ({pk_target}) DO UPDATE SET {set_clause}')
+                    else:
+                        # 全列都是 PK(纯联结表),冲突时啥也不改
+                        sql = (f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders}) '
+                               f'ON CONFLICT ({pk_target}) DO NOTHING')
+                else:
+                    # 极个别表没 PK(理论上不会发生于业务表);退回 INSERT,
+                    # 重复行会写两遍 — 这种表很少,可接受
+                    sql = f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})'
+            else:
+                sql = f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})'
+
             for record in records:
                 values = []
                 for i, col in enumerate(clean_cols):
@@ -654,25 +756,35 @@ def restore_backup(zip_path, tables=None):
                     if i in jsonb_indices and val is not None:
                         val = psycopg2.extras.Json(val)
                     values.append(val)
-                cur.execute(
-                    f'INSERT INTO {table_name} ({col_str}) VALUES ({placeholders})',
-                    values,
-                )
+                cur.execute(sql, values)
 
-        # 如果还原了 dynamic_data，需要同步还原相关的 data_relations
+        # 如果还原了 dynamic_data，需要同步还原相关的 data_relations。
+        # data_relations 没有自然的"id"列,主键是复合的;
+        # replace 模式下上面已经清掉了,这里直接 INSERT;
+        # upsert 模式下用 ON CONFLICT DO NOTHING(主键复合避免重复行)。
         if 'dynamic_data' in tables_to_restore and 'data_relations' not in tables_to_restore:
             if 'data_relations' in table_data:
                 records = table_data['data_relations']
-                # 如果有 collection 过滤，只还原对应的数据
                 if 'dynamic_data' in collection_filters:
                     records = [r for r in records if r.get('collection') in collection_filters['dynamic_data']]
-                for record in records:
-                    cur.execute(
-                        'INSERT INTO data_relations (collection, record_id, field_name, related_collection, related_id, branch_id) '
-                        'VALUES (%s, %s, %s, %s, %s, %s)',
-                        (record.get('collection'), record.get('record_id'), record.get('field_name'),
-                         record.get('related_collection'), record.get('related_id'), record.get('branch_id'))
+                if effective_mode == 'upsert':
+                    rel_sql = (
+                        'INSERT INTO data_relations (collection, record_id, field_name, '
+                        '  related_collection, related_id, branch_id) '
+                        'VALUES (%s, %s, %s, %s, %s, %s) '
+                        'ON CONFLICT DO NOTHING'
                     )
+                else:
+                    rel_sql = (
+                        'INSERT INTO data_relations (collection, record_id, field_name, '
+                        '  related_collection, related_id, branch_id) '
+                        'VALUES (%s, %s, %s, %s, %s, %s)'
+                    )
+                for record in records:
+                    cur.execute(rel_sql, (
+                        record.get('collection'), record.get('record_id'), record.get('field_name'),
+                        record.get('related_collection'), record.get('related_id'), record.get('branch_id'),
+                    ))
 
         conn.commit()
         main_success = True  # 主操作成功
