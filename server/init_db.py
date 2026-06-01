@@ -403,6 +403,55 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
     ON ai_chat_messages(session_id, created_at);
 """
 
+AI_CHAT_PROMPT_TEMPLATES_DDL = """
+CREATE TABLE IF NOT EXISTS ai_chat_prompt_templates (
+  id         VARCHAR(100) PRIMARY KEY,
+  user_id    VARCHAR(100) NOT NULL REFERENCES users(id),
+  name       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_prompt_templates_user
+  ON ai_chat_prompt_templates(user_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_template_user_name
+  ON ai_chat_prompt_templates(user_id, name);
+"""
+
+AI_CHAT_BATCHES_DDL = """
+CREATE TABLE IF NOT EXISTS ai_chat_batches (
+  id          VARCHAR(100) PRIMARY KEY,
+  user_id     VARCHAR(100) NOT NULL REFERENCES users(id),
+  name        TEXT NOT NULL,
+  prompt      TEXT NOT NULL,
+  template_id VARCHAR(100) NULL REFERENCES ai_chat_prompt_templates(id) ON DELETE SET NULL,
+  status      TEXT NOT NULL DEFAULT 'pending'
+              CHECK (status IN ('pending','running','completed','partial','failed')),
+  total       INT  NOT NULL DEFAULT 0,
+  done        INT  NOT NULL DEFAULT 0,
+  failed      INT  NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at  TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_user_created
+  ON ai_chat_batches(user_id, created_at DESC);
+"""
+
+AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """
+ALTER TABLE ai_chat_sessions
+  ADD COLUMN IF NOT EXISTS batch_id         VARCHAR(100) NULL REFERENCES ai_chat_batches(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS batch_seq        INT  NULL,
+  ADD COLUMN IF NOT EXISTS batch_input_file TEXT NULL,
+  ADD COLUMN IF NOT EXISTS error_message         TEXT NULL,
+  ADD COLUMN IF NOT EXISTS last_message_preview  TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_batch
+  ON ai_chat_sessions(batch_id, batch_seq);
+ALTER TABLE ai_chat_sessions
+  ALTER COLUMN workspace_path DROP NOT NULL,
+  ALTER COLUMN session_token DROP NOT NULL,
+  ALTER COLUMN token_expires_at DROP NOT NULL;
+"""
+
 
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
@@ -413,6 +462,19 @@ def init_db():
         cur.execute(DDL)
         conn.commit()
         print("Tables created.")
+
+        # Create AI Chat batch-related tables (Task 1)
+        cur.execute(AI_CHAT_PROMPT_TEMPLATES_DDL)
+        conn.commit()
+        print("AI chat prompt templates table created.")
+
+        cur.execute(AI_CHAT_BATCHES_DDL)
+        conn.commit()
+        print("AI chat batches table created.")
+
+        cur.execute(AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL)
+        conn.commit()
+        print("AI chat sessions batch columns added.")
 
         # Migrations: add roles column if missing
         cur.execute("""

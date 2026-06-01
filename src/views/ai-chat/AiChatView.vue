@@ -23,9 +23,30 @@ import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPa
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
+import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
+import BatchListView from './BatchListView.vue'
+import BatchDetailView from './BatchDetailView.vue'
+import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
+import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/api/aiChat'
 
 const store = useAiChatStore()
+const batches = useAiChatBatchesStore()
+
+const sidebarTab = ref<'sessions' | 'batches'>('sessions')
+const showCreateBatch = ref(false)
+const showTemplateManager = ref(false)
+
+async function openSession(sessionId: string) {
+  if (await store.jumpToSession(sessionId)) {
+    sidebarTab.value = 'sessions'
+    batches.clearSelection()
+  }
+}
+
+async function selectBatch(id: string) {
+  await batches.selectBatch(id)
+}
 
 const input = ref('')
 const activeIndex = ref(0)
@@ -293,6 +314,30 @@ async function retryMessage(m: AiMessage) {
   try { await store.retryUserMessage(m.id) } catch { ElMessage.error('重新发送失败') }
 }
 
+// Assistant-bubble retry: find the user message that produced this answer
+// and re-run it (delete from there + resend).
+function previousUserMessage(m: AiMessage): AiMessage | undefined {
+  const arr = messages.value
+  const idx = arr.findIndex((x) => x.id === m.id)
+  if (idx <= 0) return undefined
+  for (let i = idx - 1; i >= 0; i--) {
+    if (arr[i].role === 'user') return arr[i]
+  }
+  return undefined
+}
+
+async function retryAssistantMessage(m: AiMessage) {
+  if (!activeId.value) return
+  const userMsg = previousUserMessage(m)
+  if (!userMsg) { ElMessage.warning('找不到对应的用户消息'); return }
+  if (userMsg.id.startsWith('local_')) { ElMessage.warning('消息还未保存，请稍后重试'); return }
+  try {
+    await ElMessageBox.confirm('将删除该回答及其之后的对话，然后重新生成。继续？',
+      '重新生成回答', { confirmButtonText: '继续', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
+  try { await store.retryUserMessage(userMsg.id) } catch { ElMessage.error('重新发送失败') }
+}
+
 // 手动重新扫描「变更文件」面板。Skill 写出的新文件如果没落在某个 git 仓库里、
 // 或者扫描时刚好赶在 session.idle 之前的窗口里，可能会漏 —— 给用户一个明确的
 // "再扫一遍" 出口。
@@ -338,25 +383,34 @@ function onKey(e: Event) {
   <div class="ai-chat">
     <!-- 会话侧栏 -->
     <aside class="ai-chat__sidebar">
-      <ElButton class="ai-chat__new" type="primary" :icon="Plus" @click="newSession">新建会话</ElButton>
-      <ElScrollbar class="ai-chat__sessions">
-        <div
-          v-for="s in sessions" :key="s.id"
-          class="session-item" :class="{ active: s.id === activeId }"
-          @click="selectSession(s.id)"
-        >
-          <span class="session-item__title">{{ s.title || '新会话' }}</span>
-          <span class="session-item__actions" @click.stop>
-            <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-            <ElIcon @click="removeSession(s.id)"><Delete /></ElIcon>
-          </span>
-        </div>
-        <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="60" />
-      </ElScrollbar>
+      <div class="ai-sidebar__tabs">
+        <button :class="{ active: sidebarTab === 'sessions' }" @click="sidebarTab = 'sessions'">会话</button>
+        <button :class="{ active: sidebarTab === 'batches' }" @click="sidebarTab = 'batches'">批任务</button>
+      </div>
+      <div v-show="sidebarTab === 'sessions'" class="ai-sidebar__sessions-wrap">
+        <ElButton class="ai-chat__new" type="primary" :icon="Plus" @click="newSession">新建会话</ElButton>
+        <ElScrollbar class="ai-chat__sessions">
+          <div
+            v-for="s in sessions" :key="s.id"
+            class="session-item" :class="{ active: s.id === activeId }"
+            @click="selectSession(s.id)"
+          >
+            <span class="session-item__title">{{ s.title || '新会话' }}</span>
+            <span class="session-item__actions" @click.stop>
+              <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+              <ElIcon @click="removeSession(s.id)"><Delete /></ElIcon>
+            </span>
+          </div>
+          <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="60" />
+        </ElScrollbar>
+      </div>
+      <BatchListView v-if="sidebarTab === 'batches'" @select="selectBatch" @newBatch="showCreateBatch = true" />
     </aside>
 
     <!-- 对话主区 -->
     <section class="ai-chat__main">
+      <BatchDetailView v-if="sidebarTab === 'batches' && batches.activeBatch" @openSession="openSession" />
+      <template v-else>
       <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>
@@ -421,18 +475,25 @@ function onKey(e: Event) {
                   </template>
                 </template>
               </Bubble>
-              <div v-if="m.role === 'user' && messageText(m)" class="msg__actions">
+              <div v-if="messageText(m)" class="msg__actions" :class="`msg__actions--${m.role}`">
                 <button
                   class="msg__action-btn" type="button" title="复制" aria-label="复制"
                   @click="copyMessage(m)"
                 ><ElIcon><CopyDocument /></ElIcon></button>
+                <template v-if="m.role === 'user'">
+                  <button
+                    class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
+                    :disabled="streaming" @click="editMessage(m)"
+                  ><ElIcon><EditPen /></ElIcon></button>
+                  <button
+                    class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
+                    :disabled="streaming" @click="retryMessage(m)"
+                  ><ElIcon><RefreshRight /></ElIcon></button>
+                </template>
                 <button
-                  class="msg__action-btn" type="button" title="编辑并重发" aria-label="编辑并重发"
-                  :disabled="streaming" @click="editMessage(m)"
-                ><ElIcon><EditPen /></ElIcon></button>
-                <button
+                  v-else-if="m.role === 'assistant'"
                   class="msg__action-btn" type="button" title="重新生成" aria-label="重新生成"
-                  :disabled="streaming" @click="retryMessage(m)"
+                  :disabled="streaming" @click="retryAssistantMessage(m)"
                 ><ElIcon><RefreshRight /></ElIcon></button>
               </div>
             </div>
@@ -561,6 +622,7 @@ function onKey(e: Event) {
           </div>
         </div>
       </div>
+      </template>
     </section>
 
     <!-- 制品预览面板（Claude 风格，含版本切换） -->
@@ -569,6 +631,13 @@ function onKey(e: Event) {
         <ArtifactPreview v-if="preview" :filename="preview.filename" :versions="preview.versions" />
       </div>
     </ElDrawer>
+
+    <!-- 批任务对话框 -->
+    <CreateBatchDialog
+      v-model="showCreateBatch"
+      @manageTemplates="showTemplateManager = true"
+      @created="(d) => { sidebarTab = 'batches'; batches.selectBatch(d.batch.id) }" />
+    <PromptTemplateManager v-model="showTemplateManager" />
   </div>
 </template>
 
@@ -587,6 +656,31 @@ function onKey(e: Event) {
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--el-border-color-light);
+  overflow: hidden;
+}
+.ai-sidebar__tabs {
+  display: flex;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--el-border-color-light);
+  button {
+    flex: 1;
+    padding: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--el-text-color-secondary);
+    font-size: 14px;
+    &.active {
+      color: var(--el-color-primary);
+      box-shadow: inset 0 -2px 0 var(--el-color-primary);
+    }
+  }
+}
+.ai-sidebar__sessions-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 12px;
   gap: 10px;
 }
@@ -639,8 +733,10 @@ function onKey(e: Event) {
   margin-top: 4px;
   opacity: 0;
   transition: opacity 0.15s ease;
+  width: fit-content;
 }
-.msg--user:hover .msg__actions { opacity: 0.9; }
+.msg__actions--assistant { margin-left: 0; }
+.msg:hover .msg__actions { opacity: 0.9; }
 .msg__action-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px;

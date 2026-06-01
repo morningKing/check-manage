@@ -90,3 +90,14 @@ def admin_headers(admin_token):
 def dev_headers(dev_token):
     """包含 developer JWT 的请求头"""
     return {'Authorization': f'Bearer {dev_token}'}
+
+
+@pytest.fixture
+def db_conn():
+    """Create a real database connection for integration tests."""
+    import psycopg2
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+    from config import DB_CONFIG
+    conn = psycopg2.connect(**DB_CONFIG)
+    yield conn
+    conn.close()

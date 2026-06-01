@@ -34,6 +34,8 @@ from routes.system_config import system_config_bp
 from routes.home_widgets import home_widgets_bp
 from routes.column_views import column_views_bp
 from routes.ai_chat import ai_chat_bp
+from routes.ai_chat_prompt_templates import ai_chat_prompt_templates_bp
+from routes.ai_chat_batches import ai_chat_batches_bp
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
@@ -70,6 +72,8 @@ app.register_blueprint(system_config_bp)
 app.register_blueprint(home_widgets_bp)
 app.register_blueprint(column_views_bp)
 app.register_blueprint(ai_chat_bp)
+app.register_blueprint(ai_chat_prompt_templates_bp)
+app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start)
@@ -80,6 +84,10 @@ if not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
     # Start dependency validation scheduler
     from utils.dependency_scheduler import start_dependency_scheduler
     start_dependency_scheduler(app)
+
+    # Start in-process batch worker (drives child sessions via OpenCode HTTP API)
+    from utils.batch_engine import get_worker
+    get_worker().start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG,

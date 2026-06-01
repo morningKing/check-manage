@@ -135,6 +135,17 @@ A Claude-style chat drawer that connects to an **OpenCode** agent runtime (not a
 
 Key files: `server/routes/ai_chat.py` (`ai_chat_bp`: sessions/messages/SSE/delete), `server/utils/opencode_client.py`, `server/utils/workspace.py` (path-traversal-safe per-session dirs), `server/utils/session_token.py`, `mcp-server/` (standalone FastAPI + MCP Streamable-HTTP service, run from its own `.venv`), `src/components/ai-chat/` (drawer, message list/item, markdown view, input), `src/stores/aiChat.ts`, `src/api/aiChat.ts`. Design + plan: `docs/superpowers/specs/2026-05-26-ai-agent-frontend-design.md`, `docs/superpowers/plans/2026-05-26-ai-agent-frontend-m1.md`. E2E smoke: `e2e/ai-chat-smoke.spec.ts` (`npm run test:e2e`, requires OpenCode + MCP running).
 
+### AI Agent Chat — Batch Tasks (M1.5)
+
+Pick N files + 1 prompt → N isolated sessions, throttled to 3 concurrent. Children are real `ai_chat_sessions` rows with `batch_id` / `batch_seq` / `batch_input_file` set; the existing chat view handles them as-is, so clicking a child from the batch dashboard opens its full conversation thread.
+
+*   **Worker**: `server/utils/batch_engine.py` — in-process `BatchWorker` (daemon thread + `ThreadPoolExecutor(3)`), started from `app.py` next to the existing schedulers under `WERKZEUG_RUN_MAIN`. Claims FIFO via `FOR UPDATE SKIP LOCKED`. 30-min per-child timeout. On Flask restart, audit resets orphaned `running` rows back to `pending`.
+*   **REST**: `server/routes/ai_chat_batches.py` (POST/GET/DELETE/`retry-failed` + staging upload), `server/routes/ai_chat_prompt_templates.py` (per-user CRUD). Both registered just before `dynamic_bp`.
+*   **Frontend**: AI 助手 sidebar gains a `会话 / 批任务` tab switch. `BatchListView` + `BatchDetailView` + `CreateBatchDialog` + `PromptTemplateManager`. Detail polled every 5 s, list every 10 s; both pause on `document.hidden` and resume on visible. Polling stops on terminal states (`completed` / `failed`).
+*   **Failure policy**: failed children are red-flagged and never abort the batch; `POST /ai/chat/batches/:id/retry-failed` resets failures to `pending` for the worker to pick up. No auto-retry.
+
+Key files: `server/utils/batch_repo.py`, `server/utils/batch_engine.py`, `server/utils/prompt_template.py`, `server/routes/ai_chat_batches.py`, `server/routes/ai_chat_prompt_templates.py`, `src/types/aiChatBatch.ts`, `src/stores/aiChatBatches.ts`, `src/views/ai-chat/BatchListView.vue`, `src/views/ai-chat/BatchDetailView.vue`, `src/components/ai-chat/CreateBatchDialog.vue`, `src/components/ai-chat/PromptTemplateManager.vue`. Design + plan: `docs/superpowers/specs/2026-05-31-ai-chat-batch-tasks-design.md`, `docs/superpowers/plans/2026-05-31-ai-chat-batch-tasks.md`. E2E: `e2e/ai-chat-batch.spec.ts`.
+
 ### Database Design
 
 *   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB. Has `branch_id` for version isolation.

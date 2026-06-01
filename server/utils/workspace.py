@@ -134,3 +134,20 @@ def safe_resolve(root: str, rel_path: str) -> str:
     except ValueError:
         raise WorkspacePathError(f"path escapes workspace: {rel_path}")
     return str(target)
+
+
+def batch_staging_dir(workspace_root: str, user_id: str,
+                      upload_session_id: str) -> Path:
+    """Return (and create) the staging dir for a not-yet-created batch.
+
+    Lives under <workspace_root>/batch-staging/<user_id>/<upload_session_id>/
+    and is moved into per-session workspaces when the batch is created.
+    """
+    # sanitize the upload_session_id (allow uuids/letters/digits/hyphens only)
+    safe = ''.join(ch for ch in upload_session_id
+                   if ch.isalnum() or ch in '-_')
+    if not safe:
+        raise WorkspacePathError("invalid upload_session_id")
+    p = Path(workspace_root) / "batch-staging" / user_id / safe
+    p.mkdir(parents=True, exist_ok=True)
+    return p
