@@ -1,4 +1,13 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load the per-deployment .env that sits next to this file (i.e. `server/.env`).
+# `override=False` keeps real environment variables (set by the shell, CI, or
+# docker-compose) winning over file contents — useful so prod can layer secrets
+# on top of the dev-friendly defaults checked into .env.example.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / '.env', override=False)
 
 
 def _to_bool(value, default=False):
