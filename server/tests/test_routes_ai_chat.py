@@ -266,16 +266,20 @@ def test_delete_session_cleans_everything(setup):
 
 
 def test_list_sessions_returns_user_sessions(setup):
+    """SQL selects (id, title, last_active_at, batch_id, batch_input_file) so
+    that batch-children get synthesized "[批] <file>" titles. The mock row
+    must match that 5-tuple shape."""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchall.return_value = [
-        ('sess_a', '会话A', None),
-        ('sess_b', '会话B', None),
+        ('sess_a', '会话A', None, None, None),                          # regular session
+        ('sess_b', None, None, 'batch-1', 'uploads/req-A.txt'),         # batch child → synthesized title
     ]
     resp = client.get('/ai/chat/sessions', headers=dev_h)
     assert resp.status_code == 200
     body = resp.get_json()
     assert [s['id'] for s in body['sessions']] == ['sess_a', 'sess_b']
     assert body['sessions'][0]['title'] == '会话A'
+    assert body['sessions'][1]['title'] == '[批] req-A.txt'
 
 
 def test_rename_session_updates_title(setup):

@@ -297,7 +297,12 @@ class TestBatchCreate:
         assert len(data['errors']) == 2
 
     def test_batch_create_existing_id_in_db(self, setup):
-        """批量创建时数据库已有相同 ID"""
+        """批量创建时数据库已有相同 ID → UPSERT 而不是失败。
+
+        旧行为是把存在的 id 标 failed,但用户报告导入场景需要"主键冲突则更新"。
+        现在 batch-create 在 ON CONFLICT (id, branch_id) 上 DO UPDATE,响应里
+        把 created 和 updated 分开计数,failed 应为 0。
+        """
         client, mock_cursor, _, headers = setup
         # Mock database has 'rec-1' already
         mock_cursor.fetchall.side_effect = [
@@ -318,8 +323,9 @@ class TestBatchCreate:
 
         assert resp.status_code == 201
         data = resp.get_json()
-        assert data['created'] == 1  # Only rec-2 created
-        assert data['failed'] == 1   # rec-1 failed
+        assert data['created'] == 1   # rec-2 inserted
+        assert data['updated'] == 1   # rec-1 upserted (was previously rejected)
+        assert data['failed'] == 0
 
     def test_batch_create_with_relations(self, setup):
         """批量创建包含关联关系"""
