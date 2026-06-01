@@ -71,9 +71,14 @@ def test_create_session_201_writes_config_and_binds_directory(setup):
     assert not oc.register_mcp.called
     cfg = _json.loads((Path(body['workspacePath']) / 'opencode.json').read_text(encoding='utf-8'))
     assert 'token=' in cfg['mcp']['check-manage']['url']
-    # configured model is written so the agent uses it
+    # If an explicit OPENCODE_MODEL is configured, it must show up in the
+    # opencode.json; if it's empty (the default), the key is omitted so
+    # OpenCode picks from the first connected provider.
     from config import OPENCODE_MODEL
-    assert cfg['model'] == OPENCODE_MODEL
+    if OPENCODE_MODEL:
+        assert cfg['model'] == OPENCODE_MODEL
+    else:
+        assert 'model' not in cfg
 
 
 def test_create_session_guest_403(setup):
@@ -92,10 +97,13 @@ def test_send_message_persists_user_and_calls_opencode(setup):
         headers=dev_h,
     )
     assert resp.status_code == 202
-    # model is passed explicitly (config field alone isn't honored by OpenCode)
+    # model is passed explicitly to the OpenCode call. The exact value depends
+    # on body.model ∪ OPENCODE_MODEL config; both can be empty (then OpenCode
+    # picks its own default). The important contract is that the `model`
+    # kwarg is always present so OpenCode receives a deterministic value.
     args, kwargs = oc.send_prompt_async.call_args
     assert args[0] == 'oc_sess_42' and 'hello agent' in args[1]
-    assert kwargs.get('model')
+    assert 'model' in kwargs
     # directory must be the session workspace so the agent's tools run there
     assert kwargs.get('directory') == '/tmp/ws'
 
@@ -113,6 +121,48 @@ def test_send_message_other_users_session_404(setup):
         headers=dev_h,
     )
     assert resp.status_code == 404
+
+
+def test_send_message_uses_body_model_when_provided(setup):
+    """When the composer dropdown picks a non-default model, that model id
+    must flow into the OpenCode call (and override OPENCODE_MODEL)."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': 'hi', 'model': 'anthropic/claude-3.5-sonnet'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    _, kwargs = oc.send_prompt_async.call_args
+    assert kwargs.get('model') == 'anthropic/claude-3.5-sonnet'
+
+
+def test_list_models_flattens_connected_providers(setup):
+    """GET /ai/chat/models returns provider/model pairs for connected providers,
+    with the configured default surfaced separately."""
+    client, _, oc, dev_h, _, _ = setup
+    oc.list_providers.return_value = {
+        'all': [
+            {'id': 'p1', 'name': 'Provider One',
+             'models': {'m1': {'name': 'Model 1'}, 'm2': {'name': 'Model 2'}}},
+            {'id': 'p2', 'name': 'Provider Two',
+             'models': {'mX': {'name': 'X'}}},
+            {'id': 'p3', 'name': 'Not Connected',
+             'models': {'mZ': {'name': 'Z'}}},  # connected map excludes p3
+        ],
+        'default': {'p1': 'm1', 'p2': 'mX'},
+        'connected': {'p1': True, 'p2': True, 'p3': False},
+    }
+    resp = client.get('/ai/chat/models', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    ids = [m['id'] for m in body['models']]
+    assert 'p1/m1' in ids and 'p1/m2' in ids and 'p2/mX' in ids
+    assert 'p3/mZ' not in ids  # not connected
+    # labels carry the human-readable form
+    p1m1 = next(m for m in body['models'] if m['id'] == 'p1/m1')
+    assert p1m1['label'] == 'Provider One / Model 1'
 
 
 def test_get_messages_returns_history(setup):

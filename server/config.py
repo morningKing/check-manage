@@ -60,8 +60,11 @@ OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
 AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
-# OpenCode model id, "<providerID>/<modelID>". Written into each session's
-# opencode.json so the agent uses this model. The provider (incl. its API key)
-# is defined in OpenCode's own global config, not here — secrets stay out of
-# the repo. Override per-machine with the OPENCODE_MODEL env var.
-OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', 'mimo/mimo-v2.5')
+# Default OpenCode model id, "<providerID>/<modelID>". Used by:
+#   - single chat: when the user picks "default" (or doesn't pick anything)
+#     in the composer's model dropdown,
+#   - batch tasks: always (per spec, batch doesn't expose a per-task picker).
+# Leave empty (the default) to let OpenCode pick from the first connected
+# provider's default model — that lets the deployment swap providers without
+# editing this file. Override via OPENCODE_MODEL env var or `server/.env`.
+OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()

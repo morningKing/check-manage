@@ -73,6 +73,21 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def list_providers(self) -> dict:
+        """Return OpenCode's provider/model catalogue.
+
+        Shape:
+          { "all": [{"id", "name", "models": {<modelID>: {...}}, ...}, ...],
+            "default": {<providerID>: <modelID>},
+            "connected": {<providerID>: bool} }
+
+        Used by the frontend's model picker. The /provider endpoint is not
+        directory-scoped so no `directory` param.
+        """
+        resp = requests.get(self._url("/provider"), timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
     def list_commands(self, directory: str = "") -> list:
         params = {"directory": directory} if directory else None
         resp = requests.get(self._url("/command"), params=params, timeout=self.timeout)

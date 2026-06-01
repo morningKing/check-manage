@@ -52,8 +52,8 @@ MCP_NAME = 'check-manage'
 
 # Nudge the model to emit file content as fenced code blocks so the frontend can
 # lift it into a previewable/downloadable artifact (Claude-style). Kept terse and
-# with an explicit "don't narrate / don't repeat this rule" to limit MiMo's habit
-# of dumping its planning (and the rule itself) into the visible answer.
+# with an explicit "don't narrate / don't repeat this rule" to limit some models'
+# habit of dumping their planning (and the rule itself) into the visible answer.
 _AGENT_DIRECTIVE = (
     "[系统规则] 若需产出脚本/配置/文档，把完整内容放进带语言和文件名的代码块"
     "（如 ```python app.py）。画流程图用 ```mermaid 代码块；画数据图表用 ```echarts 代码块"
@@ -121,6 +121,54 @@ def create_session():
         'title': '新会话',
         'workspacePath': workspace_path,
     }), 201
+
+
+@ai_chat_bp.route('/models', methods=['GET'])
+@login_required
+def list_models():
+    """List available LLM models for the composer dropdown.
+
+    Flattens OpenCode's /provider response into:
+      { "models": [{ "id": "<providerID>/<modelID>", "label": "<provider> / <model>",
+                     "providerID": "...", "modelID": "...", "connected": bool }],
+        "default": "<configured_default>" or empty string,
+        "openCodeDefaults": { providerID: modelID } }
+    Only connected providers are surfaced. `default` is the server-side
+    OPENCODE_MODEL config; the picker uses it as the "Default" option label.
+    """
+    try:
+        provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
+    except Exception as e:
+        return jsonify({'error': f'OpenCode unreachable: {e}', 'models': []}), 502
+
+    connected = provider_info.get('connected') or {}
+    if isinstance(connected, list):
+        connected_set = set(connected)
+    else:
+        connected_set = {pid for pid, ok in connected.items() if ok}
+
+    models = []
+    for prov in provider_info.get('all') or []:
+        pid = prov.get('id')
+        pname = prov.get('name') or pid
+        if pid not in connected_set:
+            continue
+        prov_models = prov.get('models') or {}
+        for mid, mdef in prov_models.items():
+            models.append({
+                'id': f'{pid}/{mid}',
+                'label': f'{pname} / {mdef.get("name") or mid}',
+                'providerID': pid,
+                'modelID': mid,
+                'connected': True,
+            })
+    # stable ordering for the UI: provider name then model name
+    models.sort(key=lambda m: (m['label'].lower(), m['id']))
+    return jsonify({
+        'models': models,
+        'default': OPENCODE_MODEL or '',
+        'openCodeDefaults': provider_info.get('default') or {},
+    })
 
 
 @ai_chat_bp.route('/sessions', methods=['GET'])
@@ -265,10 +313,15 @@ def send_message(sid):
             (msg_id, sid, json.dumps(stored_parts or [{'type': 'text', 'text': ''}])),
         )
 
+    # Per-message model override: composer dropdown sends a `model` field
+    # ("<providerID>/<modelID>"). Empty/missing falls back to OPENCODE_MODEL
+    # (which itself may be empty, in which case OpenCode picks its default).
+    requested_model = (body.get('model') or '').strip()
+    effective_model = requested_model or OPENCODE_MODEL
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
-        sess[2], prompt.strip(), model=OPENCODE_MODEL, directory=sess[4],
+        sess[2], prompt.strip(), model=effective_model, directory=sess[4],
     )
-    return jsonify({'messageId': msg_id}), 202
+    return jsonify({'messageId': msg_id, 'model': effective_model or None}), 202
 
 
 def _safe_workspace_path(workspace_path: str, rel: str):

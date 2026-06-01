@@ -4,6 +4,7 @@ import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
   ElDropdown, ElDropdownMenu, ElDropdownItem,
+  ElSelect, ElOption,
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
@@ -28,7 +29,7 @@ import BatchListView from './BatchListView.vue'
 import BatchDetailView from './BatchDetailView.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
-import { downloadFileUrl, runScript, type AiMessage, type ChangedFile } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, type AiMessage, type ChangedFile, type ModelInfo } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -37,10 +38,30 @@ const sidebarTab = ref<'sessions' | 'batches'>('sessions')
 const showCreateBatch = ref(false)
 const showTemplateManager = ref(false)
 
+// Composer model picker: list comes from OpenCode's /provider via the
+// backend; selection is per-session and persisted in localStorage via
+// the store's setSessionModel / hydrateSessionModel actions.
+const models = ref<ModelInfo[]>([])
+const modelsLoading = ref(false)
+async function fetchModels() {
+  if (modelsLoading.value) return
+  modelsLoading.value = true
+  try {
+    const r = await listModels()
+    models.value = r.models
+  } catch { /* surfaced by interceptor */ }
+  finally { modelsLoading.value = false }
+}
+const composerModel = computed<string>({
+  get: () => (activeId.value ? store.modelBySession[activeId.value] || '' : ''),
+  set: (v) => { if (activeId.value) store.setSessionModel(activeId.value, v) },
+})
+
 async function openSession(sessionId: string) {
   if (await store.jumpToSession(sessionId)) {
     sidebarTab.value = 'sessions'
     batches.clearSelection()
+    store.hydrateSessionModel(sessionId)
   }
 }
 
@@ -197,8 +218,13 @@ watch(reasoning, scrollToBottom)
 onMounted(async () => {
   try {
     await store.loadSessions()
-    if (sessions.value.length) await store.openSession(sessions.value[0].id)
+    if (sessions.value.length) {
+      await store.openSession(sessions.value[0].id)
+      store.hydrateSessionModel(sessions.value[0].id)
+    }
   } catch { /* surfaced by interceptor */ }
+  // pre-fetch models for the dropdown (best-effort)
+  fetchModels()
 })
 
 async function newSession() {
@@ -206,6 +232,7 @@ async function newSession() {
 }
 async function selectSession(id: string) {
   if (id !== activeId.value) await store.openSession(id)
+  store.hydrateSessionModel(id)
 }
 async function renameSession(id: string, current: string) {
   try {
@@ -604,7 +631,24 @@ function onKey(e: Event) {
                 </ElDropdown>
               </div>
               <div class="composer-bar__right">
-                <span class="composer-model">MiMo</span>
+                <ElSelect
+                  v-if="activeId"
+                  v-model="composerModel"
+                  class="composer-model"
+                  size="small"
+                  placeholder="默认模型"
+                  filterable
+                  clearable
+                  :loading="modelsLoading"
+                  popper-class="composer-model__popper"
+                  @visible-change="(v) => v && !models.length && fetchModels()"
+                >
+                  <ElOption value="" label="默认模型" />
+                  <ElOption
+                    v-for="m in models" :key="m.id"
+                    :value="m.id" :label="m.label"
+                  />
+                </ElSelect>
                 <ElButton
                   v-if="streaming"
                   class="composer-send composer-send--stop" type="danger" circle :icon="Close"
@@ -840,7 +884,20 @@ function onKey(e: Event) {
   margin-top: 4px;
 }
 .composer-bar__right { display: flex; align-items: center; gap: 10px; }
-.composer-model { font-size: 13px; color: var(--el-text-color-secondary); }
+.composer-model {
+  width: 170px;
+  :deep(.el-input__wrapper) {
+    box-shadow: none;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  :deep(.el-input__inner) {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    text-align: right;
+  }
+}
+.composer-model__popper { max-width: 320px; }
 .composer-add {
   color: var(--el-text-color-secondary);
   font-size: 18px;

@@ -35,6 +35,12 @@ interface State {
   reasoning: Record<string, string>
   thinking: Record<string, boolean>
   attachments: Record<string, PendingAttachment[]>
+  /**
+   * Per-session model preference for the composer dropdown.
+   * Empty string / missing key → use backend default (OPENCODE_MODEL env).
+   * Persisted in localStorage by AiChatView (`check-manage:ai-chat:model:<sid>`).
+   */
+  modelBySession: Record<string, string>
   outputs: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
@@ -59,6 +65,7 @@ export const useAiChatStore = defineStore('aiChat', {
     reasoning: {},
     thinking: {},
     attachments: {},
+    modelBySession: {},
     outputs: {},
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
@@ -215,7 +222,11 @@ export const useAiChatStore = defineStore('aiChat', {
       this._resetStreamState(sid)
       const paths = pending.map(a => a.path)
       this.attachments[sid] = []
-      const { messageId } = await sendMessage(sid, content, paths)
+      // Per-session model preference, persisted in localStorage by AiChatView.
+      // Empty string → backend falls back to OPENCODE_MODEL config (which itself
+      // may be empty, in which case OpenCode picks its own default).
+      const model = this.modelBySession[sid] || ''
+      const { messageId } = await sendMessage(sid, content, paths, model)
       // adopt the real DB id so Edit/Retry can target this row server-side
       const msg = this.messages[sid].find((m) => m.id === localId)
       if (msg && messageId) msg.id = messageId
@@ -277,6 +288,32 @@ export const useAiChatStore = defineStore('aiChat', {
       if (!target) return false
       await this.openSession(target.id)
       return true
+    },
+
+    /**
+     * Update the composer's selected model for a session and persist to
+     * localStorage so it survives reloads / device switches.
+     */
+    setSessionModel(sessionId: string, model: string) {
+      this.modelBySession[sessionId] = model
+      try {
+        const key = `check-manage:ai-chat:model:${sessionId}`
+        if (model) localStorage.setItem(key, model)
+        else localStorage.removeItem(key)
+      } catch { /* private mode etc. */ }
+    },
+
+    /**
+     * Hydrate `modelBySession[id]` from localStorage. Called when a session
+     * is opened so the composer dropdown reflects the previously-chosen
+     * model on reload.
+     */
+    hydrateSessionModel(sessionId: string) {
+      if (this.modelBySession[sessionId] !== undefined) return
+      try {
+        const stored = localStorage.getItem(`check-manage:ai-chat:model:${sessionId}`)
+        if (stored) this.modelBySession[sessionId] = stored
+      } catch { /* ignore */ }
     },
 
     async closeSession(id: string) {

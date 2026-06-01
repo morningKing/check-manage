@@ -44,7 +44,7 @@ def test_captures_error(tmp_path):
 
 
 def test_strips_leading_bare_filename_line(tmp_path):
-    # MiMo quirk: first code line is just the filename → would NameError verbatim
+    # Some-model quirk: first code line is just the filename → would NameError verbatim
     code = "squares.py\nprint('after filename line')\n"
     res = run_python_in_workspace(code, str(tmp_path))
     assert res['exitCode'] == 0, res['stderr']

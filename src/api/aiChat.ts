@@ -73,11 +73,29 @@ export function getMessages(id: string, since?: string) {
   return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
 }
 
-export function sendMessage(id: string, content: string, attachments: string[] = []) {
-  return post<{ messageId: string }>(
+export function sendMessage(
+  id: string, content: string, attachments: string[] = [], model = '',
+) {
+  return post<{ messageId: string; model: string | null }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages`,
-    { content, attachments },
+    { content, attachments, model },
   )
+}
+
+export interface ModelInfo {
+  id: string         // "<providerID>/<modelID>"
+  label: string      // human-readable "<provider> / <model>"
+  providerID: string
+  modelID: string
+  connected: boolean
+}
+
+export function listModels() {
+  return get<{
+    models: ModelInfo[]
+    default: string
+    openCodeDefaults: Record<string, string>
+  }>('/ai/chat/models')
 }
 
 export function uploadFile(id: string, file: File) {
