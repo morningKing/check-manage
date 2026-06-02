@@ -81,8 +81,7 @@ CREATE TABLE IF NOT EXISTS users (
     username        VARCHAR(100) UNIQUE NOT NULL,
     password_hash   VARCHAR(256) NOT NULL,
     display_name    VARCHAR(200) NOT NULL,
-    role            VARCHAR(50)  NOT NULL DEFAULT 'guest'
-                    CHECK (role IN ('admin', 'developer', 'guest')),
+    role            VARCHAR(50)  NOT NULL DEFAULT 'guest',
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -530,6 +529,19 @@ def init_db():
         cur.execute(RBAC_DDL)
         conn.commit()
         print("RBAC tables (roles, role_permissions, role_page_permissions) created.")
+
+        # Migration: drop the hardcoded role CHECK so custom roles are allowed.
+        # The constraint name is auto-generated; find and drop it dynamically.
+        cur.execute("""
+            SELECT conname FROM pg_constraint
+            WHERE conrelid = 'users'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) ILIKE '%role%'
+        """)
+        for (conname,) in cur.fetchall():
+            cur.execute(f'ALTER TABLE users DROP CONSTRAINT IF EXISTS "{conname}"')
+        conn.commit()
+        print("Dropped hardcoded users.role CHECK constraint (if present).")
 
         # Migrations: add roles column if missing
         cur.execute("""
