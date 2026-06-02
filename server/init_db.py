@@ -1788,6 +1788,24 @@ def init_db():
             else:
                 print("Users table is empty. Skip default admin creation because INIT_ADMIN_PASSWORD is not set.")
 
+        # Seed built-in roles (idempotent). admin = superuser; developer/guest = editable presets.
+        cur.execute("""
+            INSERT INTO roles (id, name, description, is_system, is_superuser, default_page_access) VALUES
+              ('admin',     '管理员',   '系统超级管理员，拥有全部权限',   TRUE, TRUE,  'write'),
+              ('developer', '开发人员', '可读写所有数据，无管理功能权限', TRUE, FALSE, 'write'),
+              ('guest',     '访客',     '只读访问',                       TRUE, FALSE, 'read')
+            ON CONFLICT (id) DO NOTHING
+        """)
+        # admin.roles is seeded only to admin (superuser bypasses anyway, but keep an explicit row
+        # so the catalog renders it as granted for the admin role).
+        cur.execute("""
+            INSERT INTO role_permissions (role_id, permission_key)
+            VALUES ('admin', 'admin.roles')
+            ON CONFLICT DO NOTHING
+        """)
+        conn.commit()
+        print("Seeded built-in roles (admin/developer/guest).")
+
         conn.commit()
         print("Seed data inserted successfully.")
     finally:
