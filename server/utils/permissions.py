@@ -51,6 +51,15 @@ def _load(role_id):
         row = cur.fetchone()
         if not row:
             return None
+        # A superuser bypasses every admin/page check, so skip loading the
+        # detailed permission rows entirely.
+        if bool(row[1]):
+            return {
+                'is_superuser': True,
+                'default_page_access': row[2],
+                'admin_keys': set(),
+                'page_perms': {},
+            }
         cur.execute(
             'SELECT permission_key FROM role_permissions WHERE role_id = %s',
             (role_id,),

@@ -56,3 +56,19 @@ def test_list_roles(setup):
     resp = client.get('/roles', headers=headers)
     assert resp.status_code == 200
     assert len(resp.get_json()) == 2
+
+
+def test_delete_system_role_blocked(setup):
+    client, cur, headers = setup
+    # superuser check (fetchone #1) then role lookup (fetchone #2)
+    cur.fetchone.side_effect = [('admin', True, 'write'), ('管理员', True)]
+    resp = client.delete('/roles/admin', headers=headers)
+    assert resp.status_code == 400
+
+
+def test_delete_role_in_use_blocked(setup):
+    client, cur, headers = setup
+    cur.fetchone.side_effect = [('admin', True, 'write'), ('质检员', False)]
+    cur.fetchall.return_value = [('zhang',), ('li',)]
+    resp = client.delete('/roles/role-abc', headers=headers)
+    assert resp.status_code == 409
