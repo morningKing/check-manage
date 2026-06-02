@@ -72,3 +72,36 @@ def test_delete_role_in_use_blocked(setup):
     cur.fetchall.return_value = [('zhang',), ('li',)]
     resp = client.delete('/roles/role-abc', headers=headers)
     assert resp.status_code == 409
+
+
+def test_delete_role_success_scrubs_menus(setup):
+    client, cur, headers = setup
+    # fetchone #1 = permission resolution, #2 = role lookup in delete_role
+    cur.fetchone.side_effect = [('admin', True, 'write'), ('质检员', False)]
+    cur.fetchall.return_value = []  # no users assigned
+    resp = client.delete('/roles/role-abc', headers=headers)
+    assert resp.status_code == 200
+    sqls = [c.args[0] for c in cur.execute.call_args_list]
+    assert any('UPDATE menus' in s and 'roles - ' in s for s in sqls)
+    assert any('DELETE FROM roles' in s for s in sqls)
+
+
+def test_update_role_replaces_permissions(setup):
+    client, cur, headers = setup
+    # fetchone #1 = permission resolution, #2 = role lookup (is_superuser, is_system)
+    cur.fetchone.side_effect = [('admin', True, 'write'), (False, False)]
+    body = {
+        'adminKeys': ['admin.query'],
+        'defaultPageAccess': 'read',
+        'pagePermissions': [{
+            'pageId': 'page-orders', 'canRead': True, 'canCreate': True,
+            'canUpdate': False, 'canDelete': False,
+        }],
+    }
+    resp = client.put('/roles/role-abc', headers=headers, json=body)
+    assert resp.status_code == 200
+    sqls = [c.args[0] for c in cur.execute.call_args_list]
+    assert any('DELETE FROM role_permissions' in s for s in sqls)
+    assert any('INSERT INTO role_permissions' in s for s in sqls)
+    assert any('DELETE FROM role_page_permissions' in s for s in sqls)
+    assert any('INSERT INTO role_page_permissions' in s for s in sqls)
