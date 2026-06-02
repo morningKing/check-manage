@@ -35,3 +35,91 @@ PERMISSION_CATALOG = [
 
 def catalog_keys():
     return [e['key'] for e in PERMISSION_CATALOG]
+
+
+_cache = {}            # role_id -> resolved dict
+_lock = threading.Lock()
+
+_ACTION_COLUMN = {'read': 'read', 'create': 'create', 'update': 'update', 'delete': 'delete'}
+
+
+def _load(role_id):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, is_superuser, default_page_access FROM roles WHERE id = %s',
+            (role_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute(
+            'SELECT permission_key FROM role_permissions WHERE role_id = %s',
+            (role_id,),
+        )
+        admin_keys = {r[0] for r in cur.fetchall()}
+        cur.execute(
+            'SELECT page_id, can_read, can_create, can_update, can_delete '
+            'FROM role_page_permissions WHERE role_id = %s',
+            (role_id,),
+        )
+        page_perms = {
+            r[0]: {'read': r[1], 'create': r[2], 'update': r[3], 'delete': r[4]}
+            for r in cur.fetchall()
+        }
+    return {
+        'is_superuser': bool(row[1]),
+        'default_page_access': row[2],
+        'admin_keys': admin_keys,
+        'page_perms': page_perms,
+    }
+
+
+def get_role_perms(role_id):
+    """Return the resolved permission dict for a role (cached), or None if unknown."""
+    if role_id in _cache:
+        return _cache[role_id]
+    with _lock:
+        if role_id in _cache:
+            return _cache[role_id]
+        resolved = _load(role_id)
+        if resolved is not None:
+            _cache[role_id] = resolved
+        return resolved
+
+
+def invalidate_cache(role_id=None):
+    """Clear cache for one role, or all roles when role_id is None."""
+    with _lock:
+        if role_id is None:
+            _cache.clear()
+        else:
+            _cache.pop(role_id, None)
+
+
+def can_admin(role_id, key):
+    p = get_role_perms(role_id)
+    if not p:
+        return False
+    return p['is_superuser'] or key in p['admin_keys']
+
+
+def _default_allows(default_page_access, action):
+    if default_page_access == 'none':
+        return False
+    if default_page_access == 'read':
+        return action == 'read'
+    # 'write'
+    return True
+
+
+def can_page(role_id, page_id, action):
+    p = get_role_perms(role_id)
+    if not p:
+        return False
+    if p['is_superuser']:
+        return True
+    row = p['page_perms'].get(page_id)
+    if row is not None:
+        return bool(row.get(action, False))
+    return _default_allows(p['default_page_access'], action)
