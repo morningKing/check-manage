@@ -40,8 +40,6 @@ def catalog_keys():
 _cache = {}            # role_id -> resolved dict
 _lock = threading.Lock()
 
-_ACTION_COLUMN = {'read': 'read', 'create': 'create', 'update': 'update', 'delete': 'delete'}
-
 
 def _load(role_id):
     with get_db() as conn:
@@ -77,6 +75,7 @@ def _load(role_id):
 
 def get_role_perms(role_id):
     """Return the resolved permission dict for a role (cached), or None if unknown."""
+    # Lock-free fast path: safe under CPython's GIL since cache entries are only added, never mutated in place.
     if role_id in _cache:
         return _cache[role_id]
     with _lock:
