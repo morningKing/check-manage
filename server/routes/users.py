@@ -9,6 +9,11 @@ import uuid
 users_bp = Blueprint('users', __name__)
 
 
+def _role_exists(cur, role_id):
+    cur.execute('SELECT 1 FROM roles WHERE id = %s', (role_id,))
+    return cur.fetchone() is not None
+
+
 def format_ts(dt):
     if dt is None:
         return None
@@ -48,14 +53,14 @@ def create_user():
 
     if not username or not password or not display_name:
         return jsonify({'error': '用户名、密码和显示名称不能为空'}), 400
-    if role not in ('admin', 'developer', 'guest'):
-        return jsonify({'error': '无效的角色'}), 400
     if len(password) < 6:
         return jsonify({'error': '密码不能少于6个字符'}), 400
 
     user_id = f'user-{uuid.uuid4().hex[:8]}'
     with get_db() as conn:
         cur = conn.cursor()
+        if not _role_exists(cur, role):
+            return jsonify({'error': '无效的角色'}), 400
         cur.execute('SELECT id FROM users WHERE username = %s', (username,))
         if cur.fetchone():
             return jsonify({'error': '用户名已存在'}), 409
@@ -82,7 +87,7 @@ def update_user(user_id):
             sets.append('display_name = %s')
             params.append(body['displayName'])
         if 'role' in body:
-            if body['role'] not in ('admin', 'developer', 'guest'):
+            if not _role_exists(cur, body['role']):
                 return jsonify({'error': '无效的角色'}), 400
             sets.append('role = %s')
             params.append(body['role'])
