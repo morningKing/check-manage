@@ -403,6 +403,20 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
     ON ai_chat_messages(session_id, created_at);
 """
 
+DATA_FILES_DDL = """
+CREATE TABLE IF NOT EXISTS data_files (
+  id            VARCHAR(100) PRIMARY KEY,
+  original_name TEXT NOT NULL,
+  mime_type     TEXT,
+  size_bytes    BIGINT NOT NULL,
+  storage_path  TEXT NOT NULL,
+  uploaded_by   VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL,
+  uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_data_files_uploaded_at
+  ON data_files(uploaded_at DESC);
+"""
+
 AI_CHAT_PROMPT_TEMPLATES_DDL = """
 CREATE TABLE IF NOT EXISTS ai_chat_prompt_templates (
   id         VARCHAR(100) PRIMARY KEY,
@@ -462,6 +476,11 @@ def init_db():
         cur.execute(DDL)
         conn.commit()
         print("Tables created.")
+
+        # Data-page file/image field storage (replaces blob: URLs)
+        cur.execute(DATA_FILES_DDL)
+        conn.commit()
+        print("Data files table created.")
 
         # Create AI Chat batch-related tables (Task 1)
         cur.execute(AI_CHAT_PROMPT_TEMPLATES_DDL)

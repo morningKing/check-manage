@@ -68,3 +68,12 @@ AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
 # provider's default model — that lets the deployment swap providers without
 # editing this file. Override via OPENCODE_MODEL env var or `server/.env`.
 OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
+
+# Data-page file/image field storage. Files live OUTSIDE the repo (same
+# reasoning as ai-workspaces: keeps user-uploaded blobs out of OpenCode's
+# file-tool reach and out of git). Override via DATA_FILES_ROOT.
+DATA_FILES_ROOT       = os.getenv(
+    'DATA_FILES_ROOT',
+    os.path.join(os.path.expanduser('~'), '.check-manage', 'data-files'),
+)
+DATA_FILE_MAX_MB      = _to_int(os.getenv('DATA_FILE_MAX_MB'), 50)
