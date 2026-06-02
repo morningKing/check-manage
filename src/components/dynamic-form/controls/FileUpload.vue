@@ -5,20 +5,20 @@
  * - 渲染文件上传组件
  * - 支持多文件上传
  * - 支持文件类型和大小限制
- * - Mock 模式下模拟上传
+ * - 调用后端 /api/data-files/upload 真实持久化
  */
 <template>
   <el-upload
     v-model:file-list="fileList"
-    :action="uploadAction"
     :multiple="true"
     :limit="5"
     :on-exceed="handleExceed"
     :on-success="handleSuccess"
     :on-remove="handleRemove"
+    :on-preview="handlePreview"
     :before-upload="beforeUpload"
     :disabled="field.disabled"
-    :http-request="mockUpload"
+    :http-request="uploadToBackend"
   >
     <el-button type="primary" :disabled="field.disabled">
       <el-icon><Upload /></el-icon>
@@ -39,16 +39,16 @@
  * 基于 Element Plus Upload 组件封装
  * 用于动态表单中的文件上传
  *
- * Mock 模式：
- * - 由于没有真实后端，使用自定义上传方法模拟
- * - 文件转换为 Base64 或 ObjectURL 存储
+ * 文件实际经 POST /api/data-files/upload 落到服务器,
+ * JSONB 里只存 {uid=data_files.id, name, url, size, type}。
+ * url 是 /api/data-files/<id>/download,显示时需附 ?access_token=。
  */
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
-import { v4 as uuidv4 } from 'uuid'
+import { uploadDataFile, authedDataFileUrl } from '@/api/dataFiles'
 
 // ==================== Props & Emits ====================
 
@@ -65,11 +65,6 @@ const emit = defineEmits<{
 }>()
 
 // ==================== State ====================
-
-/**
- * 上传地址（Mock 模式不使用）
- */
-const uploadAction = ref('/api/upload')
 
 /**
  * 文件列表（Element Plus 格式）
@@ -101,34 +96,36 @@ watch(
 // ==================== 方法 ====================
 
 /**
- * Mock 上传方法
- *
- * 将文件转换为 ObjectURL 模拟上传成功
+ * 走真后端上传:落到 data_files 表 + 磁盘,
+ * 返回的 url 是 /api/data-files/<id>/download(下载时需附 access_token)。
  */
-function mockUpload(options: UploadRequestOptions): Promise<void> {
-  return new Promise((resolve) => {
-    const file = options.file
-    const url = URL.createObjectURL(file)
+async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
+  try {
+    const res = await uploadDataFile(options.file as File)
+    const uploadedFile: UploadFileInfo = {
+      uid: res.id,
+      name: res.name,
+      url: res.url,
+      size: res.size,
+      type: res.mimeType,
+    }
+    const currentFiles = props.modelValue || []
+    emit('update:modelValue', [...currentFiles, uploadedFile])
+    if (options.onSuccess) options.onSuccess(res)
+  } catch (err: any) {
+    if (options.onError) options.onError(err)
+    ElMessage.error(err?.message || '上传失败')
+    throw err
+  }
+}
 
-    // 模拟上传延迟
-    setTimeout(() => {
-      const uploadedFile: UploadFileInfo = {
-        uid: uuidv4(),
-        name: file.name,
-        url: url,
-        size: file.size,
-        type: file.type
-      }
-
-      const currentFiles = props.modelValue || []
-      emit('update:modelValue', [...currentFiles, uploadedFile])
-
-      if (options.onSuccess) {
-        options.onSuccess({ url })
-      }
-      resolve()
-    }, 500)
-  })
+/**
+ * 点文件名预览/下载:JSONB 里的 url 是裸路径,
+ * 拼上 token 后浏览器才能拿到 401 不阻塞的响应。
+ */
+function handlePreview(file: UploadFile): void {
+  if (!file.url) return
+  window.open(authedDataFileUrl(file.url), '_blank')
 }
 
 /**

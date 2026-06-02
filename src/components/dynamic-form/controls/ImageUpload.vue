@@ -10,7 +10,6 @@
 <template>
   <el-upload
     v-model:file-list="fileList"
-    :action="uploadAction"
     list-type="picture-card"
     :multiple="true"
     :limit="9"
@@ -19,10 +18,17 @@
     :on-remove="handleRemove"
     :before-upload="beforeUpload"
     :disabled="field.disabled"
-    :http-request="mockUpload"
+    :http-request="uploadToBackend"
     accept="image/*"
   >
     <el-icon><Plus /></el-icon>
+    <template #file="{ file }">
+      <!-- ElUpload's default thumbnail uses file.url which is bare;
+           inject the auth token so the <img> doesn't 401. -->
+      <div class="el-upload-list__item-thumbnail">
+        <img :src="authedDataFileUrl(file.url || '')" alt="" />
+      </div>
+    </template>
   </el-upload>
 
   <!-- 图片预览对话框 -->
@@ -48,7 +54,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
-import { v4 as uuidv4 } from 'uuid'
+import { uploadDataFile, authedDataFileUrl } from '@/api/dataFiles'
 
 // ==================== Props & Emits ====================
 
@@ -65,11 +71,6 @@ const emit = defineEmits<{
 }>()
 
 // ==================== State ====================
-
-/**
- * 上传地址（Mock 模式不使用）
- */
-const uploadAction = ref('/api/upload')
 
 /**
  * 文件列表
@@ -111,31 +112,26 @@ watch(
 // ==================== 方法 ====================
 
 /**
- * Mock 上传方法
+ * 走真后端上传:落到 data_files 表 + 磁盘,JSONB 存 {uid, name, url, size, type}。
  */
-function mockUpload(options: UploadRequestOptions): Promise<void> {
-  return new Promise((resolve) => {
-    const file = options.file
-    const url = URL.createObjectURL(file)
-
-    setTimeout(() => {
-      const uploadedFile: UploadFileInfo = {
-        uid: uuidv4(),
-        name: file.name,
-        url: url,
-        size: file.size,
-        type: file.type
-      }
-
-      const currentFiles = props.modelValue || []
-      emit('update:modelValue', [...currentFiles, uploadedFile])
-
-      if (options.onSuccess) {
-        options.onSuccess({ url })
-      }
-      resolve()
-    }, 500)
-  })
+async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
+  try {
+    const res = await uploadDataFile(options.file as File)
+    const uploadedFile: UploadFileInfo = {
+      uid: res.id,
+      name: res.name,
+      url: res.url,
+      size: res.size,
+      type: res.mimeType,
+    }
+    const currentFiles = props.modelValue || []
+    emit('update:modelValue', [...currentFiles, uploadedFile])
+    if (options.onSuccess) options.onSuccess(res)
+  } catch (err: any) {
+    if (options.onError) options.onError(err)
+    ElMessage.error(err?.message || '上传失败')
+    throw err
+  }
 }
 
 /**
@@ -168,7 +164,7 @@ function handleExceed(): void {
  * 图片预览处理
  */
 function handlePreview(file: UploadFile): void {
-  previewUrl.value = file.url || ''
+  previewUrl.value = authedDataFileUrl(file.url || '')
   previewVisible.value = true
 }
 
