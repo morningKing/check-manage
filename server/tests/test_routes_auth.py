@@ -180,3 +180,25 @@ class TestAuthPermissionsPayload:
         data = resp.get_json()
         assert 'permissions' in data
         assert data['permissions']['isSuperuser'] is True
+
+    def test_me_includes_non_superuser_permissions(self, setup):
+        client, cur, headers = setup
+        # /auth/me fetchone: dev user row, then _load fetchone: non-superuser role row
+        cur.fetchone.side_effect = [
+            ('user-dev', 'dev', '开发', 'developer'),      # user row
+            ('developer', False, 'read'),                  # role row (not superuser)
+        ]
+        # _load fetchall: admin_keys rows, then page_perms rows
+        cur.fetchall.side_effect = [
+            [('admin.query',)],
+            [('page-orders', True, True, False, False)],
+        ]
+        resp = client.get('/auth/me', headers=headers)
+        assert resp.status_code == 200
+        perms = resp.get_json()['permissions']
+        assert perms['isSuperuser'] is False
+        assert perms['adminKeys'] == ['admin.query']
+        assert perms['defaultPageAccess'] == 'read'
+        assert perms['pagePerms']['page-orders'] == {
+            'read': True, 'create': True, 'update': False, 'delete': False,
+        }
