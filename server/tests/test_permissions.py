@@ -100,3 +100,45 @@ def test_cache_invalidation_reloads():
         assert perms.can_page('developer', 'page-x', 'create') is False  # cached
         perms.invalidate_cache('developer')
         assert perms.can_page('developer', 'page-x', 'create') is True   # reloaded
+
+
+from flask import Flask, jsonify
+from auth import require_permission, create_token
+
+
+def _app_with_protected_route():
+    app = Flask(__name__)
+
+    @app.route('/protected')
+    @require_permission('admin.users')
+    def protected():
+        return jsonify({'ok': True})
+
+    app.config['TESTING'] = True
+    return app
+
+
+def test_require_permission_allows_granted():
+    app = _app_with_protected_route()
+    token = create_token({'id': 'u1', 'username': 'dev', 'role': 'developer'})
+    fake = _mock_db(('developer', False, 'read'), [('admin.users',)], [])
+    with patch('utils.permissions.get_db', fake):
+        perms.invalidate_cache()
+        resp = app.test_client().get('/protected', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 200
+
+
+def test_require_permission_denies_ungranted():
+    app = _app_with_protected_route()
+    token = create_token({'id': 'u1', 'username': 'guest', 'role': 'guest'})
+    fake = _mock_db(('guest', False, 'read'), [], [])
+    with patch('utils.permissions.get_db', fake):
+        perms.invalidate_cache()
+        resp = app.test_client().get('/protected', headers={'Authorization': f'Bearer {token}'})
+        assert resp.status_code == 403
+
+
+def test_require_permission_requires_login():
+    app = _app_with_protected_route()
+    resp = app.test_client().get('/protected')
+    assert resp.status_code == 401

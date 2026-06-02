@@ -100,6 +100,29 @@ def admin_required(f):
     return decorated
 
 
+def require_permission(permission_key):
+    """Decorator: require the current user's role to hold `permission_key`
+    (superuser bypasses). Implies login_required.
+    """
+    def wrapper(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header.startswith('Bearer '):
+                return jsonify({'error': '未登录'}), 401
+            token = auth_header.split(' ', 1)[1]
+            payload = decode_token(token)
+            if not payload:
+                return jsonify({'error': '登录已过期'}), 401
+            from utils.permissions import can_admin
+            if not can_admin(payload.get('role'), permission_key):
+                return jsonify({'error': '权限不足'}), 403
+            g.current_user = payload
+            return f(*args, **kwargs)
+        return decorated
+    return wrapper
+
+
 def hash_api_key(key):
     """Hash an API key using SHA-256."""
     return hashlib.sha256(key.encode()).hexdigest()
