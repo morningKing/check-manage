@@ -7,6 +7,21 @@ from utils.operation_log import log_operation
 auth_bp = Blueprint('auth', __name__)
 
 
+def build_permissions_payload(role_id):
+    """Resolve a compact permission set for the frontend."""
+    from utils.permissions import get_role_perms
+    p = get_role_perms(role_id)
+    if not p:
+        return {'isSuperuser': False, 'adminKeys': [],
+                'defaultPageAccess': 'none', 'pagePerms': {}}
+    return {
+        'isSuperuser': p['is_superuser'],
+        'adminKeys': sorted(p['admin_keys']),
+        'defaultPageAccess': p['default_page_access'],
+        'pagePerms': p['page_perms'],
+    }
+
+
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
     """Authenticate user and return JWT token."""
@@ -35,6 +50,7 @@ def login():
         'role': row[4],
     }
     token = create_token(user)
+    user['permissions'] = build_permissions_payload(row[4])
     return jsonify({'token': token, 'user': user})
 
 
@@ -57,6 +73,7 @@ def get_current_user():
         'username': row[1],
         'displayName': row[2],
         'role': row[3],
+        'permissions': build_permissions_payload(row[3]),
     })
 
 

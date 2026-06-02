@@ -30,6 +30,7 @@ def setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_db),
         patch('routes.auth.get_db', fake_db),
+        patch('utils.permissions.get_db', fake_db),
         patch('routes.menus.get_db', fake_db),
         patch('routes.etl_tasks.get_db', fake_db),
         patch('routes.dynamic.get_db', fake_db),
@@ -41,6 +42,11 @@ def setup(mock_conn, mock_cursor):
     ]
     for p in patches:
         p.start()
+
+    # RBAC permission resolution is cached per role_id; clear it so each test's
+    # mocked role row is actually consulted instead of a stale cached entry.
+    from utils.permissions import invalidate_cache
+    invalidate_cache()
 
     from app import app
     app.config['TESTING'] = True
@@ -158,3 +164,19 @@ class TestChangePassword:
                           content_type='application/json',
                           headers=admin_h)
         assert resp.status_code == 200
+
+
+class TestAuthPermissionsPayload:
+    def test_me_includes_permissions(self, setup):
+        client, cur, headers = setup
+        # /auth/me fetchone: user row, then permissions resolution fetchone: role row
+        cur.fetchone.side_effect = [
+            ('user-admin', 'admin', '管理员', 'admin'),   # user row
+            ('admin', True, 'write'),                      # role row (resolution)
+        ]
+        cur.fetchall.side_effect = [[], []]                # admin_keys, page_perms
+        resp = client.get('/auth/me', headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'permissions' in data
+        assert data['permissions']['isSuperuser'] is True
