@@ -10,7 +10,7 @@ MENUS = [
     {"id": "menu-3-b", "name": "数据工具", "icon": "DataLine", "pageId": None, "parentId": None, "order": 3, "path": None, "roles": ["admin", "developer"]},
     {"id": "menu-3-6", "name": "导出脚本", "icon": "Promotion", "pageId": None, "parentId": "menu-3-b", "order": 1, "path": "/admin/export-scripts", "roles": ["admin"]},
     {"id": "menu-3-8", "name": "校验脚本", "icon": "CircleCheck", "pageId": None, "parentId": "menu-3-b", "order": 2, "path": "/admin/validation-scripts", "roles": ["admin"]},
-    {"id": "menu-3-16", "name": "AI 定时任务", "icon": "AlarmClock", "pageId": None, "parentId": "menu-3-b", "order": 6, "path": "/admin/ai-scan-tasks", "roles": ["admin"]},
+    {"id": "menu-3-16", "name": "AI 定时任务", "icon": "AlarmClock", "pageId": None, "parentId": "menu-3-b", "order": 7, "path": "/admin/ai-scan-tasks", "roles": ["admin"]},
     {"id": "menu-3", "name": "系统配置", "icon": "Setting", "pageId": None, "parentId": None, "order": 4, "path": None, "roles": ["admin"]},
     {"id": "menu-3-a", "name": "平台管理", "icon": "Platform", "pageId": None, "parentId": "menu-3", "order": 1, "path": None, "roles": ["admin"]},
     {"id": "menu-3-1", "name": "菜单管理", "icon": "Menu", "pageId": None, "parentId": "menu-3-a", "order": 1, "path": "/admin/menu", "roles": ["admin"]},

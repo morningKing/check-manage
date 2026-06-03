@@ -1333,7 +1333,7 @@ def init_db():
         if not cur.fetchone():
             cur.execute(
                 'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-                "VALUES ('menu-3-16', %s, 'AlarmClock', NULL, 'menu-3-b', 6, '/admin/ai-scan-tasks', %s, 'system')",
+                "VALUES ('menu-3-16', %s, 'AlarmClock', NULL, 'menu-3-b', 7, '/admin/ai-scan-tasks', %s, 'system')",
                 ('AI 定时任务', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
