@@ -42,12 +42,24 @@ def _token(role):
     return {'Authorization': f'Bearer {create_token({"id": "u", "username": "u", "role": role})}'}
 
 
+def _prime_viewer(perms):
+    """Prime a non-guest, read-only custom role so write_required passes (it only
+    blocks guest) and the per-page gate is the thing that denies writes."""
+    perms._cache['viewer'] = {
+        'is_superuser': False,
+        'default_page_access': 'read',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+
+
 def test_guest_create_forbidden(setup):
+    # Isolate the new per-page gate: a non-guest read-only `viewer` passes
+    # write_required (which only blocks guest), so the 403 must come from the gate.
     client, cur, perms = setup
-    cur.fetchone.return_value = ('guest', False, 'read')  # role row for resolution
-    cur.fetchall.side_effect = [[], []]                   # admin_keys, page_perms
+    _prime_viewer(perms)
     resp = client.post('/orders', data=json.dumps({'name': 'x'}),
-                       content_type='application/json', headers=_token('guest'))
+                       content_type='application/json', headers=_token('viewer'))
     assert resp.status_code == 403
 
 
@@ -85,21 +97,20 @@ def test_default_read_allows_list(setup):
 
 
 def test_relations_write_requires_parent_update(setup):
+    # `viewer` is non-guest read-only: write_required passes, the per-page gate denies.
     client, cur, perms = setup
-    # read-only role: default_page_access='read' -> no 'update' on the parent page
-    cur.fetchone.return_value = ('guest', False, 'read')
-    cur.fetchall.side_effect = [[], []]
+    _prime_viewer(perms)
     # PUT /relations/<collection>/<record_id>/<field_name> is the relation write path
     resp = client.put('/relations/orders/rec-1/items',
                       data=json.dumps({'targetCollection': 'products',
                                        'targetField': 'orders', 'ids': []}),
-                      content_type='application/json', headers=_token('guest'))
+                      content_type='application/json', headers=_token('viewer'))
     assert resp.status_code == 403
 
 
 def test_relations_delete_requires_parent_update(setup):
+    # `viewer` is non-guest read-only: write_required passes, the per-page gate denies.
     client, cur, perms = setup
-    cur.fetchone.return_value = ('guest', False, 'read')
-    cur.fetchall.side_effect = [[], []]
-    resp = client.delete('/relations/orders/rec-1', headers=_token('guest'))
+    _prime_viewer(perms)
+    resp = client.delete('/relations/orders/rec-1', headers=_token('viewer'))
     assert resp.status_code == 403

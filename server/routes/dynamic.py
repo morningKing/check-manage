@@ -3,6 +3,7 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, write_required
 from utils.permissions import can_page
+from utils.rbac_guard import require_page_action
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
@@ -14,16 +15,6 @@ dynamic_bp = Blueprint('dynamic', __name__)
 
 # Reserved paths that should not be handled by the dynamic catch-all
 RESERVED = {'menus', 'pageConfigs', 'favicon.ico', 'relations', 'auth', 'users', 'operationLogs', 'backups', 'exportScripts', 'apiKeys', 'validationScripts', 'etlTasks', 'relation-graph', 'query', 'comments', 'timeline', 'dashboards', 'notifications', 'triggerRules', 'ai', 'versions', 'project-versions', 'webhook', 'dependencies', 'system-config', 'home-widgets', 'data-files'}
-
-
-def _require_page_action(collection, action):
-    """Return an error response tuple if the current user lacks `action`
-    permission on this collection's page, else None."""
-    user = getattr(flask_g, 'current_user', {}) or {}
-    role = user.get('role')
-    if not can_page(role, f'page-{collection}', action):
-        return jsonify({'error': '权限不足'}), 403
-    return None
 
 
 def _get_current_user_branch(collection):
@@ -306,7 +297,7 @@ def _apply_relation_update(cur, collection, record_id, field_name, target_collec
 def list_items(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'read')
+    denied = require_page_action(collection, 'read')
     if denied:
         return denied
 
@@ -464,7 +455,7 @@ def list_items(collection):
 def get_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'read')
+    denied = require_page_action(collection, 'read')
     if denied:
         return denied
     branch_id = _get_current_user_branch(collection)
@@ -486,7 +477,7 @@ def get_item(collection, item_id):
 def create_item(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'create')
+    denied = require_page_action(collection, 'create')
     if denied:
         return denied
     body = request.get_json(force=True)
@@ -592,7 +583,7 @@ def create_item(collection):
 def update_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'update')
+    denied = require_page_action(collection, 'update')
     if denied:
         return denied
     body = request.get_json(force=True)
@@ -836,7 +827,7 @@ def check_reference_dependencies(cur, collection, record_id, branch_id=None):
 def delete_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'delete')
+    denied = require_page_action(collection, 'delete')
     if denied:
         return denied
     branch_id = _get_current_user_branch(collection)
@@ -891,7 +882,7 @@ def batch_create_items(collection):
     """Batch create multiple records in a single transaction."""
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'create')
+    denied = require_page_action(collection, 'create')
     if denied:
         return denied
 
@@ -1149,7 +1140,7 @@ def batch_delete_items(collection, **kwargs):
     """Batch delete multiple records in a single transaction."""
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
-    denied = _require_page_action(collection, 'delete')
+    denied = require_page_action(collection, 'delete')
     if denied:
         return denied
     ids = request.json.get('ids', [])
