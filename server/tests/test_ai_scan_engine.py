@@ -176,3 +176,14 @@ def test_run_task_zero_claimed_no_batch(monkeypatch):
     se.run_task({'id': 't1', 'name': 'n', 'owner_user_id': 'u', 'collection': 'c',
                  'prompt_template': 'p', 'field_mapping': []})
     assert called['batch'] is False
+
+
+def test_is_due_logic():
+    from utils.ai_scan_scheduler import _is_due
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    assert _is_due({'last_run_at': None, 'schedule_interval_minutes': 15}, now) is True
+    assert _is_due({'last_run_at': (now - timedelta(minutes=20)).isoformat(),
+                    'schedule_interval_minutes': 15}, now) is True
+    assert _is_due({'last_run_at': (now - timedelta(minutes=5)).isoformat(),
+                    'schedule_interval_minutes': 15}, now) is False
