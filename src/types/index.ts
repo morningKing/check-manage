@@ -19,6 +19,9 @@ export * from './api'
 // 用户相关类型
 export * from './user'
 
+// 角色与权限相关类型
+export * from './role'
+
 // 操作日志相关类型
 export * from './operationLog'
 

@@ -1,11 +1,14 @@
 /**
  * 用户相关类型定义
  */
+import type { ResolvedPermissions } from './role'
 
 /**
  * 用户角色类型
+ *
+ * 自定义角色系统下，角色为任意 slug 字符串（内置：admin / developer / guest）
  */
-export type UserRole = 'admin' | 'developer' | 'guest'
+export type UserRole = string
 
 /**
  * 用户信息接口
@@ -15,6 +18,7 @@ export interface UserInfo {
   username: string
   displayName: string
   role: UserRole
+  permissions?: ResolvedPermissions
   createdAt?: string
 }
 
