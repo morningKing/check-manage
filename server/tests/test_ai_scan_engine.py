@@ -95,11 +95,21 @@ def test_build_context_dir_writes_record_md(tmp_path, monkeypatch):
     import utils.ai_scan_engine as se
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
     # no file fields → no attachments; record.md rendered from data
-    monkeypatch.setattr(se, '_field_labels', lambda coll: {'name': '名称', 'amount': '金额'})
+    monkeypatch.setattr(se, '_field_labels',
+                        lambda coll: {'name': '名称', 'amount': '金额', '审核状态': '审核状态',
+                                      '审核结论': '审核结论'})
     monkeypatch.setattr(se, '_file_field_names', lambda coll: [])
-    task = {'id': 't1', 'collection': 'orders', 'branch_id': 'main', 'context_fields': {}}
-    rec = {'id': 'rec-1', 'data': {'name': 'A', 'amount': 99, '审核状态': '处理中'}}
+    task = {'id': 't1', 'collection': 'orders', 'branch_id': 'main', 'context_fields': {},
+            'status_field': '审核状态',
+            'field_mapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True}]}
+    rec = {'id': 'rec-1', 'data': {'name': 'A', 'amount': 99, '审核状态': '处理中',
+                                   '审核结论': '旧结论'}}
     rel = se.build_context_dir(task, rec)
     from pathlib import Path
     md = (Path(str(tmp_path)) / rel / 'record.md').read_text(encoding='utf-8')
     assert '名称' in md and 'A' in md and '金额' in md and '99' in md
+    # status_field + mapped output columns must be excluded from record.md
+    assert '处理中' not in md
+    assert '审核状态' not in md
+    assert '旧结论' not in md
+    assert '审核结论' not in md

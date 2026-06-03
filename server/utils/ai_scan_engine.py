@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 from db import get_db
@@ -125,7 +126,10 @@ def on_child_finished(session_row, final_msg, ok):
     if parsed is None or any(parsed.get(k) in (None, '') for k in required):
         _set_record_status(task, rid, task['failed_value'])
         return
-    _write_back(task, rid, parsed)
+    n = _write_back(task, rid, parsed)
+    if n == 0:
+        print(f"[ai_scan] write-back matched 0 rows for record {rid}")
+        return
 
 
 def _workspace_root():
@@ -159,10 +163,13 @@ def _file_field_names(collection):
             if f.get('controlType') in ('file', 'image')]
 
 
-def _render_record_md(data, labels):
+def _render_record_md(data, labels, exclude=None):
+    exclude = exclude or set()
     lines = ['# 记录数据', '']
     for k, v in data.items():
         if k in ('createdAt', 'updatedAt', '_version', '_branchId'):
+            continue
+        if k in exclude:
             continue
         label = labels.get(k, k)
         lines.append(f'- **{label}**: {v}')
@@ -189,8 +196,7 @@ def _copy_attachments(data, file_fields, dest_dir):
         src = Path(path)
         if src.exists():
             att.mkdir(parents=True, exist_ok=True)
-            import shutil as _sh
-            _sh.copy2(str(src), str(att / name))
+            shutil.copy2(str(src), str(att / f"{_id}_{name}"))
 
 
 def build_context_dir(task, record):
@@ -199,11 +205,11 @@ def build_context_dir(task, record):
     rel = os.path.join('scan-staging', task['id'], record['id'])
     dest = Path(_workspace_root()) / rel
     if dest.exists():
-        import shutil as _sh
-        _sh.rmtree(str(dest))
+        shutil.rmtree(str(dest))
     dest.mkdir(parents=True, exist_ok=True)
     labels = _field_labels(task['collection'])
+    exclude = {task['status_field']} | {m['column'] for m in (task.get('field_mapping') or [])}
     (dest / 'record.md').write_text(
-        _render_record_md(record.get('data') or {}, labels), encoding='utf-8')
+        _render_record_md(record.get('data') or {}, labels, exclude), encoding='utf-8')
     _copy_attachments(record.get('data') or {}, _file_field_names(task['collection']), str(dest))
     return rel
