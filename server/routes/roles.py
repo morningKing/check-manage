@@ -1,8 +1,9 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
-from auth import require_permission
+from auth import require_permission, login_required
 from utils.permissions import PERMISSION_CATALOG, catalog_keys, invalidate_cache
 from utils.operation_log import log_operation
+import psycopg2.extras
 import uuid
 
 roles_bp = Blueprint('roles', __name__)
@@ -19,6 +20,22 @@ def _role_to_dict(row):
 @require_permission('admin.roles')
 def get_catalog():
     return jsonify(PERMISSION_CATALOG)
+
+
+@roles_bp.route('/roles/options', methods=['GET'])
+@login_required
+def role_options():
+    """轻量角色清单（id + 显示名 + 标记），供菜单管理/用户管理等下拉选择器使用。
+    仅需登录即可读取（角色名不敏感），不要求 admin.roles。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT id, name, is_system, is_superuser FROM roles '
+                    'ORDER BY is_system DESC, created_at')
+        rows = cur.fetchall()
+    return jsonify([
+        {'id': r[0], 'name': r[1], 'isSystem': r[2], 'isSuperuser': r[3]}
+        for r in rows
+    ])
 
 
 @roles_bp.route('/roles', methods=['GET'])
@@ -151,3 +168,39 @@ def delete_role(role_id):
     log_operation('delete', 'role', role_id, row[0], f'删除角色「{row[0]}」')
     invalidate_cache(role_id)
     return jsonify({})
+
+
+@roles_bp.route('/roles/<role_id>/menu-visibility', methods=['PUT'])
+@require_permission('admin.roles')
+def update_menu_visibility(role_id):
+    """设置某角色可见的菜单集合（从角色侧维护 menus.roles）。
+
+    Body: {"menuIds": [...]}  —— 该角色应当能看到的菜单 id 列表。
+    对每个菜单：在列表里就把角色 slug 加进 menus.roles，否则移除。
+    """
+    body = request.get_json(force=True)
+    menu_ids = set(body.get('menuIds', []))
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT name, is_superuser FROM roles WHERE id = %s', (role_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': '角色不存在'}), 404
+        # 超级管理员永远可见全部菜单，无需写库
+        if row[1]:
+            return jsonify({'message': '超级管理员可见全部菜单，无需配置'})
+        cur.execute('SELECT id FROM menus')
+        all_ids = [r[0] for r in cur.fetchall()]
+        for mid in all_ids:
+            if mid in menu_ids:
+                cur.execute(
+                    "UPDATE menus SET roles = roles || %s WHERE id = %s AND NOT (roles ? %s)",
+                    (psycopg2.extras.Json([role_id]), mid, role_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE menus SET roles = roles - %s WHERE id = %s AND roles ? %s",
+                    (role_id, mid, role_id),
+                )
+    log_operation('update', 'role', role_id, row[0], f'更新角色「{row[0]}」菜单可见性')
+    return jsonify({'message': '已保存'})

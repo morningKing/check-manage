@@ -105,3 +105,40 @@ def test_update_role_replaces_permissions(setup):
     assert any('INSERT INTO role_permissions' in s for s in sqls)
     assert any('DELETE FROM role_page_permissions' in s for s in sqls)
     assert any('INSERT INTO role_page_permissions' in s for s in sqls)
+
+
+def test_role_options(setup):
+    client, cur, headers = setup
+    cur.fetchall.return_value = [
+        ('admin', '管理员', True, True),
+        ('role-x', '质检员', False, False),
+    ]
+    resp = client.get('/roles/options', headers=headers)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert {'id', 'name', 'isSystem', 'isSuperuser'} <= set(data[0])
+    assert any(r['name'] == '质检员' for r in data)
+
+
+def test_update_menu_visibility(setup):
+    client, cur, headers = setup
+    # 1) require_permission 解析, 2) 角色查找（非超管）
+    cur.fetchone.side_effect = [('admin', True, 'write'), ('质检员', False)]
+    cur.fetchall.return_value = [('menu-1',), ('menu-2',), ('menu-3',)]
+    resp = client.put('/roles/role-x/menu-visibility',
+                      data=json.dumps({'menuIds': ['menu-1', 'menu-3']}),
+                      content_type='application/json', headers=headers)
+    assert resp.status_code == 200
+    updates = [c for c in cur.execute.call_args_list if 'UPDATE menus' in str(c.args[0])]
+    assert len(updates) == 3  # 每个菜单各一次 UPDATE
+
+
+def test_update_menu_visibility_superuser_noop(setup):
+    client, cur, headers = setup
+    cur.fetchone.side_effect = [('admin', True, 'write'), ('管理员', True)]
+    resp = client.put('/roles/admin/menu-visibility',
+                      data=json.dumps({'menuIds': []}),
+                      content_type='application/json', headers=headers)
+    assert resp.status_code == 200
+    updates = [c for c in cur.execute.call_args_list if 'UPDATE menus' in str(c.args[0])]
+    assert updates == []  # 超管不写库

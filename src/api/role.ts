@@ -2,11 +2,21 @@
  * 角色与权限管理 API 接口（管理员）
  */
 import { get, post, put, del } from '@/utils/request'
-import type { Role, RoleDetail, PermissionCatalogItem } from '@/types'
+import type { Role, RoleDetail, RoleOption, PermissionCatalogItem } from '@/types'
 
 /** 获取角色列表 */
 export function getRoles() {
   return get<Role[]>('/roles')
+}
+
+/** 获取轻量角色选项（id+名称+标记），供下拉选择器使用，仅需登录 */
+export function getRoleOptions() {
+  return get<RoleOption[]>('/roles/options')
+}
+
+/** 设置某角色可见的菜单集合（从角色侧维护 menus.roles） */
+export function updateRoleMenuVisibility(id: string, menuIds: string[]) {
+  return put<{ message: string }>(`/roles/${id}/menu-visibility`, { menuIds })
 }
 
 /** 获取角色详情 */

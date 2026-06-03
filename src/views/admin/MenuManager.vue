@@ -191,18 +191,24 @@
             </el-form-item>
 
             <el-form-item label="可见角色" prop="roles">
-              <el-checkbox-group v-model="formData.roles">
-                <el-checkbox
-                  v-for="opt in ROLE_OPTIONS"
-                  :key="opt.value"
-                  :label="opt.value"
-                  :value="opt.value"
-                >
-                  {{ opt.label }}
-                </el-checkbox>
-              </el-checkbox-group>
+              <el-select
+                v-model="formData.roles"
+                multiple
+                filterable
+                collapse-tags
+                collapse-tags-tooltip
+                placeholder="选择可见此菜单的角色（可搜索）"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="opt in roleStore.options"
+                  :key="opt.id"
+                  :label="opt.name"
+                  :value="opt.id"
+                />
+              </el-select>
               <div class="form-tip">
-                选择哪些角色可以看到此菜单
+                选择哪些角色可以看到此菜单（含自定义角色）。超级管理员始终可见全部。
               </div>
             </el-form-item>
 
@@ -280,16 +286,17 @@ import { ref, computed, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Lock } from '@element-plus/icons-vue'
-import { useMenuStore, usePageConfigStore, useExportScriptStore } from '@/stores'
+import { useMenuStore, usePageConfigStore, useExportScriptStore, useRoleStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
 import type { MenuItem, MenuFormData, MenuType } from '@/types'
-import { createEmptyMenuFormData, ROLE_OPTIONS, MENU_TYPE_OPTIONS } from '@/types'
+import { createEmptyMenuFormData, MENU_TYPE_OPTIONS } from '@/types'
 
 // ==================== Store ====================
 
 const menuStore = useMenuStore()
 const pageConfigStore = usePageConfigStore()
 const exportScriptStore = useExportScriptStore()
+const roleStore = useRoleStore()
 
 // ==================== Refs ====================
 
@@ -790,6 +797,9 @@ onMounted(async () => {
   }
   if (exportScriptStore.scripts.length === 0) {
     await exportScriptStore.fetchScripts()
+  }
+  if (roleStore.options.length === 0) {
+    await roleStore.loadOptions()
   }
 })
 </script>

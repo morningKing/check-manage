@@ -73,6 +73,26 @@
           </el-table>
           <p class="hint">未在表中勾选的数据页按上面的“默认”计算。仅保存有任意勾选的行。</p>
         </el-tab-pane>
+
+        <el-tab-pane label="菜单可见性" name="menus">
+          <el-alert v-if="detail.isSuperuser" type="info" :closable="false"
+            title="超级管理员可见全部菜单，无需配置。" style="margin-bottom:12px" />
+          <template v-else>
+            <p class="hint" style="margin-top:0">勾选此角色可在侧边栏看到的菜单。注意：子菜单要显示，其父级也需勾选。</p>
+            <el-tree
+              ref="menuTreeRef"
+              :key="'menutree-' + detail.id"
+              :data="menuTreeData"
+              show-checkbox
+              check-strictly
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              :default-checked-keys="checkedMenuKeys"
+              default-expand-all
+              style="max-height:460px;overflow:auto"
+            />
+          </template>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -101,7 +121,8 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRoleStore } from '@/stores/role'
 import { usePageConfigStore } from '@/stores/pageConfig'
-import type { RoleDetail, DefaultPageAccess, PermissionCatalogItem } from '@/types'
+import { getMenuList } from '@/api/menu'
+import type { RoleDetail, DefaultPageAccess, PermissionCatalogItem, MenuItem } from '@/types'
 
 const roleStore = useRoleStore()
 const pageConfigStore = usePageConfigStore()
@@ -112,6 +133,25 @@ const activeTab = ref('admin')
 const adminKeys = ref<Set<string>>(new Set())
 const defaultPageAccess = ref<DefaultPageAccess>('read')
 const pageRows = ref<Array<{ pageId: string; name: string; canRead: boolean; canCreate: boolean; canUpdate: boolean; canDelete: boolean }>>([])
+
+// 菜单可见性
+const menuTreeRef = ref()
+const allMenus = ref<MenuItem[]>([])
+const menuTreeData = ref<MenuItem[]>([])
+const checkedMenuKeys = ref<string[]>([])
+
+function buildMenuTree(flat: MenuItem[]): MenuItem[] {
+  const map = new Map<string, MenuItem & { children: MenuItem[] }>()
+  flat.forEach(m => map.set(m.id, { ...m, children: [] }))
+  const roots: MenuItem[] = []
+  flat.forEach(m => {
+    const node = map.get(m.id)!
+    const parent = m.parentId ? map.get(m.parentId) : undefined
+    if (parent) parent.children.push(node)
+    else roots.push(node)
+  })
+  return roots
+}
 
 const createVisible = ref(false)
 const createForm = ref<{ name: string; description: string; defaultPageAccess: DefaultPageAccess }>({
@@ -143,6 +183,12 @@ async function selectRole(id: string): Promise<void> {
       canUpdate: c?.canUpdate ?? false, canDelete: c?.canDelete ?? false,
     }
   })
+  // 菜单可见性：拉取全部菜单（含 roles），计算该角色已勾选的菜单
+  allMenus.value = await getMenuList()
+  menuTreeData.value = buildMenuTree(allMenus.value)
+  checkedMenuKeys.value = allMenus.value
+    .filter(m => (m.roles || []).includes(id))
+    .map(m => m.id)
 }
 
 function toggleAdminKey(key: string, on: boolean): void {
@@ -160,6 +206,11 @@ async function onSave(): Promise<void> {
     defaultPageAccess: defaultPageAccess.value,
     pagePermissions,
   })
+  // 同时保存菜单可见性（超管无需配置）
+  if (!detail.value.isSuperuser) {
+    const menuIds = (menuTreeRef.value?.getCheckedKeys(false) ?? checkedMenuKeys.value) as string[]
+    await roleStore.saveMenuVisibility(detail.value.id, menuIds)
+  }
   ElMessage.success('已保存')
 }
 

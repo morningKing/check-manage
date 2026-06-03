@@ -31,6 +31,14 @@ export interface Role {
   defaultPageAccess: DefaultPageAccess
 }
 
+/** 轻量角色选项（供下拉选择器使用，仅需登录即可读取） */
+export interface RoleOption {
+  id: string
+  name: string
+  isSystem: boolean
+  isSuperuser: boolean
+}
+
 /** 角色详情（编辑器） */
 export interface RoleDetail extends Role {
   adminKeys: string[]

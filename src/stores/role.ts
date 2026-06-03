@@ -4,12 +4,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
-  getRoles, getRole, getPermissionCatalog, createRole, updateRole, deleteRole,
+  getRoles, getRole, getRoleOptions, getPermissionCatalog,
+  createRole, updateRole, deleteRole, updateRoleMenuVisibility,
 } from '@/api/role'
-import type { Role, RoleDetail, PermissionCatalogItem } from '@/types'
+import type { Role, RoleDetail, RoleOption, PermissionCatalogItem } from '@/types'
 
 export const useRoleStore = defineStore('role', () => {
   const roles = ref<Role[]>([])
+  /** 轻量角色选项（供菜单/用户管理等下拉选择器使用） */
+  const options = ref<RoleOption[]>([])
   const catalog = ref<PermissionCatalogItem[]>([])
   const loading = ref(false)
 
@@ -20,6 +23,16 @@ export const useRoleStore = defineStore('role', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  /** 加载轻量角色选项（仅需登录，不要求 admin.roles） */
+  async function loadOptions(): Promise<void> {
+    options.value = await getRoleOptions()
+  }
+
+  /** 保存某角色的菜单可见性 */
+  async function saveMenuVisibility(id: string, menuIds: string[]): Promise<void> {
+    await updateRoleMenuVisibility(id, menuIds)
   }
 
   async function loadCatalog(): Promise<void> {
@@ -47,5 +60,9 @@ export const useRoleStore = defineStore('role', () => {
     await loadRoles()
   }
 
-  return { roles, catalog, loading, loadRoles, loadCatalog, fetchRole, saveRole, addRole, removeRole }
+  return {
+    roles, options, catalog, loading,
+    loadRoles, loadOptions, loadCatalog, fetchRole, saveRole, addRole, removeRole,
+    saveMenuVisibility,
+  }
 })
