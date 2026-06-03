@@ -1,5 +1,4 @@
 from flask import Blueprint, request, jsonify, g
-from db import get_db
 from auth import require_permission
 from utils import ai_scan_repo
 from utils.operation_log import log_operation
@@ -62,6 +61,9 @@ def run_now(task_id):
     from utils.ai_scan_engine import run_task
     try:
         run_task(t)
-    except Exception as e:
-        return jsonify({'error': f'运行失败：{e}'}), 500
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': '运行失败，请查看服务端日志'}), 500
+    log_operation('run', 'ai_scan_task', task_id, t['name'], f'手动触发 AI 定时任务「{t["name"]}」')
     return jsonify({'message': '已触发一次扫描'})

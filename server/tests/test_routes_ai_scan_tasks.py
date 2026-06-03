@@ -17,7 +17,7 @@ def _make_db(mock_conn):
 @pytest.fixture
 def setup(mock_conn, mock_cursor):
     fake = _make_db(mock_conn)
-    patches = [patch('db.get_db', fake), patch('routes.ai_scan_tasks.get_db', fake),
+    patches = [patch('db.get_db', fake),
                patch('utils.permissions.get_db', fake), patch('utils.ai_scan_repo.get_db', fake),
                patch('db.pool', MagicMock()), patch('utils.operation_log.log_operation')]
     for p in patches:
@@ -52,3 +52,32 @@ def test_create_task(setup):
     resp = client.post('/ai-scan-tasks', data=json.dumps(body), content_type='application/json',
                        headers=headers)
     assert resp.status_code == 201
+
+
+def test_get_missing_task_404(setup):
+    client, cur, headers = setup
+    with patch('routes.ai_scan_tasks.ai_scan_repo.get_task', lambda tid: None):
+        resp = client.get('/ai-scan-tasks/nope', headers=headers)
+    assert resp.status_code == 404
+
+
+def test_create_missing_required_400(setup):
+    client, cur, headers = setup
+    body = {'name': 'n', 'collection': 'orders', 'promptTemplate': 'p'}  # missing statusField
+    resp = client.post('/ai-scan-tasks', data=json.dumps(body), content_type='application/json',
+                       headers=headers)
+    assert resp.status_code == 400
+
+
+def test_forbidden_without_capability(setup):
+    client, cur, headers = setup
+    import utils.permissions as perms
+    perms._cache['guest'] = {
+        'is_superuser': False,
+        'default_page_access': 'read',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+    guest = create_token({'id': 'user-guest', 'username': 'guest', 'role': 'guest'})
+    resp = client.get('/ai-scan-tasks', headers={'Authorization': f'Bearer {guest}'})
+    assert resp.status_code == 403
