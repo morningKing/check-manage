@@ -339,11 +339,23 @@ class BatchWorker:
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
             self._persist_conversation(sid, prompt, final_msg)
             self._mark_done(sid, batch_id, last_preview=preview)
+            self._notify_scan(session_row, final_msg, ok=True)
         except _SessionTimeout as e:
             self._mark_failed(sid, batch_id, error=f'timeout after {e.seconds}s')
+            self._notify_scan(session_row, None, ok=False)
         except Exception as e:
             self._mark_failed(sid, batch_id,
                               error=f'{type(e).__name__}: {e}'[:500])
+            self._notify_scan(session_row, None, ok=False)
+
+    def _notify_scan(self, session_row, final_msg, ok: bool):
+        if not session_row.get('scan_task_id'):
+            return
+        try:
+            from utils.ai_scan_engine import on_child_finished
+            on_child_finished(session_row, final_msg, ok=ok)
+        except Exception:
+            traceback.print_exc()
 
     def _fetch_batch_prompt(self, batch_id: str) -> str | None:
         with get_db() as conn:

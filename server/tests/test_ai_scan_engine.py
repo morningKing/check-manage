@@ -57,3 +57,23 @@ def test_create_batch_stamps_scan_columns():
     assert any('scan_task_id' in str(c.args[0]) for c in inserts)
     flat = [v for c in inserts for v in (c.args[1] if len(c.args) > 1 else ())]
     assert 'task-1' in flat and 'rec-1' in flat
+
+
+def test_run_one_invokes_scan_hook_on_success(monkeypatch):
+    import utils.batch_engine as eng
+    calls = {}
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **k: '/tmp/ws')
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-1'
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    w = eng.BatchWorker()
+    monkeypatch.setattr(w, '_fetch_batch_prompt', lambda b: 'prompt')
+    monkeypatch.setattr(w, '_set_opencode_id', lambda *a: None)
+    monkeypatch.setattr(w, '_await_finished', lambda *a, **k: ('preview', {'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}))
+    monkeypatch.setattr(w, '_persist_conversation', lambda *a: None)
+    monkeypatch.setattr(w, '_mark_done', lambda *a, **k: None)
+    import utils.ai_scan_engine as se
+    monkeypatch.setattr(se, 'on_child_finished', lambda row, msg, ok: calls.update(row=row, ok=ok))
+    w._run_one({'id': 's1', 'user_id': 'u', 'batch_id': 'b', 'batch_input_file': 'd',
+                'scan_task_id': 'task-1', 'source_record_id': 'rec-1'})
+    assert calls['ok'] is True and calls['row']['source_record_id'] == 'rec-1'
