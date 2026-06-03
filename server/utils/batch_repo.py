@@ -16,8 +16,11 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  scan_task_id: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
-    `files` is a list of {name, path} dicts where path is workspace-relative
-    (under batch-staging/...). Returns {batch, sessions}.
+    `files` is a list of {name, path} dicts where `path` is workspace-relative
+    (under batch-staging/...). Each entry may also carry an optional `recordId`
+    key: the source record id, stamped into `source_record_id` for scan tasks.
+    `scan_task_id` is an optional param linking the child sessions to a scan task.
+    Returns {batch, sessions}.
     """
     if not files:
         raise ValueError("at least one file required")

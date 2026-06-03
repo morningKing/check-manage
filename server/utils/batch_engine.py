@@ -328,6 +328,9 @@ class BatchWorker:
         if prompt is None:
             # Batch was deleted between claim and prompt fetch.
             # FK CASCADE has already removed our session row; nothing to mark.
+            # Scan-task children are intentionally NOT notified via _notify_scan on
+            # this path: recovery is handled by the orphan sweep (running rows with
+            # no live session get reset to pending).
             return
 
         try:
