@@ -465,6 +465,38 @@ ALTER TABLE ai_chat_sessions
   ALTER COLUMN token_expires_at DROP NOT NULL;
 """
 
+AI_SCAN_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS ai_scan_tasks (
+  id              VARCHAR(100) PRIMARY KEY,
+  name            TEXT NOT NULL,
+  enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+  owner_user_id   VARCHAR(100) NOT NULL REFERENCES users(id),
+  collection      VARCHAR(200) NOT NULL,
+  branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+  status_field    TEXT NOT NULL,
+  pending_value   TEXT NOT NULL DEFAULT '',
+  running_value   TEXT NOT NULL DEFAULT '处理中',
+  done_value      TEXT NOT NULL DEFAULT '已处理',
+  failed_value    TEXT NOT NULL DEFAULT '处理失败',
+  extra_filter    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context_fields  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  prompt_template TEXT NOT NULL,
+  field_mapping   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  schedule_interval_minutes INT NOT NULL DEFAULT 15,
+  max_records_per_scan      INT NOT NULL DEFAULT 20,
+  last_run_at     TIMESTAMPTZ,
+  last_scan_count INT DEFAULT 0,
+  last_error      TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE ai_chat_sessions
+  ADD COLUMN IF NOT EXISTS scan_task_id     VARCHAR(100) NULL REFERENCES ai_scan_tasks(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS source_record_id VARCHAR(100) NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_scan
+  ON ai_chat_sessions(scan_task_id, source_record_id);
+"""
+
 
 RBAC_DDL = """
 CREATE TABLE IF NOT EXISTS roles (
@@ -524,6 +556,10 @@ def init_db():
         cur.execute(AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL)
         conn.commit()
         print("AI chat sessions batch columns added.")
+
+        cur.execute(AI_SCAN_TASKS_DDL)
+        conn.commit()
+        print("ai_scan_tasks table + ai_chat_sessions scan columns created.")
 
         # RBAC custom roles (Phase 0)
         cur.execute(RBAC_DDL)
