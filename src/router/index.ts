@@ -109,6 +109,12 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/ai-scan-tasks',
+        name: 'AiScanTaskManager',
+        component: () => import('@/views/admin/AiScanTaskManager.vue'),
+        meta: { title: 'AI 定时任务', icon: 'AlarmClock' },
+      },
+      {
         path: 'admin/operation-log',
         name: 'OperationLog',
         component: () => import('@/views/admin/OperationLog.vue'),

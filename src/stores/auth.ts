@@ -33,6 +33,7 @@ const ADMIN_PATH_PERMISSION: Record<string, string> = {
   '/admin/webhook-settings': 'admin.webhooks',
   '/admin/dependency-manager': 'admin.dependencies',
   '/admin/system-settings': 'admin.system_config',
+  '/admin/ai-scan-tasks': 'admin.ai_scan',
 }
 
 export const useAuthStore = defineStore('auth', () => {
