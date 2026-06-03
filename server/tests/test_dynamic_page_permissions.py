@@ -20,6 +20,7 @@ def setup(mock_conn, mock_cursor):
     patches = [
         patch('db.get_db', fake_db),
         patch('routes.dynamic.get_db', fake_db),
+        patch('routes.relations.get_db', fake_db),
         patch('utils.permissions.get_db', fake_db),
         patch('utils.version.get_db', fake_db),
         patch('utils.branch_lock.get_db', fake_db),
@@ -81,3 +82,24 @@ def test_default_read_allows_list(setup):
     resp = client.get('/orders/some-id', headers=_token('guest'))
     # passes the read gate, then 404 because the record does not exist
     assert resp.status_code == 404
+
+
+def test_relations_write_requires_parent_update(setup):
+    client, cur, perms = setup
+    # read-only role: default_page_access='read' -> no 'update' on the parent page
+    cur.fetchone.return_value = ('guest', False, 'read')
+    cur.fetchall.side_effect = [[], []]
+    # PUT /relations/<collection>/<record_id>/<field_name> is the relation write path
+    resp = client.put('/relations/orders/rec-1/items',
+                      data=json.dumps({'targetCollection': 'products',
+                                       'targetField': 'orders', 'ids': []}),
+                      content_type='application/json', headers=_token('guest'))
+    assert resp.status_code == 403
+
+
+def test_relations_delete_requires_parent_update(setup):
+    client, cur, perms = setup
+    cur.fetchone.return_value = ('guest', False, 'read')
+    cur.fetchall.side_effect = [[], []]
+    resp = client.delete('/relations/orders/rec-1', headers=_token('guest'))
+    assert resp.status_code == 403
