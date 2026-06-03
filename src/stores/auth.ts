@@ -151,9 +151,6 @@ export const useAuthStore = defineStore('auth', () => {
     // 动态页面路径 /page/:pageId — 没有对应菜单项则放行给已登录用户
     if (path.startsWith('/page/')) return true
 
-    // 未匹配到菜单的其他 /admin 路径：默认仅超管
-    if (path.startsWith('/admin/')) return permissions.value?.isSuperuser ?? false
-
     // 其他未匹配路径，默认仅超管可访问
     return permissions.value?.isSuperuser ?? false
   }

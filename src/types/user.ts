@@ -61,7 +61,7 @@ export const ROLE_OPTIONS: { label: string; value: UserRole }[] = [
 /**
  * 角色显示名映射
  */
-export const ROLE_LABELS: Record<UserRole, string> = {
+export const ROLE_LABELS: Partial<Record<UserRole, string>> = {
   admin: '管理员',
   developer: '开发人员',
   guest: '访客',

@@ -243,7 +243,7 @@ const authDisplayName = computed(() => authStore.displayName)
  */
 const roleLabel = computed(() => {
   const role = authStore.userRole
-  return role ? ROLE_LABELS[role] : ''
+  return role ? ROLE_LABELS[role] || role : ''
 })
 
 /**
