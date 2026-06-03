@@ -80,7 +80,7 @@
           <el-radio-button v-if="hasCalendarConfig" value="calendar"><el-icon><Calendar /></el-icon></el-radio-button>
           <el-radio-button v-if="hasGanttConfig" value="gantt"><el-icon><DataLine /></el-icon></el-radio-button>
         </el-radio-group>
-        <el-button v-if="!isGuest" type="primary" @click="handleAdd">
+        <el-button v-if="!isGuest && canCreate" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
           新增
         </el-button>
@@ -240,6 +240,8 @@
         :total="totalCount"
         :show-pagination="true"
         :show-actions="!isGuest"
+        :can-update="canUpdate"
+        :can-delete="canDelete"
         show-selection
         @view="handleView"
         @edit="handleEdit"
@@ -558,7 +560,7 @@
             <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
               关系图谱
             </el-button>
-            <el-button v-if="!isGuest" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
+            <el-button v-if="!isGuest && canUpdate" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
               编辑
             </el-button>
           </div>
@@ -860,6 +862,12 @@ const jumpStore = useJumpNavigationStore()
 const columnViewStore = useColumnViewStore()
 const isAdmin = computed(() => authStore.isAdmin)
 const isGuest = computed(() => authStore.isGuest)
+
+// ==================== 页面级 CRUD 权限（仅控制按钮显隐，服务端为权威） ====================
+// pageId 已是 `page-<collection>` 形式，canPage 接收完整 pageId
+const canCreate = computed(() => authStore.canPage(pageId.value, 'create'))
+const canUpdate = computed(() => authStore.canPage(pageId.value, 'update'))
+const canDelete = computed(() => authStore.canPage(pageId.value, 'delete'))
 
 // ==================== Refs ====================
 
