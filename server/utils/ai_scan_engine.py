@@ -213,3 +213,50 @@ def build_context_dir(task, record):
         _render_record_md(record.get('data') or {}, labels, exclude), encoding='utf-8')
     _copy_attachments(record.get('data') or {}, _file_field_names(task['collection']), str(dest))
     return rel
+
+
+def _pending_predicate(task, params):
+    sf = task['status_field']
+    pv = task.get('pending_value') or ''
+    if pv == '':
+        return "(d.data->>%s IS NULL OR d.data->>%s = '')", params + [sf, sf]
+    return "d.data->>%s = %s", params + [sf, pv]
+
+
+def claim_records(task):
+    """Atomically pick up to max_records_per_scan pending records and flip them to
+    running_value. Returns [{id, data}]."""
+    base_params = [task['collection'], task['branch_id']]
+    pred, params = _pending_predicate(task, base_params)
+    filter_sql = ''
+    extra = task.get('extra_filter') or {}
+    if extra:
+        # mongo_query.translate(query) -> (where_fragment, params); the fragment
+        # references the JSONB column unaliased as `data`, which resolves against
+        # `dynamic_data d` (single-table FROM). Mirror routes/dynamic.py usage.
+        from utils.mongo_query import translate, MongoQueryError
+        try:
+            clause, fparams = translate(extra)
+            if clause and clause != 'TRUE':
+                filter_sql = ' AND (' + clause + ')'
+                params = params + list(fparams)
+        except MongoQueryError:
+            filter_sql = ''
+    sql = (
+        "WITH picked AS ("
+        "  SELECT d.id FROM dynamic_data d "
+        "   WHERE d.collection = %s AND d.branch_id = %s AND " + pred + filter_sql +
+        "   ORDER BY d.created_at FOR UPDATE SKIP LOCKED LIMIT %s) "
+        "UPDATE dynamic_data d SET data = jsonb_set(d.data, ARRAY[%s], to_jsonb(%s::text)), "
+        "  updated_at = now(), version = d.version + 1 "
+        "FROM picked WHERE d.id = picked.id AND d.branch_id = %s "
+        "RETURNING d.id, d.data"
+    )
+    params = params + [task['max_records_per_scan'], task['status_field'],
+                       task['running_value'], task['branch_id']]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        conn.commit()
+    return [{'id': r[0], 'data': r[1]} for r in rows]

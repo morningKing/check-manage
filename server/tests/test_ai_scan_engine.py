@@ -113,3 +113,17 @@ def test_build_context_dir_writes_record_md(tmp_path, monkeypatch):
     assert '审核状态' not in md
     assert '旧结论' not in md
     assert '审核结论' not in md
+
+
+def test_claim_builds_pending_predicate_and_running_update():
+    import utils.ai_scan_engine as se
+    fake, cur = _mock_db()
+    cur.fetchall = MagicMock(return_value=[('rec-1', {'name': 'A'})])
+    task = {'id': 't1', 'collection': 'orders', 'branch_id': 'main',
+            'status_field': '审核状态', 'pending_value': '未审核', 'running_value': '处理中',
+            'extra_filter': {}, 'max_records_per_scan': 5}
+    with patch('utils.ai_scan_engine.get_db', fake):
+        claimed = se.claim_records(task)
+    sql = str(cur.execute.call_args_list[-1].args[0])
+    assert 'FOR UPDATE SKIP LOCKED' in sql and 'UPDATE dynamic_data' in sql
+    assert claimed == [{'id': 'rec-1', 'data': {'name': 'A'}}]
