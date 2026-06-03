@@ -15,3 +15,16 @@ def test_extract_last_balanced_object():
 
 def test_extract_none_returns_none():
     assert extract_json('没有 JSON 的纯文本') is None
+
+
+from utils.ai_scan_engine import message_text
+
+
+def test_message_text_joins_parts():
+    msg = {'role': 'assistant', 'content': [
+        {'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}]}
+    assert message_text(msg) == 'a\nb'
+
+
+def test_message_text_none():
+    assert message_text(None) == ''

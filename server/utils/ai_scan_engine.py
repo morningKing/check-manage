@@ -35,6 +35,15 @@ def extract_json(text):
     return None
 
 
+def message_text(final_msg):
+    """Concatenate the text parts of an assistant message dict."""
+    if not final_msg:
+        return ''
+    parts = [p.get('text', '') for p in (final_msg.get('content') or [])
+             if p.get('type') == 'text']
+    return '\n'.join(t for t in parts if t)
+
+
 def on_child_finished(session_row, final_msg, ok):
     """Write-back hook fired by the batch worker for scan-task children.
     Full implementation in Phase 2."""
