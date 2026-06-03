@@ -310,6 +310,12 @@ router.beforeEach(async (to) => {
   const appStore = useAppStore()
 
   if (!appStore.initialized) {
+    // 应用加载时刷新当前用户，确保拿到最新的权限集合（permissions）。
+    // 这能让旧会话/权限变更在刷新后即时生效，并避免依赖本地缓存里过期的权限。
+    await authStore.fetchCurrentUser()
+    if (!authStore.isLoggedIn) {
+      return '/login'
+    }
     await appStore.initializeApp()
   }
 

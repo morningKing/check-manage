@@ -55,8 +55,17 @@ export const useAuthStore = defineStore('auth', () => {
   /** 当前用户角色 */
   const userRole = computed<UserRole | null>(() => user.value?.role ?? null)
 
-  /** 是否管理员（超级用户）。回退到 role==='admin' 以兼容登录前/旧数据 */
-  const isAdmin = computed(() => user.value?.permissions?.isSuperuser ?? (user.value?.role === 'admin'))
+  /**
+   * 是否超级用户。以解析后的 `permissions.isSuperuser` 为准；当权限集合缺失
+   * （登录前/旧会话/尚未刷新）时回退到 role==='admin' —— 内置 admin 角色按设计
+   * 永远是不可删除的超级用户，因此该回退安全且能避免把管理员锁在系统管理之外。
+   */
+  const isSuperuser = computed(
+    () => user.value?.permissions?.isSuperuser ?? (user.value?.role === 'admin'),
+  )
+
+  /** 是否管理员（超级用户）。等价于 isSuperuser。 */
+  const isAdmin = isSuperuser
 
   /** 是否访客（只读权限） */
   const isGuest = computed(() => user.value?.role === 'guest')
@@ -69,16 +78,16 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** 是否拥有某个管理功能权限 */
   function can(key: string): boolean {
+    if (isSuperuser.value) return true
     const p = permissions.value
-    if (!p) return false
-    return p.isSuperuser || p.adminKeys.includes(key)
+    return p ? p.adminKeys.includes(key) : false
   }
 
   /** 是否对某数据页拥有某 CRUD 动作权限 */
   function canPage(pageId: string, action: PageAction): boolean {
+    if (isSuperuser.value) return true
     const p = permissions.value
     if (!p) return false
-    if (p.isSuperuser) return true
     const row = p.pagePerms[pageId]
     if (row) return !!row[action]
     if (p.defaultPageAccess === 'none') return false
@@ -145,14 +154,14 @@ export const useAuthStore = defineStore('auth', () => {
     if (menu) {
       const menuRoles = menu.roles || []
       // 空白名单或包含当前角色 slug 即放行；超管始终放行
-      return permissions.value?.isSuperuser || menuRoles.length === 0 || menuRoles.includes(user.value.role)
+      return isSuperuser.value || menuRoles.length === 0 || menuRoles.includes(user.value.role)
     }
 
     // 动态页面路径 /page/:pageId — 没有对应菜单项则放行给已登录用户
     if (path.startsWith('/page/')) return true
 
     // 其他未匹配路径，默认仅超管可访问
-    return permissions.value?.isSuperuser ?? false
+    return isSuperuser.value
   }
 
   return {
@@ -164,6 +173,7 @@ export const useAuthStore = defineStore('auth', () => {
     isLoggedIn,
     userRole,
     isAdmin,
+    isSuperuser,
     isGuest,
     displayName,
     permissions,

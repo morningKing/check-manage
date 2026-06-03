@@ -7,6 +7,35 @@ function userWith(perms: UserInfo['permissions']): UserInfo {
   return { id: 'u', username: 'u', displayName: 'u', role: 'r', permissions: perms }
 }
 
+function adminNoPerms(): UserInfo {
+  // Built-in admin whose resolved permissions are absent (stale session created
+  // before the permissions payload existed). role === 'admin' is always a superuser.
+  return { id: 'a', username: 'admin', displayName: '管理员', role: 'admin' }
+}
+
+describe('built-in admin superuser fallback (absent permissions)', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('treats role==="admin" as superuser when permissions are absent', () => {
+    const s = useAuthStore()
+    s.token = 't'
+    s.user = adminNoPerms()
+    expect(s.can('admin.users')).toBe(true)
+    expect(s.can('admin.roles')).toBe(true)
+    expect(s.canPage('page-x', 'delete')).toBe(true)
+    expect(s.hasRoutePermission('/admin/users')).toBe(true)
+  })
+
+  it('does NOT grant a non-admin role when permissions are absent', () => {
+    const s = useAuthStore()
+    s.token = 't'
+    s.user = { id: 'g', username: 'g', displayName: 'g', role: 'guest' }
+    expect(s.can('admin.users')).toBe(false)
+    expect(s.canPage('page-x', 'create')).toBe(false)
+    expect(s.hasRoutePermission('/admin/users')).toBe(false)
+  })
+})
+
 describe('auth store permission helpers', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
