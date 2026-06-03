@@ -172,7 +172,7 @@ Key files: `server/utils/batch_repo.py`, `server/utils/batch_engine.py`, `server
 *   `routes/cross_project_dependencies.py`: Dependency declaration CRUD, validation, merge dependency check, branch delete protection.
 *   `routes/webhooks.py`: Webhook rule management, test execution, log retrieval.
 *   `utils/script_runner.py`: Sandboxed Python execution for validation/export scripts.
-*   `utils/auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `admin_required`, `api_key_required`.
+*   `auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `require_permission('admin.x')` (RBAC capability gate; replaced the old `admin_required`), `api_key_required`. See `utils/permissions.py` + `utils/rbac_guard.py` and `docs/custom-roles-rbac-guide.md`.
 *   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
 
 **Reserved collection paths** (cannot be used as dynamic data collection names; authoritative list lives in `RESERVED` at `server/routes/dynamic.py:15`): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `system-config`, `home-widgets`, `favicon.ico`.
@@ -192,11 +192,14 @@ Key files: `server/utils/batch_repo.py`, `server/utils/batch_engine.py`, `server
 
 Vite proxies `/api` to backend port 3002 **with path rewrite**: frontend calls `/api/menus` → backend receives `/menus`. This is why backend routes don't have an `/api` prefix.
 
-### User Roles
+### User Roles (Customizable RBAC)
 
-*   **admin**: Full access to all features and admin pages.
-*   **developer**: Read/write data, but no admin page access.
-*   **guest**: Read-only access. `write_required` decorator blocks mutations.
+Roles are **data-driven and customizable** (see `docs/custom-roles-rbac-guide.md`). Permissions are controlled at three granularities: **admin-feature toggles** (`admin.*` capability keys), **per-data-page CRUD**, and **menu visibility** (`menus.roles`).
+
+*   Built-in seeds: **admin** (permanent superuser — all permissions, undeletable), **developer** (read/write data, no admin features), **guest** (read-only). `developer`/`guest` are editable; custom roles can be added.
+*   Backend is authoritative: `@require_permission('admin.x')` (replaced `admin_required`) + `require_page_action()` in `routes/dynamic.py`/`relations.py`. Resolution + cache in `server/utils/permissions.py`; catalog in `PERMISSION_CATALOG`.
+*   Frontend gating (UX only): `auth` store `isSuperuser`/`can()`/`canPage()`; `/admin/roles` role manager. JWT carries only the role slug — permission edits take effect on next `/auth/me` without re-login.
+*   ⚠️ **Capability ≠ menu visibility**: granting an `admin.*` capability lets a role *access* a route, but the sidebar link only shows if the role slug is in that menu's `menus.roles`.
 
 ### Menu Structure (Standard 3-Layer Hierarchy)
 
