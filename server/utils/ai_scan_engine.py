@@ -1,6 +1,8 @@
 import json
 import re
 
+from db import get_db
+
 
 def extract_json(text):
     """Return the parsed JSON object from the AI reply, or None.
@@ -55,7 +57,70 @@ def assemble_prompt(task):
     return preamble + (task.get('prompt_template') or '') + contract
 
 
+def _load_task(task_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, collection, branch_id, status_field, done_value, "
+                "failed_value, field_mapping FROM ai_scan_tasks WHERE id = %s",
+                (task_id,),
+            )
+            r = cur.fetchone()
+            if not r:
+                return None
+            return {'id': r[0], 'collection': r[1], 'branch_id': r[2],
+                    'status_field': r[3], 'done_value': r[4], 'failed_value': r[5],
+                    'field_mapping': r[6] or []}
+
+
+def _set_record_status(task, record_id, value):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dynamic_data SET data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text)), "
+                "updated_at = now(), version = version + 1 "
+                "WHERE id = %s AND collection = %s AND branch_id = %s",
+                (task['status_field'], value, record_id, task['collection'], task['branch_id']),
+            )
+        conn.commit()
+
+
+def _write_back(task, record_id, parsed):
+    """Apply mapped columns + done_value in one UPDATE. Returns rowcount."""
+    # build nested jsonb_set: start from `data`, wrap once per mapped column + status
+    expr = 'data'
+    params = []
+    for m in task['field_mapping']:
+        val = parsed.get(m['jsonKey'])
+        expr = f"jsonb_set({expr}, ARRAY[%s], to_jsonb(%s::text))"
+        params.extend([m['column'], '' if val is None else str(val)])
+    expr = f"jsonb_set({expr}, ARRAY[%s], to_jsonb(%s::text))"
+    params.extend([task['status_field'], task['done_value']])
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE dynamic_data SET data = {expr}, updated_at = now(), "
+                "version = version + 1 WHERE id = %s AND collection = %s AND branch_id = %s",
+                params + [record_id, task['collection'], task['branch_id']],
+            )
+            n = cur.rowcount
+        conn.commit()
+    return n
+
+
 def on_child_finished(session_row, final_msg, ok):
-    """Write-back hook fired by the batch worker for scan-task children.
-    Full implementation in Phase 2."""
-    return None
+    task = _load_task(session_row.get('scan_task_id'))
+    if not task:
+        return
+    rid = session_row.get('source_record_id')
+    if not rid:
+        return
+    if not ok:
+        _set_record_status(task, rid, task['failed_value'])
+        return
+    parsed = extract_json(message_text(final_msg))
+    required = [m['jsonKey'] for m in task['field_mapping'] if m.get('required')]
+    if parsed is None or any(parsed.get(k) in (None, '') for k in required):
+        _set_record_status(task, rid, task['failed_value'])
+        return
+    _write_back(task, rid, parsed)
