@@ -104,6 +104,50 @@ def db_conn():
 
 
 @pytest.fixture(autouse=True)
+def _reset_and_prime_permission_cache():
+    """Keep RBAC permission resolution deterministic across the whole suite.
+
+    The `@require_permission` decorator and per-page gating resolve the current
+    role's permissions via `utils.permissions.get_role_perms`, which is cached
+    in a module-global dict and (when not patched) queries the DB. Route-test
+    modules patch `utils.permissions.get_db` inconsistently, so without a reset
+    the cache leaks across modules (e.g. an admin row resolved under one mock
+    cursor lingers, or a developer role gets a polluted entry). That made dozens
+    of admin-route tests flip between 200/403 depending on collection order.
+
+    Prime the three built-in roles directly into the cache before each test so
+    resolution never depends on whatever `get_db` happens to point at:
+      - admin     -> superuser (bypasses every check)
+      - developer -> default write access, no admin keys
+      - guest     -> default read-only access
+    Then clear the cache on teardown so a test that wants custom resolution
+    (by patching `utils.permissions.get_db` itself) starts clean.
+    """
+    import utils.permissions as _perms
+    _perms.invalidate_cache()
+    _perms._cache['admin'] = {
+        'is_superuser': True,
+        'default_page_access': 'write',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+    _perms._cache['developer'] = {
+        'is_superuser': False,
+        'default_page_access': 'write',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+    _perms._cache['guest'] = {
+        'is_superuser': False,
+        'default_page_access': 'read',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+    yield
+    _perms.invalidate_cache()
+
+
+@pytest.fixture(autouse=True)
 def _rebind_module_get_db_to_real():
     """Heal `from db import get_db` bindings polluted by earlier tests.
 
