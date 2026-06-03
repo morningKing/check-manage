@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 import psycopg2.extras
 import json
 import time
@@ -50,7 +50,7 @@ def list_home_widgets():
 
 
 @home_widgets_bp.route('/home-widgets', methods=['PUT'])
-@admin_required
+@require_permission('admin.home_widgets')
 def batch_update_home_widgets():
     """Batch update widget configs. Admin only."""
     body = request.get_json(force=True)
@@ -103,7 +103,7 @@ def batch_update_home_widgets():
 
 
 @home_widgets_bp.route('/home-widgets', methods=['POST'])
-@admin_required
+@require_permission('admin.home_widgets')
 def create_home_widget():
     """Create a custom widget. Admin only. Only allows custom-markdown or data-card type."""
     body = request.get_json(force=True)
@@ -146,7 +146,7 @@ def create_home_widget():
 
 
 @home_widgets_bp.route('/home-widgets/<widget_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.home_widgets')
 def delete_home_widget(widget_id):
     """Delete a custom widget. Admin only. Only allows deleting custom-* widgets."""
     # Only allow deleting custom-* widgets
@@ -165,7 +165,7 @@ def delete_home_widget(widget_id):
 
 
 @home_widgets_bp.route('/home-widgets/order', methods=['PUT'])
-@admin_required
+@require_permission('admin.home_widgets')
 def update_home_widgets_order():
     """Update widgets order. Admin only."""
     body = request.get_json(force=True)

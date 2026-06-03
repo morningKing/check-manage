@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from werkzeug.security import generate_password_hash
 from db import get_db
-from auth import admin_required
+from auth import require_permission
 from datetime import timezone
 from utils.operation_log import log_operation
 import uuid
@@ -33,7 +33,7 @@ def row_to_dict(row):
 
 
 @users_bp.route('/users', methods=['GET'])
-@admin_required
+@require_permission('admin.users')
 def list_users():
     with get_db() as conn:
         cur = conn.cursor()
@@ -43,7 +43,7 @@ def list_users():
 
 
 @users_bp.route('/users', methods=['POST'])
-@admin_required
+@require_permission('admin.users')
 def create_user():
     body = request.get_json(force=True)
     username = body.get('username', '').strip()
@@ -76,7 +76,7 @@ def create_user():
 
 
 @users_bp.route('/users/<user_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.users')
 def update_user(user_id):
     body = request.get_json(force=True)
     with get_db() as conn:
@@ -110,7 +110,7 @@ def update_user(user_id):
 
 
 @users_bp.route('/users/<user_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.users')
 def delete_user(user_id):
     if g.current_user['userId'] == user_id:
         return jsonify({'error': '不能删除自己的账号'}), 400

@@ -7,7 +7,7 @@
 
 from flask import Blueprint, request, jsonify, Response
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required
 from utils.menu_export import execute_menu_export
 from urllib.parse import quote
 

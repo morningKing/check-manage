@@ -13,7 +13,7 @@
 """
 
 from flask import Blueprint, request, jsonify, g
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 from utils.cross_project_dependency import (
     create_project_dependency,
     get_project_dependencies,
@@ -59,7 +59,7 @@ def list_dependencies(project_menu_id):
 
 
 @cross_project_deps_bp.route('/projects/<project_menu_id>/dependencies', methods=['POST'])
-@admin_required
+@require_permission('admin.dependencies')
 def create_dependency(project_menu_id):
     """
     创建依赖声明
@@ -106,7 +106,7 @@ def create_dependency(project_menu_id):
 
 
 @cross_project_deps_bp.route('/projects/<project_menu_id>/dependencies/<dependency_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.dependencies')
 def update_dependency(project_menu_id, dependency_id):
     """
     更新依赖声明
@@ -142,7 +142,7 @@ def update_dependency(project_menu_id, dependency_id):
 
 
 @cross_project_deps_bp.route('/projects/<project_menu_id>/dependencies/<dependency_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.dependencies')
 def delete_dependency(project_menu_id, dependency_id):
     """
     解除依赖声明
@@ -159,7 +159,7 @@ def delete_dependency(project_menu_id, dependency_id):
 # ==================== 依赖校验 ====================
 
 @cross_project_deps_bp.route('/dependencies/<dependency_id>/validate', methods=['POST'])
-@admin_required
+@require_permission('admin.dependencies')
 def validate_dependency(dependency_id):
     """
     触发依赖校验
@@ -232,7 +232,7 @@ def scan_relations(source_project, target_project):
 # ==================== 分支删除保护 ====================
 
 @cross_project_deps_bp.route('/projects/<project_menu_id>/branches/<branch_id>/delete-check', methods=['GET'])
-@admin_required
+@require_permission('admin.dependencies')
 def check_delete_protection(project_menu_id, branch_id):
     """
     检查分支是否可删除（依赖保护）
@@ -289,7 +289,7 @@ def get_merge_order(project_menu_id):
 
 
 @cross_project_deps_bp.route('/projects/<project_menu_id>/update-dependencies-after-merge', methods=['POST'])
-@admin_required
+@require_permission('admin.dependencies')
 def update_deps_after_merge(project_menu_id):
     """
     合并成功后批量更新依赖声明（target_branch 改为 main）

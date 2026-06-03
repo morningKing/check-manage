@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import admin_required, login_required
+from auth import login_required, require_permission
 import psycopg2.extras
 import uuid
 
@@ -51,7 +51,7 @@ def get_rule(rule_id):
 
 
 @trigger_rules_bp.route('/triggerRules', methods=['POST'])
-@admin_required
+@require_permission('admin.trigger_rules')
 def create_rule():
     body = request.get_json(force=True)
     rule_id = body.get('id') or f'rule-{uuid.uuid4().hex[:12]}'
@@ -74,7 +74,7 @@ def create_rule():
 
 
 @trigger_rules_bp.route('/triggerRules/<rule_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.trigger_rules')
 def update_rule(rule_id):
     body = request.get_json(force=True)
     sets, params = [], []
@@ -96,7 +96,7 @@ def update_rule(rule_id):
 
 
 @trigger_rules_bp.route('/triggerRules/<rule_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.trigger_rules')
 def delete_rule(rule_id):
     with get_db() as conn:
         cur = conn.cursor()

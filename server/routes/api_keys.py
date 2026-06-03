@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import timezone
-from auth import admin_required, hash_api_key
+from auth import hash_api_key, require_permission
 from utils.operation_log import log_operation
 import uuid
 import secrets
@@ -28,7 +28,7 @@ def row_to_dict(row):
 
 
 @api_keys_bp.route('/apiKeys', methods=['GET'])
-@admin_required
+@require_permission('admin.api_keys')
 def list_api_keys():
     with get_db() as conn:
         cur = conn.cursor()
@@ -41,7 +41,7 @@ def list_api_keys():
 
 
 @api_keys_bp.route('/apiKeys', methods=['POST'])
-@admin_required
+@require_permission('admin.api_keys')
 def create_api_key():
     body = request.get_json(force=True)
     name = body.get('name', '').strip()
@@ -73,7 +73,7 @@ def create_api_key():
 
 
 @api_keys_bp.route('/apiKeys/<key_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.api_keys')
 def toggle_api_key(key_id):
     body = request.get_json(force=True)
     is_active = body.get('isActive')
@@ -103,7 +103,7 @@ def toggle_api_key(key_id):
 
 
 @api_keys_bp.route('/apiKeys/<key_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.api_keys')
 def delete_api_key(key_id):
     with get_db() as conn:
         cur = conn.cursor()

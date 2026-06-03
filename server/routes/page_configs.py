@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 from utils.operation_log import log_operation
 from utils.page_config_relations import get_page_config_relations
 import psycopg2.extras
@@ -60,7 +60,7 @@ def get_page_config(config_id):
 
 
 @page_configs_bp.route('/pageConfigs', methods=['POST'])
-@admin_required
+@require_permission('admin.page_configs')
 def create_page_config():
     body = request.get_json(force=True)
     with get_db() as conn:
@@ -77,7 +77,7 @@ def create_page_config():
 
 
 @page_configs_bp.route('/pageConfigs/<config_id>/has-data', methods=['GET'])
-@admin_required
+@require_permission('admin.page_configs')
 def page_config_has_data(config_id):
     """Return whether the collection backing this page has any rows.
 
@@ -93,7 +93,7 @@ def page_config_has_data(config_id):
 
 
 @page_configs_bp.route('/pageConfigs/<config_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.page_configs')
 def update_page_config(config_id):
     body = request.get_json(force=True)
     with get_db() as conn:
@@ -192,7 +192,7 @@ def update_page_config(config_id):
 
 
 @page_configs_bp.route('/pageConfigs/<config_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.page_configs')
 def delete_page_config(config_id):
     with get_db() as conn:
         cur = conn.cursor()
