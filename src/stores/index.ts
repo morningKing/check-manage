@@ -30,3 +30,6 @@ export { useColumnViewStore } from './columnView'
 
 // 系统配置状态
 export { useSystemConfigStore } from './systemConfig'
+
+// 角色与权限状态
+export { useRoleStore } from './role'
