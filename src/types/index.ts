@@ -51,3 +51,6 @@ export * from './systemConfig'
 
 // 列视图相关类型
 export * from './columnView'
+
+// AI 定时扫描任务相关类型
+export * from './aiScanTask'
