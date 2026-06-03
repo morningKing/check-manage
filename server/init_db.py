@@ -1286,7 +1286,7 @@ def init_db():
         if not cur.fetchone():
             cur.execute(
                 'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
-                "VALUES ('menu-3-15', %s, 'Lock', NULL, 'menu-3-a', 6, '/admin/roles', %s, 'system')",
+                "VALUES ('menu-3-15', %s, 'Lock', NULL, 'menu-3-a', 8, '/admin/roles', %s, 'system')",
                 ('角色权限', psycopg2.extras.Json(['admin'])),
             )
             conn.commit()
