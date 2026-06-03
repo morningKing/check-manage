@@ -23,7 +23,8 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 # 需要备份的业务表及其列定义
 # (表名, 列列表, JSONB列索引集合, 中文标签)
 BACKUP_TABLES = [
-    ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles'], {7}, '菜单配置'),
+    ('menus', ['id', 'name', 'icon', 'page_id', 'parent_id', '"order"', 'path', 'roles',
+               'export_script_id', 'menu_type', 'project_id'], {7}, '菜单配置'),
     ('page_configs', ['id', 'name', 'description', 'api_endpoint', 'fields', 'created_at', 'updated_at',
                       'export_scripts', 'row_export_scripts', 'api_public', 'validation_script',
                       'api_writable', 'view_config', 'delete_binding'], {4, 7, 8, 12, 13}, '页面配置'),
@@ -722,16 +723,29 @@ def restore_backup(zip_path, tables=None, mode='upsert'):
                 continue
             _, columns, jsonb_indices, _ = BACKUP_TABLE_MAP[table_name]
             records = table_data.get(table_name, [])
+            if not records:
+                continue
             clean_cols = [c.strip('"') for c in columns]
-            col_str = ', '.join(columns)
-            placeholders = ', '.join(['%s'] * len(columns))
+            # JSONB 列按列名识别（下面只用备份里实际存在的列，位置索引会变）
+            jsonb_names = {clean_cols[i] for i in jsonb_indices}
+            # 只使用备份记录中实际存在的列，兼容旧备份：缺失的列（如旧版菜单备份
+            # 没有 menu_type/project_id）由数据库列默认值填充，而不是写入显式 NULL。
+            present = [
+                (col_q, col_c)
+                for col_q, col_c in zip(columns, clean_cols)
+                if any(col_c in r for r in records)
+            ]
+            use_cols_q = [c for c, _ in present]
+            use_cols_c = [c for _, c in present]
+            col_str = ', '.join(use_cols_q)
+            placeholders = ', '.join(['%s'] * len(use_cols_c))
 
             if effective_mode == 'upsert':
                 if table_name not in pk_cache:
                     pk_cache[table_name] = _get_pk_columns(cur, table_name)
                 pk_cols = pk_cache[table_name]
                 if pk_cols:
-                    non_pk = [c for c in clean_cols if c not in pk_cols]
+                    non_pk = [c for c in use_cols_c if c not in pk_cols]
                     set_clause = ', '.join(f'{c} = EXCLUDED.{c}' for c in non_pk) \
                         if non_pk else None
                     pk_target = ', '.join(pk_cols)
@@ -751,9 +765,9 @@ def restore_backup(zip_path, tables=None, mode='upsert'):
 
             for record in records:
                 values = []
-                for i, col in enumerate(clean_cols):
+                for col in use_cols_c:
                     val = record.get(col)
-                    if i in jsonb_indices and val is not None:
+                    if col in jsonb_names and val is not None:
                         val = psycopg2.extras.Json(val)
                     values.append(val)
                 cur.execute(sql, values)
