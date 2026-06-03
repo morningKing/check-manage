@@ -53,14 +53,14 @@ def test_guest_create_forbidden(setup):
 def test_developer_create_allowed_passes_gate(setup):
     client, cur, perms = setup
     # role resolution: developer/write; first fetchone resolves the role row, then
-    # downstream handler queries (e.g. branch-lock menu lookup) see None so the
-    # create_item proceeds (will 4xx later for other reasons, but NOT 403 from the
-    # permission gate).
-    cur.fetchone.side_effect = [('developer', False, 'write')] + [None] * 20
+    # the create_item handler issues 7 more fetchones (branch lookup, branch lock,
+    # pk-uniqueness, page info, validation script, etc.) which all see None, so the
+    # gate is passed and the insert succeeds with 201 Created.
+    cur.fetchone.side_effect = [('developer', False, 'write')] + [None] * 7
     cur.fetchall.side_effect = [[], []]
     resp = client.post('/orders', data=json.dumps({}),
                        content_type='application/json', headers=_token('developer'))
-    assert resp.status_code != 403
+    assert resp.status_code == 201
 
 
 def test_role_with_no_access_cannot_read(setup):
@@ -73,10 +73,11 @@ def test_role_with_no_access_cannot_read(setup):
 
 def test_default_read_allows_list(setup):
     client, cur, perms = setup
-    # First fetchone resolves the role row; the get_item data query then sees None
-    # and returns 404 — passing the read gate (not 403).
-    cur.fetchone.side_effect = [('guest', False, 'read')] + [None] * 20
+    # First fetchone resolves the role row; the get_item handler then issues 2 more
+    # fetchones (branch lookup + the record data query) which see None, so the read
+    # gate is passed and the missing record returns 404.
+    cur.fetchone.side_effect = [('guest', False, 'read')] + [None] * 2
     cur.fetchall.side_effect = [[], []]
     resp = client.get('/orders/some-id', headers=_token('guest'))
-    # passes the read gate (may 404 later, but not 403)
-    assert resp.status_code != 403
+    # passes the read gate, then 404 because the record does not exist
+    assert resp.status_code == 404

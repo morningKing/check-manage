@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required, write_required, decode_token
+from auth import login_required, write_required
 from utils.permissions import can_page
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
