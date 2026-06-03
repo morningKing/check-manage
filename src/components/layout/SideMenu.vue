@@ -124,7 +124,7 @@ const systemShortName = computed(() => systemConfigStore.systemShortName)
  * 使用 store 中的缓存方法，避免重复计算
  */
 const menuTree = computed(() => {
-  return menuStore.getFilteredMenuTree(authStore.userRole)
+  return menuStore.getFilteredMenuTree(authStore.userRole, authStore.isAdmin)
 })
 
 /**

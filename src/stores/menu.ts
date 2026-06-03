@@ -303,7 +303,10 @@ export const useMenuStore = defineStore('menu', () => {
    * @param role - 用户角色
    * @returns 过滤后的菜单树
    */
-  function getFilteredMenuTree(role: UserRole | null): MenuItem[] {
+  function getFilteredMenuTree(role: UserRole | null, isSuper = false): MenuItem[] {
+    // 超级用户（superuser）绕过角色过滤，展示全部菜单
+    if (isSuper) return cachedMenuTree.value
+
     if (!role) return []
 
     // 检查缓存
@@ -320,17 +323,19 @@ export const useMenuStore = defineStore('menu', () => {
   /**
    * 递归过滤菜单树（基于菜单的 roles 配置）
    *
+   * 注意：role 现在可以是任意自定义角色 slug；menu.roles 同样存储 slug，
+   * 因此自定义角色无需特殊处理即可匹配。空的 roles 视为对所有角色可见。
+   *
    * @param menus - 菜单列表
-   * @param role - 用户角色
+   * @param role - 用户角色（slug）
    * @returns 过滤后的菜单列表
    */
   function filterMenusByRole(menus: MenuItem[], role: UserRole): MenuItem[] {
     const result: MenuItem[] = []
 
     for (const menu of menus) {
-      // 检查当前菜单是否对该角色可见
-      const menuRoles = menu.roles || ['admin', 'developer', 'guest']
-      if (!menuRoles.includes(role)) continue
+      // 检查当前菜单是否对该角色可见（空 roles = 对所有角色可见）
+      if (menu.roles && menu.roles.length > 0 && !menu.roles.includes(role)) continue
 
       // 递归过滤子菜单
       const filteredChildren = menu.children
