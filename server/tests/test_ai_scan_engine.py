@@ -24,3 +24,36 @@ def test_prepare_workspace_single_file_still_works(tmp_path, monkeypatch):
     (tmp_path / 'batch-staging' / 'f.txt').write_text('x', encoding='utf-8')
     ws = eng._prepare_workspace('u', 's', 'batch-staging/f.txt')
     assert (Path(ws) / 'uploads' / 'f.txt').read_text(encoding='utf-8') == 'x'
+
+
+from unittest.mock import MagicMock, patch
+from contextlib import contextmanager
+
+
+def _mock_db():
+    cur = MagicMock()
+    cur.fetchone.side_effect = lambda: {'id': 'x'}
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda s, *a: None
+    conn.__enter__ = lambda s: conn
+    conn.__exit__ = lambda s, *a: None
+    @contextmanager
+    def fake():
+        yield conn
+    return fake, cur
+
+
+def test_create_batch_stamps_scan_columns():
+    import utils.batch_repo as repo
+    fake, cur = _mock_db()
+    with patch('utils.batch_repo.get_db', fake):
+        repo.create_batch('user-1', name='n', prompt='p', template_id=None,
+                          files=[{'name': 'r1', 'path': 'scan-staging/t/r1', 'recordId': 'rec-1'}],
+                          scan_task_id='task-1')
+    # the child INSERT must include scan_task_id + source_record_id values
+    inserts = [c for c in cur.execute.call_args_list if 'INSERT INTO ai_chat_sessions' in str(c.args[0])]
+    assert inserts
+    assert any('scan_task_id' in str(c.args[0]) for c in inserts)
+    flat = [v for c in inserts for v in (c.args[1] if len(c.args) > 1 else ())]
+    assert 'task-1' in flat and 'rec-1' in flat
