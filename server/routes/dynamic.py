@@ -306,6 +306,9 @@ def _apply_relation_update(cur, collection, record_id, field_name, target_collec
 def list_items(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
+    denied = _require_page_action(collection, 'read')
+    if denied:
+        return denied
 
     query_str = request.args.get('q', '')
     keyword = request.args.get('keyword', '')
@@ -461,6 +464,9 @@ def list_items(collection):
 def get_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
+    denied = _require_page_action(collection, 'read')
+    if denied:
+        return denied
     branch_id = _get_current_user_branch(collection)
     with get_db() as conn:
         cur = conn.cursor()

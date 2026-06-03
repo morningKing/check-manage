@@ -61,3 +61,22 @@ def test_developer_create_allowed_passes_gate(setup):
     resp = client.post('/orders', data=json.dumps({}),
                        content_type='application/json', headers=_token('developer'))
     assert resp.status_code != 403
+
+
+def test_role_with_no_access_cannot_read(setup):
+    client, cur, perms = setup
+    cur.fetchone.return_value = ('locked', False, 'none')  # default none
+    cur.fetchall.side_effect = [[], []]
+    resp = client.get('/orders', headers=_token('locked'))
+    assert resp.status_code == 403
+
+
+def test_default_read_allows_list(setup):
+    client, cur, perms = setup
+    # First fetchone resolves the role row; the get_item data query then sees None
+    # and returns 404 — passing the read gate (not 403).
+    cur.fetchone.side_effect = [('guest', False, 'read')] + [None] * 20
+    cur.fetchall.side_effect = [[], []]
+    resp = client.get('/orders/some-id', headers=_token('guest'))
+    # passes the read gate (may 404 later, but not 403)
+    assert resp.status_code != 403
