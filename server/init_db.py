@@ -1279,6 +1279,19 @@ def init_db():
                 conn.commit()
                 print(f"Added {name} menu.")
 
+        # Migration: add 角色权限 (custom roles RBAC) menu if missing
+        # Note: menu-3-12 is already taken by the 数据导出 (menu-export) migration above,
+        # so the role management menu uses the next free id menu-3-15.
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-15'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-15', %s, 'Lock', NULL, 'menu-3-a', 6, '/admin/roles', %s, 'system')",
+                ('角色权限', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added 角色权限 menu.")
+
         # Migration: create project_versions table
         cur.execute("""
             SELECT table_name FROM information_schema.tables
