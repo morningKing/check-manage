@@ -112,6 +112,7 @@ async function save() {
   const payload = { ...form.value, extraFilter: parsedFilter() }
   if (form.value.id) await store.save(form.value.id, payload)
   else { const t = await store.add(payload); await select(t.id) }
+  extraFilterText.value = JSON.stringify(payload.extraFilter)
   ElMessage.success('已保存')
 }
 
