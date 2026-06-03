@@ -127,3 +127,28 @@ def test_claim_builds_pending_predicate_and_running_update():
     sql = str(cur.execute.call_args_list[-1].args[0])
     assert 'FOR UPDATE SKIP LOCKED' in sql and 'UPDATE dynamic_data' in sql
     assert claimed == [{'id': 'rec-1', 'data': {'name': 'A'}}]
+
+
+def test_run_task_creates_batch_for_claimed(monkeypatch):
+    import utils.ai_scan_engine as se
+    monkeypatch.setattr(se, 'claim_records', lambda task: [{'id': 'rec-1', 'data': {}}])
+    monkeypatch.setattr(se, 'build_context_dir', lambda task, rec: f"scan-staging/{task['id']}/{rec['id']}")
+    captured = {}
+    monkeypatch.setattr(se, 'create_batch', lambda *a, **k: captured.update(kwargs=k, args=a) or {'batch': {}})
+    monkeypatch.setattr(se, 'mark_run', lambda *a, **k: None)
+    task = {'id': 't1', 'name': '审核', 'owner_user_id': 'u', 'collection': 'orders',
+            'prompt_template': 'p', 'field_mapping': []}
+    se.run_task(task)
+    assert captured['kwargs']['scan_task_id'] == 't1'
+    assert captured['kwargs']['files'][0]['recordId'] == 'rec-1'
+
+
+def test_run_task_zero_claimed_no_batch(monkeypatch):
+    import utils.ai_scan_engine as se
+    monkeypatch.setattr(se, 'claim_records', lambda task: [])
+    called = {'batch': False}
+    monkeypatch.setattr(se, 'create_batch', lambda *a, **k: called.update(batch=True))
+    monkeypatch.setattr(se, 'mark_run', lambda *a, **k: None)
+    se.run_task({'id': 't1', 'name': 'n', 'owner_user_id': 'u', 'collection': 'c',
+                 'prompt_template': 'p', 'field_mapping': []})
+    assert called['batch'] is False

@@ -2,9 +2,12 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from db import get_db
+from utils.batch_repo import create_batch
+from utils.ai_scan_repo import mark_run
 
 
 def extract_json(text):
@@ -260,3 +263,62 @@ def claim_records(task):
             rows = cur.fetchall()
         conn.commit()
     return [{'id': r[0], 'data': r[1]} for r in rows]
+
+
+def run_task(task):
+    """One scan: claim → stage context → create batch → record run."""
+    claimed = claim_records(task)
+    if not claimed:
+        mark_run(task['id'], 0)
+        return
+    files = []
+    try:
+        for rec in claimed:
+            rel = build_context_dir(task, rec)
+            files.append({'name': rec['id'], 'path': rel, 'recordId': rec['id']})
+        prompt = assemble_prompt(task)
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+        create_batch(task['owner_user_id'], name=f"AI定时·{task['name']}·{stamp}",
+                     prompt=prompt, template_id=None, files=files,
+                     scan_task_id=task['id'])
+        mark_run(task['id'], len(claimed))
+    except Exception as e:
+        # revert claimed records to pending so they retry next scan
+        _revert_claimed(task, [r['id'] for r in claimed])
+        mark_run(task['id'], 0, error=f'{type(e).__name__}: {e}'[:500])
+        raise
+
+
+def _revert_claimed(task, record_ids):
+    if not record_ids:
+        return
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dynamic_data SET data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text)) "
+                "WHERE id = ANY(%s) AND collection = %s AND branch_id = %s",
+                (task['status_field'], task.get('pending_value') or '', record_ids,
+                 task['collection'], task['branch_id']),
+            )
+        conn.commit()
+
+
+def sweep_orphans():
+    """Reset running_value records that have no live (pending/running) child session."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, collection, branch_id, status_field, running_value, "
+                    "pending_value FROM ai_scan_tasks")
+        tasks = cur.fetchall()
+    for tid, coll, branch, sf, running, pending in tasks:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE dynamic_data d SET data = jsonb_set(d.data, ARRAY[%s], to_jsonb(%s::text)) "
+                    "WHERE d.collection = %s AND d.branch_id = %s AND d.data->>%s = %s "
+                    "AND NOT EXISTS (SELECT 1 FROM ai_chat_sessions s "
+                    "  WHERE s.scan_task_id = %s AND s.source_record_id = d.id "
+                    "    AND s.status IN ('pending','running'))",
+                    (sf, pending or '', coll, branch, sf, running, tid),
+                )
+            conn.commit()
