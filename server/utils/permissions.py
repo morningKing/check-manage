@@ -18,6 +18,7 @@ PERMISSION_CATALOG = [
     {'key': 'admin.export_scripts',     'label': '导出脚本',   'group': '数据工具'},
     {'key': 'admin.validation_scripts', 'label': '校验脚本',   'group': '数据工具'},
     {'key': 'admin.etl_tasks',          'label': 'ETL 管理',  'group': '数据工具'},
+    {'key': 'admin.ai_scan',            'label': 'AI 定时任务', 'group': '数据工具'},
     {'key': 'admin.query',              'label': '数据查询',   'group': '数据工具'},
     {'key': 'admin.trigger_rules',      'label': '触发规则',   'group': '数据工具'},
     {'key': 'admin.webhooks',           'label': 'Webhook',   'group': '数据工具'},

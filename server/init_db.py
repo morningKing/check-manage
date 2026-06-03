@@ -1328,6 +1328,17 @@ def init_db():
             conn.commit()
             print("Added 角色权限 menu.")
 
+        # Migration: add AI 定时任务 (scheduled AI row-processor) menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-16'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-16', %s, 'AlarmClock', NULL, 'menu-3-b', 6, '/admin/ai-scan-tasks', %s, 'system')",
+                ('AI 定时任务', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added AI 定时任务 menu.")
+
         # Migration: create project_versions table
         cur.execute("""
             SELECT table_name FROM information_schema.tables
