@@ -168,12 +168,19 @@ const groupedCatalog = computed(() => {
 
 async function selectRole(id: string): Promise<void> {
   selectedId.value = id
-  const d = await roleStore.fetchRole(id)
-  detail.value = d
+  // 先把角色详情和全部菜单一起拉回，并算好菜单可见性勾选项；
+  // 必须在 detail 赋值（触发树渲染）之前算好 checkedMenuKeys，否则树会以上一个
+  // 角色的 default-checked-keys 挂载（el-tree 的 default-checked-keys 仅在挂载时生效）。
+  const [d, menus] = await Promise.all([roleStore.fetchRole(id), getMenuList()])
+  allMenus.value = menus
+  menuTreeData.value = buildMenuTree(menus)
+  checkedMenuKeys.value = menus
+    .filter(m => (m.roles || []).includes(id))
+    .map(m => m.id)
+
   adminKeys.value = new Set(d.adminKeys)
   defaultPageAccess.value = d.defaultPageAccess
   const configured = new Map(d.pagePermissions.map(p => [p.pageId, p]))
-  // build rows from all page configs
   const pages = pageConfigStore.pageConfigs
   pageRows.value = pages.map((pc) => {
     const c = configured.get(pc.id)
@@ -183,12 +190,8 @@ async function selectRole(id: string): Promise<void> {
       canUpdate: c?.canUpdate ?? false, canDelete: c?.canDelete ?? false,
     }
   })
-  // 菜单可见性：拉取全部菜单（含 roles），计算该角色已勾选的菜单
-  allMenus.value = await getMenuList()
-  menuTreeData.value = buildMenuTree(allMenus.value)
-  checkedMenuKeys.value = allMenus.value
-    .filter(m => (m.roles || []).includes(id))
-    .map(m => m.id)
+  // 最后赋值 detail，确保树渲染时 checkedMenuKeys 已是当前角色的正确值
+  detail.value = d
 }
 
 function toggleAdminKey(key: string, on: boolean): void {
