@@ -36,6 +36,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.page_configs.get_db', fake_db),
         patch('routes.users.get_db', fake_db),
         patch('routes.relations.get_db', fake_db),
+        patch('utils.permissions.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('utils.operation_log.log_operation'),
         patch('utils.operation_log.get_page_info', return_value=('测试页面', [])),
@@ -58,6 +59,19 @@ def setup(mock_conn, mock_cursor):
     for p in patches:
         p.start()
 
+    # Per-page RBAC gating (Task 3.3/3.4) resolves the role's permissions via
+    # utils.permissions, which queries the DB. Prime the cache so the 'admin'
+    # role resolves as a superuser (bypasses every page check) without consuming
+    # entries from the per-test mock cursor's fetchone/fetchall side effects.
+    import utils.permissions as _perms
+    _perms.invalidate_cache()
+    _perms._cache['admin'] = {
+        'is_superuser': True,
+        'default_page_access': 'write',
+        'admin_keys': set(),
+        'page_perms': {},
+    }
+
     from app import app
     app.config['TESTING'] = True
     token = create_token({'id': 'u1', 'username': 'admin', 'role': 'admin'})
@@ -65,6 +79,7 @@ def setup(mock_conn, mock_cursor):
 
     yield app.test_client(), mock_cursor, mock_conn, headers
 
+    _perms.invalidate_cache()
     for p in patches:
         p.stop()
 
