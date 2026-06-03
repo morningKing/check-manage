@@ -243,7 +243,8 @@ def claim_records(task):
             if clause and clause != 'TRUE':
                 filter_sql = ' AND (' + clause + ')'
                 params = params + list(fparams)
-        except MongoQueryError:
+        except MongoQueryError as e:
+            print(f"[ai_scan] invalid extra_filter for task {task.get('id')}: {e}")
             filter_sql = ''
     sql = (
         "WITH picked AS ("
@@ -285,6 +286,9 @@ def run_task(task):
     except Exception as e:
         # revert claimed records to pending so they retry next scan
         _revert_claimed(task, [r['id'] for r in claimed])
+        # remove any staging dirs already written for this task's claimed records
+        shutil.rmtree(Path(_workspace_root()) / 'scan-staging' / task['id'],
+                      ignore_errors=True)
         mark_run(task['id'], 0, error=f'{type(e).__name__}: {e}'[:500])
         raise
 

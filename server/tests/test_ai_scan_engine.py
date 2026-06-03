@@ -143,6 +143,30 @@ def test_run_task_creates_batch_for_claimed(monkeypatch):
     assert captured['kwargs']['files'][0]['recordId'] == 'rec-1'
 
 
+def test_run_task_reverts_all_claimed_on_failure(monkeypatch):
+    import utils.ai_scan_engine as se
+    claimed = [{'id': 'rec-1', 'data': {}}, {'id': 'rec-2', 'data': {}}, {'id': 'rec-3', 'data': {}}]
+    monkeypatch.setattr(se, 'claim_records', lambda task: claimed)
+    # build_context_dir fails on the 3rd record
+    calls = {'n': 0}
+    def boom(task, rec):
+        calls['n'] += 1
+        if calls['n'] == 3:
+            raise RuntimeError('stage failed')
+        return f"scan-staging/{task['id']}/{rec['id']}"
+    monkeypatch.setattr(se, 'build_context_dir', boom)
+    monkeypatch.setattr(se, 'create_batch', lambda *a, **k: {'batch': {}})
+    monkeypatch.setattr(se, 'mark_run', lambda *a, **k: None)
+    reverted = {}
+    monkeypatch.setattr(se, '_revert_claimed', lambda task, ids: reverted.update(ids=ids))
+    import pytest
+    task = {'id': 't1', 'name': 'n', 'owner_user_id': 'u', 'collection': 'c',
+            'prompt_template': 'p', 'field_mapping': []}
+    with pytest.raises(RuntimeError):
+        se.run_task(task)
+    assert set(reverted['ids']) == {'rec-1', 'rec-2', 'rec-3'}  # ALL claimed reverted
+
+
 def test_run_task_zero_claimed_no_batch(monkeypatch):
     import utils.ai_scan_engine as se
     monkeypatch.setattr(se, 'claim_records', lambda task: [])
