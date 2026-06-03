@@ -190,13 +190,12 @@ function roleLabel(roleId: string): string {
   return roleStore.roles.find((r) => r.id === roleId)?.name || roleId
 }
 
-function getRoleTagType(role: string): string {
-  switch (role) {
-    case 'admin': return 'danger'
-    case 'developer': return ''
-    case 'guest': return 'info'
-    default: return 'info'
-  }
+function getRoleTagType(roleId: string): string {
+  const role = roleStore.roles.find((r) => r.id === roleId)
+  if (!role) return 'info'
+  if (role.isSuperuser) return 'danger'
+  if (role.isSystem) return ''
+  return 'info'
 }
 
 function formatDate(value: string): string {

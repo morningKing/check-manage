@@ -1,13 +1,14 @@
 <template>
   <div class="role-manager">
-    <el-card class="role-list-card">
+    <el-card class="role-list-card" v-loading="roleStore.loading">
       <template #header>
         <div class="card-header">
           <span>角色</span>
           <el-button type="primary" size="small" @click="openCreate">新建角色</el-button>
         </div>
       </template>
-      <el-menu :default-active="selectedId" @select="selectRole">
+      <el-empty v-if="roleStore.roles.length === 0" description="暂无角色" :image-size="80" />
+      <el-menu v-else :default-active="selectedId" @select="selectRole">
         <el-menu-item v-for="r in roleStore.roles" :key="r.id" :index="r.id">
           <span>{{ r.name }}</span>
           <el-tag v-if="r.isSuperuser" type="danger" size="small" style="margin-left:8px">超管</el-tag>
