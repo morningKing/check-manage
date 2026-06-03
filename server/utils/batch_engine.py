@@ -153,9 +153,13 @@ def _prepare_workspace(user_id: str, session_id: str,
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
     src = Path(_workspace_root()) / staged_file_path
-    dst = Path(ws) / 'uploads' / Path(staged_file_path).name
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.exists():
+    up = Path(ws) / 'uploads'
+    up.mkdir(parents=True, exist_ok=True)
+    if src.is_dir():
+        # scan-task context directory: copy its whole contents into uploads/
+        shutil.copytree(str(src), str(up), dirs_exist_ok=True)
+    elif src.exists():
+        dst = up / Path(staged_file_path).name
         shutil.copy2(str(src), str(dst))
     return ws
 
