@@ -77,3 +77,15 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
     w._run_one({'id': 's1', 'user_id': 'u', 'batch_id': 'b', 'batch_input_file': 'd',
                 'scan_task_id': 'task-1', 'source_record_id': 'rec-1'})
     assert calls['ok'] is True and calls['row']['source_record_id'] == 'rec-1'
+
+
+def test_assemble_prompt_appends_contract():
+    from utils.ai_scan_engine import assemble_prompt
+    task = {'prompt_template': '用方案审核skill审核。',
+            'field_mapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True},
+                              {'jsonKey': '意见', 'column': '审核意见', 'required': False}]}
+    p = assemble_prompt(task)
+    assert 'uploads/record.md' in p
+    assert '用方案审核skill审核。' in p
+    assert '结论' in p and '意见' in p
+    assert 'JSON' in p
