@@ -18,6 +18,8 @@ export interface UserInfo {
   username: string
   displayName: string
   role: UserRole
+  /** 角色显示名（含自定义角色）；后端登录/鉴权时附带，前端展示优先使用 */
+  roleName?: string
   permissions?: ResolvedPermissions
   createdAt?: string
 }

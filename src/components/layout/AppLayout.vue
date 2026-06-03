@@ -243,7 +243,9 @@ const authDisplayName = computed(() => authStore.displayName)
  */
 const roleLabel = computed(() => {
   const role = authStore.userRole
-  return role ? ROLE_LABELS[role] || role : ''
+  if (!role) return ''
+  // 优先用后端附带的角色显示名（支持自定义角色），回退到内置标签，再回退到 slug
+  return authStore.user?.roleName || ROLE_LABELS[role] || role
 })
 
 /**

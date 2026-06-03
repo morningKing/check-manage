@@ -169,9 +169,10 @@ class TestChangePassword:
 class TestAuthPermissionsPayload:
     def test_me_includes_permissions(self, setup):
         client, cur, headers = setup
-        # /auth/me fetchone: user row, then permissions resolution fetchone: role row
+        # /auth/me fetchone: user row, get_role_name row, then resolution role row
         cur.fetchone.side_effect = [
             ('user-admin', 'admin', '管理员', 'admin'),   # user row
+            ('管理员',),                                   # get_role_name row
             ('admin', True, 'write'),                      # role row (resolution)
         ]
         cur.fetchall.side_effect = [[], []]                # admin_keys, page_perms
@@ -180,12 +181,14 @@ class TestAuthPermissionsPayload:
         data = resp.get_json()
         assert 'permissions' in data
         assert data['permissions']['isSuperuser'] is True
+        assert data['roleName'] == '管理员'
 
     def test_me_includes_non_superuser_permissions(self, setup):
         client, cur, headers = setup
-        # /auth/me fetchone: dev user row, then _load fetchone: non-superuser role row
+        # /auth/me fetchone: dev user row, get_role_name row, then _load role row
         cur.fetchone.side_effect = [
             ('user-dev', 'dev', '开发', 'developer'),      # user row
+            ('开发人员',),                                  # get_role_name row
             ('developer', False, 'read'),                  # role row (not superuser)
         ]
         # _load fetchall: admin_keys rows, then page_perms rows

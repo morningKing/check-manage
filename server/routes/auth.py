@@ -22,6 +22,13 @@ def build_permissions_payload(role_id):
     }
 
 
+def get_role_name(cur, role_id):
+    """Return a role's display name, falling back to the role id slug."""
+    cur.execute('SELECT name FROM roles WHERE id = %s', (role_id,))
+    r = cur.fetchone()
+    return r[0] if r else role_id
+
+
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
     """Authenticate user and return JWT token."""
@@ -40,14 +47,17 @@ def login():
         )
         row = cur.fetchone()
 
-    if not row or not check_password_hash(row[2], password):
-        return jsonify({'error': '用户名或密码错误'}), 401
+        if not row or not check_password_hash(row[2], password):
+            return jsonify({'error': '用户名或密码错误'}), 401
+
+        role_name = get_role_name(cur, row[4])
 
     user = {
         'id': row[0],
         'username': row[1],
         'displayName': row[3],
         'role': row[4],
+        'roleName': role_name,
     }
     token = create_token(user)
     user['permissions'] = build_permissions_payload(row[4])
@@ -66,13 +76,15 @@ def get_current_user():
             (payload['userId'],),
         )
         row = cur.fetchone()
-    if not row:
-        return jsonify({'error': '用户不存在'}), 404
+        if not row:
+            return jsonify({'error': '用户不存在'}), 404
+        role_name = get_role_name(cur, row[3])
     return jsonify({
         'id': row[0],
         'username': row[1],
         'displayName': row[2],
         'role': row[3],
+        'roleName': role_name,
         'permissions': build_permissions_payload(row[3]),
     })
 
