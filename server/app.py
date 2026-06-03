@@ -97,6 +97,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.batch_engine import get_worker
     get_worker().start()
 
+    # Start scheduled AI row-processor scheduler
+    from utils.ai_scan_scheduler import start_scan_scheduler
+    start_scan_scheduler(app)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG,
             exclude_patterns=['*/backups/*'])
