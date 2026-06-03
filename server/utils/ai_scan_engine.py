@@ -1,5 +1,7 @@
 import json
+import os
 import re
+from pathlib import Path
 
 from db import get_db
 
@@ -124,3 +126,84 @@ def on_child_finished(session_row, final_msg, ok):
         _set_record_status(task, rid, task['failed_value'])
         return
     _write_back(task, rid, parsed)
+
+
+def _workspace_root():
+    return os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+
+
+def _page_config_fields(collection):
+    """The `fields` list of the collection's page config (or [])."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT fields FROM page_configs WHERE id = %s",
+                        (f'page-{collection}',))
+            r = cur.fetchone()
+    return (r[0] if r else []) or []
+
+
+def _field_labels(collection):
+    """fieldName -> label from the page config. Reuses operation_log helper.
+
+    Note: get_field_label_map(fields) takes the fields list (verified against
+    utils/operation_log.py), so we resolve the page config fields first.
+    """
+    from utils.operation_log import get_field_label_map
+    return get_field_label_map(_page_config_fields(collection))
+
+
+def _file_field_names(collection):
+    """Names of file/image controlType fields in the page config."""
+    fields = _page_config_fields(collection)
+    return [f['fieldName'] for f in fields
+            if f.get('controlType') in ('file', 'image')]
+
+
+def _render_record_md(data, labels):
+    lines = ['# 记录数据', '']
+    for k, v in data.items():
+        if k in ('createdAt', 'updatedAt', '_version', '_branchId'):
+            continue
+        label = labels.get(k, k)
+        lines.append(f'- **{label}**: {v}')
+    return '\n'.join(lines) + '\n'
+
+
+def _copy_attachments(data, file_fields, dest_dir):
+    ids = []
+    for fn in file_fields:
+        val = data.get(fn)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict) and item.get('uid'):
+                    ids.append(item['uid'])
+    if not ids:
+        return
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, original_name, storage_path FROM data_files "
+                        "WHERE id = ANY(%s)", (ids,))
+            rows = cur.fetchall()
+    att = Path(dest_dir) / 'attachments'
+    for _id, name, path in rows:
+        src = Path(path)
+        if src.exists():
+            att.mkdir(parents=True, exist_ok=True)
+            import shutil as _sh
+            _sh.copy2(str(src), str(att / name))
+
+
+def build_context_dir(task, record):
+    """Stage <ws_root>/scan-staging/<task>/<record>/ with record.md + attachments/.
+    Returns the path RELATIVE to the workspace root (for batch_input_file)."""
+    rel = os.path.join('scan-staging', task['id'], record['id'])
+    dest = Path(_workspace_root()) / rel
+    if dest.exists():
+        import shutil as _sh
+        _sh.rmtree(str(dest))
+    dest.mkdir(parents=True, exist_ok=True)
+    labels = _field_labels(task['collection'])
+    (dest / 'record.md').write_text(
+        _render_record_md(record.get('data') or {}, labels), encoding='utf-8')
+    _copy_attachments(record.get('data') or {}, _file_field_names(task['collection']), str(dest))
+    return rel
