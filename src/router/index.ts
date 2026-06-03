@@ -100,6 +100,15 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/roles',
+        name: 'RoleManager',
+        component: () => import('@/views/admin/RoleManager.vue'),
+        meta: {
+          title: '角色权限',
+          icon: 'Lock',
+        },
+      },
+      {
         path: 'admin/operation-log',
         name: 'OperationLog',
         component: () => import('@/views/admin/OperationLog.vue'),
