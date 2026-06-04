@@ -37,7 +37,7 @@ const addedLines = computed(() =>
     </template>
 
     <div v-else-if="status === 'deleted'" class="diff-empty">该文件已删除，无可预览内容</div>
-    <div v-else class="diff-empty">无法预览此文件</div>
+    <div v-else class="diff-empty">该文件当前没有差异（可能已被还原或移除）</div>
 
     <div v-if="truncated" class="diff-truncated">内容过大，已截断；请下载查看完整内容。</div>
   </div>

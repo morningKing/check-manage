@@ -38,7 +38,7 @@ describe('FileDiffView', () => {
 
   it('shows a generic placeholder for null status', () => {
     const w = mount(FileDiffView, { props: { status: null, truncated: false } })
-    expect(w.find('.diff-empty').text()).toContain('无法预览')
+    expect(w.find('.diff-empty').text()).toContain('没有差异')
   })
 
   it('renders one line per added line without blank padding', () => {

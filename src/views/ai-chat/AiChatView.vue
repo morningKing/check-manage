@@ -127,7 +127,13 @@ async function previewChange(c: ChangedFile) {
   diffOpen.value = true
   diffLoading.value = true
   try {
-    diffData.value = await getFileDiff(activeId.value, c.path)
+    const res = await getFileDiff(activeId.value, c.path)
+    diffData.value = res
+    // status null = this path is no longer a current change (the panel list
+    // drifted out of sync with the workspace — e.g. the file was reverted or
+    // removed since the last scan). Re-scan so the stale row disappears; the
+    // drawer shows a clear "no diff" message instead of dead-ending.
+    if (res.status === null) store.loadChanges(activeId.value)
   } catch {
     ElMessage.error('预览失败')
     diffOpen.value = false
