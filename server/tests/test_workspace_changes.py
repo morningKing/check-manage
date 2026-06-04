@@ -123,3 +123,58 @@ def test_resolve_repo_for_path_no_repo_returns_none(tmp_path):
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
         f.write('hi')
     assert resolve_repo_for_path(ws, 'loose.txt') == (None, None)
+
+
+def test_file_diff_modified_returns_hunks(tmp_path):
+    from utils.workspace_changes import file_diff
+    ws = str(tmp_path)
+    repo = os.path.join(ws, 'repo')
+    _init_repo(repo)
+    with open(os.path.join(repo, 'a.txt'), 'w') as f:
+        f.write('line1\nline2\nline3\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-q', '-m', 'base')
+    with open(os.path.join(repo, 'a.txt'), 'w') as f:
+        f.write('line1\nCHANGED\nline3\n')
+    res = file_diff(ws, 'repo/a.txt')
+    assert res['status'] == 'modified'
+    assert '@@' in res['diff']
+    assert '-line2' in res['diff']
+    assert '+CHANGED' in res['diff']
+    assert res['truncated'] is False
+
+
+def test_file_diff_added_returns_content(tmp_path):
+    from utils.workspace_changes import file_diff
+    ws = str(tmp_path)
+    repo = os.path.join(ws, 'repo')
+    _init_repo(repo)
+    with open(os.path.join(repo, 'new.txt'), 'w') as f:
+        f.write('fresh content\n')
+    res = file_diff(ws, 'repo/new.txt')
+    assert res['status'] == 'added'
+    assert res['content'] == 'fresh content\n'
+    assert res['truncated'] is False
+
+
+def test_file_diff_added_truncates_large_file(tmp_path):
+    from utils.workspace_changes import file_diff, MAX_DIFF_LINES
+    ws = str(tmp_path)
+    repo = os.path.join(ws, 'repo')
+    _init_repo(repo)
+    big = '\n'.join(f'line{i}' for i in range(MAX_DIFF_LINES + 50)) + '\n'
+    with open(os.path.join(repo, 'big.txt'), 'w') as f:
+        f.write(big)
+    res = file_diff(ws, 'repo/big.txt')
+    assert res['status'] == 'added'
+    assert res['truncated'] is True
+    assert res['content'].count('\n') <= MAX_DIFF_LINES
+
+
+def test_file_diff_no_repo_returns_none_status(tmp_path):
+    from utils.workspace_changes import file_diff
+    ws = str(tmp_path)
+    with open(os.path.join(ws, 'loose.txt'), 'w') as f:
+        f.write('hi')
+    res = file_diff(ws, 'loose.txt')
+    assert res['status'] is None

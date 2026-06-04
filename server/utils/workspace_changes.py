@@ -7,6 +7,8 @@ import os
 import subprocess
 
 MAX_CHANGES = 500
+MAX_DIFF_LINES = 2000      # cap added-file content & diff text by lines
+MAX_DIFF_BYTES = 256 * 1024
 _SKIP_DIRS = {'uploads', 'outputs', 'node_modules', '.venv', '__pycache__'}
 
 
@@ -107,3 +109,62 @@ def git_changes(workspace_path):
     changes.sort(key=lambda c: c['path'])
     truncated = len(changes) > MAX_CHANGES
     return changes[:MAX_CHANGES], truncated
+
+
+def _classify(repo, repo_rel):
+    """Return 'added'|'modified'|'deleted'|None for a repo-relative path."""
+    try:
+        out = subprocess.run(
+            ['git', '-C', repo, 'status', '--porcelain', '-z', '--', repo_rel],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0 or not out.stdout:
+        return None
+    xy = out.stdout.split('\0')[0][:2]
+    return _map_status(xy)
+
+
+def _cap(text):
+    """Truncate text to the line/byte caps; return (text, truncated)."""
+    truncated = False
+    if len(text.encode('utf-8', 'replace')) > MAX_DIFF_BYTES:
+        text = text.encode('utf-8', 'replace')[:MAX_DIFF_BYTES].decode('utf-8', 'ignore')
+        truncated = True
+    lines = text.split('\n')
+    if len(lines) > MAX_DIFF_LINES:
+        text = '\n'.join(lines[:MAX_DIFF_LINES])
+        truncated = True
+    return text, truncated
+
+
+def file_diff(workspace_path, rel_path):
+    """Return {status, diff?|content?, truncated} for a single changed file.
+
+    modified -> unified `git diff` (hunks only); added -> capped file content;
+    deleted/unknown -> status only. No repo found -> status None."""
+    repo, repo_rel = resolve_repo_for_path(workspace_path, rel_path)
+    if repo is None:
+        return {'status': None, 'truncated': False}
+    status = _classify(repo, repo_rel)
+    if status == 'modified':
+        try:
+            out = subprocess.run(
+                ['git', '-C', repo, 'diff', '--', repo_rel],
+                capture_output=True, text=True, timeout=20,
+            )
+            diff = out.stdout if out.returncode == 0 else ''
+        except Exception:
+            diff = ''
+        diff, truncated = _cap(diff)
+        return {'status': 'modified', 'diff': diff, 'truncated': truncated}
+    if status == 'added':
+        try:
+            with open(os.path.join(repo, repo_rel), 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except Exception:
+            content = ''
+        content, truncated = _cap(content)
+        return {'status': 'added', 'content': content, 'truncated': truncated}
+    return {'status': status, 'truncated': False}
