@@ -155,12 +155,24 @@ def _prepare_workspace(user_id: str, session_id: str,
     src = Path(_workspace_root()) / staged_file_path
     up = Path(ws) / 'uploads'
     up.mkdir(parents=True, exist_ok=True)
-    if src.is_dir():
-        # scan-task context directory: copy its whole contents into uploads/
-        shutil.copytree(str(src), str(up), dirs_exist_ok=True)
-    elif src.exists():
-        dst = up / Path(staged_file_path).name
-        shutil.copy2(str(src), str(dst))
+    # On Windows, copying a just-created staging dir can intermittently raise
+    # PermissionError (antivirus / handle-settling contention). Retry a few times.
+    last_err = None
+    for _attempt in range(3):
+        try:
+            if src.is_dir():
+                # scan-task context directory: copy its whole contents into uploads/
+                shutil.copytree(str(src), str(up), dirs_exist_ok=True)
+            elif src.exists():
+                dst = up / Path(staged_file_path).name
+                shutil.copy2(str(src), str(dst))
+            last_err = None
+            break
+        except (PermissionError, OSError) as e:
+            last_err = e
+            time.sleep(0.3)
+    if last_err is not None:
+        raise last_err
     return ws
 
 

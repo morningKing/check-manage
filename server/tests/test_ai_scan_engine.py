@@ -26,6 +26,33 @@ def test_prepare_workspace_single_file_still_works(tmp_path, monkeypatch):
     assert (Path(ws) / 'uploads' / 'f.txt').read_text(encoding='utf-8') == 'x'
 
 
+def test_prepare_workspace_retries_on_permission_error(tmp_path, monkeypatch):
+    import utils.batch_engine as eng
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    staged = tmp_path / 'scan-staging' / 't1' / 'r1'
+    (staged / 'attachments').mkdir(parents=True)
+    (staged / 'record.md').write_text('hi', encoding='utf-8')
+
+    calls = {'n': 0}
+    real_copytree = eng.shutil.copytree
+
+    def flaky(src, dst, *args, **kwargs):
+        # shutil.copytree recurses into subdirs via the same name; only count
+        # the top-level call into our staged dir, not internal recursion.
+        if str(src) == str(staged):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise PermissionError(13, 'Permission denied')
+        return real_copytree(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(eng.shutil, 'copytree', flaky)
+    monkeypatch.setattr(eng.time, 'sleep', lambda *a, **k: None)
+
+    ws = eng._prepare_workspace('user-1', 'sess-1', 'scan-staging/t1/r1')
+    assert calls['n'] == 2
+    assert (Path(ws) / 'uploads' / 'record.md').read_text(encoding='utf-8') == 'hi'
+
+
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 
