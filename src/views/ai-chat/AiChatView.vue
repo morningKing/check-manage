@@ -402,8 +402,13 @@ const changesLoading = ref(false)
 async function refreshChanges() {
   if (!activeId.value) return
   changesLoading.value = true
-  try { await store.loadChanges(activeId.value) }
-  finally { changesLoading.value = false }
+  try {
+    const ok = await store.loadChanges(activeId.value)
+    // A failed/incomplete scan keeps the last good list (store guards it) —
+    // tell the user so they know the panel wasn't refreshed, rather than
+    // silently showing stale or empty data.
+    if (ok === false) ElMessage.warning('扫描变更未完成（git 可能繁忙），已保留上次结果，请稍后重试')
+  } finally { changesLoading.value = false }
 }
 
 async function send() {

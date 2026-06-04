@@ -576,8 +576,8 @@ def list_changes(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    changes, truncated = git_changes(sess[4])
-    return jsonify({'changes': changes, 'truncated': truncated})
+    changes, truncated, ok = git_changes(sess[4])
+    return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
 
 
 @ai_chat_bp.route('/sessions/<sid>/diff', methods=['GET'])

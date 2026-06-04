@@ -144,11 +144,16 @@ export const useAiChatStore = defineStore('aiChat', {
       } catch { /* non-fatal */ }
     },
 
-    async loadChanges(id: string) {
+    async loadChanges(id: string): Promise<boolean> {
       try {
-        const { changes } = await getChanges(id)
+        const { changes, ok } = await getChanges(id)
+        // A failed/incomplete scan returns ok=false with a possibly-empty list.
+        // Never let that wipe a panel that already has entries — keep the last
+        // good list so a transient git error doesn't make changes "disappear".
+        if (ok === false && (this.changes[id]?.length ?? 0) > 0) return false
         this.changes[id] = changes
-      } catch { /* non-fatal */ }
+        return ok !== false
+      } catch { /* non-fatal: keep existing list */ return false }
     },
 
     async loadPaletteItems(id: string) {

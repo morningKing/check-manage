@@ -480,12 +480,13 @@ def test_list_changes_returns_git_changes(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
     with patch('routes.ai_chat.git_changes',
-               return_value=([{'path': 'repo/new.txt', 'status': 'added'}], False)) as gc:
+               return_value=([{'path': 'repo/new.txt', 'status': 'added'}], False, True)) as gc:
         resp = client.get('/ai/chat/sessions/sess_x/changes', headers=dev_h)
     assert resp.status_code == 200
     body = resp.get_json()
     assert body['changes'] == [{'path': 'repo/new.txt', 'status': 'added'}]
     assert body['truncated'] is False
+    assert body['ok'] is True
     assert gc.call_args[0][0] == '/tmp/ws'  # called with the session workspace
 
 

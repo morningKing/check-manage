@@ -65,9 +65,15 @@ def _map_status(xy):
 
 
 def git_changes(workspace_path):
-    """Return (changes, truncated) where changes is
-    [{'path': <rel-to-workspace POSIX>, 'status': 'added'|'modified'|'deleted'}]."""
+    """Return (changes, truncated, ok).
+
+    changes is [{'path': <rel-to-workspace POSIX>, 'status': ...}]. `ok` is
+    False when any repo's `git status` failed (exception or non-zero exit), so
+    callers can tell a real "no changes" from a failed scan and avoid wiping a
+    previously-populated list. No git repo at all is a legitimate "no changes"
+    (ok stays True)."""
     changes = []
+    ok = True
     repos = _find_git_repos(workspace_path)
     # If the workspace root is also a repo (new sessions: we git init it on
     # creation) and nested clones exist below it, the outer's `git status`
@@ -86,8 +92,10 @@ def git_changes(workspace_path):
                 capture_output=True, text=True, timeout=20,
             )
         except Exception:
+            ok = False
             continue
         if out.returncode != 0:
+            ok = False
             continue
         entries = out.stdout.split('\0')
         i = 0
@@ -108,7 +116,7 @@ def git_changes(workspace_path):
             i += 1
     changes.sort(key=lambda c: c['path'])
     truncated = len(changes) > MAX_CHANGES
-    return changes[:MAX_CHANGES], truncated
+    return changes[:MAX_CHANGES], truncated, ok
 
 
 def _classify(repo, repo_rel):

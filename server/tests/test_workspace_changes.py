@@ -33,12 +33,13 @@ def test_git_changes_detects_added_modified_deleted(tmp_path):
         f.write('changed')                              # modified
     os.remove(os.path.join(repo, 'del.txt'))            # deleted
 
-    changes, truncated = git_changes(ws)
+    changes, truncated, ok = git_changes(ws)
     by = {c['path']: c['status'] for c in changes}
     assert by.get('repo/new.txt') == 'added'
     assert by.get('repo/mod.txt') == 'modified'
     assert by.get('repo/del.txt') == 'deleted'
     assert truncated is False
+    assert ok is True
 
 
 def test_git_changes_skips_uploads_outputs(tmp_path):
@@ -48,16 +49,32 @@ def test_git_changes_skips_uploads_outputs(tmp_path):
     _init_repo(repo)
     with open(os.path.join(repo, 'x.txt'), 'w') as f:
         f.write('hi')
-    changes, truncated = git_changes(ws)
+    changes, truncated, ok = git_changes(ws)
     assert changes == []
     assert truncated is False
+    assert ok is True
 
 
 def test_git_changes_no_repo_returns_empty(tmp_path):
     from utils.workspace_changes import git_changes
     with open(os.path.join(str(tmp_path), 'loose.txt'), 'w') as f:
         f.write('not in a repo')
-    assert git_changes(str(tmp_path)) == ([], False)
+    # No repo is a legitimate "no changes" state — the scan did not fail.
+    assert git_changes(str(tmp_path)) == ([], False, True)
+
+
+def test_git_changes_reports_scan_failure(tmp_path):
+    """A repo whose `git status` fails (broken .git) must surface ok=False, NOT
+    a silent empty list — otherwise a transient git error wipes the panel."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    broken = os.path.join(ws, 'brokenrepo')
+    os.makedirs(broken)
+    # a .git FILE with garbage makes `git -C brokenrepo status` fail (rc != 0)
+    with open(os.path.join(broken, '.git'), 'w') as f:
+        f.write('this is not a valid gitdir pointer')
+    changes, truncated, ok = git_changes(ws)
+    assert ok is False
 
 
 def test_workspace_root_as_repo_picks_up_loose_files(tmp_path):
@@ -68,7 +85,7 @@ def test_workspace_root_as_repo_picks_up_loose_files(tmp_path):
     _init_repo(ws)
     with open(os.path.join(ws, 'loose.txt'), 'w') as f:
         f.write('hi')
-    changes, _ = git_changes(ws)
+    changes, _, _ = git_changes(ws)
     assert {'path': 'loose.txt', 'status': 'added'} in changes
 
 
@@ -83,7 +100,7 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     _init_repo(nested)
     with open(os.path.join(nested, 'file.py'), 'w') as f:
         f.write('print(1)')
-    changes, _ = git_changes(ws)
+    changes, _, _ = git_changes(ws)
     paths = [c['path'] for c in changes]
     # the nested repo's own file should be reported once with the nested path
     assert 'cloned-repo/file.py' in paths

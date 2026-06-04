@@ -134,7 +134,7 @@ export function listFiles(id: string) {
 }
 
 export function getChanges(id: string) {
-  return get<{ changes: ChangedFile[]; truncated: boolean }>(
+  return get<{ changes: ChangedFile[]; truncated: boolean; ok: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },
   )
 }
