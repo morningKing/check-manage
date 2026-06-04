@@ -91,3 +91,35 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     # "cloned-repo/" untracked entry
     assert 'cloned-repo' not in paths
     assert 'cloned-repo/' not in paths
+
+
+def test_resolve_repo_for_path_nested_clone(tmp_path):
+    from utils.workspace_changes import resolve_repo_for_path
+    ws = str(tmp_path)
+    _init_repo(ws)                       # workspace itself a repo
+    nested = os.path.join(ws, 'cloned-repo')
+    _init_repo(nested)
+    with open(os.path.join(nested, 'file.py'), 'w') as f:
+        f.write('print(1)')
+    repo, repo_rel = resolve_repo_for_path(ws, 'cloned-repo/file.py')
+    assert os.path.realpath(repo) == os.path.realpath(nested)
+    assert repo_rel == 'file.py'
+
+
+def test_resolve_repo_for_path_workspace_root(tmp_path):
+    from utils.workspace_changes import resolve_repo_for_path
+    ws = str(tmp_path)
+    _init_repo(ws)
+    with open(os.path.join(ws, 'loose.txt'), 'w') as f:
+        f.write('hi')
+    repo, repo_rel = resolve_repo_for_path(ws, 'loose.txt')
+    assert os.path.realpath(repo) == os.path.realpath(ws)
+    assert repo_rel == 'loose.txt'
+
+
+def test_resolve_repo_for_path_no_repo_returns_none(tmp_path):
+    from utils.workspace_changes import resolve_repo_for_path
+    ws = str(tmp_path)
+    with open(os.path.join(ws, 'loose.txt'), 'w') as f:
+        f.write('hi')
+    assert resolve_repo_for_path(ws, 'loose.txt') == (None, None)

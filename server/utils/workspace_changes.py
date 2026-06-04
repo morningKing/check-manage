@@ -31,6 +31,26 @@ def _find_git_repos(workspace_path, max_depth=3):
     return repos
 
 
+def resolve_repo_for_path(workspace_path, rel_path):
+    """Map a workspace-relative path to (repo_dir, repo_rel_path).
+
+    Picks the deepest git repo (longest path) that contains the file, so a
+    nested clone wins over the workspace-root repo. Returns (None, None) when
+    no repo contains the path."""
+    abs_target = os.path.realpath(os.path.join(workspace_path, rel_path))
+    best = None
+    for repo in _find_git_repos(workspace_path):
+        repo_real = os.path.realpath(repo)
+        prefix = repo_real + os.sep
+        if abs_target == repo_real or abs_target.startswith(prefix):
+            if best is None or len(repo_real) > len(os.path.realpath(best)):
+                best = repo
+    if best is None:
+        return None, None
+    repo_rel = os.path.relpath(abs_target, os.path.realpath(best)).replace(os.sep, '/')
+    return best, repo_rel
+
+
 def _map_status(xy):
     """Map a 2-char porcelain code to added|modified|deleted."""
     if xy == '??':
