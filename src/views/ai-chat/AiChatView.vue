@@ -21,6 +21,7 @@ import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
+import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
 import { useAiChatStore } from '@/stores/aiChat'
@@ -29,7 +30,7 @@ import BatchListView from './BatchListView.vue'
 import BatchDetailView from './BatchDetailView.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
-import { downloadFileUrl, runScript, listModels, type AiMessage, type ChangedFile, type ModelInfo } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, getFileDiff, type AiMessage, type ChangedFile, type ModelInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -105,14 +106,18 @@ function changeBadge(status: string): { label: string; type: any } {
   return { label: '修改', type: 'warning' }
 }
 async function previewChange(c: ChangedFile) {
-  if (c.status === 'deleted') return
+  if (c.status === 'deleted' || !activeId.value) return
+  diffFile.value = c.path
+  diffData.value = null
+  diffOpen.value = true
+  diffLoading.value = true
   try {
-    const text = await fetch(fileUrl(c.path)).then((r) => r.text())
-    const lang = (c.path.split('.').pop() || 'txt').toLowerCase()
-    preview.value = { filename: c.path, versions: [{ lang, code: text }] }
-    previewOpen.value = true
+    diffData.value = await getFileDiff(activeId.value, c.path)
   } catch {
     ElMessage.error('预览失败')
+    diffOpen.value = false
+  } finally {
+    diffLoading.value = false
   }
 }
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
@@ -154,6 +159,10 @@ function versionsForSeg(seg: CodeSegment, idx: number): ArtifactVersion[] {
 
 const previewOpen = ref(false)
 const preview = ref<{ filename: string; versions: ArtifactVersion[] } | null>(null)
+const diffOpen = ref(false)
+const diffData = ref<FileDiff | null>(null)
+const diffFile = ref('')
+const diffLoading = ref(false)
 function openPreview(seg: CodeSegment, idx: number) {
   preview.value = { filename: fileNameOf(seg, idx), versions: versionsForSeg(seg, idx) }
   previewOpen.value = true
@@ -673,6 +682,25 @@ function onKey(e: Event) {
     <ElDrawer v-model="previewOpen" :title="preview?.filename || '预览'" direction="rtl" size="52%">
       <div class="preview-body">
         <ArtifactPreview v-if="preview" :filename="preview.filename" :versions="preview.versions" />
+      </div>
+    </ElDrawer>
+
+    <!-- 变更文件 diff 预览面板 -->
+    <ElDrawer v-model="diffOpen" :title="diffFile || '差异'" direction="rtl" size="60%">
+      <div class="preview-body">
+        <div v-if="diffLoading" class="ai-chat__pending"><ElIcon class="spin"><Loading /></ElIcon> 加载中…</div>
+        <FileDiffView
+          v-else-if="diffData"
+          :status="diffData.status"
+          :diff="diffData.diff"
+          :content="diffData.content"
+          :truncated="diffData.truncated"
+        />
+        <a
+          v-if="diffData && diffData.status !== 'deleted'"
+          class="change-file__dl" :href="fileUrl(diffFile)" target="_blank" rel="noopener"
+          style="display:inline-block;margin-top:12px"
+        >下载完整文件</a>
       </div>
     </ElDrawer>
 
