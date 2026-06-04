@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
@@ -8,7 +8,7 @@ import {
 } from 'element-plus'
 import {
   Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
-  CopyDocument, RefreshRight, Refresh,
+  CopyDocument, RefreshRight, Refresh, ArrowRight,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -100,11 +100,26 @@ const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
 const changes = computed<ChangedFile[]>(() => store.activeChanges)
-function changeBadge(status: string): { label: string; type: any } {
-  if (status === 'added') return { label: '新增', type: 'success' }
-  if (status === 'deleted') return { label: '删除', type: 'info' }
-  return { label: '修改', type: 'warning' }
-}
+
+const groupedChanges = computed(() => ({
+  added: changes.value.filter((c) => c.status === 'added'),
+  modified: changes.value.filter((c) => c.status === 'modified'),
+  deleted: changes.value.filter((c) => c.status === 'deleted'),
+}))
+
+// 折叠状态：删除组默认折叠，其余展开
+const collapsed = reactive<Record<'added' | 'modified' | 'deleted', boolean>>({
+  added: false,
+  modified: false,
+  deleted: true,
+})
+function toggleGroup(k: 'added' | 'modified' | 'deleted') { collapsed[k] = !collapsed[k] }
+
+const GROUP_META: { key: 'added' | 'modified' | 'deleted'; label: string; type: any }[] = [
+  { key: 'added', label: '新增', type: 'success' },
+  { key: 'modified', label: '修改', type: 'warning' },
+  { key: 'deleted', label: '删除', type: 'info' },
+]
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
   diffFile.value = c.path
@@ -582,23 +597,34 @@ function onKey(e: Event) {
                 </button>
               </div>
               <div v-if="!changes.length" class="ai-changes__empty">暂无变更（点击 🔄 重新扫描）</div>
-              <div v-for="c in changes" :key="c.path" class="change-file">
-                <div class="change-file__row">
-                  <ElTag size="small" :type="changeBadge(c.status).type">{{ changeBadge(c.status).label }}</ElTag>
-                  <span class="change-file__name">{{ c.path }}</span>
-                  <ElButton v-if="c.status !== 'deleted'" size="small" text @click="previewChange(c)">预览</ElButton>
-                  <a
-                    v-if="c.status !== 'deleted'"
-                    class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener"
-                  >下载</a>
+              <template v-else>
+                <div v-for="g in GROUP_META" :key="g.key" class="change-group">
+                  <template v-if="groupedChanges[g.key].length">
+                    <button class="change-group__head" type="button" @click="toggleGroup(g.key)">
+                      <ElIcon class="change-group__chev" :class="{ open: !collapsed[g.key] }"><ArrowRight /></ElIcon>
+                      <ElTag size="small" :type="g.type">{{ g.label }}</ElTag>
+                      <span class="change-group__count">{{ groupedChanges[g.key].length }}</span>
+                    </button>
+                    <div v-show="!collapsed[g.key]" class="change-group__body">
+                      <div v-for="c in groupedChanges[g.key]" :key="c.path" class="change-file">
+                        <div class="change-file__row">
+                          <span class="change-file__name">{{ c.path }}</span>
+                          <template v-if="c.status !== 'deleted'">
+                            <ElButton size="small" text @click="previewChange(c)">预览</ElButton>
+                            <a class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener">下载</a>
+                          </template>
+                        </div>
+                        <a
+                          v-if="c.status !== 'deleted' && isImageFile(c.path)"
+                          class="change-file__img" :href="fileUrl(c.path)" target="_blank" rel="noopener noreferrer"
+                        >
+                          <img :src="fileUrl(c.path)" :alt="c.path" />
+                        </a>
+                      </div>
+                    </div>
+                  </template>
                 </div>
-                <a
-                  v-if="c.status !== 'deleted' && isImageFile(c.path)"
-                  class="change-file__img" :href="fileUrl(c.path)" target="_blank" rel="noopener noreferrer"
-                >
-                  <img :src="fileUrl(c.path)" :alt="c.path" />
-                </a>
-              </div>
+              </template>
             </div>
           </div>
         </template>
@@ -968,6 +994,15 @@ function onKey(e: Event) {
     &:disabled { opacity: 0.5; cursor: not-allowed; }
   }
 }
+.change-group { margin-bottom: 4px; }
+.change-group__head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 4px 0; background: none; border: none; cursor: pointer;
+  color: var(--el-text-color-regular);
+}
+.change-group__chev { transition: transform 0.15s; color: var(--el-text-color-secondary); &.open { transform: rotate(90deg); } }
+.change-group__count { font-size: 12px; color: var(--el-text-color-secondary); }
+.change-group__body { padding-left: 4px; }
 .change-file {
   display: flex; flex-direction: column; gap: 6px;
   padding: 6px 8px; border-radius: 6px; font-size: 14px;
@@ -977,7 +1012,7 @@ function onKey(e: Event) {
   &__dl { color: var(--el-color-primary); text-decoration: none; font-size: 13px; }
   &__img {
     display: block;
-    margin-left: 56px; /* line up under the filename, past the status tag */
+    margin-left: 0;
     text-decoration: none;
     img {
       display: block;
