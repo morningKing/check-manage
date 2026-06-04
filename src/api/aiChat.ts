@@ -47,6 +47,13 @@ export interface ChangedFile {
   status: 'added' | 'modified' | 'deleted'
 }
 
+export interface FileDiff {
+  status: 'added' | 'modified' | 'deleted' | null
+  diff?: string
+  content?: string
+  truncated: boolean
+}
+
 export interface McpTool { name: string; description: string }
 export interface McpServer { name: string; status: string; tools: McpTool[] }
 
@@ -129,6 +136,14 @@ export function listFiles(id: string) {
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },
+  )
+}
+
+export function getFileDiff(id: string, path: string) {
+  return get<FileDiff>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/diff`,
+    { path },
+    { silent: true },
   )
 }
 
