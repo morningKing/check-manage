@@ -36,7 +36,7 @@ from utils.workspace import (
     create_session_workspace, cleanup_session_workspace, write_opencode_config,
     safe_resolve,
 )
-from utils.workspace_changes import git_changes
+from utils.workspace_changes import git_changes, file_diff
 from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
@@ -578,6 +578,23 @@ def list_changes(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     changes, truncated = git_changes(sess[4])
     return jsonify({'changes': changes, 'truncated': truncated})
+
+
+@ai_chat_bp.route('/sessions/<sid>/diff', methods=['GET'])
+@login_required
+def file_diff_endpoint(sid):
+    """Return a single changed file's diff (modified) or capped content (added).
+    Path is validated against the workspace root to block traversal."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    rel = request.args.get('path', '')
+    try:
+        safe_resolve(sess[4], rel)  # raises on traversal; result unused
+    except Exception:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    return jsonify(file_diff(sess[4], rel))
 
 
 @ai_chat_bp.route('/sessions/<sid>/mcp', methods=['GET'])

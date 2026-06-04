@@ -731,3 +731,41 @@ def test_upload_skill_util_error_400(setup):
     body = resp.get_json()
     assert body['code'] == 'INVALID_SKILL_ZIP'
     assert body['error'] == 'missing SKILL.md'
+
+
+def test_file_diff_modified_returns_diff_hunks(setup):
+    """GET /sessions/:id/diff returns status='modified' and a unified diff with
+    @@ hunks for a file that has been committed then modified."""
+    import subprocess
+    client, cursor, oc, dev_h, _, ws_root = setup
+    # Create a real git repo inside the tmp workspace
+    ws = ws_root / 'wsdiff'
+    ws.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['git', 'init', str(ws)], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(ws), 'config', 'user.email', 'test@test.com'], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(ws), 'config', 'user.name', 'Test'], check=True, capture_output=True)
+    # Create and commit a file
+    target = ws / 'hello.txt'
+    target.write_text('line1\nline2\n', encoding='utf-8')
+    subprocess.run(['git', '-C', str(ws), 'add', 'hello.txt'], check=True, capture_output=True)
+    subprocess.run(['git', '-C', str(ws), 'commit', '-m', 'init'], check=True, capture_output=True)
+    # Modify the file (creates a working-tree change)
+    target.write_text('line1\nline2\nline3\n', encoding='utf-8')
+
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/diff?path=hello.txt', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['status'] == 'modified'
+    assert '@@' in body['diff']
+
+
+def test_file_diff_rejects_path_traversal(setup):
+    """GET /sessions/:id/diff with a path that escapes the workspace returns 400."""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wstravdiff'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/diff?path=../../etc/passwd', headers=dev_h)
+    assert resp.status_code == 400
+    assert resp.get_json()['code'] == 'BAD_PATH'
