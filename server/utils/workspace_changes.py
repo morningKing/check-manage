@@ -129,8 +129,9 @@ def _classify(repo, repo_rel):
 def _cap(text):
     """Truncate text to the line/byte caps; return (text, truncated)."""
     truncated = False
-    if len(text.encode('utf-8', 'replace')) > MAX_DIFF_BYTES:
-        text = text.encode('utf-8', 'replace')[:MAX_DIFF_BYTES].decode('utf-8', 'ignore')
+    encoded = text.encode('utf-8', 'replace')
+    if len(encoded) > MAX_DIFF_BYTES:
+        text = encoded[:MAX_DIFF_BYTES].decode('utf-8', 'ignore')
         truncated = True
     lines = text.split('\n')
     if len(lines) > MAX_DIFF_LINES:
