@@ -2,16 +2,25 @@ import uuid
 import psycopg2.extras
 from db import get_db
 
+# SELECT column list (snake_case = real DB columns).
 _FIELDS = ('id', 'name', 'enabled', 'owner_user_id', 'collection', 'branch_id',
            'status_field', 'pending_value', 'running_value', 'done_value',
            'failed_value', 'extra_filter', 'context_fields', 'prompt_template',
            'field_mapping', 'schedule_interval_minutes', 'max_records_per_scan',
            'last_run_at', 'last_scan_count', 'last_error', 'created_at', 'updated_at')
 
+# camelCase output keys, positionally aligned with _FIELDS. The repo's public
+# dict shape is camelCase (matches the API + TS types + engine/scheduler reads).
+_CAMEL = ('id', 'name', 'enabled', 'ownerUserId', 'collection', 'branchId',
+          'statusField', 'pendingValue', 'runningValue', 'doneValue',
+          'failedValue', 'extraFilter', 'contextFields', 'promptTemplate',
+          'fieldMapping', 'scheduleIntervalMinutes', 'maxRecordsPerScan',
+          'lastRunAt', 'lastScanCount', 'lastError', 'createdAt', 'updatedAt')
+
 
 def _row_to_dict(r):
-    d = dict(zip(_FIELDS, r))
-    for ts in ('last_run_at', 'created_at', 'updated_at'):
+    d = dict(zip(_CAMEL, r))
+    for ts in ('lastRunAt', 'createdAt', 'updatedAt'):
         if d.get(ts) is not None:
             d[ts] = d[ts].isoformat()
     return d
@@ -91,8 +100,8 @@ def delete_task(task_id):
         cur.execute(
             "UPDATE dynamic_data SET data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text)) "
             "WHERE collection = %s AND branch_id = %s AND data->>%s = %s",
-            (t['status_field'], t['pending_value'], t['collection'], t['branch_id'],
-             t['status_field'], t['running_value']),
+            (t['statusField'], t['pendingValue'], t['collection'], t['branchId'],
+             t['statusField'], t['runningValue']),
         )
         cur.execute("DELETE FROM ai_scan_tasks WHERE id = %s", (task_id,))
     return True

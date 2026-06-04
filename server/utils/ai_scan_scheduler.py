@@ -11,12 +11,12 @@ _locks_guard = threading.Lock()
 def _is_due(task, now):
     if not task.get('enabled', True):
         return False
-    lr = task.get('last_run_at')
+    lr = task.get('lastRunAt')
     if not lr:
         return True
     if isinstance(lr, str):
         lr = datetime.fromisoformat(lr)
-    interval = task.get('schedule_interval_minutes', 15)
+    interval = task.get('scheduleIntervalMinutes', 15)
     return (now - lr).total_seconds() >= interval * 60
 
 

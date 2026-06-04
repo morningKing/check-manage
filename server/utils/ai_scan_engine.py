@@ -54,13 +54,13 @@ def message_text(final_msg):
 
 def assemble_prompt(task):
     """[system preamble] + [user prompt_template] + [system JSON output contract]."""
-    keys = [m['jsonKey'] for m in (task.get('field_mapping') or [])]
+    keys = [m['jsonKey'] for m in (task.get('fieldMapping') or [])]
     contract_obj = ', '.join(f'"{k}": ...' for k in keys)
     preamble = ('本任务的数据见工作区 uploads/record.md，附件见 uploads/attachments/ 目录。\n'
                 '请阅读这些内容后完成下面的任务。\n\n')
     contract = ('\n\n---\n完成后，请在回复的最后输出一个 JSON 代码块，'
                 f'且仅包含以下字段：\n```json\n{{ {contract_obj} }}\n```')
-    return preamble + (task.get('prompt_template') or '') + contract
+    return preamble + (task.get('promptTemplate') or '') + contract
 
 
 def _load_task(task_id):
@@ -211,7 +211,7 @@ def build_context_dir(task, record):
         shutil.rmtree(str(dest))
     dest.mkdir(parents=True, exist_ok=True)
     labels = _field_labels(task['collection'])
-    exclude = {task['status_field']} | {m['column'] for m in (task.get('field_mapping') or [])}
+    exclude = {task['statusField']} | {m['column'] for m in (task.get('fieldMapping') or [])}
     (dest / 'record.md').write_text(
         _render_record_md(record.get('data') or {}, labels, exclude), encoding='utf-8')
     _copy_attachments(record.get('data') or {}, _file_field_names(task['collection']), str(dest))
@@ -219,8 +219,8 @@ def build_context_dir(task, record):
 
 
 def _pending_predicate(task, params):
-    sf = task['status_field']
-    pv = task.get('pending_value') or ''
+    sf = task['statusField']
+    pv = task.get('pendingValue') or ''
     if pv == '':
         return "(d.data->>%s IS NULL OR d.data->>%s = '')", params + [sf, sf]
     return "d.data->>%s = %s", params + [sf, pv]
@@ -229,10 +229,10 @@ def _pending_predicate(task, params):
 def claim_records(task):
     """Atomically pick up to max_records_per_scan pending records and flip them to
     running_value. Returns [{id, data}]."""
-    base_params = [task['collection'], task['branch_id']]
+    base_params = [task['collection'], task['branchId']]
     pred, params = _pending_predicate(task, base_params)
     filter_sql = ''
-    extra = task.get('extra_filter') or {}
+    extra = task.get('extraFilter') or {}
     if extra:
         # mongo_query.translate(query) -> (where_fragment, params); the fragment
         # references the JSONB column unaliased as `data`, which resolves against
@@ -256,8 +256,8 @@ def claim_records(task):
         "FROM picked WHERE d.id = picked.id AND d.branch_id = %s "
         "RETURNING d.id, d.data"
     )
-    params = params + [task['max_records_per_scan'], task['status_field'],
-                       task['running_value'], task['branch_id']]
+    params = params + [task['maxRecordsPerScan'], task['statusField'],
+                       task['runningValue'], task['branchId']]
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -279,7 +279,7 @@ def run_task(task):
             files.append({'name': rec['id'], 'path': rel, 'recordId': rec['id']})
         prompt = assemble_prompt(task)
         stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-        create_batch(task['owner_user_id'], name=f"AI定时·{task['name']}·{stamp}",
+        create_batch(task['ownerUserId'], name=f"AI定时·{task['name']}·{stamp}",
                      prompt=prompt, template_id=None, files=files,
                      scan_task_id=task['id'])
         mark_run(task['id'], len(claimed))
@@ -301,8 +301,8 @@ def _revert_claimed(task, record_ids):
             cur.execute(
                 "UPDATE dynamic_data SET data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text)) "
                 "WHERE id = ANY(%s) AND collection = %s AND branch_id = %s",
-                (task['status_field'], task.get('pending_value') or '', record_ids,
-                 task['collection'], task['branch_id']),
+                (task['statusField'], task.get('pendingValue') or '', record_ids,
+                 task['collection'], task['branchId']),
             )
         conn.commit()
 

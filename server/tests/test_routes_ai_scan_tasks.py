@@ -54,6 +54,25 @@ def test_create_task(setup):
     assert resp.status_code == 201
 
 
+def test_list_returns_camelcase_keys(setup):
+    client, cur, headers = setup
+    # one task row tuple aligned with ai_scan_repo._FIELDS (22 columns)
+    cur.fetchall.return_value = [
+        ('scan-1', 'n', True, 'user-admin', 'orders', 'main',
+         '审核状态', '', '处理中', '已处理', '处理失败', {}, {}, 'p',
+         [], 15, 20, None, 0, None, None, None),
+    ]
+    resp = client.get('/ai-scan-tasks', headers=headers)
+    assert resp.status_code == 200
+    task = resp.get_json()[0]
+    # camelCase keys present, snake_case absent
+    for k in ('statusField', 'promptTemplate', 'fieldMapping', 'ownerUserId',
+              'branchId', 'pendingValue', 'scheduleIntervalMinutes', 'maxRecordsPerScan'):
+        assert k in task, f'missing camelCase key {k}'
+    for k in ('status_field', 'prompt_template', 'field_mapping', 'owner_user_id'):
+        assert k not in task, f'unexpected snake_case key {k}'
+
+
 def test_get_missing_task_404(setup):
     client, cur, headers = setup
     with patch('routes.ai_scan_tasks.ai_scan_repo.get_task', lambda tid: None):

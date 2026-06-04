@@ -81,9 +81,9 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
 
 def test_assemble_prompt_appends_contract():
     from utils.ai_scan_engine import assemble_prompt
-    task = {'prompt_template': '用方案审核skill审核。',
-            'field_mapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True},
-                              {'jsonKey': '意见', 'column': '审核意见', 'required': False}]}
+    task = {'promptTemplate': '用方案审核skill审核。',
+            'fieldMapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True},
+                             {'jsonKey': '意见', 'column': '审核意见', 'required': False}]}
     p = assemble_prompt(task)
     assert 'uploads/record.md' in p
     assert '用方案审核skill审核。' in p
@@ -99,9 +99,9 @@ def test_build_context_dir_writes_record_md(tmp_path, monkeypatch):
                         lambda coll: {'name': '名称', 'amount': '金额', '审核状态': '审核状态',
                                       '审核结论': '审核结论'})
     monkeypatch.setattr(se, '_file_field_names', lambda coll: [])
-    task = {'id': 't1', 'collection': 'orders', 'branch_id': 'main', 'context_fields': {},
-            'status_field': '审核状态',
-            'field_mapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True}]}
+    task = {'id': 't1', 'collection': 'orders', 'branchId': 'main', 'contextFields': {},
+            'statusField': '审核状态',
+            'fieldMapping': [{'jsonKey': '结论', 'column': '审核结论', 'required': True}]}
     rec = {'id': 'rec-1', 'data': {'name': 'A', 'amount': 99, '审核状态': '处理中',
                                    '审核结论': '旧结论'}}
     rel = se.build_context_dir(task, rec)
@@ -119,9 +119,9 @@ def test_claim_builds_pending_predicate_and_running_update():
     import utils.ai_scan_engine as se
     fake, cur = _mock_db()
     cur.fetchall = MagicMock(return_value=[('rec-1', {'name': 'A'})])
-    task = {'id': 't1', 'collection': 'orders', 'branch_id': 'main',
-            'status_field': '审核状态', 'pending_value': '未审核', 'running_value': '处理中',
-            'extra_filter': {}, 'max_records_per_scan': 5}
+    task = {'id': 't1', 'collection': 'orders', 'branchId': 'main',
+            'statusField': '审核状态', 'pendingValue': '未审核', 'runningValue': '处理中',
+            'extraFilter': {}, 'maxRecordsPerScan': 5}
     with patch('utils.ai_scan_engine.get_db', fake):
         claimed = se.claim_records(task)
     sql = str(cur.execute.call_args_list[-1].args[0])
@@ -136,8 +136,8 @@ def test_run_task_creates_batch_for_claimed(monkeypatch):
     captured = {}
     monkeypatch.setattr(se, 'create_batch', lambda *a, **k: captured.update(kwargs=k, args=a) or {'batch': {}})
     monkeypatch.setattr(se, 'mark_run', lambda *a, **k: None)
-    task = {'id': 't1', 'name': '审核', 'owner_user_id': 'u', 'collection': 'orders',
-            'prompt_template': 'p', 'field_mapping': []}
+    task = {'id': 't1', 'name': '审核', 'ownerUserId': 'u', 'collection': 'orders',
+            'promptTemplate': 'p', 'fieldMapping': []}
     se.run_task(task)
     assert captured['kwargs']['scan_task_id'] == 't1'
     assert captured['kwargs']['files'][0]['recordId'] == 'rec-1'
@@ -160,8 +160,8 @@ def test_run_task_reverts_all_claimed_on_failure(monkeypatch):
     reverted = {}
     monkeypatch.setattr(se, '_revert_claimed', lambda task, ids: reverted.update(ids=ids))
     import pytest
-    task = {'id': 't1', 'name': 'n', 'owner_user_id': 'u', 'collection': 'c',
-            'prompt_template': 'p', 'field_mapping': []}
+    task = {'id': 't1', 'name': 'n', 'ownerUserId': 'u', 'collection': 'c',
+            'promptTemplate': 'p', 'fieldMapping': []}
     with pytest.raises(RuntimeError):
         se.run_task(task)
     assert set(reverted['ids']) == {'rec-1', 'rec-2', 'rec-3'}  # ALL claimed reverted
@@ -173,8 +173,8 @@ def test_run_task_zero_claimed_no_batch(monkeypatch):
     called = {'batch': False}
     monkeypatch.setattr(se, 'create_batch', lambda *a, **k: called.update(batch=True))
     monkeypatch.setattr(se, 'mark_run', lambda *a, **k: None)
-    se.run_task({'id': 't1', 'name': 'n', 'owner_user_id': 'u', 'collection': 'c',
-                 'prompt_template': 'p', 'field_mapping': []})
+    se.run_task({'id': 't1', 'name': 'n', 'ownerUserId': 'u', 'collection': 'c',
+                 'promptTemplate': 'p', 'fieldMapping': []})
     assert called['batch'] is False
 
 
@@ -182,8 +182,8 @@ def test_is_due_logic():
     from utils.ai_scan_scheduler import _is_due
     from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
-    assert _is_due({'last_run_at': None, 'schedule_interval_minutes': 15}, now) is True
-    assert _is_due({'last_run_at': (now - timedelta(minutes=20)).isoformat(),
-                    'schedule_interval_minutes': 15}, now) is True
-    assert _is_due({'last_run_at': (now - timedelta(minutes=5)).isoformat(),
-                    'schedule_interval_minutes': 15}, now) is False
+    assert _is_due({'lastRunAt': None, 'scheduleIntervalMinutes': 15}, now) is True
+    assert _is_due({'lastRunAt': (now - timedelta(minutes=20)).isoformat(),
+                    'scheduleIntervalMinutes': 15}, now) is True
+    assert _is_due({'lastRunAt': (now - timedelta(minutes=5)).isoformat(),
+                    'scheduleIntervalMinutes': 15}, now) is False
