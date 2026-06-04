@@ -1,12 +1,17 @@
 from flask import Blueprint, request, jsonify, g
 from werkzeug.security import generate_password_hash
 from db import get_db
-from auth import admin_required
+from auth import require_permission
 from datetime import timezone
 from utils.operation_log import log_operation
 import uuid
 
 users_bp = Blueprint('users', __name__)
+
+
+def _role_exists(cur, role_id):
+    cur.execute('SELECT 1 FROM roles WHERE id = %s', (role_id,))
+    return cur.fetchone() is not None
 
 
 def format_ts(dt):
@@ -28,7 +33,7 @@ def row_to_dict(row):
 
 
 @users_bp.route('/users', methods=['GET'])
-@admin_required
+@require_permission('admin.users')
 def list_users():
     with get_db() as conn:
         cur = conn.cursor()
@@ -38,7 +43,7 @@ def list_users():
 
 
 @users_bp.route('/users', methods=['POST'])
-@admin_required
+@require_permission('admin.users')
 def create_user():
     body = request.get_json(force=True)
     username = body.get('username', '').strip()
@@ -48,14 +53,14 @@ def create_user():
 
     if not username or not password or not display_name:
         return jsonify({'error': '用户名、密码和显示名称不能为空'}), 400
-    if role not in ('admin', 'developer', 'guest'):
-        return jsonify({'error': '无效的角色'}), 400
     if len(password) < 6:
         return jsonify({'error': '密码不能少于6个字符'}), 400
 
     user_id = f'user-{uuid.uuid4().hex[:8]}'
     with get_db() as conn:
         cur = conn.cursor()
+        if not _role_exists(cur, role):
+            return jsonify({'error': '无效的角色'}), 400
         cur.execute('SELECT id FROM users WHERE username = %s', (username,))
         if cur.fetchone():
             return jsonify({'error': '用户名已存在'}), 409
@@ -71,7 +76,7 @@ def create_user():
 
 
 @users_bp.route('/users/<user_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.users')
 def update_user(user_id):
     body = request.get_json(force=True)
     with get_db() as conn:
@@ -82,7 +87,7 @@ def update_user(user_id):
             sets.append('display_name = %s')
             params.append(body['displayName'])
         if 'role' in body:
-            if body['role'] not in ('admin', 'developer', 'guest'):
+            if not _role_exists(cur, body['role']):
                 return jsonify({'error': '无效的角色'}), 400
             sets.append('role = %s')
             params.append(body['role'])
@@ -105,7 +110,7 @@ def update_user(user_id):
 
 
 @users_bp.route('/users/<user_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.users')
 def delete_user(user_id):
     if g.current_user['userId'] == user_id:
         return jsonify({'error': '不能删除自己的账号'}), 400

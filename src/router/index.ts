@@ -100,6 +100,21 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
+        path: 'admin/roles',
+        name: 'RoleManager',
+        component: () => import('@/views/admin/RoleManager.vue'),
+        meta: {
+          title: '角色权限',
+          icon: 'Lock',
+        },
+      },
+      {
+        path: 'admin/ai-scan-tasks',
+        name: 'AiScanTaskManager',
+        component: () => import('@/views/admin/AiScanTaskManager.vue'),
+        meta: { title: 'AI 定时任务', icon: 'AlarmClock' },
+      },
+      {
         path: 'admin/operation-log',
         name: 'OperationLog',
         component: () => import('@/views/admin/OperationLog.vue'),
@@ -301,6 +316,12 @@ router.beforeEach(async (to) => {
   const appStore = useAppStore()
 
   if (!appStore.initialized) {
+    // 应用加载时刷新当前用户，确保拿到最新的权限集合（permissions）。
+    // 这能让旧会话/权限变更在刷新后即时生效，并避免依赖本地缓存里过期的权限。
+    await authStore.fetchCurrentUser()
+    if (!authStore.isLoggedIn) {
+      return '/login'
+    }
     await appStore.initializeApp()
   }
 

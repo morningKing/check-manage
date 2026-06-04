@@ -19,7 +19,7 @@ Legacy endpoints (kept for backward compatibility):
 
 from flask import Blueprint, request, jsonify, g
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 import psycopg2.extras
 import uuid
 
@@ -74,7 +74,7 @@ def list_rules():
 
 
 @webhook_bp.route('/webhook/rules', methods=['POST'])
-@admin_required
+@require_permission('admin.webhooks')
 def create_rule():
     """
     创建 webhook 规则
@@ -153,7 +153,7 @@ def get_rule(rule_id):
 
 
 @webhook_bp.route('/webhook/rules/<rule_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.webhooks')
 def update_rule(rule_id):
     """
     更新 webhook 规则
@@ -214,7 +214,7 @@ def update_rule(rule_id):
 
 
 @webhook_bp.route('/webhook/rules/<rule_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.webhooks')
 def delete_rule(rule_id):
     """
     删除 webhook 规则
@@ -230,7 +230,7 @@ def delete_rule(rule_id):
 
 
 @webhook_bp.route('/webhook/rules/<rule_id>/test', methods=['POST'])
-@admin_required
+@require_permission('admin.webhooks')
 def test_rule(rule_id):
     """
     测试 webhook 规则
@@ -388,7 +388,7 @@ def get_settings():
 
 
 @webhook_bp.route('/webhook/settings', methods=['PUT'])
-@admin_required
+@require_permission('admin.webhooks')
 def update_settings():
     """
     更新旧 webhook 配置（创建或更新第一个 merge 规则）
@@ -444,7 +444,7 @@ def update_settings():
 
 
 @webhook_bp.route('/webhook/test', methods=['POST'])
-@admin_required
+@require_permission('admin.webhooks')
 def test_webhook():
     """
     测试 webhook 调用（使用 merge 规则）

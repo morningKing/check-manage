@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
-from auth import login_required, write_required, admin_required
+from auth import login_required, write_required, require_permission
 from datetime import datetime, timezone
 import psycopg2.extras
 
@@ -243,7 +243,7 @@ def delete_view(page_id, view_id):
 
 
 @column_views_bp.route('/<page_id>/views/<int:view_id>/default', methods=['PUT'])
-@admin_required
+@require_permission('admin.column_views')
 def set_default(page_id, view_id):
     """Set a public view as the page default. Admin only."""
     with get_db() as conn:

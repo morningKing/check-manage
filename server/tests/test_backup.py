@@ -120,7 +120,8 @@ class TestCreateBackup:
         # menus 表有一条数据,其它表都返回空。BACKUP_TABLES 长度会增长 ——
         # side_effect 必须能匹配实际的表数量,否则会 StopIteration。
         from utils.backup import BACKUP_TABLES
-        menus_row = [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None)]
+        # 11 列：id,name,icon,page_id,parent_id,order,path,roles,export_script_id,menu_type,project_id
+        menus_row = [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None, None, 'data', None)]
         mock_cursor.fetchall.side_effect = [
             menus_row if name == 'menus' else []
             for (name, _cols, _jsonb, _label) in BACKUP_TABLES
@@ -199,6 +200,70 @@ class TestRestoreBackup:
             # 应该执行 TRUNCATE 和 INSERT
             assert mock_cursor.execute.call_count > 0
             mock_conn.commit.assert_called_once()
+
+    @patch('db.pool')
+    def test_restore_menus_preserves_menu_type(self, mock_pool):
+        """新版菜单备份还原应在 INSERT 中包含 menu_type 列及其值"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'bk.zip')
+            manifest = {'version': BACKUP_VERSION, 'id': 'bk', 'name': 't', 'type': 'manual',
+                        'createdAt': datetime.now(timezone.utc).isoformat(),
+                        'tables': {'menus': 1}, 'totalRecords': 1}
+            menus = [{'id': 'm1', 'name': 'N', 'icon': None, 'page_id': None,
+                      'parent_id': None, 'order': 1, 'path': None, 'roles': ['admin'],
+                      'export_script_id': None, 'menu_type': 'project', 'project_id': None}]
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', json.dumps(menus))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path, tables=['menus'], mode='replace')
+
+            inserts = [c for c in mock_cursor.execute.call_args_list
+                       if 'INSERT INTO menus' in str(c.args[0])]
+            assert inserts, 'expected an INSERT INTO menus'
+            sql, vals = inserts[0].args[0], inserts[0].args[1]
+            assert 'menu_type' in sql
+            assert 'project' in vals  # menu_type 的值随备份还原
+
+    @patch('db.pool')
+    def test_restore_old_menus_backup_omits_missing_columns(self, mock_pool):
+        """旧版菜单备份缺少 menu_type，应从 INSERT 中省略该列（交由数据库默认值填充）"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'bk.zip')
+            manifest = {'version': BACKUP_VERSION, 'id': 'bk', 'name': 't', 'type': 'manual',
+                        'createdAt': datetime.now(timezone.utc).isoformat(),
+                        'tables': {'menus': 1}, 'totalRecords': 1}
+            # 旧格式：仅 8 列，无 menu_type / export_script_id / project_id
+            menus = [{'id': 'm1', 'name': 'N', 'icon': None, 'page_id': None,
+                      'parent_id': None, 'order': 1, 'path': None, 'roles': ['admin']}]
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('menus.json', json.dumps(menus))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path, tables=['menus'], mode='replace')
+
+            inserts = [c for c in mock_cursor.execute.call_args_list
+                       if 'INSERT INTO menus' in str(c.args[0])]
+            assert inserts
+            sql = str(inserts[0].args[0])
+            assert 'menu_type' not in sql   # 缺列 → 不显式插入 → 用默认值，不会 NOT NULL 报错
+            assert 'project_id' not in sql
 
     @patch('db.pool')
     def test_restore_rollback_on_error(self, mock_pool):

@@ -9,7 +9,7 @@ PUT  /ai/settings — update AI configuration.
 
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 
@@ -58,7 +58,7 @@ def ai_query():
 
 
 @ai_bp.route('/settings', methods=['GET'])
-@admin_required
+@require_permission('admin.ai_settings')
 def get_settings():
     """获取 AI 配置（api_key 掩码处理）"""
     settings = get_ai_settings()
@@ -70,7 +70,7 @@ def get_settings():
 
 
 @ai_bp.route('/settings', methods=['PUT'])
-@admin_required
+@require_permission('admin.ai_settings')
 def put_settings():
     """更新 AI 配置"""
     body = request.get_json(force=True)

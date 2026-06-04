@@ -7,7 +7,7 @@ PUT  /system-config — 更新系统配置（仅管理员）
 from flask import Blueprint, request, jsonify, g
 import psycopg2.extras
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 
 system_config_bp = Blueprint('system_config', __name__, url_prefix='/system-config')
 
@@ -31,7 +31,7 @@ def get_system_config():
 
 
 @system_config_bp.route('', methods=['PUT'])
-@admin_required
+@require_permission('admin.system_config')
 def update_system_config():
     """更新系统配置（仅管理员）"""
     body = request.get_json(force=True)

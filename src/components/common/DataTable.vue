@@ -112,10 +112,10 @@
           </el-button>
           <template v-if="showActions">
             <slot name="extra-actions" :row="row" />
-            <el-button type="primary" link @click="handleEdit(row)">
+            <el-button v-if="canUpdate" type="primary" link @click="handleEdit(row)">
               编辑
             </el-button>
-            <el-button type="danger" link @click="handleDelete(row)">
+            <el-button v-if="canDelete" type="danger" link @click="handleDelete(row)">
               删除
             </el-button>
           </template>
@@ -283,6 +283,10 @@ interface Props {
   loading?: boolean
   /** 是否显示操作列 */
   showActions?: boolean
+  /** 是否允许编辑（按页面 CRUD 权限控制行内编辑按钮） */
+  canUpdate?: boolean
+  /** 是否允许删除（按页面 CRUD 权限控制行内删除按钮） */
+  canDelete?: boolean
   /** 是否显示多选列 */
   showSelection?: boolean
   /** 是否显示分页 */
@@ -294,6 +298,8 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
   showActions: true,
+  canUpdate: true,
+  canDelete: true,
   showSelection: false,
   showPagination: true,
   total: 0

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 from utils.operation_log import log_operation
 import json
 
@@ -136,7 +136,7 @@ def get_menu(menu_id):
 
 
 @menus_bp.route('/menus', methods=['POST'])
-@admin_required
+@require_permission('admin.menus')
 def create_menu():
     body = request.get_json(force=True)
     parent_id = body.get('parentId')
@@ -174,7 +174,7 @@ def create_menu():
 
 
 @menus_bp.route('/menus/<menu_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.menus')
 def update_menu(menu_id):
     with get_db() as conn:
         cur = conn.cursor()
@@ -238,7 +238,7 @@ def update_menu(menu_id):
 
 
 @menus_bp.route('/menus/<menu_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.menus')
 def delete_menu(menu_id):
     with get_db() as conn:
         cur = conn.cursor()
@@ -256,7 +256,7 @@ def delete_menu(menu_id):
 
 
 @menus_bp.route('/menus/<menu_id>/exportScript', methods=['PUT'])
-@admin_required
+@require_permission('admin.menus')
 def set_menu_export_script(menu_id):
     body = request.get_json(force=True)
     script_id = body.get('exportScriptId')

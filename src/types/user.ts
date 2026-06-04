@@ -1,11 +1,14 @@
 /**
  * 用户相关类型定义
  */
+import type { ResolvedPermissions } from './role'
 
 /**
  * 用户角色类型
+ *
+ * 自定义角色系统下，角色为任意 slug 字符串（内置：admin / developer / guest）
  */
-export type UserRole = 'admin' | 'developer' | 'guest'
+export type UserRole = string
 
 /**
  * 用户信息接口
@@ -15,6 +18,9 @@ export interface UserInfo {
   username: string
   displayName: string
   role: UserRole
+  /** 角色显示名（含自定义角色）；后端登录/鉴权时附带，前端展示优先使用 */
+  roleName?: string
+  permissions?: ResolvedPermissions
   createdAt?: string
 }
 
@@ -57,7 +63,7 @@ export const ROLE_OPTIONS: { label: string; value: UserRole }[] = [
 /**
  * 角色显示名映射
  */
-export const ROLE_LABELS: Record<UserRole, string> = {
+export const ROLE_LABELS: Partial<Record<UserRole, string>> = {
   admin: '管理员',
   developer: '开发人员',
   guest: '访客',

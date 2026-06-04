@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 from utils.operation_log import log_operation
 import uuid
 
@@ -41,7 +41,7 @@ def list_scripts():
 
 
 @validation_scripts_bp.route('/validationScripts', methods=['POST'])
-@admin_required
+@require_permission('admin.validation_scripts')
 def create_script():
     body = request.get_json(force=True)
     script_id = body.get('id') or f'vs-{uuid.uuid4().hex[:8]}'
@@ -67,7 +67,7 @@ def create_script():
 
 
 @validation_scripts_bp.route('/validationScripts/<script_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.validation_scripts')
 def update_script(script_id):
     body = request.get_json(force=True)
     now = datetime.now(timezone.utc)
@@ -102,7 +102,7 @@ def update_script(script_id):
 
 
 @validation_scripts_bp.route('/validationScripts/<script_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.validation_scripts')
 def delete_script(script_id):
     with get_db() as conn:
         cur = conn.cursor()
@@ -121,7 +121,7 @@ def delete_script(script_id):
 
 
 @validation_scripts_bp.route('/validationScripts/<script_id>/test', methods=['POST'])
-@admin_required
+@require_permission('admin.validation_scripts')
 def test_script(script_id):
     """Test a validation script with sample data."""
     body = request.get_json(force=True)

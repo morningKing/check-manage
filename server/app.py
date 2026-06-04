@@ -36,7 +36,9 @@ from routes.column_views import column_views_bp
 from routes.ai_chat import ai_chat_bp
 from routes.ai_chat_prompt_templates import ai_chat_prompt_templates_bp
 from routes.ai_chat_batches import ai_chat_batches_bp
+from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.data_files import data_files_bp
+from routes.roles import roles_bp
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
@@ -75,7 +77,9 @@ app.register_blueprint(column_views_bp)
 app.register_blueprint(ai_chat_bp)
 app.register_blueprint(ai_chat_prompt_templates_bp)
 app.register_blueprint(ai_chat_batches_bp)
+app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(data_files_bp)
+app.register_blueprint(roles_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start).
@@ -94,6 +98,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     # Start in-process batch worker (drives child sessions via OpenCode HTTP API)
     from utils.batch_engine import get_worker
     get_worker().start()
+
+    # Start scheduled AI row-processor scheduler
+    from utils.ai_scan_scheduler import start_scan_scheduler
+    start_scan_scheduler(app)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG,

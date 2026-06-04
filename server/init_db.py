@@ -81,8 +81,7 @@ CREATE TABLE IF NOT EXISTS users (
     username        VARCHAR(100) UNIQUE NOT NULL,
     password_hash   VARCHAR(256) NOT NULL,
     display_name    VARCHAR(200) NOT NULL,
-    role            VARCHAR(50)  NOT NULL DEFAULT 'guest'
-                    CHECK (role IN ('admin', 'developer', 'guest')),
+    role            VARCHAR(50)  NOT NULL DEFAULT 'guest',
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -466,6 +465,69 @@ ALTER TABLE ai_chat_sessions
   ALTER COLUMN token_expires_at DROP NOT NULL;
 """
 
+AI_SCAN_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS ai_scan_tasks (
+  id              VARCHAR(100) PRIMARY KEY,
+  name            TEXT NOT NULL,
+  enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+  owner_user_id   VARCHAR(100) NOT NULL REFERENCES users(id),
+  collection      VARCHAR(200) NOT NULL,
+  branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+  status_field    TEXT NOT NULL,
+  pending_value   TEXT NOT NULL DEFAULT '',
+  running_value   TEXT NOT NULL DEFAULT '处理中',
+  done_value      TEXT NOT NULL DEFAULT '已处理',
+  failed_value    TEXT NOT NULL DEFAULT '处理失败',
+  extra_filter    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context_fields  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  prompt_template TEXT NOT NULL,
+  field_mapping   JSONB NOT NULL DEFAULT '[]'::jsonb,
+  schedule_interval_minutes INT NOT NULL DEFAULT 15,
+  max_records_per_scan      INT NOT NULL DEFAULT 20,
+  last_run_at     TIMESTAMPTZ,
+  last_scan_count INT DEFAULT 0,
+  last_error      TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE ai_chat_sessions
+  ADD COLUMN IF NOT EXISTS scan_task_id     VARCHAR(100) NULL REFERENCES ai_scan_tasks(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS source_record_id VARCHAR(100) NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_scan
+  ON ai_chat_sessions(scan_task_id, source_record_id);
+"""
+
+
+RBAC_DDL = """
+CREATE TABLE IF NOT EXISTS roles (
+    id                  VARCHAR(100) PRIMARY KEY,
+    name                VARCHAR(200) NOT NULL,
+    description         TEXT,
+    is_system           BOOLEAN NOT NULL DEFAULT FALSE,
+    is_superuser        BOOLEAN NOT NULL DEFAULT FALSE,
+    default_page_access VARCHAR(10) NOT NULL DEFAULT 'read'
+                        CHECK (default_page_access IN ('none','read','write')),
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id        VARCHAR(100) NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    permission_key VARCHAR(100) NOT NULL,
+    PRIMARY KEY (role_id, permission_key)
+);
+
+CREATE TABLE IF NOT EXISTS role_page_permissions (
+    role_id     VARCHAR(100) NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+    page_id     VARCHAR(100) NOT NULL,
+    can_read    BOOLEAN NOT NULL DEFAULT TRUE,
+    can_create  BOOLEAN NOT NULL DEFAULT FALSE,
+    can_update  BOOLEAN NOT NULL DEFAULT FALSE,
+    can_delete  BOOLEAN NOT NULL DEFAULT FALSE,
+    PRIMARY KEY (role_id, page_id)
+);
+"""
+
 
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
@@ -494,6 +556,28 @@ def init_db():
         cur.execute(AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL)
         conn.commit()
         print("AI chat sessions batch columns added.")
+
+        cur.execute(AI_SCAN_TASKS_DDL)
+        conn.commit()
+        print("ai_scan_tasks table + ai_chat_sessions scan columns created.")
+
+        # RBAC custom roles (Phase 0)
+        cur.execute(RBAC_DDL)
+        conn.commit()
+        print("RBAC tables (roles, role_permissions, role_page_permissions) created.")
+
+        # Migration: drop the hardcoded role CHECK so custom roles are allowed.
+        # The constraint name is auto-generated; find and drop it dynamically.
+        cur.execute("""
+            SELECT conname FROM pg_constraint
+            WHERE conrelid = 'users'::regclass
+              AND contype = 'c'
+              AND pg_get_constraintdef(oid) ILIKE '%role%'
+        """)
+        for (conname,) in cur.fetchall():
+            cur.execute(f'ALTER TABLE users DROP CONSTRAINT IF EXISTS "{conname}"')
+        conn.commit()
+        print("Dropped hardcoded users.role CHECK constraint (if present).")
 
         # Migrations: add roles column if missing
         cur.execute("""
@@ -1231,6 +1315,30 @@ def init_db():
                 conn.commit()
                 print(f"Added {name} menu.")
 
+        # Migration: add 角色权限 (custom roles RBAC) menu if missing
+        # Note: menu-3-12 is already taken by the 数据导出 (menu-export) migration above,
+        # so the role management menu uses the next free id menu-3-15.
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-15'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-15', %s, 'Lock', NULL, 'menu-3-a', 8, '/admin/roles', %s, 'system')",
+                ('角色权限', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added 角色权限 menu.")
+
+        # Migration: add AI 定时任务 (scheduled AI row-processor) menu if missing
+        cur.execute("SELECT id FROM menus WHERE id = 'menu-3-16'")
+        if not cur.fetchone():
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+                "VALUES ('menu-3-16', %s, 'AlarmClock', NULL, 'menu-3-b', 7, '/admin/ai-scan-tasks', %s, 'system')",
+                ('AI 定时任务', psycopg2.extras.Json(['admin'])),
+            )
+            conn.commit()
+            print("Added AI 定时任务 menu.")
+
         # Migration: create project_versions table
         cur.execute("""
             SELECT table_name FROM information_schema.tables
@@ -1739,6 +1847,24 @@ def init_db():
                 print(f"Default admin user created ({initial_admin_username} / env INIT_ADMIN_PASSWORD)")
             else:
                 print("Users table is empty. Skip default admin creation because INIT_ADMIN_PASSWORD is not set.")
+
+        # Seed built-in roles (idempotent). admin = superuser; developer/guest = editable presets.
+        cur.execute("""
+            INSERT INTO roles (id, name, description, is_system, is_superuser, default_page_access) VALUES
+              ('admin',     '管理员',   '系统超级管理员，拥有全部权限',   TRUE, TRUE,  'write'),
+              ('developer', '开发人员', '可读写所有数据，无管理功能权限', TRUE, FALSE, 'write'),
+              ('guest',     '访客',     '只读访问',                       TRUE, FALSE, 'read')
+            ON CONFLICT (id) DO NOTHING
+        """)
+        # admin.roles is seeded only to admin (superuser bypasses anyway, but keep an explicit row
+        # so the catalog renders it as granted for the admin role).
+        cur.execute("""
+            INSERT INTO role_permissions (role_id, permission_key)
+            VALUES ('admin', 'admin.roles')
+            ON CONFLICT DO NOTHING
+        """)
+        conn.commit()
+        print("Seeded built-in roles (admin/developer/guest).")
 
         conn.commit()
         print("Seed data inserted successfully.")

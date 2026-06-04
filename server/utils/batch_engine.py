@@ -153,10 +153,26 @@ def _prepare_workspace(user_id: str, session_id: str,
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
     src = Path(_workspace_root()) / staged_file_path
-    dst = Path(ws) / 'uploads' / Path(staged_file_path).name
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    if src.exists():
-        shutil.copy2(str(src), str(dst))
+    up = Path(ws) / 'uploads'
+    up.mkdir(parents=True, exist_ok=True)
+    # On Windows, copying a just-created staging dir can intermittently raise
+    # PermissionError (antivirus / handle-settling contention). Retry a few times.
+    last_err = None
+    for _attempt in range(3):
+        try:
+            if src.is_dir():
+                # scan-task context directory: copy its whole contents into uploads/
+                shutil.copytree(str(src), str(up), dirs_exist_ok=True)
+            elif src.exists():
+                dst = up / Path(staged_file_path).name
+                shutil.copy2(str(src), str(dst))
+            last_err = None
+            break
+        except (PermissionError, OSError) as e:
+            last_err = e
+            time.sleep(0.3)
+    if last_err is not None:
+        raise last_err
     return ws
 
 
@@ -324,6 +340,9 @@ class BatchWorker:
         if prompt is None:
             # Batch was deleted between claim and prompt fetch.
             # FK CASCADE has already removed our session row; nothing to mark.
+            # Scan-task children are intentionally NOT notified via _notify_scan on
+            # this path: recovery is handled by the orphan sweep (running rows with
+            # no live session get reset to pending).
             return
 
         try:
@@ -335,11 +354,23 @@ class BatchWorker:
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
             self._persist_conversation(sid, prompt, final_msg)
             self._mark_done(sid, batch_id, last_preview=preview)
+            self._notify_scan(session_row, final_msg, ok=True)
         except _SessionTimeout as e:
             self._mark_failed(sid, batch_id, error=f'timeout after {e.seconds}s')
+            self._notify_scan(session_row, None, ok=False)
         except Exception as e:
             self._mark_failed(sid, batch_id,
                               error=f'{type(e).__name__}: {e}'[:500])
+            self._notify_scan(session_row, None, ok=False)
+
+    def _notify_scan(self, session_row, final_msg, ok: bool):
+        if not session_row.get('scan_task_id'):
+            return
+        try:
+            from utils.ai_scan_engine import on_child_finished
+            on_child_finished(session_row, final_msg, ok=ok)
+        except Exception:
+            traceback.print_exc()
 
     def _fetch_batch_prompt(self, batch_id: str) -> str | None:
         with get_db() as conn:

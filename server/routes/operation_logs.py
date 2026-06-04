@@ -10,7 +10,7 @@ import io
 import time
 from flask import Blueprint, request, jsonify, send_file
 from db import get_db
-from auth import admin_required
+from auth import require_permission
 from datetime import timezone
 
 operation_logs_bp = Blueprint('operation_logs', __name__)
@@ -112,7 +112,7 @@ def build_filter():
 
 
 @operation_logs_bp.route('/operationLogs', methods=['GET'])
-@admin_required
+@require_permission('admin.operation_logs')
 def list_logs():
     """List operation logs with optional filtering and pagination."""
     page = request.args.get('page', 1, type=int)
@@ -142,7 +142,7 @@ def list_logs():
 
 
 @operation_logs_bp.route('/operationLogs/<log_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.operation_logs')
 def delete_log(log_id):
     """Delete a single operation log entry."""
     with get_db() as conn:
@@ -152,7 +152,7 @@ def delete_log(log_id):
 
 
 @operation_logs_bp.route('/operationLogs/export', methods=['GET'])
-@admin_required
+@require_permission('admin.operation_logs')
 def export_logs():
     """Export filtered logs as an Excel or CSV file."""
     where, params = build_filter()

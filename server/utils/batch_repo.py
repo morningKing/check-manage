@@ -12,11 +12,15 @@ MAX_FILES_PER_BATCH = 50
 
 
 def create_batch(user_id: str, *, name: str, prompt: str,
-                 template_id: str | None, files: list[dict]) -> dict:
+                 template_id: str | None, files: list[dict],
+                 scan_task_id: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
-    `files` is a list of {name, path} dicts where path is workspace-relative
-    (under batch-staging/...). Returns {batch, sessions}.
+    `files` is a list of {name, path} dicts where `path` is workspace-relative
+    (under batch-staging/...). Each entry may also carry an optional `recordId`
+    key: the source record id, stamped into `source_record_id` for scan tasks.
+    `scan_task_id` is an optional param linking the child sessions to a scan task.
+    Returns {batch, sessions}.
     """
     if not files:
         raise ValueError("at least one file required")
@@ -39,9 +43,11 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 sid = str(uuid.uuid4())
                 cur.execute(
                     "INSERT INTO ai_chat_sessions "
-                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file) "
-                    "VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING *",
-                    (sid, user_id, batch_id, seq, f['path']),
+                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
+                    "   scan_task_id, source_record_id) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
+                    (sid, user_id, batch_id, seq, f['path'],
+                     scan_task_id, f.get('recordId')),
                 )
                 sessions.append(dict(cur.fetchone()))
         conn.commit()

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
-from auth import login_required, admin_required
+from auth import login_required, require_permission
 import psycopg2.extras
 import uuid
 from utils.version import get_user_current_branch as resolve_user_current_branch
@@ -52,7 +52,7 @@ def get_dashboard(dash_id):
 
 
 @dashboards_bp.route('/dashboards', methods=['POST'])
-@admin_required
+@require_permission('admin.dashboards')
 def create_dashboard():
     body = request.get_json(force=True)
     user = g.current_user
@@ -71,7 +71,7 @@ def create_dashboard():
 
 
 @dashboards_bp.route('/dashboards/<dash_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.dashboards')
 def update_dashboard(dash_id):
     body = request.get_json(force=True)
     sets, params = [], []
@@ -93,7 +93,7 @@ def update_dashboard(dash_id):
 
 
 @dashboards_bp.route('/dashboards/<dash_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.dashboards')
 def delete_dashboard(dash_id):
     with get_db() as conn:
         cur = conn.cursor()

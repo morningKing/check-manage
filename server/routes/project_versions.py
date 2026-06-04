@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify, g
-from auth import login_required, admin_required, write_required
+from auth import login_required, write_required, require_permission
 from utils.project_version import (
     get_project_collections,
     get_user_project_branch,
@@ -59,7 +59,7 @@ def list_all_branches():
 
 
 @project_versions_bp.route('/project-versions', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def create_version():
     """创建项目版本（快照或分支）"""
     body = request.get_json(force=True)
@@ -117,7 +117,7 @@ def diff_versions():
 
 
 @project_versions_bp.route('/project-versions/merge', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def merge_version():
     """合并项目版本"""
     try:
@@ -180,7 +180,7 @@ def merge_version():
 
 
 @project_versions_bp.route('/project-versions/merge-detailed', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def merge_version_detailed():
     """合并项目版本（详细决策模式 - 支持按记录/字段选择）"""
     try:
@@ -325,7 +325,7 @@ def get_project_merge_records(project_menu_id):
 
 
 @project_versions_bp.route('/project-versions/<version_id>/lock', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def lock_version(version_id):
     """锁定项目分支"""
     try:
@@ -346,7 +346,7 @@ def lock_version(version_id):
 
 
 @project_versions_bp.route('/project-versions/<version_id>/unlock', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def unlock_version(version_id):
     """解锁项目分支"""
     try:
@@ -359,7 +359,7 @@ def unlock_version(version_id):
 
 
 @project_versions_bp.route('/project-versions/main/<project_menu_id>/lock', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def lock_main_version(project_menu_id):
     """锁定项目的 main 分支"""
     try:
@@ -380,7 +380,7 @@ def lock_main_version(project_menu_id):
 
 
 @project_versions_bp.route('/project-versions/main/<project_menu_id>/unlock', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def unlock_main_version(project_menu_id):
     """解锁项目的 main 分支"""
     try:
@@ -544,7 +544,7 @@ def switch_branch(version_id):
 
 
 @project_versions_bp.route('/project-versions/<version_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.project_versions')
 def delete_version(version_id):
     """删除项目版本"""
     try:
@@ -557,7 +557,7 @@ def delete_version(version_id):
 
 
 @project_versions_bp.route('/project-versions/<version_id>/restore', methods=['POST'])
-@admin_required
+@require_permission('admin.project_versions')
 def restore_version(version_id):
     """从项目版本恢复数据"""
     try:
@@ -601,7 +601,7 @@ def switch_to_main(project_menu_id):
 
 
 @project_versions_bp.route('/project-versions/<version_id>/delete-impact', methods=['GET'])
-@admin_required
+@require_permission('admin.project_versions')
 def get_delete_impact(version_id):
     """获取删除项目版本的影响报告"""
     try:

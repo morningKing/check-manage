@@ -112,7 +112,7 @@ class TestCreateUser:
 
     def test_duplicate_username(self, setup):
         client, mock_cursor, admin_h, _ = setup
-        mock_cursor.fetchone.side_effect = [('existing-id',), None]
+        mock_cursor.fetchone.side_effect = [(1,), ('existing-id',), None]
         resp = client.post('/users',
                            data=json.dumps({
                                'username': 'admin', 'password': '123456',
@@ -125,6 +125,7 @@ class TestCreateUser:
     def test_create_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.side_effect = [
+            (1,),  # _role_exists: role found
             None,  # no duplicate
             ('u-new', 'newuser', '新用户', 'guest', now),  # created row
         ]

@@ -9,7 +9,7 @@ ETL 任务管理路由
 
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import admin_required
+from auth import require_permission
 from utils.operation_log import log_operation
 from datetime import datetime, timezone
 import psycopg2.extras
@@ -62,7 +62,7 @@ LOG_COLS = 'id, task_id, task_name, status, started_at, finished_at, total_recor
 
 
 @etl_tasks_bp.route('/etlTasks', methods=['GET'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def list_tasks():
     with get_db() as conn:
         cur = conn.cursor()
@@ -72,7 +72,7 @@ def list_tasks():
 
 
 @etl_tasks_bp.route('/etlTasks', methods=['POST'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def create_task():
     body = request.get_json(force=True)
     task_id = f'etl-{uuid.uuid4().hex[:12]}'
@@ -109,7 +109,7 @@ def create_task():
 
 
 @etl_tasks_bp.route('/etlTasks/<task_id>', methods=['PUT'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def update_task(task_id):
     body = request.get_json(force=True)
     now = datetime.now(timezone.utc)
@@ -134,7 +134,7 @@ def update_task(task_id):
 
 
 @etl_tasks_bp.route('/etlTasks/<task_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def delete_task(task_id):
     with get_db() as conn:
         cur = conn.cursor()
@@ -149,7 +149,7 @@ def delete_task(task_id):
 
 
 @etl_tasks_bp.route('/etlTasks/<task_id>/run', methods=['POST'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def run_task(task_id):
     body = request.get_json(force=True) if request.data else {}
     dry_run = body.get('dryRun', False)
@@ -235,7 +235,7 @@ def run_task(task_id):
 
 
 @etl_tasks_bp.route('/etlTasks/<task_id>/logs', methods=['GET'])
-@admin_required
+@require_permission('admin.etl_tasks')
 def list_logs(task_id):
     with get_db() as conn:
         cur = conn.cursor()

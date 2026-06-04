@@ -3,6 +3,7 @@ from db import get_db
 from auth import login_required, write_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
+from utils.rbac_guard import require_page_action
 from flask import g as flask_g
 
 relations_bp = Blueprint('relations', __name__)
@@ -69,6 +70,9 @@ def get_relations(collection, record_id):
 @relations_bp.route('/relations/<collection>/<record_id>/<field_name>', methods=['PUT'])
 @write_required
 def update_relations(collection, record_id, field_name):
+    denied = require_page_action(collection, 'update')
+    if denied:
+        return denied
     body = request.get_json(force=True)
     target_collection = body['targetCollection']
     target_field = body['targetField']
@@ -145,6 +149,9 @@ def update_relations(collection, record_id, field_name):
 @relations_bp.route('/relations/<collection>/<record_id>', methods=['DELETE'])
 @write_required
 def delete_all_relations(collection, record_id):
+    denied = require_page_action(collection, 'update')
+    if denied:
+        return denied
     branch_id = _get_current_user_branch(collection)
     with get_db() as conn:
         cur = conn.cursor()

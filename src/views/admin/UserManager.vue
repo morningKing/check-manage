@@ -28,7 +28,7 @@
         <el-table-column prop="role" label="角色" width="120" align="center">
           <template #default="{ row }">
             <el-tag :type="getRoleTagType(row.role)" size="small">
-              {{ ROLE_LABELS[row.role as UserRole] || row.role }}
+              {{ roleLabel(row.role) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -73,10 +73,10 @@
         <el-form-item label="角色" prop="role">
           <el-select v-model="formData.role" placeholder="请选择角色" style="width: 100%">
             <el-option
-              v-for="opt in ROLE_OPTIONS"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
+              v-for="opt in roleStore.roles"
+              :key="opt.id"
+              :label="opt.name"
+              :value="opt.id"
             />
           </el-select>
         </el-form-item>
@@ -134,14 +134,14 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { getUserList, createUser, updateUser, deleteUser } from '@/api/user'
-import { useAuthStore } from '@/stores'
+import { useAuthStore, useRoleStore } from '@/stores'
 import { ConfirmDialog } from '@/components/common'
-import { ROLE_OPTIONS, ROLE_LABELS } from '@/types'
 import type { UserInfo, UserRole } from '@/types'
 
 // ==================== Store ====================
 
 const authStore = useAuthStore()
+const roleStore = useRoleStore()
 
 // ==================== State ====================
 
@@ -186,13 +186,16 @@ const formRules = computed<FormRules>(() => ({
 
 // ==================== 方法 ====================
 
-function getRoleTagType(role: string): string {
-  switch (role) {
-    case 'admin': return 'danger'
-    case 'developer': return ''
-    case 'guest': return 'info'
-    default: return 'info'
-  }
+function roleLabel(roleId: string): string {
+  return roleStore.roles.find((r) => r.id === roleId)?.name || roleId
+}
+
+function getRoleTagType(roleId: string): string {
+  const role = roleStore.roles.find((r) => r.id === roleId)
+  if (!role) return 'info'
+  if (role.isSuperuser) return 'danger'
+  if (role.isSystem) return ''
+  return 'info'
 }
 
 function formatDate(value: string): string {
@@ -316,6 +319,7 @@ async function handleResetSubmit(): Promise<void> {
 
 onMounted(() => {
   loadUsers()
+  roleStore.loadRoles()
 })
 </script>
 

@@ -10,7 +10,7 @@ import zipfile
 import tempfile
 from flask import Blueprint, request, jsonify, send_file
 from db import get_db
-from auth import admin_required
+from auth import require_permission
 from utils.backup import (
     create_backup,
     restore_backup,
@@ -44,7 +44,7 @@ def _row_to_dict(row):
 
 
 @backups_bp.route('/backups', methods=['GET'])
-@admin_required
+@require_permission('admin.backup')
 def list_backups():
     """获取备份列表（按时间倒序）"""
     with get_db() as conn:
@@ -59,7 +59,7 @@ def list_backups():
 
 
 @backups_bp.route('/backups', methods=['POST'])
-@admin_required
+@require_permission('admin.backup')
 def create_manual_backup():
     """创建手动备份"""
     from flask import g
@@ -82,7 +82,7 @@ def create_manual_backup():
 
 
 @backups_bp.route('/backups/<backup_id>', methods=['DELETE'])
-@admin_required
+@require_permission('admin.backup')
 def delete_backup(backup_id):
     """删除备份（文件+记录）"""
     with get_db() as conn:
@@ -97,7 +97,7 @@ def delete_backup(backup_id):
 
 
 @backups_bp.route('/backups/<backup_id>/download', methods=['GET'])
-@admin_required
+@require_permission('admin.backup')
 def download_backup(backup_id):
     """下载备份 ZIP 文件"""
     with get_db() as conn:
@@ -114,7 +114,7 @@ def download_backup(backup_id):
 
 
 @backups_bp.route('/backups/<backup_id>/restore', methods=['POST'])
-@admin_required
+@require_permission('admin.backup')
 def restore_from_backup(backup_id):
     """从已有备份还原。
 
@@ -176,7 +176,7 @@ def restore_from_backup(backup_id):
 
 
 @backups_bp.route('/backups/upload-restore', methods=['POST'])
-@admin_required
+@require_permission('admin.backup')
 def upload_and_restore():
     """上传外部 ZIP 并还原"""
     if 'file' not in request.files:
@@ -205,7 +205,7 @@ def upload_and_restore():
 
 
 @backups_bp.route('/backups/settings', methods=['GET'])
-@admin_required
+@require_permission('admin.backup')
 def get_settings():
     """获取定时备份设置"""
     settings = get_backup_settings()
@@ -213,7 +213,7 @@ def get_settings():
 
 
 @backups_bp.route('/backups/settings', methods=['PUT'])
-@admin_required
+@require_permission('admin.backup')
 def update_settings():
     """更新定时备份设置"""
     body = request.get_json(force=True)
@@ -231,7 +231,7 @@ def update_settings():
 
 
 @backups_bp.route('/backups/tables', methods=['GET'])
-@admin_required
+@require_permission('admin.backup')
 def list_backup_tables():
     """获取可备份的表列表，包括动态数据的 collection 分组"""
     from utils.backup import get_backup_table_names
@@ -576,7 +576,7 @@ def _compute_diff(base_records, target_records, field_names):
 
 
 @backups_bp.route('/backups/diff', methods=['POST'])
-@admin_required
+@require_permission('admin.backup')
 def diff_collection():
     """对比两个数据源中指定集合的差异。
 
@@ -650,7 +650,7 @@ def diff_collection():
 
 
 @backups_bp.route('/backups/factory-reset', methods=['POST'])
-@admin_required
+@require_permission('admin.backup')
 def do_factory_reset():
     """
     恢复出厂设置
