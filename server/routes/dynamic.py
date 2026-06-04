@@ -186,7 +186,8 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
                 target_page_id = f'page-{target_collection}'
                 target_fields = target_configs.get(target_page_id)
                 if target_fields:
-                    target_display = get_display_field(target_fields)
+                    # 优先使用字段配置中指定的 displayField，而非自动检测
+                    target_display = rel_config.get('displayField') or get_display_field(target_fields)
                     if target_display:
                         sql = '''
                             SELECT DISTINCT dr.record_id
@@ -206,35 +207,45 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
                 target_page_id = f'page-{target_collection}'
                 target_fields = target_configs.get(target_page_id)
                 if target_fields:
-                    target_display = get_display_field(target_fields)
+                    # 优先使用字段配置中指定的 displayField，而非自动检测
+                    target_display = ref_config.get('displayField') or get_display_field(target_fields)
                     if target_display:
                         sql = '''
                             SELECT dd.id FROM dynamic_data dd
                             JOIN dynamic_data ref ON ref.id = dd.data->>%s
                             WHERE dd.collection = %s AND dd.branch_id = %s
-                            AND ref.collection = %s AND ref.data->>%s ILIKE %s
+                            AND ref.collection = %s AND ref.branch_id = %s
+                            AND ref.data->>%s ILIKE %s
                         '''
-                        cur.execute(sql, (field_name, collection, branch_id, target_collection, target_display, keyword_pattern))
+                        cur.execute(sql, (field_name, collection, branch_id, target_collection, branch_id, target_display, keyword_pattern))
                         matching_ids.update(row[0] for row in cur.fetchall())
 
         elif control_type == 'quoteSelect':
-            # 引用选择字段：类似 relation，通过 data_relations 搜索
+            # 引用选择字段：值是 JSONB 数组 [id1, id2, ...]，不使用 data_relations
             quote_config = field.get('quoteConfig', {}) or field.get('relationConfig', {})
             target_collection = quote_config.get('targetCollection')
             if target_collection:
                 target_page_id = f'page-{target_collection}'
                 target_fields = target_configs.get(target_page_id)
                 if target_fields:
-                    target_display = get_display_field(target_fields)
+                    # 优先使用字段配置中指定的 displayField，而非自动检测
+                    target_display = quote_config.get('displayField') or get_display_field(target_fields)
                     if target_display:
+                        # 先找目标集合中匹配关键字的记录 ID，再找当前集合中引用了它们的记录
                         sql = '''
-                            SELECT DISTINCT dr.record_id
-                            FROM data_relations dr
-                            JOIN dynamic_data dd ON dd.id = dr.related_id AND dd.collection = dr.related_collection
-                            WHERE dr.collection = %s AND dr.field_name = %s AND dr.branch_id = %s
-                            AND dd.data->>%s ILIKE %s
+                            SELECT dd.id FROM dynamic_data dd
+                            WHERE dd.collection = %s AND dd.branch_id = %s
+                            AND EXISTS (
+                                SELECT 1 FROM dynamic_data ref
+                                WHERE ref.collection = %s AND ref.branch_id = %s
+                                AND ref.data->>%s ILIKE %s
+                                AND ref.id = ANY(
+                                    SELECT jsonb_array_elements_text(dd.data->%s)
+                                )
+                            )
                         '''
-                        cur.execute(sql, (collection, field_name, branch_id, target_display, keyword_pattern))
+                        cur.execute(sql, (collection, branch_id, target_collection, branch_id,
+                                          target_display, keyword_pattern, field_name))
                         matching_ids.update(row[0] for row in cur.fetchall())
 
     return conditions, params, matching_ids
