@@ -146,6 +146,14 @@ Pick N files + 1 prompt → N isolated sessions, throttled to 3 concurrent. Chil
 
 Key files: `server/utils/batch_repo.py`, `server/utils/batch_engine.py`, `server/utils/prompt_template.py`, `server/routes/ai_chat_batches.py`, `server/routes/ai_chat_prompt_templates.py`, `src/types/aiChatBatch.ts`, `src/stores/aiChatBatches.ts`, `src/views/ai-chat/BatchListView.vue`, `src/views/ai-chat/BatchDetailView.vue`, `src/components/ai-chat/CreateBatchDialog.vue`, `src/components/ai-chat/PromptTemplateManager.vue`. Design + plan: `docs/superpowers/specs/2026-05-31-ai-chat-batch-tasks-design.md`, `docs/superpowers/plans/2026-05-31-ai-chat-batch-tasks.md`. E2E: `e2e/ai-chat-batch.spec.ts`.
 
+### AI Scheduled Tasks (定时 AI 数据流水线)
+
+A **generic** config-driven paradigm (audit is one instance): on a schedule, scan a data page, hand each pending record (fields + attached documents) to an AI session with a prompt/skill, parse its structured JSON, and write results back into the record while flowing a **status field** 待处理 → 处理中 → 已处理/处理失败. See `docs/ai-scan-tasks-guide.md`.
+
+*   **Reuses the AI batch engine**: each scan = one batch, each record = one child session (stamped `scan_task_id` + `source_record_id`); a completion hook in `batch_engine._run_one` calls `ai_scan_engine.on_child_finished` to parse + write back.
+*   **Scheduler** `server/utils/ai_scan_scheduler.py` (APScheduler 1-min tick, per-task due/lock, startup orphan sweep, `WERKZEUG_RUN_MAIN` guard). **Engine** `server/utils/ai_scan_engine.py` (atomic `FOR UPDATE SKIP LOCKED` claim→处理中; context dir = `record.md` + `attachments/`; prompt = your template + auto-appended JSON contract from the field mapping; write-back via parameterized `jsonb_set`). **Repo/API** `server/utils/ai_scan_repo.py`, `server/routes/ai_scan_tasks.py` (CRUD + run-now, `@require_permission('admin.ai_scan')`).
+*   **Config table** `ai_scan_tasks`; admin page `src/views/admin/AiScanTaskManager.vue` (`/admin/ai-scan-tasks`). Cross-table side effects are left to the skill via MCP; only same-row structured write-back is built in. Design + plan: `docs/superpowers/specs/2026-06-03-scheduled-ai-row-processor-design.md`, `docs/superpowers/plans/2026-06-03-scheduled-ai-row-processor.md`.
+
 ### Database Design
 
 *   **`dynamic_data`**: The core table. `data` column holds all fields as JSONB. Has `branch_id` for version isolation.
