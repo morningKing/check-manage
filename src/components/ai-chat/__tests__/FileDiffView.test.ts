@@ -29,4 +29,20 @@ describe('FileDiffView', () => {
     const w = mount(FileDiffView, { props: { status: 'added', content: 'x', truncated: true } })
     expect(w.find('.diff-truncated').exists()).toBe(true)
   })
+
+  it('shows a deleted placeholder for deleted status', () => {
+    const w = mount(FileDiffView, { props: { status: 'deleted', truncated: false } })
+    expect(w.find('.diff-empty').text()).toContain('已删除')
+    expect(w.find('.diff-row').exists()).toBe(false)
+  })
+
+  it('shows a generic placeholder for null status', () => {
+    const w = mount(FileDiffView, { props: { status: null, truncated: false } })
+    expect(w.find('.diff-empty').text()).toContain('无法预览')
+  })
+
+  it('renders one line per added line without blank padding', () => {
+    const w = mount(FileDiffView, { props: { status: 'added', content: 'a\nb\nc\n', truncated: false } })
+    expect(w.findAll('.diff-added-line').length).toBe(3)
+  })
 })

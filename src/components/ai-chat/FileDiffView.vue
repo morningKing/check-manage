@@ -33,11 +33,11 @@ const addedLines = computed(() =>
 
     <!-- added: lightweight capped viewer -->
     <template v-else-if="status === 'added'">
-      <pre class="diff-added-viewer"><span v-for="(ln, i) in addedLines" :key="i" class="diff-added-line"><span class="diff-no">{{ i + 1 }}</span>{{ ln }}
-</span></pre>
+      <pre class="diff-added-viewer"><span v-for="(ln, i) in addedLines" :key="i" class="diff-added-line"><span class="diff-no">{{ i + 1 }}</span>{{ ln }}</span></pre>
     </template>
 
-    <div v-else class="diff-empty">该文件已删除，无可预览内容</div>
+    <div v-else-if="status === 'deleted'" class="diff-empty">该文件已删除，无可预览内容</div>
+    <div v-else class="diff-empty">无法预览此文件</div>
 
     <div v-if="truncated" class="diff-truncated">内容过大，已截断；请下载查看完整内容。</div>
   </div>
