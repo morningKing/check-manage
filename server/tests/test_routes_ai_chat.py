@@ -769,3 +769,14 @@ def test_file_diff_rejects_path_traversal(setup):
     resp = client.get('/ai/chat/sessions/sess_x/diff?path=../../etc/passwd', headers=dev_h)
     assert resp.status_code == 400
     assert resp.get_json()['code'] == 'BAD_PATH'
+
+
+def test_file_diff_missing_path_returns_400_path_required(setup):
+    """GET /sessions/:id/diff with no ?path= query param returns 400 PATH_REQUIRED."""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsnopathparam'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/diff', headers=dev_h)
+    assert resp.status_code == 400
+    assert resp.get_json()['code'] == 'PATH_REQUIRED'

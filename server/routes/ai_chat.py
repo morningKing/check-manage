@@ -589,7 +589,9 @@ def file_diff_endpoint(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    rel = request.args.get('path', '')
+    rel = request.args.get('path', '').strip()
+    if not rel:
+        return jsonify({'error': 'path required', 'code': 'PATH_REQUIRED'}), 400
     try:
         safe_resolve(sess[4], rel)  # raises on traversal; result unused
     except Exception:
