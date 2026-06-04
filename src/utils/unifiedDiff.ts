@@ -59,6 +59,7 @@ export function parseUnifiedDiff(diff: string): DiffHunk[] {
       continue
     }
     if (!cur) continue // skip the diff/index/--- /+++ preamble
+    if (line === '') continue // trailing split artifact (diff ends with \n); a real blank context line is ' '
     if (line.startsWith('\\')) continue // "\ No newline at end of file"
     if (line.startsWith('-')) { dels.push(line.slice(1)); continue }
     if (line.startsWith('+')) { adds.push(line.slice(1)); continue }
