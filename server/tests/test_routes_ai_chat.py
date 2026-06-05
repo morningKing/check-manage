@@ -31,6 +31,7 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('db.pool', MagicMock()),
         patch('routes.ai_chat.get_db', fake_db),
         patch('utils.session_token.get_db', fake_db),
+        patch('utils.chat_persist.get_db', fake_db),
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
         patch('config.AI_WORKSPACE_ROOT', str(tmp_path)),
         patch('routes.ai_chat.AI_WORKSPACE_ROOT', str(tmp_path)),
@@ -781,3 +782,31 @@ def test_file_diff_missing_path_returns_400_path_required(setup):
     resp = client.get('/ai/chat/sessions/sess_x/diff', headers=dev_h)
     assert resp.status_code == 400
     assert resp.get_json()['code'] == 'PATH_REQUIRED'
+
+
+def test_send_message_starts_persist_listener(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsmsg'; ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_42', 'active', str(ws))
+    with patch('routes.ai_chat.ensure_listener') as ens, \
+         patch('routes.ai_chat.OpenCodeClient'):
+        resp = client.post('/ai/chat/sessions/sess_x/messages',
+                           json={'content': 'hi'}, headers=dev_h)
+    assert resp.status_code == 202
+    ens.assert_called_once()
+    assert ens.call_args[0][0] == 'sess_x'
+    assert ens.call_args[0][1] == 'oc_42'
+    assert ens.call_args[0][2] == str(ws)
+
+
+def test_delete_session_stops_persist_listener(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsdel'; ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_42', 'active', str(ws))
+    with patch('routes.ai_chat.stop_listener') as stp, \
+         patch('routes.ai_chat.OpenCodeClient'), \
+         patch('routes.ai_chat.revoke_token'), \
+         patch('routes.ai_chat.cleanup_session_workspace'):
+        resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
+    assert resp.status_code == 204
+    stp.assert_called_once_with('sess_x')

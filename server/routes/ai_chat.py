@@ -37,6 +37,9 @@ from utils.workspace import (
     safe_resolve,
 )
 from utils.workspace_changes import git_changes, file_diff
+from utils.chat_persist import (
+    ensure_listener, stop_listener, new_state, apply_event, persist_turn, _event_session_id,
+)
 from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
@@ -321,6 +324,7 @@ def send_message(sid):
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
         sess[2], prompt.strip(), model=effective_model, directory=sess[4],
     )
+    ensure_listener(sid, sess[2], sess[4])
     return jsonify({'messageId': msg_id, 'model': effective_model or None}), 202
 
 
@@ -385,47 +389,6 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-def _build_assistant_content(parts_by_id: dict, part_order: list) -> list:
-    """Build the persisted assistant content from accumulated parts, in arrival
-    order. Empty text parts are dropped; tool parts (tool_use) are kept so the
-    rendered result (e.g. a query_collection table) survives a reload."""
-    content = []
-    for pid in part_order:
-        p = parts_by_id.get(pid)
-        if not p:
-            continue
-        if p['type'] == 'text':
-            if (p.get('text') or '').strip():
-                content.append({'type': 'text', 'text': p['text']})
-        elif p['type'] == 'tool_use':
-            content.append(p)
-    return content
-
-
-def _persist_assistant_message(session_id: str, content_parts: list) -> None:
-    """Persist a completed assistant message (called on session.idle)."""
-    msg_id = 'msg_' + secrets.token_hex(6)
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-            "VALUES (%s, %s, 'assistant', %s)",
-            (msg_id, session_id, json.dumps(content_parts)),
-        )
-
-
-def _event_session_id(props: dict):
-    """OpenCode puts the session id in different nested spots per event type."""
-    if not isinstance(props, dict):
-        return None
-    if props.get('sessionID'):
-        return props['sessionID']
-    for k in ('part', 'info'):
-        v = props.get(k)
-        if isinstance(v, dict) and v.get('sessionID'):
-            return v['sessionID']
-    return None
-
 
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
@@ -445,54 +408,19 @@ def sse_events(sid):
         # Track the latest snapshot of each assistant part (text + tool) keyed by
         # part id, preserving arrival order, so the persisted message matches the
         # live stream — including rendered tool results (e.g. query_collection).
-        assistant_msg_ids = set()
-        parts_by_id = {}
-        part_order = []
+        state = new_state()
         try:
             for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
-                obj = evt.get('data') or {}
-                props = obj.get('properties') or {}
+                props = (evt.get('data') or {}).get('properties') or {}
 
                 ev_sid = _event_session_id(props)
                 if ev_sid and ev_sid != opencode_session_id:
                     continue
 
-                if etype == 'message.updated':
-                    info = props.get('info') or {}
-                    if info.get('role') == 'assistant' and info.get('id'):
-                        assistant_msg_ids.add(info['id'])
-                elif etype == 'message.part.updated':
-                    part = props.get('part') or {}
-                    pid = part.get('id')
-                    if pid and part.get('messageID') in assistant_msg_ids:
-                        ptype = part.get('type')
-                        if ptype == 'text':
-                            if pid not in parts_by_id:
-                                part_order.append(pid)
-                            parts_by_id[pid] = {'type': 'text', 'text': part.get('text', '')}
-                        elif ptype == 'tool':
-                            if pid not in parts_by_id:
-                                part_order.append(pid)
-                            st = part.get('state') or {}
-                            parts_by_id[pid] = {
-                                'type': 'tool_use',
-                                'name': part.get('tool') or 'tool',
-                                'title': st.get('title'),
-                                'status': st.get('status'),
-                                'input': st.get('input'),
-                                'result': st.get('output') if st.get('output') is not None else st.get('result'),
-                            }
-                elif etype == 'session.idle':
-                    content = _build_assistant_content(parts_by_id, part_order)
-                    if content:
-                        try:
-                            _persist_assistant_message(sid, content)
-                        except Exception:
-                            pass  # don't break the stream on DB hiccup (§7 #9)
-                    assistant_msg_ids = set()
-                    parts_by_id = {}
-                    part_order = []
+                if apply_event(state, evt, opencode_session_id) == 'idle':
+                    persist_turn(sid, state)   # idempotent: dedups with the listener
+                    state = new_state()
 
                 yield _format_sse(etype, props)
         except GeneratorExit:
@@ -679,6 +607,7 @@ def run_session_command(sid):
     OpenCodeClient(OPENCODE_BASE_URL).run_command(
         sess[2], command, arguments, model=OPENCODE_MODEL, directory=sess[4],
     )
+    ensure_listener(sid, sess[2], sess[4])
     return jsonify({'messageId': msg_id}), 202
 
 
@@ -793,6 +722,7 @@ def delete_session(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     opencode_session_id = sess[2]
+    stop_listener(sid)
     if opencode_session_id:
         try:
             OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
