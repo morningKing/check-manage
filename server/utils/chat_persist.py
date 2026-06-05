@@ -19,7 +19,7 @@ _listeners = {}          # sid -> threading.Thread
 _lock = threading.Lock()
 
 
-def _event_session_id(props):
+def event_session_id(props):
     """OpenCode puts the session id in different nested spots per event type."""
     if not isinstance(props, dict):
         return None
@@ -43,7 +43,7 @@ def apply_event(state, evt, opencode_session_id):
     Events for other sessions are ignored."""
     etype = evt.get('event', '')
     props = (evt.get('data') or {}).get('properties') or {}
-    ev_sid = _event_session_id(props)
+    ev_sid = event_session_id(props)
     if ev_sid and ev_sid != opencode_session_id:
         return None
     if etype == 'message.updated':

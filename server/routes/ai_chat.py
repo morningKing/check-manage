@@ -38,7 +38,7 @@ from utils.workspace import (
 )
 from utils.workspace_changes import git_changes, file_diff
 from utils.chat_persist import (
-    ensure_listener, stop_listener, new_state, apply_event, persist_turn, _event_session_id,
+    ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
 from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
@@ -389,7 +389,6 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
 def sse_events(sid):
@@ -414,7 +413,7 @@ def sse_events(sid):
                 etype = evt.get('event', '')
                 props = (evt.get('data') or {}).get('properties') or {}
 
-                ev_sid = _event_session_id(props)
+                ev_sid = event_session_id(props)
                 if ev_sid and ev_sid != opencode_session_id:
                     continue
 

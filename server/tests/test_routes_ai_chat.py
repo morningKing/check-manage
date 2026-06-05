@@ -799,6 +799,21 @@ def test_send_message_starts_persist_listener(setup):
     assert ens.call_args[0][2] == str(ws)
 
 
+def test_run_command_starts_persist_listener(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wscmd'; ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_42', 'active', str(ws))
+    with patch('routes.ai_chat.ensure_listener') as ens, \
+         patch('routes.ai_chat.OpenCodeClient'):
+        resp = client.post('/ai/chat/sessions/sess_x/command',
+                           json={'command': 'help', 'arguments': ''}, headers=dev_h)
+    assert resp.status_code == 202
+    ens.assert_called_once()
+    assert ens.call_args[0][0] == 'sess_x'
+    assert ens.call_args[0][1] == 'oc_42'
+    assert ens.call_args[0][2] == str(ws)
+
+
 def test_delete_session_stops_persist_listener(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wsdel'; ws.mkdir(parents=True, exist_ok=True)
