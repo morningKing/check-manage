@@ -572,7 +572,7 @@ describe('PageConfig Store — quoteSelect', () => {
     expect(records[0].quotedCases).toEqual(['case-3', 'case-1', 'case-2'])
   })
 
-  it('resolveQuoteImportValues 跳过不存在的值但保持剩余顺序', async () => {
+  it('resolveQuoteImportValues 目标集合有部分匹配时：已匹配的转换为内部ID，未匹配的保留原始值', async () => {
     const mockedGet = vi.mocked(get)
     mockedGet.mockReset()
 
@@ -606,13 +606,14 @@ describe('PageConfig Store — quoteSelect', () => {
       total: 2,
     })
 
-    // IC-002 不存在，应被过滤但不影响 IC-001 和 IC-003 的顺序
+    // IC-002 不存在于目标集合；IC-001 和 IC-003 可正常解析
     const records = [
       { quotedCases: ['IC-001', 'IC-002', 'IC-003'] },
     ]
 
     await store.resolveQuoteImportValues('page-test', records)
-    expect(records[0].quotedCases).toEqual(['case-1', 'case-3'])
+    // IC-001 → case-1, IC-002 保留原始值（目标尚未导入），IC-003 → case-3
+    expect(records[0].quotedCases).toEqual(['case-1', 'IC-002', 'case-3'])
   })
 
   it('resolveQuoteImportValues 通过 displayField 名称匹配', async () => {
@@ -819,6 +820,37 @@ describe('PageConfig Store — quoteSelect', () => {
     const records = [{ quotedCases: ['机房安全检查', '机房安全检查'] }]
     await store.resolveQuoteImportValues('page-test', records)
     expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
+  })
+
+  it('resolveQuoteImportValues 目标缺失时保留原始值（不丢弃）', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'quotedCases', controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+    // 目标集合此刻还没有数据（被引用页尚未导入）
+    mockedGet.mockResolvedValueOnce({ data: [], total: 0 })
+
+    const records = [{ quotedCases: ['IC-001', 'IC-002'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    // 改动前会被清空为 []；改动后保留原始主键值，供之后重新解析
+    expect(records[0].quotedCases).toEqual(['IC-001', 'IC-002'])
   })
 
   it('stripRelationFields 保持 quoteSelect 数组顺序不变', () => {

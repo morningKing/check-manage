@@ -1294,6 +1294,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
               for (const id of ids) {
                 if (!seen.has(id)) { seen.add(id); resolved.push(id) }
               }
+            } else if (!seen.has(v)) {
+              // 目标记录尚不存在：保留原始主键/显示值，供之后「重新解析引用」补全（不丢弃）
+              seen.add(v); resolved.push(v)
             }
           }
         }
