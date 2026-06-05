@@ -13,7 +13,9 @@ from db import get_db
 from utils.opencode_client import OpenCodeClient
 from config import OPENCODE_BASE_URL
 
-INACTIVITY_TIMEOUT = 30 * 60  # seconds; listener exits after this much silence
+INACTIVITY_TIMEOUT = 30 * 60  # seconds; read timeout on the event stream. The
+# listener exits after this much *silence* on the scoped stream (no bytes). If
+# OpenCode emits keepalives the thread may live longer, until a real stream end.
 
 _listeners = {}          # sid -> threading.Thread
 _lock = threading.Lock()

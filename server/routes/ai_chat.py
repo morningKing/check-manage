@@ -403,7 +403,8 @@ def sse_events(sid):
     def generate():
         # OpenCode text parts arrive as full snapshots keyed by part id; track the
         # latest snapshot per assistant part so we can persist on session.idle.
-        # subscribe_events() reads the GLOBAL bus; we filter to this session below.
+        # subscribe_events(directory=...) is scoped to this session's workspace;
+        # we still filter by session id below as a guard.
         # Track the latest snapshot of each assistant part (text + tool) keyed by
         # part id, preserving arrival order, so the persisted message matches the
         # live stream — including rendered tool results (e.g. query_collection).
@@ -418,7 +419,12 @@ def sse_events(sid):
                     continue
 
                 if apply_event(state, evt, opencode_session_id) == 'idle':
-                    persist_turn(sid, state)   # idempotent: dedups with the listener
+                    # Only persist when we captured the turn's message id, so the
+                    # row id is deterministic and dedups with the background
+                    # listener. Without it, defer to the listener (the
+                    # authoritative writer) to avoid a duplicate random-id row.
+                    if state['turn_msg_id']:
+                        persist_turn(sid, state)
                     state = new_state()
 
                 yield _format_sse(etype, props)
