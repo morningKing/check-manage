@@ -99,3 +99,45 @@ def test_persist_turn_falls_back_to_generated_id(monkeypatch):
     state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hi'}}
     chat_persist.persist_turn('sess1', state)
     assert sink[0][1][0].startswith('msg_')   # generated fallback id
+
+
+import threading as _threading
+import time as _time
+
+
+def test_run_listener_persists_each_idle(monkeypatch):
+    from utils import chat_persist
+    saved = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: saved.append((sid, chat_persist.build_content(state))))
+    events = [
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'one', 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p2', 'messageID': 'm2', 'type': 'text', 'text': 'two', 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events))
+    assert [c for _, c in saved] == [[{'type': 'text', 'text': 'one'}], [{'type': 'text', 'text': 'two'}]]
+
+
+def test_ensure_listener_dedups_per_session(monkeypatch):
+    from utils import chat_persist
+    started = []
+    block = _threading.Event()
+
+    def fake_target(sid, oc, d):
+        started.append(sid)
+        block.wait(2)
+
+    monkeypatch.setattr(chat_persist, '_listener_thread', fake_target)
+    try:
+        chat_persist.ensure_listener('s1', 'oc1', '/ws')
+        chat_persist.ensure_listener('s1', 'oc1', '/ws')  # already alive -> no second thread
+        _time.sleep(0.1)
+        assert started.count('s1') == 1
+    finally:
+        block.set()
+        _time.sleep(0.05)
+        chat_persist._listeners.pop('s1', None)

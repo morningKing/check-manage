@@ -136,7 +136,7 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def subscribe_events(self, directory: str = "") -> Iterator[dict]:
+    def subscribe_events(self, directory: str = "", read_timeout=None) -> Iterator[dict]:
         """Yield parsed SSE events as {"event": <type>, "data": <full object>}.
 
         OpenCode sends `data:`-only frames (no SSE `event:` line); the event name
@@ -154,7 +154,7 @@ class OpenCodeClient:
             self._url("/event"),
             params=params,
             stream=True,
-            timeout=None,
+            timeout=read_timeout,
             headers={"Accept": "text/event-stream"},
         ) as resp:
             resp.raise_for_status()

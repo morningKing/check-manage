@@ -113,3 +113,52 @@ def persist_turn(session_id, state):
             )
     except Exception:
         pass  # don't break the listener/stream on a DB hiccup
+
+
+def _run_listener(sid, opencode_session_id, event_source):
+    """Consume events, persisting the assistant message on each session.idle.
+    Returns when the source is exhausted/raises (inactivity read-timeout or
+    stream end). Pure loop — `event_source` is injectable for tests."""
+    state = new_state()
+    for evt in event_source:
+        if apply_event(state, evt, opencode_session_id) == 'idle':
+            persist_turn(sid, state)
+            state = new_state()
+
+
+def _listener_thread(sid, opencode_session_id, directory):
+    """Thread target: subscribe to OpenCode events for this session's workspace
+    and run the persist loop. Exits on inactivity read-timeout or any error;
+    removes itself from the registry so a later turn can start a fresh one."""
+    try:
+        source = OpenCodeClient(OPENCODE_BASE_URL).subscribe_events(
+            directory=directory, read_timeout=INACTIVITY_TIMEOUT,
+        )
+        _run_listener(sid, opencode_session_id, source)
+    except Exception:
+        pass
+    finally:
+        with _lock:
+            _listeners.pop(sid, None)
+
+
+def ensure_listener(sid, opencode_session_id, directory):
+    """Start a background persistence listener for `sid` if none is running.
+    Called when a turn begins, so persistence happens even with no browser
+    connected."""
+    with _lock:
+        existing = _listeners.get(sid)
+        if existing and existing.is_alive():
+            return
+        t = threading.Thread(
+            target=_listener_thread, args=(sid, opencode_session_id, directory), daemon=True,
+        )
+        _listeners[sid] = t
+        t.start()
+
+
+def stop_listener(sid):
+    """Drop a session's listener from the registry (on session delete). The
+    daemon thread itself exits once its OpenCode stream ends/errors."""
+    with _lock:
+        _listeners.pop(sid, None)
