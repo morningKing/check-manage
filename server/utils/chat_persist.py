@@ -92,3 +92,24 @@ def build_content(state):
         elif p['type'] == 'tool_use':
             content.append(p)
     return content
+
+
+def persist_turn(session_id, state):
+    """Idempotent upsert of the accumulated assistant message. No-op if the
+    content is empty. Keyed on the turn's OpenCode message id so the browser
+    SSE proxy and the background listener converge on the same row (no dupes)."""
+    content = build_content(state)
+    if not content:
+        return
+    row_id = state.get('turn_msg_id') or ('msg_' + secrets.token_hex(6))
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                "VALUES (%s, %s, 'assistant', %s) "
+                "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
+                (row_id, session_id, json.dumps(content)),
+            )
+    except Exception:
+        pass  # don't break the listener/stream on a DB hiccup

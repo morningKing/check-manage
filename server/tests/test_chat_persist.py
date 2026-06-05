@@ -47,3 +47,55 @@ def test_build_content_drops_empty_text():
     apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': '   ', 'sessionID': 'oc'}}), 'oc')
     assert build_content(s) == []
+
+
+import contextlib
+
+
+class _FakeCur:
+    def __init__(self, sink): self._sink = sink
+    def execute(self, sql, params=None): self._sink.append((sql, params))
+
+
+def _fake_db(sink):
+    @contextlib.contextmanager
+    def _cm():
+        class _Conn:
+            def cursor(self): return _FakeCur(sink)
+        yield _Conn()
+    return _cm
+
+
+def test_persist_turn_upserts_with_turn_msg_id(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    state = chat_persist.new_state()
+    state['turn_msg_id'] = 'msg_A'
+    state['part_order'] = ['p1']
+    state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hi'}}
+    chat_persist.persist_turn('sess1', state)
+    assert len(sink) == 1
+    sql, params = sink[0]
+    assert 'ON CONFLICT (id) DO UPDATE' in sql
+    assert params[0] == 'msg_A'      # deterministic row id = turn message id
+    assert params[1] == 'sess1'
+
+
+def test_persist_turn_noop_on_empty_content(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    chat_persist.persist_turn('sess1', chat_persist.new_state())  # no parts
+    assert sink == []
+
+
+def test_persist_turn_falls_back_to_generated_id(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    state = chat_persist.new_state()  # turn_msg_id stays None
+    state['part_order'] = ['p1']
+    state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hi'}}
+    chat_persist.persist_turn('sess1', state)
+    assert sink[0][1][0].startswith('msg_')   # generated fallback id
