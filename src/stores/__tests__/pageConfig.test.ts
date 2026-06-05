@@ -483,6 +483,110 @@ describe('PageConfig Store — quoteSelect', () => {
     expect(maps.quotedCases.get('case-2')).toBe('IC-002')
   })
 
+  it('fetchQuoteDisplayMaps 目标无主键时回退 displayField', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'quotedCases', controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'nm', fieldName: 'caseName', controlType: 'text' }),
+          ],
+        }),
+      ],
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseName: '苹果' },
+        { id: 'case-2', caseName: '香蕉' },
+      ],
+      total: 2,
+    })
+    const maps = await store.fetchQuoteDisplayMaps('page-test')
+    expect(maps.quotedCases).toBeDefined()
+    expect(maps.quotedCases.get('case-1')).toBe('苹果')
+    expect(maps.quotedCases.get('case-2')).toBe('香蕉')
+  })
+
+  it('fetchRelationDisplayMaps 目标无主键时回退 displayField', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'relCases', controlType: 'relation',
+              relationConfig: { targetCollection: 'cases', targetField: 'back', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'nm', fieldName: 'caseName', controlType: 'text' }),
+          ],
+        }),
+      ],
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseName: '苹果' },
+        { id: 'case-2', caseName: '香蕉' },
+      ],
+      total: 2,
+    })
+    const maps = await store.fetchRelationDisplayMaps('page-test')
+    expect(maps.relCases).toBeDefined()
+    expect(maps.relCases.get('case-1')).toBe('苹果')
+    expect(maps.relCases.get('case-2')).toBe('香蕉')
+  })
+
+  it('fetchRelationDisplayMaps 目标有主键时仍用主键值', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'relCases', controlType: 'relation',
+              relationConfig: { targetCollection: 'cases', targetField: 'back', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+    mockedGet.mockResolvedValueOnce({
+      data: [
+        { id: 'case-1', caseId: 'IC-001', caseName: '苹果' },
+        { id: 'case-2', caseId: 'IC-002', caseName: '香蕉' },
+      ],
+      total: 2,
+    })
+    const maps = await store.fetchRelationDisplayMaps('page-test')
+    expect(maps.relCases.get('case-1')).toBe('IC-001')
+    expect(maps.relCases.get('case-2')).toBe('IC-002')
+  })
+
   it('resolveQuoteImportValues 正确解析导入值', async () => {
     const mockedGet = vi.mocked(get)
     mockedGet.mockReset()

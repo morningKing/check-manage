@@ -1061,16 +1061,18 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const config = field.relationConfig
       if (!config) continue
       const pkField = getTargetPrimaryKeyField(config.targetCollection)
-      if (!pkField) continue
+      // 无主键时回退到 displayField（界面真实值）；导入侧按主键值/displayField 双匹配，故仍可重新导入
+      const labelField = pkField || config.displayField
+      if (!labelField) continue
       try {
         const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
         const records = response.data || []
-        const idToPk = new Map<string, string>()
+        const idToLabel = new Map<string, string>()
         for (const r of records) {
-          const pkVal = r[pkField]
-          if (pkVal) idToPk.set(r.id, String(pkVal))
+          const val = r[labelField]
+          if (val) idToLabel.set(r.id, String(val))
         }
-        result[field.fieldName] = idToPk
+        result[field.fieldName] = idToLabel
       } catch {
         // 目标集合加载失败时跳过
       }
@@ -1210,16 +1212,18 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const config = field.quoteConfig
       if (!config) continue
       const pkField = getTargetPrimaryKeyField(config.targetCollection)
-      if (!pkField) continue
+      // 无主键时回退到 displayField（界面真实值）；导入侧按主键值/displayField 双匹配，故仍可重新导入
+      const labelField = pkField || config.displayField
+      if (!labelField) continue
       try {
         const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
         const records = response.data || []
-        const idToPk = new Map<string, string>()
+        const idToLabel = new Map<string, string>()
         for (const r of records) {
-          const pkVal = r[pkField]
-          if (pkVal) idToPk.set(r.id, String(pkVal))
+          const val = r[labelField]
+          if (val) idToLabel.set(r.id, String(val))
         }
-        result[field.fieldName] = idToPk
+        result[field.fieldName] = idToLabel
       } catch {
         // 目标集合加载失败时跳过
       }
