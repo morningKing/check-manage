@@ -837,6 +837,7 @@ import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimel
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
+import { makeImportRowId } from '@/utils/importId'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
 import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, switchToMainProjectBranch } from '@/api/projectVersion'
@@ -2468,6 +2469,13 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
 
   // 创建共享缓存，避免多个 resolve 函数重复请求同一集合
   const collectionCache = new Map<string, any[]>()
+
+  // 预盖保序行 id：让同一批 (created_at 相同) 内按 id 排序即按文件顺序。
+  // 必须在引用解析之前，这样自引用 (resolve*ImportValues) 用到的 _importId
+  // 与最终行 id 一致，引用不会断。
+  records.forEach((r, i) => {
+    if (!r._importId) r._importId = makeImportRowId(collection.value, i, records.length)
+  })
 
   // 并行解析（使用共享缓存）
   await Promise.all([
