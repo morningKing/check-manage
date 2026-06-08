@@ -1,4 +1,4 @@
-import type { PageConfig } from '@/types'
+import type { FieldConfig, PageConfig } from '@/types'
 
 export interface TopoResult {
   /** collection 导入顺序：被引用的排在引用方之前 */
@@ -29,10 +29,10 @@ export function buildReferenceOrder(configs: PageConfig[]): TopoResult {
 
   for (const cfg of configs) {
     const coll = collOf(cfg)
-    for (const f of cfg.fields || []) {
+    for (const f of (cfg.fields || []) as FieldConfig[]) {
       let target: string | undefined
-      if (f.controlType === 'reference') target = (f as any).referenceConfig?.targetCollection
-      else if (f.controlType === 'quoteSelect') target = (f as any).quoteConfig?.targetCollection
+      if (f.controlType === 'reference') target = f.referenceConfig?.targetCollection
+      else if (f.controlType === 'quoteSelect') target = f.quoteConfig?.targetCollection
       if (!target || target === coll || !collSet.has(target)) continue
       if (!dependents.get(target)!.has(coll)) {
         dependents.get(target)!.add(coll)
@@ -54,7 +54,8 @@ export function buildReferenceOrder(configs: PageConfig[]): TopoResult {
 
   const cycles: string[][] = []
   if (order.length < collections.length) {
-    const remaining = collections.filter((c) => !order.includes(c))
+    const ordered = new Set(order)
+    const remaining = collections.filter((c) => !ordered.has(c))
     cycles.push(remaining)
     for (const c of remaining) order.push(c) // 断边尽力：残留追加到末尾
   }

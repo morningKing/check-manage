@@ -65,7 +65,7 @@ describe('buildReferenceOrder', () => {
       page('page-b', [{ type: 'reference', target: 'a' }]),
     ])
     expect(cycles.length).toBeGreaterThan(0)
-    expect(order.sort()).toEqual(['a', 'b'])
+    expect([...order].sort()).toEqual(['a', 'b'])
   })
 
   it('returns empty for empty input', () => {
