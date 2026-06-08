@@ -838,7 +838,7 @@ import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimel
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
-import { makeImportRowId } from '@/utils/importId'
+import { importPageRecords } from '@/utils/importPageRecords'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
 import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, switchToMainProjectBranch } from '@/api/projectVersion'
@@ -2493,118 +2493,21 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   importTotal.value = records.length
   importDialogVisible.value = true
 
-  // 创建共享缓存，避免多个 resolve 函数重复请求同一集合
-  const collectionCache = new Map<string, any[]>()
-
-  // 预盖保序行 id：让同一批 (created_at 相同) 内按 id 排序即按文件顺序。
-  // 必须在引用解析之前，这样自引用 (resolve*ImportValues) 用到的 _importId
-  // 与最终行 id 一致，引用不会断。
-  records.forEach((r, i) => {
-    if (!r._importId) r._importId = makeImportRowId(collection.value, i, records.length)
+  const { success, failed, created, updated } = await importPageRecords({
+    store: pageConfigStore,
+    post,
+    pageId: pageId.value,
+    collection: collection.value,
+    records,
+    onProgress: (current, total) => {
+      importCurrent.value = current
+      importProgress.value = Math.round((current / total) * 100)
+    },
   })
-
-  // 并行解析（使用共享缓存）
-  await Promise.all([
-    pageConfigStore.resolveRelationImportValues(pageId.value, records, collectionCache),
-    pageConfigStore.resolveReferenceImportValues(pageId.value, records, collectionCache),
-    pageConfigStore.resolveQuoteImportValues(pageId.value, records, collectionCache),
-    pageConfigStore.resolveCollectionSelectImportValues(pageId.value, records, collectionCache)
-  ])
-
-  // 批量生成自增序列值
-  const sequenceValues = pageConfigStore.batchGenerateSequenceValues(pageId.value, records.length)
-  const sequenceFields = Object.keys(sequenceValues)
-
-  let success = 0
-  let failed = 0
-  let created = 0
-  let updated = 0
-
-  // 使用批量 API (统一走 batch-create:主键冲突时 upsert)。
-  // 之前 < 10 条会走逐条 addPageData,行为不一致 (单条 POST 仍是 409 冲突),
-  // 现在阈值改成 1 保证所有导入都享受同一份 upsert 语义。
-  if (records.length >= 1) {
-    const BATCH_SIZE = 500
-    const batches = Math.ceil(records.length / BATCH_SIZE)
-
-    for (let batchIdx = 0; batchIdx < batches; batchIdx++) {
-      const start = batchIdx * BATCH_SIZE
-      const end = Math.min(start + BATCH_SIZE, records.length)
-      const batchRecords = records.slice(start, end)
-
-      try {
-        // 准备批量请求数据
-        const batchData = batchRecords.map((record, idx) => {
-          const importId = record._importId as string | undefined
-          const regularData = pageConfigStore.stripRelationFields(pageId.value, record)
-          delete regularData._importId
-
-          // 填充自增序列值
-          for (const fieldName of sequenceFields) {
-            if (!regularData[fieldName]) {
-              regularData[fieldName] = sequenceValues[fieldName][start + idx]
-            }
-          }
-
-          // 提取关联关系
-          const relations: Record<string, string[]> = {}
-          const relationFields = pageConfigStore.getRelationFields(pageId.value)
-          for (const field of relationFields) {
-            const ids = record[field.fieldName]
-            if (Array.isArray(ids) && ids.length > 0) {
-              relations[field.fieldName] = ids
-            }
-          }
-
-          return {
-            id: importId || `${collection.value}-${Math.random().toString(36).slice(2, 10)}`,
-            data: regularData,
-            relations
-          }
-        })
-
-        // 调用批量创建 API
-        const result = await post<{
-          success: boolean
-          created: number
-          updated?: number
-          failed: number
-          errors?: Array<{ index: number; error: string; record: any }>
-          sequenceValues?: Record<string, string>
-        }>(`/${collection.value}/batch-create`, {
-          records: batchData,
-          options: {
-            skipValidation: false,
-            generateSequence: true,
-            continueOnError: true
-          }
-        })
-
-        success += result.created + (result.updated || 0)
-        created += result.created
-        updated += result.updated || 0
-        failed += result.failed
-
-        // 处理失败记录
-        if (result.errors && result.errors.length > 0) {
-          console.warn(`批次 ${batchIdx + 1} 失败记录:`, result.errors)
-        }
-      } catch (error) {
-        console.error(`批次 ${batchIdx + 1} 导入失败:`, error)
-        failed += batchRecords.length
-      }
-
-      importCurrent.value = end
-      importProgress.value = Math.round((end / records.length) * 100)
-    }
-  }
 
   importLoading.value = false
   importResult.value = { success, failed, created, updated }
-
-  if (success > 0) {
-    await loadPageData()
-  }
+  if (success > 0) await loadPageData()
 }
 
 /**
