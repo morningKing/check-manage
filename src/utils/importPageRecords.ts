@@ -62,13 +62,14 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
           if (Array.isArray(ids) && ids.length > 0) relations[field.fieldName] = ids
         }
         return {
+          // id 正常来自上面的 _importId 盖章；此为防御性兜底
           id: importId || `${collection}-${Math.random().toString(36).slice(2, 10)}`,
           data: regularData,
           relations,
         }
       })
 
-      const result = await post<{ created: number; updated?: number; failed: number }>(
+      const result = await post<{ created: number; updated?: number; failed: number; errors?: Array<{ index: number; error: string; record: any }> }>(
         `/${collection}/batch-create`,
         { records: batchData, options: { skipValidation: false, generateSequence: true, continueOnError: true } },
       )
@@ -76,7 +77,11 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
       created += result.created
       updated += result.updated || 0
       failed += result.failed
-    } catch {
+      if (result.errors && result.errors.length > 0) {
+        console.warn(`批次 ${batchIdx + 1} 失败记录:`, result.errors)
+      }
+    } catch (error) {
+      console.error(`批次 ${batchIdx + 1} 导入失败:`, error)
       failed += batchRecords.length
     }
     onProgress?.(end, records.length)

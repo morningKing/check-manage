@@ -25,10 +25,23 @@ describe('importPageRecords', () => {
     })
 
     expect(store.resolveReferenceImportValues).toHaveBeenCalledWith('page-orders', records, expect.any(Map))
+    expect(store.resolveRelationImportValues).toHaveBeenCalled()
+    expect(store.resolveQuoteImportValues).toHaveBeenCalled()
+    expect(store.resolveCollectionSelectImportValues).toHaveBeenCalled()
     expect(post).toHaveBeenCalledWith('/orders/batch-create', expect.objectContaining({
       records: expect.any(Array),
     }))
     expect(result).toEqual({ success: 2, failed: 0, created: 2, updated: 0 })
+  })
+
+  it('reports progress for the final batch', async () => {
+    const store = makeStore()
+    const post = vi.fn().mockResolvedValue({ created: 1, updated: 0, failed: 0 })
+    const onProgress = vi.fn()
+    await importPageRecords({
+      store, post, pageId: 'page-orders', collection: 'orders', records: [{ name: 'a' }], onProgress,
+    })
+    expect(onProgress).toHaveBeenCalledWith(1, 1)
   })
 
   it('counts batch failure without throwing', async () => {
