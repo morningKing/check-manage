@@ -216,9 +216,9 @@ const staticRoutes: RouteRecordRaw[] = [
       {
         path: 'admin/menu-export',
         name: 'MenuExport',
-        component: () => import('@/views/admin/MenuExportPage.vue'),
+        component: () => import('@/views/admin/DataMigrationPage.vue'),
         meta: {
-          title: '数据导出',
+          title: '数据迁移',
           icon: 'Download',
         },
       },
