@@ -13,9 +13,6 @@
           @change="loadPages"
         />
       </el-form-item>
-      <el-form-item label="分支">
-        <el-input v-model="branchId" style="width: 140px" />
-      </el-form-item>
     </el-form>
 
     <el-table :data="pageRows" border v-loading="pagesLoading">
@@ -71,7 +68,6 @@ const pageConfigStore = usePageConfigStore()
 const treeProps = { children: 'children', label: 'name' }
 const menuTree = ref<MenuItem[]>([])
 const selectedMenuId = ref<string>('')
-const branchId = ref('main')
 const pageRows = ref<PageRow[]>([])
 const pagesLoading = ref(false)
 const running = ref(false)
@@ -110,25 +106,37 @@ async function start() {
   if (!pageConfigStore.pageConfigs.length) await pageConfigStore.fetchPageConfigs()
 
   running.value = true
+  results.value = []
   try {
     const withFiles = pageRows.value.filter((r) => r._file)
     const pages: Array<{ pageId: string; collection: string; records: Record<string, any>[] }> = []
+    const parseErrors: string[] = []
     for (const row of withFiles) {
-      const fields = pageConfigStore.getPageFields(row.pageId)
-      const isJson = row._file!.name.toLowerCase().endsWith('.json')
-      const records = isJson
-        ? await parseJsonImportFile(row._file!, fields)
-        : await parseImportFile(row._file!, fields)
-      pages.push({ pageId: row.pageId, collection: row.collection, records })
+      try {
+        const fields = pageConfigStore.getPageFields(row.pageId)
+        const isJson = row._file!.name.toLowerCase().endsWith('.json')
+        const records = isJson
+          ? await parseJsonImportFile(row._file!, fields)
+          : await parseImportFile(row._file!, fields)
+        pages.push({ pageId: row.pageId, collection: row.collection, records })
+      } catch {
+        parseErrors.push(row.pageName)
+      }
     }
 
-    const allConfigs = withFiles
-      .map((r) => pageConfigStore.getPageConfigById(r.pageId))
-      .filter((c): c is NonNullable<typeof c> => Boolean(c))
+    if (pages.length > 0) {
+      const allConfigs = pages
+        .map((p) => pageConfigStore.getPageConfigById(p.pageId))
+        .filter((c): c is NonNullable<typeof c> => Boolean(c))
+      results.value = await runBatchImport({ store: pageConfigStore, post, pages, allConfigs })
+      resultVisible.value = true
+    }
 
-    results.value = await runBatchImport({ store: pageConfigStore, post, pages, allConfigs })
-    resultVisible.value = true
-    ElMessage.success('批量导入完成')
+    if (parseErrors.length > 0) {
+      ElMessage.warning(`以下文件解析失败，已跳过：${parseErrors.join('、')}`)
+    } else {
+      ElMessage.success('批量导入完成')
+    }
   } catch (err: unknown) {
     ElMessage.error((err as Error)?.message || '批量导入失败')
   } finally {
