@@ -381,7 +381,8 @@ class TestBatchClear:
         )
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body['totalDeleted'] >= 0
+        assert body['totalDeleted'] == 6
+        assert 'relationsDeleted' in body
         executed = ' '.join(c.args[0] for c in mock_cursor.execute.call_args_list)
         assert 'DELETE FROM dynamic_data' in executed
         assert 'DELETE FROM data_relations' in executed
