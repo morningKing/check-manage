@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+
+// MarkdownView wraps md-editor (heavy in jsdom). Mock the module so it never
+// loads md-editor; the stub just echoes the `text` prop it receives so we can
+// assert exactly what FileDiffView hands it.
+vi.mock('../MarkdownView.vue', () => ({
+  default: { props: ['text'], template: '<div class="md-stub">{{ text }}</div>' },
+}))
+
 import FileDiffView from '../FileDiffView.vue'
 
 const DIFF = `--- a/a.txt
@@ -19,14 +27,35 @@ describe('FileDiffView', () => {
     expect(w.find('.diff-cell--add').text()).toContain('CHANGED')
   })
 
-  it('renders added-file content in the lightweight viewer', () => {
-    const w = mount(FileDiffView, { props: { status: 'added', content: 'hello\nworld\n', truncated: false } })
-    expect(w.find('.diff-added-viewer').text()).toContain('hello')
+  it('renders added-file content as a code block with language from the extension', () => {
+    const w = mount(FileDiffView, {
+      props: { status: 'added', content: 'export const x = 1', truncated: false, filename: 'a.ts' },
+    })
+    const md = w.find('.md-stub').text()
+    expect(md).toContain('```ts')
+    expect(md).toContain('export const x = 1')
     expect(w.find('.diff-row').exists()).toBe(false)
   })
 
+  it('uses a longer fence when the content contains backticks', () => {
+    const w = mount(FileDiffView, {
+      props: { status: 'added', content: 'a\n```\nb', truncated: false, filename: 'x.md' },
+    })
+    // inner ``` (3) forces the outer fence to 4 backticks
+    expect(w.find('.md-stub').text()).toContain('````md')
+  })
+
+  it('emits an empty-language fence when filename has no extension', () => {
+    const w = mount(FileDiffView, {
+      props: { status: 'added', content: 'plain', truncated: false, filename: 'README' },
+    })
+    expect(w.find('.md-stub').text()).toMatch(/^```\nplain\n```$/)
+  })
+
   it('shows a truncation note when truncated', () => {
-    const w = mount(FileDiffView, { props: { status: 'added', content: 'x', truncated: true } })
+    const w = mount(FileDiffView, {
+      props: { status: 'added', content: 'x', truncated: true, filename: 'x.txt' },
+    })
     expect(w.find('.diff-truncated').exists()).toBe(true)
   })
 
@@ -39,10 +68,5 @@ describe('FileDiffView', () => {
   it('shows a generic placeholder for null status', () => {
     const w = mount(FileDiffView, { props: { status: null, truncated: false } })
     expect(w.find('.diff-empty').text()).toContain('没有差异')
-  })
-
-  it('renders one line per added line without blank padding', () => {
-    const w = mount(FileDiffView, { props: { status: 'added', content: 'a\nb\nc\n', truncated: false } })
-    expect(w.findAll('.diff-added-line').length).toBe(3)
   })
 })

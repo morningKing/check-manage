@@ -732,6 +732,7 @@ function onKey(e: Event) {
           :diff="diffData.diff"
           :content="diffData.content"
           :truncated="diffData.truncated"
+          :filename="diffFile"
         />
         <a
           v-if="diffData && diffData.status !== 'deleted'"
