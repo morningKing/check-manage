@@ -102,6 +102,17 @@
                   选择导出脚本将覆盖菜单绑定的脚本
                 </div>
               </el-form-item>
+              <el-form-item label="分支">
+                <el-select v-model="branchId" style="width: 300px">
+                  <el-option
+                    v-for="b in branchOptions"
+                    :key="b.id"
+                    :label="b.name"
+                    :value="b.id"
+                  />
+                </el-select>
+                <div class="form-tip">导出该分支下的数据（默认主分支）</div>
+              </el-form-item>
             </el-form>
           </div>
 
@@ -174,6 +185,7 @@ import {
   previewMenuExport,
   executeMenuExport,
 } from '@/api/menu'
+import { useProjectBranches } from '@/composables/useProjectBranches'
 import type { MenuItem, MenuExportPreview } from '@/types'
 
 // ==================== Refs ====================
@@ -181,6 +193,8 @@ import type { MenuItem, MenuExportPreview } from '@/types'
 const treeRef = ref()
 const menuTree = ref<MenuItem[]>([])
 const selectedScriptId = ref<string>('')
+const branchId = ref('main')
+const { branchOptions, loadBranches } = useProjectBranches()
 const previewData = ref<MenuExportPreview | null>(null)
 const previewLoading = ref(false)
 const exportLoading = ref(false)
@@ -246,7 +260,7 @@ async function loadPreview(): Promise<void> {
 
   previewLoading.value = true
   try {
-    const data = await previewMenuExport(selectedMenuIds.value as string[])
+    const data = await previewMenuExport(selectedMenuIds.value as string[], branchId.value)
     previewData.value = data
 
     // Auto expand all collapse items
@@ -285,7 +299,8 @@ async function handleExport(): Promise<void> {
   try {
     const blob = await executeMenuExport(
       selectedMenuIds.value as string[],
-      selectedScriptId.value
+      selectedScriptId.value,
+      branchId.value
     )
 
     // Download the file
@@ -319,10 +334,13 @@ watch(selectedMenuIds, () => {
   }, 300)
 })
 
+// 切换分支时重新加载预览（按所选分支统计记录数）
+watch(branchId, () => loadPreview())
+
 // ==================== 生命周期 ====================
 
 onMounted(async () => {
-  await loadMenuTree()
+  await Promise.all([loadMenuTree(), loadBranches()])
 })
 
 /**

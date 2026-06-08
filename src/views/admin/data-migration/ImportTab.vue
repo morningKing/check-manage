@@ -10,8 +10,13 @@
           check-strictly
           placeholder="选择项目"
           style="width: 280px"
-          @change="loadPages"
+          @change="onProjectChange"
         />
+      </el-form-item>
+      <el-form-item label="导入到分支">
+        <el-select v-model="branchId" style="width: 180px">
+          <el-option v-for="b in branchOptions" :key="b.id" :label="b.name" :value="b.id" />
+        </el-select>
       </el-form-item>
     </el-form>
 
@@ -78,9 +83,11 @@ import { ElMessage, type UploadFile } from 'element-plus'
 import { Upload, UploadFilled } from '@element-plus/icons-vue'
 import { post } from '@/utils/request'
 import { getAvailableExportMenus, previewMenuExport } from '@/api/menu'
+import { getCurrentProjectBranch, setCurrentProjectBranch } from '@/api/projectVersion'
 import { usePageConfigStore } from '@/stores'
 import { parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { runBatchImport, type BatchImportPageResult } from '@/composables/useBatchImport'
+import { useProjectBranches } from '@/composables/useProjectBranches'
 import type { MenuItem } from '@/types'
 
 interface PageRow {
@@ -95,6 +102,8 @@ const pageConfigStore = usePageConfigStore()
 const treeProps = { children: 'children', label: 'name' }
 const menuTree = ref<MenuItem[]>([])
 const selectedMenuId = ref<string>('')
+const branchId = ref('main')
+const { branchOptions, loadBranches } = useProjectBranches()
 const pageRows = ref<PageRow[]>([])
 const pagesLoading = ref(false)
 const running = ref(false)
@@ -105,6 +114,13 @@ const hasFiles = computed(() => pageRows.value.some((r) => r._file))
 
 async function loadMenus() {
   menuTree.value = await getAvailableExportMenus()
+}
+
+// 切换项目：重置目标分支为主分支并加载该项目的分支选项，再刷新页面列表
+async function onProjectChange() {
+  branchId.value = 'main'
+  await loadBranches(selectedMenuId.value)
+  await loadPages()
 }
 
 async function loadPages() {
@@ -181,7 +197,21 @@ async function start() {
 
   running.value = true
   results.value = []
+  // 临时把当前工作分支切到目标分支，保证引用解析的读与写入都落在该分支；完成后恢复
+  const targetBranch = branchId.value
+  let prevBranch: string | null = null
   try {
+    if (selectedMenuId.value) {
+      try {
+        prevBranch = (await getCurrentProjectBranch(selectedMenuId.value))?.branchId ?? 'main'
+      } catch {
+        prevBranch = 'main'
+      }
+      if (targetBranch !== prevBranch) {
+        await setCurrentProjectBranch(selectedMenuId.value, targetBranch)
+      }
+    }
+
     const withFiles = pageRows.value.filter((r) => r._file)
     const pages: Array<{ pageId: string; collection: string; records: Record<string, any>[] }> = []
     const parseErrors: string[] = []
@@ -214,6 +244,14 @@ async function start() {
   } catch (err: unknown) {
     ElMessage.error((err as Error)?.message || '批量导入失败')
   } finally {
+    // 恢复到导入前的工作分支
+    if (selectedMenuId.value && prevBranch !== null && prevBranch !== targetBranch) {
+      try {
+        await setCurrentProjectBranch(selectedMenuId.value, prevBranch)
+      } catch {
+        /* 恢复失败不影响导入结果，忽略 */
+      }
+    }
     running.value = false
   }
 }

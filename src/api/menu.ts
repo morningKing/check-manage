@@ -105,14 +105,18 @@ export function previewMenuExport(menuIds: string[], branchId = 'main') {
  * @param scriptId - 可选，指定导出脚本ID
  * @returns Blob - ZIP 文件
  */
-export async function executeMenuExport(menuIds: string[], scriptId?: string): Promise<Blob> {
+export async function executeMenuExport(
+  menuIds: string[],
+  scriptId?: string,
+  branchId = 'main'
+): Promise<Blob> {
   const response = await fetch('/api/menuExport', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
     },
-    body: JSON.stringify({ menuIds, scriptId })
+    body: JSON.stringify({ menuIds, scriptId, branchId })
   })
 
   if (!response.ok) {
