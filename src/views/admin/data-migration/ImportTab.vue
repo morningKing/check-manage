@@ -15,6 +15,25 @@
       </el-form-item>
     </el-form>
 
+    <el-upload
+      v-if="pageRows.length"
+      class="bulk-upload"
+      drag
+      multiple
+      :auto-upload="false"
+      :show-file-list="false"
+      accept=".xlsx,.xls,.json"
+      :on-change="onBulkFile"
+    >
+      <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+      <div class="el-upload__text">将所有文件拖到此处，或<em>点击一次性选择</em></div>
+      <template #tip>
+        <div class="el-upload__tip">
+          按文件名自动分配到对应数据页（文件名需含 collection 或页名，如 products.xlsx / 产品管理.xlsx），可在下方逐行手动调整。
+        </div>
+      </template>
+    </el-upload>
+
     <el-table :data="pageRows" border v-loading="pagesLoading">
       <el-table-column prop="pageName" label="数据页" />
       <el-table-column prop="collection" label="Collection" width="180" />
@@ -56,7 +75,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
-import { Upload } from '@element-plus/icons-vue'
+import { Upload, UploadFilled } from '@element-plus/icons-vue'
 import { post } from '@/utils/request'
 import { getAvailableExportMenus, previewMenuExport } from '@/api/menu'
 import { usePageConfigStore } from '@/stores'
@@ -109,6 +128,54 @@ function onFile(row: PageRow, uploadFile: UploadFile) {
   row._file = uploadFile.raw
 }
 
+/**
+ * 按文件名把一个文件归位到某数据页：
+ * 优先精确匹配 collection / 页名，否则文件名包含其一。命中返回 true。
+ */
+function autoAssign(file: File): boolean {
+  const base = file.name.replace(/\.[^.]+$/, '').toLowerCase()
+  const rows = pageRows.value
+  let row = rows.find((r) => r.collection.toLowerCase() === base || r.pageName.toLowerCase() === base)
+  if (!row) {
+    row = rows.find(
+      (r) => base.includes(r.collection.toLowerCase()) || base.includes(r.pageName.toLowerCase()),
+    )
+  }
+  if (row) {
+    row._file = file
+    return true
+  }
+  return false
+}
+
+// el-upload 的 on-change 对每个文件各触发一次，用短定时器把结果汇总成一次提示
+let assignFlushTimer: ReturnType<typeof setTimeout> | null = null
+let pendingAssigned = 0
+const pendingUnmatched: string[] = []
+
+function onBulkFile(uploadFile: UploadFile) {
+  const file = uploadFile.raw
+  if (!file) return
+  if (!pageRows.value.length) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (autoAssign(file)) pendingAssigned++
+  else pendingUnmatched.push(file.name)
+
+  if (assignFlushTimer) clearTimeout(assignFlushTimer)
+  assignFlushTimer = setTimeout(flushAssignResult, 80)
+}
+
+function flushAssignResult() {
+  if (pendingAssigned > 0) ElMessage.success(`已自动分配 ${pendingAssigned} 个文件`)
+  if (pendingUnmatched.length > 0) {
+    ElMessage.warning(`${pendingUnmatched.length} 个文件未匹配到数据页：${pendingUnmatched.join('、')}`)
+  }
+  pendingAssigned = 0
+  pendingUnmatched.length = 0
+}
+
 async function start() {
   if (!pageConfigStore.pageConfigs.length) await pageConfigStore.fetchPageConfigs()
 
@@ -156,6 +223,7 @@ loadMenus()
 
 <style scoped lang="scss">
 .import-tab { padding: 8px; }
+.bulk-upload { margin-bottom: 16px; }
 .actions { margin-top: 16px; }
 .file-name { margin-left: 8px; font-size: 12px; color: #909399; }
 </style>
