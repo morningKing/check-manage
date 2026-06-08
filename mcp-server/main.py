@@ -16,6 +16,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
 import uvicorn
 
+from app_config import bind_config
 from context import context_from_token, ToolContext
 
 mcp_server = Server("check-manage-mcp")
@@ -92,4 +93,5 @@ app.mount("/mcp", session_manager.handle_request)
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=3003)
+    host, port = bind_config()
+    uvicorn.run(app, host=host, port=port)

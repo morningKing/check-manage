@@ -15,11 +15,19 @@ import subprocess
 import time
 import signal
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+# Load server/.env so PROXY_*/BACKEND_URL/MCP_*/CORS_* take effect from the file
+# (this process is separate from Flask's config.py, which loads it for the app).
+load_dotenv(Path(__file__).resolve().parent / '.env', override=False)
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 PROXY_PORT = int(os.environ.get('PROXY_PORT', 8080))
+PROXY_HOST = os.environ.get('PROXY_HOST', '0.0.0.0')
 BACKEND_URL = os.environ.get('BACKEND_URL', 'http://127.0.0.1:3001')
 DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'))
 
@@ -34,6 +42,26 @@ OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('image/svg+xml', '.svg')
+
+
+def _backend_port():
+    """Port the proxy launches the backend on = the port it proxies to (from
+    BACKEND_URL), so they can never drift apart."""
+    return urlparse(BACKEND_URL).port or 3001
+
+
+def _allowed_origins():
+    return [o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
+
+
+def _cors_origin(request_origin):
+    """Resolve the Access-Control-Allow-Origin value for a preflight: echo the
+    request Origin if it's in CORS_ALLOWED_ORIGINS; if the list is empty, fall
+    back to '*' (unchanged default); otherwise return '' (not allowed)."""
+    allowed = _allowed_origins()
+    if not allowed:
+        return '*'
+    return request_origin if request_origin in allowed else ''
 
 
 class ProxyHandler(SimpleHTTPRequestHandler):
@@ -193,9 +221,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self._proxy_to_backend() if self.path.startswith('/api') else self.send_error(405)
 
     def do_OPTIONS(self):
-        # Handle CORS preflight
+        # Handle CORS preflight (origin gated by CORS_ALLOWED_ORIGINS; empty list -> '*')
+        origin = _cors_origin(self.headers.get('Origin', ''))
         self.send_response(204)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        if origin:
+            self.send_header('Access-Control-Allow-Origin', origin)
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key')
         self.send_header('Access-Control-Max-Age', '86400')
@@ -215,7 +245,7 @@ def start_backend():
     env['FLASK_DEBUG'] = '0'
     proc = subprocess.Popen(
         [sys.executable, '-c',
-         'import app; app.app.run(host="0.0.0.0", port=3001, debug=False)'],
+         f'import app; app.app.run(host="0.0.0.0", port={_backend_port()}, debug=False)'],
         cwd=server_dir,
         env=env,
         stdout=subprocess.DEVNULL,
@@ -337,7 +367,7 @@ def main():
 
     # Start reverse proxy (threaded so long-lived SSE streams don't block others)
     print('[3/3] Starting reverse proxy ...', flush=True)
-    server = ThreadingHTTPServer(('0.0.0.0', PROXY_PORT), ProxyHandler)
+    server = ThreadingHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
     print(f'       Serving at http://localhost:{PROXY_PORT}', flush=True)
     print(f'       Static files: {DIST_DIR}', flush=True)
     print(f'       API proxy:    /api/* -> {BACKEND_URL}', flush=True)
