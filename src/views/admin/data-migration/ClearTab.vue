@@ -10,11 +10,13 @@
           check-strictly
           placeholder="选择项目"
           style="width: 280px"
-          @change="loadPages"
+          @change="onProjectChange"
         />
       </el-form-item>
       <el-form-item label="分支">
-        <el-input v-model="branchId" style="width: 140px" />
+        <el-select v-model="branchId" style="width: 180px" @change="loadPages">
+          <el-option v-for="b in branchOptions" :key="b.id" :label="b.name" :value="b.id" />
+        </el-select>
       </el-form-item>
     </el-form>
 
@@ -49,9 +51,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAvailableExportMenus, previewMenuExport, batchClearCollections } from '@/api/menu'
+import { useProjectBranches } from '@/composables/useProjectBranches'
 import type { MenuItem } from '@/types'
 
 interface PageRow { collection: string; pageName: string; recordCount: number }
@@ -60,6 +63,7 @@ const treeProps = { children: 'children', label: 'name' }
 const menuTree = ref<MenuItem[]>([])
 const selectedMenuId = ref('')
 const branchId = ref('main')
+const { branchOptions, loadBranches } = useProjectBranches()
 const pageRows = ref<PageRow[]>([])
 const pagesLoading = ref(false)
 const selected = ref<PageRow[]>([])
@@ -73,6 +77,13 @@ async function loadMenus() {
   menuTree.value = await getAvailableExportMenus()
 }
 
+// 切换项目：重置分支为主分支、加载该项目的分支选项、刷新页面列表
+async function onProjectChange() {
+  branchId.value = 'main'
+  await loadBranches(selectedMenuId.value)
+  await loadPages()
+}
+
 async function loadPages() {
   if (!selectedMenuId.value) return
   pagesLoading.value = true
@@ -84,9 +95,6 @@ async function loadPages() {
     pagesLoading.value = false
   }
 }
-
-// 切换分支时刷新记录数（清空针对所选分支，预览数须同分支）
-watch(branchId, () => loadPages())
 
 function onSelect(rows: PageRow[]) {
   selected.value = rows
