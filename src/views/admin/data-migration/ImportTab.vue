@@ -19,9 +19,16 @@
       <el-table-column prop="pageName" label="数据页" />
       <el-table-column prop="collection" label="Collection" width="180" />
       <el-table-column prop="recordCount" label="现有记录" width="100" align="right" />
-      <el-table-column label="导入文件" width="260">
+      <el-table-column label="导入文件" width="280">
         <template #default="{ row }">
-          <input type="file" accept=".xlsx,.xls,.json" @change="(e) => onFile(row, e)" />
+          <el-upload
+            :auto-upload="false"
+            :show-file-list="false"
+            accept=".xlsx,.xls,.json"
+            :on-change="(file: UploadFile) => onFile(row, file)"
+          >
+            <el-button size="small" :icon="Upload">选择文件</el-button>
+          </el-upload>
           <span v-if="row._file" class="file-name">{{ row._file.name }}</span>
         </template>
       </el-table-column>
@@ -48,7 +55,8 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, type UploadFile } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 import { post } from '@/utils/request'
 import { getAvailableExportMenus, previewMenuExport } from '@/api/menu'
 import { usePageConfigStore } from '@/stores'
@@ -97,9 +105,8 @@ async function loadPages() {
   }
 }
 
-function onFile(row: PageRow, e: Event) {
-  const input = e.target as HTMLInputElement
-  row._file = input.files?.[0]
+function onFile(row: PageRow, uploadFile: UploadFile) {
+  row._file = uploadFile.raw
 }
 
 async function start() {
