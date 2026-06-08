@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAvailableExportMenus, previewMenuExport, batchClearCollections } from '@/api/menu'
 import type { MenuItem } from '@/types'
@@ -76,13 +76,17 @@ async function loadMenus() {
 async function loadPages() {
   if (!selectedMenuId.value) return
   pagesLoading.value = true
+  selected.value = []
   try {
-    const preview = await previewMenuExport([selectedMenuId.value])
+    const preview = await previewMenuExport([selectedMenuId.value], branchId.value)
     pageRows.value = preview.menus.flatMap((m) => m.pages)
   } finally {
     pagesLoading.value = false
   }
 }
+
+// 切换分支时刷新记录数（清空针对所选分支，预览数须同分支）
+watch(branchId, () => loadPages())
 
 function onSelect(rows: PageRow[]) {
   selected.value = rows

@@ -94,8 +94,8 @@ export function getAvailableExportMenus() {
  *
  * @param menuIds - 菜单ID列表
  */
-export function previewMenuExport(menuIds: string[]) {
-  return post<MenuExportPreview>('/menuExport/preview', { menuIds })
+export function previewMenuExport(menuIds: string[], branchId = 'main') {
+  return post<MenuExportPreview>('/menuExport/preview', { menuIds, branchId })
 }
 
 /**
