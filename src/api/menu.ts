@@ -94,8 +94,8 @@ export function getAvailableExportMenus() {
  *
  * @param menuIds - 菜单ID列表
  */
-export function previewMenuExport(menuIds: string[]) {
-  return post<MenuExportPreview>('/menuExport/preview', { menuIds })
+export function previewMenuExport(menuIds: string[], branchId = 'main') {
+  return post<MenuExportPreview>('/menuExport/preview', { menuIds, branchId })
 }
 
 /**
@@ -121,4 +121,18 @@ export async function executeMenuExport(menuIds: string[], scriptId?: string): P
   }
 
   return response.blob()
+}
+
+/**
+ * 批量清空多个数据页在指定分支的全部记录
+ *
+ * @param collections - collection 名称列表
+ * @param branchId - 分支ID（默认 main）
+ */
+export function batchClearCollections(collections: string[], branchId = 'main') {
+  return post<{
+    perCollection: Record<string, number>
+    totalDeleted: number
+    relationsDeleted: number
+  }>('/menuExport/batchClear', { collections, branchId })
 }

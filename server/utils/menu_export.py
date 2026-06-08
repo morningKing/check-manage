@@ -287,3 +287,31 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
     zip_filename = f'菜单导出_{timestamp}.zip'
 
     return zip_bytes, zip_filename, errors
+
+
+def batch_clear(conn, collections, branch_id='main'):
+    """
+    清空多个 collection 在指定分支的全部记录，并清理悬挂的 M:N 关系。
+
+    返回：{'perCollection': {coll: deleted_count}, 'totalDeleted': int, 'relationsDeleted': int}
+    单事务：调用方负责 commit/rollback（get_db 上下文管理器已处理）。
+    """
+    cur = conn.cursor()
+    per = {}
+    total = 0
+    for coll in collections:
+        cur.execute(
+            'DELETE FROM dynamic_data WHERE collection = %s AND branch_id = %s',
+            (coll, branch_id),
+        )
+        per[coll] = cur.rowcount
+        total += cur.rowcount
+
+    cur.execute(
+        'DELETE FROM data_relations WHERE branch_id = %s '
+        'AND (collection = ANY(%s) OR related_collection = ANY(%s))',
+        (branch_id, list(collections), list(collections)),
+    )
+    relations_deleted = cur.rowcount
+
+    return {'perCollection': per, 'totalDeleted': total, 'relationsDeleted': relations_deleted}

@@ -7,8 +7,9 @@
 
 from flask import Blueprint, request, jsonify, Response
 from db import get_db
-from auth import login_required
-from utils.menu_export import execute_menu_export
+from auth import login_required, write_required
+from utils.menu_export import execute_menu_export, batch_clear
+from utils.operation_log import log_operation
 from urllib.parse import quote
 
 menu_export_bp = Blueprint('menu_export', __name__)
@@ -244,3 +245,27 @@ def preview_menu_export():
         'totalRecords': total_all_records,
         'availableScripts': available_scripts
     })
+
+
+@menu_export_bp.route('/menuExport/batchClear', methods=['POST'])
+@write_required
+def batch_clear_collections():
+    """批量清空多个数据页（collection）在指定分支的全部记录。"""
+    body = request.get_json(force=True)
+    collections = body.get('collections', [])
+    branch_id = body.get('branchId', 'main')
+
+    if not collections:
+        return jsonify({'error': '未选择要清空的数据页'}), 400
+
+    with get_db() as conn:
+        result = batch_clear(conn, collections, branch_id)
+
+    log_operation(
+        'delete', 'dynamic_data', None, None,
+        f"批量清空 {len(collections)} 个数据页，共 {result['totalDeleted']} 条记录"
+        f"（分支 {branch_id}）",
+        branch_id=branch_id,
+    )
+
+    return jsonify(result)

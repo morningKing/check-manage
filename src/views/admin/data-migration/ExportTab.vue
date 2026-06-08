@@ -164,7 +164,7 @@
 
 <script setup lang="ts">
 /**
- * MenuExportPage 组件脚本
+ * ExportTab 组件脚本
  */
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'

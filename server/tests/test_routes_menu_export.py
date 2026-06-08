@@ -344,6 +344,50 @@ class TestExecuteMenuExport:
         assert resp.status_code == 401
 
 
+# ==================== POST /menuExport/batchClear ====================
+
+class TestBatchClear:
+    """测试批量清空数据页端点"""
+
+    def _post(self, client, headers, body):
+        return client.post(
+            '/menuExport/batchClear',
+            data=json.dumps(body),
+            content_type='application/json',
+            headers=headers,
+        )
+
+    def test_empty_collections_returns_400(self, setup):
+        client, _, admin_h, _ = setup
+        resp = self._post(client, admin_h, {'collections': [], 'branchId': 'main'})
+        assert resp.status_code == 400
+
+    def test_guest_forbidden(self, setup):
+        client, _, _, _ = setup
+        guest_token = create_token({'id': 'u-g', 'username': 'g', 'role': 'guest'})
+        resp = self._post(
+            client,
+            {'Authorization': f'Bearer {guest_token}'},
+            {'collections': ['orders'], 'branchId': 'main'},
+        )
+        assert resp.status_code == 403
+
+    def test_clears_data_and_relations(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        mock_cursor.rowcount = 3
+        resp = self._post(
+            client, admin_h,
+            {'collections': ['orders', 'products'], 'branchId': 'main'},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['totalDeleted'] == 6
+        assert 'relationsDeleted' in body
+        executed = ' '.join(c.args[0] for c in mock_cursor.execute.call_args_list)
+        assert 'DELETE FROM dynamic_data' in executed
+        assert 'DELETE FROM data_relations' in executed
+
+
 # ==================== 权限测试 ====================
 
 class TestMenuExportPermissions:
