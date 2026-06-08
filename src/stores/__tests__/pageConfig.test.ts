@@ -676,7 +676,7 @@ describe('PageConfig Store — quoteSelect', () => {
     expect(records[0].quotedCases).toEqual(['case-3', 'case-1', 'case-2'])
   })
 
-  it('resolveQuoteImportValues 跳过不存在的值但保持剩余顺序', async () => {
+  it('resolveQuoteImportValues 目标集合有部分匹配时：已匹配的转换为内部ID，未匹配的保留原始值', async () => {
     const mockedGet = vi.mocked(get)
     mockedGet.mockReset()
 
@@ -710,13 +710,14 @@ describe('PageConfig Store — quoteSelect', () => {
       total: 2,
     })
 
-    // IC-002 不存在，应被过滤但不影响 IC-001 和 IC-003 的顺序
+    // IC-002 不存在于目标集合；IC-001 和 IC-003 可正常解析
     const records = [
       { quotedCases: ['IC-001', 'IC-002', 'IC-003'] },
     ]
 
     await store.resolveQuoteImportValues('page-test', records)
-    expect(records[0].quotedCases).toEqual(['case-1', 'case-3'])
+    // IC-001 → case-1, IC-002 保留原始值（目标尚未导入），IC-003 → case-3
+    expect(records[0].quotedCases).toEqual(['case-1', 'IC-002', 'case-3'])
   })
 
   it('resolveQuoteImportValues 通过 displayField 名称匹配', async () => {
@@ -923,6 +924,37 @@ describe('PageConfig Store — quoteSelect', () => {
     const records = [{ quotedCases: ['机房安全检查', '机房安全检查'] }]
     await store.resolveQuoteImportValues('page-test', records)
     expect(records[0].quotedCases).toEqual(['case-1', 'case-2'])
+  })
+
+  it('resolveQuoteImportValues 目标缺失时保留原始值（不丢弃）', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'quotedCases', controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+    // 目标集合此刻还没有数据（被引用页尚未导入）
+    mockedGet.mockResolvedValueOnce({ data: [], total: 0 })
+
+    const records = [{ quotedCases: ['IC-001', 'IC-002'] }]
+    await store.resolveQuoteImportValues('page-test', records)
+    // 改动前会被清空为 []；改动后保留原始主键值，供之后重新解析
+    expect(records[0].quotedCases).toEqual(['IC-001', 'IC-002'])
   })
 
   it('stripRelationFields 保持 quoteSelect 数组顺序不变', () => {
@@ -1738,6 +1770,96 @@ describe('PageConfig Store — resolveCollectionSelectImportValues', () => {
     expect(records[0].colC).toBe('test-existing')
     // 引用同批新记录 → 解析为预生成的 _importId
     expect(records[1].colC).toBe(records[0]._importId)
+  })
+})
+
+describe('PageConfig Store — reResolveReferences', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('reResolveReferences 把已存的原始值解析为内部 id 并回写', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedPost = vi.mocked(post)
+    mockedGet.mockReset()
+    mockedPost.mockReset()
+    mockedPost.mockResolvedValue({ success: true, created: 0, updated: 1, failed: 0 } as any)
+
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-orders',
+          fields: [
+            makeField({ id: 'nm', fieldName: 'orderNo', controlType: 'text' }),
+            makeField({
+              id: 'f1', fieldName: 'quotedCases', controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [
+            makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }),
+          ],
+        }),
+      ],
+    })
+
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/orders') {
+        return Promise.resolve({ data: [{ id: 'order-1', orderNo: 'O1', quotedCases: ['IC-001'] }], total: 1 })
+      }
+      if (url === '/cases') {
+        return Promise.resolve({ data: [{ id: 'case-1', caseId: 'IC-001', caseName: '用例A' }], total: 1 })
+      }
+      return Promise.resolve({ data: [], total: 0 })
+    })
+
+    const res = await store.reResolveReferences('page-orders')
+    expect(res.updated).toBe(1)
+    expect(res.pending).toBe(0)
+    expect(mockedPost).toHaveBeenCalledTimes(1)
+    const [url, body] = mockedPost.mock.calls[0]
+    expect(url).toBe('/orders/batch-create')
+    expect(body.records[0].id).toBe('order-1')
+    expect(body.records[0].data.quotedCases).toEqual(['case-1'])
+  })
+
+  it('reResolveReferences 目标仍缺失时保持原始值且计入 pending、不回写', async () => {
+    const mockedGet = vi.mocked(get)
+    const mockedPost = vi.mocked(post)
+    mockedGet.mockReset()
+    mockedPost.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-orders',
+          fields: [
+            makeField({
+              id: 'f1', fieldName: 'quotedCases', controlType: 'quoteSelect',
+              quoteConfig: { targetCollection: 'cases', displayField: 'caseName' },
+            }),
+          ],
+        }),
+        makePageConfig({
+          id: 'page-cases',
+          fields: [ makeField({ id: 'pk', fieldName: 'caseId', controlType: 'text', isPrimaryKey: true }) ],
+        }),
+      ],
+    })
+    mockedGet.mockImplementation((url: string) => {
+      if (url === '/orders') return Promise.resolve({ data: [{ id: 'order-1', quotedCases: ['IC-999'] }], total: 1 })
+      if (url === '/cases') return Promise.resolve({ data: [], total: 0 })
+      return Promise.resolve({ data: [], total: 0 })
+    })
+    const res = await store.reResolveReferences('page-orders')
+    expect(res.updated).toBe(0)
+    expect(res.pending).toBe(1)
+    expect(mockedPost).not.toHaveBeenCalled()
   })
 })
 

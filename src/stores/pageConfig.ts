@@ -1298,6 +1298,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
               for (const id of ids) {
                 if (!seen.has(id)) { seen.add(id); resolved.push(id) }
               }
+            } else if (!seen.has(v)) {
+              // 目标记录尚不存在：保留原始主键/显示值，供之后「重新解析引用」补全（不丢弃）
+              seen.add(v); resolved.push(v)
             }
           }
         }
@@ -1396,6 +1399,77 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         }
       }
     }
+  }
+
+  /**
+   * 重新解析当前页面已存数据中的 quoteSelect / reference 引用字段：
+   * 把导入时未匹配而保留的原始主键/显示值，按目标集合的当前数据补全为内部 id。
+   * 仅回写发生变化的记录（quoteSelect/reference 都在 JSONB data 内，relations 传空不动关联表）。
+   * 返回 { updated: 回写记录数, pending: 仍含未匹配引用的记录数 }。
+   */
+  async function reResolveReferences(
+    pageId: string
+  ): Promise<{ updated: number; pending: number }> {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return { updated: 0, pending: 0 }
+    const quoteFields = getQuoteFields(pageId)
+    const refFields = getReferenceFields(pageId)
+    const refFieldNames = [...quoteFields, ...refFields].map((f) => f.fieldName)
+    if (refFieldNames.length === 0) return { updated: 0, pending: 0 }
+
+    const endpoint = pageId.replace('page-', '')
+    let records: any[]
+    try {
+      const resp = await get<{ data: any[]; total: number }>(`/${endpoint}`, { pageSize: 10000 })
+      records = resp.data || []
+    } catch {
+      return { updated: 0, pending: 0 }
+    }
+    if (records.length === 0) return { updated: 0, pending: 0 }
+
+    const before = records.map((r) => refFieldNames.map((fn) => JSON.stringify(r[fn] ?? null)))
+
+    const cache = new Map<string, any[]>()
+    await resolveQuoteImportValues(pageId, records, cache)
+    await resolveReferenceImportValues(pageId, records, cache)
+
+    const idSetByCollection = new Map<string, Set<string>>()
+    const targetOf = (f: FieldConfig) =>
+      f.quoteConfig?.targetCollection || f.referenceConfig?.targetCollection || ''
+    for (const f of [...quoteFields, ...refFields]) {
+      const tc = targetOf(f)
+      if (!tc || idSetByCollection.has(tc)) continue
+      const recs = await fetchCollectionData(tc, cache)
+      idSetByCollection.set(tc, new Set(recs.map((r: any) => r.id)))
+    }
+    const idSetFor = (f: FieldConfig) => idSetByCollection.get(targetOf(f)) || new Set<string>()
+
+    const changed: any[] = []
+    let pending = 0
+    records.forEach((r, i) => {
+      const after = refFieldNames.map((fn) => JSON.stringify(r[fn] ?? null))
+      if (after.some((v, j) => v !== before[i][j])) changed.push(r)
+      const hasPending =
+        quoteFields.some((f) => Array.isArray(r[f.fieldName]) &&
+          r[f.fieldName].some((v: string) => !idSetFor(f).has(v))) ||
+        refFields.some((f) => !!r[f.fieldName] && !idSetFor(f).has(String(r[f.fieldName])))
+      if (hasPending) pending++
+    })
+
+    if (changed.length > 0) {
+      const allFieldNames = config.fields.map((f) => f.fieldName)
+      const batchRecords = changed.map((r) => {
+        const data: Record<string, any> = {}
+        for (const fn of allFieldNames) if (r[fn] !== undefined) data[fn] = r[fn]
+        return { id: r.id, data, relations: {} }
+      })
+      await post(`/${endpoint}/batch-create`, {
+        records: batchRecords,
+        options: { skipValidation: false, continueOnError: true },
+      })
+    }
+
+    return { updated: changed.length, pending }
   }
 
   /**
@@ -1504,6 +1578,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     // 引用选择
     fetchQuoteDisplayMaps,
     resolveQuoteImportValues,
+    reResolveReferences,
     // collection 类型选项解析
     resolveCollectionSelectImportValues,
     // 自动字段

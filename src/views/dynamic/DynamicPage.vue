@@ -105,6 +105,7 @@
               </el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
+              <el-dropdown-item v-if="!isGuest && hasReferenceFields" command="reResolveRefs" :icon="RefreshRight">重新解析引用</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" divided command="version" :icon="Tickets">版本管理</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" command="dependency" :icon="Operation">依赖管理</el-dropdown-item>
               <el-dropdown-item
@@ -831,7 +832,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -1204,6 +1205,10 @@ const pageConfig = computed<PageConfig | undefined>(() => {
 const pageFields = computed<FieldConfig[]>(() => {
   return pageConfigStore.getPageFields(pageId.value)
 })
+
+const hasReferenceFields = computed<boolean>(() =>
+  (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'quoteSelect' || f.controlType === 'reference'),
+)
 
 /**
  * 看板配置
@@ -2321,6 +2326,25 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
 }
 
 /**
+ * 重新解析引用字段（quoteSelect / reference）
+ */
+async function handleReResolveReferences(): Promise<void> {
+  try {
+    const { updated, pending } = await pageConfigStore.reResolveReferences(pageId.value)
+    if (updated > 0) await loadPageData()
+    if (updated === 0 && pending === 0) {
+      ElMessage.success('引用均已解析，无需更新')
+    } else if (pending > 0) {
+      ElMessage.warning(`已解析并更新 ${updated} 条；仍有 ${pending} 条未匹配（请确认被引用数据已导入）`)
+    } else {
+      ElMessage.success(`已重新解析，更新 ${updated} 条`)
+    }
+  } catch {
+    ElMessage.error('重新解析失败')
+  }
+}
+
+/**
  * 处理导出
  */
 async function handleExport(): Promise<void> {
@@ -2418,6 +2442,8 @@ function handleMoreCommand(command: string): void {
     }
   } else if (command === 'batchDelete') {
     handleBatchDeleteConfirm()
+  } else if (command === 'reResolveRefs') {
+    handleReResolveReferences()
   }
 }
 
