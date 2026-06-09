@@ -50,7 +50,8 @@ class OpenCodeClient:
             raise OpenCodeError(str(e))
 
     def send_prompt_async(self, opencode_session_id: str, content: str,
-                          model: str = "", directory: str = "", agent: str = "") -> None:
+                          model: str = "", directory: str = "", agent: str = "",
+                          agent_parts=None) -> None:
         """Send a prompt. `model` ("<providerID>/<modelID>") is passed explicitly
         because OpenCode does NOT honor the per-directory opencode.json `model`
         field for prompt selection — without it the server falls back to its
@@ -62,8 +63,22 @@ class OpenCodeClient:
 
         `agent` (optional) selects a named primary agent for this turn. When
         empty, OpenCode uses the session's current agent.
+
+        `agent_parts` (optional): list of {name, source?} dicts; each becomes an
+        OpenCode AgentPartInput {type:'agent', name, source?} appended after the
+        text part, so an `@name` mention delegates to that subagent for this turn.
         """
-        body = {"parts": [{"type": "text", "text": content}]}
+        parts = [{"type": "text", "text": content}]
+        for m in (agent_parts or []):
+            name = (m.get("name") or "").strip()
+            if not name:
+                continue
+            part = {"type": "agent", "name": name}
+            src = m.get("source") if isinstance(m.get("source"), dict) else m
+            if all(k in src for k in ("value", "start", "end")):
+                part["source"] = {"value": src["value"], "start": src["start"], "end": src["end"]}
+            parts.append(part)
+        body = {"parts": parts}
         if model and "/" in model:
             provider_id, model_id = model.split("/", 1)
             body["model"] = {"providerID": provider_id, "modelID": model_id}

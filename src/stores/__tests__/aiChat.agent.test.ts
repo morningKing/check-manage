@@ -61,4 +61,16 @@ describe('aiChat store agent', () => {
     expect(call[0]).toBe('sid1')
     expect(call[4]).toBe('plan')
   })
+
+  it('sendUserMessage parses @subagent mentions and forwards them', async () => {
+    const s = useAiChatStore()
+    s.activeSessionId = 'sid1'
+    s.messages['sid1'] = []
+    s.attachments['sid1'] = []
+    s.subagents = [{ name: 'general', description: '' }, { name: 'explore', description: '' }]
+    await s.sendUserMessage('ask @general to help')
+    const call = (sendMessage as any).mock.calls.at(-1)
+    // sendMessage(sid, content, paths, model, agent, agentMentions)
+    expect(call[5]).toEqual([{ name: 'general', value: '@general', start: 4, end: 12 }])
+  })
 })

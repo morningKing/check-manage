@@ -185,22 +185,28 @@ def list_models():
 def list_agents():
     """List user-facing primary OpenCode agents for the composer dropdown.
 
-    Returns { "agents": [{ "name", "description" }], "default": "<name>"|null }.
-    Filters to mode=='primary' and excludes OpenCode's internal agents.
+    Returns { "agents": [{name,description}] (primary), "subagents": [{name,description}],
+              "default": "<name>"|null }.
+    Filters to mode=='primary'/'subagent' and excludes OpenCode's internal agents.
     """
     try:
         raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
     except Exception as e:
-        return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'default': None}), 502
+        return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'subagents': [], 'default': None}), 502
 
     agents = [
         {'name': a.get('name'), 'description': a.get('description') or ''}
         for a in (raw or [])
         if a.get('mode') == 'primary' and a.get('name') not in INTERNAL_AGENTS
     ]
+    subagents = [
+        {'name': a.get('name'), 'description': a.get('description') or ''}
+        for a in (raw or [])
+        if a.get('mode') == 'subagent' and a.get('name') not in INTERNAL_AGENTS
+    ]
     names = {a['name'] for a in agents}
     default = 'build' if 'build' in names else (agents[0]['name'] if agents else None)
-    return jsonify({'agents': agents, 'default': default})
+    return jsonify({'agents': agents, 'subagents': subagents, 'default': default})
 
 
 @ai_chat_bp.route('/sessions', methods=['GET'])
@@ -351,9 +357,12 @@ def send_message(sid):
     requested_model = (body.get('model') or '').strip()
     effective_model = requested_model or OPENCODE_MODEL
     requested_agent = (body.get('agent') or '').strip()
+    agent_mentions = body.get('agentMentions')
+    if not isinstance(agent_mentions, list):
+        agent_mentions = []
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
         sess[2], prompt.strip(), model=effective_model, directory=sess[4],
-        agent=requested_agent,
+        agent=requested_agent, agent_parts=agent_mentions,
     )
     ensure_listener(sid, sess[2], sess[4])
     return jsonify({

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-export interface PaletteItem { kind: 'builtin' | 'command' | 'skill'; name: string; description: string }
-const props = defineProps<{ items: PaletteItem[]; activeIndex: number }>()
+export interface PaletteItem { kind: 'builtin' | 'command' | 'skill' | 'agent'; name: string; description: string }
+const props = withDefaults(defineProps<{ items: PaletteItem[]; activeIndex: number; prefix?: string }>(), { prefix: '/' })
 defineEmits<{ (e: 'select', item: PaletteItem): void }>()
 
-const groupLabel: Record<PaletteItem['kind'], string> = { builtin: '内置', command: '命令', skill: '技能' }
+const groupLabel: Record<PaletteItem['kind'], string> = { builtin: '内置', command: '命令', skill: '技能', agent: '智能体' }
 // Flat list keeps activeIndex simple; insert a group header row whenever the kind changes.
 const rows = computed(() => {
   const out: { header?: string; item?: PaletteItem; idx: number }[] = []
@@ -27,7 +27,7 @@ const rows = computed(() => {
         class="palette-item" :class="{ active: row.idx === activeIndex }"
         @mousedown.prevent="$emit('select', row.item!)"
       >
-        <code class="palette-item__name">/{{ row.item!.name }}</code>
+        <code class="palette-item__name">{{ prefix }}{{ row.item!.name }}</code>
         <span class="palette-item__desc">{{ row.item!.description }}</span>
       </div>
     </template>

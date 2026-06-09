@@ -80,12 +80,15 @@ export function getMessages(id: string, since?: string) {
   return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
 }
 
+export interface AgentMention { name: string; value: string; start: number; end: number }
+
 export function sendMessage(
   id: string, content: string, attachments: string[] = [], model = '', agent = '',
+  agentMentions: AgentMention[] = [],
 ) {
   return post<{ messageId: string; model: string | null; agent?: string | null }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages`,
-    { content, attachments, model, agent },
+    { content, attachments, model, agent, agentMentions },
   )
 }
 
@@ -111,7 +114,7 @@ export interface AgentInfo {
 }
 
 export function listAgents() {
-  return get<{ agents: AgentInfo[]; default: string | null }>('/ai/chat/agents')
+  return get<{ agents: AgentInfo[]; subagents: AgentInfo[]; default: string | null }>('/ai/chat/agents')
 }
 
 export function uploadFile(id: string, file: File) {
