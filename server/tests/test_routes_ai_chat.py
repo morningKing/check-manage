@@ -886,3 +886,17 @@ def test_list_agents_returns_subagents_separately(setup):
     assert [a['name'] for a in body['agents']] == ['build', 'plan']
     assert [a['name'] for a in body['subagents']] == ['general', 'explore']
     assert body['default'] == 'build'
+
+
+def test_send_message_passes_agent_mentions(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    mentions = [{"name": "general", "value": "@general", "start": 4, "end": 12}]
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': 'ask @general', 'attachments': [], 'agentMentions': mentions},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    _, kwargs = oc.send_prompt_async.call_args
+    assert kwargs.get('agent_parts') == mentions

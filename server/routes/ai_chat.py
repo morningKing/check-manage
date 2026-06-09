@@ -357,9 +357,12 @@ def send_message(sid):
     requested_model = (body.get('model') or '').strip()
     effective_model = requested_model or OPENCODE_MODEL
     requested_agent = (body.get('agent') or '').strip()
+    agent_mentions = body.get('agentMentions')
+    if not isinstance(agent_mentions, list):
+        agent_mentions = []
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
         sess[2], prompt.strip(), model=effective_model, directory=sess[4],
-        agent=requested_agent,
+        agent=requested_agent, agent_parts=agent_mentions,
     )
     ensure_listener(sid, sess[2], sess[4])
     return jsonify({

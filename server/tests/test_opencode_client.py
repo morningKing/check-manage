@@ -188,3 +188,17 @@ def test_run_command_posts_command_and_arguments():
     assert k["json"]["command"] == "init"
     assert k["json"]["arguments"] == "do it"
     assert k["json"]["model"] == "testprovider/test-model-v1"   # command endpoint wants model as a STRING
+
+
+def test_send_prompt_async_appends_agent_parts():
+    fake_resp = MagicMock(); fake_resp.raise_for_status.return_value = None
+    with patch("utils.opencode_client.requests.post", return_value=fake_resp) as post:
+        from utils.opencode_client import OpenCodeClient
+        OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
+            "ses_42", "ask @general please",
+            agent_parts=[{"name": "general", "source": {"value": "@general", "start": 4, "end": 12}}],
+        )
+        body = post.call_args.kwargs["json"]
+        assert body["parts"][0] == {"type": "text", "text": "ask @general please"}
+        assert {"type": "agent", "name": "general",
+                "source": {"value": "@general", "start": 4, "end": 12}} in body["parts"]
