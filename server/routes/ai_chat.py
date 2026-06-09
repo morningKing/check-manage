@@ -350,11 +350,17 @@ def send_message(sid):
     # (which itself may be empty, in which case OpenCode picks its default).
     requested_model = (body.get('model') or '').strip()
     effective_model = requested_model or OPENCODE_MODEL
+    requested_agent = (body.get('agent') or '').strip()
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
         sess[2], prompt.strip(), model=effective_model, directory=sess[4],
+        agent=requested_agent,
     )
     ensure_listener(sid, sess[2], sess[4])
-    return jsonify({'messageId': msg_id, 'model': effective_model or None}), 202
+    return jsonify({
+        'messageId': msg_id,
+        'model': effective_model or None,
+        'agent': requested_agent or None,
+    }), 202
 
 
 def _safe_workspace_path(workspace_path: str, rel: str):

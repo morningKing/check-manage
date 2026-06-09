@@ -854,3 +854,17 @@ def test_list_agents_degrades_on_opencode_error(setup):
     body = resp.get_json()
     assert body['agents'] == []
     assert body['default'] is None
+
+
+def test_send_message_passes_body_agent_to_opencode(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': 'hi', 'attachments': [], 'agent': 'plan'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    _, kwargs = oc.send_prompt_async.call_args
+    assert kwargs.get('agent') == 'plan'
+    assert resp.get_json().get('agent') == 'plan'
