@@ -237,7 +237,7 @@ def list_collection_data(collection):
 
         cur.execute(
             'SELECT id, collection, data, created_at FROM dynamic_data '
-            'WHERE collection = %s AND branch_id = %s' + extra_where + ' ORDER BY created_at '
+            'WHERE collection = %s AND branch_id = %s' + extra_where + ' ORDER BY created_at, id '
             'LIMIT %s OFFSET %s',
             [collection, branch_id] + q_params + [page_size, offset],
         )

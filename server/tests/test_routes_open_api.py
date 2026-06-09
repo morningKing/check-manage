@@ -134,6 +134,36 @@ class TestListCollections:
         assert data[1]['writable'] is False
 
 
+class TestListCollectionData:
+    def test_pagination_orders_by_created_at_and_id(self, setup):
+        """List query must use a deterministic ORDER BY (created_at + unique id
+        tiebreaker), otherwise rows with identical created_at can repeat across
+        pages or be skipped under LIMIT/OFFSET. Regression for duplicate-rows bug.
+        """
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(
+            mock_cursor,
+            fetchone_returns=[
+                (True, None),  # check_collection_public -> api_public=True
+                (5,),          # COUNT(*) -> total
+            ],
+            fetchall_returns=[
+                ('rec-1', 'devices', {'name': 'A'}, now),
+            ],
+        )
+        resp = client.get('/api/v1/collections/devices?page=2&pageSize=20',
+                          headers=api_h)
+        assert resp.status_code == 200
+
+        # Find the data SELECT (the one with LIMIT/OFFSET) among executed SQL.
+        data_sql = next(
+            call_args[0][0]
+            for call_args in mock_cursor.execute.call_args_list
+            if 'LIMIT' in call_args[0][0] and 'OFFSET' in call_args[0][0]
+        )
+        assert 'ORDER BY created_at, id' in data_sql
+
+
 class TestCreateRecord:
     def test_collection_not_public(self, setup):
         client, mock_cursor, api_h = setup
