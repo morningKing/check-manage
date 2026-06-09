@@ -126,6 +126,26 @@ def _validate_script(script_code):
         raise ValueError('double underscore (双下划线) attributes are not allowed')
 
 
+def validate_export_script_scope(scope, script_code):
+    """Ensure an export script's body matches its declared scope.
+
+    Menu-scope scripts run via ``run_menu_export_script``, whose sandbox injects
+    only ``menu_data`` / ``menu_name`` / ``total_records`` — NOT the page-level
+    ``data`` / ``fields`` / ``page_name``. Saving page-style code under
+    ``scope='menu'`` therefore blows up at export time with an opaque
+    ``NameError: name 'fields' is not defined``. Catch the mismatch at save
+    time with an actionable message. Page/row scopes are unconstrained (they
+    share the same injected variables).
+    """
+    if scope == 'menu' and not re.search(r'\bmenu_data\b', script_code or ''):
+        raise ValueError(
+            '菜单级(scope=menu)导出脚本必须遍历 menu_data 变量；当前脚本未引用 menu_data，'
+            '看起来是页面级写法（使用了 data/fields/page_name），运行时会报 '
+            "NameError: name 'fields' is not defined。请改用菜单级脚手架（for table in menu_data: ...，"
+            "用 table['fields']/table['records']），或将「导出维度」改为「整页(page)」。"
+        )
+
+
 def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, timeout_message):
     error_holder = [None]
 

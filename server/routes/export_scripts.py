@@ -3,7 +3,7 @@ from db import get_db
 from datetime import datetime, timezone
 from auth import login_required, require_permission
 from utils.operation_log import log_operation
-from utils.script_runner import run_export_script
+from utils.script_runner import run_export_script, validate_export_script_scope
 import psycopg2.extras
 import uuid
 import zipfile
@@ -52,6 +52,10 @@ def list_scripts():
 @require_permission('admin.export_scripts')
 def create_script():
     body = request.get_json(force=True)
+    try:
+        validate_export_script_scope(body.get('scope', 'page'), body.get('script', ''))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     script_id = body.get('id') or f'script-{uuid.uuid4().hex[:8]}'
     now = datetime.now(timezone.utc)
     with get_db() as conn:
@@ -85,6 +89,24 @@ def update_script(script_id):
     now = datetime.now(timezone.utc)
     with get_db() as conn:
         cur = conn.cursor()
+        # Validate scope/code consistency. For partial updates, fall back to the
+        # stored value for whichever of scope/script isn't in the body.
+        if 'script' in body or 'scope' in body:
+            eff_scope = body.get('scope')
+            eff_script = body.get('script')
+            if eff_scope is None or eff_script is None:
+                cur.execute('SELECT script, scope FROM export_scripts WHERE id = %s', (script_id,))
+                existing = cur.fetchone()
+                if not existing:
+                    return jsonify({'error': 'Not found'}), 404
+                if eff_script is None:
+                    eff_script = existing[0]
+                if eff_scope is None:
+                    eff_scope = existing[1]
+            try:
+                validate_export_script_scope(eff_scope, eff_script)
+            except ValueError as e:
+                return jsonify({'error': str(e)}), 400
         sets = ['updated_at=%s']
         params = [now]
         if 'name' in body:

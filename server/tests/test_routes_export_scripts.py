@@ -102,8 +102,48 @@ class TestCreateExportScript:
                            headers=dev_h)
         assert resp.status_code == 403
 
+    def test_menu_scope_with_page_code_rejected(self, setup):
+        # scope=menu 却用 fields（页面级写法）→ 保存时拒绝，避免运行期 NameError
+        client, _, admin_h, _ = setup
+        resp = client.post('/exportScripts',
+                           data=json.dumps({
+                               'name': '坏菜单脚本',
+                               'script': "headers = [f['label'] for f in fields]\nresult = ''",
+                               'outputFormat': 'csv',
+                               'scope': 'menu',
+                           }),
+                           content_type='application/json',
+                           headers=admin_h)
+        assert resp.status_code == 400
+        assert 'menu_data' in resp.get_json()['error']
+
+    def test_menu_scope_with_menu_data_ok(self, setup):
+        client, _, admin_h, _ = setup
+        resp = client.post('/exportScripts',
+                           data=json.dumps({
+                               'name': '好菜单脚本',
+                               'script': "result = [{'filename': t['pageName'] + '.csv', 'content': ''} for t in menu_data]",
+                               'outputFormat': 'csv',
+                               'scope': 'menu',
+                           }),
+                           content_type='application/json',
+                           headers=admin_h)
+        assert resp.status_code == 201
+
 
 class TestUpdateExportScript:
+    def test_update_menu_scope_with_page_code_rejected(self, setup):
+        client, _, admin_h, _ = setup
+        resp = client.put('/exportScripts/s1',
+                          data=json.dumps({
+                              'scope': 'menu',
+                              'script': "headers = [f['label'] for f in fields]\nresult = ''",
+                          }),
+                          content_type='application/json',
+                          headers=admin_h)
+        assert resp.status_code == 400
+        assert 'menu_data' in resp.get_json()['error']
+
     def test_update_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.return_value = (
