@@ -30,7 +30,7 @@ import BatchListView from './BatchListView.vue'
 import BatchDetailView from './BatchDetailView.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
-import { downloadFileUrl, runScript, listModels, getFileDiff, type AiMessage, type ChangedFile, type ModelInfo, type FileDiff } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -58,11 +58,30 @@ const composerModel = computed<string>({
   set: (v) => { if (activeId.value) store.setSessionModel(activeId.value, v) },
 })
 
+// Composer agent picker: list from OpenCode's /agent via backend; selection is
+// per-session and persisted via the store's setSessionAgent / hydrateSessionAgent.
+const agents = ref<AgentInfo[]>([])
+const agentsLoading = ref(false)
+async function fetchAgents() {
+  if (agentsLoading.value) return
+  agentsLoading.value = true
+  try {
+    const r = await listAgents()
+    agents.value = r.agents
+  } catch { /* surfaced by interceptor */ }
+  finally { agentsLoading.value = false }
+}
+const composerAgent = computed<string>({
+  get: () => (activeId.value ? store.agentBySession[activeId.value] || '' : ''),
+  set: (v) => { if (activeId.value) store.setSessionAgent(activeId.value, v) },
+})
+
 async function openSession(sessionId: string) {
   if (await store.jumpToSession(sessionId)) {
     sidebarTab.value = 'sessions'
     batches.clearSelection()
     store.hydrateSessionModel(sessionId)
+    store.hydrateSessionAgent(sessionId)
   }
 }
 
@@ -251,10 +270,12 @@ onMounted(async () => {
     if (sessions.value.length) {
       await store.openSession(sessions.value[0].id)
       store.hydrateSessionModel(sessions.value[0].id)
+      store.hydrateSessionAgent(sessions.value[0].id)
     }
   } catch { /* surfaced by interceptor */ }
-  // pre-fetch models for the dropdown (best-effort)
+  // pre-fetch models and agents for the dropdowns (best-effort)
   fetchModels()
+  fetchAgents()
 })
 
 async function newSession() {
@@ -263,6 +284,7 @@ async function newSession() {
 async function selectSession(id: string) {
   if (id !== activeId.value) await store.openSession(id)
   store.hydrateSessionModel(id)
+  store.hydrateSessionAgent(id)
 }
 async function renameSession(id: string, current: string) {
   try {
@@ -679,6 +701,22 @@ function onKey(e: Event) {
               <div class="composer-bar__right">
                 <ElSelect
                   v-if="activeId"
+                  v-model="composerAgent"
+                  class="composer-agent"
+                  size="small"
+                  placeholder="默认 Agent"
+                  clearable
+                  :loading="agentsLoading"
+                  @visible-change="(v) => v && !agents.length && fetchAgents()"
+                >
+                  <ElOption value="" label="默认 Agent" />
+                  <ElOption
+                    v-for="a in agents" :key="a.name"
+                    :value="a.name" :label="a.name"
+                  />
+                </ElSelect>
+                <ElSelect
+                  v-if="activeId"
                   v-model="composerModel"
                   class="composer-model"
                   size="small"
@@ -950,6 +988,7 @@ function onKey(e: Event) {
   margin-top: 4px;
 }
 .composer-bar__right { display: flex; align-items: center; gap: 10px; }
+.composer-agent { width: 120px; margin-right: 6px; }
 .composer-model {
   width: 170px;
   :deep(.el-input__wrapper) {
