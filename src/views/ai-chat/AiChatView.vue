@@ -706,6 +706,7 @@ function onKey(e: Event) {
                   size="small"
                   placeholder="默认 Agent"
                   clearable
+                  filterable
                   :loading="agentsLoading"
                   @visible-change="(v) => v && !agents.length && fetchAgents()"
                 >
@@ -988,7 +989,7 @@ function onKey(e: Event) {
   margin-top: 4px;
 }
 .composer-bar__right { display: flex; align-items: center; gap: 10px; }
-.composer-agent { width: 120px; margin-right: 6px; }
+.composer-agent { width: 120px; }
 .composer-model {
   width: 170px;
   :deep(.el-input__wrapper) {
