@@ -196,7 +196,7 @@ def test_send_prompt_async_appends_agent_parts():
         from utils.opencode_client import OpenCodeClient
         OpenCodeClient("http://127.0.0.1:4096").send_prompt_async(
             "ses_42", "ask @general please",
-            agent_parts=[{"name": "general", "source": {"value": "@general", "start": 4, "end": 12}}],
+            agent_parts=[{"name": "general", "value": "@general", "start": 4, "end": 12}],
         )
         body = post.call_args.kwargs["json"]
         assert body["parts"][0] == {"type": "text", "text": "ask @general please"}

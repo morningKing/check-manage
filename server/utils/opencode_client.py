@@ -74,8 +74,8 @@ class OpenCodeClient:
             if not name:
                 continue
             part = {"type": "agent", "name": name}
-            src = m.get("source")
-            if isinstance(src, dict) and all(k in src for k in ("value", "start", "end")):
+            src = m.get("source") if isinstance(m.get("source"), dict) else m
+            if all(k in src for k in ("value", "start", "end")):
                 part["source"] = {"value": src["value"], "start": src["start"], "end": src["end"]}
             parts.append(part)
         body = {"parts": parts}
