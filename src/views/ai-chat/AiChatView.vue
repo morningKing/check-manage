@@ -24,6 +24,7 @@ import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPa
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
+import { activeMentionToken } from '@/utils/agentMentions'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import BatchListView from './BatchListView.vue'
@@ -68,6 +69,7 @@ async function fetchAgents() {
   try {
     const r = await listAgents()
     agents.value = r.agents
+    store.subagents = r.subagents
   } catch { /* surfaced by interceptor */ }
   finally { agentsLoading.value = false }
 }
@@ -90,6 +92,19 @@ async function selectBatch(id: string) {
 }
 
 const input = ref('')
+const cursorPos = ref(0)
+const composerInputEl = ref<InstanceType<typeof ElInput> | null>(null)
+function syncCursor(e: Event) {
+  const el = e.target as HTMLTextAreaElement
+  cursorPos.value = el.selectionStart ?? input.value.length
+}
+// When the model changes programmatically (acceptItem / paste), try to read
+// selectionStart from the underlying textarea after the DOM settles.
+watch(input, async () => {
+  await nextTick()
+  const textarea = composerInputEl.value?.textarea
+  if (textarea) cursorPos.value = textarea.selectionStart ?? input.value.length
+})
 const activeIndex = ref(0)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const scroller = ref<InstanceType<typeof ElScrollbar> | null>(null)
@@ -112,8 +127,19 @@ const palette = computed<PaletteItem[]>(() => {
   const skills: PaletteItem[] = (cached?.skills ?? []).map((s) => ({ kind: 'skill', name: s.name, description: s.description }))
   return [...builtin, ...commands, ...skills].filter((it) => !q || it.name.toLowerCase().includes(q))
 })
-const paletteOpen = computed(() => palette.value.length > 0)
-watch(palette, () => { activeIndex.value = 0 })
+const mentionToken = computed(() => activeMentionToken(input.value, cursorPos.value))
+const mentionPalette = computed<PaletteItem[]>(() => {
+  const tok = mentionToken.value
+  if (!tok) return []
+  const q = tok.query.toLowerCase()
+  return store.subagents
+    .filter((a) => !q || a.name.toLowerCase().includes(q))
+    .map((a) => ({ kind: 'agent' as const, name: a.name, description: a.description }))
+})
+// mention token present → show mention palette; otherwise the `/` command palette
+const activePalette = computed<PaletteItem[]>(() => (mentionToken.value ? mentionPalette.value : palette.value))
+const paletteOpen = computed(() => activePalette.value.length > 0)
+watch(activePalette, () => { activeIndex.value = 0 })
 const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
@@ -350,6 +376,17 @@ async function onSkillPicked(e: Event) {
 }
 
 function acceptItem(item: PaletteItem) {
+  if (item.kind === 'agent') {
+    const tok = activeMentionToken(input.value, cursorPos.value)
+    if (tok) {
+      const before = input.value.slice(0, tok.start)
+      const after = input.value.slice(tok.end)
+      const insert = '@' + item.name + ' '
+      input.value = before + insert + after
+      cursorPos.value = before.length + insert.length
+    }
+    return
+  }
   if (item.kind === 'skill') input.value = '使用 `' + item.name + '` 技能:'
   else input.value = '/' + item.name + ' '
   activeIndex.value = 0
@@ -455,9 +492,9 @@ async function send() {
 function onKey(e: Event) {
   const ev = e as KeyboardEvent
   if (paletteOpen.value) {
-    if (ev.key === 'ArrowDown') { ev.preventDefault(); activeIndex.value = (activeIndex.value + 1) % palette.value.length; return }
-    if (ev.key === 'ArrowUp') { ev.preventDefault(); activeIndex.value = (activeIndex.value - 1 + palette.value.length) % palette.value.length; return }
-    if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); acceptItem(palette.value[activeIndex.value]); return }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); activeIndex.value = (activeIndex.value + 1) % activePalette.value.length; return }
+    if (ev.key === 'ArrowUp') { ev.preventDefault(); activeIndex.value = (activeIndex.value - 1 + activePalette.value.length) % activePalette.value.length; return }
+    if (ev.key === 'Enter' || ev.key === 'Tab') { ev.preventDefault(); acceptItem(activePalette.value[activeIndex.value]); return }
   }
   if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); send() }
 }
@@ -665,7 +702,7 @@ function onKey(e: Event) {
 
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">
-        <CommandPalette :items="palette" :active-index="activeIndex" @select="acceptItem" />
+        <CommandPalette :items="activePalette" :active-index="activeIndex" :prefix="mentionToken ? '@' : '/'" @select="acceptItem" />
         <div class="composer-inner">
           <div class="composer-card">
             <div v-if="attachments.length" class="composer-attachments">
@@ -675,10 +712,13 @@ function onKey(e: Event) {
               </span>
             </div>
             <ElInput
+              ref="composerInputEl"
               v-model="input" type="textarea" :autosize="{ minRows: 1, maxRows: 8 }"
               class="composer-input"
               placeholder="给 AI 助手发消息…（Enter 发送，Shift+Enter 换行）"
               @keydown="onKey"
+              @click="syncCursor"
+              @keyup="syncCursor"
             />
             <div class="composer-bar">
               <div class="composer-bar__left">
