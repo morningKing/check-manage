@@ -185,8 +185,9 @@ def list_models():
 def list_agents():
     """List user-facing primary OpenCode agents for the composer dropdown.
 
-    Returns { "agents": [{ "name", "description" }], "default": "<name>"|null }.
-    Filters to mode=='primary' and excludes OpenCode's internal agents.
+    Returns { "agents": [{name,description}] (primary), "subagents": [{name,description}],
+              "default": "<name>"|null }.
+    Filters to mode=='primary'/'subagent' and excludes OpenCode's internal agents.
     """
     try:
         raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()

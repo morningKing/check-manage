@@ -853,6 +853,7 @@ def test_list_agents_degrades_on_opencode_error(setup):
     assert resp.status_code == 502
     body = resp.get_json()
     assert body['agents'] == []
+    assert body['subagents'] == []
     assert body['default'] is None
 
 
