@@ -41,6 +41,12 @@ interface State {
    * Persisted in localStorage by AiChatView (`check-manage:ai-chat:model:<sid>`).
    */
   modelBySession: Record<string, string>
+  /**
+   * Per-session agent preference for the composer dropdown.
+   * Empty string / missing key → use backend default agent.
+   * Persisted in localStorage (`check-manage:ai-chat:agent:<sid>`).
+   */
+  agentBySession: Record<string, string>
   outputs: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
@@ -66,6 +72,7 @@ export const useAiChatStore = defineStore('aiChat', {
     thinking: {},
     attachments: {},
     modelBySession: {},
+    agentBySession: {} as Record<string, string>,
     outputs: {},
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
@@ -231,7 +238,8 @@ export const useAiChatStore = defineStore('aiChat', {
       // Empty string → backend falls back to OPENCODE_MODEL config (which itself
       // may be empty, in which case OpenCode picks its own default).
       const model = this.modelBySession[sid] || ''
-      const { messageId } = await sendMessage(sid, content, paths, model)
+      const agent = this.agentBySession[sid] || ''
+      const { messageId } = await sendMessage(sid, content, paths, model, agent)
       // adopt the real DB id so Edit/Retry can target this row server-side
       const msg = this.messages[sid].find((m) => m.id === localId)
       if (msg && messageId) msg.id = messageId
@@ -318,6 +326,25 @@ export const useAiChatStore = defineStore('aiChat', {
       try {
         const stored = localStorage.getItem(`check-manage:ai-chat:model:${sessionId}`)
         if (stored) this.modelBySession[sessionId] = stored
+      } catch { /* ignore */ }
+    },
+
+    /** Update the composer's selected agent for a session; persist to localStorage. */
+    setSessionAgent(sessionId: string, agent: string) {
+      this.agentBySession[sessionId] = agent
+      try {
+        const key = `check-manage:ai-chat:agent:${sessionId}`
+        if (agent) localStorage.setItem(key, agent)
+        else localStorage.removeItem(key)
+      } catch { /* private mode etc. */ }
+    },
+
+    /** Hydrate `agentBySession[id]` from localStorage when a session is opened. */
+    hydrateSessionAgent(sessionId: string) {
+      if (this.agentBySession[sessionId] !== undefined) return
+      try {
+        const stored = localStorage.getItem(`check-manage:ai-chat:agent:${sessionId}`)
+        if (stored) this.agentBySession[sessionId] = stored
       } catch { /* ignore */ }
     },
 

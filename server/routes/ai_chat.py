@@ -16,6 +16,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
+    GET    /ai/chat/agents                list_agents
 """
 
 import os
@@ -52,6 +53,11 @@ from config import (
 )
 
 MCP_NAME = 'check-manage'
+
+# OpenCode 内部系统 agent（mode=primary 但不应出现在用户选择器）。
+# 这是按名字硬编码的假设（OpenCode 未给内部 agent 单独标识字段）；
+# 升级 OpenCode 时如新增内部 primary agent 需在此补充。verified: opencode v1.2.x
+INTERNAL_AGENTS = {'compaction', 'title', 'summary'}
 
 # Nudge the model to emit file content as fenced code blocks so the frontend can
 # lift it into a previewable/downloadable artifact (Claude-style). Kept terse and
@@ -172,6 +178,29 @@ def list_models():
         'default': OPENCODE_MODEL or '',
         'openCodeDefaults': provider_info.get('default') or {},
     })
+
+
+@ai_chat_bp.route('/agents', methods=['GET'])
+@login_required
+def list_agents():
+    """List user-facing primary OpenCode agents for the composer dropdown.
+
+    Returns { "agents": [{ "name", "description" }], "default": "<name>"|null }.
+    Filters to mode=='primary' and excludes OpenCode's internal agents.
+    """
+    try:
+        raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
+    except Exception as e:
+        return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'default': None}), 502
+
+    agents = [
+        {'name': a.get('name'), 'description': a.get('description') or ''}
+        for a in (raw or [])
+        if a.get('mode') == 'primary' and a.get('name') not in INTERNAL_AGENTS
+    ]
+    names = {a['name'] for a in agents}
+    default = 'build' if 'build' in names else (agents[0]['name'] if agents else None)
+    return jsonify({'agents': agents, 'default': default})
 
 
 @ai_chat_bp.route('/sessions', methods=['GET'])
@@ -321,11 +350,17 @@ def send_message(sid):
     # (which itself may be empty, in which case OpenCode picks its default).
     requested_model = (body.get('model') or '').strip()
     effective_model = requested_model or OPENCODE_MODEL
+    requested_agent = (body.get('agent') or '').strip()
     OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
         sess[2], prompt.strip(), model=effective_model, directory=sess[4],
+        agent=requested_agent,
     )
     ensure_listener(sid, sess[2], sess[4])
-    return jsonify({'messageId': msg_id, 'model': effective_model or None}), 202
+    return jsonify({
+        'messageId': msg_id,
+        'model': effective_model or None,
+        'agent': requested_agent or None,
+    }), 202
 
 
 def _safe_workspace_path(workspace_path: str, rel: str):

@@ -50,7 +50,7 @@ class OpenCodeClient:
             raise OpenCodeError(str(e))
 
     def send_prompt_async(self, opencode_session_id: str, content: str,
-                          model: str = "", directory: str = "") -> None:
+                          model: str = "", directory: str = "", agent: str = "") -> None:
         """Send a prompt. `model` ("<providerID>/<modelID>") is passed explicitly
         because OpenCode does NOT honor the per-directory opencode.json `model`
         field for prompt selection — without it the server falls back to its
@@ -59,11 +59,16 @@ class OpenCodeClient:
         `directory` (absolute path) is passed as the ?directory= query param so
         this turn's tools (bash/write/edit) run with cwd=directory — i.e. the
         session's workspace. Without it OpenCode uses the server's launch cwd.
+
+        `agent` (optional) selects a named primary agent for this turn. When
+        empty, OpenCode uses the session's current agent.
         """
         body = {"parts": [{"type": "text", "text": content}]}
         if model and "/" in model:
             provider_id, model_id = model.split("/", 1)
             body["model"] = {"providerID": provider_id, "modelID": model_id}
+        if agent:
+            body["agent"] = agent
         params = {"directory": directory} if directory else None
         resp = requests.post(
             self._url(f"/session/{opencode_session_id}/prompt_async"),
@@ -97,6 +102,15 @@ class OpenCodeClient:
     def list_skills(self, directory: str = "") -> list:
         params = {"directory": directory} if directory else None
         resp = requests.get(self._url("/skill"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_agents(self, directory: str = "") -> list:
+        """Return OpenCode's agent list. Each item has name/description/mode
+        ('primary' | 'subagent'). Not strictly directory-scoped, but accept the
+        param for parity with list_skills/list_commands."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/agent"), params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
 
