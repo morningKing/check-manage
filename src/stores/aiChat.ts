@@ -14,8 +14,9 @@ import {
   getCommands, postCommand, abortSession, deleteFromMessage,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
-  type PaletteCommand, type StreamStatus,
+  type PaletteCommand, type StreamStatus, type AgentInfo,
 } from '@/api/aiChat'
+import { parseAgentMentions } from '@/utils/agentMentions'
 
 interface SessionMeta {
   id: string
@@ -47,6 +48,8 @@ interface State {
    * Persisted in localStorage (`check-manage:ai-chat:agent:<sid>`).
    */
   agentBySession: Record<string, string>
+  /** Cached list of subagents fetched by AiChatView. Used to resolve @ mentions on send. */
+  subagents: AgentInfo[]
   outputs: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
@@ -73,6 +76,7 @@ export const useAiChatStore = defineStore('aiChat', {
     attachments: {},
     modelBySession: {},
     agentBySession: {} as Record<string, string>,
+    subagents: [] as AgentInfo[],
     outputs: {},
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
@@ -239,7 +243,9 @@ export const useAiChatStore = defineStore('aiChat', {
       // may be empty, in which case OpenCode picks its own default).
       const model = this.modelBySession[sid] || ''
       const agent = this.agentBySession[sid] || ''
-      const { messageId } = await sendMessage(sid, content, paths, model, agent)
+      const known = new Set(this.subagents.map((a) => a.name))
+      const agentMentions = parseAgentMentions(content, known)
+      const { messageId } = await sendMessage(sid, content, paths, model, agent, agentMentions)
       // adopt the real DB id so Edit/Retry can target this row server-side
       const msg = this.messages[sid].find((m) => m.id === localId)
       if (msg && messageId) msg.id = messageId
