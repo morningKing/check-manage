@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/utils/request', () => ({
   get: vi.fn(),
@@ -8,7 +8,8 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import { get, post, put, del } from '@/utils/request'
-import { getMenuList, getMenuById, createMenu, updateMenu, deleteMenu } from '../menu'
+import { setStorage, STORAGE_KEYS } from '@/utils/storage'
+import { getMenuList, getMenuById, createMenu, updateMenu, deleteMenu, executeMenuExport } from '../menu'
 
 const mockGet = vi.mocked(get)
 const mockPost = vi.mocked(post)
@@ -60,5 +61,35 @@ describe('Menu API', () => {
 
     await deleteMenu('menu-1')
     expect(mockDel).toHaveBeenCalledWith('/menus/menu-1')
+  })
+})
+
+describe('executeMenuExport 鉴权头', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  // 回归：导出曾从 localStorage.getItem('token') 读取（错误的键），
+  // 真正的 JWT 存于 check-manage:token（STORAGE_KEYS.AUTH_TOKEN），
+  // 导致请求带空 Bearer 头被后端判为「未登录」(401)。
+  it('使用 check-manage:token 下的 JWT 作为 Authorization Bearer 头', async () => {
+    setStorage(STORAGE_KEYS.AUTH_TOKEN, 'jwt-abc-123')
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new Blob(['zip-bytes']),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await executeMenuExport(['menu-1'], 'script-1', 'main')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    const headers = init.headers as Record<string, string>
+    expect(headers.Authorization).toBe('Bearer jwt-abc-123')
   })
 })
