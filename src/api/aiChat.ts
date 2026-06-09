@@ -81,11 +81,11 @@ export function getMessages(id: string, since?: string) {
 }
 
 export function sendMessage(
-  id: string, content: string, attachments: string[] = [], model = '',
+  id: string, content: string, attachments: string[] = [], model = '', agent = '',
 ) {
-  return post<{ messageId: string; model: string | null }>(
+  return post<{ messageId: string; model: string | null; agent?: string | null }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages`,
-    { content, attachments, model },
+    { content, attachments, model, agent },
   )
 }
 
@@ -103,6 +103,15 @@ export function listModels() {
     default: string
     openCodeDefaults: Record<string, string>
   }>('/ai/chat/models')
+}
+
+export interface AgentInfo {
+  name: string
+  description: string
+}
+
+export function listAgents() {
+  return get<{ agents: AgentInfo[]; default: string | null }>('/ai/chat/agents')
 }
 
 export function uploadFile(id: string, file: File) {
