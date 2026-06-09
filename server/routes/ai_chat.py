@@ -16,6 +16,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
+    GET    /ai/chat/agents                list_agents
 """
 
 import os
@@ -53,7 +54,9 @@ from config import (
 
 MCP_NAME = 'check-manage'
 
-# OpenCode 内部系统 agent（mode=primary 但不应出现在用户选择器）
+# OpenCode 内部系统 agent（mode=primary 但不应出现在用户选择器）。
+# 这是按名字硬编码的假设（OpenCode 未给内部 agent 单独标识字段）；
+# 升级 OpenCode 时如新增内部 primary agent 需在此补充。verified: opencode v1.2.x
 INTERNAL_AGENTS = {'compaction', 'title', 'summary'}
 
 # Nudge the model to emit file content as fenced code blocks so the frontend can

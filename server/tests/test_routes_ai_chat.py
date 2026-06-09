@@ -844,3 +844,13 @@ def test_list_agents_filters_internal_and_subagents(setup):
     names = [a['name'] for a in body['agents']]
     assert names == ['build', 'plan']
     assert body['default'] == 'build'
+
+
+def test_list_agents_degrades_on_opencode_error(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    oc.list_agents.side_effect = Exception('boom')
+    resp = client.get('/ai/chat/agents', headers=dev_h)
+    assert resp.status_code == 502
+    body = resp.get_json()
+    assert body['agents'] == []
+    assert body['default'] is None
