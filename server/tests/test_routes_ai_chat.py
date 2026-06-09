@@ -868,3 +868,20 @@ def test_send_message_passes_body_agent_to_opencode(setup):
     _, kwargs = oc.send_prompt_async.call_args
     assert kwargs.get('agent') == 'plan'
     assert resp.get_json().get('agent') == 'plan'
+
+
+def test_list_agents_returns_subagents_separately(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    oc.list_agents.return_value = [
+        {"name": "build", "description": "default", "mode": "primary"},
+        {"name": "plan", "description": "no edits", "mode": "primary"},
+        {"name": "compaction", "description": "", "mode": "primary"},
+        {"name": "general", "description": "general subagent", "mode": "subagent"},
+        {"name": "explore", "description": "explore subagent", "mode": "subagent"},
+    ]
+    resp = client.get('/ai/chat/agents', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert [a['name'] for a in body['agents']] == ['build', 'plan']
+    assert [a['name'] for a in body['subagents']] == ['general', 'explore']
+    assert body['default'] == 'build'

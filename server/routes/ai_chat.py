@@ -191,16 +191,21 @@ def list_agents():
     try:
         raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
     except Exception as e:
-        return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'default': None}), 502
+        return jsonify({'error': f'OpenCode unreachable: {e}', 'agents': [], 'subagents': [], 'default': None}), 502
 
     agents = [
         {'name': a.get('name'), 'description': a.get('description') or ''}
         for a in (raw or [])
         if a.get('mode') == 'primary' and a.get('name') not in INTERNAL_AGENTS
     ]
+    subagents = [
+        {'name': a.get('name'), 'description': a.get('description') or ''}
+        for a in (raw or [])
+        if a.get('mode') == 'subagent' and a.get('name') not in INTERNAL_AGENTS
+    ]
     names = {a['name'] for a in agents}
     default = 'build' if 'build' in names else (agents[0]['name'] if agents else None)
-    return jsonify({'agents': agents, 'default': default})
+    return jsonify({'agents': agents, 'subagents': subagents, 'default': default})
 
 
 @ai_chat_bp.route('/sessions', methods=['GET'])
