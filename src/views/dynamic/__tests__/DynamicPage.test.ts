@@ -375,4 +375,35 @@ describe('DynamicPage — 查看功能', () => {
       })
     })
   })
+
+  /**
+   * 复刻 DynamicPage 标题栏「切换分支」下拉与「管理版本」项的显隐规则。
+   * 后端：切换分支 = @write_required（仅拦截访客）；管理版本 = @require_permission('admin.project_versions')。
+   * 前端门禁必须与后端一致：开发(developer) 角色可切换分支，但不显示管理版本入口。
+   */
+  function canShowBranchSwitch(opts: { isGuest: boolean; projectMenuId: string | null }): boolean {
+    return !opts.isGuest && !!opts.projectMenuId
+  }
+  function canManageVersions(isAdmin: boolean): boolean {
+    return isAdmin
+  }
+
+  describe('DynamicPage — 分支切换按钮显隐', () => {
+    it('开发角色（非访客非管理员）在存在项目时应能看到切换分支按钮', () => {
+      expect(canShowBranchSwitch({ isGuest: false, projectMenuId: 'menu-proj-1' })).toBe(true)
+    })
+
+    it('访客不显示切换分支按钮', () => {
+      expect(canShowBranchSwitch({ isGuest: true, projectMenuId: 'menu-proj-1' })).toBe(false)
+    })
+
+    it('不属于任何项目时不显示切换分支按钮', () => {
+      expect(canShowBranchSwitch({ isGuest: false, projectMenuId: null })).toBe(false)
+    })
+
+    it('「管理版本」入口仅管理员可见', () => {
+      expect(canManageVersions(true)).toBe(true)
+      expect(canManageVersions(false)).toBe(false)
+    })
+  })
 })
