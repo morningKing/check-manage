@@ -100,6 +100,15 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
+    def list_agents(self, directory: str = "") -> list:
+        """Return OpenCode's agent list. Each item has name/description/mode
+        ('primary' | 'subagent'). Not strictly directory-scoped, but accept the
+        param for parity with list_skills/list_commands."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/agent"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
     def run_command(self, opencode_session_id: str, command: str, arguments: str = "",
                     model: str = "", directory: str = "") -> None:
         body = {"command": command, "arguments": arguments}

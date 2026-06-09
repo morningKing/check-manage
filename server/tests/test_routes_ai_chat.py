@@ -825,3 +825,22 @@ def test_delete_session_stops_persist_listener(setup):
         resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
     assert resp.status_code == 204
     stp.assert_called_once_with('sess_x')
+
+
+def test_list_agents_filters_internal_and_subagents(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    oc.list_agents.return_value = [
+        {"name": "build", "description": "default", "mode": "primary"},
+        {"name": "plan", "description": "no edits", "mode": "primary"},
+        {"name": "compaction", "description": "", "mode": "primary"},
+        {"name": "title", "description": "", "mode": "primary"},
+        {"name": "summary", "description": "", "mode": "primary"},
+        {"name": "general", "description": "subagent", "mode": "subagent"},
+        {"name": "explore", "description": "subagent", "mode": "subagent"},
+    ]
+    resp = client.get('/ai/chat/agents', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    names = [a['name'] for a in body['agents']]
+    assert names == ['build', 'plan']
+    assert body['default'] == 'build'
