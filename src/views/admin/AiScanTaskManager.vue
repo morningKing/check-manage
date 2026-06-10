@@ -45,6 +45,15 @@
           <el-input v-model="form.promptTemplate" type="textarea" :rows="5"
             placeholder="操作指令，引用要用的 skill" />
         </el-form-item>
+        <el-form-item label="Agent">
+          <el-select v-model="form.agent" placeholder="使用 OpenCode 默认 Agent" clearable style="width:300px">
+            <el-option v-for="a in agents" :key="a.name" :label="a.name" :value="a.name">
+              <span>{{ a.name }}</span>
+              <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
+            </el-option>
+          </el-select>
+          <div class="hint">选择后，该任务的所有 AI 会话将使用指定 Agent 执行</div>
+        </el-form-item>
         <el-form-item label="字段映射">
           <div v-for="(m, i) in form.fieldMapping" :key="i" class="map-row">
             <el-input v-model="m.jsonKey" placeholder="AI JSON 键" style="width:160px" />
@@ -72,18 +81,21 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiScanTaskStore } from '@/stores/aiScanTask'
 import type { AiScanTask } from '@/types'
+import { listAgents } from '@/api/aiChat'
+import type { AgentInfo } from '@/api/aiChat'
 
 const store = useAiScanTaskStore()
 const selectedId = ref('')
 const form = ref<AiScanTask | null>(null)
 const extraFilterText = ref('{}')
 const running = ref(false)
+const agents = ref<AgentInfo[]>([])
 
 function blank(): AiScanTask {
   return { id: '', name: '', enabled: true, collection: '', branchId: 'main', statusField: '',
     pendingValue: '', runningValue: '处理中', doneValue: '已处理', failedValue: '处理失败',
     extraFilter: {}, contextFields: {}, promptTemplate: '', fieldMapping: [],
-    scheduleIntervalMinutes: 15, maxRecordsPerScan: 20 }
+    scheduleIntervalMinutes: 15, maxRecordsPerScan: 20, agent: null }
 }
 
 const contractPreview = computed(() => {
@@ -134,6 +146,10 @@ async function runNow() {
 onMounted(async () => {
   await store.load()
   if (store.tasks.length) await select(store.tasks[0].id)
+  try {
+    const r = await listAgents()
+    agents.value = [...r.agents, ...r.subagents]
+  } catch { /* non-fatal */ }
 })
 </script>
 

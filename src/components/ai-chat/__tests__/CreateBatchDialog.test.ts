@@ -4,9 +4,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import CreateBatchDialog from '../CreateBatchDialog.vue'
 import * as batchApi from '@/api/aiChatBatches'
 import * as tplApi from '@/api/aiChatPromptTemplates'
+import * as chatApi from '@/api/aiChat'
 
 vi.mock('@/api/aiChatBatches')
 vi.mock('@/api/aiChatPromptTemplates')
+vi.mock('@/api/aiChat')
 
 beforeAll(() => {
   globalThis.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} } as any
@@ -16,6 +18,7 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   vi.mocked(tplApi.listTemplates).mockResolvedValue([])
+  vi.mocked(chatApi.listAgents).mockResolvedValue({ agents: [], subagents: [], default: null })
 })
 
 const stubs = {
@@ -61,7 +64,7 @@ describe('CreateBatchDialog', () => {
   it('calls createBatch with the staged file list on submit', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B1', prompt: 'do',
-               template_id: null, status: 'pending', total: 1,
+               template_id: null, agent: null, status: 'pending', total: 1,
                done: 0, failed: 0, created_at: '', completed_at: null },
       sessions: [],
     })
@@ -84,7 +87,7 @@ describe('CreateBatchDialog', () => {
   it('saves a new template when 保存为模板 is checked', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
-               template_id: null, status: 'pending', total: 1,
+               template_id: null, agent: null, status: 'pending', total: 1,
                done: 0, failed: 0, created_at: '', completed_at: null },
       sessions: [],
     })

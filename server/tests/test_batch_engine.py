@@ -324,3 +324,49 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn):
             (sids[0],),
         )
         assert cur.fetchone()[0] == 'pending'
+
+
+def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_path):
+    """When batch has agent set, send_message receives that agent."""
+    import utils.batch_engine as eng
+    from utils.batch_repo import create_batch
+    from unittest.mock import MagicMock
+
+    staging = tmp_path / 'batch-staging' / 'x'
+    staging.mkdir(parents=True)
+    (staging / 'r.txt').write_text('hello')
+
+    batch_data = create_batch(
+        user_id,
+        name='agent-engine-test',
+        prompt='do stuff',
+        template_id=None,
+        files=[{'name': 'r.txt', 'path': 'batch-staging/x/r.txt'}],
+        agent='my-agent',
+    )
+    session_row = batch_data['sessions'][0]
+
+    sent_agents = []
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-sess-1'
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'ok'}]}
+    ]
+    def capture_send(oc_sid, prompt, directory='', agent=''):
+        sent_agents.append(agent)
+    fake_oc.send_message.side_effect = capture_send
+
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+
+    worker = eng.BatchWorker()
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='pending' WHERE id=%s", (session_row['id'],))
+    db_conn.commit()
+
+    claimed = worker._claim_pending_sessions(limit=1)
+    assert claimed
+    worker._run_one(claimed[0])
+
+    assert sent_agents == ['my-agent']

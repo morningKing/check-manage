@@ -7,7 +7,8 @@ _FIELDS = ('id', 'name', 'enabled', 'owner_user_id', 'collection', 'branch_id',
            'status_field', 'pending_value', 'running_value', 'done_value',
            'failed_value', 'extra_filter', 'context_fields', 'prompt_template',
            'field_mapping', 'schedule_interval_minutes', 'max_records_per_scan',
-           'last_run_at', 'last_scan_count', 'last_error', 'created_at', 'updated_at')
+           'last_run_at', 'last_scan_count', 'last_error', 'created_at', 'updated_at',
+           'agent')
 
 # camelCase output keys, positionally aligned with _FIELDS. The repo's public
 # dict shape is camelCase (matches the API + TS types + engine/scheduler reads).
@@ -15,7 +16,8 @@ _CAMEL = ('id', 'name', 'enabled', 'ownerUserId', 'collection', 'branchId',
           'statusField', 'pendingValue', 'runningValue', 'doneValue',
           'failedValue', 'extraFilter', 'contextFields', 'promptTemplate',
           'fieldMapping', 'scheduleIntervalMinutes', 'maxRecordsPerScan',
-          'lastRunAt', 'lastScanCount', 'lastError', 'createdAt', 'updatedAt')
+          'lastRunAt', 'lastScanCount', 'lastError', 'createdAt', 'updatedAt',
+          'agent')
 
 
 def _row_to_dict(r):
@@ -49,8 +51,8 @@ def create_task(body, owner_user_id):
             "INSERT INTO ai_scan_tasks (id, name, enabled, owner_user_id, collection, "
             "branch_id, status_field, pending_value, running_value, done_value, failed_value, "
             "extra_filter, context_fields, prompt_template, field_mapping, "
-            "schedule_interval_minutes, max_records_per_scan) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "schedule_interval_minutes, max_records_per_scan, agent) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (tid, body['name'], body.get('enabled', True), owner_user_id, body['collection'],
              body.get('branchId', 'main'), body['statusField'], body.get('pendingValue', ''),
              body.get('runningValue', '处理中'), body.get('doneValue', '已处理'),
@@ -58,7 +60,8 @@ def create_task(body, owner_user_id):
              psycopg2.extras.Json(body.get('extraFilter') or {}),
              psycopg2.extras.Json(body.get('contextFields') or {}),
              body['promptTemplate'], psycopg2.extras.Json(body.get('fieldMapping') or []),
-             int(body.get('scheduleIntervalMinutes', 15)), int(body.get('maxRecordsPerScan', 20))),
+             int(body.get('scheduleIntervalMinutes', 15)), int(body.get('maxRecordsPerScan', 20)),
+             body.get('agent') or None),
         )
     return get_task(tid)
 
@@ -68,6 +71,7 @@ _UPDATABLE = {
     'statusField': 'status_field', 'pendingValue': 'pending_value', 'runningValue': 'running_value',
     'doneValue': 'done_value', 'failedValue': 'failed_value', 'promptTemplate': 'prompt_template',
     'scheduleIntervalMinutes': 'schedule_interval_minutes', 'maxRecordsPerScan': 'max_records_per_scan',
+    'agent': 'agent',
 }
 _UPDATABLE_JSON = {'extraFilter': 'extra_filter', 'contextFields': 'context_fields', 'fieldMapping': 'field_mapping'}
 

@@ -43,10 +43,10 @@ def test_list_requires_admin_ai_scan(setup):
 def test_create_task(setup):
     client, cur, headers = setup
     cur.fetchone.side_effect = [('admin', True, 'write'),  # permission
-                                # get_task after insert returns a row tuple of 22 fields
+                                # get_task after insert returns a row tuple of 23 fields
                                 tuple(['scan-x', 'n', True, 'user-admin', 'orders', 'main',
                                        '审核状态', '', '处理中', '已处理', '处理失败', {}, {}, 'p',
-                                       [], 15, 20, None, 0, None, None, None])]
+                                       [], 15, 20, None, 0, None, None, None, None])]
     body = {'name': 'n', 'collection': 'orders', 'statusField': '审核状态',
             'promptTemplate': 'p', 'fieldMapping': []}
     resp = client.post('/ai-scan-tasks', data=json.dumps(body), content_type='application/json',
@@ -56,11 +56,11 @@ def test_create_task(setup):
 
 def test_list_returns_camelcase_keys(setup):
     client, cur, headers = setup
-    # one task row tuple aligned with ai_scan_repo._FIELDS (22 columns)
+    # one task row tuple aligned with ai_scan_repo._FIELDS (23 columns)
     cur.fetchall.return_value = [
         ('scan-1', 'n', True, 'user-admin', 'orders', 'main',
          '审核状态', '', '处理中', '已处理', '处理失败', {}, {}, 'p',
-         [], 15, 20, None, 0, None, None, None),
+         [], 15, 20, None, 0, None, None, None, None),
     ]
     resp = client.get('/ai-scan-tasks', headers=headers)
     assert resp.status_code == 200
@@ -100,3 +100,30 @@ def test_forbidden_without_capability(setup):
     guest = create_token({'id': 'user-guest', 'username': 'guest', 'role': 'guest'})
     resp = client.get('/ai-scan-tasks', headers={'Authorization': f'Bearer {guest}'})
     assert resp.status_code == 403
+
+
+def test_create_task_with_agent(setup):
+    client, cur, headers = setup
+    task_row = tuple(['scan-y', 'n', True, 'user-admin', 'orders', 'main',
+                      '审核状态', '', '处理中', '已处理', '处理失败', {}, {}, 'p',
+                      [], 15, 20, None, 0, None, None, None, 'my-agent'])
+    cur.fetchone.side_effect = [('admin', True, 'write'), task_row]
+    body = {'name': 'n', 'collection': 'orders', 'statusField': '审核状态',
+            'promptTemplate': 'p', 'fieldMapping': [], 'agent': 'my-agent'}
+    resp = client.post('/ai-scan-tasks', data=json.dumps(body), content_type='application/json',
+                       headers=headers)
+    assert resp.status_code == 201
+    assert resp.get_json()['agent'] == 'my-agent'
+
+
+def test_update_task_with_agent(setup):
+    client, cur, headers = setup
+    task_row = tuple(['scan-y', 'n', True, 'user-admin', 'orders', 'main',
+                      '审核状态', '', '处理中', '已处理', '处理失败', {}, {}, 'p',
+                      [], 15, 20, None, 0, None, None, None, 'updated-agent'])
+    cur.fetchone.side_effect = [('admin', True, 'write'), task_row]
+    resp = client.put('/ai-scan-tasks/scan-y',
+                      data=json.dumps({'agent': 'updated-agent'}),
+                      content_type='application/json', headers=headers)
+    assert resp.status_code == 200
+    assert resp.get_json()['agent'] == 'updated-agent'

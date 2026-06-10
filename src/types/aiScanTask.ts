@@ -17,6 +17,7 @@ export interface AiScanTask {
   fieldMapping: FieldMappingRow[]
   scheduleIntervalMinutes: number
   maxRecordsPerScan: number
+  agent?: string | null
   lastRunAt?: string | null
   lastScanCount?: number
   lastError?: string | null
