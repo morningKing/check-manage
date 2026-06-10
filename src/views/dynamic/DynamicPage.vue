@@ -27,9 +27,9 @@
           >
             {{ currentBranch?.branchName || '主分支' }}
           </el-tag>
-          <!-- 切换下拉按钮（仅管理员且属于项目时可见） -->
+          <!-- 切换下拉按钮（非访客且属于项目时可见；后端切换分支为 write 权限，与此一致） -->
           <el-dropdown
-            v-if="isAdmin && projectMenuId"
+            v-if="!isGuest && projectMenuId"
             trigger="click"
             @command="handleBranchSwitch"
             @visible-change="(visible: boolean) => visible && loadBranchVersions()"
@@ -55,7 +55,7 @@
                   <el-icon v-if="branch.id === currentBranch?.branchId"><Check /></el-icon>
                   {{ branch.name }}
                 </el-dropdown-item>
-                <el-dropdown-item divided command="manage">
+                <el-dropdown-item v-if="isAdmin" divided command="manage">
                   <el-icon><Tickets /></el-icon>
                   管理版本...
                 </el-dropdown-item>
