@@ -58,7 +58,7 @@ class _OpenCodeFacade:
         return self._client().create_session(directory=directory, title=title)
 
     def send_message(self, oc_session_id: str, prompt: str,
-                     directory: str = '') -> dict:
+                     directory: str = '', agent: str = '') -> dict:
         """Fire the prompt asynchronously.  Returns a stub dict so callers can
         discard the return value — the real work happens on the SSE stream.
         """
@@ -67,6 +67,7 @@ class _OpenCodeFacade:
             oc_session_id, prompt,
             model=OPENCODE_MODEL,
             directory=directory,
+            agent=agent,
         )
         return {'id': oc_session_id}
 
@@ -336,20 +337,21 @@ class BatchWorker:
         sid = session_row['id']
         user_id = session_row['user_id']
         batch_id = session_row['batch_id']
-        prompt = self._fetch_batch_prompt(batch_id)
-        if prompt is None:
+        ctx = self._fetch_batch_context(batch_id)
+        if ctx is None:
             # Batch was deleted between claim and prompt fetch.
             # FK CASCADE has already removed our session row; nothing to mark.
             # Scan-task children are intentionally NOT notified via _notify_scan on
             # this path: recovery is handled by the orphan sweep (running rows with
             # no live session get reset to pending).
             return
+        prompt, agent = ctx
 
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
             oc_session_id = opencode_client.create_session(directory=ws)
             self._set_opencode_id(sid, oc_session_id)
-            opencode_client.send_message(oc_session_id, prompt, directory=ws)
+            opencode_client.send_message(oc_session_id, prompt, directory=ws, agent=agent)
 
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
             self._persist_conversation(sid, prompt, final_msg)
@@ -372,15 +374,15 @@ class BatchWorker:
         except Exception:
             traceback.print_exc()
 
-    def _fetch_batch_prompt(self, batch_id: str) -> str | None:
+    def _fetch_batch_context(self, batch_id: str) -> tuple[str, str] | None:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT prompt FROM ai_chat_batches WHERE id = %s",
+                    "SELECT prompt, agent FROM ai_chat_batches WHERE id = %s",
                     (batch_id,),
                 )
                 row = cur.fetchone()
-                return row[0] if row else None
+                return (row[0], row[1] or '') if row else None
 
     def _set_opencode_id(self, session_id: str, oc_session_id: str):
         with get_db() as conn:

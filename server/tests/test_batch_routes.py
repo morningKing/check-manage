@@ -193,3 +193,24 @@ def test_retry_failed_resets_failed_to_pending(setup_app, db_conn, tmp_path, mon
             assert status == 'pending'
     finally:
         client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+def test_create_batch_stores_agent(setup_app, tmp_path, monkeypatch, db_conn):
+    """agent field is persisted and returned in the batch response."""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='x.txt', upload_session_id='u-agent-1')
+    body = {
+        'name': 'agent-test',
+        'prompt': 'do something',
+        'agent': 'my-agent',
+        'files': [f],
+    }
+    resp = client.post('/ai/chat/batches', json=body, headers=admin_headers)
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data['batch']['agent'] == 'my-agent'
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT agent FROM ai_chat_batches WHERE id = %s", (data['batch']['id'],))
+        assert cur.fetchone()[0] == 'my-agent'
