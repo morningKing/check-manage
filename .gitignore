@@ -49,3 +49,4 @@ npm-debug.log*
 /composer-aligned.png
 /composer-card.png
 /composer-focus.png
+.worktrees
