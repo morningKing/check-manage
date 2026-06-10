@@ -116,8 +116,8 @@ describe('useAiChatStore', () => {
     await store.sendUserMessage('how are you')
 
     expect(store.messages['sess_1'][0].role).toBe('user')
-    // 4th arg is the per-session model preference (empty → backend default).
-    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [], '')
+    // args: sessionId, content, attachments, model, agent, agentMentions
+    expect(api.sendMessage).toHaveBeenCalledWith('sess_1', 'how are you', [], '', '', [])
     expect(store.streaming['sess_1']).toBe(true)
   })
 
