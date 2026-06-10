@@ -438,6 +438,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
   name        TEXT NOT NULL,
   prompt      TEXT NOT NULL,
   template_id VARCHAR(100) NULL REFERENCES ai_chat_prompt_templates(id) ON DELETE SET NULL,
+  agent       TEXT,
   status      TEXT NOT NULL DEFAULT 'pending'
               CHECK (status IN ('pending','running','completed','partial','failed')),
   total       INT  NOT NULL DEFAULT 0,
@@ -484,6 +485,7 @@ CREATE TABLE IF NOT EXISTS ai_scan_tasks (
   field_mapping   JSONB NOT NULL DEFAULT '[]'::jsonb,
   schedule_interval_minutes INT NOT NULL DEFAULT 15,
   max_records_per_scan      INT NOT NULL DEFAULT 20,
+  agent           TEXT,
   last_run_at     TIMESTAMPTZ,
   last_scan_count INT DEFAULT 0,
   last_error      TEXT,
