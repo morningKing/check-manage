@@ -13,11 +13,49 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.script_runner import (
     _validate_script,
+    validate_export_script_scope,
     run_export_script,
     run_etl_script,
     run_validation_script,
     FORBIDDEN_NAMES,
 )
+
+
+# ==================== validate_export_script_scope ====================
+
+# 菜单级脚本的执行上下文只注入 menu_data/menu_name/total_records，
+# 不注入 data/fields/page_name。把页面级代码（用 fields）存成 scope=menu
+# 运行时会抛 NameError: name 'fields' is not defined。保存时即拦截。
+PAGE_CSV = (
+    "output = io.StringIO()\n"
+    "writer = csv.writer(output)\n"
+    "headers = [f['label'] for f in fields]\n"
+    "writer.writerow(headers)\n"
+    "result = output.getvalue()\n"
+)
+MENU_CSV = (
+    "result = []\n"
+    "for table in menu_data:\n"
+    "    result.append({'filename': table['pageName'] + '.csv', 'content': ''})\n"
+)
+
+
+class TestValidateExportScriptScope:
+    def test_menu_scope_without_menu_data_rejected(self):
+        with pytest.raises(ValueError, match='menu_data'):
+            validate_export_script_scope('menu', PAGE_CSV)
+
+    def test_menu_scope_with_menu_data_ok(self):
+        validate_export_script_scope('menu', MENU_CSV)  # should not raise
+
+    def test_page_scope_with_page_code_ok(self):
+        validate_export_script_scope('page', PAGE_CSV)  # should not raise
+
+    def test_row_scope_with_page_code_ok(self):
+        validate_export_script_scope('row', PAGE_CSV)  # row uses page-style vars too
+
+    def test_none_scope_defaults_to_page_ok(self):
+        validate_export_script_scope(None, PAGE_CSV)  # treated as page, no menu_data needed
 
 
 # ==================== _validate_script ====================
