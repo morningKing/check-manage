@@ -46,8 +46,13 @@
             placeholder="操作指令，引用要用的 skill" />
         </el-form-item>
         <el-form-item label="Agent">
-          <el-input v-model="form.agent" placeholder="留空使用 OpenCode 默认 Agent，如 build" style="width:300px" clearable />
-          <div class="hint">填写 OpenCode Agent 名称（如 build、review），该任务的所有 AI 会话将使用指定 Agent 执行</div>
+          <el-select v-model="form.agent" placeholder="使用 OpenCode 默认 Agent" clearable style="width:300px">
+            <el-option v-for="a in agents" :key="a.name" :label="a.name" :value="a.name">
+              <span>{{ a.name }}</span>
+              <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
+            </el-option>
+          </el-select>
+          <div class="hint">选择后，该任务的所有 AI 会话将使用指定 Agent 执行</div>
         </el-form-item>
         <el-form-item label="字段映射">
           <div v-for="(m, i) in form.fieldMapping" :key="i" class="map-row">
@@ -76,12 +81,15 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiScanTaskStore } from '@/stores/aiScanTask'
 import type { AiScanTask } from '@/types'
+import { listAgents } from '@/api/aiChat'
+import type { AgentInfo } from '@/api/aiChat'
 
 const store = useAiScanTaskStore()
 const selectedId = ref('')
 const form = ref<AiScanTask | null>(null)
 const extraFilterText = ref('{}')
 const running = ref(false)
+const agents = ref<AgentInfo[]>([])
 
 function blank(): AiScanTask {
   return { id: '', name: '', enabled: true, collection: '', branchId: 'main', statusField: '',
@@ -138,6 +146,10 @@ async function runNow() {
 onMounted(async () => {
   await store.load()
   if (store.tasks.length) await select(store.tasks[0].id)
+  try {
+    const r = await listAgents()
+    agents.value = [...r.agents, ...r.subagents]
+  } catch { /* non-fatal */ }
 })
 </script>
 
