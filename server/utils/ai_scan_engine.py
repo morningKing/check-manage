@@ -68,7 +68,7 @@ def _load_task(task_id):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, collection, branch_id, status_field, done_value, "
-                "failed_value, field_mapping FROM ai_scan_tasks WHERE id = %s",
+                "failed_value, field_mapping, agent FROM ai_scan_tasks WHERE id = %s",
                 (task_id,),
             )
             r = cur.fetchone()
@@ -76,7 +76,7 @@ def _load_task(task_id):
                 return None
             return {'id': r[0], 'collection': r[1], 'branch_id': r[2],
                     'status_field': r[3], 'done_value': r[4], 'failed_value': r[5],
-                    'field_mapping': r[6] or []}
+                    'field_mapping': r[6] or [], 'agent': r[7] or ''}
 
 
 def _set_record_status(task, record_id, value):
@@ -281,7 +281,8 @@ def run_task(task):
         stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
         create_batch(task['ownerUserId'], name=f"AI定时·{task['name']}·{stamp}",
                      prompt=prompt, template_id=None, files=files,
-                     scan_task_id=task['id'])
+                     scan_task_id=task['id'],
+                     agent=task.get('agent') or None)
         mark_run(task['id'], len(claimed))
     except Exception as e:
         # revert claimed records to pending so they retry next scan
