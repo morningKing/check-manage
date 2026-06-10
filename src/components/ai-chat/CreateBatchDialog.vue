@@ -30,6 +30,16 @@
                  placeholder="例如: 根据上传的指导书开发巡检用例…" />
       </div>
 
+      <div class="row">
+        <label>Agent <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选）</span></label>
+        <ElSelect v-model="selectedAgent" placeholder="使用 OpenCode 默认 Agent" clearable>
+          <ElOption v-for="a in agents" :key="a.name" :label="a.name" :value="a.name">
+            <span>{{ a.name }}</span>
+            <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
+          </ElOption>
+        </ElSelect>
+      </div>
+
       <div class="row row--inline">
         <ElCheckbox v-model="saveAsTemplate">保存为新模板</ElCheckbox>
         <ElInput v-if="saveAsTemplate"
@@ -76,6 +86,8 @@ import {
 } from 'element-plus'
 import { stagingUpload, createBatch } from '@/api/aiChatBatches'
 import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
+import { listAgents } from '@/api/aiChat'
+import type { AgentInfo } from '@/api/aiChat'
 import type { AiChatBatchDetail, AiChatPromptTemplate, StagedFile } from '@/types/aiChatBatch'
 
 defineProps<{ modelValue: boolean }>()
@@ -93,6 +105,8 @@ const stagedFiles = ref<StagedFile[]>([])
 const saveAsTemplate = ref(false)
 const templateName = ref('')
 const submitting = ref(false)
+const selectedAgent = ref<string>('')
+const agents = ref<AgentInfo[]>([])
 const uploadSessionId = ref<string>(crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2))
 
 const uploading = ref<{ id: number; name: string; progress: number }[]>([])
@@ -109,6 +123,10 @@ const canCreate = computed(() =>
 
 onMounted(async () => {
   try { templates.value = await listTemplates() } catch { /* non-fatal */ }
+  try {
+    const r = await listAgents()
+    agents.value = [...r.agents, ...r.subagents]
+  } catch { /* non-fatal */ }
 })
 
 function onPickTemplate(id: string | null) {
@@ -148,6 +166,7 @@ async function submit() {
       name: name.value.trim(),
       prompt: prompt.value.trim(),
       template_id: selectedTemplateId.value,
+      agent: selectedAgent.value || null,
       files: stagedFiles.value,
     })
     if (saveAsTemplate.value && templateName.value.trim()) {
@@ -171,6 +190,7 @@ function reset() {
   name.value = ''
   prompt.value = ''
   selectedTemplateId.value = null
+  selectedAgent.value = ''
   stagedFiles.value = []
   saveAsTemplate.value = false
   templateName.value = ''

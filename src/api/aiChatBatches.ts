@@ -15,6 +15,7 @@ export function createBatch(body: {
   name: string
   prompt: string
   template_id?: string | null
+  agent?: string | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
