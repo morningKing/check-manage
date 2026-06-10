@@ -161,6 +161,9 @@ export const useAuthStore = defineStore('auth', () => {
     // 动态页面路径 /page/:pageId — 没有对应菜单项则放行给已登录用户
     if (path.startsWith('/page/')) return true
 
+    // AI 助手及批任务页面 — 后端用 @write_required，只拦截访客；前端对齐
+    if (path === '/ai-chat' || path.startsWith('/ai-chat/')) return !isGuest.value
+
     // 其他未匹配路径，默认仅超管可访问
     return isSuperuser.value
   }
