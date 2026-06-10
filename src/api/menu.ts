@@ -5,6 +5,7 @@
  */
 
 import { get, post, put, del } from '@/utils/request'
+import { getStorage, STORAGE_KEYS } from '@/utils/storage'
 import type { MenuItem, MenuExportPreview } from '@/types'
 
 /**
@@ -110,11 +111,14 @@ export async function executeMenuExport(
   scriptId?: string,
   branchId = 'main'
 ): Promise<Blob> {
+  // 令牌存于 STORAGE_KEYS.AUTH_TOKEN（check-manage:token），与 axios 拦截器一致。
+  // 此前误用 localStorage.getItem('token')，读不到令牌导致后端判为「未登录」(401)。
+  const token = getStorage<string>(STORAGE_KEYS.AUTH_TOKEN, '')
   const response = await fetch('/api/menuExport', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+      'Authorization': `Bearer ${token}`
     },
     body: JSON.stringify({ menuIds, scriptId, branchId })
   })
