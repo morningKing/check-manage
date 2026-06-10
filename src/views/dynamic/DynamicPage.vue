@@ -2348,15 +2348,27 @@ async function handleReResolveReferences(): Promise<void> {
  * 处理导出
  */
 async function handleExport(): Promise<void> {
-  if (tableData.value.length === 0) {
+  const name = pageConfig.value?.name || '数据'
+  // 全量拉取（绕过分页 1000 条限制），保留当前筛选条件
+  let allData = tableData.value
+  try {
+    const result = await pageConfigStore.fetchPageData(pageId.value, {
+      query: activeMongoQuery.value || undefined,
+      keyword: searchKeyword.value || undefined,
+      loadAll: true,
+    })
+    allData = result.data
+  } catch {
+    // 全量拉取失败时退化为当前页数据
+  }
+  if (allData.length === 0) {
     ElMessage.warning('暂无数据可导出')
     return
   }
-  const name = pageConfig.value?.name || '数据'
   const relationDisplayMap = await pageConfigStore.fetchRelationDisplayMaps(pageId.value)
   const quoteDisplayMap = await pageConfigStore.fetchQuoteDisplayMaps(pageId.value)
   const mergedDisplayMap = { ...relationDisplayMap, ...quoteDisplayMap }
-  exportToExcel(tableData.value, effectiveFields.value, name, mergedDisplayMap)
+  exportToExcel(allData, effectiveFields.value, name, mergedDisplayMap)
   ElMessage.success('导出成功')
 }
 
