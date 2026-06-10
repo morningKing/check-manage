@@ -94,7 +94,7 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
     fake_oc.create_session.return_value = 'oc-1'
     monkeypatch.setattr(eng, 'opencode_client', fake_oc)
     w = eng.BatchWorker()
-    monkeypatch.setattr(w, '_fetch_batch_prompt', lambda b: 'prompt')
+    monkeypatch.setattr(w, '_fetch_batch_context', lambda b: ('prompt', ''))
     monkeypatch.setattr(w, '_set_opencode_id', lambda *a: None)
     monkeypatch.setattr(w, '_await_finished', lambda *a, **k: ('preview', {'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}))
     monkeypatch.setattr(w, '_persist_conversation', lambda *a: None)
