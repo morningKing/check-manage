@@ -8,6 +8,7 @@ export { default as QuickLinksWidget } from './QuickLinksWidget.vue'
 export { default as SystemInfoWidget } from './SystemInfoWidget.vue'
 export { default as MarkdownWidget } from './MarkdownWidget.vue'
 export { default as DataCardWidget } from './DataCardWidget.vue'
+export { default as QuickFormWidget } from './QuickFormWidget.vue'
 
 import type { WidgetType } from '@/types'
 import WelcomeWidget from './WelcomeWidget.vue'
@@ -16,6 +17,7 @@ import QuickLinksWidget from './QuickLinksWidget.vue'
 import SystemInfoWidget from './SystemInfoWidget.vue'
 import MarkdownWidget from './MarkdownWidget.vue'
 import DataCardWidget from './DataCardWidget.vue'
+import QuickFormWidget from './QuickFormWidget.vue'
 
 /**
  * Widget 类型到组件的映射
@@ -27,4 +29,5 @@ export const widgetComponentMap: Record<WidgetType, any> = {
   'system-info': SystemInfoWidget,
   'custom-markdown': MarkdownWidget,
   'data-card': DataCardWidget,
+  'quick-form': QuickFormWidget,
 }

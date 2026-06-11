@@ -31,7 +31,7 @@ export function batchUpdateHomeWidgets(widgets: Partial<WidgetConfig>[]) {
 
 /** 创建自定义区块 */
 export function createHomeWidget(data: {
-  widgetType: 'custom-markdown' | 'data-card'
+  widgetType: 'custom-markdown' | 'data-card' | 'quick-form'
   title?: string
   content: Record<string, any>
   visibleRoles?: string[]

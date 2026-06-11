@@ -105,13 +105,12 @@ def batch_update_home_widgets():
 @home_widgets_bp.route('/home-widgets', methods=['POST'])
 @require_permission('admin.home_widgets')
 def create_home_widget():
-    """Create a custom widget. Admin only. Only allows custom-markdown or data-card type."""
+    """Create a custom widget. Admin only."""
     body = request.get_json(force=True)
     widget_type = body.get('widgetType', '')
 
-    # Only allow custom-markdown or data-card types
-    if widget_type not in ('custom-markdown', 'data-card'):
-        return jsonify({"error": "Only custom-markdown or data-card types are allowed"}), 400
+    if widget_type not in ('custom-markdown', 'data-card', 'quick-form'):
+        return jsonify({"error": "Only custom-markdown, data-card or quick-form types are allowed"}), 400
 
     # Generate ID: custom-{type}-{uuid8}
     widget_id = f'custom-{widget_type}-{uuid.uuid4().hex[:8]}'

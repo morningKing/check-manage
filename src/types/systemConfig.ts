@@ -10,6 +10,7 @@ export type WidgetType =
   | 'system-info'
   | 'custom-markdown'
   | 'data-card'
+  | 'quick-form'
 
 /** 统计项类型 */
 export interface StatsItem {
@@ -45,6 +46,14 @@ export interface DataCardContent {
   linkToDetail?: boolean
 }
 
+/** 快速录入表单内容配置 */
+export interface QuickFormContent {
+  targetCollection: string
+  buttonLabel: string
+  description?: string
+  icon?: string
+}
+
 /** Widget 内容类型映射 */
 export interface WidgetContentMap {
   welcome: { heading: string; description: string }
@@ -53,6 +62,7 @@ export interface WidgetContentMap {
   'system-info': { markdown: string }
   'custom-markdown': { markdown: string }
   'data-card': DataCardContent
+  'quick-form': QuickFormContent
 }
 
 /** Widget 配置 */

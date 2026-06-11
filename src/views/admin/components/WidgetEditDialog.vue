@@ -197,6 +197,35 @@
       </el-form-item>
     </el-form>
 
+    <!-- quick-form 类型 -->
+    <el-form v-if="widget?.widgetType === 'quick-form'" label-width="90px">
+      <el-form-item label="按钮文字" required>
+        <el-input v-model="form.content.buttonLabel" placeholder="如：新增巡检记录" />
+      </el-form-item>
+      <el-form-item label="说明文字">
+        <el-input v-model="form.content.description" placeholder="可选，显示在按钮下方" />
+      </el-form-item>
+      <el-form-item label="图标名称">
+        <el-input v-model="form.content.icon" placeholder="可选，Element Plus 图标名，如 EditPen" />
+      </el-form-item>
+      <el-form-item label="关联数据页" required>
+        <el-select
+          v-model="form.content.targetCollection"
+          placeholder="选择目标数据页"
+          filterable
+          style="width: 100%"
+        >
+          <el-option
+            v-for="opt in collectionOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <div class="form-hint">填写后，点击区块将弹出该数据页的录入表单</div>
+      </el-form-item>
+    </el-form>
+
     <!-- 通用配置 -->
     <el-divider content-position="left">显示配置</el-divider>
     <el-form label-width="80px">
@@ -255,7 +284,8 @@ const dialogTitle = computed(() => {
     'quick-links': '快捷入口',
     'system-info': '系统说明',
     'custom-markdown': 'Markdown区块',
-    'data-card': '数据卡片'
+    'data-card': '数据卡片',
+    'quick-form': '快速录入'
   }
   return `编辑${typeLabels[props.widget.widgetType] || '区块'}`
 })
@@ -367,6 +397,11 @@ watch(
       if (w.widgetType === 'data-card' && !content.dataSource) {
         content.dataSource = { collection: '', branchId: 'main' }
       }
+      // 确保 quick-form 有基础结构
+      if (w.widgetType === 'quick-form') {
+        content.buttonLabel = content.buttonLabel || ''
+        content.targetCollection = content.targetCollection || ''
+      }
       form.value = {
         title: w.title || '',
         content,
@@ -403,6 +438,12 @@ function handleClose() {
 </script>
 
 <style scoped lang="scss">
+.form-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
+
 .stats-item-row,
 .link-item-row {
   display: flex;

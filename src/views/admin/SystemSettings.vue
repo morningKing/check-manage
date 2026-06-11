@@ -67,6 +67,9 @@
                 <el-dropdown-item command="data-card">
                   数据卡片
                 </el-dropdown-item>
+                <el-dropdown-item command="quick-form">
+                  快速录入表单
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -180,7 +183,8 @@ const WIDGET_TYPE_LABELS: Record<string, string> = {
   'quick-links': '快捷入口',
   'system-info': '系统说明',
   'custom-markdown': 'Markdown',
-  'data-card': '数据卡片'
+  'data-card': '数据卡片',
+  'quick-form': '快速录入'
 }
 
 const WIDGET_DEFAULT_TITLES: Record<string, string> = {
@@ -189,7 +193,8 @@ const WIDGET_DEFAULT_TITLES: Record<string, string> = {
   'quick-links': '快捷入口',
   'system-info': '系统说明',
   'custom-markdown': 'Markdown区块',
-  'data-card': '数据卡片'
+  'data-card': '数据卡片',
+  'quick-form': '快速录入'
 }
 
 // ==================== 方法 ====================
@@ -210,7 +215,10 @@ function getTagType(type: WidgetType): 'success' | 'warning' | 'info' | '' {
 }
 
 function isCustomWidget(widget: WidgetConfig): boolean {
-  return widget.id.startsWith('custom-') || widget.widgetType === 'custom-markdown' || widget.widgetType === 'data-card'
+  return widget.id.startsWith('custom-') ||
+    widget.widgetType === 'custom-markdown' ||
+    widget.widgetType === 'data-card' ||
+    widget.widgetType === 'quick-form'
 }
 
 // ==================== 事件处理 ====================
@@ -284,11 +292,13 @@ async function handleSaveWidget(data: Partial<WidgetConfig>) {
   }
 }
 
-async function handleAddWidget(type: 'custom-markdown' | 'data-card') {
+async function handleAddWidget(type: 'custom-markdown' | 'data-card' | 'quick-form') {
   try {
     const defaultContent = type === 'custom-markdown'
       ? { markdown: '' }
-      : { dataSource: { collection: '' }, displayType: 'count' }
+      : type === 'quick-form'
+        ? { targetCollection: '', buttonLabel: '快速录入' }
+        : { dataSource: { collection: '' }, displayType: 'count' }
 
     await systemConfigStore.createWidget({
       widgetType: type,
