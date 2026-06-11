@@ -16,10 +16,11 @@
           <ElSelect v-model="selectedTemplateId"
                     placeholder="可选: 从已保存模板填充"
                     clearable
-                    @change="onPickTemplate">
+                    @change="onPickTemplate"
+                    @visible-change="(v: boolean) => v && loadTemplates()">
             <ElOption v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
           </ElSelect>
-          <ElButton link @click="emit('manageTemplates')">管理模板</ElButton>
+          <ElButton link @click="handleManageTemplates">管理模板</ElButton>
         </div>
       </div>
 
@@ -79,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import {
   ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
   ElMessage,
@@ -90,7 +91,7 @@ import { listAgents } from '@/api/aiChat'
 import type { AgentInfo } from '@/api/aiChat'
 import type { AiChatBatchDetail, AiChatPromptTemplate, StagedFile } from '@/types/aiChatBatch'
 
-defineProps<{ modelValue: boolean }>()
+const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'created', detail: AiChatBatchDetail): void
@@ -121,17 +122,30 @@ const canCreate = computed(() =>
   !submitting.value
 )
 
-onMounted(async () => {
+async function loadTemplates() {
   try { templates.value = await listTemplates() } catch { /* non-fatal */ }
+}
+
+onMounted(async () => {
+  await loadTemplates()
   try {
     const r = await listAgents()
     agents.value = [...r.agents, ...r.subagents]
   } catch { /* non-fatal */ }
 })
 
+// 每次对话框打开时重新加载模板（确保「管理模板」里新建的内容能立即选到）
+watch(() => props.modelValue, async (visible) => {
+  if (visible) await loadTemplates()
+})
+
 function onPickTemplate(id: string | null) {
   const t = templates.value.find(x => x.id === id)
   if (t) prompt.value = t.content
+}
+
+function handleManageTemplates() {
+  emit('manageTemplates')
 }
 
 async function onPick(file: any) {
