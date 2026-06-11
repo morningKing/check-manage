@@ -944,11 +944,6 @@ async function handleSave() {
     return
   }
 
-  // 新建时若内容仍是脚手架原文，提醒用户修改；编辑已有脚本时不拦截
-  if (currentScriptId.value === '__new__' && scaffoldValues.has(formData.value.script)) {
-    ElMessage.warning('请修改脚手架代码后再保存')
-    return
-  }
 
   saveLoading.value = true
   try {
