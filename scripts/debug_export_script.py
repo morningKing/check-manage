@@ -118,13 +118,17 @@ def fetch_collection(base_url, token, collection, branch, limit):
     return records, fields, page_name
 
 
-def fetch_script(base_url, token, script_id):
-    """返回 (code, output_format, scope)"""
+def fetch_script(base_url, token, script_id=None, script_name=None):
+    """返回 (code, output_format, scope)，支持按 ID 或名称查找"""
     scripts = api_get(base_url, "/exportScripts", token)
     for s in scripts:
-        if s["id"] == script_id:
+        if (script_id and s["id"] == script_id) or \
+           (script_name and s["name"] == script_name):
             return s["script"], s.get("outputFormat", "csv"), s.get("scope", "page")
-    sys.exit(f"脚本 {script_id} 不存在")
+    # 名称模糊提示
+    names = [s["name"] for s in scripts]
+    key = script_id or script_name
+    sys.exit(f"脚本 '{key}' 不存在。可用脚本：{names}")
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +137,9 @@ def fetch_script(base_url, token, script_id):
 def main():
     parser = argparse.ArgumentParser(description="导出脚本本地调试工具")
     src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--script",    help="本地脚本文件路径")
-    src.add_argument("--script-id", help="服务端脚本 ID（直接从 API 拉）")
+    src.add_argument("--script",      help="本地脚本文件路径")
+    src.add_argument("--script-id",   help="服务端脚本 ID（直接从 API 拉）")
+    src.add_argument("--script-name", help="服务端脚本名称（精确匹配）")
     parser.add_argument("--collection", required=True, help="数据页 collection 名称")
     parser.add_argument("--branch",   default="main",                  help="分支（默认 main）")
     parser.add_argument("--base-url", default="http://localhost:3002", help="后端地址")
@@ -163,9 +168,12 @@ def main():
         script_code = Path(args.script).read_text(encoding="utf-8")
         scope = "page"  # 本地文件默认 page；如需 menu 请加 --scope 参数
         print(f"      本地文件 {args.script}  ({len(script_code)} 字符)  scope={scope}")
-    else:
-        script_code, _fmt, scope = fetch_script(args.base_url, token, args.script_id)
+    elif args.script_id:
+        script_code, _fmt, scope = fetch_script(args.base_url, token, script_id=args.script_id)
         print(f"      服务端脚本 {args.script_id}  ({len(script_code)} 字符)  scope={scope}")
+    else:
+        script_code, _fmt, scope = fetch_script(args.base_url, token, script_name=args.script_name)
+        print(f"      服务端脚本 '{args.script_name}'  ({len(script_code)} 字符)  scope={scope}")
 
     # 4. 组装注入变量（与后端 run_export_script / run_menu_export_script 对齐）
     print(f"[4/4] 执行脚本  scope={scope}", flush=True)

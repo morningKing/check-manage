@@ -43,6 +43,9 @@
                     {{ scopeLabel(script.scope) }}
                   </el-tag>
                 </div>
+                <div class="script-id" @click.stop="copyId(script.id)" title="点击复制 ID">
+                  {{ script.id }}
+                </div>
               </div>
               <div class="script-actions">
                 <el-button
@@ -850,6 +853,15 @@ async function loadScripts() {
   }
 }
 
+async function copyId(id: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    ElMessage.success('ID 已复制')
+  } catch {
+    ElMessage.info(id)
+  }
+}
+
 function handleSelect(script: ExportScript) {
   currentScriptId.value = script.id
   formData.value = {
@@ -1093,6 +1105,15 @@ onMounted(() => {
       margin-top: 4px;
       display: flex;
       gap: 4px;
+    }
+
+    .script-id {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--el-text-color-placeholder);
+      font-family: monospace;
+      cursor: pointer;
+      &:hover { color: var(--el-color-primary); }
     }
   }
 
