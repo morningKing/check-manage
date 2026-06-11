@@ -256,6 +256,14 @@
         @filter-change="handleFilterChange"
       >
         <template #extra-actions="{ row }">
+          <el-button
+            v-if="!isGuest && canCreate"
+            type="success"
+            link
+            @click="handleCopy(row)"
+          >
+            复制
+          </el-button>
           <el-button type="info" link @click="handleShowRelationGraph(row)">
             图谱
           </el-button>
@@ -1044,6 +1052,11 @@ const selectedRows = ref<DynamicRecord[]>([])
 const isEditMode = ref(false)
 
 /**
+ * 是否复制新增模式（区别于空白新增和编辑）
+ */
+const isCopyMode = ref(false)
+
+/**
  * 导入对话框可见性
  */
 const importDialogVisible = ref(false)
@@ -1313,7 +1326,9 @@ const effectiveFields = computed<FieldConfig[]>(() => {
  * 对话框标题
  */
 const dialogTitle = computed(() => {
-  return isEditMode.value ? '编辑记录' : '新增记录'
+  if (isEditMode.value) return '编辑记录'
+  if (isCopyMode.value) return '复制新增'
+  return '新增记录'
 })
 
 /**
@@ -1921,6 +1936,7 @@ function handleCalendarDateClick(date: Date): void {
 function handleAdd(): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   isEditMode.value = false
+  isCopyMode.value = false
   currentRecord.value = {}
   dialogVisible.value = true
 }
@@ -1931,7 +1947,30 @@ function handleAdd(): void {
 function handleEdit(row: DynamicRecord): void {
   if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
   isEditMode.value = true
+  isCopyMode.value = false
   currentRecord.value = { ...row }
+  dialogVisible.value = true
+}
+
+/**
+ * 处理复制新增：预填充行数据，去掉自动生成字段，以新增模式打开表单
+ */
+function handleCopy(row: DynamicRecord): void {
+  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  const config = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
+  const autoFields = new Set(
+    (config?.fields ?? [])
+      .filter(f => f.controlType === 'autoSequence' || f.controlType === 'autoTimestamp')
+      .map(f => f.fieldName)
+  )
+  const copied: Record<string, any> = {}
+  for (const [k, v] of Object.entries(row)) {
+    if (k === 'id' || autoFields.has(k)) continue
+    copied[k] = v
+  }
+  isEditMode.value = false
+  isCopyMode.value = true
+  currentRecord.value = copied
   dialogVisible.value = true
 }
 
