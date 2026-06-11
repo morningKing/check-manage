@@ -1,35 +1,54 @@
 # 巡检用例管理系统
 
-配置驱动的动态数据管理平台。通过菜单配置和页面字段定义，无需编码即可创建业务数据页面，支持数据关联、导入导出、校验脚本、ETL 数据管道和 Open API 等功能。
+配置驱动的动态数据管理平台。通过菜单配置和页面字段定义，**无需编码**即可创建业务数据页面，并内置数据关联、导入导出、脚本扩展、ETL 管道、版本分支、AI 智能助手等能力。
+
+> 核心理念：不为每个业务实体写新的 Vue 页面或建数据库表，而是定义一份 `PageConfig`（字段 schema）+ 一条 `Menu` 菜单，系统自动生成 UI 与 API。
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | Vue 3 + TypeScript + Element Plus + Pinia |
+| 前端 | Vue 3 + TypeScript + Element Plus + Pinia + Vite |
 | 后端 | Python Flask + psycopg2 |
-| 数据库 | PostgreSQL (JSONB 灵活存储) |
+| 数据库 | PostgreSQL（JSONB 单表灵活存储） |
+| AI 运行时 | OpenCode（Agent 运行时）+ 独立 MCP Server |
 | 代码编辑 | CodeMirror 6 |
-| 认证 | JWT (Bearer Token) |
-| 构建工具 | Vite |
+| 表格/电子表格 | Univer.js |
+| 认证 | JWT（Bearer Token） |
+| 测试 | Vitest（前端）+ Pytest（后端）+ Playwright（E2E） |
 
 ## 功能概览
 
-- **动态数据页面** — 通过配置定义字段结构，自动生成表单和表格，支持 15 种控件类型
-- **菜单管理** — 可视化树形菜单编辑，支持 3 级嵌套（工作空间→项目→数据页），基于角色的可见性控制
-- **数据关联** — 多对多双向关联（relation）和一对多引用（reference），自动双向同步
-- **自动字段** — 自动时间戳（autoTimestamp）和自增序列（autoSequence），新增/编辑时自动填充
-- **导入导出** — Excel 模板导入、Excel 导出、自定义 Python 脚本导出（支持 json/csv/xml/txt/html）
-- **数据校验** — Python 校验脚本绑定到页面，新增和编辑时自动执行，支持关联数据校验
-- **ETL 数据管道** — 可视化步骤编排，支持 HTTP 抽取、脚本转换、字段映射、条件过滤、写入集合
-- **Open API** — API Key 认证，外部系统按集合访问数据
-- **用户权限** — 三级角色体系（admin / developer / guest），基于角色的路由和菜单控制
-- **操作审计** — 全量操作日志，支持批次聚合、筛选、导出
-- **系统备份** — 手动/定时备份，支持下载、还原、跨环境迁移
-- **数据对比** — 当前数据与历史备份、不同备份之间的逐字段差异比较，支持导出对比报告
-- **项目版本管理** — 项目级分支/快照，支持创建、合并、锁定，跨分支数据隔离
-- **跨项目依赖** — 三种依赖类型（跟随主干、配套分支、精确钉住），依赖校验与通知机制
-- **Webhook 规则** — 事件触发 Webhook，支持条件过滤、HMAC-SHA256 签名、重试机制
+### 数据建模与展示
+- **动态数据页面** — 配置字段结构即自动生成表单、表格；支持表格 / 看板 / Excel / 日历 / 甘特 多种视图
+- **丰富控件类型** — 文本、数字、富文本、选择、日期、文件/图片、关联、引用、自增序列、自动时间戳、复合文本等
+- **菜单管理** — 可视化树形编辑，3 级嵌套（工作空间 → 项目 → 数据页），基于角色的可见性控制
+- **数据关联** — 多对多双向关联（relation）、一对多引用（reference）、单向引用选择（quoteSelect），自动同步
+- **自动字段** — autoTimestamp / autoSequence / compositeText，新增编辑时自动填充
+- **行内复制新增** — 操作栏「复制」按钮，预填充整行数据（跳过自增/时间戳字段），人工检视后入库
+
+### 数据流转
+- **导入导出** — Excel 模板导入、Excel 全量导出、自定义 Python 脚本导出（json/csv/xml/txt/html）；脚本支持页面级与菜单级两种维度
+- **导出脚本调试** — 内置「测试」面板可选真实数据页执行；另提供 `scripts/debug_export_script.py` 本地调试工具（拉真实数据、完整 traceback）
+- **数据校验** — Python 校验脚本绑定页面，新增/编辑时自动执行，支持关联数据校验
+- **ETL 数据管道** — 可视化步骤编排：HTTP 抽取、脚本转换、字段映射、条件过滤、写入集合
+- **Open API** — API Key 认证，外部系统按集合读写数据
+- **Webhook 规则** — `create`/`update`/`delete`/`merge` 事件触发，条件过滤 + HMAC-SHA256 签名 + 重试
+
+### 版本与协作
+- **项目版本管理** — 项目级分支/快照，创建、合并、锁定，跨分支数据隔离
+- **跨项目依赖** — 三种依赖类型（track-main / read-write / read-only），依赖校验与通知机制
+- **操作审计** — 全量操作日志，批次聚合、筛选、导出
+- **系统备份** — 手动/定时备份，下载、还原、跨环境迁移；当前数据与备份的逐字段差异对比
+
+### AI 智能助手
+- **AI 对话** — Claude 风格聊天抽屉，对接 OpenCode Agent 运行时，可 @ 选择子智能体、挑选模型，工具调用经独立 MCP Server 接入平台能力
+- **批任务** — 选 N 个文件 + 1 个 Prompt → N 个隔离会话并发处理（限流 3 并发），支持 Prompt 模板、失败重试、指定 Agent
+- **定时 AI 流水线** — 按计划扫描数据页，把待处理记录交给 AI 处理并把结构化结果回写记录，状态流转 待处理 → 处理中 → 已处理/处理失败
+
+### 首页与仪表盘
+- **可配置首页区块** — 欢迎卡片、统计概览、快捷入口、Markdown、数据卡片、**快速录入表单**（点击弹出表单直接入库到关联数据页）
+- **仪表盘** — 可视化图表配置
 
 ## 快速开始
 
@@ -38,6 +57,7 @@
 - Node.js >= 18
 - Python >= 3.9
 - PostgreSQL >= 13
+- （可选，使用 AI 功能时）[OpenCode](https://opencode.ai) 运行时
 
 ### 安装依赖
 
@@ -46,12 +66,15 @@
 npm install
 
 # 后端
-pip install flask flask-cors psycopg2-binary
+pip install flask flask-cors psycopg2-binary PyJWT pytest apscheduler
+
+# （可选）AI MCP Server 依赖，在其独立虚拟环境中安装
+cd mcp-server && python -m venv .venv && .venv\Scripts\pip install -e .
 ```
 
 ### 配置数据库
 
-编辑 `server/config.py`，设置 PostgreSQL 连接信息：
+编辑 `server/config.py`（或 `server/.env`），设置 PostgreSQL 连接：
 
 ```python
 DB_CONFIG = {
@@ -70,118 +93,114 @@ cd server
 python init_db.py
 ```
 
-将自动创建所有数据表（34 张业务表）并初始化系统菜单和默认管理员账号。
+自动创建所有数据表并初始化系统菜单、默认管理员账号。
 
 ### 启动服务
 
 ```bash
-# 方式一：同时启动前后端
+# 同时启动 后端 + 前端 + MCP Server
 npm run dev:all
 
-# 方式二：分别启动
-npm run server    # 后端（端口 3001）
-npm run dev       # 前端（端口 5173，自动代理 /api → 后端）
+# 或分别启动
+npm run server   # 后端（端口 3002）
+npm run dev      # 前端（端口 5173，自动代理 /api → 后端）
+npm run mcp      # AI MCP Server（端口 3003，使用 AI 功能时需要）
 ```
 
-访问 `http://localhost:5173`，使用 admin / admin123 登录。
+> 使用 AI 对话/批任务/定时任务前，还需另行启动 OpenCode：`opencode serve --port 4096`。
+
+访问 `http://localhost:5173`，使用 **admin / admin123** 登录。
+
+## 测试
+
+```bash
+npm run test          # 前端单元测试（Vitest）
+npm run test:server   # 后端测试（Pytest）
+npm run test:all      # 前后端全部
+npm run test:e2e      # E2E（Playwright，需服务运行）
+```
 
 ## 项目结构
 
 ```
 check-manage/
-├── server/                    # Flask 后端
-│   ├── app.py                 # 应用入口
-│   ├── config.py              # 配置文件
-│   ├── init_db.py             # 数据库初始化
-│   ├── routes/                # 路由模块
-│   │   ├── auth.py            # 认证
-│   │   ├── menus.py           # 菜单管理
-│   │   ├── page_configs.py    # 页面配置
-│   │   ├── dynamic.py         # 动态数据 CRUD
-│   │   ├── relations.py       # 数据关联
-│   │   ├── users.py           # 用户管理
-│   │   ├── export_scripts.py  # 导出脚本
-│   │   ├── validation_scripts.py # 校验脚本
-│   │   ├── etl_tasks.py       # ETL 管理
-│   │   ├── api_keys.py        # Open API
-│   │   ├── operation_logs.py  # 操作日志
-│   │   └── backups.py         # 系统备份 + 数据对比
-│   └── utils/                 # 工具模块
-│       ├── db.py              # 数据库连接池
-│       ├── auth.py            # JWT 认证
-│       ├── script_runner.py   # 脚本沙箱执行器
-│       ├── etl_engine.py      # ETL 执行引擎
-│       ├── operation_log.py   # 操作日志记录
-│       └── backup.py          # 备份/还原逻辑
-├── src/                       # Vue 前端
-│   ├── api/                   # API 请求层
-│   ├── components/            # 公共组件
-│   │   ├── common/            # 通用组件（DataTable, BackupDiffDialog 等）
-│   │   ├── dynamic-form/      # 动态表单组件（含 15 种控件）
-│   │   └── layout/            # 布局组件
-│   ├── router/                # 路由配置
-│   ├── stores/                # Pinia 状态管理
-│   ├── types/                 # TypeScript 类型定义
-│   ├── utils/                 # 工具函数
-│   └── views/                 # 页面组件
-│       ├── admin/             # 系统管理页面
-│       ├── dynamic/           # 动态数据页面
-│       ├── home/              # 首页
-│       └── login/             # 登录页
-├── docs/                      # 文档
-│   ├── 系统设计文档.md         # 架构与技术设计
-│   ├── 使用说明.md             # 用户操作手册
-│   └── 数据关联使用说明.md     # 关联功能详解
+├── server/                      # Flask 后端
+│   ├── app.py                   # 应用入口（注册 34 个蓝图 + 后台调度器）
+│   ├── config.py / .env         # 配置
+│   ├── init_db.py               # 数据库初始化
+│   ├── routes/                  # 路由模块（auth/menus/dynamic/relations/...）
+│   └── utils/                   # 工具（db 连接池、JWT、脚本沙箱、ETL/批任务/扫描引擎等）
+├── mcp-server/                  # 独立 MCP Server（FastAPI + MCP Streamable-HTTP）
+├── src/                         # Vue 前端
+│   ├── api/                     # API 请求层
+│   ├── components/              # 公共组件（common / dynamic-form / home / ai-chat / layout）
+│   ├── router/                  # 路由（动态路由由菜单生成）
+│   ├── stores/                  # Pinia 状态
+│   ├── types/                   # TypeScript 类型
+│   ├── utils/                   # 工具函数
+│   └── views/                   # 页面（admin / dynamic / home / ai-chat / login）
+├── scripts/
+│   └── debug_export_script.py   # 导出脚本本地调试工具
+├── e2e/                         # Playwright E2E 用例
+├── docs/                        # 设计文档、使用手册、规格与计划
 └── package.json
 ```
 
-## 数据库表
+## 架构要点
+
+- **单表动态数据**：所有业务数据存于 `dynamic_data` 表的 JSONB 列，按 `collection`（由 `pageId` 推导）区分实体，新增实体/字段无需迁移。
+- **动态路由**：`src/router/dynamicRoutes.ts` 运行时读取 `menus` 表生成 Vue Router 路由，统一指向 `DynamicPage.vue`。
+- **字段驱动行为**：`controlType` 决定渲染组件与逻辑（如 `relation` 触发 M:N 处理、`reference` 触发字段继承）。
+- **API 代理**：Vite 将 `/api` 代理到后端 3002 并去掉 `/api` 前缀，故后端路由不带 `/api`。
+- **后台调度器**：备份调度、跨项目依赖巡检、批任务 Worker、AI 扫描调度均在 `app.py` 启动（`WERKZEUG_RUN_MAIN` 守卫避免重载双启）。
+
+## 用户角色
+
+数据驱动、可自定义的 RBAC：
+
+- **admin** — 永久超级管理员，全部权限，不可删除
+- **developer** — 读写数据，无管理功能
+- **guest** — 只读
+
+权限分三个粒度：管理功能开关（`admin.*` 能力键）、数据页 CRUD、菜单可见性。后端为权威（`@require_permission` / `@write_required`），前端仅做 UX 门禁。
+
+## 数据库主要表
 
 | 表名 | 说明 |
 |------|------|
-| menus | 菜单树结构（工作空间→项目→数据页） |
-| page_configs | 页面配置（含 JSONB 字段定义） |
-| dynamic_data | 所有业务数据（JSONB 灵活存储） |
+| menus / page_configs / dynamic_data | 菜单树 / 页面配置 / 业务数据（核心三表） |
 | data_relations | 多对多关联关系 |
 | users | 用户账号 |
-| project_versions | 项目级分支/快照 |
-| project_dependencies | 跨项目依赖声明 |
-| project_dependency_relations | 依赖涉及的关联关系 |
-| webhook_rules | Webhook 规则定义 |
-| webhook_logs | Webhook 执行日志 |
-| notifications | 用户通知 |
-| export_scripts | 导出脚本 |
-| validation_scripts | 校验脚本 |
-| etl_tasks | ETL 任务定义 |
-| etl_logs | ETL 执行日志 |
-| api_keys | Open API 密钥 |
-| operation_logs | 操作审计日志 |
-| backups | 备份记录 |
-| backup_settings | 定时备份配置 |
-| trigger_rules | 联动规则 |
-| ai_settings | AI 配置 |
-| dashboards | 仪表盘配置 |
-| record_comments | 记录评论 |
-| collection_versions | 数据级版本（已废弃） |
-| version_snapshots | 版本快照（已废弃） |
-
-## 文档
-
-- [使用说明](docs/使用说明.md) — 用户操作手册，覆盖所有功能的使用方法
-- [系统设计文档](docs/系统设计文档.md) — 架构设计、数据库结构、API 接口、安全模型
-- [数据关联使用说明](docs/数据关联使用说明.md) — 多对多关联功能的配置和使用详解
-- [跨项目依赖功能说明](docs/跨项目依赖功能说明.md) — 项目间依赖管理、协作合并、通知机制
+| project_versions / project_dependencies / project_dependency_relations | 项目分支、跨项目依赖 |
+| webhook_rules / webhook_logs | Webhook 规则与日志 |
+| export_scripts / validation_scripts | 导出脚本、校验脚本 |
+| etl_tasks / etl_logs | ETL 任务与日志 |
+| api_keys / operation_logs | Open API 密钥、操作审计 |
+| backups / backup_settings | 备份记录、定时备份配置 |
+| notifications / record_comments / trigger_rules | 通知、记录评论、联动规则 |
+| dashboards / home_widgets / system_config | 仪表盘、首页区块、系统配置 |
+| ai_settings / ai_chat_sessions / ai_chat_messages | AI 配置、对话会话与消息 |
+| ai_chat_batches / ai_chat_prompt_templates / ai_scan_tasks | AI 批任务、Prompt 模板、定时扫描任务 |
+| column_views | 数据页列视图配置 |
 
 ## 构建部署
 
 ```bash
-# 构建前端
-npm run build
+# 构建前端（含 vue-tsc 类型检查）
+npm run build      # 产出 dist/
 
-# 产出目录：dist/
-# 配合 Nginx 等 Web 服务器部署静态文件
-# 后端通过 gunicorn 或直接 python app.py 运行
+# 一键构建并启动（前端 + 后端 + 反向代理，默认 8080）
+npm run start
 ```
+
+生产部署：前端静态文件交由 Nginx 等服务，后端以 `python app.py` 或 gunicorn 运行；启用 AI 功能时另起 MCP Server 与 OpenCode。
+
+## 文档
+
+- `docs/user-guide/` — 用户操作手册（全量功能说明、数据查询、脚本上传等）
+- `docs/design/` — 系统设计、架构与数据库结构
+- `docs/superpowers/specs/` 与 `docs/superpowers/plans/` — 各特性的设计规格与实施计划
+- `docs/ai-scan-tasks-guide.md` — 定时 AI 数据流水线指南
 
 ## License
 
