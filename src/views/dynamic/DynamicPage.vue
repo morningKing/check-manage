@@ -63,6 +63,13 @@
             </template>
           </el-dropdown>
         </div>
+        <!-- collection 标识（管理员可见，点击复制，用于脚本调试等场景） -->
+        <span
+          v-if="isAdmin && collection"
+          class="page-collection"
+          :title="`collection: ${collection}（点击复制）`"
+          @click="copyCollection"
+        >collection: {{ collection }}</span>
         <!-- 页面描述（单独一行） -->
         <span v-if="pageConfig?.description" class="page-description">
           {{ pageConfig.description }}
@@ -2344,6 +2351,15 @@ async function handleReResolveReferences(): Promise<void> {
   }
 }
 
+async function copyCollection() {
+  try {
+    await navigator.clipboard.writeText(collection.value)
+    ElMessage.success(`已复制：${collection.value}`)
+  } catch {
+    ElMessage.info(collection.value)
+  }
+}
+
 /**
  * 处理导出
  */
@@ -3107,6 +3123,17 @@ onActivated(async () => {
           color: #66b1ff;
         }
       }
+    }
+
+    .page-collection {
+      display: block;
+      margin-top: 3px;
+      font-size: 11px;
+      font-family: monospace;
+      color: var(--el-text-color-placeholder);
+      cursor: pointer;
+      user-select: none;
+      &:hover { color: var(--el-color-primary); }
     }
 
     .page-description {

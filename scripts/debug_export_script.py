@@ -137,10 +137,14 @@ def fetch_script(base_url, token, script_id=None, script_name=None):
 def main():
     parser = argparse.ArgumentParser(description="导出脚本本地调试工具")
     src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--script",      help="本地脚本文件路径")
-    src.add_argument("--script-id",   help="服务端脚本 ID（直接从 API 拉）")
-    src.add_argument("--script-name", help="服务端脚本名称（精确匹配）")
-    parser.add_argument("--collection", required=True, help="数据页 collection 名称")
+    src.add_argument("--script",           help="本地脚本文件路径")
+    src.add_argument("--script-id",        help="服务端脚本 ID（直接从 API 拉）")
+    src.add_argument("--script-name",      help="服务端脚本名称（精确匹配）")
+    src.add_argument("--list-collections", action="store_true",
+                     help="列出所有可用 collection（不执行脚本）")
+    src.add_argument("--list-scripts",     action="store_true",
+                     help="列出所有可用脚本 ID 和名称（不执行脚本）")
+    parser.add_argument("--collection", default=None, help="数据页 collection 名称")
     parser.add_argument("--branch",   default="main",                  help="分支（默认 main）")
     parser.add_argument("--base-url", default="http://localhost:3002", help="后端地址")
     parser.add_argument("--username", default="admin",                 help="用户名")
@@ -150,10 +154,32 @@ def main():
     args = parser.parse_args()
 
     password = args.password or getpass.getpass(f"密码（{args.username}）: ")
+    token = login(args.base_url, args.username, password)
+
+    # --list-collections
+    if args.list_collections:
+        cfgs = api_get(args.base_url, "/pageConfigs", token)
+        print(f"{'collection':<35} {'页面名称'}")
+        print("-" * 60)
+        for c in cfgs:
+            coll = c.get("id", "").replace("page-", "")
+            print(f"{coll:<35} {c.get('name','')}")
+        return
+
+    # --list-scripts
+    if args.list_scripts:
+        scripts = api_get(args.base_url, "/exportScripts", token)
+        print(f"{'ID':<22} {'scope':<8} {'format':<8} 名称")
+        print("-" * 60)
+        for s in scripts:
+            print(f"{s['id']:<22} {s.get('scope','page'):<8} {s.get('outputFormat',''):<8} {s['name']}")
+        return
+
+    if not args.collection:
+        sys.exit("缺少 --collection，用 --list-collections 查看可用值")
 
     # 1. 登录
     print(f"[1/4] 登录 {args.base_url}  用户={args.username}", flush=True)
-    token = login(args.base_url, args.username, password)
     print("      登录成功")
 
     # 2. 拉数据
