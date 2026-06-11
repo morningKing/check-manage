@@ -63,13 +63,6 @@
             </template>
           </el-dropdown>
         </div>
-        <!-- collection 标识（管理员可见，点击复制，用于脚本调试等场景） -->
-        <span
-          v-if="isAdmin && collection"
-          class="page-collection"
-          :title="`collection: ${collection}（点击复制）`"
-          @click="copyCollection"
-        >collection: {{ collection }}</span>
         <!-- 页面描述（单独一行） -->
         <span v-if="pageConfig?.description" class="page-description">
           {{ pageConfig.description }}
@@ -115,6 +108,7 @@
               <el-dropdown-item v-if="!isGuest && hasReferenceFields" command="reResolveRefs" :icon="RefreshRight">重新解析引用</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" divided command="version" :icon="Tickets">版本管理</el-dropdown-item>
               <el-dropdown-item v-if="isAdmin" command="dependency" :icon="Operation">依赖管理</el-dropdown-item>
+              <el-dropdown-item v-if="isAdmin" command="copyCollection" :icon="CopyDocument">复制 collection 名</el-dropdown-item>
               <el-dropdown-item
                 v-if="isAdmin"
                 command="batchDelete"
@@ -839,7 +833,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -2472,6 +2466,8 @@ function handleMoreCommand(command: string): void {
     handleBatchDeleteConfirm()
   } else if (command === 'reResolveRefs') {
     handleReResolveReferences()
+  } else if (command === 'copyCollection') {
+    copyCollection()
   }
 }
 
@@ -3123,17 +3119,6 @@ onActivated(async () => {
           color: #66b1ff;
         }
       }
-    }
-
-    .page-collection {
-      display: block;
-      margin-top: 3px;
-      font-size: 11px;
-      font-family: monospace;
-      color: var(--el-text-color-placeholder);
-      cursor: pointer;
-      user-select: none;
-      &:hover { color: var(--el-color-primary); }
     }
 
     .page-description {
