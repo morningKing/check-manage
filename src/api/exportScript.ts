@@ -18,8 +18,14 @@ export function deleteExportScript(id: string) {
   return del(`/exportScripts/${id}`)
 }
 
-export function testExportScript(id: string, testData: { data: any[]; fields: any[]; pageName: string }) {
-  return post<{ success: boolean; preview: string; filename: string; contentType: string; size: number; error?: string }>(
+export function testExportScript(id: string, testData: {
+  collection?: string
+  branchId?: string
+  data?: any[]
+  fields?: any[]
+  pageName?: string
+}) {
+  return post<{ success: boolean; preview: string; filename: string; contentType: string; size: number; recordCount?: number; extra?: string; error?: string }>(
     `/exportScripts/${id}/test`,
     testData
   )

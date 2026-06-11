@@ -176,36 +176,89 @@ def delete_script(script_id):
 @export_scripts_bp.route('/exportScripts/<script_id>/test', methods=['POST'])
 @require_permission('admin.export_scripts')
 def test_script(script_id):
-    """Test a script with sample data."""
+    """Test a script with sample data or real collection data."""
+    from utils.script_runner import run_menu_export_script
     body = request.get_json(force=True)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT script, output_format FROM export_scripts WHERE id = %s',
+            'SELECT script, output_format, scope FROM export_scripts WHERE id = %s',
             (script_id,),
         )
         row = cur.fetchone()
-    if not row:
-        return jsonify({'error': 'Not found'}), 404
+        if not row:
+            return jsonify({'error': 'Not found'}), 404
 
-    script_code = row[0]
-    output_format = row[1]
-    sample_data = body.get('data', [])
-    sample_fields = body.get('fields', [])
-    page_name = body.get('pageName', '测试')
+        script_code = row[0]
+        output_format = row[1]
+        scope = row[2] or 'page'
+
+        collection = (body.get('collection') or '').strip()
+        branch_id = body.get('branchId', 'main')
+
+        if collection:
+            # 从真实数据页取数据
+            page_id = f'page-{collection}'
+            cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (page_id,))
+            pc = cur.fetchone()
+            page_name = pc[0] if pc else collection
+            fields = pc[1] if pc else []
+
+            cur.execute(
+                'SELECT id, data, created_at FROM dynamic_data '
+                'WHERE collection = %s AND branch_id = %s ORDER BY created_at LIMIT 100',
+                (collection, branch_id),
+            )
+            from datetime import timezone as _tz
+            data = []
+            for r in cur.fetchall():
+                rec = {'id': r[0]}
+                if r[1]:
+                    rec.update(r[1])
+                if r[2]:
+                    ts = r[2]
+                    if hasattr(ts, 'astimezone'):
+                        ts = ts.astimezone(_tz.utc)
+                    rec['createdAt'] = ts.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                data.append(rec)
+        else:
+            # 硬编码样例数据（兜底）
+            sample_data = body.get('data', [])
+            sample_fields = body.get('fields', [])
+            page_name = body.get('pageName', '测试')
+            data = sample_data
+            fields = sample_fields
 
     try:
-        result_bytes, filename, content_type = run_export_script(
-            script_code, sample_data, sample_fields, page_name, output_format
-        )
-        # Return preview (truncated for large outputs)
+        if scope == 'menu':
+            menu_data = [{
+                'collection': collection or 'sample',
+                'pageName': page_name,
+                'records': data,
+                'fields': fields,
+                'recordCount': len(data),
+            }]
+            files = run_menu_export_script(script_code, menu_data, page_name, output_format)
+            # 返回第一个文件的预览
+            if files:
+                result_bytes, filename, content_type = files[0]
+            else:
+                return jsonify({'success': False, 'error': '脚本未生成任何文件'}), 400
+        else:
+            result_bytes, filename, content_type = run_export_script(
+                script_code, data, fields, page_name, output_format
+            )
+
         preview = result_bytes[:5000].decode('utf-8', errors='replace')
+        extra = f'（共 {len(files)} 个文件）' if scope == 'menu' else ''
         return jsonify({
             'success': True,
             'preview': preview,
             'filename': filename,
             'contentType': content_type,
             'size': len(result_bytes),
+            'recordCount': len(data),
+            'extra': extra,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400

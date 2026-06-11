@@ -142,6 +142,19 @@
                 <el-button type="primary" @click="handleSave" :loading="saveLoading">
                   保存
                 </el-button>
+                <el-select
+                  v-model="testCollection"
+                  placeholder="选择数据页（留空用样例数据）"
+                  clearable
+                  style="width:220px;margin-right:8px"
+                >
+                  <el-option
+                    v-for="p in pageConfigOptions"
+                    :key="p.collection"
+                    :label="p.name"
+                    :value="p.collection"
+                  />
+                </el-select>
                 <el-button type="success" @click="handleTest" :loading="testLoading">
                   测试
                 </el-button>
@@ -154,7 +167,7 @@
               <el-alert
                 v-if="testResult.success"
                 type="success"
-                :title="`文件名: ${testResult.filename} | 大小: ${testResult.size} 字节`"
+                :title="`文件名: ${testResult.filename} | 大小: ${testResult.size} 字节${testResult.recordCount != null ? ' | ' + testResult.recordCount + ' 条记录' : ''}${testResult.extra || ''}`"
                 :closable="false"
                 show-icon
               />
@@ -540,6 +553,7 @@ import { ref, watch, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Upload } from '@element-plus/icons-vue'
+import { getPageConfigList } from '@/api/page'
 import { Codemirror } from 'vue-codemirror'
 import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -750,7 +764,6 @@ for table in menu_data:
 /**
  * 获取所有脚手架值的集合（用于判断当前内容是否为未修改的脚手架）
  */
-const scaffoldValues = new Set(Object.values(SCAFFOLD_TEMPLATES))
 
 // ==================== Refs ====================
 
@@ -770,12 +783,16 @@ const saveLoading = ref(false)
 const testLoading = ref(false)
 const deleteDialogVisible = ref(false)
 const scriptToDelete = ref<ExportScript | null>(null)
+const testCollection = ref<string>('')
+const pageConfigOptions = ref<{ id: string; name: string; collection: string }[]>([])
 const testResult = ref<{
   success: boolean
   preview?: string
   filename?: string
   contentType?: string
   size?: number
+  recordCount?: number
+  extra?: string
   error?: string
 } | null>(null)
 
@@ -992,17 +1009,20 @@ async function handleTest() {
   testLoading.value = true
   testResult.value = null
   try {
-    const result = await testExportScript(currentScriptId.value!, {
-      data: [
-        { id: 'test-1', name: '示例数据1', value: '100' },
-        { id: 'test-2', name: '示例数据2', value: '200' },
-      ],
-      fields: [
-        { fieldName: 'name', label: '名称', controlType: 'text' },
-        { fieldName: 'value', label: '值', controlType: 'text' },
-      ],
-      pageName: '测试页面',
-    })
+    const payload = testCollection.value
+      ? { collection: testCollection.value }
+      : {
+          data: [
+            { id: 'test-1', name: '示例数据1', value: '100' },
+            { id: 'test-2', name: '示例数据2', value: '200' },
+          ],
+          fields: [
+            { fieldName: 'name', label: '名称', controlType: 'text' },
+            { fieldName: 'value', label: '值', controlType: 'text' },
+          ],
+          pageName: '测试页面',
+        }
+    const result = await testExportScript(currentScriptId.value!, payload)
     testResult.value = result
   } catch (e: any) {
     testResult.value = {
@@ -1034,8 +1054,16 @@ async function handleDelete() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadScripts()
+  try {
+    const configs = await getPageConfigList()
+    pageConfigOptions.value = configs.map(c => ({
+      id: c.id,
+      name: c.name,
+      collection: c.id.replace('page-', ''),
+    }))
+  } catch { /* non-fatal */ }
 })
 </script>
 
