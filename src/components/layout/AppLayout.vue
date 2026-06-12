@@ -406,7 +406,8 @@ onUnmounted(() => {
 }
 
 .app-aside {
-  background-color: #304156;
+  background-color: #f7f8fa;
+  border-right: 1px solid #ebecf0;
   transition: width 0.3s ease;
   overflow: hidden;
 }
@@ -425,7 +426,6 @@ onUnmounted(() => {
   padding: 0 20px;
   background-color: var(--el-bg-color);
   border-bottom: 1px solid var(--el-border-color-lighter);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 
   .header-left {
     display: flex;

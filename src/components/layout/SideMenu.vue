@@ -30,9 +30,9 @@
         :default-active="activeMenu"
         :collapse="sidebarCollapsed"
         :collapse-transition="false"
-        background-color="#304156"
-        text-color="#bfcbd9"
-        active-text-color="#409eff"
+        background-color="#f7f8fa"
+        text-color="#5c606b"
+        active-text-color="#1a1d21"
         router
         class="side-menu-list"
         @open="handleMenuOpen"
@@ -151,22 +151,22 @@ const activeMenu = computed(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 60px;
+  height: 52px;
   padding: 0 16px;
-  background-color: #263445;
-  border-bottom: 1px solid #1f2d3d;
+  background-color: #f7f8fa;
+  border-bottom: 1px solid #ebecf0;
   transition: all 0.3s ease;
 
   .logo-icon {
     font-size: 28px;
-    color: #409eff;
+    color: #1a1d21;
   }
 
   .logo-text {
     margin-left: 12px;
     font-size: 18px;
     font-weight: 600;
-    color: #fff;
+    color: #1a1d21;
     white-space: nowrap;
   }
 
@@ -196,35 +196,47 @@ const activeMenu = computed(() => {
 
 /* 覆盖 Element Plus 菜单样式 */
 :deep(.el-menu-item) {
+  height: 40px;
+  line-height: 40px;
+
   &:hover {
-    background-color: #263445 !important;
+    background-color: #f0f1f4 !important;
+    color: #1a1d21 !important;
   }
 
   &.is-active {
-    background-color: #409eff !important;
-    color: #fff !important;
+    background-color: #eceef5 !important;
+    color: #1a1d21 !important;
+    font-weight: 500;
 
     .el-icon {
-      color: #fff !important;
+      color: #1a1d21 !important;
     }
   }
 }
 
 :deep(.el-sub-menu__title) {
+  height: 40px;
+  line-height: 40px;
+
   &:hover {
-    background-color: #263445 !important;
+    background-color: #f0f1f4 !important;
+    color: #1a1d21 !important;
   }
 }
 
 :deep(.el-sub-menu .el-menu-item) {
-  background-color: #1f2d3d !important;
+  background-color: #f7f8fa !important;
 
   &:hover {
-    background-color: #001528 !important;
+    background-color: #f0f1f4 !important;
+    color: #1a1d21 !important;
   }
 
   &.is-active {
-    background-color: #409eff !important;
+    background-color: #eceef5 !important;
+    color: #1a1d21 !important;
+    font-weight: 500;
   }
 }
 
