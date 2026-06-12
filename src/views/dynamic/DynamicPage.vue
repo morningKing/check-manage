@@ -17,9 +17,10 @@
     <!-- 页面标题和操作栏 -->
     <div class="page-header">
       <div class="page-title">
-        <!-- 标题行：标题 + 分支标签 + 切换按钮 -->
+        <!-- 标题行：标题 + 副标题 + 分支标签 + 切换按钮 -->
         <div class="title-row">
           <h2>{{ pageConfig?.name || '数据页面' }}</h2>
+          <span v-if="pageConfig?.description" class="page-subtitle">{{ pageConfig.description }}</span>
           <!-- 分支标签（紧挨着标题后面） -->
           <el-tag
             :type="currentBranch?.branchId ? 'primary' : 'success'"
@@ -63,10 +64,6 @@
             </template>
           </el-dropdown>
         </div>
-        <!-- 页面描述（单独一行） -->
-        <span v-if="pageConfig?.description" class="page-description">
-          {{ pageConfig.description }}
-        </span>
       </div>
       <div class="page-actions">
         <ViewSelector
@@ -3124,9 +3121,10 @@ onActivated(async () => {
 
 .page-header {
   display: flex;
-  justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 16px;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
 
   .page-title {
     flex: 1;
@@ -3134,13 +3132,20 @@ onActivated(async () => {
     .title-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
+      min-height: 30px;
 
       h2 {
         margin: 0;
-        font-size: 20px;
-        font-weight: 600;
-        color: #303133;
+        font-size: 17px;
+        font-weight: 650;
+        color: var(--el-text-color-primary);
+        letter-spacing: -0.01em;
+      }
+
+      .page-subtitle {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
       }
 
       .el-tag {
@@ -3148,30 +3153,23 @@ onActivated(async () => {
       }
 
       .branch-switch-link {
-        color: #409eff;
-        font-size: 14px;
+        color: var(--el-color-primary);
+        font-size: 13px;
         cursor: pointer;
         display: inline-flex;
         align-items: center;
 
         &:hover {
-          color: #66b1ff;
+          color: var(--el-color-primary-light-3);
         }
       }
-    }
-
-    .page-description {
-      display: block;
-      margin-top: 4px;
-      font-size: 14px;
-      color: #909399;
     }
   }
 
   .page-actions {
     display: flex;
-    gap: 8px;
     align-items: center;
+    gap: 8px;
 
     .view-toggle {
       margin-right: 8px;
@@ -3218,8 +3216,8 @@ onActivated(async () => {
 .search-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 10px;
 
   .search-result-count {
     color: #909399;
@@ -3263,7 +3261,7 @@ onActivated(async () => {
 
   :deep(.el-card__body) {
     height: 100%;
-    padding: 16px;
+    padding: 0;
     overflow: hidden;
     box-sizing: border-box;
   }
