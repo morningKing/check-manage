@@ -109,6 +109,19 @@ class TestRunExportScript:
         assert filename == '测试页面.json'
         assert content_type == 'application/json'
 
+    def test_large_result_does_not_stall(self):
+        """回归：大结果（>OS 管道缓冲）不应触发 multiprocessing.Queue 的
+        join-before-drain 死锁。修复前 _process_exec 先 join 再 get，子进程
+        feeder 线程刷不动大结果 → 卡满 SCRIPT_TIMEOUT(60s)；修复后先 drain
+        再 join，应在秒级返回。"""
+        import time
+        script = "result = 'x' * (2 * 1024 * 1024)"   # 2MB，远超管道缓冲
+        t = time.perf_counter()
+        result_bytes, _, _ = run_export_script(script, [], [], '大结果', 'txt')
+        elapsed = time.perf_counter() - t
+        assert len(result_bytes) == 2 * 1024 * 1024
+        assert elapsed < 20, f"导出大结果耗时 {elapsed:.1f}s，疑似 Queue 死锁未修复"
+
     def test_custom_filename(self):
         script = 'result = "hello"\nfilename = "custom.txt"'
         result_bytes, filename, _ = run_export_script(

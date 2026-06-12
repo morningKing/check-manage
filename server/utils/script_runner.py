@@ -6,6 +6,7 @@ import io
 import json
 import math
 import multiprocessing
+import queue as _queue
 import re
 import threading
 import xml.etree.ElementTree as ET
@@ -202,17 +203,27 @@ def _process_exec(profile, script_code, script_locals, timeout_seconds, timeout_
             daemon=True,
         )
         proc.start()
-        proc.join(timeout_seconds)
 
-        if proc.is_alive():
+        # Drain the result queue BEFORE joining. A child that put a large item
+        # on a multiprocessing.Queue cannot terminate until its feeder thread
+        # has flushed that item to the underlying pipe; if we join before
+        # reading, the feeder blocks on a full pipe (results > the OS pipe
+        # buffer) and the child never exits — so proc.join() stalls for the
+        # entire timeout. (Python docs warn about exactly this ordering.)
+        # queue.get(timeout=) both drains the result and enforces the timeout:
+        # a runaway/hung script never puts a result, so get() raises Empty.
+        try:
+            payload = queue.get(timeout=timeout_seconds)
+        except _queue.Empty:
             proc.terminate()
             proc.join(timeout=1)
             raise TimeoutError(timeout_message)
 
-        if queue.empty():
-            raise RuntimeError('script process exited without result')
+        # Result drained → the child can now exit promptly.
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.terminate()
 
-        payload = queue.get()
         if not payload.get('ok'):
             raise RuntimeError(f"{payload.get('error_type', 'ScriptError')}: {payload.get('error_message', '')}")
         return payload
