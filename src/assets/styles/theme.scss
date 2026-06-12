@@ -133,3 +133,15 @@ html.dark {
     --el-table-border-color: #23262e;
   }
 }
+
+/* ==================== 紧凑模式：在基础态之上进一步收紧 ==================== */
+html.compact-mode {
+  --el-component-size: 28px;
+  --el-component-size-small: 24px;
+  --app-table-row-py: 5px;
+
+  .el-table th.el-table__cell { padding: 6px 0; }
+  .el-table td.el-table__cell { padding: 5px 0; }
+  .el-card .el-card__body { padding: 0; }
+  .page-header { margin-bottom: 8px; }
+}
