@@ -248,4 +248,19 @@ const activeMenu = computed(() => {
 :deep(.el-sub-menu .el-menu) {
   transition: all 0.1s ease !important;
 }
+
+:global(html.dark) {
+  .menu-logo {
+    background-color: #1a1d23;
+    border-bottom-color: #282c34;
+    .logo-icon, .logo-text { color: #e6e8eb; }
+  }
+  :deep(.el-menu) { background-color: #1a1d23 !important; }
+  :deep(.el-menu-item), :deep(.el-sub-menu__title) { color: #c2c6cd !important; }
+  :deep(.el-menu-item):hover, :deep(.el-sub-menu__title):hover {
+    background-color: #23262e !important; color: #fff !important;
+  }
+  :deep(.el-menu-item.is-active) { background-color: #2a2e36 !important; color: #fff !important; }
+  :deep(.el-sub-menu .el-menu-item) { background-color: #1a1d23 !important; }
+}
 </style>

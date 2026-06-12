@@ -100,3 +100,36 @@
 .app-pill--high { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
 .app-pill--mid  { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
 .app-pill--low  { background: var(--el-color-success-light-9); color: var(--el-color-success); }
+
+/* ==================== 暗色：中性灰阶变体（覆盖 EP dark/css-vars） ==================== */
+html.dark {
+  --el-color-primary: #e6e8eb;        /* 暗色下主色近白 */
+  --el-color-primary-light-3: #b9bcc1;
+  --el-color-primary-light-5: #8b8f96;
+  --el-color-primary-light-9: #2a2e35;
+  --el-color-primary-dark-2: #ffffff;
+
+  --el-text-color-primary: #e6e8eb;
+  --el-text-color-regular: #c2c6cd;
+  --el-text-color-secondary: #8b8f99;
+
+  --el-bg-color: #1c1f26;
+  --el-bg-color-page: #16181d;
+  --el-bg-color-overlay: #21242c;
+  --el-border-color: #2e323b;
+  --el-border-color-light: #282c34;
+  --el-border-color-lighter: #23262e;
+  --el-fill-color: #23262e;
+  --el-fill-color-light: #1f222a;
+  --el-fill-color-lighter: #1c1f26;
+
+  --app-shell-bg: #1a1d23;
+  --app-shell-border: #282c34;
+  --app-shell-active-bg: #2a2e36;
+
+  .el-table {
+    --el-table-header-bg-color: #1f222a;
+    --el-table-row-hover-bg-color: #21242c;
+    --el-table-border-color: #23262e;
+  }
+}

@@ -517,9 +517,8 @@ onUnmounted(() => {
 // ==================== Dark mode ====================
 
 :global(html.dark) {
-  .app-aside {
-    background-color: #1d1e1f;
-  }
+  .app-aside { background-color: #1a1d23; border-right-color: #282c34; }
+  .app-header { background-color: #1c1f26; }
 }
 
 // ==================== Compact mode ====================
