@@ -26,6 +26,7 @@ import router from './router'
 
 // 全局样式
 import './assets/styles/global.scss'
+import './assets/styles/theme.scss'   // 中性灰阶主题，覆盖 EP 变量（须在 EP css 之后）
 
 // 根组件
 import App from './App.vue'
