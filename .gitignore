@@ -50,3 +50,7 @@ npm-debug.log*
 /composer-card.png
 /composer-focus.png
 .worktrees
+
+# graphify code-graph output (generated, no API cost to rebuild via `graphify update <dir>`)
+graphify-out/
+**/graphify-out/
