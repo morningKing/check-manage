@@ -800,6 +800,16 @@ def restore_backup(zip_path, tables=None, mode='upsert'):
                         record.get('related_collection'), record.get('related_id'), record.get('branch_id'),
                     ))
 
+        # 还原 dynamic_data 后重播种序列计数器，避免后续创建与还原记录重号
+        _restored_dynamic = (tables is None) or any(
+            (t == 'dynamic_data' or t.startswith('dynamic_data:')) for t in tables
+        )
+        if _restored_dynamic:
+            from utils.sequences import reseed_sequences
+            # 若按 collection 过滤还原，仅重播种这些 collection；否则全量
+            _affected = list(collection_filters['dynamic_data']) if collection_filters.get('dynamic_data') else None
+            reseed_sequences(cur, collections=_affected)
+
         conn.commit()
         main_success = True  # 主操作成功
     except Exception:
