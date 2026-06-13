@@ -406,8 +406,8 @@ onUnmounted(() => {
 }
 
 .app-aside {
-  background-color: #f7f8fa;
-  border-right: 1px solid #ebecf0;
+  background-color: var(--app-shell-bg);
+  border-right: 1px solid var(--app-shell-border);
   transition: width 0.3s ease;
   overflow: hidden;
 }

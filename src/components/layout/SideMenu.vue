@@ -205,7 +205,7 @@ const activeMenu = computed(() => {
   }
 
   &.is-active {
-    background-color: #eceef5 !important;
+    background-color: var(--app-shell-active-bg) !important;
     color: #1a1d21 !important;
     font-weight: 500;
 
@@ -234,7 +234,7 @@ const activeMenu = computed(() => {
   }
 
   &.is-active {
-    background-color: #eceef5 !important;
+    background-color: var(--app-shell-active-bg) !important;
     color: #1a1d21 !important;
     font-weight: 500;
   }
