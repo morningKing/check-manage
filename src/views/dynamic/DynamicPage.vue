@@ -66,32 +66,90 @@
         </div>
       </div>
       <div class="page-actions">
-        <!-- 关键字搜索（简单模式时内联在功能行；高级模式下隐藏，输入下沉到展开行） -->
-        <el-input
-          v-if="viewMode !== 'excel' && !aiSearchMode && !queryMode"
-          v-model="searchKeyword"
-          placeholder="搜索..."
-          clearable
-          :prefix-icon="Search"
-          class="header-search"
-        />
-        <el-tooltip v-if="viewMode !== 'excel'" content="AI 智能查询">
-          <el-button
-            :type="aiSearchMode ? 'warning' : 'default'"
-            :icon="MagicStick"
-            circle
-            @click="toggleAiSearch"
+        <!-- 检索区：三合一统一检索 -->
+        <div v-if="viewMode !== 'excel'" class="search-zone">
+          <el-input
+            v-if="searchMode === 'keyword'"
+            v-model="searchKeyword"
+            placeholder="搜索..."
+            clearable
+            :prefix-icon="Search"
+            class="header-search"
           />
-        </el-tooltip>
-        <el-tooltip v-if="viewMode !== 'excel'" :content="queryMode ? '简单搜索' : '高级查询'">
-          <el-button
-            :type="queryMode ? 'primary' : 'default'"
-            :icon="queryMode ? Search : DCaret"
-            circle
-            @click="toggleQueryMode"
-          />
-        </el-tooltip>
-        <span v-if="viewMode !== 'excel'" class="actions-divider"></span>
+          <el-input
+            v-else-if="searchMode === 'ai'"
+            v-model="aiSearchText"
+            placeholder="用自然语言描述查询条件，回车执行"
+            clearable
+            class="header-search header-search--wide"
+            @keydown.enter="executeAiQuery"
+          >
+            <template #prefix><el-icon><MagicStick /></el-icon></template>
+          </el-input>
+          <el-input
+            v-else
+            v-model="mongoQueryText"
+            placeholder='{"field": {"$regex": "value"}}'
+            class="header-search header-search--wide header-search--mono"
+            @keydown.ctrl.enter="executeMongoQuery"
+          >
+            <template #prefix><el-icon><DCaret /></el-icon></template>
+            <template #suffix>
+              <el-popover placement="bottom-end" :width="420" trigger="click">
+                <template #reference>
+                  <el-icon class="query-help-icon"><QuestionFilled /></el-icon>
+                </template>
+                <div class="query-help">
+                  <p><b>MongoDB 查询语法</b>（支持中文字段名）</p>
+                  <table>
+                    <tr><td><code>{"用例ID": "IC-001"}</code></td><td>精确匹配</td></tr>
+                    <tr><td><code>{"名称": {"$regex": "test"}}</code></td><td>正则匹配（不区分大小写）</td></tr>
+                    <tr><td><code>{"名称": {"$like": "test"}}</code></td><td>模糊匹配（%test%）</td></tr>
+                    <tr><td><code>{"age": {"$gt": 18}}</code></td><td>大于（$gte, $lt, $lte 类似）</td></tr>
+                    <tr><td><code>{"状态": {"$in": ["a","b"]}}</code></td><td>在列表中</td></tr>
+                    <tr><td><code>{"状态": {"$nin": ["a"]}}</code></td><td>不在列表中</td></tr>
+                    <tr><td><code>{"field": {"$ne": "val"}}</code></td><td>不等于</td></tr>
+                    <tr><td><code>{"field": {"$exists": true}}</code></td><td>字段存在/不存在</td></tr>
+                    <tr><td><code>{"$or": [{...}, {...}]}</code></td><td>逻辑或</td></tr>
+                    <tr><td><code>{"$and": [{...}, {...}]}</code></td><td>逻辑与</td></tr>
+                  </table>
+                  <p style="margin-top:8px;color:#909399;font-size:12px">Ctrl+Enter 快捷执行 · 字段名可用中文标签或英文字段名</p>
+                </div>
+              </el-popover>
+            </template>
+          </el-input>
+
+          <!-- 模式选择器 -->
+          <el-select
+            :model-value="searchMode"
+            class="search-mode-select"
+            @update:model-value="setSearchMode"
+          >
+            <el-option label="关键字" value="keyword" />
+            <el-option label="AI 智能" value="ai" />
+            <el-option label="高级查询" value="mongo" />
+          </el-select>
+
+          <!-- 生效中的查询 chip -->
+          <el-tooltip v-if="aiGeneratedFilter" placement="bottom">
+            <template #content>
+              <pre style="margin:0;max-width:400px;white-space:pre-wrap">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
+            </template>
+            <el-tag type="warning" closable class="search-chip" @close="clearAiQuery">
+              <el-icon style="vertical-align: -2px"><MagicStick /></el-icon> AI 筛选
+            </el-tag>
+          </el-tooltip>
+          <el-tag
+            v-else-if="activeMongoQuery"
+            type="primary"
+            closable
+            class="search-chip"
+            @close="clearMongoQuery"
+          >
+            ⟨⟩ 高级
+          </el-tag>
+          <span class="actions-divider"></span>
+        </div>
         <ViewSelector
           @select="handleViewSelect"
           @manage="handleOpenManage"
@@ -141,16 +199,6 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <!-- AI 筛选条件激活指示（常态可见） -->
-        <el-tooltip v-if="aiGeneratedFilter" placement="bottom">
-          <template #content>
-            <pre style="margin:0;max-width:400px;white-space:pre-wrap">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
-          </template>
-          <el-tag type="warning" closable @close="clearAiQuery">
-            <el-icon style="vertical-align: -2px"><MagicStick /></el-icon>
-            AI 筛选
-          </el-tag>
-        </el-tooltip>
       </div>
     </div>
 
@@ -165,63 +213,6 @@
       <el-button type="info" link size="small" @click="dismissJumpBar">
         关闭
       </el-button>
-    </div>
-
-    <!-- 高级查询展开行（仅 AI / Mongo 模式时出现，不占常态空间） -->
-    <div class="advanced-search-bar" v-if="viewMode !== 'excel' && (aiSearchMode || queryMode)">
-      <template v-if="aiSearchMode">
-        <el-input
-          v-model="aiSearchText"
-          placeholder="用自然语言描述查询条件，如：找出所有待评审的用例"
-          clearable
-          style="flex: 1; max-width: 600px"
-          @keydown.enter="executeAiQuery"
-        />
-        <el-button type="primary" :loading="aiSearchLoading" @click="executeAiQuery">
-          <el-icon><MagicStick /></el-icon>
-          AI 查询
-        </el-button>
-        <el-button v-if="aiGeneratedFilter" @click="clearAiQuery">
-          清除
-        </el-button>
-      </template>
-      <template v-else>
-        <el-input
-          v-model="mongoQueryText"
-          type="textarea"
-          :autosize="{ minRows: 1, maxRows: 4 }"
-          placeholder='{"field": {"$regex": "value"}, "age": {"$gte": 18}}'
-          style="flex: 1; max-width: 600px; font-family: monospace"
-          @keydown.ctrl.enter="executeMongoQuery"
-        />
-        <el-button type="primary" :loading="tableLoading" @click="executeMongoQuery">
-          查询
-        </el-button>
-        <el-button v-if="activeMongoQuery" @click="clearMongoQuery">
-          清除
-        </el-button>
-        <el-popover placement="bottom-start" :width="420" trigger="click">
-          <template #reference>
-            <el-button text type="info">语法帮助</el-button>
-          </template>
-          <div class="query-help">
-            <p><b>MongoDB 查询语法</b>（支持中文字段名）</p>
-            <table>
-              <tr><td><code>{"用例ID": "IC-001"}</code></td><td>精确匹配</td></tr>
-              <tr><td><code>{"名称": {"$regex": "test"}}</code></td><td>正则匹配（不区分大小写）</td></tr>
-              <tr><td><code>{"名称": {"$like": "test"}}</code></td><td>模糊匹配（%test%）</td></tr>
-              <tr><td><code>{"age": {"$gt": 18}}</code></td><td>大于（$gte, $lt, $lte 类似）</td></tr>
-              <tr><td><code>{"状态": {"$in": ["a","b"]}}</code></td><td>在列表中</td></tr>
-              <tr><td><code>{"状态": {"$nin": ["a"]}}</code></td><td>不在列表中</td></tr>
-              <tr><td><code>{"field": {"$ne": "val"}}</code></td><td>不等于</td></tr>
-              <tr><td><code>{"field": {"$exists": true}}</code></td><td>字段存在/不存在</td></tr>
-              <tr><td><code>{"$or": [{...}, {...}]}</code></td><td>逻辑或</td></tr>
-              <tr><td><code>{"$and": [{...}, {...}]}</code></td><td>逻辑与</td></tr>
-            </table>
-            <p style="margin-top:8px;color:#909399;font-size:12px">Ctrl+Enter 快捷执行 · 字段名可用中文标签或英文字段名</p>
-          </div>
-        </el-popover>
-      </template>
     </div>
 
     <!-- 数据表格 -->
@@ -833,7 +824,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -847,6 +838,7 @@ import type { CurrentBranch } from '@/api/projectVersion'
 import type { ProjectVersion } from '@/types/version'
 import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
+import { searchModeTransition, type SearchMode } from './searchMode'
 
 // ==================== Props ====================
 
@@ -932,16 +924,20 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const columnFilters = ref<Record<string, { value: any; value2?: any; operator?: string }>>({})
 
 /**
+ * 统一检索模式（关键字 / AI / 高级）。
+ * 模板与逻辑统一以此为单一来源，不再保留 aiSearchMode/queryMode 两布尔。
+ */
+const searchMode = ref<SearchMode>('keyword')
+
+/**
  * 高级查询模式
  */
-const queryMode = ref(false)
 const mongoQueryText = ref('')
 const activeMongoQuery = ref<Record<string, any> | null>(null)
 
 /**
  * AI 搜索模式
  */
-const aiSearchMode = ref(false)
 const aiSearchText = ref('')
 const aiSearchLoading = ref(false)
 const aiGeneratedFilter = ref<Record<string, any> | null>(null)
@@ -1693,19 +1689,19 @@ async function loadExcelData(): Promise<void> {
 }
 
 /**
- * 切换查询模式
+ * 切换统一检索模式（关键字 / AI / 高级）。
+ * 互斥副作用复用纯函数 searchModeTransition。
  */
-function toggleQueryMode(): void {
-  queryMode.value = !queryMode.value
-  if (queryMode.value) {
-    aiSearchMode.value = false
-    if (aiGeneratedFilter.value) {
-      clearAiQuery()
-    }
-  }
-  if (!queryMode.value && activeMongoQuery.value && !aiGeneratedFilter.value) {
-    clearMongoQuery()
-  }
+function setSearchMode(mode: SearchMode): void {
+  const from = searchMode.value
+  if (from === mode) return
+  const { clearAi, clearMongo } = searchModeTransition(from, mode, {
+    hasAiFilter: !!aiGeneratedFilter.value,
+    hasMongoQuery: !!activeMongoQuery.value,
+  })
+  searchMode.value = mode
+  if (clearAi) clearAiQuery()
+  if (clearMongo) clearMongoQuery()
 }
 
 /**
@@ -1750,21 +1746,6 @@ async function clearMongoQuery(): Promise<void> {
   // 如果当前是 Excel 视图，同时刷新全量数据
   if (viewMode.value === 'excel') {
     await loadExcelData()
-  }
-}
-
-/**
- * 切换 AI 搜索模式（与简单搜索/高级查询互斥）
- */
-function toggleAiSearch(): void {
-  aiSearchMode.value = !aiSearchMode.value
-  if (aiSearchMode.value) {
-    queryMode.value = false
-    if (activeMongoQuery.value && !aiGeneratedFilter.value) {
-      clearMongoQuery()
-    }
-  } else if (aiGeneratedFilter.value) {
-    clearAiQuery()
   }
 }
 
@@ -2980,10 +2961,9 @@ watch(tableData, () => {
  */
 watch(pageId, (newPageId) => {
   columnFilters.value = {}
-  queryMode.value = false
+  searchMode.value = 'keyword'
   activeMongoQuery.value = null
   mongoQueryText.value = ''
-  aiSearchMode.value = false
   aiSearchText.value = ''
   aiSearchLoading.value = false
   aiGeneratedFilter.value = null
@@ -3170,8 +3150,39 @@ onActivated(async () => {
     flex-wrap: wrap;
     gap: 8px;
 
+    .search-zone {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .header-search {
       width: 200px;
+    }
+
+    .header-search--wide {
+      width: 320px;
+    }
+
+    .header-search--mono :deep(.el-input__inner) {
+      font-family: monospace;
+    }
+
+    .search-mode-select {
+      width: 104px;
+    }
+
+    .search-chip {
+      flex-shrink: 0;
+    }
+
+    .query-help-icon {
+      cursor: pointer;
+      color: var(--el-text-color-placeholder);
+
+      &:hover {
+        color: var(--el-color-primary);
+      }
     }
 
     .actions-divider {
@@ -3221,13 +3232,6 @@ onActivated(async () => {
   strong {
     color: var(--el-color-primary);
   }
-}
-
-.advanced-search-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
 }
 
 .query-help {

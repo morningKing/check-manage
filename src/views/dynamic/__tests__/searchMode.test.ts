@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { searchModeTransition, type SearchMode } from '../searchMode'
+import { searchModeTransition } from '../searchMode'
 
 describe('searchModeTransition', () => {
   const base = { hasAiFilter: false, hasMongoQuery: false }
