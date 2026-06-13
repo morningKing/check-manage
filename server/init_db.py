@@ -1341,6 +1341,29 @@ def init_db():
             conn.commit()
             print("Added AI 定时任务 menu.")
 
+        # === 设置中心：塌缩旧管理菜单树为单一"设置中心" ===
+        # 旧 menu-3(系统配置)/menu-3-b(数据工具) 及其全部后代 → 删除；插入单一 menu-settings。
+        # 这一步在所有 menu-3* 旧块之后运行，使用 init_db 自身的 cur（可见未提交的插入），
+        # 全新安装"先建后塌缩"，最终收敛为只剩 menu-settings。
+        cur.execute(
+            """
+            WITH RECURSIVE sub AS (
+                SELECT id FROM menus WHERE id IN ('menu-3', 'menu-3-b')
+                UNION ALL
+                SELECT m.id FROM menus m JOIN sub ON m.parent_id = sub.id
+            )
+            DELETE FROM menus WHERE id IN (SELECT id FROM sub)
+            """
+        )
+        cur.execute("DELETE FROM menus WHERE id = 'menu-settings'")
+        cur.execute(
+            'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+            "VALUES ('menu-settings', '设置中心', 'Setting', NULL, NULL, 4, '/admin', %s, %s)",
+            (psycopg2.extras.Json(['admin']), 'system'),
+        )
+        conn.commit()
+        print("Collapsed legacy admin menu tree into 设置中心 (menu-settings).")
+
         # Migration: create project_versions table
         cur.execute("""
             SELECT table_name FROM information_schema.tables

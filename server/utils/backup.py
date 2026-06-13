@@ -1005,11 +1005,8 @@ SYSTEM_DEFAULT_MENU_IDS = [
     'menu-1',
     # 仪表盘
     'menu-dashboard',
-    # 数据工具及其子项
-    'menu-3-b', 'menu-3-6', 'menu-3-8', 'menu-3-9', 'menu-3-10', 'menu-3-12',
-    # 系统配置及其子项
-    'menu-3', 'menu-3-a', 'menu-3-1', 'menu-3-2', 'menu-3-3', 'menu-3-7', 'menu-3-11',
-    'menu-3-c', 'menu-3-4', 'menu-3-5',
+    # 设置中心（塌缩后的统一管理菜单，取代旧 menu-3* 管理菜单树）
+    'menu-settings',
 ]
 
 # 系统默认页面配置ID - 空列表

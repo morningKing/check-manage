@@ -17,7 +17,7 @@ OLD_ROOT_IDS = ["menu-3", "menu-3-b"]
 SETTINGS_MENU = {
     "id": "menu-settings", "name": "设置中心", "icon": "Setting",
     "page_id": None, "parent_id": None, "order": 4,
-    "path": "/admin", "roles": ["admin"],
+    "path": "/admin", "roles": ["admin"], "menu_type": "system",
 }
 
 
@@ -42,11 +42,12 @@ def run():
         # upsert 设置中心：先删后插，保证可重复执行
         cur.execute("DELETE FROM menus WHERE id = %s", (SETTINGS_MENU["id"],))
         cur.execute(
-            'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) '
-            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
+            'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, menu_type) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
             (SETTINGS_MENU["id"], SETTINGS_MENU["name"], SETTINGS_MENU["icon"],
              SETTINGS_MENU["page_id"], SETTINGS_MENU["parent_id"], SETTINGS_MENU["order"],
-             SETTINGS_MENU["path"], psycopg2.extras.Json(SETTINGS_MENU["roles"])),
+             SETTINGS_MENU["path"], psycopg2.extras.Json(SETTINGS_MENU["roles"]),
+             SETTINGS_MENU["menu_type"]),
         )
         conn.commit()
     return {"deleted": ids, "inserted": SETTINGS_MENU["id"]}
