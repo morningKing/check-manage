@@ -114,6 +114,47 @@ describe('DataTable — 查看功能', () => {
     expect(menu.text()).toContain('删除')
   })
 
+  it('canUpdate=false 时主操作降级为查看（编辑不外露）', () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        data: [{ id: '1', name: '测试' }],
+        fields: [makeField()],
+        showActions: true,
+        canUpdate: false
+      },
+      global: { stubs }
+    })
+
+    const buttons = wrapper.findAll('button')
+    // 主操作降级为查看，编辑不作为外露主按钮
+    expect(buttons.some(b => b.text().trim() === '查看')).toBe(true)
+    expect(buttons.some(b => b.text().trim() === '编辑')).toBe(false)
+  })
+
+  it('extra-actions 插槽内容渲染在溢出菜单内（查看→插槽→删除 顺序）', () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        data: [{ id: '1', name: '测试' }],
+        fields: [makeField()],
+        showActions: true
+      },
+      global: { stubs },
+      slots: {
+        'extra-actions': '<div class="el-dropdown-item slot-item">复制</div>'
+      }
+    })
+
+    const menu = wrapper.find('.el-dropdown-menu')
+    expect(menu.exists()).toBe(true)
+    const menuText = menu.text()
+    expect(menuText).toContain('查看')
+    expect(menuText).toContain('复制')
+    expect(menuText).toContain('删除')
+    // 顺序：查看 在 复制 之前，复制 在 删除 之前
+    expect(menuText.indexOf('查看')).toBeLessThan(menuText.indexOf('复制'))
+    expect(menuText.indexOf('复制')).toBeLessThan(menuText.indexOf('删除'))
+  })
+
   it('点击查看按钮触发 view 事件', async () => {
     const wrapper = mount(DataTable, {
       props: {

@@ -114,7 +114,7 @@
             <el-button v-else type="primary" link @click="handleView(row)">
               查看
             </el-button>
-            <el-dropdown trigger="click" class="row-actions-more">
+            <el-dropdown v-if="canUpdate || canDelete || $slots['extra-actions']" trigger="click" class="row-actions-more">
               <el-button link class="row-actions-trigger">
                 <el-icon><MoreFilled /></el-icon>
               </el-button>
@@ -269,6 +269,7 @@
  * - fields: 字段配置列表
  * - loading: 加载状态
  * - showActions: 是否显示操作列
+ * - extra-actions 插槽: 渲染在行操作「⋯」溢出菜单内，调用方必须提供 <el-dropdown-item> 元素（而非普通按钮），slot prop 为 { row }
  * - showPagination: 是否显示分页
  * - total: 总记录数
  *
