@@ -102,23 +102,39 @@
       <!-- 操作列 -->
       <el-table-column
         label="操作"
-        :width="showActions ? 250 : 80"
+        :width="showActions ? 120 : 80"
         align="center"
         fixed="right"
       >
         <template #default="{ row }">
-          <el-button type="primary" link @click="handleView(row)">
-            查看
-          </el-button>
           <template v-if="showActions">
-            <slot name="extra-actions" :row="row" />
             <el-button v-if="canUpdate" type="primary" link @click="handleEdit(row)">
               编辑
             </el-button>
-            <el-button v-if="canDelete" type="danger" link @click="handleDelete(row)">
-              删除
+            <el-button v-else type="primary" link @click="handleView(row)">
+              查看
             </el-button>
+            <el-dropdown trigger="click" class="row-actions-more">
+              <el-button link class="row-actions-trigger">
+                <el-icon><MoreFilled /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item v-if="canUpdate" @click="handleView(row)">查看</el-dropdown-item>
+                  <slot name="extra-actions" :row="row" />
+                  <el-dropdown-item
+                    v-if="canDelete"
+                    divided
+                    class="row-actions-danger"
+                    @click="handleDelete(row)"
+                  >删除</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
+          <el-button v-else type="primary" link @click="handleView(row)">
+            查看
+          </el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -263,7 +279,7 @@
  * - page-change: 分页变化
  */
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { Search, MoreFilled } from '@element-plus/icons-vue'
 import type { FieldConfig, DynamicRecord } from '@/types'
 
 interface ColumnFilter {
@@ -700,4 +716,9 @@ defineExpose({ tableRef, clearSelection, clearAllFilters, clearCellValueCache })
   justify-content: flex-end;
   padding: 16px 0;
 }
+
+.row-actions-more { margin-left: 4px; vertical-align: middle; }
+.row-actions-trigger { color: var(--el-text-color-secondary); }
+.row-actions-trigger:hover { color: var(--el-text-color-primary); }
+:deep(.row-actions-danger) { color: var(--el-color-danger); }
 </style>

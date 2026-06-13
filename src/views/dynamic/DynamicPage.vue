@@ -267,45 +267,15 @@
         @filter-change="handleFilterChange"
       >
         <template #extra-actions="{ row }">
-          <el-button
-            v-if="!isGuest && canCreate"
-            type="success"
-            link
-            @click="handleCopy(row)"
+          <el-dropdown-item v-if="!isGuest && canCreate" @click="handleCopy(row)">复制</el-dropdown-item>
+          <el-dropdown-item @click="handleShowRelationGraph(row)">关系图谱</el-dropdown-item>
+          <el-dropdown-item
+            v-for="s in boundRowExportScripts"
+            :key="s.id"
+            @click="handleRowExport(s.id, row)"
           >
-            复制
-          </el-button>
-          <el-button type="info" link @click="handleShowRelationGraph(row)">
-            图谱
-          </el-button>
-          <el-dropdown
-            v-if="boundRowExportScripts.length > 1"
-            @command="(cmd: string) => handleRowExport(cmd, row)"
-            trigger="click"
-          >
-            <el-button type="warning" link>
-              导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item
-                  v-for="s in boundRowExportScripts"
-                  :key="s.id"
-                  :command="s.id"
-                >
-                  {{ s.name }}
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-button
-            v-else-if="boundRowExportScripts.length === 1"
-            type="warning"
-            link
-            @click="handleRowExport(boundRowExportScripts[0].id, row)"
-          >
-            导出
-          </el-button>
+            导出：{{ s.name }}
+          </el-dropdown-item>
         </template>
       </DataTable>
     </el-card>
