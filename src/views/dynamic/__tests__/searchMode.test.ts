@@ -14,6 +14,11 @@ describe('searchModeTransition', () => {
       .toStrictEqual({ clearAi: false, clearMongo: true })
   })
 
+  it('keyword <- mongo: 无生效查询时无副作用', () => {
+    expect(searchModeTransition('mongo', 'keyword', base))
+      .toStrictEqual({ clearAi: false, clearMongo: false })
+  })
+
   it('-> ai: 有游离 Mongo 查询且无 AI 筛选时清 Mongo', () => {
     expect(searchModeTransition('keyword', 'ai', { ...base, hasMongoQuery: true }))
       .toStrictEqual({ clearAi: false, clearMongo: true })
@@ -29,13 +34,15 @@ describe('searchModeTransition', () => {
       .toStrictEqual({ clearAi: true, clearMongo: false })
   })
 
+  it('-> ai: 从 mongo 直接切换，清掉游离 Mongo 查询', () => {
+    expect(searchModeTransition('mongo', 'ai', { ...base, hasMongoQuery: true }))
+      .toStrictEqual({ clearAi: false, clearMongo: true })
+  })
+
   it('同模式切换：无副作用', () => {
     expect(searchModeTransition('keyword', 'keyword', base))
       .toStrictEqual({ clearAi: false, clearMongo: false })
   })
 
-  it('类型导出可用', () => {
-    const m: SearchMode = 'ai'
-    expect(['keyword', 'ai', 'mongo']).toContain(m)
-  })
+
 })
