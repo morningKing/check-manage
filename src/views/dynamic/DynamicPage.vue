@@ -168,15 +168,15 @@
           <el-icon><Plus /></el-icon>
           新增
         </el-button>
-        <el-tooltip content="刷新">
-          <el-button :icon="Refresh" @click="handleRefresh" />
-        </el-tooltip>
         <el-dropdown @command="handleMoreCommand" trigger="click">
           <el-button>
-            更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            操作<el-icon class="el-icon--right"><ArrowDown /></el-icon>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="refresh" :icon="Refresh">刷新</el-dropdown-item>
+
+              <el-dropdown-item divided disabled class="dropdown-group-label">导入 / 导出</el-dropdown-item>
               <el-dropdown-item command="export" :icon="Download">导出 Excel</el-dropdown-item>
               <el-dropdown-item
                 v-for="s in boundExportScripts"
@@ -186,19 +186,20 @@
               >
                 {{ s.name }} ({{ s.outputFormat }})
               </el-dropdown-item>
-              <el-dropdown-item v-if="!isGuest" divided command="import" :icon="Upload">导入数据</el-dropdown-item>
+              <el-dropdown-item v-if="!isGuest" command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
-              <el-dropdown-item v-if="!isGuest && hasReferenceFields" command="reResolveRefs" :icon="RefreshRight">重新解析引用</el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" divided command="version" :icon="Tickets">版本管理</el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" command="dependency" :icon="Operation">依赖管理</el-dropdown-item>
-              <el-dropdown-item v-if="isAdmin" command="copyCollection" :icon="CopyDocument">复制 collection 名</el-dropdown-item>
-              <el-dropdown-item
-                v-if="isAdmin"
-                command="batchDelete"
-                :icon="Delete"
-              >
-                批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
-              </el-dropdown-item>
+
+              <template v-if="!isGuest && hasReferenceFields">
+                <el-dropdown-item divided disabled class="dropdown-group-label">引用 / 关系</el-dropdown-item>
+                <el-dropdown-item command="reResolveRefs" :icon="RefreshRight">重新解析引用</el-dropdown-item>
+              </template>
+
+              <template v-if="isAdmin">
+                <el-dropdown-item divided disabled class="dropdown-group-label">数据治理</el-dropdown-item>
+                <el-dropdown-item command="version" :icon="Tickets">版本管理</el-dropdown-item>
+                <el-dropdown-item command="dependency" :icon="Operation">依赖管理</el-dropdown-item>
+                <el-dropdown-item command="copyCollection" :icon="CopyDocument">复制 collection 名</el-dropdown-item>
+              </template>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -827,7 +828,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, Delete, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -2455,6 +2456,10 @@ function handleImportCommand(command: string): void {
  * 处理「更多」下拉菜单命令
  */
 function handleMoreCommand(command: string): void {
+  if (command === 'refresh') {
+    handleRefresh()
+    return
+  }
   if (command === 'export') {
     handleExport()
   } else if (command.startsWith('script:')) {
@@ -3199,6 +3204,16 @@ onActivated(async () => {
       margin: 0 2px;
     }
   }
+}
+
+:deep(.dropdown-group-label.is-disabled) {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  cursor: default;
+  opacity: 1;
+  padding-top: 4px;
+  padding-bottom: 2px;
+  font-weight: 600;
 }
 
 .import-progress {
