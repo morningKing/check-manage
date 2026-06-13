@@ -114,6 +114,10 @@ def _execute_action(cur, action_type, action_config, target_collection, source_d
             'INSERT INTO dynamic_data (id, collection, data) VALUES (%s, %s, %s)',
             (new_id, target_collection, psycopg2.extras.Json(new_data))
         )
+        # 闭合 autoSequence 计数器不变式：触发器创建的记录可能携带 autoSequence 编号，
+        # 重播种 main（INSERT 未指定 branch_id → 默认 'main'），避免后续 create_item 重号。
+        from utils.sequences import reseed_sequences
+        reseed_sequences(cur, collections=[target_collection], branch_id='main')
 
     elif action_type == 'update':
         match_field = config.get('matchField')

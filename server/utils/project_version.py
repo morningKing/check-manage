@@ -1762,6 +1762,12 @@ def restore_from_project_version(version_id, restored_by, user_id, project_menu_
                 )
                 total_relations += 1
 
+        # 闭合 autoSequence 计数器不变式：快照记录可能携带超过当前分支计数器的编号，
+        # 重播种当前分支，避免还原后下一次 create_item 重号。
+        from utils.sequences import reseed_sequences
+        restored_collections = [c['collection'] for c in collections]
+        reseed_sequences(cur, collections=restored_collections, branch_id=current_branch)
+
     return {
         'success': True,
         'recordsCount': total_records,
@@ -2075,9 +2081,11 @@ def _rollback_merge(merge_id: str) -> bool:
             backups = cur.fetchall()
 
             # 按类型回滚
+            affected_collections = set()
             for backup in backups:
                 backup_id, collection, backup_type, record_id, old_data, new_data, \
                     old_relations, new_relations = backup
+                affected_collections.add(collection)
 
                 if backup_type == 'created':
                     # 回滚创建：删除新记录
@@ -2133,6 +2141,13 @@ def _rollback_merge(merge_id: str) -> bool:
                                 (collection, record_id, rel.get('field'), rel.get('relatedColl'),
                                  rel.get('relatedId'), target_branch_id)
                             )
+
+            # 闭合 autoSequence 计数器不变式：回滚恢复（deleted/updated）的记录可能携带
+            # 超过目标分支计数器的编号，重播种目标分支，避免回滚后 create_item 重号。
+            if affected_collections:
+                from utils.sequences import reseed_sequences
+                reseed_sequences(cur, collections=list(affected_collections),
+                                 branch_id=target_branch_id)
 
             # 删除合并记录
             cur.execute('DELETE FROM merge_records WHERE id = %s', (merge_id,))

@@ -212,9 +212,9 @@ class TestSaveToCollection:
         config = {'collection': 'test', 'mode': 'insert'}
         _step_save_to_collection(config, ctx, mock_conn, dry_run=False)
         assert ctx['success'] == 1
-        assert mock_cur.execute.call_count == 1
-        sql = mock_cur.execute.call_args[0][0]
-        assert 'INSERT INTO dynamic_data' in sql
+        # 一次 INSERT；写入后还会重播种 autoSequence 计数器（额外查询 page_configs）。
+        calls = mock_cur.execute.call_args_list
+        assert any('INSERT INTO dynamic_data' in str(c) for c in calls)
 
     def test_upsert_existing(self):
         mock_cur = MagicMock()

@@ -346,6 +346,13 @@ def _step_save_to_collection(config, context, conn, dry_run):
             errors += 1
             context['errors'].append(f'写入记录失败: {str(e)}')
 
+    # 闭合 autoSequence 计数器不变式：ETL 导入的记录可能携带超过 main 分支计数器的
+    # 编号，导入后重播种 main，避免后续 create_item 重号。INSERT 均未指定 branch_id
+    # → 默认 'main'。仅在实际写入（非 dry_run）且有成功写入时执行。
+    if not dry_run and success > 0:
+        from utils.sequences import reseed_sequences
+        reseed_sequences(cur, collections=[collection], branch_id='main')
+
     context['total'] = len(records)
     context['success'] = success
     context['error'] = errors
