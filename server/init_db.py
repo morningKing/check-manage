@@ -400,6 +400,15 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
     ON ai_chat_messages(session_id, created_at);
+
+-- ==================== autoSequence 原子计数器表 ====================
+CREATE TABLE IF NOT EXISTS dynamic_sequences (
+    collection    VARCHAR(200) NOT NULL,
+    branch_id     VARCHAR(100) NOT NULL DEFAULT 'main',
+    field_name    VARCHAR(200) NOT NULL,
+    current_value BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (collection, branch_id, field_name)
+);
 """
 
 DATA_FILES_DDL = """
