@@ -71,112 +71,38 @@ const staticRoutes: RouteRecordRaw[] = [
           title: '数据页面',
         },
       },
-      // 系统配置路由
+      // 设置中心（管理控制台）：左栏分类 + 右侧 tab 容器
       {
-        path: 'admin/menu',
-        name: 'MenuManager',
-        component: () => import('@/views/admin/MenuManager.vue'),
-        meta: {
-          title: '菜单管理',
-          icon: 'Menu',
-        },
+        path: 'admin',
+        component: () => import('@/views/admin/hub/SettingsHub.vue'),
+        redirect: '/admin/access',
+        children: [
+          { path: 'access', name: 'SettingsAccess', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '访问控制', categoryId: 'access' } },
+          { path: 'structure', name: 'SettingsStructure', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '结构配置', categoryId: 'structure' } },
+          { path: 'integration', name: 'SettingsIntegration', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '集成对接', categoryId: 'integration' } },
+          { path: 'ai', name: 'SettingsAi', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: 'AI 能力', categoryId: 'ai' } },
+          { path: 'data-ops', name: 'SettingsDataOps', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '数据运维', categoryId: 'data-ops' } },
+          { path: 'sys-ops', name: 'SettingsSysOps', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '系统运维', categoryId: 'sys-ops' } },
+          { path: 'general', name: 'SettingsGeneral', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '通用设置', categoryId: 'general' } },
+        ],
       },
-      {
-        path: 'admin/page-config',
-        name: 'PageConfigManager',
-        component: () => import('@/views/admin/PageConfigManager.vue'),
-        meta: {
-          title: '页面配置',
-          icon: 'Files',
-        },
-      },
-      {
-        path: 'admin/users',
-        name: 'UserManager',
-        component: () => import('@/views/admin/UserManager.vue'),
-        meta: {
-          title: '用户管理',
-          icon: 'User',
-        },
-      },
-      {
-        path: 'admin/roles',
-        name: 'RoleManager',
-        component: () => import('@/views/admin/RoleManager.vue'),
-        meta: {
-          title: '角色权限',
-          icon: 'Lock',
-        },
-      },
-      {
-        path: 'admin/ai-scan-tasks',
-        name: 'AiScanTaskManager',
-        component: () => import('@/views/admin/AiScanTaskManager.vue'),
-        meta: { title: 'AI 定时任务', icon: 'AlarmClock' },
-      },
-      {
-        path: 'admin/operation-log',
-        name: 'OperationLog',
-        component: () => import('@/views/admin/OperationLog.vue'),
-        meta: {
-          title: '操作日志',
-          icon: 'Tickets',
-        },
-      },
-      {
-        path: 'admin/backup',
-        name: 'BackupManager',
-        component: () => import('@/views/admin/BackupManager.vue'),
-        meta: {
-          title: '系统备份',
-          icon: 'FolderOpened',
-        },
-      },
-      {
-        path: 'admin/export-scripts',
-        name: 'ExportScriptManager',
-        component: () => import('@/views/admin/ExportScriptManager.vue'),
-        meta: {
-          title: '导出脚本',
-          icon: 'Promotion',
-        },
-      },
-      {
-        path: 'admin/api-keys',
-        name: 'ApiKeyManager',
-        component: () => import('@/views/admin/ApiKeyManager.vue'),
-        meta: {
-          title: 'Open API',
-          icon: 'Key',
-        },
-      },
-      {
-        path: 'admin/validation-scripts',
-        name: 'ValidationScriptManager',
-        component: () => import('@/views/admin/ValidationScriptManager.vue'),
-        meta: {
-          title: '校验脚本',
-          icon: 'CircleCheck',
-        },
-      },
-      {
-        path: 'admin/etl-tasks',
-        name: 'EtlTaskManager',
-        component: () => import('@/views/admin/EtlTaskManager.vue'),
-        meta: {
-          title: 'ETL 管理',
-          icon: 'Connection',
-        },
-      },
-      {
-        path: 'admin/query',
-        name: 'QueryConsole',
-        component: () => import('@/views/admin/QueryConsole.vue'),
-        meta: {
-          title: '数据查询',
-          icon: 'Search',
-        },
-      },
+      // 旧管理路径 → 设置中心（保深链/书签）
+      { path: 'admin/users', redirect: '/admin/access?tab=users' },
+      { path: 'admin/roles', redirect: '/admin/access?tab=roles' },
+      { path: 'admin/menu', redirect: '/admin/structure?tab=menu' },
+      { path: 'admin/page-config', redirect: '/admin/structure?tab=page-config' },
+      { path: 'admin/api-keys', redirect: '/admin/integration?tab=api-keys' },
+      { path: 'admin/webhook-settings', redirect: '/admin/integration?tab=webhook' },
+      { path: 'admin/ai-settings', redirect: '/admin/ai?tab=ai-settings' },
+      { path: 'admin/ai-scan-tasks', redirect: '/admin/ai?tab=ai-scan' },
+      { path: 'admin/query', redirect: '/admin/data-ops?tab=query' },
+      { path: 'admin/menu-export', redirect: '/admin/data-ops?tab=data-export' },
+      { path: 'admin/etl-tasks', redirect: '/admin/data-ops?tab=etl' },
+      { path: 'admin/export-scripts', redirect: '/admin/data-ops?tab=export-scripts' },
+      { path: 'admin/validation-scripts', redirect: '/admin/data-ops?tab=validation-scripts' },
+      { path: 'admin/operation-log', redirect: '/admin/sys-ops?tab=operation-log' },
+      { path: 'admin/backup', redirect: '/admin/sys-ops?tab=backup' },
+      { path: 'admin/system-settings', redirect: '/admin/general' },
       {
         path: 'admin/trigger-rules',
         name: 'TriggerRuleManager',
@@ -187,48 +113,12 @@ const staticRoutes: RouteRecordRaw[] = [
         },
       },
       {
-        path: 'admin/ai-settings',
-        name: 'AiSettings',
-        component: () => import('@/views/admin/AiSettings.vue'),
-        meta: {
-          title: 'AI 配置',
-          icon: 'MagicStick',
-        },
-      },
-      {
-        path: 'admin/webhook-settings',
-        name: 'WebhookSettings',
-        component: () => import('@/views/admin/WebhookSettings.vue'),
-        meta: {
-          title: 'Webhook',
-          icon: 'Link',
-        },
-      },
-      {
         path: 'admin/dependency-manager',
         name: 'DependencyManager',
         component: () => import('@/views/admin/DependencyManager.vue'),
         meta: {
           title: '依赖管理',
           icon: 'Share',
-        },
-      },
-      {
-        path: 'admin/menu-export',
-        name: 'MenuExport',
-        component: () => import('@/views/admin/DataMigrationPage.vue'),
-        meta: {
-          title: '数据迁移',
-          icon: 'Download',
-        },
-      },
-      {
-        path: 'admin/system-settings',
-        name: 'SystemSettings',
-        component: () => import('@/views/admin/SystemSettings.vue'),
-        meta: {
-          title: '系统设置',
-          icon: 'Setting',
         },
       },
       // 隐藏页面：恢复出厂设置（不添加菜单项）

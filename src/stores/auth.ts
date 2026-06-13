@@ -8,6 +8,7 @@ import { ref, computed } from 'vue'
 import { getStorage, setStorage, removeStorage, STORAGE_KEYS } from '@/utils/storage'
 import { login as loginApi, getCurrentUser as getMeApi } from '@/api/auth'
 import { useMenuStore } from '@/stores/menu'
+import { filterCatalog, categoryPerms } from '@/views/admin/hub/settingsCatalog'
 import type { UserInfo, UserRole, LoginParams } from '@/types'
 import type { CurrentBranch } from '@/api/projectVersion'
 
@@ -143,6 +144,15 @@ export const useAuthStore = defineStore('auth', () => {
 
     // 首页和根路径始终允许
     if (path === '/home' || path === '/') return true
+
+    // 设置中心：父路由按"是否有任一可见分类"放行；分类路由按该类是否有可见 tab
+    if (path === '/admin') return filterCatalog(can).length > 0
+    if (path.startsWith('/admin/')) {
+      const seg = path.split('/')[2]
+      const perms = categoryPerms(seg)
+      if (perms.length) return perms.some(k => can(k))
+      // seg 非分类 id（旧段 users/menu… 或 factory-reset/trigger-rules）→ 落到下方 ADMIN_PATH_PERMISSION
+    }
 
     // 管理页：按所需能力 key 判定
     const required = ADMIN_PATH_PERMISSION[path]
