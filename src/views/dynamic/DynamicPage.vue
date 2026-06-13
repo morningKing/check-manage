@@ -837,6 +837,7 @@ import type { ProjectVersion } from '@/types/version'
 import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 import { searchModeTransition, type SearchMode } from './searchMode'
+import { isVersionConflict, conflictMessage } from './conflict'
 
 // ==================== Props ====================
 
@@ -2326,12 +2327,14 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
       await loadPageData()
     }
   } catch (error: any) {
-    const resp = error.response?.data
-    if (resp?.code === 'VERSION_CONFLICT') {
-      ElMessage.error('数据已被其他用户修改，请刷新后重试')
+    if (isVersionConflict(error)) {
+      ElMessage.warning(conflictMessage())
       dialogVisible.value = false
-      await loadPageData()
-    } else if (resp?.validationErrors?.length) {
+      await handleRefresh()
+      return
+    }
+    const resp = error.response?.data
+    if (resp?.validationErrors?.length) {
       ElMessage.error(resp.validationErrors.join('；'))
       if (resp.validationWarnings?.length) {
         ElMessage.warning(resp.validationWarnings.join('；'))
