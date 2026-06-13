@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 
-const routeMock = { meta: { categoryId: 'access' }, path: '/admin/access' }
+const routeMock = reactive({ meta: { categoryId: 'access' }, path: '/admin/access' })
 vi.mock('vue-router', () => ({
   useRoute: () => routeMock,
   RouterLink: { template: '<a><slot /></a>' },

@@ -9,6 +9,7 @@
           :to="`/admin/${c.id}`"
           class="hub-rail__item"
           :class="{ active: activeCategory === c.id }"
+          :aria-current="activeCategory === c.id ? 'page' : undefined"
         >
           <el-icon><component :is="iconOf(c.icon)" /></el-icon>
           <span>{{ c.label }}</span>
@@ -31,14 +32,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import * as ElIcons from '@element-plus/icons-vue'
-import { ArrowRight } from '@element-plus/icons-vue'
+import { Lock, Files, Link, MagicStick, DataLine, Monitor, Setting, ArrowRight } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
 import { useAuthStore } from '@/stores'
 import { filterCatalog } from './settingsCatalog'
 
 const route = useRoute()
 const auth = useAuthStore()
 
+// auth.can 同步读取 isSuperuser/permissions 计算属性 → 被 computed 追踪，权限变更时自动重算
 const categories = computed(() => filterCatalog(auth.can))
 
 const activeCategory = computed(
@@ -48,8 +50,9 @@ const currentLabel = computed(
   () => categories.value.find(c => c.id === activeCategory.value)?.label || ''
 )
 
-function iconOf(name: string) {
-  return (ElIcons as Record<string, any>)[name] || ElIcons.Setting
+const ICON_MAP: Record<string, Component> = { Lock, Files, Link, MagicStick, DataLine, Monitor, Setting }
+function iconOf(name: string): Component {
+  return ICON_MAP[name] ?? Setting
 }
 </script>
 
@@ -91,5 +94,4 @@ function iconOf(name: string) {
 .hub-crumb--current { color: var(--el-text-color-primary); font-weight: 500; }
 .hub-main__body { flex: 1; min-height: 0; overflow: auto; padding: 16px; }
 
-:global(html.dark) .hub-rail { background: var(--app-shell-bg); }
 </style>
