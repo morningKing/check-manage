@@ -10,9 +10,9 @@
  * /login               - 登录页（公开）
  * /                    - 主布局（需认证）
  * ├── /home           - 首页
- * ├── /admin/menu     - 菜单管理（仅管理员）
- * ├── /admin/page-config - 页面配置管理（仅管理员）
- * ├── /admin/users    - 用户管理（仅管理员）
+ * ├── /admin          - 设置中心（管理控制台，左栏 7 分类 + 右侧 tab，仅管理员）
+ * │   └── /admin/{access|structure|integration|ai|data-ops|sys-ops|general}
+ * ├── /admin/<旧路径>  - 兼容重定向到设置中心对应分类?tab=
  * └── /...            - 动态数据页面（根据菜单配置自动注册）
  */
 
