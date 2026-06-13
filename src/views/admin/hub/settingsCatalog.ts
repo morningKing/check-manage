@@ -77,3 +77,14 @@ export function resolveActiveTab(
   if (queryTab && tabs.some(t => t.id === queryTab)) return queryTab
   return tabs[0].id
 }
+
+/**
+ * 用户可访问的首个分类路由路径；无任何可访问分类时回退 /home。
+ * 供 /admin 父路由的动态 redirect 使用。
+ */
+export function firstAccessibleCategoryPath(
+  can: (key: string) => boolean
+): string {
+  const cats = filterCatalog(can)
+  return cats.length ? `/admin/${cats[0].id}` : '/home'
+}

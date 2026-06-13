@@ -19,6 +19,8 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { generateRoutesFromMenus, addDynamicRoutes } from './dynamicRoutes'
+import { useAuthStore } from '@/stores/auth'
+import { firstAccessibleCategoryPath } from '@/views/admin/hub/settingsCatalog'
 
 /**
  * 静态路由配置
@@ -75,7 +77,10 @@ const staticRoutes: RouteRecordRaw[] = [
       {
         path: 'admin',
         component: () => import('@/views/admin/hub/SettingsHub.vue'),
-        redirect: '/admin/access',
+        redirect: () => {
+          const auth = useAuthStore()
+          return firstAccessibleCategoryPath(auth.can)
+        },
         children: [
           { path: 'access', name: 'SettingsAccess', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '访问控制', categoryId: 'access' } },
           { path: 'structure', name: 'SettingsStructure', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '结构配置', categoryId: 'structure' } },

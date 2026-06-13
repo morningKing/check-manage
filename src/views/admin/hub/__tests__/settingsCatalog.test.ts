@@ -4,6 +4,7 @@ import {
   filterCatalog,
   categoryPerms,
   resolveActiveTab,
+  firstAccessibleCategoryPath,
 } from '../settingsCatalog'
 
 describe('settingsCatalog', () => {
@@ -53,5 +54,16 @@ describe('settingsCatalog', () => {
     expect(resolveActiveTab(tabs, 'x')).toBe('a')
     expect(resolveActiveTab(tabs, undefined)).toBe('a')
     expect(resolveActiveTab([], 'a')).toBe('')
+  })
+
+  it('firstAccessibleCategoryPath：超管 → 首个分类 access', () => {
+    expect(firstAccessibleCategoryPath(() => true)).toBe('/admin/access')
+  })
+  it('firstAccessibleCategoryPath：仅 data-ops 权限 → /admin/data-ops', () => {
+    const can = (k: string) => k === 'admin.query'
+    expect(firstAccessibleCategoryPath(can)).toBe('/admin/data-ops')
+  })
+  it('firstAccessibleCategoryPath：无权限 → /home', () => {
+    expect(firstAccessibleCategoryPath(() => false)).toBe('/home')
   })
 })
