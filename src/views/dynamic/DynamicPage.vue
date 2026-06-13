@@ -220,7 +220,12 @@
     </div>
 
     <!-- 批量操作浮现条（仅表格视图、有选中时） -->
-    <div v-if="viewMode === 'table' && selectedRows.length > 0" class="batch-action-bar">
+    <div
+      v-if="viewMode === 'table' && selectedRows.length > 0"
+      class="batch-action-bar"
+      role="toolbar"
+      aria-label="批量操作"
+    >
       <span class="batch-count">
         <el-icon><Select /></el-icon>
         已选 {{ selectedRows.length }} 项
@@ -2136,11 +2141,12 @@ function handleSelectionChange(rows: DynamicRecord[]): void {
 
 /**
  * 清空表格选择（批量条「取消选择」）。
- * DataTable 已 defineExpose clearSelection，清空会触发 selection-change 回写 selectedRows。
+ * 先主动清零 selectedRows 使浮现条立即消失，
+ * 再调用 DataTable.clearSelection() 同步 el-table 内部状态（会触发 selection-change 二次回写，无害）。
  */
 function clearTableSelection(): void {
-  dataTableRef.value?.clearSelection()
   selectedRows.value = []
+  dataTableRef.value?.clearSelection()
 }
 
 /**
