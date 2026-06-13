@@ -39,7 +39,17 @@ const stubs = {
   },
   'el-tag': {
     template: '<span><slot /></span>'
-  }
+  },
+  'el-dropdown': {
+    template: '<div class="el-dropdown"><slot /><slot name="dropdown" /></div>'
+  },
+  'el-dropdown-menu': {
+    template: '<div class="el-dropdown-menu"><slot /></div>'
+  },
+  'el-dropdown-item': {
+    template: '<div class="el-dropdown-item" @click="$emit(\'click\')"><slot /></div>',
+    emits: ['click']
+  },
 }
 
 function makeField(overrides: Partial<FieldConfig> = {}): FieldConfig {
@@ -83,7 +93,7 @@ describe('DataTable — 查看功能', () => {
     expect(html).not.toContain('删除')
   })
 
-  it('showActions=true 时渲染查看、编辑、删除按钮', () => {
+  it('showActions=true 时主操作为编辑，查看/删除收进溢出菜单', () => {
     const wrapper = mount(DataTable, {
       props: {
         data: [{ id: '1', name: '测试' }],
@@ -93,10 +103,15 @@ describe('DataTable — 查看功能', () => {
       global: { stubs }
     })
 
-    const html = wrapper.html()
-    expect(html).toContain('查看')
-    expect(html).toContain('编辑')
-    expect(html).toContain('删除')
+    // 主操作按钮：编辑外露
+    const buttons = wrapper.findAll('button')
+    expect(buttons.some(b => b.text().includes('编辑'))).toBe(true)
+
+    // 溢出菜单：查看 + 删除 收纳其中
+    const menu = wrapper.find('.el-dropdown-menu')
+    expect(menu.exists()).toBe(true)
+    expect(menu.text()).toContain('查看')
+    expect(menu.text()).toContain('删除')
   })
 
   it('点击查看按钮触发 view 事件', async () => {
