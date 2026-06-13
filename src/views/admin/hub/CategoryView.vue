@@ -14,7 +14,7 @@
       />
     </el-tabs>
     <div class="category-content">
-      <KeepAlive>
+      <KeepAlive :max="8">
         <component :is="currentComponent" v-if="currentComponent" :key="activeTab" />
       </KeepAlive>
       <el-empty v-if="visibleTabs.length === 0" description="无可用功能" />
@@ -33,6 +33,7 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
+// 主来源为路由 meta.categoryId（Task 5 路由注入）；split 回退仅作兜底
 /** 当前分类 id（路由 meta 注入；回退到路径末段） */
 const categoryId = computed(
   () => (route.meta.categoryId as string) || route.path.split('/')[2] || ''
