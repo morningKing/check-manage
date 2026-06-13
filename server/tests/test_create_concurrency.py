@@ -14,13 +14,14 @@ def _setup(coll='zzcreate'):
 
 
 def _try_create_locked(coll, pk_value):
-    """模拟 create_item 的「advisory lock → 唯一检查 → 插入」段。返回 'ok' 或 'dup'。"""
+    """模拟 create_item 的「advisory lock → 唯一检查 →（人为放大窗口）→ 插入」段。返回 'ok' 或 'dup'。"""
     with get_db() as conn:
         cur = conn.cursor()
         acquire_pk_lock(cur, coll, {'code': pk_value})
         if check_primary_key_unique(cur, coll, {'code': pk_value}, ['code'], branch_id='main'):
             conn.commit()
             return 'dup'
+        cur.execute("SELECT pg_sleep(0.05)")  # 放大 check→insert 窗口；有锁则被串行化，无锁则会重复插入
         rid = f'{coll}-{uuid.uuid4().hex[:8]}'
         cur.execute("INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s,%s,%s,'main')",
                     (rid, coll, psycopg2.extras.Json({'code': pk_value})))

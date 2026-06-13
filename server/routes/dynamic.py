@@ -535,7 +535,7 @@ def create_item(collection):
         cur = conn.cursor()
         # Fetch schema once (fields drive autoSequence + PK detection)
         page_name, fields = get_page_info(cur, collection)
-        pk_fields = get_primary_key_fields(cur, collection)
+        pk_fields = [f['fieldName'] for f in (fields or []) if f.get('isPrimaryKey')]
         # 后端原子分配 autoSequence（忽略客户端传入值）
         for f in (fields or []):
             if f.get('controlType') == 'autoSequence':
@@ -547,6 +547,8 @@ def create_item(collection):
         # 手填主键 advisory lock（排除 autoSequence 主键，其值由原子分配天然唯一）
         autoseq_names = {f['fieldName'] for f in (fields or []) if f.get('controlType') == 'autoSequence'}
         manual_pk = {f: data.get(f) for f in (pk_fields or []) if f not in autoseq_names}
+        # 锁顺序：先 allocate_sequence 的 FOR UPDATE（计数行），再 advisory lock；
+        # 全局一致顺序，避免与并发创建死锁。勿调换。
         acquire_pk_lock(cur, collection, manual_pk)
         # Check primary key uniqueness (within the same branch)
         if pk_fields:
@@ -676,7 +678,7 @@ def update_item(collection, item_id):
 
         # Fetch schema once (fields needed for autoSequence detection + PK lock)
         page_name, fields = get_page_info(cur, collection)
-        pk_fields = get_primary_key_fields(cur, collection)
+        pk_fields = [f['fieldName'] for f in (fields or []) if f.get('isPrimaryKey')]
         # 手填主键 advisory lock（仅当请求实际修改了手填主键字段时加锁）
         autoseq_names = {f['fieldName'] for f in (fields or []) if f.get('controlType') == 'autoSequence'}
         manual_pk = {f: merged_data.get(f) for f in (pk_fields or [])
@@ -756,8 +758,6 @@ def update_item(collection, item_id):
                     rel['fieldName'], rel['targetCollection'], rel['targetField'],
                     set(rel.get('ids', [])), branch_id=branch_id,
                 )
-        if not validation_script:
-            page_name, fields = get_page_info(cur, collection)
     body['id'] = item_id
     body['_version'] = new_version
     body.pop('_relations', None)
