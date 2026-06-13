@@ -319,9 +319,12 @@ class TestBatchCreate:
         把 created 和 updated 分开计数,failed 应为 0。
         """
         client, mock_cursor, _, headers = setup
-        # Mock database has 'rec-1' already
+        # Mock database has 'rec-1' already.
+        # 末尾的空列表对应批量写入后 reseed_sequences 的 page_configs 扫描查询
+        # （test-collection 无 autoSequence 字段 → 返回空 → 不再有后续查询）。
         mock_cursor.fetchall.side_effect = [
             [('rec-1',)],  # existing IDs query
+            [],            # reseed_sequences: page_configs autoSequence-fields scan
         ]
 
         records = [

@@ -1135,6 +1135,11 @@ def batch_create_items(collection):
                     all_reverse_values
                 )
 
+        # 旁路 create_item 的批量写入后，重播种序列计数器，避免后续创建与导入记录重号。
+        # 导入保留源 autoSequence 值（不覆盖），仅把计数器抬到 GREATEST(计数, 已写入 max)。
+        from utils.sequences import reseed_sequences
+        reseed_sequences(cur, collections=[collection])
+
     # Log the batch upsert (created + updated counts)
     updated_count = sum(1 for r in prepared_records if r.get('is_update'))
     created_count = len(prepared_records) - updated_count

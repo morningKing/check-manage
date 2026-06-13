@@ -378,6 +378,11 @@ def create_collection_item(collection):
         )
         new_row = cur.fetchone()
 
+        # 旁路 create_item 的 API 写入后，重播种序列计数器，避免与后续创建重号。
+        # 保留 API 提供的 autoSequence 值（不覆盖），仅把计数器抬到 GREATEST(计数, 已写入值)。
+        from utils.sequences import reseed_sequences
+        reseed_sequences(cur, collections=[collection])
+
     result = row_to_record(new_row)
     result['branchId'] = branch_id
     return jsonify({'data': result}), 201
