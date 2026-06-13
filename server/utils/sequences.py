@@ -63,3 +63,30 @@ def reseed_sequences(cur, collections=None, branch_id=None):
                     "DO UPDATE SET current_value = GREATEST(dynamic_sequences.current_value, EXCLUDED.current_value)",
                     (coll, br, field_name, mx),
                 )
+
+
+def allocate_sequence(cur, collection, branch_id, field_name, prefix, pad, count=1):
+    """原子分配 count 个序列值，返回格式化字符串列表。
+    先以现有数据 max 建零行（ON CONFLICT DO NOTHING，幂等），再 SELECT ... FOR UPDATE
+    锁定计数行串行化分配，递增 count。必须在调用方事务内执行（提交前不释放行锁）。
+    调用方负责提交。"""
+    base_seed = seq_max_from_data(cur, collection, branch_id, field_name, prefix)
+    cur.execute(
+        "INSERT INTO dynamic_sequences (collection, branch_id, field_name, current_value) "
+        "VALUES (%s,%s,%s,%s) ON CONFLICT (collection, branch_id, field_name) DO NOTHING",
+        (collection, branch_id, field_name, base_seed),
+    )
+    cur.execute(
+        "SELECT current_value FROM dynamic_sequences "
+        "WHERE collection=%s AND branch_id=%s AND field_name=%s FOR UPDATE",
+        (collection, branch_id, field_name),
+    )
+    base = cur.fetchone()[0]
+    new_value = base + count
+    cur.execute(
+        "UPDATE dynamic_sequences SET current_value=%s "
+        "WHERE collection=%s AND branch_id=%s AND field_name=%s",
+        (new_value, collection, branch_id, field_name),
+    )
+    start = base + 1
+    return [f"{prefix}{n:0{pad}d}" for n in range(start, start + count)]
