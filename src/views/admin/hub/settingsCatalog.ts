@@ -20,7 +20,7 @@ export interface SettingsCategoryMeta {
   tabs: SettingsTabMeta[]
 }
 
-export const SETTINGS_CATALOG: SettingsCategoryMeta[] = [
+export const SETTINGS_CATALOG: readonly SettingsCategoryMeta[] = [
   { id: 'access', label: '访问控制', icon: 'Lock', tabs: [
     { id: 'users', label: '用户管理', perm: 'admin.users' },
     { id: 'roles', label: '角色权限', perm: 'admin.roles' },

@@ -35,6 +35,12 @@ describe('settingsCatalog', () => {
     expect(filterCatalog(() => false)).toStrictEqual([])
   })
 
+  it('filterCatalog 不污染 SETTINGS_CATALOG', () => {
+    filterCatalog(k => k === 'admin.users')
+    expect(SETTINGS_CATALOG).toHaveLength(7)
+    expect(SETTINGS_CATALOG[0].tabs).toHaveLength(2)
+  })
+
   it('categoryPerms：返回该分类全部 tab 权限 key', () => {
     expect(categoryPerms('access')).toStrictEqual(['admin.users', 'admin.roles'])
     expect(categoryPerms('data-ops')).toContain('admin.query')
