@@ -52,3 +52,17 @@ def test_allocate_concurrent_no_dup():
     with ThreadPoolExecutor(max_workers=12) as ex:
         results = list(ex.map(one, range(40)))
     assert len(set(results)) == 40
+
+
+def test_allocate_concurrent_batches_no_overlap():
+    coll = _setup('zzalloc4')
+    def batch(_):
+        with get_db() as conn:
+            cur = conn.cursor()
+            vals = allocate_sequence(cur, coll, 'main', 'code', 'IC-', 4, count=3)
+            conn.commit()
+            return vals
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        all_vals = [v for sub in ex.map(batch, range(20)) for v in sub]
+    assert len(all_vals) == 60
+    assert len(set(all_vals)) == 60  # 20 个并发批次、每批 3 个，全程无重叠

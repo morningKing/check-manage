@@ -67,21 +67,35 @@ def reseed_sequences(cur, collections=None, branch_id=None):
 
 def allocate_sequence(cur, collection, branch_id, field_name, prefix, pad, count=1):
     """原子分配 count 个序列值，返回格式化字符串列表。
-    先以现有数据 max 建零行（ON CONFLICT DO NOTHING，幂等），再 SELECT ... FOR UPDATE
-    锁定计数行串行化分配，递增 count。必须在调用方事务内执行（提交前不释放行锁）。
-    调用方负责提交。"""
-    base_seed = seq_max_from_data(cur, collection, branch_id, field_name, prefix)
-    cur.execute(
-        "INSERT INTO dynamic_sequences (collection, branch_id, field_name, current_value) "
-        "VALUES (%s,%s,%s,%s) ON CONFLICT (collection, branch_id, field_name) DO NOTHING",
-        (collection, branch_id, field_name, base_seed),
-    )
+    常态：计数行已存在 → 直接 SELECT ... FOR UPDATE 锁定（PK 查找，免全表扫描）。
+    首次分配：计数行不存在 → 按现有数据 max 播种（仅此路径扫描 dynamic_data），
+    INSERT ... ON CONFLICT DO NOTHING 处理并发首插，再 SELECT ... FOR UPDATE 锁定。
+    必须在调用方事务内执行（提交前不释放行锁）。调用方负责提交。
+    注：当 count 使序号超过 10**pad - 1 时，格式化会产生更宽的字符串而不报错（max 为软上限）。"""
     cur.execute(
         "SELECT current_value FROM dynamic_sequences "
         "WHERE collection=%s AND branch_id=%s AND field_name=%s FOR UPDATE",
         (collection, branch_id, field_name),
     )
-    base = cur.fetchone()[0]
+    row = cur.fetchone()
+    if row is None:
+        base_seed = seq_max_from_data(cur, collection, branch_id, field_name, prefix)
+        cur.execute(
+            "INSERT INTO dynamic_sequences (collection, branch_id, field_name, current_value) "
+            "VALUES (%s,%s,%s,%s) ON CONFLICT (collection, branch_id, field_name) DO NOTHING",
+            (collection, branch_id, field_name, base_seed),
+        )
+        cur.execute(
+            "SELECT current_value FROM dynamic_sequences "
+            "WHERE collection=%s AND branch_id=%s AND field_name=%s FOR UPDATE",
+            (collection, branch_id, field_name),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"dynamic_sequences 行缺失，无法分配序列: {collection}/{branch_id}/{field_name}"
+        )
+    base = row[0]
     new_value = base + count
     cur.execute(
         "UPDATE dynamic_sequences SET current_value=%s "
