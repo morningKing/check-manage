@@ -72,11 +72,20 @@ CREATE TABLE IF NOT EXISTS dynamic_sequences (
 
 维持 READ COMMITTED + 上述**定点锁**（计数行锁 + 主键 advisory lock），不全局升 SERIALIZABLE（避免全局重试复杂度）。
 
+### ⑤ 与备份还原的交互：还原后重播种序列计数器
+
+`restore_backup`（`server/utils/backup.py:569`）单事务把 `dynamic_data`（含 `version`）原样写回，但**不触碰** `dynamic_sequences`。若不处理，还原后计数器陈旧 → 后续创建与还原回来的记录**重号**——这是本子系统引入计数表的直接后果，必须收口。
+
+- **播种逻辑抽为可复用函数** `reseed_sequences(cur, collections=None, branch_id=None)`：扫描 `dynamic_data` 各 `(collection, branch, autoSequence 字段)` 的现有 max，`UPSERT dynamic_sequences.current_value = GREATEST(现有计数, max)`。初始迁移与还原**共用**此函数。
+- **还原后调用**：`restore_backup` 在写回 `dynamic_data` 之后、提交之前，于同一事务对受影响的 collection 调用 `reseed_sequences`。`tables=None`（整库还原）→ 全量重播种；指定 `dynamic_data:collection` → 仅该 collection。
+- 幂等、兼容旧备份（旧备份无计数表也无妨，重播种从还原后的数据推导）。
+- **不在范围**：备份读快照一致性、还原与并发写的互斥/孤儿（`replace` 模式 DELETE 备份时不存在的行）——属既有备份系统语义（已有 `compute_restore_warnings` 提示），本子系统不改。
+
 ## 迁移
 
 `server/migrations/<date>_dynamic_sequences.py`（幂等）：
 1. 建 `dynamic_sequences` 表（`IF NOT EXISTS`）。
-2. 为每个 `(collection, branch_id, autoSequence 字段)` 按现有 `dynamic_data` 该字段 max 播种 `current_value`（仅当该计数行不存在时）。需读 `page_configs` 找出各 collection 的 autoSequence 字段及其 prefix。
+2. 调用共享函数 `reseed_sequences(cur)` 为每个 `(collection, branch_id, autoSequence 字段)` 按现有 `dynamic_data` 该字段 max 播种 `current_value`（`GREATEST` 语义：不回退已有计数）。`reseed_sequences` 读 `page_configs` 找出各 collection 的 autoSequence 字段及 prefix。**此函数同时被 `restore_backup` 复用（见 ⑤）**。
 3. 可重复执行：再次运行不重复播种、不回退已分配值。
 
 ## 测试策略
@@ -87,7 +96,8 @@ CREATE TABLE IF NOT EXISTS dynamic_sequences (
 3. **序列原子分配**：单元测试分配函数——存在计数行 `+1`、不存在则按现有 max 播种 `+1`、批量 `+N` 区间正确、格式（prefix+补零）正确。
 4. **播种迁移**：构造含既有编号的数据 → 运行迁移 → 计数值 == max；再运行幂等。
 5. **advisory lock 串行化**：验证同主键并发被串行（先到成功、后到 409）。
-6. **回归**：现有 `dynamic.py` 相关测试保持通过。
+6. **还原后重播种**：构造计数器领先的状态 → 还原一份编号更小/更大的备份 → 断言 `reseed_sequences` 后计数器 == 还原后数据 max（`GREATEST` 不回退）；还原后新建不与还原记录重号。
+7. **回归**：现有 `dynamic.py` / `backup` 相关测试保持通过。
 
 **前端（vitest）**：
 1. autoSequence 字段在创建表单渲染为只读「保存后生成」，创建提交体不含客户端生成的序列值。
