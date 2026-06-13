@@ -219,6 +219,25 @@
       </el-button>
     </div>
 
+    <!-- 批量操作浮现条（仅表格视图、有选中时） -->
+    <div v-if="viewMode === 'table' && selectedRows.length > 0" class="batch-action-bar">
+      <span class="batch-count">
+        <el-icon><Select /></el-icon>
+        已选 {{ selectedRows.length }} 项
+      </span>
+      <div class="batch-buttons">
+        <el-button
+          v-if="isAdmin"
+          type="danger"
+          :icon="Delete"
+          @click="handleBatchDeleteConfirm"
+        >
+          批量删除
+        </el-button>
+        <el-button text @click="clearTableSelection">取消选择</el-button>
+      </div>
+    </div>
+
     <!-- 数据表格 -->
     <el-card v-show="viewMode === 'table'" class="table-card">
       <DataTable
@@ -828,7 +847,7 @@
 import { ref, computed, watch, nextTick, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled } from '@element-plus/icons-vue'
+import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -2116,6 +2135,15 @@ function handleSelectionChange(rows: DynamicRecord[]): void {
 }
 
 /**
+ * 清空表格选择（批量条「取消选择」）。
+ * DataTable 已 defineExpose clearSelection，清空会触发 selection-change 回写 selectedRows。
+ */
+function clearTableSelection(): void {
+  dataTableRef.value?.clearSelection()
+  selectedRows.value = []
+}
+
+/**
  * 处理批量删除确认
  */
 function handleBatchDeleteConfirm(): void {
@@ -2482,8 +2510,6 @@ function handleMoreCommand(command: string): void {
     } else {
       ElMessage.warning('该数据页不属于任何项目，无法使用依赖管理')
     }
-  } else if (command === 'batchDelete') {
-    handleBatchDeleteConfirm()
   } else if (command === 'reResolveRefs') {
     handleReResolveReferences()
   } else if (command === 'copyCollection') {
@@ -3229,6 +3255,26 @@ onActivated(async () => {
 .import-result {
   padding: 10px 0;
 }
+
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  margin-bottom: 10px;
+  background: var(--el-color-primary-light-9);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+}
+.batch-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.batch-buttons { display: flex; gap: 8px; }
 
 .jump-source-bar {
   display: flex;
