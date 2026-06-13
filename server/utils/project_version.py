@@ -948,7 +948,7 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
         project_name = proj_row[0] if proj_row else ''
 
         # 计算预览数据
-        collections = get_project_projects(project_menu_id)
+        collections = get_project_collections(project_menu_id)
         for coll_info in collections:
             collection = coll_info['collection']
             source_records, source_rels = load_project_version_data_by_type(version_id, collection, version_type)
@@ -1068,9 +1068,11 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
         total_created = 0
         total_updated = 0
         total_deleted = 0
+        merged_collections = set()  # 收集本次合并涉及的 collection，用于事务末尾重播种序列计数器
 
         for coll_info in collections:
             collection = coll_info['collection']
+            merged_collections.add(collection)
 
             # 加载源版本数据（根据版本类型选择数据源）
             source_records, source_rels = load_project_version_data_by_type(version_id, collection, version_type)
@@ -1312,6 +1314,13 @@ def merge_project_version(version_id, target_branch, strategy, merged_by, user_i
             total_updated += coll_result['recordsUpdated']
             total_deleted += coll_result['recordsDeleted']
 
+        # 合并把源分支记录（携带其 autoSequence 编号）复制进目标分支，但目标分支计数器
+        # 未被推进 —— 后续 create_item 可能重号。此处在提交前、与合并同事务重播种目标
+        # 分支这些 collection 的序列计数器（GREATEST 语义，绝不回退）。
+        if merged_collections:
+            from utils.sequences import reseed_sequences
+            reseed_sequences(cur, collections=list(merged_collections), branch_id=target_branch_id)
+
         # 更新合并记录统计
         cur.execute(
             'UPDATE merge_records SET records_created = %s, records_updated = %s, records_deleted = %s WHERE id = %s',
@@ -1490,6 +1499,7 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
         total_created = 0
         total_updated = 0
         total_deleted = 0
+        merged_collections = set()  # 收集本次合并涉及的 collection，用于事务末尾重播种序列计数器
 
         # 构建来源标记
         merged_from = {
@@ -1503,6 +1513,8 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
         # 处理每个 collection 的决策
         for coll_decision in collection_decisions:
             collection = coll_decision.get('collection')
+            if collection:
+                merged_collections.add(collection)
             added_ids = coll_decision.get('added', [])
             removed_ids = coll_decision.get('removed', [])
             modified_decisions = coll_decision.get('modified', [])
@@ -1619,6 +1631,12 @@ def merge_project_version_detailed(version_id, target_branch, collection_decisio
             total_created += coll_result['recordsCreated']
             total_updated += coll_result['recordsUpdated']
             total_deleted += coll_result['recordsDeleted']
+
+        # 与上面 merge_project_version 同理：在提交前重播种目标分支这些 collection 的
+        # 序列计数器，防止详细合并复制进来的 autoSequence 编号被后续 create 重号。
+        if merged_collections:
+            from utils.sequences import reseed_sequences
+            reseed_sequences(cur, collections=list(merged_collections), branch_id=target_branch_id)
 
         # 更新合并记录统计
         cur.execute(
