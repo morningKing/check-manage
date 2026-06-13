@@ -21,7 +21,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const displayValue = computed(() => {
-  if (!props.modelValue) return '自动生成'
+  if (!props.modelValue) return '保存后生成'
   return props.modelValue
 })
 </script>

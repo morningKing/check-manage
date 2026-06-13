@@ -497,11 +497,6 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       newRecord[field.fieldName] = now
     }
 
-    // 自动填充 autoSequence 字段
-    for (const field of getAutoSequenceFields(pageId)) {
-      newRecord[field.fieldName] = generateNextSequenceValue(pageId, field)
-    }
-
     // 自动计算 compositeText 字段
     for (const field of getCompositeTextFields(pageId)) {
       newRecord[field.fieldName] = computeCompositeValue(newRecord, field)
