@@ -85,6 +85,9 @@
             @keydown.enter="executeAiQuery"
           >
             <template #prefix><el-icon><MagicStick /></el-icon></template>
+            <template #suffix>
+              <el-icon v-if="aiSearchLoading" class="is-loading"><Loading /></el-icon>
+            </template>
           </el-input>
           <el-input
             v-else
