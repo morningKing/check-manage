@@ -26,7 +26,7 @@ defineProps<{
 
 <style scoped lang="scss">
 .welcome-card {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #2a2e36 0%, #16181d 100%);
 
   .welcome-content {
     display: flex;
