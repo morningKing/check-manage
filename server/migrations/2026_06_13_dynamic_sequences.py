@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db import get_db
 from utils.sequences import reseed_sequences
 
+# DDL 与 init_db.py 中的 dynamic_sequences 保持同步
 DDL = """
 CREATE TABLE IF NOT EXISTS dynamic_sequences (
     collection    VARCHAR(200) NOT NULL,

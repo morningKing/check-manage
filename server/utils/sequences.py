@@ -1,6 +1,4 @@
 """autoSequence 后端原子分配 + 计数器播种（迁移与还原共用）。"""
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _autoseq_fields_by_collection(cur, collections=None):
@@ -31,7 +29,9 @@ def seq_max_from_data(cur, collection, branch_id, field_name, prefix):
     for (val,) in cur.fetchall():
         if not isinstance(val, str):
             continue
-        s = val[plen:] if (prefix and val.startswith(prefix)) else val
+        if prefix and not val.startswith(prefix):
+            continue
+        s = val[plen:] if prefix else val
         try:
             n = int(s)
         except (ValueError, TypeError):
@@ -44,7 +44,8 @@ def seq_max_from_data(cur, collection, branch_id, field_name, prefix):
 def reseed_sequences(cur, collections=None, branch_id=None):
     """为每个 (collection, branch, autoSequence字段) 重播种计数器。
     GREATEST 语义：current_value = max(已有计数, 数据中的 max)，绝不回退。
-    branch_id=None 时对数据中出现的所有分支播种。"""
+    branch_id=None 时对数据中出现的所有分支播种。
+    调用方负责提交事务（本函数不 commit）。"""
     fields_map = _autoseq_fields_by_collection(cur, collections)
     for coll, fld_list in fields_map.items():
         if branch_id is not None:
