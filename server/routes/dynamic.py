@@ -8,6 +8,7 @@ from utils.operation_log import log_operation, get_page_info, pick_display_name,
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 from utils.branch_lock import check_branch_lock
+from utils.sequences import allocate_sequence
 import psycopg2.extras
 import json
 
@@ -100,6 +101,16 @@ def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, 
         labels = ', '.join(f'{f}={pk_values[f]}' for f in pk_fields)
         return f'主键重复：{labels}'
     return None
+
+
+def acquire_pk_lock(cur, collection, pk_values):
+    """对 (collection + 主键值拼接) 取事务级 advisory lock，串行化同主键并发写。
+    pk_values: {field: value}。空 dict 则不加锁。事务提交/回滚自动释放。"""
+    if not pk_values:
+        return
+    parts = [str(pk_values.get(f, '')) for f in sorted(pk_values)]
+    key = collection + '|' + '|'.join(parts)
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))", (collection, key))
 
 
 def get_validation_script(cur, collection):
@@ -522,14 +533,27 @@ def create_item(collection):
 
     with get_db() as conn:
         cur = conn.cursor()
-        # Check primary key uniqueness (within the same branch)
+        # Fetch schema once (fields drive autoSequence + PK detection)
+        page_name, fields = get_page_info(cur, collection)
         pk_fields = get_primary_key_fields(cur, collection)
+        # 后端原子分配 autoSequence（忽略客户端传入值）
+        for f in (fields or []):
+            if f.get('controlType') == 'autoSequence':
+                cfg = f.get('sequenceConfig') or {}
+                prefix = cfg.get('prefix', '')
+                pad = len(str(cfg.get('max', 999)))
+                data[f['fieldName']] = allocate_sequence(
+                    cur, collection, branch_id, f['fieldName'], prefix, pad, count=1)[0]
+        # 手填主键 advisory lock（排除 autoSequence 主键，其值由原子分配天然唯一）
+        autoseq_names = {f['fieldName'] for f in (fields or []) if f.get('controlType') == 'autoSequence'}
+        manual_pk = {f: data.get(f) for f in (pk_fields or []) if f not in autoseq_names}
+        acquire_pk_lock(cur, collection, manual_pk)
+        # Check primary key uniqueness (within the same branch)
         if pk_fields:
             error = check_primary_key_unique(cur, collection, data, pk_fields, branch_id=branch_id)
             if error:
                 return jsonify({"error": error}), 409
         # Run validation script if configured
-        page_name, fields = get_page_info(cur, collection)
         validation_script = get_validation_script(cur, collection)
         pending_relations = []
         if validation_script:
@@ -561,8 +585,6 @@ def create_item(collection):
                     rel['fieldName'], rel['targetCollection'], rel['targetField'],
                     set(rel.get('ids', [])), branch_id=branch_id,
                 )
-        if not validation_script:
-            page_name, fields = get_page_info(cur, collection)
     record_name = pick_display_name(data, fields) or rid
     log_operation('create', 'dynamic_data', rid, record_name,
                   f'新增{page_name}「{record_name}」', branch_id=branch_id)
@@ -652,14 +674,20 @@ def update_item(collection, item_id):
         # Merge old_data with new data for primary key uniqueness check
         merged_data = {**old_data, **data}
 
-        # Check primary key uniqueness (exclude current record, within same branch)
+        # Fetch schema once (fields needed for autoSequence detection + PK lock)
+        page_name, fields = get_page_info(cur, collection)
         pk_fields = get_primary_key_fields(cur, collection)
+        # 手填主键 advisory lock（仅当请求实际修改了手填主键字段时加锁）
+        autoseq_names = {f['fieldName'] for f in (fields or []) if f.get('controlType') == 'autoSequence'}
+        manual_pk = {f: merged_data.get(f) for f in (pk_fields or [])
+                     if f not in autoseq_names and f in data}
+        acquire_pk_lock(cur, collection, manual_pk)
+        # Check primary key uniqueness (exclude current record, within same branch)
         if pk_fields:
             error = check_primary_key_unique(cur, collection, merged_data, pk_fields, exclude_id=item_id, branch_id=branch_id)
             if error:
                 return jsonify({"error": error}), 409
         # Run validation script if configured
-        page_name, fields = get_page_info(cur, collection)
         validation_script = get_validation_script(cur, collection)
         pending_relations = []
         if validation_script:
