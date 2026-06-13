@@ -66,6 +66,32 @@
         </div>
       </div>
       <div class="page-actions">
+        <!-- 关键字搜索（简单模式时内联在功能行；高级模式下隐藏，输入下沉到展开行） -->
+        <el-input
+          v-if="viewMode !== 'excel' && !aiSearchMode && !queryMode"
+          v-model="searchKeyword"
+          placeholder="搜索..."
+          clearable
+          :prefix-icon="Search"
+          class="header-search"
+        />
+        <el-tooltip v-if="viewMode !== 'excel'" content="AI 智能查询">
+          <el-button
+            :type="aiSearchMode ? 'warning' : 'default'"
+            :icon="MagicStick"
+            circle
+            @click="toggleAiSearch"
+          />
+        </el-tooltip>
+        <el-tooltip v-if="viewMode !== 'excel'" :content="queryMode ? '简单搜索' : '高级查询'">
+          <el-button
+            :type="queryMode ? 'primary' : 'default'"
+            :icon="queryMode ? Search : DCaret"
+            circle
+            @click="toggleQueryMode"
+          />
+        </el-tooltip>
+        <span v-if="viewMode !== 'excel'" class="actions-divider"></span>
         <ViewSelector
           @select="handleViewSelect"
           @manage="handleOpenManage"
@@ -81,10 +107,9 @@
           <el-icon><Plus /></el-icon>
           新增
         </el-button>
-        <el-button @click="handleRefresh">
-          <el-icon><Refresh /></el-icon>
-          刷新
-        </el-button>
+        <el-tooltip content="刷新">
+          <el-button :icon="Refresh" @click="handleRefresh" />
+        </el-tooltip>
         <el-dropdown @command="handleMoreCommand" trigger="click">
           <el-button>
             更多<el-icon class="el-icon--right"><ArrowDown /></el-icon>
@@ -116,6 +141,16 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <!-- AI 筛选条件激活指示（常态可见） -->
+        <el-tooltip v-if="aiGeneratedFilter" placement="bottom">
+          <template #content>
+            <pre style="margin:0;max-width:400px;white-space:pre-wrap">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
+          </template>
+          <el-tag type="warning" closable @close="clearAiQuery">
+            <el-icon style="vertical-align: -2px"><MagicStick /></el-icon>
+            AI 筛选
+          </el-tag>
+        </el-tooltip>
       </div>
     </div>
 
@@ -132,8 +167,8 @@
       </el-button>
     </div>
 
-    <!-- 搜索栏 -->
-    <div class="search-bar" v-if="viewMode !== 'excel'">
+    <!-- 高级查询展开行（仅 AI / Mongo 模式时出现，不占常态空间） -->
+    <div class="advanced-search-bar" v-if="viewMode !== 'excel' && (aiSearchMode || queryMode)">
       <template v-if="aiSearchMode">
         <el-input
           v-model="aiSearchText"
@@ -149,15 +184,6 @@
         <el-button v-if="aiGeneratedFilter" @click="clearAiQuery">
           清除
         </el-button>
-      </template>
-      <template v-else-if="!queryMode">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="输入关键字搜索..."
-          clearable
-          :prefix-icon="Search"
-          style="width: 300px"
-        />
       </template>
       <template v-else>
         <el-input
@@ -196,37 +222,6 @@
           </div>
         </el-popover>
       </template>
-      <el-tooltip content="AI 智能查询">
-        <el-button
-          :type="aiSearchMode ? 'warning' : 'default'"
-          :icon="MagicStick"
-          circle
-          @click="toggleAiSearch"
-        />
-      </el-tooltip>
-      <el-tooltip :content="queryMode ? '简单搜索' : '高级查询'">
-        <el-button
-          :type="queryMode ? 'primary' : 'default'"
-          :icon="queryMode ? Search : DCaret"
-          circle
-          @click="toggleQueryMode"
-        />
-      </el-tooltip>
-      <span class="search-result-count">
-        共 {{ totalCount }} 条记录
-        <template v-if="activeMongoQuery">
-          （已筛选）
-        </template>
-      </span>
-      <el-tooltip v-if="aiGeneratedFilter" placement="bottom">
-        <template #content>
-          <pre style="margin:0;max-width:400px;white-space:pre-wrap">{{ JSON.stringify(aiGeneratedFilter, null, 2) }}</pre>
-        </template>
-        <el-tag type="warning" closable @close="clearAiQuery">
-          <el-icon style="vertical-align: -2px"><MagicStick /></el-icon>
-          AI 筛选条件
-        </el-tag>
-      </el-tooltip>
     </div>
 
     <!-- 数据表格 -->
@@ -3121,13 +3116,15 @@ onActivated(async () => {
 
 .page-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   margin-bottom: 10px;
 
   .page-title {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
 
     .title-row {
       display: flex;
@@ -3169,10 +3166,23 @@ onActivated(async () => {
   .page-actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
 
+    .header-search {
+      width: 200px;
+    }
+
+    .actions-divider {
+      width: 1px;
+      height: 18px;
+      background: var(--el-border-color);
+      margin: 0 2px;
+    }
+
     .view-toggle {
-      margin-right: 8px;
+      margin: 0 2px;
     }
   }
 }
@@ -3213,17 +3223,11 @@ onActivated(async () => {
   }
 }
 
-.search-bar {
+.advanced-search-bar {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
-
-  .search-result-count {
-    color: #909399;
-    font-size: 13px;
-    white-space: nowrap;
-  }
 }
 
 .query-help {

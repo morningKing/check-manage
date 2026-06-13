@@ -208,17 +208,17 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 标签栏 */
+/* 标签栏 —— 发丝下划线式（瘦身） */
 .tab-bar {
   flex-shrink: 0;
   background-color: var(--el-bg-color);
   border-bottom: 1px solid var(--el-border-color-lighter);
-  padding: 6px 12px 0;
+  padding: 0 12px;
 }
 
 .tab-list {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   overflow-x: auto;
   scrollbar-width: thin;
 
@@ -235,39 +235,34 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  background-color: var(--el-fill-color-light);
+  padding: 7px 12px;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
   font-size: 13px;
-  color: var(--el-text-color-regular);
+  color: var(--el-text-color-secondary);
   user-select: none;
-  transition: background-color 0.2s, color 0.2s;
+  transition: color 0.15s, border-color 0.15s;
 
   &:hover {
-    background-color: var(--el-color-primary-light-9);
-    color: var(--el-color-primary);
+    color: var(--el-text-color-primary);
   }
 
   &.active {
-    background-color: var(--el-bg-color);
-    color: var(--el-color-primary);
+    color: var(--el-text-color-primary);
     font-weight: 500;
-    border-bottom: 1px solid var(--el-bg-color);
-    margin-bottom: -1px;
+    border-bottom-color: var(--el-color-primary);
   }
 
   .tab-close {
     font-size: 12px;
     border-radius: 50%;
     padding: 1px;
-    transition: background-color 0.2s, color 0.2s;
+    color: var(--el-text-color-placeholder);
+    transition: background-color 0.15s, color 0.15s;
 
     &:hover {
-      background-color: #f56c6c;
+      background-color: var(--el-color-danger);
       color: #fff;
     }
   }
