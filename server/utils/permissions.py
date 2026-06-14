@@ -15,6 +15,7 @@ PERMISSION_CATALOG = [
     {'key': 'admin.page_configs',       'label': '页面配置',   'group': '平台管理'},
     {'key': 'admin.api_keys',           'label': 'Open API',  'group': '平台管理'},
     {'key': 'admin.ai_settings',        'label': 'AI 配置',   'group': '平台管理'},
+    {'key': 'admin.workflows',          'label': '工作流',     'group': '平台管理'},
     {'key': 'admin.export_scripts',     'label': '导出脚本',   'group': '数据工具'},
     {'key': 'admin.validation_scripts', 'label': '校验脚本',   'group': '数据工具'},
     {'key': 'admin.etl_tasks',          'label': 'ETL 管理',  'group': '数据工具'},

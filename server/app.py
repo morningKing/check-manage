@@ -39,6 +39,7 @@ from routes.ai_chat_batches import ai_chat_batches_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.data_files import data_files_bp
 from routes.roles import roles_bp
+from routes.workflows import workflows_bp
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
@@ -80,6 +81,7 @@ app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(data_files_bp)
 app.register_blueprint(roles_bp)
+app.register_blueprint(workflows_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start).

@@ -729,6 +729,14 @@ def update_item(collection, item_id):
                     if not allowed:
                         return jsonify({"error": error}), 400
                     execute_actions(actions, merged_data, collection, item_id, cur)
+                    try:
+                        from utils.workflow_engine import on_transition
+                        on_transition(cur, collection, item_id, field_cfg['fieldName'],
+                                      old_val, new_val, old_data, merged_data,
+                                      getattr(flask_g, 'current_user', {}).get('username', ''),
+                                      user_role, comment=body.get('_workflowComment'))
+                    except Exception:
+                        import logging; logging.exception('workflow on_transition failed')
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
