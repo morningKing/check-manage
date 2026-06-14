@@ -20,9 +20,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }
   }
 
-  async function save(def: WorkflowDefinition): Promise<void> {
-    await saveWorkflow(def)
+  async function save(def: WorkflowDefinition): Promise<WorkflowDefinition> {
+    const saved = await saveWorkflow(def)
     await loadDefinitions()
+    return saved
   }
 
   async function remove(id: string): Promise<void> {

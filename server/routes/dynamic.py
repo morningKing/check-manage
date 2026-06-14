@@ -729,14 +729,22 @@ def update_item(collection, item_id):
                     if not allowed:
                         return jsonify({"error": error}), 400
                     execute_actions(actions, merged_data, collection, item_id, cur)
+                    from utils.workflow_engine import on_transition, WorkflowError
                     try:
-                        from utils.workflow_engine import on_transition
                         on_transition(cur, collection, item_id, field_cfg['fieldName'],
                                       old_val, new_val, old_data, merged_data,
                                       getattr(flask_g, 'current_user', {}).get('username', ''),
-                                      user_role, comment=body.get('_workflowComment'))
+                                      user_role, comment=body.get('_workflowComment'),
+                                      branch_id=branch_id)
+                    except WorkflowError as we:
+                        # 角色不符等可预期的编排拒绝：回滚整笔事务（状态字段也不落库），返回 403
+                        conn.rollback()
+                        return jsonify({"error": str(we)}), 403
                     except Exception:
+                        # 编排意外失败（如 spawn 出错）：回滚以避免「状态已改、实例未推进」的分裂状态
+                        conn.rollback()
                         import logging; logging.exception('workflow on_transition failed')
+                        return jsonify({"error": "工作流推进失败，请重试"}), 500
         if created_at:
             cur.execute(
                 'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '

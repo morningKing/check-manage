@@ -315,9 +315,16 @@ async function handleSave() {
     }
   }
   try {
-    await store.save(buildPayload())
+    const saved = await store.save(buildPayload())
     editVisible.value = false
-    ElMessage.success('保存成功')
+    if (saved.warnings && saved.warnings.length) {
+      ElMessage.warning({
+        message: '已保存，但存在配置问题：\n' + saved.warnings.join('\n'),
+        duration: 6000,
+      })
+    } else {
+      ElMessage.success('保存成功')
+    }
   } catch {
     /* 全局拦截器已提示 */
   }

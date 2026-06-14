@@ -35,6 +35,38 @@ def delete_definition(cur, wid):
     cur.execute("DELETE FROM workflow_definitions WHERE id=%s", (wid,))
 
 
+def validate_definition(cur, definition):
+    """保存期校验：检查每个阶段绑定的状态字段确实能驱动推进，返回中文告警列表（非阻断）。
+    无告警 = 该工作流可正常推进；有告警说明阶段配置会导致「推进按钮永不出现」之类的死流程。"""
+    from utils.operation_log import get_page_info
+    warnings = []
+    for st in definition.get('stages', []):
+        name = st.get('name') or st.get('id') or '?'
+        coll = st.get('collection'); sf = st.get('statusField')
+        if not coll or not sf:
+            continue  # 阶段名/数据页缺失由前端必填校验拦截
+        _, fields = get_page_info(cur, coll)
+        fcfg = next((f for f in (fields or []) if f.get('fieldName') == sf), None)
+        if not fcfg:
+            warnings.append(f'阶段「{name}」的状态字段 {sf} 在数据页 {coll} 中不存在')
+            continue
+        wf = fcfg.get('workflowConfig')
+        if not (wf and wf.get('enabled')):
+            warnings.append(f'阶段「{name}」的状态字段 {sf} 未启用工作流配置，将无法显示推进按钮')
+            continue
+        trans = wf.get('transitions', []) or []
+        for key, label in (('advanceTransition', '推进'), ('rejectTransition', '回退')):
+            t = st.get(key)
+            if not t:
+                continue
+            ok = any((x.get('from') == t.get('from') or x.get('from') == '*') and x.get('to') == t.get('to')
+                     for x in trans)
+            if not ok:
+                warnings.append(
+                    f'阶段「{name}」的{label}转换 {t.get("from")}→{t.get("to")} 不在字段 {sf} 的合法转换中')
+    return warnings
+
+
 def create_instance(cur, inst_id, workflow_id, stage_id, collection, record_id, started_by):
     chain = [{'stageId': stage_id, 'collection': collection, 'recordId': record_id,
               'enteredAt': _now(), 'completedBy': None}]

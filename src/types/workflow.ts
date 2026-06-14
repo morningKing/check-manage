@@ -26,6 +26,8 @@ export interface WorkflowDefinition {
   description?: string
   enabled: boolean
   stages: WorkflowStage[]
+  /** 保存时后端返回的非阻断配置告警（如某阶段状态字段无法驱动推进） */
+  warnings?: string[]
 }
 
 export interface WorkflowInboxItem {
