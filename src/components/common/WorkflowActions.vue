@@ -15,7 +15,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import type { FieldConfig, WorkflowTransition } from '@/types'
 import { useAuthStore } from '@/stores'
 
@@ -84,16 +84,7 @@ async function handleTransition(t: WorkflowTransition & { fieldName: string }) {
     return
   }
 
-  try {
-    await ElMessageBox.confirm(
-      `确定要将状态变更为「${t.label}」吗？`,
-      '状态变更',
-      { confirmButtonText: '确定', cancelButtonText: '取消', type: 'info' }
-    )
-  } catch {
-    return
-  }
-
+  // 确认由父组件（DynamicPage）的「推进/驳回意见」对话框承担，此处不再二次确认
   transitioning.value = t.to
   emit('transition', {
     field: t.fieldName,
