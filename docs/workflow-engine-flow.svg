@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="560" viewBox="0 0 940 560" font-family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2a2e36"/>
+    </marker>
+    <marker id="arrowBack" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrowLink" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8b8f99"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="940" height="560" fill="#ffffff"/>
+  <text x="30" y="40" font-size="22" font-weight="700" fill="#1a1d21">跨页工作流引擎 · 记录递传链</text>
+  <text x="30" y="64" font-size="13" fill="#8b8f99">流程 = 一条跨页关联记录链；推进时按字段映射在下一页生成下游记录并反向关联，支持驳回</text>
+
+  <!-- Stage 1 -->
+  <g>
+    <rect x="30" y="110" width="250" height="150" rx="10" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.5"/>
+    <rect x="30" y="110" width="250" height="30" rx="10" fill="#2a2e36"/>
+    <rect x="30" y="125" width="250" height="15" fill="#2a2e36"/>
+    <text x="44" y="130" font-size="14" font-weight="700" fill="#ffffff">阶段 1 · 需求评审</text>
+    <text x="44" y="166" font-size="12.5" fill="#3a3d44">数据页：<tspan font-weight="600" fill="#1a1d21">需求</tspan></text>
+    <text x="44" y="188" font-size="12.5" fill="#3a3d44">办理角色：<tspan font-weight="600" fill="#1a1d21">评审员</tspan></text>
+    <text x="44" y="210" font-size="12.5" fill="#3a3d44">状态字段：status</text>
+    <text x="44" y="232" font-size="12.5" fill="#3a3d44">推进：待评审 <tspan fill="#16a34a" font-weight="600">→ 已通过</tspan></text>
+    <text x="44" y="252" font-size="11.5" fill="#8b8f99">记录 REQ-001</text>
+  </g>
+
+  <!-- Stage 2 -->
+  <g>
+    <rect x="345" y="110" width="250" height="150" rx="10" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.5"/>
+    <rect x="345" y="110" width="250" height="30" rx="10" fill="#2a2e36"/>
+    <rect x="345" y="125" width="250" height="15" fill="#2a2e36"/>
+    <text x="359" y="130" font-size="14" font-weight="700" fill="#ffffff">阶段 2 · 方案设计</text>
+    <text x="359" y="166" font-size="12.5" fill="#3a3d44">数据页：<tspan font-weight="600" fill="#1a1d21">设计</tspan></text>
+    <text x="359" y="188" font-size="12.5" fill="#3a3d44">办理角色：<tspan font-weight="600" fill="#1a1d21">设计师</tspan></text>
+    <text x="359" y="210" font-size="12.5" fill="#3a3d44">状态字段：dstatus</text>
+    <text x="359" y="232" font-size="12.5" fill="#3a3d44">推进：设计中 <tspan fill="#16a34a" font-weight="600">→ 完成</tspan></text>
+    <text x="359" y="252" font-size="11.5" fill="#8b8f99">记录 DSN-001（自动生成）</text>
+  </g>
+
+  <!-- Stage 3 -->
+  <g>
+    <rect x="660" y="110" width="250" height="150" rx="10" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.5"/>
+    <rect x="660" y="110" width="250" height="30" rx="10" fill="#2a2e36"/>
+    <rect x="660" y="125" width="250" height="15" fill="#2a2e36"/>
+    <text x="674" y="130" font-size="14" font-weight="700" fill="#ffffff">阶段 3 · 开发</text>
+    <text x="674" y="166" font-size="12.5" fill="#3a3d44">数据页：<tspan font-weight="600" fill="#1a1d21">开发</tspan></text>
+    <text x="674" y="188" font-size="12.5" fill="#3a3d44">办理角色：<tspan font-weight="600" fill="#1a1d21">开发</tspan></text>
+    <text x="674" y="210" font-size="12.5" fill="#3a3d44">末阶段：推进 → 流程完成</text>
+    <text x="674" y="252" font-size="11.5" fill="#8b8f99">记录 DEV-001（自动生成）</text>
+  </g>
+
+  <!-- advance arrows -->
+  <line x1="280" y1="175" x2="345" y2="175" stroke="#2a2e36" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="290" y="166" font-size="11" font-weight="600" fill="#2a2e36">推进</text>
+  <line x1="595" y1="175" x2="660" y2="175" stroke="#2a2e36" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="605" y="166" font-size="11" font-weight="600" fill="#2a2e36">推进</text>
+
+  <!-- spawn mapping labels under advance arrows -->
+  <text x="288" y="290" font-size="11" fill="#3a3d44">spawn：按字段映射</text>
+  <text x="288" y="306" font-size="11" fill="#8b8f99">title ← $source.title</text>
+  <text x="288" y="320" font-size="11" fill="#8b8f99">srcReq ← $source.id（反向关联）</text>
+
+  <!-- link-back dashed arrow (downstream references upstream) -->
+  <path d="M 359 246 C 320 300, 250 300, 250 264" fill="none" stroke="#8b8f99" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#arrowLink)"/>
+
+  <!-- reject arrows (curved, above) -->
+  <path d="M 470 110 C 470 60, 155 60, 155 108" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="6 3" marker-end="url(#arrowBack)"/>
+  <text x="250" y="52" font-size="11.5" font-weight="600" fill="#dc2626">驳回（+ 意见）→ 退回上一阶段，复位上游状态</text>
+  <path d="M 785 110 C 785 78, 600 78, 600 108" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="6 3" marker-end="url(#arrowBack)"/>
+
+  <!-- divider -->
+  <line x1="30" y1="350" x2="910" y2="350" stroke="#ebecf0" stroke-width="1"/>
+
+  <!-- engine band -->
+  <text x="30" y="380" font-size="15" font-weight="700" fill="#1a1d21">运行机制（复用现有原语）</text>
+
+  <g font-size="12.5">
+    <rect x="30" y="398" width="270" height="120" rx="8" fill="#ffffff" stroke="#e3e4e8"/>
+    <text x="44" y="420" font-weight="700" fill="#1a1d21">① 触发</text>
+    <text x="44" y="442" fill="#3a3d44">数据页记录详情显示「推进/驳回」按钮</text>
+    <text x="44" y="460" fill="#8b8f99">（来自 get_allowed_transitions 状态机）</text>
+    <text x="44" y="482" fill="#3a3d44">点击 → 弹「意见」对话框 → 提交更新</text>
+    <text x="44" y="500" fill="#8b8f99">_workflowComment 随更新体透传</text>
+  </g>
+  <g font-size="12.5">
+    <rect x="335" y="398" width="270" height="120" rx="8" fill="#ffffff" stroke="#e3e4e8"/>
+    <text x="349" y="420" font-weight="700" fill="#1a1d21">② 编排（同一事务）</text>
+    <text x="349" y="442" fill="#3a3d44">update_item 状态转换后调用</text>
+    <text x="349" y="460" fill="#1a1d21" font-weight="600">workflow_engine.on_transition</text>
+    <text x="349" y="482" fill="#3a3d44">匹配阶段推进/回退 → spawn 下游</text>
+    <text x="349" y="500" fill="#8b8f99">FOR UPDATE 锁实例，防并发重复</text>
+  </g>
+  <g font-size="12.5">
+    <rect x="640" y="398" width="270" height="120" rx="8" fill="#ffffff" stroke="#e3e4e8"/>
+    <text x="654" y="420" font-weight="700" fill="#1a1d21">③ 流转 + 通知</text>
+    <text x="654" y="442" fill="#3a3d44">下游记录走 allocate_sequence</text>
+    <text x="654" y="460" fill="#8b8f99">（序号/主键一致，与并发加固对齐）</text>
+    <text x="654" y="482" fill="#3a3d44">通知下一阶段角色 → 待办收件箱</text>
+    <text x="654" y="500" fill="#8b8f99">实例 chain/history 追踪全程</text>
+  </g>
+
+  <text x="30" y="544" font-size="11.5" fill="#8b8f99">数据表：workflow_definitions（有序阶段定义）· workflow_instances（递传链 chain + history + 当前阶段）　权限：admin.workflows</text>
+</svg>

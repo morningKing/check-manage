@@ -8,17 +8,19 @@
 
 ## 1. 概述
 
-本次发布包含两个**幂等**数据库迁移，均可安全重复执行：
+本次发布包含三个**幂等**数据库迁移，均可安全重复执行：
 
 | 迁移文件 | 作用 | 为什么需要 |
 |---|---|---|
 | `migrations/2026_06_13_settings_hub_menu.py` | 将旧的"数据工具"（`menu-3-b`）和"系统配置"（`menu-3`）两棵菜单子树合并为单一"设置中心"（`/admin`）菜单 | 菜单结构重构，旧节点残留会产生重复入口和路由冲突 |
 | `migrations/2026_06_13_dynamic_sequences.py` | 创建 `dynamic_sequences` 表并按现有数据播种计数器；此后所有 autoSequence 值由服务端原子分配 | 解决并发创建时序号重复的问题；客户端不再自行生成序号 |
+| `migrations/2026_06_14_workflow_tables.py` | 创建 `workflow_definitions` / `workflow_instances` 两张表 | 跨页工作流引擎的存储（详见 `workflow-engine-guide.md`） |
 
-两个迁移均**幂等**（可重复执行不产生副作用）：
+三个迁移均**幂等**（可重复执行不产生副作用）：
 
 - 设置中心迁移：每次先删旧子树再 upsert 目标节点。
 - 序列计数迁移：建表语句含 `IF NOT EXISTS`；播种使用 `GREATEST` 语义，计数器只升不降。
+- 工作流表迁移：建表语句含 `IF NOT EXISTS`，纯建表无数据改动。
 
 **全新安装**（通过 `python init_db.py` 初始化）已包含这两项，无需单独运行迁移。
 
@@ -93,6 +95,20 @@ python -m migrations.2026_06_13_dynamic_sequences
 此步骤会：
 1. 创建 `dynamic_sequences (collection, branch_id, field_name, current_value)` 表（若已存在则跳过）。
 2. 扫描所有 `page_configs` 中的 `autoSequence` 字段，按各 collection + branch_id 的现有数据最大值播种计数器。
+
+### 步骤 3：工作流表迁移
+
+```bash
+python -m migrations.2026_06_14_workflow_tables
+```
+
+**预期输出**：
+
+```
+{'status': 'ok'}
+```
+
+创建 `workflow_definitions` / `workflow_instances` 两张表（若已存在则跳过），纯建表、无数据改动。工作流功能用法见 `workflow-engine-guide.md`。
 
 ---
 
