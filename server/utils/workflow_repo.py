@@ -60,9 +60,12 @@ def get_instance(cur, inst_id, for_update=False):
 
 
 def find_running_instance_by_record(cur, collection, record_id, for_update=False):
-    """找到 chain 末项 == (collection, record_id) 的运行中实例。"""
-    sql = ("SELECT id FROM workflow_instances WHERE status='running' "
-           "AND (chain -> -1 ->> 'collection') = %s AND (chain -> -1 ->> 'recordId') = %s LIMIT 1")
+    """找到「当前阶段对应的 chain 项」== (collection, record_id) 的运行中实例。
+    用 current_stage_id 而非 chain 末项定位——回退后当前阶段≠末项，故必须按当前阶段匹配。"""
+    sql = ("SELECT id FROM workflow_instances wi WHERE status='running' "
+           "AND EXISTS (SELECT 1 FROM jsonb_array_elements(chain) e "
+           "WHERE e->>'stageId' = wi.current_stage_id "
+           "AND e->>'collection' = %s AND e->>'recordId' = %s) LIMIT 1")
     cur.execute(sql, (collection, record_id))
     r = cur.fetchone()
     if not r:
