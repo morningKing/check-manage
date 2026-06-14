@@ -409,6 +409,31 @@ CREATE TABLE IF NOT EXISTS dynamic_sequences (
     current_value BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (collection, branch_id, field_name)
 );
+
+-- ==================== 工作流引擎表 ====================
+CREATE TABLE IF NOT EXISTS workflow_definitions (
+    id          VARCHAR(100) PRIMARY KEY,
+    name        VARCHAR(200) NOT NULL,
+    description TEXT,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    stages      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS workflow_instances (
+    id               VARCHAR(100) PRIMARY KEY,
+    workflow_id      VARCHAR(100) NOT NULL,
+    status           VARCHAR(20) NOT NULL DEFAULT 'running',
+    current_stage_id VARCHAR(100),
+    chain            JSONB NOT NULL DEFAULT '[]'::jsonb,
+    history          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    started_at       TIMESTAMPTZ DEFAULT NOW(),
+    started_by       VARCHAR(100),
+    updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_wf_inst_status ON workflow_instances(status);
+CREATE INDEX IF NOT EXISTS idx_wf_inst_current ON workflow_instances(current_stage_id);
+CREATE INDEX IF NOT EXISTS idx_wf_inst_workflow ON workflow_instances(workflow_id);
 """
 
 DATA_FILES_DDL = """
