@@ -9,6 +9,7 @@ export const SETTINGS_TAB_COMPONENTS: Record<string, Component> = {
   roles: defineAsyncComponent(() => import('@/views/admin/RoleManager.vue')),
   menu: defineAsyncComponent(() => import('@/views/admin/MenuManager.vue')),
   'page-config': defineAsyncComponent(() => import('@/views/admin/PageConfigManager.vue')),
+  workflows: defineAsyncComponent(() => import('@/views/admin/WorkflowManager.vue')),
   'api-keys': defineAsyncComponent(() => import('@/views/admin/ApiKeyManager.vue')),
   webhook: defineAsyncComponent(() => import('@/views/admin/WebhookSettings.vue')),
   'ai-settings': defineAsyncComponent(() => import('@/views/admin/AiSettings.vue')),

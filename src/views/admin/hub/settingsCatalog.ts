@@ -28,6 +28,7 @@ export const SETTINGS_CATALOG: readonly SettingsCategoryMeta[] = [
   { id: 'structure', label: '结构配置', icon: 'Files', tabs: [
     { id: 'menu', label: '菜单管理', perm: 'admin.menus' },
     { id: 'page-config', label: '页面配置', perm: 'admin.page_configs' },
+    { id: 'workflows', label: '工作流', perm: 'admin.workflows' },
   ] },
   { id: 'integration', label: '集成对接', icon: 'Link', tabs: [
     { id: 'api-keys', label: 'Open API', perm: 'admin.api_keys' },

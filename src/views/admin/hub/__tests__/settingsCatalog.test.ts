@@ -8,10 +8,10 @@ import {
 } from '../settingsCatalog'
 
 describe('settingsCatalog', () => {
-  it('共 7 个分类，tab 总数 16', () => {
+  it('共 7 个分类，tab 总数 17', () => {
     expect(SETTINGS_CATALOG).toHaveLength(7)
     const tabCount = SETTINGS_CATALOG.reduce((n, c) => n + c.tabs.length, 0)
-    expect(tabCount).toBe(16)
+    expect(tabCount).toBe(17)
   })
 
   it('每个 tab 的权限 key 以 admin. 开头且唯一标识', () => {
