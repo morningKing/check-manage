@@ -109,4 +109,33 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
                             'by': operator, 'comment': None})
             repo.update_instance(cur, inst['id'], status='completed', chain=chain, history=history)
         return
-    # reject 在 Task 5 实现
+    if rej and from_value == rej.get('from') and to_value == rej.get('to'):
+        if idx == 0:
+            return  # 首阶段无可退回
+        prev = stages[idx - 1]
+        history.append({'ts': repo._now(), 'action': 'reject', 'stageId': stage['id'],
+                        'by': operator, 'comment': comment})
+        prev_entry = None
+        for entry in reversed(chain[:-1]):
+            if entry['stageId'] == prev['id']:
+                prev_entry = entry
+                break
+        if prev_entry is None:
+            return
+        prev_entry['completedBy'] = None
+        prev_adv = (prev.get('advanceTransition') or {})
+        reset_to = prev_adv.get('from')
+        if reset_to and prev.get('statusField'):
+            cur.execute("SELECT data FROM dynamic_data WHERE collection=%s AND id=%s AND branch_id='main'",
+                        (prev_entry['collection'], prev_entry['recordId']))
+            row = cur.fetchone()
+            if row:
+                pdata = row[0] or {}
+                pdata[prev['statusField']] = reset_to
+                pdata['_rejectComment'] = comment
+                cur.execute("UPDATE dynamic_data SET data=%s, updated_at=NOW() WHERE collection=%s AND id=%s AND branch_id='main'",
+                            (psycopg2.extras.Json(pdata), prev_entry['collection'], prev_entry['recordId']))
+        repo.update_instance(cur, inst['id'], current_stage_id=prev['id'], chain=chain, history=history)
+        _notify_roles(cur, prev.get('assignedRoles', []), f'工作流驳回：{prev["name"]}',
+                      f'{operator} 驳回到「{prev["name"]}」：{comment or ""}', prev_entry['collection'], prev_entry['recordId'])
+        return
