@@ -506,7 +506,7 @@ def create_item(collection):
     rid = body.get('id')
     created_at = body.get('createdAt')
     client_relations = body.get('_relations')
-    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations')}
+    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations', '_workflowComment')}
     branch_id = _get_current_user_branch(collection)
 
     # 检查分支锁定（包括 main 分支）
@@ -625,7 +625,7 @@ def update_item(collection, item_id):
     created_at = body.get('createdAt')
     client_version = body.get('_version')
     client_relations = body.get('_relations')  # [{fieldName, targetCollection, targetField, ids}]
-    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt', '_relations')}
+    data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_version', 'updatedAt', '_relations', '_workflowComment')}
     branch_id = _get_current_user_branch(collection)
 
     # 检查分支锁定（包括 main 分支）
