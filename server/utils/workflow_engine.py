@@ -45,3 +45,68 @@ def spawn_record(cur, target_collection, branch_id, field_mapping, source_data, 
         (new_id, target_collection, psycopg2.extras.Json(data), branch_id),
     )
     return new_id
+
+
+def _stage_index(stages, stage_id):
+    for i, s in enumerate(stages):
+        if s['id'] == stage_id:
+            return i
+    return -1
+
+
+def _notify_roles(cur, roles, title, content, collection, record_id):
+    """通知拥有 roles 之一的所有用户（create_notification 自开连接，独立事务）。"""
+    if not roles:
+        return
+    from utils.notifier import create_notification
+    cur.execute("SELECT id FROM users WHERE role = ANY(%s)", (list(roles),))
+    for (uid,) in cur.fetchall():
+        create_notification(uid, 'workflow', title, content, collection, record_id)
+
+
+def on_transition(cur, collection, record_id, status_field, from_value, to_value,
+                  old_data, new_data, operator, role, comment=None):
+    """update_item 状态转换成功后调用。匹配当前实例阶段的 advance/reject 转换并编排。
+    无匹配实例则静默返回（普通状态变更不受影响）。"""
+    from utils import workflow_repo as repo
+    inst = repo.find_running_instance_by_record(cur, collection, record_id, for_update=True)
+    if not inst:
+        return
+    definition = repo.get_definition(cur, inst['workflow_id'])
+    if not definition or not definition.get('enabled'):
+        return
+    stages = definition['stages']
+    idx = _stage_index(stages, inst['current_stage_id'])
+    if idx < 0:
+        return
+    stage = stages[idx]
+    if stage.get('statusField') != status_field:
+        return
+    adv = stage.get('advanceTransition') or {}
+    rej = stage.get('rejectTransition') or {}
+
+    if stage.get('assignedRoles') and role not in stage['assignedRoles']:
+        return
+
+    chain = inst['chain']; history = inst['history']
+    if adv and from_value == adv.get('from') and to_value == adv.get('to'):
+        chain[-1]['completedBy'] = operator
+        history.append({'ts': repo._now(), 'action': 'advance', 'stageId': stage['id'],
+                        'by': operator, 'comment': comment})
+        if idx + 1 < len(stages):
+            nxt = stages[idx + 1]
+            spawn = stage.get('spawn') or {}
+            down_id = spawn_record(cur, target_collection=nxt['collection'], branch_id='main',
+                                   field_mapping=spawn.get('fieldMapping', {}),
+                                   source_data=new_data, source_id=record_id, operator=operator)
+            chain.append({'stageId': nxt['id'], 'collection': nxt['collection'], 'recordId': down_id,
+                          'enteredAt': repo._now(), 'completedBy': None})
+            repo.update_instance(cur, inst['id'], current_stage_id=nxt['id'], chain=chain, history=history)
+            _notify_roles(cur, nxt.get('assignedRoles', []), f'工作流待办：{nxt["name"]}',
+                          f'{operator} 推进了流程，请处理「{nxt["name"]}」', nxt['collection'], down_id)
+        else:
+            history.append({'ts': repo._now(), 'action': 'complete', 'stageId': stage['id'],
+                            'by': operator, 'comment': None})
+            repo.update_instance(cur, inst['id'], status='completed', chain=chain, history=history)
+        return
+    # reject 在 Task 5 实现
