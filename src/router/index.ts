@@ -64,6 +64,8 @@ const staticRoutes: RouteRecordRaw[] = [
           icon: 'ChatDotRound',
         },
       },
+      // 我的待办（工作流收件箱）
+      { path: 'workflow/inbox', name: 'WorkflowInbox', component: () => import('@/views/workflow/WorkflowInbox.vue'), meta: { title: '我的待办' } },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',

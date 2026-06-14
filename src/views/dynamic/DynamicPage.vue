@@ -548,6 +548,9 @@
           <span v-else></span>
           <div>
             <el-button @click="viewDialogVisible = false">关闭</el-button>
+            <el-button v-if="!isGuest" type="success" plain @click="openStartWorkflow">
+              启动工作流
+            </el-button>
             <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
               关系图谱
             </el-button>
@@ -556,6 +559,75 @@
             </el-button>
           </div>
         </div>
+      </template>
+    </el-dialog>
+
+    <!-- 工作流：推进/驳回意见对话框 -->
+    <el-dialog
+      v-model="transitionDialogVisible"
+      :title="isRejectTransition ? '驳回意见' : '推进意见'"
+      width="480px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <el-form label-position="top">
+        <el-form-item label="意见（可选）">
+          <el-input
+            v-model="workflowComment"
+            type="textarea"
+            :rows="4"
+            placeholder="填写本次推进 / 驳回的意见（可留空）"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="transitionDialogVisible = false">取消</el-button>
+        <el-button
+          :type="isRejectTransition ? 'danger' : 'primary'"
+          :loading="transitionSubmitting"
+          @click="confirmWorkflowTransition"
+        >
+          确认
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 工作流：启动入口对话框 -->
+    <el-dialog
+      v-model="startWorkflowDialogVisible"
+      title="启动工作流"
+      width="480px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <div v-loading="startWorkflowLoading">
+        <el-empty
+          v-if="!startWorkflowLoading && startableWorkflows.length === 0"
+          description="当前数据页没有可启动的工作流"
+        />
+        <el-form v-else label-position="top">
+          <el-form-item label="选择工作流">
+            <el-select v-model="selectedWorkflowId" placeholder="请选择工作流" style="width:100%">
+              <el-option
+                v-for="w in startableWorkflows"
+                :key="w.id"
+                :label="w.name"
+                :value="w.id!"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="startWorkflowDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!selectedWorkflowId"
+          :loading="startWorkflowSubmitting"
+          @click="confirmStartWorkflow"
+        >
+          启动
+        </el-button>
       </template>
     </el-dialog>
 
@@ -831,6 +903,8 @@ import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImport
 import { importPageRecords } from '@/utils/importPageRecords'
 import { withBatch } from '@/utils/batch'
 import { getExportScripts, executeExportScript } from '@/api/exportScript'
+import { listWorkflows, startWorkflow } from '@/api/workflow'
+import type { WorkflowDefinition } from '@/types/workflow'
 import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, switchToMainProjectBranch } from '@/api/projectVersion'
 import type { CurrentBranch } from '@/api/projectVersion'
 import type { ProjectVersion } from '@/types/version'
@@ -965,6 +1039,19 @@ const currentRecord = ref<Record<string, any>>({})
  * 当前查看的记录
  */
 const viewRecord = ref<Record<string, any>>({})
+
+// ==================== 工作流：推进/驳回意见 + 启动 ====================
+/** 推进/驳回意见对话框 */
+const transitionDialogVisible = ref(false)
+const transitionSubmitting = ref(false)
+const workflowComment = ref('')
+const pendingTransition = ref<{ field: string; from: string; to: string } | null>(null)
+/** 启动工作流对话框 */
+const startWorkflowDialogVisible = ref(false)
+const startWorkflowLoading = ref(false)
+const startWorkflowSubmitting = ref(false)
+const startableWorkflows = ref<WorkflowDefinition[]>([])
+const selectedWorkflowId = ref('')
 
 /**
  * 待删除的记录ID
@@ -1811,9 +1898,34 @@ function handleView(row: DynamicRecord): void {
 /**
  * 处理工作流状态转换（从查看弹窗中的快捷按钮）
  */
-async function handleWorkflowTransition(payload: { field: string; from: string; to: string }): Promise<void> {
+/**
+ * 工作流转换入口：由 WorkflowActions 触发。
+ * 这里不直接提交，而是打开"推进/驳回意见"对话框，让办理人填写可选意见，
+ * 确认后把 `_workflowComment` 一并写入更新请求体（后端 update_item 读取并交给工作流引擎）。
+ */
+function handleWorkflowTransition(payload: { field: string; from: string; to: string }): void {
+  if (!viewRecord.value?.id) return
+  pendingTransition.value = payload
+  workflowComment.value = ''
+  transitionDialogVisible.value = true
+}
+
+/**
+ * 判断目标状态是否属于"驳回"类，用于把对话框/按钮渲染为危险样式（尽力而为）。
+ */
+const isRejectTransition = computed(() => {
+  const to = (pendingTransition.value?.to || '').toLowerCase()
+  return to.includes('reject') || to.includes('cancel') || to.includes('驳回') || to.includes('拒绝') || to.includes('退回')
+})
+
+async function confirmWorkflowTransition(): Promise<void> {
+  const payload = pendingTransition.value
   const record = viewRecord.value
-  if (!record?.id) return
+  if (!payload || !record?.id) {
+    transitionDialogVisible.value = false
+    return
+  }
+  transitionSubmitting.value = true
   try {
     const updateData: Record<string, any> = { ...record }
     updateData[payload.field] = payload.to
@@ -1825,6 +1937,11 @@ async function handleWorkflowTransition(payload: { field: string; from: string; 
         delete updateData[key]
       }
     }
+    // 携带工作流意见，后端 update_item 会读取并转交工作流引擎
+    const comment = workflowComment.value.trim()
+    if (comment) {
+      updateData._workflowComment = comment
+    }
     await pageConfigStore.updatePageData(pageId.value, record.id, updateData)
     ElMessage.success('状态已更新')
     // Update local state
@@ -1834,9 +1951,55 @@ async function handleWorkflowTransition(payload: { field: string; from: string; 
       tableData.value = [...tableData.value]
     }
     viewRecord.value = { ...viewRecord.value, [payload.field]: payload.to }
+    transitionDialogVisible.value = false
   } catch (error: any) {
     const resp = error.response?.data
     ElMessage.error(resp?.error || '状态更新失败')
+  } finally {
+    transitionSubmitting.value = false
+  }
+}
+
+// ==================== 启动工作流 ====================
+
+/**
+ * 打开"启动工作流"对话框：拉取所有启用的工作流，
+ * 仅保留首阶段 collection 与当前页一致的工作流供选择。
+ */
+async function openStartWorkflow(): Promise<void> {
+  if (!viewRecord.value?.id) return
+  startWorkflowLoading.value = true
+  startWorkflowDialogVisible.value = true
+  selectedWorkflowId.value = ''
+  try {
+    const all = await listWorkflows()
+    startableWorkflows.value = all.filter(
+      (w) => w.enabled && w.stages?.[0]?.collection === collection.value
+    )
+    if (startableWorkflows.value.length === 0) {
+      ElMessage.info('当前数据页没有可启动的工作流')
+    }
+  } catch {
+    ElMessage.error('加载工作流列表失败')
+    startableWorkflows.value = []
+  } finally {
+    startWorkflowLoading.value = false
+  }
+}
+
+async function confirmStartWorkflow(): Promise<void> {
+  const record = viewRecord.value
+  if (!selectedWorkflowId.value || !record?.id) return
+  startWorkflowSubmitting.value = true
+  try {
+    await startWorkflow(selectedWorkflowId.value, collection.value, record.id as string)
+    ElMessage.success('工作流已启动')
+    startWorkflowDialogVisible.value = false
+  } catch (error: any) {
+    const resp = error.response?.data
+    ElMessage.error(resp?.error || '启动工作流失败')
+  } finally {
+    startWorkflowSubmitting.value = false
   }
 }
 

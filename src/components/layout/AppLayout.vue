@@ -48,6 +48,9 @@
             <el-icon :size="18"><ChatDotRound /></el-icon>
             <span style="margin-left:4px">AI 助手</span>
           </el-button>
+          <el-button text class="inbox-btn" title="我的待办" @click="router.push('/workflow/inbox')">
+            <el-icon :size="18"><List /></el-icon>
+          </el-button>
           <NotificationBell />
           <!-- 外观设置 -->
           <el-popover trigger="click" :width="280" placement="bottom-end">
@@ -152,7 +155,7 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Loading, ArrowDown, User as UserIcon, Setting, ChatDotRound } from '@element-plus/icons-vue'
+import { Loading, ArrowDown, User as UserIcon, Setting, ChatDotRound, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore, useMenuStore, useAuthStore, useTabStore, useSystemConfigStore } from '@/stores'
 import { ROLE_LABELS } from '@/types'
