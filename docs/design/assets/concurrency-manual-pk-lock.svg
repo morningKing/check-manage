@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="450" viewBox="0 0 820 450" font-family="-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">
+  <defs>
+    <marker id="a3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2a2e36"/></marker>
+    <marker id="a3r" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#dc2626"/></marker>
+  </defs>
+  <rect width="820" height="450" fill="#ffffff"/>
+  <text x="30" y="36" font-size="19" font-weight="700" fill="#1a1d21">场景三：并发创建 · 手填主键去竞态（advisory 事务锁）</text>
+  <text x="30" y="58" font-size="12" fill="#8b8f99">两个请求同时用相同手填主键「IC-A」创建（check-then-insert 在 READ COMMITTED 下本会竞态，技术行 id 不同、DB 主键拦不住）</text>
+
+  <g font-size="12.5" font-weight="600">
+    <rect x="60" y="78" width="150" height="30" rx="6" fill="#2a2e36"/><text x="78" y="98" fill="#fff">请求 A（主键 IC-A）</text>
+    <rect x="370" y="78" width="150" height="30" rx="6" fill="#2a2e36"/><text x="388" y="98" fill="#fff">请求 B（主键 IC-A）</text>
+    <rect x="640" y="78" width="150" height="30" rx="6" fill="#2a2e36"/><text x="654" y="98" fill="#fff">advisory 锁 + DB</text>
+  </g>
+  <line x1="135" y1="108" x2="135" y2="420" stroke="#d0d3d9"/>
+  <line x1="445" y1="108" x2="445" y2="420" stroke="#d0d3d9"/>
+  <line x1="715" y1="108" x2="715" y2="420" stroke="#d0d3d9"/>
+
+  <g font-size="11.5" fill="#3a3d44">
+    <line x1="135" y1="140" x2="715" y2="140" stroke="#16a34a" stroke-width="1.8" marker-end="url(#a3)"/>
+    <text x="145" y="133" fill="#16a34a" font-weight="600">A: pg_advisory_xact_lock(coll, "IC-A") → 取得</text>
+    <text x="145" y="166" fill="#3a3d44">A: 唯一性检查（无）→ INSERT IC-A</text>
+
+    <line x1="445" y1="196" x2="715" y2="196" stroke="#d97706" stroke-width="1.8" stroke-dasharray="5 3" marker-end="url(#a3)"/>
+    <text x="455" y="189" fill="#d97706" font-weight="600">B: 同键 advisory lock → 阻塞</text>
+    <rect x="615" y="206" width="180" height="30" rx="5" fill="#fffbeb" stroke="#d97706"/>
+    <text x="627" y="226" font-size="11" fill="#d97706">B 等待 A 事务结束</text>
+
+    <line x1="135" y1="262" x2="715" y2="262" stroke="#16a34a" stroke-width="1.4" marker-end="url(#a3)"/>
+    <text x="145" y="255" fill="#16a34a">A: COMMIT（插入成功 + 释放锁）</text>
+
+    <line x1="445" y1="302" x2="715" y2="302" stroke="#16a34a" stroke-width="1.4" marker-end="url(#a3)"/>
+    <text x="455" y="295" fill="#3a3d44">B: 获锁 → 唯一性检查发现 IC-A 已存在</text>
+    <line x1="715" y1="332" x2="445" y2="332" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#a3r)"/>
+    <text x="500" y="325" fill="#dc2626" font-weight="600">B: 409 主键重复</text>
+  </g>
+
+  <rect x="30" y="356" width="760" height="74" rx="8" fill="#f7f8fa" stroke="#e3e4e8"/>
+  <text x="46" y="378" font-size="12.5" font-weight="700" fill="#1a1d21">结果：恰好一条插入成功，其余返回主键重复。检查-插入窗口被同键锁串行化。</text>
+  <text x="46" y="400" font-size="11.5" fill="#3a3d44">锁顺序约定：create_item 内先 allocate_sequence 的 FOR UPDATE（计数行）、再取 advisory lock，全局一致顺序避免死锁。</text>
+  <text x="46" y="420" font-size="11.5" fill="#3a3d44">autoSequence 主键由原子分配天然唯一，无需 advisory lock；advisory lock 只作用于非序列的手填主键。</text>
+</svg>
