@@ -119,9 +119,11 @@ function onNodeClick(e: { node: { id: string } }) {
   emit('select', e.node.id)
 }
 
-// 节点变化（增删阶段 / 实时编辑）后重新自适应视野，避免节点被裁切
-const { fitView, onInit } = useVueFlow()
-onInit(() => fitView({ padding: 0.2 }))
+// 增删阶段后重新自适应视野，避免节点被裁切/过度放大。
+// 用 onNodesInitialized（节点测量完成后触发）而非 onInit/裸 watch，
+// 否则 fitView 会在新节点尺寸就绪前运行，导致过度缩放。
+const { fitView, onNodesInitialized } = useVueFlow()
+onNodesInitialized(() => fitView({ padding: 0.2 }))
 watch(
   () => model.value.nodes.map((n) => n.id).join(','),
   async () => {
