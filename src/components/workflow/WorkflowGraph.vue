@@ -39,8 +39,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import { VueFlow, MarkerType, Position } from '@vue-flow/core'
+import { computed, watch, nextTick } from 'vue'
+import { VueFlow, useVueFlow, MarkerType, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import dagre from '@dagrejs/dagre'
@@ -66,7 +66,7 @@ const REJ_COLOR = '#E6A23C'
 /** 用 dagre 仅按「推进边」排版（回退边是反向的，纳入会形成环、破坏线性布局）。 */
 function layout(model: ReturnType<typeof deriveWorkflowGraph>) {
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 90 })
+  g.setGraph({ rankdir: 'LR', nodesep: 50, ranksep: 120 })
   g.setDefaultEdgeLabel(() => ({}))
   for (const n of model.nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
   for (const e of model.edges) if (e.kind === 'advance') g.setEdge(e.source, e.target)
@@ -118,6 +118,17 @@ const edges = computed(() =>
 function onNodeClick(e: { node: { id: string } }) {
   emit('select', e.node.id)
 }
+
+// 节点变化（增删阶段 / 实时编辑）后重新自适应视野，避免节点被裁切
+const { fitView, onInit } = useVueFlow()
+onInit(() => fitView({ padding: 0.2 }))
+watch(
+  () => model.value.nodes.map((n) => n.id).join(','),
+  async () => {
+    await nextTick()
+    fitView({ padding: 0.2 })
+  },
+)
 </script>
 
 <style scoped>
