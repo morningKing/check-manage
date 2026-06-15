@@ -28,9 +28,22 @@
       <el-form label-width="120px">
         <el-form-item label="名称"><el-input v-model="form.name" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="form.enabled" /></el-form-item>
-        <el-form-item label="数据页(collection)"><el-input v-model="form.collection" placeholder="如 inspection-case" /></el-form-item>
-        <el-form-item label="分支"><el-input v-model="form.branchId" /></el-form-item>
-        <el-form-item label="状态字段"><el-input v-model="form.statusField" placeholder="记录里的字段名，如 审核状态" /></el-form-item>
+        <el-form-item label="数据页(collection)">
+          <el-select v-model="form.collection" filterable placeholder="选择数据页" style="width:300px" @change="onCollectionChange">
+            <el-option v-for="c in collectionOptions" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="分支">
+          <el-select v-model="form.branchId" filterable placeholder="选择分支" style="width:300px">
+            <el-option v-for="b in branchOptions" :key="b.value" :label="b.label" :value="b.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="状态字段">
+          <el-select v-model="form.statusField" filterable allow-create clearable
+                     placeholder="选择或输入字段名" style="width:300px">
+            <el-option v-for="f in fieldsOf(form.collection)" :key="f.value" :label="f.label" :value="f.value" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="待处理值"><el-input v-model="form.pendingValue" placeholder="留空=匹配空/未设置" /></el-form-item>
         <el-form-item label="处理中值"><el-input v-model="form.runningValue" /></el-form-item>
         <el-form-item label="已处理值"><el-input v-model="form.doneValue" /></el-form-item>
@@ -80,16 +93,40 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiScanTaskStore } from '@/stores/aiScanTask'
+import { usePageConfigStore } from '@/stores/pageConfig'
 import type { AiScanTask } from '@/types'
 import { listAgents } from '@/api/aiChat'
 import type { AgentInfo } from '@/api/aiChat'
+import { getAllBranches } from '@/api/projectVersion'
 
 const store = useAiScanTaskStore()
+const pageConfigStore = usePageConfigStore()
 const selectedId = ref('')
 const form = ref<AiScanTask | null>(null)
 const extraFilterText = ref('{}')
 const running = ref(false)
 const agents = ref<AgentInfo[]>([])
+
+// ---- 下拉选项：数据页 / 分支 / 状态字段 ----
+const collectionOptions = computed(() =>
+  pageConfigStore.pageConfigs.map((c) => ({
+    label: `${c.name}（${c.id.replace('page-', '')}）`,
+    value: c.id.replace('page-', ''),
+  })),
+)
+const branchOptions = ref<{ label: string; value: string }[]>([{ label: '主分支（main）', value: 'main' }])
+function fieldsOf(collection?: string): { label: string; value: string }[] {
+  if (!collection) return []
+  const config = pageConfigStore.pageConfigs.find((c) => c.id.replace('page-', '') === collection)
+  if (!config) return []
+  return config.fields.map((f) => ({ label: `${f.label}（${f.fieldName}）`, value: f.fieldName }))
+}
+function onCollectionChange() {
+  // 切换数据页后，若状态字段已不属于新数据页则清空，避免残留
+  if (!form.value) return
+  const valid = fieldsOf(form.value.collection).some((f) => f.value === form.value!.statusField)
+  if (!valid) form.value.statusField = ''
+}
 
 function blank(): AiScanTask {
   return { id: '', name: '', enabled: true, collection: '', branchId: 'main', statusField: '',
@@ -146,6 +183,20 @@ async function runNow() {
 onMounted(async () => {
   await store.load()
   if (store.tasks.length) await select(store.tasks[0].id)
+  // 数据页 / 状态字段 下拉来源
+  if (!pageConfigStore.pageConfigs.length) {
+    try { await pageConfigStore.fetchPageConfigs() } catch { /* non-fatal */ }
+  }
+  // 分支下拉：主分支 + 所有项目活动分支
+  try {
+    const branches = await getAllBranches()
+    const opts = [{ label: '主分支（main）', value: 'main' }]
+    for (const b of branches) {
+      if (b.id === 'main') continue
+      opts.push({ label: b.projectName ? `${b.name}（${b.projectName}）` : b.name, value: b.id })
+    }
+    branchOptions.value = opts
+  } catch { /* non-fatal，至少保留 main */ }
   try {
     const r = await listAgents()
     agents.value = [...r.agents, ...r.subagents]
