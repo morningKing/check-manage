@@ -73,16 +73,19 @@ def create_instance(cur, inst_id, workflow_id, stage_id, collection, record_id, 
     chain = [{'stageId': stage_id, 'collection': collection, 'recordId': record_id,
               'enteredAt': _now(), 'completedBy': None}]
     history = [{'ts': _now(), 'action': 'start', 'stageId': stage_id, 'by': started_by, 'comment': None}]
+    active = [{'stageId': stage_id, 'collection': collection, 'recordId': record_id}]
     cur.execute(
-        "INSERT INTO workflow_instances (id, workflow_id, status, current_stage_id, chain, history, started_by) "
-        "VALUES (%s,%s,'running',%s,%s,%s,%s)",
-        (inst_id, workflow_id, stage_id, psycopg2.extras.Json(chain), psycopg2.extras.Json(history), started_by),
+        "INSERT INTO workflow_instances (id, workflow_id, status, current_stage_id, active_stages, chain, history, started_by) "
+        "VALUES (%s,%s,'running',%s,%s,%s,%s,%s)",
+        (inst_id, workflow_id, stage_id, psycopg2.extras.Json(active),
+         psycopg2.extras.Json(chain), psycopg2.extras.Json(history), started_by),
     )
     return get_instance(cur, inst_id)
 
 
 def get_instance(cur, inst_id, for_update=False):
-    sql = "SELECT id,workflow_id,status,current_stage_id,chain,history,started_by FROM workflow_instances WHERE id=%s"
+    sql = ("SELECT id,workflow_id,status,current_stage_id,chain,history,started_by,active_stages "
+           "FROM workflow_instances WHERE id=%s")
     if for_update:
         sql += " FOR UPDATE"
     cur.execute(sql, (inst_id,))
@@ -90,24 +93,26 @@ def get_instance(cur, inst_id, for_update=False):
     if not r:
         return None
     return {'id': r[0], 'workflow_id': r[1], 'status': r[2], 'current_stage_id': r[3],
-            'chain': r[4] or [], 'history': r[5] or [], 'started_by': r[6]}
+            'chain': r[4] or [], 'history': r[5] or [], 'started_by': r[6], 'active_stages': r[7] or []}
 
 
 def find_running_instance_by_record(cur, collection, record_id, for_update=False):
-    """找到「当前阶段对应的 chain 项」== (collection, record_id) 的运行中实例。
-    用 current_stage_id 而非 chain 末项定位——回退后当前阶段≠末项，故必须按当前阶段匹配。"""
-    sql = ("SELECT id FROM workflow_instances wi WHERE status='running' "
-           "AND EXISTS (SELECT 1 FROM jsonb_array_elements(chain) e "
-           "WHERE e->>'stageId' = wi.current_stage_id "
-           "AND e->>'collection' = %s AND e->>'recordId' = %s) LIMIT 1")
-    cur.execute(sql, (collection, record_id))
+    """找到「某个活动分支」== (collection, record_id) 的运行中实例（v2 并行：按 active_stages 匹配）。
+    回退兼容：active_stages 为空的旧实例改按 current_stage_id 对应的 chain 项匹配。"""
+    sql = ("SELECT id FROM workflow_instances wi WHERE status='running' AND ("
+           "EXISTS (SELECT 1 FROM jsonb_array_elements(active_stages) a "
+           "WHERE a->>'collection' = %s AND a->>'recordId' = %s) "
+           "OR (active_stages = '[]'::jsonb AND EXISTS (SELECT 1 FROM jsonb_array_elements(chain) e "
+           "WHERE e->>'stageId' = wi.current_stage_id AND e->>'collection' = %s AND e->>'recordId' = %s))"
+           ") LIMIT 1")
+    cur.execute(sql, (collection, record_id, collection, record_id))
     r = cur.fetchone()
     if not r:
         return None
     return get_instance(cur, r[0], for_update=for_update)
 
 
-def update_instance(cur, inst_id, *, status=None, current_stage_id=None, chain=None, history=None):
+def update_instance(cur, inst_id, *, status=None, current_stage_id=None, chain=None, history=None, active_stages=None):
     sets, params = ['updated_at=NOW()'], []
     if status is not None:
         sets.append('status=%s'); params.append(status)
@@ -117,6 +122,8 @@ def update_instance(cur, inst_id, *, status=None, current_stage_id=None, chain=N
         sets.append('chain=%s'); params.append(psycopg2.extras.Json(chain))
     if history is not None:
         sets.append('history=%s'); params.append(psycopg2.extras.Json(history))
+    if active_stages is not None:
+        sets.append('active_stages=%s'); params.append(psycopg2.extras.Json(active_stages))
     params.append(inst_id)
     cur.execute(f"UPDATE workflow_instances SET {', '.join(sets)} WHERE id=%s", params)
 

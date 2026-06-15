@@ -428,12 +428,20 @@ CREATE TABLE IF NOT EXISTS workflow_instances (
     workflow_id      VARCHAR(100) NOT NULL,
     status           VARCHAR(20) NOT NULL DEFAULT 'running',
     current_stage_id VARCHAR(100),
+    active_stages    JSONB NOT NULL DEFAULT '[]'::jsonb,
     chain            JSONB NOT NULL DEFAULT '[]'::jsonb,
     history          JSONB NOT NULL DEFAULT '[]'::jsonb,
     started_at       TIMESTAMPTZ DEFAULT NOW(),
     started_by       VARCHAR(100),
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
+-- 迁移：并行多活动分支（v2）。补列并回填运行中实例的当前活动分支。
+ALTER TABLE workflow_instances ADD COLUMN IF NOT EXISTS active_stages JSONB NOT NULL DEFAULT '[]'::jsonb;
+UPDATE workflow_instances wi SET active_stages = COALESCE((
+    SELECT jsonb_agg(jsonb_build_object('stageId', e->>'stageId', 'collection', e->>'collection', 'recordId', e->>'recordId'))
+    FROM jsonb_array_elements(wi.chain) e WHERE e->>'stageId' = wi.current_stage_id
+), '[]'::jsonb)
+WHERE wi.status = 'running' AND (wi.active_stages IS NULL OR wi.active_stages = '[]'::jsonb);
 CREATE INDEX IF NOT EXISTS idx_wf_inst_status ON workflow_instances(status);
 CREATE INDEX IF NOT EXISTS idx_wf_inst_current ON workflow_instances(current_stage_id);
 CREATE INDEX IF NOT EXISTS idx_wf_inst_workflow ON workflow_instances(workflow_id);
