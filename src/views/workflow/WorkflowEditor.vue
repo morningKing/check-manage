@@ -18,21 +18,61 @@
     <div class="wf-editor__body">
       <section class="wf-editor__canvas">
         <div class="wf-editor__canvas-ops">
-          <span class="wf-editor__hint">点节点编辑该阶段 · 推进=下一阶段 / 回退=上一阶段</span>
+          <span class="wf-editor__hint">拖节点移位 · 从节点右侧小圆点拉到另一节点建边 · 点节点/连线在右侧编辑</span>
           <el-button size="small" type="primary" plain @click="addStage">+ 添加阶段</el-button>
         </div>
         <WorkflowGraph
           v-if="form.stages.length"
           class="wf-editor__graph"
+          editable
           :stages="form.stages"
+          :edges="form.edges"
           :selected-id="selectedId"
+          :selected-edge-id="selectedEdgeId"
           @select="selectStage"
+          @select-edge="selectEdge"
+          @connect="onConnect"
+          @node-move="onNodeMove"
         />
         <el-empty v-else description="还没有阶段，点击「添加阶段」开始" />
       </section>
 
       <aside class="wf-editor__panel">
-        <template v-if="selectedStage">
+        <!-- 连线（边）属性 -->
+        <template v-if="selectedEdge">
+          <div class="wf-panel__head">
+            <span class="wf-panel__title">连线</span>
+            <el-button link type="danger" @click="removeEdge">删除连线</el-button>
+          </div>
+          <div class="wf-edge-route">{{ stageName(selectedEdge.source) }} → {{ stageName(selectedEdge.target) }}</div>
+          <el-form label-position="top" class="wf-panel__form">
+            <el-form-item label="类型">
+              <el-radio-group v-model="selectedEdge.kind">
+                <el-radio value="advance">推进</el-radio>
+                <el-radio value="reject">回退</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <template v-if="selectedEdge.kind === 'advance'">
+              <el-form-item label="条件（留空=默认边，无条件时走它）">
+                <div class="wf-cond">
+                  <el-input :model-value="selectedEdge.condition?.field || ''" placeholder="字段"
+                            @update:model-value="(v: string) => (condOf(selectedEdge!).field = v)" />
+                  <el-select :model-value="selectedEdge.condition?.op || '=='" style="width: 96px"
+                             @update:model-value="(v: WorkflowConditionOp) => (condOf(selectedEdge!).op = v)">
+                    <el-option v-for="op in CONDITION_OPS" :key="op" :label="op" :value="op" />
+                  </el-select>
+                  <el-input :model-value="selectedEdge.condition?.value || ''" placeholder="值"
+                            @update:model-value="(v: string) => (condOf(selectedEdge!).value = v)" />
+                </div>
+                <el-button v-if="selectedEdge.condition" link size="small" @click="clearCondition(selectedEdge)">清除条件（设为默认边）</el-button>
+              </el-form-item>
+              <div class="wf-cond-hint">推进时逐条评估出边条件：命中则走该边；都不命中走默认边。</div>
+            </template>
+          </el-form>
+        </template>
+
+        <!-- 阶段属性 -->
+        <template v-else-if="selectedStage">
           <div class="wf-panel__head">
             <span class="wf-panel__title">阶段 {{ selectedIndex + 1 }}</span>
             <div class="wf-panel__ops">
@@ -118,8 +158,10 @@ import { ElMessage } from 'element-plus'
 import { useWorkflowStore } from '@/stores/workflow'
 import { usePageConfigStore } from '@/stores/pageConfig'
 import { useRoleStore } from '@/stores/role'
-import type { WorkflowDefinition, WorkflowStage } from '@/types/workflow'
+import type { WorkflowDefinition, WorkflowStage, WorkflowEdge, WorkflowConditionOp } from '@/types/workflow'
 import WorkflowGraph from '@/components/workflow/WorkflowGraph.vue'
+
+const CONDITION_OPS: WorkflowConditionOp[] = ['==', '!=', '>', '>=', '<', '<=', 'contains']
 
 const route = useRoute()
 const router = useRouter()
@@ -131,11 +173,17 @@ const LIST_PATH = '/admin/structure?tab=workflows'
 
 const loading = ref(false)
 const saving = ref(false)
-const form = reactive<WorkflowDefinition>({ id: undefined, name: '', description: '', enabled: true, stages: [] })
+const form = reactive<WorkflowDefinition>({ id: undefined, name: '', description: '', enabled: true, stages: [], edges: [] })
 const selectedId = ref<string | undefined>(undefined)
+const selectedEdgeId = ref<string | undefined>(undefined)
 
 const selectedIndex = computed(() => form.stages.findIndex((s) => s.id === selectedId.value))
 const selectedStage = computed<WorkflowStage | undefined>(() => form.stages[selectedIndex.value])
+const selectedEdge = computed<WorkflowEdge | undefined>(() => (form.edges || []).find((e) => e.id === selectedEdgeId.value))
+function stageName(id: string): string {
+  const s = form.stages.find((x) => x.id === id)
+  return s ? (s.name || s.id) : id
+}
 
 // ---- 选项 ----
 const collectionOptions = computed(() =>
@@ -186,11 +234,14 @@ function blankStage(): WorkflowStage {
 }
 function addStage() {
   const s = blankStage()
+  s.position = { x: 60 + form.stages.length * 230, y: 80 }
   form.stages.push(s)
   selectedId.value = s.id
+  selectedEdgeId.value = undefined
 }
 function selectStage(id: string) {
   selectedId.value = id
+  selectedEdgeId.value = undefined
 }
 function moveStage(idx: number, dir: number) {
   const target = idx + dir
@@ -201,8 +252,40 @@ function moveStage(idx: number, dir: number) {
 function removeStage(idx: number) {
   const removed = form.stages[idx]
   form.stages.splice(idx, 1)
-  if (removed) delete spawnRowState[removed.id]
+  if (removed) {
+    delete spawnRowState[removed.id]
+    // 删阶段时一并删掉与之相连的边
+    form.edges = (form.edges || []).filter((e) => e.source !== removed.id && e.target !== removed.id)
+  }
   selectedId.value = form.stages[Math.min(idx, form.stages.length - 1)]?.id
+}
+
+// ---- 画布交互：连线建边 / 拖动持久化坐标 / 点选边 ----
+function onConnect(p: { source: string; target: string }) {
+  if (p.source === p.target) return // 不允许自环
+  const id = `e-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  ;(form.edges ||= []).push({ id, source: p.source, target: p.target, kind: 'advance' })
+  selectedEdgeId.value = id
+  selectedId.value = undefined
+}
+function onNodeMove(p: { id: string; x: number; y: number }) {
+  const st = form.stages.find((s) => s.id === p.id)
+  if (st) st.position = { x: p.x, y: p.y }
+}
+function selectEdge(id: string) {
+  selectedEdgeId.value = id
+  selectedId.value = undefined
+}
+function condOf(edge: WorkflowEdge) {
+  if (!edge.condition) edge.condition = { field: '', op: '==', value: '' }
+  return edge.condition
+}
+function clearCondition(edge: WorkflowEdge) {
+  delete edge.condition
+}
+function removeEdge() {
+  form.edges = (form.edges || []).filter((e) => e.id !== selectedEdgeId.value)
+  selectedEdgeId.value = undefined
 }
 
 // ---- 收敛为可提交定义（清洗空转换/空映射）----
@@ -227,9 +310,29 @@ function buildPayload(): WorkflowDefinition {
       out.spawn = { fieldMapping: mapping }
       if (linkBack) out.spawn.linkBackField = linkBack
     }
+    if (stage.position) out.position = stage.position
     return out
   })
-  return { id: form.id, name: form.name, description: form.description || undefined, enabled: form.enabled, stages }
+  const edges: WorkflowEdge[] = (form.edges || [])
+    .filter((e) => form.stages.some((s) => s.id === e.source) && form.stages.some((s) => s.id === e.target))
+    .map((e) => {
+      const out: WorkflowEdge = { id: e.id, source: e.source, target: e.target, kind: e.kind }
+      if (e.kind === 'advance' && e.condition && e.condition.field) {
+        out.condition = { field: e.condition.field, op: e.condition.op, value: e.condition.value }
+      }
+      return out
+    })
+  return { id: form.id, name: form.name, description: form.description || undefined, enabled: form.enabled, stages, edges }
+}
+
+/** 旧定义无 edges 时，按线性顺序推导出显式边，使画布可视化并可编辑 */
+function linearEdges(stages: WorkflowStage[]): WorkflowEdge[] {
+  const out: WorkflowEdge[] = []
+  stages.forEach((s, i) => {
+    if (i + 1 < stages.length) out.push({ id: `adv-${s.id}`, source: s.id, target: stages[i + 1].id, kind: 'advance' })
+    if (i - 1 >= 0 && s.rejectTransition) out.push({ id: `rej-${s.id}`, source: s.id, target: stages[i - 1].id, kind: 'reject' })
+  })
+  return out
 }
 
 async function onSave() {
@@ -281,7 +384,9 @@ onMounted(async () => {
       const found = store.definitions.find((d) => d.id === id)
       if (found) {
         const clone: WorkflowDefinition = JSON.parse(JSON.stringify(found))
-        Object.assign(form, { id: clone.id, name: clone.name, description: clone.description || '', enabled: clone.enabled, stages: clone.stages || [] })
+        const stages = clone.stages || []
+        const edges = (clone.edges && clone.edges.length) ? clone.edges : linearEdges(stages)
+        Object.assign(form, { id: clone.id, name: clone.name, description: clone.description || '', enabled: clone.enabled, stages, edges })
       } else {
         ElMessage.error('工作流不存在')
         router.push(LIST_PATH)
@@ -392,6 +497,22 @@ onMounted(async () => {
   width: 100%;
 }
 .arrow { color: var(--el-text-color-secondary); }
+.wf-edge-route {
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.wf-cond {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.wf-cond-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+}
 .wf-spawn {
   width: 100%;
 }

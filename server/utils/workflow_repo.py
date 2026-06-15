@@ -4,30 +4,32 @@ import psycopg2.extras
 
 
 def save_definition(cur, d):
-    """upsert 一个工作流定义。d: {id?, name, description?, enabled, stages:list}"""
+    """upsert 一个工作流定义。d: {id?, name, description?, enabled, stages:list, edges?:list}"""
     wid = d.get('id') or f'wf-{uuid.uuid4().hex[:12]}'
     cur.execute(
-        "INSERT INTO workflow_definitions (id, name, description, enabled, stages, updated_at) "
-        "VALUES (%s,%s,%s,%s,%s, NOW()) "
+        "INSERT INTO workflow_definitions (id, name, description, enabled, stages, edges, updated_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s, NOW()) "
         "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, "
-        "enabled=EXCLUDED.enabled, stages=EXCLUDED.stages, updated_at=NOW()",
+        "enabled=EXCLUDED.enabled, stages=EXCLUDED.stages, edges=EXCLUDED.edges, updated_at=NOW()",
         (wid, d['name'], d.get('description'), d.get('enabled', True),
-         psycopg2.extras.Json(d.get('stages', []))),
+         psycopg2.extras.Json(d.get('stages', [])), psycopg2.extras.Json(d.get('edges', []))),
     )
     return wid
 
 
 def get_definition(cur, wid):
-    cur.execute("SELECT id,name,description,enabled,stages FROM workflow_definitions WHERE id=%s", (wid,))
+    cur.execute("SELECT id,name,description,enabled,stages,edges FROM workflow_definitions WHERE id=%s", (wid,))
     r = cur.fetchone()
     if not r:
         return None
-    return {'id': r[0], 'name': r[1], 'description': r[2], 'enabled': r[3], 'stages': r[4] or []}
+    return {'id': r[0], 'name': r[1], 'description': r[2], 'enabled': r[3],
+            'stages': r[4] or [], 'edges': r[5] or []}
 
 
 def list_definitions(cur):
-    cur.execute("SELECT id,name,description,enabled,stages FROM workflow_definitions ORDER BY updated_at DESC")
-    return [{'id': r[0], 'name': r[1], 'description': r[2], 'enabled': r[3], 'stages': r[4] or []}
+    cur.execute("SELECT id,name,description,enabled,stages,edges FROM workflow_definitions ORDER BY updated_at DESC")
+    return [{'id': r[0], 'name': r[1], 'description': r[2], 'enabled': r[3],
+             'stages': r[4] or [], 'edges': r[5] or []}
             for r in cur.fetchall()]
 
 

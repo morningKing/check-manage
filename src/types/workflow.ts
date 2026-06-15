@@ -18,6 +18,30 @@ export interface WorkflowStage {
   assignedRoles?: string[]
   /** 生成下游记录：目标字段 → 取值表达式（$source.<上游字段> / $NOW / 字面量） */
   spawn?: { fieldMapping: Record<string, string>; linkBackField?: string }
+  /** 画布坐标（图形化设计器拖拽后持久化） */
+  position?: { x: number; y: number }
+}
+
+/** 边条件运算符 */
+export type WorkflowConditionOp = '==' | '!=' | '>' | '>=' | '<' | '<=' | 'contains'
+
+/** 单条件：源记录某字段 op 值 */
+export interface WorkflowEdgeCondition {
+  field: string
+  op: WorkflowConditionOp
+  value: string
+}
+
+/**
+ * 显式流向边（DAG）。kind=advance：推进时按条件路由到 target；kind=reject：回退目标。
+ * condition 为空 = 默认边（无条件边命中时走它）。无 edges 时引擎按 stages 顺序回退为线性链。
+ */
+export interface WorkflowEdge {
+  id: string
+  source: string
+  target: string
+  kind: 'advance' | 'reject'
+  condition?: WorkflowEdgeCondition
 }
 
 export interface WorkflowDefinition {
@@ -26,6 +50,8 @@ export interface WorkflowDefinition {
   description?: string
   enabled: boolean
   stages: WorkflowStage[]
+  /** 显式流向边；省略/为空时引擎按 stages 顺序回退为线性链（向后兼容旧定义） */
+  edges?: WorkflowEdge[]
   /** 保存时后端返回的非阻断配置告警（如某阶段状态字段无法驱动推进） */
   warnings?: string[]
 }

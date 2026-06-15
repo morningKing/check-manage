@@ -1,13 +1,12 @@
 /**
- * 工作流图形化：把线性阶段链推导为「节点 + 连线」。
+ * 工作流图形化：把阶段 + 边推导为「节点 + 连线」。
  *
- * 纯函数，不依赖 Vue Flow / dagre / DOM，便于单测。布局坐标由 WorkflowGraph.vue
- * 在渲染时用 dagre 计算。当前引擎是线性链（推进 → 下一阶段，回退 → 上一阶段），
- * 故连线规则与 server/utils/workflow_engine.py 的 idx±1 一致：
- *   - 推进边：stages[i] → stages[i+1]（相邻即连，体现流水线走向）；
- *   - 回退边：stages[i] → stages[i-1]，仅当该阶段配置了 rejectTransition。
+ * 纯函数，不依赖 Vue Flow / dagre / DOM，便于单测。
+ *  - 有显式 edges（DAG + 条件边）→ 直接映射，advance 边标注条件（无条件=默认），reject 边标「回退」。
+ *  - 无 edges → 按 stages 顺序回退线性链（与后端 _effective_edges 一致）：推进 i→i+1、回退 i→i-1。
+ * 节点坐标优先用 stage.position（画布拖拽持久化），否则由 WorkflowGraph.vue 用 dagre 布局。
  */
-import type { WorkflowStage } from '@/types/workflow'
+import type { WorkflowStage, WorkflowEdge, WorkflowEdgeCondition } from '@/types/workflow'
 
 export interface WorkflowGraphNode {
   id: string
@@ -15,6 +14,7 @@ export interface WorkflowGraphNode {
   collection: string
   statusField?: string
   index: number
+  position?: { x: number; y: number }
 }
 
 export interface WorkflowGraphEdge {
@@ -38,7 +38,12 @@ function transitionLabel(t?: { from?: string; to?: string }): string | undefined
   return `${from || '∅'}→${to || '∅'}`
 }
 
-export function deriveWorkflowGraph(stages: WorkflowStage[]): WorkflowGraphModel {
+export function conditionLabel(cond?: WorkflowEdgeCondition): string | undefined {
+  if (!cond || !cond.field) return undefined
+  return `${cond.field} ${cond.op} ${cond.value}`
+}
+
+export function deriveWorkflowGraph(stages: WorkflowStage[], edges?: WorkflowEdge[]): WorkflowGraphModel {
   const list = stages || []
   const nodes: WorkflowGraphNode[] = list.map((s, i) => ({
     id: s.id,
@@ -46,13 +51,26 @@ export function deriveWorkflowGraph(stages: WorkflowStage[]): WorkflowGraphModel
     collection: s.collection || '',
     statusField: s.statusField,
     index: i,
+    position: s.position,
   }))
 
-  const edges: WorkflowGraphEdge[] = []
+  // 显式边（图形化 DAG）
+  if (edges && edges.length) {
+    const gedges: WorkflowGraphEdge[] = edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      kind: e.kind,
+      label: e.kind === 'reject' ? '回退' : (conditionLabel(e.condition) || '默认'),
+    }))
+    return { nodes, edges: gedges }
+  }
+
+  // 回退线性链
+  const linear: WorkflowGraphEdge[] = []
   list.forEach((s, i) => {
-    // 推进边：相邻阶段间始终连线，体现链路走向；有转换则标注 from→to
     if (i + 1 < list.length) {
-      edges.push({
+      linear.push({
         id: `adv-${s.id}`,
         source: s.id,
         target: list[i + 1].id,
@@ -60,10 +78,9 @@ export function deriveWorkflowGraph(stages: WorkflowStage[]): WorkflowGraphModel
         label: transitionLabel(s.advanceTransition) || '推进',
       })
     }
-    // 回退边：仅当配置了 rejectTransition 且存在上一阶段
     const rejLabel = transitionLabel(s.rejectTransition)
     if (i - 1 >= 0 && rejLabel) {
-      edges.push({
+      linear.push({
         id: `rej-${s.id}`,
         source: s.id,
         target: list[i - 1].id,
@@ -72,6 +89,5 @@ export function deriveWorkflowGraph(stages: WorkflowStage[]): WorkflowGraphModel
       })
     }
   })
-
-  return { nodes, edges }
+  return { nodes, edges: linear }
 }
