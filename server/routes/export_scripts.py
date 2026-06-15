@@ -195,6 +195,59 @@ def test_script(script_id):
 
         collection = (body.get('collection') or '').strip()
         branch_id = body.get('branchId', 'main')
+        menu_id = (body.get('menuId') or '').strip()
+
+        # 菜单级脚本 + 指定菜单：用真实 menu_data（该菜单下所有数据页）+ 引用解析，
+        # 与生产 execute_menu_export 一致——菜单级脚本本应针对菜单测试，而非单个数据页。
+        if scope == 'menu' and menu_id:
+            from utils.menu_export import get_menu_collections
+            from utils.export_references import resolve_references
+            from datetime import timezone as _tz
+            cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
+            mrow = cur.fetchone()
+            if not mrow:
+                return jsonify({'success': False, 'error': '菜单不存在'}), 404
+            menu_name = mrow[0]
+            collections = get_menu_collections(cur, menu_id)
+            if not collections:
+                return jsonify({'success': False, 'error': '该菜单下没有数据页'}), 400
+            menu_data = []
+            total = 0
+            for coll in collections:
+                cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (f'page-{coll}',))
+                pc = cur.fetchone()
+                recs = []
+                cur.execute('SELECT id, data, created_at FROM dynamic_data '
+                            'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                            (coll, branch_id))
+                for r in cur.fetchall():
+                    rec = {'id': r[0]}
+                    if r[1]:
+                        rec.update(r[1])
+                    if r[2] and hasattr(r[2], 'astimezone'):
+                        rec['createdAt'] = r[2].astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    recs.append(rec)
+                menu_data.append({'collection': coll, 'pageName': pc[0] if pc else coll,
+                                  'records': recs, 'fields': pc[1] if pc else [], 'recordCount': len(recs)})
+                total += len(recs)
+            try:
+                refs = resolve_references(cur, menu_data, export_branch=branch_id)
+            except Exception:
+                refs = {}
+            try:
+                files = run_menu_export_script(script_code, menu_data, menu_name, output_format, references=refs)
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 400
+            if not files:
+                return jsonify({'success': False, 'error': '脚本未生成任何文件'}), 400
+            result_bytes, filename, content_type = files[0]
+            return jsonify({
+                'success': True,
+                'preview': result_bytes[:5000].decode('utf-8', errors='replace'),
+                'filename': filename, 'contentType': content_type, 'size': len(result_bytes),
+                'recordCount': total,
+                'extra': f'（{len(menu_data)} 个数据页 / {len(files)} 个文件）',
+            })
 
         if collection:
             # 从真实数据页取数据

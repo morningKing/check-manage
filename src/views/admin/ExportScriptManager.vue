@@ -143,6 +143,21 @@
                   保存
                 </el-button>
                 <el-select
+                  v-if="formData.scope === 'menu'"
+                  v-model="testMenuId"
+                  placeholder="选择菜单（菜单级，留空用样例）"
+                  clearable
+                  style="width:240px;margin-right:8px"
+                >
+                  <el-option
+                    v-for="m in menuOptions"
+                    :key="m.id"
+                    :label="m.label"
+                    :value="m.id"
+                  />
+                </el-select>
+                <el-select
+                  v-else
                   v-model="testCollection"
                   placeholder="选择数据页（留空用样例数据）"
                   clearable
@@ -554,6 +569,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Upload } from '@element-plus/icons-vue'
 import { getPageConfigList } from '@/api/page'
+import { getAvailableExportMenus } from '@/api/menu'
 import { Codemirror } from 'vue-codemirror'
 import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -785,6 +801,8 @@ const deleteDialogVisible = ref(false)
 const scriptToDelete = ref<ExportScript | null>(null)
 const testCollection = ref<string>('')
 const pageConfigOptions = ref<{ id: string; name: string; collection: string }[]>([])
+const testMenuId = ref<string>('')
+const menuOptions = ref<{ id: string; label: string }[]>([])
 const testResult = ref<{
   success: boolean
   preview?: string
@@ -1009,19 +1027,24 @@ async function handleTest() {
   testLoading.value = true
   testResult.value = null
   try {
-    const payload = testCollection.value
-      ? { collection: testCollection.value }
-      : {
-          data: [
-            { id: 'test-1', name: '示例数据1', value: '100' },
-            { id: 'test-2', name: '示例数据2', value: '200' },
-          ],
-          fields: [
-            { fieldName: 'name', label: '名称', controlType: 'text' },
-            { fieldName: 'value', label: '值', controlType: 'text' },
-          ],
-          pageName: '测试页面',
-        }
+    const sample = {
+      data: [
+        { id: 'test-1', name: '示例数据1', value: '100' },
+        { id: 'test-2', name: '示例数据2', value: '200' },
+      ],
+      fields: [
+        { fieldName: 'name', label: '名称', controlType: 'text' },
+        { fieldName: 'value', label: '值', controlType: 'text' },
+      ],
+      pageName: '测试页面',
+    }
+    let payload: Record<string, unknown>
+    if (formData.value.scope === 'menu') {
+      // 菜单级：选菜单测试（真实多表 menu_data + 引用解析）；留空用样例
+      payload = testMenuId.value ? { menuId: testMenuId.value } : sample
+    } else {
+      payload = testCollection.value ? { collection: testCollection.value } : sample
+    }
     const result = await testExportScript(currentScriptId.value!, payload)
     testResult.value = result
   } catch (e: any) {
@@ -1054,6 +1077,15 @@ async function handleDelete() {
   }
 }
 
+/** 把菜单树拍平为下拉项，按层级缩进 */
+function flattenMenus(nodes: any[], depth = 0, acc: { id: string; label: string }[] = []) {
+  for (const n of nodes || []) {
+    acc.push({ id: n.id, label: `${'　'.repeat(depth)}${n.name}` })
+    if (n.children && n.children.length) flattenMenus(n.children, depth + 1, acc)
+  }
+  return acc
+}
+
 onMounted(async () => {
   loadScripts()
   try {
@@ -1063,6 +1095,10 @@ onMounted(async () => {
       name: c.name,
       collection: c.id.replace('page-', ''),
     }))
+  } catch { /* non-fatal */ }
+  try {
+    const menus = await getAvailableExportMenus()
+    menuOptions.value = flattenMenus(menus as any[])
   } catch { /* non-fatal */ }
 })
 </script>
