@@ -91,6 +91,8 @@ sequenceDiagram
 | GET | `/api/v1/collections/{collection}` | 获取集合中的数据（分页，支持 branchId 参数） |
 | GET | `/api/v1/collections/{collection}/{id}` | 获取单条记录详情（支持 branchId 参数） |
 | GET | `/api/v1/collections/{collection}/schema` | 获取集合的字段定义 |
+| GET | `/api/v1/files/{fileId}` | 获取文件元数据（名称/类型/大小） |
+| GET | `/api/v1/files/{fileId}/download` | 下载 file/image 字段上传的文件 |
 
 ### 4.2 写入接口（需开启「允许写入」）
 
@@ -587,6 +589,56 @@ Content-Type: application/json
 | 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
 | 409 | `Record has been modified...` | 乐观锁冲突（`code: "VERSION_CONFLICT"`） |
 | 409 | `Primary key conflict` | 主键字段值与已有记录重复 |
+
+---
+
+### 5.8 下载文件（file / image 字段）
+
+数据页的 `file`/`image` 字段保存的是文件对象数组。查询记录时，每个文件对象会附带一个
+`apiUrl` 字段，直接用它（带 API Key）即可下载：
+
+```json
+{
+  "data": {
+    "id": "rec-1",
+    "attachment": [
+      {
+        "uid": "8f3c...e21",
+        "name": "report.pdf",
+        "size": 20480,
+        "type": "application/pdf",
+        "url": "/api/data-files/8f3c...e21/download",   // 内部 url（走 JWT，外部不可用）
+        "apiUrl": "/api/v1/files/8f3c...e21/download"    // ← Open API 用这个
+      }
+    ]
+  }
+}
+```
+
+**下载文件字节**
+
+```
+GET /api/v1/files/{fileId}/download
+X-API-Key: cm_xxx
+```
+
+返回文件二进制流（`Content-Disposition: attachment`）。
+
+**获取文件元数据**
+
+```
+GET /api/v1/files/{fileId}
+X-API-Key: cm_xxx
+```
+
+```json
+{ "data": { "id": "8f3c...e21", "name": "report.pdf", "mimeType": "application/pdf",
+            "size": 20480, "uploadedAt": "2026-06-15T...Z",
+            "downloadUrl": "/api/v1/files/8f3c...e21/download" } }
+```
+
+> **安全边界**：只有被**已开放（api_public）集合**的记录引用的文件才能经 Open API 下载；
+> 挂在未开放集合上的文件返回 `404 File not found`。
 
 ---
 
