@@ -8,6 +8,7 @@ import math
 import multiprocessing
 import queue as _queue
 import re
+import sys
 import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
@@ -468,3 +469,123 @@ def run_menu_export_script(script_code, menu_data, menu_name, output_format='jso
 def guess_content_type(filename):
     ext = filename.rpartition('.')[2].lower() if '.' in filename else ''
     return FORMAT_CONTENT_TYPES.get(ext, 'application/octet-stream')
+
+
+# ---------------------------------------------------------------------------
+# 追踪式断点调试：在脚本行上下断点，跑一次，回传每次命中该行时的局部变量快照 +
+# 整体行执行次数（执行轨迹）。用 sys.settrace 在工作线程内记录，单一命名空间执行
+# （与沙箱一致）。非实时单步——一次跑完看快照。
+# ---------------------------------------------------------------------------
+_DEBUG_FILENAME = '<debug-script>'
+_DBG_MAX_SNAPSHOTS = 500
+_DBG_MAX_STR = 500
+_DBG_MAX_ITEMS = 50
+
+
+def _dbg_safe_val(v, depth=0):
+    """把局部变量序列化为 JSON 安全值；复杂对象用截断 repr。"""
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= _DBG_MAX_STR else v[:_DBG_MAX_STR] + '…'
+    if depth >= 3:
+        r = repr(v)
+        return r if len(r) <= _DBG_MAX_STR else r[:_DBG_MAX_STR] + '…'
+    if isinstance(v, (list, tuple)):
+        out = [_dbg_safe_val(x, depth + 1) for x in list(v)[:_DBG_MAX_ITEMS]]
+        if len(v) > _DBG_MAX_ITEMS:
+            out.append(f'…(+{len(v) - _DBG_MAX_ITEMS})')
+        return out
+    if isinstance(v, dict):
+        out = {}
+        for i, (k, x) in enumerate(v.items()):
+            if i >= _DBG_MAX_ITEMS:
+                out['…'] = f'(+{len(v) - _DBG_MAX_ITEMS})'
+                break
+            out[str(k)] = _dbg_safe_val(x, depth + 1)
+        return out
+    r = repr(v)
+    return r if len(r) <= _DBG_MAX_STR else r[:_DBG_MAX_STR] + '…'
+
+
+def _dbg_safe_locals(loc):
+    # 跳过 dunder、函数/可调用、以及注入的模块（json/re/math/...），只留脚本相关变量
+    out = {}
+    for k, v in loc.items():
+        if k.startswith('__') or callable(v) or type(v).__name__ == 'module':
+            continue
+        out[k] = _dbg_safe_val(v)
+    return out
+
+
+def debug_export_script(script_code, profile, script_locals, breakpoints=None,
+                        timeout_seconds=SCRIPT_TIMEOUT):
+    """在断点行运行脚本并采集变量快照 + 行执行轨迹。
+    返回 {success, error, errorLine, breakpointHits:[{line,vars}], lineHits:{line:count}, result?}。"""
+    _validate_script(script_code)
+    bps = set()
+    for b in (breakpoints or []):
+        try:
+            bps.add(int(b))
+        except (TypeError, ValueError):
+            pass
+
+    namespace = _build_safe_globals(profile)
+    namespace.update(script_locals)
+    line_hits = {}
+    snapshots = []
+    holder = {'error': None, 'error_line': None}
+
+    def tracer(frame, event, arg):
+        # 只追踪脚本自身的帧（含脚本内定义的函数），跳过库内部
+        if frame.f_code.co_filename != _DEBUG_FILENAME:
+            return None
+        if event == 'line':
+            ln = frame.f_lineno
+            line_hits[ln] = line_hits.get(ln, 0) + 1
+            if ln in bps and len(snapshots) < _DBG_MAX_SNAPSHOTS:
+                snapshots.append({'line': ln, 'vars': _dbg_safe_locals(frame.f_locals)})
+        return tracer
+
+    try:
+        code = compile(script_code, _DEBUG_FILENAME, 'exec')
+    except SyntaxError as exc:
+        return {'success': False, 'error': f'SyntaxError: {exc.msg}',
+                'errorLine': exc.lineno, 'breakpointHits': [], 'lineHits': {}}
+
+    def _run():
+        sys.settrace(tracer)
+        try:
+            exec(code, namespace)  # noqa: S102 — 单一命名空间
+        except Exception as exc:  # pragma: no cover
+            holder['error'] = f'{type(exc).__name__}: {exc}'
+            tb = exc.__traceback__
+            while tb:
+                if tb.tb_frame.f_code.co_filename == _DEBUG_FILENAME:
+                    holder['error_line'] = tb.tb_lineno
+                tb = tb.tb_next
+        finally:
+            sys.settrace(None)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    if thread.is_alive():
+        return {'success': False, 'error': f'调试执行超时(>{timeout_seconds}s)', 'errorLine': None,
+                'breakpointHits': snapshots, 'lineHits': line_hits, 'timedOut': True}
+
+    result = {
+        'success': holder['error'] is None,
+        'error': holder['error'],
+        'errorLine': holder['error_line'],
+        'breakpointHits': snapshots,
+        'lineHits': line_hits,
+    }
+    if holder['error'] is None:
+        out = namespace.get('result')
+        if isinstance(out, (str, bytes)):
+            preview = out[:2000] if isinstance(out, str) else out[:2000].decode('utf-8', errors='replace')
+            result['resultPreview'] = preview
+        elif isinstance(out, list):
+            result['resultPreview'] = f'(menu 多文件，{len(out)} 个)'
+    return result

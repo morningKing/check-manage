@@ -31,6 +31,32 @@ export function testExportScript(id: string, testData: {
   )
 }
 
+export interface DebugSnapshot {
+  line: number
+  vars: Record<string, any>
+}
+
+export interface DebugResult {
+  success: boolean
+  error?: string | null
+  errorLine?: number | null
+  breakpointHits: DebugSnapshot[]
+  lineHits: Record<string, number>
+  resultPreview?: string
+}
+
+export function debugExportScript(id: string, payload: {
+  breakpoints: number[]
+  collection?: string
+  branchId?: string
+  menuId?: string
+  data?: any[]
+  fields?: any[]
+  pageName?: string
+}) {
+  return post<DebugResult>(`/exportScripts/${id}/debug`, payload)
+}
+
 export async function executeExportScript(scriptId: string, collection: string, recordId?: string) {
   const payload: Record<string, string> = { scriptId, collection }
   if (recordId) payload.recordId = recordId
