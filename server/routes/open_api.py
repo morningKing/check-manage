@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify, g
+import os
+from flask import Blueprint, request, jsonify, g, send_file
 from db import get_db
 from auth import api_key_required
 from config import OPEN_API_BRANCH
@@ -25,6 +26,33 @@ def row_to_record(row):
         record.update(row[2])
     if row[3]:
         record['createdAt'] = format_ts(row[3])
+    return record
+
+
+def file_in_public_collection(cur, file_id):
+    """安全边界：仅当该文件被**某个 api_public 集合**的记录引用时，才允许经 Open API 访问。
+    防止用 API Key 拉到挂在非公开集合上的文件。file_id 是 UUID，作为 JSON 字符串值出现，
+    用子串匹配定位（下载属低频操作，可接受全表 ::text 扫描）。"""
+    cur.execute(
+        "SELECT 1 FROM dynamic_data dd "
+        "JOIN page_configs pc ON pc.id = 'page-' || dd.collection "
+        "WHERE pc.api_public = TRUE AND dd.data::text LIKE %s LIMIT 1",
+        (f'%{file_id}%',),
+    )
+    return cur.fetchone() is not None
+
+
+def enrich_file_urls(record, fields):
+    """给 file / image 字段的每个文件对象补 `apiUrl`，指向 Open API 的下载端点，
+    让外部调用方无需猜测内部 url 即可下载。就地修改并返回 record。"""
+    file_fields = {f.get('fieldName') for f in (fields or [])
+                   if f.get('controlType') in ('file', 'image')}
+    for fname in file_fields:
+        val = record.get(fname)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict) and item.get('uid'):
+                    item['apiUrl'] = f"/api/v1/files/{item['uid']}/download"
     return record
 
 
@@ -242,9 +270,10 @@ def list_collection_data(collection):
             [collection, branch_id] + q_params + [page_size, offset],
         )
         rows = cur.fetchall()
+        fields = get_page_fields(cur, collection)
 
     return jsonify({
-        'data': [row_to_record(r) for r in rows],
+        'data': [enrich_file_urls(row_to_record(r), fields) for r in rows],
         'pagination': {
             'page': page,
             'pageSize': page_size,
@@ -277,10 +306,11 @@ def get_collection_item(collection, item_id):
             (collection, item_id, branch_id),
         )
         data_row = cur.fetchone()
+        fields = get_page_fields(cur, collection) if data_row else []
 
     if not data_row:
         return jsonify({'error': 'Record not found'}), 404
-    result = row_to_record(data_row)
+    result = enrich_file_urls(row_to_record(data_row), fields)
     result['branchId'] = branch_id
     return jsonify({'data': result})
 
@@ -474,3 +504,55 @@ def update_collection_item(collection, item_id):
     result['_version'] = new_version
     result['branchId'] = branch_id
     return jsonify({'data': result})
+
+
+@open_api_bp.route('/files/<file_id>', methods=['GET'])
+@api_key_required
+def api_get_file_metadata(file_id):
+    """文件元数据（名称/类型/大小）。仅当文件被公开集合引用时可见。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if not file_in_public_collection(cur, file_id):
+            return jsonify({'error': 'File not found'}), 404
+        cur.execute(
+            'SELECT id, original_name, mime_type, size_bytes, uploaded_at '
+            'FROM data_files WHERE id = %s',
+            (file_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'File not found'}), 404
+    return jsonify({'data': {
+        'id': row[0],
+        'name': row[1],
+        'mimeType': row[2],
+        'size': row[3],
+        'uploadedAt': format_ts(row[4]),
+        'downloadUrl': f'/api/v1/files/{row[0]}/download',
+    }})
+
+
+@open_api_bp.route('/files/<file_id>/download', methods=['GET'])
+@api_key_required
+def api_download_file(file_id):
+    """经 API Key 下载数据页文件/图片字段上传的文件。仅限被公开集合引用的文件。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        if not file_in_public_collection(cur, file_id):
+            return jsonify({'error': 'File not found'}), 404
+        cur.execute(
+            'SELECT original_name, mime_type, storage_path FROM data_files WHERE id = %s',
+            (file_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'File not found'}), 404
+    name, mime, path = row
+    if not os.path.isfile(path):
+        return jsonify({'error': 'File missing on disk', 'code': 'STORAGE_MISSING'}), 410
+    return send_file(
+        path,
+        mimetype=mime or 'application/octet-stream',
+        download_name=name,
+        as_attachment=True,
+    )
