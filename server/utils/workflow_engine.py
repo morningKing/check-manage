@@ -155,6 +155,43 @@ def _reject_target(definition, stages, current_id):
     return None
 
 
+def _advance_targets(definition, stages, current_id, data):
+    """v2 多路分发：返回所有应推进到的下游阶段。命中条件的边全取（并行扇出）；
+    都不命中则取所有默认（无条件）边；无出边则空（该分支到此结束）。"""
+    out = [e for e in _effective_edges(definition)
+           if e.get('kind') == 'advance' and e.get('source') == current_id]
+    matched = []
+    for e in out:
+        cond = e.get('condition')
+        if cond and cond.get('field') and _eval_condition(cond, data):
+            t = _stage_by_id(stages, e.get('target'))
+            if t and t not in matched:
+                matched.append(t)
+    if matched:
+        return matched
+    defaults = []
+    for e in out:
+        cond = e.get('condition')
+        if not cond or not cond.get('field'):
+            t = _stage_by_id(stages, e.get('target'))
+            if t and t not in defaults:
+                defaults.append(t)
+    return defaults
+
+
+def _derive_active(inst):
+    """活动分支 [{stageId, collection, recordId}]。旧实例（无 active_stages）按
+    current_stage_id + 对应 chain 项推导出单分支，保证回退兼容。"""
+    act = inst.get('active_stages')
+    if act:
+        return [dict(a) for a in act]
+    csid = inst.get('current_stage_id')
+    entry = next((e for e in (inst.get('chain') or []) if e.get('stageId') == csid), None)
+    if entry:
+        return [{'stageId': csid, 'collection': entry.get('collection'), 'recordId': entry.get('recordId')}]
+    return []
+
+
 def on_transition(cur, collection, record_id, status_field, from_value, to_value,
                   old_data, new_data, operator, role, comment=None, branch_id='main'):
     """update_item 状态转换成功后调用。匹配当前实例阶段的 advance/reject 转换并编排。
@@ -169,32 +206,38 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
     if not definition or not definition.get('enabled'):
         return
     stages = definition['stages']
-    idx = _stage_index(stages, inst['current_stage_id'])
-    if idx < 0:
+    active = _derive_active(inst)
+    # 定位本记录所在的活动分支（v2 并行：可能有多个并发活动分支）
+    branch = next((a for a in active
+                   if a.get('collection') == collection and a.get('recordId') == record_id), None)
+    if branch is None:
         return
-    stage = stages[idx]
-    if stage.get('statusField') != status_field:
+    stage = _stage_by_id(stages, branch.get('stageId'))
+    if not stage or stage.get('statusField') != status_field:
         return
     adv = stage.get('advanceTransition') or {}
     rej = stage.get('rejectTransition') or {}
 
-    # 仅当本次转换确实命中当前阶段的 advance/reject 时才做角色校验，
-    # 否则与本阶段无关的普通状态变更会被误拦。
     matches_adv = bool(adv) and from_value == adv.get('from') and to_value == adv.get('to')
     matches_rej = bool(rej) and from_value == rej.get('from') and to_value == rej.get('to')
     if (matches_adv or matches_rej) and stage.get('assignedRoles') and role not in stage['assignedRoles']:
         raise WorkflowError(f'您的角色（{role}）无权推进工作流阶段「{stage.get("name", stage["id"])}」')
 
     chain = inst['chain']; history = inst['history']
-    cur_entry = next((e for e in chain if e['stageId'] == stage['id']), None)
+
+    def _remove_branch(lst):
+        return [a for a in lst if not (a.get('stageId') == branch['stageId'] and a.get('recordId') == record_id)]
+
     if matches_adv:
+        cur_entry = next((e for e in chain
+                          if e['stageId'] == stage['id'] and e.get('recordId') == record_id), None)
         if cur_entry is not None:
             cur_entry['completedBy'] = operator
         history.append({'ts': repo._now(), 'action': 'advance', 'stageId': stage['id'],
                         'by': operator, 'comment': comment})
-        # 按出边（含条件）路由到下游阶段；无 edges 时回退线性 idx+1。
-        nxt = _advance_target(definition, stages, stage['id'], new_data)
-        if nxt is not None:
+        targets = _advance_targets(definition, stages, stage['id'], new_data)
+        new_active = _remove_branch(active)
+        for nxt in targets:
             spawn = stage.get('spawn') or {}
             # 回退后重新推进：复用已存在的下游 chain 项，避免重复 spawn + chain 无限增长。
             existing = next((e for e in chain if e['stageId'] == nxt['id']), None)
@@ -210,27 +253,28 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
                                        next_stage=nxt, link_back_field=spawn.get('linkBackField'))
                 chain.append({'stageId': nxt['id'], 'collection': nxt['collection'], 'recordId': down_id,
                               'enteredAt': repo._now(), 'completedBy': None})
-            repo.update_instance(cur, inst['id'], current_stage_id=nxt['id'], chain=chain, history=history)
+            new_active.append({'stageId': nxt['id'], 'collection': nxt['collection'], 'recordId': down_id})
             _notify_roles(cur, nxt.get('assignedRoles', []), f'工作流待办：{nxt["name"]}',
                           f'{operator} 推进了流程，请处理「{nxt["name"]}」', nxt['collection'], down_id)
-        else:
+        if not new_active:
+            # 所有分支均已结束 → 实例完成
             history.append({'ts': repo._now(), 'action': 'complete', 'stageId': stage['id'],
                             'by': operator, 'comment': None})
-            repo.update_instance(cur, inst['id'], status='completed', chain=chain, history=history)
+            repo.update_instance(cur, inst['id'], status='completed', current_stage_id=stage['id'],
+                                 chain=chain, history=history, active_stages=[])
+        else:
+            repo.update_instance(cur, inst['id'], current_stage_id=new_active[0]['stageId'],
+                                 chain=chain, history=history, active_stages=new_active)
         return
     if matches_rej:
         prev = _reject_target(definition, stages, stage['id'])
         if prev is None:
             return  # 无回退出边
-        history.append({'ts': repo._now(), 'action': 'reject', 'stageId': stage['id'],
-                        'by': operator, 'comment': comment})
-        prev_entry = None
-        for entry in reversed(chain):
-            if entry['stageId'] == prev['id']:
-                prev_entry = entry
-                break
+        prev_entry = next((e for e in reversed(chain) if e['stageId'] == prev['id']), None)
         if prev_entry is None:
             return
+        history.append({'ts': repo._now(), 'action': 'reject', 'stageId': stage['id'],
+                        'by': operator, 'comment': comment})
         prev_entry['completedBy'] = None
         prev_adv = (prev.get('advanceTransition') or {})
         reset_to = prev_adv.get('from')
@@ -244,7 +288,11 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
                 pdata['_rejectComment'] = comment
                 cur.execute("UPDATE dynamic_data SET data=%s, updated_at=NOW() WHERE collection=%s AND id=%s AND branch_id=%s",
                             (psycopg2.extras.Json(pdata), prev_entry['collection'], prev_entry['recordId'], branch_id))
-        repo.update_instance(cur, inst['id'], current_stage_id=prev['id'], chain=chain, history=history)
+        new_active = _remove_branch(active)
+        new_active.append({'stageId': prev['id'], 'collection': prev_entry['collection'],
+                           'recordId': prev_entry['recordId']})
+        repo.update_instance(cur, inst['id'], current_stage_id=prev['id'],
+                             chain=chain, history=history, active_stages=new_active)
         _notify_roles(cur, prev.get('assignedRoles', []), f'工作流驳回：{prev["name"]}',
                       f'{operator} 驳回到「{prev["name"]}」：{comment or ""}', prev_entry['collection'], prev_entry['recordId'])
         return

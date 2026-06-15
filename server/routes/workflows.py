@@ -74,10 +74,11 @@ def start_instance():
 def list_instances():
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT id,workflow_id,status,current_stage_id,chain,history,started_by "
+        cur.execute("SELECT id,workflow_id,status,current_stage_id,chain,history,started_by,active_stages "
                     "FROM workflow_instances ORDER BY updated_at DESC LIMIT 200")
         out = [{'id': r[0], 'workflowId': r[1], 'status': r[2], 'currentStageId': r[3],
-                'chain': r[4] or [], 'history': r[5] or [], 'startedBy': r[6]} for r in cur.fetchall()]
+                'chain': r[4] or [], 'history': r[5] or [], 'startedBy': r[6], 'activeStages': r[7] or []}
+               for r in cur.fetchall()]
     return jsonify(out)
 
 
@@ -88,20 +89,27 @@ def inbox():
     role = user.get('role', '')
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT i.id, i.workflow_id, i.current_stage_id, i.chain, d.name, d.stages "
+        cur.execute("SELECT i.id, i.workflow_id, i.current_stage_id, i.active_stages, i.chain, d.name, d.stages "
                     "FROM workflow_instances i JOIN workflow_definitions d ON i.workflow_id=d.id "
                     "WHERE i.status='running'")
         items = []
-        for iid, wid, csid, chain, wname, stages in cur.fetchall():
-            stage = next((s for s in (stages or []) if s['id'] == csid), None)
-            if not stage:
-                continue
-            roles = stage.get('assignedRoles', [])
-            if roles and role not in roles:
-                continue
-            cur_entry = next((e for e in reversed(chain or []) if e.get('stageId') == csid), None)
-            items.append({'instanceId': iid, 'workflowName': wname, 'stageName': stage.get('name'),
-                          'collection': cur_entry and cur_entry['collection'],
-                          'recordId': cur_entry and cur_entry['recordId'],
-                          'enteredAt': cur_entry and cur_entry.get('enteredAt')})
+        for iid, wid, csid, active, chain, wname, stages in cur.fetchall():
+            # v2：每个活动分支一条待办；旧实例（无 active_stages）回退到 current_stage_id
+            branches = active or []
+            if not branches and csid:
+                e = next((x for x in (chain or []) if x.get('stageId') == csid), None)
+                if e:
+                    branches = [{'stageId': csid, 'collection': e.get('collection'), 'recordId': e.get('recordId')}]
+            for b in branches:
+                stage = next((s for s in (stages or []) if s['id'] == b.get('stageId')), None)
+                if not stage:
+                    continue
+                roles = stage.get('assignedRoles', [])
+                if roles and role not in roles:
+                    continue
+                entry = next((e for e in reversed(chain or [])
+                              if e.get('stageId') == b.get('stageId') and e.get('recordId') == b.get('recordId')), None)
+                items.append({'instanceId': iid, 'workflowName': wname, 'stageName': stage.get('name'),
+                              'collection': b.get('collection'), 'recordId': b.get('recordId'),
+                              'enteredAt': entry and entry.get('enteredAt')})
     return jsonify(items)
