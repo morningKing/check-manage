@@ -402,7 +402,7 @@ def run_etl_script(script_code, records):
     return result
 
 
-def run_menu_export_script(script_code, menu_data, menu_name, output_format='json'):
+def run_menu_export_script(script_code, menu_data, menu_name, output_format='json', references=None):
     _validate_script(script_code)
 
     total_records = sum(table.get('recordCount', 0) for table in menu_data)
@@ -413,6 +413,8 @@ def run_menu_export_script(script_code, menu_data, menu_name, output_format='jso
             'menu_data': menu_data,
             'menu_name': menu_name,
             'total_records': total_records,
+            # 被引用记录的查找表 {collection: {id: record}}，供跨页/跨项目引用 join
+            'references': references or {},
             'result': None,
             'filename': None,
             'content_type': None,
