@@ -39,9 +39,22 @@
 
         <el-divider content-position="left">阶段</el-divider>
 
+        <WorkflowGraph
+          v-if="editForm.stages.length"
+          class="wf-graph-panel"
+          :stages="editForm.stages"
+          :selected-id="selectedStageId"
+          @select="onSelectStage"
+        />
+
         <el-empty v-if="editForm.stages.length === 0" description="暂无阶段" :image-size="60" />
 
-        <div v-for="(stage, idx) in editForm.stages" :key="stage.id" class="stage-card">
+        <div
+          v-for="(stage, idx) in editForm.stages"
+          :key="stage.id"
+          :ref="(el) => setCardRef(stage.id, el)"
+          class="stage-card"
+          :class="{ 'stage-card--active': stage.id === selectedStageId }">
           <div class="stage-card__head">
             <span class="stage-card__idx">阶段 {{ idx + 1 }}</span>
             <div class="stage-card__ops">
@@ -147,12 +160,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useWorkflowStore } from '@/stores/workflow'
 import { usePageConfigStore } from '@/stores/pageConfig'
 import { useRoleStore } from '@/stores/role'
 import type { WorkflowDefinition, WorkflowStage } from '@/types/workflow'
+import WorkflowGraph from '@/components/workflow/WorkflowGraph.vue'
 
 const store = useWorkflowStore()
 const pageConfigStore = usePageConfigStore()
@@ -176,6 +190,20 @@ const collectionOptions = computed(() =>
 )
 
 const roleOptions = computed(() => roleStore.options)
+
+// --- 图形化视图：点选节点定位到对应阶段卡片 ---
+const selectedStageId = ref<string | undefined>(undefined)
+const stageCardEls: Record<string, HTMLElement> = {}
+
+function setCardRef(id: string, el: unknown) {
+  if (el) stageCardEls[id] = (el as { $el?: HTMLElement }).$el ?? (el as HTMLElement)
+  else delete stageCardEls[id]
+}
+
+function onSelectStage(id: string) {
+  selectedStageId.value = id
+  nextTick(() => stageCardEls[id]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
+}
 
 /** 给定 collection 名，返回其字段选项（fieldName 作为值） */
 function fieldsOf(collection: string): { label: string; value: string }[] {
@@ -232,7 +260,9 @@ function blankStage(): WorkflowStage {
 }
 
 function addStage() {
-  editForm.stages.push(blankStage())
+  const s = blankStage()
+  editForm.stages.push(s)
+  selectedStageId.value = s.id
 }
 
 function moveStage(idx: number, dir: number) {
@@ -245,6 +275,7 @@ function moveStage(idx: number, dir: number) {
 function handleAdd() {
   Object.assign(editForm, { id: undefined, name: '', description: '', enabled: true, stages: [] })
   for (const k of Object.keys(spawnRowState)) delete spawnRowState[k]
+  selectedStageId.value = undefined
   editVisible.value = true
 }
 
@@ -259,6 +290,7 @@ function handleEdit(row: WorkflowDefinition) {
     stages: clone.stages || [],
   })
   for (const k of Object.keys(spawnRowState)) delete spawnRowState[k]
+  selectedStageId.value = editForm.stages[0]?.id
   editVisible.value = true
 }
 
@@ -384,12 +416,20 @@ onMounted(async () => {
 .page-header h2 {
   margin: 0;
 }
+.wf-graph-panel {
+  margin-bottom: 16px;
+}
 .stage-card {
   border: 1px solid var(--el-border-color);
   border-radius: 6px;
   padding: 12px 16px;
   margin-bottom: 14px;
   background: var(--el-fill-color-light);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.stage-card--active {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px var(--el-color-primary-light-7);
 }
 .stage-card__head {
   display: flex;
