@@ -1,15 +1,23 @@
 # coding: utf-8
 # 导出脚本本地调试工具
 #
-# 与沙箱 100% 一致的本地执行环境，支持 scope=page / scope=menu。
+# 与沙箱一致的本地执行环境，支持 scope=page / scope=menu。
 # 直接从后端 API 拉真实数据运行脚本，错误信息带完整 traceback。
+#
+# 一致性：当本机可导入 server 代码 + 连到 DB 时，自动复用服务端的安全 builtins
+#（_build_safe_globals）与引用解析（resolve_references），与生产 100% 一致；
+# 菜单级脚本会像生产一样注入 references（被引用记录、含跨项目）+ 给记录回挂 _relations。
+# 若 server 代码/DB 不可达，则降级为本地 builtins 且 references 注入空表（会提示）。
 #
 # 用法示例：
 #
 #   # 用本地脚本文件 + 真实数据
 #   python scripts/debug_export_script.py --script my_export.py --collection inspection-case --password admin123
 #
-#   # 直接调用服务端已保存的脚本
+#   # 调试菜单级脚本（注入 references，可 join 被引用页/跨项目数据）
+#   python scripts/debug_export_script.py --script my_menu_export.py --scope menu --collection inspection-case --password admin123
+#
+#   # 直接调用服务端已保存的脚本（scope 取脚本自身，可用 --scope 覆盖）
 #   python scripts/debug_export_script.py --script-id script-fb2294ae --collection inspection-case --password admin123
 #
 #   # 只看前 10 条（快速调试）
@@ -65,7 +73,7 @@ def _build_sandbox_globals():
             'sorted': sorted, 'reversed': reversed, 'enumerate': enumerate,
             'zip': zip, 'map': map, 'filter': filter, 'range': range,
             'min': min, 'max': max, 'sum': sum, 'abs': abs, 'round': round,
-            'isinstance': isinstance, 'hasattr': hasattr, 'any': any, 'all': all,
+            'isinstance': isinstance, 'hasattr': hasattr,
             '__import__': __import__,
             'None': None, 'True': True, 'False': False,
         },
@@ -74,6 +82,57 @@ def _build_sandbox_globals():
         'pd': pd, 'np': np,
         'csv': csv, 'io': io, 'ET': ET, 'minidom': minidom,
     }
+
+
+# ---------------------------------------------------------------------------
+# 尽量复用服务端真实逻辑，保证与生产 100% 一致；不可用（无 server 代码 / 无 DB）则降级。
+# ---------------------------------------------------------------------------
+_SERVER_DIR = Path(__file__).resolve().parent.parent / "server"
+_server_build_globals = None
+_resolve_references = None
+_db_config = None
+_psycopg2 = None
+try:
+    if str(_SERVER_DIR) not in sys.path:
+        sys.path.insert(0, str(_SERVER_DIR))
+    from utils.script_runner import _build_safe_globals as _server_build_globals  # type: ignore  # noqa: E402
+    from utils.export_references import resolve_references as _resolve_references  # type: ignore  # noqa: E402
+    from config import DB_CONFIG as _db_config  # type: ignore  # noqa: E402
+    import psycopg2 as _psycopg2  # type: ignore  # noqa: E402
+except Exception:
+    _server_build_globals = None
+    _resolve_references = None
+    _db_config = None
+    _psycopg2 = None
+
+
+def build_globals(scope):
+    """优先用服务端 _build_safe_globals（builtins/模块与生产逐字一致）；否则降级本地实现。"""
+    if _server_build_globals is not None:
+        return _server_build_globals('menu' if scope == 'menu' else 'export')
+    return _build_sandbox_globals()
+
+
+def resolve_menu_references(menu_data, branch):
+    """连本机 DB 调服务端 resolve_references，给菜单脚本注入 references（与生产 execute_menu_export 一致）。
+    无 server 代码 / 无 DB 时返回 {} 并提示——与生产「解析失败不阻断」对齐。"""
+    if _resolve_references is None or _db_config is None or _psycopg2 is None:
+        print("      [warn] 未能加载服务端引用解析（需可导入 server 代码 + DB 配置），references 注入空表 {}")
+        return {}
+    try:
+        conn = _psycopg2.connect(**_db_config)
+        try:
+            cur = conn.cursor()
+            refs = _resolve_references(cur, menu_data, export_branch=branch)
+            conn.commit()
+            total = sum(len(v) for v in refs.values())
+            print(f"      references 解析：{len(refs)} 个集合 / {total} 条被引用记录")
+            return refs
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"      [warn] references 解析失败：{e}，references 注入空表 {{}}")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +204,8 @@ def main():
     src.add_argument("--list-scripts",     action="store_true",
                      help="列出所有可用脚本 ID 和名称（不执行脚本）")
     parser.add_argument("--collection", default=None, help="数据页 collection 名称")
+    parser.add_argument("--scope", choices=["page", "row", "menu"], default=None,
+                        help="脚本维度；本地 --script 文件默认 page，菜单级脚本请指定 --scope menu（才会注入 references）")
     parser.add_argument("--branch",   default="main",                  help="分支（默认 main）")
     parser.add_argument("--base-url", default="http://localhost:3002", help="后端地址")
     parser.add_argument("--username", default="admin",                 help="用户名")
@@ -191,22 +252,25 @@ def main():
     # 3. 读脚本
     print("[3/4] 读取脚本", flush=True)
     if args.script:
-        script_code = Path(args.script).read_text(encoding="utf-8")
-        scope = "page"  # 本地文件默认 page；如需 menu 请加 --scope 参数
+        # utf-8-sig：容忍编辑器写入的 BOM（否则 exec 会报 U+FEFF SyntaxError）
+        script_code = Path(args.script).read_text(encoding="utf-8-sig")
+        scope = args.scope or "page"  # 本地文件默认 page；菜单级脚本用 --scope menu
         print(f"      本地文件 {args.script}  ({len(script_code)} 字符)  scope={scope}")
     elif args.script_id:
-        script_code, _fmt, scope = fetch_script(args.base_url, token, script_id=args.script_id)
+        script_code, _fmt, saved_scope = fetch_script(args.base_url, token, script_id=args.script_id)
+        scope = args.scope or saved_scope
         print(f"      服务端脚本 {args.script_id}  ({len(script_code)} 字符)  scope={scope}")
     else:
-        script_code, _fmt, scope = fetch_script(args.base_url, token, script_name=args.script_name)
+        script_code, _fmt, saved_scope = fetch_script(args.base_url, token, script_name=args.script_name)
+        scope = args.scope or saved_scope
         print(f"      服务端脚本 '{args.script_name}'  ({len(script_code)} 字符)  scope={scope}")
 
     # 4. 组装注入变量（与后端 run_export_script / run_menu_export_script 对齐）
     print(f"[4/4] 执行脚本  scope={scope}", flush=True)
-    sandbox = _build_sandbox_globals()
+    sandbox = build_globals(scope)
 
     if scope == "menu":
-        # menu 级：注入 menu_data / menu_name / total_records
+        # menu 级：注入 menu_data / menu_name / total_records / references
         menu_data = [{
             "collection":  args.collection,
             "pageName":    page_name,
@@ -214,10 +278,13 @@ def main():
             "fields":      fields,
             "recordCount": len(records),
         }]
+        # 与生产 execute_menu_export 一致：解析引用 + 回挂 _relations + 注入 references
+        references = resolve_menu_references(menu_data, args.branch)
         local_ctx = {
             "menu_data":     menu_data,
             "menu_name":     page_name,
             "total_records": len(records),
+            "references":    references,
             "result":        None,
             "filename":      None,
             "content_type":  None,
@@ -233,16 +300,20 @@ def main():
             "content_type": None,
         }
 
+    # 单一命名空间执行：globals 与 locals 必须是同一个 dict（与服务端沙箱一致），
+    # 否则自定义函数 / 推导式等嵌套作用域看不到注入变量，报 NameError。
+    namespace = dict(sandbox)
+    namespace.update(local_ctx)
     try:
-        exec(script_code, sandbox, local_ctx)  # noqa: S102
+        exec(script_code, namespace)  # noqa: S102 — 只传一个 dict
     except Exception as exc:
         print(f"\n[ERR] 脚本执行出错: {type(exc).__name__}: {exc}", file=sys.stderr)
         traceback.print_exc()
         sys.exit(1)
 
-    result       = local_ctx.get("result")
-    out_filename = local_ctx.get("filename") or f"{page_name}.dat"
-    content_type = local_ctx.get("content_type") or "application/octet-stream"
+    result       = namespace.get("result")
+    out_filename = namespace.get("filename") or f"{page_name}.dat"
+    content_type = namespace.get("content_type") or "application/octet-stream"
 
     if result is None:
         print("\n[ERR] 脚本未给 result 赋值", file=sys.stderr)
