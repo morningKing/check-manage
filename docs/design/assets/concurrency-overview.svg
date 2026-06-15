@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="700" viewBox="0 0 980 700" font-family="-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">
+  <rect width="980" height="700" fill="#ffffff"/>
+  <text x="30" y="40" font-size="22" font-weight="700" fill="#1a1d21">数据并发控制全景</text>
+  <text x="30" y="64" font-size="13" fill="#8b8f99">底座：PostgreSQL READ COMMITTED + 定点锁；不变式：dynamic_sequences.current_value ≥ 任何已写入的序号（每个 collection×branch×字段）</text>
+
+  <!-- Three mechanism cards -->
+  <g font-size="12.5">
+    <rect x="30" y="92" width="290" height="118" rx="9" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.4"/>
+    <text x="46" y="116" font-size="14" font-weight="700" fill="#1a1d21">① 更新：乐观锁</text>
+    <text x="46" y="140" fill="#3a3d44">客户端回传 _version；UPDATE … WHERE</text>
+    <text x="46" y="158" fill="#3a3d44">version=db_version（CAS）+ rowcount 校验</text>
+    <text x="46" y="178" fill="#8b8f99">冲突 → 409 VERSION_CONFLICT，刷新重试</text>
+    <text x="46" y="198" fill="#8b8f99">字段级 merge：改不同字段不互相覆盖</text>
+
+    <rect x="345" y="92" width="290" height="118" rx="9" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.4"/>
+    <text x="361" y="116" font-size="14" font-weight="700" fill="#1a1d21">② 创建：序号原子分配</text>
+    <text x="361" y="140" fill="#3a3d44">dynamic_sequences 计数行 SELECT … FOR</text>
+    <text x="361" y="158" fill="#3a3d44">UPDATE 串行化，+N 取批量区间</text>
+    <text x="361" y="178" fill="#8b8f99">首次按现有 max 播种；常态 PK 命中免扫描</text>
+    <text x="361" y="198" fill="#8b8f99">autoSequence 由后端分配，客户端不再生成</text>
+
+    <rect x="660" y="92" width="290" height="118" rx="9" fill="#f7f8fa" stroke="#1a1d21" stroke-width="1.4"/>
+    <text x="676" y="116" font-size="14" font-weight="700" fill="#1a1d21">③ 创建：手填主键去竞态</text>
+    <text x="676" y="140" fill="#3a3d44">pg_advisory_xact_lock(collection, 主键值)</text>
+    <text x="676" y="158" fill="#3a3d44">串行化「同一主键值」的并发创建</text>
+    <text x="676" y="178" fill="#8b8f99">检查-插入窗口被锁住 → 后到者 409 重复</text>
+    <text x="676" y="198" fill="#8b8f99">事务提交自动释放</text>
+  </g>
+
+  <!-- Invariant band: write paths -->
+  <text x="30" y="248" font-size="15" font-weight="700" fill="#1a1d21">④ 序号计数器不变式 —— 所有写入路径统一守卫</text>
+  <text x="30" y="268" font-size="12" fill="#8b8f99">凡写入 dynamic_data 的路径：要么经 create_item 原子分配，要么写后于同事务 reseed_sequences（GREATEST，只升不降），要么新分支首次分配时自播种。</text>
+
+  <g font-size="12.5">
+    <!-- column headers -->
+    <rect x="30" y="286" width="920" height="28" fill="#2a2e36"/>
+    <text x="44" y="305" font-size="12.5" font-weight="600" fill="#ffffff">写入路径</text>
+    <text x="430" y="305" font-size="12.5" font-weight="600" fill="#ffffff">序号一致性保证</text>
+    <text x="720" y="305" font-size="12.5" font-weight="600" fill="#ffffff">主键 / 版本保证</text>
+  </g>
+
+  <g font-size="12">
+    <!-- rows -->
+    <g>
+      <rect x="30" y="314" width="920" height="30" fill="#ffffff" stroke="#ebecf0"/>
+      <text x="44" y="333" fill="#1a1d21" font-weight="600">表单创建 create_item</text>
+      <text x="430" y="333" fill="#16a34a">原子 allocate_sequence</text>
+      <text x="720" y="333" fill="#3a3d44">advisory lock（手填主键）</text>
+    </g>
+    <g>
+      <rect x="30" y="344" width="920" height="30" fill="#fafbfc" stroke="#ebecf0"/>
+      <text x="44" y="363" fill="#1a1d21" font-weight="600">表单更新 update_item</text>
+      <text x="430" y="363" fill="#3a3d44">不分配（更新不改序号）</text>
+      <text x="720" y="363" fill="#16a34a">version CAS + 改主键时 advisory lock</text>
+    </g>
+    <g>
+      <rect x="30" y="374" width="920" height="30" fill="#ffffff" stroke="#ebecf0"/>
+      <text x="44" y="393" fill="#1a1d21" font-weight="600">批量导入 batch_create</text>
+      <text x="430" y="393" fill="#d97706">保留导入值 + 写后 reseed</text>
+      <text x="720" y="393" fill="#3a3d44">批内/库内 ID 唯一检查</text>
+    </g>
+    <g>
+      <rect x="30" y="404" width="920" height="30" fill="#fafbfc" stroke="#ebecf0"/>
+      <text x="44" y="423" fill="#1a1d21" font-weight="600">开放 API 写入</text>
+      <text x="430" y="423" fill="#d97706">保留 API 供值 + 写后 reseed</text>
+      <text x="720" y="423" fill="#3a3d44">ID/主键唯一检查</text>
+    </g>
+    <g>
+      <rect x="30" y="434" width="920" height="30" fill="#ffffff" stroke="#ebecf0"/>
+      <text x="44" y="453" fill="#1a1d21" font-weight="600">分支合并 merge ×2</text>
+      <text x="430" y="453" fill="#d97706">写后 reseed 目标分支</text>
+      <text x="720" y="453" fill="#3a3d44">合并策略 theirs/ours</text>
+    </g>
+    <g>
+      <rect x="30" y="464" width="920" height="30" fill="#fafbfc" stroke="#ebecf0"/>
+      <text x="44" y="483" fill="#1a1d21" font-weight="600">备份还原 / 版本快照还原</text>
+      <text x="430" y="483" fill="#d97706">写后 reseed</text>
+      <text x="720" y="483" fill="#3a3d44">单事务，失败回滚</text>
+    </g>
+    <g>
+      <rect x="30" y="494" width="920" height="30" fill="#ffffff" stroke="#ebecf0"/>
+      <text x="44" y="513" fill="#1a1d21" font-weight="600">合并回滚 / ETL 导入 / 触发器创建</text>
+      <text x="430" y="513" fill="#d97706">写后 reseed</text>
+      <text x="720" y="513" fill="#3a3d44">同事务原子</text>
+    </g>
+    <g>
+      <rect x="30" y="524" width="920" height="30" fill="#fafbfc" stroke="#ebecf0"/>
+      <text x="44" y="543" fill="#1a1d21" font-weight="600">工作流推进 spawn 下游</text>
+      <text x="430" y="543" fill="#16a34a">复用 allocate_sequence</text>
+      <text x="720" y="543" fill="#3a3d44">advisory lock + 实例 FOR UPDATE</text>
+    </g>
+    <g>
+      <rect x="30" y="554" width="920" height="30" fill="#ffffff" stroke="#ebecf0"/>
+      <text x="44" y="573" fill="#1a1d21" font-weight="600">新建分支初始化</text>
+      <text x="430" y="573" fill="#16a34a">首次分配自播种（计数行缺失）</text>
+      <text x="720" y="573" fill="#3a3d44">—</text>
+    </g>
+  </g>
+
+  <!-- legend -->
+  <g font-size="11.5">
+    <rect x="30" y="600" width="14" height="14" fill="#16a34a" rx="2"/><text x="50" y="612" fill="#3a3d44">原子分配 / 复用</text>
+    <rect x="190" y="600" width="14" height="14" fill="#d97706" rx="2"/><text x="210" y="612" fill="#3a3d44">写后 reseed（GREATEST 只升不降）</text>
+    <rect x="470" y="600" width="14" height="14" fill="#3a3d44" rx="2"/><text x="490" y="612" fill="#3a3d44">其它检查/锁</text>
+  </g>
+  <text x="30" y="648" font-size="11.5" fill="#8b8f99">⑤ 旁路异步：触发器/Webhook 在主事务提交后另起事务（最终一致，非原子）。⑥ 分支锁定：merge 准备期锁分支，阻止并发修改。</text>
+  <text x="30" y="672" font-size="11.5" fill="#8b8f99">隔离级别保持 READ COMMITTED，不全局升 SERIALIZABLE——仅在序号/主键热点用定点锁，避免全局重试复杂度。</text>
+</svg>

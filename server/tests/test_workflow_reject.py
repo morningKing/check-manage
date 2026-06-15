@@ -51,4 +51,9 @@ def test_readvance_after_reject_finds_instance_and_progresses():
                       {'status': '待评审', 'title': '登录'}, {'status': '已通过', 'title': '登录'}, 'admin', 'admin')
         conn.commit()
         inst2 = repo.get_instance(cur, 'inst-adv')
+        # 回退后再推进必须复用同一下游记录，不得重复 spawn / chain 无限增长（D3 防重）
+        cur.execute("SELECT COUNT(*) FROM dynamic_data WHERE collection='zzdesign'")
+        down_count = cur.fetchone()[0]
     assert inst2['current_stage_id'] == 's2'
+    assert len(inst2['chain']) == 2, f'chain 不应增长: {inst2["chain"]}'
+    assert down_count == 1, f'回退后重推进重复 spawn 了下游记录: {down_count}'

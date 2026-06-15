@@ -284,13 +284,18 @@ def test_advance_denied_for_wrong_role():
         repo.create_instance(cur, iid, wid, 's1', req, rid, 'admin')
         conn.commit()
     try:
+        from utils.workflow_engine import WorkflowError
         with get_db() as conn:
             cur = conn.cursor()
-            on_transition(cur, collection=req, record_id=rid, status_field='status',
-                          from_value='待评审', to_value='已通过',
-                          old_data={'status': '待评审'}, new_data={'status': '已通过'},
-                          operator='guestuser', role='guest')
-            conn.commit()
+            # 角色不符现在显式抛错（由调用方回滚），而非静默放过——避免「状态已改、实例未推进」分裂
+            with pytest.raises(WorkflowError):
+                on_transition(cur, collection=req, record_id=rid, status_field='status',
+                              from_value='待评审', to_value='已通过',
+                              old_data={'status': '待评审'}, new_data={'status': '已通过'},
+                              operator='guestuser', role='guest')
+            conn.rollback()
+        with get_db() as conn:
+            cur = conn.cursor()
             inst = repo.get_instance(cur, iid)
             cur.execute("SELECT COUNT(*) FROM dynamic_data WHERE collection=%s", (down,))
             down_count = cur.fetchone()[0]
@@ -300,3 +305,73 @@ def test_advance_denied_for_wrong_role():
         assert down_count == 0  # nothing spawned
     finally:
         _cleanup(colls=[req, down], defs=[wid], insts=[iid])
+
+
+# --------------------------------------------------------------------------- #
+# 6. D4: starting a second instance on the same record is rejected (409)
+# --------------------------------------------------------------------------- #
+def test_duplicate_instance_on_record_rejected(client):
+    coll = 'zzwfdup'
+    wid, rid = 'wf-zzwf-dup', 'zzwfdup-r1'
+    h = _admin_headers()
+    with get_db() as conn:
+        cur = conn.cursor()
+        _seed_page(cur, coll, [_wf_status_field(roles=['admin'])])
+        repo.save_definition(cur, {
+            'id': wid, 'name': 'dup-demo', 'enabled': True, 'stages': [
+                {'id': 's1', 'name': '评审', 'collection': coll, 'statusField': 'status',
+                 'advanceTransition': {'from': '待评审', 'to': '已通过'},
+                 'assignedRoles': ['admin']},
+            ]})
+        cur.execute("DELETE FROM workflow_instances WHERE workflow_id=%s", (wid,))
+        cur.execute("INSERT INTO dynamic_data (id,collection,data,branch_id) "
+                    "VALUES (%s,%s,%s,'main')",
+                    (rid, coll, psycopg2.extras.Json({'status': '待评审'})))
+        conn.commit()
+    try:
+        body = {'workflowId': wid, 'collection': coll, 'recordId': rid}
+        r1 = client.post('/workflow/instances', json=body, headers=h)
+        assert r1.status_code == 201, r1.get_data(as_text=True)
+        r2 = client.post('/workflow/instances', json=body, headers=h)
+        assert r2.status_code == 409, r2.get_data(as_text=True)
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM workflow_instances WHERE workflow_id=%s", (wid,))
+            assert cur.fetchone()[0] == 1  # only one instance ever created
+    finally:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM workflow_instances WHERE workflow_id=%s", (wid,)); conn.commit()
+        _cleanup(colls=[coll], defs=[wid])
+
+
+# --------------------------------------------------------------------------- #
+# 7. D5: deleting a definition with running instances is rejected (409)
+# --------------------------------------------------------------------------- #
+def test_delete_definition_with_running_instance_rejected(client):
+    coll = 'zzwfdel'
+    wid, iid, rid = 'wf-zzwf-del', 'wfi-zzwf-del', 'zzwfdel-r1'
+    h = _admin_headers()
+    with get_db() as conn:
+        cur = conn.cursor()
+        _seed_page(cur, coll, [_wf_status_field(roles=['admin'])])
+        repo.save_definition(cur, {
+            'id': wid, 'name': 'del-demo', 'enabled': True, 'stages': [
+                {'id': 's1', 'name': '评审', 'collection': coll, 'statusField': 'status',
+                 'advanceTransition': {'from': '待评审', 'to': '已通过'},
+                 'assignedRoles': ['admin']},
+            ]})
+        cur.execute("DELETE FROM workflow_instances WHERE id=%s", (iid,))
+        cur.execute("INSERT INTO dynamic_data (id,collection,data,branch_id) "
+                    "VALUES (%s,%s,%s,'main')",
+                    (rid, coll, psycopg2.extras.Json({'status': '待评审'})))
+        repo.create_instance(cur, iid, wid, 's1', coll, rid, 'admin')
+        conn.commit()
+    try:
+        r = client.delete(f'/workflow/definitions/{wid}', headers=h)
+        assert r.status_code == 409, r.get_data(as_text=True)
+        with get_db() as conn:
+            cur = conn.cursor()
+            assert repo.get_definition(cur, wid) is not None  # still there
+    finally:
+        _cleanup(colls=[coll], defs=[wid], insts=[iid])

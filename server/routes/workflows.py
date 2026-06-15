@@ -22,15 +22,22 @@ def save_def():
     with get_db() as conn:
         cur = conn.cursor()
         wid = repo.save_definition(cur, body)
+        warnings = repo.validate_definition(cur, body)
         conn.commit()
-        return jsonify(repo.get_definition(cur, wid)), 200
+        result = repo.get_definition(cur, wid)
+        result['warnings'] = warnings  # 非阻断：提示可能导致流程无法推进的配置问题
+        return jsonify(result), 200
 
 
 @workflows_bp.route('/workflow/definitions/<wid>', methods=['DELETE'])
 @require_permission('admin.workflows')
 def delete_def(wid):
     with get_db() as conn:
-        repo.delete_definition(conn.cursor(), wid); conn.commit()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM workflow_instances WHERE workflow_id=%s AND status='running'", (wid,))
+        if cur.fetchone()[0] > 0:
+            return jsonify({'error': '该工作流存在运行中的实例，无法删除（请先终止或等待其完成）'}), 409
+        repo.delete_definition(cur, wid); conn.commit()
     return jsonify({'ok': True})
 
 
@@ -45,6 +52,10 @@ def start_instance():
         d = repo.get_definition(cur, workflow_id)
         if not d or not d.get('stages'):
             return jsonify({'error': '工作流不存在或无阶段'}), 404
+        # 同一记录已有运行中的实例则拒绝重复启动（否则会产生永远推进不了的孤儿实例）
+        existing = repo.find_running_instance_by_record(cur, collection, record_id)
+        if existing:
+            return jsonify({'error': '该记录已有运行中的工作流实例'}), 409
         first = d['stages'][0]
         inst_id = f'wfi-{uuid.uuid4().hex[:12]}'
         inst = repo.create_instance(cur, inst_id, workflow_id, first['id'], collection, record_id,
