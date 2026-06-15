@@ -112,35 +112,8 @@ class TestCreateBackup:
 
         assert res.status_code == 201
         assert res.json['backupScope'] == 'full'
-        mock_create.assert_called_once_with(backup_type='manual', created_by='admin', tables=None)
-
-    @patch('routes.backups.create_backup')
-    def test_create_partial_backup(self, mock_create, setup):
-        client, _, admin_h, _ = setup
-        mock_create.return_value = {
-            'id': 'bk-partial',
-            'name': '手动备份(表级)',
-            'type': 'manual',
-            'status': 'completed',
-            'filePath': '/tmp/bk-partial.zip',
-            'fileSize': 512,
-            'tablesCount': 2,
-            'recordsCount': 10,
-            'createdBy': 'admin',
-            'createdAt': now.isoformat(),
-            'note': None,
-            'backupScope': 'partial',
-            'backupTables': ['menus', 'users'],
-        }
-
-        res = client.post('/backups', headers=admin_h, json={
-            'tables': ['menus', 'users'],
-        })
-
-        assert res.status_code == 201
-        assert res.json['backupScope'] == 'partial'
-        assert res.json['backupTables'] == ['menus', 'users']
-        mock_create.assert_called_once_with(backup_type='manual', created_by='admin', tables=['menus', 'users'])
+        # 仅全量：不再向 create_backup 传 tables
+        mock_create.assert_called_once_with(backup_type='manual', created_by='admin')
 
     @patch('routes.backups.create_backup')
     def test_create_backup_with_note(self, mock_create, setup):
@@ -188,27 +161,8 @@ class TestRestoreBackup:
 
         assert res.status_code == 200
         assert res.json['message'] == '还原成功'
-        mock_restore.assert_called_once_with('/tmp/bk-1.zip', tables=None, mode='upsert')
-
-    @patch('routes.backups.restore_backup')
-    @patch('routes.backups.os.path.isfile')
-    def test_restore_partial_tables(self, mock_isfile, mock_restore, setup):
-        client, mock_cursor, admin_h, _ = setup
-        mock_cursor.fetchone.return_value = ('/tmp/bk-2.zip',)
-        mock_isfile.return_value = True  # 模拟文件存在
-        mock_restore.return_value = {
-            'id': 'bk-2',
-            'name': '表级备份',
-            'tables': ['menus', 'users'],
-        }
-
-        res = client.post('/backups/bk-2/restore', headers=admin_h, json={
-            'tables': ['menus'],
-        })
-
-        assert res.status_code == 200
-        # Selective restore defaults to mode='upsert' — see routes/backups.py.
-        mock_restore.assert_called_once_with('/tmp/bk-2.zip', tables=['menus'], mode='upsert')
+        # 仅整包全量还原：始终 mode='replace'，不传 tables
+        mock_restore.assert_called_once_with('/tmp/bk-1.zip', mode='replace')
 
     def test_restore_nonexistent_backup(self, setup):
         client, mock_cursor, admin_h, _ = setup
@@ -218,23 +172,6 @@ class TestRestoreBackup:
 
         assert res.status_code == 404
         assert '备份不存在' in res.json['error']
-
-
-class TestListBackupTables:
-    """测试 GET /backups/tables"""
-
-    def test_list_backup_tables(self, setup):
-        client, _, admin_h, _ = setup
-
-        res = client.get('/backups/tables', headers=admin_h)
-
-        assert res.status_code == 200
-        assert isinstance(res.json, list)
-        assert len(res.json) > 0
-
-        for item in res.json:
-            assert 'name' in item
-            assert 'label' in item
 
 
 class TestDeleteBackup:

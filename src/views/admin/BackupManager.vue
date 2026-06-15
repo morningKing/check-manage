@@ -3,8 +3,8 @@
  *
  * 职责：
  * - 查看备份列表
- * - 手动创建备份（支持全量/表级）
- * - 下载/还原/删除备份
+ * - 手动创建备份（仅全量）
+ * - 下载/还原/删除备份（整包全量还原）
  * - 上传外部备份还原
  * - 配置定时备份设置
  *
@@ -61,7 +61,7 @@
           <div class="header-actions">
             <el-button type="primary" @click="handleCreateBackup" :loading="creating">
               <el-icon><Plus /></el-icon>
-              创建备份
+              创建全量备份
             </el-button>
             <el-button @click="triggerUpload">
               <el-icon><Upload /></el-icon>
@@ -85,21 +85,6 @@
             <el-tag :type="BACKUP_TYPE_TAG_TYPES[row.type] || 'info'" size="small">
               {{ BACKUP_TYPE_LABELS[row.type] || row.type }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="backupScope" label="备份范围" width="140" align="center">
-          <template #default="{ row }">
-            <el-tag :type="row.backupScope === 'full' ? '' : 'warning'" size="small">
-              {{ row.backupScope === 'full' ? '全量' : '表级' }}
-            </el-tag>
-            <el-tooltip v-if="row.backupScope === 'partial' && row.backupTables?.length" placement="top">
-              <template #content>
-                <div style="max-width: 300px">
-                  {{ row.backupTables.map((t: string) => tableLabelMap[t] || t).join('、') }}
-                </div>
-              </template>
-              <el-icon style="margin-left: 4px; cursor: pointer"><InfoFilled /></el-icon>
-            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="90" align="center">
@@ -139,60 +124,8 @@
     </el-card>
 
     <!-- 创建备份对话框 -->
-    <el-dialog v-model="createDialogVisible" title="创建备份" width="600px">
+    <el-dialog v-model="createDialogVisible" title="创建全量备份" width="480px">
       <el-form label-width="100px">
-        <el-form-item label="备份范围">
-          <el-radio-group v-model="createScope">
-            <el-radio value="full">全量备份</el-radio>
-            <el-radio value="partial">表级备份</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="createScope === 'partial'" label="选择数据">
-          <div class="table-selector">
-            <el-input
-              v-model="tableSearchKey"
-              placeholder="搜索..."
-              clearable
-              style="margin-bottom: 8px"
-            />
-            <div class="table-list">
-              <template v-for="t in availableTables" :key="t.name">
-                <!-- 分组表（动态数据） -->
-                <template v-if="t.isGroup && t.children">
-                  <div class="table-group-header">
-                    <el-checkbox
-                      :model-value="isGroupAllSelected(t)"
-                      :indeterminate="isGroupIndeterminate(t)"
-                      @change="toggleGroup(t, $event)"
-                    >
-                      {{ t.label }}（全选）
-                    </el-checkbox>
-                  </div>
-                  <div class="table-group-children">
-                    <el-checkbox
-                      v-for="child in filterChildren(t.children)"
-                      :key="child.name"
-                      :model-value="createSelectedTables.includes(child.name)"
-                      @change="toggleChild(child.name, $event)"
-                    >
-                      {{ child.label }}
-                      <span class="record-count">({{ formatBranchCounts(child.branchCounts) }})</span>
-                    </el-checkbox>
-                  </div>
-                </template>
-                <!-- 普通表 -->
-                <template v-else-if="!t.isGroup && matchesSearch(t.label)">
-                  <el-checkbox
-                    :model-value="createSelectedTables.includes(t.name)"
-                    @change="toggleChild(t.name, $event)"
-                  >
-                    {{ t.label }}
-                  </el-checkbox>
-                </template>
-              </template>
-            </div>
-          </div>
-        </el-form-item>
         <el-form-item label="备注（可选）">
           <el-input v-model="createNote" placeholder="例如：部署前备份" />
         </el-form-item>
@@ -208,34 +141,13 @@
     <!-- 还原确认 -->
     <el-dialog v-model="restoreDialogVisible" title="还原确认" width="500px">
       <el-alert
-        title="警告：还原操作将覆盖当前数据！"
+        title="警告：还原操作将整包覆盖当前数据！"
         type="warning"
         :closable="false"
         show-icon
         style="margin-bottom: 16px"
       />
-      <p>确定要从备份 <strong>{{ restoreTarget?.name }}</strong> 还原吗？</p>
-
-      <!-- 表级备份显示表选择 -->
-      <div v-if="restoreTarget?.backupScope === 'partial'" style="margin-top: 12px">
-        <el-form-item label="选择还原数据">
-          <el-select
-            v-model="restoreSelectedTables"
-            multiple
-            filterable
-            placeholder="请选择要还原的数据"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="t in restoreTarget?.backupTables || []"
-              :key="t"
-              :label="formatBackupTableName(t)"
-              :value="t"
-            />
-          </el-select>
-        </el-form-item>
-      </div>
-
+      <p>确定要从备份 <strong>{{ restoreTarget?.name }}</strong> 全量还原吗？</p>
       <p style="color: #909399; font-size: 13px; margin-top: 12px">还原后页面将自动刷新。</p>
       <template #footer>
         <el-button @click="restoreDialogVisible = false">取消</el-button>
@@ -277,9 +189,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Upload, InfoFilled } from '@element-plus/icons-vue'
+import { Plus, Upload } from '@element-plus/icons-vue'
 import {
   getBackups,
   createBackup,
@@ -289,7 +201,6 @@ import {
   uploadAndRestore,
   getBackupSettings,
   updateBackupSettings,
-  getBackupTables,
 } from '@/api/backup'
 import { ConfirmDialog } from '@/components/common'
 import {
@@ -316,40 +227,13 @@ const settings = reactive({
   lastBackupAt: null as string | null,
 })
 
-// 可备份的表列表
-interface BackupTableItem {
-  name: string
-  label: string
-  isGroup?: boolean
-  children?: { name: string; label: string; branchCounts?: { branch: string; count: number }[] }[]
-}
-const availableTables = ref<BackupTableItem[]>([])
-
-// 表名 -> 中文标签映射
-const tableLabelMap = computed(() => {
-  const map: Record<string, string> = {}
-  for (const t of availableTables.value) {
-    if (t.isGroup && t.children) {
-      for (const child of t.children) {
-        map[child.name] = child.label
-      }
-    }
-    map[t.name] = t.label
-  }
-  return map
-})
-
 // 创建备份对话框
 const createDialogVisible = ref(false)
 const createNote = ref('')
-const createScope = ref<'full' | 'partial'>('full')
-const createSelectedTables = ref<string[]>([])
-const tableSearchKey = ref('')
 
 // 还原确认
 const restoreDialogVisible = ref(false)
 const restoreTarget = ref<Backup | null>(null)
-const restoreSelectedTables = ref<string[]>([])
 
 const deleteDialogVisible = ref(false)
 const deleteTarget = ref<Backup | null>(null)
@@ -412,14 +296,6 @@ async function loadSettings(): Promise<void> {
   }
 }
 
-async function loadAvailableTables(): Promise<void> {
-  try {
-    availableTables.value = await getBackupTables()
-  } catch {
-    // 静默处理
-  }
-}
-
 async function handleSaveSettings(): Promise<void> {
   settingsSaving.value = true
   try {
@@ -438,85 +314,13 @@ async function handleSaveSettings(): Promise<void> {
 
 function handleCreateBackup(): void {
   createNote.value = ''
-  createScope.value = 'full'
-  createSelectedTables.value = []
-  tableSearchKey.value = ''
   createDialogVisible.value = true
 }
 
-function matchesSearch(label: string): boolean {
-  if (!tableSearchKey.value) return true
-  return label.toLowerCase().includes(tableSearchKey.value.toLowerCase())
-}
-
-function filterChildren(children: { name: string; label: string; branchCounts?: { branch: string; count: number }[] }[]) {
-  if (!tableSearchKey.value) return children
-  return children.filter(c => matchesSearch(c.label))
-}
-
-function formatBranchCounts(branchCounts?: { branch: string; count: number }[]): string {
-  if (!branchCounts || branchCounts.length === 0) return '0 条'
-  if (branchCounts.length === 1) return `${branchCounts[0].count} 条`
-  return branchCounts.map(b => `${b.branch}: ${b.count}`).join(', ')
-}
-
-function isGroupAllSelected(t: BackupTableItem): boolean {
-  if (!t.children) return false
-  return t.children.every(c => createSelectedTables.value.includes(c.name))
-}
-
-function isGroupIndeterminate(t: BackupTableItem): boolean {
-  if (!t.children) return false
-  const selected = t.children.filter(c => createSelectedTables.value.includes(c.name))
-  return selected.length > 0 && selected.length < t.children.length
-}
-
-function toggleGroup(t: BackupTableItem, checked: boolean): void {
-  if (!t.children) return
-  if (checked) {
-    // 全选
-    for (const c of t.children) {
-      if (!createSelectedTables.value.includes(c.name)) {
-        createSelectedTables.value.push(c.name)
-      }
-    }
-  } else {
-    // 取消全选
-    createSelectedTables.value = createSelectedTables.value.filter(
-      name => !t.children!.some(c => c.name === name)
-    )
-  }
-}
-
-function toggleChild(name: string, checked: boolean): void {
-  if (checked) {
-    if (!createSelectedTables.value.includes(name)) {
-      createSelectedTables.value.push(name)
-    }
-  } else {
-    createSelectedTables.value = createSelectedTables.value.filter(n => n !== name)
-  }
-}
-
-function formatBackupTableName(name: string): string {
-  // 处理 dynamic_data:collection 格式
-  if (name.startsWith('dynamic_data:')) {
-    const collection = name.substring('dynamic_data:'.length)
-    return tableLabelMap.value[name] || collection
-  }
-  return tableLabelMap.value[name] || name
-}
-
 async function doCreateBackup(): Promise<void> {
-  if (createScope.value === 'partial' && createSelectedTables.value.length === 0) {
-    ElMessage.warning('请至少选择一张表')
-    return
-  }
-
   creating.value = true
   try {
-    const tables = createScope.value === 'partial' ? createSelectedTables.value : undefined
-    await createBackup(createNote.value || undefined, tables)
+    await createBackup(createNote.value || undefined)
     ElMessage.success('备份创建成功')
     createDialogVisible.value = false
     await loadBackups()
@@ -537,28 +341,14 @@ async function handleDownload(row: Backup): Promise<void> {
 
 function handleRestoreConfirm(row: Backup): void {
   restoreTarget.value = row
-  // 表级备份默认全选
-  restoreSelectedTables.value = row.backupScope === 'partial' && row.backupTables
-    ? [...row.backupTables]
-    : []
   restoreDialogVisible.value = true
 }
 
 async function doRestore(): Promise<void> {
   if (!restoreTarget.value) return
-
-  // 表级备份需要选择表
-  if (restoreTarget.value.backupScope === 'partial' && restoreSelectedTables.value.length === 0) {
-    ElMessage.warning('请至少选择一张表')
-    return
-  }
-
   restoring.value = true
   try {
-    const tables = restoreTarget.value.backupScope === 'partial'
-      ? restoreSelectedTables.value
-      : undefined
-    await restoreBackup(restoreTarget.value.id, tables)
+    await restoreBackup(restoreTarget.value.id)
     ElMessage.success('还原成功，页面即将刷新')
     restoreDialogVisible.value = false
     setTimeout(() => window.location.reload(), 1500)
@@ -620,7 +410,6 @@ async function doUploadRestore(): Promise<void> {
 onMounted(() => {
   loadBackups()
   loadSettings()
-  loadAvailableTables()
 })
 </script>
 
@@ -658,44 +447,5 @@ onMounted(() => {
   margin-top: 8px;
   color: #909399;
   font-size: 13px;
-}
-
-.table-selector {
-  width: 100%;
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  padding: 8px;
-}
-
-.table-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.table-group-header {
-  padding: 8px 0 4px 0;
-  border-bottom: 1px solid #ebeef5;
-  margin-bottom: 4px;
-}
-
-.table-group-header :deep(.el-checkbox__label) {
-  font-weight: 600;
-  color: #303133;
-}
-
-.table-group-children {
-  padding-left: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.record-count {
-  color: #909399;
-  font-size: 12px;
-  margin-left: 4px;
 }
 </style>

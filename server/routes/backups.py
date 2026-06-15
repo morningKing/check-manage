@@ -17,7 +17,6 @@ from utils.backup import (
     delete_backup_file,
     get_backup_settings,
     update_backup_settings,
-    get_backup_table_names,
     factory_reset,
     BACKUP_DIR,
 )
@@ -65,11 +64,11 @@ def create_manual_backup():
     from flask import g
     body = request.get_json(silent=True) or {}
     note = body.get('note')
-    tables = body.get('tables')  # None = 全量备份
     created_by = g.current_user.get('username', 'admin')
 
     try:
-        result = create_backup(backup_type='manual', created_by=created_by, tables=tables)
+        # 仅支持全量备份（已移除表级备份）
+        result = create_backup(backup_type='manual', created_by=created_by)
         # 更新备注
         if note:
             with get_db() as conn:
@@ -116,28 +115,7 @@ def download_backup(backup_id):
 @backups_bp.route('/backups/<backup_id>/restore', methods=['POST'])
 @require_permission('admin.backup')
 def restore_from_backup(backup_id):
-    """从已有备份还原。
-
-    body 字段:
-      tables: list[str] | None
-        None = 全量还原(所有备份内的表一并替换)
-        [...] = 选择性还原
-      mode: 'upsert' (默认) | 'replace'
-        仅在选择性还原下生效。
-        - 'upsert' 安全:不会让其他表的外键变孤儿。
-        - 'replace' 兼容旧行为,会 DELETE 表;选择性 replace 触发依赖检查,
-          若发现风险且未带 confirmUnsafe=true,返回 409 + warnings。
-      confirmUnsafe: bool
-        replace 模式专用的二次确认。
-    """
-    from utils.backup import compute_restore_warnings
-    body = request.get_json(silent=True) or {}
-    tables = body.get('tables')
-    mode = (body.get('mode') or 'upsert').lower()
-    confirm_unsafe = bool(body.get('confirmUnsafe'))
-    if mode not in ('upsert', 'replace'):
-        return jsonify({'error': f'invalid mode: {mode!r}'}), 400
-
+    """从已有备份整包全量还原（已移除表级/选择性还原）。"""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute('SELECT file_path FROM backups WHERE id = %s', (backup_id,))
@@ -148,28 +126,13 @@ def restore_from_backup(backup_id):
     if not file_path or not os.path.isfile(file_path):
         return jsonify({'error': '备份文件不存在'}), 404
 
-    # Selective replace → check orphan risk before doing anything
-    warnings = []
-    if tables and mode == 'replace':
-        # Compute warnings against the BASE table names (strip the
-        # `dynamic_data:collection-foo` suffix some entries may carry).
-        base_tables = [t.split(':', 1)[0] for t in tables]
-        warnings = compute_restore_warnings(base_tables, mode='replace')
-        if warnings and not confirm_unsafe:
-            return jsonify({
-                'error': '检测到选择性 replace 还原会让其他表产生孤儿外键引用',
-                'code': 'RESTORE_ORPHAN_RISK',
-                'warnings': warnings,
-                'hint': '改用 upsert 模式(只覆盖备份里有的行)或带 confirmUnsafe=true 强制 replace。',
-            }), 409
-
     try:
-        manifest = restore_backup(file_path, tables=tables, mode=mode)
+        # 全量还原：tables=None → 备份内所有表一并替换
+        manifest = restore_backup(file_path, mode='replace')
         return jsonify({
             'message': '还原成功',
             'manifest': manifest,
-            'mode': 'replace' if not tables else mode,  # full restore is always replace-like
-            'warnings': warnings,
+            'mode': 'replace',
         })
     except Exception as e:
         return jsonify({'error': f'还原失败: {str(e)}'}), 500
@@ -228,74 +191,6 @@ def update_settings():
 
     settings = update_backup_settings(enabled, interval, retention_count)
     return jsonify(settings)
-
-
-@backups_bp.route('/backups/tables', methods=['GET'])
-@require_permission('admin.backup')
-def list_backup_tables():
-    """获取可备份的表列表，包括动态数据的 collection 分组"""
-    from utils.backup import get_backup_table_names
-
-    base_tables = get_backup_table_names()
-
-    # 获取动态数据表中的所有 collection
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            'SELECT DISTINCT collection FROM dynamic_data ORDER BY collection'
-        )
-        collections = [row[0] for row in cur.fetchall()]
-
-        # 获取分支名称映射
-        cur.execute('SELECT id, name FROM collection_versions')
-        branch_name_map = {row[0]: row[1] for row in cur.fetchall()}
-
-        # 获取每个 collection 的记录数（按分支分组）
-        collection_stats = {}
-        for col in collections:
-            cur.execute(
-                'SELECT branch_id, COUNT(*) FROM dynamic_data WHERE collection = %s GROUP BY branch_id ORDER BY branch_id',
-                (col,),
-            )
-            branch_counts = []
-            for row in cur.fetchall():
-                bid = row[0]
-                label = '主分支' if bid == 'main' else branch_name_map.get(bid, f'未知分支({bid[:8]})')
-                branch_counts.append({'branch': label, 'count': row[1]})
-            collection_stats[col] = branch_counts
-
-        # 获取每个 collection 对应的页面名称
-        cur.execute(
-            'SELECT SUBSTRING(id FROM 6) AS col, name FROM page_configs WHERE id LIKE \'page-%\''
-        )
-        page_names = {row[0]: row[1] for row in cur.fetchall()}
-
-    # 构建结果：基础表 + 动态数据 collection 分组
-    result = []
-    for t in base_tables:
-        if t['name'] == 'dynamic_data':
-            # 动态数据表展开为 collection 列表
-            result.append({
-                'name': 'dynamic_data',
-                'label': t['label'],
-                'isGroup': True,
-                'children': [
-                    {
-                        'name': f'dynamic_data:{col}',
-                        'label': page_names.get(col, col),
-                        'branchCounts': collection_stats.get(col, []),
-                    }
-                    for col in collections
-                ]
-            })
-        else:
-            result.append({
-                'name': t['name'],
-                'label': t['label'],
-                'isGroup': False,
-            })
-
-    return jsonify(result)
 
 
 # ==================== 备份数据对比 ====================
