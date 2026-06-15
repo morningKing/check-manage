@@ -41,6 +41,14 @@
 - **操作审计** — 全量操作日志，批次聚合、筛选、导出
 - **系统备份** — 手动/定时备份，下载、还原、跨环境迁移；当前数据与备份的逐字段差异对比
 
+### 流程编排（工作流）
+- **跨页工作流引擎** — 把多个数据页串成一条命名业务流程：不同**角色**在不同**阶段**处理；记录推进时**自动在下一页生成下游记录**（按字段映射携带上游数据并反向关联），支持**驳回**回退
+- **图形化流程设计器** — 全屏画布**拖拽创建节点、拉连线定义流向（DAG）**、拖动布局；点节点编阶段、点连线编流向
+- **条件路由** — 推进边可配**单条件**（`字段 op 值`，运算符 `== != > >= < <= contains`，留空=默认边）：命中条件的边优先，否则走默认边
+- **并行多分支（v2）** — 一个阶段可**并行扇出**到多个分支（命中的多条条件边/多条默认边全取），各分支独立推进，**所有分支结束**实例才完成
+- **待办收件箱** — 按「当前阶段办理角色 ∋ 我」聚合运行中实例的待办；每个并发活动分支一条
+- **状态机驱动** — 推进/驳回复用字段的 `workflowConfig` 状态机；推进失败即回滚整笔事务，杜绝「状态已改、实例未推进」
+
 ### AI 智能助手
 - **AI 对话** — Claude 风格聊天抽屉，对接 OpenCode Agent 运行时，可 @ 选择子智能体、挑选模型，工具调用经独立 MCP Server 接入平台能力
 - **批任务** — 选 N 个文件 + 1 个 Prompt → N 个隔离会话并发处理（限流 3 并发），支持 Prompt 模板、失败重试、指定 Agent
@@ -125,7 +133,7 @@ npm run test:e2e      # E2E（Playwright，需服务运行）
 ```
 check-manage/
 ├── server/                      # Flask 后端
-│   ├── app.py                   # 应用入口（注册 34 个蓝图 + 后台调度器）
+│   ├── app.py                   # 应用入口（注册 35 个蓝图 + 后台调度器）
 │   ├── config.py / .env         # 配置
 │   ├── init_db.py               # 数据库初始化
 │   ├── routes/                  # 路由模块（auth/menus/dynamic/relations/...）
@@ -138,7 +146,7 @@ check-manage/
 │   ├── stores/                  # Pinia 状态
 │   ├── types/                   # TypeScript 类型
 │   ├── utils/                   # 工具函数
-│   └── views/                   # 页面（admin / dynamic / home / ai-chat / login）
+│   └── views/                   # 页面（admin / dynamic / home / ai-chat / workflow / login）
 ├── scripts/
 │   └── debug_export_script.py   # 导出脚本本地调试工具
 ├── e2e/                         # Playwright E2E 用例
@@ -177,6 +185,7 @@ check-manage/
 | etl_tasks / etl_logs | ETL 任务与日志 |
 | api_keys / operation_logs | Open API 密钥、操作审计 |
 | backups / backup_settings | 备份记录、定时备份配置 |
+| workflow_definitions / workflow_instances | 工作流定义（阶段 + 流向边 + 条件）、运行实例（并发活动分支 + 轨迹） |
 | notifications / record_comments / trigger_rules | 通知、记录评论、联动规则 |
 | dashboards / home_widgets / system_config | 仪表盘、首页区块、系统配置 |
 | ai_settings / ai_chat_sessions / ai_chat_messages | AI 配置、对话会话与消息 |
@@ -201,6 +210,7 @@ npm run start
 - `docs/design/` — 系统设计、架构与数据库结构
 - `docs/superpowers/specs/` 与 `docs/superpowers/plans/` — 各特性的设计规格与实施计划
 - `docs/ai-scan-tasks-guide.md` — 定时 AI 数据流水线指南
+- `docs/workflow-engine-guide.md` — 跨页工作流引擎使用指南（图形化 DAG 设计器、条件路由、并行分支）
 
 ## License
 
