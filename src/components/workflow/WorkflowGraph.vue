@@ -135,7 +135,8 @@ watch(
 .wf-graph {
   position: relative;
   width: 100%;
-  height: 260px;
+  height: 100%;
+  min-height: 240px;
   border: 1px solid #e4e7ed;
   border-radius: 8px;
   background: #fafbfc;

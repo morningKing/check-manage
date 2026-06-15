@@ -66,6 +66,9 @@ const staticRoutes: RouteRecordRaw[] = [
       },
       // 我的待办（工作流收件箱）
       { path: 'workflow/inbox', name: 'WorkflowInbox', component: () => import('@/views/workflow/WorkflowInbox.vue'), meta: { title: '我的待办' } },
+      // 工作流全屏编辑页（新建 / 按 id 编辑）
+      { path: 'workflow/new', name: 'WorkflowEditorNew', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '新建工作流' } },
+      { path: 'workflow/:id', name: 'WorkflowEditor', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '编辑工作流' } },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',
