@@ -417,9 +417,12 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
     description TEXT,
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
     stages      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    edges       JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+-- 迁移：为已存在的库补 edges 列（图形化 DAG + 条件边）
+ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS edges JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE TABLE IF NOT EXISTS workflow_instances (
     id               VARCHAR(100) PRIMARY KEY,
     workflow_id      VARCHAR(100) NOT NULL,

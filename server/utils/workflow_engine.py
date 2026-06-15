@@ -95,6 +95,66 @@ def _notify_roles(cur, roles, title, content, collection, record_id):
         create_notification(uid, 'workflow', title, content, collection, record_id)
 
 
+def _stage_by_id(stages, sid):
+    return next((s for s in stages if s.get('id') == sid), None)
+
+
+def _effective_edges(definition):
+    """显式 edges 优先；为空时按 stages 顺序回退为线性链（向后兼容旧定义）：
+    相邻 advance（i→i+1）+ 配了 rejectTransition 的 reject（i→i-1）。"""
+    edges = definition.get('edges')
+    if edges:
+        return edges
+    stages = definition.get('stages') or []
+    derived = []
+    for i, s in enumerate(stages):
+        if i + 1 < len(stages):
+            derived.append({'source': s['id'], 'target': stages[i + 1]['id'], 'kind': 'advance'})
+        if i - 1 >= 0 and s.get('rejectTransition'):
+            derived.append({'source': s['id'], 'target': stages[i - 1]['id'], 'kind': 'reject'})
+    return derived
+
+
+def _eval_condition(cond, data):
+    """单条件求值：data[field] op value。数值比较自动转 float，失败即不命中。"""
+    field = cond.get('field'); op = cond.get('op'); expected = cond.get('value')
+    actual = (data or {}).get(field)
+    if op in ('>', '>=', '<', '<='):
+        try:
+            a = float(actual); e = float(expected)
+        except (TypeError, ValueError):
+            return False
+        return {'>': a > e, '>=': a >= e, '<': a < e, '<=': a <= e}[op]
+    if op == 'contains':
+        return expected in actual if isinstance(actual, (list, tuple, str)) else False
+    a = '' if actual is None else str(actual)
+    e = '' if expected is None else str(expected)
+    return a == e if op == '==' else (a != e if op == '!=' else False)
+
+
+def _advance_target(definition, stages, current_id, data):
+    """按出边路由推进目标：先取条件命中的边，否则走默认（无条件）边，都没有则 None（流程结束）。"""
+    out = [e for e in _effective_edges(definition)
+           if e.get('kind') == 'advance' and e.get('source') == current_id]
+    for e in out:
+        cond = e.get('condition')
+        if cond and cond.get('field') and _eval_condition(cond, data):
+            return _stage_by_id(stages, e.get('target'))
+    for e in out:
+        cond = e.get('condition')
+        if not cond or not cond.get('field'):
+            return _stage_by_id(stages, e.get('target'))
+    return None
+
+
+def _reject_target(definition, stages, current_id):
+    """回退目标：当前阶段的 reject 出边的 target。"""
+    for e in _effective_edges(definition):
+        if e.get('kind') == 'reject' and e.get('source') == current_id:
+            return _stage_by_id(stages, e.get('target'))
+    return None
+
+
 def on_transition(cur, collection, record_id, status_field, from_value, to_value,
                   old_data, new_data, operator, role, comment=None, branch_id='main'):
     """update_item 状态转换成功后调用。匹配当前实例阶段的 advance/reject 转换并编排。
@@ -132,8 +192,9 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
             cur_entry['completedBy'] = operator
         history.append({'ts': repo._now(), 'action': 'advance', 'stageId': stage['id'],
                         'by': operator, 'comment': comment})
-        if idx + 1 < len(stages):
-            nxt = stages[idx + 1]
+        # 按出边（含条件）路由到下游阶段；无 edges 时回退线性 idx+1。
+        nxt = _advance_target(definition, stages, stage['id'], new_data)
+        if nxt is not None:
             spawn = stage.get('spawn') or {}
             # 回退后重新推进：复用已存在的下游 chain 项，避免重复 spawn + chain 无限增长。
             existing = next((e for e in chain if e['stageId'] == nxt['id']), None)
@@ -158,9 +219,9 @@ def on_transition(cur, collection, record_id, status_field, from_value, to_value
             repo.update_instance(cur, inst['id'], status='completed', chain=chain, history=history)
         return
     if matches_rej:
-        if idx == 0:
-            return  # 首阶段无可退回
-        prev = stages[idx - 1]
+        prev = _reject_target(definition, stages, stage['id'])
+        if prev is None:
+            return  # 无回退出边
         history.append({'ts': repo._now(), 'action': 'reject', 'stageId': stage['id'],
                         'by': operator, 'comment': comment})
         prev_entry = None
