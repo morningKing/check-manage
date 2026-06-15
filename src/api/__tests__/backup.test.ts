@@ -21,7 +21,6 @@ import {
   restoreBackup,
   getBackupSettings,
   diffBackupCollection,
-  getBackupTables,
   updateBackupSettings,
   downloadBackup,
   uploadAndRestore,
@@ -60,34 +59,6 @@ describe('Backup API', () => {
     expect(mockPost).toHaveBeenCalledWith('/backups', { note: '手动备份' })
   })
 
-  it('createBackup 传 tables 参数时发送表级备份请求', async () => {
-    mockPost.mockResolvedValueOnce({
-      id: 'bk-4',
-      backupScope: 'partial',
-      backupTables: ['menus', 'users'],
-    } as any)
-
-    const result = await createBackup(undefined, ['menus', 'users'])
-
-    expect(mockPost).toHaveBeenCalledWith('/backups', {
-      note: undefined,
-      tables: ['menus', 'users'],
-    })
-    expect(result.backupScope).toBe('partial')
-    expect(result.backupTables).toEqual(['menus', 'users'])
-  })
-
-  it('createBackup 同时传 note 和 tables', async () => {
-    mockPost.mockResolvedValueOnce({ id: 'bk-5' } as any)
-
-    await createBackup('部署前备份', ['dynamic_data', 'data_relations'])
-
-    expect(mockPost).toHaveBeenCalledWith('/backups', {
-      note: '部署前备份',
-      tables: ['dynamic_data', 'data_relations'],
-    })
-  })
-
   it('deleteBackup 调用 DELETE /backups/{id}', async () => {
     mockDel.mockResolvedValueOnce({} as any)
 
@@ -101,16 +72,6 @@ describe('Backup API', () => {
     const res = await restoreBackup('bk-1')
     expect(mockServicePost).toHaveBeenCalledWith('/backups/bk-1/restore', {})
     expect(res.data).toEqual({ message: '还原成功' })
-  })
-
-  it('restoreBackup 传 tables 参数时发送表级还原请求', async () => {
-    mockServicePost.mockResolvedValueOnce({ data: { message: '还原成功' } } as any)
-
-    await restoreBackup('bk-1', ['menus', 'users'])
-
-    expect(mockServicePost).toHaveBeenCalledWith('/backups/bk-1/restore', {
-      tables: ['menus', 'users'],
-    })
   })
 
   it('getBackupSettings 调用 GET /backups/settings', async () => {
@@ -146,18 +107,6 @@ describe('Backup API', () => {
       targetSource: 'bk-2',
     })
     expect(res).toEqual(diffResult)
-  })
-
-  it('getBackupTables 调用 GET /backups/tables', async () => {
-    const tables = [
-      { name: 'menus', label: '菜单配置' },
-      { name: 'users', label: '用户数据' },
-    ]
-    mockGet.mockResolvedValueOnce(tables as any)
-
-    const res = await getBackupTables()
-    expect(mockGet).toHaveBeenCalledWith('/backups/tables')
-    expect(res).toEqual(tables)
   })
 
   it('updateBackupSettings 调用 PUT /backups/settings', async () => {
