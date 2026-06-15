@@ -196,10 +196,19 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
                         'recordCount': len(records)
                     })
 
+                # 解析引用：补取被引用记录（含跨项目，按依赖版本/分支）+ 回挂 _relations，
+                # 让脚本能 join 未被选中的被引用页数据。失败不阻断导出（退化为裸 ID）。
+                try:
+                    from utils.export_references import resolve_references
+                    references = resolve_references(cur, menu_data, export_branch=branch_id)
+                except Exception as ref_err:
+                    references = {}
+                    errors.append(f'「{menu_name}」引用解析告警：{ref_err}')
+
                 # Execute menu-level export script
                 try:
                     files = run_menu_export_script(
-                        script_code, menu_data, menu_name, output_format
+                        script_code, menu_data, menu_name, output_format, references=references
                     )
                 except Exception as e:
                     errors.append(f'「{menu_name}」: {str(e)}')
