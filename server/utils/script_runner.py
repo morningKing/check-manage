@@ -148,11 +148,17 @@ def validate_export_script_scope(scope, script_code):
 
 
 def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, timeout_message):
+    # 单一命名空间：globals 与 locals 必须是同一个 dict。若传成两个不同的 dict，脚本会以
+    # 「类体作用域」运行——自定义函数 / 列表推导式 / 生成器表达式 / lambda 等嵌套作用域只能经
+    # LOAD_GLOBAL 取自由变量，看不到注入到 locals 的 data/fields 及脚本自定义的函数/变量，
+    # 表现为「不支持自定义函数/推导式」的 NameError。合并后顶层名字进同一命名空间即可被嵌套作用域看到。
+    namespace = dict(safe_globals)
+    namespace.update(script_locals)
     error_holder = [None]
 
     def _execute():
         try:
-            exec(script_code, safe_globals, script_locals)  # noqa: S102
+            exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（同时作 globals/locals）
         except Exception as exc:  # pragma: no cover
             error_holder[0] = exc
 
@@ -164,25 +170,27 @@ def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, time
         raise TimeoutError(timeout_message)
     if error_holder[0]:
         raise error_holder[0]
-    return script_locals
+    return namespace
 
 
 def _subprocess_exec_worker(queue, profile, script_code, script_locals):
-    safe_globals = _build_safe_globals(profile)
-    local_ctx = dict(script_locals)
+    # 单一命名空间（原因见 _thread_exec）：合并 globals 与注入的 locals，使自定义函数 / 推导式
+    # 能引用 data/fields 等注入变量与脚本自定义名字，而不报 NameError。
+    namespace = _build_safe_globals(profile)
+    namespace.update(script_locals)
     try:
-        exec(script_code, safe_globals, local_ctx)  # noqa: S102
+        exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（同时作 globals/locals）
         if profile in ('export', 'menu'):
             queue.put({
                 'ok': True,
-                'result': local_ctx.get('result'),
-                'filename': local_ctx.get('filename'),
-                'content_type': local_ctx.get('content_type'),
+                'result': namespace.get('result'),
+                'filename': namespace.get('filename'),
+                'content_type': namespace.get('content_type'),
             })
         elif profile == 'etl':
             queue.put({
                 'ok': True,
-                'result': local_ctx.get('result'),
+                'result': namespace.get('result'),
             })
         else:
             queue.put({'ok': True})

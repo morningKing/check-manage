@@ -477,3 +477,91 @@ result = json.dumps(all_records, ensure_ascii=False)
         assert len(result) == 3
         assert result[0]['_tableName'] == '用例表'
         assert result[2]['_tableName'] == '计划表'
+
+
+# ==================== 嵌套作用域回归：自定义函数 / 推导式可引用注入变量 ====================
+
+class TestNestedScopeNameResolution:
+    """回归：修复前 exec 传了两个不同的 globals/locals dict，脚本以「类体作用域」运行，
+    自定义函数 / 推导式 / lambda 等嵌套作用域经 LOAD_GLOBAL 取名，看不到注入到 locals 的
+    data/fields/records/menu_data 及脚本自定义的函数 → NameError。合并为单一命名空间后修复。
+    覆盖两个 exec 点：_subprocess_exec_worker（export/etl/menu）与 _thread_exec（validation）。"""
+
+    # ---- export (子进程路径) ----
+    def test_export_custom_function_references_injected_fields(self):
+        script = (
+            "def row_to_obj(d):\n"
+            "    return {f['fieldName']: d.get(f['fieldName']) for f in fields}\n"
+            "result = json.dumps([row_to_obj(d) for d in data], ensure_ascii=False)\n"
+        )
+        data = [{'name': 'a', 'age': 1}, {'name': 'b', 'age': 2}]
+        fields = [{'fieldName': 'name'}, {'fieldName': 'age'}]
+        out, _, _ = run_export_script(script, data, fields, '页面', 'json')
+        import json
+        assert json.loads(out) == [{'name': 'a', 'age': 1}, {'name': 'b', 'age': 2}]
+
+    def test_export_comprehension_calls_script_defined_helper(self):
+        script = (
+            "def fmt(d):\n"
+            "    return d['name'].upper()\n"
+            "result = ','.join([fmt(d) for d in data])\n"
+        )
+        data = [{'name': 'a'}, {'name': 'b'}]
+        out, _, _ = run_export_script(script, data, [], '页面', 'txt')
+        assert out == b'A,B'
+
+    def test_export_function_references_injected_data(self):
+        script = (
+            "def total():\n"
+            "    return len(data)\n"
+            "result = str(total())\n"
+        )
+        out, _, _ = run_export_script(script, [{'x': 1}, {'x': 2}], [], '页面', 'txt')
+        assert out == b'2'
+
+    # ---- ETL (子进程路径) ----
+    def test_etl_custom_function_references_records(self):
+        script = (
+            "def total():\n"
+            "    return len(records)\n"
+            "result = [{'count': total()}]\n"
+        )
+        out = run_etl_script(script, [{'x': 1}, {'x': 2}, {'x': 3}])
+        assert out == [{'count': 3}]
+
+    # ---- menu export (子进程路径) ----
+    def test_menu_custom_function_references_menu_data(self):
+        from utils.script_runner import run_menu_export_script
+        script = (
+            "def count_tables():\n"
+            "    return len(menu_data)\n"
+            "result = json.dumps({'n': count_tables()})\n"
+        )
+        menu_data = [
+            {'collection': 't1', 'pageName': '1', 'records': [], 'fields': [], 'recordCount': 0},
+            {'collection': 't2', 'pageName': '2', 'records': [], 'fields': [], 'recordCount': 0},
+        ]
+        files = run_menu_export_script(script, menu_data, '菜单', 'json')
+        import json
+        assert json.loads(files[0][0])['n'] == 2
+
+    # ---- validation (线程路径 _thread_exec) ----
+    def test_validation_custom_function_references_record_and_query(self):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [('r1', {'name': 'dup'})]
+        mock_cur.fetchone.return_value = None
+        mock_conn.cursor.return_value = mock_cur
+        script = (
+            "def is_dup(name):\n"
+            "    for r in query('test'):\n"
+            "        if r['name'] == name:\n"
+            "            return True\n"
+            "    return False\n"
+            "if is_dup(record.get('name')):\n"
+            "    add_error('重复')\n"
+        )
+        errors, _, _ = run_validation_script(
+            script, {'name': 'dup'}, 'create', None, [], 'test', mock_conn
+        )
+        assert len(errors) == 1
