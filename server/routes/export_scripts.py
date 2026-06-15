@@ -317,6 +317,106 @@ def test_script(script_id):
         return jsonify({'success': False, 'error': str(e)}), 400
 
 
+@export_scripts_bp.route('/exportScripts/<script_id>/debug', methods=['POST'])
+@require_permission('admin.export_scripts')
+def debug_script(script_id):
+    """追踪式断点调试：在指定行下断点，跑一次脚本，回传每次命中的局部变量快照 + 行执行轨迹。
+    body: { breakpoints:[行号], collection?/data?/fields?/pageName?, branchId? }"""
+    from utils.script_runner import debug_export_script
+    from datetime import timezone as _tz
+    body = request.get_json(force=True)
+    breakpoints = body.get('breakpoints') or []
+    menu_id = (body.get('menuId') or '').strip()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT script, output_format, scope FROM export_scripts WHERE id = %s', (script_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'Not found'}), 404
+        script_code, output_format, scope = row[0], row[1], (row[2] or 'page')
+        collection = (body.get('collection') or '').strip()
+        branch_id = body.get('branchId', 'main')
+
+        # 菜单级脚本 + 指定菜单：用真实多表 menu_data + 引用解析（与 test_script 一致）
+        if scope == 'menu' and menu_id:
+            from utils.menu_export import get_menu_collections
+            from utils.export_references import resolve_references
+            cur.execute('SELECT name FROM menus WHERE id = %s', (menu_id,))
+            mrow = cur.fetchone()
+            if not mrow:
+                return jsonify({'success': False, 'error': '菜单不存在'}), 404
+            menu_name = mrow[0]
+            collections = get_menu_collections(cur, menu_id)
+            if not collections:
+                return jsonify({'success': False, 'error': '该菜单下没有数据页'}), 400
+            menu_data = []
+            total = 0
+            for coll in collections:
+                cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (f'page-{coll}',))
+                pc = cur.fetchone()
+                recs = []
+                cur.execute('SELECT id, data, created_at FROM dynamic_data '
+                            'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                            (coll, branch_id))
+                for r in cur.fetchall():
+                    rec = {'id': r[0]}
+                    if r[1]:
+                        rec.update(r[1])
+                    if r[2] and hasattr(r[2], 'astimezone'):
+                        rec['createdAt'] = r[2].astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    recs.append(rec)
+                menu_data.append({'collection': coll, 'pageName': pc[0] if pc else coll,
+                                  'records': recs, 'fields': pc[1] if pc else [], 'recordCount': len(recs)})
+                total += len(recs)
+            try:
+                refs = resolve_references(cur, menu_data, export_branch=branch_id)
+            except Exception:
+                refs = {}
+            script_locals = {'menu_data': menu_data, 'menu_name': menu_name, 'total_records': total,
+                             'references': refs, 'result': None, 'filename': None, 'content_type': None}
+            try:
+                return jsonify(debug_export_script(script_code, 'menu', script_locals, breakpoints))
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 400
+
+        if collection:
+            cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (f'page-{collection}',))
+            pc = cur.fetchone()
+            page_name = pc[0] if pc else collection
+            fields = pc[1] if pc else []
+            cur.execute('SELECT id, data, created_at FROM dynamic_data '
+                        'WHERE collection = %s AND branch_id = %s ORDER BY created_at LIMIT 100',
+                        (collection, branch_id))
+            data = []
+            for r in cur.fetchall():
+                rec = {'id': r[0]}
+                if r[1]:
+                    rec.update(r[1])
+                if r[2] and hasattr(r[2], 'astimezone'):
+                    rec['createdAt'] = r[2].astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                data.append(rec)
+        else:
+            data = body.get('data', [])
+            fields = body.get('fields', [])
+            page_name = body.get('pageName', '测试')
+
+    if scope == 'menu':
+        profile = 'menu'
+        menu_data = [{'collection': collection or 'sample', 'pageName': page_name,
+                      'records': data, 'fields': fields, 'recordCount': len(data)}]
+        script_locals = {'menu_data': menu_data, 'menu_name': page_name, 'total_records': len(data),
+                         'references': {}, 'result': None, 'filename': None, 'content_type': None}
+    else:
+        profile = 'export'
+        script_locals = {'data': data, 'fields': fields, 'page_name': page_name,
+                         'result': None, 'filename': None, 'content_type': None}
+
+    try:
+        return jsonify(debug_export_script(script_code, profile, script_locals, breakpoints))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+
 @export_scripts_bp.route('/exportScripts/execute', methods=['POST'])
 @login_required
 def execute_script():

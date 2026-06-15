@@ -134,8 +134,10 @@
                     :extensions="cmExtensions"
                     :style="{ height: '400px' }"
                     placeholder="请编写 Python 导出脚本..."
+                    @ready="(p: any) => (cmView = p.view)"
                   />
                 </div>
+                <div class="debug-hint">提示：点击代码左侧行号槽可设置断点（红点），再点「调试运行」查看每次命中时的局部变量与执行轨迹。</div>
               </el-form-item>
 
               <el-form-item>
@@ -173,6 +175,9 @@
                 <el-button type="success" @click="handleTest" :loading="testLoading">
                   测试
                 </el-button>
+                <el-button type="warning" @click="handleDebug" :loading="debugLoading">
+                  调试运行
+                </el-button>
               </el-form-item>
             </el-form>
 
@@ -194,6 +199,59 @@
                 show-icon
               />
               <pre v-if="testResult.success && testResult.preview" class="test-preview">{{ testResult.preview }}</pre>
+            </div>
+
+            <!-- 调试结果 -->
+            <div v-if="debugResult" class="debug-result">
+              <el-divider content-position="left">调试结果</el-divider>
+              <el-alert
+                v-if="!debugResult.success"
+                type="error"
+                :title="`运行出错${debugResult.errorLine ? '（第 ' + debugResult.errorLine + ' 行）' : ''}：${debugResult.error}`"
+                :closable="false"
+                show-icon
+                style="margin-bottom:12px"
+              />
+              <el-alert
+                v-else
+                type="success"
+                :title="`执行完成，命中 ${debugResult.breakpointHits.length} 次断点快照，走过 ${Object.keys(debugResult.lineHits).length} 行`"
+                :closable="false"
+                show-icon
+                style="margin-bottom:12px"
+              />
+
+              <template v-if="debugResult.breakpointHits.length">
+                <h4 class="debug-section-title">断点快照（按命中顺序）</h4>
+                <div
+                  v-for="(snap, i) in debugResult.breakpointHits"
+                  :key="i"
+                  class="debug-snap"
+                >
+                  <div class="debug-snap-head">
+                    第 <strong>{{ snap.line }}</strong> 行
+                    <span class="debug-snap-idx">#{{ i + 1 }}</span>
+                  </div>
+                  <pre class="debug-snap-vars">{{ formatVars(snap.vars) }}</pre>
+                </div>
+              </template>
+              <el-empty
+                v-else-if="debugResult.success"
+                description="未设置断点，仅记录执行轨迹。点击行号槽设置断点后再调试。"
+                :image-size="60"
+              />
+
+              <h4 class="debug-section-title">执行轨迹（行 → 执行次数）</h4>
+              <div class="debug-trace">
+                <el-tag
+                  v-for="ln in sortedLineHits"
+                  :key="ln[0]"
+                  size="small"
+                  type="info"
+                  class="debug-trace-tag"
+                >行 {{ ln[0] }} × {{ ln[1] }}</el-tag>
+              </div>
+              <pre v-if="debugResult.resultPreview" class="test-preview">result 预览：{{ debugResult.resultPreview }}</pre>
             </div>
 
             <!-- 使用说明 -->
@@ -564,7 +622,7 @@ result = json.dumps(data, ensure_ascii=False, indent=2)</pre>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Upload } from '@element-plus/icons-vue'
@@ -580,12 +638,16 @@ import {
   updateExportScript,
   deleteExportScript,
   testExportScript,
+  debugExportScript,
+  type DebugResult,
 } from '@/api/exportScript'
+import { breakpointGutter, getBreakpointLines, setHitLines } from './exportBreakpointGutter'
 import type { ExportScript } from '@/types'
 
 // ==================== CodeMirror 配置 ====================
 
-const cmExtensions = [python(), oneDark]
+const cmExtensions = [python(), oneDark, breakpointGutter]
+const cmView = ref<any>(null)
 
 // ==================== 脚手架模板 ====================
 
@@ -813,6 +875,22 @@ const testResult = ref<{
   extra?: string
   error?: string
 } | null>(null)
+const debugLoading = ref(false)
+const debugResult = ref<DebugResult | null>(null)
+const sortedLineHits = computed<[number, number][]>(() => {
+  const hits = debugResult.value?.lineHits || {}
+  return Object.entries(hits)
+    .map(([k, v]) => [Number(k), v] as [number, number])
+    .sort((a, b) => a[0] - b[0])
+})
+
+function formatVars(vars: Record<string, any>): string {
+  try {
+    return JSON.stringify(vars, null, 2)
+  } catch {
+    return String(vars)
+  }
+}
 
 // ==================== 表单校验 ====================
 
@@ -1054,6 +1132,59 @@ async function handleTest() {
     }
   } finally {
     testLoading.value = false
+  }
+}
+
+async function handleDebug() {
+  const valid = await formRef.value?.validate()
+  if (!valid) return
+
+  if (!formData.value.script.trim()) {
+    ElMessage.warning('请编写脚本代码')
+    return
+  }
+  if (currentScriptId.value === '__new__') {
+    ElMessage.warning('请先保存脚本再调试')
+    return
+  }
+
+  const breakpoints = cmView.value ? getBreakpointLines(cmView.value) : []
+
+  debugLoading.value = true
+  debugResult.value = null
+  try {
+    const sample = {
+      data: [
+        { id: 'test-1', name: '示例数据1', value: '100' },
+        { id: 'test-2', name: '示例数据2', value: '200' },
+      ],
+      fields: [
+        { fieldName: 'name', label: '名称', controlType: 'text' },
+        { fieldName: 'value', label: '值', controlType: 'text' },
+      ],
+      pageName: '测试页面',
+    }
+    let payload: Record<string, unknown>
+    if (formData.value.scope === 'menu') {
+      payload = testMenuId.value ? { menuId: testMenuId.value } : sample
+    } else {
+      payload = testCollection.value ? { collection: testCollection.value } : sample
+    }
+    const result = await debugExportScript(currentScriptId.value!, { ...payload, breakpoints })
+    debugResult.value = result
+    // 高亮执行轨迹走过的行
+    if (cmView.value) {
+      setHitLines(cmView.value, Object.keys(result.lineHits || {}).map(Number))
+    }
+  } catch (e: any) {
+    debugResult.value = {
+      success: false,
+      error: e.response?.data?.error || '调试执行失败',
+      breakpointHits: [],
+      lineHits: {},
+    }
+  } finally {
+    debugLoading.value = false
   }
 }
 
@@ -1323,6 +1454,65 @@ onMounted(async () => {
     margin-top: 12px;
     white-space: pre-wrap;
     word-break: break-all;
+  }
+}
+
+.debug-hint {
+  margin-top: 8px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.debug-result {
+  margin-top: 16px;
+
+  .debug-section-title {
+    margin: 16px 0 8px;
+    font-size: 13px;
+    color: #303133;
+  }
+
+  .debug-snap {
+    border: 1px solid #ebeef5;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    overflow: hidden;
+
+    .debug-snap-head {
+      background: #f5f7fa;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #606266;
+
+      .debug-snap-idx {
+        margin-left: 8px;
+        color: #909399;
+      }
+    }
+
+    .debug-snap-vars {
+      margin: 0;
+      padding: 10px 12px;
+      background: #282c34;
+      color: #abb2bf;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  }
+
+  .debug-trace {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+
+    .debug-trace-tag {
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
   }
 }
 </style>
