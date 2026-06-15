@@ -76,5 +76,6 @@ function onTabChange(name: string | number): void {
   :deep(.el-tabs__header) { margin: 0 0 12px; }
   :deep(.el-tabs__nav-wrap::after) { height: 1px; background: var(--el-border-color-lighter); }
 }
-.category-content { flex: 1; min-height: 0; }
+/* 内容区自身滚动，使上方 tab 头固定不被长内容顶走/覆盖 */
+.category-content { flex: 1; min-height: 0; overflow-y: auto; }
 </style>
