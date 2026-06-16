@@ -83,8 +83,9 @@ const pageId = computed(() => `page-${props.content.targetCollection}`)
 // 图标名 → 组件（图标已配置但全局未注册时也能渲染）
 const iconComp = computed(() => (ElIcons as Record<string, unknown>)[props.content.icon || ''] || EditPen)
 
-// 展示字段：第一个文本类字段（找不到则用 id）
+// 展示字段：优先用配置指定的 displayField，否则取第一个文本类字段（找不到则用 id）
 const displayField = computed<string | null>(() => {
+  if (props.content.displayField) return props.content.displayField
   const cfg = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
   const f = (cfg?.fields || []).find(x =>
     ['text', 'textarea', 'autoSequence', 'compositeText'].includes(x.controlType))
