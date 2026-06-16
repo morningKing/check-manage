@@ -100,6 +100,7 @@ sequenceDiagram
 |------|------|------|
 | POST | `/api/v1/collections/{collection}` | 新增一条记录（支持 branchId 参数） |
 | PUT | `/api/v1/collections/{collection}/{id}` | 修改一条记录（支持部分更新，支持 branchId 参数） |
+| POST | `/api/v1/files` | 上传文件，返回 `uid` 供写入 file / image 字段 |
 
 ---
 
@@ -592,7 +593,58 @@ Content-Type: application/json
 
 ---
 
-### 5.8 下载文件（file / image 字段）
+### 5.8 上传文件（写入 file / image 字段）
+
+外部系统可通过 API 直接上传文件，拿到 `uid` 后写入记录的 `file` / `image` 字段。
+
+**请求**（`multipart/form-data`）：
+
+```
+POST /api/v1/files
+X-API-Key: cm_xxx
+Content-Type: multipart/form-data
+
+file        = <要上传的文件>            # 必填
+collection  = <目标数据页>             # 必填，须为「公开且允许写入」的集合
+```
+
+**响应**：
+
+```json
+{
+  "data": {
+    "uid": "8f3c...e21",
+    "name": "report.pdf",
+    "size": 20480,
+    "mimeType": "application/pdf",
+    "downloadUrl": "/api/v1/files/8f3c...e21/download"
+  }
+}
+```
+
+**写入文件字段**：拿到 `uid` 后，在新增 / 修改记录时把如下对象数组写入该 file / image 字段：
+
+```json
+{
+  "名称": "外部记录1",
+  "附件": [
+    {
+      "uid": "8f3c...e21",
+      "name": "report.pdf",
+      "size": 20480,
+      "type": "application/pdf",
+      "url": "/api/data-files/8f3c...e21/download"
+    }
+  ]
+}
+```
+
+> - 鉴权与写记录一致：只能向**公开且允许写入**的集合上传（否则 404 / 403）。
+> - 支持中文文件名；单文件大小上限同网页端（`DATA_FILE_MAX_MB`）。
+> - 缺 `collection` → 400；非公开集合 → 404。
+> - 文件被某条记录引用后，即可经 `GET /api/v1/files/{uid}/download` 下载（见 5.9）。
+
+### 5.9 下载文件（file / image 字段）
 
 数据页的 `file`/`image` 字段保存的是文件对象数组。查询记录时，每个文件对象会附带一个
 `apiUrl` 字段，直接用它（带 API Key）即可下载：

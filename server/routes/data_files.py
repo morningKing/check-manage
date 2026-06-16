@@ -40,6 +40,44 @@ def _storage_dir(file_id: str) -> Path:
     return p
 
 
+def save_data_file(f, uploaded_by=None):
+    """Persist a werkzeug FileStorage to disk + the data_files table.
+
+    Shared by the web upload route and the Open API upload route. Returns
+    ``(meta, error)``: ``meta`` (dict) on success with ``error`` None, or
+    ``(None, (response, status))`` on failure. ``uploaded_by`` is a users.id
+    (the column is nullable — API-key uploads pass None).
+    """
+    safe_name = safe_filename(f.filename)  # preserves Unicode (e.g. 中文) names
+    file_id = str(uuid.uuid4())
+    dest_path = _storage_dir(file_id) / safe_name
+
+    f.save(dest_path)
+    size = os.path.getsize(dest_path)
+    if size > _MAX_BYTES:
+        try:
+            os.remove(dest_path)
+        except OSError:
+            pass
+        return None, (jsonify({'error': f'file too large (max {DATA_FILE_MAX_MB} MB)'}), 413)
+
+    mime = f.mimetype or 'application/octet-stream'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO data_files (id, original_name, mime_type, size_bytes, "
+            "storage_path, uploaded_by) VALUES (%s, %s, %s, %s, %s, %s)",
+            (file_id, safe_name, mime, size, str(dest_path), uploaded_by),
+        )
+    return {
+        'id': file_id,
+        'name': safe_name,
+        'size': size,
+        'mimeType': mime,
+        'url': f'/api/data-files/{file_id}/download',
+    }, None
+
+
 @data_files_bp.route('/data-files/upload', methods=['POST'])
 @login_required
 def upload_data_file():
@@ -60,37 +98,10 @@ def upload_data_file():
     elif role == 'guest':
         return jsonify({'error': '访客无操作权限'}), 403
 
-    safe_name = safe_filename(f.filename)  # preserves Unicode (e.g. 中文) names
-    file_id = str(uuid.uuid4())
-    dest_dir = _storage_dir(file_id)
-    dest_path = dest_dir / safe_name
-
-    f.save(dest_path)
-    size = os.path.getsize(dest_path)
-    if size > _MAX_BYTES:
-        try:
-            os.remove(dest_path)
-        except OSError:
-            pass
-        return jsonify({'error': f'file too large (max {DATA_FILE_MAX_MB} MB)'}), 413
-
-    mime = f.mimetype or 'application/octet-stream'
-    user = g.current_user
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO data_files (id, original_name, mime_type, size_bytes, "
-            "storage_path, uploaded_by) VALUES (%s, %s, %s, %s, %s, %s)",
-            (file_id, safe_name, mime, size, str(dest_path), user['userId']),
-        )
-
-    return jsonify({
-        'id': file_id,
-        'name': safe_name,
-        'size': size,
-        'mimeType': mime,
-        'url': f'/api/data-files/{file_id}/download',
-    }), 201
+    meta, err = save_data_file(f, uploaded_by=g.current_user['userId'])
+    if err:
+        return err
+    return jsonify(meta), 201
 
 
 @data_files_bp.route('/data-files/<file_id>/download', methods=['GET'])
