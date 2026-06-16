@@ -164,7 +164,7 @@
           <el-radio-button v-if="hasCalendarConfig" value="calendar"><el-icon><Calendar /></el-icon></el-radio-button>
           <el-radio-button v-if="hasGanttConfig" value="gantt"><el-icon><DataLine /></el-icon></el-radio-button>
         </el-radio-group>
-        <el-button v-if="!isGuest && canCreate" type="primary" @click="handleAdd">
+        <el-button v-if="canCreate" type="primary" @click="handleAdd">
           <el-icon><Plus /></el-icon>
           新增
         </el-button>
@@ -186,8 +186,8 @@
               >
                 {{ s.name }} ({{ s.outputFormat }})
               </el-dropdown-item>
-              <el-dropdown-item v-if="!isGuest" command="import" :icon="Upload">导入数据</el-dropdown-item>
-              <el-dropdown-item v-if="!isGuest" command="template" :icon="Download">下载导入模板</el-dropdown-item>
+              <el-dropdown-item v-if="canCreate" command="import" :icon="Upload">导入数据</el-dropdown-item>
+              <el-dropdown-item v-if="canCreate" command="template" :icon="Download">下载导入模板</el-dropdown-item>
 
               <template v-if="!isGuest && hasReferenceFields">
                 <el-dropdown-item divided disabled class="dropdown-group-label">引用 / 关系</el-dropdown-item>
@@ -252,7 +252,7 @@
         :loading="tableLoading"
         :total="totalCount"
         :show-pagination="true"
-        :show-actions="!isGuest"
+        :show-actions="canCreate || canUpdate || canDelete"
         :can-update="canUpdate"
         :can-delete="canDelete"
         show-selection
@@ -267,7 +267,7 @@
         @filter-change="handleFilterChange"
       >
         <template #extra-actions="{ row }">
-          <el-dropdown-item v-if="!isGuest && canCreate" @click="handleCopy(row)">复制</el-dropdown-item>
+          <el-dropdown-item v-if="canCreate" @click="handleCopy(row)">复制</el-dropdown-item>
           <el-dropdown-item @click="handleShowRelationGraph(row)">关系图谱</el-dropdown-item>
           <el-dropdown-item
             v-for="s in boundRowExportScripts"
@@ -565,7 +565,7 @@
             <el-button type="info" @click="viewDialogVisible = false; handleShowRelationGraph(viewRecord as DynamicRecord)">
               关系图谱
             </el-button>
-            <el-button v-if="!isGuest && canUpdate" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
+            <el-button v-if="canUpdate" type="primary" @click="viewDialogVisible = false; handleEdit(viewRecord as DynamicRecord)">
               编辑
             </el-button>
           </div>
@@ -2068,7 +2068,7 @@ async function handleCalendarDateChange(payload: { recordId: string; updates: Re
 }
 
 function handleCalendarDateClick(date: Date): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canCreate.value) { ElMessage.warning('无新增权限'); return }
   isEditMode.value = false
   // 使用本地日期而非 UTC 日期，避免时区导致日期偏移一天
   const year = date.getFullYear()
@@ -2085,7 +2085,7 @@ function handleCalendarDateClick(date: Date): void {
  * 处理新增
  */
 function handleAdd(): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canCreate.value) { ElMessage.warning('无新增权限'); return }
   isEditMode.value = false
   isCopyMode.value = false
   currentRecord.value = {}
@@ -2096,7 +2096,7 @@ function handleAdd(): void {
  * 处理编辑
  */
 function handleEdit(row: DynamicRecord): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canUpdate.value) { ElMessage.warning('无编辑权限'); return }
   isEditMode.value = true
   isCopyMode.value = false
   currentRecord.value = { ...row }
@@ -2107,7 +2107,7 @@ function handleEdit(row: DynamicRecord): void {
  * 处理复制新增：预填充行数据，去掉自动生成字段，以新增模式打开表单
  */
 function handleCopy(row: DynamicRecord): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canCreate.value) { ElMessage.warning('无新增权限'); return }
   const config = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
   const autoFields = new Set(
     (config?.fields ?? [])
@@ -2129,7 +2129,7 @@ function handleCopy(row: DynamicRecord): void {
  * 处理删除确认
  */
 function handleDeleteConfirm(row: DynamicRecord): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canDelete.value) { ElMessage.warning('无删除权限'); return }
 
   // 检测是否启用删除绑定
   if (pageConfig.value?.deleteBinding?.enabled) {
@@ -2303,7 +2303,7 @@ function clearTableSelection(): void {
  * 处理批量删除确认
  */
 function handleBatchDeleteConfirm(): void {
-  if (isGuest.value) { ElMessage.warning('访客无操作权限'); return }
+  if (!canDelete.value) { ElMessage.warning('无删除权限'); return }
   if (selectedRows.value.length === 0) {
     ElMessage.warning('请先勾选要删除的记录')
     return

@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required, write_required
+from auth import login_required
 from utils.permissions import can_page
 from utils.rbac_guard import require_page_action
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
@@ -495,7 +495,7 @@ def get_item(collection, item_id):
 
 
 @dynamic_bp.route('/<collection>', methods=['POST'])
-@write_required
+@login_required
 def create_item(collection):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
@@ -614,7 +614,7 @@ def create_item(collection):
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['PUT'])
-@write_required
+@login_required
 def update_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
@@ -878,7 +878,7 @@ def check_reference_dependencies(cur, collection, record_id, branch_id=None):
 
 
 @dynamic_bp.route('/<collection>/<item_id>', methods=['DELETE'])
-@write_required
+@login_required
 def delete_item(collection, item_id):
     if collection in RESERVED:
         return jsonify({"error": "Not found"}), 404
@@ -932,7 +932,7 @@ def delete_item(collection, item_id):
 
 
 @dynamic_bp.route('/<collection>/batch-create', methods=['POST'])
-@write_required
+@login_required
 def batch_create_items(collection):
     """Batch create multiple records in a single transaction."""
     if collection in RESERVED:
@@ -1195,7 +1195,7 @@ def batch_create_items(collection):
 
 
 @dynamic_bp.route('/<collection>/batch-delete', methods=['POST'])
-@write_required
+@login_required
 def batch_delete_items(collection, **kwargs):
     """Batch delete multiple records in a single transaction."""
     if collection in RESERVED:
