@@ -28,6 +28,7 @@
       v-else
       ref="formRef"
       :fields="fields"
+      :collection="content.targetCollection"
       :show-actions="false"
     />
     <template #footer>

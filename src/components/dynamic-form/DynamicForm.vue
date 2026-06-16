@@ -51,10 +51,11 @@
  * - submit: 表单提交
  * - cancel: 取消操作
  */
-import { ref, watch } from 'vue'
+import { ref, watch, provide, toRef } from 'vue'
 import type { FieldConfig } from '@/types'
 import FormRenderer from './FormRenderer.vue'
 import { getControlDefaultValue } from './controls'
+import { DYNAMIC_FORM_COLLECTION } from './context'
 
 // ==================== Props & Emits ====================
 
@@ -71,6 +72,8 @@ interface Props {
   showActions?: boolean
   /** 提交按钮文本 */
   submitText?: string
+  /** 目标数据页 collection（供文件/图片控件上传时按数据页写权限鉴权） */
+  collection?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -80,6 +83,9 @@ const props = withDefaults(defineProps<Props>(), {
   showActions: true,
   submitText: '确定'
 })
+
+// 把 collection 下发给文件/图片控件（经 inject 取用，无需逐层透传 props）
+provide(DYNAMIC_FORM_COLLECTION, toRef(props, 'collection'))
 
 const emit = defineEmits<{
   (e: 'submit', data: Record<string, any>): void

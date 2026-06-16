@@ -17,9 +17,11 @@ export interface DataFileMeta {
   url: string  // bare relative path: /api/data-files/<id>/download
 }
 
-export function uploadDataFile(file: File): Promise<DataFileMeta> {
+export function uploadDataFile(file: File, collection?: string): Promise<DataFileMeta> {
   const form = new FormData()
   form.append('file', file)
+  // 携带目标数据页，后端据此按「该数据页的写权限」鉴权（支持被授权的访客/自定义角色）
+  if (collection) form.append('collection', collection)
   return post('/data-files/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })

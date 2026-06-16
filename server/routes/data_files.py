@@ -23,10 +23,11 @@ from pathlib import Path
 
 from flask import Blueprint, request, jsonify, g, send_file
 
-from auth import login_required, login_required_sse, write_required
+from auth import login_required, login_required_sse
 from db import get_db
 from config import DATA_FILES_ROOT, DATA_FILE_MAX_MB
 from utils.filename import safe_filename
+from utils.permissions import can_page
 
 data_files_bp = Blueprint('data_files', __name__)
 
@@ -40,11 +41,24 @@ def _storage_dir(file_id: str) -> Path:
 
 
 @data_files_bp.route('/data-files/upload', methods=['POST'])
-@write_required
+@login_required
 def upload_data_file():
     f = request.files.get('file')
     if not f or not f.filename:
         return jsonify({'error': 'file required'}), 400
+
+    # 鉴权：文件字段属于某个数据页。若请求带上目标 collection，则按该数据页的
+    # 「写」权限（新增或编辑任一）放行——这样被授予数据页写权限的自定义角色
+    # （含访客）也能上传，与 routes/dynamic.py 的 require_page_action 一致。
+    # 未带 collection 的旧调用退回「非访客」校验，保持向后兼容。
+    role = (g.current_user or {}).get('role')
+    collection = (request.form.get('collection') or '').strip()
+    if collection:
+        page_id = f'page-{collection}'
+        if not (can_page(role, page_id, 'create') or can_page(role, page_id, 'update')):
+            return jsonify({'error': '权限不足'}), 403
+    elif role == 'guest':
+        return jsonify({'error': '访客无操作权限'}), 403
 
     safe_name = safe_filename(f.filename)  # preserves Unicode (e.g. 中文) names
     file_id = str(uuid.uuid4())
