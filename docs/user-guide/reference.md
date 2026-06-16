@@ -625,7 +625,7 @@ CREATE TABLE dynamic_data (
 | 单行文本 | `text` | string | 基础文本输入 |
 | 多行文本 | `textarea` | string | 支持换行 |
 | 富文本 | `richText` | string (HTML) | Quill 编辑器 |
-| Markdown | `markdown` | string (Markdown) | md-editor-v3 实时预览；查看时前端渲染 |
+| Markdown | `markdown` | string (Markdown) | md-editor-v3 实时预览；查看时前端渲染；支持内嵌 SVG（裸 `<svg>` 块或 ```svg 代码块，以 `<img>` 渲染，复杂图也可显示） |
 | 数值 | `number` | number | 整数/小数 |
 | 单选下拉 | `select` | string | 静态/API/数据页选项 |
 | 多选下拉 | `multiSelect` | string[] | Tag 标签展示 |
