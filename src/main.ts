@@ -21,6 +21,10 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 // Element Plus 图标
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
+// md-editor-v3 预览样式（全局引入，确保 Markdown 字段/区块在生产构建中
+// 始终带 GFM 渲染样式——标题、表格、代码块等，避免按需 chunk 的 CSS 未加载）
+import 'md-editor-v3/lib/preview.css'
+
 // 路由配置
 import router from './router'
 

@@ -34,6 +34,18 @@ export default defineConfig({
     }
   },
 
+  // 生产构建预览服务器（vite preview）：同样代理 /api，便于本地验证生产包
+  preview: {
+    port: 4173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3002',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, '')
+      }
+    }
+  },
+
   // CSS 预处理器配置
   css: {
     preprocessorOptions: {
