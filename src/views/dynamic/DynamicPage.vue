@@ -377,6 +377,7 @@
         ref="dynamicFormRef"
         :fields="effectiveFields"
         :initial-data="currentRecord"
+        :collection="collection"
         :show-actions="false"
         @submit="handleSubmit"
       />

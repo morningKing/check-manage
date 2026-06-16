@@ -43,12 +43,13 @@
  * JSONB 里只存 {uid=data_files.id, name, url, size, type}。
  * url 是 /api/data-files/<id>/download,显示时需附 ?access_token=。
  */
-import { ref, watch } from 'vue'
+import { ref, watch, inject } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
 import { uploadDataFile, authedDataFileUrl } from '@/api/dataFiles'
+import { DYNAMIC_FORM_COLLECTION } from '../context'
 
 // ==================== Props & Emits ====================
 
@@ -60,6 +61,8 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+// 所属数据页 collection（由 DynamicForm 注入），上传鉴权用
+const formCollection = inject(DYNAMIC_FORM_COLLECTION, undefined)
 const emit = defineEmits<{
   (e: 'update:modelValue', value: UploadFileInfo[]): void
 }>()
@@ -101,7 +104,7 @@ watch(
  */
 async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
   try {
-    const res = await uploadDataFile(options.file as File)
+    const res = await uploadDataFile(options.file as File, formCollection?.value)
     const uploadedFile: UploadFileInfo = {
       uid: res.id,
       name: res.name,
