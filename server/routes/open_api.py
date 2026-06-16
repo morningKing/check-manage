@@ -5,6 +5,7 @@ from auth import api_key_required
 from config import OPEN_API_BRANCH
 from datetime import timezone
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from routes.data_files import save_data_file
 import uuid
 import json
 import psycopg2.extras
@@ -556,3 +557,46 @@ def api_download_file(file_id):
         download_name=name,
         as_attachment=True,
     )
+
+
+@open_api_bp.route('/files', methods=['POST'])
+@api_key_required
+def api_upload_file():
+    """经 API Key 上传文件，返回 uid 供随后写入记录的 file / image 字段。
+
+    请求：multipart/form-data
+      - `file`        : 要上传的文件（必填）
+      - `collection`  : 目标数据页（必填，须为公开且可写的集合）
+
+    返回 `{ data: { uid, name, size, mimeType, downloadUrl } }`。把
+    `[{ "uid": <uid>, "name": <name>, "size": <size>, "type": <mimeType>,
+        "url": "/api/data-files/<uid>/download" }]` 写入记录的 file/image
+    字段即可建立引用。
+    """
+    collection = (request.form.get('collection') or '').strip()
+    if not collection:
+        return jsonify({'error': 'collection is required'}), 400
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        # 仅允许向「公开且可写」的集合上传，与写记录的鉴权一致
+        err = check_collection_writable(cur, collection)
+        if err:
+            return err
+
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'file is required'}), 400
+
+    # API Key 无关联用户：uploaded_by 置空（该列可空）
+    meta, err = save_data_file(f, uploaded_by=None)
+    if err:
+        return err
+
+    return jsonify({'data': {
+        'uid': meta['id'],
+        'name': meta['name'],
+        'size': meta['size'],
+        'mimeType': meta['mimeType'],
+        'downloadUrl': f"/api/v1/files/{meta['id']}/download",
+    }}), 201

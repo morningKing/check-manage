@@ -10,6 +10,7 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch, call
 from contextlib import contextmanager
+from io import BytesIO
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -335,3 +336,68 @@ class TestSchemaIncludesWritable:
         assert resp.status_code == 200
         data = resp.get_json()['data']
         assert data['writable'] is True
+
+
+class TestUploadFile:
+    """POST /api/v1/files — Open API 文件上传（写入 file/image 字段）。"""
+
+    def test_missing_collection(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor)  # auth only
+        resp = client.post(
+            '/api/v1/files',
+            data={'file': (BytesIO(b'hello'), 'a.txt')},
+            content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 400
+        assert 'collection' in resp.get_json()['error']
+
+    def test_non_public_collection(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (False, False),  # check_collection_public -> not public
+        ])
+        resp = client.post(
+            '/api/v1/files',
+            data={'collection': 'devices', 'file': (BytesIO(b'hello'), 'a.txt')},
+            content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 404
+
+    def test_read_only_collection(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, False),  # public but not writable
+        ])
+        resp = client.post(
+            '/api/v1/files',
+            data={'collection': 'devices', 'file': (BytesIO(b'hello'), 'a.txt')},
+            content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 403
+
+    def test_upload_success_returns_uid(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),  # public + writable
+        ])
+        fake_meta = {'id': 'file-xyz', 'name': '巡检.txt', 'size': 5,
+                     'mimeType': 'text/plain', 'url': '/api/data-files/file-xyz/download'}
+        with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
+            resp = client.post(
+                '/api/v1/files',
+                data={'collection': 'devices', 'file': (BytesIO(b'hello'), '巡检.txt')},
+                content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 201
+        data = resp.get_json()['data']
+        assert data['uid'] == 'file-xyz'
+        assert data['name'] == '巡检.txt'
+        assert data['downloadUrl'] == '/api/v1/files/file-xyz/download'
+
+    def test_missing_file(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),  # public + writable
+        ])
+        resp = client.post(
+            '/api/v1/files',
+            data={'collection': 'devices'},
+            content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 400
