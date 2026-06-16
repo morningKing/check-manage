@@ -223,6 +223,10 @@ Projects can be direct children of workspace (level 2) OR standalone level-1 men
 
 ## Development Workflow
 
+### ⚠️ Documentation Sync (MANDATORY)
+
+**Every user-facing feature change MUST update the user guide in the same PR.** When you add, change, or remove a feature that a user interacts with, update the matching doc under `docs/user-guide/` (organized by feature: `getting-started/ data/ admin/ integration/ ai/`, English-slug filenames). If no doc exists for the feature, create one in the right subfolder and link it from `docs/user-guide/README.md` (the index/TOC). Where a flow has UI, include a real page screenshot under `docs/user-guide/_images/`. Treat the doc update as part of "done" — a feature change without its user-guide update is incomplete.
+
 ### Adding a New Business Entity (e.g., "Products")
 
 **Do NOT** create a new Vue file or SQL table.
