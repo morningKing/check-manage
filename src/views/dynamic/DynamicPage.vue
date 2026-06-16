@@ -488,6 +488,9 @@
             <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
             <div v-else>
               <div v-for="(f, idx) in viewRecord[field.fieldName]" :key="idx" class="view-file-item">
+                <el-icon class="view-file-type" :style="{ color: fileTypeIcon(f.name).color }">
+                  <component :is="fileTypeIcon(f.name).icon" />
+                </el-icon>
                 <el-link
                   type="primary"
                   @click="isPreviewable(f.name) ? openFilePreview(f) : downloadFileItem(f)"
@@ -932,7 +935,7 @@ import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
-import { isPreviewable } from '@/utils/filePreview'
+import { isPreviewable, fileTypeIcon } from '@/utils/filePreview'
 import { authedDataFileUrl } from '@/api/dataFiles'
 
 // ==================== Props ====================
@@ -3687,6 +3690,10 @@ html.dark .dynamic-page :deep(.highlight-flash) {
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+}
+.view-file-type {
+  font-size: 16px;
+  flex-shrink: 0;
 }
 .view-file-dl {
   color: var(--el-text-color-secondary);
