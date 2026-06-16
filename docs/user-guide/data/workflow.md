@@ -87,7 +87,7 @@
 
 ## 9. 部署 / 迁移
 
-新增一张定义表 + 一张实例表。对**现有数据库**执行幂等迁移（见 `docs/data-migration-guide.md` 同款流程，**先备份**）：
+新增一张定义表 + 一张实例表。对**现有数据库**执行幂等迁移（见 `../integration/data-migration.md` 同款流程，**先备份**）：
 
 ```bash
 cd server

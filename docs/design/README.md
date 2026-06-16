@@ -29,7 +29,7 @@
 |------|------|
 | [10-数据并发控制.md](./10-数据并发控制.md) | 跨所有写入路径的并发一致性权威设计：乐观锁、序号原子分配、手填主键 advisory 锁、序号计数器全局不变式、工作流推进并发与分支隔离、关系一致性、分支锁定、触发器/Webhook 最终一致。配 4 张 SVG 场景图（`assets/concurrency-*.svg`）。 |
 
-> 跨页**工作流引擎**（`workflow_definitions` / `workflow_instances` / 收件箱 / 设计器）是横切③数据写入 + ⑧通知的编排能力：状态字段转换驱动阶段推进、原子分配下游记录、分支隔离与「推进失败即回滚」一致性。并发与一致性见 [10-数据并发控制.md](./10-数据并发控制.md) §7，使用说明见 [`../workflow-engine-guide.md`](../workflow-engine-guide.md)。
+> 跨页**工作流引擎**（`workflow_definitions` / `workflow_instances` / 收件箱 / 设计器）是横切③数据写入 + ⑧通知的编排能力：状态字段转换驱动阶段推进、原子分配下游记录、分支隔离与「推进失败即回滚」一致性。并发与一致性见 [10-数据并发控制.md](./10-数据并发控制.md) §7，使用说明见 [工作流引擎使用指南](../user-guide/data/workflow.md)。
 
 ## 文档结构约定
 
@@ -49,12 +49,12 @@
 
 每篇归档文档顶部均带「已归档」横幅，指向其当前权威文档：
 
-| 旧文档 | 内容去向 |
+| 旧文档（已重命名为英文 slug） | 内容去向 |
 |--------|----------|
-| 系统设计文档.md | 拆分进各业务域（README + 01~10） |
-| 数据并发控制设计文档.md | → ⑩ 数据并发控制（已被完全取代，仅存重定向 + 历史背景） |
-| 项目管理功能设计文档.md | → ③看板/工作流（+ 跨页工作流引擎）· ⑥联动 · ⑧通知/仪表盘 |
-| 跨项目依赖设计文档.md | → ⑦ 版本协作 |
-| ai-chat-功能说明与方案设计.md | → ⑨ AI 智能助手（已更新多 agent/批任务/定时） |
-| 巡检用例开发 Skill 设计文档.md | AI 应用示例（保留备查） |
-| 优势分析报告.md | 非设计文档（保留备查） |
+| [system-design.md](./archive/system-design.md) | 拆分进各业务域（README + 01~10） |
+| [concurrency-control-design.md](./archive/concurrency-control-design.md) | → ⑩ 数据并发控制（已被完全取代，仅存重定向 + 历史背景） |
+| [project-management-design.md](./archive/project-management-design.md) | → ③看板/工作流（+ 跨页工作流引擎）· ⑥联动 · ⑧通知/仪表盘 |
+| [cross-project-dependency-design.md](./archive/cross-project-dependency-design.md) | → ⑦ 版本协作 |
+| [ai-chat-design.md](./archive/ai-chat-design.md) | → ⑨ AI 智能助手（已更新多 agent/批任务/定时） |
+| [inspection-skill-design.md](./archive/inspection-skill-design.md) | AI 应用示例（保留备查） |
+| [advantages-analysis.md](./archive/advantages-analysis.md) | 非设计文档（保留备查） |

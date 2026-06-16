@@ -1006,7 +1006,7 @@ mindmap
 ### B. 参考资料
 
 - [check-manage 使用说明](./使用说明.md)
-- [check-manage 系统设计文档](./系统设计文档.md)
+- [check-manage 系统设计文档](./system-design.md)
 - [check-manage OpenAPI 接口文档](./OpenAPI 接口文档.md)
 - [数据关联使用说明](./数据关联使用说明.md)
 
