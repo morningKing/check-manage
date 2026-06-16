@@ -18,10 +18,12 @@
         v-for="r in recentRecords"
         :key="r.id"
         class="record-row"
-        :title="recordDisplay(r)"
+        :title="`${recordDisplay(r)} — 点击跳转到数据页`"
+        @click="goToRecord(r)"
       >
         <el-icon class="dot"><Document /></el-icon>
         <span class="record-text">{{ recordDisplay(r) }}</span>
+        <el-icon class="record-jump"><Right /></el-icon>
       </div>
     </div>
   </el-card>
@@ -57,11 +59,14 @@ export default { inheritAttrs: false }
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { EditPen, ArrowRight, Document } from '@element-plus/icons-vue'
+import { EditPen, ArrowRight, Document, Right } from '@element-plus/icons-vue'
 import * as ElIcons from '@element-plus/icons-vue'
 import { DynamicForm } from '@/components/dynamic-form'
 import { usePageConfigStore } from '@/stores/pageConfig'
+import { useMenuStore } from '@/stores/menu'
+import { useJumpNavigationStore } from '@/stores/jumpNavigation'
 import { get } from '@/utils/request'
 import type { QuickFormContent } from '@/types/systemConfig'
 import type { FieldConfig, DynamicRecord } from '@/types'
@@ -72,6 +77,9 @@ const props = defineProps<{
 }>()
 
 const pageConfigStore = usePageConfigStore()
+const menuStore = useMenuStore()
+const jumpStore = useJumpNavigationStore()
+const router = useRouter()
 const dialogVisible = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
@@ -95,6 +103,29 @@ const displayField = computed<string | null>(() => {
 function recordDisplay(r: DynamicRecord): string {
   const v = displayField.value ? (r as any)[displayField.value] : null
   return (v != null && v !== '') ? String(v) : (r.id || '—')
+}
+
+// 点击记录行 → 跳转到对应数据页并定位/高亮该行
+async function goToRecord(r: DynamicRecord): Promise<void> {
+  const collection = props.content.targetCollection
+  if (!collection || !r.id) return
+  // 菜单可能尚未加载（首页直达场景）
+  if (menuStore.menuList.length === 0) {
+    try { await menuStore.fetchMenus() } catch { /* non-fatal */ }
+  }
+  const targetMenu = menuStore.menuList.find(m => m.pageId === pageId.value)
+  if (!targetMenu?.path) {
+    ElMessage.warning('未找到对应数据页，无法跳转')
+    return
+  }
+  // 设置跳转意图，目标数据页到达后会消费并定位+高亮该记录
+  jumpStore.setJump({
+    targetCollection: collection,
+    targetRecordId: r.id,
+    jumpType: 'reference',
+    sourcePageId: '',
+  })
+  router.push({ path: targetMenu.path })
 }
 
 // 拉取前 5 条记录
@@ -192,12 +223,22 @@ async function submitForm() {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 0;
+    padding: 3px 6px;
     font-size: 13px;
     color: var(--el-text-color-regular);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.15s, color 0.15s;
 
     .dot { color: var(--el-text-color-placeholder); font-size: 13px; flex-shrink: 0; }
-    .record-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .record-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .record-jump { color: var(--el-text-color-placeholder); font-size: 13px; flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
+
+    &:hover {
+      background-color: var(--el-fill-color-light);
+      color: var(--el-color-primary);
+      .record-jump { opacity: 1; color: var(--el-color-primary); }
+    }
   }
 }
 
