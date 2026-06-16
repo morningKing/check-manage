@@ -522,12 +522,12 @@
             <div class="view-richtext" v-html="viewRecord[field.fieldName] || '-'" />
           </template>
 
-          <!-- Markdown：渲染预览 -->
+          <!-- Markdown：与首页区块统一的渲染机制（MarkdownPreview） -->
           <template v-else-if="field.controlType === 'markdown'">
-            <MdPreview
+            <MarkdownPreview
               v-if="viewRecord[field.fieldName]"
               class="view-markdown"
-              :modelValue="String(viewRecord[field.fieldName])"
+              :text="String(viewRecord[field.fieldName])"
             />
             <span v-else>-</span>
           </template>
@@ -906,7 +906,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
-import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView } from '@/components/common'
+import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
@@ -922,8 +922,6 @@ import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
-import { MdPreview } from 'md-editor-v3'
-import 'md-editor-v3/lib/preview.css'
 
 // ==================== Props ====================
 
@@ -3658,11 +3656,6 @@ html.dark .dynamic-page :deep(.highlight-flash) {
 .view-markdown {
   max-height: 460px;
   overflow-y: auto;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-}
-.view-markdown :deep(.md-editor-preview) {
-  font-size: 14px;
 }
 
 .view-images {

@@ -12,13 +12,12 @@
         <span>{{ title || '系统说明' }}</span>
       </div>
     </template>
-    <MdPreview class="system-info" :model-value="content?.markdown || ''" />
+    <MarkdownPreview :text="content?.markdown" />
   </el-card>
 </template>
 
 <script setup lang="ts">
-import { MdPreview } from 'md-editor-v3'
-import 'md-editor-v3/lib/preview.css'
+import { MarkdownPreview } from '@/components/common'
 import type { WidgetContentMap } from '@/types'
 
 defineProps<{
@@ -32,18 +31,5 @@ defineProps<{
   display: flex;
   align-items: center;
   font-weight: 600;
-}
-
-.system-info {
-  :deep(.md-editor-preview-wrapper) {
-    padding: 0;
-  }
-  &:deep(.md-editor) {
-    background: transparent;
-    --md-bk-color: transparent;
-  }
-  :deep(.md-editor-preview) {
-    font-size: 14px;
-  }
 }
 </style>
