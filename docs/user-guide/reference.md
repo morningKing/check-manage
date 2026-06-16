@@ -618,13 +618,14 @@ CREATE TABLE dynamic_data (
 
 ### 5.3 字段控件类型
 
-系统支持 **17 种字段控件类型**：
+系统支持 **18 种字段控件类型**：
 
 | 控件类型 | 标识 | 存储类型 | 特性 |
 |---------|------|---------|------|
 | 单行文本 | `text` | string | 基础文本输入 |
 | 多行文本 | `textarea` | string | 支持换行 |
 | 富文本 | `richText` | string (HTML) | Quill 编辑器 |
+| Markdown | `markdown` | string (Markdown) | md-editor-v3 实时预览；查看时前端渲染 |
 | 数值 | `number` | number | 整数/小数 |
 | 单选下拉 | `select` | string | 静态/API/数据页选项 |
 | 多选下拉 | `multiSelect` | string[] | Tag 标签展示 |

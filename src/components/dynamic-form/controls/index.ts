@@ -11,6 +11,7 @@ import type { ControlType } from '@/types'
 import TextInput from './TextInput.vue'
 import TextArea from './TextArea.vue'
 import RichTextEditor from './RichTextEditor.vue'
+import MarkdownEditor from './MarkdownEditor.vue'
 import NumberInput from './NumberInput.vue'
 import SelectInput from './SelectInput.vue'
 import MultiSelect from './MultiSelect.vue'
@@ -35,6 +36,7 @@ export const controlComponentMap: Record<ControlType, Component> = {
   text: TextInput,
   textarea: TextArea,
   richText: RichTextEditor,
+  markdown: MarkdownEditor,
   number: NumberInput,
   select: SelectInput,
   multiSelect: MultiSelect,
@@ -87,6 +89,7 @@ export function getControlDefaultValue(controlType: ControlType): any {
     case 'image':
       return []
     case 'richText':
+    case 'markdown':
       return ''
     default:
       return ''
@@ -98,6 +101,7 @@ export {
   TextInput,
   TextArea,
   RichTextEditor,
+  MarkdownEditor,
   NumberInput,
   SelectInput,
   MultiSelect,

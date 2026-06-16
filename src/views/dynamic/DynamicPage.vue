@@ -349,7 +349,7 @@
     <!-- 新增/编辑对话框 -->
     <el-dialog
       v-model="dialogVisible"
-      width="600px"
+      :width="hasWideContentField ? '900px' : '600px'"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -397,7 +397,7 @@
     <!-- 查看记录对话框 -->
     <el-dialog
       v-model="viewDialogVisible"
-      width="700px"
+      :width="hasWideContentField ? '960px' : '700px'"
       destroy-on-close
     >
       <template #header>
@@ -520,6 +520,16 @@
           <!-- 富文本 -->
           <template v-else-if="field.controlType === 'richText'">
             <div class="view-richtext" v-html="viewRecord[field.fieldName] || '-'" />
+          </template>
+
+          <!-- Markdown：渲染预览 -->
+          <template v-else-if="field.controlType === 'markdown'">
+            <MdPreview
+              v-if="viewRecord[field.fieldName]"
+              class="view-markdown"
+              :modelValue="String(viewRecord[field.fieldName])"
+            />
+            <span v-else>-</span>
           </template>
 
           <!-- 默认：纯文本 -->
@@ -912,6 +922,8 @@ import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
+import { MdPreview } from 'md-editor-v3'
+import 'md-editor-v3/lib/preview.css'
 
 // ==================== Props ====================
 
@@ -1296,6 +1308,11 @@ const pageFields = computed<FieldConfig[]>(() => {
 
 const hasReferenceFields = computed<boolean>(() =>
   (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'quoteSelect' || f.controlType === 'reference'),
+)
+
+// 含富文本 / Markdown 字段时，编辑与查看弹窗拉宽以容纳编辑器/渲染内容
+const hasWideContentField = computed<boolean>(() =>
+  (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'richText' || f.controlType === 'markdown'),
 )
 
 /**
@@ -3636,6 +3653,16 @@ html.dark .dynamic-page :deep(.highlight-flash) {
   padding: 8px;
   background: var(--el-fill-color-light);
   border-radius: 4px;
+}
+
+.view-markdown {
+  max-height: 460px;
+  overflow-y: auto;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
+}
+.view-markdown :deep(.md-editor-preview) {
+  font-size: 14px;
 }
 
 .view-images {
