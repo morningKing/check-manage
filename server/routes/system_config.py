@@ -17,7 +17,11 @@ def get_system_config():
     """获取系统配置（公开访问，无需登录）"""
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('SELECT system_name, system_short_name, logo_url FROM system_config WHERE id = 1')
+        cur.execute(
+            'SELECT system_name, system_short_name, logo_url, '
+            'login_title, login_subtitle, login_footer '
+            'FROM system_config WHERE id = 1'
+        )
         row = cur.fetchone()
 
     if not row:
@@ -26,7 +30,10 @@ def get_system_config():
     return jsonify({
         'systemName': row['system_name'],
         'systemShortName': row['system_short_name'],
-        'logoUrl': row['logo_url']
+        'logoUrl': row['logo_url'],
+        'loginTitle': row['login_title'],
+        'loginSubtitle': row['login_subtitle'],
+        'loginFooter': row['login_footer'],
     })
 
 
@@ -45,6 +52,14 @@ def update_system_config():
     if not system_short_name:
         return jsonify({'error': '系统简称不能为空'}), 400
 
+    # 登录页文案（可选，空字符串归一化为 None）
+    def _norm(v):
+        v = (v or '').strip()
+        return v or None
+    login_title = _norm(body.get('loginTitle'))
+    login_subtitle = _norm(body.get('loginSubtitle'))
+    login_footer = _norm(body.get('loginFooter'))
+
     # 获取当前用户名作为更新人
     updated_by = g.current_user.get('username', '')
 
@@ -57,13 +72,19 @@ def update_system_config():
 
         cur.execute("""
             UPDATE system_config
-            SET system_name = %s, system_short_name = %s, logo_url = %s, updated_at = NOW(), updated_by = %s
+            SET system_name = %s, system_short_name = %s, logo_url = %s,
+                login_title = %s, login_subtitle = %s, login_footer = %s,
+                updated_at = NOW(), updated_by = %s
             WHERE id = 1
-        """, (system_name, system_short_name, logo_url, updated_by))
+        """, (system_name, system_short_name, logo_url,
+              login_title, login_subtitle, login_footer, updated_by))
         conn.commit()
 
     return jsonify({
         'systemName': system_name,
         'systemShortName': system_short_name,
-        'logoUrl': logo_url
+        'logoUrl': logo_url,
+        'loginTitle': login_title,
+        'loginSubtitle': login_subtitle,
+        'loginFooter': login_footer,
     })

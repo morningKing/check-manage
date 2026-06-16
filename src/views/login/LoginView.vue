@@ -11,7 +11,8 @@
     <div class="login-card">
       <div class="login-header">
         <el-icon class="login-logo"><Monitor /></el-icon>
-        <h1>{{ systemName }}</h1>
+        <h1>{{ loginTitle }}</h1>
+        <p v-if="loginSubtitle" class="login-subtitle">{{ loginSubtitle }}</p>
       </div>
       <el-form
         ref="formRef"
@@ -48,6 +49,7 @@
           </el-button>
         </el-form-item>
       </el-form>
+      <p v-if="loginFooter" class="login-footer">{{ loginFooter }}</p>
     </div>
   </div>
 </template>
@@ -77,9 +79,15 @@ const formRules: FormRules = {
 }
 
 /**
- * 系统名称（登录页标题）
+ * 登录页文案（可在「系统设置」后台定制）
+ * - 标题：loginTitle 优先，留空回退系统名称
+ * - 副标题 / 页脚：可选
  */
-const systemName = computed(() => systemConfigStore.systemName)
+const loginTitle = computed(
+  () => systemConfigStore.systemConfig.loginTitle?.trim() || systemConfigStore.systemName,
+)
+const loginSubtitle = computed(() => systemConfigStore.systemConfig.loginSubtitle || '')
+const loginFooter = computed(() => systemConfigStore.systemConfig.loginFooter || '')
 
 /**
  * 登录页无需登录态，直接获取系统配置
@@ -137,9 +145,24 @@ async function handleLogin(): Promise<void> {
     font-weight: 600;
     color: #303133;
   }
+
+  .login-subtitle {
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: #909399;
+    white-space: pre-line;
+  }
 }
 
 .login-btn {
   width: 100%;
+}
+
+.login-footer {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: #c0c4cc;
+  white-space: pre-line;
 }
 </style>

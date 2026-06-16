@@ -150,6 +150,9 @@ CREATE TABLE IF NOT EXISTS system_config (
     system_name     VARCHAR(200) NOT NULL DEFAULT '巡检用例管理系统',
     system_short_name VARCHAR(50) NOT NULL DEFAULT '巡检管理',
     logo_url        VARCHAR(500),
+    login_title     VARCHAR(200),
+    login_subtitle  VARCHAR(300),
+    login_footer    VARCHAR(500),
     updated_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_by      VARCHAR(100)
 );
@@ -1061,6 +1064,15 @@ def init_db():
             """)
             conn.commit()
             print("Created system_config table.")
+
+        # Migration: add login-page copy columns to system_config (idempotent)
+        cur.execute("""
+            ALTER TABLE system_config
+                ADD COLUMN IF NOT EXISTS login_title    VARCHAR(200),
+                ADD COLUMN IF NOT EXISTS login_subtitle VARCHAR(300),
+                ADD COLUMN IF NOT EXISTS login_footer   VARCHAR(500);
+        """)
+        conn.commit()
 
         # Migration: create home_widgets table if missing
         cur.execute("""

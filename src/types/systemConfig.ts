@@ -83,6 +83,12 @@ export interface SystemConfig {
   systemName: string
   systemShortName: string
   logoUrl?: string | null
+  /** 登录页标题（留空则用 systemName） */
+  loginTitle?: string | null
+  /** 登录页副标题 / 欢迎语 */
+  loginSubtitle?: string | null
+  /** 登录页页脚文案 */
+  loginFooter?: string | null
 }
 
 /** 系统配置更新参数 */
@@ -90,6 +96,9 @@ export interface SystemConfigUpdate {
   systemName: string
   systemShortName: string
   logoUrl?: string | null
+  loginTitle?: string | null
+  loginSubtitle?: string | null
+  loginFooter?: string | null
 }
 
 /** 排序更新参数 */

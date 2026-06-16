@@ -42,6 +42,38 @@
               Logo 图片 URL，如：https://example.com/logo.png
             </div>
           </el-form-item>
+
+          <el-divider content-position="left">登录页文案</el-divider>
+          <el-form-item label="登录页标题">
+            <el-input
+              v-model="loginTitle"
+              placeholder="留空则使用系统名称"
+              maxlength="200"
+              show-word-limit
+              clearable
+            />
+          </el-form-item>
+          <el-form-item label="登录页副标题">
+            <el-input
+              v-model="loginSubtitle"
+              type="textarea"
+              :rows="2"
+              placeholder="可选，欢迎语 / 提示，显示在标题下方"
+              maxlength="300"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item label="登录页页脚">
+            <el-input
+              v-model="loginFooter"
+              type="textarea"
+              :rows="2"
+              placeholder="可选，版权 / 备案等，显示在登录框底部"
+              maxlength="500"
+              show-word-limit
+            />
+          </el-form-item>
+
           <el-form-item>
             <el-button type="primary" :loading="saving" @click="handleSaveConfig">
               保存设置
@@ -169,6 +201,10 @@ const widgetsLoading = ref(false)
 const systemName = ref('')
 const systemShortName = ref('')
 const logoUrl = ref('')
+// 登录页文案
+const loginTitle = ref('')
+const loginSubtitle = ref('')
+const loginFooter = ref('')
 
 // 区块列表（可拖拽）
 const widgetsList = ref<WidgetConfig[]>([])
@@ -241,7 +277,10 @@ async function handleSaveConfig() {
     await systemConfigStore.updateConfig({
       systemName: name,
       systemShortName: shortName,
-      logoUrl: (logoUrl.value || '').trim() || null
+      logoUrl: (logoUrl.value || '').trim() || null,
+      loginTitle: (loginTitle.value || '').trim() || null,
+      loginSubtitle: (loginSubtitle.value || '').trim() || null,
+      loginFooter: (loginFooter.value || '').trim() || null
     })
     ElMessage.success('保存成功')
   } catch {
@@ -343,6 +382,9 @@ onMounted(async () => {
     systemName.value = systemConfigStore.systemName || ''
     systemShortName.value = systemConfigStore.systemShortName || ''
     logoUrl.value = systemConfigStore.systemConfig?.logoUrl || ''
+    loginTitle.value = systemConfigStore.systemConfig?.loginTitle || ''
+    loginSubtitle.value = systemConfigStore.systemConfig?.loginSubtitle || ''
+    loginFooter.value = systemConfigStore.systemConfig?.loginFooter || ''
     widgetsList.value = [...systemConfigStore.widgets].sort((a, b) => a.order - b.order)
   } catch {
     ElMessage.error('加载配置失败')
