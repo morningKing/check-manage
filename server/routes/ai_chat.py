@@ -29,7 +29,7 @@ from flask import (
     Blueprint, request, jsonify, g as flask_g, Response, stream_with_context,
     send_file,
 )
-from werkzeug.utils import secure_filename
+from utils.filename import safe_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required
 from utils.opencode_client import OpenCodeClient
@@ -495,7 +495,7 @@ def upload_file(sid):
         return jsonify({'error': 'file required', 'code': 'FILE_REQUIRED'}), 400
 
     workspace_path = sess[4]
-    safe_name = secure_filename(f.filename) or ('upload_' + secrets.token_hex(4))
+    safe_name = safe_filename(f.filename)  # preserves Unicode (e.g. 中文) names
     rel = f"uploads/{safe_name}"
     dest = safe_resolve(workspace_path, rel)  # raises on traversal
     os.makedirs(os.path.dirname(dest), exist_ok=True)

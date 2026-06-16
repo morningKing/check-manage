@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from flask import Blueprint, current_app, g, jsonify, request
-from werkzeug.utils import secure_filename
+from utils.filename import safe_filename
 
 from auth import login_required
 from utils.workspace import batch_staging_dir, WorkspacePathError
@@ -33,9 +33,7 @@ def staging_upload():
     if not f or not upload_session_id:
         return jsonify({'error': 'file and upload_session_id required'}), 400
 
-    filename = secure_filename(f.filename or '')
-    if not filename:
-        return jsonify({'error': 'invalid filename'}), 400
+    filename = safe_filename(f.filename or '')  # preserves Unicode (e.g. 中文) names
 
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
         or os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
