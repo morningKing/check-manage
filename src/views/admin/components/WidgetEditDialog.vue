@@ -205,8 +205,8 @@
       <el-form-item label="说明文字">
         <el-input v-model="form.content.description" placeholder="可选，显示在按钮下方" />
       </el-form-item>
-      <el-form-item label="图标名称">
-        <el-input v-model="form.content.icon" placeholder="可选，Element Plus 图标名，如 EditPen" />
+      <el-form-item label="图标">
+        <IconPicker v-model="form.content.icon" />
       </el-form-item>
       <el-form-item label="关联数据页" required>
         <el-select
@@ -279,6 +279,7 @@ import 'md-editor-v3/lib/style.css'
 import type { WidgetConfig } from '@/types'
 import { useMenuStore, usePageConfigStore } from '@/stores'
 import { getAllBranches, type BranchOption } from '@/api/projectVersion'
+import { IconPicker } from '@/components/common'
 
 const props = defineProps<{
   modelValue: boolean
