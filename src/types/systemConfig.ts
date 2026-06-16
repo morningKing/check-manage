@@ -52,6 +52,8 @@ export interface QuickFormContent {
   buttonLabel: string
   description?: string
   icon?: string
+  /** 指定要录入的字段（fieldName 列表，按此顺序展示）；留空/未设置 = 全部字段（自动字段除外） */
+  fields?: string[]
 }
 
 /** Widget 内容类型映射 */

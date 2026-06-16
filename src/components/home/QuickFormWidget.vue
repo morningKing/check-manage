@@ -67,10 +67,19 @@ const fields = computed<FieldConfig[]>(() => {
   const cfg = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
   if (!cfg) return []
   // 过滤掉自动生成字段，不需要用户填写
-  return cfg.fields.filter(f =>
+  const usable = cfg.fields.filter(f =>
     f.controlType !== 'autoSequence' &&
     f.controlType !== 'autoTimestamp'
   )
+  // 若配置了要录入的字段，则只保留这些字段并按配置顺序展示
+  const picked = props.content.fields
+  if (picked && picked.length) {
+    const byName = new Map(usable.map(f => [f.fieldName, f]))
+    return picked
+      .map(name => byName.get(name))
+      .filter((f): f is FieldConfig => Boolean(f))
+  }
+  return usable
 })
 
 async function open() {
