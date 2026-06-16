@@ -330,6 +330,66 @@
           </div>
         </el-form-item>
 
+        <!-- 默认值（输入 / 选择类控件，新增记录时预填） -->
+        <el-form-item v-if="showDefaultValue" label="默认值">
+          <!-- 单选下拉 / 单选按钮：从已配置的静态选项中选 -->
+          <el-select
+            v-if="['select', 'radio'].includes(fieldFormData.controlType) && fieldFormData.optionsSource.type === 'static'"
+            v-model="fieldFormData.defaultValue"
+            placeholder="选择默认选项"
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="(opt, i) in fieldFormData.options"
+              :key="i"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <!-- 多选下拉 / 复选框：多选静态选项 -->
+          <el-select
+            v-else-if="['multiSelect', 'checkbox'].includes(fieldFormData.controlType) && fieldFormData.optionsSource.type === 'static'"
+            v-model="fieldFormData.defaultValue"
+            multiple
+            placeholder="选择默认选项"
+            clearable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="(opt, i) in fieldFormData.options"
+              :key="i"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <!-- 数字 -->
+          <el-input-number
+            v-else-if="fieldFormData.controlType === 'number'"
+            v-model="fieldFormData.defaultValue"
+            controls-position="right"
+            style="width: 100%"
+          />
+          <!-- 日期 / 日期时间 -->
+          <el-date-picker
+            v-else-if="['date', 'datetime'].includes(fieldFormData.controlType)"
+            v-model="fieldFormData.defaultValue"
+            :type="fieldFormData.controlType === 'date' ? 'date' : 'datetime'"
+            :value-format="fieldFormData.controlType === 'date' ? 'YYYY-MM-DD' : 'YYYY-MM-DDTHH:mm:ss'"
+            placeholder="选择默认日期"
+            clearable
+            style="width: 100%"
+          />
+          <!-- 其它（文本 / 多行文本，或来源为 API / 数据页的选择类）：直接输入 -->
+          <el-input
+            v-else
+            v-model="fieldFormData.defaultValue"
+            placeholder="输入默认值（留空表示无）"
+            clearable
+          />
+          <div class="default-value-tip">新增记录时预填该值；留空表示无默认值。</div>
+        </el-form-item>
+
         <!-- 关联配置（仅关联类型显示） -->
         <el-form-item
           v-if="showRelationConfig"
@@ -736,6 +796,12 @@ const editDialogTitle = computed(() => {
 const showOptionsConfig = computed(() => {
   const optionTypes = ['select', 'multiSelect', 'radio', 'checkbox']
   return optionTypes.includes(fieldFormData.value.controlType)
+})
+
+// 可设默认值的控件类型（输入类 + 选择类 + 日期）
+const showDefaultValue = computed(() => {
+  return ['text', 'textarea', 'number', 'select', 'multiSelect', 'radio', 'checkbox', 'date', 'datetime']
+    .includes(fieldFormData.value.controlType)
 })
 
 const showRelationConfig = computed(() => {
@@ -1186,6 +1252,13 @@ watch(
 <style scoped lang="scss">
 .field-config-editor {
   width: 100%;
+}
+
+.default-value-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.4;
 }
 
 .editor-toolbar {
