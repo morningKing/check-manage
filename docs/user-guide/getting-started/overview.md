@@ -149,6 +149,7 @@
 | text | 单行文本 | - |
 | textarea | 多行文本 | - |
 | richText | 富文本编辑器 | - |
+| markdown | Markdown 编辑器（实时预览，查看时前端渲染） | - |
 | number | 数值输入 | - |
 | select | 单选下拉 | 选项来源配置 |
 | multiSelect | 多选下拉 | 选项来源配置 |

@@ -76,6 +76,7 @@ Defined in `src/types/field.ts`. The `controlType` value determines which compon
 | Type | Description |
 |------|-------------|
 | `text`, `textarea`, `richText`, `number` | Input controls |
+| `markdown` | Markdown editor (md-editor-v3 `MdEditor` with live preview); stored as Markdown source, rendered read-only via `MdPreview` in the detail dialog + plain-text preview in table cells |
 | `select`, `multiSelect`, `radio`, `checkbox` | Selection controls |
 | `date`, `datetime` | Date/time pickers |
 | `file`, `image` | Upload controls |

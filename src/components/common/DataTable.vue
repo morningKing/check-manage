@@ -490,6 +490,8 @@ function getColumnWidth(field: FieldConfig): string {
       return '200'
     case 'richText':
       return '200'
+    case 'markdown':
+      return '200'
     default:
       return '150'
   }
@@ -561,6 +563,17 @@ function formatCellValue(row: any, field: FieldConfig): string {
 
     case 'richText': {
       const plain = value?.replace(/<[^>]*>/g, '') || ''
+      return plain.length > 50 ? plain.slice(0, 50) + '...' : plain || '-'
+    }
+
+    case 'markdown': {
+      // 表格单元格内显示去除 Markdown 标记的纯文本预览
+      const plain = String(value)
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // 图片
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // 链接→文字
+        .replace(/[#>*_`~]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
       return plain.length > 50 ? plain.slice(0, 50) + '...' : plain || '-'
     }
 
