@@ -243,6 +243,24 @@
         </el-select>
         <div class="form-hint">指定要录入的字段及顺序（按选择先后展示）；留空则录入该数据页的全部字段</div>
       </el-form-item>
+      <el-form-item label="显示字段">
+        <el-select
+          v-model="form.content.displayField"
+          filterable
+          clearable
+          placeholder="留空 = 自动取第一个文本字段"
+          style="width: 100%"
+          :disabled="!form.content.targetCollection"
+        >
+          <el-option
+            v-for="opt in quickFormDisplayFieldOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <div class="form-hint">区块内「最近 5 条」列表每行展示的字段内容</div>
+      </el-form-item>
     </el-form>
 
     <!-- 通用配置 -->
@@ -368,9 +386,21 @@ const quickFormFieldOptions = computed(() => {
     .map(f => ({ value: f.fieldName, label: f.label || f.fieldName }))
 })
 
-// 切换目标数据页时清空已选录入字段（避免残留旧数据页的字段）
+// quick-form 「最近 5 条」可展示字段（含自动字段，便于用编号/合成字段做展示）
+const quickFormDisplayFieldOptions = computed(() => {
+  const collection = form.value.content?.targetCollection
+  if (!collection) return []
+  const pageConfig = pageConfigStore.pageConfigs.find(p => p.id === `page-${collection}`)
+  if (!pageConfig?.fields) return []
+  return pageConfig.fields
+    .filter(f => f.controlType !== 'autoTimestamp')
+    .map(f => ({ value: f.fieldName, label: f.label || f.fieldName }))
+})
+
+// 切换目标数据页时清空已选录入字段 / 展示字段（避免残留旧数据页的字段）
 function onQuickFormCollectionChange() {
   form.value.content.fields = []
+  form.value.content.displayField = ''
 }
 
 // 分支选项
@@ -438,6 +468,7 @@ watch(
         content.buttonLabel = content.buttonLabel || ''
         content.targetCollection = content.targetCollection || ''
         content.fields = Array.isArray(content.fields) ? content.fields : []
+        content.displayField = content.displayField || ''
       }
       form.value = {
         title: w.title || '',
