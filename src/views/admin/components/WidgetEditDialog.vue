@@ -214,6 +214,7 @@
           placeholder="选择目标数据页"
           filterable
           style="width: 100%"
+          @change="onQuickFormCollectionChange"
         >
           <el-option
             v-for="opt in collectionOptions"
@@ -223,6 +224,24 @@
           />
         </el-select>
         <div class="form-hint">填写后，点击区块将弹出该数据页的录入表单</div>
+      </el-form-item>
+      <el-form-item label="录入字段">
+        <el-select
+          v-model="form.content.fields"
+          multiple
+          filterable
+          placeholder="留空 = 录入全部字段（自动字段除外）"
+          style="width: 100%"
+          :disabled="!form.content.targetCollection"
+        >
+          <el-option
+            v-for="opt in quickFormFieldOptions"
+            :key="opt.value"
+            :label="opt.label"
+            :value="opt.value"
+          />
+        </el-select>
+        <div class="form-hint">指定要录入的字段及顺序（按选择先后展示）；留空则录入该数据页的全部字段</div>
       </el-form-item>
     </el-form>
 
@@ -337,6 +356,22 @@ const fieldOptions = computed(() => {
   }))
 })
 
+// quick-form 目标数据页的可录入字段（排除自动生成字段）
+const quickFormFieldOptions = computed(() => {
+  const collection = form.value.content?.targetCollection
+  if (!collection) return []
+  const pageConfig = pageConfigStore.pageConfigs.find(p => p.id === `page-${collection}`)
+  if (!pageConfig?.fields) return []
+  return pageConfig.fields
+    .filter(f => f.controlType !== 'autoSequence' && f.controlType !== 'autoTimestamp')
+    .map(f => ({ value: f.fieldName, label: f.label || f.fieldName }))
+})
+
+// 切换目标数据页时清空已选录入字段（避免残留旧数据页的字段）
+function onQuickFormCollectionChange() {
+  form.value.content.fields = []
+}
+
 // 分支选项
 const branchOptions = ref<BranchOption[]>([])
 
@@ -401,6 +436,7 @@ watch(
       if (w.widgetType === 'quick-form') {
         content.buttonLabel = content.buttonLabel || ''
         content.targetCollection = content.targetCollection || ''
+        content.fields = Array.isArray(content.fields) ? content.fields : []
       }
       form.value = {
         title: w.title || '',
