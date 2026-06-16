@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from db import get_db
-from auth import login_required, write_required
+from auth import login_required
 from utils.operation_log import log_operation, get_page_info, pick_display_name
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 from utils.rbac_guard import require_page_action
@@ -68,7 +68,7 @@ def get_relations(collection, record_id):
 
 
 @relations_bp.route('/relations/<collection>/<record_id>/<field_name>', methods=['PUT'])
-@write_required
+@login_required
 def update_relations(collection, record_id, field_name):
     denied = require_page_action(collection, 'update')
     if denied:
@@ -147,7 +147,7 @@ def update_relations(collection, record_id, field_name):
 
 
 @relations_bp.route('/relations/<collection>/<record_id>', methods=['DELETE'])
-@write_required
+@login_required
 def delete_all_relations(collection, record_id):
     denied = require_page_action(collection, 'update')
     if denied:
