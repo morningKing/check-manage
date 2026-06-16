@@ -5,8 +5,8 @@ those vanished on reload and were invisible to other browsers.
 
 Storage layout: <DATA_FILES_ROOT>/<id[:2]>/<id>/<original_name>
   - Two-level dir keeps inode counts sane.
-  - Original name is kept (after secure_filename) so downloads land with a
-    sensible name in the user's Downloads folder.
+  - Original name is kept (after Unicode-preserving safe_filename, so 中文
+    names survive) and downloads land with a sensible name.
 
 JSONB shape stored in dynamic_data:
   [{ "uid": "<data_files.id>", "name": "...", "url": "/api/data-files/<id>/download",
@@ -22,11 +22,11 @@ import uuid
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, g, send_file
-from werkzeug.utils import secure_filename
 
 from auth import login_required, login_required_sse, write_required
 from db import get_db
 from config import DATA_FILES_ROOT, DATA_FILE_MAX_MB
+from utils.filename import safe_filename
 
 data_files_bp = Blueprint('data_files', __name__)
 
@@ -46,7 +46,7 @@ def upload_data_file():
     if not f or not f.filename:
         return jsonify({'error': 'file required'}), 400
 
-    safe_name = secure_filename(f.filename) or 'unnamed'
+    safe_name = safe_filename(f.filename)  # preserves Unicode (e.g. 中文) names
     file_id = str(uuid.uuid4())
     dest_dir = _storage_dir(file_id)
     dest_path = dest_dir / safe_name
