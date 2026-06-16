@@ -1,8 +1,8 @@
 <template>
-  <el-card :class="['quick-form-widget', $attrs.class]" @click="open" shadow="hover">
-    <div class="widget-body">
+  <el-card :class="['quick-form-widget', $attrs.class]" shadow="hover">
+    <div class="widget-body" @click="open">
       <el-icon v-if="content.icon" class="widget-icon">
-        <component :is="content.icon" />
+        <component :is="iconComp" />
       </el-icon>
       <el-icon v-else class="widget-icon"><EditPen /></el-icon>
       <div class="widget-text">
@@ -10,6 +10,19 @@
         <div v-if="content.description" class="widget-desc">{{ content.description }}</div>
       </div>
       <el-icon class="widget-arrow"><ArrowRight /></el-icon>
+    </div>
+
+    <!-- 最近数据（前 5 条） -->
+    <div v-if="recentRecords.length" class="widget-records">
+      <div
+        v-for="r in recentRecords"
+        :key="r.id"
+        class="record-row"
+        :title="recordDisplay(r)"
+      >
+        <el-icon class="dot"><Document /></el-icon>
+        <span class="record-text">{{ recordDisplay(r) }}</span>
+      </div>
     </div>
   </el-card>
 
@@ -43,13 +56,15 @@ export default { inheritAttrs: false }
 </script>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { EditPen, ArrowRight } from '@element-plus/icons-vue'
+import { EditPen, ArrowRight, Document } from '@element-plus/icons-vue'
+import * as ElIcons from '@element-plus/icons-vue'
 import { DynamicForm } from '@/components/dynamic-form'
 import { usePageConfigStore } from '@/stores/pageConfig'
+import { get } from '@/utils/request'
 import type { QuickFormContent } from '@/types/systemConfig'
-import type { FieldConfig } from '@/types'
+import type { FieldConfig, DynamicRecord } from '@/types'
 
 const props = defineProps<{
   content: QuickFormContent
@@ -61,8 +76,46 @@ const dialogVisible = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
 const formRef = ref<InstanceType<typeof DynamicForm>>()
+const recentRecords = ref<DynamicRecord[]>([])
 
 const pageId = computed(() => `page-${props.content.targetCollection}`)
+
+// 图标名 → 组件（图标已配置但全局未注册时也能渲染）
+const iconComp = computed(() => (ElIcons as Record<string, unknown>)[props.content.icon || ''] || EditPen)
+
+// 展示字段：第一个文本类字段（找不到则用 id）
+const displayField = computed<string | null>(() => {
+  const cfg = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
+  const f = (cfg?.fields || []).find(x =>
+    ['text', 'textarea', 'autoSequence', 'compositeText'].includes(x.controlType))
+  return f?.fieldName || null
+})
+
+function recordDisplay(r: DynamicRecord): string {
+  const v = displayField.value ? (r as any)[displayField.value] : null
+  return (v != null && v !== '') ? String(v) : (r.id || '—')
+}
+
+// 拉取前 5 条记录
+async function fetchRecent(): Promise<void> {
+  if (!props.content.targetCollection) { recentRecords.value = []; return }
+  try {
+    const resp = await get<{ data: DynamicRecord[]; total: number }>(
+      `/${props.content.targetCollection}`, { pageSize: 5 })
+    recentRecords.value = (resp.data || []).slice(0, 5)
+  } catch {
+    recentRecords.value = []
+  }
+}
+
+onMounted(async () => {
+  if (pageConfigStore.pageConfigs.length === 0) {
+    try { await pageConfigStore.fetchPageConfigs() } catch { /* non-fatal */ }
+  }
+  fetchRecent()
+})
+
+watch(() => props.content.targetCollection, () => fetchRecent())
 
 const fields = computed<FieldConfig[]>(() => {
   const cfg = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
@@ -106,6 +159,7 @@ async function submitForm() {
     await pageConfigStore.addPageData(pageId.value, data)
     ElMessage.success('提交成功')
     dialogVisible.value = false
+    fetchRecent() // 刷新区块内最近数据
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || '提交失败')
   } finally {
@@ -116,7 +170,6 @@ async function submitForm() {
 
 <style scoped lang="scss">
 .quick-form-widget {
-  cursor: pointer;
   transition: transform 0.15s;
   &:hover { transform: translateY(-2px); }
 }
@@ -126,6 +179,25 @@ async function submitForm() {
   align-items: center;
   gap: 14px;
   padding: 4px 0;
+  cursor: pointer;
+}
+
+.widget-records {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+
+  .record-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+
+    .dot { color: var(--el-text-color-placeholder); font-size: 13px; flex-shrink: 0; }
+    .record-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  }
 }
 
 .widget-icon {
