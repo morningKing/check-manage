@@ -487,8 +487,8 @@
           <template v-else-if="field.controlType === 'file'">
             <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
             <div v-else>
-              <div v-for="(f, idx) in viewRecord[field.fieldName]" :key="idx">
-                <el-link type="primary" :href="f.url" target="_blank">{{ f.name }}</el-link>
+              <div v-for="(f, idx) in viewRecord[field.fieldName]" :key="idx" class="view-file-item">
+                <el-link type="primary" @click="openFilePreview(f)">{{ f.name }}</el-link>
               </div>
             </div>
           </template>
@@ -572,6 +572,9 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 文件在线预览（懒加载 @vue-office 等渲染库） -->
+    <FilePreviewDialog v-model="filePreviewVisible" :file="previewFile" />
 
     <!-- 工作流：推进/驳回意见对话框 -->
     <el-dialog
@@ -902,7 +905,7 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, nextTick, onActivated } from 'vue'
+import { ref, computed, watch, nextTick, onActivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
@@ -1308,6 +1311,15 @@ const pageFields = computed<FieldConfig[]>(() => {
 const hasReferenceFields = computed<boolean>(() =>
   (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'quoteSelect' || f.controlType === 'reference'),
 )
+
+// 文件在线预览（懒加载，避免 @vue-office 等重型库进入主包）
+const FilePreviewDialog = defineAsyncComponent(() => import('@/components/common/FilePreviewDialog.vue'))
+const filePreviewVisible = ref(false)
+const previewFile = ref<{ name?: string; url?: string; type?: string } | null>(null)
+function openFilePreview(f: { name?: string; url?: string; type?: string }) {
+  previewFile.value = f
+  filePreviewVisible.value = true
+}
 
 // 含富文本 / Markdown 字段时，编辑与查看弹窗拉宽以容纳编辑器/渲染内容
 const hasWideContentField = computed<boolean>(() =>
