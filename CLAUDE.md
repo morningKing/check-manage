@@ -148,7 +148,7 @@ Key files: `server/utils/batch_repo.py`, `server/utils/batch_engine.py`, `server
 
 ### AI Scheduled Tasks (定时 AI 数据流水线)
 
-A **generic** config-driven paradigm (audit is one instance): on a schedule, scan a data page, hand each pending record (fields + attached documents) to an AI session with a prompt/skill, parse its structured JSON, and write results back into the record while flowing a **status field** 待处理 → 处理中 → 已处理/处理失败. See `docs/ai-scan-tasks-guide.md`.
+A **generic** config-driven paradigm (audit is one instance): on a schedule, scan a data page, hand each pending record (fields + attached documents) to an AI session with a prompt/skill, parse its structured JSON, and write results back into the record while flowing a **status field** 待处理 → 处理中 → 已处理/处理失败. See `docs/user-guide/ai/scan-tasks.md`.
 
 *   **Reuses the AI batch engine**: each scan = one batch, each record = one child session (stamped `scan_task_id` + `source_record_id`); a completion hook in `batch_engine._run_one` calls `ai_scan_engine.on_child_finished` to parse + write back.
 *   **Scheduler** `server/utils/ai_scan_scheduler.py` (APScheduler 1-min tick, per-task due/lock, startup orphan sweep, `WERKZEUG_RUN_MAIN` guard). **Engine** `server/utils/ai_scan_engine.py` (atomic `FOR UPDATE SKIP LOCKED` claim→处理中; context dir = `record.md` + `attachments/`; prompt = your template + auto-appended JSON contract from the field mapping; write-back via parameterized `jsonb_set`). **Repo/API** `server/utils/ai_scan_repo.py`, `server/routes/ai_scan_tasks.py` (CRUD + run-now, `@require_permission('admin.ai_scan')`).
@@ -180,7 +180,7 @@ A **generic** config-driven paradigm (audit is one instance): on a schedule, sca
 *   `routes/cross_project_dependencies.py`: Dependency declaration CRUD, validation, merge dependency check, branch delete protection.
 *   `routes/webhooks.py`: Webhook rule management, test execution, log retrieval.
 *   `utils/script_runner.py`: Sandboxed Python execution for validation/export scripts.
-*   `auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `require_permission('admin.x')` (RBAC capability gate; replaced the old `admin_required`), `api_key_required`. See `utils/permissions.py` + `utils/rbac_guard.py` and `docs/custom-roles-rbac-guide.md`.
+*   `auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `require_permission('admin.x')` (RBAC capability gate; replaced the old `admin_required`), `api_key_required`. See `utils/permissions.py` + `utils/rbac_guard.py` and `docs/user-guide/admin/roles-rbac.md`.
 *   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
 
 **Reserved collection paths** (cannot be used as dynamic data collection names; authoritative list lives in `RESERVED` at `server/routes/dynamic.py:15`): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `system-config`, `home-widgets`, `favicon.ico`.
@@ -202,7 +202,7 @@ Vite proxies `/api` to backend port 3002 **with path rewrite**: frontend calls `
 
 ### User Roles (Customizable RBAC)
 
-Roles are **data-driven and customizable** (see `docs/custom-roles-rbac-guide.md`). Permissions are controlled at three granularities: **admin-feature toggles** (`admin.*` capability keys), **per-data-page CRUD**, and **menu visibility** (`menus.roles`).
+Roles are **data-driven and customizable** (see `docs/user-guide/admin/roles-rbac.md`). Permissions are controlled at three granularities: **admin-feature toggles** (`admin.*` capability keys), **per-data-page CRUD**, and **menu visibility** (`menus.roles`).
 
 *   Built-in seeds: **admin** (permanent superuser — all permissions, undeletable), **developer** (read/write data, no admin features), **guest** (read-only). `developer`/`guest` are editable; custom roles can be added.
 *   Backend is authoritative: `@require_permission('admin.x')` (replaced `admin_required`) + `require_page_action()` in `routes/dynamic.py`/`relations.py`. Resolution + cache in `server/utils/permissions.py`; catalog in `PERMISSION_CATALOG`.
@@ -222,6 +222,10 @@ Menus follow a strict 3-level hierarchy enforced by `menuType` field:
 Projects can be direct children of workspace (level 2) OR standalone level-1 menus with `menuType='project'`. Data pages must have valid `page_id` and `parent_id` pointing to a project.
 
 ## Development Workflow
+
+### ⚠️ Documentation Sync (MANDATORY)
+
+**Every user-facing feature change MUST update the user guide in the same PR.** When you add, change, or remove a feature that a user interacts with, update the matching doc under `docs/user-guide/` (organized by feature: `getting-started/ data/ admin/ integration/ ai/`, English-slug filenames). If no doc exists for the feature, create one in the right subfolder and link it from `docs/user-guide/README.md` (the index/TOC). Where a flow has UI, include a real page screenshot under `docs/user-guide/_images/`. Treat the doc update as part of "done" — a feature change without its user-guide update is incomplete.
 
 ### Adding a New Business Entity (e.g., "Products")
 

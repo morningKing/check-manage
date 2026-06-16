@@ -209,8 +209,8 @@ npm run start
 - `docs/user-guide/` — 用户操作手册（全量功能说明、数据查询、脚本上传等）
 - `docs/design/` — 系统设计、架构与数据库结构
 - `docs/superpowers/specs/` 与 `docs/superpowers/plans/` — 各特性的设计规格与实施计划
-- `docs/ai-scan-tasks-guide.md` — 定时 AI 数据流水线指南
-- `docs/workflow-engine-guide.md` — 跨页工作流引擎使用指南（图形化 DAG 设计器、条件路由、并行分支）
+- `docs/user-guide/ai/scan-tasks.md` — 定时 AI 数据流水线指南
+- `docs/user-guide/data/workflow.md` — 跨页工作流引擎使用指南（图形化 DAG 设计器、条件路由、并行分支）
 
 ## License
 

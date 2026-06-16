@@ -14,7 +14,7 @@
 |---|---|---|
 | `migrations/2026_06_13_settings_hub_menu.py` | 将旧的"数据工具"（`menu-3-b`）和"系统配置"（`menu-3`）两棵菜单子树合并为单一"设置中心"（`/admin`）菜单 | 菜单结构重构，旧节点残留会产生重复入口和路由冲突 |
 | `migrations/2026_06_13_dynamic_sequences.py` | 创建 `dynamic_sequences` 表并按现有数据播种计数器；此后所有 autoSequence 值由服务端原子分配 | 解决并发创建时序号重复的问题；客户端不再自行生成序号 |
-| `migrations/2026_06_14_workflow_tables.py` | 创建 `workflow_definitions` / `workflow_instances` 两张表 | 跨页工作流引擎的存储（详见 `workflow-engine-guide.md`） |
+| `migrations/2026_06_14_workflow_tables.py` | 创建 `workflow_definitions` / `workflow_instances` 两张表 | 跨页工作流引擎的存储（详见 `../data/workflow.md`） |
 
 三个迁移均**幂等**（可重复执行不产生副作用）：
 
@@ -108,7 +108,7 @@ python -m migrations.2026_06_14_workflow_tables
 {'status': 'ok'}
 ```
 
-创建 `workflow_definitions` / `workflow_instances` 两张表（若已存在则跳过），纯建表、无数据改动。工作流功能用法见 `workflow-engine-guide.md`。
+创建 `workflow_definitions` / `workflow_instances` 两张表（若已存在则跳过），纯建表、无数据改动。工作流功能用法见 `../data/workflow.md`。
 
 ---
 
