@@ -488,7 +488,13 @@
             <span v-if="!Array.isArray(viewRecord[field.fieldName]) || viewRecord[field.fieldName].length === 0">-</span>
             <div v-else>
               <div v-for="(f, idx) in viewRecord[field.fieldName]" :key="idx" class="view-file-item">
-                <el-link type="primary" @click="openFilePreview(f)">{{ f.name }}</el-link>
+                <el-link
+                  type="primary"
+                  @click="isPreviewable(f.name) ? openFilePreview(f) : downloadFileItem(f)"
+                >{{ f.name }}</el-link>
+                <el-link class="view-file-dl" :underline="false" title="下载文件" @click="downloadFileItem(f)">
+                  <el-icon><Download /></el-icon>
+                </el-link>
               </div>
             </div>
           </template>
@@ -926,6 +932,8 @@ import { post } from '@/utils/request'
 import type { PageConfig, FieldConfig, DynamicRecord, ExportScript, KanbanConfig, FieldOption, DeleteBindingConfig, CalendarConfig, GanttConfig } from '@/types'
 import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
+import { isPreviewable } from '@/utils/filePreview'
+import { authedDataFileUrl } from '@/api/dataFiles'
 
 // ==================== Props ====================
 
@@ -1319,6 +1327,9 @@ const previewFile = ref<{ name?: string; url?: string; type?: string } | null>(n
 function openFilePreview(f: { name?: string; url?: string; type?: string }) {
   previewFile.value = f
   filePreviewVisible.value = true
+}
+function downloadFileItem(f: { url?: string }) {
+  if (f?.url) window.open(authedDataFileUrl(f.url), '_blank')
 }
 
 // 含富文本 / Markdown 字段时，编辑与查看弹窗拉宽以容纳编辑器/渲染内容
@@ -3669,6 +3680,17 @@ html.dark .dynamic-page :deep(.highlight-flash) {
 .view-markdown {
   max-height: 460px;
   overflow-y: auto;
+}
+
+.view-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.view-file-dl {
+  color: var(--el-text-color-secondary);
+  font-size: 15px;
 }
 
 .view-images {

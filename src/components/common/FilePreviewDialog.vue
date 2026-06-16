@@ -68,6 +68,7 @@ import VueOfficePptx from '@vue-office/pptx'
 import VueOfficePdf from '@vue-office/pdf'
 import MarkdownPreview from './MarkdownPreview.vue'
 import { authedDataFileUrl } from '@/api/dataFiles'
+import { previewKind } from '@/utils/filePreview'
 
 interface PreviewFile { name?: string; url?: string; type?: string }
 
@@ -83,20 +84,8 @@ const loading = ref(false)
 const textContent = ref('')
 const errorMsg = ref('')
 
-const ext = computed(() => (props.file?.name || '').split('.').pop()?.toLowerCase() || '')
 const authedUrl = computed(() => (props.file?.url ? authedDataFileUrl(props.file.url) : ''))
-
-const kind = computed(() => {
-  const e = ext.value
-  if (e === 'docx') return 'docx'
-  if (['xlsx', 'xls'].includes(e)) return 'excel'
-  if (e === 'pptx') return 'pptx'
-  if (e === 'pdf') return 'pdf'
-  if (['md', 'markdown'].includes(e)) return 'markdown'
-  if (['txt', 'log', 'json', 'csv', 'xml', 'yaml', 'yml', 'ini', 'conf'].includes(e)) return 'text'
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(e)) return 'image'
-  return 'unsupported'
-})
+const kind = computed(() => previewKind(props.file?.name))
 
 const officeComponent = computed(() => {
   switch (kind.value) {
