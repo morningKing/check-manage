@@ -96,12 +96,25 @@ def _target_field_map(cur, collection):
     return _reference_target_map(row[0] if row else [])
 
 
+def _has_resolvable_fields(fields):
+    """该页是否存在需要解析的字段：reference / quoteSelect（内联外键）或 relation（关系表）。"""
+    return any(
+        (f or {}).get('controlType') in ('reference', 'quoteSelect', 'relation')
+        for f in (fields or [])
+    )
+
+
 def resolve_page_references(cur, collection, records, fields, export_branch='main', max_depth=1):
     """页面级导出的引用解析便捷封装。
 
     把单个数据页包装成 menu_data 结构后复用 :func:`resolve_references`，
     返回 references 查找表；并就地给 records 补 `_relations`。
+
+    若该页没有任何 reference / quoteSelect / relation 字段，则没有可解析的引用
+    （data_relations 也只由 relation 字段产生），直接返回空表、不触库。
     """
+    if not _has_resolvable_fields(fields):
+        return {}
     menu_data = [{'collection': collection, 'records': records, 'fields': fields or []}]
     return resolve_references(cur, menu_data, export_branch=export_branch, max_depth=max_depth)
 

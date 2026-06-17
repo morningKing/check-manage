@@ -286,3 +286,46 @@ def test_execute_menu_export_resolves_cross_page_reference():
             cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
             conn.commit()
         _cleanup([src, tgt])
+
+
+def test_execute_menu_export_page_scope_resolves_reference():
+    """端到端走 execute_menu_export 的「表级(page)脚本」分支：菜单导出时逐页跑页面级脚本，
+    也应注入 references（修复前该分支用 run_export_script 不传 references → NameError）。"""
+    src, tgt = 'zzmpsrc', 'zzmptgt'
+    menu_id, script_id = 'zzmp-menu', 'zzmp-script'
+    # 页面级写法：直接用 data + references（非 menu_data）
+    script = (
+        "out = []\n"
+        "for r in data:\n"
+        "    ref = references.get('zzmptgt', {}).get(r.get('ref'))\n"
+        "    out.append({'id': r['id'], 'refName': ref['name'] if ref else None})\n"
+        "result = json.dumps(out, ensure_ascii=False)\n"
+    )
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, src, [{'fieldName': 'ref', 'controlType': 'reference',
+                                   'referenceConfig': {'targetCollection': tgt}}])
+            _seed_page(cur, tgt, [{'fieldName': 'name', 'controlType': 'text'}])
+            _ins(cur, src, 'zzmp-s1', {'ref': 'zzmp-t1'})
+            _ins(cur, tgt, 'zzmp-t1', {'name': '橙子'})
+            cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
+            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope) "
+                        "VALUES (%s,%s,%s,'json','page')", (script_id, 'ref-join-page', script))
+            cur.execute("DELETE FROM menus WHERE id=%s", (menu_id,))
+            cur.execute("INSERT INTO menus (id,name,page_id,export_script_id) VALUES (%s,%s,%s,%s)",
+                        (menu_id, 'zzMenuP', f'page-{src}', script_id))
+            conn.commit()
+        with get_db() as conn:
+            zip_bytes, fname, errors = execute_menu_export(conn, [menu_id], None, 'main')
+        assert zip_bytes is not None, f'导出失败：{errors}'
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        payload = json.loads(zf.read(zf.namelist()[0]))
+        assert payload == [{'id': 'zzmp-s1', 'refName': '橙子'}], payload
+    finally:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM menus WHERE id=%s", (menu_id,))
+            cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
+            conn.commit()
+        _cleanup([src, tgt])
