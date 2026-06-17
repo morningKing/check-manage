@@ -66,7 +66,7 @@ class TestListExportScripts:
     def test_returns_list(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchall.return_value = [
-            ('s1', '脚本1', '描述', 'python', 'print(1)', 'json', now, now, 'page'),
+            ('s1', '脚本1', '描述', 'python', 'print(1)', 'json', now, now, 'page', None, None),
         ]
         resp = client.get('/exportScripts', headers=admin_h)
         assert resp.status_code == 200
@@ -89,6 +89,7 @@ class TestCreateExportScript:
                                'script': 'print(1)',
                                'language': 'python',
                                'outputFormat': 'json',
+                               'boundCollection': 'inspection-case',
                            }),
                            content_type='application/json',
                            headers=admin_h)
@@ -125,6 +126,7 @@ class TestCreateExportScript:
                                'script': "result = [{'filename': t['pageName'] + '.csv', 'content': ''} for t in menu_data]",
                                'outputFormat': 'csv',
                                'scope': 'menu',
+                               'boundMenuId': 'menu-test',
                            }),
                            content_type='application/json',
                            headers=admin_h)
@@ -147,7 +149,7 @@ class TestUpdateExportScript:
     def test_update_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.return_value = (
-            's1', '更新脚本', '描述', 'python', 'print(2)', 'json', now, now, 'page',
+            's1', '更新脚本', '描述', 'python', 'print(2)', 'json', now, now, 'page', None, None,
         )
         resp = client.put('/exportScripts/s1',
                           data=json.dumps({'name': '更新脚本'}),
@@ -163,6 +165,33 @@ class TestUpdateExportScript:
                           content_type='application/json',
                           headers=admin_h)
         assert resp.status_code == 404
+
+
+class TestExportScriptBinding:
+    def test_create_page_script_requires_binding(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        resp = client.post('/exportScripts',
+            data=json.dumps({'name': 'x', 'script': 'result="1"', 'scope': 'page'}),
+            content_type='application/json', headers=admin_h)
+        assert resp.status_code == 400
+        assert '绑定' in resp.get_json()['error']
+
+    def test_create_page_script_with_binding_ok(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        resp = client.post('/exportScripts',
+            data=json.dumps({'name': 'x', 'script': 'result="1"', 'scope': 'page',
+                             'boundCollection': 'inspection-case'}),
+            content_type='application/json', headers=admin_h)
+        assert resp.status_code == 201
+        assert resp.get_json()['boundCollection'] == 'inspection-case'
+
+    def test_create_menu_script_with_collection_binding_rejected(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        resp = client.post('/exportScripts',
+            data=json.dumps({'name': 'x', 'script': 'result=""\nfor t in menu_data:\n    pass',
+                             'scope': 'menu', 'boundCollection': 'inspection-case'}),
+            content_type='application/json', headers=admin_h)
+        assert resp.status_code == 400
 
 
 class TestDeleteExportScript:

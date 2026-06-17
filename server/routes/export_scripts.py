@@ -32,7 +32,27 @@ def row_to_dict(row):
         'createdAt': format_ts(row[6]),
         'updatedAt': format_ts(row[7]),
         'scope': row[8] if len(row) > 8 else 'page',
+        'boundCollection': row[9] if len(row) > 9 else None,
+        'boundMenuId': row[10] if len(row) > 10 else None,
     }
+
+
+def _normalize_binding(scope, body):
+    """返回 (bound_collection, bound_menu_id)；新建必绑、与 scope 一致，否则抛 ValueError。"""
+    bc = (body.get('boundCollection') or '').strip() or None
+    bm = (body.get('boundMenuId') or '').strip() or None
+    if scope == 'menu':
+        if bc:
+            raise ValueError('菜单维度脚本只能绑定菜单，不能绑定数据页')
+        if not bm:
+            raise ValueError('菜单维度脚本必须绑定一个菜单')
+        return None, bm
+    else:
+        if bm:
+            raise ValueError('数据页维度脚本只能绑定数据页，不能绑定菜单')
+        if not bc:
+            raise ValueError('数据页维度脚本必须绑定一个数据页')
+        return bc, None
 
 
 @export_scripts_bp.route('/exportScripts', methods=['GET'])
@@ -41,7 +61,7 @@ def list_scripts():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope '
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
             'FROM export_scripts ORDER BY created_at'
         )
         rows = cur.fetchall()
@@ -52,8 +72,10 @@ def list_scripts():
 @require_permission('admin.export_scripts')
 def create_script():
     body = request.get_json(force=True)
+    scope = body.get('scope', 'page')
     try:
-        validate_export_script_scope(body.get('scope', 'page'), body.get('script', ''))
+        validate_export_script_scope(scope, body.get('script', ''))
+        bound_collection, bound_menu_id = _normalize_binding(scope, body)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     script_id = body.get('id') or f'script-{uuid.uuid4().hex[:8]}'
@@ -61,24 +83,21 @@ def create_script():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'INSERT INTO export_scripts (id, name, description, language, script, output_format, created_at, updated_at, scope) '
-            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+            'INSERT INTO export_scripts (id, name, description, language, script, output_format, '
+            'created_at, updated_at, scope, bound_collection, bound_menu_id) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
             (script_id, body.get('name', ''), body.get('description', ''),
              body.get('language', 'python'), body.get('script', ''),
-             body.get('outputFormat', 'json'), now, now, body.get('scope', 'page')),
+             body.get('outputFormat', 'json'), now, now, scope, bound_collection, bound_menu_id),
         )
     log_operation('create', 'export_script', script_id, body.get('name', ''),
                   f'新增导出脚本「{body.get("name", "")}」')
     return jsonify({
-        'id': script_id,
-        'name': body.get('name', ''),
-        'description': body.get('description', ''),
-        'language': body.get('language', 'python'),
-        'script': body.get('script', ''),
-        'outputFormat': body.get('outputFormat', 'json'),
-        'scope': body.get('scope', 'page'),
-        'createdAt': format_ts(now),
-        'updatedAt': format_ts(now),
+        'id': script_id, 'name': body.get('name', ''), 'description': body.get('description', ''),
+        'language': body.get('language', 'python'), 'script': body.get('script', ''),
+        'outputFormat': body.get('outputFormat', 'json'), 'scope': scope,
+        'boundCollection': bound_collection, 'boundMenuId': bound_menu_id,
+        'createdAt': format_ts(now), 'updatedAt': format_ts(now),
     }), 201
 
 
@@ -127,12 +146,18 @@ def update_script(script_id):
         if 'scope' in body:
             sets.append('scope=%s')
             params.append(body['scope'])
+        if 'boundCollection' in body:
+            sets.append('bound_collection=%s')
+            params.append((body.get('boundCollection') or '').strip() or None)
+        if 'boundMenuId' in body:
+            sets.append('bound_menu_id=%s')
+            params.append((body.get('boundMenuId') or '').strip() or None)
         params.append(script_id)
         cur.execute(
             f'UPDATE export_scripts SET {", ".join(sets)} WHERE id=%s', params
         )
         cur.execute(
-            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope '
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
             'FROM export_scripts WHERE id = %s', (script_id,)
         )
         row = cur.fetchone()
