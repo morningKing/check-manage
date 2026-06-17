@@ -100,9 +100,46 @@ const displayField = computed<string | null>(() => {
   return f?.fieldName || null
 })
 
+// 展示字段的配置（用于把原始值解析成标签 / 格式化日期）
+const displayFieldConfig = computed<FieldConfig | null>(() => {
+  if (!displayField.value) return null
+  const cfg = pageConfigStore.pageConfigs.find(c => c.id === pageId.value)
+  return cfg?.fields.find(f => f.fieldName === displayField.value) || null
+})
+
+// 把选项值映射为标签（找不到则原样返回）
+function optionLabel(field: FieldConfig, value: unknown): string {
+  const opt = (field.options || []).find(o => o.value === value)
+  return opt ? opt.label : String(value)
+}
+
+// 简易日期格式化（无效则返回原始串）
+function formatDateValue(value: unknown, withTime: boolean): string {
+  const d = new Date(value as string)
+  if (isNaN(d.getTime())) return String(value)
+  const p = (n: number) => String(n).padStart(2, '0')
+  const date = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return withTime ? `${date} ${p(d.getHours())}:${p(d.getMinutes())}` : date
+}
+
 function recordDisplay(r: DynamicRecord): string {
   const v = displayField.value ? (r as any)[displayField.value] : null
-  return (v != null && v !== '') ? String(v) : (r.id || '—')
+  if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) return r.id || '—'
+  const field = displayFieldConfig.value
+  switch (field?.controlType) {
+    case 'select':
+    case 'radio':
+      return optionLabel(field, v)
+    case 'multiSelect':
+    case 'checkbox':
+      return (Array.isArray(v) ? v : [v]).map(x => optionLabel(field, x)).join('、')
+    case 'date':
+      return formatDateValue(v, false)
+    case 'datetime':
+      return formatDateValue(v, true)
+    default:
+      return String(v)
+  }
 }
 
 // 点击记录行 → 跳转到对应数据页并定位/高亮该行
@@ -133,7 +170,7 @@ async function fetchRecent(): Promise<void> {
   if (!props.content.targetCollection) { recentRecords.value = []; return }
   try {
     const resp = await get<{ data: DynamicRecord[]; total: number }>(
-      `/${props.content.targetCollection}`, { pageSize: 5 })
+      `/${props.content.targetCollection}`, { pageSize: 5, sort: 'createdAt', order: 'desc' })
     recentRecords.value = (resp.data || []).slice(0, 5)
   } catch {
     recentRecords.value = []
