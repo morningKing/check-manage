@@ -68,6 +68,32 @@ def list_scripts():
     return jsonify([row_to_dict(r) for r in rows])
 
 
+@export_scripts_bp.route('/exportScripts/for-collection/<collection>', methods=['GET'])
+@login_required
+def scripts_for_collection(collection):
+    """该数据页可用的导出脚本 = 绑定到它的脚本 ∪ 该页 page_configs.export_scripts 里的未绑定脚本。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+            'scope, bound_collection, bound_menu_id FROM export_scripts '
+            'WHERE bound_collection = %s', (collection,))
+        rows = list(cur.fetchall())
+        bound_ids = {r[0] for r in rows}
+        # 兼容旧 opt-in：page_configs.export_scripts 里登记、但未绑定的脚本
+        cur.execute('SELECT export_scripts FROM page_configs WHERE id = %s', (f'page-{collection}',))
+        pc = cur.fetchone()
+        legacy_ids = [sid for sid in (pc[0] if pc and pc[0] else []) if sid not in bound_ids]
+        if legacy_ids:
+            cur.execute(
+                'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+                'scope, bound_collection, bound_menu_id FROM export_scripts '
+                'WHERE id = ANY(%s) AND bound_collection IS NULL AND bound_menu_id IS NULL',
+                (legacy_ids,))
+            rows.extend(cur.fetchall())
+    return jsonify([row_to_dict(r) for r in rows])
+
+
 @export_scripts_bp.route('/exportScripts', methods=['POST'])
 @require_permission('admin.export_scripts')
 def create_script():

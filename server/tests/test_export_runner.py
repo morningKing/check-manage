@@ -131,3 +131,25 @@ def test_execute_endpoint_rejects_binding_mismatch():
         assert '绑定' in resp.get_json()['error']
     finally:
         _cleanup([coll, other], [sid])
+
+
+def test_for_collection_returns_bound_scripts():
+    from app import app
+    from auth import create_token
+    coll, sid = 'zzer_f', 'zzer_s6'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, coll, [])
+            _seed_script(cur, sid, scope='page', bound_collection=coll)
+            conn.commit()
+        app.config['TESTING'] = True
+        tok = create_token({'id': 'u1', 'username': 'admin', 'role': 'admin'})
+        c = app.test_client()
+        resp = c.get(f'/exportScripts/for-collection/{coll}',
+                     headers={'Authorization': f'Bearer {tok}'})
+        assert resp.status_code == 200
+        ids = [s['id'] for s in resp.get_json()]
+        assert sid in ids
+    finally:
+        _cleanup([coll], [sid])
