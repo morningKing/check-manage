@@ -45,3 +45,27 @@ def test_run_rejects_unbound_script(tmp_path):
         import pytest
         with pytest.raises(RunExportError):
             handle({'script_id': 's2'}, _ctx('admin'))
+
+
+def test_run_sanitizes_traversal_filename(tmp_path):
+    script_row = ('s3', 'evil', "result='x'", 'json', 'page', 'col-x', None)
+    cur = MagicMock()
+    seq = {"i": 0}
+    def fetchone():
+        vals = [script_row, (str(tmp_path),)]
+        v = vals[seq["i"]]; seq["i"] += 1; return v
+    cur.fetchone.side_effect = fetchone
+    conn = MagicMock(); conn.cursor.return_value = cur
+    @contextmanager
+    def _get():
+        yield conn
+    def fake_exec(cur_, row, **kw):
+        return (b'x', '../../evil.json', 'application/json')
+    with patch('tools.run_export_script.get_db', _get), \
+         patch('tools.run_export_script.execute_bound_export', fake_exec):
+        from tools.run_export_script import handle
+        out = handle({'script_id': 's3'}, _ctx('admin'))
+    # file must land INSIDE outputs/, not escape it
+    assert out['path'] == 'outputs/evil.json'
+    import os
+    assert os.path.exists(os.path.join(str(tmp_path), 'outputs', 'evil.json'))
