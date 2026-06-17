@@ -260,7 +260,7 @@ def _process_exec(profile, script_code, script_locals, timeout_seconds, timeout_
         return {'ok': True}
 
 
-def run_export_script(script_code, data, fields, page_name, output_format='json'):
+def run_export_script(script_code, data, fields, page_name, output_format='json', references=None):
     _validate_script(script_code)
 
     payload = _process_exec(
@@ -270,6 +270,8 @@ def run_export_script(script_code, data, fields, page_name, output_format='json'
             'data': data,
             'fields': fields,
             'page_name': page_name,
+            # 被引用记录的查找表 {collection: {id: record}}，供跨页/跨项目引用 join
+            'references': references or {},
             'result': None,
             'filename': None,
             'content_type': None,
