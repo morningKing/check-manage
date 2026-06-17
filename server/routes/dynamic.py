@@ -336,6 +336,18 @@ def list_items(collection):
         page_size = min(page_size, 1000)
     offset = (page - 1) * page_size if not load_all else 0
 
+    # 排序参数（列名与方向均走白名单，防 SQL 注入）
+    _SORT_COLUMNS = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
+    sort_col = _SORT_COLUMNS.get(request.args.get('sort', 'createdAt'), 'created_at')
+    direction = 'DESC' if request.args.get('order', 'asc').lower() == 'desc' else 'ASC'
+    # locateId 的页码定位依赖默认升序排列，二者不同时生效（有 locateId 时强制升序）
+    if locate_id:
+        order_by_clause = 'created_at, id'
+    elif sort_col == 'id':
+        order_by_clause = f'id {direction}'
+    else:
+        order_by_clause = f'{sort_col} {direction}, id {direction}'
+
     branch_id = _get_current_user_branch(collection)
 
     with get_db() as conn:
@@ -447,14 +459,14 @@ def list_items(collection):
             data_sql = (
                 'SELECT id, collection, data, created_at, updated_at, version, branch_id '
                 f'FROM dynamic_data WHERE {where_clause} '
-                'ORDER BY created_at, id'
+                f'ORDER BY {order_by_clause}'
             )
             cur.execute(data_sql, all_params)
         else:
             data_sql = (
                 'SELECT id, collection, data, created_at, updated_at, version, branch_id '
                 f'FROM dynamic_data WHERE {where_clause} '
-                'ORDER BY created_at, id LIMIT %s OFFSET %s'
+                f'ORDER BY {order_by_clause} LIMIT %s OFFSET %s'
             )
             cur.execute(data_sql, all_params + [page_size, offset])
         rows = cur.fetchall()

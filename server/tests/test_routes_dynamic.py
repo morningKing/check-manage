@@ -154,6 +154,41 @@ class TestListCollection:
         assert data['pageSize'] == 20
         assert data['total'] == 100
 
+    def _executed_sql(self, mock_cursor):
+        """返回本次请求实际执行过的所有 SQL 文本（用于断言 ORDER BY）。"""
+        return ' || '.join(
+            str(c.args[0]) for c in mock_cursor.execute.call_args_list if c.args
+        )
+
+    def test_list_default_order_ascending(self, setup):
+        """默认按 created_at 升序排列"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection', headers=headers)
+        assert resp.status_code == 200
+        assert 'ORDER BY created_at ASC, id ASC' in self._executed_sql(mock_cursor)
+
+    def test_list_sort_desc(self, setup):
+        """sort=createdAt&order=desc 生成降序 ORDER BY（最近记录在前）"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?sort=createdAt&order=desc', headers=headers)
+        assert resp.status_code == 200
+        assert 'ORDER BY created_at DESC, id DESC' in self._executed_sql(mock_cursor)
+
+    def test_list_sort_invalid_field_falls_back(self, setup):
+        """非法 sort 列名被白名单拒绝，回退到 created_at（防 SQL 注入）"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?sort=data;DROP TABLE&order=desc', headers=headers)
+        assert resp.status_code == 200
+        sql = self._executed_sql(mock_cursor)
+        assert 'DROP TABLE' not in sql
+        assert 'ORDER BY created_at DESC, id DESC' in sql
+
 
 class TestCreateRecord:
     def test_create_returns_201(self, setup):
