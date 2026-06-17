@@ -462,80 +462,38 @@ def debug_script(script_id):
 @export_scripts_bp.route('/exportScripts/execute', methods=['POST'])
 @login_required
 def execute_script():
-    """Execute an export script and return the generated file."""
+    """Execute an export script (page scope) and return the generated file."""
+    from utils.export_runner import (
+        execute_bound_export, ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
+    )
+    from flask import g
     body = request.get_json(force=True)
     script_id = body.get('scriptId')
     collection = body.get('collection')
-    record_id = body.get('recordId')  # optional: for row-level export
-    branch_id = body.get('branchId', 'main')  # NEW: branch filter, default main
-
+    record_id = body.get('recordId')
+    branch_id = body.get('branchId', 'main')
     if not script_id or not collection:
         return jsonify({'error': '缺少参数 scriptId 或 collection'}), 400
 
+    role = (g.current_user or {}).get('role')
     with get_db() as conn:
         cur = conn.cursor()
-        # Fetch script
-        cur.execute(
-            'SELECT script, output_format FROM export_scripts WHERE id = %s',
-            (script_id,),
-        )
-        script_row = cur.fetchone()
-        if not script_row:
+        cur.execute(f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s', (script_id,))
+        row = cur.fetchone()
+        if not row:
             return jsonify({'error': '脚本不存在'}), 404
-
-        script_code = script_row[0]
-        output_format = script_row[1]
-
-        # Fetch collection data (single record or all), filtered by branch
-        if record_id:
-            cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
-                (collection, record_id, branch_id),
-            )
-        else:
-            cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s ORDER BY created_at',
-                (collection, branch_id),
-            )
-        rows = cur.fetchall()
-        data = []
-        for r in rows:
-            record = {'id': r[0]}
-            if r[2]:
-                record.update(r[2])
-            if r[3]:
-                ts = r[3]
-                if hasattr(ts, 'astimezone'):
-                    ts = ts.astimezone(timezone.utc)
-                record['createdAt'] = ts.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            data.append(record)
-
-        # Fetch page config fields
-        page_id = f'page-{collection}'
-        cur.execute(
-            'SELECT name, fields FROM page_configs WHERE id = %s', (page_id,)
-        )
-        pc_row = cur.fetchone()
-        page_name = pc_row[0] if pc_row else collection
-        fields = pc_row[1] if pc_row else []
-
-        # 解析跨页/跨项目引用，注入脚本 references（同时给记录补 _relations）
-        from utils.export_references import resolve_page_references
         try:
-            refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
-        except Exception:
-            refs = {}
-
-    try:
-        result_bytes, filename, content_type = run_export_script(
-            script_code, data, fields, page_name, output_format, references=refs
-        )
-    except Exception as e:
-        return jsonify({'error': f'脚本执行失败：{str(e)}'}), 400
+            result_bytes, filename, content_type = execute_bound_export(
+                cur, row, collection=collection, branch_id=branch_id, role=role, record_id=record_id)
+        except ExportBindingError as e:
+            return jsonify({'error': str(e)}), 400
+        except ExportPermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except Exception as e:
+            return jsonify({'error': f'脚本执行失败：{str(e)}'}), 400
 
     return Response(
-        result_bytes,
-        mimetype=content_type,
+        result_bytes, mimetype=content_type,
         headers={
             'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename)}",
             'Content-Length': str(len(result_bytes)),
@@ -569,18 +527,21 @@ def batch_export():
                     errors.append(f'任务 {idx + 1}: 缺少参数')
                     continue
 
-                # Fetch script
-                cur.execute(
-                    'SELECT script, output_format FROM export_scripts WHERE id = %s',
-                    (script_id,),
-                )
+                # Fetch script (with binding columns)
+                from utils.export_runner import check_binding, ExportBindingError, SCRIPT_SELECT
+                cur.execute(f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s',
+                            (script_id,))
                 script_row = cur.fetchone()
                 if not script_row:
                     errors.append(f'任务 {idx + 1}: 脚本 {script_id} 不存在')
                     continue
-
-                script_code = script_row[0]
-                output_format = script_row[1]
+                try:
+                    check_binding(script_row, collection=collection)
+                except ExportBindingError as e:
+                    errors.append(f'任务 {idx + 1}: {str(e)}')
+                    continue
+                script_code = script_row[2]
+                output_format = script_row[3]
 
                 # Fetch collection data, filtered by branch
                 cur.execute(

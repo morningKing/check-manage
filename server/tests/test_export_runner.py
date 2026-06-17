@@ -108,3 +108,26 @@ def test_rbac_denies_role_not_in_menu_roles():
                 execute_bound_export(cur, row, collection=coll, role='guest')
     finally:
         _cleanup([coll], [sid])
+
+
+def test_execute_endpoint_rejects_binding_mismatch():
+    from app import app
+    from auth import create_token
+    coll, other, sid = 'zzer_e', 'zzer_e2', 'zzer_s5'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, coll, [])
+            _seed_page(cur, other, [])
+            _seed_script(cur, sid, scope='page', bound_collection=coll)
+            conn.commit()
+        app.config['TESTING'] = True
+        tok = create_token({'id': 'u1', 'username': 'admin', 'role': 'admin'})
+        c = app.test_client()
+        resp = c.post('/exportScripts/execute',
+                      json={'scriptId': sid, 'collection': other, 'branchId': 'main'},
+                      headers={'Authorization': f'Bearer {tok}'})
+        assert resp.status_code == 400
+        assert '绑定' in resp.get_json()['error']
+    finally:
+        _cleanup([coll, other], [sid])
