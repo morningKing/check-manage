@@ -9,7 +9,7 @@ from mcp.server import Server
 
 from tools import (
     list_collections, save_artifact, read_upload, export_collection_excel, run_python,
-    query_collection, read_data_file,
+    query_collection, read_data_file, list_export_scripts,
 )
 
 _TOOLS = {
@@ -20,6 +20,7 @@ _TOOLS = {
     run_python.NAME: (run_python.TOOL, run_python.handle),
     query_collection.NAME: (query_collection.TOOL, query_collection.handle),
     read_data_file.NAME: (read_data_file.TOOL, read_data_file.handle),
+    list_export_scripts.NAME: (list_export_scripts.TOOL, list_export_scripts.handle),
 }
 
 
