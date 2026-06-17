@@ -693,6 +693,16 @@ def init_db():
             conn.commit()
             print("Added scope column to export_scripts table.")
 
+        # Migration: add binding columns to export_scripts (bound_collection / bound_menu_id)
+        for col in ('bound_collection', 'bound_menu_id'):
+            cur.execute("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'export_scripts' AND column_name = %s
+            """, (col,))
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE export_scripts ADD COLUMN {col} VARCHAR(100)")
+                print(f"Added {col} column to export_scripts table.")
+
         # Migration: add row_export_scripts column to page_configs
         cur.execute("""
             SELECT column_name FROM information_schema.columns
