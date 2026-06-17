@@ -32,7 +32,27 @@ def row_to_dict(row):
         'createdAt': format_ts(row[6]),
         'updatedAt': format_ts(row[7]),
         'scope': row[8] if len(row) > 8 else 'page',
+        'boundCollection': row[9] if len(row) > 9 else None,
+        'boundMenuId': row[10] if len(row) > 10 else None,
     }
+
+
+def _normalize_binding(scope, body):
+    """返回 (bound_collection, bound_menu_id)；新建必绑、与 scope 一致，否则抛 ValueError。"""
+    bc = (body.get('boundCollection') or '').strip() or None
+    bm = (body.get('boundMenuId') or '').strip() or None
+    if scope == 'menu':
+        if bc:
+            raise ValueError('菜单维度脚本只能绑定菜单，不能绑定数据页')
+        if not bm:
+            raise ValueError('菜单维度脚本必须绑定一个菜单')
+        return None, bm
+    else:
+        if bm:
+            raise ValueError('数据页维度脚本只能绑定数据页，不能绑定菜单')
+        if not bc:
+            raise ValueError('数据页维度脚本必须绑定一个数据页')
+        return bc, None
 
 
 @export_scripts_bp.route('/exportScripts', methods=['GET'])
@@ -41,10 +61,48 @@ def list_scripts():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope '
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
             'FROM export_scripts ORDER BY created_at'
         )
         rows = cur.fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@export_scripts_bp.route('/exportScripts/for-collection/<collection>', methods=['GET'])
+@login_required
+def scripts_for_collection(collection):
+    """该数据页可用的导出脚本 = 绑定到它的脚本 ∪ 该页 page_configs.export_scripts 里的未绑定脚本。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+            'scope, bound_collection, bound_menu_id FROM export_scripts '
+            'WHERE bound_collection = %s', (collection,))
+        rows = list(cur.fetchall())
+        bound_ids = {r[0] for r in rows}
+        # 兼容旧 opt-in：page_configs.export_scripts 里登记、但未绑定的脚本
+        cur.execute('SELECT export_scripts FROM page_configs WHERE id = %s', (f'page-{collection}',))
+        pc = cur.fetchone()
+        legacy_ids = [sid for sid in (pc[0] if pc and pc[0] else []) if sid not in bound_ids]
+        if legacy_ids:
+            cur.execute(
+                'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+                'scope, bound_collection, bound_menu_id FROM export_scripts '
+                'WHERE id = ANY(%s) AND bound_collection IS NULL AND bound_menu_id IS NULL',
+                (legacy_ids,))
+            rows.extend(cur.fetchall())
+        # 兼容旧行级 opt-in：page_configs.row_export_scripts 里登记、但未绑定的脚本
+        cur.execute('SELECT row_export_scripts FROM page_configs WHERE id = %s', (f'page-{collection}',))
+        pc_row = cur.fetchone()
+        seen_ids = {r[0] for r in rows}
+        row_legacy_ids = [sid for sid in (pc_row[0] if pc_row and pc_row[0] else []) if sid not in seen_ids]
+        if row_legacy_ids:
+            cur.execute(
+                'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+                'scope, bound_collection, bound_menu_id FROM export_scripts '
+                'WHERE id = ANY(%s) AND bound_collection IS NULL AND bound_menu_id IS NULL',
+                (row_legacy_ids,))
+            rows.extend(cur.fetchall())
     return jsonify([row_to_dict(r) for r in rows])
 
 
@@ -52,8 +110,10 @@ def list_scripts():
 @require_permission('admin.export_scripts')
 def create_script():
     body = request.get_json(force=True)
+    scope = body.get('scope', 'page')
     try:
-        validate_export_script_scope(body.get('scope', 'page'), body.get('script', ''))
+        validate_export_script_scope(scope, body.get('script', ''))
+        bound_collection, bound_menu_id = _normalize_binding(scope, body)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     script_id = body.get('id') or f'script-{uuid.uuid4().hex[:8]}'
@@ -61,24 +121,21 @@ def create_script():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'INSERT INTO export_scripts (id, name, description, language, script, output_format, created_at, updated_at, scope) '
-            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+            'INSERT INTO export_scripts (id, name, description, language, script, output_format, '
+            'created_at, updated_at, scope, bound_collection, bound_menu_id) '
+            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
             (script_id, body.get('name', ''), body.get('description', ''),
              body.get('language', 'python'), body.get('script', ''),
-             body.get('outputFormat', 'json'), now, now, body.get('scope', 'page')),
+             body.get('outputFormat', 'json'), now, now, scope, bound_collection, bound_menu_id),
         )
     log_operation('create', 'export_script', script_id, body.get('name', ''),
                   f'新增导出脚本「{body.get("name", "")}」')
     return jsonify({
-        'id': script_id,
-        'name': body.get('name', ''),
-        'description': body.get('description', ''),
-        'language': body.get('language', 'python'),
-        'script': body.get('script', ''),
-        'outputFormat': body.get('outputFormat', 'json'),
-        'scope': body.get('scope', 'page'),
-        'createdAt': format_ts(now),
-        'updatedAt': format_ts(now),
+        'id': script_id, 'name': body.get('name', ''), 'description': body.get('description', ''),
+        'language': body.get('language', 'python'), 'script': body.get('script', ''),
+        'outputFormat': body.get('outputFormat', 'json'), 'scope': scope,
+        'boundCollection': bound_collection, 'boundMenuId': bound_menu_id,
+        'createdAt': format_ts(now), 'updatedAt': format_ts(now),
     }), 201
 
 
@@ -127,12 +184,18 @@ def update_script(script_id):
         if 'scope' in body:
             sets.append('scope=%s')
             params.append(body['scope'])
+        if 'boundCollection' in body:
+            sets.append('bound_collection=%s')
+            params.append((body.get('boundCollection') or '').strip() or None)
+        if 'boundMenuId' in body:
+            sets.append('bound_menu_id=%s')
+            params.append((body.get('boundMenuId') or '').strip() or None)
         params.append(script_id)
         cur.execute(
             f'UPDATE export_scripts SET {", ".join(sets)} WHERE id=%s', params
         )
         cur.execute(
-            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope '
+            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
             'FROM export_scripts WHERE id = %s', (script_id,)
         )
         row = cur.fetchone()
@@ -437,80 +500,38 @@ def debug_script(script_id):
 @export_scripts_bp.route('/exportScripts/execute', methods=['POST'])
 @login_required
 def execute_script():
-    """Execute an export script and return the generated file."""
+    """Execute an export script (page scope) and return the generated file."""
+    from utils.export_runner import (
+        execute_bound_export, ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
+    )
+    from flask import g
     body = request.get_json(force=True)
     script_id = body.get('scriptId')
     collection = body.get('collection')
-    record_id = body.get('recordId')  # optional: for row-level export
-    branch_id = body.get('branchId', 'main')  # NEW: branch filter, default main
-
+    record_id = body.get('recordId')
+    branch_id = body.get('branchId', 'main')
     if not script_id or not collection:
         return jsonify({'error': '缺少参数 scriptId 或 collection'}), 400
 
+    role = (g.current_user or {}).get('role')
     with get_db() as conn:
         cur = conn.cursor()
-        # Fetch script
-        cur.execute(
-            'SELECT script, output_format FROM export_scripts WHERE id = %s',
-            (script_id,),
-        )
-        script_row = cur.fetchone()
-        if not script_row:
+        cur.execute(f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s', (script_id,))
+        row = cur.fetchone()
+        if not row:
             return jsonify({'error': '脚本不存在'}), 404
-
-        script_code = script_row[0]
-        output_format = script_row[1]
-
-        # Fetch collection data (single record or all), filtered by branch
-        if record_id:
-            cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND id = %s AND branch_id = %s',
-                (collection, record_id, branch_id),
-            )
-        else:
-            cur.execute(
-                'SELECT id, collection, data, created_at FROM dynamic_data WHERE collection = %s AND branch_id = %s ORDER BY created_at',
-                (collection, branch_id),
-            )
-        rows = cur.fetchall()
-        data = []
-        for r in rows:
-            record = {'id': r[0]}
-            if r[2]:
-                record.update(r[2])
-            if r[3]:
-                ts = r[3]
-                if hasattr(ts, 'astimezone'):
-                    ts = ts.astimezone(timezone.utc)
-                record['createdAt'] = ts.strftime('%Y-%m-%dT%H:%M:%S.000Z')
-            data.append(record)
-
-        # Fetch page config fields
-        page_id = f'page-{collection}'
-        cur.execute(
-            'SELECT name, fields FROM page_configs WHERE id = %s', (page_id,)
-        )
-        pc_row = cur.fetchone()
-        page_name = pc_row[0] if pc_row else collection
-        fields = pc_row[1] if pc_row else []
-
-        # 解析跨页/跨项目引用，注入脚本 references（同时给记录补 _relations）
-        from utils.export_references import resolve_page_references
         try:
-            refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
-        except Exception:
-            refs = {}
-
-    try:
-        result_bytes, filename, content_type = run_export_script(
-            script_code, data, fields, page_name, output_format, references=refs
-        )
-    except Exception as e:
-        return jsonify({'error': f'脚本执行失败：{str(e)}'}), 400
+            result_bytes, filename, content_type = execute_bound_export(
+                cur, row, collection=collection, branch_id=branch_id, role=role, record_id=record_id)
+        except ExportBindingError as e:
+            return jsonify({'error': str(e)}), 400
+        except ExportPermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except Exception as e:
+            return jsonify({'error': f'脚本执行失败：{str(e)}'}), 400
 
     return Response(
-        result_bytes,
-        mimetype=content_type,
+        result_bytes, mimetype=content_type,
         headers={
             'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename)}",
             'Content-Length': str(len(result_bytes)),
@@ -544,18 +565,21 @@ def batch_export():
                     errors.append(f'任务 {idx + 1}: 缺少参数')
                     continue
 
-                # Fetch script
-                cur.execute(
-                    'SELECT script, output_format FROM export_scripts WHERE id = %s',
-                    (script_id,),
-                )
+                # Fetch script (with binding columns)
+                from utils.export_runner import check_binding, ExportBindingError, SCRIPT_SELECT
+                cur.execute(f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s',
+                            (script_id,))
                 script_row = cur.fetchone()
                 if not script_row:
                     errors.append(f'任务 {idx + 1}: 脚本 {script_id} 不存在')
                     continue
-
-                script_code = script_row[0]
-                output_format = script_row[1]
+                try:
+                    check_binding(script_row, collection=collection)
+                except ExportBindingError as e:
+                    errors.append(f'任务 {idx + 1}: {str(e)}')
+                    continue
+                script_code = script_row[2]
+                output_format = script_row[3]
 
                 # Fetch collection data, filtered by branch
                 cur.execute(
