@@ -1012,9 +1012,12 @@ watch(
     if (formData.value.script === oldScaffold || formData.value.script === '') {
       formData.value.script = SCAFFOLD_TEMPLATES[newKey] || SCAFFOLD_TEMPLATES['json']
     }
-    // 切换 scope 时清除对侧绑定，避免提交错误绑定
-    formData.value.boundCollection = ''
-    formData.value.boundMenuId = ''
+    // 切换 scope 时只清除对侧绑定，保留匹配侧（避免编辑时抹掉刚加载的绑定）
+    if (newScope === 'menu') {
+      formData.value.boundCollection = ''
+    } else {
+      formData.value.boundMenuId = ''
+    }
   }
 )
 

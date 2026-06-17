@@ -91,6 +91,18 @@ def scripts_for_collection(collection):
                 'WHERE id = ANY(%s) AND bound_collection IS NULL AND bound_menu_id IS NULL',
                 (legacy_ids,))
             rows.extend(cur.fetchall())
+        # 兼容旧行级 opt-in：page_configs.row_export_scripts 里登记、但未绑定的脚本
+        cur.execute('SELECT row_export_scripts FROM page_configs WHERE id = %s', (f'page-{collection}',))
+        pc_row = cur.fetchone()
+        seen_ids = {r[0] for r in rows}
+        row_legacy_ids = [sid for sid in (pc_row[0] if pc_row and pc_row[0] else []) if sid not in seen_ids]
+        if row_legacy_ids:
+            cur.execute(
+                'SELECT id, name, description, language, script, output_format, created_at, updated_at, '
+                'scope, bound_collection, bound_menu_id FROM export_scripts '
+                'WHERE id = ANY(%s) AND bound_collection IS NULL AND bound_menu_id IS NULL',
+                (row_legacy_ids,))
+            rows.extend(cur.fetchall())
     return jsonify([row_to_dict(r) for r in rows])
 
 
