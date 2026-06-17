@@ -385,6 +385,8 @@ onMounted(async () => {
     loginTitle.value = systemConfigStore.systemConfig?.loginTitle || ''
     loginSubtitle.value = systemConfigStore.systemConfig?.loginSubtitle || ''
     loginFooter.value = systemConfigStore.systemConfig?.loginFooter || ''
+    // 配置页需要全部区块（含未启用），否则取消勾选后刷新该区块会从列表消失、无法再启用
+    await systemConfigStore.fetchWidgets(true)
     widgetsList.value = [...systemConfigStore.widgets].sort((a, b) => a.order - b.order)
   } catch {
     ElMessage.error('加载配置失败')
