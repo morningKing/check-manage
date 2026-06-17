@@ -263,10 +263,19 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
                             record['createdAt'] = ts.strftime('%Y-%m-%dT%H:%M:%S.000Z')
                         data.append(record)
 
+                    # 解析该页引用：补取被引用记录（含跨项目，按依赖版本/分支）+ 回挂 _relations。
+                    # 失败不阻断导出（退化为裸 ID）。
+                    try:
+                        from utils.export_references import resolve_page_references
+                        page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
+                    except Exception as ref_err:
+                        page_refs = {}
+                        errors.append(f'「{menu_name}」→「{page_name}」引用解析告警：{ref_err}')
+
                     # Execute export script
                     try:
                         result_bytes, filename, content_type = run_export_script(
-                            script_code, data, fields, page_name, output_format
+                            script_code, data, fields, page_name, output_format, references=page_refs
                         )
                     except Exception as e:
                         errors.append(f'「{menu_name}」→「{page_name}」: {str(e)}')
