@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
+from utils.permissions import can_admin
 import psycopg2.extras
 import json
 import time
@@ -27,17 +28,34 @@ def _row_to_json(row):
 @home_widgets_bp.route('/home-widgets', methods=['GET'])
 @login_required
 def list_home_widgets():
-    """Get home widgets list sorted by order. All roles can read."""
+    """Get home widgets list sorted by order.
+
+    Default (home page): only enabled widgets visible to the current role.
+    ``?all=true`` (admin config page): every widget unfiltered, so a disabled
+    widget can still be re-enabled. Gated by the ``admin.home_widgets`` capability
+    — non-admins always get the filtered list regardless of the param.
+    """
     user = g.current_user
     user_role = user.get('role', 'guest')
+    want_all = request.args.get('all', 'false').lower() == 'true'
+    admin_all = want_all and can_admin(user_role, 'admin.home_widgets')
 
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(
-            'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
-            'FROM home_widgets WHERE enabled = TRUE ORDER BY "order"'
-        )
+        if admin_all:
+            cur.execute(
+                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
+                'FROM home_widgets ORDER BY "order"'
+            )
+        else:
+            cur.execute(
+                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
+                'FROM home_widgets WHERE enabled = TRUE ORDER BY "order"'
+            )
         rows = cur.fetchall()
+
+    if admin_all:
+        return jsonify([_row_to_json(row) for row in rows])
 
     # Filter by visible_roles
     widgets = []

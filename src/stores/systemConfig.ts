@@ -84,10 +84,11 @@ export const useSystemConfigStore = defineStore('systemConfig', () => {
 
   /**
    * 加载首页区块
+   * @param all true 时拉取全部区块（含未启用，供配置页使用）；默认仅启用且当前角色可见
    */
-  async function fetchWidgets(): Promise<void> {
+  async function fetchWidgets(all = false): Promise<void> {
     try {
-      const result = await fetchWidgetsApi()
+      const result = await fetchWidgetsApi(all)
       widgets.value = result
     } catch (error) {
       console.error('Failed to fetch widgets:', error)

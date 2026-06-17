@@ -19,9 +19,9 @@ export function updateSystemConfig(data: SystemConfigUpdate) {
   return put<SystemConfig>('/system-config', data)
 }
 
-/** 获取首页区块列表 */
-export function getHomeWidgets() {
-  return get<WidgetConfig[]>('/home-widgets')
+/** 获取首页区块列表。all=true 时返回全部区块（含未启用，需 admin.home_widgets 权限），供配置页使用 */
+export function getHomeWidgets(all = false) {
+  return get<WidgetConfig[]>('/home-widgets', all ? { all: true } : undefined)
 }
 
 /** 批量更新区块配置 */

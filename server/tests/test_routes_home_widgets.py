@@ -144,6 +144,63 @@ class TestListHomeWidgets:
         assert len(data) == 1
         assert data[0]['id'] == 'stats'
 
+    def _disabled_and_enabled_rows(self):
+        return [
+            {
+                'id': 'welcome', 'widget_type': 'welcome', 'title': '欢迎', 'content': {},
+                'enabled': False, 'order': 1, 'visible_roles': ['admin'],
+                'created_at': now, 'updated_at': now,
+            },
+            {
+                'id': 'stats', 'widget_type': 'stats', 'title': '统计', 'content': {},
+                'enabled': True, 'order': 2, 'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now, 'updated_at': now,
+            },
+        ]
+
+    def test_get_all_widgets_admin_includes_disabled(self, setup):
+        """?all=true（管理员）返回全部区块，含未启用 —— 取消勾选后仍可在配置页重新启用"""
+        client, mock_cursor, admin_h, _ = setup
+        import utils.permissions as _perms
+        _perms.invalidate_cache()
+        _perms._cache['admin'] = {
+            'is_superuser': True, 'default_page_access': 'write',
+            'admin_keys': set(), 'page_perms': {},
+        }
+        try:
+            mock_cursor.fetchall.return_value = self._disabled_and_enabled_rows()
+            resp = client.get('/home-widgets?all=true', headers=admin_h)
+            assert resp.status_code == 200
+            data = resp.get_json()
+            ids = {w['id'] for w in data}
+            assert ids == {'welcome', 'stats'}  # 含未启用的 welcome
+            # 验证执行的是不带 enabled 过滤的 SQL
+            sql = ' '.join(str(c.args[0]) for c in mock_cursor.execute.call_args_list if c.args)
+            assert 'WHERE enabled = TRUE' not in sql
+        finally:
+            _perms.invalidate_cache()
+
+    def test_get_all_widgets_non_admin_still_filtered(self, setup):
+        """非管理员即便带 ?all=true 也只拿到启用且角色可见的区块（权限不被绕过）"""
+        client, mock_cursor, _, dev_h = setup
+        import utils.permissions as _perms
+        _perms.invalidate_cache()
+        _perms._cache['developer'] = {
+            'is_superuser': False, 'default_page_access': 'read',
+            'admin_keys': set(), 'page_perms': {},
+        }
+        try:
+            mock_cursor.fetchall.return_value = self._disabled_and_enabled_rows()
+            resp = client.get('/home-widgets?all=true', headers=dev_h)
+            assert resp.status_code == 200
+            data = resp.get_json()
+            ids = {w['id'] for w in data}
+            assert ids == {'stats'}  # welcome 未启用且仅 admin 可见 -> 被过滤
+            sql = ' '.join(str(c.args[0]) for c in mock_cursor.execute.call_args_list if c.args)
+            assert 'WHERE enabled = TRUE' in sql
+        finally:
+            _perms.invalidate_cache()
+
 
 class TestCreateHomeWidget:
     def test_create_custom_widget(self, setup):
