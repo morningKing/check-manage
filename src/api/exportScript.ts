@@ -6,6 +6,10 @@ export function getExportScripts() {
   return get<ExportScript[]>('/exportScripts')
 }
 
+export function getExportScriptsForCollection(collection: string) {
+  return get<ExportScript[]>(`/exportScripts/for-collection/${collection}`)
+}
+
 export function createExportScript(data: Partial<ExportScript>) {
   return post<ExportScript>('/exportScripts', data)
 }

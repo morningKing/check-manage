@@ -925,7 +925,7 @@ import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
 import { importPageRecords } from '@/utils/importPageRecords'
 import { withBatch } from '@/utils/batch'
-import { getExportScripts, executeExportScript } from '@/api/exportScript'
+import { getExportScriptsForCollection, executeExportScript } from '@/api/exportScript'
 import { listWorkflows, startWorkflow } from '@/api/workflow'
 import type { WorkflowDefinition } from '@/types/workflow'
 import { getCurrentProjectBranch, switchProjectBranch, listProjectVersions, switchToMainProjectBranch } from '@/api/projectVersion'
@@ -1381,21 +1381,17 @@ const kanbanGroupOptions = computed<FieldOption[]>(() => {
 })
 
 /**
- * 当前页面绑定的导出脚本
+ * 当前页面绑定的导出脚本（page/menu scope，来自 for-collection 端点）
  */
 const boundExportScripts = computed<ExportScript[]>(() => {
-  const ids = pageConfig.value?.exportScripts || []
-  if (ids.length === 0) return []
-  return allExportScripts.value.filter(s => ids.includes(s.id))
+  return allExportScripts.value.filter(s => s.scope !== 'row')
 })
 
 /**
- * 当前页面绑定的行级导出脚本
+ * 当前页面绑定的行级导出脚本（row scope，来自 for-collection 端点）
  */
 const boundRowExportScripts = computed<ExportScript[]>(() => {
-  const ids = pageConfig.value?.rowExportScripts || []
-  if (ids.length === 0) return []
-  return allExportScripts.value.filter(s => ids.includes(s.id))
+  return allExportScripts.value.filter(s => s.scope === 'row')
 })
 
 /**
@@ -3192,6 +3188,13 @@ watch(pageId, (newPageId) => {
   columnViewStore.clearState()
   if (newPageId) {
     loadColumnViews()
+    // 重新加载当前 collection 绑定的导出脚本
+    const col = newPageId.replace('page-', '')
+    getExportScriptsForCollection(col).then(list => {
+      allExportScripts.value = list
+    }).catch(() => {
+      allExportScripts.value = []
+    })
   }
 })
 
@@ -3294,11 +3297,13 @@ onActivated(async () => {
     }
   }
 
-  // 加载导出脚本列表（用于绑定展示）
+  // 加载当前 collection 绑定的导出脚本（binding-driven）
   try {
-    allExportScripts.value = await getExportScripts()
+    if (collection.value) {
+      allExportScripts.value = await getExportScriptsForCollection(collection.value)
+    }
   } catch {
-    // 非管理员可能无权访问，忽略错误
+    allExportScripts.value = []
   }
 })
 </script>

@@ -42,6 +42,7 @@
                   <el-tag size="small" :type="scopeTagType(script.scope)">
                     {{ scopeLabel(script.scope) }}
                   </el-tag>
+                  <el-tag v-if="!script.boundCollection && !script.boundMenuId" type="warning" size="small">未绑定</el-tag>
                 </div>
                 <div class="script-id" @click.stop="copyId(script.id)" title="点击复制 ID">
                   {{ script.id }}
@@ -124,6 +125,32 @@
                   <template v-else-if="formData.scope === 'menu'">
                     菜单级导出，接收菜单下所有数据表的数据，可统一处理
                   </template>
+                </div>
+              </el-form-item>
+
+              <el-form-item label="绑定目标" required>
+                <el-select
+                  v-if="formData.scope !== 'menu'"
+                  v-model="formData.boundCollection"
+                  placeholder="选择绑定的数据页"
+                  filterable
+                  clearable
+                  style="width: 100%"
+                >
+                  <el-option v-for="opt in collectionOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <el-select
+                  v-else
+                  v-model="formData.boundMenuId"
+                  placeholder="选择绑定的菜单"
+                  filterable
+                  clearable
+                  style="width: 100%"
+                >
+                  <el-option v-for="opt in bindingMenuOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                </el-select>
+                <div class="form-tip">
+                  导出脚本专项专用：只能用于其绑定的{{ formData.scope === 'menu' ? '菜单' : '数据页' }}
                 </div>
               </el-form-item>
 
@@ -639,6 +666,7 @@ import { ElMessage } from 'element-plus'
 import { Plus, Upload } from '@element-plus/icons-vue'
 import { getPageConfigList } from '@/api/page'
 import { getAvailableExportMenus } from '@/api/menu'
+import { useMenuStore } from '@/stores'
 import { Codemirror } from 'vue-codemirror'
 import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -867,6 +895,8 @@ const formData = ref({
   outputFormat: 'json',
   scope: 'page' as 'page' | 'row' | 'menu',
   script: '',
+  boundCollection: '' as string,
+  boundMenuId: '' as string,
 })
 const saveLoading = ref(false)
 const testLoading = ref(false)
@@ -902,6 +932,24 @@ function formatVars(vars: Record<string, any>): string {
     return String(vars)
   }
 }
+
+// ==================== 绑定目标选项 ====================
+
+const bindingMenuStore = useMenuStore()
+
+const collectionOptions = computed(() => {
+  const dataMenus = bindingMenuStore.menuList.filter(m => m.menuType === 'data' && m.pageId)
+  return dataMenus.map(m => ({
+    value: m.pageId?.replace(/^page-/, '') || '',
+    label: m.name,
+  }))
+})
+
+const bindingMenuOptions = computed(() => {
+  return bindingMenuStore.menuList
+    .filter(m => m.name && ['workspace', 'project'].includes(m.menuType || ''))
+    .map(m => ({ value: m.id, label: m.name }))
+})
 
 // ==================== 表单校验 ====================
 
@@ -953,7 +1001,7 @@ watch(
   }
 )
 
-// scope 变化时也切换脚手架
+// scope 变化时也切换脚手架 + 清除对侧绑定
 watch(
   () => formData.value.scope,
   (newScope, oldScope) => {
@@ -964,6 +1012,9 @@ watch(
     if (formData.value.script === oldScaffold || formData.value.script === '') {
       formData.value.script = SCAFFOLD_TEMPLATES[newKey] || SCAFFOLD_TEMPLATES['json']
     }
+    // 切换 scope 时清除对侧绑定，避免提交错误绑定
+    formData.value.boundCollection = ''
+    formData.value.boundMenuId = ''
   }
 )
 
@@ -994,6 +1045,8 @@ function handleSelect(script: ExportScript) {
     outputFormat: script.outputFormat,
     scope: script.scope || 'page',
     script: script.script,
+    boundCollection: script.boundCollection || '',
+    boundMenuId: script.boundMenuId || '',
   }
   testResult.value = null
 }
@@ -1006,6 +1059,8 @@ function handleAdd() {
     outputFormat: 'json',
     scope: 'page',
     script: SCAFFOLD_TEMPLATES['json'],
+    boundCollection: '',
+    boundMenuId: '',
   }
   testResult.value = null
 }
@@ -1044,6 +1099,8 @@ function handleFileUpload(event: Event) {
         outputFormat: 'json',
         scope: 'page',
         script: content,
+        boundCollection: '',
+        boundMenuId: '',
       }
       testResult.value = null
       ElMessage.success('脚本已加载，请填写信息后保存')
@@ -1069,26 +1126,35 @@ async function handleSave() {
   }
 
 
+  const isCreate = currentScriptId.value === '__new__'
+  if (isCreate) {
+    if (formData.value.scope !== 'menu' && !formData.value.boundCollection) {
+      ElMessage.warning('请先绑定一个数据页')
+      return
+    }
+    if (formData.value.scope === 'menu' && !formData.value.boundMenuId) {
+      ElMessage.warning('请先绑定一个菜单')
+      return
+    }
+  }
+
   saveLoading.value = true
   try {
-    if (currentScriptId.value === '__new__') {
-      const created = await createExportScript({
-        name: formData.value.name,
-        description: formData.value.description,
-        outputFormat: formData.value.outputFormat,
-        scope: formData.value.scope,
-        script: formData.value.script,
-      })
+    const payload: Partial<ExportScript> = {
+      name: formData.value.name,
+      description: formData.value.description,
+      outputFormat: formData.value.outputFormat,
+      scope: formData.value.scope,
+      script: formData.value.script,
+      boundCollection: formData.value.boundCollection || null,
+      boundMenuId: formData.value.boundMenuId || null,
+    }
+    if (isCreate) {
+      const created = await createExportScript(payload)
       currentScriptId.value = created.id
       ElMessage.success('创建成功')
     } else {
-      await updateExportScript(currentScriptId.value!, {
-        name: formData.value.name,
-        description: formData.value.description,
-        outputFormat: formData.value.outputFormat,
-        scope: formData.value.scope,
-        script: formData.value.script,
-      })
+      await updateExportScript(currentScriptId.value!, payload)
       ElMessage.success('保存成功')
     }
     await loadScripts()
