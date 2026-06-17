@@ -282,6 +282,58 @@ class TestCreateHomeWidget:
         data = resp.get_json()
         assert data['widgetType'] == 'data-card'
 
+    def test_create_chart_widget(self, setup):
+        """测试创建新增的 chart 类型区块（验证新类型被白名单放行）"""
+        client, mock_cursor, admin_h, _ = setup
+        content = {'collection': 'daily-record', 'chartType': 'bar', 'groupField': 'result', 'limit': 20}
+        mock_cursor.fetchone.side_effect = [
+            {'max_order': 7},
+            {
+                'id': 'custom-chart-aa11bb22',
+                'widget_type': 'chart',
+                'title': '图表',
+                'content': content,
+                'enabled': True,
+                'order': 8,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now,
+                'updated_at': now,
+            }
+        ]
+        resp = client.post('/home-widgets',
+            data=json.dumps({'widgetType': 'chart', 'title': '图表', 'content': content}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()['widgetType'] == 'chart'
+
+    def test_create_announcement_widget(self, setup):
+        """测试创建新增的 announcement 类型区块"""
+        client, mock_cursor, admin_h, _ = setup
+        content = {'title': '公告', 'body': '正文', 'level': 'warning', 'closable': True}
+        mock_cursor.fetchone.side_effect = [
+            {'max_order': 8},
+            {
+                'id': 'custom-announcement-cc33dd44',
+                'widget_type': 'announcement',
+                'title': '公告',
+                'content': content,
+                'enabled': True,
+                'order': 9,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now,
+                'updated_at': now,
+            }
+        ]
+        resp = client.post('/home-widgets',
+            data=json.dumps({'widgetType': 'announcement', 'title': '公告', 'content': content}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()['widgetType'] == 'announcement'
+
 
 class TestDeleteHomeWidget:
     def test_delete_custom_widget(self, setup):

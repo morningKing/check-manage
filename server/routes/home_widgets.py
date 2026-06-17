@@ -127,8 +127,12 @@ def create_home_widget():
     body = request.get_json(force=True)
     widget_type = body.get('widgetType', '')
 
-    if widget_type not in ('custom-markdown', 'data-card', 'quick-form'):
-        return jsonify({"error": "Only custom-markdown, data-card or quick-form types are allowed"}), 400
+    allowed_types = (
+        'custom-markdown', 'data-card', 'quick-form',
+        'chart', 'todo', 'activity', 'announcement',
+    )
+    if widget_type not in allowed_types:
+        return jsonify({"error": f"Widget type must be one of: {', '.join(allowed_types)}"}), 400
 
     # Generate ID: custom-{type}-{uuid8}
     widget_id = f'custom-{widget_type}-{uuid.uuid4().hex[:8]}'

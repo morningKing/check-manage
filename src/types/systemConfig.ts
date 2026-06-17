@@ -11,6 +11,10 @@ export type WidgetType =
   | 'custom-markdown'
   | 'data-card'
   | 'quick-form'
+  | 'chart'
+  | 'todo'
+  | 'activity'
+  | 'announcement'
 
 /** 统计项类型 */
 export interface StatsItem {
@@ -58,6 +62,42 @@ export interface QuickFormContent {
   displayField?: string
 }
 
+/** 图表区块内容配置 */
+export interface ChartContent {
+  /** 数据页集合名 */
+  collection: string
+  /** 图表类型 */
+  chartType: 'bar' | 'pie' | 'line'
+  /** 分组字段（按其取值分组计数） */
+  groupField: string
+  /** 取前 N 个分组，默认 20 */
+  limit?: number
+}
+
+/** 我的待办区块内容配置 */
+export interface TodoContent {
+  /** 最多显示条数，默认 5 */
+  limit?: number
+}
+
+/** 最近动态区块内容配置 */
+export interface ActivityContent {
+  /** 最多显示条数，默认 8 */
+  limit?: number
+}
+
+/** 公告区块内容配置 */
+export interface AnnouncementContent {
+  /** 标题 */
+  title?: string
+  /** 正文（Markdown） */
+  body?: string
+  /** 提示级别（决定配色） */
+  level?: 'info' | 'success' | 'warning' | 'danger'
+  /** 是否允许用户关闭（关闭状态记在本地） */
+  closable?: boolean
+}
+
 /** Widget 内容类型映射 */
 export interface WidgetContentMap {
   welcome: { heading: string; description: string }
@@ -67,6 +107,10 @@ export interface WidgetContentMap {
   'custom-markdown': { markdown: string }
   'data-card': DataCardContent
   'quick-form': QuickFormContent
+  chart: ChartContent
+  todo: TodoContent
+  activity: ActivityContent
+  announcement: AnnouncementContent
 }
 
 /** Widget 配置 */

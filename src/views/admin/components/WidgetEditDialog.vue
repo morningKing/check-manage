@@ -263,6 +263,88 @@
       </el-form-item>
     </el-form>
 
+    <!-- chart 类型 -->
+    <el-form v-if="widget?.widgetType === 'chart'" label-width="90px">
+      <el-form-item label="数据页" required>
+        <el-select
+          v-model="form.content.collection"
+          placeholder="选择数据页"
+          filterable
+          style="width: 100%"
+          @change="form.content.groupField = ''"
+        >
+          <el-option v-for="opt in collectionOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="分组字段" required>
+        <el-select
+          v-model="form.content.groupField"
+          placeholder="按该字段取值分组计数"
+          filterable
+          style="width: 100%"
+          :disabled="!form.content.collection"
+        >
+          <el-option v-for="opt in chartFieldOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <div class="form-hint">按该字段的不同取值分组，统计每组的记录数量</div>
+      </el-form-item>
+      <el-form-item label="图表类型">
+        <el-radio-group v-model="form.content.chartType">
+          <el-radio value="bar">柱状图</el-radio>
+          <el-radio value="pie">饼图</el-radio>
+          <el-radio value="line">折线图</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="分组上限">
+        <el-input-number v-model="form.content.limit" :min="1" :max="50" />
+        <div class="form-hint">最多取前 N 个分组（按数量降序）</div>
+      </el-form-item>
+    </el-form>
+
+    <!-- todo 类型 -->
+    <el-form v-if="widget?.widgetType === 'todo'" label-width="90px">
+      <el-form-item label="显示条数">
+        <el-input-number v-model="form.content.limit" :min="1" :max="20" />
+        <div class="form-hint">展示当前用户工作流待办的前 N 条</div>
+      </el-form-item>
+    </el-form>
+
+    <!-- activity 类型 -->
+    <el-form v-if="widget?.widgetType === 'activity'" label-width="90px">
+      <el-form-item label="显示条数">
+        <el-input-number v-model="form.content.limit" :min="1" :max="30" />
+        <div class="form-hint">展示最近 N 条操作日志（需「操作日志」权限，无权限的角色看到空状态）</div>
+      </el-form-item>
+    </el-form>
+
+    <!-- announcement 类型 -->
+    <el-form v-if="widget?.widgetType === 'announcement'" label-width="90px">
+      <el-form-item label="标题">
+        <el-input v-model="form.content.title" placeholder="公告标题" />
+      </el-form-item>
+      <el-form-item label="级别">
+        <el-radio-group v-model="form.content.level">
+          <el-radio value="info">信息</el-radio>
+          <el-radio value="success">成功</el-radio>
+          <el-radio value="warning">警告</el-radio>
+          <el-radio value="danger">危险</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      <el-form-item label="正文">
+        <MdEditor
+          v-model="form.content.body"
+          language="zh-CN"
+          :preview="false"
+          :style="{ height: '260px' }"
+          placeholder="支持 Markdown..."
+        />
+      </el-form-item>
+      <el-form-item label="可关闭">
+        <el-switch v-model="form.content.closable" />
+        <div class="form-hint">开启后用户可关闭该公告（关闭状态记在本地，公告内容更新后重新出现）</div>
+      </el-form-item>
+    </el-form>
+
     <!-- 通用配置 -->
     <el-divider content-position="left">显示配置</el-divider>
     <el-form label-width="80px">
@@ -323,7 +405,11 @@ const dialogTitle = computed(() => {
     'system-info': '系统说明',
     'custom-markdown': 'Markdown区块',
     'data-card': '数据卡片',
-    'quick-form': '快速录入'
+    'quick-form': '快速录入',
+    chart: '图表',
+    todo: '我的待办',
+    activity: '最近动态',
+    announcement: '公告'
   }
   return `编辑${typeLabels[props.widget.widgetType] || '区块'}`
 })
@@ -373,6 +459,15 @@ const fieldOptions = computed(() => {
     value: f.fieldName,
     label: f.label || f.fieldName
   }))
+})
+
+// chart 区块所选数据页的字段（用于选择分组字段）
+const chartFieldOptions = computed(() => {
+  const collection = form.value.content?.collection
+  if (!collection) return []
+  const pageConfig = pageConfigStore.pageConfigs.find(p => p.id === `page-${collection}`)
+  if (!pageConfig?.fields) return []
+  return pageConfig.fields.map(f => ({ value: f.fieldName, label: f.label || f.fieldName }))
 })
 
 // quick-form 目标数据页的可录入字段（排除自动生成字段）
@@ -469,6 +564,23 @@ watch(
         content.targetCollection = content.targetCollection || ''
         content.fields = Array.isArray(content.fields) ? content.fields : []
         content.displayField = content.displayField || ''
+      }
+      // 确保 chart 有基础结构
+      if (w.widgetType === 'chart') {
+        content.collection = content.collection || ''
+        content.chartType = content.chartType || 'bar'
+        content.groupField = content.groupField || ''
+        content.limit = content.limit || 20
+      }
+      // todo / activity 仅需 limit
+      if (w.widgetType === 'todo') content.limit = content.limit || 5
+      if (w.widgetType === 'activity') content.limit = content.limit || 8
+      // 确保 announcement 有基础结构
+      if (w.widgetType === 'announcement') {
+        content.title = content.title || ''
+        content.body = content.body || ''
+        content.level = content.level || 'info'
+        content.closable = content.closable ?? false
       }
       form.value = {
         title: w.title || '',

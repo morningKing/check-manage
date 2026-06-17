@@ -102,6 +102,18 @@
                 <el-dropdown-item command="quick-form">
                   快速录入表单
                 </el-dropdown-item>
+                <el-dropdown-item command="chart" divided>
+                  图表区块
+                </el-dropdown-item>
+                <el-dropdown-item command="todo">
+                  我的待办
+                </el-dropdown-item>
+                <el-dropdown-item command="activity">
+                  最近动态
+                </el-dropdown-item>
+                <el-dropdown-item command="announcement">
+                  公告
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -220,7 +232,11 @@ const WIDGET_TYPE_LABELS: Record<string, string> = {
   'system-info': '系统说明',
   'custom-markdown': 'Markdown',
   'data-card': '数据卡片',
-  'quick-form': '快速录入'
+  'quick-form': '快速录入',
+  chart: '图表',
+  todo: '我的待办',
+  activity: '最近动态',
+  announcement: '公告'
 }
 
 const WIDGET_DEFAULT_TITLES: Record<string, string> = {
@@ -230,7 +246,11 @@ const WIDGET_DEFAULT_TITLES: Record<string, string> = {
   'system-info': '系统说明',
   'custom-markdown': 'Markdown区块',
   'data-card': '数据卡片',
-  'quick-form': '快速录入'
+  'quick-form': '快速录入',
+  chart: '图表',
+  todo: '我的待办',
+  activity: '最近动态',
+  announcement: '公告'
 }
 
 // ==================== 方法 ====================
@@ -250,11 +270,13 @@ function getTagType(type: WidgetType): 'success' | 'warning' | 'info' | '' {
   return ''
 }
 
+const CUSTOM_WIDGET_TYPES = [
+  'custom-markdown', 'data-card', 'quick-form',
+  'chart', 'todo', 'activity', 'announcement',
+]
+
 function isCustomWidget(widget: WidgetConfig): boolean {
-  return widget.id.startsWith('custom-') ||
-    widget.widgetType === 'custom-markdown' ||
-    widget.widgetType === 'data-card' ||
-    widget.widgetType === 'quick-form'
+  return widget.id.startsWith('custom-') || CUSTOM_WIDGET_TYPES.includes(widget.widgetType)
 }
 
 // ==================== 事件处理 ====================
@@ -331,13 +353,21 @@ async function handleSaveWidget(data: Partial<WidgetConfig>) {
   }
 }
 
-async function handleAddWidget(type: 'custom-markdown' | 'data-card' | 'quick-form') {
+const WIDGET_DEFAULT_CONTENT: Record<string, Record<string, any>> = {
+  'custom-markdown': { markdown: '' },
+  'quick-form': { targetCollection: '', buttonLabel: '快速录入' },
+  'data-card': { dataSource: { collection: '' }, displayType: 'count' },
+  chart: { collection: '', chartType: 'bar', groupField: '', limit: 20 },
+  todo: { limit: 5 },
+  activity: { limit: 8 },
+  announcement: { title: '公告', body: '', level: 'info', closable: false },
+}
+
+type CreatableWidgetType = 'custom-markdown' | 'data-card' | 'quick-form' | 'chart' | 'todo' | 'activity' | 'announcement'
+
+async function handleAddWidget(type: CreatableWidgetType) {
   try {
-    const defaultContent = type === 'custom-markdown'
-      ? { markdown: '' }
-      : type === 'quick-form'
-        ? { targetCollection: '', buttonLabel: '快速录入' }
-        : { dataSource: { collection: '' }, displayType: 'count' }
+    const defaultContent = WIDGET_DEFAULT_CONTENT[type] || {}
 
     await systemConfigStore.createWidget({
       widgetType: type,
