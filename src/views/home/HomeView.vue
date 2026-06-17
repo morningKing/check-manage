@@ -13,6 +13,7 @@
         :is="getWidgetComponent(widget.widgetType)"
         :content="widget.content"
         :title="widget.title"
+        :widget-id="widget.id"
         class="widget-wrapper"
       />
     </template>

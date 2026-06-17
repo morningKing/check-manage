@@ -140,7 +140,7 @@ export const useSystemConfigStore = defineStore('systemConfig', () => {
    * 创建自定义区块
    */
   async function createWidget(data: {
-    widgetType: 'custom-markdown' | 'data-card' | 'quick-form'
+    widgetType: 'custom-markdown' | 'data-card' | 'quick-form' | 'chart' | 'todo' | 'activity' | 'announcement'
     title?: string
     content: Record<string, any>
     visibleRoles?: string[]
