@@ -9,8 +9,8 @@ import json
 import zipfile
 import psycopg2.extras
 from db import get_db
-from utils.export_references import resolve_references
-from utils.script_runner import run_menu_export_script
+from utils.export_references import resolve_references, resolve_page_references
+from utils.script_runner import run_menu_export_script, run_export_script
 from utils.menu_export import execute_menu_export
 
 
@@ -188,6 +188,59 @@ def test_run_menu_export_script_injects_references():
         assert parsed == [{'id': 's1', 'refName': '苹果'}]
     finally:
         _cleanup([src, tgt])
+
+
+def test_resolve_page_references_resolves_inline_reference():
+    """页面级便捷封装：单页 records 的内联 reference 能解析到被引用记录。"""
+    src, tgt = 'zzpgsrc', 'zzpgtgt'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, tgt, [{'fieldName': 'name', 'controlType': 'text'}])
+            _ins(cur, tgt, 'zzpg-t1', {'name': '客户A'})
+            conn.commit()
+            fields = [{'fieldName': 'ref', 'controlType': 'reference',
+                       'referenceConfig': {'targetCollection': tgt}}]
+            records = [{'id': 's1', 'ref': 'zzpg-t1'}]
+            refs = resolve_page_references(cur, src, records, fields, export_branch='main')
+        assert refs[tgt]['zzpg-t1']['name'] == '客户A'
+    finally:
+        _cleanup([src, tgt])
+
+
+def test_run_export_script_injects_references():
+    """端到端（页面级）：page 脚本用注入的 references join 被引用页（修复前 references 缺失）。"""
+    src, tgt = 'zzpesrc', 'zzpetgt'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, tgt, [{'fieldName': 'name', 'controlType': 'text'}])
+            _ins(cur, tgt, 'zzpe-t1', {'name': '香蕉'})
+            conn.commit()
+            fields = [{'fieldName': 'ref', 'controlType': 'reference',
+                       'referenceConfig': {'targetCollection': tgt}}]
+            data = [{'id': 's1', 'ref': 'zzpe-t1'}]
+            refs = resolve_page_references(cur, src, data, fields, export_branch='main')
+        script = (
+            "out = []\n"
+            "for r in data:\n"
+            "    ref = references.get('zzpetgt', {}).get(r.get('ref'))\n"
+            "    out.append({'id': r['id'], 'refName': ref['name'] if ref else None})\n"
+            "result = json.dumps(out, ensure_ascii=False)\n"
+        )
+        result_bytes, _, _ = run_export_script(script, data, fields, '测试页', 'json', references=refs)
+        assert json.loads(result_bytes) == [{'id': 's1', 'refName': '香蕉'}]
+    finally:
+        _cleanup([src, tgt])
+
+
+def test_run_export_script_references_defaults_empty():
+    """未传 references 时脚本内 references 为空字典（向后兼容，不报 NameError）。"""
+    script = (
+        "result = json.dumps({'hasRefs': bool(references), 'n': len(references)})\n"
+    )
+    result_bytes, _, _ = run_export_script(script, [], [], '测试页', 'json')
+    assert json.loads(result_bytes) == {'hasRefs': False, 'n': 0}
 
 
 def test_execute_menu_export_resolves_cross_page_reference():

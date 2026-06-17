@@ -282,6 +282,15 @@ def test_script(script_id):
             data = sample_data
             fields = sample_fields
 
+        # 页面级脚本：解析引用以便预览时也能 join（菜单级在上面分支单独处理）
+        page_refs = {}
+        if scope != 'menu' and collection:
+            from utils.export_references import resolve_page_references
+            try:
+                page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
+            except Exception:
+                page_refs = {}
+
     try:
         if scope == 'menu':
             menu_data = [{
@@ -299,7 +308,7 @@ def test_script(script_id):
                 return jsonify({'success': False, 'error': '脚本未生成任何文件'}), 400
         else:
             result_bytes, filename, content_type = run_export_script(
-                script_code, data, fields, page_name, output_format
+                script_code, data, fields, page_name, output_format, references=page_refs
             )
 
         preview = result_bytes[:5000].decode('utf-8', errors='replace')
@@ -379,6 +388,7 @@ def debug_script(script_id):
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 400
 
+        page_refs = {}
         if collection:
             cur.execute('SELECT name, fields FROM page_configs WHERE id = %s', (f'page-{collection}',))
             pc = cur.fetchone()
@@ -395,6 +405,13 @@ def debug_script(script_id):
                 if r[2] and hasattr(r[2], 'astimezone'):
                     rec['createdAt'] = r[2].astimezone(_tz.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
                 data.append(rec)
+            # 页面级脚本：解析引用，调试时也能看到 references
+            if scope != 'menu':
+                from utils.export_references import resolve_page_references
+                try:
+                    page_refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
+                except Exception:
+                    page_refs = {}
         else:
             data = body.get('data', [])
             fields = body.get('fields', [])
@@ -409,7 +426,7 @@ def debug_script(script_id):
     else:
         profile = 'export'
         script_locals = {'data': data, 'fields': fields, 'page_name': page_name,
-                         'result': None, 'filename': None, 'content_type': None}
+                         'references': page_refs, 'result': None, 'filename': None, 'content_type': None}
 
     try:
         return jsonify(debug_export_script(script_code, profile, script_locals, breakpoints))
@@ -477,9 +494,16 @@ def execute_script():
         page_name = pc_row[0] if pc_row else collection
         fields = pc_row[1] if pc_row else []
 
+        # 解析跨页/跨项目引用，注入脚本 references（同时给记录补 _relations）
+        from utils.export_references import resolve_page_references
+        try:
+            refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
+        except Exception:
+            refs = {}
+
     try:
         result_bytes, filename, content_type = run_export_script(
-            script_code, data, fields, page_name, output_format
+            script_code, data, fields, page_name, output_format, references=refs
         )
     except Exception as e:
         return jsonify({'error': f'脚本执行失败：{str(e)}'}), 400
@@ -561,10 +585,17 @@ def batch_export():
                 page_name = pc_row[0] if pc_row else collection
                 fields = pc_row[1] if pc_row else []
 
+                # 解析跨页/跨项目引用，注入脚本 references
+                from utils.export_references import resolve_page_references
+                try:
+                    refs = resolve_page_references(cur, collection, data, fields, export_branch=branch_id)
+                except Exception:
+                    refs = {}
+
                 # Execute script
                 try:
                     result_bytes, filename, content_type = run_export_script(
-                        script_code, data, fields, page_name, output_format
+                        script_code, data, fields, page_name, output_format, references=refs
                     )
                 except Exception as e:
                     errors.append(f'任务 {idx + 1} ({page_name}): {str(e)}')

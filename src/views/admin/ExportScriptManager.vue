@@ -285,7 +285,7 @@
 
                   <el-alert type="info" :closable="false" style="margin-bottom: 16px;">
                     <template #title>
-                      <strong>整页/单行模式</strong>：使用 <code>data</code>、<code>fields</code>、<code>page_name</code>
+                      <strong>整页/单行模式</strong>：使用 <code>data</code>、<code>fields</code>、<code>page_name</code>、<code>references</code>
                     </template>
                   </el-alert>
 
@@ -297,7 +297,7 @@
                       <tr>
                         <td><code>data</code></td>
                         <td><code>list[dict]</code></td>
-                        <td>当前数据页的全部记录。每条记录是一个字典，包含 <code>id</code>、各字段值、<code>createdAt</code></td>
+                        <td>当前数据页的全部记录。每条记录是一个字典，包含 <code>id</code>、各字段值、<code>createdAt</code>；若记录有关系字段还会带上 <code>_relations</code></td>
                       </tr>
                       <tr>
                         <td><code>fields</code></td>
@@ -308,6 +308,11 @@
                         <td><code>page_name</code></td>
                         <td><code>str</code></td>
                         <td>当前数据页名称，可用于生成文件名</td>
+                      </tr>
+                      <tr>
+                        <td><code>references</code></td>
+                        <td><code>dict</code></td>
+                        <td><code>{collection: {id: record}}</code> —— reference / quoteSelect / relation 所引用记录的查找表（含<strong>跨项目依赖</strong>按声明分支/版本补取的记录）。用法：<code>references.get('目标集合', {}).get(外键ID)</code>；值为 <code>None</code> 表示该 ID 已尝试但缺失（悬挂引用）</td>
                       </tr>
                     </tbody>
                   </table>
@@ -339,6 +344,11 @@
                         <td><code>total_records</code></td>
                         <td><code>int</code></td>
                         <td>总记录数（所有数据表）</td>
+                      </tr>
+                      <tr>
+                        <td><code>references</code></td>
+                        <td><code>dict</code></td>
+                        <td><code>{collection: {id: record}}</code> —— 被引用记录查找表，同上（含跨项目依赖补取）</td>
                       </tr>
                     </tbody>
                   </table>
@@ -593,6 +603,7 @@ result = output.getvalue()</pre>
 #   data       : list[dict]  — 数据记录
 #   fields     : list[dict]  — 字段配置
 #   page_name  : str         — 页面名称
+#   references : dict        — 被引用记录查找表 {集合:{id:记录}}（含跨项目依赖）
 #
 # 输出变量：
 #   result     : str | bytes — 导出内容（必须）

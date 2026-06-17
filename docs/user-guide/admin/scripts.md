@@ -98,6 +98,7 @@
 #   data       : list[dict]  — 数据记录
 #   fields     : list[dict]  — 字段配置
 #   page_name  : str         — 页面名称
+#   references : dict         — 被引用记录查找表 {集合:{id:记录}}(含跨项目依赖)
 #
 # 输出变量:
 #   result     : str | bytes — 导出内容(必须)
@@ -107,6 +108,17 @@
 
 result = json.dumps(data, ensure_ascii=False, indent=2)
 ```
+
+> **`references` —— 跨页/跨项目引用查找表**：当数据页含 `reference` / `quoteSelect` / `relation` 字段时,系统会在跑脚本前自动解析这些外键(包括按**跨项目依赖**声明的分支/版本补取被引用页的记录),注入 `references = {目标集合: {id: 记录}}`。脚本里 `references.get('目标集合', {}).get(外键ID)` 即可拿到被引用记录,无需自己再查库;值为 `None` 表示该 ID 已尝试但缺失(悬挂引用)。此前仅菜单级脚本可用,现整页/单行级(含 JSON 导出)也已注入。
+>
+> ```python
+> # 例:订单导出时把「产品」外键替换成产品名称
+> out = []
+> for r in data:
+>     prod = references.get('products', {}).get(r.get('productId'))
+>     out.append({**r, 'productName': prod['name'] if prod else None})
+> result = json.dumps(out, ensure_ascii=False)
+> ```
 
 ### 导出脚本模板(CSV 格式)
 
