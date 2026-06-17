@@ -701,6 +701,7 @@ def init_db():
             """, (col,))
             if not cur.fetchone():
                 cur.execute(f"ALTER TABLE export_scripts ADD COLUMN {col} VARCHAR(100)")
+                conn.commit()
                 print(f"Added {col} column to export_scripts table.")
 
         # Migration: add row_export_scripts column to page_configs
