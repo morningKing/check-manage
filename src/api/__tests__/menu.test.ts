@@ -82,10 +82,11 @@ describe('executeMenuExport 鉴权头', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       blob: async () => new Blob(['zip-bytes']),
+      headers: { get: () => null },
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await executeMenuExport(['menu-1'], 'script-1', 'main')
+    await executeMenuExport(['menu-1'], 'main')
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const init = fetchMock.mock.calls[0][1] as RequestInit

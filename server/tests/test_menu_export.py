@@ -189,7 +189,7 @@ class TestExecuteMenuExport:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cur
 
-        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'])
+        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'], 'script-1')
 
         assert zip_bytes is None
         assert len(errors) == 1
@@ -242,7 +242,7 @@ class TestExecuteMenuExport:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cur
 
-        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'])
+        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'], 'script-1')
 
         # 应该生成 ZIP
         assert zip_bytes is not None
@@ -284,7 +284,7 @@ class TestExecuteMenuExport:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cur
 
-        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'])
+        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'], 'script-1')
 
         assert zip_bytes is not None
         assert filename.endswith('.zip')
@@ -326,7 +326,7 @@ class TestMenuExportZipStructure:
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cur
 
-        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-parent'])
+        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-parent'], 'script-1')
 
         assert zip_bytes is not None
         import zipfile
@@ -369,7 +369,7 @@ result = [
         mock_conn = MagicMock()
         mock_conn.cursor.return_value = mock_cur
 
-        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'])
+        zip_bytes, filename, errors = execute_menu_export(mock_conn, ['menu-1'], 'script-1')
 
         import zipfile
         import io

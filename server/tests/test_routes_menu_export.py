@@ -326,7 +326,7 @@ class TestExecuteMenuExport:
         ]
 
         resp = client.post('/menuExport',
-                          data=json.dumps({'menuIds': ['menu-1', 'menu-2']}),
+                          data=json.dumps({'menuIds': ['menu-1', 'menu-2'], 'scriptId': 'script-1'}),
                           content_type='application/json',
                           headers=admin_h)
 
@@ -411,7 +411,7 @@ class TestMenuExportPermissions:
         ]
 
         resp = client.post('/menuExport',
-                          data=json.dumps({'menuIds': ['menu-1']}),
+                          data=json.dumps({'menuIds': ['menu-1'], 'scriptId': 'script-1'}),
                           content_type='application/json',
                           headers=dev_h)
 

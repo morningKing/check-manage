@@ -5,7 +5,7 @@
 - POST /menuExport - 批量导出多个菜单的数据
 """
 
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify, Response, g
 from db import get_db
 from auth import login_required, write_required
 from utils.menu_export import execute_menu_export, batch_clear
@@ -32,14 +32,15 @@ def export_menus():
     """
     body = request.get_json(force=True)
     menu_ids = body.get('menuIds', [])
-    script_id = body.get('scriptId')  # Optional override
+    script_id = body.get('scriptId')  # Optional override（旧路径，前端已不再传）
     branch_id = body.get('branchId', 'main')  # NEW: branch filter
+    role = (g.current_user or {}).get('role')
 
     if not menu_ids:
         return jsonify({'error': '未选择菜单'}), 400
 
     with get_db() as conn:
-        zip_bytes, zip_filename, errors = execute_menu_export(conn, menu_ids, script_id, branch_id)
+        zip_bytes, zip_filename, errors = execute_menu_export(conn, menu_ids, script_id, branch_id, role=role)
 
     if zip_bytes is None:
         error_msg = '所有导出任务均失败'

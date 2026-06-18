@@ -66,7 +66,7 @@
               <span>导出预览</span>
               <el-button
                 type="primary"
-                :disabled="selectedMenuIds.length === 0 || !selectedScriptId"
+                :disabled="selectedMenuIds.length === 0"
                 :loading="exportLoading"
                 @click="handleExport"
               >
@@ -76,32 +76,16 @@
             </div>
           </template>
 
-          <!-- 选择导出脚本 -->
+          <!-- 分支选择 -->
           <div class="script-select-section">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="导出脚本专项专用：每个数据页将使用其绑定的导出脚本，未绑定脚本的页面会被跳过。"
+              style="margin-bottom: 12px;"
+            />
             <el-form label-width="100px">
-              <el-form-item label="导出脚本">
-                <el-select
-                  v-model="selectedScriptId"
-                  placeholder="请选择导出脚本"
-                  style="width: 300px"
-                  clearable
-                >
-                  <el-option
-                    v-for="script in availableScripts"
-                    :key="script.id"
-                    :label="script.name"
-                    :value="script.id"
-                  >
-                    <span>{{ script.name }}</span>
-                    <span style="color: #909399; margin-left: 8px; font-size: 12px;">
-                      {{ script.description }}
-                    </span>
-                  </el-option>
-                </el-select>
-                <div class="form-tip">
-                  选择导出脚本将覆盖菜单绑定的脚本
-                </div>
-              </el-form-item>
               <el-form-item label="分支">
                 <el-select v-model="branchId" style="width: 300px">
                   <el-option
@@ -192,7 +176,6 @@ import type { MenuItem, MenuExportPreview } from '@/types'
 
 const treeRef = ref()
 const menuTree = ref<MenuItem[]>([])
-const selectedScriptId = ref<string>('')
 const branchId = ref('main')
 const { branchOptions, loadBranches } = useProjectBranches()
 const previewData = ref<MenuExportPreview | null>(null)
@@ -212,10 +195,6 @@ const treeProps = {
 
 const selectedMenuIds = computed(() => {
   return treeRef.value?.getCheckedKeys() || []
-})
-
-const availableScripts = computed(() => {
-  return previewData.value?.availableScripts || []
 })
 
 // ==================== 方法 ====================
@@ -265,15 +244,6 @@ async function loadPreview(): Promise<void> {
 
     // Auto expand all collapse items
     activeCollapse.value = data.menus.map(m => m.menuId)
-
-    // Auto select first script if none selected
-    if (!selectedScriptId.value && data.availableScripts.length > 0) {
-      // Check if any menu has a bound script
-      const boundScript = data.menus.find(m => m.boundScript)?.boundScript
-      if (boundScript) {
-        selectedScriptId.value = boundScript.id
-      }
-    }
   } catch (error: any) {
     ElMessage.error(error.message || '加载预览失败')
   } finally {
@@ -290,16 +260,10 @@ async function handleExport(): Promise<void> {
     return
   }
 
-  if (!selectedScriptId.value) {
-    ElMessage.warning('请选择导出脚本')
-    return
-  }
-
   exportLoading.value = true
   try {
-    const blob = await executeMenuExport(
+    const { blob, notice } = await executeMenuExport(
       selectedMenuIds.value as string[],
-      selectedScriptId.value,
       branchId.value
     )
 
@@ -314,6 +278,10 @@ async function handleExport(): Promise<void> {
     document.body.removeChild(a)
 
     ElMessage.success('导出成功')
+    // 有跳过/部分失败时提示（绑定驱动：无绑定脚本的页面被跳过）
+    if (notice) {
+      ElMessage.warning(notice)
+    }
   } catch (error: any) {
     ElMessage.error(error.message || '导出失败')
   } finally {
