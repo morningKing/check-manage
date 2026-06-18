@@ -96,7 +96,7 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/inspection-case', { pageSize: 10000 })
+    expect(mockGet).toHaveBeenCalledWith('/inspection-case', { all: true })
   })
 
   it('collection 类型 labelField/valueField 缺省时使用 id', async () => {
@@ -120,7 +120,7 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/items', { pageSize: 10000 })
+    expect(mockGet).toHaveBeenCalledWith('/items', { all: true })
   })
 
   it('collection 类型加载失败时选项为空', async () => {
@@ -140,7 +140,7 @@ describe('SelectInput — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/nonexistent', { pageSize: 10000 })
+    expect(mockGet).toHaveBeenCalledWith('/nonexistent', { all: true })
     // 不抛出错误，组件正常渲染
   })
 })
@@ -174,7 +174,7 @@ describe('MultiSelect — loadOptions', () => {
     })
     await flushPromises()
 
-    expect(mockGet).toHaveBeenCalledWith('/tags', { pageSize: 10000 })
+    expect(mockGet).toHaveBeenCalledWith('/tags', { all: true })
   })
 
   it('static 类型不发起请求', async () => {

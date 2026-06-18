@@ -320,8 +320,10 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       return cache.get(collection)!
     }
     try {
-      // 使用大页量获取全量数据（用于解析关联/引用字段）
-      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { pageSize: 10000 })
+      // 全量加载（用于解析关联/引用字段）。必须用 all=true：后端对分页 pageSize
+      // 有 1000 上限（min(page_size,1000)），用大 pageSize 会被悄悄截断到 1000，
+      // 导致第 1000 条之后的目标记录解析/索引不到。
+      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { all: true })
       const records = response.data || []
       cache.set(collection, records)
       return records
@@ -343,7 +345,9 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       return cached.data
     }
     try {
-      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { pageSize: 10000 })
+      // all=true 全量加载：后端分页 pageSize 有 1000 上限，大 pageSize 会被截断，
+      // 导致第 1000 条之后的选项加载不到（关联/引用/quoteSelect 选择器索引不全）。
+      const response = await get<{ data: any[]; total: number }>(`/${collection}`, { all: true })
       const records = response.data || []
       collectionOptionCache.set(collection, { data: records, timestamp: Date.now() })
       return records
@@ -1060,7 +1064,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const labelField = pkField || config.displayField
       if (!labelField) continue
       try {
-        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
+        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { all: true })
         const records = response.data || []
         const idToLabel = new Map<string, string>()
         for (const r of records) {
@@ -1211,7 +1215,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       const labelField = pkField || config.displayField
       if (!labelField) continue
       try {
-        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { pageSize: 10000 })
+        const response = await get<{ data: any[]; total: number }>(`/${config.targetCollection}`, { all: true })
         const records = response.data || []
         const idToLabel = new Map<string, string>()
         for (const r of records) {
@@ -1415,7 +1419,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     const endpoint = pageId.replace('page-', '')
     let records: any[]
     try {
-      const resp = await get<{ data: any[]; total: number }>(`/${endpoint}`, { pageSize: 10000 })
+      const resp = await get<{ data: any[]; total: number }>(`/${endpoint}`, { all: true })
       records = resp.data || []
     } catch {
       return { updated: 0, pending: 0 }
