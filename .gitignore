@@ -54,3 +54,23 @@ npm-debug.log*
 # graphify code-graph output (generated, no API cost to rebuild via `graphify update <dir>`)
 graphify-out/
 **/graphify-out/
+
+# ---- Local dev scratch & runtime artifacts (not part of the project) ----
+# Root-level dev/test screenshots (docs images live under docs/ and stay tracked)
+/*.png
+# One-off local scratch scripts
+/check_disk.py
+/disk_monitor.py
+/hello.py
+# Scratch payload dumps
+msgs.json
+**/msgs.json
+# AI-chat runtime per-session workspaces (created at runtime)
+ai-workspaces/
+**/ai-workspaces/
+# Superpowers / Trae / Claude local tooling dirs & generated indexes
+.superpowers/
+superpowers/
+.trae/
+.claude/worktrees/
+SKILLS.md
