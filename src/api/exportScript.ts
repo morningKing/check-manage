@@ -61,9 +61,10 @@ export function debugExportScript(id: string, payload: {
   return post<DebugResult>(`/exportScripts/${id}/debug`, payload)
 }
 
-export async function executeExportScript(scriptId: string, collection: string, recordId?: string) {
+export async function executeExportScript(scriptId: string, collection: string, recordId?: string, branchId?: string) {
   const payload: Record<string, string> = { scriptId, collection }
   if (recordId) payload.recordId = recordId
+  if (branchId) payload.branchId = branchId
   const response = await service.post('/exportScripts/execute', payload, {
     responseType: 'blob',
   })

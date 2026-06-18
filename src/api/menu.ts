@@ -108,7 +108,8 @@ export function previewMenuExport(menuIds: string[], branchId = 'main') {
  */
 export async function executeMenuExport(
   menuIds: string[],
-  branchId = 'main'
+  branchId = 'main',
+  scriptId?: string
 ): Promise<{ blob: Blob; notice: string }> {
   // 令牌存于 STORAGE_KEYS.AUTH_TOKEN（check-manage:token），与 axios 拦截器一致。
   const token = getStorage<string>(STORAGE_KEYS.AUTH_TOKEN, '')
@@ -118,7 +119,7 @@ export async function executeMenuExport(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({ menuIds, branchId })
+    body: JSON.stringify({ menuIds, branchId, ...(scriptId ? { scriptId } : {}) })
   })
 
   if (!response.ok) {
