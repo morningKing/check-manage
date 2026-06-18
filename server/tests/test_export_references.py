@@ -265,14 +265,15 @@ def test_execute_menu_export_resolves_cross_page_reference():
             _ins(cur, src, 'zzme-s1', {'ref': 'zzme-t1'})
             _ins(cur, tgt, 'zzme-t1', {'name': '苹果'})
             cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
-            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope) "
-                        "VALUES (%s,%s,%s,'json','menu')", (script_id, 'ref-join', script))
+            # 菜单级脚本绑定到菜单（bound_menu_id），菜单导出无需指定脚本
+            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope,bound_menu_id) "
+                        "VALUES (%s,%s,%s,'json','menu',%s)", (script_id, 'ref-join', script, menu_id))
             cur.execute("DELETE FROM menus WHERE id=%s", (menu_id,))
-            cur.execute("INSERT INTO menus (id,name,page_id,export_script_id) VALUES (%s,%s,%s,%s)",
-                        (menu_id, 'zzMenu', f'page-{src}', script_id))
+            cur.execute("INSERT INTO menus (id,name,page_id) VALUES (%s,%s,%s)",
+                        (menu_id, 'zzMenu', f'page-{src}'))
             conn.commit()
         with get_db() as conn:
-            zip_bytes, fname, errors = execute_menu_export(conn, [menu_id], None, 'main')
+            zip_bytes, fname, errors = execute_menu_export(conn, [menu_id], None, 'main', role='admin')
         assert zip_bytes is not None, f'导出失败：{errors}'
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
         names = zf.namelist()
@@ -310,14 +311,15 @@ def test_execute_menu_export_page_scope_resolves_reference():
             _ins(cur, src, 'zzmp-s1', {'ref': 'zzmp-t1'})
             _ins(cur, tgt, 'zzmp-t1', {'name': '橙子'})
             cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
-            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope) "
-                        "VALUES (%s,%s,%s,'json','page')", (script_id, 'ref-join-page', script))
+            # 绑定驱动：脚本绑定到该 collection（bound_collection），菜单导出无需指定脚本
+            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope,bound_collection) "
+                        "VALUES (%s,%s,%s,'json','page',%s)", (script_id, 'ref-join-page', script, src))
             cur.execute("DELETE FROM menus WHERE id=%s", (menu_id,))
-            cur.execute("INSERT INTO menus (id,name,page_id,export_script_id) VALUES (%s,%s,%s,%s)",
-                        (menu_id, 'zzMenuP', f'page-{src}', script_id))
+            cur.execute("INSERT INTO menus (id,name,page_id) VALUES (%s,%s,%s)",
+                        (menu_id, 'zzMenuP', f'page-{src}'))
             conn.commit()
         with get_db() as conn:
-            zip_bytes, fname, errors = execute_menu_export(conn, [menu_id], None, 'main')
+            zip_bytes, fname, errors = execute_menu_export(conn, [menu_id], None, 'main', role='admin')
         assert zip_bytes is not None, f'导出失败：{errors}'
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
         payload = json.loads(zf.read(zf.namelist()[0]))
@@ -329,3 +331,46 @@ def test_execute_menu_export_page_scope_resolves_reference():
             cur.execute("DELETE FROM export_scripts WHERE id=%s", (script_id,))
             conn.commit()
         _cleanup([src, tgt])
+
+
+def test_execute_menu_export_skips_unbound_pages():
+    """绑定驱动菜单导出：父菜单下两页，一页绑定脚本→导出，一页无绑定→跳过并计入 errors。"""
+    bound_c, unbound_c = 'zzmebound', 'zzmeunbound'
+    parent, c1, c2, sid = 'zzme-parent', 'zzme-c1', 'zzme-c2', 'zzme-bscript'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, bound_c, [{'fieldName': 'name', 'controlType': 'text'}])
+            _seed_page(cur, unbound_c, [{'fieldName': 'name', 'controlType': 'text'}])
+            _ins(cur, bound_c, 'b1', {'name': 'A'})
+            _ins(cur, unbound_c, 'u1', {'name': 'B'})
+            cur.execute("DELETE FROM export_scripts WHERE id=%s", (sid,))
+            cur.execute("INSERT INTO export_scripts (id,name,script,output_format,scope,bound_collection) "
+                        "VALUES (%s,%s,%s,'json','page',%s)",
+                        (sid, 'bound', "result = json.dumps([r['id'] for r in data])", bound_c))
+            for mid in (parent, c1, c2):
+                cur.execute("DELETE FROM menus WHERE id=%s", (mid,))
+            cur.execute("INSERT INTO menus (id,name) VALUES (%s,%s)", (parent, 'zz父菜单'))
+            cur.execute("INSERT INTO menus (id,name,page_id,parent_id) VALUES (%s,%s,%s,%s)",
+                        (c1, '已绑定页', f'page-{bound_c}', parent))
+            cur.execute("INSERT INTO menus (id,name,page_id,parent_id) VALUES (%s,%s,%s,%s)",
+                        (c2, '未绑定页', f'page-{unbound_c}', parent))
+            conn.commit()
+        with get_db() as conn:
+            zip_bytes, fname, errors = execute_menu_export(conn, [parent], None, 'main', role='admin')
+        # 绑定页产出文件
+        assert zip_bytes is not None, f'导出失败：{errors}'
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+        names = zf.namelist()
+        assert len(names) == 1, names
+        assert json.loads(zf.read(names[0])) == ['b1']
+        # 未绑定页被跳过并记入 errors 摘要（页名取自 page_configs，即 collection 名）
+        assert any('已跳过' in e and unbound_c in e for e in errors), errors
+    finally:
+        with get_db() as conn:
+            cur = conn.cursor()
+            for mid in (parent, c1, c2):
+                cur.execute("DELETE FROM menus WHERE id=%s", (mid,))
+            cur.execute("DELETE FROM export_scripts WHERE id=%s", (sid,))
+            conn.commit()
+        _cleanup([bound_c, unbound_c])

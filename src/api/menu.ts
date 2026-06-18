@@ -100,19 +100,17 @@ export function previewMenuExport(menuIds: string[], branchId = 'main') {
 }
 
 /**
- * 执行菜单级导出
+ * 执行菜单级导出（绑定驱动：每个数据页用其绑定的导出脚本，无绑定则跳过）
  *
  * @param menuIds - 菜单ID列表
- * @param scriptId - 可选，指定导出脚本ID
- * @returns Blob - ZIP 文件
+ * @param branchId - 分支ID（默认 main）
+ * @returns { blob, notice } - ZIP 文件 + 可选的「跳过/告警」提示（来自 X-Export-Errors 头）
  */
 export async function executeMenuExport(
   menuIds: string[],
-  scriptId?: string,
   branchId = 'main'
-): Promise<Blob> {
+): Promise<{ blob: Blob; notice: string }> {
   // 令牌存于 STORAGE_KEYS.AUTH_TOKEN（check-manage:token），与 axios 拦截器一致。
-  // 此前误用 localStorage.getItem('token')，读不到令牌导致后端判为「未登录」(401)。
   const token = getStorage<string>(STORAGE_KEYS.AUTH_TOKEN, '')
   const response = await fetch('/api/menuExport', {
     method: 'POST',
@@ -120,7 +118,7 @@ export async function executeMenuExport(
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({ menuIds, scriptId, branchId })
+    body: JSON.stringify({ menuIds, branchId })
   })
 
   if (!response.ok) {
@@ -128,7 +126,13 @@ export async function executeMenuExport(
     throw new Error(error.error || '导出失败')
   }
 
-  return response.blob()
+  // 后端把「跳过/部分失败」摘要放在 X-Export-Errors 头（URL 编码）
+  let notice = ''
+  const raw = response.headers.get('X-Export-Errors')
+  if (raw) {
+    try { notice = decodeURIComponent(raw) } catch { notice = raw }
+  }
+  return { blob: await response.blob(), notice }
 }
 
 /**

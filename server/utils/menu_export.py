@@ -94,7 +94,7 @@ def get_menu_collections_with_info(cur, menu_id, branch_id='main'):
     return pages
 
 
-def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
+def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main', role=None):
     """
     执行菜单级导出
 
@@ -113,8 +113,20 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
     cur = conn.cursor()
     buf = io.BytesIO()
     errors = []
+    skipped = []  # 无绑定导出脚本、被跳过的「菜单/页面」名
     file_count = 0
     seen_filenames = {}
+
+    def _add_to_zip(menu_name, filename, result_bytes):
+        nonlocal file_count
+        if filename in seen_filenames:
+            seen_filenames[filename] += 1
+            name_part, dot, ext = filename.rpartition('.')
+            filename = f'{name_part}_{seen_filenames[filename]}.{ext}' if dot else f'{filename}_{seen_filenames[filename]}'
+        else:
+            seen_filenames[filename] = 0
+        zf.writestr(f'{menu_name}/{filename}', result_bytes)
+        file_count += 1
 
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for menu_id in menu_ids:
@@ -128,12 +140,55 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
             menu_name = menu_row[0]
             menu_script_id = menu_row[1]
 
-            # Determine which script to use (parameter > menu binding)
-            effective_script_id = script_id or menu_script_id
+            # ===== 绑定驱动模式（默认）：用绑定脚本导出，无绑定则跳过 =====
+            if not script_id:
+                from utils.export_runner import (
+                    execute_bound_export, ExportBindingError, ExportPermissionError, SCRIPT_SELECT,
+                )
+                collections = get_menu_collections(cur, menu_id)
+                if not collections:
+                    errors.append(f'菜单「{menu_name}」下没有数据页面')
+                    continue
+                # 1) 菜单级绑定脚本（bound_menu_id = 本菜单）→ 菜单级导出（一次性产出 1+ 文件）
+                cur.execute(
+                    f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE bound_menu_id = %s ORDER BY created_at',
+                    (menu_id,))
+                menu_bound_rows = cur.fetchall()
+                for srow in menu_bound_rows:
+                    try:
+                        files = execute_bound_export(cur, srow, menu_id=menu_id, branch_id=branch_id, role=role)
+                    except (ExportBindingError, ExportPermissionError, Exception) as e:
+                        errors.append(f'「{menu_name}」: {str(e)}')
+                        continue
+                    for result_bytes, filename, _ct in files:
+                        _add_to_zip(menu_name, filename, result_bytes)
 
-            if not effective_script_id:
-                errors.append(f'菜单「{menu_name}」未绑定导出脚本且未指定脚本')
+                # 2) 每个数据页的页面级绑定脚本（bound_collection = 该页）→ 逐页导出
+                for coll in collections:
+                    cur.execute('SELECT name FROM page_configs WHERE id = %s', (f'page-{coll}',))
+                    pc = cur.fetchone()
+                    page_label = pc[0] if pc else coll
+                    cur.execute(
+                        f'SELECT {SCRIPT_SELECT} FROM export_scripts WHERE bound_collection = %s ORDER BY created_at',
+                        (coll,))
+                    page_bound_rows = cur.fetchall()
+                    if not page_bound_rows:
+                        # 菜单级脚本已覆盖整菜单时不算「跳过」；否则该页确实无脚本可用
+                        if not menu_bound_rows:
+                            skipped.append(f'{menu_name}/{page_label}')
+                        continue
+                    for srow in page_bound_rows:
+                        try:
+                            result_bytes, filename, _ct = execute_bound_export(
+                                cur, srow, collection=coll, branch_id=branch_id, role=role)
+                        except (ExportBindingError, ExportPermissionError, Exception) as e:
+                            errors.append(f'「{menu_name}」→「{page_label}」: {str(e)}')
+                            continue
+                        _add_to_zip(menu_name, filename, result_bytes)
                 continue
+
+            # ===== 兼容旧路径：显式指定脚本覆盖，对整个菜单跑该脚本 =====
+            effective_script_id = script_id
 
             # Get script info including scope
             cur.execute(
@@ -296,6 +351,11 @@ def execute_menu_export(conn, menu_ids, script_id=None, branch_id='main'):
                     zip_path = f'{menu_name}/{filename}'
                     zf.writestr(zip_path, result_bytes)
                     file_count += 1
+
+    # 把跳过摘要并入 errors 最前面，供前端在导出完成后提示（X-Export-Errors 头）
+    if skipped:
+        preview = '、'.join(skipped[:5]) + ('…' if len(skipped) > 5 else '')
+        errors.insert(0, f'{len(skipped)} 个页面无绑定导出脚本，已跳过：{preview}')
 
     if file_count == 0:
         return None, None, errors
