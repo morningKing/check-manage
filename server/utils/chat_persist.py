@@ -8,10 +8,16 @@ used by the browser SSE proxy so both share one tested implementation."""
 import json
 import secrets
 import threading
+import time
 
 from db import get_db
 from utils.opencode_client import OpenCodeClient
 from config import OPENCODE_BASE_URL
+
+# Debounce for mid-turn (incremental) persistence: at most one DB upsert this
+# often while a turn streams, so switching sessions mid-stream recovers the
+# partial answer (incl. tool calls) instead of only the on-idle final snapshot.
+INCREMENTAL_PERSIST_INTERVAL = 1.0  # seconds
 
 INACTIVITY_TIMEOUT = 30 * 60  # seconds; read timeout on the event stream. The
 # listener exits after this much *silence* on the scoped stream (no bytes). If
@@ -41,7 +47,8 @@ def new_state():
 
 def apply_event(state, evt, opencode_session_id):
     """Consume one subscribe_events() item ({'event','data'}). Accumulate
-    assistant text/tool parts into `state`. Return 'idle' on session.idle.
+    assistant text/tool parts into `state`. Returns 'idle' on session.idle,
+    'changed' when an assistant text/tool part was (re)captured, else None.
     Events for other sessions are ignored."""
     etype = evt.get('event', '')
     props = (evt.get('data') or {}).get('properties') or {}
@@ -63,6 +70,7 @@ def apply_event(state, evt, opencode_session_id):
                 if pid not in state['parts_by_id']:
                     state['part_order'].append(pid)
                 state['parts_by_id'][pid] = {'type': 'text', 'text': part.get('text', '')}
+                return 'changed'
             elif ptype == 'tool':
                 if pid not in state['parts_by_id']:
                     state['part_order'].append(pid)
@@ -75,6 +83,7 @@ def apply_event(state, evt, opencode_session_id):
                     'input': st.get('input'),
                     'result': st.get('output') if st.get('output') is not None else st.get('result'),
                 }
+                return 'changed'
     elif etype == 'session.idle':
         return 'idle'
     return None
@@ -118,14 +127,23 @@ def persist_turn(session_id, state):
 
 
 def _run_listener(sid, opencode_session_id, event_source):
-    """Consume events, persisting the assistant message on each session.idle.
-    Returns when the source is exhausted/raises (inactivity read-timeout or
-    stream end). Pure loop — `event_source` is injectable for tests."""
+    """Consume events, persisting the assistant message on each session.idle and
+    incrementally (time-debounced) while a turn streams, so switching sessions
+    mid-stream recovers the partial answer. Returns when the source is
+    exhausted/raises. Pure loop — `event_source` is injectable for tests."""
     state = new_state()
+    last_persist = time.monotonic()
     for evt in event_source:
-        if apply_event(state, evt, opencode_session_id) == 'idle':
+        sig = apply_event(state, evt, opencode_session_id)
+        if sig == 'idle':
             persist_turn(sid, state)
             state = new_state()
+            last_persist = time.monotonic()
+        elif sig == 'changed' and state['turn_msg_id']:
+            now = time.monotonic()
+            if now - last_persist >= INCREMENTAL_PERSIST_INTERVAL:
+                persist_turn(sid, state)
+                last_persist = now
 
 
 def _listener_thread(sid, opencode_session_id, directory):
