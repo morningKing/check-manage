@@ -122,6 +122,34 @@ def test_run_listener_persists_each_idle(monkeypatch):
     assert [c for _, c in saved] == [[{'type': 'text', 'text': 'one'}], [{'type': 'text', 'text': 'two'}]]
 
 
+def test_run_listener_persists_incrementally_while_streaming(monkeypatch):
+    """Mid-turn (before idle) the listener upserts the partial answer once the
+    debounce elapses, so switching sessions mid-stream recovers tool calls."""
+    from utils import chat_persist
+    saved = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: saved.append(chat_persist.build_content(state)))
+    clock = {'t': 0.0}
+
+    def fake_monotonic():
+        clock['t'] += 2.0  # each read advances 2s > 1.0s debounce
+        return clock['t']
+
+    monkeypatch.setattr(chat_persist.time, 'monotonic', fake_monotonic)
+    events = [
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'partial', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'q',
+                                              'state': {'status': 'completed', 'output': 'r'}, 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events))
+    # at least one incremental persist before idle + the idle persist
+    assert len(saved) >= 2
+    # the latest persisted snapshot carries the tool call (not just text)
+    assert any(p.get('type') == 'tool_use' for p in saved[-1])
+
+
 def test_ensure_listener_dedups_per_session(monkeypatch):
     from utils import chat_persist
     started = []

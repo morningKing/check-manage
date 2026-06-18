@@ -416,12 +416,29 @@ export const useAiChatStore = defineStore('aiChat', {
           this._resetStreamState(sid)
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           this.loadChanges(sid)
+          this._reloadPersisted(sid)  // converge on server-persisted turn (incl. tool calls)
           break
         case 'session.error':
           this.streaming[sid] = false
           this.thinking[sid] = false
           break
       }
+    },
+
+    async _reloadPersisted(sid: string) {
+      // After a turn finishes, replace the in-memory (streamed) messages with the
+      // server-persisted version so a session that was switched away-and-back
+      // mid-stream ends up with the full answer incl. tool calls. Guards:
+      //  - skip if a new turn already started (don't clobber a live stream)
+      //  - only adopt if it has at least as many messages (a persistence race
+      //    could briefly lag behind; never drop the complete in-memory turn)
+      try {
+        const history = await getMessages(sid)
+        const current = this.messages[sid]?.length ?? 0
+        if (!this.streaming[sid] && history.messages.length >= current) {
+          this.messages[sid] = history.messages
+        }
+      } catch { /* non-fatal: keep the in-memory copy */ }
     },
 
     _resetStreamState(sid: string) {
