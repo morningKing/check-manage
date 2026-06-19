@@ -169,6 +169,28 @@ class TestListCollection:
         assert resp.status_code == 200
         assert 'ORDER BY created_at ASC, id ASC' in self._executed_sql(mock_cursor)
 
+    def test_list_ids_filter(self, setup):
+        """ids= 按真实 id 列过滤（id 不在 data JSONB，不能用 q）"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?ids=a,b,c&all=true', headers=headers)
+        assert resp.status_code == 200
+        sql = self._executed_sql(mock_cursor)
+        assert 'id = ANY(' in sql
+        # 该 id 列表作为参数传入（防注入）
+        params = [c.args[1] for c in mock_cursor.execute.call_args_list if c.args and len(c.args) > 1]
+        assert any(['a', 'b', 'c'] in (p or []) for p in params)
+
+    def test_list_ids_empty_matches_nothing(self, setup):
+        """ids= 传了但为空 → id = ANY('{}') 不匹配任何记录"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = (0,)
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?ids=', headers=headers)
+        assert resp.status_code == 200
+        assert 'id = ANY(' in self._executed_sql(mock_cursor)
+
     def test_list_sort_desc(self, setup):
         """sort=createdAt&order=desc 生成降序 ORDER BY（最近记录在前）"""
         client, mock_cursor, _, headers = setup
