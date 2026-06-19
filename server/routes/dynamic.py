@@ -326,6 +326,9 @@ def list_items(collection):
     query_str = request.args.get('q', '')
     keyword = request.args.get('keyword', '')
     locate_id = request.args.get('locateId', '')
+    # 按真实 id 列过滤（逗号分隔）。用于「只取被引用到的记录」的标签解析，避免全量加载。
+    # 注意：id 是独立列、不在 data JSONB 里，所以不能用 q={"id":...}，必须走这里。
+    ids_param = request.args.get('ids')  # None 表示未传；'' 表示传了但为空 → 不匹配任何记录
     # 分页参数
     page = request.args.get('page', 1, type=int)
     page_size = request.args.get('pageSize', 50, type=int)
@@ -362,6 +365,12 @@ def list_items(collection):
         # 构建基础查询条件
         base_conditions = ['collection = %s', 'branch_id = %s']
         base_params = [collection, branch_id]
+
+        # 按 id 列过滤（真实列，非 JSONB）。传了 ids 即限定到这些 id；空列表 → 无匹配。
+        if ids_param is not None:
+            id_list = [i for i in ids_param.split(',') if i]
+            base_conditions.append('id = ANY(%s)')
+            base_params.append(id_list)
 
         # 处理 MongoDB 查询
         query_conditions = []

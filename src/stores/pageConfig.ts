@@ -357,6 +357,32 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 只取指定 id 的目标记录（用于关联/引用/quote 的标签解析），避免为了几十个引用而全量
+   * 加载整张目标数据页。用后端 `?ids=` 真实 id 列过滤（id 不在 data JSONB 里，不能用 q）。
+   * 按 id 缓存（含「已查但缺失」用 null 占位，避免重复请求）。idCache: collection → (id → record|null)
+   */
+  async function fetchRecordsByIds(
+    collection: string,
+    ids: string[],
+    idCache: Map<string, Map<string, any>>
+  ): Promise<Map<string, any>> {
+    let recMap = idCache.get(collection)
+    if (!recMap) { recMap = new Map(); idCache.set(collection, recMap) }
+    const missing = [...new Set(ids)].filter((id) => id && !recMap!.has(id))
+    if (missing.length === 0) return recMap
+    const CHUNK = 100  // 控制 URL 长度（id 可能是 UUID）
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const chunk = missing.slice(i, i + CHUNK)
+      try {
+        const resp = await get<{ data: any[] }>(`/${collection}`, { ids: chunk.join(','), all: true })
+        for (const rec of (resp.data || [])) recMap!.set(rec.id, rec)
+      } catch { /* 整块失败：下方标缺失，标签回退为裸 id */ }
+      for (const id of chunk) if (!recMap!.has(id)) recMap!.set(id, null)  // 缺失占位
+    }
+    return recMap
+  }
+
+  /**
    * 获取页面数据列表（支持后端分页）
    *
    * @param pageId - 页面ID
@@ -425,7 +451,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
       }
 
       // 共享集合缓存，避免多个 resolve 函数重复请求同一集合
-      const collectionCache = new Map<string, any[]>()
+      const collectionCache = new Map<string, Map<string, any>>()
 
       // 批量加载关联字段数据（一次请求替代 N 次）
       const relationFields = getRelationFields(pageId)
@@ -873,43 +899,36 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveReferences(
     data: DynamicRecord[],
     referenceFields: FieldConfig[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, Map<string, any>>
   ): Promise<void> {
-    const cache = collectionCache || new Map<string, any[]>()
+    const idCache = collectionCache || new Map<string, Map<string, any>>()
 
-    // 按目标集合分组，收集所有需要加载的父记录 ID
+    // 按目标集合分组，收集本页记录引用到的父记录 ID（只取这些，不再全量加载）
     const collectionIds = new Map<string, Set<string>>()
-
     for (const field of referenceFields) {
       const config = field.referenceConfig
       if (!config?.targetCollection) continue
-      if (!collectionIds.has(config.targetCollection)) {
-        collectionIds.set(config.targetCollection, new Set())
-      }
-      const idSet = collectionIds.get(config.targetCollection)!
+      const idSet = collectionIds.get(config.targetCollection) || new Set<string>()
+      collectionIds.set(config.targetCollection, idSet)
       for (const record of data) {
         const refId = record[field.fieldName]
         if (refId) idSet.add(refId)
       }
     }
 
-    // 批量加载每个目标集合的记录
-    const parentRecordMap = new Map<string, Record<string, any>>()
+    // 只取被引用到的父记录
     for (const [collection, ids] of collectionIds) {
-      if (ids.size === 0) continue
-      const allRecords = await fetchCollectionData(collection, cache)
-      for (const rec of allRecords) {
-        parentRecordMap.set(rec.id, rec)
-      }
+      if (ids.size > 0) await fetchRecordsByIds(collection, [...ids], idCache)
     }
 
     // 将继承字段值合并到子记录
     for (const field of referenceFields) {
       const config = field.referenceConfig
-      if (!config) continue
+      if (!config?.targetCollection) continue
+      const recMap = idCache.get(config.targetCollection)
       for (const record of data) {
         const refId = record[field.fieldName]
-        const parent = refId ? parentRecordMap.get(refId) : null
+        const parent = (refId && recMap?.get(refId)) || null
         // 写入 displayField 值
         record[`_ref_${field.fieldName}_display`] = parent
           ? (parent[config.displayField] || parent.id)
@@ -933,46 +952,38 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveRelationLabels(
     data: DynamicRecord[],
     relationFields: FieldConfig[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, Map<string, any>>
   ): Promise<void> {
-    const cache = collectionCache || new Map<string, any[]>()
+    const idCache = collectionCache || new Map<string, Map<string, any>>()
 
-    // 按 targetCollection 分组，避免重复请求同一集合
-    const collectionSet = new Set<string>()
-    for (const field of relationFields) {
-      const config = field.relationConfig
-      if (config?.targetCollection) {
-        collectionSet.add(config.targetCollection)
-      }
-    }
-
-    // 批量加载每个目标集合的全部记录
-    const collectionRecords = new Map<string, any[]>()
-    for (const collection of collectionSet) {
-      const records = await fetchCollectionData(collection, cache)
-      collectionRecords.set(collection, records)
-    }
-
-    // 为每个关联字段构建 id → label 映射，并写入 _rel_ 前缀字段
+    // 收集每个目标集合被本页记录引用到的 id（只取这些，不再全量加载）
+    const collectionIds = new Map<string, Set<string>>()
     for (const field of relationFields) {
       const config = field.relationConfig
       if (!config?.targetCollection) continue
-
-      const records = collectionRecords.get(config.targetCollection)
-      if (!records) continue
-
-      const idToLabel = new Map<string, string>()
-      for (const rec of records) {
-        idToLabel.set(rec.id, rec[config.displayField] || rec.id)
+      const idSet = collectionIds.get(config.targetCollection) || new Set<string>()
+      collectionIds.set(config.targetCollection, idSet)
+      for (const record of data) {
+        const ids = record[field.fieldName]
+        if (Array.isArray(ids)) for (const id of ids) if (id) idSet.add(id)
       }
+    }
+    for (const [collection, ids] of collectionIds) {
+      if (ids.size > 0) await fetchRecordsByIds(collection, [...ids], idCache)
+    }
 
+    // 为每个关联字段写入 _rel_ 前缀的 { id, label }[]
+    for (const field of relationFields) {
+      const config = field.relationConfig
+      if (!config?.targetCollection) continue
+      const recMap = idCache.get(config.targetCollection)
       for (const record of data) {
         const ids = record[field.fieldName]
         if (Array.isArray(ids) && ids.length > 0) {
-          record[`_rel_${field.fieldName}_labels`] = ids.map((id: string) => ({
-            id,
-            label: idToLabel.get(id) || id
-          }))
+          record[`_rel_${field.fieldName}_labels`] = ids.map((id: string) => {
+            const rec = recMap?.get(id)
+            return { id, label: (rec && (rec[config.displayField] || rec.id)) || id }
+          })
         } else {
           record[`_rel_${field.fieldName}_labels`] = []
         }
@@ -989,43 +1000,36 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveQuoteLabels(
     data: DynamicRecord[],
     quoteFields: FieldConfig[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, Map<string, any>>
   ): Promise<void> {
-    const cache = collectionCache || new Map<string, any[]>()
+    const idCache = collectionCache || new Map<string, Map<string, any>>()
 
-    const collectionSet = new Set<string>()
+    const collectionIds = new Map<string, Set<string>>()
     for (const field of quoteFields) {
       const config = field.quoteConfig
-      if (config?.targetCollection) {
-        collectionSet.add(config.targetCollection)
+      if (!config?.targetCollection) continue
+      const idSet = collectionIds.get(config.targetCollection) || new Set<string>()
+      collectionIds.set(config.targetCollection, idSet)
+      for (const record of data) {
+        const ids = record[field.fieldName]
+        if (Array.isArray(ids)) for (const id of ids) if (id) idSet.add(id)
       }
     }
-
-    const collectionRecords = new Map<string, any[]>()
-    for (const collection of collectionSet) {
-      const records = await fetchCollectionData(collection, cache)
-      collectionRecords.set(collection, records)
+    for (const [collection, ids] of collectionIds) {
+      if (ids.size > 0) await fetchRecordsByIds(collection, [...ids], idCache)
     }
 
     for (const field of quoteFields) {
       const config = field.quoteConfig
       if (!config?.targetCollection) continue
-
-      const records = collectionRecords.get(config.targetCollection)
-      if (!records) continue
-
-      const idToLabel = new Map<string, string>()
-      for (const rec of records) {
-        idToLabel.set(rec.id, rec[config.displayField] || rec.id)
-      }
-
+      const recMap = idCache.get(config.targetCollection)
       for (const record of data) {
         const ids = record[field.fieldName]
         if (Array.isArray(ids) && ids.length > 0) {
-          record[`_quote_${field.fieldName}_labels`] = ids.map((id: string) => ({
-            id,
-            label: idToLabel.get(id) || id
-          }))
+          record[`_quote_${field.fieldName}_labels`] = ids.map((id: string) => {
+            const rec = recMap?.get(id)
+            return { id, label: (rec && (rec[config.displayField] || rec.id)) || id }
+          })
         } else {
           record[`_quote_${field.fieldName}_labels`] = []
         }
@@ -1480,7 +1484,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    */
   async function refreshSingleRecord(pageId: string, recordId: string): Promise<DynamicRecord | null> {
     const endpoint = pageId.replace('page-', '')
-    const collectionCache = new Map<string, any[]>()
+    const collectionCache = new Map<string, Map<string, any>>()
 
     try {
       // 获取单条记录
