@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify
 from db import get_db
 from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
+from utils.memory import reset_memory_singleton
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
@@ -101,6 +102,7 @@ def put_settings():
 
     settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
                                   mem0_enabled=mem0_enabled, embedding_model=embedding_model)
+    reset_memory_singleton()
     # Mask before returning
     key = settings.get('apiKey', '')
     if len(key) > 4:
