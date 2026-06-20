@@ -55,10 +55,16 @@ class TestGetSystemConfig:
     def test_get_system_config(self, setup):
         """测试获取系统配置"""
         client, mock_cursor, admin_h, _ = setup
+        # Mock must mirror the route's SELECT column list (RealDictCursor returns
+        # every selected column, including the login_* fields added with the
+        # login-page customization feature). Omitting them no longer matches reality.
         mock_cursor.fetchone.return_value = {
             'system_name': '测试系统',
             'system_short_name': '测试',
             'logo_url': None,
+            'login_title': '欢迎登录',
+            'login_subtitle': None,
+            'login_footer': None,
         }
         resp = client.get('/system-config', headers=admin_h)
         assert resp.status_code == 200
@@ -67,6 +73,10 @@ class TestGetSystemConfig:
         assert 'systemShortName' in data
         assert data['systemName'] == '测试系统'
         assert data['systemShortName'] == '测试'
+        # login-customization fields are passed through
+        assert data['loginTitle'] == '欢迎登录'
+        assert data['loginSubtitle'] is None
+        assert data['loginFooter'] is None
 
     def test_get_system_config_not_found(self, setup):
         """测试系统配置不存在返回404"""
