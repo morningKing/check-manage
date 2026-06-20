@@ -281,7 +281,7 @@ This creates:
 *   **Database Config**: `server/config.py` — PostgreSQL on localhost:5432, database `casemanage`.
 *   **TypeScript**: Strict mode enabled (`noUnusedLocals`, `noUnusedParameters`). Path alias `@/` → `src/`.
 *   **SCSS**: Global variables via `src/assets/styles/variables.scss` (auto-imported in all SCSS).
-*   **Production**: `start.sh` builds frontend, starts backend + reverse proxy on port 8080.
+*   **Production**: `start.sh` builds frontend, starts backend + reverse proxy on port 8080. The backend is served by **waitress** (bounded thread pool, `BACKEND_THREADS` env, default 8 — kept below the DB pool's `maxconn=20`); the dev server (`npm run dev`) stays on Werkzeug with `threaded=True`.
 
 ## Testing Patterns
 

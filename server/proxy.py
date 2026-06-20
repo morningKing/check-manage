@@ -238,14 +238,21 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
 
 def start_backend():
-    """Start the Flask backend as a subprocess (non-debug for production)."""
+    """Start the Flask backend as a subprocess (production WSGI server).
+
+    Uses waitress with a *bounded* thread pool instead of Werkzeug's unbounded
+    threaded dev server. The pool size (BACKEND_THREADS, default 8) is kept
+    below the DB pool max (ThreadedConnectionPool maxconn=20) so concurrent
+    requests can't exhaust DB connections.
+    """
     server_dir = os.path.dirname(__file__)
     env = os.environ.copy()
-    # Force non-debug mode to avoid Werkzeug reloader issues
     env['FLASK_DEBUG'] = '0'
+    threads = max(1, int(os.environ.get('BACKEND_THREADS', '8')))
     proc = subprocess.Popen(
         [sys.executable, '-c',
-         f'import app; app.app.run(host="0.0.0.0", port={_backend_port()}, debug=False, threaded=True)'],
+         'import app; from waitress import serve; '
+         f'serve(app.app, host="0.0.0.0", port={_backend_port()}, threads={threads})'],
         cwd=server_dir,
         env=env,
         stdout=subprocess.DEVNULL,
