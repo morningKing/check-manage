@@ -109,6 +109,15 @@ def list_memories(user_id):
         return []
 
 
+def render_memory_block(mems, limit=5):
+    lines = [str(x.get('memory', '')).strip() for x in (mems or [])]
+    lines = [l for l in lines if l][:limit]
+    if not lines:
+        return ''
+    body = '\n'.join(f'- {l}' for l in lines)
+    return f'[关于当前用户的长期记忆（供参考，不必逐条复述）]\n{body}\n\n'
+
+
 def delete_memory(memory_id):
     m = get_memory()
     if m is None or not memory_id:

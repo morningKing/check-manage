@@ -30,3 +30,12 @@ def test_add_swallows_errors():
     fake = MagicMock(); fake.add.side_effect = RuntimeError('boom')
     with patch.object(mem, 'get_memory', return_value=fake):
         mem.add_memory('alice', [{'role': 'user', 'content': 'x'}])  # must not raise
+
+def test_render_memory_block_formats_lines():
+    block = mem.render_memory_block([{'memory': '喜欢 Python'}, {'memory': '在用 PostgreSQL'}, {'memory': ''}])
+    assert '喜欢 Python' in block and '在用 PostgreSQL' in block
+    assert block.startswith('[关于当前用户的长期记忆')
+    assert block.endswith('\n\n')
+
+def test_render_memory_block_empty_returns_empty():
+    assert mem.render_memory_block([]) == ''

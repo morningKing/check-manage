@@ -47,6 +47,7 @@ from utils.data_export import (
 )
 from utils.py_runner import run_python_in_workspace
 from utils.skill_upload import extract_skill_zip, SkillUploadError
+from utils.memory import search_memory, render_memory_block
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -313,7 +314,11 @@ def send_message(sid):
     # augmented prompt with the uploaded files' text content inlined (reliable
     # and model-agnostic — see notes in send_message tests).
     stored_parts = [{'type': 'text', 'text': content}] if content else []
-    prompt = _AGENT_DIRECTIVE + content
+    mem_block = ''
+    if content:
+        mems = search_memory(user['userId'], content, limit=5)
+        mem_block = render_memory_block(mems)
+    prompt = _AGENT_DIRECTIVE + mem_block + content
     for rel in attachments:
         name = os.path.basename(rel)
         stored_parts.append({'type': 'file', 'name': name, 'path': rel})
