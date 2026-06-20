@@ -894,6 +894,16 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   }
 
   /**
+   * 获取页面配置中所有被标记为业务主键（isPrimaryKey）的字段，保持配置顺序。
+   * 导入时用于派生确定性的记录 id（见 makeStableImportId）。
+   */
+  function getPrimaryKeyFields(pageId: string): FieldConfig[] {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return []
+    return config.fields.filter((f) => f.isPrimaryKey)
+  }
+
+  /**
    * 批量解析引用字段，加载父记录数据并合并到子记录
    */
   async function resolveReferences(
@@ -1570,6 +1580,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     batchDeletePageData,
     getCachedPageData,
     refreshSingleRecord,
+    // 主键
+    getPrimaryKeyFields,
     // 关联关系
     getRelationFields,
     stripRelationFields,
