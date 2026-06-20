@@ -245,7 +245,7 @@ def start_backend():
     env['FLASK_DEBUG'] = '0'
     proc = subprocess.Popen(
         [sys.executable, '-c',
-         f'import app; app.app.run(host="0.0.0.0", port={_backend_port()}, debug=False)'],
+         f'import app; app.app.run(host="0.0.0.0", port={_backend_port()}, debug=False, threaded=True)'],
         cwd=server_dir,
         env=env,
         stdout=subprocess.DEVNULL,

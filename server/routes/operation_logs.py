@@ -8,6 +8,7 @@ Endpoints:
 """
 import io
 import time
+import threading
 from flask import Blueprint, request, jsonify, send_file
 from db import get_db
 from auth import require_permission
@@ -16,7 +17,9 @@ from datetime import timezone
 operation_logs_bp = Blueprint('operation_logs', __name__)
 
 # 分支名称缓存（避免每次请求都 SELECT 全表 collection_versions）
+# 加锁：并发 serving 下保护「读 ts → 重建 → 写 map/ts」这段复合读改写。
 _branch_name_cache = {'map': {}, 'ts': 0}
+_branch_name_lock = threading.Lock()
 _BRANCH_CACHE_TTL = 60  # 秒
 
 ACTION_LABELS = {'create': '新增', 'update': '修改', 'delete': '删除'}
@@ -36,15 +39,16 @@ def format_ts(dt):
 
 
 def _get_branch_name_map(cur):
-    """获取分支名称映射（带模块级缓存）"""
+    """获取分支名称映射（带模块级缓存，线程安全）"""
     now = time.time()
-    if now - _branch_name_cache['ts'] < _BRANCH_CACHE_TTL and _branch_name_cache['map']:
-        return _branch_name_cache['map']
-    cur.execute('SELECT id, name FROM collection_versions')
-    m = {row[0]: row[1] for row in cur.fetchall()}
-    _branch_name_cache['map'] = m
-    _branch_name_cache['ts'] = now
-    return m
+    with _branch_name_lock:
+        if now - _branch_name_cache['ts'] < _BRANCH_CACHE_TTL and _branch_name_cache['map']:
+            return _branch_name_cache['map']
+        cur.execute('SELECT id, name FROM collection_versions')
+        m = {row[0]: row[1] for row in cur.fetchall()}
+        _branch_name_cache['map'] = m
+        _branch_name_cache['ts'] = now
+        return m
 
 
 def row_to_dict(row, branch_name_map=None):
