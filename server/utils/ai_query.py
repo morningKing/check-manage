@@ -7,14 +7,51 @@ AI configuration is read from the ``ai_settings`` database table.
 """
 
 import json
-import urllib.request
-import urllib.error
+import threading
 from datetime import datetime, timezone
+
+import requests
+from requests.adapters import HTTPAdapter
+
+try:  # urllib3 ships with requests; guard import path differences
+    from urllib3.util.retry import Retry
+except Exception:  # pragma: no cover - very old urllib3
+    Retry = None
 
 from db import get_db
 
 # Field types that cannot be meaningfully queried via natural language
 _SKIP_TYPES = {'relation', 'reference', 'quoteSelect', 'file', 'image', 'richText'}
+
+# ---------------------------------------------------------------------------
+# Shared HTTP session — reuses TCP/TLS connections to the LLM endpoint across
+# requests (connection pooling) instead of opening a fresh socket every call.
+# A single module-level Session is safe to share across threads.
+# ---------------------------------------------------------------------------
+_session = None
+_session_lock = threading.Lock()
+
+
+def get_http_session():
+    global _session
+    if _session is None:
+        with _session_lock:
+            if _session is None:
+                s = requests.Session()
+                if Retry is not None:
+                    retry = Retry(
+                        total=2,
+                        backoff_factor=0.3,
+                        status_forcelist=(429, 500, 502, 503, 504),
+                        allowed_methods=frozenset(['POST']),
+                    )
+                    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10, max_retries=retry)
+                else:
+                    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=10)
+                s.mount('https://', adapter)
+                s.mount('http://', adapter)
+                _session = s
+    return _session
 
 
 # ---------------------------------------------------------------------------
@@ -164,24 +201,25 @@ def nl_to_mongo_filter(question, fields, collection_name):
         'max_tokens': cfg['maxTokens'],
     }).encode('utf-8')
 
-    req = urllib.request.Request(
-        cfg['endpoint'],
-        data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f"Bearer {api_key}",
-        },
-        method='POST',
-    )
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f"Bearer {api_key}",
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=cfg['timeout']) as resp:
-            body = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f'AI 服务请求失败 ({e.code}): {error_body}')
-    except urllib.error.URLError as e:
-        raise RuntimeError(f'AI 服务连接失败: {e.reason}')
+        resp = get_http_session().post(
+            cfg['endpoint'], data=payload, headers=headers, timeout=cfg['timeout']
+        )
+    except requests.RequestException as e:
+        raise RuntimeError(f'AI 服务连接失败: {e}')
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f'AI 服务请求失败 ({resp.status_code}): {resp.text}')
+
+    try:
+        body = resp.json()
+    except ValueError:
+        raise RuntimeError('AI 服务返回格式异常')
 
     # Extract assistant content
     try:

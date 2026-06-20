@@ -106,5 +106,8 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     start_scan_scheduler(app)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG,
+    # threaded=True: serve requests concurrently (one thread per request) so a
+    # slow outbound call (AI query, webhook, ETL) no longer blocks the whole
+    # backend. The DB layer already uses a thread-safe ThreadedConnectionPool.
+    app.run(host='0.0.0.0', port=FLASK_PORT, debug=FLASK_DEBUG, threaded=True,
             exclude_patterns=['*/backups/*'])
