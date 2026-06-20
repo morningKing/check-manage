@@ -39,3 +39,36 @@ def test_render_memory_block_formats_lines():
 
 def test_render_memory_block_empty_returns_empty():
     assert mem.render_memory_block([]) == ''
+
+def test_extract_skips_noninteractive_session():
+    # session row: (user_id, batch_id, scan_task_id) — batch session must be skipped
+    conn = MagicMock(); cur = MagicMock()
+    cur.fetchone.return_value = ('u1', 'batch-9', None)
+    conn.cursor.return_value = cur
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_db():
+        yield conn
+    called = {'n': 0}
+    with patch.object(mem, 'get_db', fake_db), \
+         patch.object(mem, 'add_memory', lambda *a, **k: called.__setitem__('n', called['n'] + 1)):
+        mem.extract_from_turn('sid', state={'turn_msg_id': 'm', 'text': 'hi'}, _sync=True)
+    assert called['n'] == 0  # batch session → no extraction
+
+def test_extract_interactive_calls_add():
+    conn = MagicMock(); cur = MagicMock()
+    # 1st fetchone = session row (interactive: no batch/scan); 2nd = last user message content (JSONB list)
+    cur.fetchone.side_effect = [('u1', None, None), ([{'type': 'text', 'text': '今天天气如何'}],)]
+    conn.cursor.return_value = cur
+    from contextlib import contextmanager
+    @contextmanager
+    def fake_db():
+        yield conn
+    captured = {}
+    with patch.object(mem, 'get_db', fake_db), \
+         patch.object(mem, '_turn_text', return_value='晴天'), \
+         patch.object(mem, 'add_memory', lambda uid, msgs: captured.update(uid=uid, msgs=msgs)):
+        mem.extract_from_turn('sid', state={'turn_msg_id': 'm'}, _sync=True)
+    assert captured['uid'] == 'u1'
+    assert {'role': 'user', 'content': '今天天气如何'} in captured['msgs']
+    assert {'role': 'assistant', 'content': '晴天'} in captured['msgs']

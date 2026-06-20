@@ -8,6 +8,7 @@ import os
 import threading
 import logging
 
+from db import get_db
 from utils.ai_query import get_ai_settings
 
 logger = logging.getLogger(__name__)
@@ -126,3 +127,55 @@ def delete_memory(memory_id):
         m.delete(memory_id=memory_id)
     except Exception as e:
         logger.warning('mem0 delete failed: %s', e)
+
+
+def _turn_text(state):
+    """从 listener 的累积 state 取助手纯文本。复用 chat_persist.build_content。"""
+    try:
+        from utils.chat_persist import build_content
+        parts = build_content(state) or []
+        return '\n'.join(p.get('text', '') for p in parts if p.get('type') == 'text').strip()
+    except Exception:
+        return ''
+
+
+def _extract_user_text(content):
+    """ai_chat_messages.content 是 [{'type':'text','text':...}, ...] 的 JSONB。"""
+    if isinstance(content, list):
+        return '\n'.join(p.get('text', '') for p in content if isinstance(p, dict) and p.get('type') == 'text').strip()
+    return ''
+
+
+def extract_from_turn(session_id, state, _sync=False):
+    """每轮 idle、persist_turn 之后调用：抽取这一轮 [user, assistant] 进长期记忆。
+    仅限真人交互会话（batch_id/scan_task_id 为空）。后台线程执行，绝不抛出。"""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT user_id, batch_id, scan_task_id FROM ai_chat_sessions WHERE id=%s",
+                        (session_id,))
+            row = cur.fetchone()
+        if not row:
+            return
+        user_id, batch_id, scan_task_id = row[0], row[1], row[2]
+        if not user_id or batch_id or scan_task_id:
+            return
+        assistant_text = _turn_text(state)
+        if not assistant_text:
+            return
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT content FROM ai_chat_messages WHERE session_id=%s AND role='user' "
+                        "ORDER BY created_at DESC, id DESC LIMIT 1", (session_id,))
+            r = cur.fetchone()
+        user_text = _extract_user_text(r[0]) if r else ''
+        messages = []
+        if user_text:
+            messages.append({'role': 'user', 'content': user_text})
+        messages.append({'role': 'assistant', 'content': assistant_text})
+        if _sync:
+            add_memory(user_id, messages)
+        else:
+            threading.Thread(target=add_memory, args=(user_id, messages), daemon=True).start()
+    except Exception as e:
+        logger.warning('extract_from_turn failed: %s', e)
