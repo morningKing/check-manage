@@ -348,7 +348,7 @@ def test_search_scopes_by_user_and_unwraps_results():
     fake.search.return_value = {'results': [{'id': '1', 'memory': '喜欢 Python'}]}
     with patch.object(mem, 'get_memory', return_value=fake):
         out = mem.search_memory('alice', '技术', limit=3)
-    fake.search.assert_called_once_with(query='技术', user_id='alice', limit=3)
+    fake.search.assert_called_once_with(query='技术', filters={'user_id': 'alice'}, limit=3)
     assert out == [{'id': '1', 'memory': '喜欢 Python'}]
 
 def test_add_swallows_errors():
@@ -457,7 +457,7 @@ def search_memory(user_id, query, limit=5):
     if m is None or not user_id or not query:
         return []
     try:
-        return _unwrap(m.search(query=query, user_id=user_id, limit=limit))
+        return _unwrap(m.search(query=query, filters={'user_id': user_id}, limit=limit))
     except Exception as e:
         logger.warning('mem0 search failed: %s', e)
         return []
@@ -468,7 +468,7 @@ def list_memories(user_id):
     if m is None or not user_id:
         return []
     try:
-        return _unwrap(m.get_all(user_id=user_id))
+        return _unwrap(m.get_all(filters={'user_id': user_id}))
     except Exception as e:
         logger.warning('mem0 get_all failed: %s', e)
         return []
