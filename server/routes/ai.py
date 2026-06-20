@@ -91,12 +91,16 @@ def put_settings():
     if not isinstance(max_tokens, int) or max_tokens < 1:
         return jsonify({'error': 'max_tokens 必须为正整数'}), 400
 
+    mem0_enabled = bool(body.get('mem0Enabled', False))
+    embedding_model = (body.get('embeddingModel') or 'text-embedding-v3').strip()
+
     # If api_key is all-masked (unchanged from frontend), keep the old value
     current = get_ai_settings()
     if api_key and set(api_key[:-4]) == {'*'}:
         api_key = current['apiKey']
 
-    settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens)
+    settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
+                                  mem0_enabled=mem0_enabled, embedding_model=embedding_model)
     # Mask before returning
     key = settings.get('apiKey', '')
     if len(key) > 4:
