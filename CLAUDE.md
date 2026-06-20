@@ -182,7 +182,7 @@ A **generic** config-driven paradigm (audit is one instance): on a schedule, sca
 *   `routes/webhooks.py`: Webhook rule management, test execution, log retrieval.
 *   `utils/script_runner.py`: Sandboxed Python execution for validation/export scripts.
 *   `auth.py`: JWT decorators — `login_required`, `write_required` (blocks guest), `require_permission('admin.x')` (RBAC capability gate; replaced the old `admin_required`), `api_key_required`. See `utils/permissions.py` + `utils/rbac_guard.py` and `docs/user-guide/admin/roles-rbac.md`.
-*   `utils/db.py`: `psycopg2.pool.SimpleConnectionPool` (1–10 connections). Use `get_db()` context manager.
+*   `db.py`: `psycopg2.pool.ThreadedConnectionPool` (2–20 connections, thread-safe). Use the `get_db()` context manager. Imported as `from db import get_db`. The production backend runs under waitress with a bounded thread pool (`BACKEND_THREADS`, default 8) kept below `maxconn`.
 
 **Reserved collection paths** (cannot be used as dynamic data collection names; authoritative list lives in `RESERVED` at `server/routes/dynamic.py:15`): `menus`, `pageConfigs`, `relations`, `auth`, `users`, `operationLogs`, `backups`, `exportScripts`, `apiKeys`, `validationScripts`, `etlTasks`, `relation-graph`, `query`, `comments`, `timeline`, `dashboards`, `notifications`, `triggerRules`, `ai`, `versions`, `project-versions`, `webhook`, `dependencies`, `system-config`, `home-widgets`, `favicon.ico`.
 
