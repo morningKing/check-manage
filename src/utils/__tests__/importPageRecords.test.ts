@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { importPageRecords } from '../importPageRecords'
+import { makeStableImportId } from '../importId'
 
 function makeStore(overrides: Record<string, any> = {}) {
   return {
@@ -10,6 +11,7 @@ function makeStore(overrides: Record<string, any> = {}) {
     batchGenerateSequenceValues: vi.fn().mockReturnValue({}),
     stripRelationFields: vi.fn((_p: string, r: any) => ({ ...r })),
     getRelationFields: vi.fn().mockReturnValue([]),
+    getPrimaryKeyFields: vi.fn().mockReturnValue([]),
     ...overrides,
   }
 }
@@ -42,6 +44,38 @@ describe('importPageRecords', () => {
       store, post, pageId: 'page-orders', collection: 'orders', records: [{ name: 'a' }], onProgress,
     })
     expect(onProgress).toHaveBeenCalledWith(1, 1)
+  })
+
+  it('derives a stable, primary-key-based id when the page has a primary key', async () => {
+    const store = makeStore({
+      getPrimaryKeyFields: vi.fn().mockReturnValue([{ fieldName: 'code' }]),
+    })
+    const post = vi.fn().mockResolvedValue({ created: 2, updated: 0, failed: 0 })
+    const records = [{ code: 'SKU-1', name: 'a' }, { code: 'SKU-2', name: 'b' }]
+
+    await importPageRecords({ store, post, pageId: 'page-products', collection: 'products', records })
+
+    const sent = post.mock.calls[0][1].records
+    // id is the deterministic hash of the primary key — identical to a fresh derivation,
+    // so a delete-and-re-import of the same code reuses this exact id.
+    expect(sent[0].id).toBe(makeStableImportId('products', ['SKU-1']))
+    expect(sent[1].id).toBe(makeStableImportId('products', ['SKU-2']))
+    // re-importing the same record yields the same id (no random suffix)
+    expect(sent[0].id).toBe(makeStableImportId('products', ['SKU-1']))
+  })
+
+  it('falls back to a random row id when a primary-key value is missing', async () => {
+    const store = makeStore({
+      getPrimaryKeyFields: vi.fn().mockReturnValue([{ fieldName: 'code' }]),
+    })
+    const post = vi.fn().mockResolvedValue({ created: 1, updated: 0, failed: 0 })
+    const records = [{ name: 'no-code-here' }]
+
+    await importPageRecords({ store, post, pageId: 'page-products', collection: 'products', records })
+
+    const sent = post.mock.calls[0][1].records
+    expect(sent[0].id).not.toContain('-pk-')
+    expect(sent[0].id).toMatch(/^products-/)
   })
 
   it('counts batch failure without throwing', async () => {

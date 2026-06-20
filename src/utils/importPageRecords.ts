@@ -1,4 +1,4 @@
-import { makeImportRowId } from '@/utils/importId'
+import { makeImportRowId, makeStableImportId } from '@/utils/importId'
 
 export interface ImportPageResult {
   success: number
@@ -26,8 +26,24 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
   const { store, post, pageId, collection, records, onProgress } = params
   const collectionCache = new Map<string, any[]>()
 
+  // 主键派生的确定性 id：有主键字段且该行主键值齐全时，用主键哈希出稳定 id，
+  // 使「删除后重新导入」复用同一 id（后端 batch-create 是 upsert），从而让引用方
+  // 存的旧 id 自动保持有效；否则回退到带随机后缀、保序的行 id。
+  const pkFieldNames: string[] = (store.getPrimaryKeyFields?.(pageId) || []).map(
+    (f: { fieldName: string }) => f.fieldName
+  )
+  const hasPk = (r: Record<string, any>): boolean =>
+    pkFieldNames.length > 0 &&
+    pkFieldNames.every((fn) => {
+      const v = r[fn]
+      return v !== undefined && v !== null && String(v).trim() !== ''
+    })
+
   records.forEach((r, i) => {
-    if (!r._importId) r._importId = makeImportRowId(collection, i, records.length)
+    if (r._importId) return
+    r._importId = hasPk(r)
+      ? makeStableImportId(collection, pkFieldNames.map((fn) => r[fn]))
+      : makeImportRowId(collection, i, records.length)
   })
 
   await Promise.all([
