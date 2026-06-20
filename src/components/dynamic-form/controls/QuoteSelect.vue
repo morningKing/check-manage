@@ -9,20 +9,17 @@
       multiple
       clearable
       filterable
+      remote
+      :remote-method="onSearch"
       style="width: 100%"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import type { FieldConfig } from '@/types'
-import { usePageConfigStore } from '@/stores/pageConfig'
-
-interface SelectOption {
-  label: string
-  value: string
-}
+import { useRemoteCollectionOptions } from '@/composables/useRemoteCollectionOptions'
 
 interface Props {
   field: FieldConfig
@@ -34,44 +31,23 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: string[]): void
 }>()
 
-const options = ref<SelectOption[]>([])
-const loading = ref(false)
-const pageConfigStore = usePageConfigStore()
+const { options, loading, onSearch, ensureSelectedLabels, init } = useRemoteCollectionOptions({
+  collection: () => props.field.quoteConfig?.targetCollection,
+  labelField: () => props.field.quoteConfig?.displayField || 'id',
+})
 
 const selectValue = computed({
   get: () => props.modelValue || [],
   set: (value) => emit('update:modelValue', value)
 })
 
-async function loadOptions(): Promise<void> {
-  const config = props.field.quoteConfig
-  if (!config || !config.targetCollection) {
-    options.value = []
-    return
-  }
+onMounted(() => init(props.modelValue || []))
 
-  loading.value = true
-  try {
-    const data = await pageConfigStore.fetchCollectionOptions(config.targetCollection)
-    options.value = data.map((item) => ({
-      label: item[config.displayField] || item.id,
-      value: item.id
-    }))
-  } catch (error) {
-    console.error('加载引用选项失败:', error)
-    options.value = []
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => {
-  loadOptions()
-})
+watch(() => props.modelValue, (v) => ensureSelectedLabels(v || []))
 
 watch(
   () => props.field.quoteConfig,
-  () => loadOptions(),
+  () => init(props.modelValue || []),
   { deep: true }
 )
 </script>
