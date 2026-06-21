@@ -31,6 +31,7 @@ import BatchListView from './BatchListView.vue'
 import BatchDetailView from './BatchDetailView.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
+import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
 import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
@@ -39,6 +40,7 @@ const batches = useAiChatBatchesStore()
 const sidebarTab = ref<'sessions' | 'batches'>('sessions')
 const showCreateBatch = ref(false)
 const showTemplateManager = ref(false)
+const showMemoryManager = ref(false)
 
 // Composer model picker: list comes from OpenCode's /provider via the
 // backend; selection is per-session and persisted in localStorage via
@@ -342,6 +344,7 @@ const skillInput = ref<HTMLInputElement | null>(null)
 function handleAddMenu(cmd: string) {
   if (cmd === 'file') pickFiles()
   else if (cmd === 'skill') skillInput.value?.click()
+  else if (cmd === 'memory') showMemoryManager.value = true
 }
 
 // Backend emits a specific `code` for every validation failure; map them to
@@ -734,6 +737,7 @@ function onKey(e: Event) {
                     <ElDropdownMenu>
                       <ElDropdownItem command="file" :disabled="store.uploading">上传附件</ElDropdownItem>
                       <ElDropdownItem command="skill" :disabled="store.uploading">添加技能 (zip)</ElDropdownItem>
+                      <ElDropdownItem command="memory" divided>我的记忆</ElDropdownItem>
                     </ElDropdownMenu>
                   </template>
                 </ElDropdown>
@@ -827,6 +831,7 @@ function onKey(e: Event) {
       @manageTemplates="showTemplateManager = true"
       @created="(d) => { sidebarTab = 'batches'; batches.selectBatch(d.batch.id) }" />
     <PromptTemplateManager v-model="showTemplateManager" />
+    <MemoryManager v-model="showMemoryManager" />
   </div>
 </template>
 
