@@ -139,10 +139,17 @@ CREATE TABLE IF NOT EXISTS ai_settings (
     model           VARCHAR(200) NOT NULL DEFAULT 'qwen-plus',
     timeout         INTEGER NOT NULL DEFAULT 30,
     max_tokens      INTEGER NOT NULL DEFAULT 1024,
+    mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+    embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3',
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
+
+-- mem0 长期记忆配置列：新库由上面的 CREATE 直接带上；已有库幂等补列
+-- （等价于 add_mem0_settings_columns.py，纳入 init_db 后新部署无需再跑该迁移脚本）。
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3';
 
 -- ==================== system_config 表 ====================
 CREATE TABLE IF NOT EXISTS system_config (
@@ -1049,6 +1056,8 @@ def init_db():
                     model           VARCHAR(200) NOT NULL DEFAULT 'qwen-plus',
                     timeout         INTEGER NOT NULL DEFAULT 30,
                     max_tokens      INTEGER NOT NULL DEFAULT 1024,
+                    mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+                    embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3',
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
                 INSERT INTO ai_settings (id) VALUES (1);
