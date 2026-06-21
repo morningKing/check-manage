@@ -99,7 +99,7 @@ def test_reopen_deleted_forbidden():
 
 def test_physical_delete_endpoint_removed():
     r = _client().delete('/ai/chat/sessions/s1', headers=_h())
-    assert r.status_code in (404, 405)  # 个人物理删已移除
+    assert r.status_code == 405  # 个人物理删已移除（路由仍存在于其它方法 → 405）
 
 
 def test_list_includes_closed():
@@ -120,3 +120,6 @@ def test_list_includes_closed():
     assert r.status_code == 200
     sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
     assert 'closed' in sql
+    data = r.get_json()
+    statuses = [s['status'] for s in data['sessions']]
+    assert 'active' in statuses and 'closed' in statuses

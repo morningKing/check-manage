@@ -35,14 +35,14 @@ from db import get_db
 from auth import login_required, login_required_sse, write_required
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
-    create_session_workspace, cleanup_session_workspace, write_opencode_config,
+    create_session_workspace, write_opencode_config,
     safe_resolve,
 )
 from utils.workspace_changes import git_changes, file_diff
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
-from utils.session_token import generate_token, revoke_token
+from utils.session_token import generate_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
