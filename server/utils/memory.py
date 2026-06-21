@@ -20,16 +20,36 @@ _memory = None
 _init_attempted = False
 _lock = threading.Lock()
 
-# All mem0/Chroma native calls run on ONE dedicated long-lived thread. chromadb/
-# onnxruntime native state is unsafe to create on one thread and use from the
-# app's many others (APScheduler threads + werkzeug request workers) — that
-# combination segfaults the process. Pinning every mem0 call to a single thread
-# avoids it. (init + add/search/get_all/delete all go through here.)
+# ── Why every mem0 call is pinned to ONE dedicated thread ─────────────────────
+# mem0's vector store (chromadb) computes embeddings via onnxruntime — a native
+# C++ runtime. Such native libs hold THREAD-AFFINE state: handles, the onnxruntime
+# session/memory arena, and BLAS thread context all bind to the thread that
+# created them. Touching that state from a DIFFERENT thread is an illegal native
+# memory access → SIGSEGV.
+#
+# This app is multi-threaded: waitress/werkzeug request workers, APScheduler
+# threads (backup / dependency / AI-scan), plus mem0's own background extract
+# thread. If the singleton is lazily created on request thread A and then used
+# from scheduler thread B (or another worker), it crashes. Symptom we actually
+# hit: the 1st call (same thread) succeeds, the 2nd (different thread) segfaults.
+#
+# A segfault is PROCESS-level — it kills the interpreter outright, so it can NOT
+# be caught by the try/except no-op fallbacks below; the crash happens before any
+# Python handler can run. The only fix is to never cross threads.
+#
+# So: a single-worker pool acts as the "native thread". Because max_workers=1,
+# init AND every later add/search/get_all/delete run on that SAME long-lived
+# thread, satisfying chromadb/onnxruntime's affinity. _on_mem_thread() submits
+# the work there and blocks on .result(), so callers keep normal sync semantics.
+# (Tests don't init the native store — they mock/short-circuit — so this path is
+# only exercised by the running server with mem0_enabled=True.)
 import concurrent.futures as _futures
 _executor = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='mem0')
 
 
 def _on_mem_thread(fn):
+    # Run `fn` on the single mem0 thread and wait for it (keeps the chromadb/
+    # onnxruntime native state thread-affine; see the block above for why).
     return _executor.submit(fn).result()
 
 
