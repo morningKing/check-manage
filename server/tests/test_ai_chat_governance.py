@@ -123,3 +123,22 @@ def test_list_includes_closed():
     data = r.get_json()
     statuses = [s['status'] for s in data['sessions']]
     assert 'active' in statuses and 'closed' in statuses
+
+
+# --- Task 3: admin governance endpoints (RBAC gated) ---
+# The conftest autouse fixture `_reset_and_prime_permission_cache` seeds the
+# 'developer' role with `admin_keys: set()` (no admin capabilities), so any
+# endpoint decorated with `@require_permission('admin.ai_chat_admin')` will
+# reject a developer token with 403. No DB needed for permission resolution.
+
+
+def test_admin_archive_requires_permission():
+    """developer (no admin.ai_chat_admin) -> 403"""
+    r = _client().post('/ai/chat/sessions/s1/archive', headers=_h(role='developer'))
+    assert r.status_code == 403
+
+
+def test_admin_list_requires_permission():
+    """developer (no admin.ai_chat_admin) -> 403"""
+    r = _client().get('/ai/chat/admin/sessions', headers=_h(role='developer'))
+    assert r.status_code == 403

@@ -32,7 +32,7 @@ from flask import (
 )
 from utils.filename import safe_filename
 from db import get_db
-from auth import login_required, login_required_sse, write_required
+from auth import login_required, login_required_sse, write_required, require_permission
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
     create_session_workspace, write_opencode_config,
@@ -863,5 +863,36 @@ def reopen_session(sid):
                     (sid, user['userId']))
     log_operation('update', 'ai_chat_session', sid, sid, '重开会话')
     return jsonify({'ok': True, 'status': 'active'})
+
+
+# --- Admin governance endpoints (require admin.ai_chat_admin capability) ---
+
+
+@ai_chat_bp.route('/admin/sessions', methods=['GET'])
+@require_permission('admin.ai_chat_admin')
+def admin_list_sessions():
+    """List all sessions across all users (admin only, max 500)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, user_id, title, status, last_active_at FROM ai_chat_sessions "
+            "WHERE batch_id IS NULL ORDER BY last_active_at DESC NULLS LAST, id DESC LIMIT 500")
+        rows = cur.fetchall()
+    return jsonify({'sessions': [
+        {'id': r[0], 'userId': r[1], 'title': r[2] or '新会话', 'status': r[3],
+         'lastActiveAt': r[4].isoformat() if r[4] else None} for r in rows]})
+
+
+@ai_chat_bp.route('/sessions/<sid>/archive', methods=['POST'])
+@require_permission('admin.ai_chat_admin')
+def archive_session(sid):
+    """Archive any session (admin only)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status='archived' WHERE id=%s", (sid,))
+        if cur.rowcount == 0:
+            return jsonify({'error': 'session not found'}), 404
+    log_operation('update', 'ai_chat_session', sid, sid, '归档会话（admin）')
+    return jsonify({'ok': True, 'status': 'archived'})
 
 

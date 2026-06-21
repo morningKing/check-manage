@@ -32,6 +32,7 @@ PERMISSION_CATALOG = [
     {'key': 'admin.backup',             'label': '系统备份',   'group': '系统运维'},
     {'key': 'admin.system_config',      'label': '系统设置',   'group': '系统运维'},
     {'key': 'admin.home_widgets',       'label': '首页区块',   'group': '系统运维'},
+    {'key': 'admin.ai_chat_admin',     'label': 'AI 会话治理', 'group': '平台管理'},
 ]
 
 
