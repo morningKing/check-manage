@@ -48,6 +48,7 @@ from utils.data_export import (
 from utils.py_runner import run_python_in_workspace
 from utils.skill_upload import extract_skill_zip, SkillUploadError
 from utils.memory import search_memory, render_memory_block
+from utils.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -819,6 +820,41 @@ def run_script(sid):
         )
     result['messageId'] = msg_id
     return jsonify(result)
+
+
+@ai_chat_bp.route('/sessions/<sid>/close', methods=['POST'])
+@write_required
+def close_session(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # close 是软关闭、可 reopen：仅改 status + 停 listener；
+    # 保留 token / workspace / OpenCode session，使 reopen 能续上（失效则 M3 重建）。
+    stop_listener(sid)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status='closed' WHERE id=%s AND user_id=%s",
+                    (sid, user['userId']))
+    log_operation('update', 'ai_chat_session', sid, sid, '关闭会话')
+    return jsonify({'ok': True, 'status': 'closed'})
+
+
+@ai_chat_bp.route('/sessions/<sid>/reopen', methods=['POST'])
+@write_required
+def reopen_session(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if sess[3] == 'archived':
+        return jsonify({'error': '已归档会话不可重开', 'code': 'SESSION_ARCHIVED'}), 403
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status = 'active' WHERE id=%s AND user_id=%s",
+                    (sid, user['userId']))
+    log_operation('update', 'ai_chat_session', sid, sid, '重开会话')
+    return jsonify({'ok': True, 'status': 'active'})
 
 
 @ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])
