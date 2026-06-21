@@ -332,6 +332,7 @@ async function closeSessionItem(id: string) {
 async function reopenSessionItem(id: string) {
   try {
     await store.reopenSession(id)
+    await selectSession(id)
   } catch { ElMessage.error('重开会话失败') }
 }
 

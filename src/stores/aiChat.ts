@@ -357,18 +357,21 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async closeSession(id: string) {
-      if (this.activeSessionId === id) this._closeStream()
       await apiCloseSession(id)
+      if (this.activeSessionId === id) {
+        this._closeStream()
+        this.activeSessionId = null
+      }
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'closed'
       this.streaming[id] = false
-      if (this.activeSessionId === id) this.activeSessionId = null
     },
 
     async reopenSession(id: string) {
       await apiReopenSession(id)
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'active'
+      this.streaming[id] = false
     },
 
     _openStream(sid: string) {
