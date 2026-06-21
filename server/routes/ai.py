@@ -7,11 +7,11 @@ GET  /ai/settings — retrieve AI configuration (api_key masked).
 PUT  /ai/settings — update AI configuration.
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
-from utils.memory import reset_memory_singleton
+from utils.memory import reset_memory_singleton, list_memories, delete_memory
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
@@ -108,3 +108,21 @@ def put_settings():
     if len(key) > 4:
         settings['apiKey'] = '*' * (len(key) - 4) + key[-4:]
     return jsonify(settings)
+
+
+@ai_bp.route('/memories', methods=['GET'])
+@login_required
+def list_my_memories():
+    user = g.current_user
+    return jsonify({'memories': list_memories(user['userId'])})
+
+
+@ai_bp.route('/memories/<memory_id>', methods=['DELETE'])
+@login_required
+def delete_my_memory(memory_id):
+    user = g.current_user
+    owned = {m.get('id') for m in list_memories(user['userId'])}
+    if memory_id not in owned:
+        return jsonify({'error': 'not found'}), 404
+    delete_memory(memory_id)
+    return jsonify({'ok': True})
