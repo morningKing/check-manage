@@ -77,3 +77,7 @@ DATA_FILES_ROOT       = os.getenv(
     os.path.join(os.path.expanduser('~'), '.check-manage', 'data-files'),
 )
 DATA_FILE_MAX_MB      = _to_int(os.getenv('DATA_FILE_MAX_MB'), 50)
+
+# Shared secret for the MCP server -> Flask internal memory endpoints.
+# Empty (default) disables the internal endpoints (returns 403).
+MCP_INTERNAL_TOKEN = os.getenv('MCP_INTERNAL_TOKEN', '')

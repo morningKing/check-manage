@@ -8,3 +8,5 @@ requests>=2.31.0
 APScheduler>=3.10.0
 pytest>=8.0.0
 pytest-cov>=5.0.0
+mem0ai>=0.1.0
+chromadb>=0.5.0

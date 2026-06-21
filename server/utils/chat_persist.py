@@ -137,6 +137,11 @@ def _run_listener(sid, opencode_session_id, event_source):
         sig = apply_event(state, evt, opencode_session_id)
         if sig == 'idle':
             persist_turn(sid, state)
+            try:
+                from utils.memory import extract_from_turn
+                extract_from_turn(sid, state)
+            except Exception:
+                pass
             state = new_state()
             last_persist = time.monotonic()
         elif sig == 'changed' and state['turn_msg_id']:

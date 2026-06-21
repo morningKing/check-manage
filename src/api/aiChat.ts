@@ -206,6 +206,15 @@ export function downloadFileUrl(id: string, path: string): string {
   return `/api/ai/chat/sessions/${encodeURIComponent(id)}/files/download?path=${encodeURIComponent(path)}${authParam('&')}`
 }
 
+export interface AiMemory { id: string; memory: string }
+
+export function listMemories() {
+  return get<{ memories: AiMemory[] }>('/ai/memories')
+}
+export function deleteMemory(id: string) {
+  return del(`/ai/memories/${id}`)
+}
+
 export type StreamStatus = 'open' | 'reconnecting' | 'closed'
 
 export interface StreamHandlers {

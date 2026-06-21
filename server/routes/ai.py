@@ -7,10 +7,11 @@ GET  /ai/settings — retrieve AI configuration (api_key masked).
 PUT  /ai/settings — update AI configuration.
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
+from utils.memory import reset_memory_singleton, list_memories, delete_memory
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
@@ -91,14 +92,37 @@ def put_settings():
     if not isinstance(max_tokens, int) or max_tokens < 1:
         return jsonify({'error': 'max_tokens 必须为正整数'}), 400
 
+    mem0_enabled = bool(body.get('mem0Enabled', False))
+    embedding_model = (body.get('embeddingModel') or 'text-embedding-v3').strip()
+
     # If api_key is all-masked (unchanged from frontend), keep the old value
     current = get_ai_settings()
     if api_key and set(api_key[:-4]) == {'*'}:
         api_key = current['apiKey']
 
-    settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens)
+    settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
+                                  mem0_enabled=mem0_enabled, embedding_model=embedding_model)
+    reset_memory_singleton()
     # Mask before returning
     key = settings.get('apiKey', '')
     if len(key) > 4:
         settings['apiKey'] = '*' * (len(key) - 4) + key[-4:]
     return jsonify(settings)
+
+
+@ai_bp.route('/memories', methods=['GET'])
+@login_required
+def list_my_memories():
+    user = g.current_user
+    return jsonify({'memories': list_memories(user['userId'])})
+
+
+@ai_bp.route('/memories/<memory_id>', methods=['DELETE'])
+@login_required
+def delete_my_memory(memory_id):
+    user = g.current_user
+    owned = {m.get('id') for m in list_memories(user['userId'])}
+    if memory_id not in owned:
+        return jsonify({'error': 'not found'}), 404
+    delete_memory(memory_id)
+    return jsonify({'ok': True})

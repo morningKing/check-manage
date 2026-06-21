@@ -10,6 +10,7 @@ from mcp.server import Server
 from tools import (
     list_collections, save_artifact, read_upload, export_collection_excel, run_python,
     query_collection, read_data_file, list_export_scripts, run_export_script,
+    memory,
 )
 
 _TOOLS = {
@@ -22,6 +23,9 @@ _TOOLS = {
     read_data_file.NAME: (read_data_file.TOOL, read_data_file.handle),
     list_export_scripts.NAME: (list_export_scripts.TOOL, list_export_scripts.handle),
     run_export_script.NAME: (run_export_script.TOOL, run_export_script.handle),
+    memory.SEARCH.name: (memory.SEARCH, memory.handle_search),
+    memory.ADD.name: (memory.ADD, memory.handle_add),
+    memory.DELETE.name: (memory.DELETE, memory.handle_delete),
 }
 
 

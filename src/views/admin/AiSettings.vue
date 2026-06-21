@@ -70,6 +70,18 @@
           />
         </el-form-item>
 
+        <el-form-item label="长期记忆 (mem0)">
+          <el-switch v-model="settings.mem0Enabled" />
+          <span class="hint">开启后，AI 会话将自动形成并调用按用户的长期记忆</span>
+        </el-form-item>
+
+        <el-form-item label="Embedding 模型" v-if="settings.mem0Enabled">
+          <el-input
+            v-model="settings.embeddingModel"
+            placeholder="text-embedding-v3"
+          />
+        </el-form-item>
+
         <el-form-item>
           <el-button type="primary" @click="handleSave" :loading="saving">
             保存设置
@@ -97,6 +109,8 @@ interface AiSettingsData {
   model: string
   timeout: number
   maxTokens: number
+  mem0Enabled?: boolean
+  embeddingModel?: string
   updatedAt: string | null
 }
 
@@ -110,6 +124,8 @@ const settings = reactive<AiSettingsData>({
   model: 'qwen-plus',
   timeout: 30,
   maxTokens: 1024,
+  mem0Enabled: false,
+  embeddingModel: 'text-embedding-v3',
   updatedAt: null,
 })
 
@@ -128,6 +144,8 @@ async function loadSettings() {
     settings.model = s.model
     settings.timeout = s.timeout
     settings.maxTokens = s.maxTokens
+    settings.mem0Enabled = !!s.mem0Enabled
+    settings.embeddingModel = s.embeddingModel || 'text-embedding-v3'
     settings.updatedAt = s.updatedAt
   } catch {
     // silent
@@ -146,6 +164,8 @@ async function handleSave() {
       model: settings.model,
       timeout: settings.timeout,
       maxTokens: settings.maxTokens,
+      mem0Enabled: settings.mem0Enabled,
+      embeddingModel: settings.embeddingModel,
     }) as any
     // Update local state with response
     if (data) {
@@ -178,6 +198,12 @@ onMounted(() => {
 .card-header h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.hint {
+  margin-left: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .updated-info {
