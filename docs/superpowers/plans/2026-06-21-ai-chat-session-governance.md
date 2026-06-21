@@ -312,3 +312,15 @@ git commit -m "docs(ai-chat): session governance & audit"
 - [ ] admin list/archive 受 `admin.ai_chat_admin` 保护（无权限 403）；审计写入 operation_logs。
 - [ ] 前端 `vue-tsc` clean；列表按 status 显示关闭/重开。
 - [ ] 手动：关闭会话→列表灰显+可重开→重开后能继续（OpenCode 失效则 M3 重建）；admin 审计页按 `target_type=ai_chat_session` 看到操作记录。
+
+---
+
+## 测试验证记录（更正）
+
+> 更正 PR #63 描述里的 Test Plan。
+
+实测结果：**后端完整测试套件 `953 passed, 0 failed`（含 `test_backup.py` 全部 40 个用例），`vue-tsc` clean，前端 aiChat store 测试通过。**
+
+PR #63 原 Test Plan 写的 "913 passed，`test_backup.py` 因 chromadb 原生崩溃被排除" **不准确**：那是把前台 `pytest > 文件` 的输出在崩溃前误判为进程崩溃所致——实为输出缓冲被截断的假象，并非真实 segfault。三次独立复核确认无崩溃：`test_backup.py` 单独跑 40 passed；mem0/chromadb 相关测试 + backup 同进程 49 passed；完整套件 953 passed。
+
+补充：`server/utils/memory.py` 注释提到的 chromadb/onnxruntime segfault 是**运行态 Flask 服务**下跨线程使用原生库的历史问题（已由"mem0 调用钉单线程 executor"修复），与 pytest 全量运行无关。
