@@ -9,3 +9,13 @@
 - **批任务/扫描会话不参与**记忆（它们不是个人对话）。
 
 > 依赖 AI 设置里的 API Key/端点（与 AI 智能查询同一套，默认阿里云 DashScope 兼容端点）。Embedding 模型默认 `text-embedding-v3`。
+
+## 让助手主动管理记忆（M2）
+
+开启内部通道（`server/.env` 设置 `MCP_INTERNAL_TOKEN`）后，助手在对话中可主动：
+
+- **memory_search**：查你的相关记忆；
+- **memory_add**：把你明确要它记住的事实存入；
+- **memory_delete**：删除一条记忆。
+
+这些操作作用域仍按用户，且经后端统一管理（不直接写记忆库）。未设置 `MCP_INTERNAL_TOKEN` 时这些工具不可用（内部端点返回 403），不影响其余功能。
