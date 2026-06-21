@@ -79,3 +79,19 @@ def test_reopen_archived_forbidden():
     with patch.object(ac, 'get_db', fake):
         r = _client().post('/ai/chat/sessions/s1/reopen', headers=_h())
     assert r.status_code == 403
+
+
+def test_close_archived_forbidden():
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc1', 'archived', '/ws')])
+    with patch.object(ac, 'get_db', fake), patch.object(ac, 'stop_listener'):
+        r = _client().post('/ai/chat/sessions/s1/close', headers=_h())
+    assert r.status_code == 409
+
+
+def test_reopen_deleted_forbidden():
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc1', 'deleted', '/ws')])
+    with patch.object(ac, 'get_db', fake):
+        r = _client().post('/ai/chat/sessions/s1/reopen', headers=_h())
+    assert r.status_code == 409

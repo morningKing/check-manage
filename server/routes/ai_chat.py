@@ -15,6 +15,8 @@ Routes registered:
     GET    /ai/chat/sessions/:id/commands list OpenCode commands + skills
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
+    POST   /ai/chat/sessions/:id/close    close_session
+    POST   /ai/chat/sessions/:id/reopen   reopen_session
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
     GET    /ai/chat/agents                list_agents
 """
@@ -829,6 +831,8 @@ def close_session(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if sess[3] in ('archived', 'deleted'):
+        return jsonify({'error': '该状态会话不可关闭', 'code': 'INVALID_STATUS'}), 409
     # close 是软关闭、可 reopen：仅改 status + 停 listener；
     # 保留 token / workspace / OpenCode session，使 reopen 能续上（失效则 M3 重建）。
     stop_listener(sid)
@@ -849,6 +853,8 @@ def reopen_session(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     if sess[3] == 'archived':
         return jsonify({'error': '已归档会话不可重开', 'code': 'SESSION_ARCHIVED'}), 403
+    if sess[3] == 'deleted':
+        return jsonify({'error': '已删除会话不可重开', 'code': 'INVALID_STATUS'}), 409
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET status = 'active' WHERE id=%s AND user_id=%s",
