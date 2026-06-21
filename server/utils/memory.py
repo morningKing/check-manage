@@ -20,6 +20,18 @@ _memory = None
 _init_attempted = False
 _lock = threading.Lock()
 
+# All mem0/Chroma native calls run on ONE dedicated long-lived thread. chromadb/
+# onnxruntime native state is unsafe to create on one thread and use from the
+# app's many others (APScheduler threads + werkzeug request workers) — that
+# combination segfaults the process. Pinning every mem0 call to a single thread
+# avoids it. (init + add/search/get_all/delete all go through here.)
+import concurrent.futures as _futures
+_executor = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='mem0')
+
+
+def _on_mem_thread(fn):
+    return _executor.submit(fn).result()
+
 
 def _base_url(endpoint):
     return endpoint.rsplit('/chat/completions', 1)[0] if endpoint else ''
@@ -57,7 +69,7 @@ def get_memory():
         try:
             os.makedirs(MEM0_STORE_ROOT, exist_ok=True)
             from mem0 import Memory
-            _memory = Memory.from_config(_build_config(cfg))
+            _memory = _on_mem_thread(lambda: Memory.from_config(_build_config(cfg)))
             return _memory
         except Exception as e:
             logger.warning('mem0 init failed, memory disabled: %s', e)
@@ -83,7 +95,7 @@ def add_memory(user_id, messages):
     if m is None or not user_id or not messages:
         return
     try:
-        m.add(messages, user_id=user_id)
+        _on_mem_thread(lambda: m.add(messages, user_id=user_id))
     except Exception as e:
         logger.warning('mem0 add failed: %s', e)
 
@@ -93,7 +105,7 @@ def search_memory(user_id, query, limit=5):
     if m is None or not user_id or not query:
         return []
     try:
-        return _unwrap(m.search(query=query, filters={'user_id': user_id}, limit=limit))
+        return _unwrap(_on_mem_thread(lambda: m.search(query=query, filters={'user_id': user_id}, limit=limit)))
     except Exception as e:
         logger.warning('mem0 search failed: %s', e)
         return []
@@ -104,7 +116,7 @@ def list_memories(user_id):
     if m is None or not user_id:
         return []
     try:
-        return _unwrap(m.get_all(filters={'user_id': user_id}))
+        return _unwrap(_on_mem_thread(lambda: m.get_all(filters={'user_id': user_id})))
     except Exception as e:
         logger.warning('mem0 get_all failed: %s', e)
         return []
@@ -124,7 +136,7 @@ def delete_memory(memory_id):
     if m is None or not memory_id:
         return
     try:
-        m.delete(memory_id=memory_id)
+        _on_mem_thread(lambda: m.delete(memory_id=memory_id))
     except Exception as e:
         logger.warning('mem0 delete failed: %s', e)
 

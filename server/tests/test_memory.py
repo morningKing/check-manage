@@ -6,6 +6,21 @@ import utils.memory as mem
 def setup_function():
     mem.reset_memory_singleton()
 
+def test_mem0_ops_run_on_dedicated_thread():
+    """Regression: mem0 native calls must run on the dedicated single thread
+    (chromadb/onnxruntime segfault otherwise under the app's many threads)."""
+    import threading
+    fake = MagicMock()
+    seen = {}
+    def rec(**kw):
+        seen['thread'] = threading.current_thread().name
+        return {'results': []}
+    fake.search.side_effect = rec
+    with patch.object(mem, 'get_memory', return_value=fake):
+        mem.search_memory('u', 'q')
+    assert seen.get('thread', '').startswith('mem0'), seen
+
+
 def test_get_memory_none_when_disabled():
     with patch.object(mem, 'get_ai_settings', return_value={'mem0Enabled': False, 'apiKey': 'sk'}):
         assert mem.get_memory() is None
