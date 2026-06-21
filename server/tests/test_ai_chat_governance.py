@@ -95,3 +95,28 @@ def test_reopen_deleted_forbidden():
     with patch.object(ac, 'get_db', fake):
         r = _client().post('/ai/chat/sessions/s1/reopen', headers=_h())
     assert r.status_code == 409
+
+
+def test_physical_delete_endpoint_removed():
+    r = _client().delete('/ai/chat/sessions/s1', headers=_h())
+    assert r.status_code in (404, 405)  # 个人物理删已移除
+
+
+def test_list_includes_closed():
+    import routes.ai_chat as ac
+    conn = MagicMock(); cur = MagicMock()
+    cur.fetchall.return_value = [
+        ('s1', '会话1', None, None, None, 'active'),
+        ('s2', '会话2', None, None, None, 'closed'),
+    ]
+    conn.cursor.return_value = cur
+
+    @contextmanager
+    def fake():
+        yield conn
+
+    with patch.object(ac, 'get_db', fake):
+        r = _client().get('/ai/chat/sessions', headers=_h())
+    assert r.status_code == 200
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert 'closed' in sql

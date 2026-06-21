@@ -6,7 +6,6 @@ Routes registered:
     GET    /ai/chat/sessions/:id/messages history
     POST   /ai/chat/sessions/:id/messages send_message
     GET    /ai/chat/sessions/:id/events   sse_proxy
-    DELETE /ai/chat/sessions/:id          delete_session
     POST   /ai/chat/sessions/:id/files    upload; GET .../files, .../files/download
     POST   /ai/chat/sessions/:id/skills   install a skill zip
     GET    /ai/chat/sessions/:id/changes  workspace git changes
@@ -129,6 +128,8 @@ def create_session():
             (opencode_session_id, session_id),
         )
 
+    log_operation('create', 'ai_chat_session', session_id, '新会话', '创建会话')
+
     return jsonify({
         'id': session_id,
         'title': '新会话',
@@ -228,10 +229,10 @@ def list_sessions():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, title, last_active_at, batch_id, batch_input_file "
+            "SELECT id, title, last_active_at, batch_id, batch_input_file, status "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
-            "  AND (status = 'active' OR batch_id IS NOT NULL) "
+            "  AND (status IN ('active', 'closed') OR batch_id IS NOT NULL) "
             "ORDER BY last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )
@@ -249,7 +250,8 @@ def list_sessions():
         'sessions': [
             {'id': r[0],
              'title': _title(r[1], r[3], r[4]),
-             'lastActiveAt': r[2].isoformat() if r[2] else None}
+             'lastActiveAt': r[2].isoformat() if r[2] else None,
+             'status': r[5]}
             for r in rows
         ],
     })
@@ -863,32 +865,3 @@ def reopen_session(sid):
     return jsonify({'ok': True, 'status': 'active'})
 
 
-@ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])
-@write_required
-def delete_session(sid):
-    user = flask_g.current_user
-    sess = _load_session_for_user(sid, user['userId'])
-    if not sess:
-        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-
-    opencode_session_id = sess[2]
-    stop_listener(sid)
-    if opencode_session_id:
-        try:
-            OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
-        except Exception:
-            pass  # 404 from OpenCode = already gone (§7 #11)
-
-    # Security-critical first: kill the token and mark the session dead so a
-    # failure to remove files (e.g. Windows handle held by OpenCode) can't leave
-    # an authenticated session alive.
-    revoke_token(sid)
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s",
-            (sid,),
-        )
-
-    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)  # best-effort
-    return '', 204

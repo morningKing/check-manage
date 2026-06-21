@@ -298,32 +298,21 @@ def test_sse_events_filters_other_sessions(setup):
     assert 'OTHER' not in body
 
 
-def test_delete_session_cleans_everything(setup):
+def test_delete_session_endpoint_removed(setup):
+    """Personal physical delete endpoint has been removed (governance Task 2)."""
     client, cursor, oc, dev_h, _, ws_root = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
-    # Pre-create the workspace dir so cleanup has something to remove
-    target = ws_root / 'user-1' / 'sess_x' / 'uploads'
-    target.mkdir(parents=True, exist_ok=True)
-
     resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
-    assert resp.status_code == 204
-    oc.delete_session.assert_called_once_with('oc_sess_42')
-    assert not (ws_root / 'user-1' / 'sess_x').exists()
-
-    # DB updates: revoke token + soft-flag (or DELETE)
-    statements = [c.args[0] for c in cursor.execute.call_args_list]
-    assert any('UPDATE ai_chat_sessions' in s and 'status' in s for s in statements) or \
-           any('DELETE FROM ai_chat_sessions' in s for s in statements)
+    assert resp.status_code == 405  # Method Not Allowed
 
 
 def test_list_sessions_returns_user_sessions(setup):
-    """SQL selects (id, title, last_active_at, batch_id, batch_input_file) so
+    """SQL selects (id, title, last_active_at, batch_id, batch_input_file, status) so
     that batch-children get synthesized "[批] <file>" titles. The mock row
-    must match that 5-tuple shape."""
+    must match that 6-tuple shape."""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchall.return_value = [
-        ('sess_a', '会话A', None, None, None),                          # regular session
-        ('sess_b', None, None, 'batch-1', 'uploads/req-A.txt'),         # batch child → synthesized title
+        ('sess_a', '会话A', None, None, None, 'active'),                # regular session
+        ('sess_b', None, None, 'batch-1', 'uploads/req-A.txt', 'active'),  # batch child → synthesized title
     ]
     resp = client.get('/ai/chat/sessions', headers=dev_h)
     assert resp.status_code == 200
@@ -331,6 +320,7 @@ def test_list_sessions_returns_user_sessions(setup):
     assert [s['id'] for s in body['sessions']] == ['sess_a', 'sess_b']
     assert body['sessions'][0]['title'] == '会话A'
     assert body['sessions'][1]['title'] == '[批] req-A.txt'
+    assert body['sessions'][0]['status'] == 'active'
 
 
 def test_rename_session_updates_title(setup):
@@ -814,17 +804,12 @@ def test_run_command_starts_persist_listener(setup):
     assert ens.call_args[0][2] == str(ws)
 
 
-def test_delete_session_stops_persist_listener(setup):
+def test_delete_session_stops_persist_listener_removed(setup):
+    """Personal physical delete endpoint removed (governance Task 2) —
+    stop_listener is now called by close_session instead."""
     client, cursor, oc, dev_h, _, ws_root = setup
-    ws = ws_root / 'wsdel'; ws.mkdir(parents=True, exist_ok=True)
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_42', 'active', str(ws))
-    with patch('routes.ai_chat.stop_listener') as stp, \
-         patch('routes.ai_chat.OpenCodeClient'), \
-         patch('routes.ai_chat.revoke_token'), \
-         patch('routes.ai_chat.cleanup_session_workspace'):
-        resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
-    assert resp.status_code == 204
-    stp.assert_called_once_with('sess_x')
+    resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
+    assert resp.status_code == 405
 
 
 def test_list_agents_filters_internal_and_subagents(setup):
