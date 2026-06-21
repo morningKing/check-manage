@@ -21,43 +21,55 @@ import psycopg2.extras
 # 备份文件存储目录
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
 
-# mem0 向量库目录（与 utils/memory.py 一致；在此重复定义以避免 import memory 的副作用）。
+# 外部文件目录（不在 DB 里；默认随备份一起打包/还原）。在此从 env 直接读，避免
+# import utils.memory / config 的副作用。AI 会话工作区（AI_WORKSPACE_ROOT）是临时
+# 数据（TTL），故意不纳入备份。
 MEM0_STORE_ROOT = os.environ.get(
-    'MEM0_STORE_ROOT', os.path.join(os.path.expanduser('~'), '.check-manage', 'mem0'))
+    'MEM0_STORE_ROOT', os.path.join(os.path.expanduser('~'), '.check-manage', 'mem0'))        # mem0 向量库
+DATA_FILES_ROOT = os.environ.get(
+    'DATA_FILES_ROOT', os.path.join(os.path.expanduser('~'), '.check-manage', 'data-files'))  # 数据页上传文件
 _VECTOR_PREFIX = 'vector_store/'
+_DATA_FILES_PREFIX = 'data_files/'
 
 
-def _add_vector_store_to_zip(zf):
-    """把 mem0 向量库目录的全部文件打进 ZIP（vector_store/ 前缀）。返回是否打了内容。"""
-    if not os.path.isdir(MEM0_STORE_ROOT):
+def _add_tree_to_zip(zf, root, prefix):
+    """把一个目录的全部文件打进 ZIP（prefix 前缀）。返回是否打了内容。"""
+    if not os.path.isdir(root):
         return False
     added = False
-    for root, _dirs, files in os.walk(MEM0_STORE_ROOT):
+    for r, _dirs, files in os.walk(root):
         for f in files:
-            fp = os.path.join(root, f)
-            arc = _VECTOR_PREFIX + os.path.relpath(fp, MEM0_STORE_ROOT).replace('\\', '/')
-            zf.write(fp, arc)
+            fp = os.path.join(r, f)
+            zf.write(fp, prefix + os.path.relpath(fp, root).replace('\\', '/'))
             added = True
     return added
 
 
-def _restore_vector_store(zip_path):
-    """从 ZIP 还原向量库目录到 MEM0_STORE_ROOT。向量库没有 upsert 语义，因此是
-    全量覆盖（先清空再解出），与备份时刻的 DB 引用 id 配套一致。返回是否还原了内容。"""
+def _restore_tree(zip_path, prefix, root):
+    """从 ZIP 还原一个目录到 root（全量覆盖：先清空再解出；外部文件无 upsert 语义，
+    须与备份时刻的 DB 引用配套）。返回是否还原了内容。"""
     with zipfile.ZipFile(zip_path, 'r') as zf:
-        vs = [n for n in zf.namelist() if n.startswith(_VECTOR_PREFIX) and not n.endswith('/')]
-        if not vs:
+        items = [n for n in zf.namelist() if n.startswith(prefix) and not n.endswith('/')]
+        if not items:
             return False
-        if os.path.isdir(MEM0_STORE_ROOT):
-            shutil.rmtree(MEM0_STORE_ROOT, ignore_errors=True)
-        os.makedirs(MEM0_STORE_ROOT, exist_ok=True)
-        for n in vs:
-            rel = n[len(_VECTOR_PREFIX):]
-            dest = os.path.join(MEM0_STORE_ROOT, rel)
-            os.makedirs(os.path.dirname(dest) or MEM0_STORE_ROOT, exist_ok=True)
+        if os.path.isdir(root):
+            shutil.rmtree(root, ignore_errors=True)
+        os.makedirs(root, exist_ok=True)
+        for n in items:
+            dest = os.path.join(root, n[len(prefix):])
+            os.makedirs(os.path.dirname(dest) or root, exist_ok=True)
             with open(dest, 'wb') as out:
                 out.write(zf.read(n))
     return True
+
+
+# 语义明确的薄封装（向后兼容）
+def _add_vector_store_to_zip(zf):
+    return _add_tree_to_zip(zf, MEM0_STORE_ROOT, _VECTOR_PREFIX)
+
+
+def _restore_vector_store(zip_path):
+    return _restore_tree(zip_path, _VECTOR_PREFIX, MEM0_STORE_ROOT)
 
 # 需要备份的业务表及其列定义
 # (表名, 列列表, JSONB列索引集合, 中文标签)
@@ -358,7 +370,8 @@ def get_backup_table_names():
     ]
 
 
-def create_backup(backup_type='manual', created_by=None, tables=None, include_vector_store=True):
+def create_backup(backup_type='manual', created_by=None, tables=None,
+                  include_vector_store=True, include_data_files=True):
     """
     创建备份
 
@@ -550,6 +563,7 @@ def create_backup(backup_type='manual', created_by=None, tables=None, include_ve
         'createdAt': now.isoformat(),
         'createdBy': created_by,
         'hasVectorStore': bool(include_vector_store and os.path.isdir(MEM0_STORE_ROOT)),
+        'hasDataFiles': bool(include_data_files and os.path.isdir(DATA_FILES_ROOT)),
     }
 
     # 3. 打包 ZIP
@@ -562,6 +576,8 @@ def create_backup(backup_type='manual', created_by=None, tables=None, include_ve
             zf.writestr(f'{table_name}.json', json.dumps(records, ensure_ascii=False, indent=2))
         if include_vector_store:
             _add_vector_store_to_zip(zf)
+        if include_data_files:
+            _add_tree_to_zip(zf, DATA_FILES_ROOT, _DATA_FILES_PREFIX)
 
     file_size = os.path.getsize(zip_path)
 
@@ -608,7 +624,8 @@ def create_backup(backup_type='manual', created_by=None, tables=None, include_ve
     }
 
 
-def restore_backup(zip_path, tables=None, mode='upsert', restore_vector_store=True):
+def restore_backup(zip_path, tables=None, mode='upsert',
+                   restore_vector_store=True, restore_data_files=True):
     """
     从 ZIP 备份文件还原数据(单事务,失败回滚)。
 
@@ -890,13 +907,19 @@ def restore_backup(zip_path, tables=None, mode='upsert', restore_vector_store=Tr
                 except Exception:
                     pass
 
-    # 还原向量库（表还原成功后；目录全量覆盖，与备份时刻的 DB 引用配套）
+    # 还原外部文件目录（表还原成功后；全量覆盖，与备份时刻的 DB 引用配套）
     if restore_vector_store:
         try:
             _restore_vector_store(zip_path)
         except Exception:
             import logging
             logging.error('restore vector store failed', exc_info=True)
+    if restore_data_files:
+        try:
+            _restore_tree(zip_path, _DATA_FILES_PREFIX, DATA_FILES_ROOT)
+        except Exception:
+            import logging
+            logging.error('restore data files failed', exc_info=True)
     return manifest
 
 

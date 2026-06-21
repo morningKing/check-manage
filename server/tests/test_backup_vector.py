@@ -35,6 +35,21 @@ def test_pack_noop_when_store_absent(tmp_path, monkeypatch):
         assert bk._add_vector_store_to_zip(zf) is False
 
 
+def test_data_files_pack_and_restore(tmp_path, monkeypatch):
+    root = tmp_path / 'data-files'
+    (root / 'page-x').mkdir(parents=True)
+    (root / 'page-x' / 'upload.pdf').write_bytes(b'PDFDATA')
+    monkeypatch.setattr(bk, 'DATA_FILES_ROOT', str(root))
+    zp = tmp_path / 'df.zip'
+    with zipfile.ZipFile(zp, 'w') as zf:
+        assert bk._add_tree_to_zip(zf, str(root), bk._DATA_FILES_PREFIX) is True
+    with zipfile.ZipFile(zp) as zf:
+        assert 'data_files/page-x/upload.pdf' in zf.namelist()
+    shutil.rmtree(root)
+    assert bk._restore_tree(str(zp), bk._DATA_FILES_PREFIX, str(root)) is True
+    assert (root / 'page-x' / 'upload.pdf').read_bytes() == b'PDFDATA'
+
+
 def test_restore_noop_when_no_vector_store_in_zip(tmp_path):
     zp = tmp_path / 'novs.zip'
     with zipfile.ZipFile(zp, 'w') as zf:
