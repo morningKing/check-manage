@@ -365,11 +365,20 @@ def send_message(sid):
     agent_mentions = body.get('agentMentions')
     if not isinstance(agent_mentions, list):
         agent_mentions = []
-    OpenCodeClient(OPENCODE_BASE_URL).send_prompt_async(
-        sess[2], prompt.strip(), model=effective_model, directory=sess[4],
-        agent=requested_agent, agent_parts=agent_mentions,
-    )
-    ensure_listener(sid, sess[2], sess[4])
+    import requests as _requests
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    oc_sid = sess[2]
+    try:
+        client.send_prompt_async(
+            oc_sid, prompt.strip(), model=effective_model, directory=sess[4],
+            agent=requested_agent, agent_parts=agent_mentions,
+        )
+    except _requests.RequestException:
+        oc_sid = _recover_session_and_resend(
+            client, sid, sess[4], msg_id, prompt.strip(),
+            effective_model, requested_agent, agent_mentions,
+        )
+    ensure_listener(sid, oc_sid, sess[4])
     return jsonify({
         'messageId': msg_id,
         'model': effective_model or None,
@@ -397,6 +406,51 @@ def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_00
         return raw.decode('utf-8')
     except (UnicodeDecodeError, OSError):
         return None
+
+
+def _render_history_block(sid, exclude_msg_id, max_turns=6):
+    """最近 max_turns*2 条消息（不含当前这条）渲染成纯文本摘要，供会话复活时重注上下文。"""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, role, content FROM ai_chat_messages "
+                "WHERE session_id=%s AND id != %s "
+                "ORDER BY created_at DESC, id DESC LIMIT %s",
+                (sid, exclude_msg_id, max_turns * 2),
+            )
+            rows = cur.fetchall()
+    except Exception:
+        return ''
+    if not rows:
+        return ''
+    rows = list(reversed(rows))
+    lines = []
+    for _id, role, content in rows:
+        text = ''
+        if isinstance(content, list):
+            text = '\n'.join(p.get('text', '') for p in content
+                             if isinstance(p, dict) and p.get('type') == 'text').strip()
+        if not text:
+            continue
+        who = '用户' if role == 'user' else '助手'
+        lines.append(f'{who}: {text}')
+    if not lines:
+        return ''
+    return '[此前对话摘要（会话已恢复，供你延续上下文）]\n' + '\n'.join(lines) + '\n\n'
+
+
+def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
+                                prompt, model, agent, agent_parts):
+    """OpenCode session 失效时：新建 session + 注入历史 + 更新绑定 + 重发。返回新的 opencode_session_id。"""
+    new_oc = client.create_session(directory=workspace_path, title='恢复会话')
+    history = _render_history_block(sid, exclude_msg_id=current_msg_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s WHERE id=%s", (new_oc, sid))
+    client.send_prompt_async(new_oc, (history + prompt).strip(), model=model,
+                             directory=workspace_path, agent=agent, agent_parts=agent_parts)
+    return new_oc
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages', methods=['GET'])
