@@ -142,3 +142,44 @@ def test_admin_list_requires_permission():
     """developer (no admin.ai_chat_admin) -> 403"""
     r = _client().get('/ai/chat/admin/sessions', headers=_h(role='developer'))
     assert r.status_code == 403
+
+
+# --- Admin happy-path tests (admin role = superuser, bypasses permission gate) ---
+
+
+def test_admin_list_sessions_ok():
+    import routes.ai_chat as ac
+    conn = MagicMock(); cur = MagicMock()
+    cur.fetchall.return_value = [('s1', 'u1', '会话1', 'active', None),
+                                 ('s2', 'u2', None, 'archived', None)]
+    conn.cursor.return_value = cur
+
+    @contextmanager
+    def fake():
+        yield conn
+
+    with patch.object(ac, 'get_db', fake):
+        r = _client().get('/ai/chat/admin/sessions', headers=_h(role='admin'))
+    assert r.status_code == 200
+    data = r.get_json()
+    assert len(data['sessions']) == 2
+    assert data['sessions'][0]['status'] == 'active'
+    assert data['sessions'][1]['title'] == '新会话'  # None title defaults
+
+
+def test_admin_archive_ok():
+    import routes.ai_chat as ac
+    conn = MagicMock(); cur = MagicMock()
+    cur.rowcount = 1
+    conn.cursor.return_value = cur
+
+    @contextmanager
+    def fake():
+        yield conn
+
+    with patch.object(ac, 'get_db', fake), \
+         patch.object(ac, 'stop_listener'), patch.object(ac, 'log_operation'):
+        r = _client().post('/ai/chat/sessions/s1/archive', headers=_h(role='admin'))
+    assert r.status_code == 200
+    assert r.get_json()['status'] == 'archived'
+    assert any("status='archived'" in str(c.args[0]) for c in cur.execute.call_args_list)

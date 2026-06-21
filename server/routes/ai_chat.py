@@ -887,11 +887,12 @@ def admin_list_sessions():
 @require_permission('admin.ai_chat_admin')
 def archive_session(sid):
     """Archive any session (admin only)."""
+    stop_listener(sid)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET status='archived' WHERE id=%s", (sid,))
         if cur.rowcount == 0:
-            return jsonify({'error': 'session not found'}), 404
+            return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     log_operation('update', 'ai_chat_session', sid, sid, '归档会话（admin）')
     return jsonify({'ok': True, 'status': 'archived'})
 
