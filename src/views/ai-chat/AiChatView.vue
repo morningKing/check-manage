@@ -7,7 +7,7 @@ import {
   ElSelect, ElOption,
 } from 'element-plus'
 import {
-  Plus, Top, Delete, EditPen, Close, Document, Loading, Download,
+  Plus, Top, EditPen, Close, Document, Loading, Download,
   CopyDocument, RefreshRight, Refresh, ArrowRight,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
@@ -321,11 +321,19 @@ async function renameSession(id: string, current: string) {
     if (value?.trim()) await store.renameSession(id, value.trim())
   } catch { /* cancelled */ }
 }
-async function removeSession(id: string) {
+async function closeSessionItem(id: string) {
   try {
-    await ElMessageBox.confirm('删除该会话？', '删除', { type: 'warning' })
+    await ElMessageBox.confirm('关闭该会话？关闭后可重新打开，历史会保留。', '关闭会话', {
+      confirmButtonText: '关闭', cancelButtonText: '取消',
+    })
     await store.closeSession(id)
   } catch { /* cancelled */ }
+}
+async function reopenSessionItem(id: string) {
+  try {
+    await store.reopenSession(id)
+    await selectSession(id)
+  } catch { ElMessage.error('重开会话失败') }
 }
 
 function pickFiles() { fileInputEl.value?.click() }
@@ -516,13 +524,14 @@ function onKey(e: Event) {
         <ElScrollbar class="ai-chat__sessions">
           <div
             v-for="s in sessions" :key="s.id"
-            class="session-item" :class="{ active: s.id === activeId }"
+            class="session-item" :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
             @click="selectSession(s.id)"
           >
             <span class="session-item__title">{{ s.title || '新会话' }}</span>
             <span class="session-item__actions" @click.stop>
               <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-              <ElIcon @click="removeSession(s.id)"><Delete /></ElIcon>
+              <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
+              <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
             </span>
           </div>
           <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="60" />
@@ -894,6 +903,7 @@ function onKey(e: Event) {
   &__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   &__actions { display: none; gap: 6px; .el-icon { &:hover { color: var(--el-color-primary); } } }
   &:hover &__actions { display: flex; }
+  &.is-closed { opacity: 0.55; }
 }
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ai-chat__messages { flex: 1; min-height: 0; }

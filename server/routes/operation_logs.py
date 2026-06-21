@@ -26,6 +26,7 @@ ACTION_LABELS = {'create': '新增', 'update': '修改', 'delete': '删除'}
 TARGET_LABELS = {
     'menu': '菜单', 'page_config': '页面配置',
     'dynamic_data': '动态数据', 'user': '用户', 'relation': '关联关系',
+    'ai_chat_session': 'AI会话',
 }
 ROLE_LABELS = {'admin': '管理员', 'developer': '开发人员', 'guest': '访客'}
 

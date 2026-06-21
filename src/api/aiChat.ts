@@ -18,6 +18,7 @@ export interface AiSession {
 export interface AiSessionSummary {
   id: string
   title: string
+  status?: string
   lastActiveAt?: string
 }
 
@@ -71,8 +72,11 @@ export function renameSession(id: string, title: string) {
   )
 }
 
-export function deleteSession(id: string) {
-  return del<void>(`/ai/chat/sessions/${encodeURIComponent(id)}`)
+export function closeSession(id: string) {
+  return post<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}/close`, {})
+}
+export function reopenSession(id: string) {
+  return post<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}/reopen`, {})
 }
 
 export function getMessages(id: string, since?: string) {

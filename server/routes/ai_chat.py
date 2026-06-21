@@ -6,7 +6,6 @@ Routes registered:
     GET    /ai/chat/sessions/:id/messages history
     POST   /ai/chat/sessions/:id/messages send_message
     GET    /ai/chat/sessions/:id/events   sse_proxy
-    DELETE /ai/chat/sessions/:id          delete_session
     POST   /ai/chat/sessions/:id/files    upload; GET .../files, .../files/download
     POST   /ai/chat/sessions/:id/skills   install a skill zip
     GET    /ai/chat/sessions/:id/changes  workspace git changes
@@ -15,6 +14,8 @@ Routes registered:
     GET    /ai/chat/sessions/:id/commands list OpenCode commands + skills
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
+    POST   /ai/chat/sessions/:id/close    close_session
+    POST   /ai/chat/sessions/:id/reopen   reopen_session
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
     GET    /ai/chat/agents                list_agents
 """
@@ -31,23 +32,24 @@ from flask import (
 )
 from utils.filename import safe_filename
 from db import get_db
-from auth import login_required, login_required_sse, write_required
+from auth import login_required, login_required_sse, write_required, require_permission
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
-    create_session_workspace, cleanup_session_workspace, write_opencode_config,
+    create_session_workspace, write_opencode_config,
     safe_resolve,
 )
 from utils.workspace_changes import git_changes, file_diff
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
-from utils.session_token import generate_token, revoke_token
+from utils.session_token import generate_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
 from utils.py_runner import run_python_in_workspace
 from utils.skill_upload import extract_skill_zip, SkillUploadError
 from utils.memory import search_memory, render_memory_block
+from utils.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
@@ -125,6 +127,8 @@ def create_session():
             "UPDATE ai_chat_sessions SET opencode_session_id = %s WHERE id = %s",
             (opencode_session_id, session_id),
         )
+
+    log_operation('create', 'ai_chat_session', session_id, '新会话', '创建会话')
 
     return jsonify({
         'id': session_id,
@@ -225,10 +229,10 @@ def list_sessions():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, title, last_active_at, batch_id, batch_input_file "
+            "SELECT id, title, last_active_at, batch_id, batch_input_file, status "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
-            "  AND (status = 'active' OR batch_id IS NOT NULL) "
+            "  AND (status IN ('active', 'closed') OR batch_id IS NOT NULL) "
             "ORDER BY last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )
@@ -246,7 +250,8 @@ def list_sessions():
         'sessions': [
             {'id': r[0],
              'title': _title(r[1], r[3], r[4]),
-             'lastActiveAt': r[2].isoformat() if r[2] else None}
+             'lastActiveAt': r[2].isoformat() if r[2] else None,
+             'status': r[5]}
             for r in rows
         ],
     })
@@ -821,32 +826,74 @@ def run_script(sid):
     return jsonify(result)
 
 
-@ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])
+@ai_chat_bp.route('/sessions/<sid>/close', methods=['POST'])
 @write_required
-def delete_session(sid):
+def close_session(sid):
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-
-    opencode_session_id = sess[2]
+    if sess[3] in ('archived', 'deleted'):
+        return jsonify({'error': '该状态会话不可关闭', 'code': 'INVALID_STATUS'}), 409
+    # close 是软关闭、可 reopen：仅改 status + 停 listener；
+    # 保留 token / workspace / OpenCode session，使 reopen 能续上（失效则 M3 重建）。
     stop_listener(sid)
-    if opencode_session_id:
-        try:
-            OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
-        except Exception:
-            pass  # 404 from OpenCode = already gone (§7 #11)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status='closed' WHERE id=%s AND user_id=%s",
+                    (sid, user['userId']))
+    log_operation('update', 'ai_chat_session', sid, sid, '关闭会话')
+    return jsonify({'ok': True, 'status': 'closed'})
 
-    # Security-critical first: kill the token and mark the session dead so a
-    # failure to remove files (e.g. Windows handle held by OpenCode) can't leave
-    # an authenticated session alive.
-    revoke_token(sid)
+
+@ai_chat_bp.route('/sessions/<sid>/reopen', methods=['POST'])
+@write_required
+def reopen_session(sid):
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if sess[3] == 'archived':
+        return jsonify({'error': '已归档会话不可重开', 'code': 'SESSION_ARCHIVED'}), 403
+    if sess[3] == 'deleted':
+        return jsonify({'error': '已删除会话不可重开', 'code': 'INVALID_STATUS'}), 409
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status = 'active' WHERE id=%s AND user_id=%s",
+                    (sid, user['userId']))
+    log_operation('update', 'ai_chat_session', sid, sid, '重开会话')
+    return jsonify({'ok': True, 'status': 'active'})
+
+
+# --- Admin governance endpoints (require admin.ai_chat_admin capability) ---
+
+
+@ai_chat_bp.route('/admin/sessions', methods=['GET'])
+@require_permission('admin.ai_chat_admin')
+def admin_list_sessions():
+    """List all sessions across all users (admin only, max 500)."""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s",
-            (sid,),
-        )
+            "SELECT id, user_id, title, status, last_active_at FROM ai_chat_sessions "
+            "WHERE batch_id IS NULL ORDER BY last_active_at DESC NULLS LAST, id DESC LIMIT 500")
+        rows = cur.fetchall()
+    return jsonify({'sessions': [
+        {'id': r[0], 'userId': r[1], 'title': r[2] or '新会话', 'status': r[3],
+         'lastActiveAt': r[4].isoformat() if r[4] else None} for r in rows]})
 
-    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)  # best-effort
-    return '', 204
+
+@ai_chat_bp.route('/sessions/<sid>/archive', methods=['POST'])
+@require_permission('admin.ai_chat_admin')
+def archive_session(sid):
+    """Archive any session (admin only)."""
+    stop_listener(sid)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status='archived' WHERE id=%s", (sid,))
+        if cur.rowcount == 0:
+            return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    log_operation('update', 'ai_chat_session', sid, sid, '归档会话（admin）')
+    return jsonify({'ok': True, 'status': 'archived'})
+
+

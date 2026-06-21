@@ -9,7 +9,8 @@
 
 import { defineStore } from 'pinia'
 import {
-  createSession, listSessions, renameSession as apiRenameSession, deleteSession,
+  createSession, listSessions, renameSession as apiRenameSession,
+  closeSession as apiCloseSession, reopenSession as apiReopenSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage,
   createEventStream,
@@ -21,6 +22,7 @@ import { parseAgentMentions } from '@/utils/agentMentions'
 interface SessionMeta {
   id: string
   title: string
+  status?: string
 }
 
 interface PendingAttachment {
@@ -112,7 +114,7 @@ export const useAiChatStore = defineStore('aiChat', {
   actions: {
     async loadSessions() {
       const { sessions } = await listSessions()
-      this.sessions = sessions.map(s => ({ id: s.id, title: s.title }))
+      this.sessions = sessions.map(s => ({ id: s.id, title: s.title, status: s.status }))
     },
 
     async startNewSession(projectMenuId?: string) {
@@ -355,14 +357,21 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async closeSession(id: string) {
-      if (this.activeSessionId === id) this._closeStream()
-      await deleteSession(id)
-      this.sessions = this.sessions.filter(s => s.id !== id)
-      delete this.messages[id]
-      delete this.streaming[id]
-      delete this.reasoning[id]
-      this._resetStreamState(id)
-      if (this.activeSessionId === id) this.activeSessionId = null
+      await apiCloseSession(id)
+      if (this.activeSessionId === id) {
+        this._closeStream()
+        this.activeSessionId = null
+      }
+      const s = this.sessions.find(x => x.id === id)
+      if (s) s.status = 'closed'
+      this.streaming[id] = false
+    },
+
+    async reopenSession(id: string) {
+      await apiReopenSession(id)
+      const s = this.sessions.find(x => x.id === id)
+      if (s) s.status = 'active'
+      this.streaming[id] = false
     },
 
     _openStream(sid: string) {
