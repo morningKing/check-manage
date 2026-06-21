@@ -1,12 +1,33 @@
+# check-manage 后端依赖（server/）。安装： pip install -r requirements.txt
+# 注：MCP 服务（mcp-server/）有自己的 venv 与依赖，不在此文件内。
+
+# --- Web 框架 / 服务器 ---
 Flask>=3.0.0
 flask-cors>=4.0.0
+waitress>=3.0.0            # 生产 WSGI server（proxy.py 启动后端用；dev 用 Werkzeug）
+
+# --- 数据库 ---
 psycopg2-binary>=2.9.0
+
+# --- 认证 / 配置 ---
 PyJWT>=2.8.0
 python-dotenv>=1.0.0
-waitress>=3.0.0
+
+# --- HTTP 客户端（OpenCode / LLM / webhook 出站）---
 requests>=2.31.0
+
+# --- 定时任务调度（备份 / 依赖校验 / AI 扫描）---
 APScheduler>=3.10.0
-pytest>=8.0.0
-pytest-cov>=5.0.0
+
+# --- AI 长期记忆（mem0 + 嵌入式向量库）---
 mem0ai>=0.1.0
 chromadb>=0.5.0
+
+# --- 脚本沙箱预注入 + 数据处理 + Excel 导出 ---
+pandas>=2.0.0             # script_runner 预注入为 pd
+numpy>=1.24.0             # script_runner 预注入为 np
+openpyxl>=3.1.0           # operation_logs / data_export 导出 .xlsx
+
+# --- 测试 ---
+pytest>=7.4.0
+pytest-cov>=5.0.0
