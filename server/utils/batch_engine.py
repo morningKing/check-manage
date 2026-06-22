@@ -119,6 +119,11 @@ class _OpenCodeFacade:
                         'content': content})
         return out or [{'role': 'assistant', 'finished': False, 'content': []}]
 
+    def get_messages(self, oc_session_id: str, directory: str = '') -> list:
+        """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
+        _persist_conversation to store the FULL conversation incl. tool parts."""
+        return self._client().get_messages(oc_session_id, directory=directory) or []
+
 
 # The module-level name that tests monkeypatch.
 opencode_client = _OpenCodeFacade()
@@ -451,6 +456,29 @@ class BatchWorker:
                     if p.get('type') == 'text':
                         total_text += len(p.get('text') or '')
         return (count, total_text)
+
+    @staticmethod
+    def _content_from_parts(parts) -> list:
+        """Map one OpenCode message's parts to persisted typed content: text +
+        tool_use (matches interactive build_content + the AiContentPart schema).
+        Drops reasoning/step markers."""
+        out = []
+        for p in (parts or []):
+            t = p.get('type')
+            if t == 'text':
+                if (p.get('text') or '').strip():
+                    out.append({'type': 'text', 'text': p['text']})
+            elif t == 'tool':
+                st = p.get('state') or {}
+                out.append({
+                    'type': 'tool_use',
+                    'name': p.get('tool') or 'tool',
+                    'title': st.get('title') or '',
+                    'status': st.get('status'),
+                    'input': st.get('input'),
+                    'result': st.get('output'),
+                })
+        return out
 
     @staticmethod
     def _preview_from(message: dict) -> str | None:
