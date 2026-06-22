@@ -172,8 +172,8 @@
     <rect x="40" y="636" width="1260" height="98" rx="8" fill="#fff8e1" stroke="#ff8f00" stroke-width="1.5"/>
     <rect x="52" y="648" width="18" height="14" fill="#fff" stroke="#ff8f00"/><rect x="48" y="651" width="8" height="3" fill="#fff" stroke="#ff8f00"/><rect x="48" y="657" width="8" height="3" fill="#fff" stroke="#ff8f00"/>
     <text x="80" y="660" class="comp" fill="#e65100">⑨ AI 智能助手</text>
-    <text x="54" y="684" class="s">ai (配置) · ai_chat (对话/SSE 代理) · ai_chat_batches (批任务) · ai_chat_prompt_templates · ai_scan_tasks (定时流水线)</text>
-    <text x="54" y="706" class="lbl">对话：@子智能体 + 模型选择，SSE 流式代理；批任务：N 文件并发 (限流 3)；定时：扫描数据页→AI 处理→结构化结果回写记录</text>
+    <text x="54" y="684" class="s">ai (配置 + 长期记忆 /memories) · ai_chat (对话/SSE 代理) · ai_chat_batches (批任务) · ai_chat_prompt_templates · ai_scan_tasks (定时流水线)</text>
+    <text x="54" y="706" class="lbl">对话：@子智能体 + 模型选择，SSE 流式代理；批任务：N 文件并发 (限流 3)；定时：扫描数据页→AI 处理→结构化结果回写；长期记忆：跨会话 mem0（注入+抽取+手动补写）</text>
     <text x="54" y="724" class="lbl">浏览器只与 Flask 通信；Flask 作为网关与 SSE 代理，对接 OpenCode；平台能力经独立 MCP Server 暴露给 Agent</text>
   </g>
 
@@ -277,6 +277,16 @@
     <text x="1354" y="708" class="s">debug_export_script.py — 导出脚本本地调试</text>
     <text x="1354" y="726" class="s">拉真实数据 + 完整 traceback</text>
   </g>
+  <!-- 长期记忆 (mem0) — Flask 进程内 + 本地向量库 -->
+  <g>
+    <rect x="1340" y="746" width="340" height="118" rx="8" fill="#fce4ec" stroke="#ad1457" stroke-width="1.6"/>
+    <rect x="1352" y="758" width="18" height="14" fill="#fff" stroke="#ad1457"/><rect x="1348" y="761" width="8" height="3" fill="#fff" stroke="#ad1457"/><rect x="1348" y="767" width="8" height="3" fill="#fff" stroke="#ad1457"/>
+    <text x="1380" y="770" class="comp" fill="#880e4f">长期记忆 (mem0)</text>
+    <text x="1354" y="794" class="s">utils/memory.py（Flask 进程内）+ Chroma 向量库</text>
+    <text x="1354" y="812" class="lbl">MEM0_STORE_ROOT 本地持久化 · 按 user_id · 随备份</text>
+    <text x="1354" y="830" class="lbl">被动逐轮抽取 + 主动补写 (/memories · MCP memory_*)</text>
+    <text x="1354" y="848" class="lbl">DashScope 嵌入/提炼 · 原生调用钉单线程 (防 segfault)</text>
+  </g>
 
   <!-- ===================== 连线 / 数据流 ===================== -->
   <!-- 用户 <-> SPA -->
@@ -317,6 +327,10 @@
   <path d="M1300 680 C 1330 640, 1330 540, 1340 470" fill="none" stroke="#ff8f00" stroke-width="2" marker-end="url(#arrowAI)"/>
   <text x="1306" y="600" class="lbl" fill="#e65100">SSE 代理</text>
   <text x="1306" y="616" class="lbl" fill="#e65100">启动会话</text>
+
+  <!-- AI 域 -> 长期记忆 (Flask 唯一写入 / 召回) -->
+  <line x1="1300" y1="712" x2="1342" y2="792" stroke="#ff8f00" stroke-width="1.8" marker-end="url(#arrowAI)"/>
+  <text x="1240" y="772" class="lbl" fill="#880e4f">记忆注入/抽取</text>
 
   <!-- OpenCode -> MCP (工具调用) -->
   <line x1="1510" y1="512" x2="1510" y2="528" stroke="#ff8f00" stroke-width="2" marker-end="url(#arrowAI)"/>

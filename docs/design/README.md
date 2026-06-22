@@ -21,7 +21,7 @@
 | ⑥ | 开放集成 | api_keys · open_api · webhook · trigger_rules | [06-开放集成.md](./06-开放集成.md) |
 | ⑦ | 版本协作 | project_versions · cross_project_deps | [07-版本协作.md](./07-版本协作.md) |
 | ⑧ | 运维监控 | operation_logs · backups · notifications · dashboards | [08-运维监控.md](./08-运维监控.md) |
-| ⑨ | AI 智能助手 | ai_chat · batches · prompt_templates · ai_scan_tasks + OpenCode/MCP | [09-AI智能助手.md](./09-AI智能助手.md) |
+| ⑨ | AI 智能助手 | ai_chat · batches · prompt_templates · ai_scan_tasks · 长期记忆 mem0 + OpenCode/MCP | [09-AI智能助手.md](./09-AI智能助手.md) |
 
 ## 横切关注点
 
