@@ -109,6 +109,16 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     if (activeBatch.value?.id === id) clearSelection()
   }
 
+  async function appendToBatch(id: string, files: { name: string; path: string }[]) {
+    const detail = await api.appendBatch(id, files)
+    await fetchList()
+    if (activeBatch.value?.id === id) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    }
+    return detail
+  }
+
   // Tab-visibility pause: when the page is hidden, stop both polling loops to
   // save bandwidth and battery; resume when visible (refetching once first so
   // the UI is up-to-date the moment the user returns).
@@ -142,6 +152,6 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, clearSelection, retryFailed,
-    createAndSelect, removeBatch,
+    createAndSelect, removeBatch, appendToBatch,
   }
 })

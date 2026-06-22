@@ -30,6 +30,10 @@ export function retryFailedSessions(id: string) {
   return post<{ retried: number }>(`/ai/chat/batches/${id}/retry-failed`)
 }
 
+export function appendBatch(id: string, files: StagedFile[]) {
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/append`, { files })
+}
+
 export function stagingUpload(file: File, uploadSessionId: string) {
   const form = new FormData()
   form.append('file', file)
