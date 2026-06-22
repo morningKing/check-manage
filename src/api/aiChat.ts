@@ -218,6 +218,9 @@ export function listMemories() {
 export function deleteMemory(id: string) {
   return del(`/ai/memories/${id}`)
 }
+export function addMemory(text: string, verbatim = false) {
+  return post<{ ok: boolean; memories: AiMemory[] }>('/ai/memories', { text, verbatim })
+}
 
 export type StreamStatus = 'open' | 'reconnecting' | 'closed'
 
