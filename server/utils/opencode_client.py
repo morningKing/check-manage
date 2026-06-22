@@ -49,6 +49,22 @@ class OpenCodeClient:
         except requests.RequestException as e:
             raise OpenCodeError(str(e))
 
+    def get_messages(self, opencode_session_id: str, directory: str = "") -> list:
+        """GET the session's messages (REST). Each item is
+        ``{'info': {...}, 'parts': [...]}``; an assistant message carries
+        ``info.finish`` (terminal reasons like 'stop' vs continuation 'tool-calls')
+        and ``info.time.completed`` — a *deterministic* completion signal, unlike
+        the one-shot ``session.idle`` event the batch worker used to race for.
+        """
+        params = {"directory": directory} if directory else None
+        resp = requests.get(
+            self._url(f"/session/{opencode_session_id}/message"),
+            params=params,
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def send_prompt_async(self, opencode_session_id: str, content: str,
                           model: str = "", directory: str = "", agent: str = "",
                           agent_parts=None) -> None:
