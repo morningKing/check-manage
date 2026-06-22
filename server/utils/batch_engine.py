@@ -365,7 +365,7 @@ class BatchWorker:
                                          agent=agent, model=model)
 
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
-            self._persist_conversation(sid, prompt, final_msg)
+            self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
         except _SessionTimeout as e:
@@ -488,37 +488,43 @@ class BatchWorker:
                 return (t[0] if t else '')[:200]
         return None
 
-    def _persist_conversation(self, session_id: str,
-                              prompt: str, assistant_msg: dict | None):
-        """Write the user prompt + assistant final message into ai_chat_messages.
-
-        Without this, the 查看 button on the batch dashboard opens an empty
-        thread — the worker drove the conversation through OpenCode's SSE and
-        never touched Flask's message store. Best-effort; never raises.
-        """
+    def _persist_conversation(self, session_id: str, prompt: str,
+                              oc_session_id: str, assistant_msg: dict | None,
+                              directory: str = ''):
+        """Persist the FULL conversation: the user prompt + every assistant
+        message (mapped to text + tool_use parts) read from OpenCode's REST
+        message list, so the batch child's thread shows tool bubbles like an
+        interactive session. Falls back to `assistant_msg` if REST yields none.
+        Best-effort; never raises."""
         try:
             import uuid as _uuid
             import json as _json
-            user_content = [{'type': 'text', 'text': prompt}]
-            parts = (assistant_msg or {}).get('content') or []
-            assistant_content = parts if parts else [{'type': 'text', 'text': ''}]
+            raw = []
+            try:
+                raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
+            except Exception:
+                raw = []
+            rows = [('user', [{'type': 'text', 'text': prompt}])]
+            for m in raw:
+                if (m.get('info') or {}).get('role') != 'assistant':
+                    continue
+                content = self._content_from_parts(m.get('parts'))
+                if content:
+                    rows.append(('assistant', content))
+            if len(rows) == 1:   # REST gave nothing usable — fall back to final msg
+                parts = (assistant_msg or {}).get('content') or []
+                rows.append(('assistant', parts if parts else [{'type': 'text', 'text': ''}]))
             with get_db() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                        "VALUES (%s, %s, %s, %s::jsonb)",
-                        (str(_uuid.uuid4()), session_id, 'user',
-                         _json.dumps(user_content)),
-                    )
-                    cur.execute(
-                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                        "VALUES (%s, %s, %s, %s::jsonb)",
-                        (str(_uuid.uuid4()), session_id, 'assistant',
-                         _json.dumps(assistant_content)),
-                    )
+                    for role, content in rows:
+                        cur.execute(
+                            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                            "VALUES (%s, %s, %s, %s::jsonb)",
+                            (str(_uuid.uuid4()), session_id, role, _json.dumps(content)),
+                        )
                 conn.commit()
         except Exception:
-            traceback.print_exc()  # best-effort; don't crash _run_one
+            traceback.print_exc()
 
     def _mark_done(self, session_id: str, batch_id: str,
                    last_preview: str | None):
