@@ -99,6 +99,7 @@ def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_p
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'done!'}]}
     ]
+    fake_oc.get_messages.return_value = []
     monkeypatch.setattr(eng, 'opencode_client', fake_oc)
     ws = str(tmp_path)
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
@@ -262,6 +263,7 @@ def test_concurrency_cap_3(user_id, db_conn, monkeypatch, tmp_path):
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'ok'}]}
     ]
+    fake_oc.get_messages.return_value = []
     monkeypatch.setattr(eng, 'opencode_client', fake_oc)
     ws = str(tmp_path)
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
@@ -353,6 +355,7 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'ok'}]}
     ]
+    fake_oc.get_messages.return_value = []
     def capture_send(oc_sid, prompt, directory='', agent='', model=''):
         sent_agents.append(agent)
     fake_oc.send_message.side_effect = capture_send

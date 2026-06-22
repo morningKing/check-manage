@@ -108,6 +108,62 @@ def delete_batch(user_id: str, batch_id: str) -> bool:
     return deleted
 
 
+def append_to_batch(user_id: str, batch_id: str, files: list[dict]) -> dict | None:
+    """Append N child sessions to an existing batch (any status). seq continues
+    from max+1, total += N, status recomputed (-> running). Returns
+    {batch, sessions} or None if the batch isn't found / not owned."""
+    if not files:
+        raise ValueError("at least one file required")
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT total FROM ai_chat_batches WHERE id=%s AND user_id=%s",
+                        (batch_id, user_id))
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row['total'] + len(files) > MAX_FILES_PER_BATCH:
+                raise ValueError(f"max {MAX_FILES_PER_BATCH} files per batch")
+            cur.execute("SELECT COALESCE(MAX(batch_seq), -1) AS m "
+                        "FROM ai_chat_sessions WHERE batch_id=%s", (batch_id,))
+            start = cur.fetchone()['m'] + 1
+            sessions = []
+            for i, f in enumerate(files):
+                sid = str(uuid.uuid4())
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions "
+                    "  (id, user_id, status, batch_id, batch_seq, batch_input_file) "
+                    "VALUES (%s, %s, 'pending', %s, %s, %s) RETURNING *",
+                    (sid, user_id, batch_id, start + i, f['path']),
+                )
+                sessions.append(dict(cur.fetchone()))
+            cur.execute("UPDATE ai_chat_batches SET total = total + %s WHERE id=%s",
+                        (len(files), batch_id))
+        conn.commit()
+    _recompute_batch_status_for(batch_id)
+    return get_batch_detail(user_id, batch_id)
+
+
+def _recompute_batch_status_for(batch_id: str) -> None:
+    """Local SQL equivalent of batch_engine._recompute_batch_status to avoid
+    circular imports (batch_engine imports batch_repo)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT done, failed, total FROM ai_chat_batches WHERE id=%s", (batch_id,))
+            row = cur.fetchone()
+            if not row:
+                return
+            done, failed, total = row
+            terminal = done + failed
+            status = ('pending' if terminal == 0 else
+                      'running' if terminal < total else
+                      'failed' if failed == total else
+                      'completed' if done == total else 'partial')
+            cur.execute("UPDATE ai_chat_batches SET status=%s, "
+                        "completed_at = CASE WHEN %s = total THEN now() ELSE NULL END "
+                        "WHERE id=%s", (status, terminal, batch_id))
+        conn.commit()
+
+
 def reset_failed_to_pending(user_id: str, batch_id: str) -> int:
     """Returns count of sessions reset. Also clears batch.failed counter and
     recomputes batch.status."""

@@ -235,3 +235,32 @@ def test_create_batch_stores_model(setup_app, tmp_path, monkeypatch, db_conn):
     with db_conn.cursor() as cur:
         cur.execute("SELECT model FROM ai_chat_batches WHERE id = %s", (data['batch']['id'],))
         assert cur.fetchone()[0] == 'anthropic/claude'
+
+
+def test_append_adds_children_and_resets_running(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u-app-1')
+    bid = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f1]},
+                      headers=admin_headers).get_json()['batch']['id']
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_batches SET status='completed', done=1 WHERE id=%s", (bid,))
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE batch_id=%s", (bid,))
+        db_conn.commit()
+    f2 = _stage_one(client, admin_headers, name='c.txt', upload_session_id='u-app-2')
+    r = client.post(f'/ai/chat/batches/{bid}/append', json={'files': [f2]}, headers=admin_headers)
+    assert r.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT total, status FROM ai_chat_batches WHERE id=%s", (bid,))
+        total, status = cur.fetchone()
+        assert total == 2 and status == 'running'
+        cur.execute("SELECT max(batch_seq) FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+        assert cur.fetchone()[0] == 1   # seq continued 0 -> 1
+
+
+def test_append_other_users_batch_404(setup_app, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u-app-3')
+    r = client.post('/ai/chat/batches/does-not-exist/append', json={'files': [f]}, headers=admin_headers)
+    assert r.status_code == 404

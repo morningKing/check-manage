@@ -82,15 +82,19 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     activeSessions.value = []
   }
 
-  async function retryFailed() {
-    if (!activeBatch.value) return
-    const id = activeBatch.value.id
-    activeBatch.value.failed = 0   // optimistic
+  async function retryFailed(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    if (activeBatch.value?.id === id && activeBatch.value) activeBatch.value.failed = 0  // optimistic
     await api.retryFailedSessions(id)
-    // refetch authoritative state and resume polling
     const detail = await api.getBatch(id)
-    applyDetail(detail)
-    if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    // reflect new counts in the list row so the group header updates
+    const idx = items.value.findIndex(b => b.id === id)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === id) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    }
   }
 
   async function createAndSelect(body: Parameters<typeof api.createBatch>[0]) {
@@ -107,6 +111,16 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     await api.deleteBatch(id)
     items.value = items.value.filter(b => b.id !== id)
     if (activeBatch.value?.id === id) clearSelection()
+  }
+
+  async function appendToBatch(id: string, files: { name: string; path: string }[]) {
+    const detail = await api.appendBatch(id, files)
+    await fetchList()
+    if (activeBatch.value?.id === id) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    }
+    return detail
   }
 
   // Tab-visibility pause: when the page is hidden, stop both polling loops to
@@ -142,6 +156,6 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, clearSelection, retryFailed,
-    createAndSelect, removeBatch,
+    createAndSelect, removeBatch, appendToBatch,
   }
 })

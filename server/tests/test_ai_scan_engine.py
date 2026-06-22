@@ -97,7 +97,7 @@ def test_run_one_invokes_scan_hook_on_success(monkeypatch):
     monkeypatch.setattr(w, '_fetch_batch_context', lambda b: ('prompt', '', ''))
     monkeypatch.setattr(w, '_set_opencode_id', lambda *a: None)
     monkeypatch.setattr(w, '_await_finished', lambda *a, **k: ('preview', {'role': 'assistant', 'content': [{'type': 'text', 'text': 'ok'}]}))
-    monkeypatch.setattr(w, '_persist_conversation', lambda *a: None)
+    monkeypatch.setattr(w, '_persist_conversation', lambda *a, **kw: None)
     monkeypatch.setattr(w, '_mark_done', lambda *a, **k: None)
     import utils.ai_scan_engine as se
     monkeypatch.setattr(se, 'on_child_finished', lambda row, msg, ok: calls.update(row=row, ok=ok))

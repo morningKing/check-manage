@@ -13,6 +13,7 @@ from auth import login_required
 from utils.workspace import batch_staging_dir, WorkspacePathError
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
+    append_to_batch,
     create_batch,
     delete_batch,
     get_batch_detail,
@@ -127,3 +128,24 @@ def retry_failed(batch_id):
         from utils.batch_engine import get_worker
         get_worker().notify()
     return jsonify({'retried': count})
+
+
+@ai_chat_batches_bp.post('/<batch_id>/append')
+@login_required
+def append(batch_id):
+    body = request.get_json(silent=True) or {}
+    files = body.get('files') or []
+    if not isinstance(files, list) or not files:
+        return jsonify({'error': 'at least one file required'}), 400
+    for f in files:
+        if not isinstance(f, dict) or not f.get('path') or not f.get('name'):
+            return jsonify({'error': 'each file must have {name, path}'}), 400
+    try:
+        result = append_to_batch(g.current_user['userId'], batch_id, files)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)

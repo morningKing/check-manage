@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
@@ -27,8 +27,7 @@ import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegm
 import { activeMentionToken } from '@/utils/agentMentions'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
-import BatchListView from './BatchListView.vue'
-import BatchDetailView from './BatchDetailView.vue'
+import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
@@ -37,7 +36,6 @@ import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, type A
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
 
-const sidebarTab = ref<'sessions' | 'batches'>('sessions')
 const showCreateBatch = ref(false)
 const showTemplateManager = ref(false)
 const showMemoryManager = ref(false)
@@ -80,18 +78,6 @@ const composerAgent = computed<string>({
   set: (v) => { if (activeId.value) store.setSessionAgent(activeId.value, v) },
 })
 
-async function openSession(sessionId: string) {
-  if (await store.jumpToSession(sessionId)) {
-    sidebarTab.value = 'sessions'
-    batches.clearSelection()
-    store.hydrateSessionModel(sessionId)
-    store.hydrateSessionAgent(sessionId)
-  }
-}
-
-async function selectBatch(id: string) {
-  await batches.selectBatch(id)
-}
 
 const input = ref('')
 const cursorPos = ref(0)
@@ -304,7 +290,10 @@ onMounted(async () => {
   // pre-fetch models and agents for the dropdowns (best-effort)
   fetchModels()
   fetchAgents()
+  // load batch list for the unified sidebar
+  batches.fetchList().then(() => batches.startListPolling()).catch(() => {})
 })
+onUnmounted(() => batches.stopListPolling())
 
 async function newSession() {
   try { await store.startNewSession() } catch { ElMessage.error('创建会话失败') }
@@ -515,11 +504,7 @@ function onKey(e: Event) {
   <div class="ai-chat">
     <!-- 会话侧栏 -->
     <aside class="ai-chat__sidebar">
-      <div class="ai-sidebar__tabs">
-        <button :class="{ active: sidebarTab === 'sessions' }" @click="sidebarTab = 'sessions'">会话</button>
-        <button :class="{ active: sidebarTab === 'batches' }" @click="sidebarTab = 'batches'">批任务</button>
-      </div>
-      <div v-show="sidebarTab === 'sessions'" class="ai-sidebar__sessions-wrap">
+      <div class="ai-sidebar__sessions-wrap">
         <ElButton class="ai-chat__new" type="primary" :icon="Plus" @click="newSession">新建会话</ElButton>
         <ElScrollbar class="ai-chat__sessions">
           <div
@@ -534,16 +519,24 @@ function onKey(e: Event) {
               <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
             </span>
           </div>
-          <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="60" />
+
+          <div v-if="batches.items.length" class="ai-sidebar__batches-head">
+            批任务
+            <ElButton link size="small" :icon="Plus" @click="showCreateBatch = true">新建</ElButton>
+          </div>
+          <BatchGroup
+            v-for="b in batches.items" :key="b.id"
+            :batch="b" :active-session-id="activeId"
+            @select-child="selectSession"
+          />
+
+          <ElEmpty v-if="!sessions.length && !batches.items.length" description="暂无会话" :image-size="60" />
         </ElScrollbar>
       </div>
-      <BatchListView v-if="sidebarTab === 'batches'" @select="selectBatch" @newBatch="showCreateBatch = true" />
     </aside>
 
     <!-- 对话主区 -->
     <section class="ai-chat__main">
-      <BatchDetailView v-if="sidebarTab === 'batches' && batches.activeBatch" @openSession="openSession" />
-      <template v-else>
       <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>
@@ -804,7 +797,6 @@ function onKey(e: Event) {
           </div>
         </div>
       </div>
-      </template>
     </section>
 
     <!-- 制品预览面板（Claude 风格，含版本切换） -->
@@ -838,7 +830,7 @@ function onKey(e: Event) {
     <CreateBatchDialog
       v-model="showCreateBatch"
       @manageTemplates="showTemplateManager = true"
-      @created="(d) => { sidebarTab = 'batches'; batches.selectBatch(d.batch.id) }" />
+      @created="async (d) => { await batches.fetchList(); batches.selectBatch(d.batch.id) }" />
     <PromptTemplateManager v-model="showTemplateManager" />
     <MemoryManager v-model="showMemoryManager" />
   </div>
@@ -861,24 +853,8 @@ function onKey(e: Event) {
   border-right: 1px solid var(--el-border-color-light);
   overflow: hidden;
 }
-.ai-sidebar__tabs {
-  display: flex;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--el-border-color-light);
-  button {
-    flex: 1;
-    padding: 8px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--el-text-color-secondary);
-    font-size: 14px;
-    &.active {
-      color: var(--el-color-primary);
-      box-shadow: inset 0 -2px 0 var(--el-color-primary);
-    }
-  }
-}
+.ai-sidebar__batches-head { display:flex; align-items:center; justify-content:space-between;
+  margin: 10px 8px 4px; font-size: 12px; color: var(--el-text-color-secondary); font-weight: 600; }
 .ai-sidebar__sessions-wrap {
   flex: 1;
   display: flex;
