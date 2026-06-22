@@ -8,6 +8,7 @@ export interface AiChatBatch {
   prompt: string
   template_id: string | null
   agent: string | null
+  model: string | null
   status: BatchStatus
   total: number
   done: number

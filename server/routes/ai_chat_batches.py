@@ -70,10 +70,11 @@ def create():
             return jsonify({'error': 'each file must have {name, path}'}), 400
 
     agent = (body.get('agent') or '').strip() or None
+    model = (body.get('model') or '').strip() or None
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
-                          agent=agent)
+                          agent=agent, model=model)
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()

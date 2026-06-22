@@ -14,7 +14,8 @@ MAX_FILES_PER_BATCH = 50
 def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
-                 agent: str | None = None) -> dict:
+                 agent: str | None = None,
+                 model: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -22,6 +23,8 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     key: the source record id, stamped into `source_record_id` for scan tasks.
     `scan_task_id` is an optional param linking the child sessions to a scan task.
     `agent` is an optional OpenCode agent name to use for this batch.
+    `model` is an optional "<providerID>/<modelID>" to run this batch with;
+    empty falls back to the global OPENCODE_MODEL / the agent's default.
     Returns {batch, sessions}.
     """
     if not files:
@@ -34,9 +37,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "INSERT INTO ai_chat_batches "
-                "  (id, user_id, name, prompt, template_id, total, status, agent) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) RETURNING *",
-                (batch_id, user_id, name, prompt, template_id, len(files), agent),
+                "  (id, user_id, name, prompt, template_id, total, status, agent, model) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s) RETURNING *",
+                (batch_id, user_id, name, prompt, template_id, len(files), agent, model),
             )
             batch = dict(cur.fetchone())
 

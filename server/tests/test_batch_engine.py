@@ -353,7 +353,7 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'ok'}]}
     ]
-    def capture_send(oc_sid, prompt, directory='', agent=''):
+    def capture_send(oc_sid, prompt, directory='', agent='', model=''):
         sent_agents.append(agent)
     fake_oc.send_message.side_effect = capture_send
 

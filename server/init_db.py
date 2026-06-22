@@ -494,6 +494,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
   prompt      TEXT NOT NULL,
   template_id VARCHAR(100) NULL REFERENCES ai_chat_prompt_templates(id) ON DELETE SET NULL,
   agent       TEXT,
+  model       TEXT,
   status      TEXT NOT NULL DEFAULT 'pending'
               CHECK (status IN ('pending','running','completed','partial','failed')),
   total       INT  NOT NULL DEFAULT 0,
@@ -504,8 +505,9 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_user_created
   ON ai_chat_batches(user_id, created_at DESC);
--- Idempotent upgrade: add `agent` to DBs created before it joined the CREATE above.
+-- Idempotent upgrade: add `agent`/`model` to DBs created before they joined CREATE above.
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS agent TEXT;
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS model TEXT;
 """
 
 AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """

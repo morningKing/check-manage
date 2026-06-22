@@ -7,6 +7,8 @@
           <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
           <span>· {{ batch.done }} / {{ batch.total }}</span>
           <span v-if="batch.failed">· {{ batch.failed }} 失败</span>
+          <span>· Agent: {{ batch.agent || '默认' }}</span>
+          <span>· 模型: {{ batch.model || '默认' }}</span>
         </div>
       </div>
       <div class="actions">

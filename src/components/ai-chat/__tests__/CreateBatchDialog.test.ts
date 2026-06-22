@@ -64,7 +64,7 @@ describe('CreateBatchDialog', () => {
   it('calls createBatch with the staged file list on submit', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B1', prompt: 'do',
-               template_id: null, agent: null, status: 'pending', total: 1,
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
                done: 0, failed: 0, created_at: '', completed_at: null },
       sessions: [],
     })
@@ -87,7 +87,7 @@ describe('CreateBatchDialog', () => {
   it('saves a new template when 保存为模板 is checked', async () => {
     vi.mocked(batchApi.createBatch).mockResolvedValue({
       batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
-               template_id: null, agent: null, status: 'pending', total: 1,
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
                done: 0, failed: 0, created_at: '', completed_at: null },
       sessions: [],
     })

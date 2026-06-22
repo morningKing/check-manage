@@ -214,3 +214,24 @@ def test_create_batch_stores_agent(setup_app, tmp_path, monkeypatch, db_conn):
     with db_conn.cursor() as cur:
         cur.execute("SELECT agent FROM ai_chat_batches WHERE id = %s", (data['batch']['id'],))
         assert cur.fetchone()[0] == 'my-agent'
+
+
+def test_create_batch_stores_model(setup_app, tmp_path, monkeypatch, db_conn):
+    """model field is persisted and returned in the batch response."""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='x.txt', upload_session_id='u-model-1')
+    body = {
+        'name': 'model-test',
+        'prompt': 'do something',
+        'model': 'anthropic/claude',
+        'files': [f],
+    }
+    resp = client.post('/ai/chat/batches', json=body, headers=admin_headers)
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data['batch']['model'] == 'anthropic/claude'
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT model FROM ai_chat_batches WHERE id = %s", (data['batch']['id'],))
+        assert cur.fetchone()[0] == 'anthropic/claude'
