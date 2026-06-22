@@ -82,15 +82,19 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     activeSessions.value = []
   }
 
-  async function retryFailed() {
-    if (!activeBatch.value) return
-    const id = activeBatch.value.id
-    activeBatch.value.failed = 0   // optimistic
+  async function retryFailed(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    if (activeBatch.value?.id === id && activeBatch.value) activeBatch.value.failed = 0  // optimistic
     await api.retryFailedSessions(id)
-    // refetch authoritative state and resume polling
     const detail = await api.getBatch(id)
-    applyDetail(detail)
-    if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    // reflect new counts in the list row so the group header updates
+    const idx = items.value.findIndex(b => b.id === id)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === id) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(id)
+    }
   }
 
   async function createAndSelect(body: Parameters<typeof api.createBatch>[0]) {

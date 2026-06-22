@@ -47,7 +47,7 @@ function statusLabel(s: string) {
   return ({ pending: '待运行', running: '运行中', completed: '已完成', partial: '部分失败', failed: '失败' } as Record<string, string>)[s] || s
 }
 function fileName(p?: string | null) { return (p || '').split('/').pop() || '' }
-async function onRetry() { try { await store.retryFailed() } catch { ElMessage.error('重试失败') } }
+async function onRetry() { try { await store.retryFailed(props.batch.id) } catch { ElMessage.error('重试失败') } }
 async function onDelete() {
   try {
     await ElMessageBox.confirm('删除该批次及其所有子任务？', '删除', { type: 'warning' })
@@ -76,4 +76,11 @@ async function onAppended() { if (expanded.value) await store.selectBatch(props.
 .dot--failed { background: var(--el-color-danger); }
 .dot--running { background: var(--el-color-warning); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }
+.badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--el-fill-color);
+  color: var(--el-text-color-secondary); flex: 0 0 auto; }
+.badge--running { background: var(--el-color-warning-light-8); color: var(--el-color-warning); }
+.badge--completed { background: var(--el-color-success-light-8); color: var(--el-color-success); }
+.badge--failed { background: var(--el-color-danger-light-8); color: var(--el-color-danger); }
+.badge--partial { background: var(--el-color-warning-light-8); color: var(--el-color-warning); }
+.badge--pending { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
 </style>
