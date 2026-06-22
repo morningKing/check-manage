@@ -19,7 +19,6 @@ Tests monkeypatch the `opencode_client` name at module level (eng.opencode_clien
 so all three calls resolve through the patched object.
 """
 import os
-import queue
 import shutil
 import threading
 import time
@@ -71,55 +70,50 @@ class _OpenCodeFacade:
         )
         return {'id': oc_session_id}
 
+    # Finish reasons that mean "the model will produce another message" (the
+    # agent is about to run a tool and continue). Anything else is terminal.
+    _CONTINUATION_FINISH = {'tool-calls', 'tool_use'}
+
     def list_messages(self, oc_session_id: str,
                       directory: str = '') -> list:
-        """Subscribe to the directory SSE stream and collect all message.part
-        events until session.idle fires, then return a synthetic message list.
-
-        Returns a list where the last element is an assistant message dict with
-        the shape the worker's _await_finished() expects:
+        """Poll OpenCode's REST message list and map each assistant message to the
+        shape the worker's _await_finished() expects:
             {'role': 'assistant', 'finished': True/False, 'content': [...]}
 
-        Raises on connection errors (propagates to _mark_failed).
-        Times out after 5 seconds of no events — the caller (POLL_INTERVAL_SEC
-        loop) retries immediately, so a short blocking-read timeout is fine.
+        Completion is derived from the message's `finish` reason, NOT from the
+        one-shot `session.idle` event. A turn is finished once the latest
+        assistant message has `time.completed` set AND a terminal `finish`
+        (anything other than 'tool-calls'). This is deterministic: re-polling
+        always re-reads the same state, so a turn that ends between two polls is
+        never missed — unlike the old event-window approach which dropped
+        `session.idle` if it fired in the gap (the source of children hanging in
+        'running' until the 30-min timeout under concurrency).
+
+        A transient REST error is reported as "not finished" so the poll loop
+        retries; a persistent failure still hits SESSION_TIMEOUT_SEC -> failed.
         """
-        client = self._client()
-        result_q: queue.Queue = queue.Queue()
-
-        def _stream():
-            try:
-                parts_text: list[str] = []
-                finished = False
-                for evt in client.subscribe_events(directory=directory):
-                    etype = evt.get('event', '')
-                    props = evt.get('data', {}).get('properties', {}) if evt.get('data') else {}
-
-                    if etype == 'message.part.updated':
-                        part = props.get('part') or {}
-                        if part.get('type') == 'text' and part.get('text'):
-                            parts_text.append(part['text'])
-                    elif etype == 'session.idle':
-                        finished = True
-                        result_q.put(('ok', parts_text, finished))
-                        return
-            except Exception as exc:
-                result_q.put(('err', exc))
-
-        t = threading.Thread(target=_stream, daemon=True)
-        t.start()
-        t.join(timeout=5)   # short poll window — caller loops
-
-        if result_q.empty():
-            # No session.idle yet — return an "not yet finished" synthetic message.
+        import requests
+        try:
+            raw = self._client().get_messages(oc_session_id, directory=directory) or []
+        except requests.RequestException:
             return [{'role': 'assistant', 'finished': False, 'content': []}]
 
-        item = result_q.get()
-        if item[0] == 'err':
-            raise item[1]
-        _, parts_text, finished = item
-        content = [{'type': 'text', 'text': t} for t in parts_text if t]
-        return [{'role': 'assistant', 'finished': finished, 'content': content}]
+        out: list = []
+        for m in raw:
+            info = m.get('info') or {}
+            if info.get('role') != 'assistant':
+                continue
+            parts = m.get('parts') or m.get('content') or []
+            content = [{'type': 'text', 'text': p.get('text', '')}
+                       for p in parts
+                       if p.get('type') == 'text' and p.get('text')]
+            finish = info.get('finish')
+            completed = (info.get('time') or {}).get('completed')
+            finished = bool(completed) and finish not in (None, '') \
+                and finish not in self._CONTINUATION_FINISH
+            out.append({'role': 'assistant', 'finished': finished,
+                        'content': content})
+        return out or [{'role': 'assistant', 'finished': False, 'content': []}]
 
 
 # The module-level name that tests monkeypatch.
@@ -219,15 +213,22 @@ def _recompute_batch_status(batch_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 class _SessionTimeout(Exception):
-    def __init__(self, seconds: int):
-        super().__init__(f'timeout after {seconds}s')
+    def __init__(self, seconds: int, reason: str = 'timeout'):
+        super().__init__(f'{reason} after {seconds}s')
         self.seconds = seconds
+        self.reason = reason
 
 
 class BatchWorker:
     MAX_CONCURRENT = 3
     POLL_INTERVAL_SEC = 2
     SESSION_TIMEOUT_SEC = 1800
+    # Hard ceiling above. STALL is a softer guard: if the OpenCode turn produces
+    # no new output for this long (and never reports finished), treat it as a
+    # stalled/half-open turn and fail it — instead of hanging the whole
+    # SESSION_TIMEOUT_SEC. An actively-working turn keeps changing its message
+    # text, so this only trips on a genuinely frozen session.
+    STALL_TIMEOUT_SEC = 180
 
     def __init__(self):
         self._wake = threading.Event()
@@ -358,7 +359,7 @@ class BatchWorker:
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
         except _SessionTimeout as e:
-            self._mark_failed(sid, batch_id, error=f'timeout after {e.seconds}s')
+            self._mark_failed(sid, batch_id, error=str(e)[:500])
             self._notify_scan(session_row, None, ok=False)
         except Exception as e:
             self._mark_failed(sid, batch_id,
@@ -405,6 +406,9 @@ class BatchWorker:
         deadline = time.time() + self.SESSION_TIMEOUT_SEC
         last_preview = None
         last_message = None
+        last_sig = None
+        last_progress_at = time.time()
+        first = True
         while time.time() < deadline:
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
@@ -415,8 +419,33 @@ class BatchWorker:
                     if m.get('finished'):
                         return last_preview, last_message
                     break
+            # No-progress watchdog: the signature changes whenever the turn emits
+            # a new message or more text. If it stays frozen past STALL_TIMEOUT_SEC
+            # the turn is half-open on OpenCode's side — fail rather than hang.
+            sig = self._progress_signature(msgs)
+            if first or sig != last_sig:
+                first = False
+                last_sig = sig
+                last_progress_at = time.time()
+            elif time.time() - last_progress_at > self.STALL_TIMEOUT_SEC:
+                raise _SessionTimeout(int(time.time() - last_progress_at),
+                                      reason='stalled (no progress)')
             time.sleep(self.POLL_INTERVAL_SEC)
         raise _SessionTimeout(self.SESSION_TIMEOUT_SEC)
+
+    @staticmethod
+    def _progress_signature(msgs: list) -> tuple:
+        """A cheap proxy for forward progress: (#assistant messages, total text
+        length). Changes whenever the model emits a new message or more text."""
+        count = 0
+        total_text = 0
+        for m in msgs:
+            if m.get('role') == 'assistant':
+                count += 1
+                for p in (m.get('content') or []):
+                    if p.get('type') == 'text':
+                        total_text += len(p.get('text') or '')
+        return (count, total_text)
 
     @staticmethod
     def _preview_from(message: dict) -> str | None:
