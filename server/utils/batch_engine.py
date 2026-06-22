@@ -57,14 +57,18 @@ class _OpenCodeFacade:
         return self._client().create_session(directory=directory, title=title)
 
     def send_message(self, oc_session_id: str, prompt: str,
-                     directory: str = '', agent: str = '') -> dict:
+                     directory: str = '', agent: str = '', model: str = '') -> dict:
         """Fire the prompt asynchronously.  Returns a stub dict so callers can
         discard the return value — the real work happens on the SSE stream.
+
+        `model` ("<providerID>/<modelID>") is the per-batch model; empty falls
+        back to the global OPENCODE_MODEL (which itself may be empty, leaving the
+        choice to OpenCode / the agent default).
         """
         from config import OPENCODE_MODEL
         self._client().send_prompt_async(
             oc_session_id, prompt,
-            model=OPENCODE_MODEL,
+            model=model or OPENCODE_MODEL,
             directory=directory,
             agent=agent,
         )
@@ -346,13 +350,14 @@ class BatchWorker:
             # this path: recovery is handled by the orphan sweep (running rows with
             # no live session get reset to pending).
             return
-        prompt, agent = ctx
+        prompt, agent, model = ctx
 
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
             oc_session_id = opencode_client.create_session(directory=ws)
             self._set_opencode_id(sid, oc_session_id)
-            opencode_client.send_message(oc_session_id, prompt, directory=ws, agent=agent)
+            opencode_client.send_message(oc_session_id, prompt, directory=ws,
+                                         agent=agent, model=model)
 
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
             self._persist_conversation(sid, prompt, final_msg)
@@ -375,15 +380,15 @@ class BatchWorker:
         except Exception:
             traceback.print_exc()
 
-    def _fetch_batch_context(self, batch_id: str) -> tuple[str, str] | None:
+    def _fetch_batch_context(self, batch_id: str) -> tuple[str, str, str] | None:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT prompt, agent FROM ai_chat_batches WHERE id = %s",
+                    "SELECT prompt, agent, model FROM ai_chat_batches WHERE id = %s",
                     (batch_id,),
                 )
                 row = cur.fetchone()
-                return (row[0], row[1] or '') if row else None
+                return (row[0], row[1] or '', row[2] or '') if row else None
 
     def _set_opencode_id(self, session_id: str, oc_session_id: str):
         with get_db() as conn:

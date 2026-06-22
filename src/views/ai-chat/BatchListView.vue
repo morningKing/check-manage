@@ -16,6 +16,10 @@
           <span>· {{ b.done }}/{{ b.total }}</span>
           <span class="muted">· {{ relativeTime(b.created_at) }}</span>
         </div>
+        <div v-if="b.agent || b.model" class="batch-card__meta muted">
+          <span v-if="b.agent">Agent: {{ b.agent }}</span>
+          <span v-if="b.model">{{ b.agent ? ' · ' : '' }}模型: {{ b.model }}</span>
+        </div>
       </div>
       <div v-if="!store.items.length" class="empty">还没有批任务</div>
     </div>

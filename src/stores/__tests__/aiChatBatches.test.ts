@@ -19,7 +19,7 @@ beforeEach(() => {
 })
 
 const mockBatch = {
-  id: 'b1', user_id: 'u', name: 'B', prompt: 'p', template_id: null, agent: null,
+  id: 'b1', user_id: 'u', name: 'B', prompt: 'p', template_id: null, agent: null, model: null,
   status: 'running' as const, total: 3, done: 1, failed: 0,
   created_at: '', completed_at: null,
 }
