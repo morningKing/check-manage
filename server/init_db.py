@@ -504,6 +504,8 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_user_created
   ON ai_chat_batches(user_id, created_at DESC);
+-- Idempotent upgrade: add `agent` to DBs created before it joined the CREATE above.
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS agent TEXT;
 """
 
 AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """
@@ -552,6 +554,8 @@ ALTER TABLE ai_chat_sessions
   ADD COLUMN IF NOT EXISTS source_record_id VARCHAR(100) NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_scan
   ON ai_chat_sessions(scan_task_id, source_record_id);
+-- Idempotent upgrade: add `agent` to DBs created before it joined the CREATE above.
+ALTER TABLE ai_scan_tasks ADD COLUMN IF NOT EXISTS agent TEXT;
 """
 
 
