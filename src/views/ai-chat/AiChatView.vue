@@ -830,7 +830,7 @@ function onKey(e: Event) {
     <CreateBatchDialog
       v-model="showCreateBatch"
       @manageTemplates="showTemplateManager = true"
-      @created="(d) => { batches.fetchList(); batches.selectBatch(d.batch.id) }" />
+      @created="async (d) => { await batches.fetchList(); batches.selectBatch(d.batch.id) }" />
     <PromptTemplateManager v-model="showTemplateManager" />
     <MemoryManager v-model="showMemoryManager" />
   </div>
