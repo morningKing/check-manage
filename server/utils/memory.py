@@ -120,6 +120,21 @@ def add_memory(user_id, messages):
         logger.warning('mem0 add failed: %s', e)
 
 
+def add_memory_text(user_id, text, infer=True):
+    """手动补写一条记忆。infer=False 为 verbatim（原样、不提炼，仍嵌入）。
+    返回是否写入（mem0 不可用/降级时 False）。"""
+    m = get_memory()
+    if m is None or not user_id or not text:
+        return False
+    try:
+        _on_mem_thread(lambda: m.add([{'role': 'user', 'content': text}],
+                                     user_id=user_id, infer=infer))
+        return True
+    except Exception as e:
+        logger.warning('mem0 manual add failed: %s', e)
+        return False
+
+
 def search_memory(user_id, query, limit=5):
     m = get_memory()
     if m is None or not user_id or not query:

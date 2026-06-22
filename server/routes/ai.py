@@ -11,7 +11,9 @@ from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
-from utils.memory import reset_memory_singleton, list_memories, delete_memory
+from utils.memory import (
+    reset_memory_singleton, list_memories, delete_memory, add_memory_text, get_memory,
+)
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
@@ -115,6 +117,25 @@ def put_settings():
 def list_my_memories():
     user = g.current_user
     return jsonify({'memories': list_memories(user['userId'])})
+
+
+@ai_bp.route('/memories', methods=['POST'])
+@login_required
+def add_my_memory():
+    user = g.current_user
+    body = request.get_json(silent=True) or {}
+    text = (body.get('text') or '').strip()
+    verbatim = bool(body.get('verbatim'))
+    if not text:
+        return jsonify({'error': '内容不能为空'}), 400
+    if len(text) > 2000:
+        return jsonify({'error': '内容过长（上限 2000 字符）'}), 400
+    if get_memory() is None:
+        return jsonify({'error': '记忆功能未配置（缺少 API Key 或未启用底层）',
+                        'code': 'MEMORY_UNAVAILABLE'}), 409
+    if not add_memory_text(user['userId'], text, infer=not verbatim):
+        return jsonify({'error': '写入失败'}), 500
+    return jsonify({'ok': True, 'memories': list_memories(user['userId'])})
 
 
 @ai_bp.route('/memories/<memory_id>', methods=['DELETE'])
