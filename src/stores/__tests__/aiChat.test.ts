@@ -10,6 +10,7 @@ vi.mock('@/api/aiChat', () => ({
   listSessions: vi.fn(),
   renameSession: vi.fn(),
   deleteSession: vi.fn(),
+  clearSession: vi.fn(),
   getMessages: vi.fn(),
   sendMessage: vi.fn(),
   uploadFile: vi.fn(),
@@ -189,5 +190,30 @@ describe('useAiChatStore', () => {
 
     // generated artifacts (outputs/ + workspace root) surface; uploaded input does not
     expect(store.outputs['sess_1'].map(f => f.name)).toEqual(['out.py', 'report.md'])
+  })
+
+  it('clearSession wipes local history/files, keeps the session active, and reopens the stream', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { void h; return { close: vi.fn() } })
+    ;(api.clearSession as any).mockResolvedValue({ ok: true, status: 'active' })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    // seed local per-session state that clear must reset
+    store.messages['sess_1'] = [{ id: 'm1', role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+    store.outputs['sess_1'] = [{ name: 'a.txt', path: 'a.txt', dir: 'workspace', size: 1 }]
+    store.changes['sess_1'] = [{ path: 'a.txt', status: 'added' }]
+    const streamCallsBefore = vi.mocked(api.createEventStream).mock.calls.length
+
+    await store.clearSession('sess_1')
+
+    expect(api.clearSession).toHaveBeenCalledWith('sess_1')
+    expect(store.messages['sess_1']).toEqual([])
+    expect(store.outputs['sess_1']).toEqual([])
+    expect(store.changes['sess_1']).toEqual([])
+    expect(store.sessions.find(s => s.id === 'sess_1')?.status).toBe('active')
+    // active session reconnects to the fresh OpenCode context
+    expect(vi.mocked(api.createEventStream).mock.calls.length).toBe(streamCallsBefore + 1)
   })
 })

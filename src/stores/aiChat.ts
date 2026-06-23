@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
-  deleteSession as apiDeleteSession,
+  deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage,
   createEventStream,
@@ -387,6 +387,25 @@ export const useAiChatStore = defineStore('aiChat', {
       this.sessions = this.sessions.filter(x => x.id !== id)
       delete this.messages[id]
       delete this.streaming[id]
+    },
+
+    async clearSession(id: string) {
+      // 清空会话：后端删历史 + 清空并重建工作区 + 新建 OpenCode 会话（重置上下文），
+      // 会话仍留在列表里且可立即继续。重置本地缓存的全部 per-session 状态。
+      await apiClearSession(id)
+      this.messages[id] = []
+      this.outputs[id] = []
+      this.changes[id] = []
+      this.attachments[id] = []
+      this.streaming[id] = false
+      this.thinking[id] = false
+      const s = this.sessions.find(x => x.id === id)
+      if (s) s.status = 'active'
+      // 旧 SSE 绑定的是已删的 OpenCode 会话，活跃会话需重连到新上下文。
+      if (this.activeSessionId === id) {
+        this._resetStreamState(id)
+        this._openStream(id)
+      }
     },
 
     _openStream(sid: string) {

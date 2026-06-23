@@ -122,6 +122,52 @@ def test_delete_others_session_404():
     assert r.status_code == 404
 
 
+def test_clear_session_resets_messages_workspace_and_opencode():
+    """清空会话：删历史 + 清空并重建工作区 + 新建 OpenCode 会话；会话留在列表里
+    (status='active')，可立即继续使用。"""
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc_old', 'active', '/ws')])  # _load_session_for_user row
+    oc_client = MagicMock()
+    oc_client.create_session.return_value = 'oc_new'
+    with patch.object(ac, 'get_db', fake), \
+         patch.object(ac, 'stop_listener') as stop, \
+         patch.object(ac, 'OpenCodeClient', return_value=oc_client), \
+         patch.object(ac, 'cleanup_session_workspace') as cleanup, \
+         patch.object(ac, 'create_session_workspace', return_value='/ws') as recreate, \
+         patch.object(ac, 'write_opencode_config'), \
+         patch.object(ac, 'generate_token', return_value='tok_new'), \
+         patch.object(ac, 'log_operation') as logop:
+        r = _client().post('/ai/chat/sessions/s1/clear', headers=_h())
+    assert r.status_code == 200
+    assert r.get_json()['status'] == 'active'
+    stop.assert_called_once_with('s1')
+    cleanup.assert_called_once()            # workspace wiped
+    recreate.assert_called_once()           # scaffold rebuilt
+    oc_client.delete_session.assert_called_once_with('oc_old')  # old context dropped
+    oc_client.create_session.assert_called_once()               # fresh context
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert 'DELETE FROM ai_chat_messages' in sql                # history cleared
+    assert 'oc_new' in str([c.args for c in cur.execute.call_args_list])  # rebound
+    logop.assert_called_once()
+    assert logop.call_args.args[:2] == ('update', 'ai_chat_session')
+
+
+def test_clear_others_session_404():
+    import routes.ai_chat as ac
+    fake, cur = _db([None])
+    with patch.object(ac, 'get_db', fake):
+        r = _client().post('/ai/chat/sessions/sX/clear', headers=_h())
+    assert r.status_code == 404
+
+
+def test_clear_deleted_session_409():
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc1', 'deleted', '/ws')])
+    with patch.object(ac, 'get_db', fake):
+        r = _client().post('/ai/chat/sessions/s1/clear', headers=_h())
+    assert r.status_code == 409
+
+
 def test_list_excludes_batch_children():
     # Batch child sessions live in their batch group, not the regular session
     # list — the query must filter by status only (no `batch_id IS NOT NULL`).
