@@ -419,6 +419,44 @@ def test_list_files_includes_workspace_root_generated_files(setup):
     assert '.git' not in files
 
 
+def test_list_files_recurses_plain_subdirs_but_skips_nested_repos_and_noise(setup):
+    """产出文件 must surface generated files in plain subdirectories (recursively)
+    — not just outputs/ and the root. But it must still EXCLUDE: nested git repos
+    (clone+edit changes belong to 变更文件), noise dirs (node_modules/.git), and
+    uploads/ (user input)."""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsrec'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    # a generated file nested in a plain subdirectory (the blind spot we fix)
+    (ws / 'reports' / 'q1').mkdir(parents=True, exist_ok=True)
+    (ws / 'reports' / 'q1' / 'jan.md').write_text('# jan', encoding='utf-8')
+    # outputs/ nested file should still be tagged 'outputs'
+    (ws / 'outputs' / 'sub').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs' / 'sub' / 'r.txt').write_text('r', encoding='utf-8')
+    # uploaded input — excluded from 产出文件 (tagged 'uploads')
+    (ws / 'uploads' / 'in.txt').write_text('hi', encoding='utf-8')
+    # a cloned repo: its files belong to 变更文件, NOT 产出文件
+    (ws / 'cloned' / '.git').mkdir(parents=True, exist_ok=True)
+    (ws / 'cloned' / 'code.py').write_text('x=1', encoding='utf-8')
+    # noise dir
+    (ws / 'node_modules' / 'pkg').mkdir(parents=True, exist_ok=True)
+    (ws / 'node_modules' / 'pkg' / 'index.js').write_text('//', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files', headers=dev_h)
+    assert resp.status_code == 200
+    files = {f['path']: f for f in resp.get_json()['files']}
+    # nested plain-subdir file surfaces, tagged 'workspace'
+    assert files['reports/q1/jan.md']['dir'] == 'workspace'
+    # nested outputs file surfaces, tagged 'outputs'
+    assert files['outputs/sub/r.txt']['dir'] == 'outputs'
+    # uploads still tagged 'uploads' (frontend drops these from 产出文件)
+    assert files['uploads/in.txt']['dir'] == 'uploads'
+    # cloned repo + noise excluded
+    assert 'cloned/code.py' not in files
+    assert 'node_modules/pkg/index.js' not in files
+
+
 def test_download_file_returns_content(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wsdl'
