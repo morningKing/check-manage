@@ -34,6 +34,10 @@ export function appendBatch(id: string, files: StagedFile[]) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/append`, { files })
 }
 
+export function reexecuteChild(batchId: string, sessionId: string) {
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/reexecute`, {})
+}
+
 export function stagingUpload(file: File, uploadSessionId: string) {
   const form = new FormData()
   form.append('file', file)

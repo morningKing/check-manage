@@ -152,10 +152,21 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   }
   attachVisibilityHandler()
 
+  async function reexecuteChild(batchId: string, sessionId: string) {
+    const detail = await api.reexecuteChild(batchId, sessionId)
+    const idx = items.value.findIndex(b => b.id === batchId)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === batchId) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(batchId)
+    }
+    return detail
+  }
+
   return {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
-    selectBatch, clearSelection, retryFailed,
+    selectBatch, clearSelection, retryFailed, reexecuteChild,
     createAndSelect, removeBatch, appendToBatch,
   }
 })
