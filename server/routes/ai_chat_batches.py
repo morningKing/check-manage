@@ -18,6 +18,7 @@ from utils.batch_repo import (
     delete_batch,
     get_batch_detail,
     list_batches,
+    reexecute_child,
     reset_failed_to_pending,
 )
 
@@ -144,6 +145,20 @@ def append(batch_id):
         result = append_to_batch(g.current_user['userId'], batch_id, files)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/reexecute')
+@login_required
+def reexecute(batch_id, session_id):
+    try:
+        result = reexecute_child(g.current_user['userId'], batch_id, session_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker

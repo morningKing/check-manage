@@ -264,3 +264,77 @@ def test_append_other_users_batch_404(setup_app, tmp_path, monkeypatch):
     f = _stage_one(client, admin_headers, name='a.txt', upload_session_id='u-app-3')
     r = client.post('/ai/chat/batches/does-not-exist/append', json={'files': [f]}, headers=admin_headers)
     assert r.status_code == 404
+
+
+def _make_terminal_batch(client, headers, db_conn, monkeypatch, tmp_path, *, usid, child_status):
+    """Create a 2-child batch, mark BOTH children terminal (child_status) and the
+    batch counters to match (done/failed = 2). Inserts an old message on the FIRST
+    child. Returns (bid, first_sid)."""
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, headers, name='r1.txt', upload_session_id=usid)
+    f2 = _stage_one(client, headers, name='r2.txt', upload_session_id=usid)
+    detail = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f1, f2]},
+                         headers=headers).get_json()
+    bid = detail['batch']['id']
+    sids = [s['id'] for s in sorted(detail['sessions'], key=lambda x: x['batch_seq'])]
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status=%s, opencode_session_id='oc-old', "
+                    "last_message_preview='old', error_message='e' WHERE batch_id=%s",
+                    (child_status, bid))
+        cur.execute("INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                    "VALUES ('m-old-1', %s, 'user', '[]'::jsonb)", (sids[0],))
+        done = 2 if child_status == 'completed' else 0
+        failed = 2 if child_status == 'failed' else 0
+        cur.execute("UPDATE ai_chat_batches SET status='completed', done=%s, failed=%s WHERE id=%s",
+                    (done, failed, bid))
+        db_conn.commit()
+    return bid, sids[0]
+
+
+def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    bid, sid = _make_terminal_batch(client, admin_headers, db_conn, monkeypatch, tmp_path,
+                                    usid='u-rx-1', child_status='completed')
+    r = client.post(f'/ai/chat/batches/{bid}/sessions/{sid}/reexecute', headers=admin_headers)
+    assert r.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, opencode_session_id, last_message_preview, error_message "
+                    "FROM ai_chat_sessions WHERE id=%s", (sid,))
+        st, oc, prev, err = cur.fetchone()
+        assert st == 'pending' and oc is None and prev is None and err is None
+        cur.execute("SELECT count(*) FROM ai_chat_messages WHERE session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT done, status FROM ai_chat_batches WHERE id=%s", (bid,))
+        done, bstatus = cur.fetchone()
+        assert done == 1 and bstatus == 'running'
+
+
+def test_reexecute_failed_child_decrements_failed(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    bid, sid = _make_terminal_batch(client, admin_headers, db_conn, monkeypatch, tmp_path,
+                                    usid='u-rx-2', child_status='failed')
+    r = client.post(f'/ai/chat/batches/{bid}/sessions/{sid}/reexecute', headers=admin_headers)
+    assert r.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT failed, status FROM ai_chat_batches WHERE id=%s", (bid,))
+        failed, bstatus = cur.fetchone()
+        assert failed == 1 and bstatus == 'running'
+
+
+def test_reexecute_running_child_409(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='r.txt', upload_session_id='u-rx-3')
+    detail = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f]},
+                         headers=admin_headers).get_json()
+    bid = detail['batch']['id']; sid = detail['sessions'][0]['id']
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (sid,)); db_conn.commit()
+    r = client.post(f'/ai/chat/batches/{bid}/sessions/{sid}/reexecute', headers=admin_headers)
+    assert r.status_code == 409
+
+
+def test_reexecute_missing_child_404(setup_app):
+    client, admin_headers = setup_app
+    r = client.post('/ai/chat/batches/nope/sessions/nope/reexecute', headers=admin_headers)
+    assert r.status_code == 404

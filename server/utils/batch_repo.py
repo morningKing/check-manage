@@ -164,6 +164,41 @@ def _recompute_batch_status_for(batch_id: str) -> None:
         conn.commit()
 
 
+def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
+    """Re-run a single TERMINAL (completed/failed) batch child from scratch:
+    delete its old messages, reset it to pending with a cleared OpenCode session,
+    roll back the batch counter, recompute status (-> running). Returns updated
+    detail, or None if the child isn't found / not owned. Raises ValueError if the
+    child is not in a terminal state."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.status FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            status = row[0]
+            if status not in ('completed', 'failed'):
+                raise ValueError('only completed/failed children can be re-executed')
+            cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (session_id,))
+            cur.execute(
+                "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
+                "  last_message_preview=NULL, error_message=NULL WHERE id = %s",
+                (session_id,),
+            )
+            if status == 'completed':
+                cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
+            else:
+                cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
+        conn.commit()
+    _recompute_batch_status_for(batch_id)
+    return get_batch_detail(user_id, batch_id)
+
+
 def reset_failed_to_pending(user_id: str, batch_id: str) -> int:
     """Returns count of sessions reset. Also clears batch.failed counter and
     recomputes batch.status."""
