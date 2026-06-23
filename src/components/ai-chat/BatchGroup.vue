@@ -18,7 +18,11 @@
            @click="$emit('selectChild', s.id)">
         <span :class="`dot dot--${s.status}`" />
         <span class="bg-child__file">{{ fileName(s.batch_input_file) }}</span>
-        <span class="bg-child__preview">{{ s.last_message_preview || '' }}</span>
+        <span class="bg-child__preview"
+              :class="{ 'is-error': s.status === 'failed' && !!s.error_message }"
+              :title="(s.status === 'failed' && s.error_message) || s.last_message_preview || ''">
+          {{ (s.status === 'failed' && s.error_message) ? s.error_message : (s.last_message_preview || '') }}
+        </span>
         <ElIcon v-if="s.status === 'completed' || s.status === 'failed'"
                 class="bg-child__reexec" title="重新执行（清空上下文）"
                 @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
@@ -81,6 +85,7 @@ async function onAppended() { if (expanded.value) await store.selectBatch(props.
 .bg-child:hover, .bg-child.active { background: var(--el-fill-color); }
 .bg-child__file { flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bg-child__preview { color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-child__preview.is-error { color: var(--el-color-danger); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-info); flex: 0 0 auto; }
 .dot--completed { background: var(--el-color-success); }
 .dot--failed { background: var(--el-color-danger); }
