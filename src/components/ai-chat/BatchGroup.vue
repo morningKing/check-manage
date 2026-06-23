@@ -19,6 +19,9 @@
         <span :class="`dot dot--${s.status}`" />
         <span class="bg-child__file">{{ fileName(s.batch_input_file) }}</span>
         <span class="bg-child__preview">{{ s.last_message_preview || '' }}</span>
+        <ElIcon v-if="s.status === 'completed' || s.status === 'failed'"
+                class="bg-child__reexec" title="重新执行（清空上下文）"
+                @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
       </div>
       <div v-if="!store.activeSessions.length" class="bg-empty">加载中…</div>
     </div>
@@ -28,7 +31,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, Delete } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
 import type { AiChatBatch } from '@/types/aiChatBatch'
@@ -54,6 +57,13 @@ async function onDelete() {
     await store.removeBatch(props.batch.id)
   } catch { /* cancelled */ }
 }
+async function onReexec(sessionId: string) {
+  try { await store.reexecuteChild(props.batch.id, sessionId) }
+  catch (e: unknown) {
+    const err = e as { response?: { data?: { error?: string } } }
+    ElMessage.error(err.response?.data?.error || '重新执行失败')
+  }
+}
 async function onAppended() { if (expanded.value) await store.selectBatch(props.batch.id) }
 </script>
 <style scoped>
@@ -75,6 +85,8 @@ async function onAppended() { if (expanded.value) await store.selectBatch(props.
 .dot--completed { background: var(--el-color-success); }
 .dot--failed { background: var(--el-color-danger); }
 .dot--running { background: var(--el-color-warning); }
+.bg-child__reexec { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
+.bg-child__reexec:hover { color: var(--el-color-primary); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--el-fill-color);
   color: var(--el-text-color-secondary); flex: 0 0 auto; }
