@@ -596,6 +596,8 @@ def list_files(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     workspace_path = sess[4]
+    if not workspace_path:   # batch child sessions have no workspace dir
+        return jsonify({'files': []})
     out = []
     for sub in ('uploads', 'outputs'):
         d = os.path.join(workspace_path, sub)
@@ -617,6 +619,8 @@ def list_changes(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if not sess[4]:   # batch child sessions have no workspace dir
+        return jsonify({'changes': [], 'truncated': False, 'ok': True})
     changes, truncated, ok = git_changes(sess[4])
     return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
 
