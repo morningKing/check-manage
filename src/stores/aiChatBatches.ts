@@ -163,10 +163,18 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     return detail
   }
 
+  async function updateBatchConfig(id: string, body: { agent: string | null; model: string | null }) {
+    const detail = await api.updateBatchConfig(id, body)
+    const idx = items.value.findIndex(b => b.id === id)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === id) applyDetail(detail)
+    return detail
+  }
+
   return {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, clearSelection, retryFailed, reexecuteChild,
-    createAndSelect, removeBatch, appendToBatch,
+    createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
   }
 })
