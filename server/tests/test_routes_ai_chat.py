@@ -394,6 +394,31 @@ def test_list_files_returns_uploads_and_outputs(setup):
     assert files['outputs/out.py']['dir'] == 'outputs'
 
 
+def test_list_files_includes_workspace_root_generated_files(setup):
+    """Files the agent writes directly under the workspace root (not into
+    outputs/) must still surface — tagged dir='workspace' — while noise files
+    (.gitignore, opencode.json, dotfiles) and subdirectories are excluded."""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsroot'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    # a real generated file at the root (the common agent-write case)
+    (ws / 'report.md').write_text('# done', encoding='utf-8')
+    # noise that must NOT show
+    (ws / '.gitignore').write_text('outputs/', encoding='utf-8')
+    (ws / 'opencode.json').write_text('{}', encoding='utf-8')
+    (ws / '.git').mkdir(exist_ok=True)  # a directory, must be skipped
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
+    resp = client.get('/ai/chat/sessions/sess_x/files', headers=dev_h)
+    assert resp.status_code == 200
+    files = {f['path']: f for f in resp.get_json()['files']}
+    assert files['report.md']['dir'] == 'workspace'
+    assert 'report.md' in files
+    assert '.gitignore' not in files
+    assert 'opencode.json' not in files
+    assert '.git' not in files
+
+
 def test_download_file_returns_content(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wsdl'

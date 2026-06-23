@@ -154,7 +154,10 @@ export const useAiChatStore = defineStore('aiChat', {
     async loadFiles(id: string) {
       try {
         const { files } = await listFiles(id)
-        this.outputs[id] = files.filter(f => f.dir === 'outputs')
+        // 产出文件 surfaces everything the agent generated: files written to
+        // outputs/ AND files written directly under the workspace root. Only
+        // user-uploaded inputs (uploads/) are excluded.
+        this.outputs[id] = files.filter(f => f.dir !== 'uploads')
       } catch { /* non-fatal */ }
     },
 
