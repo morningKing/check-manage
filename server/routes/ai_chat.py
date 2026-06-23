@@ -606,6 +606,18 @@ def list_files(sid):
                 if os.path.isfile(fp):
                     out.append({'name': name, 'path': f"{sub}/{name}",
                                 'dir': sub, 'size': os.path.getsize(fp)})
+    # Also surface files the agent wrote directly under the workspace root
+    # (the common `write report.md` case): without this they only ever showed
+    # in the git-based 变更文件 panel, never in 产出文件. Skip dotfiles
+    # (.gitignore/.DS_Store/.git/...), the per-session opencode.json config, and
+    # subdirectories (uploads/outputs/nested clones are reported elsewhere).
+    for name in sorted(os.listdir(workspace_path)):
+        if name.startswith('.') or name == 'opencode.json':
+            continue
+        fp = os.path.join(workspace_path, name)
+        if os.path.isfile(fp):
+            out.append({'name': name, 'path': name,
+                        'dir': 'workspace', 'size': os.path.getsize(fp)})
     return jsonify({'files': out})
 
 

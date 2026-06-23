@@ -171,13 +171,14 @@ describe('useAiChatStore', () => {
     expect(store.activeChanges).toEqual([{ path: 'repo/new.txt', status: 'added' }])
   })
 
-  it('loads outputs/ files after a turn finishes (session.idle)', async () => {
+  it('surfaces outputs/ and workspace-root generated files (not uploads) after session.idle', async () => {
     vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
     vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
     let handlers: any
     vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
     vi.mocked(api.listFiles).mockResolvedValue({ files: [
       { name: 'out.py', path: 'outputs/out.py', dir: 'outputs', size: 12 },
+      { name: 'report.md', path: 'report.md', dir: 'workspace', size: 6 },
       { name: 'in.txt', path: 'uploads/in.txt', dir: 'uploads', size: 5 },
     ] })
 
@@ -186,7 +187,7 @@ describe('useAiChatStore', () => {
     handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
     await Promise.resolve(); await Promise.resolve()  // let loadFiles promise settle
 
-    // only outputs/ files are surfaced as downloadable artifacts
-    expect(store.outputs['sess_1'].map(f => f.name)).toEqual(['out.py'])
+    // generated artifacts (outputs/ + workspace root) surface; uploaded input does not
+    expect(store.outputs['sess_1'].map(f => f.name)).toEqual(['out.py', 'report.md'])
   })
 })

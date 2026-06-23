@@ -39,7 +39,7 @@ export type AiContentPart =
 export interface AiFile {
   name: string
   path: string
-  dir: 'uploads' | 'outputs'
+  dir: 'uploads' | 'outputs' | 'workspace'
   size: number
 }
 

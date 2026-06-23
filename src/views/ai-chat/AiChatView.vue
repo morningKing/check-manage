@@ -656,7 +656,7 @@ function onKey(e: Event) {
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
             </div>
 
-            <!-- 产出文件（agent 写入 outputs/ 的真实文件） -->
+            <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">
               <div class="ai-outputs__title">产出文件</div>
               <a
