@@ -519,8 +519,9 @@ function onKey(e: Event) {
               <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
             </span>
           </div>
+          <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="48" />
 
-          <div v-if="batches.items.length" class="ai-sidebar__batches-head">
+          <div class="ai-sidebar__batches-head">
             批任务
             <ElButton link size="small" :icon="Plus" @click="showCreateBatch = true">新建</ElButton>
           </div>
@@ -529,8 +530,7 @@ function onKey(e: Event) {
             :batch="b" :active-session-id="activeId"
             @select-child="selectSession"
           />
-
-          <ElEmpty v-if="!sessions.length && !batches.items.length" description="暂无会话" :image-size="60" />
+          <ElEmpty v-if="!batches.items.length" description="暂无批任务" :image-size="48" />
         </ElScrollbar>
       </div>
     </aside>
