@@ -16,6 +16,7 @@ Routes registered:
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
     POST   /ai/chat/sessions/:id/close    close_session
     POST   /ai/chat/sessions/:id/reopen   reopen_session
+    POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
     DELETE /ai/chat/sessions/:id/messages/:msg_id  drop a message + everything after
     GET    /ai/chat/agents                list_agents
 """
@@ -904,6 +905,53 @@ def reopen_session(sid):
         cur.execute("UPDATE ai_chat_sessions SET status = 'active' WHERE id=%s AND user_id=%s",
                     (sid, user['userId']))
     log_operation('update', 'ai_chat_session', sid, sid, '重开会话')
+    return jsonify({'ok': True, 'status': 'active'})
+
+
+@ai_chat_bp.route('/sessions/<sid>/clear', methods=['POST'])
+@write_required
+def clear_session(sid):
+    """清空会话：保留会话本身（行/在列表中可见），但清空对话历史与工作区文件，
+    并重置 OpenCode 上下文，使会话恢复成「全新」状态、可立即继续使用。
+
+    与可逆的 close、不可逆的 delete 不同——clear 原地重置：删旧 OpenCode 会话、
+    rmtree 工作区并重建脚手架、重新签发 token、新建 OpenCode 会话、删光消息，
+    最后置 active。仅本人；archived/deleted 状态不可清空。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if sess[3] in ('archived', 'deleted'):
+        return jsonify({'error': '该状态会话不可清空', 'code': 'INVALID_STATUS'}), 409
+    old_oc = sess[2]
+    # 1) 停监听 + 删旧 OpenCode 会话（先删以释放工作区句柄，Windows 上尤为重要）
+    stop_listener(sid)
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    if old_oc:
+        try:
+            client.delete_session(old_oc)
+        except Exception:
+            pass  # 404 = 已不存在
+    # 2) 清空并重建工作区脚手架（uploads/ outputs/ .gitignore git init）
+    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
+    workspace_path = create_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
+    # 3) 重新签发 token（新 TTL）+ 用新 token 重写 opencode.json 的 MCP url
+    token = generate_token(sid, AI_SESSION_TTL_HOURS)
+    mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
+    write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
+                          model=OPENCODE_MODEL)
+    # 4) 新建 OpenCode 会话（绑定重建后的工作区）= 上下文重置
+    new_oc = client.create_session(directory=workspace_path, title='新会话')
+    # 5) 删历史 + 重绑 opencode_session_id + 置 active
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
+        cur.execute(
+            "UPDATE ai_chat_sessions SET opencode_session_id = %s, status = 'active', "
+            "workspace_path = %s WHERE id = %s AND user_id = %s",
+            (new_oc, workspace_path, sid, user['userId']),
+        )
+    log_operation('update', 'ai_chat_session', sid, sid, '清空会话')
     return jsonify({'ok': True, 'status': 'active'})
 
 

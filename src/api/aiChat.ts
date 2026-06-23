@@ -81,6 +81,9 @@ export function reopenSession(id: string) {
 export function deleteSession(id: string) {
   return del<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}`)
 }
+export function clearSession(id: string) {
+  return post<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}/clear`, {})
+}
 
 export function getMessages(id: string, since?: string) {
   const q = since ? `?since=${encodeURIComponent(since)}` : ''

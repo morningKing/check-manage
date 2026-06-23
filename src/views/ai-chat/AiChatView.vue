@@ -8,7 +8,7 @@ import {
 } from 'element-plus'
 import {
   Plus, Top, EditPen, Close, Document, Loading, Download,
-  CopyDocument, RefreshRight, Refresh, ArrowRight, Delete,
+  CopyDocument, RefreshRight, Refresh, ArrowRight, Delete, Brush,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -335,6 +335,17 @@ async function deleteSessionItem(id: string) {
     if (e !== 'cancel' && e !== 'close') ElMessage.error('删除会话失败')
   }
 }
+async function clearSessionItem(id: string) {
+  try {
+    await ElMessageBox.confirm('清空该会话？将清空对话历史和工作区内的全部文件，不可恢复；会话本身保留，可继续使用。', '清空会话', {
+      type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消',
+    })
+    await store.clearSession(id)
+    ElMessage.success('已清空')
+  } catch (e: unknown) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('清空会话失败')
+  }
+}
 
 function pickFiles() { fileInputEl.value?.click() }
 async function onFilesPicked(e: Event) {
@@ -528,6 +539,7 @@ function onKey(e: Event) {
               <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
               <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
               <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
+              <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
               <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
             </span>
           </div>
