@@ -298,11 +298,19 @@ def test_sse_events_filters_other_sessions(setup):
     assert 'OTHER' not in body
 
 
-def test_delete_session_endpoint_removed(setup):
-    """Personal physical delete endpoint has been removed (governance Task 2)."""
+def test_delete_session_cleans_everything(setup):
+    """Personal delete: mark 'deleted', kill OpenCode session + workspace."""
     client, cursor, oc, dev_h, _, ws_root = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    target = ws_root / 'user-1' / 'sess_x' / 'uploads'
+    target.mkdir(parents=True, exist_ok=True)
+
     resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
-    assert resp.status_code == 405  # Method Not Allowed
+    assert resp.status_code == 200
+    oc.delete_session.assert_called_once_with('oc_sess_42')
+    assert not (ws_root / 'user-1' / 'sess_x').exists()
+    statements = [c.args[0] for c in cursor.execute.call_args_list]
+    assert any('UPDATE ai_chat_sessions' in s and 'status' in s for s in statements)
 
 
 def test_list_sessions_returns_user_sessions(setup):
@@ -804,12 +812,17 @@ def test_run_command_starts_persist_listener(setup):
     assert ens.call_args[0][2] == str(ws)
 
 
-def test_delete_session_stops_persist_listener_removed(setup):
-    """Personal physical delete endpoint removed (governance Task 2) —
-    stop_listener is now called by close_session instead."""
+def test_delete_session_stops_persist_listener(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
-    resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
-    assert resp.status_code == 405
+    ws = ws_root / 'wsdel'; ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_42', 'active', str(ws))
+    with patch('routes.ai_chat.stop_listener') as stp, \
+         patch('routes.ai_chat.OpenCodeClient'), \
+         patch('routes.ai_chat.revoke_token'), \
+         patch('routes.ai_chat.cleanup_session_workspace'):
+        resp = client.delete('/ai/chat/sessions/sess_x', headers=dev_h)
+    assert resp.status_code == 200
+    stp.assert_called_once_with('sess_x')
 
 
 def test_list_agents_filters_internal_and_subagents(setup):

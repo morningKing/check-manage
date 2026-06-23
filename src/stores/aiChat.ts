@@ -11,6 +11,7 @@ import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
+  deleteSession as apiDeleteSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage,
   createEventStream,
@@ -372,6 +373,17 @@ export const useAiChatStore = defineStore('aiChat', {
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'active'
       this.streaming[id] = false
+    },
+
+    async deleteSession(id: string) {
+      await apiDeleteSession(id)
+      if (this.activeSessionId === id) {
+        this._closeStream()
+        this.activeSessionId = null
+      }
+      this.sessions = this.sessions.filter(x => x.id !== id)
+      delete this.messages[id]
+      delete this.streaming[id]
     },
 
     _openStream(sid: string) {

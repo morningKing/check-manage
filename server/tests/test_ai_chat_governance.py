@@ -97,9 +97,29 @@ def test_reopen_deleted_forbidden():
     assert r.status_code == 409
 
 
-def test_physical_delete_endpoint_removed():
-    r = _client().delete('/ai/chat/sessions/s1', headers=_h())
-    assert r.status_code == 405  # 个人物理删已移除（路由仍存在于其它方法 → 405）
+def test_delete_session_marks_deleted_and_audits():
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc1', 'active', '/ws')])  # _load_session_for_user row
+    with patch.object(ac, 'get_db', fake), \
+         patch.object(ac, 'stop_listener'), \
+         patch.object(ac, 'revoke_token') as revoke, \
+         patch.object(ac, 'cleanup_session_workspace'), \
+         patch.object(ac, 'OpenCodeClient'), \
+         patch.object(ac, 'log_operation') as logop:
+        r = _client().delete('/ai/chat/sessions/s1', headers=_h())
+    assert r.status_code == 200
+    assert any("status = 'deleted'" in str(c.args[0]) for c in cur.execute.call_args_list)
+    revoke.assert_called_once_with('s1')
+    logop.assert_called_once()
+    assert logop.call_args.args[:2] == ('delete', 'ai_chat_session')
+
+
+def test_delete_others_session_404():
+    import routes.ai_chat as ac
+    fake, cur = _db([None])  # _load_session_for_user returns None for non-owner
+    with patch.object(ac, 'get_db', fake):
+        r = _client().delete('/ai/chat/sessions/sX', headers=_h())
+    assert r.status_code == 404
 
 
 def test_list_excludes_batch_children():
