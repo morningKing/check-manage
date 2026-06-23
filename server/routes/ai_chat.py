@@ -36,13 +36,13 @@ from auth import login_required, login_required_sse, write_required, require_per
 from utils.opencode_client import OpenCodeClient
 from utils.workspace import (
     create_session_workspace, write_opencode_config,
-    safe_resolve,
+    safe_resolve, cleanup_session_workspace,
 )
 from utils.workspace_changes import git_changes, file_diff
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
-from utils.session_token import generate_token
+from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
@@ -866,6 +866,36 @@ def reopen_session(sid):
                     (sid, user['userId']))
     log_operation('update', 'ai_chat_session', sid, sid, '重开会话')
     return jsonify({'ok': True, 'status': 'active'})
+
+
+@ai_chat_bp.route('/sessions/<sid>', methods=['DELETE'])
+@write_required
+def delete_session(sid):
+    """Personal hard-ish delete (distinct from the reopenable `close`): mark the
+    session 'deleted' so it leaves the list and can't be reopened, kill its token
+    and OpenCode session, and clean up its workspace. The DB row + messages are
+    kept for audit; the deletion itself is logged to operation_logs."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    opencode_session_id = sess[2]
+    stop_listener(sid)
+    if opencode_session_id:
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).delete_session(opencode_session_id)
+        except Exception:
+            pass  # 404 from OpenCode = already gone
+    # Security-critical first: kill the token + mark dead so a failed file cleanup
+    # (e.g. Windows handle held by OpenCode) can't leave an authenticated session.
+    revoke_token(sid)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s AND user_id = %s",
+                    (sid, user['userId']))
+    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)  # best-effort
+    log_operation('delete', 'ai_chat_session', sid, sid, '删除会话')
+    return jsonify({'ok': True, 'status': 'deleted'})
 
 
 # --- Admin governance endpoints (require admin.ai_chat_admin capability) ---
