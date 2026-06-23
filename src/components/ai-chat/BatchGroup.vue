@@ -7,6 +7,7 @@
       <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
       <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
       <span class="bg-actions" @click.stop>
+        <ElIcon title="编辑 Agent/模型" @click="editOpen = true"><Setting /></ElIcon>
         <ElIcon title="追加文件" @click="appendOpen = true"><Plus /></ElIcon>
         <ElIcon v-if="batch.failed" title="重试失败" @click="onRetry"><RefreshRight /></ElIcon>
         <ElIcon title="删除批次" @click="onDelete"><Delete /></ElIcon>
@@ -30,20 +31,23 @@
       <div v-if="!store.activeSessions.length" class="bg-empty">加载中…</div>
     </div>
     <AppendFilesDialog v-model="appendOpen" :batch-id="batch.id" @appended="onAppended" />
+    <EditBatchConfigDialog v-model="editOpen" :batch="batch" @saved="onConfigSaved" />
   </div>
 </template>
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
+import EditBatchConfigDialog from './EditBatchConfigDialog.vue'
 import type { AiChatBatch } from '@/types/aiChatBatch'
 
 const props = defineProps<{ batch: AiChatBatch; activeSessionId: string | null }>()
 defineEmits<{ (e: 'selectChild', id: string): void }>()
 const store = useAiChatBatchesStore()
 const appendOpen = ref(false)
+const editOpen = ref(false)
 const expanded = computed(() => store.activeBatch?.id === props.batch.id)
 
 function toggle() {
@@ -69,6 +73,7 @@ async function onReexec(sessionId: string) {
   }
 }
 async function onAppended() { if (expanded.value) await store.selectBatch(props.batch.id) }
+async function onConfigSaved() { if (expanded.value) await store.selectBatch(props.batch.id) }
 </script>
 <style scoped>
 .batch-group__head { display: flex; align-items: center; gap: 6px; padding: 6px 8px;

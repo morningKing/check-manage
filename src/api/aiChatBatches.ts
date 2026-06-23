@@ -1,4 +1,4 @@
-import { get, post, del } from '@/utils/request'
+import { get, post, del, patch } from '@/utils/request'
 import type {
   AiChatBatch, AiChatBatchDetail, StagedFile,
 } from '@/types/aiChatBatch'
@@ -36,6 +36,10 @@ export function appendBatch(id: string, files: StagedFile[]) {
 
 export function reexecuteChild(batchId: string, sessionId: string) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/reexecute`, {})
+}
+
+export function updateBatchConfig(id: string, body: { agent: string | null; model: string | null }) {
+  return patch<AiChatBatchDetail>(`/ai/chat/batches/${id}`, body)
 }
 
 export function stagingUpload(file: File, uploadSessionId: string) {
