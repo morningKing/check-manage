@@ -199,6 +199,26 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
     return get_batch_detail(user_id, batch_id)
 
 
+def update_batch_config(user_id: str, batch_id: str, *,
+                        agent: str | None, model: str | None) -> dict | None:
+    """Update a batch's agent/model (owner-only). NULL clears to the default.
+    Returns updated detail, or None if not found / not owned. Takes effect on the
+    next run the worker claims (retry / reexecute / pending), since the worker
+    reads agent+model fresh per run via _fetch_batch_context."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_chat_batches SET agent = %s, model = %s "
+                "WHERE id = %s AND user_id = %s",
+                (agent, model, batch_id, user_id),
+            )
+            updated = cur.rowcount > 0
+        conn.commit()
+    if not updated:
+        return None
+    return get_batch_detail(user_id, batch_id)
+
+
 def reset_failed_to_pending(user_id: str, batch_id: str) -> int:
     """Returns count of sessions reset. Also clears batch.failed counter and
     recomputes batch.status."""

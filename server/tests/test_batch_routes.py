@@ -338,3 +338,38 @@ def test_reexecute_missing_child_404(setup_app):
     client, admin_headers = setup_app
     r = client.post('/ai/chat/batches/nope/sessions/nope/reexecute', headers=admin_headers)
     assert r.status_code == 404
+
+
+def test_patch_updates_agent_and_model(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='r.txt', upload_session_id='u-cfg-1')
+    bid = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f]},
+                      headers=admin_headers).get_json()['batch']['id']
+    r = client.patch(f'/ai/chat/batches/{bid}',
+                     json={'agent': 'plan', 'model': 'mimo/mimo-v2.5'}, headers=admin_headers)
+    assert r.status_code == 200
+    assert r.get_json()['batch']['agent'] == 'plan'
+    assert r.get_json()['batch']['model'] == 'mimo/mimo-v2.5'
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT agent, model FROM ai_chat_batches WHERE id=%s", (bid,))
+        assert cur.fetchone() == ('plan', 'mimo/mimo-v2.5')
+
+
+def test_patch_empty_clears_to_null(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='r.txt', upload_session_id='u-cfg-2')
+    bid = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'agent': 'plan',
+                                                'files': [f]}, headers=admin_headers).get_json()['batch']['id']
+    r = client.patch(f'/ai/chat/batches/{bid}', json={'agent': '', 'model': ''}, headers=admin_headers)
+    assert r.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT agent, model FROM ai_chat_batches WHERE id=%s", (bid,))
+        assert cur.fetchone() == (None, None)
+
+
+def test_patch_missing_batch_404(setup_app):
+    client, admin_headers = setup_app
+    r = client.patch('/ai/chat/batches/nope', json={'model': 'x'}, headers=admin_headers)
+    assert r.status_code == 404

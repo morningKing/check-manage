@@ -20,6 +20,7 @@ from utils.batch_repo import (
     list_batches,
     reexecute_child,
     reset_failed_to_pending,
+    update_batch_config,
 )
 
 
@@ -99,6 +100,18 @@ def detail(batch_id):
     if not body:
         return jsonify({'error': 'not found'}), 404
     return jsonify(body)
+
+
+@ai_chat_batches_bp.patch('/<batch_id>')
+@login_required
+def update_config(batch_id):
+    body = request.get_json(silent=True) or {}
+    agent = (body.get('agent') or '').strip() or None
+    model = (body.get('model') or '').strip() or None
+    result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(result)
 
 
 @ai_chat_batches_bp.delete('/<batch_id>')
