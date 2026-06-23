@@ -343,6 +343,21 @@ class BatchWorker:
 
     # --- per-session run ---
 
+    @staticmethod
+    def _with_input_hint(prompt: str, session_row) -> str:
+        """Prepend a hint telling the agent where its uploaded input file is, so it
+        reads it instead of asking for a path. Scan-task children already carry their
+        own context preamble (ai_scan_engine.assemble_prompt), so they're left as-is;
+        children without an input file are unchanged too."""
+        if session_row.get('scan_task_id'):
+            return prompt
+        rel = session_row.get('batch_input_file') or ''
+        name = os.path.basename(rel.replace('\\', '/'))
+        if not name:
+            return prompt
+        return (f'本任务的输入文件已放在工作区 uploads/{name}，'
+                f'请先读取该文件的内容，再完成下面的要求：\n\n{prompt}')
+
     def _run_one(self, session_row):
         sid = session_row['id']
         user_id = session_row['user_id']
@@ -356,6 +371,7 @@ class BatchWorker:
             # no live session get reset to pending).
             return
         prompt, agent, model = ctx
+        prompt = self._with_input_hint(prompt, session_row)
 
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
