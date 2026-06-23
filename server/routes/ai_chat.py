@@ -217,13 +217,12 @@ def list_agents():
 @ai_chat_bp.route('/sessions', methods=['GET'])
 @login_required
 def list_sessions():
-    """List the current user's sessions for the sidebar (newest first).
+    """List the current user's regular sessions for the sidebar (newest first).
 
-    Includes both regular `active` sessions and batch-child sessions (whose
-    status is one of pending/running/completed/failed). Batch children must
-    show up so the 查看 button on the batch dashboard can switch into them.
-    For batch children we synthesize a title from the input file basename
-    so the user can distinguish them in the list.
+    Only `active`/`closed` interactive sessions are returned. Batch-child
+    sessions are intentionally excluded — they live inside their batch group
+    (collapsible) in the unified sidebar and are managed there (a batch is
+    hard-deleted as a unit), not as individually-closeable list items.
     """
     user = flask_g.current_user
     with get_db() as conn:
@@ -232,7 +231,7 @@ def list_sessions():
             "SELECT id, title, last_active_at, batch_id, batch_input_file, status "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
-            "  AND (status IN ('active', 'closed') OR batch_id IS NOT NULL) "
+            "  AND status IN ('active', 'closed') "
             "ORDER BY last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )

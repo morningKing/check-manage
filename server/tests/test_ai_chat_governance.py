@@ -102,6 +102,25 @@ def test_physical_delete_endpoint_removed():
     assert r.status_code == 405  # 个人物理删已移除（路由仍存在于其它方法 → 405）
 
 
+def test_list_excludes_batch_children():
+    # Batch child sessions live in their batch group, not the regular session
+    # list — the query must filter by status only (no `batch_id IS NOT NULL`).
+    import routes.ai_chat as ac
+    conn = MagicMock(); cur = MagicMock()
+    cur.fetchall.return_value = []
+    conn.cursor.return_value = cur
+    from contextlib import contextmanager
+    @contextmanager
+    def fake():
+        yield conn
+    with patch.object(ac, 'get_db', fake):
+        r = _client().get('/ai/chat/sessions', headers=_h())
+    assert r.status_code == 200
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert 'batch_id IS NOT NULL' not in sql
+    assert "status IN ('active', 'closed')" in sql
+
+
 def test_list_includes_closed():
     import routes.ai_chat as ac
     conn = MagicMock(); cur = MagicMock()
