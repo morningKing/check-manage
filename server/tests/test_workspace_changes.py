@@ -262,6 +262,54 @@ def test_prioritize_sorts_by_path_within_group():
     assert [c['path'] for c in capped] == ['a.txt', 'b.txt']
 
 
+def test_is_secondary_classifies_dependency_and_build_files():
+    from utils.workspace_changes import _is_secondary
+    # secondary
+    assert _is_secondary('package-lock.json')
+    assert _is_secondary('frontend/yarn.lock')
+    assert _is_secondary('node_modules/react/index.js')
+    assert _is_secondary('dist/app.js')
+    assert _is_secondary('build/out.bin')
+    assert _is_secondary('server/__pycache__/x.pyc')
+    assert _is_secondary('a/b.min.js')
+    assert _is_secondary('a/b.css.map')
+    # source / key files
+    assert not _is_secondary('src/main.py')
+    assert not _is_secondary('src/components/App.vue')
+    assert not _is_secondary('README.md')
+    assert not _is_secondary('go.mod')                  # go.mod is source, go.sum is not
+
+
+def test_source_files_sort_before_secondary():
+    from utils.workspace_changes import _prioritize_and_cap
+    changes = [
+        {'path': 'dist/bundle.js', 'status': 'added'},
+        {'path': 'src/app.py', 'status': 'modified'},
+        {'path': 'package-lock.json', 'status': 'modified'},
+        {'path': 'src/util.py', 'status': 'added'},
+    ]
+    capped, _ = _prioritize_and_cap(changes)
+    # source (added/modified) first, secondary after — all before any deletion
+    assert [c['path'] for c in capped] == [
+        'src/app.py', 'src/util.py', 'dist/bundle.js', 'package-lock.json',
+    ]
+
+
+def test_truncation_keeps_modified_source_over_flood_of_secondary_added():
+    """The reported bug: a flood of generated/added files (e.g. expanded
+    node_modules) pushed the user's modified source out of the 500-cap. Source
+    modifications must survive."""
+    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
+    flood = [{'path': f'node_modules/pkg/f{i:05d}.js', 'status': 'added'}
+             for i in range(MAX_CHANGES + 200)]
+    src = [{'path': 'src/zzz_last.py', 'status': 'modified'}]   # path sorts late on purpose
+    capped, truncated = _prioritize_and_cap(flood + src)
+    assert truncated is True
+    assert len(capped) == MAX_CHANGES
+    assert {'path': 'src/zzz_last.py', 'status': 'modified'} in capped  # survived
+    assert capped[0]['path'] == 'src/zzz_last.py'                       # in fact, first
+
+
 def test_git_changes_orders_deleted_last(tmp_path):
     """End-to-end through a real repo: deletions sort after added/modified."""
     from utils.workspace_changes import git_changes
