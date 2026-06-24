@@ -40,7 +40,7 @@ from utils.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
 )
-from utils.workspace_changes import git_changes, file_diff
+from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
@@ -679,6 +679,27 @@ def list_changes(sid):
         return jsonify({'changes': [], 'truncated': False, 'ok': True})
     changes, truncated, ok = git_changes(sess[4])
     return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
+
+
+@ai_chat_bp.route('/sessions/<sid>/changes/expand', methods=['GET'])
+@login_required
+def expand_change_dir(sid):
+    """List the individual files inside a folded `dir/` change entry (large
+    brand-new dirs are collapsed in 变更文件; this expands one on demand)."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    rel = request.args.get('dir', '').strip()
+    if not rel:
+        return jsonify({'error': 'dir required', 'code': 'DIR_REQUIRED'}), 400
+    if not sess[4]:
+        return jsonify({'files': []})
+    try:
+        safe_resolve(sess[4], rel.rstrip('/'))  # block traversal; result unused
+    except Exception:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    return jsonify({'files': expand_untracked_dir(sess[4], rel)})
 
 
 @ai_chat_bp.route('/sessions/<sid>/diff', methods=['GET'])
