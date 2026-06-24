@@ -170,6 +170,40 @@ def test_large_untracked_directory_stays_collapsed(tmp_path):
     assert not any(c['path'].startswith('pulled/f') for c in changes)
 
 
+def test_expand_untracked_dir_lists_all_files(tmp_path):
+    """A folded `dir/` entry can be expanded on demand into every file under it
+    (recursively, workspace-relative, path-sorted)."""
+    from utils.workspace_changes import (
+        git_changes, expand_untracked_dir, UNTRACKED_DIR_EXPAND_LIMIT)
+    ws = str(tmp_path)
+    _init_repo(ws)
+    pulled = os.path.join(ws, 'pulled')
+    os.makedirs(os.path.join(pulled, 'sub'))
+    n = UNTRACKED_DIR_EXPAND_LIMIT + 3
+    for i in range(n):
+        with open(os.path.join(pulled, f'f{i:03d}.py'), 'w') as f:
+            f.write('x')
+    with open(os.path.join(pulled, 'sub', 'deep.py'), 'w') as f:
+        f.write('y')
+    # git_changes folds it
+    changes, _, _ = git_changes(ws)
+    assert any(c.get('kind') == 'dir' and c['path'] == 'pulled/' for c in changes)
+    # expand lists every file under it
+    files = expand_untracked_dir(ws, 'pulled/')
+    paths = [f['path'] for f in files]
+    assert 'pulled/f000.py' in paths
+    assert 'pulled/sub/deep.py' in paths
+    assert len(files) == n + 1
+    assert all(f['status'] == 'added' for f in files)
+    assert paths == sorted(paths)
+
+
+def test_expand_untracked_dir_no_repo_returns_empty(tmp_path):
+    from utils.workspace_changes import expand_untracked_dir
+    # path not under any git repo -> empty (no crash)
+    assert expand_untracked_dir(str(tmp_path), 'nope/') == []
+
+
 def test_small_untracked_directory_expands(tmp_path):
     """A small brand-new dir still expands into its files (no collapse)."""
     from utils.workspace_changes import git_changes

@@ -165,6 +165,13 @@ export function getChanges(id: string) {
   )
 }
 
+// Expand a folded `dir/` change entry into its individual files.
+export function expandChangeDir(id: string, dir: string) {
+  return get<{ files: ChangedFile[] }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/changes/expand`, { dir }, { silent: true },
+  )
+}
+
 export function getFileDiff(id: string, path: string) {
   return get<FileDiff>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/diff`,

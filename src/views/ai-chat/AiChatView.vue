@@ -31,7 +31,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, expandChangeDir, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -489,6 +489,24 @@ async function refreshChanges() {
   } finally { changesLoading.value = false }
 }
 
+// 折叠的「目录/ (N 个新文件)」条目可就地展开看里面的文件（点击懒加载）。
+const expandedDirs = reactive<Record<string, { open: boolean; loading: boolean; files: ChangedFile[] }>>({})
+async function toggleDir(c: ChangedFile) {
+  if (!activeId.value) return
+  // Read back through the reactive proxy (an assignment expression returns the
+  // raw object, whose mutations wouldn't trigger updates).
+  if (!expandedDirs[c.path]) expandedDirs[c.path] = { open: false, loading: false, files: [] }
+  const st = expandedDirs[c.path]
+  st.open = !st.open
+  if (st.open && !st.files.length && !st.loading) {
+    st.loading = true
+    try {
+      const { files } = await expandChangeDir(activeId.value, c.path)
+      st.files = files
+    } catch { ElMessage.error('展开目录失败') } finally { st.loading = false }
+  }
+}
+
 async function send() {
   if (!canSend.value) return
   const text = input.value.trim()
@@ -703,20 +721,37 @@ function onKey(e: Event) {
                     </button>
                     <div v-show="!collapsed[g.key]" class="change-group__body">
                       <div v-for="c in groupedChanges[g.key]" :key="c.path" class="change-file">
-                        <div class="change-file__row">
-                          <span class="change-file__name">{{ c.path }}</span>
-                          <span v-if="c.kind === 'dir'" class="change-file__dircount">{{ c.count }} 个新文件</span>
-                          <template v-else-if="c.status !== 'deleted'">
-                            <ElButton size="small" text @click="previewChange(c)">预览</ElButton>
-                            <a class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener">下载</a>
-                          </template>
-                        </div>
-                        <a
-                          v-if="c.status !== 'deleted' && isImageFile(c.path)"
-                          class="change-file__img" :href="fileUrl(c.path)" target="_blank" rel="noopener noreferrer"
-                        >
-                          <img :src="fileUrl(c.path)" :alt="c.path" />
-                        </a>
+                        <!-- 折叠目录：可点击就地展开里面的文件 -->
+                        <template v-if="c.kind === 'dir'">
+                          <button class="change-file__dirhead" type="button" @click="toggleDir(c)">
+                            <ElIcon class="change-file__chev" :class="{ open: expandedDirs[c.path]?.open }"><ArrowRight /></ElIcon>
+                            <span class="change-file__name">{{ c.path }}</span>
+                            <span class="change-file__dircount">{{ c.count }} 个新文件</span>
+                          </button>
+                          <div v-show="expandedDirs[c.path]?.open" class="change-file__dirbody">
+                            <span v-if="expandedDirs[c.path]?.loading" class="change-file__dirhint">加载中…</span>
+                            <div v-for="f in (expandedDirs[c.path]?.files || [])" :key="f.path" class="change-file__row">
+                              <span class="change-file__name">{{ f.path }}</span>
+                              <ElButton size="small" text @click="previewChange(f)">预览</ElButton>
+                              <a class="change-file__dl" :href="fileUrl(f.path)" target="_blank" rel="noopener">下载</a>
+                            </div>
+                          </div>
+                        </template>
+                        <template v-else>
+                          <div class="change-file__row">
+                            <span class="change-file__name">{{ c.path }}</span>
+                            <template v-if="c.status !== 'deleted'">
+                              <ElButton size="small" text @click="previewChange(c)">预览</ElButton>
+                              <a class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener">下载</a>
+                            </template>
+                          </div>
+                          <a
+                            v-if="c.status !== 'deleted' && isImageFile(c.path)"
+                            class="change-file__img" :href="fileUrl(c.path)" target="_blank" rel="noopener noreferrer"
+                          >
+                            <img :src="fileUrl(c.path)" :alt="c.path" />
+                          </a>
+                        </template>
                       </div>
                     </div>
                   </template>
@@ -1116,6 +1151,13 @@ function onKey(e: Event) {
   &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--el-font-family-mono, monospace); }
   &__dl { color: var(--el-color-primary); text-decoration: none; font-size: 13px; }
   &__dircount { color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; }
+  &__dirhead {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: none; border: none; padding: 0; cursor: pointer; color: inherit; text-align: left;
+  }
+  &__chev { transition: transform 0.15s; &.open { transform: rotate(90deg); } }
+  &__dirbody { padding-left: 18px; }
+  &__dirhint { color: var(--el-text-color-secondary); font-size: 12px; }
   &__img {
     display: block;
     margin-left: 0;

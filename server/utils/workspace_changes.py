@@ -210,6 +210,22 @@ def git_changes(workspace_path):
     return capped, truncated, ok
 
 
+def expand_untracked_dir(workspace_path, rel_dir):
+    """List the individual untracked files under a folded `dir/` entry (the ones
+    git_changes collapsed when the directory had too many files). Returns
+    [{'path': <workspace-relative POSIX>, 'status': 'added'}, ...], path-sorted."""
+    rel = rel_dir.rstrip('/')
+    repo, repo_rel = resolve_repo_for_path(workspace_path, rel)
+    if repo is None:
+        return []
+    out = []
+    for fp in _list_untracked_files(repo, repo_rel):
+        frel = os.path.relpath(os.path.join(repo, fp), workspace_path).replace(os.sep, '/')
+        out.append({'path': frel, 'status': 'added'})
+    out.sort(key=lambda c: c['path'])
+    return out
+
+
 def _classify(repo, repo_rel):
     """Return 'added'|'modified'|'deleted'|None for a repo-relative path."""
     try:
