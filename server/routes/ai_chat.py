@@ -23,6 +23,7 @@ Routes registered:
 
 import os
 import json
+import logging
 import secrets
 import requests
 from datetime import datetime, timezone, timedelta
@@ -55,6 +56,8 @@ from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
     AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
 )
+
+logger = logging.getLogger(__name__)
 
 MCP_NAME = 'check-manage'
 
@@ -373,16 +376,22 @@ def send_message(sid):
     import requests as _requests
     client = OpenCodeClient(OPENCODE_BASE_URL)
     oc_sid = sess[2]
+    logger.info('send_message session=%s oc=%s user=%s model=%s agent=%s attachments=%d',
+                sid, oc_sid, user['userId'], effective_model or 'default',
+                requested_agent or 'default', len(attachments))
     try:
         client.send_prompt_async(
             oc_sid, prompt.strip(), model=effective_model, directory=sess[4],
             agent=requested_agent, agent_parts=agent_mentions,
         )
-    except _requests.RequestException:
+    except _requests.RequestException as e:
+        logger.warning('send_message OpenCode dispatch failed session=%s oc=%s: %s; '
+                       'recovering session', sid, oc_sid, e)
         oc_sid = _recover_session_and_resend(
             client, sid, sess[4], msg_id, prompt.strip(),
             effective_model, requested_agent, agent_mentions,
         )
+        logger.info('send_message recovered session=%s new_oc=%s', sid, oc_sid)
     ensure_listener(sid, oc_sid, sess[4])
     return jsonify({
         'messageId': msg_id,
@@ -517,6 +526,7 @@ def sse_events(sid):
         # part id, preserving arrival order, so the persisted message matches the
         # live stream — including rendered tool results (e.g. query_collection).
         state = new_state()
+        logger.info('sse stream open session=%s oc=%s', sid, opencode_session_id)
         try:
             for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
@@ -538,6 +548,13 @@ def sse_events(sid):
                 yield _format_sse(etype, props)
         except GeneratorExit:
             return
+        except Exception:
+            # Upstream OpenCode SSE error/drop — previously vanished, leaving the
+            # browser to silently reconnect with no server-side trace.
+            logger.exception('sse stream error session=%s oc=%s', sid, opencode_session_id)
+            return
+        finally:
+            logger.info('sse stream closed session=%s', sid)
 
     return Response(
         stream_with_context(generate()),
@@ -807,8 +824,8 @@ def delete_message_onwards(sid, msg_id):
         deleted = cur.rowcount
     try:
         OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
-    except Exception:
-        pass  # best-effort: a non-streaming session returns 4xx and that's fine
+    except Exception as e:
+        logger.debug('abort_session best-effort no-op session=%s: %s', sid, e)
     return jsonify({'deleted': deleted}), 200
 
 

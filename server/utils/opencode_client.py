@@ -12,8 +12,12 @@ emits a {type, properties} envelope; callers map event names themselves.
 """
 
 import json
+import logging
+import time
 import requests
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 
 class OpenCodeError(RuntimeError):
@@ -29,14 +33,22 @@ class OpenCodeClient:
         return f"{self.base_url}{path}"
 
     def create_session(self, *, directory: str, title: str = "") -> str:
-        resp = requests.post(
-            self._url("/session"),
-            params={"directory": directory},
-            json={"title": title},
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["id"]
+        t0 = time.monotonic()
+        try:
+            resp = requests.post(
+                self._url("/session"),
+                params={"directory": directory},
+                json={"title": title},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning('opencode create_session failed dir=%s: %s', directory, e)
+            raise
+        oc_id = resp.json()["id"]
+        logger.info('opencode create_session ok id=%s dir=%s %.0fms',
+                    oc_id, directory, (time.monotonic() - t0) * 1000)
+        return oc_id
 
     def delete_session(self, opencode_session_id: str) -> None:
         try:
@@ -101,13 +113,26 @@ class OpenCodeClient:
         if agent:
             body["agent"] = agent
         params = {"directory": directory} if directory else None
-        resp = requests.post(
-            self._url(f"/session/{opencode_session_id}/prompt_async"),
-            params=params,
-            json=body,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        t0 = time.monotonic()
+        logger.info('opencode send_prompt_async -> session=%s model=%s agent=%s parts=%d len=%d',
+                    opencode_session_id, model or 'default', agent or 'default',
+                    len(parts), len(content))
+        try:
+            resp = requests.post(
+                self._url(f"/session/{opencode_session_id}/prompt_async"),
+                params=params,
+                json=body,
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            # Covers the "sent but hung / no reply" case: a timeout or HTTP error
+            # here is exactly what makes a session look stuck.
+            logger.warning('opencode send_prompt_async FAILED session=%s %.0fms: %s',
+                           opencode_session_id, (time.monotonic() - t0) * 1000, e)
+            raise
+        logger.info('opencode send_prompt_async accepted session=%s %.0fms',
+                    opencode_session_id, (time.monotonic() - t0) * 1000)
 
     def list_providers(self) -> dict:
         """Return OpenCode's provider/model catalogue.

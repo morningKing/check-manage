@@ -41,6 +41,11 @@ from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.data_files import data_files_bp
 from routes.roles import roles_bp
 from routes.workflows import workflows_bp
+from utils.logging_setup import setup_logging
+
+# Configure logging (console + rotating file) before anything logs. Skip the
+# file handler under pytest so test runs don't spew ai-chat.log.
+setup_logging(to_file='pytest' not in sys.modules)
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:
