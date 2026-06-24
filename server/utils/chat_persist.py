@@ -6,6 +6,7 @@ the assistant message on `session.idle`, so switching sessions mid-stream no
 longer loses tool calls / partial output. The accumulation helpers are also
 used by the browser SSE proxy so both share one tested implementation."""
 import json
+import logging
 import secrets
 import threading
 import time
@@ -13,6 +14,8 @@ import time
 from db import get_db
 from utils.opencode_client import OpenCodeClient
 from config import OPENCODE_BASE_URL
+
+logger = logging.getLogger(__name__)
 
 # Debounce for mid-turn (incremental) persistence: at most one DB upsert this
 # often while a turn streams, so switching sessions mid-stream recovers the
@@ -122,8 +125,9 @@ def persist_turn(session_id, state):
                 "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
                 (row_id, session_id, json.dumps(content)),
             )
-    except Exception:
-        pass  # don't break the listener/stream on a DB hiccup
+    except Exception as e:
+        # Don't break the listener/stream on a DB hiccup — but no longer silent.
+        logger.warning('persist_turn DB error session=%s row=%s: %s', session_id, row_id, e)
 
 
 def _run_listener(sid, opencode_session_id, event_source):
@@ -137,11 +141,13 @@ def _run_listener(sid, opencode_session_id, event_source):
         sig = apply_event(state, evt, opencode_session_id)
         if sig == 'idle':
             persist_turn(sid, state)
+            logger.debug('persist listener idle->persisted session=%s parts=%d',
+                         sid, len(state.get('part_order', [])))
             try:
                 from utils.memory import extract_from_turn
                 extract_from_turn(sid, state)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
             state = new_state()
             last_persist = time.monotonic()
         elif sig == 'changed' and state['turn_msg_id']:
@@ -156,12 +162,15 @@ def _listener_thread(sid, opencode_session_id, directory):
     and run the persist loop. Exits on inactivity read-timeout or any error;
     removes itself from the registry so a later turn can start a fresh one."""
     try:
+        logger.info('persist listener start session=%s oc=%s', sid, opencode_session_id)
         source = OpenCodeClient(OPENCODE_BASE_URL).subscribe_events(
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
         _run_listener(sid, opencode_session_id, source)
+        logger.info('persist listener stream ended session=%s', sid)
     except Exception:
-        pass
+        # Previously swallowed — the #1 reason a "stuck" session left no trace.
+        logger.exception('persist listener crashed session=%s', sid)
     finally:
         with _lock:
             _listeners.pop(sid, None)
