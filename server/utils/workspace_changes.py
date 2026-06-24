@@ -97,21 +97,13 @@ def _is_secondary(path):
 
 
 def _prioritize_and_cap(changes):
-    """Order changes for the 变更文件 panel, then cap to MAX_CHANGES.
-
-    Sort key (ascending) = (is_deleted, is_secondary, path), so the order is:
-      1. source files added/modified   <- always kept first
-      2. secondary files added/modified (lockfiles, dist/, node_modules/, ...)
-      3. deletions (source then secondary)
-    On overflow the lower tiers are dropped first, so a flood of generated/added
-    files can never crowd the source files the user actually changed out of the
-    list (and deletions are still dropped before any add/modify). Returns
-    (capped_list, truncated)."""
-    changes.sort(key=lambda c: (
-        1 if c['status'] == 'deleted' else 0,
-        1 if _is_secondary(c['path']) else 0,
-        c['path'],
-    ))
+    """Order changes for the 变更文件 panel (source files before secondary ones,
+    each group by path), then cap to MAX_CHANGES. On overflow the secondary tier
+    is dropped first, so generated/dependency churn (e.g. a whole node_modules/
+    or dist/) can't crowd out the source files the user actually changed.
+    (Deletions are filtered out upstream — the panel lists only added/modified.)
+    Returns (capped_list, truncated)."""
+    changes.sort(key=lambda c: (1 if _is_secondary(c['path']) else 0, c['path']))
     truncated = len(changes) > MAX_CHANGES
     return changes[:MAX_CHANGES], truncated
 
@@ -203,6 +195,8 @@ def git_changes(workspace_path):
                 continue
             changes.append({'path': rel, 'status': _map_status(xy)})
             i += 1
+    # The panel lists only additions/modifications; deletions are noise here.
+    changes = [c for c in changes if c['status'] != 'deleted']
     capped, truncated = _prioritize_and_cap(changes)
     return capped, truncated, ok
 

@@ -17,7 +17,8 @@ def _init_repo(path):
     _git(path, 'config', 'user.name', 't')
 
 
-def test_git_changes_detects_added_modified_deleted(tmp_path):
+def test_git_changes_detects_added_modified_excludes_deleted(tmp_path):
+    """The panel lists additions/modifications only — deletions are filtered out."""
     from utils.workspace_changes import git_changes
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
@@ -31,13 +32,14 @@ def test_git_changes_detects_added_modified_deleted(tmp_path):
         f.write('hi')                                   # added (untracked)
     with open(os.path.join(repo, 'mod.txt'), 'w') as f:
         f.write('changed')                              # modified
-    os.remove(os.path.join(repo, 'del.txt'))            # deleted
+    os.remove(os.path.join(repo, 'del.txt'))            # deleted -> excluded
 
     changes, truncated, ok = git_changes(ws)
     by = {c['path']: c['status'] for c in changes}
     assert by.get('repo/new.txt') == 'added'
     assert by.get('repo/mod.txt') == 'modified'
-    assert by.get('repo/del.txt') == 'deleted'
+    assert 'repo/del.txt' not in by                     # deletion not listed
+    assert not any(c['status'] == 'deleted' for c in changes)
     assert truncated is False
     assert ok is True
 
@@ -273,36 +275,6 @@ def _mk(n, status, prefix):
     return [{'path': f'{prefix}{i:04d}.txt', 'status': status} for i in range(n)]
 
 
-def test_prioritize_groups_deleted_after_non_deleted():
-    from utils.workspace_changes import _prioritize_and_cap
-    changes = _mk(2, 'deleted', 'd') + _mk(2, 'added', 'a') + _mk(1, 'modified', 'm')
-    capped, truncated = _prioritize_and_cap(list(changes))
-    assert truncated is False
-    statuses = [c['status'] for c in capped]
-    first_deleted = statuses.index('deleted')
-    assert all(s != 'deleted' for s in statuses[:first_deleted])      # non-deleted first
-    assert all(s == 'deleted' for s in statuses[first_deleted:])      # deletions last
-
-
-def test_truncation_drops_all_deletions_when_non_deleted_fills_cap():
-    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
-    changes = _mk(MAX_CHANGES, 'added', 'a') + _mk(10, 'deleted', 'd')
-    capped, truncated = _prioritize_and_cap(changes)
-    assert truncated is True
-    assert len(capped) == MAX_CHANGES
-    assert all(c['status'] == 'added' for c in capped)               # no deletion survives
-
-
-def test_truncation_keeps_leftover_deletions_path_sorted():
-    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
-    changes = _mk(MAX_CHANGES - 5, 'added', 'a') + _mk(20, 'deleted', 'd')
-    capped, truncated = _prioritize_and_cap(changes)
-    assert truncated is True
-    assert len(capped) == MAX_CHANGES
-    kept_deleted = sorted(c['path'] for c in capped if c['status'] == 'deleted')
-    assert kept_deleted == [f'd{i:04d}.txt' for i in range(5)]       # only 5 slots, lowest paths
-
-
 def test_prioritize_sorts_by_path_within_group():
     from utils.workspace_changes import _prioritize_and_cap
     changes = [{'path': 'b.txt', 'status': 'added'}, {'path': 'a.txt', 'status': 'added'}]
@@ -358,8 +330,8 @@ def test_truncation_keeps_modified_source_over_flood_of_secondary_added():
     assert capped[0]['path'] == 'src/zzz_last.py'                       # in fact, first
 
 
-def test_git_changes_orders_deleted_last(tmp_path):
-    """End-to-end through a real repo: deletions sort after added/modified."""
+def test_git_changes_omits_deletions_end_to_end(tmp_path):
+    """End-to-end through a real repo: a deleted tracked file is not listed."""
     from utils.workspace_changes import git_changes
     ws = str(tmp_path)
     repo = os.path.join(ws, 'repo')
@@ -370,11 +342,11 @@ def test_git_changes_orders_deleted_last(tmp_path):
     _git(repo, 'add', '.')
     _git(repo, 'commit', '-q', '-m', 'base')
     with open(os.path.join(repo, 'amod.txt'), 'w') as f:
-        f.write('changed')                       # modified (path sorts FIRST)
-    os.remove(os.path.join(repo, 'zdel.txt'))    # deleted (path sorts LAST anyway)
+        f.write('changed')                       # modified
+    os.remove(os.path.join(repo, 'zdel.txt'))    # deleted -> excluded
     with open(os.path.join(repo, 'bnew.txt'), 'w') as f:
         f.write('hi')                            # added
     changes, _, _ = git_changes(ws)
-    statuses = [c['status'] for c in changes]
-    first_deleted = statuses.index('deleted')
-    assert all(s != 'deleted' for s in statuses[:first_deleted])
+    paths = {c['path'] for c in changes}
+    assert paths == {'repo/amod.txt', 'repo/bnew.txt'}
+    assert not any(c['status'] == 'deleted' for c in changes)
