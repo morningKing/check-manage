@@ -4,6 +4,7 @@ import { ElRadioGroup, ElRadioButton, ElSelect, ElOption, ElButton, ElMessage } 
 import { CopyDocument, Download } from '@element-plus/icons-vue'
 import MarkdownView from './MarkdownView.vue'
 import { isRenderableLang, isMarkdownLang, downloadText } from '@/utils/artifacts'
+import { copyText } from '@/utils/clipboard'
 
 export interface ArtifactVersion { lang: string; code: string }
 
@@ -29,8 +30,8 @@ const sourceMarkdown = computed(() =>
 )
 
 async function copy() {
-  try { await navigator.clipboard.writeText(current.value.code); ElMessage.success('已复制') }
-  catch { ElMessage.error('复制失败') }
+  if (await copyText(current.value.code)) ElMessage.success('已复制')
+  else ElMessage.error('复制失败')
 }
 function download() { downloadText(props.filename, current.value.code) }
 </script>

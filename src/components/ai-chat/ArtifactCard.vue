@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { ElButton, ElIcon, ElMessage } from 'element-plus'
 import { Document, View, CopyDocument, Download, VideoPlay } from '@element-plus/icons-vue'
 import { artifactFilename, artifactLabel, downloadText, sniffLang, isRunnableLang } from '@/utils/artifacts'
+import { copyText } from '@/utils/clipboard'
 
 const props = defineProps<{ lang: string; code: string; index: number; versions?: number; running?: boolean }>()
 const emit = defineEmits<{ (e: 'preview'): void; (e: 'run'): void }>()
@@ -15,12 +16,8 @@ const versionCount = computed(() => props.versions ?? 1)
 const runnable = computed(() => isRunnableLang(effLang.value))
 
 async function copy() {
-  try {
-    await navigator.clipboard.writeText(props.code)
-    ElMessage.success('已复制')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+  if (await copyText(props.code)) ElMessage.success('已复制')
+  else ElMessage.error('复制失败')
 }
 function download() {
   downloadText(filename.value, props.code)
