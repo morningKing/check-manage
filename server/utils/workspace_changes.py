@@ -64,6 +64,17 @@ def _map_status(xy):
     return 'modified'  # M / R / C / etc.
 
 
+def _prioritize_and_cap(changes):
+    """Order changes so added/modified come first (each group by path) and
+    deletions last, then cap to MAX_CHANGES. On overflow the deletions are
+    dropped before any added/modified file, so the 变更文件 panel always shows
+    new/changed files first and only spends leftover capacity on deletions.
+    Returns (capped_list, truncated)."""
+    changes.sort(key=lambda c: (1 if c['status'] == 'deleted' else 0, c['path']))
+    truncated = len(changes) > MAX_CHANGES
+    return changes[:MAX_CHANGES], truncated
+
+
 def git_changes(workspace_path):
     """Return (changes, truncated, ok).
 
@@ -114,9 +125,8 @@ def git_changes(workspace_path):
                 continue  # already reported by the nested repo itself
             changes.append({'path': rel, 'status': _map_status(xy)})
             i += 1
-    changes.sort(key=lambda c: c['path'])
-    truncated = len(changes) > MAX_CHANGES
-    return changes[:MAX_CHANGES], truncated, ok
+    capped, truncated = _prioritize_and_cap(changes)
+    return capped, truncated, ok
 
 
 def _classify(repo, repo_rel):

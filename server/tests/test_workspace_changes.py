@@ -195,3 +195,68 @@ def test_file_diff_no_repo_returns_none_status(tmp_path):
         f.write('hi')
     res = file_diff(ws, 'loose.txt')
     assert res['status'] is None
+
+
+# --- truncation priority: added/modified first, deletions only with leftover room ---
+
+def _mk(n, status, prefix):
+    return [{'path': f'{prefix}{i:04d}.txt', 'status': status} for i in range(n)]
+
+
+def test_prioritize_groups_deleted_after_non_deleted():
+    from utils.workspace_changes import _prioritize_and_cap
+    changes = _mk(2, 'deleted', 'd') + _mk(2, 'added', 'a') + _mk(1, 'modified', 'm')
+    capped, truncated = _prioritize_and_cap(list(changes))
+    assert truncated is False
+    statuses = [c['status'] for c in capped]
+    first_deleted = statuses.index('deleted')
+    assert all(s != 'deleted' for s in statuses[:first_deleted])      # non-deleted first
+    assert all(s == 'deleted' for s in statuses[first_deleted:])      # deletions last
+
+
+def test_truncation_drops_all_deletions_when_non_deleted_fills_cap():
+    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
+    changes = _mk(MAX_CHANGES, 'added', 'a') + _mk(10, 'deleted', 'd')
+    capped, truncated = _prioritize_and_cap(changes)
+    assert truncated is True
+    assert len(capped) == MAX_CHANGES
+    assert all(c['status'] == 'added' for c in capped)               # no deletion survives
+
+
+def test_truncation_keeps_leftover_deletions_path_sorted():
+    from utils.workspace_changes import _prioritize_and_cap, MAX_CHANGES
+    changes = _mk(MAX_CHANGES - 5, 'added', 'a') + _mk(20, 'deleted', 'd')
+    capped, truncated = _prioritize_and_cap(changes)
+    assert truncated is True
+    assert len(capped) == MAX_CHANGES
+    kept_deleted = sorted(c['path'] for c in capped if c['status'] == 'deleted')
+    assert kept_deleted == [f'd{i:04d}.txt' for i in range(5)]       # only 5 slots, lowest paths
+
+
+def test_prioritize_sorts_by_path_within_group():
+    from utils.workspace_changes import _prioritize_and_cap
+    changes = [{'path': 'b.txt', 'status': 'added'}, {'path': 'a.txt', 'status': 'added'}]
+    capped, _ = _prioritize_and_cap(changes)
+    assert [c['path'] for c in capped] == ['a.txt', 'b.txt']
+
+
+def test_git_changes_orders_deleted_last(tmp_path):
+    """End-to-end through a real repo: deletions sort after added/modified."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    repo = os.path.join(ws, 'repo')
+    _init_repo(repo)
+    for name in ('amod.txt', 'zdel.txt'):
+        with open(os.path.join(repo, name), 'w') as f:
+            f.write('base')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-q', '-m', 'base')
+    with open(os.path.join(repo, 'amod.txt'), 'w') as f:
+        f.write('changed')                       # modified (path sorts FIRST)
+    os.remove(os.path.join(repo, 'zdel.txt'))    # deleted (path sorts LAST anyway)
+    with open(os.path.join(repo, 'bnew.txt'), 'w') as f:
+        f.write('hi')                            # added
+    changes, _, _ = git_changes(ws)
+    statuses = [c['status'] for c in changes]
+    first_deleted = statuses.index('deleted')
+    assert all(s != 'deleted' for s in statuses[:first_deleted])
