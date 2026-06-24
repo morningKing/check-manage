@@ -26,6 +26,29 @@ __pycache__/
 *.pyc
 .DS_Store
 opencode.json
+AGENTS.md
+"""
+
+# Persistent guidance OpenCode reads as project context. The workspace ROOT is
+# already a git repo we use for the 变更文件 panel, so the agent must NOT fight
+# it for the root .git — pulling code at the root forces hacky .git grafting that
+# leaves `git status` reporting every file as deleted. Cloning into a subdir is
+# verified to work cleanly. (Listed in .gitignore so it doesn't show as a change.)
+_AGENTS_MD = """# AI 会话工作区说明
+
+这是一个受管的 AI 会话工作区。**根目录本身已经是一个用于「变更文件」跟踪的 git 仓库**
+（只提交了一个 `.gitignore` 作基线）。
+
+## 拉取 / 克隆远端代码（重要）
+
+- 需要拉取远端代码时，请 **`git clone <url> <子目录>/` 克隆到一个子目录**，保留它自己的
+  `.git`。例如：`git clone https://example.com/x.git ./x`。在该子目录里正常做 git
+  操作（改文件、查看 diff），「变更文件」面板会正确显示你的修改。
+- **不要**在工作区根目录执行 `git init` / `git clone .` / `git remote add` /
+  `git fetch` / `git reset` / `git checkout`，也不要移动或替换根目录的 `.git`——这会
+  破坏变更跟踪，并可能让 `git status` 把所有文件误报为「已删除」。
+
+`uploads/` 与 `outputs/` 是平台目录，请勿放置代码。
 """
 
 
@@ -48,6 +71,11 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
     gitignore = p / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(_DEFAULT_GITIGNORE, encoding="utf-8")
+    # Persistent agent guidance (read by OpenCode as project context): clone
+    # remote code into a SUBDIR, never fight the root .git.
+    agents_md = p / "AGENTS.md"
+    if not agents_md.exists():
+        agents_md.write_text(_AGENTS_MD, encoding="utf-8")
     if not (p / ".git").exists():
         try:
             subprocess.run(

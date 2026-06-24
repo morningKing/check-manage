@@ -48,6 +48,24 @@ def test_create_session_workspace_commits_gitignore_so_no_noise(tmp_path):
     assert "opencode.json" not in out.stdout
 
 
+def test_create_session_workspace_writes_agents_md_guidance(tmp_path):
+    """AGENTS.md (OpenCode project context) tells the agent to clone remote code
+    into a subdir and not fight the root .git — and it's gitignored so it never
+    shows up as a change."""
+    import shutil as _sh, subprocess as _sp
+    from utils.workspace import create_session_workspace
+    p = Path(create_session_workspace(str(tmp_path), "u", "s"))
+    agents = p / "AGENTS.md"
+    assert agents.is_file()
+    body = agents.read_text(encoding="utf-8")
+    assert "子目录" in body and "git clone" in body
+    assert "AGENTS.md" in (p / ".gitignore").read_text(encoding="utf-8")
+    if _sh.which("git"):  # ignored -> workspace still clean
+        out = _sp.run(["git", "-C", str(p), "status", "--porcelain"],
+                      capture_output=True, text=True)
+        assert "AGENTS.md" not in out.stdout
+
+
 def test_create_session_workspace_skips_git_init_when_already_initialized(tmp_path):
     """Idempotency: a second call doesn't reinit or overwrite the .gitignore."""
     from utils.workspace import create_session_workspace
