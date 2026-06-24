@@ -99,7 +99,11 @@ def git_changes(workspace_path):
     for repo in repos:
         try:
             out = subprocess.run(
-                ['git', '-C', repo, 'status', '--porcelain', '-z'],
+                # -uall expands untracked directories into their individual files
+                # instead of collapsing a brand-new dir tree to a single `dir/`
+                # entry. (Nested git repos still fold to one entry — git never
+                # crosses a .git boundary — so the de-dup logic below is intact.)
+                ['git', '-C', repo, 'status', '--porcelain', '-uall', '-z'],
                 capture_output=True, text=True, timeout=20,
             )
         except Exception:

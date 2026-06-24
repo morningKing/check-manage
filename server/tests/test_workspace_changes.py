@@ -89,6 +89,28 @@ def test_workspace_root_as_repo_picks_up_loose_files(tmp_path):
     assert {'path': 'loose.txt', 'status': 'added'} in changes
 
 
+def test_git_changes_expands_untracked_directory(tmp_path):
+    """A brand-new untracked directory tree must list each file, not collapse to
+    a single directory entry. `git status --porcelain` folds untracked dirs
+    (`?? src/`); we pass -uall so every file inside is reported and clickable."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    deep = os.path.join(ws, 'src', 'components', 'deep')
+    os.makedirs(deep)
+    for name in ('a.txt', 'b.txt'):
+        with open(os.path.join(deep, name), 'w') as f:
+            f.write(name)
+    changes, _, _ = git_changes(ws)
+    paths = {c['path'] for c in changes}
+    assert 'src/components/deep/a.txt' in paths
+    assert 'src/components/deep/b.txt' in paths
+    # must NOT collapse to a bare directory entry
+    assert 'src/' not in paths
+    assert 'src/components/deep/' not in paths
+    assert all(c['status'] == 'added' for c in changes)
+
+
 def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     """A workspace-level repo + a nested clone: the nested clone's own files
     are reported once (by the nested repo), not twice (once via the outer
