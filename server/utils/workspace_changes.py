@@ -64,13 +64,49 @@ def _map_status(xy):
     return 'modified'  # M / R / C / etc.
 
 
+# "Secondary" files: dependency lockfiles, build/dependency/cache dirs, and
+# generated artifacts. These are rarely what the user is reviewing, so they sort
+# AFTER source files — when the 500-cap truncates, secondary churn (e.g. a whole
+# expanded node_modules/ or dist/) can't crowd out the source files the user
+# actually changed.
+_SECONDARY_DIR_SEGMENTS = {
+    'node_modules', 'dist', 'build', '.venv', 'venv', '__pycache__',
+    '.next', '.nuxt', 'target', 'vendor', '.cache', 'coverage', '.git',
+}
+_SECONDARY_BASENAMES = {
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock',
+    'cargo.lock', 'composer.lock', 'gemfile.lock', 'go.sum',
+}
+_SECONDARY_SUFFIXES = ('.min.js', '.min.css', '.map', '.pyc', '.lock', '.log')
+
+
+def _is_secondary(path):
+    """True for dependency/build/generated files that should sort after source."""
+    p = path.replace('\\', '/').lower()
+    segments = p.split('/')
+    if segments[-1] in _SECONDARY_BASENAMES:
+        return True
+    if any(seg in _SECONDARY_DIR_SEGMENTS for seg in segments[:-1]):
+        return True
+    return p.endswith(_SECONDARY_SUFFIXES)
+
+
 def _prioritize_and_cap(changes):
-    """Order changes so added/modified come first (each group by path) and
-    deletions last, then cap to MAX_CHANGES. On overflow the deletions are
-    dropped before any added/modified file, so the 变更文件 panel always shows
-    new/changed files first and only spends leftover capacity on deletions.
-    Returns (capped_list, truncated)."""
-    changes.sort(key=lambda c: (1 if c['status'] == 'deleted' else 0, c['path']))
+    """Order changes for the 变更文件 panel, then cap to MAX_CHANGES.
+
+    Sort key (ascending) = (is_deleted, is_secondary, path), so the order is:
+      1. source files added/modified   <- always kept first
+      2. secondary files added/modified (lockfiles, dist/, node_modules/, ...)
+      3. deletions (source then secondary)
+    On overflow the lower tiers are dropped first, so a flood of generated/added
+    files can never crowd the source files the user actually changed out of the
+    list (and deletions are still dropped before any add/modify). Returns
+    (capped_list, truncated)."""
+    changes.sort(key=lambda c: (
+        1 if c['status'] == 'deleted' else 0,
+        1 if _is_secondary(c['path']) else 0,
+        c['path'],
+    ))
     truncated = len(changes) > MAX_CHANGES
     return changes[:MAX_CHANGES], truncated
 
