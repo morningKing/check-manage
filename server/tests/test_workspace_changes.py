@@ -44,6 +44,32 @@ def test_git_changes_detects_added_modified_excludes_deleted(tmp_path):
     assert ok is True
 
 
+def test_git_changes_handles_non_ascii_filenames(tmp_path):
+    """git -z emits UTF-8 path bytes; decoding them with text=True under a cp936
+    locale (Chinese Windows) crashed (stdout=None -> .split). We decode UTF-8
+    ourselves, so Chinese filenames work and don't blow up the refresh."""
+    from utils.workspace_changes import git_changes, file_diff
+    ws = str(tmp_path)
+    _init_repo(ws)
+    cn_new = '新增文件.py'
+    with open(os.path.join(ws, cn_new), 'w', encoding='utf-8') as f:
+        f.write('print(1)\n')
+    cn_mod = '已跟踪.py'
+    with open(os.path.join(ws, cn_mod), 'w', encoding='utf-8') as f:
+        f.write('a\n')
+    _git(ws, 'add', cn_mod)
+    _git(ws, 'commit', '-q', '-m', 'base')
+    with open(os.path.join(ws, cn_mod), 'w', encoding='utf-8') as f:
+        f.write('b\n')                                   # modified
+    changes, _, ok = git_changes(ws)
+    by = {c['path']: c['status'] for c in changes}
+    assert ok is True
+    assert by.get(cn_new) == 'added'
+    assert by.get(cn_mod) == 'modified'
+    # diff on a Chinese-named file must also not crash
+    assert file_diff(ws, cn_mod)['status'] == 'modified'
+
+
 def test_git_changes_skips_uploads_outputs(tmp_path):
     from utils.workspace_changes import git_changes
     ws = str(tmp_path)
