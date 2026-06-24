@@ -111,6 +111,54 @@ def test_git_changes_expands_untracked_directory(tmp_path):
     assert all(c['status'] == 'added' for c in changes)
 
 
+def test_list_untracked_files(tmp_path):
+    from utils.workspace_changes import _list_untracked_files
+    ws = str(tmp_path)
+    _init_repo(ws)
+    os.makedirs(os.path.join(ws, 'd', 'e'))
+    for p in ('d/x.txt', 'd/e/y.txt'):
+        with open(os.path.join(ws, p), 'w') as f:
+            f.write('x')
+    assert set(_list_untracked_files(ws, 'd/')) == {'d/x.txt', 'd/e/y.txt'}
+
+
+def test_large_untracked_directory_stays_collapsed(tmp_path):
+    """Pulled-in code (no .git): a big brand-new dir stays ONE collapsed entry
+    (kind='dir' + count), not N individual 'added' files that drown real edits."""
+    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+    ws = str(tmp_path)
+    _init_repo(ws)
+    pulled = os.path.join(ws, 'pulled')
+    os.makedirs(pulled)
+    n = UNTRACKED_DIR_EXPAND_LIMIT + 5
+    for i in range(n):
+        with open(os.path.join(pulled, f'f{i:03d}.py'), 'w') as f:
+            f.write('x')
+    changes, _, _ = git_changes(ws)
+    dir_entries = [c for c in changes if c.get('kind') == 'dir']
+    assert len(dir_entries) == 1
+    assert dir_entries[0] == {'path': 'pulled/', 'status': 'added', 'kind': 'dir', 'count': n}
+    # none of the individual files leaked into the list
+    assert not any(c['path'].startswith('pulled/f') for c in changes)
+
+
+def test_small_untracked_directory_expands(tmp_path):
+    """A small brand-new dir still expands into its files (no collapse)."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    d = os.path.join(ws, 'newdir', 'sub')
+    os.makedirs(d)
+    for name in ('a.py', 'b.py'):
+        with open(os.path.join(d, name), 'w') as f:
+            f.write('x')
+    changes, _, _ = git_changes(ws)
+    paths = {c['path'] for c in changes}
+    assert 'newdir/sub/a.py' in paths
+    assert 'newdir/sub/b.py' in paths
+    assert not any(c.get('kind') == 'dir' for c in changes)
+
+
 def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     """A workspace-level repo + a nested clone: the nested clone's own files
     are reported once (by the nested repo), not twice (once via the outer

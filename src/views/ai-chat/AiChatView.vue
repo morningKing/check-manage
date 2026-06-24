@@ -708,7 +708,8 @@ function onKey(e: Event) {
                       <div v-for="c in groupedChanges[g.key]" :key="c.path" class="change-file">
                         <div class="change-file__row">
                           <span class="change-file__name">{{ c.path }}</span>
-                          <template v-if="c.status !== 'deleted'">
+                          <span v-if="c.kind === 'dir'" class="change-file__dircount">{{ c.count }} 个新文件</span>
+                          <template v-else-if="c.status !== 'deleted'">
                             <ElButton size="small" text @click="previewChange(c)">预览</ElButton>
                             <a class="change-file__dl" :href="fileUrl(c.path)" target="_blank" rel="noopener">下载</a>
                           </template>
@@ -1117,6 +1118,7 @@ function onKey(e: Event) {
   &__row { display: flex; align-items: center; gap: 8px; }
   &__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--el-font-family-mono, monospace); }
   &__dl { color: var(--el-color-primary); text-decoration: none; font-size: 13px; }
+  &__dircount { color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; }
   &__img {
     display: block;
     margin-left: 0;

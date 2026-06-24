@@ -46,6 +46,10 @@ export interface AiFile {
 export interface ChangedFile {
   path: string
   status: 'added' | 'modified' | 'deleted'
+  // When a large brand-new untracked directory is collapsed, the entry is the
+  // directory (path ends with '/') with kind='dir' and the file count.
+  kind?: 'dir'
+  count?: number
 }
 
 export interface FileDiff {
