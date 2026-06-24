@@ -5,6 +5,7 @@ import { ElIcon, ElMessage } from 'element-plus'
 import { CopyDocument, Download } from '@element-plus/icons-vue'
 import 'md-editor-v3/lib/preview.css'
 import './md-editor-setup' // register bundled mermaid/echarts (side effect)
+import { copyText } from '@/utils/clipboard'
 
 const props = defineProps<{ text: string }>()
 
@@ -59,12 +60,8 @@ const segments = computed<Seg[]>(() => {
 })
 
 async function copySvg(raw: string) {
-  try {
-    await navigator.clipboard.writeText(raw)
-    ElMessage.success('已复制 SVG 源码')
-  } catch {
-    ElMessage.error('复制失败')
-  }
+  if (await copyText(raw)) ElMessage.success('已复制 SVG 源码')
+  else ElMessage.error('复制失败')
 }
 </script>
 

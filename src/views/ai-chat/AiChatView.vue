@@ -25,6 +25,7 @@ import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
 import { activeMentionToken } from '@/utils/agentMentions'
+import { copyText } from '@/utils/clipboard'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
@@ -442,8 +443,8 @@ function messageText(m: AiMessage): string {
 async function copyMessage(m: AiMessage) {
   const text = messageText(m)
   if (!text) return
-  try { await navigator.clipboard.writeText(text); ElMessage.success('已复制') }
-  catch { ElMessage.error('复制失败') }
+  if (await copyText(text)) ElMessage.success('已复制')
+  else ElMessage.error('复制失败')
 }
 
 async function editMessage(m: AiMessage) {
