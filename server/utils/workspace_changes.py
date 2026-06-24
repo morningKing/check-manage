@@ -9,6 +9,11 @@ import subprocess
 MAX_CHANGES = 500
 MAX_DIFF_LINES = 2000      # cap added-file content & diff text by lines
 MAX_DIFF_BYTES = 256 * 1024
+# A brand-new untracked directory with <= this many files is expanded into its
+# individual files; a larger one (e.g. code pulled in without a .git, where every
+# file shows as "added") stays collapsed as a single `dir/` entry so it doesn't
+# drown the user's real changes.
+UNTRACKED_DIR_EXPAND_LIMIT = 10
 _SKIP_DIRS = {'uploads', 'outputs', 'node_modules', '.venv', '__pycache__'}
 
 
@@ -111,6 +116,21 @@ def _prioritize_and_cap(changes):
     return changes[:MAX_CHANGES], truncated
 
 
+def _list_untracked_files(repo, dirpath):
+    """All untracked files under `dirpath` (repo-relative POSIX paths), expanded
+    via -uall. Used to count/expand a folded `?? dir/` entry."""
+    try:
+        out = subprocess.run(
+            ['git', '-C', repo, 'status', '--porcelain', '-uall', '-z', '--', dirpath],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception:
+        return []
+    if out.returncode != 0:
+        return []
+    return [e[3:] for e in out.stdout.split('\0') if e and e[:2] == '??']
+
+
 def git_changes(workspace_path):
     """Return (changes, truncated, ok).
 
@@ -135,11 +155,12 @@ def git_changes(workspace_path):
     for repo in repos:
         try:
             out = subprocess.run(
-                # -uall expands untracked directories into their individual files
-                # instead of collapsing a brand-new dir tree to a single `dir/`
-                # entry. (Nested git repos still fold to one entry — git never
-                # crosses a .git boundary — so the de-dup logic below is intact.)
-                ['git', '-C', repo, 'status', '--porcelain', '-uall', '-z'],
+                # Default porcelain FOLDS a brand-new untracked directory to a
+                # single `dir/` entry (no -uall). We keep that folding, then
+                # decide per directory below: small dirs expand into their files;
+                # large ones stay collapsed. Tracked-file modifications/deletions
+                # are always listed individually by git regardless.
+                ['git', '-C', repo, 'status', '--porcelain', '-z'],
                 capture_output=True, text=True, timeout=20,
             )
         except Exception:
@@ -163,6 +184,23 @@ def git_changes(workspace_path):
             if cleaned in nested_repo_paths or rel in nested_repo_paths:
                 i += 1
                 continue  # already reported by the nested repo itself
+            # A folded untracked-directory entry (`?? dir/`): expand it into its
+            # files if there are only a few; otherwise keep it as ONE collapsed
+            # entry tagged kind='dir' + count, so pulled-in code (hundreds of
+            # files, all "added") doesn't drown the user's real changes.
+            if xy == '??' and path.endswith('/'):
+                files = _list_untracked_files(repo, path)
+                if 0 < len(files) <= UNTRACKED_DIR_EXPAND_LIMIT:
+                    for fp in files:
+                        frel = os.path.relpath(
+                            os.path.join(repo, fp), workspace_path).replace(os.sep, '/')
+                        changes.append({'path': frel, 'status': 'added'})
+                else:
+                    # keep a trailing slash so it reads as a directory
+                    changes.append({'path': rel.rstrip('/') + '/', 'status': 'added',
+                                    'kind': 'dir', 'count': len(files)})
+                i += 1
+                continue
             changes.append({'path': rel, 'status': _map_status(xy)})
             i += 1
     capped, truncated = _prioritize_and_cap(changes)
