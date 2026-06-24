@@ -108,19 +108,31 @@ def _prioritize_and_cap(changes):
     return changes[:MAX_CHANGES], truncated
 
 
+def _run_git(args, timeout=20):
+    """Run git and return (returncode, stdout_text), decoding stdout as UTF-8
+    (git's encoding for -z paths).
+
+    We deliberately do NOT pass text=True: on Windows that decodes with the
+    cp936/GBK locale, which raises UnicodeDecodeError on UTF-8 path bytes (e.g.
+    Chinese filenames) *inside subprocess's reader thread*. That error doesn't
+    propagate, so subprocess.run returns rc=0 with stdout=None — the cause of
+    "'NoneType' object has no attribute 'split'" when refreshing 变更文件."""
+    out = subprocess.run(args, capture_output=True, timeout=timeout)
+    text = out.stdout.decode('utf-8', 'replace') if out.stdout else ''
+    return out.returncode, text
+
+
 def _list_untracked_files(repo, dirpath):
     """All untracked files under `dirpath` (repo-relative POSIX paths), expanded
     via -uall. Used to count/expand a folded `?? dir/` entry."""
     try:
-        out = subprocess.run(
-            ['git', '-C', repo, 'status', '--porcelain', '-uall', '-z', '--', dirpath],
-            capture_output=True, text=True, timeout=20,
-        )
+        rc, stdout = _run_git(
+            ['git', '-C', repo, 'status', '--porcelain', '-uall', '-z', '--', dirpath])
     except Exception:
         return []
-    if out.returncode != 0:
+    if rc != 0:
         return []
-    return [e[3:] for e in out.stdout.split('\0') if e and e[:2] == '??']
+    return [e[3:] for e in stdout.split('\0') if e and e[:2] == '??']
 
 
 def git_changes(workspace_path):
@@ -146,22 +158,19 @@ def git_changes(workspace_path):
             nested_repo_paths.add(rel + '/')
     for repo in repos:
         try:
-            out = subprocess.run(
-                # Default porcelain FOLDS a brand-new untracked directory to a
-                # single `dir/` entry (no -uall). We keep that folding, then
-                # decide per directory below: small dirs expand into their files;
-                # large ones stay collapsed. Tracked-file modifications/deletions
-                # are always listed individually by git regardless.
-                ['git', '-C', repo, 'status', '--porcelain', '-z'],
-                capture_output=True, text=True, timeout=20,
-            )
+            # Default porcelain FOLDS a brand-new untracked directory to a single
+            # `dir/` entry (no -uall). We keep that folding, then decide per
+            # directory below: small dirs expand into their files; large ones stay
+            # collapsed. Tracked-file modifications/deletions are always listed
+            # individually by git regardless.
+            rc, stdout = _run_git(['git', '-C', repo, 'status', '--porcelain', '-z'])
         except Exception:
             ok = False
             continue
-        if out.returncode != 0:
+        if rc != 0:
             ok = False
             continue
-        entries = out.stdout.split('\0')
+        entries = stdout.split('\0')
         i = 0
         while i < len(entries):
             e = entries[i]
@@ -204,15 +213,13 @@ def git_changes(workspace_path):
 def _classify(repo, repo_rel):
     """Return 'added'|'modified'|'deleted'|None for a repo-relative path."""
     try:
-        out = subprocess.run(
-            ['git', '-C', repo, 'status', '--porcelain', '-z', '--', repo_rel],
-            capture_output=True, text=True, timeout=20,
-        )
+        rc, stdout = _run_git(
+            ['git', '-C', repo, 'status', '--porcelain', '-z', '--', repo_rel])
     except Exception:
         return None
-    if out.returncode != 0 or not out.stdout:
+    if rc != 0 or not stdout:
         return None
-    xy = out.stdout.split('\0')[0][:2]
+    xy = stdout.split('\0')[0][:2]
     return _map_status(xy)
 
 
@@ -241,11 +248,8 @@ def file_diff(workspace_path, rel_path):
     status = _classify(repo, repo_rel)
     if status == 'modified':
         try:
-            out = subprocess.run(
-                ['git', '-C', repo, 'diff', '--', repo_rel],
-                capture_output=True, text=True, timeout=20,
-            )
-            diff = out.stdout if out.returncode == 0 else ''
+            rc, stdout = _run_git(['git', '-C', repo, 'diff', '--', repo_rel])
+            diff = stdout if rc == 0 else ''
         except Exception:
             diff = ''
         diff, truncated = _cap(diff)
