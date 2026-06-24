@@ -40,7 +40,7 @@ from utils.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
 )
-from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir
+from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir, read_file_preview
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
@@ -722,6 +722,28 @@ def file_diff_endpoint(sid):
     except Exception:
         return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
     return jsonify(file_diff(sess[4], rel))
+
+
+@ai_chat_bp.route('/sessions/<sid>/preview', methods=['GET'])
+@login_required
+def preview_file(sid):
+    """Return a workspace file's capped text content for in-panel preview. Unlike
+    /diff this is git-independent, so it works for 产出文件 under outputs/ (which
+    git ignores). Path is validated against the workspace root."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    rel = request.args.get('path', '').strip()
+    if not rel:
+        return jsonify({'error': 'path required', 'code': 'PATH_REQUIRED'}), 400
+    try:
+        abs_path = safe_resolve(sess[4], rel)
+    except Exception:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
+    return jsonify(read_file_preview(abs_path))
 
 
 @ai_chat_bp.route('/sessions/<sid>/mcp', methods=['GET'])
