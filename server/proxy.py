@@ -38,6 +38,11 @@ DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'
 MCP_HEALTH_URL = os.environ.get('MCP_HEALTH_URL', 'http://127.0.0.1:3003/health')
 OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 
+# Managed subprocesses log here (NOT /dev/null) so a failed start leaves a
+# diagnosable trace. .gitignore already excludes *.log.
+BACKEND_LOG = os.path.join(os.path.dirname(__file__), 'proxy-backend.log')
+MCP_LOG = os.path.join(os.path.dirname(__file__), 'proxy-mcp.log')
+
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -249,16 +254,52 @@ def start_backend():
     env = os.environ.copy()
     env['FLASK_DEBUG'] = '0'
     threads = max(1, int(os.environ.get('BACKEND_THREADS', '8')))
+    # Send stdout+stderr to a log file, NOT DEVNULL: a failed start (missing
+    # 'waitress', DB down, port in use, import error) must be diagnosable rather
+    # than vanishing silently. _report_dead_subprocess() surfaces this on failure.
+    log = open(BACKEND_LOG, 'w', encoding='utf-8', errors='replace')
     proc = subprocess.Popen(
         [sys.executable, '-c',
          'import app; from waitress import serve; '
          f'serve(app.app, host="0.0.0.0", port={_backend_port()}, threads={threads})'],
         cwd=server_dir,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     return proc
+
+
+def _read_tail(path, n=40):
+    """Return the last `n` lines of a text file (empty string if unreadable)."""
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            return ''.join(f.readlines()[-n:])
+    except OSError:
+        return ''
+
+
+def _report_dead_subprocess(name, proc, log_path):
+    """If `proc` has already exited, print a clear diagnostic (exit code + log
+    tail + the most common fix) and return True. If it's still running, print
+    nothing and return False.
+
+    This is the fix for "proxy.py can't bring up the backend with no error":
+    the child's output now lands in a log instead of /dev/null, and a child
+    that dies on startup is reported loudly instead of swallowed."""
+    if proc.poll() is None:
+        return False
+    print(f'       [ERROR] {name} exited immediately (exit code {proc.returncode}).',
+          flush=True)
+    tail = _read_tail(log_path)
+    if tail.strip():
+        print(f'       ----- {os.path.basename(log_path)} (last lines) -----', flush=True)
+        for line in tail.rstrip().splitlines():
+            print(f'       | {line}', flush=True)
+    print('       Likely cause: backend dependencies are not installed in this '
+          "Python. Run:  pip install -r requirements.txt", flush=True)
+    print(f'       Full log: {log_path}', flush=True)
+    return True
 
 
 def wait_for_backend(url, timeout=15):
@@ -296,12 +337,13 @@ def start_mcp():
     if not os.path.isfile(os.path.join(mcp_dir, 'main.py')):
         print(f'       [WARN] mcp-server not found at {mcp_dir}; AI chat disabled', flush=True)
         return None
+    log = open(MCP_LOG, 'w', encoding='utf-8', errors='replace')
     proc = subprocess.Popen(
         [_mcp_python(), 'main.py'],
         cwd=mcp_dir,
         env=os.environ.copy(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     return proc
 
@@ -352,8 +394,16 @@ def main():
     procs.append(backend_proc)
     if wait_for_backend(BACKEND_URL):
         print(f'       Backend ready at {BACKEND_URL}', flush=True)
+    elif _report_dead_subprocess('Backend', backend_proc, BACKEND_LOG):
+        # No backend = the proxy would only serve 502s. Fail fast instead of
+        # starting a useless proxy (this is what made the failure look silent).
+        for p in procs:
+            if p is not None and p.poll() is None:
+                p.kill()
+        sys.exit(1)
     else:
-        print('       [WARN] Backend may not be ready yet', flush=True)
+        print(f'       [WARN] Backend slow to respond but still running; '
+              f'see {BACKEND_LOG}', flush=True)
 
     # Start MCP server (AI chat capability provider)
     print('[2/3] Starting MCP server ...', flush=True)
@@ -362,6 +412,11 @@ def main():
         procs.append(mcp_proc)
         if wait_for_mcp(MCP_HEALTH_URL):
             print(f'       MCP ready ({MCP_HEALTH_URL})', flush=True)
+        elif _report_dead_subprocess('MCP server', mcp_proc, MCP_LOG):
+            # MCP only powers AI chat; the rest of the app still serves, so we
+            # report the cause but don't abort.
+            print('       [WARN] MCP server failed to start; AI chat disabled '
+                  '(rest of the app still serves).', flush=True)
         else:
             print('       [WARN] MCP server may not be ready yet', flush=True)
 
