@@ -180,6 +180,15 @@ export function getFileDiff(id: string, path: string) {
   )
 }
 
+// Capped text content of any workspace file (git-independent), for 产出文件 preview.
+export function getFilePreview(id: string, path: string) {
+  return get<{ content: string; truncated: boolean; binary: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/preview`,
+    { path },
+    { silent: true },
+  )
+}
+
 export function getMcpServices(id: string) {
   return get<{ servers: McpServer[]; error?: string }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/mcp`, undefined, { silent: true },

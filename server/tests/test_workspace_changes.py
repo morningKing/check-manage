@@ -320,6 +320,32 @@ def test_file_diff_added_truncates_large_file(tmp_path):
     assert res['content'].count('\n') <= MAX_DIFF_LINES
 
 
+def test_read_file_preview_text(tmp_path):
+    from utils.workspace_changes import read_file_preview
+    p = tmp_path / 'a.txt'
+    p.write_bytes(b'hello\nworld\n')  # bytes to avoid platform newline translation
+    r = read_file_preview(str(p))
+    assert r == {'content': 'hello\nworld\n', 'truncated': False, 'binary': False}
+
+
+def test_read_file_preview_binary(tmp_path):
+    from utils.workspace_changes import read_file_preview
+    p = tmp_path / 'b.bin'
+    p.write_bytes(b'\x89PNG\x00\x01\x02')
+    r = read_file_preview(str(p))
+    assert r['binary'] is True
+    assert r['content'] == ''
+
+
+def test_read_file_preview_truncates_large(tmp_path):
+    from utils.workspace_changes import read_file_preview, MAX_DIFF_LINES
+    p = tmp_path / 'big.txt'
+    p.write_text('\n'.join(f'line{i}' for i in range(MAX_DIFF_LINES + 100)) + '\n', encoding='utf-8')
+    r = read_file_preview(str(p))
+    assert r['truncated'] is True
+    assert r['content'].count('\n') <= MAX_DIFF_LINES
+
+
 def test_file_diff_no_repo_returns_none_status(tmp_path):
     from utils.workspace_changes import file_diff
     ws = str(tmp_path)

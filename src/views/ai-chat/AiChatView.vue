@@ -7,7 +7,7 @@ import {
   ElSelect, ElOption,
 } from 'element-plus'
 import {
-  Plus, Top, EditPen, Close, Document, Loading, Download,
+  Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, Delete, Brush,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
@@ -31,7 +31,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, expandChangeDir, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -164,6 +164,25 @@ async function previewChange(c: ChangedFile) {
     // removed since the last scan). Re-scan so the stale row disappears; the
     // drawer shows a clear "no diff" message instead of dead-ending.
     if (res.status === null) store.loadChanges(activeId.value)
+  } catch {
+    ElMessage.error('预览失败')
+    diffOpen.value = false
+  } finally {
+    diffLoading.value = false
+  }
+}
+// 产出文件预览：复用 diff 抽屉，但走 git-independent 的 /preview 读文件内容。
+async function previewOutput(f: { name: string; path: string }) {
+  if (!activeId.value) return
+  diffFile.value = f.path
+  diffData.value = null
+  diffOpen.value = true
+  diffLoading.value = true
+  try {
+    const r = await getFilePreview(activeId.value, f.path)
+    diffData.value = r.binary
+      ? { status: 'added', content: '（二进制文件，无法预览，请下载查看）', truncated: false }
+      : { status: 'added', content: r.content, truncated: r.truncated }
   } catch {
     ElMessage.error('预览失败')
     diffOpen.value = false
@@ -686,15 +705,13 @@ function onKey(e: Event) {
             <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">
               <div class="ai-outputs__title">产出文件</div>
-              <a
-                v-for="f in outputs" :key="f.path"
-                class="output-file" :href="fileUrl(f.path)" target="_blank" rel="noopener"
-              >
+              <div v-for="f in outputs" :key="f.path" class="output-file">
                 <ElIcon><Document /></ElIcon>
                 <span class="output-file__name">{{ f.name }}</span>
                 <span class="output-file__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
-                <ElIcon class="output-file__dl"><Download /></ElIcon>
-              </a>
+                <ElButton size="small" text @click="previewOutput(f)">预览</ElButton>
+                <a class="output-file__dl" :href="fileUrl(f.path)" target="_blank" rel="noopener">下载</a>
+              </div>
             </div>
 
             <!-- 变更文件（会话 workspace 内 git 仓库的新增/修改/删除） -->

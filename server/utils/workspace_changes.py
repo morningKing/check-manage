@@ -239,6 +239,22 @@ def _classify(repo, repo_rel):
     return _map_status(xy)
 
 
+def read_file_preview(abs_path):
+    """Read a file's text for in-panel preview: {'content','truncated','binary'}.
+    Capped by the same line/byte limits as diffs. Independent of git, so it works
+    for produced files under outputs/ (which git ignores). Binary files (NUL byte)
+    return binary=True with empty content."""
+    try:
+        with open(abs_path, 'rb') as f:
+            raw = f.read(MAX_DIFF_BYTES + 1)
+    except OSError:
+        return {'content': '', 'truncated': False, 'binary': False}
+    if b'\x00' in raw:
+        return {'content': '', 'truncated': False, 'binary': True}
+    text, truncated = _cap(raw.decode('utf-8', 'replace'))
+    return {'content': text, 'truncated': truncated, 'binary': False}
+
+
 def _cap(text):
     """Truncate text to the line/byte caps; return (text, truncated)."""
     truncated = False
