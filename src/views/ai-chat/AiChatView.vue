@@ -134,24 +134,21 @@ const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
 const changes = computed<ChangedFile[]>(() => store.activeChanges)
 
+// 变更面板只展示新增/修改，不列出删除（后端已过滤 deleted）
 const groupedChanges = computed(() => ({
   added: changes.value.filter((c) => c.status === 'added'),
   modified: changes.value.filter((c) => c.status === 'modified'),
-  deleted: changes.value.filter((c) => c.status === 'deleted'),
 }))
 
-// 折叠状态：删除组默认折叠，其余展开
-const collapsed = reactive<Record<'added' | 'modified' | 'deleted', boolean>>({
+const collapsed = reactive<Record<'added' | 'modified', boolean>>({
   added: false,
   modified: false,
-  deleted: true,
 })
-function toggleGroup(k: 'added' | 'modified' | 'deleted') { collapsed[k] = !collapsed[k] }
+function toggleGroup(k: 'added' | 'modified') { collapsed[k] = !collapsed[k] }
 
-const GROUP_META: { key: 'added' | 'modified' | 'deleted'; label: string; type: any }[] = [
+const GROUP_META: { key: 'added' | 'modified'; label: string; type: any }[] = [
   { key: 'added', label: '新增', type: 'success' },
   { key: 'modified', label: '修改', type: 'warning' },
-  { key: 'deleted', label: '删除', type: 'info' },
 ]
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
