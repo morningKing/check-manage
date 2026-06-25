@@ -15,6 +15,9 @@ from utils.memory import (
     reset_memory_singleton, list_memories, delete_memory, add_memory_text, get_memory,
 )
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from utils.mcp_servers import (
+    list_servers, create_server, update_server, delete_server, McpServerError,
+)
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
 
@@ -146,4 +149,57 @@ def delete_my_memory(memory_id):
     if memory_id not in owned:
         return jsonify({'error': 'not found'}), 404
     delete_memory(memory_id)
+    return jsonify({'ok': True})
+
+
+# --- External MCP servers (admin) ------------------------------------------
+# Registered servers are merged into every AI-chat session's opencode.json so
+# OpenCode can reach their tools, alongside the platform's own MCP.
+
+def _mcp_payload(body):
+    return {
+        'name': body.get('name'),
+        'type': body.get('type', 'remote'),
+        'url': body.get('url', ''),
+        'command': body.get('command') or [],
+        'headers': body.get('headers') or {},
+        'environment': body.get('environment') or {},
+        'enabled': body.get('enabled', True),
+    }
+
+
+@ai_bp.route('/mcp-servers', methods=['GET'])
+@require_permission('admin.ai_settings')
+def list_mcp_servers():
+    return jsonify({'servers': list_servers()})
+
+
+@ai_bp.route('/mcp-servers', methods=['POST'])
+@require_permission('admin.ai_settings')
+def create_mcp_server():
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(create_server(**_mcp_payload(body))), 201
+    except McpServerError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@ai_bp.route('/mcp-servers/<server_id>', methods=['PUT'])
+@require_permission('admin.ai_settings')
+def update_mcp_server(server_id):
+    body = request.get_json(silent=True) or {}
+    try:
+        row = update_server(server_id, **_mcp_payload(body))
+    except McpServerError as e:
+        return jsonify({'error': str(e)}), 400
+    if row is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(row)
+
+
+@ai_bp.route('/mcp-servers/<server_id>', methods=['DELETE'])
+@require_permission('admin.ai_settings')
+def delete_mcp_server(server_id):
+    if not delete_server(server_id):
+        return jsonify({'error': 'not found'}), 404
     return jsonify({'ok': True})

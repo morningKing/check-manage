@@ -151,6 +151,23 @@ INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3';
 
+-- External MCP servers registered by an admin and merged into every AI-chat
+-- session's opencode.json (alongside the platform's own MCP). `name` is the key
+-- used in opencode.json's `mcp` map. `type` is 'remote' (url + headers) or
+-- 'local' (command argv + environment).
+CREATE TABLE IF NOT EXISTS ai_mcp_servers (
+    id          VARCHAR(64) PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL UNIQUE,
+    type        VARCHAR(20)  NOT NULL DEFAULT 'remote',
+    url         VARCHAR(1000) NOT NULL DEFAULT '',
+    command     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    headers     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    environment JSONB NOT NULL DEFAULT '{}'::jsonb,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ==================== system_config 表 ====================
 CREATE TABLE IF NOT EXISTS system_config (
     id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
