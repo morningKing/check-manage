@@ -516,6 +516,8 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
   template_id VARCHAR(100) NULL REFERENCES ai_chat_prompt_templates(id) ON DELETE SET NULL,
   agent       TEXT,
   model       TEXT,
+  provision_repo TEXT,
+  provision_ref  TEXT,
   status      TEXT NOT NULL DEFAULT 'pending'
               CHECK (status IN ('pending','running','completed','partial','failed')),
   total       INT  NOT NULL DEFAULT 0,
@@ -529,6 +531,10 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_user_created
 -- Idempotent upgrade: add `agent`/`model` to DBs created before they joined CREATE above.
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS agent TEXT;
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS model TEXT;
+-- Per-batch workspace provisioning: clone an agent/skill repo into each child's
+-- .opencode/ before its session starts (so project-level agents are usable).
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS provision_repo TEXT;
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS provision_ref TEXT;
 """
 
 AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """

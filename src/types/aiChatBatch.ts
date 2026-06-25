@@ -9,6 +9,8 @@ export interface AiChatBatch {
   template_id: string | null
   agent: string | null
   model: string | null
+  provision_repo?: string | null
+  provision_ref?: string | null
   status: BatchStatus
   total: number
   done: number

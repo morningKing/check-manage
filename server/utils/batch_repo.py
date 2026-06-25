@@ -15,7 +15,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
                  agent: str | None = None,
-                 model: str | None = None) -> dict:
+                 model: str | None = None,
+                 provision_repo: str | None = None,
+                 provision_ref: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -37,9 +39,11 @@ def create_batch(user_id: str, *, name: str, prompt: str,
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "INSERT INTO ai_chat_batches "
-                "  (id, user_id, name, prompt, template_id, total, status, agent, model) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s) RETURNING *",
-                (batch_id, user_id, name, prompt, template_id, len(files), agent, model),
+                "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
+                "   provision_repo, provision_ref) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s) RETURNING *",
+                (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
+                 provision_repo, provision_ref),
             )
             batch = dict(cur.fetchone())
 
@@ -200,17 +204,20 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
 
 
 def update_batch_config(user_id: str, batch_id: str, *,
-                        agent: str | None, model: str | None) -> dict | None:
-    """Update a batch's agent/model (owner-only). NULL clears to the default.
-    Returns updated detail, or None if not found / not owned. Takes effect on the
-    next run the worker claims (retry / reexecute / pending), since the worker
-    reads agent+model fresh per run via _fetch_batch_context."""
+                        agent: str | None, model: str | None,
+                        provision_repo: str | None = None,
+                        provision_ref: str | None = None) -> dict | None:
+    """Update a batch's agent/model/provision repo (owner-only). NULL clears to
+    the default. Returns updated detail, or None if not found / not owned. Takes
+    effect on the next run the worker claims (retry / reexecute / pending), since
+    the worker reads these fresh per run via _fetch_batch_context."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE ai_chat_batches SET agent = %s, model = %s "
+                "UPDATE ai_chat_batches SET agent = %s, model = %s, "
+                "  provision_repo = %s, provision_ref = %s "
                 "WHERE id = %s AND user_id = %s",
-                (agent, model, batch_id, user_id),
+                (agent, model, provision_repo, provision_ref, batch_id, user_id),
             )
             updated = cur.rowcount > 0
         conn.commit()
