@@ -328,6 +328,56 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn):
         assert cur.fetchone()[0] == 'pending'
 
 
+def test_dispatch_tick_survives_claim_error():
+    """A transient error while claiming must NOT propagate out of the dispatcher.
+
+    Regression guard for "批任务一直待运行": before this, an exception in
+    _claim_pending_sessions propagated out of _dispatcher_loop and killed the
+    worker thread permanently, so every future batch hung in 'pending' with no
+    error and no recovery until Flask restarted."""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    calls = {'n': 0}
+
+    def boom(limit):
+        calls['n'] += 1
+        raise RuntimeError('db hiccup')
+
+    w._claim_pending_sessions = boom
+    # Must NOT raise; reports failure so the loop backs off and keeps going.
+    assert w._dispatch_tick() is False
+    assert calls['n'] == 1
+
+
+def test_dispatch_tick_submits_claimed_sessions():
+    """A healthy tick claims pending sessions and submits each to the executor,
+    reserving its slot in _running_session_ids."""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    w._claim_pending_sessions = lambda limit: [{'id': 'sid-1'}]
+    submitted = []
+
+    class FakeExec:
+        def submit(self, fn, arg):
+            submitted.append(arg)
+
+    w._executor = FakeExec()
+    assert w._dispatch_tick() is True
+    assert submitted == [{'id': 'sid-1'}]
+    assert 'sid-1' in w._running_session_ids
+
+
+def test_dispatch_tick_noop_when_no_free_slots():
+    """When all concurrency slots are busy, the tick claims nothing."""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    w._running_session_ids = {'a', 'b', 'c'}  # == MAX_CONCURRENT
+    claimed = {'called': False}
+    w._claim_pending_sessions = lambda limit: claimed.__setitem__('called', True) or []
+    assert w._dispatch_tick() is True
+    assert claimed['called'] is False
+
+
 def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_path):
     """When batch has agent set, send_message receives that agent."""
     import utils.batch_engine as eng
