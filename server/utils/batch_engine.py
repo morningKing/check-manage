@@ -18,6 +18,7 @@ singleton and expose three thin wrappers:
 Tests monkeypatch the `opencode_client` name at module level (eng.opencode_client)
 so all three calls resolve through the patched object.
 """
+import logging
 import os
 import shutil
 import threading
@@ -30,6 +31,8 @@ from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from utils.workspace import create_session_workspace
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -282,20 +285,45 @@ class BatchWorker:
     # --- dispatcher ---
 
     def _dispatcher_loop(self):
-        while not self._stop.is_set():
-            self._wake.wait(timeout=10)
-            self._wake.clear()
-            if self._stop.is_set():
-                break
+        logger.info('batch dispatcher started')
+        try:
+            while not self._stop.is_set():
+                self._wake.wait(timeout=10)
+                self._wake.clear()
+                if self._stop.is_set():
+                    break
+                if not self._dispatch_tick():
+                    # The tick hit an error (DB hiccup, pool exhaustion). Back off
+                    # briefly to avoid hot-looping, but KEEP the loop alive.
+                    self._stop.wait(self.POLL_INTERVAL_SEC)
+        finally:
+            # Normally only reached via stop(). If it's ever reached otherwise,
+            # this log turns a silent dead worker — the cause of "批任务一直待运行"
+            # — into something diagnosable.
+            logger.info('batch dispatcher exited (stop=%s)', self._stop.is_set())
+
+    def _dispatch_tick(self) -> bool:
+        """Run one claim+submit cycle. Returns True normally, False if an
+        exception was caught.
+
+        NEVER raises: a transient failure here (a DB hiccup, connection-pool
+        exhaustion) must not propagate out of _dispatcher_loop and kill the
+        worker thread — that would leave every future batch hanging in 'pending'
+        forever with no error and no recovery until Flask restarts."""
+        try:
             with self._lock:
                 free = self.MAX_CONCURRENT - len(self._running_session_ids)
             if free <= 0:
-                continue
+                return True
             pending = self._claim_pending_sessions(limit=free)
             for s in pending:
                 with self._lock:
                     self._running_session_ids.add(s['id'])
                 self._executor.submit(self._safe_run_one, s)
+            return True
+        except Exception:
+            logger.exception('batch dispatcher tick failed; will retry')
+            return False
 
     def _safe_run_one(self, session_row):
         try:
