@@ -21,6 +21,7 @@ so all three calls resolve through the patched object.
 import logging
 import os
 import shutil
+import subprocess
 import threading
 import time
 import traceback
@@ -30,7 +31,7 @@ from pathlib import Path
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from utils.workspace import create_session_workspace
+from utils.workspace import create_session_workspace, _rm_force
 from utils.ai_message_meta import meta_from_info, public_meta, tool_duration_ms
 
 logger = logging.getLogger(__name__)
@@ -399,11 +400,18 @@ class BatchWorker:
             # this path: recovery is handled by the orphan sweep (running rows with
             # no live session get reset to pending).
             return
-        prompt, agent, model = ctx
+        prompt, agent, model, provision_repo, provision_ref = ctx
         prompt = self._with_input_hint(prompt, session_row)
 
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
+            # Provision project-level agents/skills BEFORE the session starts —
+            # OpenCode binds the agent at prompt time, so the repo must be in
+            # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
+            # the child (global agents/skills still work); we just post a notice.
+            prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
+            if prov_warn:
+                self._persist_provision_notice(sid, prov_warn)
             oc_session_id = opencode_client.create_session(directory=ws)
             self._set_opencode_id(sid, oc_session_id)
             opencode_client.send_message(oc_session_id, prompt, directory=ws,
@@ -421,6 +429,26 @@ class BatchWorker:
                               error=f'{type(e).__name__}: {e}'[:500])
             self._notify_scan(session_row, None, ok=False)
 
+    def _persist_provision_notice(self, session_id: str, warning: str):
+        """Insert a notice into the child's thread when workspace provisioning
+        failed, so the user sees that it degraded to the global agents/skills.
+        Inserted before the turn so it sorts to the top. Best-effort."""
+        try:
+            import uuid as _uuid
+            import json as _json
+            content = [{'type': 'text',
+                        'text': f'⚠️ 预置仓库克隆失败，已使用全局 Agent / Skill 继续。\n\n{warning}'}]
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                        "VALUES (%s, %s, 'assistant', %s::jsonb)",
+                        (str(_uuid.uuid4()), session_id, _json.dumps(content)),
+                    )
+                conn.commit()
+        except Exception:
+            traceback.print_exc()
+
     def _notify_scan(self, session_row, final_msg, ok: bool):
         if not session_row.get('scan_task_id'):
             return
@@ -430,15 +458,49 @@ class BatchWorker:
         except Exception:
             traceback.print_exc()
 
-    def _fetch_batch_context(self, batch_id: str) -> tuple[str, str, str] | None:
+    @staticmethod
+    def _provision_workspace(ws: str, repo, ref):
+        """Clone the batch's agent/skill repo into <ws>/.opencode/ so OpenCode
+        discovers project-level agents/skills when the session's prompt is sent.
+
+        The repo root is treated as the .opencode config dir (it should contain
+        agent/, skill/, …). Shallow clone; the cloned .git is removed afterwards.
+
+        Degrades gracefully: on failure returns a short warning string (the run
+        continues with the global agents/skills) instead of raising — the caller
+        surfaces the warning in the session. Returns None on success / no-op."""
+        repo = (repo or '').strip()
+        if not repo:
+            return None
+        dest = os.path.join(ws, '.opencode')
+        args = ['git', 'clone', '--depth', '1']
+        ref = (ref or '').strip()
+        if ref:
+            args += ['--branch', ref]
+        args += [repo, dest]
+        try:
+            out = subprocess.run(args, capture_output=True, timeout=180)
+            if out.returncode != 0:
+                err = (out.stderr or b'').decode('utf-8', 'replace').strip()
+                return f'预置仓库克隆失败 (rc={out.returncode}): {err[:300]}'
+            gitdir = os.path.join(dest, '.git')
+            if os.path.isdir(gitdir):
+                shutil.rmtree(gitdir, onerror=_rm_force)  # git internals are read-only on Windows
+            return None
+        except Exception as e:
+            return f'预置仓库克隆失败: {type(e).__name__}: {e}'
+
+    def _fetch_batch_context(self, batch_id: str) -> tuple | None:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT prompt, agent, model FROM ai_chat_batches WHERE id = %s",
+                    "SELECT prompt, agent, model, provision_repo, provision_ref "
+                    "FROM ai_chat_batches WHERE id = %s",
                     (batch_id,),
                 )
                 row = cur.fetchone()
-                return (row[0], row[1] or '', row[2] or '') if row else None
+                return (row[0], row[1] or '', row[2] or '', row[3] or '', row[4] or '') \
+                    if row else None
 
     def _set_opencode_id(self, session_id: str, oc_session_id: str):
         with get_db() as conn:

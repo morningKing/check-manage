@@ -328,6 +328,24 @@ def test_restart_audit_resets_orphaned_running(user_id, db_conn):
         assert cur.fetchone()[0] == 'pending'
 
 
+def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
+    """create_batch persists provision_repo/ref and the worker reads them via
+    _fetch_batch_context (so the provisioning step gets them per run)."""
+    from utils.batch_repo import create_batch
+    from utils.batch_engine import BatchWorker
+    data = create_batch(
+        user_id, name='prov-test', prompt='do', template_id=None,
+        files=[{'name': 'r.txt', 'path': 'batch-staging/x/r.txt'}],
+        agent='my-agent', provision_repo='https://example.com/agents.git',
+        provision_ref='main')
+    bid = data['batch']['id']
+    assert data['batch']['provision_repo'] == 'https://example.com/agents.git'
+    assert data['batch']['provision_ref'] == 'main'
+    ctx = BatchWorker()._fetch_batch_context(bid)
+    prompt, agent, model, repo, ref = ctx
+    assert (agent, repo, ref) == ('my-agent', 'https://example.com/agents.git', 'main')
+
+
 def test_dispatch_tick_survives_claim_error():
     """A transient error while claiming must NOT propagate out of the dispatcher.
 

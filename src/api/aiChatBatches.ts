@@ -17,6 +17,8 @@ export function createBatch(body: {
   template_id?: string | null
   agent?: string | null
   model?: string | null
+  provision_repo?: string | null
+  provision_ref?: string | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
@@ -38,7 +40,12 @@ export function reexecuteChild(batchId: string, sessionId: string) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/reexecute`, {})
 }
 
-export function updateBatchConfig(id: string, body: { agent: string | null; model: string | null }) {
+export function updateBatchConfig(id: string, body: {
+  agent: string | null
+  model: string | null
+  provision_repo?: string | null
+  provision_ref?: string | null
+}) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${id}`, body)
 }
 

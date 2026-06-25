@@ -32,8 +32,9 @@
       </div>
 
       <div class="row">
-        <label>Agent <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选）</span></label>
-        <ElSelect v-model="selectedAgent" placeholder="使用 OpenCode 默认 Agent" clearable>
+        <label>Agent <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选，可手填项目 Agent 名）</span></label>
+        <ElSelect v-model="selectedAgent" placeholder="使用 OpenCode 默认 Agent"
+                  clearable filterable allow-create default-first-option>
           <ElOption v-for="a in agents" :key="a.name" :label="a.name" :value="a.name">
             <span>{{ a.name }}</span>
             <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
@@ -46,6 +47,15 @@
         <ElSelect v-model="selectedModel" placeholder="使用默认模型" clearable filterable>
           <ElOption v-for="m in models" :key="m.id" :label="m.label" :value="m.id" />
         </ElSelect>
+      </div>
+
+      <div class="row">
+        <label>预置仓库 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · Agent/Skill）</span></label>
+        <ElInput v-model="provisionRepo" placeholder="git URL，克隆进每个子会话的 .opencode/（仓库根 = .opencode 内容）" />
+        <ElInput v-model="provisionRef" placeholder="分支 / tag / commit（可选）" style="margin-top:6px" />
+        <div style="color:var(--el-text-color-placeholder);font-size:11px;margin-top:4px">
+          会话启动前克隆，使项目级 Agent/Skill 可用；克隆失败会降级用全局 Agent 并在会话内提示。
+        </div>
       </div>
 
       <div class="row row--inline">
@@ -117,6 +127,8 @@ const selectedAgent = ref<string>('')
 const agents = ref<AgentInfo[]>([])
 const selectedModel = ref<string>('')
 const models = ref<ModelInfo[]>([])
+const provisionRepo = ref<string>('')
+const provisionRef = ref<string>('')
 const uploadSessionId = ref<string>(crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2))
 
 const uploading = ref<{ id: number; name: string; progress: number }[]>([])
@@ -194,6 +206,8 @@ async function submit() {
       template_id: selectedTemplateId.value,
       agent: selectedAgent.value || null,
       model: selectedModel.value || null,
+      provision_repo: provisionRepo.value.trim() || null,
+      provision_ref: provisionRef.value.trim() || null,
       files: stagedFiles.value,
     })
     if (saveAsTemplate.value && templateName.value.trim()) {
@@ -219,6 +233,8 @@ function reset() {
   selectedTemplateId.value = null
   selectedAgent.value = ''
   selectedModel.value = ''
+  provisionRepo.value = ''
+  provisionRef.value = ''
   stagedFiles.value = []
   saveAsTemplate.value = false
   templateName.value = ''

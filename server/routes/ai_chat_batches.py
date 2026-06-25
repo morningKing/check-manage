@@ -74,10 +74,13 @@ def create():
 
     agent = (body.get('agent') or '').strip() or None
     model = (body.get('model') or '').strip() or None
+    provision_repo = (body.get('provision_repo') or '').strip() or None
+    provision_ref = (body.get('provision_ref') or '').strip() or None
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
-                          agent=agent, model=model)
+                          agent=agent, model=model,
+                          provision_repo=provision_repo, provision_ref=provision_ref)
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -108,7 +111,10 @@ def update_config(batch_id):
     body = request.get_json(silent=True) or {}
     agent = (body.get('agent') or '').strip() or None
     model = (body.get('model') or '').strip() or None
-    result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model)
+    provision_repo = (body.get('provision_repo') or '').strip() or None
+    provision_ref = (body.get('provision_ref') or '').strip() or None
+    result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
+                                 provision_repo=provision_repo, provision_ref=provision_ref)
     if result is None:
         return jsonify({'error': 'not found'}), 404
     return jsonify(result)
