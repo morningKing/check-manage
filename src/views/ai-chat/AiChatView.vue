@@ -14,6 +14,8 @@ import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
+import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
+import { parseTodos } from '@/utils/todos'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
@@ -626,8 +628,12 @@ function onKey(e: Event) {
                   <template v-for="(p, i) in m.content" :key="i">
                     <ChatFile v-if="p.type === 'file'" :name="p.name" :src="fileUrl(p.path)" />
                     <template v-else-if="p.type === 'tool_use'">
+                      <TodoListBlock
+                        v-if="parseTodos(p)"
+                        :todos="parseTodos(p)!"
+                      />
                       <QueryResultBlock
-                        v-if="parseQueryResult(p)"
+                        v-else-if="parseQueryResult(p)"
                         :result="parseQueryResult(p)!" :download-url="fileUrl"
                       />
                       <ToolCallBubble
