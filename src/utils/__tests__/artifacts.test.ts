@@ -1,5 +1,37 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile, groupFilesByDir } from '../artifacts'
+
+describe('groupFilesByDir', () => {
+  it('groups files by parent directory, root-first then alphabetical', () => {
+    const files = [
+      { path: 'outputs/b.md', name: 'b.md' },
+      { path: 'report.md', name: 'report.md' },
+      { path: 'outputs/a.md', name: 'a.md' },
+      { path: 'reports/q1/jan.md', name: 'jan.md' },
+    ]
+    const groups = groupFilesByDir(files)
+    expect(groups.map(g => g.dir)).toEqual(['', 'outputs', 'reports/q1'])
+    expect(groups.map(g => g.label)).toEqual(['根目录', 'outputs/', 'reports/q1/'])
+    // files within a group are path-sorted
+    expect(groups[1].files.map(f => f.path)).toEqual(['outputs/a.md', 'outputs/b.md'])
+  })
+
+  it('puts a single root file under 根目录', () => {
+    const groups = groupFilesByDir([{ path: 'only.txt', name: 'only.txt' }])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ dir: '', label: '根目录' })
+    expect(groups[0].files).toHaveLength(1)
+  })
+
+  it('normalises backslash paths', () => {
+    const groups = groupFilesByDir([{ path: 'outputs\\win.txt', name: 'win.txt' }])
+    expect(groups[0].dir).toBe('outputs')
+  })
+
+  it('returns [] for no files', () => {
+    expect(groupFilesByDir([])).toEqual([])
+  })
+})
 
 describe('splitArtifacts', () => {
   it('lifts a large code block into a code segment', () => {

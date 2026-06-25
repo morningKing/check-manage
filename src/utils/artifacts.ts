@@ -134,6 +134,39 @@ export function sniffLang(lang: string, code: string): string {
   return l
 }
 
+export interface FileGroup<T> { dir: string; label: string; files: T[] }
+
+/**
+ * Group files by their parent directory so the 产出文件 panel can render one
+ * collapsible section per directory (instead of a long flat list). Root-level
+ * files (no `/` in the path) go under an empty-dir group labelled 根目录.
+ * Groups are ordered root-first then alphabetically; files within a group are
+ * path-sorted. Pure + deterministic so it's unit-testable.
+ */
+export function groupFilesByDir<T extends { path: string }>(files: T[]): FileGroup<T>[] {
+  const map = new Map<string, T[]>()
+  for (const f of files) {
+    const p = f.path.replace(/\\/g, '/')
+    const i = p.lastIndexOf('/')
+    const dir = i >= 0 ? p.slice(0, i) : ''
+    const bucket = map.get(dir)
+    if (bucket) bucket.push(f)
+    else map.set(dir, [f])
+  }
+  const dirs = [...map.keys()].sort((a, b) => {
+    if (a === b) return 0
+    if (a === '') return -1
+    if (b === '') return 1
+    return a < b ? -1 : 1
+  })
+  return dirs.map((dir) => ({
+    dir,
+    label: dir === '' ? '根目录' : dir + '/',
+    files: map.get(dir)!.slice().sort((x, y) =>
+      x.path < y.path ? -1 : x.path > y.path ? 1 : 0),
+  }))
+}
+
 export function downloadText(filename: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
