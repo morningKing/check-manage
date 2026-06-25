@@ -228,6 +228,18 @@ Projects can be direct children of workspace (level 2) OR standalone level-1 men
 
 **Every user-facing feature change MUST update the user guide in the same PR.** When you add, change, or remove a feature that a user interacts with, update the matching doc under `docs/user-guide/` (organized by feature: `getting-started/ data/ admin/ integration/ ai/`, English-slug filenames). If no doc exists for the feature, create one in the right subfolder and link it from `docs/user-guide/README.md` (the index/TOC). Where a flow has UI, include a real page screenshot under `docs/user-guide/_images/`. Treat the doc update as part of "done" — a feature change without its user-guide update is incomplete.
 
+### ⚠️ Playwright Verification (MANDATORY for UI / full-stack changes)
+
+**Any change that touches a frontend page OR exercises frontend↔backend interaction MUST be verified live with Playwright before it's considered done** — unit tests and `vue-tsc` are necessary but NOT sufficient. This covers: new/changed Vue views or components, panels, dialogs, status rendering, and any feature whose correctness depends on the browser calling the backend (create/list/poll flows, SSE, settings pages, file panels, etc.).
+
+Procedure:
+1. Ensure services are running on the branch under test (`npm run dev:all` or restart the backend with `python app.py` so it loads the changed code — the Werkzeug/waitress process loads modules at startup, so backend changes need a restart). Frontend changes are picked up by Vite HMR.
+2. Drive the real flow through the browser with the Playwright MCP tools (navigate, log in `admin`/`admin123`, perform the user actions), and assert on the rendered result — not just a 200 response.
+3. Where the UI reflects backend state, cross-check the DB / on-disk artifact (e.g. a session's `opencode.json`, a `git status`, a batch row) so you're verifying the real wiring, not a stale cache.
+4. Capture a screenshot of the key result into `.playwright-mcp/` as evidence and state plainly in the PR/summary what was verified.
+
+Backend-only changes with no UI/interaction surface (pure utils, scripts, migrations) don't require Playwright — unit tests suffice. When in doubt (does a user see this?), verify with Playwright.
+
 ### Adding a New Business Entity (e.g., "Products")
 
 **Do NOT** create a new Vue file or SQL table.
