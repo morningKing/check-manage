@@ -108,6 +108,40 @@ def _prioritize_and_cap(changes):
     return changes[:MAX_CHANGES], truncated
 
 
+def _collapse_added_floods(changes):
+    """Collapse a flood of brand-new 'added' files that share an immediate parent
+    directory into one expandable `dir/` entry.
+
+    git only folds untracked *sub*directories; files at a repo's TOP level (an
+    unborn-HEAD clone, a freshly `git init`'d project, or a pull whose files
+    aren't committed) are listed individually as `?? f.py`. Without this, a whole
+    pulled code repo floods the 变更文件 panel as N 'added' files — the reported
+    "拉取下来的代码仓所有文件都是新增状态" bug. We catch it the same way folded
+    subdirectories are handled (collapse to `dir/` + count, expandable on click).
+
+    Modified/deleted entries and already-collapsed `kind='dir'` entries pass
+    through untouched, so the user's real edits stay visible. Files sitting
+    directly at the workspace root (no parent directory) are left individual —
+    they're usually a handful of deliverables, not a pulled repo."""
+    groups = {}
+    passthrough = []
+    for c in changes:
+        if c['status'] == 'added' and c.get('kind') != 'dir':
+            path = c['path']
+            parent = path.rsplit('/', 1)[0] if '/' in path else ''
+            groups.setdefault(parent, []).append(c)
+        else:
+            passthrough.append(c)
+    out = list(passthrough)
+    for parent, items in groups.items():
+        if parent and len(items) > UNTRACKED_DIR_EXPAND_LIMIT:
+            out.append({'path': parent + '/', 'status': 'added',
+                        'kind': 'dir', 'count': len(items)})
+        else:
+            out.extend(items)
+    return out
+
+
 def _run_git(args, timeout=20):
     """Run git and return (returncode, stdout_text), decoding stdout as UTF-8
     (git's encoding for -z paths).
@@ -206,6 +240,9 @@ def git_changes(workspace_path):
             i += 1
     # The panel lists only additions/modifications; deletions are noise here.
     changes = [c for c in changes if c['status'] != 'deleted']
+    # Collapse top-level 'added' floods (an unborn-HEAD / uncommitted pulled repo
+    # lists every file individually since git only folds untracked subdirs).
+    changes = _collapse_added_floods(changes)
     capped, truncated = _prioritize_and_cap(changes)
     return capped, truncated, ok
 

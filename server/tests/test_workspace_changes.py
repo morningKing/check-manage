@@ -242,6 +242,81 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     assert 'cloned-repo/' not in paths
 
 
+def test_unborn_nested_repo_top_level_flood_collapses(tmp_path):
+    """The reported bug: a pulled/scaffolded repo whose files sit at the repo's
+    TOP level (unborn HEAD — `git init` with no commit, or a clone whose files
+    aren't committed) makes git list every file individually as `?? f.py` (git
+    only folds untracked *sub*directories, never repo-root-level files). Those
+    must collapse into ONE expandable `dir/` entry, not flood the panel as N
+    'added' files."""
+    from utils.workspace_changes import (
+        git_changes, expand_untracked_dir, UNTRACKED_DIR_EXPAND_LIMIT)
+    ws = str(tmp_path)
+    _init_repo(ws)                       # workspace itself a repo (committed nothing yet is fine)
+    nested = os.path.join(ws, 'cloned-repo')
+    _init_repo(nested)                   # nested repo, UNBORN HEAD (no commit)
+    n = UNTRACKED_DIR_EXPAND_LIMIT + 7
+    for i in range(n):
+        with open(os.path.join(nested, f'f{i:03d}.py'), 'w') as f:
+            f.write('x')
+    changes, _, _ = git_changes(ws)
+    dir_entries = [c for c in changes if c.get('kind') == 'dir']
+    assert dir_entries == [
+        {'path': 'cloned-repo/', 'status': 'added', 'kind': 'dir', 'count': n}]
+    # not one of the N individual files leaked through
+    assert not any(c['path'].startswith('cloned-repo/f') for c in changes)
+    # and the collapsed entry expands to every file
+    files = expand_untracked_dir(ws, 'cloned-repo/')
+    assert len(files) == n
+    assert all(f['status'] == 'added' for f in files)
+
+
+def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
+    """When a nested repo has a few real edits AND a flood of brand-new top-level
+    files, the edits stay individually visible (the user's actual work) while only
+    the new-file flood collapses."""
+    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+    ws = str(tmp_path)
+    _init_repo(ws)
+    nested = os.path.join(ws, 'repo')
+    _init_repo(nested)
+    with open(os.path.join(nested, 'README'), 'w') as f:
+        f.write('base\n')
+    _git(nested, 'add', '-A')
+    _git(nested, 'commit', '-q', '-m', 'base')
+    with open(os.path.join(nested, 'README'), 'w') as f:
+        f.write('edited\n')                          # one real modification
+    n = UNTRACKED_DIR_EXPAND_LIMIT + 4
+    for i in range(n):                               # flood of new top-level files
+        with open(os.path.join(nested, f'gen{i:03d}.py'), 'w') as f:
+            f.write('x')
+    changes, _, _ = git_changes(ws)
+    # the modification is shown individually
+    assert {'path': 'repo/README', 'status': 'modified'} in changes
+    # the new-file flood is collapsed to one dir entry
+    dir_entries = [c for c in changes if c.get('kind') == 'dir']
+    assert dir_entries == [
+        {'path': 'repo/', 'status': 'added', 'kind': 'dir', 'count': n}]
+    assert not any(c['path'].startswith('repo/gen') for c in changes)
+
+
+def test_small_top_level_added_files_stay_individual(tmp_path):
+    """A nested repo with only a FEW new top-level files keeps listing them
+    individually (no collapse below the limit) — preserves existing behavior."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    nested = os.path.join(ws, 'repo')
+    _init_repo(nested)
+    for name in ('a.py', 'b.py', 'c.py'):
+        with open(os.path.join(nested, name), 'w') as f:
+            f.write('x')
+    changes, _, _ = git_changes(ws)
+    paths = {c['path'] for c in changes}
+    assert {'repo/a.py', 'repo/b.py', 'repo/c.py'} <= paths
+    assert not any(c.get('kind') == 'dir' for c in changes)
+
+
 def test_resolve_repo_for_path_nested_clone(tmp_path):
     from utils.workspace_changes import resolve_repo_for_path
     ws = str(tmp_path)
