@@ -23,7 +23,7 @@ import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
-import { splitArtifacts, sniffLang, artifactFilename, isImageFile, type CodeSegment } from '@/utils/artifacts'
+import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, type CodeSegment } from '@/utils/artifacts'
 import { activeMentionToken } from '@/utils/agentMentions'
 import { copyText } from '@/utils/clipboard'
 import { useAiChatStore } from '@/stores/aiChat'
@@ -133,6 +133,10 @@ const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
+// 产出文件按目录分组，每个目录一个可折叠分组（默认展开）。
+const groupedOutputs = computed(() => groupFilesByDir(outputs.value))
+const outputsCollapsed = reactive<Record<string, boolean>>({})
+function toggleOutputGroup(dir: string) { outputsCollapsed[dir] = !outputsCollapsed[dir] }
 const changes = computed<ChangedFile[]>(() => store.activeChanges)
 
 // 变更面板只展示新增/修改，不列出删除（后端已过滤 deleted）
@@ -705,13 +709,22 @@ function onKey(e: Event) {
 
             <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">
-              <div class="ai-outputs__title">产出文件</div>
-              <div v-for="f in outputs" :key="f.path" class="output-file">
-                <ElIcon><Document /></ElIcon>
-                <span class="output-file__name">{{ f.name }}</span>
-                <span class="output-file__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
-                <ElButton size="small" text @click="previewOutput(f)">预览</ElButton>
-                <a class="output-file__dl" :href="fileUrl(f.path)" target="_blank" rel="noopener">下载</a>
+              <div class="ai-outputs__title">产出文件 <span class="ai-outputs__count">({{ outputs.length }})</span></div>
+              <div v-for="g in groupedOutputs" :key="g.dir" class="output-group">
+                <button class="output-group__head" type="button" @click="toggleOutputGroup(g.dir)">
+                  <ElIcon class="output-group__chev" :class="{ open: !outputsCollapsed[g.dir] }"><ArrowRight /></ElIcon>
+                  <span class="output-group__dir">{{ g.label }}</span>
+                  <span class="output-group__count">{{ g.files.length }}</span>
+                </button>
+                <div v-show="!outputsCollapsed[g.dir]" class="output-group__body">
+                  <div v-for="f in g.files" :key="f.path" class="output-file">
+                    <ElIcon><Document /></ElIcon>
+                    <span class="output-file__name">{{ f.name }}</span>
+                    <span class="output-file__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
+                    <ElButton size="small" text @click="previewOutput(f)">预览</ElButton>
+                    <a class="output-file__dl" :href="fileUrl(f.path)" target="_blank" rel="noopener">下载</a>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1037,7 +1050,22 @@ function onKey(e: Event) {
   border-radius: 10px;
   background: var(--el-fill-color-lighter);
   &__title { font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary); margin-bottom: 8px; }
+  &__count { font-weight: 400; }
 }
+.output-group { margin-bottom: 2px; }
+.output-group__head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 4px 0; background: none; border: none; cursor: pointer;
+  color: var(--el-text-color-regular);
+}
+.output-group__chev { transition: transform 0.15s; color: var(--el-text-color-secondary); &.open { transform: rotate(90deg); } }
+.output-group__dir {
+  flex: 1; text-align: left; font-size: 13px;
+  font-family: var(--el-font-family-mono, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.output-group__count { font-size: 12px; color: var(--el-text-color-secondary); }
+.output-group__body { padding-left: 4px; }
 .output-file {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 8px; border-radius: 6px; text-decoration: none;
