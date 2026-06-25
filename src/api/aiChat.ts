@@ -22,16 +22,24 @@ export interface AiSessionSummary {
   lastActiveAt?: string
 }
 
+export interface AiMessageMeta {
+  durationMs?: number
+  tokensInput?: number
+  tokensOutput?: number
+  cost?: number
+}
+
 export interface AiMessage {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: AiContentPart[]
   createdAt?: string
+  meta?: AiMessageMeta | null
 }
 
 export type AiContentPart =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown }
+  | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown; durationMs?: number }
   | { type: 'file'; name: string; path: string }
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
   | { type: 'mcp_services'; servers: McpServer[] }

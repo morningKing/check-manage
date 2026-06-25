@@ -32,6 +32,28 @@ def test_apply_event_accumulates_text_tool_and_detects_idle():
     assert content[1]['result'] == 'res'
 
 
+def test_apply_event_captures_meta_and_tool_duration():
+    from utils.chat_persist import new_state, apply_event, build_content
+    from utils.ai_message_meta import aggregate_metas, public_meta
+    s = new_state()
+    # message.updated carrying time/tokens/cost (final completed snapshot)
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                  'time': {'created': 1000, 'completed': 5400},
+                  'tokens': {'input': 18886, 'output': 159}, 'cost': 0.002}}), 'oc')
+    # tool part with state.time -> durationMs surfaced into content
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'bash',
+                  'state': {'status': 'completed', 'output': 'ok',
+                            'time': {'start': 2000, 'end': 2123}}, 'sessionID': 'oc'}}), 'oc')
+    content = build_content(s)
+    tool = [p for p in content if p['type'] == 'tool_use'][0]
+    assert tool['durationMs'] == 123
+    # turn meta aggregates correctly
+    meta = public_meta(aggregate_metas(list(s['meta_by_msg'].values())))
+    assert meta == {'durationMs': 4400, 'tokensInput': 18886, 'tokensOutput': 159, 'cost': 0.002}
+
+
 def test_apply_event_ignores_other_session():
     from utils.chat_persist import new_state, apply_event
     s = new_state()

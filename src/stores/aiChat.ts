@@ -442,6 +442,7 @@ export const useAiChatStore = defineStore('aiChat', {
           } else if (part.type === 'tool') {
             // MCP / built-in tool call — render inline as a collapsible card.
             const st = part.state || {}
+            const tt = st.time || {}
             this._upsertAssistantPart(sid, part.id, {
               type: 'tool_use',
               name: part.tool || 'tool',
@@ -449,6 +450,7 @@ export const useAiChatStore = defineStore('aiChat', {
               status: st.status,
               input: st.input,
               result: st.output ?? st.result,
+              durationMs: (tt.start && tt.end) ? Math.max(0, tt.end - tt.start) : undefined,
             })
           }
           break
