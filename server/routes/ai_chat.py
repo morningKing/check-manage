@@ -41,6 +41,7 @@ from utils.workspace import (
     safe_resolve, cleanup_session_workspace,
 )
 from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir, read_file_preview
+from utils.mcp_servers import enabled_mcp_config
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
 )
@@ -60,6 +61,16 @@ from config import (
 logger = logging.getLogger(__name__)
 
 MCP_NAME = 'check-manage'
+
+
+def _external_mcp():
+    """Admin-registered external MCP servers to merge into opencode.json.
+    Best-effort: a DB/config error must not block session creation."""
+    try:
+        return enabled_mcp_config(reserved_names=[MCP_NAME])
+    except Exception:
+        logger.exception('failed to load external MCP servers')
+        return {}
 
 # OpenCode 内部系统 agent（mode=primary 但不应出现在用户选择器）。
 # 这是按名字硬编码的假设（OpenCode 未给内部 agent 单独标识字段）；
@@ -121,7 +132,7 @@ def create_session():
     #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=OPENCODE_MODEL)
+                          model=OPENCODE_MODEL, extra_mcp=_external_mcp())
 
     # 4) ask OpenCode to start a session bound to this workspace (directory query param)
     client = OpenCodeClient(OPENCODE_BASE_URL)
@@ -1002,7 +1013,7 @@ def clear_session(sid):
     token = generate_token(sid, AI_SESSION_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=OPENCODE_MODEL)
+                          model=OPENCODE_MODEL, extra_mcp=_external_mcp())
     # 4) 新建 OpenCode 会话（绑定重建后的工作区）= 上下文重置
     new_oc = client.create_session(directory=workspace_path, title='新会话')
     # 5) 删历史 + 重绑 opencode_session_id + 置 active

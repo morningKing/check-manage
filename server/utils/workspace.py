@@ -123,21 +123,30 @@ def cleanup_session_workspace(workspace_root: str, user_id: str, session_id: str
 
 
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
-                          model: str = "") -> str:
+                          model: str = "", extra_mcp: dict | None = None) -> str:
     """Write opencode.json into the workspace so OpenCode (scoped to this dir)
     connects to our MCP server at `mcp_url` (which carries the session token)
     and, when given, uses `model` ("<providerID>/<modelID>").
+
+    `extra_mcp` is an optional map of additional OpenCode MCP entries (admin-
+    registered external MCP servers) merged in alongside the platform's own; the
+    platform entry (`mcp_name`) always wins so external config can't shadow it.
     Returns the config file path.
     """
+    mcp = {
+        mcp_name: {
+            "type": "remote",
+            "url": mcp_url,
+            "enabled": True,
+        },
+    }
+    if extra_mcp:
+        for name, entry in extra_mcp.items():
+            if name != mcp_name:           # never let an external entry shadow ours
+                mcp[name] = entry
     cfg = {
         "$schema": "https://opencode.ai/config.json",
-        "mcp": {
-            mcp_name: {
-                "type": "remote",
-                "url": mcp_url,
-                "enabled": True,
-            },
-        },
+        "mcp": mcp,
     }
     if model:
         cfg["model"] = model
