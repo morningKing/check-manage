@@ -230,8 +230,12 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     _init_repo(ws)   # workspace is itself a repo
     nested = os.path.join(ws, 'cloned-repo')
     _init_repo(nested)
+    with open(os.path.join(nested, '.keep'), 'w') as f:
+        f.write('x')
+    _git(nested, 'add', '-A')
+    _git(nested, 'commit', '-q', '-m', 'base')   # born -> not auto-baselined
     with open(os.path.join(nested, 'file.py'), 'w') as f:
-        f.write('print(1)')
+        f.write('print(1)')                      # a real new file on top
     changes, _, _ = git_changes(ws)
     paths = [c['path'] for c in changes]
     # the nested repo's own file should be reported once with the nested path
@@ -242,40 +246,65 @@ def test_workspace_root_repo_plus_nested_clone_no_duplicates(tmp_path):
     assert 'cloned-repo/' not in paths
 
 
-def test_unborn_nested_repo_top_level_flood_collapses(tmp_path):
-    """The reported bug: a pulled/scaffolded repo whose files sit at the repo's
-    TOP level (unborn HEAD — `git init` with no commit, or a clone whose files
-    aren't committed) makes git list every file individually as `?? f.py` (git
-    only folds untracked *sub*directories, never repo-root-level files). Those
-    must collapse into ONE expandable `dir/` entry, not flood the panel as N
-    'added' files."""
-    from utils.workspace_changes import (
-        git_changes, expand_untracked_dir, UNTRACKED_DIR_EXPAND_LIMIT)
+def _has_head(repo):
+    """True if the repo has at least one commit (born HEAD)."""
+    return subprocess.run(['git', '-C', repo, 'rev-parse', '--verify', 'HEAD'],
+                          capture_output=True).returncode == 0
+
+
+def test_unborn_pulled_repo_auto_baselined_as_initial_state(tmp_path):
+    """The reported intent: a pulled 代码仓 (nested git repo) is the INITIAL STATE,
+    not a pile of '新增'. When such a repo has no baseline commit (unborn HEAD — a
+    clone whose .git history was stripped, or source pulled without history), the
+    scan auto-creates a one-time baseline commit so its content becomes the
+    initial state. After that, git_changes reports NOTHING for it (just like a
+    real `git clone` with history)."""
+    from utils.workspace_changes import git_changes
     ws = str(tmp_path)
-    _init_repo(ws)                       # workspace itself a repo (committed nothing yet is fine)
+    _init_repo(ws)                       # workspace tracking repo
     nested = os.path.join(ws, 'cloned-repo')
-    _init_repo(nested)                   # nested repo, UNBORN HEAD (no commit)
-    n = UNTRACKED_DIR_EXPAND_LIMIT + 7
-    for i in range(n):
+    _init_repo(nested)                   # pulled repo, UNBORN HEAD (no commit)
+    for i in range(25):
         with open(os.path.join(nested, f'f{i:03d}.py'), 'w') as f:
             f.write('x')
+    assert not _has_head(nested)         # precondition: no baseline yet
+    changes, _, ok = git_changes(ws)
+    assert ok
+    # the pulled repo got a baseline commit and is now the initial state
+    assert _has_head(nested)
+    assert not any(c['path'].startswith('cloned-repo') for c in changes)
+
+
+def test_after_baseline_only_real_changes_show(tmp_path):
+    """Once a pulled repo is baselined, only the user's real subsequent changes
+    appear — an edit shows as modified, a brand-new file as added — and NOT the
+    whole repo as '新增'."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    nested = os.path.join(ws, 'cloned-repo')
+    _init_repo(nested)
+    for i in range(8):
+        with open(os.path.join(nested, f'f{i:03d}.py'), 'w') as f:
+            f.write('x\n')
+    git_changes(ws)                      # establishes the baseline
+    # now make real edits on top of the pulled baseline
+    with open(os.path.join(nested, 'f000.py'), 'w') as f:
+        f.write('edited\n')
+    with open(os.path.join(nested, 'brand_new.py'), 'w') as f:
+        f.write('new\n')
     changes, _, _ = git_changes(ws)
-    dir_entries = [c for c in changes if c.get('kind') == 'dir']
-    assert dir_entries == [
-        {'path': 'cloned-repo/', 'status': 'added', 'kind': 'dir', 'count': n}]
-    # not one of the N individual files leaked through
-    assert not any(c['path'].startswith('cloned-repo/f') for c in changes)
-    # and the collapsed entry expands to every file
-    files = expand_untracked_dir(ws, 'cloned-repo/')
-    assert len(files) == n
-    assert all(f['status'] == 'added' for f in files)
+    assert {'path': 'cloned-repo/f000.py', 'status': 'modified'} in changes
+    assert {'path': 'cloned-repo/brand_new.py', 'status': 'added'} in changes
+    # the other 7 baseline files are NOT reported as changes
+    assert not any(c['path'].startswith('cloned-repo/f00') and c['path'] != 'cloned-repo/f000.py'
+                   for c in changes)
 
 
-def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
-    """When a nested repo has a few real edits AND a flood of brand-new top-level
-    files, the edits stay individually visible (the user's actual work) while only
-    the new-file flood collapses."""
-    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+def test_committed_clone_not_rebaselined(tmp_path):
+    """A real clone (born HEAD) is left untouched — its own commit is the
+    baseline, real edits show as before, and the scan does NOT add a commit."""
+    from utils.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'repo')
@@ -284,6 +313,43 @@ def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
         f.write('base\n')
     _git(nested, 'add', '-A')
     _git(nested, 'commit', '-q', '-m', 'base')
+    head_before = subprocess.run(['git', '-C', nested, 'rev-parse', 'HEAD'],
+                                 capture_output=True, text=True).stdout.strip()
+    with open(os.path.join(nested, 'README'), 'w') as f:
+        f.write('edited\n')
+    changes, _, _ = git_changes(ws)
+    head_after = subprocess.run(['git', '-C', nested, 'rev-parse', 'HEAD'],
+                                capture_output=True, text=True).stdout.strip()
+    assert head_before == head_after            # not re-baselined
+    assert {'path': 'repo/README', 'status': 'modified'} in changes
+
+
+def test_workspace_root_outputs_not_baselined(tmp_path):
+    """The workspace ROOT repo is never auto-baselined: files the agent writes
+    directly under the workspace (its real outputs) must still show as added,
+    not be silently committed away."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    with open(os.path.join(ws, 'report.md'), 'w') as f:
+        f.write('agent output\n')
+    changes, _, _ = git_changes(ws)
+    assert {'path': 'report.md', 'status': 'added'} in changes
+
+
+def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
+    """A committed (born) nested repo with a few real edits AND a flood of
+    brand-new top-level files: the edit stays individually visible, and the new
+    files collapse to one expandable dir entry (still real '新增', just folded)."""
+    from utils.workspace_changes import git_changes, UNTRACKED_DIR_EXPAND_LIMIT
+    ws = str(tmp_path)
+    _init_repo(ws)
+    nested = os.path.join(ws, 'repo')
+    _init_repo(nested)
+    with open(os.path.join(nested, 'README'), 'w') as f:
+        f.write('base\n')
+    _git(nested, 'add', '-A')
+    _git(nested, 'commit', '-q', '-m', 'base')      # born -> not re-baselined
     with open(os.path.join(nested, 'README'), 'w') as f:
         f.write('edited\n')                          # one real modification
     n = UNTRACKED_DIR_EXPAND_LIMIT + 4
@@ -291,9 +357,7 @@ def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
         with open(os.path.join(nested, f'gen{i:03d}.py'), 'w') as f:
             f.write('x')
     changes, _, _ = git_changes(ws)
-    # the modification is shown individually
     assert {'path': 'repo/README', 'status': 'modified'} in changes
-    # the new-file flood is collapsed to one dir entry
     dir_entries = [c for c in changes if c.get('kind') == 'dir']
     assert dir_entries == [
         {'path': 'repo/', 'status': 'added', 'kind': 'dir', 'count': n}]
@@ -301,13 +365,17 @@ def test_nested_repo_modifications_survive_added_flood_collapse(tmp_path):
 
 
 def test_small_top_level_added_files_stay_individual(tmp_path):
-    """A nested repo with only a FEW new top-level files keeps listing them
-    individually (no collapse below the limit) — preserves existing behavior."""
+    """A committed (born) nested repo with only a FEW new top-level files keeps
+    listing them individually (no collapse below the limit)."""
     from utils.workspace_changes import git_changes
     ws = str(tmp_path)
     _init_repo(ws)
     nested = os.path.join(ws, 'repo')
     _init_repo(nested)
+    with open(os.path.join(nested, '.keep'), 'w') as f:
+        f.write('x')
+    _git(nested, 'add', '-A')
+    _git(nested, 'commit', '-q', '-m', 'base')      # born -> not re-baselined
     for name in ('a.py', 'b.py', 'c.py'):
         with open(os.path.join(nested, name), 'w') as f:
             f.write('x')
