@@ -423,10 +423,14 @@ CREATE TABLE IF NOT EXISTS ai_chat_messages (
     session_id  VARCHAR(100) NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
     role        VARCHAR(20) NOT NULL,
     content     JSONB NOT NULL,
+    meta        JSONB,
     created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
     ON ai_chat_messages(session_id, created_at);
+-- Per-assistant-message execution metadata (duration / tokens / cost). Idempotent
+-- add for existing deployments.
+ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 
 -- ==================== autoSequence 原子计数器表 ====================
 CREATE TABLE IF NOT EXISTS dynamic_sequences (

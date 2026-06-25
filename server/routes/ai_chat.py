@@ -494,14 +494,14 @@ def get_messages(sid):
         cur = conn.cursor()
         if since:
             cur.execute(
-                "SELECT id, role, content, created_at FROM ai_chat_messages "
+                "SELECT id, role, content, created_at, meta FROM ai_chat_messages "
                 "WHERE session_id = %s AND id > %s "
                 "ORDER BY created_at ASC",
                 (sid, since),
             )
         else:
             cur.execute(
-                "SELECT id, role, content, created_at FROM ai_chat_messages "
+                "SELECT id, role, content, created_at, meta FROM ai_chat_messages "
                 "WHERE session_id = %s ORDER BY created_at ASC",
                 (sid,),
             )
@@ -510,7 +510,8 @@ def get_messages(sid):
     return jsonify({
         'messages': [
             {'id': r[0], 'role': r[1], 'content': r[2],
-             'createdAt': r[3].isoformat() if r[3] else None}
+             'createdAt': r[3].isoformat() if r[3] else None,
+             'meta': r[4]}
             for r in rows
         ],
     })

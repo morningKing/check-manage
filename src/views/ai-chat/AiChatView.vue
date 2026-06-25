@@ -28,6 +28,7 @@ import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/comp
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, type CodeSegment } from '@/utils/artifacts'
 import { activeMentionToken } from '@/utils/agentMentions'
 import { copyText } from '@/utils/clipboard'
+import { summarizeMeta } from '@/utils/aiMeta'
 import { useAiChatStore } from '@/stores/aiChat'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
@@ -639,7 +640,7 @@ function onKey(e: Event) {
                       <ToolCallBubble
                         v-else
                         :name="p.name" :title="p.title" :status="p.status"
-                        :input="p.input" :result="p.result"
+                        :input="p.input" :result="p.result" :duration-ms="p.durationMs"
                       />
                     </template>
                     <RunResultBlock
@@ -670,6 +671,9 @@ function onKey(e: Event) {
                   </template>
                 </template>
               </Bubble>
+              <div v-if="m.role === 'assistant' && summarizeMeta(m.meta)" class="msg__meta">
+                {{ summarizeMeta(m.meta) }}
+              </div>
               <div v-if="messageText(m)" class="msg__actions" :class="`msg__actions--${m.role}`">
                 <button
                   class="msg__action-btn" type="button" title="复制" aria-label="复制"
@@ -1002,6 +1006,12 @@ function onKey(e: Event) {
 }
 /* User: a single gray rounded block on the right (no inner box) */
 .msg--user { display: flex; flex-direction: column; align-items: flex-end; }
+.msg__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-family: var(--el-font-family-mono, monospace);
+}
 .msg__actions {
   display: flex; gap: 4px;
   margin-top: 4px;

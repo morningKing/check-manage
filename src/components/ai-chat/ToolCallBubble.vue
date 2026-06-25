@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import { ElIcon } from 'element-plus'
 import { Tools, Loading, CircleCheck, CircleClose, ArrowRight } from '@element-plus/icons-vue'
+import { formatDuration } from '@/utils/aiMeta'
 
 const props = defineProps<{
   name: string
@@ -9,7 +10,10 @@ const props = defineProps<{
   status?: string
   input?: unknown
   result?: unknown
+  durationMs?: number
 }>()
+
+const durationText = computed(() => formatDuration(props.durationMs))
 
 const open = ref(false)
 
@@ -40,6 +44,7 @@ function fmt(v: unknown): string {
       <ElIcon class="tool-call__icon"><Tools /></ElIcon>
       <span class="tool-call__name">{{ displayName }}</span>
       <span v-if="subtitle" class="tool-call__subtitle" :title="subtitle">{{ subtitle }}</span>
+      <span v-if="durationText" class="tool-call__dur">{{ durationText }}</span>
       <span class="tool-call__status">
         <ElIcon v-if="status === 'completed'" class="ok"><CircleCheck /></ElIcon>
         <ElIcon v-else-if="status === 'error'" class="err"><CircleClose /></ElIcon>
@@ -94,6 +99,10 @@ function fmt(v: unknown): string {
   min-width: 0;
   flex: 1;
   &::before { content: '· '; opacity: 0.6; }
+}
+.tool-call__dur {
+  flex-shrink: 0; font-size: 12px; color: var(--el-text-color-secondary);
+  font-family: var(--el-font-family-mono, monospace);
 }
 .tool-call__status { margin-left: auto; flex-shrink: 0; .ok { color: var(--el-color-success); } .err { color: var(--el-color-danger); } .run { color: var(--el-color-primary); } }
 .tool-call__body { padding: 4px 12px 12px; border-top: 1px solid var(--el-border-color-lighter); }

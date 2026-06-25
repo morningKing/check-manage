@@ -13,6 +13,8 @@ import time
 
 from db import get_db
 from utils.opencode_client import OpenCodeClient
+from utils.ai_message_meta import (
+    meta_from_info, aggregate_metas, public_meta, tool_duration_ms)
 from config import OPENCODE_BASE_URL
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,8 @@ def event_session_id(props):
 
 def new_state():
     """Fresh per-turn accumulator."""
-    return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [], 'turn_msg_id': None}
+    return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [],
+            'turn_msg_id': None, 'meta_by_msg': {}}
 
 
 def apply_event(state, evt, opencode_session_id):
@@ -64,6 +67,11 @@ def apply_event(state, evt, opencode_session_id):
             state['assistant_msg_ids'].add(info['id'])
             if state['turn_msg_id'] is None:
                 state['turn_msg_id'] = info['id']
+            # Capture timing/tokens/cost; overwrite so the final (completed)
+            # update wins. None until the message completes.
+            m = meta_from_info(info)
+            if m:
+                state['meta_by_msg'][info['id']] = m
     elif etype == 'message.part.updated':
         part = props.get('part') or {}
         pid = part.get('id')
@@ -85,6 +93,7 @@ def apply_event(state, evt, opencode_session_id):
                     'status': st.get('status'),
                     'input': st.get('input'),
                     'result': st.get('output') if st.get('output') is not None else st.get('result'),
+                    'durationMs': tool_duration_ms(st),
                 }
                 return 'changed'
     elif etype == 'session.idle':
@@ -116,14 +125,17 @@ def persist_turn(session_id, state):
     if not content:
         return
     row_id = state.get('turn_msg_id') or ('msg_' + secrets.token_hex(6))
+    meta = public_meta(aggregate_metas(list(state.get('meta_by_msg', {}).values())))
+    meta_json = json.dumps(meta) if meta else None
     try:
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                "VALUES (%s, %s, 'assistant', %s) "
-                "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
-                (row_id, session_id, json.dumps(content)),
+                "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
+                "VALUES (%s, %s, 'assistant', %s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, "
+                "  meta = COALESCE(EXCLUDED.meta, ai_chat_messages.meta)",
+                (row_id, session_id, json.dumps(content), meta_json),
             )
     except Exception as e:
         # Don't break the listener/stream on a DB hiccup — but no longer silent.

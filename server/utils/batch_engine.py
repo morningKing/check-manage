@@ -31,6 +31,7 @@ from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from utils.workspace import create_session_workspace
+from utils.ai_message_meta import meta_from_info, public_meta, tool_duration_ms
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +522,7 @@ class BatchWorker:
                     'status': st.get('status'),
                     'input': st.get('input'),
                     'result': st.get('output'),
+                    'durationMs': tool_duration_ms(st),
                 })
         return out
 
@@ -548,23 +550,25 @@ class BatchWorker:
                 raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
             except Exception:
                 raw = []
-            rows = [('user', [{'type': 'text', 'text': prompt}])]
+            rows = [('user', [{'type': 'text', 'text': prompt}], None)]
             for m in raw:
                 if (m.get('info') or {}).get('role') != 'assistant':
                     continue
                 content = self._content_from_parts(m.get('parts'))
                 if content:
-                    rows.append(('assistant', content))
+                    meta = public_meta(meta_from_info(m.get('info')))
+                    rows.append(('assistant', content, meta))
             if len(rows) == 1:   # REST gave nothing usable — fall back to final msg
                 parts = (assistant_msg or {}).get('content') or []
-                rows.append(('assistant', parts if parts else [{'type': 'text', 'text': ''}]))
+                rows.append(('assistant', parts if parts else [{'type': 'text', 'text': ''}], None))
             with get_db() as conn:
                 with conn.cursor() as cur:
-                    for role, content in rows:
+                    for role, content, meta in rows:
                         cur.execute(
-                            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                            "VALUES (%s, %s, %s, %s::jsonb)",
-                            (str(_uuid.uuid4()), session_id, role, _json.dumps(content)),
+                            "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
+                            "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb)",
+                            (str(_uuid.uuid4()), session_id, role, _json.dumps(content),
+                             _json.dumps(meta) if meta else None),
                         )
                 conn.commit()
         except Exception:
