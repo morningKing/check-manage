@@ -1,7 +1,15 @@
 """Compute the changed files in a session workspace via `git status`.
 
 OpenCode's native /session/{id}/diff returns nothing for the clone+edit flow,
-so we read git status of the workspace's git repos directly. Read-only.
+so we read git status of the workspace's git repos directly.
+
+Mostly read-only, with ONE deliberate side effect: a pulled 代码仓 (a nested git
+repo) that has no baseline commit yet — an unborn HEAD, e.g. a clone whose .git
+history was stripped, or source pulled without history — gets a one-time
+"baseline" commit so its content is treated as the INITIAL STATE rather than a
+pile of "新增". After that, only the user's real subsequent edits/additions show
+(identical to a real `git clone` with history). The workspace ROOT repo is never
+auto-committed — its untracked files are the agent's real outputs we want shown.
 """
 import os
 import subprocess
@@ -108,6 +116,40 @@ def _prioritize_and_cap(changes):
     return changes[:MAX_CHANGES], truncated
 
 
+def _collapse_added_floods(changes):
+    """Collapse a flood of brand-new 'added' files that share an immediate parent
+    directory into one expandable `dir/` entry.
+
+    git only folds untracked *sub*directories; files at a repo's TOP level (an
+    unborn-HEAD clone, a freshly `git init`'d project, or a pull whose files
+    aren't committed) are listed individually as `?? f.py`. Without this, a whole
+    pulled code repo floods the 变更文件 panel as N 'added' files — the reported
+    "拉取下来的代码仓所有文件都是新增状态" bug. We catch it the same way folded
+    subdirectories are handled (collapse to `dir/` + count, expandable on click).
+
+    Modified/deleted entries and already-collapsed `kind='dir'` entries pass
+    through untouched, so the user's real edits stay visible. Files sitting
+    directly at the workspace root (no parent directory) are left individual —
+    they're usually a handful of deliverables, not a pulled repo."""
+    groups = {}
+    passthrough = []
+    for c in changes:
+        if c['status'] == 'added' and c.get('kind') != 'dir':
+            path = c['path']
+            parent = path.rsplit('/', 1)[0] if '/' in path else ''
+            groups.setdefault(parent, []).append(c)
+        else:
+            passthrough.append(c)
+    out = list(passthrough)
+    for parent, items in groups.items():
+        if parent and len(items) > UNTRACKED_DIR_EXPAND_LIMIT:
+            out.append({'path': parent + '/', 'status': 'added',
+                        'kind': 'dir', 'count': len(items)})
+        else:
+            out.extend(items)
+    return out
+
+
 def _run_git(args, timeout=20):
     """Run git and return (returncode, stdout_text), decoding stdout as UTF-8
     (git's encoding for -z paths).
@@ -135,6 +177,41 @@ def _list_untracked_files(repo, dirpath):
     return [e[3:] for e in stdout.split('\0') if e and e[:2] == '??']
 
 
+def _ensure_pulled_repo_baseline(repos, workspace_path):
+    """Give every pulled 代码仓 (nested git repo) a baseline so its content is the
+    INITIAL STATE, not a flood of "新增".
+
+    A real `git clone` keeps history, so its HEAD already IS the baseline and we
+    leave it alone. But a repo pulled without history (clone with .git stripped +
+    re-`git init`, source extracted then init'd, …) has an *unborn* HEAD — git
+    can't tell baseline from new, so every file shows as untracked/added. For
+    those we make a one-time baseline commit (isolated identity, doesn't touch
+    the agent's global git config), after which only real subsequent changes
+    appear — exactly like a clone with history.
+
+    The workspace ROOT repo is skipped: it always has its committed `.gitignore`
+    (so it's never unborn anyway), and its untracked files are the agent's real
+    outputs we DO want to surface."""
+    ws_real = os.path.realpath(workspace_path)
+    for repo in repos:
+        if os.path.realpath(repo) == ws_real:
+            continue  # never auto-commit the workspace root tracking repo
+        try:
+            rc, _ = _run_git(['git', '-C', repo, 'rev-parse', '--verify', 'HEAD'])
+            if rc == 0:
+                continue  # already has a baseline (e.g. a clone with history)
+            rc, out = _run_git(['git', '-C', repo, 'status', '--porcelain', '-z'])
+            if rc != 0 or not out.replace('\0', '').strip():
+                continue  # nothing to baseline
+            _run_git(['git', '-C', repo, 'add', '-A'])
+            _run_git(['git', '-C', repo,
+                      '-c', 'user.name=check-manage',
+                      '-c', 'user.email=check-manage@local',
+                      'commit', '-q', '-m', 'baseline (auto): pulled repo initial state'])
+        except Exception:
+            continue  # best-effort: a failed baseline just leaves it as-is
+
+
 def git_changes(workspace_path):
     """Return (changes, truncated, ok).
 
@@ -146,6 +223,9 @@ def git_changes(workspace_path):
     changes = []
     ok = True
     repos = _find_git_repos(workspace_path)
+    # Treat pulled 代码仓 without history as the initial state (one-time baseline)
+    # before scanning, so they don't show up as a flood of "新增".
+    _ensure_pulled_repo_baseline(repos, workspace_path)
     # If the workspace root is also a repo (new sessions: we git init it on
     # creation) and nested clones exist below it, the outer's `git status`
     # will see each nested clone as a single untracked dir entry. Suppress
@@ -206,6 +286,9 @@ def git_changes(workspace_path):
             i += 1
     # The panel lists only additions/modifications; deletions are noise here.
     changes = [c for c in changes if c['status'] != 'deleted']
+    # Collapse top-level 'added' floods (an unborn-HEAD / uncommitted pulled repo
+    # lists every file individually since git only folds untracked subdirs).
+    changes = _collapse_added_floods(changes)
     capped, truncated = _prioritize_and_cap(changes)
     return capped, truncated, ok
 
