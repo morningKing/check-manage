@@ -129,6 +129,11 @@ class _OpenCodeFacade:
         _persist_conversation to store the FULL conversation incl. tool parts."""
         return self._client().get_messages(oc_session_id, directory=directory) or []
 
+    def list_agents(self, directory: str = '') -> list:
+        """OpenCode agents available in `directory`'s scope (global + project),
+        each {'name','mode',...}. Used to validate a batch's chosen agent."""
+        return self._client().list_agents(directory=directory) or []
+
 
 # The module-level name that tests monkeypatch.
 opencode_client = _OpenCodeFacade()
@@ -412,6 +417,14 @@ class BatchWorker:
             prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
             if prov_warn:
                 self._persist_provision_notice(sid, prov_warn)
+            # Fail FAST on an unusable agent. OpenCode silently produces nothing
+            # for an unknown / subagent-as-primary agent, which would otherwise
+            # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).
+            agent_err = self._check_agent(agent, ws)
+            if agent_err:
+                self._mark_failed(sid, batch_id, error=agent_err)
+                self._notify_scan(session_row, None, ok=False)
+                return
             oc_session_id = opencode_client.create_session(directory=ws)
             self._set_opencode_id(sid, oc_session_id)
             opencode_client.send_message(oc_session_id, prompt, directory=ws,
@@ -457,6 +470,29 @@ class BatchWorker:
             on_child_finished(session_row, final_msg, ok=ok)
         except Exception:
             traceback.print_exc()
+
+    @staticmethod
+    def _check_agent(agent, directory):
+        """Return an error string if `agent` can't be used as the session's
+        primary agent (unknown, or a subagent), else None. Empty agent (default)
+        is always OK. If OpenCode can't be queried we don't block (return None) —
+        create_session will surface a real connectivity error instead."""
+        agent = (agent or '').strip()
+        if not agent:
+            return None
+        try:
+            agents = opencode_client.list_agents(directory=directory) or []
+            names = {a.get('name') for a in agents}
+            primary = {a.get('name') for a in agents if a.get('mode') == 'primary'}
+        except Exception:
+            return None
+        if agent in primary:
+            return None
+        if agent in names:
+            return (f'Agent「{agent}」是 subagent，不能作为批任务的主 Agent。'
+                    f'请改用 primary Agent，或在 prompt 里用 @{agent} 调用它。')
+        return (f'Agent「{agent}」不存在（OpenCode 未找到）。'
+                f'请确认该 Agent 已在 OpenCode 安装，或通过「预置仓库」提供给子任务。')
 
     @staticmethod
     def _provision_workspace(ws: str, repo, ref):

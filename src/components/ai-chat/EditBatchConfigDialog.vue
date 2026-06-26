@@ -53,7 +53,9 @@ function prefill() {
 }
 
 onMounted(async () => {
-  try { const r = await listAgents(); agents.value = [...r.agents, ...r.subagents] } catch { /* non-fatal */ }
+  // Only PRIMARY agents can be a session's agent (a subagent makes OpenCode
+  // silently produce nothing → batch hangs). Use @mention to delegate instead.
+  try { const r = await listAgents(); agents.value = r.agents } catch { /* non-fatal */ }
   try { models.value = (await listModels()).models } catch { /* non-fatal */ }
   prefill()
 })
