@@ -258,6 +258,9 @@ class BatchWorker:
     MAX_CONCURRENT = 3
     POLL_INTERVAL_SEC = 2
     SESSION_TIMEOUT_SEC = 1800
+    # How long to wait for the live listener to persist the turn before the
+    # worker falls back to a full REST read (keeps the two from double-writing).
+    FINALIZE_WAIT_SEC = 5
     # Hard ceiling above. STALL is a softer guard: if the OpenCode turn produces
     # no new output for this long (and never reports finished), treat it as a
     # stalled/half-open turn and fail it — instead of hanging the whole
@@ -442,12 +445,21 @@ class BatchWorker:
                 self._notify_scan(session_row, None, ok=False)
                 return
             oc_session_id = opencode_client.create_session(directory=ws)
-            self._set_opencode_id(sid, oc_session_id)
+            self._set_opencode_id(sid, oc_session_id, ws)
+            # Persist the prompt + start the live persistence listener BEFORE
+            # sending, so opening this child mid-run shows the work in real time
+            # (same SSE + incremental-persist path as interactive sessions).
+            self._persist_user_prompt(sid, prompt)
+            from utils.chat_persist import ensure_listener
+            ensure_listener(sid, oc_session_id, ws)
             opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                          agent=agent, model=model)
 
             preview, final_msg = self._await_finished(oc_session_id, directory=ws)
-            self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
+            # The listener persists the assistant turn live; fall back to a full
+            # REST read only if nothing landed (e.g. SSE was unavailable).
+            self._finalize_persistence(sid, prompt, oc_session_id, final_msg, ws,
+                                       had_notice=bool(prov_warn))
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
         except _SessionTimeout as e:
@@ -554,15 +566,69 @@ class BatchWorker:
                 return (row[0], row[1] or '', row[2] or '', row[3] or '', row[4] or '') \
                     if row else None
 
-    def _set_opencode_id(self, session_id: str, oc_session_id: str):
+    def _set_opencode_id(self, session_id: str, oc_session_id: str, ws: str = None):
+        """Record the OpenCode session id and (so the SSE proxy can scope to it
+        for live viewing) the workspace path on the child session row."""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                if ws is not None:
+                    cur.execute(
+                        "UPDATE ai_chat_sessions SET opencode_session_id = %s, "
+                        "workspace_path = %s WHERE id = %s",
+                        (oc_session_id, ws, session_id),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE ai_chat_sessions SET opencode_session_id = %s "
+                        "WHERE id = %s",
+                        (oc_session_id, session_id),
+                    )
+            conn.commit()
+
+    def _persist_user_prompt(self, session_id: str, prompt: str):
+        """Persist the child's prompt as a user message (deterministic id, write
+        once) so the thread shows the question while the turn runs."""
+        import json as _json
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                        "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
+                        (f'{session_id}:user', session_id,
+                         _json.dumps([{'type': 'text', 'text': prompt}])),
+                    )
+                conn.commit()
+        except Exception:
+            traceback.print_exc()
+
+    def _assistant_count(self, session_id: str) -> int:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE ai_chat_sessions SET opencode_session_id = %s "
-                    "WHERE id = %s",
-                    (oc_session_id, session_id),
+                    "SELECT count(*) FROM ai_chat_messages "
+                    "WHERE session_id = %s AND role = 'assistant'",
+                    (session_id,),
                 )
-            conn.commit()
+                return cur.fetchone()[0]
+
+    def _finalize_persistence(self, sid, prompt, oc_session_id, final_msg, ws,
+                              had_notice):
+        """Ensure the turn is persisted. The live listener normally does it
+        incrementally; wait briefly for it, then fall back to a full REST read if
+        nothing assistant-side landed (so a missed SSE never loses the answer).
+        `had_notice` accounts for the provision-failure notice (also an assistant
+        row) so it isn't mistaken for the turn."""
+        baseline = 1 if had_notice else 0
+        deadline = time.time() + self.FINALIZE_WAIT_SEC
+        while time.time() < deadline:
+            try:
+                if self._assistant_count(sid) > baseline:
+                    return
+            except Exception:
+                break
+            time.sleep(0.5)
+        self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
 
     def _await_finished(self, oc_session_id: str,
                         directory: str = '') -> tuple[str | None, dict | None]:
@@ -678,24 +744,31 @@ class BatchWorker:
                 raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
             except Exception:
                 raw = []
-            rows = [('user', [{'type': 'text', 'text': prompt}], None)]
+            assistant_rows = []
             for m in raw:
                 if (m.get('info') or {}).get('role') != 'assistant':
                     continue
                 content = self._content_from_parts(m.get('parts'))
                 if content:
                     meta = public_meta(meta_from_info(m.get('info')))
-                    rows.append(('assistant', content, meta))
-            if len(rows) == 1:   # REST gave nothing usable — fall back to final msg
+                    assistant_rows.append((content, meta))
+            if not assistant_rows:   # REST gave nothing usable — fall back to final msg
                 parts = (assistant_msg or {}).get('content') or []
-                rows.append(('assistant', parts if parts else [{'type': 'text', 'text': ''}], None))
+                assistant_rows.append((parts if parts else [{'type': 'text', 'text': ''}], None))
             with get_db() as conn:
                 with conn.cursor() as cur:
-                    for role, content, meta in rows:
+                    # user prompt — idempotent with the early _persist_user_prompt row
+                    cur.execute(
+                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                        "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
+                        (f'{session_id}:user', session_id,
+                         _json.dumps([{'type': 'text', 'text': prompt}])),
+                    )
+                    for content, meta in assistant_rows:
                         cur.execute(
                             "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
-                            "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb)",
-                            (str(_uuid.uuid4()), session_id, role, _json.dumps(content),
+                            "VALUES (%s, %s, 'assistant', %s::jsonb, %s::jsonb)",
+                            (str(_uuid.uuid4()), session_id, _json.dumps(content),
                              _json.dumps(meta) if meta else None),
                         )
                 conn.commit()

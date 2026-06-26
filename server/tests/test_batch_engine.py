@@ -346,6 +346,35 @@ def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     assert (agent, repo, ref) == ('my-agent', 'https://example.com/agents.git', 'main')
 
 
+def test_finalize_persistence_skips_fallback_when_listener_persisted(monkeypatch):
+    """When the live listener already persisted the turn, the worker must NOT
+    also do a full REST persist (that would duplicate the conversation)."""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    monkeypatch.setattr(w, '_assistant_count', lambda sid: 2)   # listener wrote a row
+    calls = {'n': 0}
+    monkeypatch.setattr(w, '_persist_conversation',
+                        lambda *a, **k: calls.__setitem__('n', calls['n'] + 1))
+    w._finalize_persistence('sid', 'p', 'oc', None, 'ws', had_notice=False)
+    assert calls['n'] == 0
+
+
+def test_finalize_persistence_falls_back_when_nothing_persisted(monkeypatch):
+    """If the listener persisted nothing (e.g. SSE unavailable), the worker does
+    a full REST persist so the answer is never lost. had_notice accounts for the
+    provision-failure notice row."""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    w.FINALIZE_WAIT_SEC = 0.1
+    # only the provision notice exists (count == baseline) -> still a fallback
+    monkeypatch.setattr(w, '_assistant_count', lambda sid: 1)
+    calls = {'n': 0}
+    monkeypatch.setattr(w, '_persist_conversation',
+                        lambda *a, **k: calls.__setitem__('n', calls['n'] + 1))
+    w._finalize_persistence('sid', 'p', 'oc', None, 'ws', had_notice=True)
+    assert calls['n'] == 1
+
+
 def test_progress_signature_counts_tool_activity():
     """A delegating subagent shows as a long-running `task` tool with no new
     text — the signature must still change as the tool advances, else the stall

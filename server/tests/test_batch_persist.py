@@ -65,8 +65,11 @@ def test_persist_conversation_stores_user_and_each_assistant():
     w = eng.BatchWorker()
     with patch.object(eng, 'opencode_client', oc), patch.object(eng, 'get_db', fake_db):
         w._persist_conversation('sess-1', '我的问题', 'oc-1', {'content': [{'type': 'text', 'text': '最终答案'}]})
-    roles = [p[2] for p in inserts]            # params = (id, session_id, role, content_json)
-    assert roles == ['user', 'assistant', 'assistant']   # user + 2 assistant
+    # user row uses a deterministic id ('<sid>:user'); assistants are separate inserts
+    user_inserts = [p for p in inserts if str(p[0]).endswith(':user')]
+    assistant_inserts = [p for p in inserts if not str(p[0]).endswith(':user')]
+    assert len(user_inserts) == 1                # user prompt
+    assert len(assistant_inserts) == 2           # 2 assistant messages
     import json
-    a1 = json.loads(inserts[1][3])
+    a1 = json.loads(assistant_inserts[0][2])     # assistant params: (id, sid, content, meta)
     assert a1[0]['type'] == 'tool_use' and a1[0]['name'] == 'read'
