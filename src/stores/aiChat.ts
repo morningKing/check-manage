@@ -151,6 +151,18 @@ export const useAiChatStore = defineStore('aiChat', {
       this._openStream(id)
     },
 
+    // Re-fetch the persisted messages for `id` and adopt them. Used to live-poll
+    // a running batch child (whose work is persisted incrementally server-side
+    // but isn't pushed over SSE). No-op if the session is no longer active or is
+    // streaming live (interactive sessions update via SSE, not polling).
+    async reloadMessages(id: string) {
+      if (this.activeSessionId !== id || this.streaming[id]) return
+      try {
+        const history = await getMessages(id)
+        this.messages[id] = history.messages
+      } catch { /* non-fatal */ }
+    },
+
     async loadFiles(id: string) {
       try {
         const { files } = await listFiles(id)

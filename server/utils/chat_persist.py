@@ -208,3 +208,13 @@ def stop_listener(sid):
     daemon thread itself exits once its OpenCode stream ends/errors."""
     with _lock:
         _listeners.pop(sid, None)
+
+
+def has_listener(sid):
+    """True if a live background persistence listener owns this session. The SSE
+    proxy uses this to AVOID persisting itself — otherwise a browser that opens a
+    turn mid-stream captures a different turn_msg_id than the listener and writes
+    a duplicate partial row (seen when opening a running batch child)."""
+    with _lock:
+        t = _listeners.get(sid)
+        return bool(t and t.is_alive())

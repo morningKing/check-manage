@@ -44,6 +44,7 @@ from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir
 from utils.mcp_servers import enabled_mcp_config
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
+    has_listener,
 )
 from utils.session_token import generate_token, revoke_token
 from utils.data_export import (
@@ -552,11 +553,13 @@ def sse_events(sid):
                     continue
 
                 if apply_event(state, evt, opencode_session_id) == 'idle':
-                    # Only persist when we captured the turn's message id, so the
-                    # row id is deterministic and dedups with the background
-                    # listener. Without it, defer to the listener (the
-                    # authoritative writer) to avoid a duplicate random-id row.
-                    if state['turn_msg_id']:
+                    # Defer to the background listener when one owns this session
+                    # (always true while a turn runs — interactive send and batch
+                    # both start one). A browser that opened the turn mid-stream
+                    # captured a different turn_msg_id, so persisting here would
+                    # write a duplicate partial row. Only persist as a fallback
+                    # when no listener is active AND we captured the turn id.
+                    if state['turn_msg_id'] and not has_listener(sid):
                         persist_turn(sid, state)
                     state = new_state()
 

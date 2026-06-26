@@ -302,6 +302,31 @@ async function scrollToBottom() {
 watch(() => messages.value.map(m => m.content.map(c => (c as any).text || '').join()).join('|'), scrollToBottom)
 watch(reasoning, scrollToBottom)
 
+// Live view for a running batch child: its work is persisted incrementally on
+// the server but not pushed over SSE, so poll its messages while it runs. The
+// watch keys on activeId AND the batch children's statuses, so it (re)starts
+// when the child's status becomes known/running and stops on completion (with a
+// final refresh). Keying only on activeId would miss the case where
+// activeSessions loads after the child is opened.
+let liveTimer: ReturnType<typeof setInterval> | null = null
+function stopLivePoll() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null } }
+watch(
+  [activeId, () => batches.activeSessions.map((s) => `${s.id}:${s.status}`).join('|')],
+  () => {
+    stopLivePoll()
+    const id = activeId.value
+    if (!id) return
+    const child = batches.activeSessions.find((s) => s.id === id)
+    if (!child) return                       // not a child of the selected batch
+    store.reloadMessages(id)                  // reflect latest (covers completion)
+    if (child.status === 'running') {
+      liveTimer = setInterval(() => store.reloadMessages(id), 2500)
+    }
+  },
+  { immediate: true },
+)
+onUnmounted(stopLivePoll)
+
 onMounted(async () => {
   try {
     await store.loadSessions()
