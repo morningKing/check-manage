@@ -133,7 +133,7 @@ export const useAiChatStore = defineStore('aiChat', {
       return meta.id
     },
 
-    async openSession(id: string) {
+    async openSession(id: string, opts: { stream?: boolean } = {}) {
       // Always (re)load palette items so a transient backend hiccup during the
       // first load doesn't leave the "/" dropdown empty forever — earlier path
       // only ran this once and the early-return then masked the failure.
@@ -148,7 +148,12 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadFiles(id)
       this.loadChanges(id)
       this.loadPaletteItems(id)
-      this._openStream(id)
+      // Batch children are driven by the worker and viewed via polling
+      // (reloadMessages). Opening an SSE stream for them would let the live
+      // _upsertAssistantPart write into the poll-replaced message array at stale
+      // indices — corrupting/blanking the tool bubbles. So poll-only here.
+      if (opts.stream === false) this._closeStream()
+      else this._openStream(id)
     },
 
     // Re-fetch the persisted messages for `id` and adopt them. Used to live-poll
@@ -159,7 +164,13 @@ export const useAiChatStore = defineStore('aiChat', {
       if (this.activeSessionId !== id || this.streaming[id]) return
       try {
         const history = await getMessages(id)
-        this.messages[id] = history.messages
+        // Never let a transient short/empty poll wipe what's already rendered —
+        // the conversation only grows server-side (idempotent upsert), so a
+        // shorter result is a hiccup, not a real shrink. (This is why the
+        // bubbles could momentarily vanish during a live batch run.)
+        if (history.messages.length >= (this.messages[id]?.length ?? 0)) {
+          this.messages[id] = history.messages
+        }
       } catch { /* non-fatal */ }
     },
 
