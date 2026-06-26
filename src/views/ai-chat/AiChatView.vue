@@ -327,6 +327,21 @@ watch(
 )
 onUnmounted(stopLivePoll)
 
+// When viewing a batch child, surface the batch's Agent/model + run status
+// (the bottom composer selectors are per-interactive-session and stay blank for
+// batch children, which is why they didn't show before).
+const activeBatchInfo = computed(() => {
+  const id = activeId.value
+  if (!id) return null
+  const child = batches.activeSessions.find((s) => s.id === id)
+  if (!child) return null
+  const b = batches.activeBatch
+  return { status: child.status, agent: b?.agent || '', model: b?.model || '' }
+})
+function batchStatusLabel(s: string) {
+  return ({ pending: '待运行', running: '正在运行', completed: '已完成', failed: '失败' } as Record<string, string>)[s] || s
+}
+
 onMounted(async () => {
   try {
     await store.loadSessions()
@@ -828,6 +843,15 @@ function onKey(e: Event) {
         </template>
       </ElScrollbar>
 
+      <!-- 批任务子会话：显示该批次的 Agent/模型与运行状态（普通会话由底部选择器自管） -->
+      <div v-if="activeBatchInfo" class="batch-bar" :class="`batch-bar--${activeBatchInfo.status}`">
+        <span class="batch-bar__status">
+          <ElIcon v-if="activeBatchInfo.status === 'running'" class="spin"><Loading /></ElIcon>
+          {{ batchStatusLabel(activeBatchInfo.status) }}
+        </span>
+        <span class="batch-bar__cfg">Agent：{{ activeBatchInfo.agent || '默认' }} · 模型：{{ activeBatchInfo.model || '默认' }}</span>
+      </div>
+
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">
         <CommandPalette :items="activePalette" :active-index="activeIndex" :prefix="mentionToken ? '@' : '/'" @select="acceptItem" />
@@ -1124,6 +1148,25 @@ function onKey(e: Event) {
   background: var(--el-fill-color-light); border-radius: 4px; font-size: 13px;
 }
 .attach-chip__x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
+.batch-bar {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  border-radius: 8px 8px 0 0;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+}
+.batch-bar__status { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.batch-bar__cfg { font-family: var(--el-font-family-mono, monospace); }
+.batch-bar--running { background: var(--el-color-danger-light-9); }
+.batch-bar--running .batch-bar__status { color: var(--el-color-danger); }
+.batch-bar--completed .batch-bar__status { color: var(--el-color-success); }
+.batch-bar--failed .batch-bar__status { color: var(--el-color-danger); }
+.batch-bar .spin { animation: spin 1s linear infinite; }
 .ai-chat__composer {
   padding: 8px 16px 18px;
   position: relative;

@@ -257,15 +257,18 @@ class _SessionTimeout(Exception):
 class BatchWorker:
     MAX_CONCURRENT = 3
     POLL_INTERVAL_SEC = 2
-    SESSION_TIMEOUT_SEC = 1800
+    # Hard per-child cap. Default 0 = NO cap: a batch child runs as long as it
+    # keeps making progress (legit long tasks / subagent delegations shouldn't be
+    # killed by an arbitrary clock). Override with AI_BATCH_SESSION_TIMEOUT_SEC.
+    SESSION_TIMEOUT_SEC = int(os.getenv('AI_BATCH_SESSION_TIMEOUT_SEC', '0'))
     # Persist the conversation at most this often off the REST poll, so a running
     # batch child can be viewed live without flooding the DB.
     PROGRESS_PERSIST_SEC = 2.5
-    # Hard ceiling above. STALL is a softer guard: if the OpenCode turn produces
-    # no new output for this long (and never reports finished), treat it as a
-    # stalled/half-open turn and fail it — instead of hanging the whole
-    # SESSION_TIMEOUT_SEC. An actively-working turn keeps changing its message
-    # text, so this only trips on a genuinely frozen session.
+    # The real safety net (kept even with no hard cap): if the turn produces NO
+    # new output AND nothing is in flight for this long, it's a half-open/frozen
+    # turn — fail it. Tool/subagent activity counts as progress (see
+    # _progress_signature / the active_tool reset in _await_finished), so a
+    # working turn never trips this; only a genuinely dead one does.
     STALL_TIMEOUT_SEC = 180
 
     def __init__(self):
@@ -381,6 +384,16 @@ class BatchWorker:
                     (limit,),
                 )
                 rows = [dict(r) for r in cur.fetchall()]
+                # Reflect "in progress" in the batch the moment a child starts —
+                # otherwise the batch stays 'pending' (sidebar shows 待运行) until
+                # the FIRST child reaches a terminal state, even while children run.
+                batch_ids = list({r['batch_id'] for r in rows if r.get('batch_id')})
+                if batch_ids:
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET status = 'running' "
+                        "WHERE id = ANY(%s) AND status = 'pending'",
+                        (batch_ids,),
+                    )
             conn.commit()
         return rows
 
@@ -617,14 +630,15 @@ class BatchWorker:
         while the turn runs, so callers can persist the conversation live off the
         same REST poll. Best-effort: an error there never aborts the wait.
         """
-        deadline = time.time() + self.SESSION_TIMEOUT_SEC
+        cap = self.SESSION_TIMEOUT_SEC
+        deadline = (time.time() + cap) if cap and cap > 0 else None   # None = no hard cap
         last_preview = None
         last_message = None
         last_sig = None
         last_progress_at = time.time()
         last_persist_at = 0.0
         first = True
-        while time.time() < deadline:
+        while deadline is None or time.time() < deadline:
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
             if on_progress and time.time() - last_persist_at >= self.PROGRESS_PERSIST_SEC:
