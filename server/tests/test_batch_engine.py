@@ -346,6 +346,70 @@ def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     assert (agent, repo, ref) == ('my-agent', 'https://example.com/agents.git', 'main')
 
 
+def test_progress_signature_counts_tool_activity():
+    """A delegating subagent shows as a long-running `task` tool with no new
+    text — the signature must still change as the tool advances, else the stall
+    watchdog falsely fires."""
+    from utils.batch_engine import BatchWorker
+    sig = BatchWorker._progress_signature
+    pending = [{'role': 'assistant', 'content': [
+        {'type': 'tool_use', 'name': 'task', 'status': 'pending', 'output_len': 0}]}]
+    running = [{'role': 'assistant', 'content': [
+        {'type': 'tool_use', 'name': 'task', 'status': 'running', 'output_len': 0}]}]
+    grew = [{'role': 'assistant', 'content': [
+        {'type': 'tool_use', 'name': 'task', 'status': 'running', 'output_len': 120}]}]
+    # status change and output growth both register as progress
+    assert sig(pending) != sig(running)
+    assert sig(running) != sig(grew)
+
+
+def test_await_finished_no_stall_while_tool_running(monkeypatch):
+    """A turn that's mid tool-call (subagent) with frozen TEXT must NOT be killed
+    by the stall watchdog — only the 30-min SESSION_TIMEOUT bounds it."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 5
+    running = {'role': 'assistant', 'finished': False, 'finish': 'tool-calls',
+               'running_tool': True,
+               'content': [{'type': 'tool_use', 'name': 'task', 'status': 'running', 'output_len': 0}]}
+    done = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+            'running_tool': False, 'content': [{'type': 'text', 'text': 'done'}]}
+    seq = [[running]] * 60 + [[done]]   # ~1.2s of frozen-text running > STALL 0.5s
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    preview, msg = w._await_finished('oc')
+    assert msg['finished'] is True          # completed, NOT stalled
+
+
+def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
+    """A genuinely frozen turn (no text, no tool in flight) still trips the stall."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    from utils.batch_engine import _SessionTimeout
+    import pytest as _pytest
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 5
+    idle = {'role': 'assistant', 'finished': False, 'finish': None,
+            'running_tool': False, 'content': []}
+    fake = MagicMock()
+    fake.list_messages.return_value = [idle]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc')
+    assert 'stalled' in str(ei.value)
+
+
 def test_dispatch_tick_survives_claim_error():
     """A transient error while claiming must NOT propagate out of the dispatcher.
 
