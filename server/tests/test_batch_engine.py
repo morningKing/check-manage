@@ -346,33 +346,28 @@ def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     assert (agent, repo, ref) == ('my-agent', 'https://example.com/agents.git', 'main')
 
 
-def test_finalize_persistence_skips_fallback_when_listener_persisted(monkeypatch):
-    """When the live listener already persisted the turn, the worker must NOT
-    also do a full REST persist (that would duplicate the conversation)."""
-    from utils.batch_engine import BatchWorker
-    w = BatchWorker()
-    monkeypatch.setattr(w, '_assistant_count', lambda sid: 2)   # listener wrote a row
-    calls = {'n': 0}
-    monkeypatch.setattr(w, '_persist_conversation',
-                        lambda *a, **k: calls.__setitem__('n', calls['n'] + 1))
-    w._finalize_persistence('sid', 'p', 'oc', None, 'ws', had_notice=False)
-    assert calls['n'] == 0
-
-
-def test_finalize_persistence_falls_back_when_nothing_persisted(monkeypatch):
-    """If the listener persisted nothing (e.g. SSE unavailable), the worker does
-    a full REST persist so the answer is never lost. had_notice accounts for the
-    provision-failure notice row."""
-    from utils.batch_engine import BatchWorker
-    w = BatchWorker()
-    w.FINALIZE_WAIT_SEC = 0.1
-    # only the provision notice exists (count == baseline) -> still a fallback
-    monkeypatch.setattr(w, '_assistant_count', lambda sid: 1)
-    calls = {'n': 0}
-    monkeypatch.setattr(w, '_persist_conversation',
-                        lambda *a, **k: calls.__setitem__('n', calls['n'] + 1))
-    w._finalize_persistence('sid', 'p', 'oc', None, 'ws', had_notice=True)
-    assert calls['n'] == 1
+def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
+    """The worker persists the conversation off its own REST poll (so the live
+    view works without SSE): on_progress is invoked while the turn runs."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.POLL_INTERVAL_SEC = 0.02
+    w.PROGRESS_PERSIST_SEC = 0
+    running = {'role': 'assistant', 'finished': False, 'finish': 'tool-calls',
+               'running_tool': True, 'content': []}
+    done = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+            'running_tool': False, 'content': [{'type': 'text', 'text': 'ok'}]}
+    seq = [[running]] * 3 + [[done]]
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1); calls['i'] += 1; return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    progress = {'n': 0}
+    w._await_finished('oc', on_progress=lambda: progress.__setitem__('n', progress['n'] + 1))
+    assert progress['n'] >= 2   # persisted live during the run, not just at the end
 
 
 def test_progress_signature_counts_tool_activity():
