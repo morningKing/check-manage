@@ -113,16 +113,32 @@ class _OpenCodeFacade:
             if info.get('role') != 'assistant':
                 continue
             parts = m.get('parts') or m.get('content') or []
-            content = [{'type': 'text', 'text': p.get('text', '')}
-                       for p in parts
-                       if p.get('type') == 'text' and p.get('text')]
+            content: list = []
+            running_tool = False
+            for p in parts:
+                t = p.get('type')
+                if t == 'text' and p.get('text'):
+                    content.append({'type': 'text', 'text': p.get('text', '')})
+                elif t == 'tool':
+                    st = p.get('state') or {}
+                    status = st.get('status')
+                    out_val = st.get('output')
+                    # Keep tool parts visible to progress tracking (a delegating
+                    # subagent shows up as a long-running `task` tool — invisible
+                    # if we only track text → false "stalled" kill).
+                    content.append({'type': 'tool_use', 'name': p.get('tool'),
+                                    'status': status,
+                                    'output_len': len(out_val) if isinstance(out_val, str) else 0})
+                    if status in (None, '', 'pending', 'running'):
+                        running_tool = True
             finish = info.get('finish')
             completed = (info.get('time') or {}).get('completed')
             finished = bool(completed) and finish not in (None, '') \
                 and finish not in self._CONTINUATION_FINISH
-            out.append({'role': 'assistant', 'finished': finished,
-                        'content': content})
-        return out or [{'role': 'assistant', 'finished': False, 'content': []}]
+            out.append({'role': 'assistant', 'finished': finished, 'content': content,
+                        'finish': finish, 'running_tool': running_tool})
+        return out or [{'role': 'assistant', 'finished': False, 'content': [],
+                        'finish': None, 'running_tool': False}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
@@ -565,18 +581,25 @@ class BatchWorker:
         while time.time() < deadline:
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
+            active_tool = False
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
                     last_preview = self._preview_from(m)
                     last_message = m
                     if m.get('finished'):
                         return last_preview, last_message
+                    # The model is mid tool-call (incl. delegating to a subagent
+                    # via the `task` tool) — it's working, not stalled.
+                    if m.get('running_tool') or m.get('finish') in ('tool-calls', 'tool_use'):
+                        active_tool = True
                     break
             # No-progress watchdog: the signature changes whenever the turn emits
-            # a new message or more text. If it stays frozen past STALL_TIMEOUT_SEC
-            # the turn is half-open on OpenCode's side — fail rather than hang.
+            # a new message, more text, or any tool activity. If it stays frozen
+            # past STALL_TIMEOUT_SEC AND nothing is in flight, the turn is half-open
+            # on OpenCode's side — fail rather than hang. A running tool/subagent is
+            # NOT a stall (only the 30-min SESSION_TIMEOUT bounds those).
             sig = self._progress_signature(msgs)
-            if first or sig != last_sig:
+            if first or sig != last_sig or active_tool:
                 first = False
                 last_sig = sig
                 last_progress_at = time.time()
@@ -589,16 +612,23 @@ class BatchWorker:
     @staticmethod
     def _progress_signature(msgs: list) -> tuple:
         """A cheap proxy for forward progress: (#assistant messages, total text
-        length). Changes whenever the model emits a new message or more text."""
+        length, tool activity). Changes whenever the model emits a new message,
+        more text, OR a tool advances (new tool call / status change / growing
+        output) — so a delegating subagent (a long-running `task` tool) counts as
+        progress instead of looking 'stalled'."""
         count = 0
         total_text = 0
+        tool_sig: list = []
         for m in msgs:
             if m.get('role') == 'assistant':
                 count += 1
                 for p in (m.get('content') or []):
                     if p.get('type') == 'text':
                         total_text += len(p.get('text') or '')
-        return (count, total_text)
+                    elif p.get('type') == 'tool_use':
+                        tool_sig.append((p.get('name'), p.get('status'),
+                                         p.get('output_len') or 0))
+        return (count, total_text, tuple(tool_sig))
 
     @staticmethod
     def _content_from_parts(parts) -> list:
