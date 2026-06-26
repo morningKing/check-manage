@@ -291,7 +291,7 @@ def rename_session(sid):
 
 
 def _load_session_for_user(session_id: str, user_id: str):
-    """Return (id, user_id, opencode_session_id, status, workspace_path) or None.
+    """Return (id, user_id, opencode_session_id, status, workspace_path, batch_id) or None.
 
     On a successful load, also bump `last_active_at` and extend `token_expires_at`
     by `AI_SESSION_TTL_HOURS` — every user action keeps the session's MCP token
@@ -301,7 +301,7 @@ def _load_session_for_user(session_id: str, user_id: str):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, user_id, opencode_session_id, status, workspace_path "
+            "SELECT id, user_id, opencode_session_id, status, workspace_path, batch_id "
             "FROM ai_chat_sessions "
             "WHERE id = %s AND user_id = %s",
             (session_id, user_id),
@@ -553,13 +553,12 @@ def sse_events(sid):
                     continue
 
                 if apply_event(state, evt, opencode_session_id) == 'idle':
-                    # Defer to the background listener when one owns this session
-                    # (always true while a turn runs — interactive send and batch
-                    # both start one). A browser that opened the turn mid-stream
-                    # captured a different turn_msg_id, so persisting here would
-                    # write a duplicate partial row. Only persist as a fallback
-                    # when no listener is active AND we captured the turn id.
-                    if state['turn_msg_id'] and not has_listener(sid):
+                    # Don't persist for a batch child — its worker is the sole
+                    # writer (REST, keyed on message ids); persisting here (a
+                    # merged turn keyed on a mid-stream turn_msg_id) would
+                    # duplicate. Otherwise defer to the background listener when
+                    # one owns the session, else persist as a fallback.
+                    if state['turn_msg_id'] and not sess[5] and not has_listener(sid):
                         persist_turn(sid, state)
                     state = new_state()
 
