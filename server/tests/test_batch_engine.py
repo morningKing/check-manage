@@ -65,6 +65,18 @@ def _seed_batch(db_conn, user_id, n_sessions=3):
 # Test 1: claim respects limit
 # ---------------------------------------------------------------------------
 
+def test_claim_marks_batch_running(user_id, db_conn):
+    """The batch flips pending -> running the moment its first child is claimed,
+    so the sidebar shows 运行中 while children run (not 待运行 until one finishes)."""
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=2)   # batch defaults to 'pending'
+    BatchWorker()._claim_pending_sessions(limit=1)
+    db_conn.rollback()   # drop our snapshot so we see the worker's committed update
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone()[0] == 'running'
+
+
 def test_claim_pending_respects_limit(user_id, db_conn):
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=5)
@@ -344,6 +356,27 @@ def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
     ctx = BatchWorker()._fetch_batch_context(bid)
     prompt, agent, model, repo, ref = ctx
     assert (agent, repo, ref) == ('my-agent', 'https://example.com/agents.git', 'main')
+
+
+def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
+    """With SESSION_TIMEOUT_SEC=0 (no hard cap, the requested 'no timeout'), a
+    working turn isn't clock-killed, but a genuinely idle/frozen turn is still
+    caught by the stall watchdog."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    from utils.batch_engine import _SessionTimeout
+    import pytest as _pytest
+    w = eng.BatchWorker()
+    w.SESSION_TIMEOUT_SEC = 0      # no hard cap
+    w.STALL_TIMEOUT_SEC = 0.3
+    w.POLL_INTERVAL_SEC = 0.02
+    idle = {'role': 'assistant', 'finished': False, 'finish': None,
+            'running_tool': False, 'content': []}
+    fake = MagicMock(); fake.list_messages.return_value = [idle]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    with _pytest.raises(_SessionTimeout) as ei:
+        w._await_finished('oc')
+    assert 'stalled' in str(ei.value)
 
 
 def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
