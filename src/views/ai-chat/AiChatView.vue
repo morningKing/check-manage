@@ -367,6 +367,13 @@ async function selectSession(id: string) {
   store.hydrateSessionModel(id)
   store.hydrateSessionAgent(id)
 }
+// Batch children are worker-driven and viewed via polling (reloadMessages).
+// Open them WITHOUT an SSE stream so we don't add an OpenCode /event
+// subscription per viewed child (Node EventEmitter cap) and so the live
+// _upsertAssistantPart can't fight the poll-replaced message array.
+async function selectBatchChild(id: string) {
+  if (id !== activeId.value) await store.openSession(id, { stream: false })
+}
 async function renameSession(id: string, current: string) {
   try {
     const res = await ElMessageBox.prompt('重命名会话', '重命名', { inputValue: current })
@@ -634,7 +641,7 @@ function onKey(e: Event) {
           <BatchGroup
             v-for="b in batches.items" :key="b.id"
             :batch="b" :active-session-id="activeId"
-            @select-child="selectSession"
+            @select-child="selectBatchChild"
           />
           <ElEmpty v-if="!batches.items.length" description="暂无批任务" :image-size="48" />
         </ElScrollbar>

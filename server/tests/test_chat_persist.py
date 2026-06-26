@@ -127,21 +127,27 @@ import threading as _threading
 import time as _time
 
 
-def test_run_listener_persists_each_idle(monkeypatch):
+def test_run_listener_persists_then_exits_on_idle(monkeypatch):
+    """The listener persists the turn on idle and then RETURNS, releasing the
+    OpenCode /event subscription (one listener per turn). A second turn fed into
+    the same iterator is left unconsumed — proving the early exit."""
     from utils import chat_persist
     saved = []
     monkeypatch.setattr(chat_persist, 'persist_turn',
                         lambda sid, state: saved.append((sid, chat_persist.build_content(state))))
-    events = [
+    it = iter([
         _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
         _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'one', 'sessionID': 'oc'}}),
         _ev('session.idle', {'sessionID': 'oc'}),
         _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc'}}),
         _ev('message.part.updated', {'part': {'id': 'p2', 'messageID': 'm2', 'type': 'text', 'text': 'two', 'sessionID': 'oc'}}),
         _ev('session.idle', {'sessionID': 'oc'}),
-    ]
-    chat_persist._run_listener('sess1', 'oc', iter(events))
-    assert [c for _, c in saved] == [[{'type': 'text', 'text': 'one'}], [{'type': 'text', 'text': 'two'}]]
+    ])
+    chat_persist._run_listener('sess1', 'oc', it)
+    # only the first turn persisted; listener returned at its idle
+    assert [c for _, c in saved] == [[{'type': 'text', 'text': 'one'}]]
+    # the second turn's events were NOT consumed (stream released on exit)
+    assert next(it)['data']['properties']['info']['id'] == 'm2'
 
 
 def test_run_listener_persists_incrementally_while_streaming(monkeypatch):

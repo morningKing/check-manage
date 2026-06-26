@@ -39,6 +39,12 @@ def setup(mock_conn, mock_cursor, tmp_path):
     for p in patches:
         p.start()
 
+    # Isolate the global persist-listener registry: a prior send test may leave
+    # a listener registered for 'sess_x', which would make has_listener() True
+    # and skip the SSE proxy's fallback persist under test here.
+    from utils import chat_persist
+    chat_persist._listeners.clear()
+
     from app import app
     app.config['TESTING'] = True
     dev = create_token({'id': 'user-1', 'username': 'dev', 'role': 'developer'})
@@ -168,11 +174,11 @@ def test_list_models_flattens_connected_providers(setup):
 
 def test_get_messages_returns_history(setup):
     client, cursor, oc, dev_h, _, _ = setup
-    # owner check + history fetch
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    # owner check + history fetch (6-tuple: …, workspace_path, batch_id)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
     cursor.fetchall.return_value = [
-        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None),
-        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None),
+        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None, None),
+        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None, None),
     ]
     resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
     assert resp.status_code == 200
@@ -206,7 +212,7 @@ def test_unknown_session_does_not_touch(setup):
 
 def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     client, cursor, oc, dev_h, _, _ = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
 
     # Real OpenCode event shapes: data-only frames with {type, properties}.
     oc.subscribe_events.return_value = iter([
@@ -237,7 +243,7 @@ def test_sse_events_persists_tool_parts_on_idle(setup):
     """Tool calls (e.g. query_collection) must be persisted alongside text so the
     rendered result survives a reload — not just the assistant's prose."""
     client, cursor, oc, dev_h, _, _ = setup
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
     oc.subscribe_events.return_value = iter([
         {'event': 'message.updated', 'data': {'type': 'message.updated',
             'properties': {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},

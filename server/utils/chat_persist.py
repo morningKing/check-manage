@@ -143,25 +143,34 @@ def persist_turn(session_id, state):
 
 
 def _run_listener(sid, opencode_session_id, event_source):
-    """Consume events, persisting the assistant message on each session.idle and
-    incrementally (time-debounced) while a turn streams, so switching sessions
-    mid-stream recovers the partial answer. Returns when the source is
-    exhausted/raises. Pure loop — `event_source` is injectable for tests."""
+    """Consume events, persisting the assistant message on session.idle and
+    incrementally (time-debounced) while the turn streams, so switching sessions
+    mid-stream recovers the partial answer. Returns after the turn's idle (or
+    when the source is exhausted/raises).
+
+    One listener per turn, not per session: on idle we persist and RETURN,
+    releasing the OpenCode /event subscription instead of holding it open for up
+    to 30 min waiting for the next turn. OpenCode adds an internal event listener
+    per open /event connection (Node EventEmitter, default cap 10); a long-lived
+    listener per idle session piled these up until OpenCode hit "max listeners
+    exceeded" and dropped events. The next turn re-creates a fresh listener via
+    ensure_listener(). The pre-idle read timeout (INACTIVITY_TIMEOUT) still
+    tolerates long silent tool calls *within* a turn. `event_source` is
+    injectable for tests."""
     state = new_state()
     last_persist = time.monotonic()
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
         if sig == 'idle':
             persist_turn(sid, state)
-            logger.debug('persist listener idle->persisted session=%s parts=%d',
+            logger.debug('persist listener idle->persisted+exit session=%s parts=%d',
                          sid, len(state.get('part_order', [])))
             try:
                 from utils.memory import extract_from_turn
                 extract_from_turn(sid, state)
             except Exception as e:
                 logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
-            state = new_state()
-            last_persist = time.monotonic()
+            return
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()
             if now - last_persist >= INCREMENTAL_PERSIST_INTERVAL:
