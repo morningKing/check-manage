@@ -419,6 +419,7 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
     sent_agents = []
     fake_oc = MagicMock()
     fake_oc.create_session.return_value = 'oc-sess-1'
+    fake_oc.list_agents.return_value = [{'name': 'my-agent', 'mode': 'primary'}]
     fake_oc.list_messages.return_value = [
         {'role': 'assistant', 'finished': True,
          'content': [{'type': 'text', 'text': 'ok'}]}

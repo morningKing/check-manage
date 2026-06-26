@@ -151,7 +151,10 @@ onMounted(async () => {
   await loadTemplates()
   try {
     const r = await listAgents()
-    agents.value = [...r.agents, ...r.subagents]
+    // Only PRIMARY agents can be a session's agent; a subagent picked here makes
+    // OpenCode silently produce nothing (batch hangs). Use @mention in the prompt
+    // to delegate to a subagent instead.
+    agents.value = r.agents
   } catch { /* non-fatal */ }
   try {
     models.value = (await listModels()).models
