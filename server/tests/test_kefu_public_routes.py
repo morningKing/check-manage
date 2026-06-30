@@ -11,7 +11,8 @@ def test_public_config_ok(client):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body['name'] == '售前' and body['enabled'] is True
-    assert 'bot_user_id' not in body  # 不泄露内部字段
+    for field in ('bot_user_id', 'rate_limit', 'system_prompt', 'agent', 'model'):
+        assert field not in body, f"internal field '{field}' must not be in public config"
 
 
 def test_public_config_404(client):
@@ -29,7 +30,8 @@ def test_create_session_requires_visitor_header(client):
 def test_create_session_ok(client):
     with patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=INST), \
          patch('routes.kefu_public.kefu_repo.create_kefu_session',
-               return_value={'id': 'sess_1', 'title': '客服会话'}) as m:
+               return_value={'id': 'sess_1', 'title': '客服会话'}) as m, \
+         patch('routes.kefu_public._rate_ok', return_value=True):
         resp = client.post('/kefu/i/presale/sessions',
                            headers={'X-Visitor-Id': 'visitor-abc'})
     assert resp.status_code == 201
@@ -43,6 +45,13 @@ def test_create_session_disabled_403(client):
         resp = client.post('/kefu/i/presale/sessions',
                            headers={'X-Visitor-Id': 'v1'})
     assert resp.status_code == 403
+
+
+def test_create_session_ratelimited(client):
+    with patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=INST), \
+         patch('routes.kefu_public._rate_ok', return_value=False):
+        resp = client.post('/kefu/i/presale/sessions', headers={'X-Visitor-Id': 'v1'})
+    assert resp.status_code == 429
 
 
 def test_messages_visitor_ownership(client):

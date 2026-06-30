@@ -64,7 +64,7 @@ def history(sid):
         cur = conn.cursor()
         cur.execute(
             "SELECT id, role, content, created_at FROM ai_chat_messages "
-            "WHERE session_id=%s ORDER BY created_at ASC", (sid,))
+            "WHERE session_id=%s ORDER BY created_at ASC LIMIT 500", (sid,))
         rows = cur.fetchall()
     return jsonify({'messages': [
         {'id': r[0], 'role': r[1], 'content': r[2],
