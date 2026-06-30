@@ -1,6 +1,7 @@
 """公开匿名客服入口（无 JWT，X-Visitor-Id 识别 + 限速）。
 公开攻击面收敛于此蓝图，便于审计加固。"""
 import json
+import logging
 import os
 import secrets
 from flask import Blueprint, request, jsonify, Response, stream_with_context
@@ -15,6 +16,8 @@ from utils.chat_persist import (
 from utils.workspace import safe_resolve, WorkspacePathError
 from utils.filename import safe_filename
 from config import OPENCODE_BASE_URL, OPENCODE_MODEL
+
+logger = logging.getLogger(__name__)
 
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _ALLOWED_EXT = {'.txt', '.md', '.csv', '.json', '.pdf', '.png', '.jpg',
@@ -96,7 +99,9 @@ def send_message(sid):
     sess = kefu_repo.load_kefu_session(sid, vid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
-    inst = kefu_repo.get_instance(sess[5]) or {}
+    inst = kefu_repo.get_instance(sess[5])
+    if not inst:
+        return jsonify({'error': 'instance not found'}), 404
     if not _rate_ok(inst, vid):
         return jsonify({'error': '请求过于频繁，请稍后再试'}), 429
 
@@ -111,6 +116,10 @@ def send_message(sid):
     # 护栏与人设已注入 AGENTS.md，这里只发用户内容 + 附件路径提示
     prompt = content
     for rel in attachments:
+        try:
+            safe_resolve(sess[4], rel)   # raises WorkspacePathError on traversal/abs path
+        except WorkspacePathError:
+            return jsonify({'error': f'invalid attachment path: {rel}'}), 400
         name = os.path.basename(rel)
         stored_parts.append({'type': 'file', 'name': name, 'path': rel})
         prompt += f"\n\n[用户上传的文件 {name}，路径：{rel}（可用工具读取）]"
@@ -143,6 +152,7 @@ def events(sid):
     client = OpenCodeClient(OPENCODE_BASE_URL)
 
     def generate():
+        logger.info('kefu sse open session=%s oc=%s', sid, oc_sid)
         state = new_state()
         try:
             for evt in client.subscribe_events(directory=sess[4]):
@@ -159,7 +169,10 @@ def events(sid):
         except GeneratorExit:
             return
         except Exception:
+            logger.exception('kefu sse stream error session=%s oc=%s', sid, oc_sid)
             return
+        finally:
+            logger.info('kefu sse closed session=%s', sid)
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

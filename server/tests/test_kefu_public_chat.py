@@ -34,3 +34,28 @@ def test_upload_rejects_oversize(client):
                            headers={'X-Visitor-Id': 'v1'},
                            content_type='multipart/form-data')
     assert resp.status_code == 413
+
+
+def test_events_wrong_visitor_404(client):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=None):
+        resp = client.get('/kefu/sessions/sess_1/events?visitor_id=wrong')
+    assert resp.status_code == 404
+
+
+def test_upload_rejects_bad_type(client):
+    import io
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS):
+        resp = client.post('/kefu/sessions/sess_1/files',
+                           data={'file': (io.BytesIO(b'x'), 'evil.exe')},
+                           headers={'X-Visitor-Id': 'v1'},
+                           content_type='multipart/form-data')
+    assert resp.status_code == 415
+
+
+def test_send_message_ratelimited(client):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public.kefu_repo.get_instance', return_value=INST), \
+         patch('routes.kefu_public._rate_ok', return_value=False):
+        resp = client.post('/kefu/sessions/sess_1/messages', json={'content': 'hi'},
+                           headers={'X-Visitor-Id': 'v1'})
+    assert resp.status_code == 429
