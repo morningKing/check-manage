@@ -42,6 +42,7 @@ from routes.data_files import data_files_bp
 from routes.roles import roles_bp
 from routes.workflows import workflows_bp
 from routes.kefu_admin import kefu_admin_bp
+from routes.kefu_public import kefu_public_bp
 from utils.logging_setup import setup_logging
 
 # Configure logging (console + rotating file) before anything logs. Skip the
@@ -91,6 +92,7 @@ app.register_blueprint(data_files_bp)
 app.register_blueprint(roles_bp)
 app.register_blueprint(workflows_bp)
 app.register_blueprint(kefu_admin_bp)
+app.register_blueprint(kefu_public_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start).
