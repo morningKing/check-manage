@@ -37,6 +37,7 @@ def test_create_kefu_session_inserts_row_with_visitor(mock_conn, mock_cursor):
     flat = [p for params in inserted_params for p in params]
     assert 'visitor-abc' in flat
     assert 'kefu-bot' in flat
+    assert 'kf_1' in flat  # kefu_instance_id present in the insert
     inj.assert_called_once()  # 护栏被注入工作区
 
 
@@ -57,3 +58,14 @@ def test_create_kefu_session_injects_guardrail(mock_conn, mock_cursor):
         out = repo.create_kefu_session(instance, 'visitor-xyz')
     inj.assert_called_once_with('/ws/kf2', instance)
     assert out['title'] == '客服会话'
+
+
+def test_load_kefu_session_returns_none_for_wrong_visitor(mock_conn, mock_cursor):
+    """load_kefu_session returns None when row not found (mismatched visitor)."""
+    mock_cursor.fetchone.return_value = None
+    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)):
+        out = repo.load_kefu_session('sess_1', 'wrong-visitor')
+    assert out is None
+    # the query must filter by visitor_id AND kefu_instance_id IS NOT NULL
+    sql = ' '.join(c.args[0] for c in mock_cursor.execute.call_args_list)
+    assert 'visitor_id' in sql and 'kefu_instance_id IS NOT NULL' in sql

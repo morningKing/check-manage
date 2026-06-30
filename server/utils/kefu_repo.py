@@ -120,7 +120,7 @@ def get_instance_by_slug(slug) -> dict | None:
 def update_instance(instance_id, payload) -> dict | None:
     fields, params = [], []
     for col in ('slug', 'name', 'agent', 'model', 'system_prompt',
-                'welcome_message', 'enabled'):
+                'welcome_message'):
         if col in payload:
             fields.append(f"{col}=%s")
             params.append(payload[col] if payload[col] != '' else None)
@@ -128,6 +128,9 @@ def update_instance(instance_id, payload) -> dict | None:
         if col in payload:
             fields.append(f"{col}=%s")
             params.append(json.dumps(payload[col]))
+    if 'enabled' in payload:
+        fields.append("enabled=%s")
+        params.append(bool(payload['enabled']))
     if not fields:
         return get_instance(instance_id)
     fields.append("updated_at=now()")
