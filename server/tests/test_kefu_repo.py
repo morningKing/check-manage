@@ -1,0 +1,59 @@
+# server/tests/test_kefu_repo.py
+"""Unit tests for kefu_repo — mocked DB, no real PostgreSQL or OpenCode."""
+import json
+from unittest.mock import patch, MagicMock
+import utils.kefu_repo as repo
+
+
+def _cm(conn):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def cm():
+        yield conn
+
+    return cm()
+
+
+def test_create_kefu_session_inserts_row_with_visitor(mock_conn, mock_cursor):
+    instance = {
+        'id': 'kf_1', 'slug': 'presale', 'name': '售前',
+        'agent': '', 'model': '', 'system_prompt': '你是售前助手',
+        'bot_user_id': 'kefu-bot',
+    }
+    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/kf'), \
+         patch('utils.kefu_repo.write_opencode_config'), \
+         patch('utils.kefu_repo.generate_token', return_value='tok123'), \
+         patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.kefu_repo._inject_system_prompt') as inj:
+        OC.return_value.create_session.return_value = 'oc_sid_1'
+        out = repo.create_kefu_session(instance, 'visitor-abc')
+    assert out['id'].startswith('sess_')
+    # 校验插入语句带上了 visitor_id 与 bot 用户
+    insert_sql = ' '.join(c.args[0] for c in mock_cursor.execute.call_args_list)
+    assert 'ai_chat_sessions' in insert_sql
+    inserted_params = [c.args[1] for c in mock_cursor.execute.call_args_list if c.args[1]]
+    flat = [p for params in inserted_params for p in params]
+    assert 'visitor-abc' in flat
+    assert 'kefu-bot' in flat
+    inj.assert_called_once()  # 护栏被注入工作区
+
+
+def test_create_kefu_session_injects_guardrail(mock_conn, mock_cursor):
+    """_inject_system_prompt is called with the workspace path and instance."""
+    instance = {
+        'id': 'kf_2', 'slug': 'aftersale', 'name': '售后',
+        'agent': '', 'model': 'anthropic/claude-3-5-sonnet', 'system_prompt': '你是售后',
+        'bot_user_id': 'kefu-bot',
+    }
+    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/kf2'), \
+         patch('utils.kefu_repo.write_opencode_config'), \
+         patch('utils.kefu_repo.generate_token', return_value='tok456'), \
+         patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.kefu_repo._inject_system_prompt') as inj:
+        OC.return_value.create_session.return_value = 'oc_sid_2'
+        out = repo.create_kefu_session(instance, 'visitor-xyz')
+    inj.assert_called_once_with('/ws/kf2', instance)
+    assert out['title'] == '客服会话'
