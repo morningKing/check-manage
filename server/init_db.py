@@ -432,6 +432,30 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
 -- add for existing deployments.
 ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 
+-- ==================== 智能客服：实例表 + 会话增列 ====================
+CREATE TABLE IF NOT EXISTS kefu_instances (
+  id               VARCHAR(100) PRIMARY KEY,
+  slug             VARCHAR(100) NOT NULL UNIQUE,
+  name             VARCHAR(200) NOT NULL,
+  agent            TEXT,
+  model            TEXT,
+  system_prompt    TEXT,
+  welcome_message  TEXT,
+  guided_questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  branding         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  bot_user_id      VARCHAR(100) NOT NULL REFERENCES users(id),
+  enabled          BOOLEAN NOT NULL DEFAULT true,
+  rate_limit       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS kefu_instance_id VARCHAR(100) REFERENCES kefu_instances(id) ON DELETE SET NULL;
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS visitor_id     VARCHAR(100);
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS needs_human    BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS human_takeover BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_chat_sess_kefu ON ai_chat_sessions(kefu_instance_id, visitor_id);
+
 -- ==================== autoSequence 原子计数器表 ====================
 CREATE TABLE IF NOT EXISTS dynamic_sequences (
     collection    VARCHAR(200) NOT NULL,
@@ -1988,7 +2012,8 @@ def init_db():
             INSERT INTO roles (id, name, description, is_system, is_superuser, default_page_access) VALUES
               ('admin',     '管理员',   '系统超级管理员，拥有全部权限',   TRUE, TRUE,  'write'),
               ('developer', '开发人员', '可读写所有数据，无管理功能权限', TRUE, FALSE, 'write'),
-              ('guest',     '访客',     '只读访问',                       TRUE, FALSE, 'read')
+              ('guest',     '访客',     '只读访问',                       TRUE, FALSE, 'read'),
+              ('kefu-guest','智能客服访客','智能客服 bot 专用只读角色，可见数据页需显式授予', TRUE, FALSE, 'none')
             ON CONFLICT (id) DO NOTHING
         """)
         # admin.roles is seeded only to admin (superuser bypasses anyway, but keep an explicit row
