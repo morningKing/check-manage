@@ -123,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_sess_kefu ON ai_chat_sessions(kefu_instance_
 ## 7. 转人工 / 人工接管
 
 - **触发**：访客点「转人工」按钮，或 Agent 通过特定标记请求升级 → `needs_human=true`，Agent 生成一段对话摘要供人工参考。
-- **管理端队列**：复用 `admin.ai_chat_admin`（或归入 `admin.kefu`），新增 kefu 会话队列视图，展示「待接管」会话。
+- **管理端队列**：归入 `admin.kefu` 权限（见 §8），新增 kefu 会话队列视图，展示「待接管」会话。
 - **接管**：管理员点「接管」→ `human_takeover=true`（Agent 暂停转发）；管理员消息写入 `ai_chat_messages`，经**进程内广播**推到访客 SSE（事件类型 `human_message`）。可「释放」交回 Agent（`human_takeover=false`）。
 - **前端**：访客页 SSE 同时处理 `assistant`（OpenCode）与 `human_message`（人工）两类事件，统一渲染进消息流。
 
