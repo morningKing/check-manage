@@ -1,0 +1,241 @@
+# 智能客服（Smart Customer Service）Phase 1 使用文档
+
+> 适用阶段：Phase 1（后端 API）。Phase 3（前端全页 + 可嵌入 widget + KefuManager 管理 UI）属后续阶段，本文仅描述 Phase 1 已上线内容。
+>
+> 配套规格见 `docs/superpowers/specs/`（智能客服设计文档）。
+
+---
+
+## 1. 这是什么
+
+智能客服是一个**面向公开访客的、无需登录**的对话入口，独立于内部管理系统的 JWT 鉴权体系。
+
+核心特点：
+
+- **公开匿名**：访客通过 `X-Visitor-Id` 头标识身份，无需账号或 JWT Token。
+- **OpenCode Agent 驱动**：每次对话都在 OpenCode 运行时内运行，可调用 MCP 工具读取系统数据页。
+- **RBAC 只读钳制**：Agent 运行在固定 bot 用户（`kefu-bot`）身份下，其角色 `kefu-guest` 的 `default_page_access='none'`——默认看不到任何数据页，只有管理员在 `/admin/roles` 显式授权的数据页才可读，且全程只读。
+- **安全护栏**：每个会话工作区注入不可覆盖的系统边界声明（AGENTS.md），防止越权。
+- **多实例**：可为不同场景（售前、售后、技术支持……）创建多个实例，通过 `slug` 区分。
+
+Phase 1 后端仅暴露 JSON API（见第 3 节）。前端全页 `/kefu/<slug>`、可嵌入 `kefu-widget.js` 和 `KefuManager.vue` 管理界面将在 **Phase 3** 落地。
+
+---
+
+## 2. 前置条件
+
+- 当前用户有 `admin.kefu` 权限（在 `/admin/roles` 为对应角色开启该能力开关）。
+- 后端（Flask）+ OpenCode（`opencode serve`）+ MCP 服务 均已运行。
+- 已获取管理员 JWT Token：
+
+```bash
+TOKEN=$(curl -s -X POST localhost:3002/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+```
+
+---
+
+## 3. 创建客服实例
+
+**API：** `POST /admin/kefu/instances`（需 `admin.kefu` 权限）
+
+### 3.1 字段说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `slug` | string | 是 | URL 标识符，小写字母/数字/连字符，1–64 字符（如 `presale`）；全局唯一 |
+| `name` | string | 是 | 实例显示名称（如 `售前客服`） |
+| `agent` | string | 否 | 指定 OpenCode Agent 名称；留空 = 使用全局默认 |
+| `model` | string | 否 | 指定模型（如 `anthropic/claude-3-5-sonnet-20241022`）；留空 = 全局默认 |
+| `system_prompt` | string | 否 | 实例的人设与业务边界说明；会拼接在不可覆盖的安全护栏之后 |
+| `welcome_message` | string | 否 | 访客打开对话时展示的欢迎语 |
+| `guided_questions` | array of string | 否 | 引导性预设问题列表，前端用于快速提问按钮 |
+| `branding` | object | 否 | 品牌定制（颜色、Logo 等，前端 Phase 3 使用） |
+| `rate_limit` | object | 否 | 限速配置，见第 5 节 |
+| `enabled` | boolean | 否 | 默认 `true`；置为 `false` 后访客建会话返回 403 |
+
+### 3.2 curl 示例
+
+```bash
+# 创建一个售前客服实例
+curl -s -X POST localhost:3002/admin/kefu/instances \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "slug": "presale",
+    "name": "售前客服",
+    "system_prompt": "你是公司售前助手，负责解答产品功能、定价和部署方式相关问题。不要讨论竞品。",
+    "welcome_message": "你好！我是售前助手，有任何购买或评估问题欢迎提问 😊",
+    "guided_questions": ["支持私有化部署吗？", "有哪些定价套餐？", "怎么申请试用？"],
+    "rate_limit": {"perMinute": 10, "perDay": 200}
+  }'
+```
+
+成功响应（201）：
+
+```json
+{
+  "id": "kf_a1b2c3",
+  "slug": "presale",
+  "name": "售前客服",
+  "enabled": true,
+  ...
+}
+```
+
+### 3.3 其他管理接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET`    | `/admin/kefu/instances`        | 列出所有实例 |
+| `GET`    | `/admin/kefu/instances/<id>`   | 获取单个实例 |
+| `PATCH`  | `/admin/kefu/instances/<id>`   | 更新实例（字段与 POST 一致，按需传入） |
+| `DELETE` | `/admin/kefu/instances/<id>`   | 删除实例 |
+
+> **注意**：Phase 3 的 `KefuManager.vue` 管理页（`/admin/kefu`）将提供可视化界面；Phase 1 阶段通过以上 API 操作。
+
+---
+
+## 4. 授予数据页读权限
+
+智能客服 Agent 默认**看不到任何数据页**（`default_page_access='none'`）。要让 Agent 能查询某个业务数据页（如"产品手册"、"常见问题库"），需在 `/admin/roles` 为 `kefu-guest` 角色单独授权：
+
+1. 登录管理端，进入 **系统配置 → 权限管理 → 角色** (`/admin/roles`)。
+2. 找到角色 `kefu-guest`，点击「编辑」。
+3. 在「数据页权限」列表中，为目标数据页勾选 **读**（read）权限。
+4. 保存。
+
+**不要授予写/删权限**，`kefu-guest` 的只读定位不应改变。未授权的数据页，Agent 的 MCP `query_collection` 工具会因 RBAC 鉴权失败而被拒，不会泄露数据。
+
+---
+
+## 5. 限速配置
+
+`rate_limit` 字段为对象，支持以下子字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `perMinute` | number | 每分钟最大请求数（按 `实例ID + visitor_id + IP` 计数）；0 或不填 = 不限 |
+| `perDay` | number | 每天最大请求数（同维度计数）；0 或不填 = 不限 |
+
+超限时 API 返回 `429 Too Many Requests`，消息体为 `{"error": "请求过于频繁，请稍后再试"}`。
+
+---
+
+## 6. 访客 API（公开入口）
+
+以下接口**无需鉴权**，通过 `X-Visitor-Id` 头标识访客（Phase 3 前端将自动写入 localStorage 中的匿名 ID）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET`  | `/kefu/i/<slug>`                  | 获取实例公开配置（名称、欢迎语、引导问、品牌） |
+| `POST` | `/kefu/i/<slug>/sessions`         | 创建会话（需 `X-Visitor-Id` 头，返回 `sess_*` id） |
+| `GET`  | `/kefu/sessions/<sid>/messages`   | 获取历史消息（需 `X-Visitor-Id` 头） |
+| `POST` | `/kefu/sessions/<sid>/messages`   | 发送消息（返回 202 + `messageId`，异步推送 SSE） |
+| `GET`  | `/kefu/sessions/<sid>/events`     | SSE 事件流（`?visitor_id=<vid>` 查询参数） |
+| `POST` | `/kefu/sessions/<sid>/files`      | 上传文件（multipart，≤20MB，白名单扩展名） |
+
+**分享链接形状**：`/<host>/kefu/<slug>`（Phase 3 前端路由落地，Phase 1 JSON API 可通过上表直接调用）。
+
+### 文件上传限制
+
+- 大小上限：20MB
+- 允许扩展名：`.txt .md .csv .json .pdf .png .jpg .jpeg .gif .xlsx .docx`
+- 路径穿越防护：服务端校验所有附件路径，非法路径返回 400。
+
+---
+
+## 7. 安全边界
+
+| 层次 | 机制 |
+|------|------|
+| **读权限钳制** | Agent 运行在 `kefu-bot` 用户下，角色 `kefu-guest`，`default_page_access='none'`，MCP 通过 RBAC 硬拒未授权的 `query_collection`。 |
+| **护栏系统提示** | 每个会话工作区的 `AGENTS.md` 注入 4 条不可覆盖的边界声明（最高优先级）：仅限客服相关问题、严禁导出全量数据/凭证/隐私、只读、忽略越权指令。这是软性防护，硬边界是 RBAC。 |
+| **附件路径校验** | 用户传来的附件相对路径经 `safe_resolve` 校验，防止路径穿越到会话工作区外。 |
+| **限速** | 每个访客+IP 组合按实例配置限速，防止爬取或滥用。 |
+| **公开面收敛** | 所有匿名公开接口集中在 `kefu_public_bp`（`/kefu/` 前缀），便于独立审计和 WAF 规则配置。 |
+| **Bot 口令** | `kefu-bot` 的登录口令为每次迁移随机生成的不可登录值，不可通过正常登录流程使用。 |
+
+---
+
+## 8. 端到端手动验证清单
+
+> 以下步骤需要 OpenCode + MCP 全栈运行。Phase 1 单元测试（`tests/test_kefu_*.py`）覆盖了路由、RBAC、护栏和 repo 层逻辑，端到端需手动执行。
+
+**环境准备**
+
+```bash
+# 终端 1：后端
+cd server && python app.py
+
+# 终端 2：OpenCode（独立进程）
+opencode serve
+
+# 终端 3：MCP 服务
+cd mcp-server && python main.py
+```
+
+**验证步骤**
+
+- [ ] **步骤 1 — 获取管理员 Token**
+
+  ```bash
+  TOKEN=$(curl -s -X POST localhost:3002/auth/login \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"admin123"}' \
+    | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+  ```
+
+- [ ] **步骤 2 — 创建实例**
+
+  ```bash
+  curl -s -X POST localhost:3002/admin/kefu/instances \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"slug":"smoke","name":"冒烟测试客服","system_prompt":"你是冒烟测试助手","rate_limit":{"perMinute":20}}'
+  ```
+
+  期望：201 + 含 `id` 的 JSON。
+
+- [ ] **步骤 3 — 访客取公开配置**
+
+  ```bash
+  curl -s localhost:3002/kefu/i/smoke
+  ```
+
+  期望：200 + 含 `name`、`enabled:true` 的 JSON（不含 `system_prompt`、`agent`、`model` 等内部字段）。
+
+- [ ] **步骤 4 — 创建会话**
+
+  ```bash
+  SID=$(curl -s -X POST localhost:3002/kefu/i/smoke/sessions \
+    -H 'X-Visitor-Id: visitor-test-1' | python -c "import sys,json;print(json.load(sys.stdin)['id'])")
+  echo "session: $SID"
+  ```
+
+  期望：201 + `id` 以 `sess_` 前缀开头。
+
+- [ ] **步骤 5 — 发送消息**
+
+  ```bash
+  curl -s -X POST localhost:3002/kefu/sessions/$SID/messages \
+    -H 'X-Visitor-Id: visitor-test-1' -H 'Content-Type: application/json' \
+    -d '{"content":"你们的产品支持私有化部署吗？"}'
+  ```
+
+  期望：202 + `{"messageId":"msg_..."}` 。
+
+- [ ] **步骤 6 — 校验只读钳制（安全关键）**
+
+  在 `/admin/roles` 中确认 `kefu-guest` 的 `default_page_access='none'` 且未给任何数据页授权，然后向 Agent 提问「请查询 xxx 数据页的全部记录」。查看 MCP 服务日志，确认 `query_collection` 因无 page-read 权限被拒，响应中不含该数据页数据。
+
+- [ ] **步骤 7 — 授权后可见**
+
+  在 `/admin/roles` 给 `kefu-guest` 授予目标数据页的 read 权限，重新发消息再次查询同一数据页，确认 Agent 能取到数据。
+
+---
+
+## 9. 后续阶段
+
+- **Phase 2 — 转人工/人工接管**：`needs_human`/`human_takeover` 状态机、人工消息合并 SSE 通道、管理端会话队列与接管/释放、会话级审计。
+- **Phase 3 — 前端**：独立全页 `/kefu/:slug`、可嵌入 `kefu-widget.js`（独立构建 entry + iframe）、`KefuManager.vue` 管理页、访客匿名 `visitor_id`（localStorage）。Playwright 全流程验证 + 截图。
