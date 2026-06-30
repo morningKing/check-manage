@@ -33,11 +33,16 @@ PERMISSION_CATALOG = [
     {'key': 'admin.system_config',      'label': '系统设置',   'group': '系统运维'},
     {'key': 'admin.home_widgets',       'label': '首页区块',   'group': '系统运维'},
     {'key': 'admin.ai_chat_admin',     'label': 'AI 会话治理', 'group': '平台管理'},
+    {'key': 'admin.kefu',              'label': '智能客服',     'group': '平台管理'},
 ]
 
 
 def catalog_keys():
     return [e['key'] for e in PERMISSION_CATALOG]
+
+
+def all_permission_keys():
+    return catalog_keys()
 
 
 _cache = {}            # role_id -> resolved dict
