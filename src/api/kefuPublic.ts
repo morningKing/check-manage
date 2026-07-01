@@ -19,7 +19,7 @@ export function createKefuSession(slug: string) { return post<{ id: string; titl
 export function getKefuHistory(sid: string) { return get<{ messages: KefuMessage[] }>(`/kefu/sessions/${sid}/messages`, undefined, vh()) }
 export function sendKefuMessage(sid: string, content: string) { return post<{ messageId: string }>(`/kefu/sessions/${sid}/messages`, { content }, vh()) }
 export function getKefuFaq(slug: string) { return get<{ items: KefuFaqItem[] }>(`/kefu/i/${slug}/faq`) }
-export function clickKefuFaq(slug: string, fid: string) { return post(`/kefu/i/${slug}/faq/${fid}/click`, {}, vh()).catch(() => {}) }
+export function clickKefuFaq(slug: string, fid: string) { return post(`/kefu/i/${slug}/faq/${fid}/click`, {}, { ...vh(), silent: true }).catch(() => {}) }
 
 const RECONNECT_MS = [1000, 2000, 5000, 10000]
 export interface KefuStreamHandlers { onIdle: () => void; onError: (e: any) => void; onStatus?: (s: string) => void }

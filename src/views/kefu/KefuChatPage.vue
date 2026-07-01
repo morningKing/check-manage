@@ -1,25 +1,28 @@
 <!-- src/views/kefu/KefuChatPage.vue -->
 <template>
   <div class="kefu-page">
-    <header class="kefu-header">
-      <span class="title">{{ config?.name || '在线客服' }}</span>
-      <el-button size="small" @click="drawer = true">🗂 自助服务</el-button>
-    </header>
-    <main class="kefu-messages" ref="scroller">
-      <div v-if="config?.welcome_message" class="msg assistant"><MarkdownView :text="config.welcome_message" /></div>
-      <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
-        <MarkdownView v-if="m.role==='assistant'" :text="plainText(m.content)" />
-        <span v-else class="user-text">{{ plainText(m.content) }}</span>
-      </div>
-      <div v-if="sending" class="typing">正在输入…</div>
-    </main>
-    <footer class="kefu-input">
-      <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter.prevent="send" />
-      <el-button type="primary" :disabled="!draft.trim() || sending" @click="send">发送</el-button>
-    </footer>
-    <el-drawer v-model="drawer" title="自助服务" direction="rtl" size="360px">
-      <KefuSelfServicePanel :items="faq" @click="onFaqClick" @escalate="onEscalate" />
-    </el-drawer>
+    <template v-if="!loadError">
+      <header class="kefu-header">
+        <span class="title">{{ config?.name || '在线客服' }}</span>
+        <el-button size="small" @click="drawer = true">🗂 自助服务</el-button>
+      </header>
+      <main class="kefu-messages" ref="scroller">
+        <div v-if="config?.welcome_message" class="msg assistant"><MarkdownView :text="config.welcome_message" /></div>
+        <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
+          <MarkdownView v-if="m.role==='assistant'" :text="plainText(m.content)" />
+          <span v-else class="user-text">{{ plainText(m.content) }}</span>
+        </div>
+        <div v-if="sending" class="typing">正在输入…</div>
+      </main>
+      <footer class="kefu-input">
+        <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter="onEnter" />
+        <el-button type="primary" :disabled="!draft.trim() || sending" @click="send">发送</el-button>
+      </footer>
+      <el-drawer v-model="drawer" title="自助服务" direction="rtl" size="360px">
+        <KefuSelfServicePanel :items="faq" @click="onFaqClick" @escalate="onEscalate" />
+      </el-drawer>
+    </template>
+    <div v-else class="kefu-error">客服暂不可用，请稍后再试</div>
   </div>
 </template>
 
@@ -39,6 +42,7 @@ const messages = ref<KefuMessage[]>([])
 const draft = ref('')
 const sending = ref(false)
 const drawer = ref(false)
+const loadError = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 let closeStream: (() => void) | null = null
 
@@ -56,18 +60,29 @@ async function send() {
   try { await api.sendKefuMessage(sessionId.value, text) } catch { ElMessage.error('发送失败，请稍后重试'); sending.value = false }
 }
 
+function onEnter(e: KeyboardEvent) {
+  if (e.isComposing) return          // IME candidate selection — not a submit
+  if (e.shiftKey) return             // Shift+Enter = newline
+  e.preventDefault()
+  send()
+}
+
 function onFaqClick(id: string) { api.clickKefuFaq(props.slug, id) }
 async function onEscalate(question: string) { if (sending.value) return; drawer.value = false; draft.value = question; await send() }
 
 onMounted(async () => {
-  config.value = await api.getKefuConfig(props.slug)
-  const s = await api.createKefuSession(props.slug); sessionId.value = s.id
-  faq.value = (await api.getKefuFaq(props.slug)).items
-  await reload()
-  closeStream = api.createKefuEventStream(sessionId.value, {
-    onIdle: async () => { await reload(); sending.value = false },
-    onError: () => {},
-  })
+  try {
+    config.value = await api.getKefuConfig(props.slug)
+    const s = await api.createKefuSession(props.slug); sessionId.value = s.id
+    faq.value = (await api.getKefuFaq(props.slug)).items
+    await reload()
+    closeStream = api.createKefuEventStream(sessionId.value, {
+      onIdle: async () => { await reload(); sending.value = false },
+      onError: () => { sending.value = false; ElMessage.error('客服暂时无法回复，请稍后重试') },
+    })
+  } catch {
+    loadError.value = true
+  }
 })
 onBeforeUnmount(() => { closeStream?.() })
 defineExpose({ sessionId, onEscalate, messages, sending })
