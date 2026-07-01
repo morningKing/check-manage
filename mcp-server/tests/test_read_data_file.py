@@ -111,6 +111,37 @@ def test_missing_arguments_raise():
         handle({}, _ctx())
 
 
+def test_admin_bypasses_menu_roles(tmp_path):
+    """Admin bypasses the menu-role gate even when menu_roles is empty."""
+    sample = tmp_path / 'doc.txt'
+    sample.write_text('admin can read this', encoding='utf-8')
+    record = ({'attachment': [{'uid': 'fid99', 'name': 'doc.txt'}]},)
+    file_row = ('doc.txt', 'text/plain', sample.stat().st_size, str(sample))
+    with patch('tools.read_data_file.get_db', _fake_get_db(record, file_row, menu_roles=[])):
+        from tools.read_data_file import handle
+        res = handle({'collection': 'ic', 'record_id': 'r1', 'field': 'attachment'},
+                     _ctx('admin'))
+    assert res['found'] is True
+    assert 'admin can read this' in res['content']
+
+
+def test_denied_when_menu_row_missing():
+    """Non-admin is denied when the menu row is missing (no row = deny)."""
+    from tools.read_data_file import handle, ReadDataFileError
+    from contextlib import contextmanager
+    cur = MagicMock()
+    cur.fetchone.return_value = None   # no menu row → roles is None → deny
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    @contextmanager
+    def _get():
+        yield conn
+    with patch('tools.read_data_file.get_db', _get):
+        with pytest.raises(ReadDataFileError):
+            handle({'collection': 'secret', 'record_id': 'R1', 'field': 'f'},
+                   _ctx('developer'))
+
+
 def test_kefu_guest_denied_when_not_in_menu_roles(monkeypatch):
     from tools.read_data_file import handle, ReadDataFileError
     from context import ToolContext

@@ -93,3 +93,19 @@ def test_events_concurrency_cap(client):
          patch('routes.kefu_public._sse_acquire', return_value=False):
         resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
     assert resp.status_code == 429
+
+
+def test_events_sse_release_called_on_stream_end(client):
+    """_sse_release is called exactly once per acquired stream when the generator completes."""
+    release_mock = MagicMock()
+    sse_key = f"{SESS[5]}:v1"   # "kf_1:v1"
+
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public._sse_acquire', return_value=True), \
+         patch('routes.kefu_public._sse_release', release_mock), \
+         patch('routes.kefu_public.OpenCodeClient') as MockOC:
+        MockOC.return_value.subscribe_events.return_value = iter([])
+        resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
+        _ = resp.data   # consume the streaming response so the generator runs to completion
+
+    release_mock.assert_called_once_with(sse_key)

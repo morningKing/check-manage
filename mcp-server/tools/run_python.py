@@ -2,9 +2,9 @@
 return stdout + any result files written to outputs/. Lets the agent actually
 RUN a script (e.g. produce a file) instead of only emitting source.
 
-Caveats / safety: this is arbitrary code execution. It is mitigated by — guest
-blocked, cwd confined to the session workspace, a hard timeout, and truncated
-output. It is NOT a strong sandbox (no network/syscall isolation); it runs with
+Caveats / safety: this is arbitrary code execution. It is mitigated by — read-only
+roles (guest, kefu-guest) blocked, cwd confined to the session workspace, a hard
+timeout, and truncated output. It is NOT a strong sandbox (no network/syscall isolation); it runs with
 the MCP server's interpreter and privileges. Acceptable here because OpenCode's
 built-in bash tool already permits arbitrary execution; this just lands result
 files in the session's outputs/ so the user can download them."""

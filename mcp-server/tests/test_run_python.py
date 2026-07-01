@@ -59,7 +59,7 @@ def test_guest_blocked(tmp_path):
         handle({'code': 'print(1)'}, _ctx('guest'))
 
 
-def test_kefu_guest_blocked(tmp_path):
+def test_kefu_guest_blocked():
     from tools.run_python import handle, RunPythonError
     with pytest.raises(RunPythonError):
         handle({'code': 'print(1)'}, _ctx('kefu-guest'))

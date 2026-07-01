@@ -14,6 +14,7 @@ def test_is_public_kefu():
 def test_tool_allowed_public_kefu_restricted():
     assert tool_allowed("query_collection", "kefu-guest")
     assert tool_allowed("read_upload", "kefu-guest")
+    assert tool_allowed("list_collections", "kefu-guest")
     assert not tool_allowed("run_python", "kefu-guest")
     assert not tool_allowed("save_artifact", "kefu-guest")
     assert not tool_allowed("read_data_file", "kefu-guest")

@@ -194,35 +194,39 @@ def events(sid):
     if not _sse_acquire(sse_key):
         return jsonify({'error': '并发连接过多，请稍后再试'}), 429
 
-    oc_sid = sess[2]
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    try:
+        oc_sid = sess[2]
+        client = OpenCodeClient(OPENCODE_BASE_URL)
 
-    def generate():
-        logger.info('kefu sse open session=%s oc=%s', sid, oc_sid)
-        state = new_state()
-        try:
-            for evt in client.subscribe_events(directory=sess[4]):
-                etype = evt.get('event', '')
-                props = (evt.get('data') or {}).get('properties') or {}
-                ev_sid = event_session_id(props)
-                if ev_sid and ev_sid != oc_sid:
-                    continue
-                if apply_event(state, evt, oc_sid) == 'idle':
-                    if state['turn_msg_id'] and not has_listener(sid):
-                        persist_turn(sid, state)
-                    state = new_state()
-                yield _format_sse(etype, props)
-        except GeneratorExit:
-            return
-        except Exception:
-            logger.exception('kefu sse stream error session=%s oc=%s', sid, oc_sid)
-            return
-        finally:
-            _sse_release(sse_key)
-            logger.info('kefu sse closed session=%s', sid)
+        def generate():
+            logger.info('kefu sse open session=%s oc=%s', sid, oc_sid)
+            state = new_state()
+            try:
+                for evt in client.subscribe_events(directory=sess[4]):
+                    etype = evt.get('event', '')
+                    props = (evt.get('data') or {}).get('properties') or {}
+                    ev_sid = event_session_id(props)
+                    if ev_sid and ev_sid != oc_sid:
+                        continue
+                    if apply_event(state, evt, oc_sid) == 'idle':
+                        if state['turn_msg_id'] and not has_listener(sid):
+                            persist_turn(sid, state)
+                        state = new_state()
+                    yield _format_sse(etype, props)
+            except GeneratorExit:
+                return
+            except Exception:
+                logger.exception('kefu sse stream error session=%s oc=%s', sid, oc_sid)
+                return
+            finally:
+                _sse_release(sse_key)
+                logger.info('kefu sse closed session=%s', sid)
 
-    return Response(stream_with_context(generate()), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+        return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    except Exception:
+        _sse_release(sse_key)
+        raise
 
 
 @kefu_public_bp.route('/sessions/<sid>/files', methods=['POST'])

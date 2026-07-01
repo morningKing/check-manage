@@ -35,7 +35,7 @@ def test_guest_blocked(tmp_path):
         handle({"filename": "a.py", "content": "x"}, _ctx("guest"))
 
 
-def test_kefu_guest_blocked(tmp_path):
+def test_kefu_guest_blocked():
     from tools.save_artifact import handle, SaveArtifactError
     with pytest.raises(SaveArtifactError):
         handle({"filename": "a.py", "content": "x"}, _ctx("kefu-guest"))
