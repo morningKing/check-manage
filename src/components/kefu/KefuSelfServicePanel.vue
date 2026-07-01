@@ -36,8 +36,9 @@ const visible = computed(() => props.items.filter(i =>
   (filter.value === '' || i.question.includes(filter.value))))
 
 function toggle(id: string) {
-  expandedId.value = expandedId.value === id ? null : id
-  if (expandedId.value === id) emit('click', id)
+  const expanding = expandedId.value !== id
+  expandedId.value = expanding ? id : null
+  if (expanding) emit('click', id)
 }
 function askAi(it: KefuFaqItem) { emit('escalate', it.question) }
 </script>

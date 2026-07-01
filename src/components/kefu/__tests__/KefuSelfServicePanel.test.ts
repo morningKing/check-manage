@@ -14,6 +14,7 @@ const items = [
 const stubs = {
   'el-input': { template: `<input :value="modelValue" @input="$emit('update:modelValue',$event.target.value)" />`, props: ['modelValue'] },
   'el-tag': { template: `<button @click="$emit('click')"><slot/></button>` },
+  'el-button': { template: `<button @click="$emit('click')"><slot/></button>` },
   MdPreview: { template: `<div class="md"><slot/></div>`, props: ['modelValue'] },
 }
 
