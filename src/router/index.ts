@@ -38,6 +38,14 @@ const staticRoutes: RouteRecordRaw[] = [
       public: true,
     },
   },
+  // 访客客服页（公开，无需登录）
+  {
+    path: '/kefu/:slug',
+    name: 'KefuChat',
+    component: () => import('@/views/kefu/KefuChatPage.vue'),
+    props: true,
+    meta: { title: '在线客服', public: true },
+  },
   {
     path: '/',
     name: 'Layout',
