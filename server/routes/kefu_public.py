@@ -84,6 +84,12 @@ def _rate_ok(inst, vid):
     return _limiter.allow(ip_key, DEFAULT_IP_PER_MINUTE, DEFAULT_IP_PER_DAY)
 
 
+def _faqclick_ok(inst_id, vid):
+    key = f"faqclick:{inst_id}:{vid}:{_client_ip()}"
+    # 独立于消息桶：宽松上限，仅防明显灌水。
+    return _limiter.allow(key, 120, 5000)
+
+
 def _sse_acquire(key: str) -> bool:
     """Atomically increment the active-stream counter for *key*.
 
@@ -306,3 +312,23 @@ def upload(sid):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     f.save(dest)
     return jsonify({'name': safe_name, 'path': rel, 'size': os.path.getsize(dest)}), 201
+
+
+@kefu_public_bp.route('/i/<slug>/faq', methods=['GET'])
+def faq_list(slug):
+    inst = kefu_repo.get_instance_by_slug(slug)
+    if not inst:
+        return jsonify({'error': 'not found'}), 404
+    if not inst.get('enabled', True):
+        return jsonify({'items': []})
+    return jsonify({'items': kefu_repo.list_faq_public(inst['id'])})
+
+
+@kefu_public_bp.route('/i/<slug>/faq/<fid>/click', methods=['POST'])
+def faq_click(slug, fid):
+    inst = kefu_repo.get_instance_by_slug(slug)
+    if not inst:
+        return jsonify({'error': 'not found'}), 404
+    if _faqclick_ok(inst['id'], _visitor_id()):
+        kefu_repo.increment_faq_click(inst['id'], fid)  # 静默：命中与否都 204
+    return ('', 204)
