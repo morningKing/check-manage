@@ -244,7 +244,177 @@ cd mcp-server && python main.py
 
 ---
 
-## 9. 后续阶段
+## 9. 热门问题 / 自助服务面板（Stage ①：配置）
+
+### 9.1 这是什么
+
+热门问题是一个**客服实例级的自助知识库**，管理员可为每个客服实例策划一组常见问题。每条热问包含：
+
+- **问题** — 简洁的问题标题
+- **答案** — Markdown 格式的预写回答（支持代码块、列表、链接等）
+- **分类标签** — 可选，用于在访客面板中按分类筛选（如"计费"、"部署"、"功能"）
+- **排序** — 管理员可拖拽调序，决定热问在访客面板中的显示顺序
+- **启用状态** — 切换热问的启用/禁用，禁用后不会出现在访客面板
+- **点击量** — 只读计数器，记录访客浏览该热问的次数，供管理员参考调序
+
+**访客自助体验**（Stage ②）：访客打开客服对话时，可在一个专属面板中浏览热问、按分类筛选、展开查看 Markdown 答案，无需 AI 回复即可自助解决常见问题；点击时自动埋点；若热问未能解决可点击转向 AI。
+
+---
+
+### 9.2 管理配置（后台）
+
+#### 9.2.1 访问管理页面
+
+1. 使用有 `admin.kefu` 权限的账号登录管理端。
+2. 进入 **AI 助手 → 客服管理**（路径 `/admin/kefu`）。
+3. 在实例列表中选择目标客服实例，或新建一个实例（见第 3 节）。
+
+#### 9.2.2 增删改热问
+
+在所选实例的热问编辑器中：
+
+| 操作 | 步骤 |
+|------|------|
+| **新增热问** | 点击「新增热问」按钮 → 填写问题标题 → 用 Markdown 编辑器撰写答案 → 可选添加分类标签 → 点击「保存」 |
+| **编辑热问** | 点击列表中的目标热问行 → 修改标题/答案/标签 → 点击「保存」 |
+| **删除热问** | 点击列表中目标热问行的删除图标 → 确认删除 |
+| **调整排序** | 在列表中拖拽热问行，松开时自动提交排序变更 |
+| **切换启用** | 点击热问行的启用/禁用切换开关 |
+
+#### 9.2.3 字段说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `question` | string | 是 | 问题标题（如"支持私有化部署吗？"） |
+| `answer` | string | 是 | Markdown 格式的答案，可包含代码块、列表、表格、链接等 |
+| `category` | string | 否 | 分类标签（如"计费"、"部署"、"功能"）；支持自由输入 |
+| `sort_order` | number | — | 排序权重，由拖拽操作自动管理 |
+| `enabled` | boolean | — | 是否启用，默认 `true`；禁用后不会出现在公开访客面板 |
+| `click_count` | number | — | 只读，记录访客点击次数，每次访客查看该热问答案时自动递增 |
+
+---
+
+### 9.3 公开端点
+
+#### 9.3.1 获取热问列表
+
+**API：** `GET /kefu/i/<slug>/faq`
+
+无需鉴权，返回指定客服实例的所有**启用的热问**，按 `sort_order` 排序。
+
+**响应示例（200）：**
+
+```json
+{
+  "data": [
+    {
+      "id": "faq_abc123",
+      "instance_id": "kf_presale",
+      "question": "支持私有化部署吗？",
+      "answer": "# 私有化部署\n\n我们提供...",
+      "category": "部署",
+      "sort_order": 1,
+      "click_count": 142,
+      "enabled": true
+    },
+    {
+      "id": "faq_def456",
+      "instance_id": "kf_presale",
+      "question": "如何申请试用？",
+      "answer": "# 试用申请\n\n请填写表单...",
+      "category": "计费",
+      "sort_order": 2,
+      "click_count": 89,
+      "enabled": true
+    }
+  ]
+}
+```
+
+**curl 示例：**
+
+```bash
+curl -s localhost:3002/kefu/i/presale/faq
+```
+
+---
+
+#### 9.3.2 埋点：记录热问点击
+
+**API：** `POST /kefu/i/<slug>/faq/<id>/click`
+
+无需鉴权。访客查看某个热问的答案时调用，自动递增该热问的 `click_count`。
+
+**请求头：**
+
+| 头 | 说明 |
+|----|------|
+| `X-Visitor-Id` | 访客身份标识（可选，用于点击溯源） |
+
+**响应（204）：**
+
+无响应体。仅用于统计，不返回数据。
+
+**curl 示例：**
+
+```bash
+curl -s -X POST localhost:3002/kefu/i/presale/faq/faq_abc123/click \
+  -H 'X-Visitor-Id: visitor-test-1'
+```
+
+---
+
+### 9.4 管理 API（后台操作）
+
+以下接口需要 `admin.kefu` 权限（见第 2 节获取 Token）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/admin/kefu/instances/<instance_id>/faq` | 列出某实例下的所有热问（含禁用的） |
+| `POST` | `/admin/kefu/instances/<instance_id>/faq` | 新增热问 |
+| `PATCH` | `/admin/kefu/instances/<instance_id>/faq/<id>` | 编辑单个热问 |
+| `DELETE` | `/admin/kefu/instances/<instance_id>/faq/<id>` | 删除单个热问 |
+| `PATCH` | `/admin/kefu/instances/<instance_id>/faq/reorder` | 批量重新排序（见下例） |
+
+**新增热问示例：**
+
+```bash
+curl -s -X POST localhost:3002/admin/kefu/instances/kf_presale/faq \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "question": "支持私有化部署吗？",
+    "answer": "# 私有化部署\n\n我们支持私有化部署...",
+    "category": "部署",
+    "enabled": true
+  }'
+```
+
+**重新排序示例：**
+
+```bash
+# 按新的 ID 顺序提交
+curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "faq_ids": ["faq_abc123", "faq_def456", "faq_xyz789"]
+  }'
+```
+
+---
+
+### 9.5 注意事项
+
+- **访客自助面板（Stage ②）**：上述公开端点仅暴露数据接口；访客自助 UI（在对话页内展示热问面板、支持分类筛选、展开 Markdown 答案）属 **Stage ②**，由后续 PR 实现。
+- **Markdown 支持**：答案字段支持标准 Markdown 语法；前端将使用 `MdPreview` 组件渲染。
+- **点击量统计**：仅用于参考，不影响排序、启用状态等配置；管理员可根据点击量调整热问顺序以提升自助转化率。
+- **禁用后的行为**：禁用热问后：
+  - 该热问不出现在 `GET /kefu/i/<slug>/faq` 的返回中
+  - 访客点击该热问的请求被拒（返回 404）
+  - 该热问在管理后台仍可见、可重新启用
+
+---
+
+## 10. 后续阶段
 
 - **Phase 2 — 转人工/人工接管**：`needs_human`/`human_takeover` 状态机、人工消息合并 SSE 通道、管理端会话队列与接管/释放、会话级审计。
 - **Phase 3 — 前端**：独立全页 `/kefu/:slug`、可嵌入 `kefu-widget.js`（独立构建 entry + iframe）、`KefuManager.vue` 管理页、访客匿名 `visitor_id`（localStorage）。Playwright 全流程验证 + 截图。
