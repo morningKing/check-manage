@@ -33,8 +33,8 @@ export function createKefuEventStream(sid: string, h: KefuStreamHandlers): () =>
     es = new EventSource(url)
     es.addEventListener('session.idle', () => h.onIdle())
     es.addEventListener('session.error', (e: MessageEvent) => h.onError(e))
-    es.onerror = (err) => {
-      h.onError(err); es?.close(); if (closed) return
+    es.onerror = () => {
+      es?.close(); if (closed) return
       h.onStatus?.('reconnecting')
       timer = setTimeout(open, RECONNECT_MS[Math.min(attempt, RECONNECT_MS.length - 1)]); attempt += 1
     }
