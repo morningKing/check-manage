@@ -74,3 +74,10 @@ def test_export_requires_collection():
     from tools.export_collection_excel import handle, ExportError
     with pytest.raises(ExportError):
         handle({}, _ctx('admin'))
+
+
+def test_export_rejects_kefu_guest():
+    """kefu-guest must be rejected before any DB call."""
+    from tools.export_collection_excel import handle, ExportError
+    with pytest.raises(ExportError, match="not available for public customer-service sessions"):
+        handle({'collection': 'any'}, _ctx('kefu-guest'))

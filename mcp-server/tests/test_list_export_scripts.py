@@ -21,6 +21,14 @@ def _fake_db(rows_by_call):
     return _get
 
 
+def test_list_rejects_kefu_guest():
+    """kefu-guest must be rejected before any DB call."""
+    import pytest
+    with pytest.raises(PermissionError, match="not available for public customer-service sessions"):
+        from tools.list_export_scripts import handle
+        handle({}, _ctx('kefu-guest'))
+
+
 def test_list_only_bound_scripts_for_role():
     # call order: 1) bound scripts list; 2) s1 target menu roles; 3) s2 target menu roles
     rows = [

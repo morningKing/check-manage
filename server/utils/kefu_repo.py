@@ -168,8 +168,11 @@ def _new_session_id() -> str:
 def create_kefu_session(instance: dict, visitor_id: str) -> dict:
     """建工作区 + 注入护栏 + 生成 token + 写 opencode.json + 创建 OpenCode session + 插入 DB 行。
 
-    返回 {'id': session_id, 'title': '客服会话'}。
+    Returns {'id': session_id, 'title': '客服会话'}.
+    Re-asserts kefu-bot's role on every session creation so a manual DB edit
+    cannot silently widen the bot's access (SPOT: single point of truth).
     """
+    ensure_bot_user()  # idempotent — ON CONFLICT DO UPDATE re-pins role to kefu-guest
     bot_user_id = instance['bot_user_id']
     session_id = _new_session_id()
     workspace_path = create_session_workspace(AI_WORKSPACE_ROOT, bot_user_id, session_id)

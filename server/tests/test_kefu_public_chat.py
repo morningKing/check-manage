@@ -102,10 +102,48 @@ def test_events_sse_release_called_on_stream_end(client):
 
     with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
          patch('routes.kefu_public._sse_acquire', return_value=True), \
+         patch('routes.kefu_public._sse_acquire_ip', return_value=True), \
          patch('routes.kefu_public._sse_release', release_mock), \
+         patch('routes.kefu_public._sse_release_ip'), \
          patch('routes.kefu_public.OpenCodeClient') as MockOC:
         MockOC.return_value.subscribe_events.return_value = iter([])
         resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
         _ = resp.data   # consume the streaming response so the generator runs to completion
 
     release_mock.assert_called_once_with(sse_key)
+
+
+# ---------------------------------------------------------------------------
+# SSE per-IP cap
+# ---------------------------------------------------------------------------
+
+def test_events_sse_ip_cap_helper():
+    """Unit-test _sse_acquire_ip/_sse_release_ip without Flask (deterministic)."""
+    import routes.kefu_public as mod
+    key = '__test_ip_cap_unique__'
+    mod._sse_active.pop(key, None)
+
+    for _ in range(mod.MAX_SSE_PER_IP):
+        assert mod._sse_acquire_ip(key) is True
+    assert mod._sse_acquire_ip(key) is False  # over cap
+
+    mod._sse_release_ip(key)
+    assert mod._sse_acquire_ip(key) is True   # one slot freed
+
+    # Cleanup
+    for _ in range(mod.MAX_SSE_PER_IP):
+        mod._sse_release_ip(key)
+    assert key not in mod._sse_active
+
+
+def test_events_ip_sse_cap_returns_429(client):
+    """When IP SSE cap is hit, visitor slot is released (all-or-nothing) and 429 is returned."""
+    release_mock = MagicMock()
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public._sse_acquire', return_value=True), \
+         patch('routes.kefu_public._sse_acquire_ip', return_value=False), \
+         patch('routes.kefu_public._sse_release', release_mock):
+        resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
+    assert resp.status_code == 429
+    # Visitor slot must have been released since IP cap was full (all-or-nothing).
+    release_mock.assert_called_once()

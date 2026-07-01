@@ -7,6 +7,14 @@ def _ctx(role="admin"):
     return ToolContext(session_id="s1", user_id="u1", role=role)
 
 
+def test_run_rejects_kefu_guest():
+    """kefu-guest must be rejected before any DB call."""
+    import pytest
+    from tools.run_export_script import handle, RunExportError
+    with pytest.raises(RunExportError, match="not available for public customer-service sessions"):
+        handle({'script_id': 'any'}, _ctx('kefu-guest'))
+
+
 def test_run_writes_output_and_summary(tmp_path):
     # script_row (SCRIPT_SELECT order) + workspace_path
     script_row = ('s1', 'JSON导出', "result = '[1,2,3]'", 'json', 'page', 'col-x', None)

@@ -14,7 +14,7 @@
 
 - **公开匿名**：访客通过 `X-Visitor-Id` 头标识身份，无需账号或 JWT Token。
 - **OpenCode Agent 驱动**：每次对话都在 OpenCode 运行时内运行，可调用 MCP 工具读取系统数据页。
-- **RBAC 只读钳制**：Agent 运行在固定 bot 用户（`kefu-bot`）身份下，其角色 `kefu-guest` 的 `default_page_access='none'`——默认看不到任何数据页，只有管理员在 `/admin/roles` 显式授权的数据页才可读，且全程只读。
+- **RBAC 只读钳制**：Agent 运行在固定 bot 用户（`kefu-bot`）身份下，其角色 `kefu-guest` 的 `default_page_access='none'`——默认看不到任何数据页，只有将 `kefu-guest` 加入数据页**菜单的 `roles` 列表**后，Agent 才可读该数据页，且全程只读。
 - **安全护栏**：每个会话工作区注入不可覆盖的系统边界声明（AGENTS.md），防止越权。
 - **多实例**：可为不同场景（售前、售后、技术支持……）创建多个实例，通过 `slug` 区分。
 

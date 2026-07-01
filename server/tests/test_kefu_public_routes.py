@@ -66,7 +66,8 @@ def test_messages_visitor_ownership(client):
 # ---------------------------------------------------------------------------
 
 def test_rate_default_floor_applies_when_unset(client):
-    """When rate_limit dict is empty (no keys), _rate_ok applies DEFAULT_PER_MINUTE/DAY."""
+    """When rate_limit dict is empty, _rate_ok applies DEFAULT_PER_MINUTE/DAY for the
+    per-visitor bucket and DEFAULT_IP_PER_MINUTE/DAY for the IP-only bucket."""
     import routes.kefu_public as mod
     from unittest.mock import MagicMock, patch as _patch
 
@@ -80,13 +81,20 @@ def test_rate_default_floor_applies_when_unset(client):
         resp = client.post('/kefu/i/presale/sessions', headers={'X-Visitor-Id': 'v1'})
 
     assert resp.status_code == 201
-    args = mock_limiter.allow.call_args[0]  # positional: (key, per_minute, per_day)
-    assert args[1] == mod.DEFAULT_PER_MINUTE, f"expected {mod.DEFAULT_PER_MINUTE}, got {args[1]}"
-    assert args[2] == mod.DEFAULT_PER_DAY, f"expected {mod.DEFAULT_PER_DAY}, got {args[2]}"
+    calls = mock_limiter.allow.call_args_list
+    # First call: per-visitor bucket
+    visitor_args = calls[0][0]  # positional args of first call
+    assert visitor_args[1] == mod.DEFAULT_PER_MINUTE, f"expected {mod.DEFAULT_PER_MINUTE}, got {visitor_args[1]}"
+    assert visitor_args[2] == mod.DEFAULT_PER_DAY, f"expected {mod.DEFAULT_PER_DAY}, got {visitor_args[2]}"
+    # Second call: IP-only bucket (fixed floors, no opt-out)
+    ip_args = calls[1][0]
+    assert ip_args[1] == mod.DEFAULT_IP_PER_MINUTE, f"expected {mod.DEFAULT_IP_PER_MINUTE}, got {ip_args[1]}"
+    assert ip_args[2] == mod.DEFAULT_IP_PER_DAY, f"expected {mod.DEFAULT_IP_PER_DAY}, got {ip_args[2]}"
 
 
 def test_rate_explicit_zero_means_unlimited(client):
-    """Explicit 0 in config is the admin opt-out — still passes 0 to allow() (unlimited)."""
+    """Explicit 0 in instance config is the admin opt-out for the per-visitor bucket.
+    The IP-only bucket always uses the fixed floor regardless of the explicit-0."""
     import routes.kefu_public as mod
     from unittest.mock import MagicMock, patch as _patch
 
@@ -100,6 +108,35 @@ def test_rate_explicit_zero_means_unlimited(client):
         resp = client.post('/kefu/i/presale/sessions', headers={'X-Visitor-Id': 'v2'})
 
     assert resp.status_code == 201
-    args = mock_limiter.allow.call_args[0]
-    assert args[1] == 0, f"explicit 0 perMinute must stay 0 (unlimited), got {args[1]}"
-    assert args[2] == 0, f"explicit 0 perDay must stay 0 (unlimited), got {args[2]}"
+    calls = mock_limiter.allow.call_args_list
+    # First call: per-visitor bucket — explicit 0 must stay 0 (unlimited)
+    visitor_args = calls[0][0]
+    assert visitor_args[1] == 0, f"explicit 0 perMinute must stay 0 (unlimited), got {visitor_args[1]}"
+    assert visitor_args[2] == 0, f"explicit 0 perDay must stay 0 (unlimited), got {visitor_args[2]}"
+    # Second call: IP-only bucket — always uses fixed floors (no opt-out applies here)
+    ip_args = calls[1][0]
+    assert ip_args[1] == mod.DEFAULT_IP_PER_MINUTE
+    assert ip_args[2] == mod.DEFAULT_IP_PER_DAY
+
+
+def test_rate_ip_floor_catches_rotating_visitor():
+    """Rotating visitor_id does not bypass the IP-only bucket floor."""
+    import routes.kefu_public as mod
+    from unittest.mock import patch as _patch
+    from utils.rate_limit import RateLimiter
+
+    inst = {'id': 'kf_ipfloor', 'rate_limit': {}}
+    limiter = RateLimiter()
+
+    with _patch.object(mod, '_limiter', limiter), \
+         _patch('routes.kefu_public._client_ip', return_value='10.0.0.99'):
+        # Exhaust the IP per-minute floor with different visitor IDs each time.
+        results = [
+            mod._rate_ok(inst, f'vid-{i}')
+            for i in range(mod.DEFAULT_IP_PER_MINUTE)
+        ]
+        # One more call with a brand-new visitor ID — IP bucket must reject.
+        final = mod._rate_ok(inst, 'vid-brand-new')
+
+    assert all(results), "all requests within IP floor should pass"
+    assert final is False, "IP bucket must block even with a fresh visitor_id"

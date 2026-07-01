@@ -29,8 +29,13 @@ _ALLOWED_EXT = {'.txt', '.md', '.csv', '.json', '.pdf', '.png', '.jpg',
 DEFAULT_PER_MINUTE = 30
 DEFAULT_PER_DAY = 500
 
-# SSE concurrency cap: max open streams per (instance, visitor) pair.
-MAX_SSE_PER_VISITOR = 3
+# Fixed IP-only rate floors — always enforced, not subject to the explicit-0 opt-out.
+DEFAULT_IP_PER_MINUTE = 60
+DEFAULT_IP_PER_DAY = 1000
+
+# SSE concurrency caps.
+MAX_SSE_PER_VISITOR = 3   # max open streams per (instance, visitor) pair
+MAX_SSE_PER_IP = 6        # max open streams per client IP (across all visitors)
 _sse_active: dict = {}   # key -> count
 _sse_lock = threading.Lock()
 
@@ -46,6 +51,14 @@ def _visitor_id():
     return (request.headers.get('X-Visitor-Id') or '').strip()
 
 
+def _client_ip() -> str:
+    # Trust the bundled reverse proxy to set X-Forwarded-For correctly.
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr
+
+
 def _public_config(inst: dict) -> dict:
     return {
         'slug': inst['slug'], 'name': inst['name'],
@@ -58,13 +71,17 @@ def _public_config(inst: dict) -> dict:
 
 def _rate_ok(inst, vid):
     rl = inst.get('rate_limit') or {}
-    key = f"{inst['id']}:{vid}:{request.remote_addr}"
+    key = f"{inst['id']}:{vid}:{_client_ip()}"
     # Absent key → safe default floor; explicit 0 → unlimited (admin opt-out).
     pm = rl.get('perMinute')
     pm = DEFAULT_PER_MINUTE if pm is None else int(pm)
     pd = rl.get('perDay')
     pd = DEFAULT_PER_DAY if pd is None else int(pd)
-    return _limiter.allow(key, pm, pd)
+    if not _limiter.allow(key, pm, pd):
+        return False
+    # Second IP-only bucket with fixed floors (no unlimited opt-out for this bucket).
+    ip_key = f"ip:{inst['id']}:{_client_ip()}"
+    return _limiter.allow(ip_key, DEFAULT_IP_PER_MINUTE, DEFAULT_IP_PER_DAY)
 
 
 def _sse_acquire(key: str) -> bool:
@@ -84,6 +101,31 @@ def _sse_acquire(key: str) -> bool:
 
 def _sse_release(key: str) -> None:
     """Decrement the active-stream counter for *key*, removing it when zero."""
+    with _sse_lock:
+        count = _sse_active.get(key, 0)
+        if count <= 1:
+            _sse_active.pop(key, None)
+        else:
+            _sse_active[key] = count - 1
+
+
+def _sse_acquire_ip(key: str) -> bool:
+    """Atomically increment the active-stream counter for IP-keyed *key*.
+
+    Returns True and bumps the count if still below MAX_SSE_PER_IP;
+    returns False (without modifying the count) when the cap is already met.
+    Unit-testable without a Flask request context.
+    """
+    with _sse_lock:
+        count = _sse_active.get(key, 0)
+        if count >= MAX_SSE_PER_IP:
+            return False
+        _sse_active[key] = count + 1
+        return True
+
+
+def _sse_release_ip(key: str) -> None:
+    """Decrement the active-stream counter for IP-keyed *key*, removing it when zero."""
     with _sse_lock:
         count = _sse_active.get(key, 0)
         if count <= 1:
@@ -191,7 +233,13 @@ def events(sid):
         return jsonify({'error': 'session not found'}), 404
 
     sse_key = f"{sess[5]}:{vid}"
+    ip_key = f"ip:{_client_ip()}"
+
     if not _sse_acquire(sse_key):
+        return jsonify({'error': '并发连接过多，请稍后再试'}), 429
+    # All-or-nothing: if IP cap is full, release the visitor slot we just acquired.
+    if not _sse_acquire_ip(ip_key):
+        _sse_release(sse_key)
         return jsonify({'error': '并发连接过多，请稍后再试'}), 429
 
     try:
@@ -220,12 +268,14 @@ def events(sid):
                 return
             finally:
                 _sse_release(sse_key)
+                _sse_release_ip(ip_key)
                 logger.info('kefu sse closed session=%s', sid)
 
         return Response(stream_with_context(generate()), mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
     except Exception:
         _sse_release(sse_key)
+        _sse_release_ip(ip_key)
         raise
 
 

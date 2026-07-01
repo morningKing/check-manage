@@ -71,6 +71,10 @@ def _cell(v):
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
+    from rbac import is_public_kefu
+    if is_public_kefu(ctx.role):
+        raise ExportError("not available for public customer-service sessions")
+
     collection = (input or {}).get("collection") or ""
     if not collection:
         raise ExportError("collection is required")

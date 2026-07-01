@@ -60,6 +60,26 @@ def test_create_kefu_session_injects_guardrail(mock_conn, mock_cursor):
     assert out['title'] == '客服会话'
 
 
+def test_create_kefu_session_calls_ensure_bot_user(mock_conn, mock_cursor):
+    """create_kefu_session must call ensure_bot_user() on every invocation
+    so a manual role edit on kefu-bot cannot silently widen access."""
+    instance = {
+        'id': 'kf_spot', 'slug': 'test', 'name': '测试',
+        'agent': '', 'model': '', 'system_prompt': '',
+        'bot_user_id': 'kefu-bot',
+    }
+    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)), \
+         patch('utils.kefu_repo.create_session_workspace', return_value='/ws/spot'), \
+         patch('utils.kefu_repo.write_opencode_config'), \
+         patch('utils.kefu_repo.generate_token', return_value='tok_spot'), \
+         patch('utils.kefu_repo.OpenCodeClient') as OC, \
+         patch('utils.kefu_repo._inject_system_prompt'), \
+         patch('utils.kefu_repo.ensure_bot_user') as mock_ensure:
+        OC.return_value.create_session.return_value = 'oc_spot'
+        repo.create_kefu_session(instance, 'visitor-spot')
+    mock_ensure.assert_called_once()
+
+
 def test_load_kefu_session_returns_none_for_wrong_visitor(mock_conn, mock_cursor):
     """load_kefu_session returns None when row not found (mismatched visitor)."""
     mock_cursor.fetchone.return_value = None

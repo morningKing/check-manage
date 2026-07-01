@@ -30,6 +30,10 @@ def _roles_for_menu(cur, menu_id):
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
+    from rbac import is_public_kefu
+    if is_public_kefu(ctx.role):
+        raise PermissionError("not available for public customer-service sessions")
+
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(

@@ -43,6 +43,10 @@ def _workspace(cur, session_id):
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
+    from rbac import is_public_kefu
+    if is_public_kefu(ctx.role):
+        raise RunExportError("not available for public customer-service sessions")
+
     script_id = (input or {}).get("script_id") or ""
     if not script_id:
         raise RunExportError("script_id is required")

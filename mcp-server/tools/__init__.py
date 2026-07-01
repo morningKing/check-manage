@@ -54,7 +54,15 @@ def _dispatch_tool(name: str, arguments: dict, ctx):
 def register_all(server: Server) -> None:
     @server.list_tools()
     async def _list_tools():
-        return [spec for spec, _ in _TOOLS.values()]
+        try:
+            from main import _resolve_context  # lazy import to avoid cycle
+            from rbac import tool_allowed
+            ctx = _resolve_context()
+            return [spec for spec, _ in _TOOLS.values() if tool_allowed(spec.name, ctx.role)]
+        except Exception:
+            # If context resolution fails (e.g. non-kefu session, missing header),
+            # fall back to returning all specs so legitimate sessions are unaffected.
+            return [spec for spec, _ in _TOOLS.values()]
 
     @server.call_tool()
     async def _call(name: str, arguments: dict):
