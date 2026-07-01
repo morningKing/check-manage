@@ -1,6 +1,6 @@
 # 智能客服（Smart Customer Service）Phase 1 使用文档
 
-> 适用阶段：Phase 1（后端 API）。Phase 3（前端全页 + 可嵌入 widget + KefuManager 管理 UI）属后续阶段，本文仅描述 Phase 1 已上线内容。
+> 适用阶段：Phase 1（后端 API）已上线；Stage ②（访客自助页 `/kefu/<slug>`）已交付。可嵌入 widget（`kefu-widget.js`）和 `KefuManager.vue` 管理界面属后续阶段（Phase 3），尚未上线。
 >
 > 配套规格见 `docs/superpowers/specs/`（智能客服设计文档）。
 
@@ -18,7 +18,7 @@
 - **安全护栏**：每个会话工作区注入不可覆盖的系统边界声明（AGENTS.md），防止越权。
 - **多实例**：可为不同场景（售前、售后、技术支持……）创建多个实例，通过 `slug` 区分。
 
-Phase 1 后端仅暴露 JSON API（见第 3 节）。前端全页 `/kefu/<slug>`、可嵌入 `kefu-widget.js` 和 `KefuManager.vue` 管理界面将在 **Phase 3** 落地。
+Phase 1 后端已暴露全套 JSON API（见第 3 节）；Stage ② 已交付访客自助全页（见第 9.5 节）。可嵌入 `kefu-widget.js` 和 `KefuManager.vue` 管理界面将在 **Phase 3** 落地。
 
 ---
 
@@ -142,7 +142,7 @@ curl -s -X POST localhost:3002/admin/kefu/instances \
 | `GET`  | `/kefu/sessions/<sid>/events`     | SSE 事件流（`?visitor_id=<vid>` 查询参数） |
 | `POST` | `/kefu/sessions/<sid>/files`      | 上传文件（multipart，≤20MB，白名单扩展名） |
 
-**分享链接形状**：`/<host>/kefu/<slug>`（Phase 3 前端路由落地，Phase 1 JSON API 可通过上表直接调用）。
+**分享链接形状**：`/<host>/kefu/<slug>`（Stage ② 前端路由已落地；访客页无需登录，详见第 9.5 节）。Phase 1 JSON API 可通过上表直接调用。
 
 ### 文件上传限制
 
@@ -257,7 +257,7 @@ cd mcp-server && python main.py
 - **启用状态** — 切换热问的启用/禁用，禁用后不会出现在访客面板
 - **点击量** — 只读计数器，记录访客浏览该热问的次数，供管理员参考调序
 
-**访客自助体验**（Stage ②）：访客打开客服对话时，可在一个专属面板中浏览热问、按分类筛选、展开查看 Markdown 答案，无需 AI 回复即可自助解决常见问题；点击时自动埋点；若热问未能解决可点击转向 AI。
+**访客自助体验**（Stage ②，已交付）：访客打开客服对话页（`/<host>/kefu/<slug>`，无需登录）时，右上角「🗂 自助服务」抽屉提供热问浏览。访客可按分类标签筛选、关键词搜索，点击一条热问即内联展开其 Markdown 预写答案（同时记录点击埋点）；若热问未能解决可点击「没解决？问 AI」，该问题将直接发入 AI 对话。详见第 9.5 节。
 
 ---
 
@@ -394,19 +394,43 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
 
 ---
 
-### 9.5 注意事项
+### 9.5 访客自助页（Stage ②，已交付）
 
-- **访客自助面板（Stage ②）**：上述公开端点仅暴露数据接口；访客自助 UI（在对话页内展示热问面板、支持分类筛选、展开 Markdown 答案）属 **Stage ②**，由后续 PR 实现。
-- **Markdown 支持**：答案字段支持标准 Markdown 语法；前端将使用 `MdPreview` 组件渲染。
-- **点击量统计**：仅用于参考，不影响排序、启用状态等配置；管理员可根据点击量调整热问顺序以提升自助转化率。
-- **禁用后的行为**：禁用热问后：
-  - 该热问不出现在 `GET /kefu/i/<slug>/faq` 的返回中
-  - 访客点击该热问返回 204（静默无响应体），点击量不计数
-  - 该热问在管理后台仍可见、可重新启用
+访客无需登录，直接通过以下链接访问客服对话页：
+
+```
+http://<host>/kefu/<slug>
+```
+
+例如：`http://example.com/kefu/presale`（slug 为创建实例时设置的标识符）。
+
+**页面布局（对话为主）：**
+
+- 顶部标题栏显示实例名称，右上角有「🗂 自助服务」按钮。
+- 主区域为 AI 对话流：欢迎语（Markdown 渲染）+ 历史消息，底部为输入框 + 发送按钮。
+- 对话由 OpenCode Agent 驱动，访客匿名身份通过 `X-Visitor-Id`（自动写入 `localStorage kefu:visitor_id`）标识，无 JWT/登录。
+
+**「🗂 自助服务」抽屉功能：**
+
+| 功能 | 说明 |
+|------|------|
+| 热问列表 | 列出所有启用的热问，按 `sort_order` 排序 |
+| 分类标签筛选 | 点击分类标签（如「部署」、「计费」）只显示该分类热问；「全部」重置 |
+| 关键词搜索 | 输入框实时过滤，匹配问题标题 |
+| 内联展开 Markdown 答案 | 点击热问标题展开，使用 `MdPreview` 渲染 Markdown（支持代码块、表格等）；再次点击收起 |
+| 点击埋点 | 每次展开热问自动调用 `POST /kefu/i/<slug>/faq/<id>/click`，递增 `click_count`（静默，不影响体验） |
+| 「没解决？问 AI」 | 点击后：关闭抽屉，将该问题文本发入 AI 对话，显示「正在输入…」等待 Agent 回复 |
+
+**注意事项：**
+
+- **Markdown 支持**：答案字段支持标准 Markdown 语法，前端使用 `MdPreview` 组件渲染。
+- **点击量统计**：仅用于参考，不影响排序、启用状态；管理员可根据点击量调整热问顺序以提升自助转化率。
+- **禁用后的行为**：禁用热问后不出现在访客面板；管理后台仍可见、可重新启用。
+- **可嵌入 widget**：独立 `<script>` 嵌入方式（不依赖宿主路由）属 Phase 3，尚未实现。
 
 ---
 
 ## 10. 后续阶段
 
 - **Phase 2 — 转人工/人工接管**：`needs_human`/`human_takeover` 状态机、人工消息合并 SSE 通道、管理端会话队列与接管/释放、会话级审计。
-- **Phase 3 — 前端**：独立全页 `/kefu/:slug`、可嵌入 `kefu-widget.js`（独立构建 entry + iframe）、`KefuManager.vue` 管理页、访客匿名 `visitor_id`（localStorage）。Playwright 全流程验证 + 截图。
+- **Phase 3 — 前端增强**：可嵌入 `kefu-widget.js`（独立构建 entry + iframe，不依赖宿主路由）、`KefuManager.vue` 管理页（`/admin/kefu` 可视化实例/热问管理）、文件上传入访客对话。（访客全页 `/kefu/:slug` 已在 Stage ② 交付，不重复实现。）

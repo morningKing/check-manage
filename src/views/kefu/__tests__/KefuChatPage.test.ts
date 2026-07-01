@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 vi.mock('@/api/kefuPublic', () => ({
   getVisitorId: () => 'v1',
@@ -14,6 +14,7 @@ import * as api from '@/api/kefuPublic'
 import KefuChatPage from '../KefuChatPage.vue'
 
 beforeAll(() => { globalThis.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} } as any })
+beforeEach(() => vi.clearAllMocks())
 const stubs = { 'el-drawer': { template: '<div v-if="modelValue"><slot/></div>', props: ['modelValue'] },
   'el-button': { template: `<button @click="$emit('click')"><slot/></button>` },
   'el-input': { template: `<input :value="modelValue" @input="$emit('update:modelValue',$event.target.value)" />`, props: ['modelValue'] },

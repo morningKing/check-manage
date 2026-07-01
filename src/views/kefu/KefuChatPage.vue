@@ -25,6 +25,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import KefuSelfServicePanel from '@/components/kefu/KefuSelfServicePanel.vue'
 import * as api from '@/api/kefuPublic'
@@ -52,11 +53,11 @@ async function send() {
   draft.value = ''; sending.value = true
   messages.value.push({ id: 'local_' + Date.now(), role: 'user', content: [{ type: 'text', text }], createdAt: null })
   await scrollDown()
-  try { await api.sendKefuMessage(sessionId.value, text) } catch { sending.value = false }
+  try { await api.sendKefuMessage(sessionId.value, text) } catch { ElMessage.error('发送失败，请稍后重试'); sending.value = false }
 }
 
 function onFaqClick(id: string) { api.clickKefuFaq(props.slug, id) }
-async function onEscalate(question: string) { drawer.value = false; draft.value = question; await send() }
+async function onEscalate(question: string) { if (sending.value) return; drawer.value = false; draft.value = question; await send() }
 
 onMounted(async () => {
   config.value = await api.getKefuConfig(props.slug)
