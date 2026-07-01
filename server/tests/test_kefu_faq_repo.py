@@ -39,3 +39,16 @@ def test_reorder_writes_sort_order_by_index(mock_conn, mock_cursor):
     # faq_b → sort_order 0, faq_a → sort_order 1, both scoped to kf_1
     flat = [c[1] for c in calls]
     assert (0, 'faq_b', 'kf_1') in flat and (1, 'faq_a', 'kf_1') in flat
+
+
+def test_list_faq_public_omits_private_fields(mock_conn, mock_cursor):
+    mock_cursor.fetchall.return_value = [('faq_1', 'Q?', 'A', 'billing')]
+    with patch('utils.kefu_repo.get_db', lambda: _cm(mock_conn)):
+        items = repo.list_faq_public('kf_1')
+    assert len(items) == 1
+    item = items[0]
+    assert set(item.keys()) == {'id', 'question', 'answer', 'category'}
+    assert item['id'] == 'faq_1' and item['question'] == 'Q?' and item['answer'] == 'A' and item['category'] == 'billing'
+    assert 'click_count' not in item
+    assert 'enabled' not in item
+    assert 'instance_id' not in item

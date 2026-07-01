@@ -26,6 +26,7 @@ def test_public_faq_list_404(client):
 
 def test_click_increments(client):
     with patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=INST), \
+         patch('routes.kefu_public._faqclick_ok', return_value=True), \
          patch('routes.kefu_public.kefu_repo.increment_faq_click', return_value=True) as m:
         r = client.post('/kefu/i/presale/faq/faq_1/click')
     assert r.status_code == 204
@@ -37,3 +38,12 @@ def test_click_unknown_silent_204(client):
          patch('routes.kefu_public.kefu_repo.increment_faq_click', return_value=False):
         r = client.post('/kefu/i/presale/faq/nope/click')
     assert r.status_code == 204
+
+
+def test_click_rate_limited_silent_204(client):
+    with patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=INST), \
+         patch('routes.kefu_public._faqclick_ok', return_value=False), \
+         patch('routes.kefu_public.kefu_repo.increment_faq_click') as m:
+        r = client.post('/kefu/i/presale/faq/faq_1/click')
+    assert r.status_code == 204
+    m.assert_not_called()

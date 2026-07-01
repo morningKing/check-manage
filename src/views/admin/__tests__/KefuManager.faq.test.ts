@@ -85,12 +85,6 @@ describe('KefuManager - FAQ 逻辑', () => {
     vi.clearAllMocks()
   })
 
-  it('组件可正常挂载', async () => {
-    const wrapper = mount(KefuManager, { global: { stubs } })
-    await nextTick()
-    expect(wrapper.exists()).toBe(true)
-  })
-
   it('onMounted 调用 listInstances', async () => {
     mount(KefuManager, { global: { stubs } })
     await nextTick()
@@ -187,7 +181,7 @@ describe('KefuManager - FAQ 逻辑', () => {
     expect(mockCreateFaq).toHaveBeenCalledWith('inst-1', {
       question: '有效问题',
       answer: '有效答案',
-      category: '',
+      category: null,
       enabled: true,
     })
   })

@@ -119,6 +119,7 @@ const staticRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/KefuManager.vue'),
         meta: {
           title: '智能客服',
+          permission: 'admin.kefu',
         },
       },
       {

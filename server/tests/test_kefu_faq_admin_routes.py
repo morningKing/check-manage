@@ -47,3 +47,16 @@ def test_reorder_ok(client, admin_headers):
                          json={'order': ['faq_b', 'faq_a']}, headers=admin_headers)
     assert r.status_code == 200
     m.assert_called_once_with('kf_1', ['faq_b', 'faq_a'])
+
+
+def test_delete_faq_ownership_404(client, admin_headers):
+    other = {**FAQ, 'instance_id': 'other'}
+    with patch('routes.kefu_admin.kefu_repo.get_faq', return_value=other):
+        r = client.delete('/admin/kefu/instances/kf_1/faq/faq_1', headers=admin_headers)
+    assert r.status_code == 404
+
+
+def test_reorder_invalid_body(client, admin_headers):
+    r = client.patch('/admin/kefu/instances/kf_1/faq/reorder',
+                     json={}, headers=admin_headers)
+    assert r.status_code == 400

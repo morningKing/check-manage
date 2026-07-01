@@ -68,8 +68,9 @@ function openEdit(row: KefuFaq) { editing.value = row; Object.assign(form, { que
 
 async function save() {
   if (!form.question.trim() || !form.answer.trim()) { ElMessage.warning('问题与答案必填'); return }
-  if (editing.value) await api.updateFaq(activeIid.value, editing.value.id, { ...form })
-  else await api.createFaq(activeIid.value, { ...form })
+  const payload = { ...form, category: form.category || null }
+  if (editing.value) await api.updateFaq(activeIid.value, editing.value.id, payload)
+  else await api.createFaq(activeIid.value, payload)
   dialog.value = false; await loadFaq(); ElMessage.success('已保存')
 }
 async function remove(row: KefuFaq) { await api.deleteFaq(activeIid.value, row.id); await loadFaq() }
