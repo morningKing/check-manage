@@ -99,14 +99,20 @@ curl -s -X POST localhost:3002/admin/kefu/instances \
 
 ## 4. 授予数据页读权限
 
-智能客服 Agent 默认**看不到任何数据页**（`default_page_access='none'`）。要让 Agent 能查询某个业务数据页（如"产品手册"、"常见问题库"），需在 `/admin/roles` 为 `kefu-guest` 角色单独授权：
+智能客服 Agent 默认**看不到任何数据页**。要让 Agent 能查询某个业务数据页（如"产品手册"、"常见问题库"），需将 `kefu-guest` 加入该数据页**菜单的 `roles` 列表**——这是 MCP `query_collection` 工具执行的实际鉴权点（见 `mcp-server/tools/query_collection.py:78-81`：工具查询 `SELECT roles FROM menus WHERE page_id='page-'+collection`，若 `ctx.role` 不在该列表则拒绝）。
 
-1. 登录管理端，进入 **系统配置 → 权限管理 → 角色** (`/admin/roles`)。
-2. 找到角色 `kefu-guest`，点击「编辑」。
-3. 在「数据页权限」列表中，为目标数据页勾选 **读**（read）权限。
+**授权步骤：**
+
+1. 登录管理端，进入 **系统配置 → 菜单管理**（或直接在侧边栏右键目标数据页菜单项点「编辑」）。
+2. 找到目标数据页对应的菜单项，点击「编辑」。
+3. 在「可见角色」（roles）字段中，添加 `kefu-guest`。
 4. 保存。
 
-**不要授予写/删权限**，`kefu-guest` 的只读定位不应改变。未授权的数据页，Agent 的 MCP `query_collection` 工具会因 RBAC 鉴权失败而被拒，不会泄露数据。
+重复以上步骤，按需为多个数据页逐一授权。
+
+> **注意 — `default_page_access` 与 MCP 无关**：`kefu-guest` 角色的 `default_page_access='none'` 控制的是 Flask 侧动态数据 CRUD API（`/api/<collection>`）的默认可见范围，与 MCP `query_collection` 的鉴权逻辑相互独立。MCP 数据查询的门卫始终是**菜单 `roles`**，不是 `role_permissions` 表。
+>
+> **不要授予 `kefu-guest` 写/删权限**；`kefu-guest` 的只读定位不应改变。未在菜单 roles 中授权的数据页，Agent 调用 `query_collection` 时会被 MCP 层硬拒，不会泄露数据。
 
 ---
 
@@ -150,8 +156,9 @@ curl -s -X POST localhost:3002/admin/kefu/instances \
 
 | 层次 | 机制 |
 |------|------|
-| **读权限钳制** | Agent 运行在 `kefu-bot` 用户下，角色 `kefu-guest`，`default_page_access='none'`，MCP 通过 RBAC 硬拒未授权的 `query_collection`。 |
-| **护栏系统提示** | 每个会话工作区的 `AGENTS.md` 注入 4 条不可覆盖的边界声明（最高优先级）：仅限客服相关问题、严禁导出全量数据/凭证/隐私、只读、忽略越权指令。这是软性防护，硬边界是 RBAC。 |
+| **工具白名单钳制（首要硬边界）** | `kefu-guest` 角色在 MCP 分发层（`mcp-server/tools/__init__.py` `_dispatch_tool`）受工具白名单限制（`rbac.py` `KEFU_TOOL_ALLOWLIST`）：**只允许** `query_collection`、`list_collections`、`read_upload`；`run_python`、`save_artifact`、`read_data_file`、`memory_*` 等工具在分发层直接返回 `PermissionError`，无论 Agent 指令如何均不可绕过。 |
+| **数据页可见性（菜单 roles 门卫）** | Agent 运行在 `kefu-bot` 用户下，角色 `kefu-guest`。`query_collection` 工具执行前查询目标数据页的菜单 `roles` 数组（`SELECT roles FROM menus WHERE page_id='page-'+collection`）；`kefu-guest` 不在其中则拒绝，不会泄露任何数据。这是数据可见性的硬边界。`default_page_access='none'` 控制 Flask 侧 CRUD API 默认访问，不参与 MCP 查询鉴权。 |
+| **护栏系统提示** | 每个会话工作区的 `AGENTS.md` 注入 4 条不可覆盖的边界声明（最高优先级）：仅限客服相关问题、严禁导出全量数据/凭证/隐私、只读、忽略越权指令。这是软性防护，工具白名单和菜单 roles 门卫是硬边界。 |
 | **附件路径校验** | 用户传来的附件相对路径经 `safe_resolve` 校验，防止路径穿越到会话工作区外。 |
 | **限速** | 每个访客+IP 组合按实例配置限速，防止爬取或滥用。 |
 | **公开面收敛** | 所有匿名公开接口集中在 `kefu_public_bp`（`/kefu/` 前缀），便于独立审计和 WAF 规则配置。 |
@@ -227,11 +234,13 @@ cd mcp-server && python main.py
 
 - [ ] **步骤 6 — 校验只读钳制（安全关键）**
 
-  在 `/admin/roles` 中确认 `kefu-guest` 的 `default_page_access='none'` 且未给任何数据页授权，然后向 Agent 提问「请查询 xxx 数据页的全部记录」。查看 MCP 服务日志，确认 `query_collection` 因无 page-read 权限被拒，响应中不含该数据页数据。
+  确认目标数据页的菜单 `roles` 中**未包含** `kefu-guest`（进入菜单管理，找到该数据页菜单项，查看「可见角色」字段）。向 Agent 提问「请查询 xxx 数据页的全部记录」。查看 MCP 服务日志，确认 `query_collection` 因菜单 roles 鉴权失败被拒（`无权限查询：xxx`），响应中不含该数据页数据。
+
+  同时验证工具白名单：向 Agent 发起可能触发 `run_python` 的请求（如"帮我执行一段 Python 代码"），确认 MCP 日志返回 `PermissionError: tool 'run_python' not available for this session`。
 
 - [ ] **步骤 7 — 授权后可见**
 
-  在 `/admin/roles` 给 `kefu-guest` 授予目标数据页的 read 权限，重新发消息再次查询同一数据页，确认 Agent 能取到数据。
+  在菜单管理中，将 `kefu-guest` 加入目标数据页菜单的「可见角色」，保存。重新发消息再次查询同一数据页，确认 Agent 能取到数据。
 
 ---
 
