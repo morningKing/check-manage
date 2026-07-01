@@ -230,3 +230,107 @@ def load_kefu_session(session_id: str, visitor_id: str):
             (session_id, visitor_id),
         )
         return cur.fetchone()
+
+
+# ---- FAQ (热门问题) ----
+_FAQ_COLS = ("id, instance_id, question, answer, category, "
+             "sort_order, click_count, enabled")
+
+
+def _row_to_faq(r) -> dict:
+    return {
+        'id': r[0], 'instance_id': r[1], 'question': r[2], 'answer': r[3],
+        'category': r[4], 'sort_order': r[5], 'click_count': r[6], 'enabled': r[7],
+    }
+
+
+def create_faq(instance_id: str, payload: dict) -> dict:
+    fid = 'faq_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO kefu_faq_items "
+            "(id, instance_id, question, answer, category, sort_order, enabled) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) "
+            f"RETURNING {_FAQ_COLS}",
+            (fid, instance_id, payload['question'], payload['answer'],
+             payload.get('category') or None, int(payload.get('sort_order') or 0),
+             payload.get('enabled', True)),
+        )
+        return _row_to_faq(cur.fetchone())
+
+
+def list_faq_admin(instance_id: str) -> list:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT {_FAQ_COLS} FROM kefu_faq_items WHERE instance_id=%s "
+            "ORDER BY sort_order ASC, created_at ASC", (instance_id,))
+        return [_row_to_faq(r) for r in cur.fetchall()]
+
+
+def list_faq_public(instance_id: str) -> list:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, question, answer, category FROM kefu_faq_items "
+            "WHERE instance_id=%s AND enabled=true "
+            "ORDER BY sort_order ASC, created_at ASC", (instance_id,))
+        return [{'id': r[0], 'question': r[1], 'answer': r[2], 'category': r[3]}
+                for r in cur.fetchall()]
+
+
+def get_faq(faq_id: str):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT {_FAQ_COLS} FROM kefu_faq_items WHERE id=%s", (faq_id,))
+        r = cur.fetchone()
+        return _row_to_faq(r) if r else None
+
+
+def update_faq(faq_id: str, payload: dict):
+    fields, params = [], []
+    for col in ('question', 'answer', 'category', 'sort_order', 'enabled'):
+        if col in payload:
+            fields.append(f"{col}=%s")
+            val = payload[col]
+            if col == 'category' and val == '':
+                val = None
+            params.append(val)
+    if not fields:
+        return get_faq(faq_id)
+    fields.append("updated_at=now()")
+    params.append(faq_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"UPDATE kefu_faq_items SET {', '.join(fields)} WHERE id=%s "
+                    f"RETURNING {_FAQ_COLS}", tuple(params))
+        r = cur.fetchone()
+        return _row_to_faq(r) if r else None
+
+
+def delete_faq(faq_id: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM kefu_faq_items WHERE id=%s", (faq_id,))
+        return cur.rowcount > 0
+
+
+def reorder_faq(instance_id: str, id_list: list) -> None:
+    with get_db() as conn:
+        cur = conn.cursor()
+        for idx, fid in enumerate(id_list):
+            cur.execute(
+                "UPDATE kefu_faq_items SET sort_order=%s, updated_at=now() "
+                "WHERE id=%s AND instance_id=%s",
+                (idx, fid, instance_id))
+
+
+def increment_faq_click(instance_id: str, faq_id: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE kefu_faq_items SET click_count = click_count + 1 "
+            "WHERE id=%s AND instance_id=%s AND enabled=true",
+            (faq_id, instance_id))
+        return cur.rowcount > 0
