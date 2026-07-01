@@ -103,6 +103,8 @@ def update_faq(iid, fid):
     if not _faq_owned(iid, fid):
         return jsonify({'error': 'not found'}), 404
     faq = kefu_repo.update_faq(fid, request.get_json(silent=True) or {})
+    if not faq:
+        return jsonify({'error': 'not found'}), 404
     log_operation('update', 'kefu_faq_item', fid, faq['question'][:50], '更新热问')
     return jsonify(faq)
 

@@ -306,26 +306,18 @@ cd mcp-server && python main.py
 
 ```json
 {
-  "data": [
+  "items": [
     {
       "id": "faq_abc123",
-      "instance_id": "kf_presale",
       "question": "支持私有化部署吗？",
       "answer": "# 私有化部署\n\n我们提供...",
-      "category": "部署",
-      "sort_order": 1,
-      "click_count": 142,
-      "enabled": true
+      "category": "部署"
     },
     {
       "id": "faq_def456",
-      "instance_id": "kf_presale",
       "question": "如何申请试用？",
       "answer": "# 试用申请\n\n请填写表单...",
-      "category": "计费",
-      "sort_order": 2,
-      "click_count": 89,
-      "enabled": true
+      "category": "计费"
     }
   ]
 }
@@ -396,7 +388,7 @@ curl -s -X POST localhost:3002/admin/kefu/instances/kf_presale/faq \
 curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{
-    "faq_ids": ["faq_abc123", "faq_def456", "faq_xyz789"]
+    "order": ["faq_abc123", "faq_def456", "faq_xyz789"]
   }'
 ```
 
@@ -409,7 +401,7 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
 - **点击量统计**：仅用于参考，不影响排序、启用状态等配置；管理员可根据点击量调整热问顺序以提升自助转化率。
 - **禁用后的行为**：禁用热问后：
   - 该热问不出现在 `GET /kefu/i/<slug>/faq` 的返回中
-  - 访客点击该热问的请求被拒（返回 404）
+  - 访客点击该热问返回 204（静默无响应体），点击量不计数
   - 该热问在管理后台仍可见、可重新启用
 
 ---

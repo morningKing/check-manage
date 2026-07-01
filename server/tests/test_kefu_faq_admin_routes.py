@@ -60,3 +60,11 @@ def test_reorder_invalid_body(client, admin_headers):
     r = client.patch('/admin/kefu/instances/kf_1/faq/reorder',
                      json={}, headers=admin_headers)
     assert r.status_code == 400
+
+
+def test_patch_faq_deleted_race_404(client, admin_headers):
+    with patch('routes.kefu_admin.kefu_repo.get_faq', return_value=FAQ), \
+         patch('routes.kefu_admin.kefu_repo.update_faq', return_value=None):
+        r = client.patch('/admin/kefu/instances/kf_1/faq/faq_1',
+                         json={'question': 'X'}, headers=admin_headers)
+    assert r.status_code == 404
