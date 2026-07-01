@@ -456,6 +456,20 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS needs_human    BOOLEAN NOT
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS human_takeover BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_chat_sess_kefu ON ai_chat_sessions(kefu_instance_id, visitor_id);
 
+CREATE TABLE IF NOT EXISTS kefu_faq_items (
+  id           VARCHAR(100) PRIMARY KEY,
+  instance_id  VARCHAR(100) NOT NULL REFERENCES kefu_instances(id) ON DELETE CASCADE,
+  question     TEXT NOT NULL,
+  answer       TEXT NOT NULL,
+  category     VARCHAR(100),
+  sort_order   INTEGER NOT NULL DEFAULT 0,
+  click_count  INTEGER NOT NULL DEFAULT 0,
+  enabled      BOOLEAN NOT NULL DEFAULT true,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kefu_faq_instance ON kefu_faq_items(instance_id, sort_order);
+
 -- ==================== autoSequence 原子计数器表 ====================
 CREATE TABLE IF NOT EXISTS dynamic_sequences (
     collection    VARCHAR(200) NOT NULL,
