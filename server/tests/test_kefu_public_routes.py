@@ -59,3 +59,47 @@ def test_messages_visitor_ownership(client):
         resp = client.get('/kefu/sessions/sess_x/messages',
                           headers={'X-Visitor-Id': 'v1'})
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Default rate-limit floor
+# ---------------------------------------------------------------------------
+
+def test_rate_default_floor_applies_when_unset(client):
+    """When rate_limit dict is empty (no keys), _rate_ok applies DEFAULT_PER_MINUTE/DAY."""
+    import routes.kefu_public as mod
+    from unittest.mock import MagicMock, patch as _patch
+
+    inst_no_limit = {**INST, 'rate_limit': {}}
+    mock_limiter = MagicMock()
+    mock_limiter.allow.return_value = True
+
+    with _patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=inst_no_limit), \
+         _patch('routes.kefu_public.kefu_repo.create_kefu_session', return_value={'id': 's1'}), \
+         _patch.object(mod, '_limiter', mock_limiter):
+        resp = client.post('/kefu/i/presale/sessions', headers={'X-Visitor-Id': 'v1'})
+
+    assert resp.status_code == 201
+    args = mock_limiter.allow.call_args[0]  # positional: (key, per_minute, per_day)
+    assert args[1] == mod.DEFAULT_PER_MINUTE, f"expected {mod.DEFAULT_PER_MINUTE}, got {args[1]}"
+    assert args[2] == mod.DEFAULT_PER_DAY, f"expected {mod.DEFAULT_PER_DAY}, got {args[2]}"
+
+
+def test_rate_explicit_zero_means_unlimited(client):
+    """Explicit 0 in config is the admin opt-out — still passes 0 to allow() (unlimited)."""
+    import routes.kefu_public as mod
+    from unittest.mock import MagicMock, patch as _patch
+
+    inst_zero = {**INST, 'rate_limit': {'perMinute': 0, 'perDay': 0}}
+    mock_limiter = MagicMock()
+    mock_limiter.allow.return_value = True
+
+    with _patch('routes.kefu_public.kefu_repo.get_instance_by_slug', return_value=inst_zero), \
+         _patch('routes.kefu_public.kefu_repo.create_kefu_session', return_value={'id': 's2'}), \
+         _patch.object(mod, '_limiter', mock_limiter):
+        resp = client.post('/kefu/i/presale/sessions', headers={'X-Visitor-Id': 'v2'})
+
+    assert resp.status_code == 201
+    args = mock_limiter.allow.call_args[0]
+    assert args[1] == 0, f"explicit 0 perMinute must stay 0 (unlimited), got {args[1]}"
+    assert args[2] == 0, f"explicit 0 perDay must stay 0 (unlimited), got {args[2]}"

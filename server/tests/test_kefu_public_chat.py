@@ -59,3 +59,37 @@ def test_send_message_ratelimited(client):
         resp = client.post('/kefu/sessions/sess_1/messages', json={'content': 'hi'},
                            headers={'X-Visitor-Id': 'v1'})
     assert resp.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# SSE concurrency cap
+# ---------------------------------------------------------------------------
+
+def test_events_sse_acquire_release_helper():
+    """Unit-test _sse_acquire/_sse_release without Flask (deterministic)."""
+    import routes.kefu_public as mod
+    key = '__test_sse_cap_unique_key__'
+    # Ensure clean state
+    mod._sse_active.pop(key, None)
+
+    assert mod._sse_acquire(key) is True   # 1st
+    assert mod._sse_acquire(key) is True   # 2nd
+    assert mod._sse_acquire(key) is True   # 3rd  (== MAX_SSE_PER_VISITOR)
+    assert mod._sse_acquire(key) is False  # 4th  -> rejected
+
+    mod._sse_release(key)                  # free one slot
+    assert mod._sse_acquire(key) is True   # now 3 again -> allowed
+
+    # Cleanup
+    mod._sse_release(key)
+    mod._sse_release(key)
+    mod._sse_release(key)
+    assert key not in mod._sse_active
+
+
+def test_events_concurrency_cap(client):
+    """4th concurrent SSE stream for same visitor+instance returns 429."""
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public._sse_acquire', return_value=False):
+        resp = client.get('/kefu/sessions/sess_1/events?visitor_id=v1')
+    assert resp.status_code == 429

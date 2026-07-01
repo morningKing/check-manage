@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 from db import get_db
 from utils import kefu_repo
@@ -22,6 +23,16 @@ logger = logging.getLogger(__name__)
 _MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 _ALLOWED_EXT = {'.txt', '.md', '.csv', '.json', '.pdf', '.png', '.jpg',
                 '.jpeg', '.gif', '.xlsx', '.docx'}
+
+# Rate-limit defaults applied when the instance config omits a key entirely.
+# An explicit 0 in config still means "unlimited" (admin opt-out).
+DEFAULT_PER_MINUTE = 30
+DEFAULT_PER_DAY = 500
+
+# SSE concurrency cap: max open streams per (instance, visitor) pair.
+MAX_SSE_PER_VISITOR = 3
+_sse_active: dict = {}   # key -> count
+_sse_lock = threading.Lock()
 
 
 def _format_sse(event, data):
@@ -48,7 +59,37 @@ def _public_config(inst: dict) -> dict:
 def _rate_ok(inst, vid):
     rl = inst.get('rate_limit') or {}
     key = f"{inst['id']}:{vid}:{request.remote_addr}"
-    return _limiter.allow(key, int(rl.get('perMinute') or 0), int(rl.get('perDay') or 0))
+    # Absent key → safe default floor; explicit 0 → unlimited (admin opt-out).
+    pm = rl.get('perMinute')
+    pm = DEFAULT_PER_MINUTE if pm is None else int(pm)
+    pd = rl.get('perDay')
+    pd = DEFAULT_PER_DAY if pd is None else int(pd)
+    return _limiter.allow(key, pm, pd)
+
+
+def _sse_acquire(key: str) -> bool:
+    """Atomically increment the active-stream counter for *key*.
+
+    Returns True and bumps the count if still below MAX_SSE_PER_VISITOR;
+    returns False (without modifying the count) when the cap is already met.
+    Unit-testable without a Flask request context.
+    """
+    with _sse_lock:
+        count = _sse_active.get(key, 0)
+        if count >= MAX_SSE_PER_VISITOR:
+            return False
+        _sse_active[key] = count + 1
+        return True
+
+
+def _sse_release(key: str) -> None:
+    """Decrement the active-stream counter for *key*, removing it when zero."""
+    with _sse_lock:
+        count = _sse_active.get(key, 0)
+        if count <= 1:
+            _sse_active.pop(key, None)
+        else:
+            _sse_active[key] = count - 1
 
 
 @kefu_public_bp.route('/i/<slug>', methods=['GET'])
@@ -148,6 +189,11 @@ def events(sid):
     sess = kefu_repo.load_kefu_session(sid, vid)
     if not sess:
         return jsonify({'error': 'session not found'}), 404
+
+    sse_key = f"{sess[5]}:{vid}"
+    if not _sse_acquire(sse_key):
+        return jsonify({'error': '并发连接过多，请稍后再试'}), 429
+
     oc_sid = sess[2]
     client = OpenCodeClient(OPENCODE_BASE_URL)
 
@@ -172,6 +218,7 @@ def events(sid):
             logger.exception('kefu sse stream error session=%s oc=%s', sid, oc_sid)
             return
         finally:
+            _sse_release(sse_key)
             logger.info('kefu sse closed session=%s', sid)
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
