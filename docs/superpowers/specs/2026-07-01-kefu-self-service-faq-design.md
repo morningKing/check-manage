@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_kefu_faq_instance
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/kefu/i/<slug>/faq` | 返回该实例 `enabled=true` 的热问列表（`id, question, answer, category`），按 `sort_order` 升序。一次拉全（含答案），访客端即时展开、无额外请求。实例不存在→404；停用（`enabled=false`）→返回空列表（面板隐藏）。 |
-| POST | `/kefu/i/<slug>/faq/<id>/click` | 点击量 `click_count + 1`，返回 204。轻量埋点：经 `_rate_ok` 限速防刷；id 不属于该实例或已停用→静默 204（不泄露存在性，不报错）。 |
+| POST | `/kefu/i/<slug>/faq/<id>/click` | 点击量 `click_count + 1`，返回 204。轻量埋点：经**独立**的点击限速桶（key 前缀 `faqclick:`，独立于消息桶，避免浏览 FAQ 挤占对话额度）防刷；id 不属于该实例或已停用→静默 204（不泄露存在性，不报错）。 |
 
 > 归属校验：click 端点校验 `faq.instance_id` 属于 `slug` 指向的实例。`click_count` 自增用参数化 `UPDATE ... SET click_count = click_count + 1`（并发安全）。
 
@@ -117,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_kefu_faq_instance
 ## 8. 安全
 
 - FAQ 内容为管理员策划的公开文案，匿名只读安全。
-- `/faq/<id>/click` 经 `_rate_ok`（Phase 1 的按 visitor+IP 双桶限速）防止点击量灌水。
+- `/faq/<id>/click` 经**独立的点击限速桶**（`faqclick:` 前缀，复用 `RateLimiter` 但独立于消息桶）防止点击量灌水，且不挤占对话额度。
 - 管理 CRUD 由 `admin.kefu` 钳制；归属校验防跨实例操作。
 - 访客页无鉴权守卫，但仅调用公开 `kefu_public_bp` 端点（攻击面仍收敛在该蓝图）。
 
