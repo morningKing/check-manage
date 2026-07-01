@@ -114,6 +114,14 @@ const staticRoutes: RouteRecordRaw[] = [
       { path: 'admin/backup', redirect: '/admin/sys-ops?tab=backup' },
       { path: 'admin/system-settings', redirect: '/admin/general' },
       {
+        path: 'admin/kefu',
+        name: 'KefuManager',
+        component: () => import('@/views/admin/KefuManager.vue'),
+        meta: {
+          title: '智能客服',
+        },
+      },
+      {
         path: 'admin/trigger-rules',
         name: 'TriggerRuleManager',
         component: () => import('@/views/admin/TriggerRuleManager.vue'),
