@@ -34,6 +34,23 @@ def tool_specs() -> list[tuple[str, str]]:
     return [(spec.name, spec.description or "") for spec, _ in _TOOLS.values()]
 
 
+def _dispatch_tool(name: str, arguments: dict, ctx):
+    """Module-level dispatch helper (testable without MCP server).
+
+    Enforces the central tool allowlist before calling the handler.
+    Raises ValueError for unknown tools, PermissionError when the caller's
+    role is not permitted to invoke the tool.
+    """
+    from rbac import tool_allowed
+    entry = _TOOLS.get(name)
+    if entry is None:
+        raise ValueError(f"unknown tool: {name}")
+    if not tool_allowed(name, ctx.role):
+        raise PermissionError(f"tool '{name}' not available for this session")
+    result = entry[1](arguments, ctx)
+    return [types.TextContent(type="text", text=str(result))]
+
+
 def register_all(server: Server) -> None:
     @server.list_tools()
     async def _list_tools():
@@ -41,10 +58,6 @@ def register_all(server: Server) -> None:
 
     @server.call_tool()
     async def _call(name: str, arguments: dict):
-        entry = _TOOLS.get(name)
-        if entry is None:
-            raise ValueError(f"unknown tool: {name}")
         from main import _resolve_context  # lazy import to avoid cycle
         ctx = _resolve_context()
-        result = entry[1](arguments or {}, ctx)
-        return [types.TextContent(type="text", text=str(result))]
+        return _dispatch_tool(name, arguments or {}, ctx)
