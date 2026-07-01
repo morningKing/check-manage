@@ -61,3 +61,57 @@ def delete_instance(iid):
         return jsonify({'error': 'not found'}), 404
     log_operation('delete', 'kefu_instance', iid, iid, '删除客服实例')
     return jsonify({'ok': True})
+
+
+def _faq_owned(iid, fid):
+    faq = kefu_repo.get_faq(fid)
+    return faq if (faq and faq['instance_id'] == iid) else None
+
+
+@kefu_admin_bp.route('/instances/<iid>/faq', methods=['GET'])
+@require_permission('admin.kefu')
+def list_faq(iid):
+    return jsonify({'items': kefu_repo.list_faq_admin(iid)})
+
+
+@kefu_admin_bp.route('/instances/<iid>/faq', methods=['POST'])
+@require_permission('admin.kefu')
+def create_faq(iid):
+    if not kefu_repo.get_instance(iid):
+        return jsonify({'error': 'instance not found'}), 404
+    body = request.get_json(silent=True) or {}
+    if not (body.get('question') or '').strip() or not (body.get('answer') or '').strip():
+        return jsonify({'error': 'question 与 answer 必填'}), 400
+    faq = kefu_repo.create_faq(iid, body)
+    log_operation('create', 'kefu_faq_item', faq['id'], faq['question'][:50], '新建热问')
+    return jsonify(faq), 201
+
+
+@kefu_admin_bp.route('/instances/<iid>/faq/reorder', methods=['PATCH'])
+@require_permission('admin.kefu')
+def reorder_faq(iid):
+    order = (request.get_json(silent=True) or {}).get('order')
+    if not isinstance(order, list):
+        return jsonify({'error': 'order must be a list'}), 400
+    kefu_repo.reorder_faq(iid, order)
+    return jsonify({'ok': True})
+
+
+@kefu_admin_bp.route('/instances/<iid>/faq/<fid>', methods=['PATCH'])
+@require_permission('admin.kefu')
+def update_faq(iid, fid):
+    if not _faq_owned(iid, fid):
+        return jsonify({'error': 'not found'}), 404
+    faq = kefu_repo.update_faq(fid, request.get_json(silent=True) or {})
+    log_operation('update', 'kefu_faq_item', fid, faq['question'][:50], '更新热问')
+    return jsonify(faq)
+
+
+@kefu_admin_bp.route('/instances/<iid>/faq/<fid>', methods=['DELETE'])
+@require_permission('admin.kefu')
+def delete_faq(iid, fid):
+    if not _faq_owned(iid, fid):
+        return jsonify({'error': 'not found'}), 404
+    kefu_repo.delete_faq(fid)
+    log_operation('delete', 'kefu_faq_item', fid, fid, '删除热问')
+    return jsonify({'ok': True})
