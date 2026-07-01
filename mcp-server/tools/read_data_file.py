@@ -9,9 +9,10 @@ agent has no way to dereference uid → actual bytes.
 Lookup: dynamic_data[id=record_id][field] → list of {uid: data_files.id} →
 data_files row → storage_path on disk → file contents.
 
-Auth: same MCP token-validated identity as the other tools. Any non-guest user
-who reached this MCP token already has data-page read access, so we don't
-re-check ACL per row.
+Auth: same MCP token-validated identity as the other tools. Access is gated by
+the menu's role list (like query_collection): the caller's role must appear in
+the collection's menu roles. Admin bypasses the gate; collections with no menu
+row are denied for non-admin roles.
 """
 
 import os
@@ -62,6 +63,15 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     if not collection or not record_id or not field:
         raise ReadDataFileError("collection, record_id, field required")
+
+    # Menu-role gate: caller's role must be in the collection's menu roles (admin bypasses).
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT roles FROM menus WHERE page_id = %s", ('page-' + collection,))
+        mrow = cur.fetchone()
+        roles = mrow[0] if mrow else None
+        if ctx.role != "admin" and (roles is None or ctx.role not in roles):
+            raise ReadDataFileError(f"role {ctx.role} 无权读取 {collection} 的文件")
 
     with get_db() as conn:
         cur = conn.cursor()

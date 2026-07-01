@@ -35,6 +35,12 @@ def test_guest_blocked(tmp_path):
         handle({"filename": "a.py", "content": "x"}, _ctx("guest"))
 
 
+def test_kefu_guest_blocked(tmp_path):
+    from tools.save_artifact import handle, SaveArtifactError
+    with pytest.raises(SaveArtifactError):
+        handle({"filename": "a.py", "content": "x"}, _ctx("kefu-guest"))
+
+
 def test_missing_args(fake_db, mock_cursor):
     from tools.save_artifact import handle, SaveArtifactError
     with patch("tools.save_artifact.get_db", fake_db):

@@ -59,6 +59,12 @@ def test_guest_blocked(tmp_path):
         handle({'code': 'print(1)'}, _ctx('guest'))
 
 
+def test_kefu_guest_blocked(tmp_path):
+    from tools.run_python import handle, RunPythonError
+    with pytest.raises(RunPythonError):
+        handle({'code': 'print(1)'}, _ctx('kefu-guest'))
+
+
 def test_requires_code(tmp_path):
     with patch('tools.run_python.get_db', _fake_db(str(tmp_path))):
         from tools.run_python import handle, RunPythonError

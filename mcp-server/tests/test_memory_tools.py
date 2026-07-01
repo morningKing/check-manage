@@ -21,3 +21,24 @@ def test_delete():
     with patch('tools.memory.memory_client.delete') as d:
         memtool.handle_delete({'memoryId': 'm1'}, CTX)
     d.assert_called_once_with('m1')
+
+
+KEFU_CTX = ToolContext(session_id='s', user_id='kefu-bot', role='kefu-guest')
+
+
+def test_memory_search_blocked_for_kefu():
+    import pytest
+    with pytest.raises(PermissionError):
+        memtool.handle_search({'query': 'x'}, KEFU_CTX)
+
+
+def test_memory_add_blocked_for_kefu():
+    import pytest
+    with pytest.raises(PermissionError):
+        memtool.handle_add({'text': 'remember this'}, KEFU_CTX)
+
+
+def test_memory_delete_blocked_for_kefu():
+    import pytest
+    with pytest.raises(PermissionError):
+        memtool.handle_delete({'memoryId': 'm1'}, KEFU_CTX)

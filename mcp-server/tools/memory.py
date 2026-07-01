@@ -2,6 +2,7 @@
 internal endpoints so Flask stays the sole mem0/Chroma owner. Scope = ctx.user_id."""
 import mcp.types as types
 from context import ToolContext
+from rbac import is_public_kefu
 import memory_client
 
 SEARCH = types.Tool(
@@ -23,6 +24,8 @@ DELETE = types.Tool(
 
 
 def handle_search(args: dict, ctx: ToolContext) -> str:
+    if is_public_kefu(ctx.role):
+        raise PermissionError("memory is not available for public customer-service sessions")
     rows = memory_client.search(ctx.user_id, args.get("query", ""), int(args.get("limit", 5)))
     if not rows:
         return "（无相关记忆）"
@@ -30,10 +33,14 @@ def handle_search(args: dict, ctx: ToolContext) -> str:
 
 
 def handle_add(args: dict, ctx: ToolContext) -> str:
+    if is_public_kefu(ctx.role):
+        raise PermissionError("memory is not available for public customer-service sessions")
     memory_client.add(ctx.user_id, args.get("text", ""))
     return "已记住。"
 
 
 def handle_delete(args: dict, ctx: ToolContext) -> str:
+    if is_public_kefu(ctx.role):
+        raise PermissionError("memory is not available for public customer-service sessions")
     memory_client.delete(args.get("memoryId", ""))
     return "已删除。"

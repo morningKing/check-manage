@@ -17,6 +17,7 @@ import tempfile
 import mcp.types as types
 from db import get_db
 from context import ToolContext
+from rbac import is_readonly
 
 
 NAME = "run_python"
@@ -76,8 +77,8 @@ def _list_outputs(out_dir: str):
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
-    if ctx.role == "guest":
-        raise RunPythonError("guest is not allowed to run code")
+    if is_readonly(ctx.role):
+        raise RunPythonError("read-only role is not allowed to run code")
     code = (input or {}).get("code")
     if not code or not isinstance(code, str):
         raise RunPythonError("code is required")

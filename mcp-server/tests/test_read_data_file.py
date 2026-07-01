@@ -10,11 +10,15 @@ def _ctx(role="developer"):
     return ToolContext(session_id="s1", user_id="u1", role=role)
 
 
-def _fake_get_db(record_data, file_row):
-    """Two-step get_db: first SELECT fetches the dynamic_data row (one tuple),
-    second fetches the data_files row. file_row=None → 404 on file."""
+def _fake_get_db(record_data, file_row, menu_roles=None):
+    """Three-step get_db: first SELECT fetches the menus roles (menu-gate check),
+    second fetches the dynamic_data row, third fetches the data_files row.
+    menu_roles defaults to ['admin', 'developer'] so existing tests (role='developer')
+    pass the gate without changes to their call sites. file_row=None → 404 on file."""
+    if menu_roles is None:
+        menu_roles = ['admin', 'developer']
     cur = MagicMock()
-    sequence = [record_data, file_row]
+    sequence = [(menu_roles,), record_data, file_row]
     state = {"i": 0}
 
     def fetchone():
@@ -105,3 +109,21 @@ def test_missing_arguments_raise():
     from tools.read_data_file import handle, ReadDataFileError
     with pytest.raises(ReadDataFileError):
         handle({}, _ctx())
+
+
+def test_kefu_guest_denied_when_not_in_menu_roles(monkeypatch):
+    from tools.read_data_file import handle, ReadDataFileError
+    from context import ToolContext
+    from unittest.mock import MagicMock
+    from contextlib import contextmanager
+    cur = MagicMock()
+    cur.fetchone.return_value = (["admin", "developer"],)  # roles for the menu; no kefu-guest
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    @contextmanager
+    def _get():
+        yield conn
+    monkeypatch.setattr('tools.read_data_file.get_db', _get)
+    with pytest.raises(ReadDataFileError):
+        handle({'collection': 'secret', 'record_id': 'R1', 'field': 'f'},
+               ToolContext(session_id='s', user_id='kefu-bot', role='kefu-guest'))

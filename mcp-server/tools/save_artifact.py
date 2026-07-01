@@ -6,6 +6,7 @@ import os
 import mcp.types as types
 from db import get_db
 from context import ToolContext
+from rbac import is_readonly
 
 
 NAME = "save_artifact"
@@ -45,8 +46,8 @@ def _workspace_for_session(session_id: str):
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
-    if ctx.role == "guest":
-        raise SaveArtifactError("guest is not allowed to write files")
+    if is_readonly(ctx.role):
+        raise SaveArtifactError("read-only role is not allowed to write files")
     filename = (input or {}).get("filename") or ""
     content = (input or {}).get("content")
     if not filename or content is None:
