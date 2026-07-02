@@ -12,3 +12,10 @@ export function createFaq(iid: string, data: Partial<KefuFaq>) { return post<Kef
 export function updateFaq(iid: string, fid: string, data: Partial<KefuFaq>) { return patch<KefuFaq>(`/admin/kefu/instances/${iid}/faq/${fid}`, data) }
 export function deleteFaq(iid: string, fid: string) { return del(`/admin/kefu/instances/${iid}/faq/${fid}`) }
 export function reorderFaq(iid: string, order: string[]) { return patch(`/admin/kefu/instances/${iid}/faq/reorder`, { order }) }
+
+export interface KefuInstanceFull extends KefuInstance {
+  guided_questions?: string[]
+  panel_blocks?: any[]
+}
+export function getInstance(iid: string) { return get<KefuInstanceFull>(`/admin/kefu/instances/${iid}`) }
+export function updateInstance(iid: string, data: Partial<KefuInstanceFull>) { return patch<KefuInstanceFull>(`/admin/kefu/instances/${iid}`, data) }

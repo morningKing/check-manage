@@ -1,7 +1,7 @@
 <template>
   <div class="kefu-manager">
     <el-page-header content="智能客服 · 热门问题" />
-    <el-select v-model="activeIid" placeholder="选择客服实例" @change="loadFaq" style="width:280px;margin:12px 0">
+    <el-select v-model="activeIid" placeholder="选择客服实例" @change="onInstanceChange" style="width:280px;margin:12px 0">
       <el-option v-for="i in instances" :key="i.id" :label="i.name" :value="i.id" />
     </el-select>
     <el-button type="primary" :disabled="!activeIid" @click="openCreate">新增热问</el-button>
@@ -28,6 +28,27 @@
       </el-table-column>
     </el-table>
 
+    <!-- 主页配置：提示气泡 + 自助区块 -->
+    <template v-if="activeIid">
+      <el-divider />
+      <div class="home-config-section">
+        <div class="section-title">提示气泡（guided_questions）</div>
+        <div v-for="(_, idx) in bubbles" :key="idx" class="bubble-row">
+          <el-input v-model="bubbles[idx]" placeholder="提示语" style="width:360px" />
+          <el-button link :disabled="idx===0" @click="moveBubble(idx,-1)">↑</el-button>
+          <el-button link :disabled="idx===bubbles.length-1" @click="moveBubble(idx,1)">↓</el-button>
+          <el-button link type="danger" @click="removeBubble(idx)">删除</el-button>
+        </div>
+        <el-button size="small" style="margin-top:6px" @click="addBubble">+ 添加气泡</el-button>
+      </div>
+
+      <div class="home-config-section" style="margin-top:16px">
+        <KefuBlocksEditor v-model="blocks" />
+      </div>
+
+      <el-button type="primary" style="margin-top:16px" @click="saveHome">保存主页配置</el-button>
+    </template>
+
     <el-dialog v-model="dialog" :title="editing?.id ? '编辑热问' : '新增热问'" width="720px">
       <el-form label-width="72px">
         <el-form-item label="问题"><el-input v-model="form.question" /></el-form-item>
@@ -52,6 +73,7 @@ import { MdEditor } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 import * as api from '@/api/kefu'
 import type { KefuFaq, KefuInstance } from '@/api/kefu'
+import KefuBlocksEditor from '@/components/kefu/KefuBlocksEditor.vue'
 
 const instances = ref<KefuInstance[]>([])
 const activeIid = ref('')
@@ -60,8 +82,34 @@ const dialog = ref(false)
 const editing = ref<KefuFaq | null>(null)
 const form = reactive({ question: '', answer: '', category: '', enabled: true })
 
+const bubbles = ref<string[]>([])
+const blocks = ref<any[]>([])
+
 async function loadInstances() { instances.value = (await api.listInstances()).instances }
 async function loadFaq() { if (activeIid.value) faqs.value = (await api.listFaq(activeIid.value)).items }
+async function loadHome() {
+  if (!activeIid.value) return
+  const inst = await api.getInstance(activeIid.value)
+  bubbles.value = inst.guided_questions || []
+  blocks.value = inst.panel_blocks || []
+}
+
+async function onInstanceChange() {
+  await loadFaq()
+  await loadHome()
+}
+
+function addBubble() { bubbles.value.push('') }
+function removeBubble(idx: number) { bubbles.value.splice(idx, 1) }
+function moveBubble(idx: number, dir: number) {
+  const arr = bubbles.value; const j = idx + dir
+  ;[arr[idx], arr[j]] = [arr[j], arr[idx]]
+}
+
+async function saveHome() {
+  await api.updateInstance(activeIid.value, { guided_questions: bubbles.value, panel_blocks: blocks.value })
+  ElMessage.success('主页配置已保存')
+}
 
 function openCreate() { editing.value = null; Object.assign(form, { question: '', answer: '', category: '', enabled: true }); dialog.value = true }
 function openEdit(row: KefuFaq) { editing.value = row; Object.assign(form, { question: row.question, answer: row.answer, category: row.category || '', enabled: row.enabled }); dialog.value = true }
