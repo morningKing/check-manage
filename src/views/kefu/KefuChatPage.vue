@@ -16,13 +16,23 @@
           </div>
           <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
             <MarkdownView v-if="m.role==='assistant'" :text="plainText(m.content)" />
-            <span v-else class="user-text">{{ plainText(m.content) }}</span>
+            <template v-else>
+              <span v-if="plainText(m.content)" class="user-text">{{ plainText(m.content) }}</span>
+              <span v-for="(f,i) in fileParts(m.content)" :key="i" class="file-chip">📎 {{ f.name }}</span>
+            </template>
           </div>
           <div v-if="sending" class="typing">正在输入…</div>
         </main>
         <footer class="kefu-input">
-          <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter="onEnter" />
-          <el-button type="primary" :disabled="!draft.trim() || sending" @click="send">发送</el-button>
+          <div v-if="pending.length" class="pending">
+            <span v-for="(p,i) in pending" :key="i" class="pending-chip">📎 {{ p.name }} <b @click="removePending(i)">✕</b></span>
+          </div>
+          <div class="input-row">
+            <button class="attach-btn" title="上传文件" @click="fileInput?.click()">📎</button>
+            <input ref="fileInput" type="file" multiple class="hidden-file" @change="onFileChange" />
+            <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter="onEnter" />
+            <el-button type="primary" :disabled="(!draft.trim() && pending.length===0) || sending" @click="send">发送</el-button>
+          </div>
         </footer>
       </div>
       <aside v-if="hasBlocks" class="kefu-column">
@@ -54,6 +64,8 @@ const sending = ref(false)
 const drawer = ref(false)
 const loadError = ref(false)
 const scroller = ref<HTMLElement | null>(null)
+const pending = ref<{ name: string; path: string }[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
 let closeStream: (() => void) | null = null
 
 const bubbles = computed(() => config.value?.guided_questions || [])
@@ -63,16 +75,41 @@ const showWelcome = computed(() => messages.value.length === 0)
 
 function normalize(content: any) { return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }] }
 function plainText(content: any) { return normalize(content).filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') }
+function fileParts(content: any) { return normalize(content).filter((p: any) => p.type === 'file') }
 async function scrollDown() { await nextTick(); if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight }
 
 async function reload() { messages.value = (await api.getKefuHistory(sessionId.value)).messages; await scrollDown() }
 
+async function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files) await onPickFiles(Array.from(input.files))
+  input.value = ''
+}
+
+async function onPickFiles(files: File[]) {
+  for (const f of files) {
+    try {
+      const r = await api.uploadKefuFile(sessionId.value, f)
+      pending.value.push({ name: r.name, path: r.path })
+    } catch (err: any) { ElMessage.error(err?.message || '上传失败') }
+  }
+}
+
+function removePending(i: number) { pending.value.splice(i, 1) }
+
 async function send() {
-  const text = draft.value.trim(); if (!text || sending.value) return
+  const text = draft.value.trim()
+  const atts = pending.value.map(p => p.path)
+  if ((!text && atts.length === 0) || sending.value) return
   draft.value = ''; sending.value = true
-  messages.value.push({ id: 'local_' + Date.now(), role: 'user', content: [{ type: 'text', text }], createdAt: null })
+  const parts: any[] = []
+  if (text) parts.push({ type: 'text', text })
+  for (const p of pending.value) parts.push({ type: 'file', name: p.name, path: p.path })
+  messages.value.push({ id: 'local_' + Date.now(), role: 'user', content: parts, createdAt: null })
+  pending.value = []
   await scrollDown()
-  try { await api.sendKefuMessage(sessionId.value, text) } catch { ElMessage.error('发送失败，请稍后重试'); sending.value = false }
+  try { await api.sendKefuMessage(sessionId.value, text, atts) }
+  catch { ElMessage.error('发送失败，请稍后重试'); sending.value = false }
 }
 
 function onEnter(e: KeyboardEvent) {
@@ -102,7 +139,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => { closeStream?.() })
-defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles })
+defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, fileParts, draft })
 </script>
 
 <style scoped>
@@ -119,4 +156,13 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 @media (min-width: 992px) {
   .svc-toggle { display: none; }  /* desktop uses persistent column, not drawer */
 }
+.hidden-file { display: none; }
+.pending { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
+.pending-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--el-color-primary-light-9, #ecf5ff); border: 1px solid var(--el-color-primary-light-7, #c6e2ff); border-radius: 12px; padding: 2px 8px; font-size: 12px; }
+.pending-chip b { cursor: pointer; font-weight: normal; color: var(--el-text-color-secondary, #909399); }
+.pending-chip b:hover { color: var(--el-color-danger, #f56c6c); }
+.input-row { display: flex; align-items: flex-end; gap: 6px; padding: 8px; }
+.attach-btn { background: none; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 16px; line-height: 1; flex-shrink: 0; }
+.attach-btn:hover { background: var(--el-fill-color-light, #f5f7fa); }
+.file-chip { display: inline-block; background: var(--el-color-primary-light-9, #ecf5ff); border: 1px solid var(--el-color-primary-light-7, #c6e2ff); border-radius: 10px; padding: 2px 8px; font-size: 12px; margin: 2px 2px 0; }
 </style>

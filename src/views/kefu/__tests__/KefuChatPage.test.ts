@@ -9,6 +9,7 @@ vi.mock('@/api/kefuPublic', () => ({
   sendKefuMessage: vi.fn().mockResolvedValue({ messageId: 'm1' }),
   clickKefuFaq: vi.fn().mockResolvedValue(undefined),
   createKefuEventStream: vi.fn().mockReturnValue(() => {}),
+  uploadKefuFile: vi.fn().mockResolvedValue({ name: 'a.txt', path: 'uploads/a.txt', size: 3 }),
 }))
 import * as api from '@/api/kefuPublic'
 import KefuChatPage from '../KefuChatPage.vue'
@@ -35,7 +36,7 @@ describe('KefuChatPage', () => {
     const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
     await flushPromises()
     await (w.vm as any).onEscalate('如何部署')
-    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '如何部署')
+    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '如何部署', [])
   })
 
   it('renders prompt bubbles from guided_questions and sends on click', async () => {
@@ -43,12 +44,38 @@ describe('KefuChatPage', () => {
     await flushPromises()
     // bubble click calls sendKefuMessage with the bubble text
     await (w.vm as any).askBubble('价格?')
-    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '价格?')
+    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '价格?', [])
   })
 
   it('passes panel_blocks + faq to KefuServiceColumn', async () => {
     const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
     await flushPromises()
     expect((w.vm as any).blocks).toHaveLength(1)
+  })
+
+  it('uploads picked files into pending', async () => {
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    await (w.vm as any).onPickFiles([new File(['abc'], 'a.txt')])
+    expect((w.vm as any).pending).toEqual([{ name: 'a.txt', path: 'uploads/a.txt' }])
+  })
+
+  it('send passes pending attachments and clears them', async () => {
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    ;(w.vm as any).pending = [{ name: 'a.txt', path: 'uploads/a.txt' }]
+    ;(w.vm as any).draft = '看看这个'
+    await (w.vm as any).send()
+    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '看看这个', ['uploads/a.txt'])
+    expect((w.vm as any).pending).toEqual([])
+  })
+
+  it('can send with only attachments (no text)', async () => {
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    ;(w.vm as any).pending = [{ name: 'a.txt', path: 'uploads/a.txt' }]
+    ;(w.vm as any).draft = ''
+    await (w.vm as any).send()
+    expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '', ['uploads/a.txt'])
   })
 })
