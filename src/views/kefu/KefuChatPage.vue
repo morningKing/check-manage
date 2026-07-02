@@ -28,7 +28,7 @@
       <aside v-if="hasBlocks" class="kefu-column">
         <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalate" />
       </aside>
-      <el-drawer v-model="drawer" title="自助服务" direction="rtl" size="360px">
+      <el-drawer v-if="hasBlocks" v-model="drawer" title="自助服务" direction="rtl" size="360px">
         <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalateDrawer" />
       </el-drawer>
     </template>

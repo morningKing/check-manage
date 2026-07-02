@@ -19,7 +19,6 @@ const stubs = { 'el-drawer': { template: '<div v-if="modelValue"><slot/></div>',
   'el-button': { template: `<button @click="$emit('click')"><slot/></button>` },
   'el-input': { template: `<input :value="modelValue" @input="$emit('update:modelValue',$event.target.value)" />`, props: ['modelValue'] },
   MarkdownView: { template: '<div />', props: ['text'] },
-  KefuSelfServicePanel: { template: '<div class="ssp" />', props: ['items'] },
   KefuServiceColumn: { props: ['blocks', 'faqItems'], template: '<div class="col" />' } }
 
 describe('KefuChatPage', () => {
