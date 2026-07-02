@@ -12,8 +12,10 @@ describe('isSafeUrl', () => {
     expect(isSafeUrl('https://x.com')).toBe(true)
     expect(isSafeUrl('http://x.com')).toBe(true)
     expect(isSafeUrl('/docs')).toBe(true)
+    expect(isSafeUrl('./local')).toBe(true)
     expect(isSafeUrl('javascript:alert(1)')).toBe(false)
     expect(isSafeUrl('data:text/html,x')).toBe(false)
+    expect(isSafeUrl('//evil.com')).toBe(false)
   })
 })
 
@@ -26,6 +28,7 @@ describe('KefuBlockLinks', () => {
     const anchors = w.findAll('a')
     expect(anchors).toHaveLength(1)
     expect(anchors[0].attributes('rel')).toContain('noopener')
+    expect(anchors[0].attributes('rel')).toContain('noreferrer')
     expect(anchors[0].attributes('target')).toBe('_blank')
   })
 })
