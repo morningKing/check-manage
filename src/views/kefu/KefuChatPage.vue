@@ -23,7 +23,7 @@
             :message="m"
             :agent-name="config?.name || '在线客服'"
             :agent-logo="config?.branding?.logo" />
-          <div v-if="sending" class="typing-row">
+          <div v-if="sending" class="typing-row" role="status" aria-label="正在输入">
             <span class="typing-bubble"><i></i><i></i><i></i></span>
           </div>
         </main>
@@ -174,7 +174,6 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 .input-row { display: flex; align-items: flex-end; gap: 6px; padding: 8px; }
 .attach-btn { background: none; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 16px; line-height: 1; flex-shrink: 0; }
 .attach-btn:hover { background: var(--el-fill-color-light, #f5f7fa); }
-.file-chip { display: inline-block; background: var(--el-color-primary-light-9, #ecf5ff); border: 1px solid var(--el-color-primary-light-7, #c6e2ff); border-radius: 10px; padding: 2px 8px; font-size: 12px; margin: 2px 2px 0; }
 .kefu-welcome { margin-bottom: 16px; }
 .typing-row { display: flex; margin-bottom: 16px; }
 .typing-bubble {
