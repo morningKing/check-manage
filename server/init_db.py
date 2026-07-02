@@ -446,6 +446,7 @@ CREATE TABLE IF NOT EXISTS kefu_instances (
   bot_user_id      VARCHAR(100) NOT NULL REFERENCES users(id),
   enabled          BOOLEAN NOT NULL DEFAULT true,
   rate_limit       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  panel_blocks     JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );

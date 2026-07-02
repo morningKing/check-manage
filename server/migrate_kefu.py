@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS kefu_faq_items (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_kefu_faq_instance ON kefu_faq_items(instance_id, sort_order);
+
+ALTER TABLE kefu_instances ADD COLUMN IF NOT EXISTS panel_blocks JSONB NOT NULL DEFAULT '[]'::jsonb;
 """
 
 
