@@ -66,6 +66,7 @@ def _public_config(inst: dict) -> dict:
         'guided_questions': inst.get('guided_questions') or [],
         'branding': inst.get('branding') or {},
         'enabled': inst.get('enabled', True),
+        'panel_blocks': inst.get('panel_blocks') or [],
     }
 
 

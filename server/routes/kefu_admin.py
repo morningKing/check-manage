@@ -8,6 +8,16 @@ from utils.operation_log import log_operation
 kefu_admin_bp = Blueprint('kefu_admin', __name__, url_prefix='/admin/kefu')
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
+_BLOCK_TYPES = {'links', 'faq', 'richtext', 'contact'}
+
+
+def _validate_panel_blocks(v):
+    if not isinstance(v, list):
+        return 'panel_blocks 必须是数组'
+    for b in v:
+        if not isinstance(b, dict) or b.get('type') not in _BLOCK_TYPES:
+            return 'panel_blocks 每项需为对象且 type 合法'
+    return None
 
 
 @kefu_admin_bp.route('/instances', methods=['GET'])
@@ -46,6 +56,10 @@ def update_instance(iid):
     body = request.get_json(silent=True) or {}
     if 'slug' in body and not _SLUG_RE.match((body.get('slug') or '').strip()):
         return jsonify({'error': 'slug 非法'}), 400
+    if 'panel_blocks' in body:
+        err = _validate_panel_blocks(body['panel_blocks'])
+        if err:
+            return jsonify({'error': err}), 400
     inst = kefu_repo.update_instance(iid, body)
     if not inst:
         return jsonify({'error': 'not found'}), 404
