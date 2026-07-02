@@ -18,7 +18,22 @@ export interface KefuMessage { id: string; role: string; content: any; createdAt
 export function getKefuConfig(slug: string) { return get<KefuConfig>(`/kefu/i/${slug}`) }
 export function createKefuSession(slug: string) { return post<{ id: string; title: string }>(`/kefu/i/${slug}/sessions`, {}, vh()) }
 export function getKefuHistory(sid: string) { return get<{ messages: KefuMessage[] }>(`/kefu/sessions/${sid}/messages`, undefined, vh()) }
-export function sendKefuMessage(sid: string, content: string) { return post<{ messageId: string }>(`/kefu/sessions/${sid}/messages`, { content }, vh()) }
+export function sendKefuMessage(sid: string, content: string, attachments: string[] = []) { return post<{ messageId: string }>(`/kefu/sessions/${sid}/messages`, { content, attachments }, vh()) }
+
+export async function uploadKefuFile(sid: string, file: File): Promise<{ name: string; path: string; size: number }> {
+  const fd = new FormData()
+  fd.append('file', file)
+  const res = await fetch(`/api/kefu/sessions/${encodeURIComponent(sid)}/files`, {
+    method: 'POST',
+    headers: { 'X-Visitor-Id': getVisitorId() },  // do NOT set Content-Type; browser sets multipart boundary
+    body: fd,
+  })
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}))
+    throw new Error(e.error || '上传失败')
+  }
+  return res.json()
+}
 export function getKefuFaq(slug: string) { return get<{ items: KefuFaqItem[] }>(`/kefu/i/${slug}/faq`) }
 export function clickKefuFaq(slug: string, fid: string) { return post(`/kefu/i/${slug}/faq/${fid}/click`, {}, { ...vh(), silent: true }).catch(() => {}) }
 

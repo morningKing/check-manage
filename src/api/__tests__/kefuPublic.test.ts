@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// Hoisted by Vitest — applies to all imports of @/utils/request in this file and modules loaded from it
+vi.mock('@/utils/request', () => ({
+  get: vi.fn(),
+  post: vi.fn(),
+}))
+
 class FakeEventSource {
   static last: FakeEventSource | null = null
   static constructionCount = 0
@@ -15,6 +21,7 @@ beforeEach(() => {
   ;(globalThis as any).EventSource = FakeEventSource
   localStorage.clear()
   FakeEventSource.constructionCount = 0
+  vi.clearAllMocks()  // reset post/get call counts between tests
 })
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -58,5 +65,38 @@ describe('createKefuEventStream', () => {
     ;(FakeEventSource as any).last?.onerror?.(new Event('error'))
     expect(FakeEventSource.constructionCount).toBe(countBefore + 1)  // no new EventSource created
     expect(FakeEventSource.last).toBe(firstES)  // still the same instance
+  })
+})
+
+describe('uploadKefuFile', () => {
+  it('POSTs multipart to the files endpoint with X-Visitor-Id and returns json', async () => {
+    localStorage.setItem('kefu:visitor_id', 'vid-1')
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ name: 'a.txt', path: 'uploads/a.txt', size: 3 }) })
+    ;(globalThis as any).fetch = fetchMock
+    const { uploadKefuFile } = await import('../kefuPublic')
+    const res = await uploadKefuFile('sess_1', new File(['abc'], 'a.txt', { type: 'text/plain' }))
+    expect(res.path).toBe('uploads/a.txt')
+    const [url, opts] = fetchMock.mock.calls[0]
+    expect(url).toBe('/api/kefu/sessions/sess_1/files')
+    expect(opts.method).toBe('POST')
+    expect(opts.headers['X-Visitor-Id']).toBe('vid-1')
+    expect(opts.body).toBeInstanceOf(FormData)
+  })
+
+  it('throws with backend error message on non-2xx', async () => {
+    ;(globalThis as any).fetch = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: '文件超过 20MB 上限' }) })
+    const { uploadKefuFile } = await import('../kefuPublic')
+    await expect(uploadKefuFile('sess_1', new File(['x'], 'x.bin'))).rejects.toThrow('文件超过 20MB 上限')
+  })
+})
+
+describe('sendKefuMessage attachments', () => {
+  it('passes attachments in the body', async () => {
+    const { post } = await import('@/utils/request')
+    vi.mocked(post).mockResolvedValue({ messageId: 'm1' })
+    const { sendKefuMessage } = await import('../kefuPublic')
+    await sendKefuMessage('sess_1', 'hi', ['uploads/a.txt'])
+    const [, body] = vi.mocked(post).mock.calls[0]
+    expect(body).toEqual({ content: 'hi', attachments: ['uploads/a.txt'] })
   })
 })
