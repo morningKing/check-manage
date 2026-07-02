@@ -20,11 +20,9 @@
 import { computed } from 'vue'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import type { KefuMessage } from '@/api/kefuPublic'
+import { avatarInitial, avatarColor } from './avatar'
 
 const props = defineProps<{ message: KefuMessage; agentName?: string; agentLogo?: string }>()
-
-// Intentional theme-invariant identity palette (per-agent-name color, like Slack/Gmail avatars — stays constant across light/dark).
-const AVATAR_COLORS = ['#5b8def', '#e6795e', '#42b883', '#b06ab3', '#e0913a', '#3aa5c2']
 
 function normalize(content: any) {
   return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
@@ -35,13 +33,8 @@ const text = computed(() =>
   normalize(props.message.content).filter((p: any) => p.type === 'text').map((p: any) => p.text).join(''))
 const files = computed(() =>
   normalize(props.message.content).filter((p: any) => p.type === 'file'))
-const initial = computed(() => ((props.agentName || '客服').trim().charAt(0) || '客'))
-const avatarStyle = computed(() => {
-  const name = props.agentName || '客服'
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return { background: AVATAR_COLORS[h % AVATAR_COLORS.length] }
-})
+const initial = computed(() => avatarInitial(props.agentName))
+const avatarStyle = computed(() => ({ background: avatarColor(props.agentName) }))
 const time = computed(() => {
   if (!props.message.createdAt) return ''
   const d = new Date(props.message.createdAt)
@@ -75,7 +68,7 @@ const time = computed(() => {
   border-top-left-radius: 4px;
 }
 .kmb--user .kmb__bubble {
-  background: var(--el-color-primary, #409eff);
+  background: var(--kefu-accent, #4f6ef2);
   color: var(--el-color-white, #fff);
   border-bottom-right-radius: 4px;
 }
