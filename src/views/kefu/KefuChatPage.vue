@@ -28,7 +28,7 @@
             <span v-for="(p,i) in pending" :key="i" class="pending-chip">📎 {{ p.name }} <b @click="removePending(i)">✕</b></span>
           </div>
           <div class="input-row">
-            <button class="attach-btn" title="上传文件" @click="fileInput?.click()">📎</button>
+            <button class="attach-btn" type="button" title="上传文件" @click="fileInput?.click()">📎</button>
             <input ref="fileInput" type="file" multiple class="hidden-file" @change="onFileChange" />
             <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter="onEnter" />
             <el-button type="primary" :disabled="(!draft.trim() && pending.length===0) || sending" @click="send">发送</el-button>
@@ -101,15 +101,24 @@ async function send() {
   const text = draft.value.trim()
   const atts = pending.value.map(p => p.path)
   if ((!text && atts.length === 0) || sending.value) return
+  const savedPending = pending.value.slice()  // for restore-on-failure
   draft.value = ''; sending.value = true
   const parts: any[] = []
   if (text) parts.push({ type: 'text', text })
   for (const p of pending.value) parts.push({ type: 'file', name: p.name, path: p.path })
-  messages.value.push({ id: 'local_' + Date.now(), role: 'user', content: parts, createdAt: null })
+  const localMsgId = 'local_' + Date.now()
+  messages.value.push({ id: localMsgId, role: 'user', content: parts, createdAt: null })
   pending.value = []
   await scrollDown()
   try { await api.sendKefuMessage(sessionId.value, text, atts) }
-  catch { ElMessage.error('发送失败，请稍后重试'); sending.value = false }
+  catch {
+    ElMessage.error('发送失败，请稍后重试')
+    sending.value = false
+    draft.value = text           // restore text
+    pending.value = savedPending // restore attachments
+    // remove the optimistic bubble
+    messages.value = messages.value.filter(m => m.id !== localMsgId)
+  }
 }
 
 function onEnter(e: KeyboardEvent) {

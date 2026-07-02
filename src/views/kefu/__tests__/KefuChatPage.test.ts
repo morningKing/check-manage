@@ -5,7 +5,7 @@ vi.mock('@/api/kefuPublic', () => ({
   getKefuConfig: vi.fn().mockResolvedValue({ slug: 's', name: 'KF', welcome_message: 'hi', guided_questions: ['价格?'], branding: {}, enabled: true, panel_blocks: [{ id: '1', type: 'faq', enabled: true, config: {} }] }),
   createKefuSession: vi.fn().mockResolvedValue({ id: 'sess_1', title: 't' }),
   getKefuFaq: vi.fn().mockResolvedValue({ items: [{ id: 'a', question: 'Q', answer: 'A', category: null }] }),
-  getKefuHistory: vi.fn().mockResolvedValue({ messages: [] }),
+  getKefuHistory: vi.fn(() => Promise.resolve({ messages: [] })),
   sendKefuMessage: vi.fn().mockResolvedValue({ messageId: 'm1' }),
   clickKefuFaq: vi.fn().mockResolvedValue(undefined),
   createKefuEventStream: vi.fn().mockReturnValue(() => {}),
@@ -77,5 +77,20 @@ describe('KefuChatPage', () => {
     ;(w.vm as any).draft = ''
     await (w.vm as any).send()
     expect(api.sendKefuMessage).toHaveBeenCalledWith('sess_1', '', ['uploads/a.txt'])
+  })
+
+  it('restores draft and pending on send failure', async () => {
+    vi.mocked(api.sendKefuMessage).mockRejectedValueOnce(new Error('Network error'))
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    ;(w.vm as any).pending = [{ name: 'a.txt', path: 'uploads/a.txt' }]
+    ;(w.vm as any).draft = '看看这个'
+    const initialPending = (w.vm as any).pending
+    await (w.vm as any).send()
+    // after failure, draft and pending should be restored
+    expect((w.vm as any).draft).toBe('看看这个')
+    expect((w.vm as any).pending).toStrictEqual(initialPending)
+    // optimistic message should be removed
+    expect((w.vm as any).messages).toEqual([])
   })
 })
