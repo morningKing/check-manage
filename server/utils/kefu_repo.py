@@ -56,12 +56,13 @@ def _row_to_instance(r) -> dict:
         'bot_user_id': r[9],
         'enabled': r[10],
         'rate_limit': r[11],
+        'panel_blocks': r[12],
     }
 
 
 _COLS = (
     "id, slug, name, agent, model, system_prompt, welcome_message, "
-    "guided_questions, branding, bot_user_id, enabled, rate_limit"
+    "guided_questions, branding, bot_user_id, enabled, rate_limit, panel_blocks"
 )
 
 
@@ -73,8 +74,8 @@ def create_instance(payload: dict) -> dict:
         cur.execute(
             "INSERT INTO kefu_instances "
             "(id, slug, name, agent, model, system_prompt, welcome_message, "
-            " guided_questions, branding, bot_user_id, enabled, rate_limit) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            " guided_questions, branding, bot_user_id, enabled, rate_limit, panel_blocks) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             f"RETURNING {_COLS}",
             (
                 iid,
@@ -89,6 +90,7 @@ def create_instance(payload: dict) -> dict:
                 bot_id,
                 payload.get('enabled', True),
                 json.dumps(payload.get('rate_limit') or {}),
+                json.dumps(payload.get('panel_blocks') or []),
             ),
         )
         return _row_to_instance(cur.fetchone())
@@ -124,7 +126,7 @@ def update_instance(instance_id, payload) -> dict | None:
         if col in payload:
             fields.append(f"{col}=%s")
             params.append(payload[col] if payload[col] != '' else None)
-    for col in ('guided_questions', 'branding', 'rate_limit'):
+    for col in ('guided_questions', 'branding', 'rate_limit', 'panel_blocks'):
         if col in payload:
             fields.append(f"{col}=%s")
             params.append(json.dumps(payload[col]))
