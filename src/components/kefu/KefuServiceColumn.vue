@@ -27,3 +27,14 @@ function defaultTitle(t: string) {
   return ({ links: '快捷入口', faq: '热点问题', richtext: '公告', contact: '联系我们' } as any)[t] || ''
 }
 </script>
+<style scoped>
+.kefu-service-column { display: flex; flex-direction: column; gap: 12px; }
+.svc-block {
+  background: var(--el-bg-color, #fff); border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 12px; padding: 14px 16px;
+}
+.svc-title {
+  margin: 0 0 10px; font-size: 13px; font-weight: 600;
+  color: var(--el-text-color-secondary, #909399);
+}
+</style>
