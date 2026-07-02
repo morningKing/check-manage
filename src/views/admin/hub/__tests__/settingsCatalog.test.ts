@@ -8,10 +8,18 @@ import {
 } from '../settingsCatalog'
 
 describe('settingsCatalog', () => {
-  it('共 7 个分类，tab 总数 17', () => {
+  it('共 7 个分类，tab 总数 18', () => {
     expect(SETTINGS_CATALOG).toHaveLength(7)
     const tabCount = SETTINGS_CATALOG.reduce((n, c) => n + c.tabs.length, 0)
-    expect(tabCount).toBe(17)
+    expect(tabCount).toBe(18)
+  })
+
+  it('集成对接分类含智能客服 tab（admin.kefu）', () => {
+    const integration = SETTINGS_CATALOG.find(c => c.id === 'integration')!
+    const kefu = integration.tabs.find(t => t.id === 'kefu')
+    expect(kefu).toBeTruthy()
+    expect(kefu!.perm).toBe('admin.kefu')
+    expect(kefu!.label).toBe('智能客服')
   })
 
   it('每个 tab 的权限 key 以 admin. 开头且唯一标识', () => {

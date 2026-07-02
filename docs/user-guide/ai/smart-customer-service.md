@@ -266,7 +266,7 @@ cd mcp-server && python main.py
 #### 9.2.1 访问管理页面
 
 1. 使用有 `admin.kefu` 权限的账号登录管理端。
-2. 进入 **AI 助手 → 客服管理**（路径 `/admin/kefu`）。
+2. 顶部导航进入 **设置中心 → 集成对接 → 智能客服**（与 Open API、Webhook 并列的 tab）。旧书签 `/admin/kefu` 仍可用，会自动跳转到 `/admin/integration?tab=kefu`。
 3. 在实例列表中选择目标客服实例，或新建一个实例（见第 3 节）。
 
 #### 9.2.2 增删改热问

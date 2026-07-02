@@ -12,6 +12,7 @@ export const SETTINGS_TAB_COMPONENTS: Record<string, Component> = {
   workflows: defineAsyncComponent(() => import('@/views/admin/WorkflowManager.vue')),
   'api-keys': defineAsyncComponent(() => import('@/views/admin/ApiKeyManager.vue')),
   webhook: defineAsyncComponent(() => import('@/views/admin/WebhookSettings.vue')),
+  kefu: defineAsyncComponent(() => import('@/views/admin/KefuManager.vue')),
   'ai-settings': defineAsyncComponent(() => import('@/views/admin/AiSettings.vue')),
   'ai-scan': defineAsyncComponent(() => import('@/views/admin/AiScanTaskManager.vue')),
   query: defineAsyncComponent(() => import('@/views/admin/QueryConsole.vue')),

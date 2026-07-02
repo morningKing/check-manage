@@ -33,6 +33,7 @@ export const SETTINGS_CATALOG: readonly SettingsCategoryMeta[] = [
   { id: 'integration', label: '集成对接', icon: 'Link', tabs: [
     { id: 'api-keys', label: 'Open API', perm: 'admin.api_keys' },
     { id: 'webhook', label: 'Webhook', perm: 'admin.webhooks' },
+    { id: 'kefu', label: '智能客服', perm: 'admin.kefu' },
   ] },
   { id: 'ai', label: 'AI 能力', icon: 'MagicStick', tabs: [
     { id: 'ai-settings', label: 'AI 配置', perm: 'admin.ai_settings' },
