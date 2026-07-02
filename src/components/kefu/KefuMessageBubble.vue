@@ -23,6 +23,7 @@ import type { KefuMessage } from '@/api/kefuPublic'
 
 const props = defineProps<{ message: KefuMessage; agentName?: string; agentLogo?: string }>()
 
+// Intentional theme-invariant identity palette (per-agent-name color, like Slack/Gmail avatars — stays constant across light/dark).
 const AVATAR_COLORS = ['#5b8def', '#e6795e', '#42b883', '#b06ab3', '#e0913a', '#3aa5c2']
 
 function normalize(content: any) {
@@ -55,7 +56,7 @@ const time = computed(() => {
 .kmb__avatar {
   flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 15px; font-weight: 600; overflow: hidden;
+  color: var(--el-color-white, #fff); font-size: 15px; font-weight: 600; overflow: hidden;
 }
 .kmb__avatar img { width: 100%; height: 100%; object-fit: cover; }
 .kmb__col { display: flex; flex-direction: column; max-width: 76%; }
@@ -71,7 +72,7 @@ const time = computed(() => {
 }
 .kmb--user .kmb__bubble {
   background: var(--el-color-primary, #409eff);
-  color: #fff;
+  color: var(--el-color-white, #fff);
   border-bottom-right-radius: 4px;
 }
 .kmb__file {
@@ -80,6 +81,7 @@ const time = computed(() => {
   background: var(--el-color-primary-light-9, #ecf5ff);
   border: 1px solid var(--el-color-primary-light-7, #c6e2ff);
 }
+/* translucent white overlay: reads correctly on the primary-colored bubble in both light and dark themes */
 .kmb--user .kmb__file {
   background: rgba(255, 255, 255, 0.22); border-color: rgba(255, 255, 255, 0.35); color: #fff;
 }
