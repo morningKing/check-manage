@@ -9,19 +9,23 @@
         </header>
         <main class="kefu-messages" ref="scroller">
           <div v-if="showWelcome" class="kefu-welcome">
-            <MarkdownView v-if="config?.welcome_message" :text="config.welcome_message" />
+            <KefuMessageBubble
+              v-if="config?.welcome_message"
+              :message="{ id: 'welcome', role: 'assistant', content: [{ type: 'text', text: config.welcome_message }], createdAt: null }"
+              :agent-name="config?.name || '在线客服'"
+              :agent-logo="config?.branding?.logo" />
             <div v-if="bubbles.length" class="bubbles">
               <button v-for="(b,i) in bubbles" :key="i" class="bubble" @click="askBubble(b)">{{ b }}</button>
             </div>
           </div>
-          <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
-            <MarkdownView v-if="m.role==='assistant'" :text="plainText(m.content)" />
-            <template v-else>
-              <span v-if="plainText(m.content)" class="user-text">{{ plainText(m.content) }}</span>
-              <span v-for="(f,i) in fileParts(m.content)" :key="i" class="file-chip">📎 {{ f.name }}</span>
-            </template>
+          <KefuMessageBubble
+            v-for="m in messages" :key="m.id"
+            :message="m"
+            :agent-name="config?.name || '在线客服'"
+            :agent-logo="config?.branding?.logo" />
+          <div v-if="sending" class="typing-row">
+            <span class="typing-bubble"><i></i><i></i><i></i></span>
           </div>
-          <div v-if="sending" class="typing">正在输入…</div>
         </main>
         <footer class="kefu-input">
           <div v-if="pending.length" class="pending">
@@ -49,7 +53,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
+import KefuMessageBubble from '@/components/kefu/KefuMessageBubble.vue'
 import KefuServiceColumn from '@/components/kefu/KefuServiceColumn.vue'
 import * as api from '@/api/kefuPublic'
 import type { KefuConfig, KefuFaqItem, KefuMessage } from '@/api/kefuPublic'
@@ -73,9 +77,6 @@ const blocks = computed(() => config.value?.panel_blocks || [])
 const hasBlocks = computed(() => blocks.value.some(b => b.enabled !== false))
 const showWelcome = computed(() => messages.value.length === 0)
 
-function normalize(content: any) { return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }] }
-function plainText(content: any) { return normalize(content).filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') }
-function fileParts(content: any) { return normalize(content).filter((p: any) => p.type === 'file') }
 async function scrollDown() { await nextTick(); if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight }
 
 async function reload() { messages.value = (await api.getKefuHistory(sessionId.value)).messages; await scrollDown() }
@@ -148,7 +149,7 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => { closeStream?.() })
-defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, fileParts, draft })
+defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, draft })
 </script>
 
 <style scoped>
@@ -174,4 +175,18 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 .attach-btn { background: none; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 16px; line-height: 1; flex-shrink: 0; }
 .attach-btn:hover { background: var(--el-fill-color-light, #f5f7fa); }
 .file-chip { display: inline-block; background: var(--el-color-primary-light-9, #ecf5ff); border: 1px solid var(--el-color-primary-light-7, #c6e2ff); border-radius: 10px; padding: 2px 8px; font-size: 12px; margin: 2px 2px 0; }
+.kefu-welcome { margin-bottom: 16px; }
+.typing-row { display: flex; margin-bottom: 16px; }
+.typing-bubble {
+  display: inline-flex; gap: 4px; padding: 10px 12px; border-radius: 12px;
+  border-top-left-radius: 4px; background: var(--el-fill-color-light, #f4f4f5);
+}
+.typing-bubble i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--el-text-color-secondary, #909399);
+  animation: kmb-blink 1.2s infinite ease-in-out both;
+}
+.typing-bubble i:nth-child(2) { animation-delay: 0.2s; }
+.typing-bubble i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes kmb-blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 </style>
