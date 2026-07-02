@@ -394,7 +394,254 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
 
 ---
 
-### 9.5 访客自助页（Stage ②，已交付）
+### 9.5 访客主页配置（提示气泡 + 自助区块）
+
+#### 9.5.1 概述
+
+访客进入客服对话页（`/kefu/<slug>`）时看到的首屏布局，由两部分配置组成：
+
+1. **提示气泡**（`guided_questions`）— 快速引导问题列表，以可点击芯片形式展示在欢迎语下方；访客可点击快速提问。
+2. **自助服务区块**（`panel_blocks`）— 有序列表，支持 4 种区块类型：
+   - `links` — 快捷入口，配置图标/标签/链接
+   - `faq` — 热点问题，关联热问库并限制显示条数
+   - `richtext` — 公告/富文本，支持 Markdown 渲染
+   - `contact` — 联系方式，配置电话/邮箱/营业时间/微信
+
+访客页对这些配置的新版布局渲染属 **Stage ②**（下阶段实现），本阶段（Stage ①）专注后端存储与管理端配置界面。
+
+#### 9.5.2 管理配置
+
+##### 访问管理页面
+
+1. 使用有 `admin.kefu` 权限的账号登录管理端。
+2. 进入 **AI 助手 → 客服管理**（路径 `/admin/kefu`）。
+3. 在实例列表中选择目标客服实例。
+4. 向下滑动到「主页配置」区域。
+
+##### 配置提示气泡（guided_questions）
+
+在「主页配置」中的「提示气泡」编辑框：
+
+| 操作 | 步骤 |
+|------|------|
+| **新增气泡** | 在文本框中输入一条提示问题 → 回车或点击「加号」按钮 → 新增行出现在列表下方 |
+| **编辑气泡** | 点击列表中的气泡，修改文本 → 回车或失焦自动保存 |
+| **删除气泡** | 点击气泡行右侧的「×」删除按钮 → 即时移除 |
+| **调整顺序** | 拖拽气泡行调整上下位置（未来 Stage ② 访客页按此顺序显示） |
+
+**示例：**
+
+```
+提示气泡列表：
+[ 支持私有化部署吗？ ]
+[ 如何申请试用？ ]
+[ 有哪些定价套餐？ ]
+```
+
+##### 配置自助区块（panel_blocks）
+
+在「主页配置」中的「自助区块」编辑器：
+
+###### 新增区块
+
+点击「新增区块」按钮，选择类型，根据类型填写字段：
+
+**① links（快捷入口）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 区块标题（如"快速入口"） |
+| `enabled` | boolean | 是 | 是否启用，默认 `true` |
+| `config.items` | array | 是 | 快捷项列表，每项包含： |
+| — `icon` | string | 否 | 图标 URL 或 emoji（如 `:📝:` 或 `https://example.com/icon.svg`） |
+| — `label` | string | 是 | 链接文本（如"下载手册"） |
+| — `url` | string | 是 | 完整链接 URL（如 `https://example.com/manual.pdf`） |
+
+**示例结构：**
+
+```json
+{
+  "type": "links",
+  "title": "快速入口",
+  "enabled": true,
+  "config": {
+    "items": [
+      { "icon": "📥", "label": "下载手册", "url": "https://example.com/manual.pdf" },
+      { "icon": "💬", "label": "加入社区", "url": "https://example.com/community" }
+    ]
+  }
+}
+```
+
+**② faq（热点问题）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 区块标题（如"热点问题"） |
+| `enabled` | boolean | 是 | 是否启用，默认 `true` |
+| `config.limit` | number | 否 | 最多展示几条热问，默认 5；设为 0 = 不限 |
+
+> **关联数据**：此区块会自动关联当前实例下的所有**启用的热问**（通过 `GET /kefu/i/<slug>/faq` 获取），访客页将按 `sort_order` 排序、并限制在 `limit` 条以内。
+
+**示例结构：**
+
+```json
+{
+  "type": "faq",
+  "title": "热点问题",
+  "enabled": true,
+  "config": {
+    "limit": 5
+  }
+}
+```
+
+**③ richtext（公告/富文本）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 区块标题（如"平台公告"） |
+| `enabled` | boolean | 是 | 是否启用，默认 `true` |
+| `config.content` | string | 是 | Markdown 格式的内容，支持标题、列表、代码块、表格、链接等 |
+
+**示例结构：**
+
+```json
+{
+  "type": "richtext",
+  "title": "平台公告",
+  "enabled": true,
+  "config": {
+    "content": "# 最新更新\n\n## v2.0 已发布\n\n- 新增私有化部署模式\n- 支持企业 SSO\n\n[查看详情](https://example.com/release-notes)"
+  }
+}
+```
+
+**④ contact（联系方式）**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `title` | string | 是 | 区块标题（如"联系我们"） |
+| `enabled` | boolean | 是 | 是否启用，默认 `true` |
+| `config.phone` | string | 否 | 电话号码（如 `+86-10-1234-5678`） |
+| `config.email` | string | 否 | 邮箱地址（如 `support@example.com`） |
+| `config.hours` | string | 否 | 营业时间（如 `工作日 9:00-18:00`） |
+| `config.wechat` | string | 否 | 微信号或公众号二维码 URL（如 `https://example.com/wechat-qr.jpg`） |
+
+**示例结构：**
+
+```json
+{
+  "type": "contact",
+  "title": "联系我们",
+  "enabled": true,
+  "config": {
+    "phone": "+86-10-1234-5678",
+    "email": "support@example.com",
+    "hours": "工作日 9:00-18:00",
+    "wechat": "https://example.com/wechat-qr.jpg"
+  }
+}
+```
+
+###### 编辑与管理区块
+
+| 操作 | 步骤 |
+|------|------|
+| **编辑区块** | 点击区块卡片 → 修改字段 → 点击「保存」或失焦自动保存 |
+| **删除区块** | 点击区块右上角的删除按钮 → 确认删除 |
+| **调整顺序** | 拖拽区块卡片调整上下位置（Stage ② 访客页按此顺序渲染） |
+| **启用/禁用** | 点击区块的启用/禁用开关 → 禁用后访客页不显示该区块 |
+
+##### 保存配置
+
+修改提示气泡或自助区块后，点击「主页配置」底部的**「保存主页配置」**按钮 → 前端提交 `PATCH /admin/kefu/instances/<id>`，后端存储 `guided_questions` 和 `panel_blocks` 到 `kefu_instances` 表。
+
+#### 9.5.3 公开配置端点
+
+**API：** `GET /kefu/i/<slug>`
+
+无需鉴权，返回指定客服实例的公开配置，其中包括 `guided_questions` 和 `panel_blocks`。
+
+**响应示例（200）：**
+
+```json
+{
+  "id": "kf_presale",
+  "slug": "presale",
+  "name": "售前客服",
+  "enabled": true,
+  "welcome_message": "你好！我是售前助手...",
+  "guided_questions": [
+    "支持私有化部署吗？",
+    "有哪些定价套餐？"
+  ],
+  "panel_blocks": [
+    {
+      "id": "blk_1",
+      "type": "links",
+      "title": "快速入口",
+      "enabled": true,
+      "config": {
+        "items": [
+          { "icon": "📥", "label": "下载手册", "url": "https://example.com/manual.pdf" }
+        ]
+      }
+    },
+    {
+      "id": "blk_2",
+      "type": "faq",
+      "title": "热点问题",
+      "enabled": true,
+      "config": { "limit": 5 }
+    },
+    {
+      "id": "blk_3",
+      "type": "richtext",
+      "title": "平台公告",
+      "enabled": true,
+      "config": { "content": "# 最新更新\n..." }
+    },
+    {
+      "id": "blk_4",
+      "type": "contact",
+      "title": "联系我们",
+      "enabled": true,
+      "config": {
+        "phone": "+86-10-1234-5678",
+        "email": "support@example.com"
+      }
+    }
+  ]
+}
+```
+
+**curl 示例：**
+
+```bash
+curl -s localhost:3002/kefu/i/presale
+```
+
+#### 9.5.4 Stage ① 范围 + Stage ② 预告
+
+**本阶段（Stage ①）已交付：**
+
+- ✓ 后端存储：`panel_blocks` JSONB 列 + 校验逻辑
+- ✓ 管理 API：PATCH 白名单 + 配置读写
+- ✓ 管理端界面：提示气泡编辑器 + 区块编辑器（4 种类型完整表单）
+- ✓ 公开端点：`GET /kefu/i/<slug>` 返回 `guided_questions` + `panel_blocks`
+
+**下阶段（Stage ②）实现访客页新版布局：**
+
+- 两栏设计：左侧 AI 对话 + 右侧自助服务列
+- 提示气泡：欢迎语下方芯片式快速提问
+- 区块渲染：4 个子组件分别渲染 links/faq/richtext/contact
+- 响应式：移动端折叠为抽屉或标签页
+- 主题定制：品牌色融合
+
+---
+
+### 9.6 访客自助页（Stage ②，已交付）
 
 访客无需登录，直接通过以下链接访问客服对话页：
 
