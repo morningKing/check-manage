@@ -153,6 +153,7 @@ onMounted(async () => {
     loadError.value = true
   } finally {
     loading.value = false
+    if (!loadError.value) await scrollDown()
   }
 })
 onBeforeUnmount(() => { closeStream?.() })

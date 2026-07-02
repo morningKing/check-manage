@@ -7,7 +7,7 @@
       </span>
     </div>
     <div class="composer__row" :class="{ 'is-focused': focused }">
-      <button class="composer__attach" type="button" title="上传文件" @click="fileInput?.click()">
+      <button class="composer__attach" type="button" title="上传文件" aria-label="上传文件" @click="fileInput?.click()">
         <el-icon><Paperclip /></el-icon>
       </button>
       <input ref="fileInput" type="file" multiple class="composer__file" @change="onFileChange" />
@@ -22,7 +22,7 @@
         @keydown.enter="onEnter"
         @focus="focused = true"
         @blur="focused = false" />
-      <button class="composer__send" type="button" :disabled="!canSend" title="发送" @click="emit('send')">
+      <button class="composer__send" type="button" :disabled="!canSend" title="发送" aria-label="发送" @click="emit('send')">
         <el-icon><Promotion /></el-icon>
       </button>
     </div>
