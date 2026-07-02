@@ -14,8 +14,19 @@ export function deleteFaq(iid: string, fid: string) { return del(`/admin/kefu/in
 export function reorderFaq(iid: string, order: string[]) { return patch(`/admin/kefu/instances/${iid}/faq/reorder`, { order }) }
 
 export interface KefuInstanceFull extends KefuInstance {
+  agent?: string | null
+  model?: string | null
+  system_prompt?: string | null
+  welcome_message?: string | null
+  branding?: Record<string, any>
   guided_questions?: string[]
   panel_blocks?: any[]
 }
 export function getInstance(iid: string) { return get<KefuInstanceFull>(`/admin/kefu/instances/${iid}`) }
 export function updateInstance(iid: string, data: Partial<KefuInstanceFull>) { return patch<KefuInstanceFull>(`/admin/kefu/instances/${iid}`, data) }
+export function createInstance(data: Partial<KefuInstanceFull> & { slug: string; name: string }) {
+  return post<KefuInstance>('/admin/kefu/instances', data)
+}
+export function deleteInstance(iid: string) {
+  return del(`/admin/kefu/instances/${iid}`)
+}
