@@ -102,7 +102,9 @@ async function onInstanceChange() {
 function addBubble() { bubbles.value.push('') }
 function removeBubble(idx: number) { bubbles.value.splice(idx, 1) }
 function moveBubble(idx: number, dir: number) {
-  const arr = bubbles.value; const j = idx + dir
+  const j = idx + dir
+  if (j < 0 || j >= bubbles.value.length) return
+  const arr = bubbles.value
   ;[arr[idx], arr[j]] = [arr[j], arr[idx]]
 }
 

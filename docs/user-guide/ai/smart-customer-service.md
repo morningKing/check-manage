@@ -502,7 +502,7 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
 |------|------|------|------|
 | `title` | string | 是 | 区块标题（如"平台公告"） |
 | `enabled` | boolean | 是 | 是否启用，默认 `true` |
-| `config.content` | string | 是 | Markdown 格式的内容，支持标题、列表、代码块、表格、链接等 |
+| `config.markdown` | string | 是 | Markdown 格式的内容，支持标题、列表、代码块、表格、链接等 |
 
 **示例结构：**
 
@@ -512,7 +512,7 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
   "title": "平台公告",
   "enabled": true,
   "config": {
-    "content": "# 最新更新\n\n## v2.0 已发布\n\n- 新增私有化部署模式\n- 支持企业 SSO\n\n[查看详情](https://example.com/release-notes)"
+    "markdown": "# 最新更新\n\n## v2.0 已发布\n\n- 新增私有化部署模式\n- 支持企业 SSO\n\n[查看详情](https://example.com/release-notes)"
   }
 }
 ```
@@ -600,7 +600,7 @@ curl -s -X PATCH localhost:3002/admin/kefu/instances/kf_presale/faq/reorder \
       "type": "richtext",
       "title": "平台公告",
       "enabled": true,
-      "config": { "content": "# 最新更新\n..." }
+      "config": { "markdown": "# 最新更新\n..." }
     },
     {
       "id": "blk_4",
