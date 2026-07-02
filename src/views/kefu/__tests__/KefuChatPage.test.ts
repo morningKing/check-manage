@@ -20,7 +20,9 @@ const stubs = { 'el-drawer': { template: '<div v-if="modelValue"><slot/></div>',
   'el-button': { template: `<button @click="$emit('click')"><slot/></button>` },
   'el-input': { template: `<input :value="modelValue" @input="$emit('update:modelValue',$event.target.value)" />`, props: ['modelValue'] },
   MarkdownView: { template: '<div />', props: ['text'] },
-  KefuServiceColumn: { props: ['blocks', 'faqItems'], template: '<div class="col" />' } }
+  KefuServiceColumn: { props: ['blocks', 'faqItems'], template: '<div class="col" />' },
+  KefuComposer: { template: '<div class="composer-stub" />', props: ['draft', 'pending', 'sending'] },
+  KefuMessageBubble: { template: '<div class="bubble-stub" />', props: ['message', 'agentName', 'agentLogo'] } }
 
 describe('KefuChatPage', () => {
   it('bootstraps config + session + faq on mount', async () => {

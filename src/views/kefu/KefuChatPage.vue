@@ -1,52 +1,65 @@
 <!-- src/views/kefu/KefuChatPage.vue -->
 <template>
-  <div class="kefu-page" :class="{ 'with-column': hasBlocks }">
-    <template v-if="!loadError">
-      <div class="kefu-main">
-        <header class="kefu-header">
-          <span class="title">{{ config?.name || '在线客服' }}</span>
-          <el-button v-if="hasBlocks" class="svc-toggle" size="small" @click="drawer = true">🗂 自助服务</el-button>
-        </header>
-        <main class="kefu-messages" ref="scroller">
-          <div v-if="showWelcome" class="kefu-welcome">
+  <div class="kefu-page">
+    <div class="kefu-card" :class="{ 'is-plain': loading || loadError }">
+      <div v-if="loading" class="kefu-skeleton">
+        <div class="sk-header"><div class="sk-avatar" /><div class="sk-lines"><i /><i /></div></div>
+        <div class="sk-body"><span /><span /><span /></div>
+      </div>
+      <div v-else-if="loadError" class="kefu-error">
+        <div class="kefu-error__icon">💬</div>
+        <p>客服暂不可用，请稍后再试</p>
+      </div>
+      <template v-else>
+        <div class="kefu-main">
+          <header class="kefu-header">
+            <div class="kefu-header__id">
+              <div class="kefu-avatar" :style="{ background: headerAvatarColor }">
+                <img v-if="config?.branding?.logo" :src="config.branding.logo" alt="" />
+                <span v-else>{{ headerAvatarInitial }}</span>
+              </div>
+              <div class="kefu-header__meta">
+                <span class="kefu-header__name">{{ config?.name || '在线客服' }}</span>
+                <span class="kefu-header__status"><i class="dot" /> 在线</span>
+              </div>
+            </div>
+            <el-button v-if="hasBlocks" class="svc-toggle" size="small" @click="drawer = true">🗂 自助服务</el-button>
+          </header>
+          <main class="kefu-messages" ref="scroller">
+            <div v-if="showWelcome" class="kefu-welcome">
+              <KefuMessageBubble
+                v-if="config?.welcome_message"
+                :message="{ id: 'welcome', role: 'assistant', content: [{ type: 'text', text: config.welcome_message }], createdAt: null }"
+                :agent-name="config?.name || '在线客服'"
+                :agent-logo="config?.branding?.logo" />
+              <div v-if="bubbles.length" class="bubbles">
+                <button v-for="(b, i) in bubbles" :key="i" class="bubble" @click="askBubble(b)">{{ b }}</button>
+              </div>
+            </div>
             <KefuMessageBubble
-              v-if="config?.welcome_message"
-              :message="{ id: 'welcome', role: 'assistant', content: [{ type: 'text', text: config.welcome_message }], createdAt: null }"
+              v-for="m in messages" :key="m.id"
+              :message="m"
               :agent-name="config?.name || '在线客服'"
               :agent-logo="config?.branding?.logo" />
-            <div v-if="bubbles.length" class="bubbles">
-              <button v-for="(b,i) in bubbles" :key="i" class="bubble" @click="askBubble(b)">{{ b }}</button>
+            <div v-if="sending" class="typing-row" role="status" aria-label="正在输入">
+              <span class="typing-bubble"><i></i><i></i><i></i></span>
             </div>
-          </div>
-          <KefuMessageBubble
-            v-for="m in messages" :key="m.id"
-            :message="m"
-            :agent-name="config?.name || '在线客服'"
-            :agent-logo="config?.branding?.logo" />
-          <div v-if="sending" class="typing-row" role="status" aria-label="正在输入">
-            <span class="typing-bubble"><i></i><i></i><i></i></span>
-          </div>
-        </main>
-        <footer class="kefu-input">
-          <div v-if="pending.length" class="pending">
-            <span v-for="(p,i) in pending" :key="i" class="pending-chip">📎 {{ p.name }} <b @click="removePending(i)">✕</b></span>
-          </div>
-          <div class="input-row">
-            <button class="attach-btn" type="button" title="上传文件" @click="fileInput?.click()">📎</button>
-            <input ref="fileInput" type="file" multiple class="hidden-file" @change="onFileChange" />
-            <el-input v-model="draft" type="textarea" :rows="2" placeholder="输入你的问题…" @keydown.enter="onEnter" />
-            <el-button type="primary" :disabled="(!draft.trim() && pending.length===0) || sending" @click="send">发送</el-button>
-          </div>
-        </footer>
-      </div>
-      <aside v-if="hasBlocks" class="kefu-column">
-        <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalate" />
-      </aside>
-      <el-drawer v-if="hasBlocks" v-model="drawer" title="自助服务" direction="rtl" size="360px">
-        <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalateDrawer" />
-      </el-drawer>
-    </template>
-    <div v-else class="kefu-error">客服暂不可用，请稍后再试</div>
+          </main>
+          <KefuComposer
+            :draft="draft" :pending="pending" :sending="sending"
+            @update:draft="draft = $event"
+            @pick-files="onPickFiles"
+            @remove-pending="removePending"
+            @send="send" />
+        </div>
+        <aside v-if="hasBlocks" class="kefu-column">
+          <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalate" />
+        </aside>
+        <el-drawer v-if="hasBlocks" v-model="drawer" title="自助服务" direction="rtl" size="360px">
+          <KefuServiceColumn :blocks="blocks" :faqItems="faq" @faqClick="onFaqClick" @escalate="onEscalateDrawer" />
+        </el-drawer>
+      </template>
+    </div>
   </div>
 </template>
 
@@ -55,6 +68,8 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import KefuMessageBubble from '@/components/kefu/KefuMessageBubble.vue'
 import KefuServiceColumn from '@/components/kefu/KefuServiceColumn.vue'
+import KefuComposer from '@/components/kefu/KefuComposer.vue'
+import { avatarInitial, avatarColor } from '@/components/kefu/avatar'
 import * as api from '@/api/kefuPublic'
 import type { KefuConfig, KefuFaqItem, KefuMessage } from '@/api/kefuPublic'
 
@@ -69,8 +84,11 @@ const drawer = ref(false)
 const loadError = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const pending = ref<{ name: string; path: string }[]>([])
-const fileInput = ref<HTMLInputElement | null>(null)
 let closeStream: (() => void) | null = null
+
+const loading = ref(true)
+const headerAvatarInitial = computed(() => avatarInitial(config.value?.name))
+const headerAvatarColor = computed(() => avatarColor(config.value?.name))
 
 const bubbles = computed(() => config.value?.guided_questions || [])
 const blocks = computed(() => config.value?.panel_blocks || [])
@@ -80,12 +98,6 @@ const showWelcome = computed(() => messages.value.length === 0)
 async function scrollDown() { await nextTick(); if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight }
 
 async function reload() { messages.value = (await api.getKefuHistory(sessionId.value)).messages; await scrollDown() }
-
-async function onFileChange(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files) await onPickFiles(Array.from(input.files))
-  input.value = ''
-}
 
 async function onPickFiles(files: File[]) {
   for (const f of files) {
@@ -122,13 +134,6 @@ async function send() {
   }
 }
 
-function onEnter(e: KeyboardEvent) {
-  if (e.isComposing) return          // IME candidate selection — not a submit
-  if (e.shiftKey) return             // Shift+Enter = newline
-  e.preventDefault()
-  send()
-}
-
 function onFaqClick(id: string) { api.clickKefuFaq(props.slug, id) }
 async function onEscalate(question: string) { if (sending.value) return; drawer.value = false; draft.value = question; await send() }
 async function onEscalateDrawer(question: string) { drawer.value = false; await onEscalate(question) }
@@ -146,6 +151,8 @@ onMounted(async () => {
     })
   } catch {
     loadError.value = true
+  } finally {
+    loading.value = false
   }
 })
 onBeforeUnmount(() => { closeStream?.() })
@@ -153,28 +160,54 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 </script>
 
 <style scoped>
-.kefu-page { display: flex; height: 100vh; }
+.kefu-page {
+  /* brand accent — SCOPED to this page only; does NOT touch global --el-color-primary */
+  --kefu-accent: #4f6ef2;
+  --kefu-accent-hover: #3f5fe0;
+  --kefu-accent-soft: #eef1fe;
+  --kefu-accent-contrast: #ffffff;
+  height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--el-bg-color-page, #f5f7fa); padding: 24px; box-sizing: border-box;
+}
+.kefu-card {
+  display: flex; width: min(1080px, 94vw); height: min(880px, 92vh);
+  background: var(--el-bg-color, #fff); border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08); overflow: hidden;
+}
+.kefu-card.is-plain { align-items: center; justify-content: center; }
 .kefu-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.kefu-column { width: 340px; border-left: 1px solid var(--el-border-color, #eee); overflow-y: auto; padding: 12px; }
-.kefu-welcome .bubbles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.bubble { border: 1px solid var(--el-color-primary, #409eff); color: var(--el-color-primary, #409eff); background: transparent; border-radius: 16px; padding: 6px 14px; cursor: pointer; }
-.svc-toggle { display: none; }
-@media (max-width: 991px) {
-  .kefu-column { display: none; }
-  .svc-toggle { display: inline-flex; }
+
+/* header */
+.kefu-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px; border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5);
 }
-@media (min-width: 992px) {
-  .svc-toggle { display: none; }  /* desktop uses persistent column, not drawer */
+.kefu-header__id { display: flex; align-items: center; gap: 10px; }
+.kefu-avatar {
+  width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 16px; font-weight: 600;
 }
-.hidden-file { display: none; }
-.pending { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
-.pending-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--el-color-primary-light-9, #ecf5ff); border: 1px solid var(--el-color-primary-light-7, #c6e2ff); border-radius: 12px; padding: 2px 8px; font-size: 12px; }
-.pending-chip b { cursor: pointer; font-weight: normal; color: var(--el-text-color-secondary, #909399); }
-.pending-chip b:hover { color: var(--el-color-danger, #f56c6c); }
-.input-row { display: flex; align-items: flex-end; gap: 6px; padding: 8px; }
-.attach-btn { background: none; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 6px; padding: 6px 8px; cursor: pointer; font-size: 16px; line-height: 1; flex-shrink: 0; }
-.attach-btn:hover { background: var(--el-fill-color-light, #f5f7fa); }
+.kefu-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.kefu-header__meta { display: flex; flex-direction: column; line-height: 1.3; }
+.kefu-header__name { font-weight: 600; color: var(--el-text-color-primary, #303133); }
+.kefu-header__status { font-size: 12px; color: var(--el-text-color-secondary, #909399); display: inline-flex; align-items: center; gap: 4px; }
+.kefu-header__status .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; }
+
+/* messages */
+.kefu-messages { flex: 1; overflow-y: auto; padding: 20px 24px; }
+.kefu-messages::-webkit-scrollbar { width: 6px; }
+.kefu-messages::-webkit-scrollbar-thumb { background: var(--el-border-color, #dcdfe6); border-radius: 3px; }
 .kefu-welcome { margin-bottom: 16px; }
+.kefu-welcome .bubbles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.bubble {
+  border: 1px solid var(--kefu-accent-soft, #eef1fe); background: var(--kefu-accent-soft, #eef1fe);
+  color: var(--kefu-accent, #4f6ef2); border-radius: 16px; padding: 6px 14px; cursor: pointer;
+  font-size: 13px; transition: background .15s ease;
+}
+.bubble:hover { background: #e3e8fd; }
+
+/* typing */
 .typing-row { display: flex; margin-bottom: 16px; }
 .typing-bubble {
   display: inline-flex; gap: 4px; padding: 10px 12px; border-radius: 12px;
@@ -188,4 +221,32 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 .typing-bubble i:nth-child(2) { animation-delay: 0.2s; }
 .typing-bubble i:nth-child(3) { animation-delay: 0.4s; }
 @keyframes kmb-blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+
+/* right column */
+.kefu-column { width: 320px; border-left: 1px solid var(--el-border-color-lighter, #ebeef5); overflow-y: auto; padding: 16px; background: var(--el-bg-color-page, #f9fafb); }
+
+/* skeleton + error */
+.kefu-skeleton { width: 100%; max-width: 420px; padding: 24px; }
+.kefu-skeleton .sk-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+.kefu-skeleton .sk-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--el-fill-color, #f0f2f5); }
+.kefu-skeleton .sk-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.kefu-skeleton .sk-lines i { height: 10px; border-radius: 5px; background: var(--el-fill-color, #f0f2f5); }
+.kefu-skeleton .sk-lines i:first-child { width: 40%; }
+.kefu-skeleton .sk-lines i:last-child { width: 24%; }
+.kefu-skeleton .sk-body { display: flex; flex-direction: column; gap: 12px; }
+.kefu-skeleton .sk-body span { height: 44px; border-radius: 12px; background: var(--el-fill-color-light, #f5f7fa); }
+.kefu-skeleton .sk-body span:nth-child(1) { width: 70%; }
+.kefu-skeleton .sk-body span:nth-child(2) { width: 55%; align-self: flex-end; background: var(--kefu-accent-soft, #eef1fe); }
+.kefu-skeleton .sk-body span:nth-child(3) { width: 60%; }
+.kefu-error { text-align: center; color: var(--el-text-color-secondary, #909399); }
+.kefu-error__icon { font-size: 40px; margin-bottom: 8px; }
+
+/* responsive: full-bleed card + drawer under 992px */
+.svc-toggle { display: none; }
+@media (max-width: 991px) {
+  .kefu-page { padding: 0; }
+  .kefu-card { width: 100vw; height: 100vh; border-radius: 0; border: none; box-shadow: none; }
+  .kefu-column { display: none; }
+  .svc-toggle { display: inline-flex; }
+}
 </style>
