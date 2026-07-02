@@ -66,8 +66,12 @@ const time = computed(() => {
   word-break: break-word; overflow-wrap: anywhere;
 }
 .kmb--agent .kmb__bubble {
-  background: var(--el-fill-color-light, #f4f4f5);
+  /* white card on the gray page (classic messenger look): --el-fill-color-light
+     is nearly identical to the page background, so use --el-bg-color + a border
+     for clear contrast against the visitor's primary bubble */
+  background: var(--el-bg-color, #fff);
   color: var(--el-text-color-primary, #303133);
+  border: 1px solid var(--el-border-color-light, #e4e7ed);
   border-top-left-radius: 4px;
 }
 .kmb--user .kmb__bubble {
