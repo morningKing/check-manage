@@ -80,6 +80,7 @@ describe('uploadKefuFile', () => {
     expect(url).toBe('/api/kefu/sessions/sess_1/files')
     expect(opts.method).toBe('POST')
     expect(opts.headers['X-Visitor-Id']).toBe('vid-1')
+    expect(opts.headers['Content-Type']).toBeUndefined()
     expect(opts.body).toBeInstanceOf(FormData)
   })
 
