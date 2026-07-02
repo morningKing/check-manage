@@ -76,11 +76,13 @@ function addBlock(type: string) {
 }
 function removeBlock(idx: number) { list.value.splice(idx, 1); emit() }
 function move(idx: number, dir: number) {
-  const j = idx + dir; const a = list.value
+  const j = idx + dir
+  if (j < 0 || j >= list.value.length) return
+  const a = list.value
   ;[a[idx], a[j]] = [a[j], a[idx]]; emit()
 }
 function addItem(b: Block) { (b.config.items ||= []).push({ icon: '', label: '', url: '' }); emit() }
-function delItem(b: Block, j: number) { b.config.items.splice(j, 1); emit() }
+function delItem(b: Block, j: number) { b.config.items?.splice(j, 1); emit() }
 
 defineExpose({ addBlock, removeBlock, move })
 </script>
