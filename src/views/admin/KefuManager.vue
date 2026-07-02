@@ -4,7 +4,10 @@
     <el-select v-model="activeIid" placeholder="选择客服实例" @change="onInstanceChange" style="width:280px;margin:12px 0">
       <el-option v-for="i in instances" :key="i.id" :label="i.name" :value="i.id" />
     </el-select>
-    <el-button type="primary" :disabled="!activeIid" @click="openCreate">新增热问</el-button>
+    <el-button type="primary" @click="openCreateInstance">+ 新建客服</el-button>
+    <el-button v-if="activeIid" @click="openEditInstance">编辑客服</el-button>
+    <el-button v-if="activeIid" type="danger" @click="removeInstance">删除客服</el-button>
+    <el-button :disabled="!activeIid" @click="openCreate" style="margin-left:16px">新增热问</el-button>
     <el-table :data="faqs" row-key="id" style="margin-top:12px">
       <el-table-column label="排序" width="70">
         <template #default="{ $index }">
@@ -63,17 +66,21 @@
         <el-button type="primary" @click="save">保存</el-button>
       </template>
     </el-dialog>
+
+    <KefuInstanceDialog v-model="showInstanceDialog" :instance="editingInstance" @saved="onInstanceSaved" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { MdEditor } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 import * as api from '@/api/kefu'
 import type { KefuFaq, KefuInstance } from '@/api/kefu'
 import KefuBlocksEditor from '@/components/kefu/KefuBlocksEditor.vue'
+import KefuInstanceDialog from '@/components/kefu/KefuInstanceDialog.vue'
+import type { KefuInstanceFull } from '@/api/kefu'
 
 const instances = ref<KefuInstance[]>([])
 const activeIid = ref('')
@@ -84,6 +91,32 @@ const form = reactive({ question: '', answer: '', category: '', enabled: true })
 
 const bubbles = ref<string[]>([])
 const blocks = ref<any[]>([])
+
+const showInstanceDialog = ref(false)
+const editingInstance = ref<KefuInstanceFull | null>(null)
+
+function openCreateInstance() { editingInstance.value = null; showInstanceDialog.value = true }
+async function openEditInstance() {
+  if (!activeIid.value) return
+  editingInstance.value = await api.getInstance(activeIid.value)
+  showInstanceDialog.value = true
+}
+async function removeInstance() {
+  if (!activeIid.value) return
+  try {
+    await ElMessageBox.confirm('将同时删除该客服的所有热问，且不可恢复。确认删除？', '删除客服', { type: 'warning' })
+  } catch { return }  // 用户取消
+  await api.deleteInstance(activeIid.value)
+  ElMessage.success('客服已删除')
+  activeIid.value = ''
+  faqs.value = []; bubbles.value = []; blocks.value = []
+  await loadInstances()
+}
+async function onInstanceSaved(inst: { id: string }) {
+  const creating = editingInstance.value === null
+  await loadInstances()
+  if (creating) { activeIid.value = inst.id; await onInstanceChange() }
+}
 
 async function loadInstances() { instances.value = (await api.listInstances()).instances }
 async function loadFaq() { if (activeIid.value) faqs.value = (await api.listFaq(activeIid.value)).items }
