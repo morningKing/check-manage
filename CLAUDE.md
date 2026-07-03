@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install
 pip install flask flask-cors psycopg2-binary PyJWT pytest apscheduler
 
-# Initialize database (runs DDL and seeds default admin)
+# Initialize database (runs DDL, seeds default admin, and seeds a demo kefu instance at /kefu/demo)
 cd server && python init_db.py
 
 # Start development (both frontend and backend)

@@ -2046,6 +2046,13 @@ def init_db():
     finally:
         conn.close()
 
+    # seed 演示客服（幂等；失败不影响 init）—— 依赖 kefu 表与 kefu-guest 角色已建
+    try:
+        from seed_kefu import seed_kefu_demo
+        seed_kefu_demo()
+    except Exception as e:
+        print(f"[warn] seed 演示客服失败（非致命）：{e}")
+
 
 if __name__ == "__main__":
     init_db()

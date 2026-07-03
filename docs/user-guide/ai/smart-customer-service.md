@@ -34,6 +34,8 @@ TOKEN=$(curl -s -X POST localhost:3002/auth/login \
   -d '{"username":"admin","password":"admin123"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
 ```
 
+- **演示实例**：`python init_db.py` 会自动 seed 一个「演示客服」（访问 `/kefu/demo`），已存在则跳过、不覆盖。也可随时 `cd server && python seed_kefu.py` 手动补种。
+
 ---
 
 ## 3. 创建客服实例
