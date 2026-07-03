@@ -9,23 +9,38 @@ def test_seed_creates_when_absent():
     with patch.object(seed_kefu.kefu_repo, 'get_instance_by_slug', return_value=None), \
          patch.object(seed_kefu.kefu_repo, 'create_instance',
                       return_value={'id': 'kf_x', 'slug': 'demo-seedtest'}) as mc, \
+         patch.object(seed_kefu.kefu_repo, 'list_faq_admin', return_value=[]), \
          patch.object(seed_kefu.kefu_repo, 'create_faq') as mf:
         created = seed_kefu_instance(spec, faqs)
     assert created is True
     mc.assert_called_once_with(spec)
     assert mf.call_count == 2
-    assert mf.call_args_list[0].args[0] == 'kf_x'   # faq attached to created instance id
+    assert mf.call_args_list[0].args[0] == 'kf_x'
 
 
-def test_seed_skips_when_present():
+def test_seed_skips_faqs_when_present_with_faqs():
     with patch.object(seed_kefu.kefu_repo, 'get_instance_by_slug',
                       return_value={'id': 'kf_e', 'slug': 'demo'}), \
          patch.object(seed_kefu.kefu_repo, 'create_instance') as mc, \
+         patch.object(seed_kefu.kefu_repo, 'list_faq_admin', return_value=[{'id': 'faq_1'}]), \
          patch.object(seed_kefu.kefu_repo, 'create_faq') as mf:
         created = seed_kefu_instance({'slug': 'demo'}, DEMO_FAQ)
     assert created is False
     mc.assert_not_called()
     mf.assert_not_called()
+
+
+def test_seed_heals_faqs_when_instance_exists_but_empty():
+    with patch.object(seed_kefu.kefu_repo, 'get_instance_by_slug',
+                      return_value={'id': 'kf_e', 'slug': 'demo'}), \
+         patch.object(seed_kefu.kefu_repo, 'create_instance') as mc, \
+         patch.object(seed_kefu.kefu_repo, 'list_faq_admin', return_value=[]), \
+         patch.object(seed_kefu.kefu_repo, 'create_faq') as mf:
+        created = seed_kefu_instance({'slug': 'demo'}, DEMO_FAQ)
+    assert created is False
+    mc.assert_not_called()
+    assert mf.call_count == len(DEMO_FAQ)
+    assert mf.call_args_list[0].args[0] == 'kf_e'
 
 
 def test_demo_constants_shape():

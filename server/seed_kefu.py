@@ -34,13 +34,19 @@ DEMO_FAQ = [
 
 
 def seed_kefu_instance(spec: dict, faqs: list) -> bool:
-    """幂等 seed 一个客服实例 + 其 FAQ。已存在同 slug 则跳过返回 False；新建返回 True。"""
-    if kefu_repo.get_instance_by_slug(spec['slug']):
-        return False
-    inst = kefu_repo.create_instance(spec)
-    for f in faqs:
-        kefu_repo.create_faq(inst['id'], f)
-    return True
+    """幂等 seed 一个客服实例 + 其 FAQ。返回是否新建了实例。
+
+    实例不存在则创建；FAQ 仅在该实例当前无 FAQ 时补种——这样部分失败
+    （实例已建但 FAQ 未全建）能在重跑时自愈，正常重跑又不会重复插入。
+    """
+    inst = kefu_repo.get_instance_by_slug(spec['slug'])
+    created = inst is None
+    if created:
+        inst = kefu_repo.create_instance(spec)
+    if faqs and not kefu_repo.list_faq_admin(inst['id']):
+        for f in faqs:
+            kefu_repo.create_faq(inst['id'], f)
+    return created
 
 
 def seed_kefu_demo() -> bool:
