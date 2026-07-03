@@ -78,9 +78,11 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     # -- Proxy /api/* to backend ------------------------------------------
 
     def _is_sse(self):
-        """AI chat SSE event stream: /api/ai/chat/sessions/<id>/events."""
+        """SSE event streams that must be relayed chunk-by-chunk (never buffered):
+        AI chat  /api/ai/chat/sessions/<id>/events  and
+        kefu     /api/kefu/sessions/<sid>/events."""
         path = self.path.split('?')[0]
-        return path.endswith('/events') and '/ai/chat/' in path
+        return path.endswith('/events') and ('/ai/chat/' in path or '/kefu/sessions/' in path)
 
     def _proxy_to_backend(self, stream=False):
         # Strip /api prefix: /api/auth/login -> /auth/login
@@ -95,7 +97,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         # Build upstream request, forward relevant headers
         req = urllib.request.Request(url, data=body, method=self.command)
-        for header in ('Content-Type', 'Authorization', 'X-API-Key', 'Accept'):
+        for header in ('Content-Type', 'Authorization', 'X-API-Key', 'X-Visitor-Id', 'Accept'):
             value = self.headers.get(header)
             if value:
                 req.add_header(header, value)
