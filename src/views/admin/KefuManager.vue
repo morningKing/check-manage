@@ -98,19 +98,27 @@ const editingInstance = ref<KefuInstanceFull | null>(null)
 function openCreateInstance() { editingInstance.value = null; showInstanceDialog.value = true }
 async function openEditInstance() {
   if (!activeIid.value) return
-  editingInstance.value = await api.getInstance(activeIid.value)
-  showInstanceDialog.value = true
+  try {
+    editingInstance.value = await api.getInstance(activeIid.value)
+    showInstanceDialog.value = true
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '加载实例失败')
+  }
 }
 async function removeInstance() {
   if (!activeIid.value) return
   try {
     await ElMessageBox.confirm('将同时删除该客服的所有热问，且不可恢复。确认删除？', '删除客服', { type: 'warning' })
   } catch { return }  // 用户取消
-  await api.deleteInstance(activeIid.value)
-  ElMessage.success('客服已删除')
-  activeIid.value = ''
-  faqs.value = []; bubbles.value = []; blocks.value = []
-  await loadInstances()
+  try {
+    await api.deleteInstance(activeIid.value)
+    ElMessage.success('客服已删除')
+    activeIid.value = ''
+    faqs.value = []; bubbles.value = []; blocks.value = []
+    await loadInstances()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '删除失败')
+  }
 }
 async function onInstanceSaved(inst: { id: string }) {
   const creating = editingInstance.value === null
