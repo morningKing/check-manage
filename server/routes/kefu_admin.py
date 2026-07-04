@@ -1,6 +1,6 @@
 """客服实例管理 API（需 admin.kefu）。"""
 import re
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from auth import require_permission
 from utils import kefu_repo
 from utils.operation_log import log_operation
@@ -131,3 +131,62 @@ def delete_faq(iid, fid):
     kefu_repo.delete_faq(fid)
     log_operation('delete', 'kefu_faq_item', fid, fid, '删除热问')
     return jsonify({'ok': True})
+
+
+# ==================== 人工接管（会话） ====================
+
+@kefu_admin_bp.route('/sessions', methods=['GET'])
+@require_permission('admin.kefu')
+def list_sessions():
+    def _b(v):
+        return None if v is None else v in ('1', 'true', 'True')
+    sessions = kefu_repo.list_kefu_sessions_admin(
+        instance_id=request.args.get('instance') or None,
+        needs_human=_b(request.args.get('needs_human')),
+        takeover=_b(request.args.get('takeover')),
+        status=request.args.get('status', 'active') or None,
+    )
+    return jsonify({'sessions': sessions})
+
+
+@kefu_admin_bp.route('/sessions/<sid>/messages', methods=['GET'])
+@require_permission('admin.kefu')
+def get_session_messages(sid):
+    if not kefu_repo.get_kefu_session_admin(sid):
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'messages': kefu_repo.get_messages(sid)})
+
+
+@kefu_admin_bp.route('/sessions/<sid>/takeover', methods=['POST'])
+@require_permission('admin.kefu')
+def takeover_session_route(sid):
+    if not kefu_repo.get_kefu_session_admin(sid):
+        return jsonify({'error': 'not found'}), 404
+    kefu_repo.takeover_session(sid, g.current_user['userId'])
+    log_operation('takeover', 'kefu_session', sid, None, '接管客服会话')
+    return jsonify({'humanTakeover': True})
+
+
+@kefu_admin_bp.route('/sessions/<sid>/release', methods=['POST'])
+@require_permission('admin.kefu')
+def release_session_route(sid):
+    if not kefu_repo.get_kefu_session_admin(sid):
+        return jsonify({'error': 'not found'}), 404
+    kefu_repo.release_session(sid)
+    log_operation('release', 'kefu_session', sid, None, '释放客服会话')
+    return jsonify({'humanTakeover': False})
+
+
+@kefu_admin_bp.route('/sessions/<sid>/messages', methods=['POST'])
+@require_permission('admin.kefu')
+def human_reply(sid):
+    sess = kefu_repo.get_kefu_session_admin(sid)
+    if not sess:
+        return jsonify({'error': 'not found'}), 404
+    if not sess['human_takeover']:
+        return jsonify({'error': '会话未处于人工接管状态'}), 409
+    content = ((request.get_json(silent=True) or {}).get('content') or '').strip()
+    if not content:
+        return jsonify({'error': 'content required'}), 400
+    mid = kefu_repo.insert_human_message(sid, content, g.current_user['userId'])
+    return jsonify({'messageId': mid}), 201
