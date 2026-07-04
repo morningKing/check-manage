@@ -1,57 +1,76 @@
 <template>
   <div class="kefu-manager">
-    <el-page-header content="智能客服 · 热门问题" />
-    <el-select v-model="activeIid" placeholder="选择客服实例" @change="onInstanceChange" style="width:280px;margin:12px 0">
-      <el-option v-for="i in instances" :key="i.id" :label="i.name" :value="i.id" />
-    </el-select>
-    <el-button type="primary" @click="openCreateInstance">+ 新建客服</el-button>
-    <el-button v-if="activeIid" @click="openEditInstance">编辑客服</el-button>
-    <el-button v-if="activeIid" type="danger" @click="removeInstance">删除客服</el-button>
-    <el-button :disabled="!activeIid" @click="openCreate" style="margin-left:16px">新增热问</el-button>
-    <el-table :data="faqs" row-key="id" style="margin-top:12px">
-      <el-table-column label="排序" width="70">
-        <template #default="{ $index }">
-          <el-button link :disabled="$index===0" @click="move($index,-1)">↑</el-button>
-          <el-button link :disabled="$index===faqs.length-1" @click="move($index,1)">↓</el-button>
-        </template>
-      </el-table-column>
-      <el-table-column prop="question" label="问题" show-overflow-tooltip />
-      <el-table-column prop="category" label="分类" width="120" />
-      <el-table-column prop="click_count" label="点击量" width="90" />
-      <el-table-column label="启用" width="80">
-        <template #default="{ row }">
-          <el-switch :model-value="row.enabled" @change="(v: boolean) => toggle(row, v)" />
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="140">
-        <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" @click="remove(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 顶部实例栏 -->
+    <div class="km-topbar">
+      <span class="km-topbar__label">客服实例</span>
+      <el-select v-model="activeIid" placeholder="选择客服实例" @change="onInstanceChange" style="width:260px">
+        <el-option v-for="i in instances" :key="i.id" :label="i.name" :value="i.id" />
+      </el-select>
+      <el-button type="primary" @click="openCreateInstance">+ 新建客服</el-button>
+      <el-button v-if="activeIid" @click="openEditInstance">编辑客服</el-button>
+      <el-button v-if="activeIid" type="danger" @click="removeInstance">删除客服</el-button>
+    </div>
 
-    <!-- 主页配置：提示气泡 + 自助区块 -->
-    <template v-if="activeIid">
-      <el-divider />
-      <div class="home-config-section">
-        <div class="section-title">提示气泡（guided_questions）</div>
-        <div v-for="(_, idx) in bubbles" :key="idx" class="bubble-row">
-          <el-input v-model="bubbles[idx]" placeholder="提示语" style="width:360px" />
-          <el-button link :disabled="idx===0" @click="moveBubble(idx,-1)">↑</el-button>
-          <el-button link :disabled="idx===bubbles.length-1" @click="moveBubble(idx,1)">↓</el-button>
-          <el-button link type="danger" @click="removeBubble(idx)">删除</el-button>
+    <!-- 空状态 -->
+    <div v-if="!activeIid" class="km-empty">
+      {{ instances.length ? '请选择上方的客服实例开始配置' : '还没有客服实例，点「+ 新建客服」创建一个' }}
+    </div>
+
+    <!-- 子标签：热门问题 / 主页配置 -->
+    <el-tabs v-else class="km-tabs">
+      <el-tab-pane label="热门问题">
+        <div class="km-tab-body">
+          <div class="km-toolbar">
+            <el-button type="primary" @click="openCreate">+ 新增热问</el-button>
+          </div>
+          <el-table :data="faqs" row-key="id">
+            <el-table-column label="排序" width="70">
+              <template #default="{ $index }">
+                <el-button link :disabled="$index===0" @click="move($index,-1)">↑</el-button>
+                <el-button link :disabled="$index===faqs.length-1" @click="move($index,1)">↓</el-button>
+              </template>
+            </el-table-column>
+            <el-table-column prop="question" label="问题" show-overflow-tooltip />
+            <el-table-column prop="category" label="分类" width="120" />
+            <el-table-column prop="click_count" label="点击量" width="90" />
+            <el-table-column label="启用" width="80">
+              <template #default="{ row }">
+                <el-switch :model-value="row.enabled" @change="(v: boolean) => toggle(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="140">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
+                <el-button link type="danger" @click="remove(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
-        <el-button size="small" style="margin-top:6px" @click="addBubble">+ 添加气泡</el-button>
-      </div>
+      </el-tab-pane>
 
-      <div class="home-config-section" style="margin-top:16px">
-        <KefuBlocksEditor v-model="blocks" />
-      </div>
+      <el-tab-pane label="主页配置">
+        <div class="km-tab-body">
+          <div class="home-config-section">
+            <div class="section-title">提示气泡（guided_questions）</div>
+            <div v-for="(_, idx) in bubbles" :key="idx" class="bubble-row">
+              <el-input v-model="bubbles[idx]" placeholder="提示语" style="width:360px" />
+              <el-button link :disabled="idx===0" @click="moveBubble(idx,-1)">↑</el-button>
+              <el-button link :disabled="idx===bubbles.length-1" @click="moveBubble(idx,1)">↓</el-button>
+              <el-button link type="danger" @click="removeBubble(idx)">删除</el-button>
+            </div>
+            <el-button size="small" style="margin-top:6px" @click="addBubble">+ 添加气泡</el-button>
+          </div>
 
-      <el-button type="primary" style="margin-top:16px" @click="saveHome">保存主页配置</el-button>
-    </template>
+          <div class="home-config-section" style="margin-top:16px">
+            <KefuBlocksEditor v-model="blocks" />
+          </div>
 
+          <el-button type="primary" style="margin-top:16px" @click="saveHome">保存主页配置</el-button>
+        </div>
+      </el-tab-pane>
+    </el-tabs>
+
+    <!-- FAQ 编辑对话框 -->
     <el-dialog v-model="dialog" :title="editing?.id ? '编辑热问' : '新增热问'" width="720px">
       <el-form label-width="72px">
         <el-form-item label="问题"><el-input v-model="form.question" /></el-form-item>
@@ -175,3 +194,22 @@ async function move(idx: number, dir: number) {
 
 onMounted(loadInstances)
 </script>
+
+<style scoped>
+.kefu-manager { padding: 4px 0; }
+.km-topbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-bottom: 14px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--el-border-color-lighter, #ebeef5);
+}
+.km-topbar__label { font-weight: 600; color: var(--el-text-color-regular, #606266); }
+.km-empty {
+  padding: 48px 0; text-align: center;
+  color: var(--el-text-color-secondary, #909399);
+}
+.km-tabs { margin-top: 4px; }
+.km-tab-body { padding: 8px 2px 4px; }
+.km-toolbar { margin-bottom: 12px; }
+.section-title { font-weight: 600; color: var(--el-text-color-regular, #606266); margin-bottom: 8px; }
+.bubble-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+</style>

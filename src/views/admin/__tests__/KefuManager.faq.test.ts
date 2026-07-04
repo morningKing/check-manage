@@ -59,6 +59,8 @@ const stubs = {
   'el-form': { template: '<form><slot /></form>', props: ['label-width'] },
   'el-form-item': { template: '<div><slot /></div>', props: ['label'] },
   'el-input': { template: '<input />', props: ['modelValue', 'placeholder'], emits: ['update:modelValue'] },
+  'el-tabs': { template: '<div><slot /></div>' },
+  'el-tab-pane': { template: '<div><slot /></div>', props: ['label'] },
   MdEditor: {
     template: '<textarea class="md-editor-mock" />',
     props: ['modelValue'],
