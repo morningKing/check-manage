@@ -222,6 +222,9 @@ def send_message(sid):
             "VALUES (%s,%s,'user',%s)",
             (msg_id, sid, json.dumps(stored_parts or [{'type': 'text', 'text': ''}])))
 
+    if sess[6]:  # human_takeover：不派 AI，等人工回复（访客轮询取回复）
+        return jsonify({'messageId': msg_id, 'humanTakeover': True}), 202
+
     client = OpenCodeClient(OPENCODE_BASE_URL)
     oc_sid = sess[2]
     model = inst.get('model') or OPENCODE_MODEL
@@ -230,6 +233,16 @@ def send_message(sid):
                              directory=workspace_path, agent=agent, agent_parts=[])
     ensure_listener(sid, oc_sid, workspace_path)
     return jsonify({'messageId': msg_id}), 202
+
+
+@kefu_public_bp.route('/sessions/<sid>/request-human', methods=['POST'])
+def request_human(sid):
+    vid = _visitor_id()
+    sess = kefu_repo.load_kefu_session(sid, vid)
+    if not sess:
+        return jsonify({'error': 'session not found'}), 404
+    kefu_repo.set_needs_human(sid, True)
+    return jsonify({'needsHuman': True}), 200
 
 
 @kefu_public_bp.route('/sessions/<sid>/events', methods=['GET'])
