@@ -1,6 +1,6 @@
 from unittest.mock import patch, MagicMock
 
-SESS = ('sess_1', 'kefu-bot', 'oc_1', 'active', '/ws/kf', 'kf_1')
+SESS = ('sess_1', 'kefu-bot', 'oc_1', 'active', '/ws/kf', 'kf_1', False)
 INST = {'id': 'kf_1', 'slug': 'presale', 'rate_limit': {}}
 
 

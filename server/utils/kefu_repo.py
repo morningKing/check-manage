@@ -445,8 +445,10 @@ def get_messages(session_id: str) -> list:
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, role, content, meta, created_at FROM ai_chat_messages "
-            "WHERE session_id=%s ORDER BY created_at ASC", (session_id,))
+            "SELECT id, role, content, meta, created_at FROM ("
+            "  SELECT id, role, content, meta, created_at FROM ai_chat_messages "
+            "  WHERE session_id=%s ORDER BY created_at DESC LIMIT 500"
+            ") t ORDER BY created_at ASC", (session_id,))
         rows = cur.fetchall()
     return [{'id': r[0], 'role': r[1], 'content': r[2], 'meta': r[3],
              'createdAt': _iso(r[4])} for r in rows]
