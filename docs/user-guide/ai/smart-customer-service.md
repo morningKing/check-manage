@@ -271,6 +271,10 @@ cd mcp-server && python main.py
 2. 顶部导航进入 **设置中心 → 集成对接 → 智能客服**（与 Open API、Webhook 并列的 tab）。旧书签 `/admin/kefu` 仍可用，会自动跳转到 `/admin/integration?tab=kefu`。
 3. 在实例列表中选择目标客服实例，或点「+ 新建客服」创建一个（见下）。
 
+**页面结构**：顶部为**客服实例栏**（选择实例 + 新建/编辑/删除客服）；选中实例后，下方以**「热门问题 / 主页配置」两个子标签**分区——「热门问题」管热问表格，「主页配置」管提示气泡与自助区块。未选实例时显示引导空状态。
+
+![客服设置页](../_images/kefu-manager-redesign.png)
+
 #### 9.2.1.1 新建 / 编辑 / 删除客服实例
 
 ![客服实例管理](../_images/kefu-instance-admin.png)
