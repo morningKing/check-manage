@@ -221,13 +221,13 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
 
 
 def load_kefu_session(session_id: str, visitor_id: str):
-    """返回 (id, user_id, opencode_session_id, status, workspace_path, kefu_instance_id)
+    """返回 (id, user_id, opencode_session_id, status, workspace_path, kefu_instance_id, human_takeover)
     或 None（session 不存在或 visitor 不匹配）。"""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT id, user_id, opencode_session_id, status, workspace_path, "
-            "kefu_instance_id FROM ai_chat_sessions "
+            "kefu_instance_id, human_takeover FROM ai_chat_sessions "
             "WHERE id=%s AND visitor_id=%s AND kefu_instance_id IS NOT NULL",
             (session_id, visitor_id),
         )
@@ -336,3 +336,117 @@ def increment_faq_click(instance_id: str, faq_id: str) -> bool:
             "WHERE id=%s AND instance_id=%s AND enabled=true",
             (faq_id, instance_id))
         return cur.rowcount > 0
+
+
+def _msg_preview(content, n: int = 60) -> str:
+    """从消息 content（parts 数组）提取纯文本预览。"""
+    if not isinstance(content, list):
+        return ''
+    text = ''.join(p.get('text', '') for p in content
+                   if isinstance(p, dict) and p.get('type') == 'text')
+    return text[:n]
+
+
+def _iso(ts):
+    return ts.isoformat() if ts else None
+
+
+def set_needs_human(session_id: str, value: bool = True) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET needs_human=%s "
+            "WHERE id=%s AND kefu_instance_id IS NOT NULL",
+            (value, session_id))
+        return cur.rowcount > 0
+
+
+def get_kefu_session_admin(session_id: str):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, kefu_instance_id, visitor_id, needs_human, human_takeover, "
+            "human_agent_id, status, opencode_session_id, workspace_path "
+            "FROM ai_chat_sessions WHERE id=%s AND kefu_instance_id IS NOT NULL",
+            (session_id,))
+        r = cur.fetchone()
+    if not r:
+        return None
+    return {'id': r[0], 'kefu_instance_id': r[1], 'visitor_id': r[2],
+            'needs_human': r[3], 'human_takeover': r[4], 'human_agent_id': r[5],
+            'status': r[6], 'opencode_session_id': r[7], 'workspace_path': r[8]}
+
+
+def takeover_session(session_id: str, agent_id: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET human_takeover=true, human_agent_id=%s, "
+            "needs_human=false WHERE id=%s AND kefu_instance_id IS NOT NULL",
+            (agent_id, session_id))
+        return cur.rowcount > 0
+
+
+def release_session(session_id: str) -> bool:
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET human_takeover=false, human_agent_id=NULL "
+            "WHERE id=%s AND kefu_instance_id IS NOT NULL",
+            (session_id,))
+        return cur.rowcount > 0
+
+
+def insert_human_message(session_id: str, text: str, agent_id: str) -> str:
+    msg_id = 'msg_' + secrets.token_hex(6)
+    content = json.dumps([{'type': 'text', 'text': text}])
+    meta = json.dumps({'author': 'human', 'agent_user_id': agent_id})
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
+            "VALUES (%s,%s,'assistant',%s,%s)",
+            (msg_id, session_id, content, meta))
+    return msg_id
+
+
+def list_kefu_sessions_admin(instance_id=None, needs_human=None,
+                             takeover=None, status='active') -> list:
+    clauses = ["kefu_instance_id IS NOT NULL"]
+    params = []
+    if instance_id:
+        clauses.append("kefu_instance_id=%s"); params.append(instance_id)
+    if needs_human is not None:
+        clauses.append("needs_human=%s"); params.append(needs_human)
+    if takeover is not None:
+        clauses.append("human_takeover=%s"); params.append(takeover)
+    if status:
+        clauses.append("status=%s"); params.append(status)
+    where = " AND ".join(clauses)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, kefu_instance_id, visitor_id, needs_human, human_takeover, "
+            "human_agent_id, status, created_at, last_active_at, "
+            "(SELECT content FROM ai_chat_messages m WHERE m.session_id=s.id "
+            " ORDER BY created_at DESC LIMIT 1) "
+            "FROM ai_chat_sessions s WHERE " + where +
+            " ORDER BY last_active_at DESC NULLS LAST",
+            tuple(params))
+        rows = cur.fetchall()
+    return [{'id': r[0], 'kefu_instance_id': r[1], 'visitor_id': r[2],
+             'needs_human': r[3], 'human_takeover': r[4], 'human_agent_id': r[5],
+             'status': r[6], 'created_at': _iso(r[7]), 'last_active_at': _iso(r[8]),
+             'last_message': _msg_preview(r[9])} for r in rows]
+
+
+def get_messages(session_id: str) -> list:
+    """管理员视角取会话全部消息（含 meta，用于区分人工/AI）。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, role, content, meta, created_at FROM ai_chat_messages "
+            "WHERE session_id=%s ORDER BY created_at ASC", (session_id,))
+        rows = cur.fetchall()
+    return [{'id': r[0], 'role': r[1], 'content': r[2], 'meta': r[3],
+             'createdAt': _iso(r[4])} for r in rows]

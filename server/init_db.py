@@ -455,6 +455,7 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS kefu_instance_id VARCHAR(1
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS visitor_id     VARCHAR(100);
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS needs_human    BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS human_takeover BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS human_agent_id VARCHAR(100);
 CREATE INDEX IF NOT EXISTS idx_chat_sess_kefu ON ai_chat_sessions(kefu_instance_id, visitor_id);
 
 CREATE TABLE IF NOT EXISTS kefu_faq_items (
