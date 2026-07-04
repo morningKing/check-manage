@@ -18,7 +18,8 @@ export interface KefuMessage { id: string; role: string; content: any; createdAt
 export function getKefuConfig(slug: string) { return get<KefuConfig>(`/kefu/i/${slug}`) }
 export function createKefuSession(slug: string) { return post<{ id: string; title: string }>(`/kefu/i/${slug}/sessions`, {}, vh()) }
 export function getKefuHistory(sid: string) { return get<{ messages: KefuMessage[] }>(`/kefu/sessions/${sid}/messages`, undefined, vh()) }
-export function sendKefuMessage(sid: string, content: string, attachments: string[] = []) { return post<{ messageId: string }>(`/kefu/sessions/${sid}/messages`, { content, attachments }, vh()) }
+export function sendKefuMessage(sid: string, content: string, attachments: string[] = []) { return post<{ messageId: string; humanTakeover?: boolean }>(`/kefu/sessions/${sid}/messages`, { content, attachments }, vh()) }
+export function requestHuman(sid: string) { return post<{ needsHuman: boolean }>(`/kefu/sessions/${sid}/request-human`, {}, vh()) }
 
 export async function uploadKefuFile(sid: string, file: File): Promise<{ name: string; path: string; size: number }> {
   const fd = new FormData()

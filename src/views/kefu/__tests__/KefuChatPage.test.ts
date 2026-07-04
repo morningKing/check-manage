@@ -10,6 +10,7 @@ vi.mock('@/api/kefuPublic', () => ({
   clickKefuFaq: vi.fn().mockResolvedValue(undefined),
   createKefuEventStream: vi.fn().mockReturnValue(() => {}),
   uploadKefuFile: vi.fn().mockResolvedValue({ name: 'a.txt', path: 'uploads/a.txt', size: 3 }),
+  requestHuman: vi.fn().mockResolvedValue({ needsHuman: true }),
 }))
 import * as api from '@/api/kefuPublic'
 import KefuChatPage from '../KefuChatPage.vue'
@@ -94,5 +95,43 @@ describe('KefuChatPage', () => {
     expect((w.vm as any).pending).toStrictEqual(initialPending)
     // optimistic message should be removed
     expect((w.vm as any).messages).toEqual([])
+  })
+
+  it('requestHuman enters humanMode and starts 3s polling', async () => {
+    vi.useFakeTimers()
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()                       // onMounted: getKefuHistory called once
+    vi.mocked(api.getKefuHistory).mockClear()
+    await (w.vm as any).requestHuman()
+    expect(api.requestHuman).toHaveBeenCalledWith('sess_1')
+    expect((w.vm as any).humanMode).toBe(true)
+    vi.advanceTimersByTime(3000)
+    await flushPromises()
+    expect(api.getKefuHistory).toHaveBeenCalled()  // polled once at 3s
+    w.unmount()
+    vi.useRealTimers()
+  })
+
+  it('send that returns humanTakeover clears sending immediately + humanMode', async () => {
+    vi.mocked(api.sendKefuMessage).mockResolvedValueOnce({ messageId: 'm1', humanTakeover: true } as any)
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    ;(w.vm as any).draft = '我要人工'
+    await (w.vm as any).send()
+    expect((w.vm as any).sending).toBe(false)
+    expect((w.vm as any).humanMode).toBe(true)
+  })
+
+  it('stops polling on unmount', async () => {
+    vi.useFakeTimers()
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    await (w.vm as any).requestHuman()
+    vi.mocked(api.getKefuHistory).mockClear()
+    w.unmount()
+    vi.advanceTimersByTime(6000)
+    await flushPromises()
+    expect(api.getKefuHistory).not.toHaveBeenCalled()
+    vi.useRealTimers()
   })
 })

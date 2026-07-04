@@ -20,12 +20,16 @@
               </div>
               <div class="kefu-header__meta">
                 <span class="kefu-header__name">{{ config?.name || '在线客服' }}</span>
-                <span class="kefu-header__status"><i class="dot" /> 在线</span>
+                <span class="kefu-header__status"><i class="dot" /> {{ humanMode ? '人工客服接入中' : '在线' }}</span>
               </div>
             </div>
-            <el-button v-if="hasBlocks" class="svc-toggle" size="small" @click="drawer = true">🗂 自助服务</el-button>
+            <div class="kefu-header__actions">
+              <el-button v-if="!humanMode" size="small" @click="requestHuman">🙋 转人工</el-button>
+              <el-button v-if="hasBlocks" class="svc-toggle" size="small" @click="drawer = true">🗂 自助服务</el-button>
+            </div>
           </header>
           <main class="kefu-messages" ref="scroller">
+            <div v-if="humanMode" class="kefu-human-banner">已为你转接人工客服，请稍候…</div>
             <div v-if="showWelcome" class="kefu-welcome">
               <KefuMessageBubble
                 v-if="config?.welcome_message"
@@ -85,6 +89,8 @@ const loadError = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const pending = ref<{ name: string; path: string }[]>([])
 let closeStream: (() => void) | null = null
+const humanMode = ref(false)
+let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const loading = ref(true)
 const headerAvatarInitial = computed(() => avatarInitial(config.value?.name))
@@ -110,6 +116,20 @@ async function onPickFiles(files: File[]) {
 
 function removePending(i: number) { pending.value.splice(i, 1) }
 
+function startPolling() { if (!pollTimer) pollTimer = setInterval(() => { reload() }, 3000) }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } }
+function enterHumanMode() {
+  if (humanMode.value) return
+  humanMode.value = true
+  sending.value = false
+  startPolling()
+}
+async function requestHuman() {
+  if (humanMode.value) return
+  try { await api.requestHuman(sessionId.value); enterHumanMode() }
+  catch { ElMessage.error('转人工失败，请稍后重试') }
+}
+
 async function send() {
   const text = draft.value.trim()
   const atts = pending.value.map(p => p.path)
@@ -123,7 +143,10 @@ async function send() {
   messages.value.push({ id: localMsgId, role: 'user', content: parts, createdAt: null })
   pending.value = []
   await scrollDown()
-  try { await api.sendKefuMessage(sessionId.value, text, atts) }
+  try {
+    const resp = await api.sendKefuMessage(sessionId.value, text, atts)
+    if (resp?.humanTakeover || humanMode.value) { sending.value = false; enterHumanMode() }
+  }
   catch {
     ElMessage.error('发送失败，请稍后重试')
     sending.value = false
@@ -156,8 +179,8 @@ onMounted(async () => {
     if (!loadError.value) await scrollDown()
   }
 })
-onBeforeUnmount(() => { closeStream?.() })
-defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, draft })
+onBeforeUnmount(() => { closeStream?.(); stopPolling() })
+defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, draft, requestHuman, humanMode })
 </script>
 
 <style scoped>
@@ -194,6 +217,12 @@ defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubb
 .kefu-header__name { font-weight: 600; color: var(--el-text-color-primary, #303133); }
 .kefu-header__status { font-size: 12px; color: var(--el-text-color-secondary, #909399); display: inline-flex; align-items: center; gap: 4px; }
 .kefu-header__status .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; }
+.kefu-header__actions { display: flex; align-items: center; gap: 8px; }
+.kefu-human-banner {
+  margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+  background: var(--kefu-accent-soft, #eef1fe); color: var(--kefu-accent, #4f6ef2);
+  font-size: 13px; text-align: center;
+}
 
 /* messages */
 .kefu-messages { flex: 1; overflow-y: auto; padding: 20px 24px; }
