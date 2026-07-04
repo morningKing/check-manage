@@ -116,7 +116,7 @@ async function onPickFiles(files: File[]) {
 
 function removePending(i: number) { pending.value.splice(i, 1) }
 
-function startPolling() { if (!pollTimer) pollTimer = setInterval(() => { reload() }, 3000) }
+function startPolling() { if (!pollTimer) pollTimer = setInterval(() => { reload().catch(() => {}) }, 3000) }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } }
 function enterHumanMode() {
   if (humanMode.value) return
