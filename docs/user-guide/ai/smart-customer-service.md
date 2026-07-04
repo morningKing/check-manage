@@ -736,7 +736,31 @@ http://<host>/kefu/<slug>
 
 ---
 
-## 10. 后续阶段
+## 10. 人工接管（Phase 2 · 后端接口，已交付）
 
-- **Phase 2 — 转人工/人工接管**：`needs_human`/`human_takeover` 状态机、人工消息合并 SSE 通道、管理端会话队列与接管/释放、会话级审计。
-- **Phase 3 — 前端增强**：可嵌入 `kefu-widget.js`（独立构建 entry + iframe，不依赖宿主路由）、`KefuManager.vue` 管理页（`/admin/kefu` 可视化实例/热问管理）、文件上传入访客对话。（访客全页 `/kefu/:slug` 已在 Stage ② 交付，不重复实现。）
+支持把某个客服会话从 AI 切到**人工**：访客发起转人工 → 管理员接管（接管期间访客消息**不再派给 AI**，改由人工回复）→ 释放（回到 AI）。当前**后端接口已交付**；管理端可视化控制台（会话队列/接管台）与实时推送（SSE 合并）属后续，本阶段访客靠**轮询**取人工回复。
+
+**状态**（`ai_chat_sessions`）：`needs_human`（访客已请求人工）、`human_takeover`（已被接管；为真时 AI 停派）、`human_agent_id`（当前接管的管理员）。人工回复存为 `role='assistant'`、`meta={author:'human', agent_user_id}`，访客侧无缝当作客服回复。
+
+**访客接口**（`X-Visitor-Id` 归属校验）：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/kefu/sessions/<sid>/request-human` | 发起转人工 → `needs_human=true`，返回 `{needsHuman:true}` |
+
+接管期间访客照常 `POST /kefu/sessions/<sid>/messages`，消息入库但不触发 AI（响应带 `humanTakeover:true`）；访客轮询 `GET /kefu/sessions/<sid>/messages` 取人工回复。
+
+**管理端接口**（均需 `admin.kefu` 权限）：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET`  | `/admin/kefu/sessions?instance=&needs_human=&takeover=&status=` | 会话队列（过滤：实例/待人工/接管中/状态，含最后消息预览、接管人） |
+| `GET`  | `/admin/kefu/sessions/<sid>/messages` | 完整对话（管理员视角，含 `meta`） |
+| `POST` | `/admin/kefu/sessions/<sid>/takeover` | 接管：`human_takeover=true`、记录接管人、清 `needs_human`（写审计） |
+| `POST` | `/admin/kefu/sessions/<sid>/release`  | 释放：回到 AI（写审计） |
+| `POST` | `/admin/kefu/sessions/<sid>/messages` | 人工回复（仅接管中允许，否则 `409`；空内容 `400`）→ `201 {messageId}` |
+
+接管/释放写 `operation_logs`（`target_type='kefu_session'`）供审计。
+
+## 11. 后续阶段
+
+- **Phase 2 后续 — 人工接管前端 + 实时**：管理端接管控制台 UI（会话队列/接管台/人工回复输入）、人工消息合并进访客 SSE（替代轮询）。后端接口已见第 10 节。
+- **Phase 3 — 前端增强**：可嵌入 `kefu-widget.js`（独立构建 entry + iframe，不依赖宿主路由）、文件上传入访客对话。（访客全页 `/kefu/:slug` 已在 Stage ② 交付；`KefuManager.vue` 管理页已在设置中心「集成对接 → 智能客服」交付。）
