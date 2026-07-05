@@ -1,15 +1,46 @@
 """客服实例管理 API（需 admin.kefu）。"""
 import re
-from flask import Blueprint, request, jsonify, g
+import json
+import threading
+import queue as _queue
+from flask import Blueprint, request, jsonify, g, Response, stream_with_context
 from auth import require_permission
 from utils import kefu_repo
 from utils import kefu_event_bus
+from utils import kefu_sse_ticket
 from utils.operation_log import log_operation
 
 kefu_admin_bp = Blueprint('kefu_admin', __name__, url_prefix='/admin/kefu')
 
 _SLUG_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 _BLOCK_TYPES = {'links', 'faq', 'richtext', 'contact'}
+
+MAX_ADMIN_SSE_PER_USER = 3
+ADMIN_SSE_HEARTBEAT = 20
+_admin_sse_active: dict = {}
+_admin_sse_lock = threading.Lock()
+
+
+def _format_sse(event, data):
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _admin_sse_acquire(uid: str) -> bool:
+    with _admin_sse_lock:
+        n = _admin_sse_active.get(uid, 0)
+        if n >= MAX_ADMIN_SSE_PER_USER:
+            return False
+        _admin_sse_active[uid] = n + 1
+        return True
+
+
+def _admin_sse_release(uid: str) -> None:
+    with _admin_sse_lock:
+        n = _admin_sse_active.get(uid, 0)
+        if n <= 1:
+            _admin_sse_active.pop(uid, None)
+        else:
+            _admin_sse_active[uid] = n - 1
 
 
 def _validate_panel_blocks(v):
@@ -199,3 +230,45 @@ def human_reply(sid):
     kefu_event_bus.publish(sid, {'type': 'human_message'})
     kefu_event_bus.publish(f"inst:{sess['kefu_instance_id']}", {'sid': sid, 'type': 'human_message'})
     return jsonify({'messageId': mid}), 201
+
+
+# ==================== 管理端实例事件 SSE ====================
+
+@kefu_admin_bp.route('/events/ticket', methods=['POST'])
+@require_permission('admin.kefu')
+def events_ticket():
+    return jsonify({'ticket': kefu_sse_ticket.issue(g.current_user['userId'])})
+
+
+@kefu_admin_bp.route('/events', methods=['GET'])
+def admin_events():
+    uid = kefu_sse_ticket.consume(request.args.get('ticket') or '')
+    if not uid:
+        return jsonify({'error': 'invalid ticket'}), 401
+    iid = (request.args.get('instance') or '').strip()
+    if not iid:
+        return jsonify({'error': 'instance required'}), 400
+    if not _admin_sse_acquire(uid):
+        return jsonify({'error': '并发连接过多，请稍后再试'}), 429
+
+    q = kefu_event_bus.subscribe(f"inst:{iid}")
+
+    def generate():
+        try:
+            yield _format_sse('ready', {})
+            while True:
+                try:
+                    evt = q.get(timeout=ADMIN_SSE_HEARTBEAT)
+                    yield _format_sse(evt.get('type', 'message'), evt)
+                except _queue.Empty:
+                    yield ': ping\n\n'
+        except GeneratorExit:
+            return
+        except Exception:
+            return
+        finally:
+            kefu_event_bus.unsubscribe(f"inst:{iid}", q)
+            _admin_sse_release(uid)
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

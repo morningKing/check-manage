@@ -107,3 +107,37 @@ def test_human_reply_publishes_events(client, admin_headers):
     P.assert_any_call('sess_1', {'type': 'human_message'})
     P.assert_any_call('inst:kf_1', {'sid': 'sess_1', 'type': 'human_message'})
     assert P.call_count == 2
+
+
+def test_events_ticket_requires_admin(client, dev_headers):
+    assert client.post('/admin/kefu/events/ticket', headers=dev_headers).status_code == 403
+
+
+def test_events_ticket_returns_token(client, admin_headers):
+    resp = client.post('/admin/kefu/events/ticket', headers=admin_headers)
+    assert resp.status_code == 200
+    assert resp.get_json()['ticket']
+
+
+def test_events_bad_ticket_401(client):
+    with patch('routes.kefu_admin.kefu_sse_ticket.consume', return_value=None):
+        resp = client.get('/admin/kefu/events?instance=kf_1&ticket=bad')
+    assert resp.status_code == 401
+
+
+def test_events_missing_instance_400(client):
+    with patch('routes.kefu_admin.kefu_sse_ticket.consume', return_value='user-admin'):
+        resp = client.get('/admin/kefu/events?ticket=good')
+    assert resp.status_code == 400
+
+
+def test_admin_sse_cap_allows_three_then_blocks():
+    from routes import kefu_admin as ka
+    ka._admin_sse_active.clear()
+    assert ka._admin_sse_acquire('u') is True
+    assert ka._admin_sse_acquire('u') is True
+    assert ka._admin_sse_acquire('u') is True
+    assert ka._admin_sse_acquire('u') is False   # cap = 3
+    ka._admin_sse_release('u')
+    assert ka._admin_sse_acquire('u') is True
+    ka._admin_sse_active.clear()
