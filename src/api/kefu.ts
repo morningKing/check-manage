@@ -30,3 +30,11 @@ export function createInstance(data: Partial<KefuInstanceFull> & { slug: string;
 export function deleteInstance(iid: string) {
   return del(`/admin/kefu/instances/${iid}`)
 }
+
+export function listSessions(params: { instance?: string; needs_human?: boolean; takeover?: boolean; status?: string }) {
+  return get<{ sessions: any[] }>('/admin/kefu/sessions', params)
+}
+export function getSessionMessages(sid: string) { return get<{ messages: any[] }>(`/admin/kefu/sessions/${sid}/messages`) }
+export function takeoverSession(sid: string) { return post<{ humanTakeover: boolean }>(`/admin/kefu/sessions/${sid}/takeover`, {}) }
+export function releaseSession(sid: string) { return post<{ humanTakeover: boolean }>(`/admin/kefu/sessions/${sid}/release`, {}) }
+export function humanReply(sid: string, content: string) { return post<{ messageId: string }>(`/admin/kefu/sessions/${sid}/messages`, { content }) }
