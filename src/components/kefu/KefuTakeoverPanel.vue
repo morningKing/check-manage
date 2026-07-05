@@ -103,7 +103,10 @@ async function loadConversation() {
   messages.value = (await api.getSessionMessages(selectedSid.value)).messages
   await nextTick(); if (convEl.value) convEl.value.scrollTop = convEl.value.scrollHeight
 }
-async function selectSession(sid: string) { selectedSid.value = sid; await loadConversation() }
+async function selectSession(sid: string) {
+  selectedSid.value = sid
+  try { await loadConversation() } catch { ElMessage.error('加载对话失败') }
+}
 
 async function takeover() {
   if (!selectedSid.value) return
@@ -126,7 +129,7 @@ watch(filter, () => { loadQueue() })
 watch(() => props.instanceId, () => { selectedSid.value = ''; messages.value = []; loadQueue() })
 
 onMounted(() => {
-  loadQueue()
+  loadQueue().catch(() => {})
   queueTimer = setInterval(() => { loadQueue().catch(() => {}) }, 5000)
   convTimer = setInterval(() => { if (selectedSid.value) loadConversation().catch(() => {}) }, 5000)
 })
