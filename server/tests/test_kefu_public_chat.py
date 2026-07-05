@@ -52,6 +52,26 @@ def test_upload_rejects_bad_type(client):
     assert resp.status_code == 415
 
 
+def test_send_message_publishes_instance_event(client, mock_cursor):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public.kefu_repo.get_instance', return_value=INST), \
+         patch('routes.kefu_public.OpenCodeClient'), \
+         patch('routes.kefu_public.ensure_listener'), \
+         patch('routes.kefu_public.kefu_event_bus.publish') as P:
+        client.post('/kefu/sessions/sess_1/messages', json={'content': '价格'},
+                    headers={'X-Visitor-Id': 'v1'})
+    P.assert_any_call('inst:kf_1', {'sid': 'sess_1', 'type': 'visitor_message'})
+
+
+def test_request_human_publishes_instance_event(client):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
+         patch('routes.kefu_public.kefu_repo.set_needs_human'), \
+         patch('routes.kefu_public.kefu_event_bus.publish') as P:
+        resp = client.post('/kefu/sessions/sess_1/request-human', headers={'X-Visitor-Id': 'v1'})
+    assert resp.status_code == 200
+    P.assert_any_call('inst:kf_1', {'sid': 'sess_1', 'type': 'needs_human'})
+
+
 def test_send_message_ratelimited(client):
     with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=SESS), \
          patch('routes.kefu_public.kefu_repo.get_instance', return_value=INST), \

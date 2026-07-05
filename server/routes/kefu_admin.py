@@ -161,22 +161,26 @@ def get_session_messages(sid):
 @kefu_admin_bp.route('/sessions/<sid>/takeover', methods=['POST'])
 @require_permission('admin.kefu')
 def takeover_session_route(sid):
-    if not kefu_repo.get_kefu_session_admin(sid):
+    sess = kefu_repo.get_kefu_session_admin(sid)
+    if not sess:
         return jsonify({'error': 'not found'}), 404
     kefu_repo.takeover_session(sid, g.current_user['userId'])
     log_operation('takeover', 'kefu_session', sid, None, '接管客服会话')
     kefu_event_bus.publish(sid, {'type': 'takeover'})
+    kefu_event_bus.publish(f"inst:{sess['kefu_instance_id']}", {'sid': sid, 'type': 'takeover'})
     return jsonify({'humanTakeover': True})
 
 
 @kefu_admin_bp.route('/sessions/<sid>/release', methods=['POST'])
 @require_permission('admin.kefu')
 def release_session_route(sid):
-    if not kefu_repo.get_kefu_session_admin(sid):
+    sess = kefu_repo.get_kefu_session_admin(sid)
+    if not sess:
         return jsonify({'error': 'not found'}), 404
     kefu_repo.release_session(sid)
     log_operation('release', 'kefu_session', sid, None, '释放客服会话')
     kefu_event_bus.publish(sid, {'type': 'release'})
+    kefu_event_bus.publish(f"inst:{sess['kefu_instance_id']}", {'sid': sid, 'type': 'release'})
     return jsonify({'humanTakeover': False})
 
 
@@ -193,4 +197,5 @@ def human_reply(sid):
         return jsonify({'error': 'content required'}), 400
     mid = kefu_repo.insert_human_message(sid, content, g.current_user['userId'])
     kefu_event_bus.publish(sid, {'type': 'human_message'})
+    kefu_event_bus.publish(f"inst:{sess['kefu_instance_id']}", {'sid': sid, 'type': 'human_message'})
     return jsonify({'messageId': mid}), 201

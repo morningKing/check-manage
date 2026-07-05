@@ -246,6 +246,8 @@ def send_message(sid):
             "VALUES (%s,%s,'user',%s)",
             (msg_id, sid, json.dumps(stored_parts or [{'type': 'text', 'text': ''}])))
 
+    kefu_event_bus.publish(f"inst:{sess[5]}", {'sid': sid, 'type': 'visitor_message'})
+
     if sess[6]:  # human_takeover：不派 AI，等人工回复（访客轮询取回复）
         return jsonify({'messageId': msg_id, 'humanTakeover': True}), 202
 
@@ -266,6 +268,7 @@ def request_human(sid):
     if not sess:
         return jsonify({'error': 'session not found'}), 404
     kefu_repo.set_needs_human(sid, True)
+    kefu_event_bus.publish(f"inst:{sess[5]}", {'sid': sid, 'type': 'needs_human'})
     return jsonify({'needsHuman': True}), 200
 
 
