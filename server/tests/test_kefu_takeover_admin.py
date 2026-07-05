@@ -74,3 +74,30 @@ def test_human_reply_empty_content_400(client, admin_headers):
         resp = client.post('/admin/kefu/sessions/sess_1/messages',
                            json={'content': '   '}, headers=admin_headers)
     assert resp.status_code == 400
+
+
+def test_takeover_publishes_event(client, admin_headers):
+    with patch('routes.kefu_admin.kefu_repo.get_kefu_session_admin', return_value=dict(_SESS)), \
+         patch('routes.kefu_admin.kefu_repo.takeover_session', return_value=True), \
+         patch('routes.kefu_admin.log_operation'), \
+         patch('routes.kefu_admin.kefu_event_bus.publish') as P:
+        client.post('/admin/kefu/sessions/sess_1/takeover', headers=admin_headers)
+    P.assert_called_once_with('sess_1', {'type': 'takeover'})
+
+
+def test_release_publishes_event(client, admin_headers):
+    with patch('routes.kefu_admin.kefu_repo.get_kefu_session_admin', return_value=dict(_SESS)), \
+         patch('routes.kefu_admin.kefu_repo.release_session', return_value=True), \
+         patch('routes.kefu_admin.log_operation'), \
+         patch('routes.kefu_admin.kefu_event_bus.publish') as P:
+        client.post('/admin/kefu/sessions/sess_1/release', headers=admin_headers)
+    P.assert_called_once_with('sess_1', {'type': 'release'})
+
+
+def test_human_reply_publishes_event(client, admin_headers):
+    s = dict(_SESS, human_takeover=True)
+    with patch('routes.kefu_admin.kefu_repo.get_kefu_session_admin', return_value=s), \
+         patch('routes.kefu_admin.kefu_repo.insert_human_message', return_value='msg_1'), \
+         patch('routes.kefu_admin.kefu_event_bus.publish') as P:
+        client.post('/admin/kefu/sessions/sess_1/messages', json={'content': '您好'}, headers=admin_headers)
+    P.assert_called_once_with('sess_1', {'type': 'human_message'})

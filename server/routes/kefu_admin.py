@@ -3,6 +3,7 @@ import re
 from flask import Blueprint, request, jsonify, g
 from auth import require_permission
 from utils import kefu_repo
+from utils import kefu_event_bus
 from utils.operation_log import log_operation
 
 kefu_admin_bp = Blueprint('kefu_admin', __name__, url_prefix='/admin/kefu')
@@ -164,6 +165,7 @@ def takeover_session_route(sid):
         return jsonify({'error': 'not found'}), 404
     kefu_repo.takeover_session(sid, g.current_user['userId'])
     log_operation('takeover', 'kefu_session', sid, None, '接管客服会话')
+    kefu_event_bus.publish(sid, {'type': 'takeover'})
     return jsonify({'humanTakeover': True})
 
 
@@ -174,6 +176,7 @@ def release_session_route(sid):
         return jsonify({'error': 'not found'}), 404
     kefu_repo.release_session(sid)
     log_operation('release', 'kefu_session', sid, None, '释放客服会话')
+    kefu_event_bus.publish(sid, {'type': 'release'})
     return jsonify({'humanTakeover': False})
 
 
@@ -189,4 +192,5 @@ def human_reply(sid):
     if not content:
         return jsonify({'error': 'content required'}), 400
     mid = kefu_repo.insert_human_message(sid, content, g.current_user['userId'])
+    kefu_event_bus.publish(sid, {'type': 'human_message'})
     return jsonify({'messageId': mid}), 201
