@@ -9,6 +9,7 @@ vi.mock('@/api/kefuPublic', () => ({
   sendKefuMessage: vi.fn().mockResolvedValue({ messageId: 'm1' }),
   clickKefuFaq: vi.fn().mockResolvedValue(undefined),
   createKefuEventStream: vi.fn().mockReturnValue(() => {}),
+  createKefuHumanEventStream: vi.fn(() => () => {}),
   uploadKefuFile: vi.fn().mockResolvedValue({ name: 'a.txt', path: 'uploads/a.txt', size: 3 }),
   requestHuman: vi.fn().mockResolvedValue({ needsHuman: true }),
 }))
@@ -97,21 +98,6 @@ describe('KefuChatPage', () => {
     expect((w.vm as any).messages).toEqual([])
   })
 
-  it('requestHuman enters humanMode and starts 3s polling', async () => {
-    vi.useFakeTimers()
-    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
-    await flushPromises()                       // onMounted: getKefuHistory called once
-    vi.mocked(api.getKefuHistory).mockClear()
-    await (w.vm as any).requestHuman()
-    expect(api.requestHuman).toHaveBeenCalledWith('sess_1')
-    expect((w.vm as any).humanMode).toBe(true)
-    vi.advanceTimersByTime(3000)
-    await flushPromises()
-    expect(api.getKefuHistory).toHaveBeenCalled()  // polled once at 3s
-    w.unmount()
-    vi.useRealTimers()
-  })
-
   it('send that returns humanTakeover clears sending immediately + humanMode', async () => {
     vi.mocked(api.sendKefuMessage).mockResolvedValueOnce({ messageId: 'm1', humanTakeover: true } as any)
     const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
@@ -122,16 +108,53 @@ describe('KefuChatPage', () => {
     expect((w.vm as any).humanMode).toBe(true)
   })
 
-  it('stops polling on unmount', async () => {
-    vi.useFakeTimers()
+  it('opens human-event stream on mount and closes on unmount', async () => {
+    const close = vi.fn()
+    vi.mocked(api.createKefuHumanEventStream).mockReturnValue(close)
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    expect(api.createKefuHumanEventStream).toHaveBeenCalledWith('sess_1', expect.any(Object))
+    w.unmount()
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('onTakeover enters humanMode and reloads', async () => {
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    const calls = vi.mocked(api.createKefuHumanEventStream).mock.calls
+    const h = (calls[calls.length - 1] as any)[1]
+    vi.mocked(api.getKefuHistory).mockClear()
+    h.onTakeover(); await flushPromises()
+    expect((w.vm as any).humanMode).toBe(true)
+    expect(api.getKefuHistory).toHaveBeenCalled()
+  })
+
+  it('onHumanMessage reloads history', async () => {
+    mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
+    await flushPromises()
+    const calls = vi.mocked(api.createKefuHumanEventStream).mock.calls
+    const h = (calls[calls.length - 1] as any)[1]
+    vi.mocked(api.getKefuHistory).mockClear()
+    h.onHumanMessage(); await flushPromises()
+    expect(api.getKefuHistory).toHaveBeenCalled()
+  })
+
+  it('onRelease exits humanMode', async () => {
     const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
     await flushPromises()
     await (w.vm as any).requestHuman()
-    vi.mocked(api.getKefuHistory).mockClear()
-    w.unmount()
-    vi.advanceTimersByTime(6000)
+    expect((w.vm as any).humanMode).toBe(true)
+    const calls = vi.mocked(api.createKefuHumanEventStream).mock.calls
+    const h = (calls[calls.length - 1] as any)[1]
+    h.onRelease(); await flushPromises()
+    expect((w.vm as any).humanMode).toBe(false)
+  })
+
+  it('requestHuman enters humanMode', async () => {
+    const w = mount(KefuChatPage, { props: { slug: 's' }, global: { stubs } })
     await flushPromises()
-    expect(api.getKefuHistory).not.toHaveBeenCalled()
-    vi.useRealTimers()
+    await (w.vm as any).requestHuman()
+    expect(api.requestHuman).toHaveBeenCalledWith('sess_1')
+    expect((w.vm as any).humanMode).toBe(true)
   })
 })

@@ -89,8 +89,8 @@ const loadError = ref(false)
 const scroller = ref<HTMLElement | null>(null)
 const pending = ref<{ name: string; path: string }[]>([])
 let closeStream: (() => void) | null = null
+let closeHumanStream: (() => void) | null = null
 const humanMode = ref(false)
-let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const loading = ref(true)
 const headerAvatarInitial = computed(() => avatarInitial(config.value?.name))
@@ -116,14 +116,12 @@ async function onPickFiles(files: File[]) {
 
 function removePending(i: number) { pending.value.splice(i, 1) }
 
-function startPolling() { if (!pollTimer) pollTimer = setInterval(() => { reload().catch(() => {}) }, 3000) }
-function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null } }
 function enterHumanMode() {
   if (humanMode.value) return
   humanMode.value = true
   sending.value = false
-  startPolling()
 }
+function exitHumanMode() { humanMode.value = false }
 async function requestHuman() {
   if (humanMode.value) return
   try { await api.requestHuman(sessionId.value); enterHumanMode() }
@@ -172,6 +170,12 @@ onMounted(async () => {
       onIdle: async () => { await reload(); sending.value = false },
       onError: () => { sending.value = false; ElMessage.error('客服暂时无法回复，请稍后重试') },
     })
+    closeHumanStream = api.createKefuHumanEventStream(sessionId.value, {
+      onReady: () => { reload().catch(() => {}) },
+      onHumanMessage: () => { reload().catch(() => {}) },
+      onTakeover: () => { enterHumanMode(); reload().catch(() => {}) },
+      onRelease: () => { exitHumanMode(); reload().catch(() => {}) },
+    })
   } catch {
     loadError.value = true
   } finally {
@@ -179,7 +183,7 @@ onMounted(async () => {
     if (!loadError.value) await scrollDown()
   }
 })
-onBeforeUnmount(() => { closeStream?.(); stopPolling() })
+onBeforeUnmount(() => { closeStream?.(); closeHumanStream?.() })
 defineExpose({ sessionId, onEscalate, messages, sending, askBubble, blocks, bubbles, pending, onPickFiles, send, draft, requestHuman, humanMode })
 </script>
 

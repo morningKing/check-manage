@@ -60,3 +60,31 @@ export function createKefuEventStream(sid: string, h: KefuStreamHandlers): () =>
   open()
   return () => { closed = true; if (timer) clearTimeout(timer); es?.close() }
 }
+
+export interface KefuHumanStreamHandlers {
+  onReady?: () => void
+  onHumanMessage?: () => void
+  onTakeover?: () => void
+  onRelease?: () => void
+}
+
+export function createKefuHumanEventStream(sid: string, h: KefuHumanStreamHandlers): () => void {
+  const url = `/api/kefu/sessions/${encodeURIComponent(sid)}/human-events?visitor_id=${encodeURIComponent(getVisitorId())}`
+  let es: EventSource | null = null, closed = false, attempt = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const open = () => {
+    if (closed) return
+    es = new EventSource(url)
+    es.addEventListener('ready', () => h.onReady?.())
+    es.addEventListener('human_message', () => h.onHumanMessage?.())
+    es.addEventListener('takeover', () => h.onTakeover?.())
+    es.addEventListener('release', () => h.onRelease?.())
+    es.onerror = () => {
+      es?.close(); if (closed) return
+      timer = setTimeout(open, RECONNECT_MS[Math.min(attempt, RECONNECT_MS.length - 1)]); attempt += 1
+    }
+    es.onopen = () => { attempt = 0 }
+  }
+  open()
+  return () => { closed = true; if (timer) clearTimeout(timer); es?.close() }
+}
