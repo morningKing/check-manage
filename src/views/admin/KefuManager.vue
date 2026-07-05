@@ -68,6 +68,12 @@
           <el-button type="primary" style="margin-top:16px" @click="saveHome">保存主页配置</el-button>
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="人工接管">
+        <div class="km-tab-body">
+          <KefuTakeoverPanel :instance-id="activeIid" />
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- FAQ 编辑对话框 -->
@@ -99,6 +105,7 @@ import * as api from '@/api/kefu'
 import type { KefuFaq, KefuInstance } from '@/api/kefu'
 import KefuBlocksEditor from '@/components/kefu/KefuBlocksEditor.vue'
 import KefuInstanceDialog from '@/components/kefu/KefuInstanceDialog.vue'
+import KefuTakeoverPanel from '@/components/kefu/KefuTakeoverPanel.vue'
 import type { KefuInstanceFull } from '@/api/kefu'
 
 const instances = ref<KefuInstance[]>([])

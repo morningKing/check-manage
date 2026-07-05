@@ -67,6 +67,7 @@ const stubs = {
     emits: ['update:modelValue'],
   },
   KefuInstanceDialog: { template: '<div />', props: ['modelValue', 'instance'] },
+  KefuTakeoverPanel: { template: '<div />', props: ['instanceId'] },
 }
 
 const sampleFaqs = [
