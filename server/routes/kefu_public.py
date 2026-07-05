@@ -5,9 +5,11 @@ import logging
 import os
 import secrets
 import threading
+import queue as _queue
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 from db import get_db
 from utils import kefu_repo
+from utils import kefu_event_bus
 from utils.rate_limit import RateLimiter
 from utils.opencode_client import OpenCodeClient
 from utils.chat_persist import (
@@ -38,6 +40,10 @@ MAX_SSE_PER_VISITOR = 3   # max open streams per (instance, visitor) pair
 MAX_SSE_PER_IP = 6        # max open streams per client IP (across all visitors)
 _sse_active: dict = {}   # key -> count
 _sse_lock = threading.Lock()
+
+MAX_HUMAN_SSE_PER_VISITOR = 2   # 人工事件流独立上限，不占 OpenCode 流配额
+HUMAN_SSE_HEARTBEAT = 20        # 秒，心跳保活 + 探测断连
+_human_sse_active: dict = {}
 
 
 def _format_sse(event, data):
@@ -139,6 +145,24 @@ def _sse_release_ip(key: str) -> None:
             _sse_active.pop(key, None)
         else:
             _sse_active[key] = count - 1
+
+
+def _human_sse_acquire(key: str) -> bool:
+    with _sse_lock:
+        count = _human_sse_active.get(key, 0)
+        if count >= MAX_HUMAN_SSE_PER_VISITOR:
+            return False
+        _human_sse_active[key] = count + 1
+        return True
+
+
+def _human_sse_release(key: str) -> None:
+    with _sse_lock:
+        count = _human_sse_active.get(key, 0)
+        if count <= 1:
+            _human_sse_active.pop(key, None)
+        else:
+            _human_sse_active[key] = count - 1
 
 
 @kefu_public_bp.route('/i/<slug>', methods=['GET'])
@@ -297,6 +321,43 @@ def events(sid):
         _sse_release(sse_key)
         _sse_release_ip(ip_key)
         raise
+
+
+@kefu_public_bp.route('/sessions/<sid>/human-events', methods=['GET'])
+def human_events(sid):
+    vid = (request.args.get('visitor_id') or '').strip()
+    sess = kefu_repo.load_kefu_session(sid, vid)
+    if not sess:
+        return jsonify({'error': 'session not found'}), 404
+
+    key = f"{sess[5]}:{vid}"
+    if not _human_sse_acquire(key):
+        return jsonify({'error': '并发连接过多，请稍后再试'}), 429
+
+    q = kefu_event_bus.subscribe(sid)
+
+    def generate():
+        logger.info('kefu human-sse open session=%s', sid)
+        try:
+            yield _format_sse('ready', {})
+            while True:
+                try:
+                    evt = q.get(timeout=HUMAN_SSE_HEARTBEAT)
+                    yield _format_sse(evt.get('type', 'message'), evt)
+                except _queue.Empty:
+                    yield ': ping\n\n'
+        except GeneratorExit:
+            return
+        except Exception:
+            logger.exception('kefu human-sse error session=%s', sid)
+            return
+        finally:
+            kefu_event_bus.unsubscribe(sid, q)
+            _human_sse_release(key)
+            logger.info('kefu human-sse closed session=%s', sid)
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @kefu_public_bp.route('/sessions/<sid>/files', methods=['POST'])

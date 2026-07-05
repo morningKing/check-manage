@@ -147,3 +147,24 @@ def test_events_ip_sse_cap_returns_429(client):
     assert resp.status_code == 429
     # Visitor slot must have been released since IP cap was full (all-or-nothing).
     release_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Human-events SSE endpoint (independent concurrency counter)
+# ---------------------------------------------------------------------------
+
+def test_human_events_404_when_not_owner(client):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=None):
+        resp = client.get('/kefu/sessions/sess_x/human-events?visitor_id=v1')
+    assert resp.status_code == 404
+
+
+def test_human_sse_cap_allows_two_then_blocks():
+    from routes import kefu_public as kp
+    kp._human_sse_active.clear()
+    assert kp._human_sse_acquire('k') is True
+    assert kp._human_sse_acquire('k') is True
+    assert kp._human_sse_acquire('k') is False   # cap = 2
+    kp._human_sse_release('k')
+    assert kp._human_sse_acquire('k') is True
+    kp._human_sse_active.clear()
