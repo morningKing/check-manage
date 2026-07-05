@@ -79,10 +79,18 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
     def _is_sse(self):
         """SSE event streams that must be relayed chunk-by-chunk (never buffered):
-        AI chat  /api/ai/chat/sessions/<id>/events  and
-        kefu     /api/kefu/sessions/<sid>/events."""
+        AI chat  /api/ai/chat/sessions/<id>/events
+        kefu     /api/kefu/sessions/<sid>/events        (visitor OpenCode proxy)
+                 /api/kefu/sessions/<sid>/human-events  (visitor human-takeover, C1)
+                 /api/admin/kefu/events                 (admin console, C2)
+
+        Match by suffix (`/events` OR `/human-events`) AND an AI-chat/kefu prefix.
+        NOTE: any NEW SSE route must be added here or the proxy will buffer it to
+        completion and the stream will hang in production (dev via Vite masks this
+        — Vite proxies SSE natively). See CLAUDE.md "proxy.py verification"."""
         path = self.path.split('?')[0]
-        return path.endswith('/events') and ('/ai/chat/' in path or '/kefu/sessions/' in path)
+        return path.endswith(('/events', '/human-events')) and \
+            ('/ai/chat/' in path or '/kefu/' in path)
 
     def _proxy_to_backend(self, stream=False):
         # Strip /api prefix: /api/auth/login -> /auth/login

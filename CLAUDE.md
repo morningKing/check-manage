@@ -240,6 +240,21 @@ Procedure:
 
 Backend-only changes with no UI/interaction surface (pure utils, scripts, migrations) don't require Playwright — unit tests suffice. When in doubt (does a user see this?), verify with Playwright.
 
+### ⚠️ proxy.py Verification (MANDATORY for SSE / streaming / new proxied routes)
+
+**The Vite dev proxy (`:5173`) is NOT production.** Production serves the built `dist/` and proxies `/api/*` through `server/proxy.py` (`:8080`, reverse proxy in front of a waitress backend). Vite proxies SSE/streaming natively, so **a feature can pass all Playwright/Vite verification and still be broken in production** through `proxy.py`. This is a real, recurring gap.
+
+**Any change involving SSE, chunked/streaming responses, a NEW `/api` route shape, or non-standard request headers MUST also be verified through `proxy.py` (`:8080`) before it's considered done** — not just via Vite.
+
+The specific trap: `proxy.py._is_sse()` is an **explicit allowlist** deciding which responses stream vs. buffer. An SSE route not matched there is read to completion (`_relay_buffered`) and **hangs forever** in production. Likewise `_proxy_to_backend` forwards only an **allowlisted set of request headers** (`Content-Type, Authorization, X-API-Key, X-Visitor-Id, Accept`) — a new custom header a route depends on will be silently dropped. **When you add an SSE endpoint, you MUST update `_is_sse()`; when a route needs a new request header, you MUST add it to the forward list.**
+
+Procedure:
+1. `npm run build` (produces `dist/`), then `cd server && python proxy.py` (starts its own backend on `:3001` + serves `:8080`).
+2. Exercise the real flow through `:8080` (Playwright, or `curl -N` for SSE). For SSE, confirm the stream **arrives incrementally** — e.g. `curl -sN --max-time 4 http://localhost:8080/api/.../events...` returns `event: ...` frames within the window; an **empty** result means the proxy buffered it (broken). Trigger a live event and confirm it arrives through `:8080` in real time.
+3. State plainly in the summary that the flow was verified through `proxy.py`, not only Vite.
+
+The SSE routes that must stay matched by `_is_sse()`: `/api/ai/chat/sessions/<id>/events`, `/api/kefu/sessions/<sid>/events`, `/api/kefu/sessions/<sid>/human-events`, `/api/admin/kefu/events`.
+
 ### Adding a New Business Entity (e.g., "Products")
 
 **Do NOT** create a new Vue file or SQL table.
