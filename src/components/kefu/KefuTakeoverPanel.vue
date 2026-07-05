@@ -68,8 +68,7 @@ const selectedSid = ref('')
 const messages = ref<any[]>([])
 const replyDraft = ref('')
 const convEl = ref<HTMLElement | null>(null)
-let queueTimer: ReturnType<typeof setInterval> | null = null
-let convTimer: ReturnType<typeof setInterval> | null = null
+let closeStream: (() => void) | null = null
 
 const selected = computed(() => sessions.value.find(s => s.id === selectedSid.value) || null)
 
@@ -108,6 +107,14 @@ async function selectSession(sid: string) {
   try { await loadConversation() } catch { ElMessage.error('加载对话失败') }
 }
 
+function openStream() {
+  closeStream?.()
+  closeStream = api.createKefuAdminEventStream(props.instanceId, {
+    onReady: () => { loadQueue().catch(() => {}); if (selectedSid.value) loadConversation().catch(() => {}) },
+    onEvent: (e) => { loadQueue().catch(() => {}); if (e.sid && e.sid === selectedSid.value) loadConversation().catch(() => {}) },
+  })
+}
+
 async function takeover() {
   if (!selectedSid.value) return
   try { await api.takeoverSession(selectedSid.value); await loadQueue(); await loadConversation() }
@@ -126,17 +133,13 @@ async function sendReply() {
 }
 
 watch(filter, () => { loadQueue() })
-watch(() => props.instanceId, () => { selectedSid.value = ''; messages.value = []; loadQueue() })
+watch(() => props.instanceId, () => { selectedSid.value = ''; messages.value = []; loadQueue().catch(() => {}); openStream() })
 
 onMounted(() => {
   loadQueue().catch(() => {})
-  queueTimer = setInterval(() => { loadQueue().catch(() => {}) }, 5000)
-  convTimer = setInterval(() => { if (selectedSid.value) loadConversation().catch(() => {}) }, 5000)
+  openStream()
 })
-onBeforeUnmount(() => {
-  if (queueTimer) clearInterval(queueTimer)
-  if (convTimer) clearInterval(convTimer)
-})
+onBeforeUnmount(() => { closeStream?.() })
 
 defineExpose({ sessions, filter, selectedSid, messages, replyDraft, selected, selectSession, takeover, release, sendReply, loadQueue })
 </script>

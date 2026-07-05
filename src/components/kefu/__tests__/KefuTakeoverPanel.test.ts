@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
 const mockList = vi.fn(), mockMsgs = vi.fn(), mockTakeover = vi.fn(), mockRelease = vi.fn(), mockReply = vi.fn()
+const mockTicket = vi.fn(), mockStream = vi.fn()
 vi.mock('@/api/kefu', () => ({
   listSessions: (...a: any[]) => mockList(...a),
   getSessionMessages: (...a: any[]) => mockMsgs(...a),
   takeoverSession: (...a: any[]) => mockTakeover(...a),
   releaseSession: (...a: any[]) => mockRelease(...a),
   humanReply: (...a: any[]) => mockReply(...a),
+  requestSseTicket: (...a: any[]) => mockTicket(...a),
+  createKefuAdminEventStream: (...a: any[]) => mockStream(...a),
 }))
 vi.mock('element-plus', () => ({ ElMessage: { error: vi.fn(), success: vi.fn() } }))
 import KefuTakeoverPanel from '../KefuTakeoverPanel.vue'
@@ -29,6 +32,8 @@ describe('KefuTakeoverPanel', () => {
     mockTakeover.mockResolvedValue({ humanTakeover: true })
     mockRelease.mockResolvedValue({ humanTakeover: false })
     mockReply.mockResolvedValue({ messageId: 'x' })
+    mockTicket.mockResolvedValue({ ticket: 't' })
+    mockStream.mockReturnValue(() => {})
   })
 
   it('loads queue scoped to instance on mount', async () => {
@@ -81,15 +86,39 @@ describe('KefuTakeoverPanel', () => {
     expect((w.vm as any).replyDraft).toBe('')
   })
 
-  it('polls queue every 5s and stops on unmount', async () => {
-    vi.useFakeTimers()
-    const w = mountP(); await flushPromises()
+  it('opens admin event stream on mount and closes on unmount', async () => {
+    const close = vi.fn(); mockStream.mockReturnValue(close)
+    const w = mountP('kf_1'); await flushPromises()
+    expect(mockStream).toHaveBeenCalled()
+    expect(mockStream.mock.calls[0][0]).toBe('kf_1')
+    w.unmount()
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('onReady reloads queue', async () => {
+    mountP(); await flushPromises()
+    const h = mockStream.mock.calls[0][1]
     mockList.mockClear()
-    vi.advanceTimersByTime(5000); await flushPromises()
+    h.onReady(); await flushPromises()
     expect(mockList).toHaveBeenCalled()
-    w.unmount(); mockList.mockClear()
-    vi.advanceTimersByTime(10000); await flushPromises()
-    expect(mockList).not.toHaveBeenCalled()
-    vi.useRealTimers()
+  })
+
+  it('onEvent for non-selected session reloads queue only', async () => {
+    mountP(); await flushPromises()
+    const h = mockStream.mock.calls[0][1]
+    mockList.mockClear(); mockMsgs.mockClear()
+    h.onEvent({ sid: 'other', type: 'visitor_message' }); await flushPromises()
+    expect(mockList).toHaveBeenCalled()
+    expect(mockMsgs).not.toHaveBeenCalled()
+  })
+
+  it('onEvent for the selected session reloads queue + conversation', async () => {
+    const w = mountP(); await flushPromises()
+    await (w.vm as any).selectSession('sess_1')
+    const h = mockStream.mock.calls[0][1]
+    mockList.mockClear(); mockMsgs.mockClear()
+    h.onEvent({ sid: 'sess_1', type: 'human_message' }); await flushPromises()
+    expect(mockList).toHaveBeenCalled()
+    expect(mockMsgs).toHaveBeenCalled()
   })
 })
