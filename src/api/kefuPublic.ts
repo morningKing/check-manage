@@ -10,6 +10,13 @@ export function getVisitorId(): string {
 
 function vh() { return { headers: { 'X-Visitor-Id': getVisitorId() } } }
 
+export function kefuFileUrl(sid: string, name: string): string {
+  return `/api/kefu/sessions/${encodeURIComponent(sid)}/files/${encodeURIComponent(name)}?visitor_id=${encodeURIComponent(getVisitorId())}`
+}
+export function isKefuImage(name: string): boolean {
+  return /\.(png|jpe?g|gif)$/i.test(name || '')
+}
+
 export interface PanelBlock { id: string; type: 'links' | 'faq' | 'richtext' | 'contact'; title?: string; enabled?: boolean; config: any }
 export interface KefuConfig { slug: string; name: string; welcome_message: string | null; guided_questions: string[]; branding: Record<string, any>; enabled: boolean; panel_blocks?: PanelBlock[] }
 export interface KefuFaqItem { id: string; question: string; answer: string; category: string | null }

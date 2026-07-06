@@ -58,4 +58,27 @@ describe('KefuMessageBubble', () => {
     expect(chips[0].text()).toContain('a.txt')
     expect(w.text()).toContain('看这个')
   })
+
+  it('renders an image file part as an inline <img> pointing at the files endpoint', () => {
+    const w = mount(KefuMessageBubble, { props: {
+      sessionId: 'sess_1',
+      message: { id: 'm1', role: 'user', content: [{ type: 'file', name: 'a.png', path: 'uploads/a.png' }], createdAt: null },
+    } })
+    const img = w.find('img.kmb__img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toContain('/kefu/sessions/sess_1/files/a.png')
+    expect(w.find('a.kmb__file').exists()).toBe(false)
+  })
+
+  it('renders a non-image file part as a download link, not an <img>', () => {
+    const w = mount(KefuMessageBubble, { props: {
+      sessionId: 'sess_1',
+      message: { id: 'm2', role: 'user', content: [{ type: 'file', name: 'b.pdf', path: 'uploads/b.pdf' }], createdAt: null },
+    } })
+    expect(w.find('img.kmb__img').exists()).toBe(false)
+    const a = w.find('a.kmb__file')
+    expect(a.exists()).toBe(true)
+    expect(a.attributes('href')).toContain('/kefu/sessions/sess_1/files/b.pdf')
+    expect(a.attributes('download')).toBeDefined()
+  })
 })

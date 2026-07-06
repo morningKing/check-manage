@@ -9,7 +9,12 @@
       <div class="kmb__bubble">
         <MarkdownView v-if="!isUser" :text="text" />
         <span v-else-if="text" class="kmb__text">{{ text }}</span>
-        <span v-for="(f, i) in files" :key="i" class="kmb__file">📎 {{ f.name }}</span>
+        <template v-for="(f, i) in files" :key="i">
+          <a v-if="isKefuImage(f.name)" :href="kefuFileUrl(sessionId, f.name)" target="_blank" rel="noopener">
+            <img class="kmb__img" :src="kefuFileUrl(sessionId, f.name)" :alt="f.name" />
+          </a>
+          <a v-else class="kmb__file" :href="kefuFileUrl(sessionId, f.name)" target="_blank" rel="noopener" download>📎 {{ f.name }}</a>
+        </template>
       </div>
       <div v-if="time" class="kmb__time">{{ time }}</div>
     </div>
@@ -20,9 +25,10 @@
 import { computed } from 'vue'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import type { KefuMessage } from '@/api/kefuPublic'
+import { kefuFileUrl, isKefuImage } from '@/api/kefuPublic'
 import { avatarInitial, avatarColor } from './avatar'
 
-const props = defineProps<{ message: KefuMessage; agentName?: string; agentLogo?: string }>()
+const props = withDefaults(defineProps<{ message: KefuMessage; agentName?: string; agentLogo?: string; sessionId?: string }>(), { sessionId: '' })
 
 function normalize(content: any) {
   return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
@@ -77,7 +83,9 @@ const time = computed(() => {
   border-radius: 10px; font-size: 12px;
   background: var(--el-color-primary-light-9, #ecf5ff);
   border: 1px solid var(--el-color-primary-light-7, #c6e2ff);
+  text-decoration: none; cursor: pointer;
 }
+.kmb__img { max-width: 220px; max-height: 220px; border-radius: 8px; display: block; margin-top: 4px; cursor: zoom-in; }
 /* translucent white overlay: reads correctly on the primary-colored bubble in both light and dark themes */
 .kmb--user .kmb__file {
   background: rgba(255, 255, 255, 0.22); border-color: rgba(255, 255, 255, 0.35); color: #fff;

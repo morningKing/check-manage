@@ -35,7 +35,8 @@
                 v-if="config?.welcome_message"
                 :message="{ id: 'welcome', role: 'assistant', content: [{ type: 'text', text: config.welcome_message }], createdAt: null }"
                 :agent-name="config?.name || '在线客服'"
-                :agent-logo="config?.branding?.logo" />
+                :agent-logo="config?.branding?.logo"
+                :session-id="sessionId" />
               <div v-if="bubbles.length" class="bubbles">
                 <button v-for="(b, i) in bubbles" :key="i" class="bubble" @click="askBubble(b)">{{ b }}</button>
               </div>
@@ -44,7 +45,8 @@
               v-for="m in messages" :key="m.id"
               :message="m"
               :agent-name="config?.name || '在线客服'"
-              :agent-logo="config?.branding?.logo" />
+              :agent-logo="config?.branding?.logo"
+              :session-id="sessionId" />
             <div v-if="sending" class="typing-row" role="status" aria-label="正在输入">
               <span class="typing-bubble"><i></i><i></i><i></i></span>
             </div>
