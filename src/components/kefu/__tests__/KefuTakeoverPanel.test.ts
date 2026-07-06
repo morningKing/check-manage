@@ -121,4 +121,16 @@ describe('KefuTakeoverPanel', () => {
     expect(mockList).toHaveBeenCalled()
     expect(mockMsgs).toHaveBeenCalled()
   })
+
+  it('renders an image file part in the conversation as <img>', async () => {
+    mockMsgs.mockResolvedValue({ messages: [
+      { id: 'm1', role: 'user', content: [{ type: 'file', name: 'a.png', path: 'uploads/a.png' }], meta: null, createdAt: null },
+    ] })
+    const w = mountP(); await flushPromises()
+    await (w.vm as any).selectSession('sess_1')
+    const img = w.find('img.ktp__img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toContain('/kefu/sessions/sess_1/files/a.png')
+    expect(img.attributes('src')).toContain('visitor_id=v-abcdef12')
+  })
 })

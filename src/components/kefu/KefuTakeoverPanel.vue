@@ -39,7 +39,13 @@
           <div v-for="m in messages" :key="m.id" class="ktp__msg" :class="'ktp__msg--' + m.role">
             <div class="ktp__bubble">
               <span v-if="m.meta && m.meta.author === 'human'" class="ktp__human-tag">人工</span>
-              {{ plainText(m.content) }}
+              <span v-if="plainText(m.content)">{{ plainText(m.content) }}</span>
+              <template v-for="(f, i) in fileParts(m.content)" :key="i">
+                <a v-if="isKefuImage(f.name)" :href="adminFileUrl(f.name)" target="_blank" rel="noopener">
+                  <img class="ktp__img" :src="adminFileUrl(f.name)" :alt="f.name" />
+                </a>
+                <a v-else class="ktp__filelink" :href="adminFileUrl(f.name)" target="_blank" rel="noopener" download>📎 {{ f.name }}</a>
+              </template>
             </div>
             <div class="ktp__msg-time">{{ hhmm(m.createdAt) }}</div>
           </div>
@@ -59,6 +65,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as api from '@/api/kefu'
+import { isKefuImage } from '@/api/kefuPublic'
 
 const props = defineProps<{ instanceId: string }>()
 
@@ -83,6 +90,13 @@ function hhmm(ts: string | null) {
 function plainText(content: any) {
   const parts = Array.isArray(content) ? content : []
   return parts.filter((p: any) => p && p.type === 'text').map((p: any) => p.text).join('')
+}
+function fileParts(content: any) {
+  return (Array.isArray(content) ? content : []).filter((p: any) => p && p.type === 'file')
+}
+function adminFileUrl(name: string) {
+  const vid = selected.value?.visitor_id || ''
+  return `/api/kefu/sessions/${selectedSid.value}/files/${encodeURIComponent(name)}?visitor_id=${encodeURIComponent(vid)}`
 }
 
 function queryParams() {
@@ -173,4 +187,6 @@ defineExpose({ sessions, filter, selectedSid, messages, replyDraft, selected, se
 .ktp__human-tag { display: inline-block; font-size: 10px; margin-right: 4px; padding: 0 4px; border-radius: 6px; background: #eef1fe; color: #4f6ef2; }
 .ktp__msg-time { font-size: 11px; color: var(--el-text-color-secondary, #909399); margin-top: 2px; }
 .ktp__reply { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--el-border-color-lighter, #ebeef5); }
+.ktp__img { max-width: 200px; max-height: 200px; border-radius: 8px; display: block; margin-top: 4px; cursor: zoom-in; }
+.ktp__filelink { display: inline-block; margin-top: 4px; font-size: 12px; text-decoration: none; color: var(--el-color-primary, #4f6ef2); }
 </style>
