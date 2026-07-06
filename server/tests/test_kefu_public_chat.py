@@ -212,3 +212,14 @@ def test_get_file_404_when_missing(client, tmp_path):
     with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=sess):
         resp = client.get('/kefu/sessions/sess_1/files/nope.png?visitor_id=v1')
     assert resp.status_code == 404
+
+
+def test_get_file_rejects_traversal(client, tmp_path):
+    (tmp_path / 'uploads').mkdir()
+    sess = ('sess_1', 'kefu-bot', 'oc_1', 'active', str(tmp_path), 'kf_1', False)
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=sess):
+        # single-segment '..' resolves to the workspace root (a dir) → isfile False → 404
+        assert client.get('/kefu/sessions/sess_1/files/..?visitor_id=v1').status_code == 404
+        # encoded-slash traversal never matches the single-segment <name> route → 404
+        assert client.get(
+            '/kefu/sessions/sess_1/files/..%2F..%2Fconfig.py?visitor_id=v1').status_code == 404
