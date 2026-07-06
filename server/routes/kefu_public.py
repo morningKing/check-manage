@@ -6,7 +6,7 @@ import os
 import secrets
 import threading
 import queue as _queue
-from flask import Blueprint, request, jsonify, Response, stream_with_context
+from flask import Blueprint, request, jsonify, Response, stream_with_context, send_file
 from db import get_db
 from utils import kefu_repo
 from utils import kefu_event_bus
@@ -390,6 +390,21 @@ def upload(sid):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     f.save(dest)
     return jsonify({'name': safe_name, 'path': rel, 'size': os.path.getsize(dest)}), 201
+
+
+@kefu_public_bp.route('/sessions/<sid>/files/<name>', methods=['GET'])
+def get_file(sid, name):
+    vid = (request.args.get('visitor_id') or '').strip()
+    sess = kefu_repo.load_kefu_session(sid, vid)
+    if not sess:
+        return jsonify({'error': 'session not found'}), 404
+    try:
+        dest = safe_resolve(sess[4], f"uploads/{name}")
+    except WorkspacePathError:
+        return jsonify({'error': 'not found'}), 404
+    if not os.path.isfile(dest):
+        return jsonify({'error': 'not found'}), 404
+    return send_file(dest)
 
 
 @kefu_public_bp.route('/i/<slug>/faq', methods=['GET'])

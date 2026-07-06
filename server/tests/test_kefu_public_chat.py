@@ -188,3 +188,27 @@ def test_human_sse_cap_allows_two_then_blocks():
     kp._human_sse_release('k')
     assert kp._human_sse_acquire('k') is True
     kp._human_sse_active.clear()
+
+
+def test_get_file_404_not_owner(client):
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=None):
+        resp = client.get('/kefu/sessions/sess_1/files/a.png?visitor_id=v1')
+    assert resp.status_code == 404
+
+
+def test_get_file_serves_image(client, tmp_path):
+    up = tmp_path / 'uploads'
+    up.mkdir()
+    (up / 'a.png').write_bytes(b'\x89PNG\r\n\x1a\n' + b'0' * 64)
+    sess = ('sess_1', 'kefu-bot', 'oc_1', 'active', str(tmp_path), 'kf_1', False)
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=sess):
+        resp = client.get('/kefu/sessions/sess_1/files/a.png?visitor_id=v1')
+    assert resp.status_code == 200
+    assert resp.headers['Content-Type'].startswith('image/png')
+
+
+def test_get_file_404_when_missing(client, tmp_path):
+    sess = ('sess_1', 'kefu-bot', 'oc_1', 'active', str(tmp_path), 'kf_1', False)
+    with patch('routes.kefu_public.kefu_repo.load_kefu_session', return_value=sess):
+        resp = client.get('/kefu/sessions/sess_1/files/nope.png?visitor_id=v1')
+    assert resp.status_code == 404
