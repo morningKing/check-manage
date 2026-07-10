@@ -1238,7 +1238,6 @@ def init_db():
             conn.commit()
             print("Added layout_x/y/w/h columns to home_widgets and backfilled positions.")
 
-
         # Migration: add backup_scope and backup_tables columns to backups
         cur.execute("""
             SELECT column_name FROM information_schema.columns
