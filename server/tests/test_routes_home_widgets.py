@@ -213,6 +213,7 @@ class TestCreateHomeWidget:
         # 第二次 fetchone 用于返回新创建的记录
         mock_cursor.fetchone.side_effect = [
             {'max_order': 5},  # COALESCE 查询
+            {'max_bottom': 4},  # 网格底部查询
             {
                 'id': 'custom-custom-markdown-abc12345',
                 'widget_type': 'custom-markdown',
@@ -261,6 +262,7 @@ class TestCreateHomeWidget:
         client, mock_cursor, admin_h, _ = setup
         mock_cursor.fetchone.side_effect = [
             {'max_order': 3},
+            {'max_bottom': 8},
             {
                 'id': 'custom-data-card-xyz12345',
                 'widget_type': 'data-card',
@@ -288,6 +290,7 @@ class TestCreateHomeWidget:
         content = {'collection': 'daily-record', 'chartType': 'bar', 'groupField': 'result', 'limit': 20}
         mock_cursor.fetchone.side_effect = [
             {'max_order': 7},
+            {'max_bottom': 24},
             {
                 'id': 'custom-chart-aa11bb22',
                 'widget_type': 'chart',
@@ -314,6 +317,7 @@ class TestCreateHomeWidget:
         content = {'title': '公告', 'body': '正文', 'level': 'warning', 'closable': True}
         mock_cursor.fetchone.side_effect = [
             {'max_order': 8},
+            {'max_bottom': 28},
             {
                 'id': 'custom-announcement-cc33dd44',
                 'widget_type': 'announcement',
@@ -363,32 +367,86 @@ class TestDeleteHomeWidget:
         assert resp.status_code == 403
 
 
-class TestUpdateWidgetOrder:
-    def test_update_widget_order(self, setup):
-        """测试更新排序"""
+class TestUpdateHomeWidgetsLayout:
+    def test_update_layout_success(self, setup):
+        """测试批量保存网格坐标，并按新阅读顺序重算 order"""
         client, mock_cursor, admin_h, _ = setup
-        resp = client.put('/home-widgets/order',
-            data=json.dumps({'orders': [{'id': 'welcome', 'order': 10}, {'id': 'stats', 'order': 5}]}),
+        mock_cursor.fetchall.side_effect = [
+            [{'id': 'stats'}, {'id': 'welcome'}],  # ORDER BY layout_y, layout_x -> 新阅读顺序
+            [
+                {
+                    'id': 'stats', 'widget_type': 'stats', 'title': '统计', 'content': {},
+                    'enabled': True, 'order': 1, 'visible_roles': ['admin', 'developer', 'guest'],
+                    'layout_x': 0, 'layout_y': 0, 'layout_w': 6, 'layout_h': 4,
+                    'created_at': now, 'updated_at': now,
+                },
+                {
+                    'id': 'welcome', 'widget_type': 'welcome', 'title': '欢迎', 'content': {},
+                    'enabled': True, 'order': 2, 'visible_roles': ['admin', 'developer', 'guest'],
+                    'layout_x': 6, 'layout_y': 0, 'layout_w': 6, 'layout_h': 4,
+                    'created_at': now, 'updated_at': now,
+                },
+            ],
+        ]
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': [
+                {'id': 'stats', 'x': 0, 'y': 0, 'w': 6, 'h': 4},
+                {'id': 'welcome', 'x': 6, 'y': 0, 'w': 6, 'h': 4},
+            ]}),
             content_type='application/json',
             headers=admin_h
         )
         assert resp.status_code == 200
+        data = resp.get_json()
+        assert data[0]['id'] == 'stats'
+        assert data[0]['layout'] == {'x': 0, 'y': 0, 'w': 6, 'h': 4}
+        assert data[1]['id'] == 'welcome'
 
-    def test_update_widget_order_empty(self, setup):
-        """测试空排序数组返回错误"""
+    def test_update_layout_empty(self, setup):
+        """测试空 layout 数组返回错误"""
         client, _, admin_h, _ = setup
-        resp = client.put('/home-widgets/order',
-            data=json.dumps({'orders': []}),
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': []}),
             content_type='application/json',
             headers=admin_h
         )
         assert resp.status_code == 400
 
-    def test_update_widget_order_non_admin(self, setup):
-        """测试非管理员无法更新排序"""
+    def test_update_layout_x_out_of_range(self, setup):
+        """测试 x 超出 0-11 范围返回错误"""
+        client, _, admin_h, _ = setup
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': [{'id': 'welcome', 'x': 12, 'y': 0, 'w': 1, 'h': 4}]}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400
+
+    def test_update_layout_w_exceeds_grid(self, setup):
+        """测试 x+w 超过 12 列返回错误"""
+        client, _, admin_h, _ = setup
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': [{'id': 'welcome', 'x': 6, 'y': 0, 'w': 12, 'h': 4}]}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400
+
+    def test_update_layout_missing_id(self, setup):
+        """测试缺少 id 返回错误"""
+        client, _, admin_h, _ = setup
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': [{'x': 0, 'y': 0, 'w': 12, 'h': 4}]}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400
+
+    def test_update_layout_non_admin(self, setup):
+        """测试非管理员无法保存布局"""
         client, _, _, dev_h = setup
-        resp = client.put('/home-widgets/order',
-            data=json.dumps({'orders': [{'id': 'welcome', 'order': 10}]}),
+        resp = client.put('/home-widgets/layout',
+            data=json.dumps({'layout': [{'id': 'welcome', 'x': 0, 'y': 0, 'w': 12, 'h': 4}]}),
             content_type='application/json',
             headers=dev_h
         )

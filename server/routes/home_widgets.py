@@ -20,6 +20,12 @@ def _row_to_json(row):
         'enabled': row['enabled'],
         'order': row['order'],
         'visibleRoles': row['visible_roles'] if isinstance(row['visible_roles'], list) else json.loads(row['visible_roles'] or '[]'),
+        'layout': {
+            'x': row.get('layout_x', 0),
+            'y': row.get('layout_y', 0),
+            'w': row.get('layout_w', 12),
+            'h': row.get('layout_h', 4),
+        },
         'createdAt': row['created_at'].isoformat() if row['created_at'] else None,
         'updatedAt': row['updated_at'].isoformat() if row['updated_at'] else None,
     }
@@ -44,12 +50,14 @@ def list_home_widgets():
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         if admin_all:
             cur.execute(
-                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
+                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
+                'layout_x, layout_y, layout_w, layout_h, created_at, updated_at '
                 'FROM home_widgets ORDER BY "order"'
             )
         else:
             cur.execute(
-                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
+                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
+                'layout_x, layout_y, layout_w, layout_h, created_at, updated_at '
                 'FROM home_widgets WHERE enabled = TRUE ORDER BY "order"'
             )
         rows = cur.fetchall()
@@ -111,7 +119,8 @@ def batch_update_home_widgets():
 
         # Return updated list
         cur.execute(
-            'SELECT id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at '
+            'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
+            'layout_x, layout_y, layout_w, layout_h, created_at, updated_at '
             'FROM home_widgets ORDER BY "order"'
         )
         rows = cur.fetchall()
@@ -145,11 +154,18 @@ def create_home_widget():
         max_order_row = cur.fetchone()
         new_order = max_order_row['max_order']
 
+        # New widget is appended to the bottom of the grid, full width
+        cur.execute('SELECT COALESCE(MAX(layout_y + layout_h), 0) AS max_bottom FROM home_widgets')
+        max_bottom_row = cur.fetchone()
+        new_y = max_bottom_row['max_bottom']
+
         # Insert new widget
         cur.execute(
-            'INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", visible_roles) '
-            'VALUES (%s, %s, %s, %s, %s, %s, %s) '
-            'RETURNING id, widget_type, title, content, enabled, "order", visible_roles, created_at, updated_at',
+            'INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", visible_roles, '
+            'layout_x, layout_y, layout_w, layout_h) '
+            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) '
+            'RETURNING id, widget_type, title, content, enabled, "order", visible_roles, '
+            'layout_x, layout_y, layout_w, layout_h, created_at, updated_at',
             (
                 widget_id,
                 widget_type,
@@ -157,7 +173,8 @@ def create_home_widget():
                 psycopg2.extras.Json(body.get('content', {})),
                 body.get('enabled', True),
                 new_order,
-                psycopg2.extras.Json(body.get('visibleRoles', ['admin', 'developer', 'guest']))
+                psycopg2.extras.Json(body.get('visibleRoles', ['admin', 'developer', 'guest'])),
+                0, new_y, 12, 4,
             )
         )
         new_row = cur.fetchone()
@@ -185,27 +202,59 @@ def delete_home_widget(widget_id):
     return jsonify({"success": True})
 
 
-@home_widgets_bp.route('/home-widgets/order', methods=['PUT'])
+@home_widgets_bp.route('/home-widgets/layout', methods=['PUT'])
 @require_permission('admin.home_widgets')
-def update_home_widgets_order():
-    """Update widgets order. Admin only."""
-    body = request.get_json(force=True)
-    orders = body.get('orders', [])
+def update_home_widgets_layout():
+    """Batch update widget grid positions (x/y/w/h). Admin only.
 
-    if not orders:
-        return jsonify({"error": "orders array is required"}), 400
+    Recomputes and persists `order` from the new (y, x) reading order in the
+    same transaction, so mobile rendering (which still sorts by `order`)
+    stays in sync with the grid without any extra writes elsewhere.
+    """
+    body = request.get_json(force=True)
+    layout = body.get('layout', [])
+
+    if not layout:
+        return jsonify({"error": "layout array is required"}), 400
+
+    for item in layout:
+        widget_id = item.get('id')
+        x, y, w, h = item.get('x'), item.get('y'), item.get('w'), item.get('h')
+        if not widget_id:
+            return jsonify({"error": "each layout item requires an id"}), 400
+        if not isinstance(x, int) or not isinstance(y, int) or not isinstance(w, int) or not isinstance(h, int):
+            return jsonify({"error": "x/y/w/h must be integers"}), 400
+        if not (0 <= x <= 11):
+            return jsonify({"error": f"x must be within 0-11, got {x}"}), 400
+        if not (1 <= w <= 12) or x + w > 12:
+            return jsonify({"error": f"w must be within 1-12 and x+w<=12, got x={x} w={w}"}), 400
+        if y < 0:
+            return jsonify({"error": f"y must be >= 0, got {y}"}), 400
+        if h < 1:
+            return jsonify({"error": f"h must be >= 1, got {h}"}), 400
 
     with get_db() as conn:
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        for item in orders:
-            widget_id = item.get('id')
-            new_order = item.get('order')
-            if widget_id and new_order is not None:
-                cur.execute(
-                    'UPDATE home_widgets SET "order" = %s, updated_at = NOW() WHERE id = %s',
-                    (new_order, widget_id)
-                )
+        for item in layout:
+            cur.execute(
+                'UPDATE home_widgets SET layout_x = %s, layout_y = %s, layout_w = %s, layout_h = %s, updated_at = NOW() '
+                'WHERE id = %s',
+                (item['x'], item['y'], item['w'], item['h'], item['id'])
+            )
+
+        # Recompute `order` from the new reading order (y, x)
+        cur.execute('SELECT id FROM home_widgets ORDER BY layout_y, layout_x')
+        ids_in_order = [row['id'] for row in cur.fetchall()]
+        for idx, widget_id in enumerate(ids_in_order):
+            cur.execute('UPDATE home_widgets SET "order" = %s WHERE id = %s', (idx + 1, widget_id))
+
+        cur.execute(
+            'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
+            'layout_x, layout_y, layout_w, layout_h, created_at, updated_at '
+            'FROM home_widgets ORDER BY "order"'
+        )
+        rows = cur.fetchall()
         conn.commit()
 
-    return jsonify({"success": True})
+    return jsonify([_row_to_json(row) for row in rows])
