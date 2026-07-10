@@ -7,7 +7,7 @@
  */
 <template>
   <div class="system-settings">
-    <el-tabs v-model="activeTab" type="border-card">
+    <el-tabs v-model="activeTab" type="border-card" :before-leave="handleTabBeforeLeave">
       <!-- 基本设置 Tab -->
       <el-tab-pane label="基本设置" name="basic">
         <el-form
@@ -127,50 +127,28 @@
           <el-empty description="暂无首页区块配置" />
         </div>
 
-        <draggable
-          v-else
-          v-model="widgetsList"
-          item-key="id"
-          handle=".drag-handle"
-          animation="200"
-          @end="handleDragEnd"
-          class="widgets-list"
-        >
-          <template #item="{ element }">
-            <div class="widget-item">
-              <el-icon class="drag-handle"><Rank /></el-icon>
-              <el-switch
-                v-model="element.enabled"
-                @change="handleWidgetChange(element)"
-              />
-              <span class="widget-title">
-                {{ element.title || getDefaultTitle(element.widgetType) }}
-              </span>
-              <el-tag size="small" :type="getTagType(element.widgetType)">
-                {{ getWidgetTypeLabel(element.widgetType) }}
-              </el-tag>
-              <div class="widget-actions">
-                <el-button
-                  type="primary"
-                  link
-                  size="small"
-                  @click="handleEditWidget(element)"
-                >
-                  <el-icon><Edit /></el-icon>
-                </el-button>
-                <el-button
-                  v-if="isCustomWidget(element)"
-                  type="danger"
-                  link
-                  size="small"
-                  @click="handleDeleteWidget(element)"
-                >
-                  <el-icon><Delete /></el-icon>
-                </el-button>
-              </div>
-            </div>
-          </template>
-        </draggable>
+        <template v-else>
+          <div class="layout-toolbar">
+            <el-button
+              type="success"
+              :disabled="!layoutDirty"
+              :loading="savingLayout"
+              @click="handleSaveLayout"
+            >
+              <el-icon><Check /></el-icon>
+              保存布局
+            </el-button>
+            <span v-if="layoutDirty" class="layout-dirty-hint">有未保存的修改</span>
+          </div>
+
+          <HomeLayoutEditor
+            :widgets="widgetsList"
+            @edit="handleEditWidget"
+            @delete="handleDeleteWidget"
+            @toggle="handleWidgetChange"
+            @layout-change="handleLayoutChange"
+          />
+        </template>
 
         <WidgetEditDialog
           v-model="editDialogVisible"
@@ -192,11 +170,11 @@
  */
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, ArrowDown, Rank, Edit, Delete } from '@element-plus/icons-vue'
-import draggable from 'vuedraggable'
+import { Plus, ArrowDown, Check } from '@element-plus/icons-vue'
 import { useSystemConfigStore } from '@/stores'
 import WidgetEditDialog from './components/WidgetEditDialog.vue'
-import type { WidgetConfig, WidgetType } from '@/types'
+import HomeLayoutEditor from '@/components/admin/HomeLayoutEditor.vue'
+import type { WidgetConfig, WidgetType, WidgetLayoutUpdateItem } from '@/types'
 
 // ==================== Store ====================
 
@@ -218,26 +196,15 @@ const loginTitle = ref('')
 const loginSubtitle = ref('')
 const loginFooter = ref('')
 
-// 区块列表（可拖拽）
+// 区块列表（网格编辑）
 const widgetsList = ref<WidgetConfig[]>([])
 const editDialogVisible = ref(false)
 const currentWidget = ref<WidgetConfig | null>(null)
+const pendingLayout = ref<WidgetLayoutUpdateItem[]>([])
+const layoutDirty = ref(false)
+const savingLayout = ref(false)
 
 // ==================== 常量 ====================
-
-const WIDGET_TYPE_LABELS: Record<string, string> = {
-  welcome: '欢迎卡片',
-  stats: '统计概览',
-  'quick-links': '快捷入口',
-  'system-info': '系统说明',
-  'custom-markdown': 'Markdown',
-  'data-card': '数据卡片',
-  'quick-form': '快速录入',
-  chart: '图表',
-  todo: '我的待办',
-  activity: '最近动态',
-  announcement: '公告'
-}
 
 const WIDGET_DEFAULT_TITLES: Record<string, string> = {
   welcome: '欢迎卡片',
@@ -257,26 +224,6 @@ const WIDGET_DEFAULT_TITLES: Record<string, string> = {
 
 function getDefaultTitle(type: WidgetType): string {
   return WIDGET_DEFAULT_TITLES[type] || type
-}
-
-function getWidgetTypeLabel(type: WidgetType): string {
-  return WIDGET_TYPE_LABELS[type] || type
-}
-
-function getTagType(type: WidgetType): 'success' | 'warning' | 'info' | '' {
-  if (type.startsWith('custom-')) return 'warning'
-  if (type === 'welcome') return 'success'
-  if (type === 'stats') return 'info'
-  return ''
-}
-
-const CUSTOM_WIDGET_TYPES = [
-  'custom-markdown', 'data-card', 'quick-form',
-  'chart', 'todo', 'activity', 'announcement',
-]
-
-function isCustomWidget(widget: WidgetConfig): boolean {
-  return widget.id.startsWith('custom-') || CUSTOM_WIDGET_TYPES.includes(widget.widgetType)
 }
 
 // ==================== 事件处理 ====================
@@ -312,16 +259,37 @@ async function handleSaveConfig() {
   }
 }
 
-async function handleDragEnd() {
-  const orders = widgetsList.value.map((w, idx) => ({
-    id: w.id,
-    order: idx + 1
-  }))
+function handleLayoutChange(items: WidgetLayoutUpdateItem[]) {
+  pendingLayout.value = items
+  layoutDirty.value = true
+}
+
+async function handleSaveLayout() {
+  if (!layoutDirty.value) return
+  savingLayout.value = true
   try {
-    await systemConfigStore.reorderWidgets(orders)
+    await systemConfigStore.updateLayout(pendingLayout.value)
+    widgetsList.value = [...systemConfigStore.widgets]
+    layoutDirty.value = false
+    ElMessage.success('布局已保存')
   } catch {
-    ElMessage.error('排序保存失败')
+    ElMessage.error('布局保存失败')
+  } finally {
+    savingLayout.value = false
   }
+}
+
+async function handleTabBeforeLeave(_activeName: string, oldActiveName: string): Promise<boolean> {
+  if (oldActiveName === 'widgets' && layoutDirty.value) {
+    try {
+      await ElMessageBox.confirm('布局有未保存的修改，确定要离开吗？', '提示', { type: 'warning' })
+      layoutDirty.value = false
+      return true
+    } catch {
+      return false
+    }
+  }
+  return true
 }
 
 async function handleWidgetChange(widget: WidgetConfig) {
@@ -451,43 +419,15 @@ onMounted(async () => {
   padding: 20px;
 }
 
-.widgets-list {
-  .widget-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px;
-    border: 1px solid var(--el-border-color);
-    border-radius: 4px;
-    margin-bottom: 8px;
-    background: var(--el-bg-color);
-    transition: box-shadow 0.2s;
+.layout-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
 
-    &:hover {
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    }
-
-    .drag-handle {
-      cursor: grab;
-      color: var(--el-text-color-secondary);
-
-      &:active {
-        cursor: grabbing;
-      }
-    }
-
-    .widget-title {
-      flex: 1;
-      font-weight: 500;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .widget-actions {
-      display: flex;
-      gap: 4px;
-    }
-  }
+.layout-dirty-hint {
+  font-size: 12px;
+  color: var(--el-color-warning);
 }
 </style>
