@@ -97,10 +97,29 @@ function toGridItems(widgets: WidgetConfig[]): GridLayoutItem[] {
 
 const items = ref<GridLayoutItem[]>(toGridItems(props.widgets))
 
+// grid-layout-plus 会在挂载时无条件触发一次 layout-updated（onMounted 的两层
+// nextTick 链），并且内部有一个 watch(() => [props.layout, props.layout.length])
+// ——只要 layout 这个 prop 的数组引用发生变化就会调用 layoutUpdate() 再次触发
+// layout-updated（见 node_modules/grid-layout-plus/src/components/grid-layout.vue
+// 第 100-117 行与第 180-186 行）。下面的 id 集合重同步每次都会给 items.value
+// 赋一个新数组，从而“顺带”触发这个内部 watch，产生与用户拖拽无关的“幽灵”事件。
+// 用 ignoreNextEmit 吞掉这两类非用户操作触发的 layout-updated：挂载时的一次，
+// 以及每次 id 集合重同步导致的一次；真正的拖拽/缩放结束事件不经过这条路径，
+// 照常放行。
+//
+// 时序说明：下面 watch 回调里，ignoreNextEmit = true 这一行在语法上先于
+// items.value = toGridItems(...) 执行完成——而后者正是触发 grid-layout-plus
+// 内部 watch（进而调用 layoutUpdate() 触发 layout-updated）的原因。无论 Vue
+// 内部 watcher 的 flush 时机（默认 'pre'）如何调度，子组件的响应式副作用都只能
+// 在这次赋值语句执行之后才可能运行，因此 handleLayoutUpdated 触发时读到的
+// ignoreNextEmit 必然已经是 true，同步顺序上不存在竞态。
+let ignoreNextEmit = true
+
 // 只在区块集合变化（新增/删除）时重新同步坐标，避免覆盖用户正在拖拽的状态
 watch(
   () => props.widgets.map(w => w.id).join(','),
   () => {
+    ignoreNextEmit = true
     items.value = toGridItems(props.widgets)
   }
 )
@@ -111,6 +130,10 @@ function widgetById(id: string | number): WidgetConfig | undefined {
 }
 
 function handleLayoutUpdated() {
+  if (ignoreNextEmit) {
+    ignoreNextEmit = false
+    return
+  }
   emit('layout-change', items.value.map(it => ({ id: it.i, x: it.x, y: it.y, w: it.w, h: it.h })))
 }
 
@@ -130,14 +153,14 @@ const WIDGET_TYPE_LABELS: Record<string, string> = {
   announcement: '公告'
 }
 
-const WIDGET_DEFAULT_TITLES: Record<string, string> = { ...WIDGET_TYPE_LABELS }
-
 function getWidgetTypeLabel(type: WidgetType): string {
   return WIDGET_TYPE_LABELS[type] || type
 }
 
+// 区块默认标题与类型标签当前共用同一份文案表；若未来两者需要分化措辞，
+// 在此单独引入一份 WIDGET_DEFAULT_TITLES 映射即可，不影响调用方 getDefaultTitle。
 function getDefaultTitle(type: WidgetType): string {
-  return WIDGET_DEFAULT_TITLES[type] || type
+  return WIDGET_TYPE_LABELS[type] || type
 }
 
 function getTagType(type: WidgetType): 'success' | 'warning' | 'info' | '' {
