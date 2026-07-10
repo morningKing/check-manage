@@ -13,9 +13,9 @@ import {
   batchUpdateHomeWidgets,
   createHomeWidget,
   deleteHomeWidget,
-  updateWidgetsOrder
+  updateWidgetsLayout
 } from '@/api/systemConfig'
-import type { SystemConfig, SystemConfigUpdate, WidgetConfig, OrderUpdateItem } from '@/types'
+import type { SystemConfig, SystemConfigUpdate, WidgetConfig, WidgetLayoutUpdateItem } from '@/types'
 
 /** 默认系统配置 */
 const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
@@ -168,19 +168,14 @@ export const useSystemConfigStore = defineStore('systemConfig', () => {
   }
 
   /**
-   * 更新排序
+   * 批量保存网格布局（管理端拖拽/缩放后调用）
    */
-  async function reorderWidgets(orders: OrderUpdateItem[]): Promise<void> {
+  async function updateLayout(layout: WidgetLayoutUpdateItem[]): Promise<void> {
     try {
-      await updateWidgetsOrder(orders)
-      // 更新本地状态
-      const orderMap = new Map(orders.map(item => [item.id, item.order]))
-      widgets.value = widgets.value.map(widget => ({
-        ...widget,
-        order: orderMap.get(widget.id) ?? widget.order
-      }))
+      const result = await updateWidgetsLayout(layout)
+      widgets.value = result
     } catch (error) {
-      console.error('Failed to reorder widgets:', error)
+      console.error('Failed to update layout:', error)
       throw error
     }
   }
@@ -216,6 +211,6 @@ export const useSystemConfigStore = defineStore('systemConfig', () => {
     updateWidgets,
     createWidget,
     removeWidget,
-    reorderWidgets
+    updateLayout
   }
 })

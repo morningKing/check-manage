@@ -9,7 +9,7 @@ vi.mock('@/api/systemConfig', () => ({
   batchUpdateHomeWidgets: vi.fn(),
   createHomeWidget: vi.fn(),
   deleteHomeWidget: vi.fn(),
-  updateWidgetsOrder: vi.fn(),
+  updateWidgetsLayout: vi.fn(),
 }))
 
 // Mock auth store
@@ -23,6 +23,7 @@ import {
   getSystemConfig,
   updateSystemConfig,
   getHomeWidgets,
+  updateWidgetsLayout,
 } from '@/api/systemConfig'
 import { useAuthStore } from '@/stores/auth'
 import { useSystemConfigStore } from '../systemConfig'
@@ -30,6 +31,7 @@ import { useSystemConfigStore } from '../systemConfig'
 const mockGetSystemConfig = vi.mocked(getSystemConfig)
 const mockUpdateSystemConfig = vi.mocked(updateSystemConfig)
 const mockGetHomeWidgets = vi.mocked(getHomeWidgets)
+const mockUpdateWidgetsLayout = vi.mocked(updateWidgetsLayout)
 const mockUseAuthStore = vi.mocked(useAuthStore)
 
 describe('SystemConfig Store', () => {
@@ -311,6 +313,47 @@ describe('SystemConfig Store', () => {
       await store.initialize()
 
       expect(store.systemShortName).toBe('MS')
+    })
+  })
+
+  describe('updateLayout', () => {
+    it('批量保存布局后用返回值刷新 widgets', async () => {
+      mockGetSystemConfig.mockResolvedValueOnce({ systemName: 'Test', systemShortName: 'T' } as any)
+      mockGetHomeWidgets.mockResolvedValueOnce([] as any)
+
+      const updated = [
+        {
+          id: 'welcome',
+          widgetType: 'welcome' as const,
+          title: 'Welcome',
+          content: {},
+          enabled: true,
+          order: 1,
+          visibleRoles: [],
+          layout: { x: 0, y: 0, w: 6, h: 4 },
+        },
+      ]
+      mockUpdateWidgetsLayout.mockResolvedValueOnce(updated as any)
+
+      const store = useSystemConfigStore()
+      await store.initialize()
+      await store.updateLayout([{ id: 'welcome', x: 0, y: 0, w: 6, h: 4 }])
+
+      expect(mockUpdateWidgetsLayout).toHaveBeenCalledWith([{ id: 'welcome', x: 0, y: 0, w: 6, h: 4 }])
+      expect(store.widgets).toEqual(updated)
+    })
+
+    it('保存失败时抛出错误', async () => {
+      mockGetSystemConfig.mockResolvedValueOnce({ systemName: 'Test', systemShortName: 'T' } as any)
+      mockGetHomeWidgets.mockResolvedValueOnce([] as any)
+      mockUpdateWidgetsLayout.mockRejectedValueOnce(new Error('Network error'))
+
+      const store = useSystemConfigStore()
+      await store.initialize()
+
+      await expect(
+        store.updateLayout([{ id: 'welcome', x: 0, y: 0, w: 6, h: 4 }])
+      ).rejects.toThrow('Network error')
     })
   })
 })

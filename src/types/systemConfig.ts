@@ -113,6 +113,14 @@ export interface WidgetContentMap {
   announcement: AnnouncementContent
 }
 
+/** 区块网格布局坐标（12 列网格，行高固定） */
+export interface WidgetLayout {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 /** Widget 配置 */
 export interface WidgetConfig {
   id: string
@@ -122,6 +130,7 @@ export interface WidgetConfig {
   enabled: boolean
   order: number
   visibleRoles: string[]
+  layout: WidgetLayout
   createdAt?: string
   updatedAt?: string
 }
@@ -149,8 +158,11 @@ export interface SystemConfigUpdate {
   loginFooter?: string | null
 }
 
-/** 排序更新参数 */
-export interface OrderUpdateItem {
+/** 布局更新参数 */
+export interface WidgetLayoutUpdateItem {
   id: string
-  order: number
+  x: number
+  y: number
+  w: number
+  h: number
 }

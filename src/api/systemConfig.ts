@@ -6,7 +6,7 @@ import type {
   SystemConfig,
   SystemConfigUpdate,
   WidgetConfig,
-  OrderUpdateItem
+  WidgetLayoutUpdateItem
 } from '@/types'
 
 /** 获取系统配置 */
@@ -44,7 +44,7 @@ export function deleteHomeWidget(id: string) {
   return del<{ success: boolean }>(`/home-widgets/${id}`)
 }
 
-/** 更新区块排序 */
-export function updateWidgetsOrder(orders: OrderUpdateItem[]) {
-  return put<{ success: boolean }>('/home-widgets/order', { orders })
+/** 批量保存区块网格布局（x/y/w/h），后端会按新阅读顺序重算 order */
+export function updateWidgetsLayout(layout: WidgetLayoutUpdateItem[]) {
+  return put<WidgetConfig[]>('/home-widgets/layout', { layout })
 }
