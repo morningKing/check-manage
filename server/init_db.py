@@ -201,19 +201,19 @@ CREATE TABLE IF NOT EXISTS home_widgets (
 );
 
 -- 默认首页区块数据
-INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order") VALUES
+INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", layout_y) VALUES
 ('welcome', 'welcome', '欢迎',
  '{"heading": "欢迎使用巡检用例管理系统", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
- true, 1),
+ true, 1, 0),
 ('stats', 'stats', '系统概览',
  '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
- true, 2),
+ true, 2, 4),
 ('quick-links', 'quick-links', '快捷入口',
  '{"links": [{"name": "菜单管理", "path": "/admin/menu", "icon": "Menu"}, {"name": "页面配置", "path": "/admin/page-config", "icon": "Files"}, {"name": "批量导出", "path": "", "icon": "Download", "action": "batchExport"}]}',
- true, 3),
+ true, 3, 8),
 ('system-info', 'system-info', '系统说明',
  '{"markdown": "**技术栈：** Vue 3 + TypeScript + Element Plus + Pinia\\n\\n**主要功能：**\\n- 支持 1-3 级嵌套菜单配置\\n- 页面字段可视化配置\\n- 多种表单控件类型支持\\n- 动态数据页面渲染"}',
- true, 4)
+ true, 4, 12)
 ON CONFLICT (id) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS export_scripts (
