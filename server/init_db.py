@@ -192,6 +192,10 @@ CREATE TABLE IF NOT EXISTS home_widgets (
     enabled         BOOLEAN DEFAULT TRUE,
     "order"         INTEGER DEFAULT 0,
     visible_roles   JSONB DEFAULT '["admin","developer","guest"]',
+    layout_x        INTEGER NOT NULL DEFAULT 0,
+    layout_y        INTEGER NOT NULL DEFAULT 0,
+    layout_w        INTEGER NOT NULL DEFAULT 12,
+    layout_h        INTEGER NOT NULL DEFAULT 4,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1182,30 +1186,59 @@ def init_db():
                     enabled         BOOLEAN DEFAULT TRUE,
                     "order"         INTEGER DEFAULT 0,
                     visible_roles   JSONB DEFAULT '["admin","developer","guest"]',
+                    layout_x        INTEGER NOT NULL DEFAULT 0,
+                    layout_y        INTEGER NOT NULL DEFAULT 0,
+                    layout_w        INTEGER NOT NULL DEFAULT 12,
+                    layout_h        INTEGER NOT NULL DEFAULT 4,
                     created_at      TIMESTAMPTZ DEFAULT NOW(),
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
             """)
             # Insert default widgets
             cur.execute("""
-                INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order") VALUES
+                INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", layout_y) VALUES
                 ('welcome', 'welcome', '欢迎',
                  '{"heading": "欢迎使用巡检用例管理系统", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
-                 true, 1),
+                 true, 1, 0),
                 ('stats', 'stats', '系统概览',
                  '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
-                 true, 2),
+                 true, 2, 4),
                 ('quick-links', 'quick-links', '快捷入口',
                  '{"links": [{"name": "菜单管理", "path": "/admin/menu", "icon": "Menu"}, {"name": "页面配置", "path": "/admin/page-config", "icon": "Files"}, {"name": "批量导出", "path": "", "icon": "Download", "action": "batchExport"}]}',
-                 true, 3),
+                 true, 3, 8),
                 ('system-info', 'system-info', '系统说明',
                  '{"markdown": "**技术栈：** Vue 3 + TypeScript + Element Plus + Pinia\\n\\n**主要功能：**\\n- 支持 1-3 级嵌套菜单配置\\n- 页面字段可视化配置\\n- 多种表单控件类型支持\\n- 动态数据页面渲染"}',
-                 true, 4)
+                 true, 4, 12)
             """)
             conn.commit()
             print("Created home_widgets table with default widgets.")
 
-        
+        # Migration: add layout_x/y/w/h columns to home_widgets (grid layout editor)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'home_widgets' AND column_name = 'layout_x'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                ALTER TABLE home_widgets
+                    ADD COLUMN layout_x INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN layout_y INTEGER NOT NULL DEFAULT 0,
+                    ADD COLUMN layout_w INTEGER NOT NULL DEFAULT 12,
+                    ADD COLUMN layout_h INTEGER NOT NULL DEFAULT 4;
+            """)
+            # Backfill: preserve today's vertical stacking order as full-width rows
+            # (x=0, w=12, h=4 from the column DEFAULTs above; only y needs computing)
+            cur.execute('SELECT id FROM home_widgets ORDER BY "order"')
+            ids_in_order = [row[0] for row in cur.fetchall()]
+            for idx, widget_id in enumerate(ids_in_order):
+                cur.execute(
+                    'UPDATE home_widgets SET layout_y = %s WHERE id = %s',
+                    (idx * 4, widget_id)
+                )
+            conn.commit()
+            print("Added layout_x/y/w/h columns to home_widgets and backfilled positions.")
+
+
         # Migration: add backup_scope and backup_tables columns to backups
         cur.execute("""
             SELECT column_name FROM information_schema.columns
