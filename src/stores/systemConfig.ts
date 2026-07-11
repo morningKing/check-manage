@@ -15,7 +15,7 @@ import {
   deleteHomeWidget,
   updateWidgetsLayout
 } from '@/api/systemConfig'
-import type { SystemConfig, SystemConfigUpdate, WidgetConfig, WidgetLayoutUpdateItem } from '@/types'
+import type { SystemConfig, SystemConfigUpdate, WidgetConfig, WidgetLayout, WidgetLayoutUpdateItem, CreatableWidgetType } from '@/types'
 
 /** 默认系统配置 */
 const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
@@ -137,13 +137,14 @@ export const useSystemConfigStore = defineStore('systemConfig', () => {
   }
 
   /**
-   * 创建自定义区块
+   * 创建自定义区块。传 layout 时按指定网格坐标创建（区块面板拖拽新增用），不传则追加到底部
    */
   async function createWidget(data: {
-    widgetType: 'custom-markdown' | 'data-card' | 'quick-form' | 'chart' | 'todo' | 'activity' | 'announcement'
+    widgetType: CreatableWidgetType
     title?: string
     content: Record<string, any>
     visibleRoles?: string[]
+    layout?: WidgetLayout
   }): Promise<void> {
     try {
       const widget = await createHomeWidget(data)

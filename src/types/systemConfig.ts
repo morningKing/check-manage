@@ -166,3 +166,13 @@ export interface WidgetLayoutUpdateItem {
   w: number
   h: number
 }
+
+/** 可通过「首页配置」新增的区块类型（对应后端 create_home_widget 的 allowed_types 白名单） */
+export type CreatableWidgetType =
+  | 'custom-markdown'
+  | 'data-card'
+  | 'quick-form'
+  | 'chart'
+  | 'todo'
+  | 'activity'
+  | 'announcement'

@@ -6,7 +6,9 @@ import type {
   SystemConfig,
   SystemConfigUpdate,
   WidgetConfig,
-  WidgetLayoutUpdateItem
+  WidgetLayout,
+  WidgetLayoutUpdateItem,
+  CreatableWidgetType
 } from '@/types'
 
 /** 获取系统配置 */
@@ -29,12 +31,13 @@ export function batchUpdateHomeWidgets(widgets: Partial<WidgetConfig>[]) {
   return put<WidgetConfig[]>('/home-widgets', { widgets })
 }
 
-/** 创建自定义区块 */
+/** 创建自定义区块。传 layout 时按指定网格坐标创建（区块面板拖拽新增用），不传则追加到底部 */
 export function createHomeWidget(data: {
-  widgetType: 'custom-markdown' | 'data-card' | 'quick-form' | 'chart' | 'todo' | 'activity' | 'announcement'
+  widgetType: CreatableWidgetType
   title?: string
   content: Record<string, any>
   visibleRoles?: string[]
+  layout?: WidgetLayout
 }) {
   return post<WidgetConfig>('/home-widgets', data)
 }
