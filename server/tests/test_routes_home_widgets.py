@@ -338,6 +338,57 @@ class TestCreateHomeWidget:
         assert resp.status_code == 201
         assert resp.get_json()['widgetType'] == 'announcement'
 
+    def test_create_widget_with_layout_override(self, setup):
+        """测试拖拽创建：带显式 layout 时跳过"追加到底部"，并重算 order"""
+        client, mock_cursor, admin_h, _ = setup
+        mock_cursor.fetchone.side_effect = [
+            {'max_order': 3},  # COALESCE(MAX("order")) 查询
+            {  # INSERT ... RETURNING（插入时的坐标）
+                'id': 'custom-chart-ddee1122', 'widget_type': 'chart', 'title': '图表',
+                'content': {}, 'enabled': True, 'order': 4,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'layout_x': 3, 'layout_y': 2, 'layout_w': 6, 'layout_h': 4,
+                'created_at': now, 'updated_at': now,
+            },
+            {  # _recompute_order 之后重新查询同一行（order 可能已变化）
+                'id': 'custom-chart-ddee1122', 'widget_type': 'chart', 'title': '图表',
+                'content': {}, 'enabled': True, 'order': 1,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'layout_x': 3, 'layout_y': 2, 'layout_w': 6, 'layout_h': 4,
+                'created_at': now, 'updated_at': now,
+            },
+        ]
+        mock_cursor.fetchall.return_value = [{'id': 'custom-chart-ddee1122'}]  # ORDER BY layout_y, layout_x
+        resp = client.post('/home-widgets',
+            data=json.dumps({
+                'widgetType': 'chart', 'title': '图表', 'content': {},
+                'layout': {'x': 3, 'y': 2, 'w': 6, 'h': 4},
+            }),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 201
+        data = resp.get_json()
+        assert data['layout'] == {'x': 3, 'y': 2, 'w': 6, 'h': 4}
+        assert data['order'] == 1  # 重算后的值，不是插入时算的 4
+
+        # 未再查询 max_bottom（"追加到底部"的那条 SQL 不应被执行）
+        sql_calls = ' '.join(str(c.args[0]) for c in mock_cursor.execute.call_args_list if c.args)
+        assert 'MAX(layout_y + layout_h)' not in sql_calls
+
+    def test_create_widget_invalid_layout_override(self, setup):
+        """测试拖拽创建：layout 越界返回 400"""
+        client, _, admin_h, _ = setup
+        resp = client.post('/home-widgets',
+            data=json.dumps({
+                'widgetType': 'chart', 'title': '图表', 'content': {},
+                'layout': {'x': 10, 'y': 0, 'w': 6, 'h': 4},  # x+w=16 > 12
+            }),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400
+
 
 class TestDeleteHomeWidget:
     def test_delete_custom_widget(self, setup):

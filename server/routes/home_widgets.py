@@ -31,6 +31,32 @@ def _row_to_json(row):
     }
 
 
+def _validate_layout_item(x, y, w, h):
+    """Validate a single grid position. Returns an error message string, or None if valid."""
+    if not isinstance(x, int) or not isinstance(y, int) or not isinstance(w, int) or not isinstance(h, int):
+        return "x/y/w/h must be integers"
+    if not (0 <= x <= 11):
+        return f"x must be within 0-11, got {x}"
+    if not (1 <= w <= 12) or x + w > 12:
+        return f"w must be within 1-12 and x+w<=12, got x={x} w={w}"
+    if y < 0:
+        return f"y must be >= 0, got {y}"
+    if h < 1:
+        return f"h must be >= 1, got {h}"
+    return None
+
+
+def _recompute_order(cur):
+    """Recompute and persist `order` from the (layout_y, layout_x) reading order.
+
+    Must run inside the caller's existing transaction (does not commit).
+    """
+    cur.execute('SELECT id FROM home_widgets ORDER BY layout_y, layout_x')
+    ids_in_order = [row['id'] for row in cur.fetchall()]
+    for idx, widget_id in enumerate(ids_in_order):
+        cur.execute('UPDATE home_widgets SET "order" = %s WHERE id = %s', (idx + 1, widget_id))
+
+
 @home_widgets_bp.route('/home-widgets', methods=['GET'])
 @login_required
 def list_home_widgets():
@@ -132,7 +158,13 @@ def batch_update_home_widgets():
 @home_widgets_bp.route('/home-widgets', methods=['POST'])
 @require_permission('admin.home_widgets')
 def create_home_widget():
-    """Create a custom widget. Admin only."""
+    """Create a custom widget. Admin only.
+
+    Optional body field `layout: {x,y,w,h}` places the widget at an explicit
+    grid position (used by drag-to-create from the block palette). When
+    omitted, the widget is appended full-width to the bottom of the grid
+    (unchanged default behavior for the "click to add" path).
+    """
     body = request.get_json(force=True)
     widget_type = body.get('widgetType', '')
 
@@ -142,6 +174,12 @@ def create_home_widget():
     )
     if widget_type not in allowed_types:
         return jsonify({"error": f"Widget type must be one of: {', '.join(allowed_types)}"}), 400
+
+    layout = body.get('layout')
+    if layout is not None:
+        error = _validate_layout_item(layout.get('x'), layout.get('y'), layout.get('w'), layout.get('h'))
+        if error:
+            return jsonify({"error": error}), 400
 
     # Generate ID: custom-{type}-{uuid8}
     widget_id = f'custom-{widget_type}-{uuid.uuid4().hex[:8]}'
@@ -154,10 +192,13 @@ def create_home_widget():
         max_order_row = cur.fetchone()
         new_order = max_order_row['max_order']
 
-        # New widget is appended to the bottom of the grid, full width
-        cur.execute('SELECT COALESCE(MAX(layout_y + layout_h), 0) AS max_bottom FROM home_widgets')
-        max_bottom_row = cur.fetchone()
-        new_y = max_bottom_row['max_bottom']
+        if layout is not None:
+            new_x, new_y, new_w, new_h = layout['x'], layout['y'], layout['w'], layout['h']
+        else:
+            # New widget is appended to the bottom of the grid, full width
+            cur.execute('SELECT COALESCE(MAX(layout_y + layout_h), 0) AS max_bottom FROM home_widgets')
+            max_bottom_row = cur.fetchone()
+            new_x, new_y, new_w, new_h = 0, max_bottom_row['max_bottom'], 12, 4
 
         # Insert new widget
         cur.execute(
@@ -174,10 +215,23 @@ def create_home_widget():
                 body.get('enabled', True),
                 new_order,
                 psycopg2.extras.Json(body.get('visibleRoles', ['admin', 'developer', 'guest'])),
-                0, new_y, 12, 4,
+                new_x, new_y, new_w, new_h,
             )
         )
         new_row = cur.fetchone()
+
+        if layout is not None:
+            # Explicit position was placed somewhere other than "the bottom" —
+            # recompute order from (y, x) so mobile stacking matches the grid.
+            _recompute_order(cur)
+            cur.execute(
+                'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
+                'layout_x, layout_y, layout_w, layout_h, created_at, updated_at '
+                'FROM home_widgets WHERE id = %s',
+                (widget_id,)
+            )
+            new_row = cur.fetchone()
+
         conn.commit()
 
     return jsonify(_row_to_json(new_row)), 201
@@ -219,19 +273,11 @@ def update_home_widgets_layout():
 
     for item in layout:
         widget_id = item.get('id')
-        x, y, w, h = item.get('x'), item.get('y'), item.get('w'), item.get('h')
         if not widget_id:
             return jsonify({"error": "each layout item requires an id"}), 400
-        if not isinstance(x, int) or not isinstance(y, int) or not isinstance(w, int) or not isinstance(h, int):
-            return jsonify({"error": "x/y/w/h must be integers"}), 400
-        if not (0 <= x <= 11):
-            return jsonify({"error": f"x must be within 0-11, got {x}"}), 400
-        if not (1 <= w <= 12) or x + w > 12:
-            return jsonify({"error": f"w must be within 1-12 and x+w<=12, got x={x} w={w}"}), 400
-        if y < 0:
-            return jsonify({"error": f"y must be >= 0, got {y}"}), 400
-        if h < 1:
-            return jsonify({"error": f"h must be >= 1, got {h}"}), 400
+        error = _validate_layout_item(item.get('x'), item.get('y'), item.get('w'), item.get('h'))
+        if error:
+            return jsonify({"error": error}), 400
 
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -243,11 +289,7 @@ def update_home_widgets_layout():
                 (item['x'], item['y'], item['w'], item['h'], item['id'])
             )
 
-        # Recompute `order` from the new reading order (y, x)
-        cur.execute('SELECT id FROM home_widgets ORDER BY layout_y, layout_x')
-        ids_in_order = [row['id'] for row in cur.fetchall()]
-        for idx, widget_id in enumerate(ids_in_order):
-            cur.execute('UPDATE home_widgets SET "order" = %s WHERE id = %s', (idx + 1, widget_id))
+        _recompute_order(cur)
 
         cur.execute(
             'SELECT id, widget_type, title, content, enabled, "order", visible_roles, '
