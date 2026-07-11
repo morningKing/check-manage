@@ -1,5 +1,10 @@
 <template>
-  <div class="home-layout-editor">
+  <div
+    ref="gridContainerRef"
+    class="home-layout-editor"
+    @dragover.prevent
+    @drop="handleDrop"
+  >
     <GridLayout
       v-model:layout="items"
       :col-num="12"
@@ -73,8 +78,8 @@
 import { computed, ref, watch } from 'vue'
 import { GridLayout, GridItem } from 'grid-layout-plus'
 import { Rank, Edit, Delete } from '@element-plus/icons-vue'
-import { isCustomHomeWidget } from '@/utils/homeGridLayout'
-import type { WidgetConfig, WidgetLayoutUpdateItem, WidgetType } from '@/types'
+import { isCustomHomeWidget, pixelToGridPosition } from '@/utils/homeGridLayout'
+import type { WidgetConfig, WidgetLayoutUpdateItem, WidgetType, CreatableWidgetType } from '@/types'
 
 const props = defineProps<{
   widgets: WidgetConfig[]
@@ -85,6 +90,7 @@ const emit = defineEmits<{
   delete: [widget: WidgetConfig]
   toggle: [widget: WidgetConfig]
   'layout-change': [items: WidgetLayoutUpdateItem[]]
+  'create-at': [payload: { widgetType: CreatableWidgetType; x: number; y: number; w: number; h: number }]
 }>()
 
 // ==================== 网格状态 ====================
@@ -135,6 +141,29 @@ function handleLayoutUpdated() {
     return
   }
   emit('layout-change', items.value.map(it => ({ id: it.i, x: it.x, y: it.y, w: it.w, h: it.h })))
+}
+
+// ==================== 区块面板拖拽落点 ====================
+
+const gridContainerRef = ref<HTMLElement | null>(null)
+
+/** 从区块面板拖入创建的默认尺寸——半行宽，方便落点两侧还能再放一个区块 */
+const DROP_DEFAULT_W = 6
+const DROP_DEFAULT_H = 4
+
+function handleDrop(event: DragEvent) {
+  const widgetType = event.dataTransfer?.getData('text/plain') as CreatableWidgetType | ''
+  if (!widgetType) return
+
+  const container = gridContainerRef.value
+  if (!container) return
+
+  const rect = container.getBoundingClientRect()
+  const left = event.clientX - rect.left
+  const top = event.clientY - rect.top
+  const { x, y } = pixelToGridPosition(left, top, rect.width, DROP_DEFAULT_W)
+
+  emit('create-at', { widgetType, x, y, w: DROP_DEFAULT_W, h: DROP_DEFAULT_H })
 }
 
 // ==================== 展示文案 ====================
