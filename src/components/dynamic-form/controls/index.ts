@@ -26,6 +26,7 @@ import AutoTimestamp from './AutoTimestamp.vue'
 import AutoSequence from './AutoSequence.vue'
 import QuoteSelect from './QuoteSelect.vue'
 import CompositeText from './CompositeText.vue'
+import StatusBadge from './StatusBadge.vue'
 
 /**
  * 控件类型到组件的映射
@@ -51,7 +52,8 @@ export const controlComponentMap: Record<ControlType, Component> = {
   autoTimestamp: AutoTimestamp,
   autoSequence: AutoSequence,
   quoteSelect: QuoteSelect,
-  compositeText: CompositeText
+  compositeText: CompositeText,
+  statusBadge: StatusBadge
 }
 
 /**
@@ -91,6 +93,8 @@ export function getControlDefaultValue(controlType: ControlType): any {
     case 'richText':
     case 'markdown':
       return ''
+    case 'statusBadge':
+      return ''
     default:
       return ''
   }
@@ -115,5 +119,6 @@ export {
   AutoTimestamp,
   AutoSequence,
   QuoteSelect,
-  CompositeText
+  CompositeText,
+  StatusBadge
 }

@@ -1071,7 +1071,10 @@ function handleEditField(field: FieldConfig, index: number): void {
       : { targetCollection: '', displayField: '' },
     compositeTextConfig: field.compositeTextConfig
       ? { ...field.compositeTextConfig, sourceFields: [...field.compositeTextConfig.sourceFields] }
-      : { sourceFields: [], separator: ' - ' }
+      : { sourceFields: [], separator: ' - ' },
+    statusBadgeConfig: field.statusBadgeConfig
+      ? { ...field.statusBadgeConfig, options: [...field.statusBadgeConfig.options] }
+      : { options: [], pollIntervalSec: 5 }
   }
   // Load workflow config
   const wf = field.workflowConfig
