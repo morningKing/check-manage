@@ -389,6 +389,19 @@ class TestCreateHomeWidget:
         )
         assert resp.status_code == 400
 
+    def test_create_widget_non_dict_layout_override(self, setup):
+        """测试 layout 不是对象（如数组/字符串）时返回 400 而非 500"""
+        client, _, admin_h, _ = setup
+        resp = client.post('/home-widgets',
+            data=json.dumps({
+                'widgetType': 'chart', 'title': '图表', 'content': {},
+                'layout': [1, 2, 3],
+            }),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400
+
 
 class TestDeleteHomeWidget:
     def test_delete_custom_widget(self, setup):

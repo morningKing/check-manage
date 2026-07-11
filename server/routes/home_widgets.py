@@ -177,6 +177,8 @@ def create_home_widget():
 
     layout = body.get('layout')
     if layout is not None:
+        if not isinstance(layout, dict):
+            return jsonify({"error": "layout must be an object"}), 400
         error = _validate_layout_item(layout.get('x'), layout.get('y'), layout.get('w'), layout.get('h'))
         if error:
             return jsonify({"error": error}), 400
