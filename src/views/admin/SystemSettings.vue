@@ -82,43 +82,8 @@
         </el-form>
       </el-tab-pane>
 
-      <!-- 馅页配置 Tab -->
+      <!-- 首页配置 Tab -->
       <el-tab-pane label="首页配置" name="widgets">
-        <div class="widgets-toolbar">
-          <el-dropdown @command="handleAddWidget">
-            <el-button type="primary">
-              <el-icon><Plus /></el-icon>
-              新增区块
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="custom-markdown">
-                  Markdown 区块
-                </el-dropdown-item>
-                <el-dropdown-item command="data-card">
-                  数据卡片
-                </el-dropdown-item>
-                <el-dropdown-item command="quick-form">
-                  快速录入表单
-                </el-dropdown-item>
-                <el-dropdown-item command="chart" divided>
-                  图表区块
-                </el-dropdown-item>
-                <el-dropdown-item command="todo">
-                  我的待办
-                </el-dropdown-item>
-                <el-dropdown-item command="activity">
-                  最近动态
-                </el-dropdown-item>
-                <el-dropdown-item command="announcement">
-                  公告
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-
         <div v-if="widgetsLoading" class="widgets-loading">
           <el-skeleton :rows="3" animated />
         </div>
@@ -127,28 +92,33 @@
           <el-empty description="暂无首页区块配置" />
         </div>
 
-        <template v-else>
-          <div class="layout-toolbar">
-            <el-button
-              type="success"
-              :disabled="!layoutDirty"
-              :loading="savingLayout"
-              @click="handleSaveLayout"
-            >
-              <el-icon><Check /></el-icon>
-              保存布局
-            </el-button>
-            <span v-if="layoutDirty" class="layout-dirty-hint">有未保存的修改</span>
-          </div>
+        <div v-else class="home-config-layout">
+          <HomeBlockPalette @add-at-bottom="handleAddWidget" />
 
-          <HomeLayoutEditor
-            :widgets="widgetsList"
-            @edit="handleEditWidget"
-            @delete="handleDeleteWidget"
-            @toggle="handleWidgetChange"
-            @layout-change="handleLayoutChange"
-          />
-        </template>
+          <div class="home-config-main">
+            <div class="layout-toolbar">
+              <el-button
+                type="success"
+                :disabled="!layoutDirty"
+                :loading="savingLayout"
+                @click="handleSaveLayout"
+              >
+                <el-icon><Check /></el-icon>
+                保存布局
+              </el-button>
+              <span v-if="layoutDirty" class="layout-dirty-hint">有未保存的修改</span>
+            </div>
+
+            <HomeLayoutEditor
+              :widgets="widgetsList"
+              @edit="handleEditWidget"
+              @delete="handleDeleteWidget"
+              @toggle="handleWidgetChange"
+              @layout-change="handleLayoutChange"
+              @create-at="handleCreateAt"
+            />
+          </div>
+        </div>
 
         <WidgetEditDialog
           v-model="editDialogVisible"
@@ -170,11 +140,12 @@
  */
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, ArrowDown, Check } from '@element-plus/icons-vue'
+import { Check } from '@element-plus/icons-vue'
 import { useSystemConfigStore } from '@/stores'
 import WidgetEditDialog from './components/WidgetEditDialog.vue'
 import HomeLayoutEditor from '@/components/admin/HomeLayoutEditor.vue'
-import type { WidgetConfig, WidgetType, WidgetLayoutUpdateItem } from '@/types'
+import HomeBlockPalette from '@/components/admin/HomeBlockPalette.vue'
+import type { WidgetConfig, WidgetType, WidgetLayout, WidgetLayoutUpdateItem, CreatableWidgetType } from '@/types'
 
 // ==================== Store ====================
 
@@ -331,23 +302,36 @@ const WIDGET_DEFAULT_CONTENT: Record<string, Record<string, any>> = {
   announcement: { title: '公告', body: '', level: 'info', closable: false },
 }
 
-type CreatableWidgetType = 'custom-markdown' | 'data-card' | 'quick-form' | 'chart' | 'todo' | 'activity' | 'announcement'
+/** 创建区块的公共逻辑；不传 layout 时后端按"追加到底部"处理（点击面板卡片走这条） */
+async function createWidgetOfType(type: CreatableWidgetType, layout?: WidgetLayout) {
+  const defaultContent = WIDGET_DEFAULT_CONTENT[type] || {}
+
+  await systemConfigStore.createWidget({
+    widgetType: type,
+    title: getDefaultTitle(type),
+    content: defaultContent,
+    visibleRoles: ['admin', 'developer', 'guest'],
+    ...(layout ? { layout } : {})
+  })
+  // 从 store 获取最新创建的 widget（store 已 push）
+  const newWidget = systemConfigStore.widgets[systemConfigStore.widgets.length - 1]
+  if (newWidget) {
+    widgetsList.value.push(newWidget)
+  }
+}
 
 async function handleAddWidget(type: CreatableWidgetType) {
   try {
-    const defaultContent = WIDGET_DEFAULT_CONTENT[type] || {}
+    await createWidgetOfType(type)
+    ElMessage.success('创建成功')
+  } catch {
+    ElMessage.error('创建失败')
+  }
+}
 
-    await systemConfigStore.createWidget({
-      widgetType: type,
-      title: getDefaultTitle(type),
-      content: defaultContent,
-      visibleRoles: ['admin', 'developer', 'guest']
-    })
-    // 从 store 获取最新创建的 widget（store 已 push）
-    const newWidget = systemConfigStore.widgets[systemConfigStore.widgets.length - 1]
-    if (newWidget) {
-      widgetsList.value.push(newWidget)
-    }
+async function handleCreateAt(payload: { widgetType: CreatableWidgetType; x: number; y: number; w: number; h: number }) {
+  try {
+    await createWidgetOfType(payload.widgetType, { x: payload.x, y: payload.y, w: payload.w, h: payload.h })
     ElMessage.success('创建成功')
   } catch {
     ElMessage.error('创建失败')
@@ -412,6 +396,17 @@ onMounted(async () => {
 
 .widgets-toolbar {
   margin-bottom: 16px;
+}
+
+.home-config-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.home-config-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .widgets-loading,
