@@ -166,7 +166,7 @@
  *
  * 功能：
  * 1. 系统配置管理（名称、简称、Logo）
- * 2. 首页区块管理（增删改、拖拽排序）
+ * 2. 首页区块管理（增删改、自由拖拽/缩放网格布局）
  */
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'

@@ -402,6 +402,15 @@ class TestUpdateHomeWidgetsLayout:
         assert data[0]['layout'] == {'x': 0, 'y': 0, 'w': 6, 'h': 4}
         assert data[1]['id'] == 'welcome'
 
+        # order 必须按 (layout_y, layout_x) 的新阅读顺序重算并写回：
+        # 模拟的 `ORDER BY layout_y, layout_x` 结果是 [stats, welcome]，
+        # 所以 "order" 应依次写回 stats=1, welcome=2。
+        order_update_calls = [
+            c.args[1] for c in mock_cursor.execute.call_args_list
+            if c.args and 'SET "order" = %s' in str(c.args[0])
+        ]
+        assert order_update_calls == [(1, 'stats'), (2, 'welcome')]
+
     def test_update_layout_empty(self, setup):
         """测试空 layout 数组返回错误"""
         client, _, admin_h, _ = setup
