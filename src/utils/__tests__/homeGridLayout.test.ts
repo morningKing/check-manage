@@ -31,3 +31,30 @@ describe('isCustomHomeWidget', () => {
     expect(isCustomHomeWidget({ id: 'legacy-todo-1', widgetType: 'todo' })).toBe(true)
   })
 })
+
+import { pixelToGridPosition } from '../homeGridLayout'
+
+describe('pixelToGridPosition', () => {
+  // containerWidth=900, colNum=12, marginX=12 => colWidth = (900 - 12*13) / 12 = 62
+  it('容器左上角 (0,0) 换算为网格 (0,0)', () => {
+    expect(pixelToGridPosition(0, 0, 900, 6)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('落在第 2 列（一个 colWidth+marginX 之外）换算为 x=1', () => {
+    // left = colWidth + marginX = 62 + 12 = 74
+    expect(pixelToGridPosition(74, 0, 900, 6)).toEqual({ x: 1, y: 0 })
+  })
+
+  it('落在第 2 行（一个 rowHeight+marginY 之外）换算为 y=1', () => {
+    // top = rowHeight + marginY = 30 + 12 = 42
+    expect(pixelToGridPosition(0, 42, 900, 6)).toEqual({ x: 0, y: 1 })
+  })
+
+  it('超出右边界时 x 被 clamp 到 12-w', () => {
+    expect(pixelToGridPosition(10000, 0, 900, 6)).toEqual({ x: 6, y: 0 })
+  })
+
+  it('负坐标时 x/y 被 clamp 到 0', () => {
+    expect(pixelToGridPosition(-100, -100, 900, 6)).toEqual({ x: 0, y: 0 })
+  })
+})
