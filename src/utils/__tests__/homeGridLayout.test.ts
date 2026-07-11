@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { layoutToGridStyle, isCustomHomeWidget } from '../homeGridLayout'
+import { layoutToGridStyle, isCustomHomeWidget, pixelToGridPosition } from '../homeGridLayout'
 
 describe('layoutToGridStyle', () => {
   it('将起点在 0 的坐标转换为 CSS Grid 定位（CSS Grid 从 1 开始计数）', () => {
@@ -31,8 +31,6 @@ describe('isCustomHomeWidget', () => {
     expect(isCustomHomeWidget({ id: 'legacy-todo-1', widgetType: 'todo' })).toBe(true)
   })
 })
-
-import { pixelToGridPosition } from '../homeGridLayout'
 
 describe('pixelToGridPosition', () => {
   // containerWidth=900, colNum=12, marginX=12 => colWidth = (900 - 12*13) / 12 = 62
