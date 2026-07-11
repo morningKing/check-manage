@@ -24,6 +24,7 @@ import {
   updateSystemConfig,
   getHomeWidgets,
   updateWidgetsLayout,
+  createHomeWidget,
 } from '@/api/systemConfig'
 import { useAuthStore } from '@/stores/auth'
 import { useSystemConfigStore } from '../systemConfig'
@@ -32,6 +33,7 @@ const mockGetSystemConfig = vi.mocked(getSystemConfig)
 const mockUpdateSystemConfig = vi.mocked(updateSystemConfig)
 const mockGetHomeWidgets = vi.mocked(getHomeWidgets)
 const mockUpdateWidgetsLayout = vi.mocked(updateWidgetsLayout)
+const mockCreateHomeWidget = vi.mocked(createHomeWidget)
 const mockUseAuthStore = vi.mocked(useAuthStore)
 
 describe('SystemConfig Store', () => {
@@ -354,6 +356,42 @@ describe('SystemConfig Store', () => {
       await expect(
         store.updateLayout([{ id: 'welcome', x: 0, y: 0, w: 6, h: 4 }])
       ).rejects.toThrow('Network error')
+    })
+  })
+
+  describe('createWidget', () => {
+    it('传入 layout 时透传给 createHomeWidget，并把返回的区块 push 进 widgets', async () => {
+      mockGetSystemConfig.mockResolvedValueOnce({ systemName: 'Test', systemShortName: 'T' } as any)
+      mockGetHomeWidgets.mockResolvedValueOnce([] as any)
+
+      const created = {
+        id: 'custom-chart-abc123',
+        widgetType: 'chart' as const,
+        title: '图表',
+        content: {},
+        enabled: true,
+        order: 1,
+        visibleRoles: ['admin', 'developer', 'guest'],
+        layout: { x: 3, y: 2, w: 6, h: 4 },
+      }
+      mockCreateHomeWidget.mockResolvedValueOnce(created as any)
+
+      const store = useSystemConfigStore()
+      await store.initialize()
+      await store.createWidget({
+        widgetType: 'chart',
+        title: '图表',
+        content: {},
+        layout: { x: 3, y: 2, w: 6, h: 4 },
+      })
+
+      expect(mockCreateHomeWidget).toHaveBeenCalledWith({
+        widgetType: 'chart',
+        title: '图表',
+        content: {},
+        layout: { x: 3, y: 2, w: 6, h: 4 },
+      })
+      expect(store.widgets).toContainEqual(created)
     })
   })
 })
