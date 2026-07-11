@@ -1,5 +1,5 @@
 <template>
-  <el-card :class="['quick-form-widget', $attrs.class]" shadow="hover">
+  <el-card :class="['quick-form-widget', $attrs.class]" :style="$attrs.style" shadow="hover">
     <div class="widget-body" @click="open">
       <el-icon v-if="content.icon" class="widget-icon">
         <component :is="iconComp" />
