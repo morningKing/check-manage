@@ -687,23 +687,69 @@ CREATE TABLE IF NOT EXISTS role_page_permissions (
 """
 
 
-def _create_search_text_trgm_index():
-    """CREATE INDEX CONCURRENTLY 不能在事务块里跑，必须用独立的 autocommit 连接。
+def _create_concurrent_index(index_name, create_sql):
+    """建 CONCURRENTLY 索引，带失败自愈。独立 autocommit 连接（CONCURRENTLY 不能
+    在事务块里跑）。
 
-    在已有几百万行的 dynamic_data 上非并发建索引会长时间持锁堵塞写入；
-    CONCURRENTLY 以慢得多但不阻塞的方式建索引，适合已在生产跑着的库。
+    CONCURRENTLY 构建中途失败/被打断会在 pg_index 里留一个 invalid 的索引
+    占位；`IF NOT EXISTS` 只按名字判断存在与否、不检查有效性，不清理的话
+    重跑 init_db.py 会一直跳过这个坏索引、永远不重建。这里先探测并清掉
+    invalid 的残留，再尝试建；这次尝试本身失败也做同样的清理，让下一次
+    重跑能自愈，不需要人工介入。
     """
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = True
     try:
         cur = conn.cursor()
+        # to_regclass() 走 psycopg2 取回的是 regclass 的文本表示（对象名），不是
+        # 原始 oid 整数；直接把它当 oid 参数再传一次会报 InvalidTextRepresentation。
+        # 让 Postgres 在同一条查询里把 to_regclass() 的结果直接和 indexrelid 比较，
+        # 不经过客户端往返，类型转换交给服务端处理；索引不存在时 to_regclass()
+        # 返回 NULL，WHERE 条件天然不匹配，fetchone() 拿到 None，语义清晰。
         cur.execute(
-            'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dynamic_data_search_trgm '
-            'ON dynamic_data USING gin (search_text gin_trgm_ops)'
+            'SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)',
+            (index_name,),
         )
-        print("Trigram index on dynamic_data.search_text ready.")
+        row = cur.fetchone()
+        if row is not None and not row[0]:
+            print(f"Found invalid leftover index {index_name}, dropping before rebuild.")
+            cur.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {index_name}')
+        cur.execute(create_sql)
+        print(f"Index {index_name} ready.")
+    except Exception:
+        try:
+            cur.execute(f'DROP INDEX CONCURRENTLY IF EXISTS {index_name}')
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
+
+
+def _create_search_text_trgm_index():
+    _create_concurrent_index(
+        'idx_dynamic_data_search_trgm',
+        'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dynamic_data_search_trgm '
+        'ON dynamic_data USING gin (search_text gin_trgm_ops)'
+    )
+
+
+def _create_search_text_pending_index():
+    """自维护的"待回填"清单：只装 search_text 仍是 NULL 的行。
+
+    没有这个索引时，_backfill_search_text 在已经全部回填完的大 collection
+    上每次重跑都要扫一遍该 collection 的全部行才能确认"没有剩余"——千万级
+    下每次 `git pull` 后重跑 init_db.py 都白白花这个代价。部分索引只覆盖
+    还没处理的行，回填完 Postgres 自动把它从索引里摘掉（部分索引的维护
+    是自动的，不需要额外记账），重跑的代价随剩余行数趋近于零。副作用是
+    它对任何忘记盖 search_text 的写路径（不只是这次改的几个）也天然兜底：
+    那些行会自动出现在索引里，下次跑 init_db.py 就会被捞去补算。
+    """
+    _create_concurrent_index(
+        'idx_dynamic_data_search_text_pending',
+        'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dynamic_data_search_text_pending '
+        'ON dynamic_data (collection) WHERE search_text IS NULL'
+    )
 
 
 def _backfill_search_text(conn, batch_size=2000):
@@ -711,7 +757,8 @@ def _backfill_search_text(conn, batch_size=2000):
 
     按 collection 分批处理，每批 UPDATE 后立即 commit，避免千万级存量数据
     一次性锁住整张表或撑爆内存。search_text 写完后该行不再匹配 IS NULL，
-    循环天然终止，可安全重复执行（幂等）。
+    循环天然终止，可安全重复执行（幂等）；配合 idx_dynamic_data_search_text_pending
+    分区索引，已回填完的 collection 重跑代价接近于零。
     """
     cur = conn.cursor()
     cur.execute('SELECT id, fields FROM page_configs')
@@ -756,6 +803,7 @@ def init_db():
         # （见 utils/search_text.py）。索引用独立 autocommit 连接并发建，
         # 存量数据补算走批量 backfill，均可在已有数据的库上安全重复执行。
         _create_search_text_trgm_index()
+        _create_search_text_pending_index()
         _backfill_search_text(conn)
 
         # Data-page file/image field storage (replaces blob: URLs)
