@@ -696,6 +696,23 @@ X-API-Key: cm_xxx
 
 ## 6. 使用示例
 
+> **Python 用户推荐直接用官方客户端库**，比手写 `requests` 调用更省事：内置异常分类（无需手动查状态码）、
+> 自动分页遍历、以及"上传文件 + 写入 file/image 字段"的一步式方法。见仓库 `python-client/README.md`。
+>
+> ```bash
+> cd python-client && pip install -e .
+> ```
+> ```python
+> from checkmanage_openapi import OpenApiClient
+>
+> with OpenApiClient(api_key="cm_xxx", base_url=BASE_URL) as client:
+>     for record in client.iter_records("inspection-cases"):
+>         print(record["id"])
+>     client.attach_files("devices", "附件", "./report.pdf", {"名称": "外部记录1"})
+> ```
+>
+> 下面 6.1-6.4 是不依赖该客户端库、直接手写请求的参考实现，适合其他语言或不便安装额外包的场景。
+
 ### 6.1 cURL
 
 ```bash

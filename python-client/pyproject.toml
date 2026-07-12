@@ -1,0 +1,18 @@
+[project]
+name = "check-manage-openapi-client"
+version = "0.1.0"
+description = "check-manage Open API 的官方 Python 客户端：集合读写、分支、文件上传/下载"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["checkmanage_openapi*"]
