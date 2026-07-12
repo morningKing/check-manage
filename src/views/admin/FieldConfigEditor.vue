@@ -613,6 +613,74 @@
           </div>
         </el-form-item>
 
+        <!-- 状态徽标配置（仅状态徽标类型显示） -->
+        <el-form-item
+          v-if="showStatusBadgeConfig"
+          label="状态选项"
+        >
+          <div class="status-badge-config">
+            <div
+              v-for="(opt, optIndex) in fieldFormData.statusBadgeConfig.options"
+              :key="optIndex"
+              class="status-badge-option-row"
+            >
+              <el-input v-model="opt.label" placeholder="显示文本" style="width: 18%" />
+              <el-input v-model="opt.value" placeholder="值" style="width: 16%" />
+              <IconPicker v-model="opt.icon" style="width: 22%" />
+              <el-color-picker v-model="opt.color" />
+              <el-checkbox v-model="opt.animated">动画</el-checkbox>
+              <el-checkbox v-model="opt.terminal">终态</el-checkbox>
+              <el-button type="danger" link @click="removeStatusBadgeOption(optIndex)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+            <el-button type="primary" link @click="addStatusBadgeOption">
+              <el-icon><Plus /></el-icon>
+              添加阶段
+            </el-button>
+
+            <el-row :gutter="16" class="status-badge-timing">
+              <el-col :span="8">
+                <el-form-item label="轮询间隔(秒)" label-width="110px">
+                  <el-input-number
+                    v-model="fieldFormData.statusBadgeConfig.pollIntervalSec"
+                    :min="1"
+                    :max="3600"
+                    style="width: 100%"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="超时(秒)" label-width="90px">
+                  <el-input-number
+                    v-model="fieldFormData.statusBadgeConfig.timeoutSec"
+                    :min="1"
+                    style="width: 100%"
+                    placeholder="不填=不启用"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="8">
+                <el-form-item label="超时后写为" label-width="100px">
+                  <el-select
+                    v-model="fieldFormData.statusBadgeConfig.timeoutValue"
+                    placeholder="选一个选项值"
+                    clearable
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="opt in fieldFormData.statusBadgeConfig.options"
+                      :key="opt.value"
+                      :label="opt.label || opt.value"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                </el-form-item>
+              </el-col>
+            </el-row>
+          </div>
+        </el-form-item>
+
         <!-- 工作流配置（仅 select 类型显示） -->
         <el-form-item
           v-if="showWorkflowConfig"
@@ -700,6 +768,7 @@ import type { FieldConfig, FieldFormData } from '@/types'
 import { CONTROL_TYPE_OPTIONS, createEmptyFieldFormData } from '@/types'
 import { usePageConfigStore } from '@/stores'
 import { v4 as uuidv4 } from 'uuid'
+import { IconPicker } from '@/components/common'
 
 // ==================== Props & Emits ====================
 
@@ -800,7 +869,7 @@ const showOptionsConfig = computed(() => {
 
 // 可设默认值的控件类型（输入类 + 选择类 + 日期）
 const showDefaultValue = computed(() => {
-  return ['text', 'textarea', 'number', 'select', 'multiSelect', 'radio', 'checkbox', 'date', 'datetime']
+  return ['text', 'textarea', 'number', 'select', 'multiSelect', 'radio', 'checkbox', 'date', 'datetime', 'statusBadge']
     .includes(fieldFormData.value.controlType)
 })
 
@@ -822,6 +891,10 @@ const showQuoteConfig = computed(() => {
 
 const showCompositeTextConfig = computed(() => {
   return fieldFormData.value.controlType === 'compositeText'
+})
+
+const showStatusBadgeConfig = computed(() => {
+  return fieldFormData.value.controlType === 'statusBadge'
 })
 
 const compositeSourceFieldOptions = computed(() => {
@@ -1125,6 +1198,12 @@ async function handleSaveField(): Promise<void> {
     sequenceConfig: showSequenceConfig.value ? fieldFormData.value.sequenceConfig : undefined,
     quoteConfig: showQuoteConfig.value ? fieldFormData.value.quoteConfig : undefined,
     compositeTextConfig: showCompositeTextConfig.value ? fieldFormData.value.compositeTextConfig : undefined,
+    statusBadgeConfig: showStatusBadgeConfig.value
+      ? {
+          ...fieldFormData.value.statusBadgeConfig,
+          options: fieldFormData.value.statusBadgeConfig.options.filter(o => o.value && o.label),
+        }
+      : undefined,
     workflowConfig: showWorkflowConfig.value && workflowEnabled.value
       ? {
           enabled: true,
@@ -1186,6 +1265,20 @@ function addOption(): void {
  */
 function removeOption(index: number): void {
   fieldFormData.value.options.splice(index, 1)
+}
+
+/**
+ * 添加状态徽标阶段选项
+ */
+function addStatusBadgeOption(): void {
+  fieldFormData.value.statusBadgeConfig.options.push({ value: '', label: '', icon: '' })
+}
+
+/**
+ * 移除状态徽标阶段选项
+ */
+function removeStatusBadgeOption(index: number): void {
+  fieldFormData.value.statusBadgeConfig.options.splice(index, 1)
 }
 
 /**
