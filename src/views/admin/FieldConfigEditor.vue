@@ -639,45 +639,37 @@
               添加阶段
             </el-button>
 
-            <el-row :gutter="16" class="status-badge-timing">
-              <el-col :span="8">
-                <el-form-item label="轮询间隔(秒)" label-width="110px">
-                  <el-input-number
-                    v-model="fieldFormData.statusBadgeConfig.pollIntervalSec"
-                    :min="1"
-                    :max="3600"
-                    style="width: 100%"
+            <div class="status-badge-timing">
+              <el-form-item label="轮询间隔(秒)" label-width="110px">
+                <el-input-number
+                  v-model="fieldFormData.statusBadgeConfig.pollIntervalSec"
+                  :min="1"
+                  :max="3600"
+                />
+              </el-form-item>
+              <el-form-item label="超时(秒)" label-width="90px">
+                <el-input-number
+                  v-model="fieldFormData.statusBadgeConfig.timeoutSec"
+                  :min="1"
+                  placeholder="不填=不启用"
+                />
+              </el-form-item>
+              <el-form-item label="超时后写为" label-width="100px">
+                <el-select
+                  v-model="fieldFormData.statusBadgeConfig.timeoutValue"
+                  placeholder="选一个选项值"
+                  clearable
+                  style="width: 160px"
+                >
+                  <el-option
+                    v-for="opt in fieldFormData.statusBadgeConfig.options"
+                    :key="opt.value"
+                    :label="opt.label || opt.value"
+                    :value="opt.value"
                   />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="超时(秒)" label-width="90px">
-                  <el-input-number
-                    v-model="fieldFormData.statusBadgeConfig.timeoutSec"
-                    :min="1"
-                    style="width: 100%"
-                    placeholder="不填=不启用"
-                  />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="超时后写为" label-width="100px">
-                  <el-select
-                    v-model="fieldFormData.statusBadgeConfig.timeoutValue"
-                    placeholder="选一个选项值"
-                    clearable
-                    style="width: 100%"
-                  >
-                    <el-option
-                      v-for="opt in fieldFormData.statusBadgeConfig.options"
-                      :key="opt.value"
-                      :label="opt.label || opt.value"
-                      :value="opt.value"
-                    />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-            </el-row>
+                </el-select>
+              </el-form-item>
+            </div>
           </div>
         </el-form-item>
 
@@ -1485,5 +1477,29 @@ watch(
   gap: 4px;
   margin-bottom: 6px;
   flex-wrap: wrap;
+}
+
+.status-badge-config {
+  width: 100%;
+}
+
+.status-badge-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.status-badge-timing {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+
+  :deep(.el-form-item) {
+    margin-bottom: 0;
+  }
 }
 </style>
