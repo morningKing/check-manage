@@ -930,7 +930,7 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, nextTick, onActivated, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, nextTick, onActivated, onDeactivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
@@ -954,6 +954,7 @@ import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
 import { isPreviewable, fileTypeIcon } from '@/utils/filePreview'
 import { authedDataFileUrl } from '@/api/dataFiles'
+import { useStatusBadgePolling } from '@/composables/useStatusBadgePolling'
 
 // ==================== Props ====================
 
@@ -1336,6 +1337,14 @@ const pageFields = computed<FieldConfig[]>(() => {
   return pageConfigStore.getPageFields(pageId.value)
 })
 
+/**
+ * statusBadge 字段的页面级轮询：只要当前页数据里还有非终态行，就定时重新拉取整页数据
+ */
+const statusBadgePolling = useStatusBadgePolling({
+  fields: pageFields,
+  onRefresh: loadPageData,
+})
+
 const hasReferenceFields = computed<boolean>(() =>
   (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'quoteSelect' || f.controlType === 'reference'),
 )
@@ -1701,6 +1710,15 @@ async function loadPageData(): Promise<void> {
     totalCount.value = result.total
     // 加载当前分支信息
     await loadCurrentBranch()
+    // "查看记录"弹窗打开时，用刷新后的数据同步一份（statusBadge 轮询场景下弹窗内容也要跟着更新）
+    if (viewDialogVisible.value && viewRecord.value?.id) {
+      const fresh = result.data.find((r: DynamicRecord) => r.id === viewRecord.value.id)
+      if (fresh) {
+        viewRecord.value = { ...fresh }
+      }
+    }
+    // 有非终态 statusBadge 行时安排下一次轮询刷新，否则停止
+    statusBadgePolling.evaluateAndSchedule(result.data)
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
@@ -3337,6 +3355,10 @@ onActivated(async () => {
   } catch {
     allExportScripts.value = []
   }
+})
+
+onDeactivated(() => {
+  statusBadgePolling.stop()
 })
 </script>
 
