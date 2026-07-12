@@ -95,6 +95,19 @@
             class="reference-link"
             @click.stop="handleReferenceClick(row, field)"
           >{{ getCellValue(row, field) }}</span>
+          <span
+            v-else-if="field.controlType === 'statusBadge'"
+            class="status-badge-cell"
+            :style="{ color: getStatusBadgeOption(row, field)?.color }"
+          >
+            <el-icon
+              v-if="getStatusBadgeOption(row, field)?.icon"
+              :class="{ 'status-badge-spin': getStatusBadgeOption(row, field)?.animated }"
+            >
+              <component :is="statusBadgeIconComp(getStatusBadgeOption(row, field)!.icon)" />
+            </el-icon>
+            <span>{{ getStatusBadgeOption(row, field)?.label || row[field.fieldName] || '-' }}</span>
+          </span>
           <span v-else>{{ getCellValue(row, field) }}</span>
         </template>
       </el-table-column>
@@ -281,6 +294,7 @@
  */
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { Search, MoreFilled } from '@element-plus/icons-vue'
+import * as ElIcons from '@element-plus/icons-vue'
 import type { FieldConfig, DynamicRecord } from '@/types'
 
 interface ColumnFilter {
@@ -577,9 +591,26 @@ function formatCellValue(row: any, field: FieldConfig): string {
       return plain.length > 50 ? plain.slice(0, 50) + '...' : plain || '-'
     }
 
+    case 'statusBadge': {
+      const opt = field.statusBadgeConfig?.options.find((o) => o.value === value)
+      return opt?.label || String(value)
+    }
+
     default:
       return String(value)
   }
+}
+
+/**
+ * 取某行 statusBadge 字段当前值对应的选项配置（图标/颜色/动画）
+ */
+function getStatusBadgeOption(row: any, field: FieldConfig) {
+  const value = row[field.fieldName]
+  return field.statusBadgeConfig?.options.find((o) => o.value === value)
+}
+
+function statusBadgeIconComp(name: string) {
+  return (ElIcons as Record<string, unknown>)[name]
 }
 
 /**
@@ -706,6 +737,21 @@ defineExpose({ tableRef, clearSelection, clearAllFilters, clearCellValueCache })
   &:hover {
     text-decoration: underline;
   }
+}
+
+.status-badge-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-badge-spin {
+  animation: status-badge-rotate 1.2s linear infinite;
+}
+
+@keyframes status-badge-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .relation-tags {
