@@ -402,6 +402,13 @@ def create_collection_item(collection):
         # Strip internal fields
         data = {k: v for k, v in body.items() if k not in ('createdAt', 'updatedAt', '_version')}
 
+        # statusBadge 字段：创建时若已带初始值，盖变化时间戳作为超时判定基准
+        # （否则超时兜底任务永远匹配不到这条记录，安全网会有漏洞）
+        from datetime import datetime
+        for f in (fields or []):
+            if f.get('controlType') == 'statusBadge' and data.get(f.get('fieldName')):
+                data[f'_statusBadge_{f["fieldName"]}_changedAt'] = datetime.now(timezone.utc).isoformat()
+
         cur.execute(
             'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s) '
             'RETURNING id, collection, data, created_at',

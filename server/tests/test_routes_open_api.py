@@ -336,6 +336,52 @@ class TestStatusBadgeTimestampOpenApi:
             if c.args and 'UPDATE dynamic_data' in str(c.args[0])
         )
 
+    def _find_insert_call(self, mock_cursor):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'INSERT INTO dynamic_data' in str(c.args[0])
+        )
+
+    def test_create_with_initial_status_stamps_timestamp(self, setup):
+        """POST 创建记录时 statusBadge 字段带初始值，应写入变化时间戳——
+        否则这条记录会永远匹配不到超时兜底任务的扫描条件，安全网出现漏洞"""
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),                                          # writable
+            (self.STATUS_FIELDS,),                                 # get_page_fields
+            None,                                                  # ID uniqueness (not found)
+            ([],),                                                 # pk_fields
+            ('rec-1', 'devices', {'status': 'pending'}, now),      # RETURNING
+        ])
+        resp = client.post('/api/v1/collections/devices',
+                           data=json.dumps({'id': 'rec-1', 'status': 'pending'}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 201
+        insert_call = self._find_insert_call(mock_cursor)
+        inserted_data = insert_call.args[1][2].adapted  # (id, collection, data, branch_id)
+        assert inserted_data['status'] == 'pending'
+        assert '_statusBadge_status_changedAt' in inserted_data
+
+    def test_create_without_status_value_does_not_stamp(self, setup):
+        """创建时该字段没有值（未传/空）不应凭空写入时间戳"""
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),
+            (self.STATUS_FIELDS,),
+            None,
+            ([],),
+            ('rec-1', 'devices', {'name': 'X'}, now),
+        ])
+        resp = client.post('/api/v1/collections/devices',
+                           data=json.dumps({'id': 'rec-1', 'name': 'X'}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 201
+        insert_call = self._find_insert_call(mock_cursor)
+        inserted_data = insert_call.args[1][2].adapted
+        assert '_statusBadge_status_changedAt' not in inserted_data
+
     def test_update_status_value_changed_stamps_timestamp(self, setup):
         """第三方系统通过 Open API PUT 回写 statusBadge 字段值变化时，应写入变化时间戳"""
         client, mock_cursor, api_h = setup
