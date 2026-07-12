@@ -567,7 +567,6 @@ def create_item(collection):
                     cur, collection, branch_id, f['fieldName'], prefix, pad, count=1)[0]
             elif f.get('controlType') == 'statusBadge' and data.get(f['fieldName']):
                 # 记录创建时状态字段已有初始值（如 defaultValue）：盖变化时间戳作为超时判定基准
-                from datetime import datetime, timezone
                 data[f'_statusBadge_{f["fieldName"]}_changedAt'] = datetime.now(timezone.utc).isoformat()
         # 手填主键 advisory lock（排除 autoSequence 主键，其值由原子分配天然唯一）
         autoseq_names = {f['fieldName'] for f in (fields or []) if f.get('controlType') == 'autoSequence'}
@@ -771,7 +770,6 @@ def update_item(collection, item_id):
                         import logging; logging.exception('workflow on_transition failed')
                         return jsonify({"error": "工作流推进失败，请重试"}), 500
         # statusBadge 字段：值真正变化时记录变化时间戳，供超时兜底任务判定
-        from datetime import datetime, timezone
         for field_cfg in (fields or []):
             if field_cfg.get('controlType') != 'statusBadge':
                 continue
