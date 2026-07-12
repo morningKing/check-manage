@@ -2570,6 +2570,9 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
       const refreshed = await pageConfigStore.refreshSingleRecord(pageId.value, savedRecordId)
       if (refreshed) {
         tableData.value = [...pageConfigStore.getCachedPageData(pageId.value)]
+        // 智能刷新绕过了 loadPageData，statusBadge 轮询判定要在这里补一次，
+        // 否则新增/编辑出一条非终态状态记录后，轮询不会启动/重新调度
+        statusBadgePolling.evaluateAndSchedule(tableData.value)
       } else {
         // 刷新单条失败，回退到全量加载
         await loadPageData()
