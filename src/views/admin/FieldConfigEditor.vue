@@ -1073,7 +1073,7 @@ function handleEditField(field: FieldConfig, index: number): void {
       ? { ...field.compositeTextConfig, sourceFields: [...field.compositeTextConfig.sourceFields] }
       : { sourceFields: [], separator: ' - ' },
     statusBadgeConfig: field.statusBadgeConfig
-      ? { ...field.statusBadgeConfig, options: [...field.statusBadgeConfig.options] }
+      ? { ...field.statusBadgeConfig, options: field.statusBadgeConfig.options.map(o => ({ ...o })) }
       : { options: [], pollIntervalSec: 5 }
   }
   // Load workflow config
