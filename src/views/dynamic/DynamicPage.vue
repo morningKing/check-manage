@@ -3140,6 +3140,7 @@ async function loadPageDataWithLocate(targetId: string): Promise<void> {
       tableData.value = result.data
       totalCount.value = result.total
       currentPage.value = result.locatedPage
+      statusBadgePolling.evaluateAndSchedule(result.data)
       await highlightRecord(targetId)
       return
     }
@@ -3158,6 +3159,7 @@ async function loadPageDataWithLocate(targetId: string): Promise<void> {
         tableData.value = retryResult.data
         totalCount.value = retryResult.total
         currentPage.value = retryResult.locatedPage
+        statusBadgePolling.evaluateAndSchedule(retryResult.data)
         await highlightRecord(targetId)
         ElMessage.info('已临时清除筛选条件以定位记录')
         return
