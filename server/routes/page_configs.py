@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from auth import login_required, require_permission
 from utils.operation_log import log_operation
 from utils.page_config_relations import get_page_config_relations
+from utils.field_indexes import sync_field_indexes, mark_all_dropping
 import psycopg2.extras
 
 page_configs_bp = Blueprint('page_configs', __name__)
@@ -63,14 +64,18 @@ def get_page_config(config_id):
 @require_permission('admin.page_configs')
 def create_page_config():
     body = request.get_json(force=True)
+    config_id = body.get('id')
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             'INSERT INTO page_configs (id, name, description, api_endpoint, fields, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)',
-            (body.get('id'), body.get('name'), body.get('description'), body.get('apiEndpoint'),
+            (config_id, body.get('name'), body.get('description'), body.get('apiEndpoint'),
              psycopg2.extras.Json(body.get('fields', [])),
              body.get('createdAt'), body.get('updatedAt')),
         )
+        if body.get('fields'):
+            collection = config_id.replace('page-', '', 1) if config_id and config_id.startswith('page-') else config_id
+            sync_field_indexes(cur, collection, body['fields'])
     log_operation('create', 'page_config', body.get('id'), body.get('name'),
                   f'新增页面配置「{body.get("name")}」')
     return jsonify(body), 201
@@ -124,12 +129,18 @@ def update_page_config(config_id):
                         "code": "FIELDS_LOCKED",
                         "removedFields": removed,
                     }), 409
-                # 2. Modified fields (any non-identical attribute on an existing field)
+                # 2. Modified fields (any non-identical attribute on an existing field).
+                # 'indexed' 是纯性能维度的开关，不改变已存数据的形状/兼容性，允许
+                # 单独在已有数据的页面上修改（其余属性变化仍然锁定）——这也是这个
+                # 功能真正有意义的场景：数据量已经大到需要加索引的页面。
                 modified = []
                 for name, cur_field in current_by_name.items():
                     new_field = new_by_name.get(name)
                     if new_field != cur_field:
-                        modified.append(name)
+                        cur_sans_indexed = {k: v for k, v in cur_field.items() if k != 'indexed'}
+                        new_sans_indexed = {k: v for k, v in (new_field or {}).items() if k != 'indexed'}
+                        if cur_sans_indexed != new_sans_indexed:
+                            modified.append(name)
                 if modified:
                     return jsonify({
                         "error": "该页面已存在数据,只能新增字段,不能修改已有字段的任何属性",
@@ -181,6 +192,10 @@ def update_page_config(config_id):
             params.append(config_id)
             cur.execute(f'UPDATE page_configs SET {", ".join(sets)} WHERE id=%s', params)
 
+        # 字段配置里 indexed 标记的变化，同步进 field_indexes（后台任务异步建/删索引）
+        if 'fields' in body:
+            sync_field_indexes(cur, collection, body['fields'])
+
         # Return full record
         cur.execute('SELECT id, name, description, api_endpoint, fields, created_at, updated_at, export_scripts, row_export_scripts, api_public, validation_script, api_writable, view_config, delete_binding FROM page_configs WHERE id = %s', (config_id,))
         row = cur.fetchone()
@@ -200,9 +215,38 @@ def delete_page_config(config_id):
         row = cur.fetchone()
         config_name = row[0] if row else config_id
         cur.execute('DELETE FROM page_configs WHERE id = %s', (config_id,))
+        collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
+        mark_all_dropping(cur, collection)
     log_operation('delete', 'page_config', config_id, config_name,
                   f'删除页面配置「{config_name}」')
     return jsonify({})
+
+
+@page_configs_bp.route('/pageConfigs/<config_id>/field-indexes', methods=['GET'])
+@login_required
+def get_field_index_status(config_id):
+    """字段索引构建状态（供管理端字段配置界面轮询展示：待建/构建中/已就绪/失败）。"""
+    collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT field_name, status, error, requested_at, ready_at '
+            'FROM field_indexes WHERE collection = %s',
+            (collection,),
+        )
+        rows = cur.fetchall()
+    return jsonify({
+        'data': [
+            {
+                'fieldName': r[0],
+                'status': r[1],
+                'error': r[2],
+                'requestedAt': format_ts(r[3]),
+                'readyAt': format_ts(r[4]),
+            }
+            for r in rows
+        ]
+    })
 
 
 @page_configs_bp.route('/pageConfigs/<page_id>/relations', methods=['GET'])

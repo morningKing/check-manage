@@ -91,3 +91,23 @@ export function getPageConfigRelations(pageId: string, depth?: number) {
 
   return get<RelationGraph>(`/pageConfigs/${pageId}/relations`, params)
 }
+
+/**
+ * 字段索引构建状态（一个字段一行）
+ */
+export interface FieldIndexStatus {
+  fieldName: string
+  status: 'pending' | 'building' | 'ready' | 'failed' | 'dropping'
+  error: string | null
+  requestedAt: string
+  readyAt: string | null
+}
+
+/**
+ * 获取页面下所有字段的索引构建状态（供字段配置界面轮询展示）
+ *
+ * @param pageId - 页面ID
+ */
+export function getFieldIndexStatuses(pageId: string) {
+  return get<{ data: FieldIndexStatus[] }>(`/pageConfigs/${pageId}/field-indexes`)
+}

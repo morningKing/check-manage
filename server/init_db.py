@@ -54,6 +54,22 @@ CREATE INDEX IF NOT EXISTS idx_dynamic_data_gin ON dynamic_data USING gin(data);
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ALTER TABLE dynamic_data ADD COLUMN IF NOT EXISTS search_text TEXT;
 
+-- 按字段配置生成的表达式索引：管理员在字段配置里勾选"加速筛选/排序"后，
+-- 这里先记一行 pending，utils/field_index_scheduler.py 的后台任务异步
+-- CREATE INDEX CONCURRENTLY 建出 (data->>'field') 表达式索引，避免在保存
+-- 页面配置的请求里同步等一个可能耗时很久的建索引操作（见 utils/field_indexes.py）。
+CREATE TABLE IF NOT EXISTS field_indexes (
+    collection    VARCHAR(200) NOT NULL,
+    field_name    VARCHAR(200) NOT NULL,
+    index_name    VARCHAR(80) NOT NULL,
+    status        VARCHAR(20) NOT NULL DEFAULT 'pending',
+    error         TEXT,
+    requested_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ready_at      TIMESTAMPTZ,
+    PRIMARY KEY (collection, field_name)
+);
+CREATE INDEX IF NOT EXISTS idx_field_indexes_status ON field_indexes(status);
+
 CREATE TABLE IF NOT EXISTS data_relations (
     collection          VARCHAR(200) NOT NULL,
     record_id           VARCHAR(100) NOT NULL,

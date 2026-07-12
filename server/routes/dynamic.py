@@ -10,6 +10,7 @@ from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
 from utils.search_text import compute_search_text
+from utils.field_indexes import sql_literal
 import psycopg2.extras
 import json
 
@@ -337,18 +338,6 @@ def list_items(collection):
         page_size = min(page_size, 1000)
     offset = (page - 1) * page_size if not load_all else 0
 
-    # 排序参数（列名与方向均走白名单，防 SQL 注入）
-    _SORT_COLUMNS = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
-    sort_col = _SORT_COLUMNS.get(request.args.get('sort', 'createdAt'), 'created_at')
-    direction = 'DESC' if request.args.get('order', 'asc').lower() == 'desc' else 'ASC'
-    # locateId 的页码定位依赖默认升序排列，二者不同时生效（有 locateId 时强制升序）
-    if locate_id:
-        order_by_clause = 'created_at, id'
-    elif sort_col == 'id':
-        order_by_clause = f'id {direction}'
-    else:
-        order_by_clause = f'{sort_col} {direction}, id {direction}'
-
     branch_id = _get_current_user_branch(collection)
 
     with get_db() as conn:
@@ -359,6 +348,25 @@ def list_items(collection):
         cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
         pc_row = cur.fetchone()
         fields = pc_row[0] if pc_row and pc_row[0] else []
+
+        # 排序参数（列名与方向均走白名单，防 SQL 注入）。标记了 indexed 的字段，
+        # 管理员已确认会为它建 (data->>'field') 表达式索引，因此额外放开允许排序
+        # （见 utils/field_indexes.py；未标记的字段依旧不能排序，避免无索引的
+        # 全表排序拖垮千万级数据下的查询）。
+        _SORT_COLUMNS = {'createdAt': 'created_at', 'updatedAt': 'updated_at', 'id': 'id'}
+        for f in (fields or []):
+            fname = f.get('fieldName')
+            if fname and f.get('indexed') and fname not in _SORT_COLUMNS:
+                _SORT_COLUMNS[fname] = f"data->>{sql_literal(fname)}"
+        sort_col = _SORT_COLUMNS.get(request.args.get('sort', 'createdAt'), 'created_at')
+        direction = 'DESC' if request.args.get('order', 'asc').lower() == 'desc' else 'ASC'
+        # locateId 的页码定位依赖默认升序排列，二者不同时生效（有 locateId 时强制升序）
+        if locate_id:
+            order_by_clause = 'created_at, id'
+        elif sort_col == 'id':
+            order_by_clause = f'id {direction}'
+        else:
+            order_by_clause = f'{sort_col} {direction}, id {direction}'
 
         # 构建基础查询条件
         base_conditions = ['collection = %s', 'branch_id = %s']

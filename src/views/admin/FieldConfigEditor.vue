@@ -64,6 +64,13 @@
                 <el-tag v-if="element.isPrimaryKey" size="small" type="warning">
                   主键
                 </el-tag>
+                <el-tag
+                  v-if="element.indexed && fieldIndexStatuses[element.fieldName]"
+                  size="small"
+                  :type="fieldIndexStatusTagType(fieldIndexStatuses[element.fieldName].status)"
+                >
+                  索引 · {{ fieldIndexStatusLabel(fieldIndexStatuses[element.fieldName].status) }}
+                </el-tag>
               </div>
               <div class="field-meta">
                 字段名: {{ element.fieldName }}
@@ -162,6 +169,25 @@
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item v-if="showIndexedToggle" label="加速筛选/排序">
+          <div class="indexed-toggle-row">
+            <el-switch v-model="fieldFormData.indexed" />
+            <span class="indexed-hint">
+              后台异步为该字段建索引，用于加快按此字段筛选/排序；数据量大的页面建索引可能需要几分钟
+            </span>
+            <el-tag
+              v-if="editingFieldIndexStatus"
+              size="small"
+              :type="fieldIndexStatusTagType(editingFieldIndexStatus.status)"
+            >
+              {{ fieldIndexStatusLabel(editingFieldIndexStatus.status) }}
+            </el-tag>
+          </div>
+          <div v-if="editingFieldIndexStatus?.status === 'failed' && editingFieldIndexStatus.error" class="indexed-error">
+            建索引失败：{{ editingFieldIndexStatus.error }}
+          </div>
+        </el-form-item>
 
         <el-form-item label="占位提示" prop="placeholder">
           <el-input
@@ -751,7 +777,7 @@
  * Events：
  * - update: 字段配置更新
  */
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { Plus, Check, Rank, Delete, DocumentAdd, Upload } from '@element-plus/icons-vue'
@@ -761,6 +787,7 @@ import { CONTROL_TYPE_OPTIONS, createEmptyFieldFormData } from '@/types'
 import { usePageConfigStore } from '@/stores'
 import { v4 as uuidv4 } from 'uuid'
 import { IconPicker } from '@/components/common'
+import { getFieldIndexStatuses, type FieldIndexStatus } from '@/api/page'
 
 // ==================== Props & Emits ====================
 
@@ -908,6 +935,17 @@ const compositeTextPreview = computed(() => {
 
 const showWorkflowConfig = computed(() => {
   return fieldFormData.value.controlType === 'select'
+})
+
+// 与 server/utils/field_indexes.py::INDEXABLE_TYPES 保持一致：值是标量、
+// 适合做等值/范围/排序表达式索引的控件类型。
+const INDEXABLE_TYPES = [
+  'text', 'number', 'select', 'radio', 'date', 'datetime',
+  'autoSequence', 'autoTimestamp', 'compositeText', 'statusBadge', 'checkbox',
+]
+
+const showIndexedToggle = computed(() => {
+  return INDEXABLE_TYPES.includes(fieldFormData.value.controlType)
 })
 
 const workflowEnabled = ref(false)
@@ -1139,7 +1177,8 @@ function handleEditField(field: FieldConfig, index: number): void {
       : { sourceFields: [], separator: ' - ' },
     statusBadgeConfig: field.statusBadgeConfig
       ? { ...field.statusBadgeConfig, options: field.statusBadgeConfig.options.map(o => ({ ...o })) }
-      : { options: [], pollIntervalSec: 5 }
+      : { options: [], pollIntervalSec: 5 },
+    indexed: field.indexed || false
   }
   // Load workflow config
   const wf = field.workflowConfig
@@ -1208,7 +1247,8 @@ async function handleSaveField(): Promise<void> {
               roles: t.roles.length > 0 ? t.roles : undefined,
             })),
         }
-      : undefined
+      : undefined,
+    indexed: showIndexedToggle.value ? (fieldFormData.value.indexed || undefined) : undefined
   }
 
   if (editingIndex.value === -1) {
@@ -1321,6 +1361,61 @@ function isLockedField(fieldName: string): boolean {
   return props.lockExistingFields && originalFieldNames.value.has(fieldName)
 }
 
+// ==================== 字段索引构建状态 ====================
+// 建索引在后台异步跑（CREATE INDEX CONCURRENTLY 在大表上可能耗时很久），
+// 这里轮询展示进度：待建/构建中/已就绪/失败（见 utils/field_index_scheduler.py）。
+// 声明必须在下方 watch(props.fields, { immediate: true }) 之前——该 watch
+// 立即同步调用 fetchFieldIndexStatuses()，晚声明会撞上 let 的暂时性死区。
+
+const fieldIndexStatuses = ref<Record<string, FieldIndexStatus>>({})
+let fieldIndexPollTimer: ReturnType<typeof setTimeout> | null = null
+
+const editingFieldIndexStatus = computed(() => {
+  const fieldName = fieldFormData.value.fieldName
+  return fieldName ? fieldIndexStatuses.value[fieldName] : undefined
+})
+
+function fieldIndexStatusLabel(status: FieldIndexStatus['status']): string {
+  return {
+    pending: '待建',
+    building: '构建中',
+    ready: '已就绪',
+    failed: '失败',
+    dropping: '清理中',
+  }[status] || status
+}
+
+function fieldIndexStatusTagType(status: FieldIndexStatus['status']): 'info' | 'warning' | 'success' | 'danger' {
+  if (status === 'ready') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'pending' || status === 'building') return 'warning'
+  return 'info'
+}
+
+async function fetchFieldIndexStatuses(): Promise<void> {
+  if (fieldIndexPollTimer) {
+    clearTimeout(fieldIndexPollTimer)
+    fieldIndexPollTimer = null
+  }
+  if (!props.pageId) return
+  try {
+    const resp = await getFieldIndexStatuses(props.pageId)
+    const map: Record<string, FieldIndexStatus> = {}
+    for (const s of resp.data) map[s.fieldName] = s
+    fieldIndexStatuses.value = map
+    const hasInFlight = resp.data.some(s => s.status === 'pending' || s.status === 'building' || s.status === 'dropping')
+    if (hasInFlight) {
+      fieldIndexPollTimer = setTimeout(fetchFieldIndexStatuses, 5000)
+    }
+  } catch {
+    // 状态展示是锦上添花，拉取失败不影响字段配置本身的编辑/保存
+  }
+}
+
+onUnmounted(() => {
+  if (fieldIndexPollTimer) clearTimeout(fieldIndexPollTimer)
+})
+
 /**
  * 监听 props.fields 变化，同步到本地
  */
@@ -1332,6 +1427,7 @@ watch(
     // pin to the fields that existed at edit-time, not to whatever's been
     // added during this session.
     originalFieldNames.value = new Set(newFields.map((f) => f.fieldName))
+    fetchFieldIndexStatuses()
   },
   { immediate: true, deep: true }
 )
@@ -1501,5 +1597,23 @@ watch(
   :deep(.el-form-item) {
     margin-bottom: 0;
   }
+}
+
+.indexed-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.indexed-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+.indexed-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #f56c6c;
 }
 </style>

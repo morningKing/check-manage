@@ -120,6 +120,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.status_badge_timeout_scheduler import start_status_badge_timeout_scheduler
     start_status_badge_timeout_scheduler(app)
 
+    # Start field-index build/drop worker (async CREATE/DROP INDEX CONCURRENTLY)
+    from utils.field_index_scheduler import start_field_index_scheduler
+    start_field_index_scheduler(app)
+
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a
     # slow outbound call (AI query, webhook, ETL) no longer blocks the whole

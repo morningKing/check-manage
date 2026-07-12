@@ -148,3 +148,93 @@ class TestDeletePageConfig:
         mock_cursor.fetchone.return_value = ('测试页',)
         resp = client.delete('/pageConfigs/page-1', headers=admin_h)
         assert resp.status_code == 200
+
+    def test_delete_marks_field_indexes_dropping(self, setup):
+        """删除页面配置要连带清理该 collection 下的字段索引，否则物理索引永久残留。"""
+        client, mock_cursor, admin_h, _ = setup
+        mock_cursor.fetchone.return_value = ('测试页',)
+        resp = client.delete('/pageConfigs/page-1', headers=admin_h)
+        assert resp.status_code == 200
+        drop_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and "status = 'dropping'" in str(c.args[0])
+        ]
+        assert len(drop_calls) == 1
+        assert drop_calls[0].args[1] == ('1',)
+
+
+class TestFieldIndexSyncOnSave:
+    """保存字段配置时，indexed 标记要同步进 field_indexes（见 utils/field_indexes.py）。"""
+
+    def test_newly_indexed_field_inserts_pending_row(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        new_fields = [{'fieldName': 'status', 'controlType': 'select', 'indexed': True}]
+        mock_cursor.fetchone.side_effect = [
+            None,  # has_data check -> no data yet, fields not locked
+            ('page-1', '测试页', '描述', '/testData', new_fields, now, now, [], [], False, None),  # final SELECT
+        ]
+        mock_cursor.fetchall.return_value = []  # sync_field_indexes: no existing tracked fields
+        resp = client.put('/pageConfigs/page-1',
+                          data=json.dumps({'fields': new_fields}),
+                          content_type='application/json',
+                          headers=admin_h)
+        assert resp.status_code == 200
+        insert_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'INSERT INTO field_indexes' in str(c.args[0])
+        ]
+        assert len(insert_calls) == 1
+        args = insert_calls[0].args[1]
+        assert args[1] == 'status'
+        assert args[3] == 'pending'
+
+    def test_toggling_indexed_only_is_allowed_even_when_fields_locked(self, setup):
+        """indexed 是纯性能开关，不影响已存数据的形状，应该在已有数据的页面上也能改。"""
+        client, mock_cursor, admin_h, _ = setup
+        old_fields = [{'fieldName': 'status', 'controlType': 'select', 'indexed': False}]
+        new_fields = [{'fieldName': 'status', 'controlType': 'select', 'indexed': True}]
+        mock_cursor.fetchone.side_effect = [
+            (1,),                     # has_data check -> truthy, data exists
+            (old_fields,),            # current fields (for lock comparison)
+            ('page-1', '测试页', '描述', '/testData', new_fields, now, now, [], [], False, None),  # final SELECT
+        ]
+        mock_cursor.fetchall.return_value = []
+        resp = client.put('/pageConfigs/page-1',
+                          data=json.dumps({'fields': new_fields}),
+                          content_type='application/json',
+                          headers=admin_h)
+        assert resp.status_code == 200
+
+    def test_changing_other_attribute_alongside_indexed_still_locked(self, setup):
+        """indexed 的豁免只覆盖它自己；同一字段的其他属性变化仍然要拒绝。"""
+        client, mock_cursor, admin_h, _ = setup
+        old_fields = [{'fieldName': 'status', 'controlType': 'select', 'indexed': False, 'label': '状态'}]
+        new_fields = [{'fieldName': 'status', 'controlType': 'select', 'indexed': True, 'label': '新状态'}]
+        mock_cursor.fetchone.side_effect = [
+            (1,),
+            (old_fields,),
+        ]
+        resp = client.put('/pageConfigs/page-1',
+                          data=json.dumps({'fields': new_fields}),
+                          content_type='application/json',
+                          headers=admin_h)
+        assert resp.status_code == 409
+        assert resp.get_json()['code'] == 'FIELDS_LOCKED'
+
+
+class TestFieldIndexStatusEndpoint:
+    def test_returns_status_list(self, setup):
+        client, mock_cursor, admin_h, _ = setup
+        mock_cursor.fetchall.return_value = [
+            ('status', 'ready', None, now, now),
+        ]
+        resp = client.get('/pageConfigs/page-1/field-indexes', headers=admin_h)
+        assert resp.status_code == 200
+        data = resp.get_json()['data']
+        assert data == [{
+            'fieldName': 'status',
+            'status': 'ready',
+            'error': None,
+            'requestedAt': '2024-01-01T00:00:00.000Z',
+            'readyAt': '2024-01-01T00:00:00.000Z',
+        }]

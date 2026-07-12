@@ -260,6 +260,8 @@ export interface FieldConfig {
   workflowConfig?: WorkflowConfig
   compositeTextConfig?: CompositeTextConfig
   statusBadgeConfig?: StatusBadgeConfig
+  /** 标记后台异步为该字段建 (data->>field) 表达式索引，加速筛选与排序（见 server/utils/field_indexes.py） */
+  indexed?: boolean
 }
 
 /**
@@ -286,6 +288,7 @@ export interface FieldFormData {
   workflowConfig?: WorkflowConfig
   compositeTextConfig?: CompositeTextConfig
   statusBadgeConfig: StatusBadgeConfig
+  indexed: boolean
 }
 
 /**
@@ -311,6 +314,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     sequenceConfig: { prefix: '', max: 999 },
     quoteConfig: { targetCollection: '', displayField: '' },
     compositeTextConfig: { sourceFields: [], separator: ' - ' },
-    statusBadgeConfig: { options: [], pollIntervalSec: 5 }
+    statusBadgeConfig: { options: [], pollIntervalSec: 5 },
+    indexed: false
   }
 }

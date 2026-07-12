@@ -104,7 +104,7 @@ class TestListCollection:
     def test_list_returns_records(self, setup):
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
-        mock_cursor.fetchone.return_value = (1,)  # total count
+        mock_cursor.fetchone.side_effect = [None, (1,)]  # 1: page_configs fields, 2: total count
         mock_cursor.fetchall.return_value = [
             ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 1),
         ]
@@ -120,7 +120,7 @@ class TestListCollection:
         """列表接口返回 _version 字段"""
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
-        mock_cursor.fetchone.return_value = (1,)  # total count
+        mock_cursor.fetchone.side_effect = [None, (1,)]  # 1: page_configs fields, 2: total count
         mock_cursor.fetchall.return_value = [
             ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 3),
         ]
@@ -143,7 +143,7 @@ class TestListCollection:
         """测试分页参数"""
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
-        mock_cursor.fetchone.return_value = (100,)  # total count
+        mock_cursor.fetchone.side_effect = [None, (100,)]  # 1: page_configs fields, 2: total count
         mock_cursor.fetchall.return_value = [
             ('rec-1', 'test-collection', {'name': '记录1'}, now, now, 1),
         ]
@@ -210,6 +210,33 @@ class TestListCollection:
         sql = self._executed_sql(mock_cursor)
         assert 'DROP TABLE' not in sql
         assert 'ORDER BY created_at DESC, id DESC' in sql
+
+    def test_list_sort_by_field_not_marked_indexed_falls_back(self, setup):
+        """字段没有标记 indexed，即便字段真实存在也不允许排序（避免无索引全表排序）"""
+        client, mock_cursor, _, headers = setup
+        fields = [{'fieldName': 'priority', 'controlType': 'select', 'indexed': False}]
+        mock_cursor.fetchone.side_effect = [
+            (fields,),  # page_configs fields
+            (0,),       # total count
+        ]
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?sort=priority&order=desc', headers=headers)
+        assert resp.status_code == 200
+        assert 'ORDER BY created_at DESC, id DESC' in self._executed_sql(mock_cursor)
+
+    def test_list_sort_by_indexed_field_uses_jsonb_expression(self, setup):
+        """标记了 indexed 的字段允许排序，生成 (data->>'field') 表达式（匹配建出的索引）"""
+        client, mock_cursor, _, headers = setup
+        fields = [{'fieldName': 'priority', 'controlType': 'select', 'indexed': True}]
+        mock_cursor.fetchone.side_effect = [
+            (fields,),  # page_configs fields
+            (0,),       # total count
+        ]
+        mock_cursor.fetchall.return_value = []
+        resp = client.get('/test-collection?sort=priority&order=desc', headers=headers)
+        assert resp.status_code == 200
+        sql = self._executed_sql(mock_cursor)
+        assert "ORDER BY data->>'priority' DESC, id DESC" in sql
 
 
 class TestCreateRecord:
