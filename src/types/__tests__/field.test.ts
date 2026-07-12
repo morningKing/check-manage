@@ -31,8 +31,8 @@ describe('Field Types', () => {
       expect(opt!.label).toBe('引用选择')
     })
 
-    it('共 19 种控件类型', () => {
-      expect(CONTROL_TYPE_OPTIONS).toHaveLength(19)
+    it('共 20 种控件类型', () => {
+      expect(CONTROL_TYPE_OPTIONS).toHaveLength(20)
     })
 
     it('包含 markdown 选项', () => {
