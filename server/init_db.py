@@ -2117,60 +2117,67 @@ def init_db():
             conn.commit()
             print("Created column_views table.")
 
-        # Seed menus (insert only if not exists)
-        menus_inserted = 0
-        for m in MENUS:
-            cur.execute("SELECT id FROM menus WHERE id = %s", (m["id"],))
-            if not cur.fetchone():
-                cur.execute(
-                    'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
-                    (m["id"], m["name"], m.get("icon"), m.get("pageId"), m.get("parentId"), m.get("order", 0), m.get("path"), psycopg2.extras.Json(m.get("roles", ["admin", "developer", "guest"]))),
-                )
-                menus_inserted += 1
-        if menus_inserted > 0:
-            print(f"Inserted {menus_inserted} menus.")
-        else:
-            print("Menus already exist, skipping.")
+        # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
+        # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
+        # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每
+        # 条记录的 id 单独判断"存在就跳过"，管理员手动删掉演示数据后，任何原因
+        # 重跑 init_db.py（哪怕只是要应用一次不相关的 schema 迁移）都会把它们原样
+        # 插回来——这不是期望行为，这次改成"只在从未种过任何页面配置的全新库上
+        # 播种"，已投入使用、删过示例数据的库不会再被自动复活。
+        cur.execute("SELECT COUNT(*) FROM page_configs")
+        is_fresh_install = cur.fetchone()[0] == 0
 
-        # Update menu_type for seeded menus (巡检管理示例数据)
-        # menu-2 是一级菜单（workspace），menu-2-1/2-2/2-3 是二级菜单（project），menu-2-3-1/2-3-2 是三级菜单（data）
-        cur.execute("UPDATE menus SET menu_type = 'workspace' WHERE id = 'menu-2'")
-        cur.execute("UPDATE menus SET menu_type = 'project' WHERE id IN ('menu-2-1', 'menu-2-2', 'menu-2-3')")
-        cur.execute("UPDATE menus SET menu_type = 'data' WHERE id IN ('menu-2-3-1', 'menu-2-3-2')")
-        conn.commit()
-        print("Updated menu_type for seeded menus.")
-
-        # Seed page_configs (insert only if not exists)
-        configs_inserted = 0
-        for pc in PAGE_CONFIGS:
-            cur.execute("SELECT id FROM page_configs WHERE id = %s", (pc["id"],))
-            if not cur.fetchone():
-                cur.execute(
-                    "INSERT INTO page_configs (id, name, description, api_endpoint, fields, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                    (pc["id"], pc["name"], pc.get("description"), pc.get("apiEndpoint"),
-                     psycopg2.extras.Json(pc["fields"]),
-                     pc.get("createdAt"), pc.get("updatedAt")),
-                )
-                configs_inserted += 1
-        if configs_inserted > 0:
-            print(f"Inserted {configs_inserted} page configs.")
-
-        # Seed dynamic data (insert only if not exists)
-        data_inserted = 0
-        for collection, records in DYNAMIC_DATA.items():
-            for r in records:
-                rid = r["id"]
-                cur.execute("SELECT id FROM dynamic_data WHERE id = %s", (rid,))
+        if is_fresh_install:
+            menus_inserted = 0
+            for m in MENUS:
+                cur.execute("SELECT id FROM menus WHERE id = %s", (m["id"],))
                 if not cur.fetchone():
-                    created_at = r.get("createdAt")
-                    data = {k: v for k, v in r.items() if k not in ("id", "createdAt")}
                     cur.execute(
-                        "INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)",
-                        (rid, collection, psycopg2.extras.Json(data), created_at),
+                        'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
+                        (m["id"], m["name"], m.get("icon"), m.get("pageId"), m.get("parentId"), m.get("order", 0), m.get("path"), psycopg2.extras.Json(m.get("roles", ["admin", "developer", "guest"]))),
                     )
-                    data_inserted += 1
-        if data_inserted > 0:
-            print(f"Inserted {data_inserted} dynamic data records.")
+                    menus_inserted += 1
+            if menus_inserted > 0:
+                print(f"Inserted {menus_inserted} menus.")
+
+            # menu-2 是一级菜单（workspace），menu-2-1/2-2/2-3 是二级菜单（project），menu-2-3-1/2-3-2 是三级菜单（data）
+            cur.execute("UPDATE menus SET menu_type = 'workspace' WHERE id = 'menu-2'")
+            cur.execute("UPDATE menus SET menu_type = 'project' WHERE id IN ('menu-2-1', 'menu-2-2', 'menu-2-3')")
+            cur.execute("UPDATE menus SET menu_type = 'data' WHERE id IN ('menu-2-3-1', 'menu-2-3-2')")
+            conn.commit()
+            print("Updated menu_type for seeded menus.")
+
+            configs_inserted = 0
+            for pc in PAGE_CONFIGS:
+                cur.execute("SELECT id FROM page_configs WHERE id = %s", (pc["id"],))
+                if not cur.fetchone():
+                    cur.execute(
+                        "INSERT INTO page_configs (id, name, description, api_endpoint, fields, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        (pc["id"], pc["name"], pc.get("description"), pc.get("apiEndpoint"),
+                         psycopg2.extras.Json(pc["fields"]),
+                         pc.get("createdAt"), pc.get("updatedAt")),
+                    )
+                    configs_inserted += 1
+            if configs_inserted > 0:
+                print(f"Inserted {configs_inserted} page configs.")
+
+            data_inserted = 0
+            for collection, records in DYNAMIC_DATA.items():
+                for r in records:
+                    rid = r["id"]
+                    cur.execute("SELECT id FROM dynamic_data WHERE id = %s", (rid,))
+                    if not cur.fetchone():
+                        created_at = r.get("createdAt")
+                        data = {k: v for k, v in r.items() if k not in ("id", "createdAt")}
+                        cur.execute(
+                            "INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s,%s,%s,%s)",
+                            (rid, collection, psycopg2.extras.Json(data), created_at),
+                        )
+                        data_inserted += 1
+            if data_inserted > 0:
+                print(f"Inserted {data_inserted} dynamic data records.")
+        else:
+            print("page_configs 非空，跳过巡检管理示例菜单/页面/数据的播种（不是全新库）。")
 
         # Seed default admin user if users table is empty
         cur.execute("SELECT COUNT(*) FROM users")
@@ -2212,10 +2219,17 @@ def init_db():
     finally:
         conn.close()
 
-    # seed 演示客服（幂等；失败不影响 init）—— 依赖 kefu 表与 kefu-guest 角色已建
+    # seed 演示客服（失败不影响 init）—— 依赖 kefu 表与 kefu-guest 角色已建。
+    # 只在 kefu_instances 表彻底为空时种，跟上面示例数据同理：按 slug 判断"存
+    # 在就跳过"会在管理员手动删除演示客服后，任何一次重跑 init_db.py 都把它
+    # 复活；改成只在全新库（一个 kefu 实例都没有）时才种一次。
     try:
-        from seed_kefu import seed_kefu_demo
-        seed_kefu_demo()
+        from utils import kefu_repo
+        if not kefu_repo.list_instances():
+            from seed_kefu import seed_kefu_demo
+            seed_kefu_demo()
+        else:
+            print("kefu_instances 非空，跳过演示客服播种（不是全新库）。")
     except Exception as e:
         print(f"[warn] seed 演示客服失败（非致命）：{e}")
 
