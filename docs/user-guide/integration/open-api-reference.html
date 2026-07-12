@@ -1,0 +1,1535 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open API 接口文档</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --bg-raised: #ffffff;
+    --ink: #10141c;
+    --ink-soft: #2b3342;
+    --muted: #5b6472;
+    --line: rgba(16, 20, 28, 0.12);
+    --line-strong: rgba(16, 20, 28, 0.2);
+    --accent: #c97a2b;
+    --accent-ink: #7a4813;
+    --accent-soft: #f3e3cd;
+    --code-bg: #10141c;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #8592a3;
+    --get: #2c7a9b;
+    --post: #3f8d4f;
+    --put: #8a5cc7;
+    --delete: #c1483d;
+    --radius: 4px;
+    --shadow: 0 1px 2px rgba(16, 20, 28, 0.05), 0 10px 28px rgba(16, 20, 28, 0.07);
+    --sidebar-w: 252px;
+    --measure: 42rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f131b;
+      --bg-raised: #171c26;
+      --ink: #eef1f4;
+      --ink-soft: #c7cdd6;
+      --muted: #8b95a3;
+      --line: rgba(238, 241, 244, 0.1);
+      --line-strong: rgba(238, 241, 244, 0.18);
+      --accent: #e3a458;
+      --accent-ink: #f6d9ab;
+      --accent-soft: rgba(227, 164, 88, 0.14);
+      --code-bg: #0a0d13;
+      --code-ink: #e8ecef;
+      --code-accent: #e3a458;
+      --code-muted: #7f8a99;
+      --get: #57a8c9;
+      --post: #64ba71;
+      --put: #ab8bdf;
+      --delete: #e17b6d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f131b;
+    --bg-raised: #171c26;
+    --ink: #eef1f4;
+    --ink-soft: #c7cdd6;
+    --muted: #8b95a3;
+    --line: rgba(238, 241, 244, 0.1);
+    --line-strong: rgba(238, 241, 244, 0.18);
+    --accent: #e3a458;
+    --accent-ink: #f6d9ab;
+    --accent-soft: rgba(227, 164, 88, 0.14);
+    --code-bg: #0a0d13;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #7f8a99;
+    --get: #57a8c9;
+    --post: #64ba71;
+    --put: #ab8bdf;
+    --delete: #e17b6d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f4f6f8;
+    --bg-raised: #ffffff;
+    --ink: #10141c;
+    --ink-soft: #2b3342;
+    --muted: #5b6472;
+    --line: rgba(16, 20, 28, 0.12);
+    --line-strong: rgba(16, 20, 28, 0.2);
+    --accent: #c97a2b;
+    --accent-ink: #7a4813;
+    --accent-soft: #f3e3cd;
+    --code-bg: #10141c;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #8592a3;
+    --get: #2c7a9b;
+    --post: #3f8d4f;
+    --put: #8a5cc7;
+    --delete: #c1483d;
+    --shadow: 0 1px 2px rgba(16, 20, 28, 0.05), 0 10px 28px rgba(16, 20, 28, 0.07);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink-soft);
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1, h2, h3, h4 {
+    color: var(--ink);
+    font-weight: 700;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  code, pre, .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- shell ---------- */
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px 40px 28px;
+    border-right: 1px solid var(--line);
+    scrollbar-width: thin;
+  }
+
+  .sidebar-brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .sidebar-brand .mark {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex: none;
+  }
+
+  .sidebar-brand strong {
+    font-size: 15px;
+    color: var(--ink);
+    letter-spacing: 0.01em;
+  }
+
+  .sidebar-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 2px 0 26px 17px;
+  }
+
+  .nav-group {
+    margin-bottom: 22px;
+  }
+
+  .nav-group-label {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px 2px;
+  }
+
+  .nav-group a {
+    display: block;
+    text-decoration: none;
+    font-size: 13.5px;
+    color: var(--ink-soft);
+    padding: 5px 8px;
+    border-radius: var(--radius);
+    margin: 1px 0;
+    border-left: 2px solid transparent;
+  }
+
+  .nav-group a:hover { background: var(--accent-soft); color: var(--accent-ink); }
+
+  .nav-group a.active {
+    border-left-color: var(--accent);
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    font-weight: 600;
+  }
+
+  .content {
+    padding: 48px clamp(20px, 5vw, 64px) 120px;
+    min-width: 0;
+  }
+
+  section { margin-bottom: 64px; scroll-margin-top: 24px; }
+
+  section > h2 {
+    font-size: 24px;
+    margin-bottom: 4px;
+  }
+
+  section > .section-desc {
+    color: var(--muted);
+    max-width: var(--measure);
+    margin: 10px 0 28px;
+  }
+
+  h3.sub {
+    font-size: 17px;
+    margin: 36px 0 10px;
+    padding-top: 4px;
+  }
+
+  p { max-width: var(--measure); }
+
+  .scroll-x { overflow-x: auto; }
+
+  /* ---------- hero ---------- */
+
+  .hero {
+    padding: 40px 0 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 48px;
+  }
+
+  .hero h1 {
+    font-size: clamp(28px, 4vw, 38px);
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+  }
+
+  .hero p.lead {
+    max-width: 40rem;
+    color: var(--muted);
+    font-size: 16px;
+    margin-bottom: 24px;
+  }
+
+  .hero-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+
+  .fact-chip {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12.5px;
+  }
+
+  .fact-chip .k { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .fact-chip .v { font-family: ui-monospace, monospace; color: var(--ink); }
+
+  /* ---------- endpoint index table ---------- */
+
+  table.endpoint-index {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+
+  table.endpoint-index th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  table.endpoint-index td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  table.endpoint-index tr:hover td { background: var(--accent-soft); }
+
+  table.endpoint-index td.path { font-family: ui-monospace, monospace; color: var(--ink); }
+
+  /* ---------- method badge ---------- */
+
+  .m {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    color: #fff;
+    min-width: 52px;
+  }
+
+  .m-get { background: var(--get); }
+  .m-post { background: var(--post); }
+  .m-put { background: var(--put); }
+  .m-delete { background: var(--delete); }
+
+  /* ---------- endpoint card ---------- */
+
+  .endpoint {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    box-shadow: var(--shadow);
+    margin: 20px 0 40px;
+    overflow: hidden;
+  }
+
+  .endpoint-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+
+  .endpoint-head .path {
+    font-family: ui-monospace, monospace;
+    font-size: 13.5px;
+    color: var(--ink);
+  }
+
+  .endpoint-head .flags {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+
+  .flag {
+    font-size: 10.5px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+  }
+
+  .flag.write { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
+
+  .endpoint-body { padding: 18px 18px 22px; }
+
+  .endpoint-body > p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+
+  /* ---------- param tables ---------- */
+
+  table.params {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 10px 0 18px;
+  }
+
+  table.params th {
+    text-align: left;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  table.params td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  table.params td:first-child { font-family: ui-monospace, monospace; color: var(--ink); white-space: nowrap; }
+
+  table.params tr:last-child td { border-bottom: none; }
+
+  /* ---------- code panel ---------- */
+
+  .code {
+    position: relative;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 5px;
+    margin: 12px 0 18px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .code .code-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--code-muted);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .code .code-bar .dots { display: flex; gap: 5px; margin-right: 4px; }
+  .code .code-bar .dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.14); }
+
+  .code .copy-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.14);
+    color: var(--code-muted);
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+
+  .code .copy-btn:hover { color: var(--code-ink); border-color: rgba(255,255,255,0.3); }
+  .code .copy-btn:focus-visible { outline: 2px solid var(--code-accent); outline-offset: 1px; }
+
+  .code pre {
+    margin: 0;
+    padding: 14px 16px 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+
+  .code .k { color: var(--code-accent); }
+  .code .s { color: #9fd8a3; }
+  .code .c { color: var(--code-muted); font-style: italic; }
+  .code .n { color: #7bb8e8; }
+
+  /* ---------- callouts ---------- */
+
+  .callout {
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 5px 5px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 13.5px;
+    max-width: var(--measure);
+  }
+
+  .callout p { margin: 0 0 6px; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout strong { color: var(--accent-ink); }
+
+  .callout.warn { border-left-color: var(--delete); }
+  .callout.warn strong { color: var(--delete); }
+
+  /* ---------- step flow (file upload) ---------- */
+
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin: 24px 0 8px;
+  }
+
+  .flow-step {
+    position: relative;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    padding: 18px 16px;
+  }
+
+  .flow-step:first-child { border-radius: 6px 0 0 6px; }
+  .flow-step:last-child { border-radius: 0 6px 6px 0; }
+  .flow-step + .flow-step { border-left: none; }
+
+  .flow-step .num {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+
+  .flow-step h4 { font-size: 14.5px; margin: 6px 0 6px; }
+  .flow-step p { font-size: 12.5px; color: var(--muted); margin: 0; max-width: none; }
+
+  .flow-step::after {
+    content: "→";
+    position: absolute;
+    right: -13px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    z-index: 1;
+  }
+
+  .flow-step:last-child::after { display: none; }
+
+  /* ---------- onboarding steps ---------- */
+
+  .steps {
+    counter-reset: step;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: var(--measure);
+    margin-top: 20px;
+  }
+
+  .steps li {
+    list-style: none;
+    display: flex;
+    gap: 16px;
+    padding: 0 0 22px;
+    position: relative;
+  }
+
+  .steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--accent);
+  }
+
+  .steps li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 13px;
+    top: 26px;
+    bottom: 0;
+    width: 1px;
+    background: var(--line-strong);
+  }
+
+  .steps li .step-body h4 { font-size: 14.5px; margin-bottom: 3px; }
+  .steps li .step-body p { font-size: 13.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- security table ---------- */
+
+  table.sec {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    max-width: 44rem;
+  }
+
+  table.sec td {
+    padding: 11px 4px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  table.sec td:first-child {
+    width: 120px;
+    color: var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* ---------- faq ---------- */
+
+  details.faq {
+    border-bottom: 1px solid var(--line);
+    padding: 14px 0;
+  }
+
+  details.faq summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 14.5px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  details.faq summary::-webkit-details-marker { display: none; }
+
+  details.faq summary::before {
+    content: "+";
+    font-family: ui-monospace, monospace;
+    color: var(--accent);
+    font-size: 15px;
+    width: 16px;
+    flex: none;
+  }
+
+  details.faq[open] summary::before { content: "–"; }
+
+  details.faq .faq-body {
+    margin: 10px 0 0 26px;
+    color: var(--muted);
+    font-size: 13.5px;
+    max-width: 38rem;
+  }
+
+  details.faq .faq-body code { color: var(--ink-soft); }
+
+  /* ---------- footer ---------- */
+
+  .footnote {
+    color: var(--muted);
+    font-size: 12.5px;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
+    margin-top: 8px;
+  }
+
+  /* ---------- mobile nav toggle ---------- */
+
+  .mobile-bar { display: none; }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+
+    .mobile-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 18px;
+    }
+
+    .mobile-bar .mark { width: 9px; height: 9px; border-radius: 2px; background: var(--accent); }
+    .mobile-bar strong { color: var(--ink); font-size: 14px; }
+    .mobile-bar button {
+      margin-left: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      background: var(--bg-raised);
+      border: 1px solid var(--line-strong);
+      color: var(--ink-soft);
+      padding: 5px 10px;
+      border-radius: var(--radius);
+    }
+
+    .sidebar {
+      position: static;
+      height: auto;
+      display: none;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+      padding: 18px;
+    }
+
+    .sidebar.open { display: block; }
+
+    .content { padding: 28px 18px 100px; }
+
+    .flow { grid-template-columns: 1fr; }
+    .flow-step { border-radius: 0 !important; border-left: 1px solid var(--line) !important; border-top: none; }
+    .flow-step:first-child { border-top: 1px solid var(--line); border-radius: 6px 6px 0 0 !important; }
+    .flow-step:last-child { border-radius: 0 0 6px 6px !important; }
+    .flow-step::after { content: "↓"; right: 50%; top: auto; bottom: -13px; transform: translateX(50%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<div class="mobile-bar">
+  <span class="mark"></span>
+  <strong>Open API</strong>
+  <button id="navToggle" type="button">目录</button>
+</div>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar" aria-label="文档目录">
+    <div class="sidebar-brand"><span class="mark"></span><strong>Open API</strong></div>
+    <p class="sidebar-sub">check-manage 集成参考</p>
+
+    <div class="nav-group">
+      <p class="nav-group-label">开始</p>
+      <a href="#overview">概述</a>
+      <a href="#auth">认证</a>
+      <a href="#prereq">前置条件</a>
+      <a href="#onboarding">接入流程</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">查询接口</p>
+      <a href="#ep-collections">获取集合列表</a>
+      <a href="#ep-branches">获取分支列表</a>
+      <a href="#ep-list">获取集合数据</a>
+      <a href="#ep-detail">获取单条记录</a>
+      <a href="#ep-schema">获取字段定义</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">写入接口</p>
+      <a href="#ep-create">新增记录</a>
+      <a href="#ep-update">修改记录</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">文件</p>
+      <a href="#files"><strong>文件上传 &amp; 文件字段录入</strong></a>
+      <a href="#ep-download">下载文件</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">参考</p>
+      <a href="#quickstart">快速上手示例</a>
+      <a href="#errors">错误处理</a>
+      <a href="#security">安全注意事项</a>
+      <a href="#faq">常见问题</a>
+    </div>
+  </nav>
+
+  <main class="content">
+
+    <section class="hero" id="overview">
+      <p class="eyebrow">Open API Reference</p>
+      <h1>让外部系统安全地读写你的业务数据</h1>
+      <p class="lead">通过 API Key 认证的 RESTful 接口，外部系统可以查询、新增、修改数据集合中已授权开放的记录 —— 包括附件文件的上传与下载。所有接口收发 <code>application/json</code>。</p>
+
+      <div class="hero-facts">
+        <div class="fact-chip"><span class="k">Base&nbsp;URL</span><span class="v">http://&lt;host&gt;:&lt;port&gt;/api/v1</span></div>
+        <div class="fact-chip"><span class="k">开发环境</span><span class="v">http://localhost:7001/api/v1</span></div>
+        <div class="fact-chip"><span class="k">认证头</span><span class="v">X-API-Key: cm_xxx</span></div>
+        <div class="fact-chip"><span class="k">数据格式</span><span class="v">application/json</span></div>
+      </div>
+
+      <p style="max-width: var(--measure); color: var(--muted); font-size: 13.5px;">
+        默认情况下集合仅对 Open API 只读开放，写入需管理员额外开启「允许写入」。文件上传走独立的
+        <code>multipart/form-data</code> 端点，详见下方「<a href="#files" style="color: var(--accent-ink); font-weight: 600;">文件上传 &amp; 文件字段录入</a>」。
+      </p>
+    </section>
+
+    <section id="auth">
+      <p class="eyebrow">Authentication</p>
+      <h2>认证</h2>
+      <p class="section-desc">所有请求都必须在请求头中携带有效的 API Key。密钥由系统哈希后比对，不会以明文存储。</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>headers</div>
+        <pre><code>X-API-Key: cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2</code></pre>
+      </div>
+
+      <h3 class="sub">密钥格式</h3>
+      <div class="scroll-x">
+        <table class="params">
+          <tr><th>属性</th><th>说明</th></tr>
+          <tr><td>前缀</td><td><code>cm_</code></td></tr>
+          <tr><td>长度</td><td>约 46 个字符</td></tr>
+          <tr><td>字符集</td><td>URL 安全的 Base64 字符</td></tr>
+        </table>
+      </div>
+
+      <h3 class="sub">认证过程</h3>
+      <ul class="steps">
+        <li><div class="step-body"><h4>系统对密钥做 SHA-256 哈希</h4><p>请求头中的 <code>cm_xxx</code> 不会明文比对，而是先做哈希再查库。</p></div></li>
+        <li><div class="step-body"><h4>查 <code>api_keys</code> 表比对哈希</h4><p>命中则继续，未命中直接返回 401。</p></div></li>
+        <li><div class="step-body"><h4>检查密钥状态</h4><p>若密钥已被管理员停用，返回 401「API key has been revoked」。</p></div></li>
+        <li><div class="step-body"><h4>更新最近使用时间并放行</h4><p>写入 <code>last_used_at</code>，供管理员追踪密钥使用情况。</p></div></li>
+      </ul>
+
+      <h3 class="sub">认证错误</h3>
+      <div class="scroll-x">
+        <table class="params">
+          <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+          <tr><td>401</td><td><code>Missing API key</code></td><td>请求头未携带 <code>X-API-Key</code></td></tr>
+          <tr><td>401</td><td><code>Invalid API key</code></td><td>API Key 无效（不存在）</td></tr>
+          <tr><td>401</td><td><code>API key has been revoked</code></td><td>API Key 已被管理员停用</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="prereq">
+      <p class="eyebrow">Before you start</p>
+      <h2>前置条件</h2>
+      <p class="section-desc">调用 Open API 前，管理员需要先在系统内完成三件事。只有满足条件的集合才会出现在 <code>GET /collections</code> 的返回结果中。</p>
+
+      <ul class="steps">
+        <li><div class="step-body"><h4>创建 API Key</h4><p>「系统配置 → 数据工具 → Open API」中创建，创建后仅显示一次密钥明文。</p></div></li>
+        <li><div class="step-body"><h4>开放数据集合</h4><p>在「页面配置」中勾选「允许 Open API 访问」（<code>api_public = true</code>）。</p></div></li>
+        <li><div class="step-body"><h4>开放写入权限（可选）</h4><p>如需新增 / 修改数据，额外开启「允许写入」（<code>api_writable = true</code>）。</p></div></li>
+      </ul>
+    </section>
+
+    <section id="onboarding">
+      <p class="eyebrow">Get connected</p>
+      <h2>接入流程</h2>
+      <p class="section-desc">从创建密钥到外部系统跑通第一个请求，共 7 步。</p>
+
+      <ul class="steps">
+        <li><div class="step-body"><h4>管理员创建 API Key</h4><p>进入「系统配置 → 数据工具 → Open API」，点击「创建 API Key」并命名。</p></div></li>
+        <li><div class="step-body"><h4>立即复制并保存密钥</h4><p>密钥仅在创建时显示一次，关闭弹窗后将无法再次查看明文。</p></div></li>
+        <li><div class="step-body"><h4>开启目标页面的「允许 Open API 访问」</h4><p>进入「系统配置 → 平台管理 → 页面配置」，选中需要开放的数据页并保存。</p></div></li>
+        <li><div class="step-body"><h4>需要写入时，额外开启「允许写入」</h4><p>默认仅只读；外部系统需要新增 / 修改数据时才开启。</p></div></li>
+        <li><div class="step-body"><h4>把密钥和 Base URL 交给外部系统开发者</h4><p>通过安全渠道传递，不要通过明文邮件或聊天记录长期留存。</p></div></li>
+        <li><div class="step-body"><h4>外部系统调用 <code>GET /collections</code> 验证连通性</h4><p>返回 200 说明密钥有效、网络可达。</p></div></li>
+        <li><div class="step-body"><h4>按需调用数据 / 文件接口</h4><p>连通性确认后即可正式接入业务查询与写入逻辑。</p></div></li>
+      </ul>
+    </section>
+
+    <section id="endpoints">
+      <p class="eyebrow">Endpoint index</p>
+      <h2>接口一览</h2>
+      <p class="section-desc">9 个接口，按只读 / 写入分组；写入接口均要求目标集合开启「允许写入」。</p>
+
+      <h3 class="sub">查询接口（只读）</h3>
+      <div class="scroll-x">
+        <table class="endpoint-index">
+          <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/collections</td><td>获取所有已开放的集合列表</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/branches</td><td>获取所有可用分支列表</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/collections/{collection}</td><td>获取集合中的数据（分页）</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/collections/{collection}/{id}</td><td>获取单条记录详情</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/collections/{collection}/schema</td><td>获取集合的字段定义</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/files/{fileId}</td><td>获取文件元数据</td></tr>
+          <tr><td><span class="m m-get">GET</span></td><td class="path">/files/{fileId}/download</td><td>下载文件二进制内容</td></tr>
+        </table>
+      </div>
+
+      <h3 class="sub">写入接口（需开启「允许写入」）</h3>
+      <div class="scroll-x">
+        <table class="endpoint-index">
+          <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+          <tr><td><span class="m m-post">POST</span></td><td class="path">/collections/{collection}</td><td>新增一条记录</td></tr>
+          <tr><td><span class="m m-put">PUT</span></td><td class="path">/collections/{collection}/{id}</td><td>修改一条记录（支持部分更新）</td></tr>
+          <tr><td><span class="m m-post">POST</span></td><td class="path">/files</td><td>上传文件，返回 uid 供写入 file / image 字段</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="ep-collections">
+      <p class="eyebrow">5.1</p>
+      <h2>获取集合列表</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/collections</span>
+        </div>
+        <div class="endpoint-body">
+          <p>获取所有已开放 Open API 访问的数据集合。未开放的集合不会出现在结果中。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: [
+    { <span class="k">"collection"</span>: <span class="s">"inspection-cases"</span>, <span class="k">"name"</span>: <span class="s">"巡检用例"</span>, <span class="k">"writable"</span>: <span class="n">false</span> },
+    { <span class="k">"collection"</span>: <span class="s">"devices"</span>, <span class="k">"name"</span>: <span class="s">"设备台账"</span>, <span class="k">"writable"</span>: <span class="n">true</span> }
+  ]
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-branches">
+      <p class="eyebrow">5.2</p>
+      <h2>获取分支列表</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/branches</span>
+        </div>
+        <div class="endpoint-body">
+          <p><code>main</code> 分支始终可用，其余分支来自项目版本管理中状态为 <code>active</code> 的分支。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"main"</span>, <span class="k">"name"</span>: <span class="s">"main"</span>, <span class="k">"status"</span>: <span class="s">"active"</span> },
+    { <span class="k">"id"</span>: <span class="s">"pv-abc123"</span>, <span class="k">"name"</span>: <span class="s">"版本A"</span>, <span class="k">"status"</span>: <span class="s">"active"</span> }
+  ]
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-list">
+      <p class="eyebrow">5.3</p>
+      <h2>获取集合数据（分页）</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/collections/{collection}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>支持分页与分支选择。</p>
+          <table class="params">
+            <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+            <tr><td>page</td><td>1</td><td>页码，从 1 开始</td></tr>
+            <tr><td>pageSize</td><td>20</td><td>每页条数，最大 100</td></tr>
+            <tr><td>branchId</td><td>main</td><td>分支标识，来自分支列表接口</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: [ { <span class="k">"id"</span>: <span class="s">"a1b2c3d4"</span>, <span class="k">"caseName"</span>: <span class="s">"登录功能验证"</span>, <span class="k">"priority"</span>: <span class="s">"high"</span> } ],
+  <span class="k">"pagination"</span>: { <span class="k">"page"</span>: <span class="n">1</span>, <span class="k">"pageSize"</span>: <span class="n">20</span>, <span class="k">"total"</span>: <span class="n">128</span>, <span class="k">"totalPages"</span>: <span class="n">7</span> },
+  <span class="k">"branchId"</span>: <span class="s">"main"</span>
+}</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+            <tr><td>404</td><td><code>Collection not found or not public</code></td><td>集合不存在或未开放</td></tr>
+            <tr><td>404</td><td><code>Branch not found or not active</code></td><td>分支不存在或非活跃</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-detail">
+      <p class="eyebrow">5.4</p>
+      <h2>获取单条记录</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/collections/{collection}/{id}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>根据记录 ID 获取完整数据，同样支持 <code>branchId</code>。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: {
+    <span class="k">"id"</span>: <span class="s">"a1b2c3d4"</span>, <span class="k">"caseName"</span>: <span class="s">"登录功能验证"</span>,
+    <span class="k">"tags"</span>: [<span class="s">"smoke"</span>, <span class="s">"login"</span>], <span class="k">"branchId"</span>: <span class="s">"main"</span>
+  }
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-schema">
+      <p class="eyebrow">5.5</p>
+      <h2>获取集合字段定义</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/collections/{collection}/schema</span>
+        </div>
+        <div class="endpoint-body">
+          <p>返回字段结构，帮助外部系统提前了解需要传哪些字段、哪些必填。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: {
+    <span class="k">"collection"</span>: <span class="s">"inspection-cases"</span>, <span class="k">"writable"</span>: <span class="n">true</span>,
+    <span class="k">"fields"</span>: [
+      { <span class="k">"fieldName"</span>: <span class="s">"caseName"</span>, <span class="k">"label"</span>: <span class="s">"用例名称"</span>, <span class="k">"type"</span>: <span class="s">"text"</span>, <span class="k">"required"</span>: <span class="n">true</span> },
+      { <span class="k">"fieldName"</span>: <span class="s">"priority"</span>, <span class="k">"label"</span>: <span class="s">"优先级"</span>, <span class="k">"type"</span>: <span class="s">"select"</span>, <span class="k">"required"</span>: <span class="n">true</span> }
+    ]
+  }
+}</code></pre>
+          </div>
+          <h3 class="sub" style="margin-top: 22px;">字段控件类型枚举</h3>
+          <div class="scroll-x">
+            <table class="params">
+              <tr><th>type</th><th>说明</th><th>type</th><th>说明</th></tr>
+              <tr><td>text</td><td>单行文本</td><td>file</td><td>文件</td></tr>
+              <tr><td>textarea</td><td>多行文本</td><td>image</td><td>图片</td></tr>
+              <tr><td>number</td><td>数值</td><td>relation</td><td>多对多关联</td></tr>
+              <tr><td>select</td><td>单选下拉</td><td>reference</td><td>一对多引用</td></tr>
+              <tr><td>multiSelect</td><td>多选下拉</td><td>quoteSelect</td><td>引用选择</td></tr>
+              <tr><td>radio</td><td>单选按钮</td><td>autoTimestamp</td><td>自动时间戳</td></tr>
+              <tr><td>checkbox</td><td>复选框</td><td>autoSequence</td><td>自增序列</td></tr>
+              <tr><td>date / datetime</td><td>日期 / 日期时间</td><td>richtext</td><td>富文本编辑器</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-create">
+      <p class="eyebrow">5.6</p>
+      <h2>新增记录</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/collections/{collection}</span>
+          <span class="flags"><span class="flag write">需允许写入</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>不传 <code>id</code> 则自动生成 <code>api-xxxxxxxxxxxx</code> 格式的记录 ID。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{
+  <span class="k">"caseName"</span>: <span class="s">"新增用例"</span>,
+  <span class="k">"priority"</span>: <span class="s">"high"</span>,
+  <span class="k">"status"</span>: <span class="s">"active"</span>
+}</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{
+  <span class="k">"data"</span>: { <span class="k">"id"</span>: <span class="s">"api-a1b2c3d4e5f6"</span>, <span class="k">"caseName"</span>: <span class="s">"新增用例"</span>, <span class="k">"branchId"</span>: <span class="s">"main"</span> }
+}</code></pre>
+          </div>
+
+          <div class="callout">
+            <p><strong>引用类字段（reference / quoteSelect）可以延迟解析。</strong>推荐直接写目标记录的内部 ID；如果被引用的数据还没创建，也可以先写目标的主键值 / 显示字段值作为原始值（<code>quoteSelect</code> 例如 <code>["苹果手机", "华为笔记本"]</code>），系统会原样保存不报错。</p>
+            <p>待数据补齐后，到该数据页点击「更多 → 重新解析引用」即可把原始值补全为内部 ID。<code>relation</code>（多对多）不支持此机制，需在请求体中用 <code>_relations</code> 按内部 ID 写入。</p>
+          </div>
+
+          <table class="params">
+            <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>Validation failed</code></td><td>必填字段缺失（<code>details</code> 数组列出具体字段）</td></tr>
+            <tr><td>403</td><td><code>Collection is read-only</code></td><td>集合未开启「允许写入」</td></tr>
+            <tr><td>409</td><td><code>Record ID already exists</code></td><td>自定义 ID 已存在（同一分支下）</td></tr>
+            <tr><td>409</td><td><code>Primary key conflict</code></td><td>主键字段值与已有记录重复</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-update">
+      <p class="eyebrow">5.7</p>
+      <h2>修改记录</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-put">PUT</span>
+          <span class="path">/api/v1/collections/{collection}/{id}</span>
+          <span class="flags"><span class="flag write">需允许写入</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>支持<strong>部分更新</strong>：只传需要修改的字段，未传字段保持原值。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"status"</span>: <span class="s">"inactive"</span>, <span class="k">"_version"</span>: <span class="n">1</span> }</code></pre>
+          </div>
+          <p style="font-size: 13px; margin-top: -8px;">传入 <code>_version</code> 时进行乐观锁并发冲突检测。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+            <tr><td>409</td><td><code>Record has been modified...</code></td><td>乐观锁冲突（<code>code: "VERSION_CONFLICT"</code>）</td></tr>
+            <tr><td>404</td><td><code>Record not found</code></td><td>记录 ID 不存在，或在该分支下不存在</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="files">
+      <p class="eyebrow">5.8 · 深入讲解</p>
+      <h2>文件上传 &amp; 文件字段录入</h2>
+      <p class="section-desc">
+        <code>file</code> / <code>image</code> 类型的字段在数据库里存的不是二进制内容，而是一个<strong>文件对象数组</strong>。
+        所以往这类字段写数据分两步：先把文件本体传到独立的文件端点换回一个 <code>uid</code>，
+        再把包含这个 <code>uid</code> 的对象数组写进新增 / 修改记录的请求体里。
+      </p>
+
+      <div class="flow">
+        <div class="flow-step">
+          <span class="num">STEP 1</span>
+          <h4>上传文件</h4>
+          <p><code>POST /api/v1/files</code>，multipart 表单，拿到 <code>uid</code>。</p>
+        </div>
+        <div class="flow-step">
+          <span class="num">STEP 2</span>
+          <h4>写入字段</h4>
+          <p>把 <code>uid</code> 组装成文件对象，塞进 <code>file</code>/<code>image</code> 字段的数组。</p>
+        </div>
+        <div class="flow-step">
+          <span class="num">STEP 3</span>
+          <h4>下载 / 展示</h4>
+          <p>记录里的 <code>apiUrl</code> 即为下载地址，带同一个 API Key 即可取回文件。</p>
+        </div>
+      </div>
+
+      <h3 class="sub">Step 1 · 上传文件本体</h3>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/files</span>
+          <span class="flags"><span class="flag write">需允许写入</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>请求体为 <code>multipart/form-data</code>，而非 JSON —— 这是 Open API 里唯一一个不收 JSON 请求体的接口。</p>
+          <table class="params">
+            <tr><th>表单字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>file</td><td>是</td><td>要上传的文件本体</td></tr>
+            <tr><td>collection</td><td>是</td><td>目标数据页标识，须为「公开且允许写入」的集合</td></tr>
+          </table>
+
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>curl</div>
+            <pre><code><span class="c"># 上传本地文件 report.pdf，目标集合为 devices</span>
+curl -s -X POST \
+  -H <span class="s">"X-API-Key: $API_KEY"</span> \
+  -F <span class="s">"file=@./report.pdf"</span> \
+  -F <span class="s">"collection=devices"</span> \
+  <span class="s">"$BASE_URL/files"</span></code></pre>
+          </div>
+
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: {
+    <span class="k">"uid"</span>: <span class="s">"8f3c...e21"</span>,
+    <span class="k">"name"</span>: <span class="s">"report.pdf"</span>,
+    <span class="k">"size"</span>: <span class="n">20480</span>,
+    <span class="k">"mimeType"</span>: <span class="s">"application/pdf"</span>,
+    <span class="k">"downloadUrl"</span>: <span class="s">"/api/v1/files/8f3c...e21/download"</span>
+  }
+}</code></pre>
+          </div>
+
+          <table class="params">
+            <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>collection is required</code></td><td>表单缺少 <code>collection</code> 字段</td></tr>
+            <tr><td>404</td><td><code>Collection not found or not public</code></td><td>目标集合非公开</td></tr>
+            <tr><td>403</td><td><code>Collection is read-only</code></td><td>目标集合未开启「允许写入」</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <h3 class="sub">Step 2 · 把 uid 写进 file / image 字段</h3>
+      <p>拿到 <code>uid</code> 后，在新增 / 修改记录的请求体里，把如下对象数组写进对应字段（字段名以 schema 中定义的为准，图中用「附件」举例）：</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>PUT /collections/devices/{id}</div>
+        <pre><code>{
+  <span class="k">"名称"</span>: <span class="s">"外部记录1"</span>,
+  <span class="k">"附件"</span>: [
+    {
+      <span class="k">"uid"</span>: <span class="s">"8f3c...e21"</span>,
+      <span class="k">"name"</span>: <span class="s">"report.pdf"</span>,
+      <span class="k">"size"</span>: <span class="n">20480</span>,
+      <span class="k">"type"</span>: <span class="s">"application/pdf"</span>,
+      <span class="k">"url"</span>: <span class="s">"/api/data-files/8f3c...e21/download"</span>
+    }
+  ]
+}</code></pre>
+      </div>
+
+      <h4 style="font-size: 13.5px; color: var(--ink); margin: 22px 0 8px;">文件对象字段说明</h4>
+      <div class="scroll-x">
+        <table class="params">
+          <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+          <tr><td>uid</td><td>string</td><td>上传接口返回的文件标识，必填</td></tr>
+          <tr><td>name</td><td>string</td><td>文件名，用于列表展示</td></tr>
+          <tr><td>size</td><td>integer</td><td>字节数</td></tr>
+          <tr><td>type</td><td>string</td><td>MIME 类型</td></tr>
+          <tr><td>url</td><td>string</td><td>内部下载地址，走网页端 JWT 鉴权，<strong>外部系统不可用</strong></td></tr>
+          <tr><td>apiUrl</td><td>string</td><td>查询记录时系统自动附带，Open API 下载专用（见下方 Step 3）</td></tr>
+        </table>
+      </div>
+
+      <div class="callout">
+        <p><strong>image 字段和 file 字段走同一套流程</strong> —— 都是先 <code>POST /files</code> 拿 <code>uid</code>，再写入同样结构的对象数组，唯一区别是页面配置里各自的数量 / 大小上限不同（图片默认最多 9 张 / 单张 5MB，文件默认最多 5 个 / 单个 10MB，具体以 <code>DATA_FILE_MAX_MB</code> 配置为准）。</p>
+        <p>一个字段可以写入多个文件对象：多次调用 <code>POST /files</code> 拿到多个 <code>uid</code>，再把它们一起放进数组即可。</p>
+      </div>
+
+      <div class="callout warn">
+        <p><strong>常见错误：直接把本地文件路径或 base64 写进 JSON 字段。</strong>这类字段只接受「已上传文件的引用对象数组」，不会帮你解析路径或反编码 base64 —— 必须先完成 Step 1 拿到 <code>uid</code>。</p>
+      </div>
+
+      <h3 class="sub">端到端示例：上传并挂到新记录上</h3>
+      <p>以下示例先上传文件，再用拿到的 <code>uid</code> 新建一条记录，一步到位。</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>bash</div>
+        <pre><code><span class="c"># 1. 上传文件，取出 uid（依赖 jq）</span>
+UPLOAD=$(curl -s -X POST \
+  -H <span class="s">"X-API-Key: $API_KEY"</span> \
+  -F <span class="s">"file=@./report.pdf"</span> \
+  -F <span class="s">"collection=devices"</span> \
+  <span class="s">"$BASE_URL/files"</span>)
+FILE_UID=$(echo <span class="s">"$UPLOAD"</span> | jq -r <span class="s">'.data.uid'</span>)
+FILE_NAME=$(echo <span class="s">"$UPLOAD"</span> | jq -r <span class="s">'.data.name'</span>)
+FILE_SIZE=$(echo <span class="s">"$UPLOAD"</span> | jq -r <span class="s">'.data.size'</span>)
+
+<span class="c"># 2. 用 uid 组装文件对象，新建记录</span>
+curl -s -X POST \
+  -H <span class="s">"X-API-Key: $API_KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">"{\"名称\":\"外部记录1\",\"附件\":[{\"uid\":\"$FILE_UID\",\"name\":\"$FILE_NAME\",\"size\":$FILE_SIZE,\"type\":\"application/pdf\"}]}"</span> \
+  <span class="s">"$BASE_URL/collections/devices"</span></code></pre>
+      </div>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>python</div>
+        <pre><code><span class="k">import</span> requests
+
+API_KEY = <span class="s">"cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"</span>
+BASE_URL = <span class="s">"http://localhost:7001/api/v1"</span>
+HEADERS = {<span class="s">"X-API-Key"</span>: API_KEY}
+
+
+<span class="k">def</span> upload_file(collection, file_path):
+    <span class="c">"""上传单个文件，返回可写入 file/image 字段的对象"""</span>
+    <span class="k">with</span> open(file_path, <span class="s">"rb"</span>) <span class="k">as</span> f:
+        resp = requests.post(
+            <span class="k">f</span><span class="s">"{BASE_URL}/files"</span>,
+            headers=HEADERS,
+            files={<span class="s">"file"</span>: f},
+            data={<span class="s">"collection"</span>: collection},
+        )
+    resp.raise_for_status()
+    meta = resp.json()[<span class="s">"data"</span>]
+    <span class="k">return</span> {
+        <span class="s">"uid"</span>: meta[<span class="s">"uid"</span>],
+        <span class="s">"name"</span>: meta[<span class="s">"name"</span>],
+        <span class="s">"size"</span>: meta[<span class="s">"size"</span>],
+        <span class="s">"type"</span>: meta[<span class="s">"mimeType"</span>],
+    }
+
+
+<span class="k">def</span> create_record_with_attachment(collection, fields, file_field_name, file_path):
+    <span class="c">"""上传文件 + 新增一条带附件的记录"""</span>
+    file_obj = upload_file(collection, file_path)
+    payload = {**fields, file_field_name: [file_obj]}
+    resp = requests.post(
+        <span class="k">f</span><span class="s">"{BASE_URL}/collections/{collection}"</span>,
+        headers={**HEADERS, <span class="s">"Content-Type"</span>: <span class="s">"application/json"</span>},
+        json=payload,
+    )
+    resp.raise_for_status()
+    <span class="k">return</span> resp.json()[<span class="s">"data"</span>]
+
+
+<span class="c"># 使用示例</span>
+record = create_record_with_attachment(
+    <span class="s">"devices"</span>,
+    {<span class="s">"名称"</span>: <span class="s">"外部记录1"</span>},
+    <span class="s">"附件"</span>,
+    <span class="s">"./report.pdf"</span>,
+)
+print(<span class="k">f</span><span class="s">"新增成功: {record['id']}"</span>)</code></pre>
+      </div>
+
+      <div class="callout">
+        <p><strong>鉴权与限制同写记录一致</strong>：只能向公开且允许写入的集合上传（否则 404 / 403）。支持中文文件名；单文件大小上限同网页端（<code>DATA_FILE_MAX_MB</code>）。文件被某条记录引用后，才能经 <code>GET /files/{uid}/download</code> 下载。</p>
+      </div>
+    </section>
+
+    <section id="ep-download">
+      <p class="eyebrow">5.9</p>
+      <h2>下载文件</h2>
+      <p class="section-desc">查询记录时，每个文件对象都会附带一个 <code>apiUrl</code> —— 这才是 Open API 应该用来下载的地址（区别于内部 <code>url</code>，后者走网页端 JWT，外部系统调用不了）。</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>GET /collections/devices/{id} response 片段</div>
+        <pre><code>{
+  <span class="k">"attachment"</span>: [
+    {
+      <span class="k">"uid"</span>: <span class="s">"8f3c...e21"</span>, <span class="k">"name"</span>: <span class="s">"report.pdf"</span>,
+      <span class="k">"url"</span>: <span class="s">"/api/data-files/8f3c...e21/download"</span>,     <span class="c">// 内部地址，不可用</span>
+      <span class="k">"apiUrl"</span>: <span class="s">"/api/v1/files/8f3c...e21/download"</span>  <span class="c">// ← Open API 用这个</span>
+    }
+  ]
+}</code></pre>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/files/{fileId}/download</span>
+        </div>
+        <div class="endpoint-body">
+          <p>返回文件二进制流，响应头 <code>Content-Disposition: attachment</code>。</p>
+        </div>
+      </div>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/files/{fileId}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>仅获取文件元数据（不下载内容），用于展示文件名 / 大小 / 类型。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"data"</span>: {
+    <span class="k">"id"</span>: <span class="s">"8f3c...e21"</span>, <span class="k">"name"</span>: <span class="s">"report.pdf"</span>,
+    <span class="k">"mimeType"</span>: <span class="s">"application/pdf"</span>, <span class="k">"size"</span>: <span class="n">20480</span>,
+    <span class="k">"downloadUrl"</span>: <span class="s">"/api/v1/files/8f3c...e21/download"</span>
+  }
+}</code></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <p><strong>安全边界</strong>：只有被已开放（<code>api_public</code>）集合的记录引用的文件才能经 Open API 下载；挂在未开放集合上的文件返回 <code>404 File not found</code>。</p>
+      </div>
+    </section>
+
+    <section id="quickstart">
+      <p class="eyebrow">Quick start</p>
+      <h2>快速上手示例</h2>
+      <p class="section-desc">最常用的读写操作，cURL 一把梭。完整的 Python / JavaScript / Java 客户端代码请参考仓库中的 <code>docs/user-guide/integration/open-api.md</code>。</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>bash</div>
+        <pre><code><span class="c"># 环境变量</span>
+API_KEY=<span class="s">"cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"</span>
+BASE_URL=<span class="s">"http://localhost:7001/api/v1"</span>
+
+<span class="c"># 1. 查看所有已开放的集合</span>
+curl -s -H <span class="s">"X-API-Key: $API_KEY"</span> <span class="s">"$BASE_URL/collections"</span> | jq
+
+<span class="c"># 2. 分页获取数据</span>
+curl -s -H <span class="s">"X-API-Key: $API_KEY"</span> <span class="s">"$BASE_URL/collections/inspection-cases?page=1&pageSize=20"</span> | jq
+
+<span class="c"># 3. 新增一条记录</span>
+curl -s -X POST \
+  -H <span class="s">"X-API-Key: $API_KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{"caseName":"API新增用例","priority":"high"}'</span> \
+  <span class="s">"$BASE_URL/collections/inspection-cases"</span> | jq
+
+<span class="c"># 4. 修改一条记录（部分更新）</span>
+curl -s -X PUT \
+  -H <span class="s">"X-API-Key: $API_KEY"</span> -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{"status":"inactive"}'</span> \
+  <span class="s">"$BASE_URL/collections/inspection-cases/a1b2c3d4"</span> | jq</code></pre>
+      </div>
+    </section>
+
+    <section id="errors">
+      <p class="eyebrow">Error handling</p>
+      <h2>错误处理</h2>
+
+      <h3 class="sub">统一错误格式</h3>
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>error shape</div>
+        <pre><code>{ <span class="k">"error"</span>: <span class="s">"错误描述信息"</span> }
+
+<span class="c">// 部分校验错误会附带 details</span>
+{ <span class="k">"error"</span>: <span class="s">"Validation failed"</span>, <span class="k">"details"</span>: [<span class="s">"名称 is required"</span>, <span class="s">"优先级 is required"</span>] }</code></pre>
+      </div>
+
+      <h3 class="sub">错误码汇总</h3>
+      <div class="scroll-x">
+        <table class="endpoint-index">
+          <tr><th>状态码</th><th>error</th><th>说明</th></tr>
+          <tr><td>400</td><td class="path">Request body is required</td><td>POST/PUT 请求体为空</td></tr>
+          <tr><td>400</td><td class="path">Validation failed</td><td>必填字段缺失或校验不通过</td></tr>
+          <tr><td>401</td><td class="path">Missing / Invalid API key</td><td>请求头缺少或密钥不存在</td></tr>
+          <tr><td>401</td><td class="path">API key has been revoked</td><td>密钥已停用</td></tr>
+          <tr><td>403</td><td class="path">Collection is read-only</td><td>集合未开启写入权限</td></tr>
+          <tr><td>404</td><td class="path">Collection not found or not public</td><td>集合不存在或未开放</td></tr>
+          <tr><td>404</td><td class="path">Record / Branch not found</td><td>记录或分支不存在</td></tr>
+          <tr><td>409</td><td class="path">Record ID already exists</td><td>新增时 ID 冲突</td></tr>
+          <tr><td>409</td><td class="path">Primary key conflict</td><td>主键字段值重复</td></tr>
+          <tr><td>409</td><td class="path">VERSION_CONFLICT</td><td>乐观锁版本冲突</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="security">
+      <p class="eyebrow">Security</p>
+      <h2>安全注意事项</h2>
+      <table class="sec">
+        <tr><td>密钥保管</td><td>API Key 创建后仅显示一次，请妥善保存</td></tr>
+        <tr><td>传输安全</td><td>生产环境务必使用 HTTPS，防止密钥泄露</td></tr>
+        <tr><td>最小开放</td><td>仅对必要的集合开启 Open API，遵循最小权限原则</td></tr>
+        <tr><td>写入权限</td><td>仅对确需外部写入的集合开启「允许写入」，默认只读</td></tr>
+        <tr><td>定期轮换</td><td>建议定期创建新密钥并停用旧密钥</td></tr>
+        <tr><td>及时停用</td><td>不再使用的密钥应立即停用或删除</td></tr>
+        <tr><td>速率监控</td><td>系统记录每个密钥的最后使用时间，管理员可据此监控使用情况</td></tr>
+      </table>
+    </section>
+
+    <section id="faq">
+      <p class="eyebrow">FAQ</p>
+      <h2>常见问题</h2>
+
+      <details class="faq">
+        <summary>文件字段能不能直接传文件路径或 base64？</summary>
+        <div class="faq-body">不能。<code>file</code>/<code>image</code> 字段只接受「已上传文件的引用对象数组」（含 <code>uid</code>），必须先调用 <code>POST /files</code> 完成上传，再把返回的 <code>uid</code> 组装进对象数组写入记录。</div>
+      </details>
+
+      <details class="faq">
+        <summary>一个文件字段能挂多个文件吗？</summary>
+        <div class="faq-body">可以。多次调用 <code>POST /files</code> 拿到多个 <code>uid</code>，把它们各自组装成文件对象后一起放进同一个数组即可。具体数量上限以该字段在页面配置中的设置为准。</div>
+      </details>
+
+      <details class="faq">
+        <summary>下载文件用 url 还是 apiUrl？</summary>
+        <div class="faq-body">Open API 场景一律用 <code>apiUrl</code>。<code>url</code> 是内部地址，走网页端 JWT 鉴权，外部系统直接调用会 401。</div>
+      </details>
+
+      <details class="faq">
+        <summary>如何判断哪些集合已开放 API 访问？</summary>
+        <div class="faq-body">调用 <code>GET /collections</code> 即可，未开放的集合不会出现在返回结果中；<code>writable</code> 字段标识该集合是否允许写入。</div>
+      </details>
+
+      <details class="faq">
+        <summary>能否写入数据到特定分支？</summary>
+        <div class="faq-body">可以，在 POST/PUT 请求中加 <code>branchId</code> 参数即可。分支需存在且处于活跃状态，否则返回 <code>404 Branch not found or not active</code>。</div>
+      </details>
+
+      <details class="faq">
+        <summary>修改记录需要传所有字段吗？</summary>
+        <div class="faq-body">不需要。PUT 支持部分更新，只传要修改的字段，未传字段保持原值。</div>
+      </details>
+
+      <details class="faq">
+        <summary>如何避免并发修改冲突？</summary>
+        <div class="faq-body">PUT 请求体传入 <code>_version</code> 字段即可触发乐观锁检测；版本不一致会返回 <code>409 VERSION_CONFLICT</code>。建议先 GET 拿最新版本号，再连同 <code>_version</code> 一起提交修改。</div>
+      </details>
+
+      <details class="faq">
+        <summary>引用字段指向的数据还没创建怎么办？</summary>
+        <div class="faq-body">可以先写入目标的主键值或显示字段值作为原始值，系统会原样保存；待数据补齐后，到该数据页点击「更多 → 重新解析引用」即可补全为内部 ID。仅适用于 <code>reference</code>/<code>quoteSelect</code>，不适用于 <code>relation</code>。</div>
+      </details>
+
+      <details class="faq">
+        <summary>API Key 泄露了怎么办？</summary>
+        <div class="faq-body">立即登录系统，在「Open API」管理页面停用该密钥，然后创建一个新密钥重新分发给外部系统。</div>
+      </details>
+    </section>
+
+    <p class="footnote">依据 <code>docs/user-guide/integration/open-api.md</code> 整理生成，文件上传与文件字段录入部分为补充说明。接口行为以后端实现为准。</p>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var toggle = document.getElementById("navToggle");
+    var sidebar = document.getElementById("sidebar");
+    if (toggle && sidebar) {
+      toggle.addEventListener("click", function () {
+        sidebar.classList.toggle("open");
+      });
+    }
+
+    // copy buttons on code panels
+    document.querySelectorAll(".code").forEach(function (panel) {
+      var bar = panel.querySelector(".code-bar");
+      var codeEl = panel.querySelector("pre code");
+      if (!bar || !codeEl) return;
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-btn";
+      btn.textContent = "复制";
+      btn.addEventListener("click", function () {
+        var text = codeEl.textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            btn.textContent = "已复制";
+            setTimeout(function () { btn.textContent = "复制"; }, 1400);
+          }).catch(function () {});
+        }
+      });
+      bar.appendChild(btn);
+    });
+
+    // scroll-spy active nav
+    var links = Array.prototype.slice.call(document.querySelectorAll(".nav-group a"));
+    var map = {};
+    links.forEach(function (a) {
+      var id = a.getAttribute("href").slice(1);
+      var el = document.getElementById(id);
+      if (el) map[id] = a;
+    });
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var link = map[entry.target.id];
+        if (!link) return;
+        if (entry.isIntersecting) {
+          links.forEach(function (l) { l.classList.remove("active"); });
+          link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-10% 0px -75% 0px", threshold: 0 });
+    Object.keys(map).forEach(function (id) {
+      observer.observe(document.getElementById(id));
+    });
+  })();
+</script>
+</body>
+</html>
