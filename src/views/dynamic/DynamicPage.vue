@@ -466,6 +466,22 @@
             >{{ viewRecord[`_ref_${field.fieldName}_display`] || viewRecord[field.fieldName] }}</span>
           </template>
 
+          <!-- 状态徽标字段：图标+颜色，只读 -->
+          <template v-else-if="field.controlType === 'statusBadge'">
+            <span
+              class="status-badge-cell"
+              :style="{ color: viewStatusBadgeOption(field)?.color }"
+            >
+              <el-icon
+                v-if="viewStatusBadgeOption(field)?.icon"
+                :class="{ 'status-badge-spin': viewStatusBadgeOption(field)?.animated }"
+              >
+                <component :is="statusBadgeIconComp(viewStatusBadgeOption(field)!.icon)" />
+              </el-icon>
+              <span>{{ formatViewValue(field) }}</span>
+            </span>
+          </template>
+
           <!-- 选项类字段：显示标签 -->
           <template v-else-if="['select', 'radio'].includes(field.controlType)">
             {{ formatViewValue(field) }}
@@ -918,6 +934,7 @@ import { ref, computed, watch, nextTick, onActivated, defineAsyncComponent } fro
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
+import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -1621,8 +1638,23 @@ function handleFilterChange(filters: Record<string, { value: any; value2?: any; 
 function formatViewValue(field: FieldConfig): string {
   const value = viewRecord.value[field.fieldName]
   if (value === null || value === undefined || value === '') return '-'
+  if (field.controlType === 'statusBadge') {
+    return viewStatusBadgeOption(field)?.label || String(value)
+  }
   const opt = field.options?.find(o => o.value === value)
   return opt?.label || String(value)
+}
+
+/**
+ * "查看记录"弹窗里取 statusBadge 字段当前值对应的选项配置
+ */
+function viewStatusBadgeOption(field: FieldConfig) {
+  const value = viewRecord.value[field.fieldName]
+  return field.statusBadgeConfig?.options.find(o => o.value === value)
+}
+
+function statusBadgeIconComp(name: string) {
+  return (ElIconsAll as Record<string, unknown>)[name]
 }
 
 /**
@@ -3670,6 +3702,21 @@ html.dark .dynamic-page :deep(.highlight-flash) {
   &:hover {
     text-decoration: underline;
   }
+}
+
+.status-badge-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-badge-spin {
+  animation: status-badge-rotate 1.2s linear infinite;
+}
+
+@keyframes status-badge-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .view-textarea {
