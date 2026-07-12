@@ -468,6 +468,17 @@ def update_collection_item(collection, item_id):
         new_data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', 'updatedAt', '_version')}
         merged.update(new_data)
 
+        # statusBadge 字段：值真正变化时记录变化时间戳，供超时兜底任务判定
+        from datetime import datetime
+        for field_cfg in (fields or []):
+            if field_cfg.get('controlType') != 'statusBadge':
+                continue
+            fname = field_cfg.get('fieldName')
+            if not fname or fname not in new_data:
+                continue
+            if old_data.get(fname) != merged.get(fname):
+                merged[f'_statusBadge_{fname}_changedAt'] = datetime.now(timezone.utc).isoformat()
+
         # Validate required fields on the merged result
         req_errors = validate_required_fields(merged, fields)
         if req_errors:

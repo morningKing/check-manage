@@ -324,6 +324,61 @@ class TestUpdateRecord:
         assert resp.status_code == 200
 
 
+class TestStatusBadgeTimestampOpenApi:
+    """PUT /api/v1/collections/<collection>/<id> — 第三方系统回写 statusBadge 字段
+    变化时，data 里应写入 `_statusBadge_<field>_changedAt` 时间戳。"""
+
+    STATUS_FIELDS = [{'fieldName': 'status', 'controlType': 'statusBadge'}]
+
+    def _find_update_call(self, mock_cursor):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'UPDATE dynamic_data' in str(c.args[0])
+        )
+
+    def test_update_status_value_changed_stamps_timestamp(self, setup):
+        """第三方系统通过 Open API PUT 回写 statusBadge 字段值变化时，应写入变化时间戳"""
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),                                          # writable
+            ('rec-1', {'status': 'pending'}, 1),                   # existing record
+            (self.STATUS_FIELDS,),                                 # get_page_fields
+            ([],),                                                 # pk_fields
+            ('rec-1', 'devices', {'status': 'processing'}, now),   # updated row
+        ])
+        mock_cursor.rowcount = 1
+        resp = client.put('/api/v1/collections/devices/rec-1',
+                          data=json.dumps({'status': 'processing'}),
+                          content_type='application/json',
+                          headers=api_h)
+        assert resp.status_code == 200
+        update_call = self._find_update_call(mock_cursor)
+        merged_data = update_call.args[1][0].adapted  # (data, version, collection, id, db_version, branch_id)
+        assert merged_data['status'] == 'processing'
+        assert '_statusBadge_status_changedAt' in merged_data
+
+    def test_update_status_value_unchanged_does_not_restamp(self, setup):
+        """值没变时不重复刷新时间戳（沿用旧值）"""
+        client, mock_cursor, api_h = setup
+        old_data = {'status': 'pending', '_statusBadge_status_changedAt': '2026-01-01T00:00:00+00:00'}
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),                                          # writable
+            ('rec-1', dict(old_data), 1),                          # existing record
+            (self.STATUS_FIELDS,),                                 # get_page_fields
+            ([],),                                                 # pk_fields
+            ('rec-1', 'devices', dict(old_data), now),             # updated row
+        ])
+        mock_cursor.rowcount = 1
+        resp = client.put('/api/v1/collections/devices/rec-1',
+                          data=json.dumps({'status': 'pending'}),
+                          content_type='application/json',
+                          headers=api_h)
+        assert resp.status_code == 200
+        update_call = self._find_update_call(mock_cursor)
+        merged_data = update_call.args[1][0].adapted
+        assert merged_data['_statusBadge_status_changedAt'] == '2026-01-01T00:00:00+00:00'
+
+
 class TestSchemaIncludesWritable:
     def test_schema_writable_flag(self, setup):
         client, mock_cursor, api_h = setup
