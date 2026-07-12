@@ -566,3 +566,53 @@ class TestStatusBadgeTimestamp:
         update_call = self._find_sql_call(mock_cursor, 'UPDATE dynamic_data')
         merged_data = update_call.args[1][0].adapted
         assert merged_data['_statusBadge_status_changedAt'] == '2026-01-01T00:00:00+00:00'
+
+
+class TestSearchTextStamping:
+    """create_item/update_item 应维护 search_text 预计算列（配合 pg_trgm 索引加速关键字搜索，见 utils/search_text.py）"""
+
+    TEXT_FIELDS = [
+        {'fieldName': 'name', 'controlType': 'text'},
+        {'fieldName': 'note', 'controlType': 'textarea'},
+        {'fieldName': 'ref', 'controlType': 'reference'},
+    ]
+
+    def _find_sql_call(self, mock_cursor, needle):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and needle in str(c.args[0])
+        )
+
+    def test_create_stamps_search_text_from_direct_searchable_fields_only(self, setup):
+        """search_text 只拼接直接可搜索字段（text/textarea/...），reference 等不计入"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', self.TEXT_FIELDS)):
+            resp = client.post('/test-collection',
+                               data=json.dumps({'name': '张三', 'note': '备注', 'ref': 'other-rec'}),
+                               content_type='application/json',
+                               headers=headers)
+        assert resp.status_code == 201
+        insert_call = self._find_sql_call(mock_cursor, 'INSERT INTO dynamic_data')
+        # (id, collection, data, created_at, branch_id, search_text)
+        search_text = insert_call.args[1][5]
+        assert search_text == '张三 备注'
+
+    def test_update_refreshes_search_text_with_merged_data(self, setup):
+        """更新记录后 search_text 应基于合并后的数据（新旧字段都算）重新计算"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            {'name': '旧名字', 'note': '旧备注'},
+            ({'name': '旧名字', 'note': '旧备注'}, 1),
+        ]
+        mock_cursor.rowcount = 1
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', self.TEXT_FIELDS)):
+            resp = client.put('/test-collection/rec-1',
+                              data=json.dumps({'name': '新名字', '_version': 1}),
+                              content_type='application/json',
+                              headers=headers)
+        assert resp.status_code == 200
+        update_call = self._find_sql_call(mock_cursor, 'UPDATE dynamic_data')
+        # (data, version, search_text, collection, id, db_version, branch_id)
+        search_text = update_call.args[1][2]
+        assert search_text == '新名字 旧备注'

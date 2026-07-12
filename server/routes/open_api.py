@@ -5,6 +5,7 @@ from auth import api_key_required
 from config import OPEN_API_BRANCH
 from datetime import timezone
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+from utils.search_text import compute_search_text
 from routes.data_files import save_data_file
 import uuid
 import json
@@ -410,9 +411,10 @@ def create_collection_item(collection):
                 data[f'_statusBadge_{f["fieldName"]}_changedAt'] = datetime.now(timezone.utc).isoformat()
 
         cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s, %s, %s, %s) '
+            'INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES (%s, %s, %s, %s, %s) '
             'RETURNING id, collection, data, created_at',
-            (record_id, collection, psycopg2.extras.Json(data), branch_id),
+            (record_id, collection, psycopg2.extras.Json(data), branch_id,
+             compute_search_text(data, fields)),
         )
         new_row = cur.fetchone()
 
@@ -502,9 +504,10 @@ def update_collection_item(collection, item_id):
 
         new_version = db_version + 1
         cur.execute(
-            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
+            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s, search_text = %s '
             'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-            (psycopg2.extras.Json(merged), new_version, collection, item_id, db_version, branch_id),
+            (psycopg2.extras.Json(merged), new_version, compute_search_text(merged, fields),
+             collection, item_id, db_version, branch_id),
         )
         if cur.rowcount == 0:
             return jsonify({

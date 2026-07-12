@@ -425,6 +425,67 @@ class TestStatusBadgeTimestampOpenApi:
         assert merged_data['_statusBadge_status_changedAt'] == '2026-01-01T00:00:00+00:00'
 
 
+class TestSearchTextStampingOpenApi:
+    """Open API 的 create/update 也要维护 search_text 预计算列，与内部 UI 写路径
+    （routes/dynamic.py 的 create_item/update_item）保持一致，否则第三方系统
+    写入的记录搜不到（见 utils/search_text.py）。"""
+
+    TEXT_FIELDS = [
+        {'fieldName': 'name', 'controlType': 'text'},
+        {'fieldName': 'note', 'controlType': 'textarea'},
+        {'fieldName': 'ref', 'controlType': 'reference'},
+    ]
+
+    def _find_insert_call(self, mock_cursor):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'INSERT INTO dynamic_data' in str(c.args[0])
+        )
+
+    def _find_update_call(self, mock_cursor):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'UPDATE dynamic_data' in str(c.args[0])
+        )
+
+    def test_create_stamps_search_text_from_direct_searchable_fields_only(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),                                          # writable
+            (self.TEXT_FIELDS,),                                   # get_page_fields
+            None,                                                  # ID uniqueness (not found)
+            ([],),                                                 # pk_fields
+            ('rec-1', 'devices', {'name': '张三', 'note': '备注'}, now),  # RETURNING
+        ])
+        resp = client.post('/api/v1/collections/devices',
+                           data=json.dumps({'id': 'rec-1', 'name': '张三', 'note': '备注', 'ref': 'x'}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 201
+        insert_call = self._find_insert_call(mock_cursor)
+        search_text = insert_call.args[1][4]  # (id, collection, data, branch_id, search_text)
+        assert search_text == '张三 备注'
+
+    def test_update_refreshes_search_text_with_merged_data(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),                                              # writable
+            ('rec-1', {'name': '旧名字', 'note': '旧备注'}, 1),         # existing record
+            (self.TEXT_FIELDS,),                                       # get_page_fields
+            ([],),                                                     # pk_fields
+            ('rec-1', 'devices', {'name': '新名字', 'note': '旧备注'}, now),  # updated row
+        ])
+        mock_cursor.rowcount = 1
+        resp = client.put('/api/v1/collections/devices/rec-1',
+                          data=json.dumps({'name': '新名字'}),
+                          content_type='application/json',
+                          headers=api_h)
+        assert resp.status_code == 200
+        update_call = self._find_update_call(mock_cursor)
+        search_text = update_call.args[1][2]  # (data, version, search_text, collection, id, db_version, branch_id)
+        assert search_text == '新名字 旧备注'
+
+
 class TestSchemaIncludesWritable:
     def test_schema_writable_flag(self, setup):
         client, mock_cursor, api_h = setup

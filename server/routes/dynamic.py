@@ -9,6 +9,7 @@ from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQ
 from utils.version import get_user_current_branch, MAIN_BRANCH_ID
 from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
+from utils.search_text import compute_search_text
 import psycopg2.extras
 import json
 
@@ -155,6 +156,11 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
     conditions.append("id = %s")
     params.append(keyword)
 
+    # 直接可搜索字段：走预计算的 search_text 列（配合 pg_trgm GIN 索引），
+    # 而不是对每个字段单独做 data->>field ILIKE 全表扫描
+    conditions.append("search_text ILIKE %s")
+    params.append(keyword_pattern)
+
     # 批量预加载目标集合的 page_configs（消除 N+1）
     target_collections = set()
     for field in fields:
@@ -177,19 +183,11 @@ def build_keyword_conditions(cur, collection, keyword, fields, branch_id):
         for row in cur.fetchall():
             target_configs[row[0]] = row[1]
 
-    # 可直接在 JSONB 中搜索的字段类型
-    direct_searchable = {'text', 'textarea', 'markdown', 'number', 'autoSequence', 'select', 'radio', 'date', 'datetime', 'autoTimestamp', 'compositeText'}
-
     for field in fields:
         field_name = field.get('fieldName')
         control_type = field.get('controlType', 'text')
 
-        if control_type in direct_searchable:
-            # 直接在 JSONB data 字段中搜索
-            conditions.append(f"data->>%s ILIKE %s")
-            params.extend([field_name, keyword_pattern])
-
-        elif control_type == 'relation':
+        if control_type == 'relation':
             # M:N 关联字段：通过 data_relations 表搜索
             rel_config = field.get('relationConfig', {})
             target_collection = rel_config.get('targetCollection')
@@ -597,8 +595,10 @@ def create_item(collection):
                     "validationWarnings": warnings,
                 }), 400
         cur.execute(
-            'INSERT INTO dynamic_data (id, collection, data, created_at, branch_id) VALUES (%s,%s,%s,%s,%s)',
-            (rid, collection, psycopg2.extras.Json(data), created_at, branch_id),
+            'INSERT INTO dynamic_data (id, collection, data, created_at, branch_id, search_text) '
+            'VALUES (%s,%s,%s,%s,%s,%s)',
+            (rid, collection, psycopg2.extras.Json(data), created_at, branch_id,
+             compute_search_text(data, fields)),
         )
         # Apply relations queued by validation script
         if pending_relations:
@@ -778,17 +778,18 @@ def update_item(collection, item_id):
                 continue
             if old_data.get(fname) != merged_data.get(fname):
                 merged_data[f'_statusBadge_{fname}_changedAt'] = datetime.now(timezone.utc).isoformat()
+        search_text = compute_search_text(merged_data, fields)
         if created_at:
             cur.execute(
-                'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s '
+                'UPDATE dynamic_data SET data = %s, created_at = %s, updated_at = NOW(), version = %s, search_text = %s '
                 'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-                (psycopg2.extras.Json(merged_data), created_at, new_version, collection, item_id, db_version, branch_id),
+                (psycopg2.extras.Json(merged_data), created_at, new_version, search_text, collection, item_id, db_version, branch_id),
             )
         else:
             cur.execute(
-                'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s '
+                'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = %s, search_text = %s '
                 'WHERE collection = %s AND id = %s AND version = %s AND branch_id = %s',
-                (psycopg2.extras.Json(merged_data), new_version, collection, item_id, db_version, branch_id),
+                (psycopg2.extras.Json(merged_data), new_version, search_text, collection, item_id, db_version, branch_id),
             )
         if cur.rowcount == 0:
             # Another request changed the version between our SELECT and UPDATE
@@ -1108,14 +1109,16 @@ def batch_create_items(collection):
         # refreshed instead of skipped.
         if prepared_records:
             values = [
-                (r['id'], collection, psycopg2.extras.Json(r['data']), branch_id)
+                (r['id'], collection, psycopg2.extras.Json(r['data']), branch_id,
+                 compute_search_text(r['data'], fields))
                 for r in prepared_records
             ]
             psycopg2.extras.execute_values(
                 cur,
-                'INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES %s '
+                'INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES %s '
                 'ON CONFLICT (id, branch_id) DO UPDATE SET '
                 '  data = EXCLUDED.data, '
+                '  search_text = EXCLUDED.search_text, '
                 '  updated_at = NOW(), '
                 '  version = dynamic_data.version + 1',
                 values

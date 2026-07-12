@@ -13,6 +13,7 @@ import psycopg2
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from config import DB_CONFIG
+from utils.search_text import compute_search_text
 
 
 @pytest.fixture(autouse=True)
@@ -46,8 +47,10 @@ def search_db():
     cur.execute("INSERT INTO page_configs (id, name, fields) VALUES (%s,%s,%s)",
                 ('page-_t_products', '产品管理', json.dumps(products_fields)))
     for pid, name in [('tp1', '苹果手机'), ('tp2', '华为笔记本'), ('tp3', '小米耳机')]:
-        cur.execute("INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s,%s,%s,'main')",
-                    (pid, '_t_products', json.dumps({'产品编号': pid, '产品名称': name, '价格': 999})))
+        p_data = {'产品编号': pid, '产品名称': name, '价格': 999}
+        cur.execute(
+            "INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES (%s,%s,%s,'main',%s)",
+            (pid, '_t_products', json.dumps(p_data), compute_search_text(p_data, products_fields)))
 
     # 订单表：有 reference 字段和 quoteSelect 字段，displayField 都是 '产品名称'
     # 注意：第一个 text 字段是 '产品编号'，但 displayField 指定为 '产品名称'
@@ -61,11 +64,15 @@ def search_db():
     cur.execute("INSERT INTO page_configs (id, name, fields) VALUES (%s,%s,%s)",
                 ('page-_t_orders', '订单管理', json.dumps(orders_fields)))
     # 订单A: reference=tp1(苹果手机), quoteSelect=[tp2,tp3]
-    cur.execute("INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s,%s,%s,'main')",
-                ('to1', '_t_orders', json.dumps({'订单名': '订单A', '引用产品': 'tp1', '批量引用': ['tp2', 'tp3']})))
+    o1_data = {'订单名': '订单A', '引用产品': 'tp1', '批量引用': ['tp2', 'tp3']}
+    cur.execute(
+        "INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES (%s,%s,%s,'main',%s)",
+        ('to1', '_t_orders', json.dumps(o1_data), compute_search_text(o1_data, orders_fields)))
     # 订单B: reference=tp2(华为笔记本), quoteSelect=[]
-    cur.execute("INSERT INTO dynamic_data (id, collection, data, branch_id) VALUES (%s,%s,%s,'main')",
-                ('to2', '_t_orders', json.dumps({'订单名': '订单B', '引用产品': 'tp2', '批量引用': []})))
+    o2_data = {'订单名': '订单B', '引用产品': 'tp2', '批量引用': []}
+    cur.execute(
+        "INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES (%s,%s,%s,'main',%s)",
+        ('to2', '_t_orders', json.dumps(o2_data), compute_search_text(o2_data, orders_fields)))
     conn.commit()
 
     yield conn

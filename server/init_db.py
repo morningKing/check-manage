@@ -6,6 +6,7 @@ import psycopg2
 import psycopg2.extras
 from config import DB_CONFIG
 from seed_data import MENUS, PAGE_CONFIGS, DYNAMIC_DATA
+from utils.search_text import compute_search_text
 import json
 
 DDL = """
@@ -45,6 +46,13 @@ CREATE INDEX IF NOT EXISTS idx_dynamic_data_collection ON dynamic_data(collectio
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch ON dynamic_data(collection, branch_id);
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_coll_branch_created ON dynamic_data(collection, branch_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_dynamic_data_gin ON dynamic_data USING gin(data);
+
+-- 关键字搜索加速：预计算列 + pg_trgm GIN 索引（见 utils/search_text.py）。
+-- data->>field ILIKE 逐字段扫描在千万级数据下退化为全表扫描；search_text
+-- 由写路径（create_item/update_item/batch_create_items + Open API 对应端点）
+-- 维护，配合下方的 trigram 索引可以让 ILIKE 走索引。
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+ALTER TABLE dynamic_data ADD COLUMN IF NOT EXISTS search_text TEXT;
 
 CREATE TABLE IF NOT EXISTS data_relations (
     collection          VARCHAR(200) NOT NULL,
@@ -663,6 +671,61 @@ CREATE TABLE IF NOT EXISTS role_page_permissions (
 """
 
 
+def _create_search_text_trgm_index():
+    """CREATE INDEX CONCURRENTLY 不能在事务块里跑，必须用独立的 autocommit 连接。
+
+    在已有几百万行的 dynamic_data 上非并发建索引会长时间持锁堵塞写入；
+    CONCURRENTLY 以慢得多但不阻塞的方式建索引，适合已在生产跑着的库。
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    conn.autocommit = True
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dynamic_data_search_trgm '
+            'ON dynamic_data USING gin (search_text gin_trgm_ops)'
+        )
+        print("Trigram index on dynamic_data.search_text ready.")
+    finally:
+        conn.close()
+
+
+def _backfill_search_text(conn, batch_size=2000):
+    """为写路径改造前就存在的历史行补算 search_text（新行由写路径直接维护）。
+
+    按 collection 分批处理，每批 UPDATE 后立即 commit，避免千万级存量数据
+    一次性锁住整张表或撑爆内存。search_text 写完后该行不再匹配 IS NULL，
+    循环天然终止，可安全重复执行（幂等）。
+    """
+    cur = conn.cursor()
+    cur.execute('SELECT id, fields FROM page_configs')
+    page_rows = cur.fetchall()
+    total_updated = 0
+    for page_id, fields in page_rows:
+        if not page_id.startswith('page-'):
+            continue
+        collection = page_id[len('page-'):]
+        while True:
+            cur.execute(
+                'SELECT id, branch_id, data FROM dynamic_data '
+                'WHERE collection = %s AND search_text IS NULL LIMIT %s',
+                (collection, batch_size),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                break
+            for rid, branch_id, data in rows:
+                search_text = compute_search_text(data or {}, fields or [])
+                cur.execute(
+                    'UPDATE dynamic_data SET search_text = %s WHERE id = %s AND branch_id = %s',
+                    (search_text, rid, branch_id),
+                )
+            conn.commit()
+            total_updated += len(rows)
+    if total_updated:
+        print(f"Backfilled search_text for {total_updated} existing dynamic_data row(s).")
+
+
 def init_db():
     conn = psycopg2.connect(**DB_CONFIG)
     try:
@@ -672,6 +735,12 @@ def init_db():
         cur.execute(DDL)
         conn.commit()
         print("Tables created.")
+
+        # Keyword search acceleration: search_text 预计算列 + pg_trgm GIN 索引
+        # （见 utils/search_text.py）。索引用独立 autocommit 连接并发建，
+        # 存量数据补算走批量 backfill，均可在已有数据的库上安全重复执行。
+        _create_search_text_trgm_index()
+        _backfill_search_text(conn)
 
         # Data-page file/image field storage (replaces blob: URLs)
         cur.execute(DATA_FILES_DDL)
