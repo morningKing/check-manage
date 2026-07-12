@@ -60,3 +60,23 @@ def test_proxy_forwards_visitor_id_header():
     # create-session / send-message return 400 "X-Visitor-Id required".
     src = inspect.getsource(proxy.ProxyHandler._proxy_to_backend)
     assert 'X-Visitor-Id' in src
+
+
+# --- Raw non-ASCII path/query safety (proxy-backend 500 regression) ---
+
+
+def test_safe_upstream_path_percent_encodes_raw_non_ascii():
+    # BaseHTTPRequestHandler decodes the request line as latin-1, so a client
+    # that sends a raw (non-percent-encoded) UTF-8 character survives in
+    # self.path as one char per byte. Without encoding, http.client's
+    # ascii-only request line raises UnicodeEncodeError.
+    raw_bytes = '状'.encode('utf-8')
+    latin1_path = '/pageConfigs?keyword=' + raw_bytes.decode('latin-1')
+    encoded = proxy._safe_upstream_path(latin1_path)
+    assert encoded == '/pageConfigs?keyword=%E7%8A%B6'
+    encoded.encode('ascii')  # must not raise
+
+
+def test_safe_upstream_path_leaves_ascii_and_percent_encoding_untouched():
+    path = '/pageConfigs?keyword=%E7%8A%B6&all=true'
+    assert proxy._safe_upstream_path(path) == path
