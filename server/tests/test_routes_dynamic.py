@@ -501,3 +501,68 @@ class TestBatchCreate:
                           headers=headers)
 
         assert resp.status_code == 404
+
+
+class TestStatusBadgeTimestamp:
+    """statusBadge 字段变化时，data 里应写入 `_statusBadge_<field>_changedAt` 时间戳"""
+
+    STATUS_FIELDS = [{'fieldName': 'status', 'controlType': 'statusBadge'}]
+
+    def _find_sql_call(self, mock_cursor, needle):
+        return next(
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and needle in str(c.args[0])
+        )
+
+    def test_create_with_initial_status_stamps_timestamp(self, setup):
+        """新建记录时 statusBadge 字段有初始值，应写入变化时间戳"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', self.STATUS_FIELDS)):
+            resp = client.post('/test-collection',
+                               data=json.dumps({'status': 'pending'}),
+                               content_type='application/json',
+                               headers=headers)
+        assert resp.status_code == 201
+        insert_call = self._find_sql_call(mock_cursor, 'INSERT INTO dynamic_data')
+        inserted_data = insert_call.args[1][2].adapted  # (id, collection, data, created_at, branch_id)
+        assert '_statusBadge_status_changedAt' in inserted_data
+        assert inserted_data['status'] == 'pending'
+
+    def test_update_status_value_changed_stamps_timestamp(self, setup):
+        """更新记录时 statusBadge 字段值变化，应刷新变化时间戳"""
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.side_effect = [
+            {'status': 'pending'},              # 1. before webhook: old_data
+            ({'status': 'pending'}, 1),         # 2. old data + version
+        ]
+        mock_cursor.rowcount = 1
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', self.STATUS_FIELDS)):
+            resp = client.put('/test-collection/rec-1',
+                              data=json.dumps({'status': 'processing', '_version': 1}),
+                              content_type='application/json',
+                              headers=headers)
+        assert resp.status_code == 200
+        update_call = self._find_sql_call(mock_cursor, 'UPDATE dynamic_data')
+        merged_data = update_call.args[1][0].adapted  # (data, [created_at,] version, collection, id, db_version, branch_id)
+        assert merged_data['status'] == 'processing'
+        assert '_statusBadge_status_changedAt' in merged_data
+
+    def test_update_status_value_unchanged_does_not_restamp(self, setup):
+        """更新记录时 statusBadge 字段值没变，不应刷新时间戳（沿用旧值）"""
+        client, mock_cursor, _, headers = setup
+        old_data = {'status': 'pending', '_statusBadge_status_changedAt': '2026-01-01T00:00:00+00:00'}
+        mock_cursor.fetchone.side_effect = [
+            dict(old_data),                     # 1. before webhook: old_data
+            (dict(old_data), 1),                # 2. old data + version
+        ]
+        mock_cursor.rowcount = 1
+        with patch('routes.dynamic.get_page_info', return_value=('测试页面', self.STATUS_FIELDS)):
+            resp = client.put('/test-collection/rec-1',
+                              data=json.dumps({'status': 'pending', '_version': 1}),
+                              content_type='application/json',
+                              headers=headers)
+        assert resp.status_code == 200
+        update_call = self._find_sql_call(mock_cursor, 'UPDATE dynamic_data')
+        merged_data = update_call.args[1][0].adapted
+        assert merged_data['_statusBadge_status_changedAt'] == '2026-01-01T00:00:00+00:00'
