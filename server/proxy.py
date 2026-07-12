@@ -69,6 +69,20 @@ def _cors_origin(request_origin):
     return request_origin if request_origin in allowed else ''
 
 
+def _safe_upstream_path(path):
+    """BaseHTTPRequestHandler decodes the raw request line as latin-1, so a
+    client that sends a non-percent-encoded UTF-8 byte in the path/query (e.g.
+    a raw Chinese character) leaves it in `self.path` as a char in the
+    0x80-0xFF range. http.client's request line must be pure ASCII, so passing
+    that straight to urllib.request.Request crashes with UnicodeEncodeError
+    (proxy-backend 500, connection reset for the client) before the request
+    ever reaches the backend. Percent-encode only the non-ASCII bytes here;
+    ASCII bytes (including any %XX a well-behaved client already sent) pass
+    through untouched, so normal percent-encoded URLs are unaffected."""
+    raw = path.encode('latin-1', errors='surrogateescape')
+    return ''.join(chr(b) if b < 0x80 else '%{:02X}'.format(b) for b in raw)
+
+
 class ProxyHandler(SimpleHTTPRequestHandler):
     """Handle static files from dist/ and proxy /api to Flask backend."""
 
@@ -97,7 +111,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         backend_path = self.path[4:]  # remove leading "/api"
         if not backend_path:
             backend_path = '/'
-        url = BACKEND_URL + backend_path
+        url = BACKEND_URL + _safe_upstream_path(backend_path)
 
         # Read request body
         content_length = int(self.headers.get('Content-Length', 0))
@@ -249,7 +263,12 @@ class ProxyHandler(SimpleHTTPRequestHandler):
     # Suppress default request logging clutter
     def log_message(self, format, *args):
         status = args[1] if len(args) > 1 else ''
-        print(f'  {self.command:7s} {self.path} -> {status}')
+        msg = f'  {self.command:7s} {self.path} -> {status}'
+        # self.path may hold raw non-ASCII bytes (see _safe_upstream_path) that
+        # the console's codec (e.g. GBK on zh-CN Windows) cannot represent;
+        # never let a log line crash the request it's logging.
+        encoding = sys.stdout.encoding or 'utf-8'
+        print(msg.encode(encoding, errors='backslashreplace').decode(encoding, errors='replace'))
 
 
 def start_backend():
