@@ -466,6 +466,22 @@
             >{{ viewRecord[`_ref_${field.fieldName}_display`] || viewRecord[field.fieldName] }}</span>
           </template>
 
+          <!-- 状态徽标字段：图标+颜色，只读 -->
+          <template v-else-if="field.controlType === 'statusBadge'">
+            <span
+              class="status-badge-cell"
+              :style="{ color: viewStatusBadgeOption(field)?.color }"
+            >
+              <el-icon
+                v-if="viewStatusBadgeOption(field)?.icon"
+                :class="{ 'status-badge-spin': viewStatusBadgeOption(field)?.animated }"
+              >
+                <component :is="statusBadgeIconComp(viewStatusBadgeOption(field)!.icon)" />
+              </el-icon>
+              <span>{{ formatViewValue(field) }}</span>
+            </span>
+          </template>
+
           <!-- 选项类字段：显示标签 -->
           <template v-else-if="['select', 'radio'].includes(field.controlType)">
             {{ formatViewValue(field) }}
@@ -914,10 +930,11 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, nextTick, onActivated, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, nextTick, onActivated, onDeactivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
+import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
@@ -937,6 +954,7 @@ import { searchModeTransition, type SearchMode } from './searchMode'
 import { isVersionConflict, conflictMessage } from './conflict'
 import { isPreviewable, fileTypeIcon } from '@/utils/filePreview'
 import { authedDataFileUrl } from '@/api/dataFiles'
+import { useStatusBadgePolling } from '@/composables/useStatusBadgePolling'
 
 // ==================== Props ====================
 
@@ -1319,6 +1337,14 @@ const pageFields = computed<FieldConfig[]>(() => {
   return pageConfigStore.getPageFields(pageId.value)
 })
 
+/**
+ * statusBadge 字段的页面级轮询：只要当前页数据里还有非终态行，就定时重新拉取整页数据
+ */
+const statusBadgePolling = useStatusBadgePolling({
+  fields: pageFields,
+  onRefresh: loadPageData,
+})
+
 const hasReferenceFields = computed<boolean>(() =>
   (pageConfig.value?.fields ?? []).some((f) => f.controlType === 'quoteSelect' || f.controlType === 'reference'),
 )
@@ -1621,8 +1647,23 @@ function handleFilterChange(filters: Record<string, { value: any; value2?: any; 
 function formatViewValue(field: FieldConfig): string {
   const value = viewRecord.value[field.fieldName]
   if (value === null || value === undefined || value === '') return '-'
+  if (field.controlType === 'statusBadge') {
+    return viewStatusBadgeOption(field)?.label || String(value)
+  }
   const opt = field.options?.find(o => o.value === value)
   return opt?.label || String(value)
+}
+
+/**
+ * "查看记录"弹窗里取 statusBadge 字段当前值对应的选项配置
+ */
+function viewStatusBadgeOption(field: FieldConfig) {
+  const value = viewRecord.value[field.fieldName]
+  return field.statusBadgeConfig?.options.find(o => o.value === value)
+}
+
+function statusBadgeIconComp(name: string) {
+  return (ElIconsAll as Record<string, unknown>)[name]
 }
 
 /**
@@ -1669,6 +1710,15 @@ async function loadPageData(): Promise<void> {
     totalCount.value = result.total
     // 加载当前分支信息
     await loadCurrentBranch()
+    // "查看记录"弹窗打开时，用刷新后的数据同步一份（statusBadge 轮询场景下弹窗内容也要跟着更新）
+    if (viewDialogVisible.value && viewRecord.value?.id) {
+      const fresh = result.data.find((r: DynamicRecord) => r.id === viewRecord.value.id)
+      if (fresh) {
+        viewRecord.value = { ...fresh }
+      }
+    }
+    // 有非终态 statusBadge 行时安排下一次轮询刷新，否则停止
+    statusBadgePolling.evaluateAndSchedule(result.data)
   } catch (error) {
     console.error('加载数据失败:', error)
     ElMessage.error('加载数据失败')
@@ -2520,6 +2570,9 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
       const refreshed = await pageConfigStore.refreshSingleRecord(pageId.value, savedRecordId)
       if (refreshed) {
         tableData.value = [...pageConfigStore.getCachedPageData(pageId.value)]
+        // 智能刷新绕过了 loadPageData，statusBadge 轮询判定要在这里补一次，
+        // 否则新增/编辑出一条非终态状态记录后，轮询不会启动/重新调度
+        statusBadgePolling.evaluateAndSchedule(tableData.value)
       } else {
         // 刷新单条失败，回退到全量加载
         await loadPageData()
@@ -3087,6 +3140,7 @@ async function loadPageDataWithLocate(targetId: string): Promise<void> {
       tableData.value = result.data
       totalCount.value = result.total
       currentPage.value = result.locatedPage
+      statusBadgePolling.evaluateAndSchedule(result.data)
       await highlightRecord(targetId)
       return
     }
@@ -3105,6 +3159,7 @@ async function loadPageDataWithLocate(targetId: string): Promise<void> {
         tableData.value = retryResult.data
         totalCount.value = retryResult.total
         currentPage.value = retryResult.locatedPage
+        statusBadgePolling.evaluateAndSchedule(retryResult.data)
         await highlightRecord(targetId)
         ElMessage.info('已临时清除筛选条件以定位记录')
         return
@@ -3305,6 +3360,10 @@ onActivated(async () => {
   } catch {
     allExportScripts.value = []
   }
+})
+
+onDeactivated(() => {
+  statusBadgePolling.stop()
 })
 </script>
 
@@ -3670,6 +3729,21 @@ html.dark .dynamic-page :deep(.highlight-flash) {
   &:hover {
     text-decoration: underline;
   }
+}
+
+.status-badge-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-badge-spin {
+  animation: status-badge-rotate 1.2s linear infinite;
+}
+
+@keyframes status-badge-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .view-textarea {

@@ -29,6 +29,7 @@ export type ControlType =
   | 'richText'      // 富文本编辑器
   | 'markdown'      // Markdown 编辑器（前端渲染）
   | 'compositeText' // 组合文本（自动拼接其他字段值）
+  | 'statusBadge'   // 状态徽标（只读，图标+颜色展示离散阶段，第三方系统异步回写）
 
 /**
  * 控件类型配置
@@ -54,7 +55,8 @@ export const CONTROL_TYPE_OPTIONS: { label: string; value: ControlType }[] = [
   { label: '自动时间戳', value: 'autoTimestamp' },
   { label: '自增序列', value: 'autoSequence' },
   { label: '引用选择', value: 'quoteSelect' },
-  { label: '组合文本', value: 'compositeText' }
+  { label: '组合文本', value: 'compositeText' },
+  { label: '状态徽标', value: 'statusBadge' }
 ]
 
 /**
@@ -143,6 +145,40 @@ export interface CompositeTextConfig {
 }
 
 /**
+ * 状态徽标选项接口
+ *
+ * @property value - 选项值（与字段实际存储值一致）
+ * @property label - 显示文本
+ * @property icon - Element Plus 图标名
+ * @property color - 图标/文字颜色（十六进制），不填用默认灰
+ * @property animated - 是否持续旋转动画（表示"进行中"）
+ * @property terminal - 是否终态：到达后前端停止轮询、后端超时任务跳过
+ */
+export interface StatusBadgeOption {
+  value: string
+  label: string
+  icon: string
+  color?: string
+  animated?: boolean
+  terminal?: boolean
+}
+
+/**
+ * 状态徽标配置接口
+ *
+ * @property options - 各阶段选项列表
+ * @property pollIntervalSec - 轮询间隔（秒），默认 5
+ * @property timeoutSec - 超时阈值（秒），不填则不启用超时兜底
+ * @property timeoutValue - 超时后写入的选项值，必须是 options 里某个 value
+ */
+export interface StatusBadgeConfig {
+  options: StatusBadgeOption[]
+  pollIntervalSec?: number
+  timeoutSec?: number
+  timeoutValue?: string
+}
+
+/**
  * 验证规则接口
  *
  * 定义字段的验证规则
@@ -223,6 +259,7 @@ export interface FieldConfig {
   quoteConfig?: QuoteConfig
   workflowConfig?: WorkflowConfig
   compositeTextConfig?: CompositeTextConfig
+  statusBadgeConfig?: StatusBadgeConfig
 }
 
 /**
@@ -248,6 +285,7 @@ export interface FieldFormData {
   quoteConfig?: QuoteConfig
   workflowConfig?: WorkflowConfig
   compositeTextConfig?: CompositeTextConfig
+  statusBadgeConfig: StatusBadgeConfig
 }
 
 /**
@@ -272,6 +310,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     referenceConfig: { targetCollection: '', displayField: '', inheritFields: [] },
     sequenceConfig: { prefix: '', max: 999 },
     quoteConfig: { targetCollection: '', displayField: '' },
-    compositeTextConfig: { sourceFields: [], separator: ' - ' }
+    compositeTextConfig: { sourceFields: [], separator: ' - ' },
+    statusBadgeConfig: { options: [], pollIntervalSec: 5 }
   }
 }

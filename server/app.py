@@ -116,6 +116,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.ai_scan_scheduler import start_scan_scheduler
     start_scan_scheduler(app)
 
+    # Start statusBadge timeout fallback scheduler
+    from utils.status_badge_timeout_scheduler import start_status_badge_timeout_scheduler
+    start_status_badge_timeout_scheduler(app)
+
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a
     # slow outbound call (AI query, webhook, ETL) no longer blocks the whole
