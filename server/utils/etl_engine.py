@@ -213,6 +213,14 @@ def _step_file_upload(config, context, conn):
     else:
         raise ValueError(f'不支持的文件格式: {ext}')
 
+    # Excel 的日期列 pandas 会自动解析成 Timestamp，Timestamp 不是合法 JSON 类型，
+    # 后续 save_to_collection 用 psycopg2.extras.Json 写库时会针对该记录整条失败
+    # （静默失败：不报错，只是这条记录不落库）。转成字符串，NaT 会变成 NaN，
+    # 交给下面既有的 NaN→None 那一步统一处理。
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+
     # NaN（空单元格）转 None，否则写入 dynamic_data 时 JSON 序列化会产出非法值
     # 先转为 object dtype 确保 None 不会被转回 NaN
     df = df.astype(object).where(pd.notnull(df), None)

@@ -9,6 +9,8 @@ import os
 import pytest
 from unittest.mock import MagicMock
 import csv
+import json
+import datetime
 import tempfile
 import os as _os
 from openpyxl import Workbook
@@ -160,6 +162,29 @@ class TestFileUpload:
             assert ctx['records'][0]['name'] == '张三'
             assert ctx['records'][0]['age'] == 25
             assert ctx['records'][1]['name'] == '李四'
+        finally:
+            _os.remove(path)
+
+    @pytest.mark.filterwarnings('ignore::DeprecationWarning')
+    def test_xlsx_date_column_is_json_serializable(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['name', 'joined_at'])
+        ws.append(['张三', datetime.date(2024, 1, 15)])
+        ws.append(['李四', datetime.datetime(2024, 2, 20, 10, 30, 0)])
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+            path = f.name
+        wb.save(path)
+        try:
+            mock_conn = self._mock_conn_for_file('数据.xlsx', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn)
+            assert len(ctx['records']) == 2
+            for rec in ctx['records']:
+                assert isinstance(rec['joined_at'], str)
+                # 不带 default= 参数：如果修复无效，Timestamp/datetime 会让这里直接抛错，
+                # 和真实的 psycopg2.extras.Json(record) 写库路径一样会静默失败。
+                json.dumps(rec)
         finally:
             _os.remove(path)
 
