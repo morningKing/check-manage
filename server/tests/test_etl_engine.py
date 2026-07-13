@@ -142,6 +142,7 @@ class TestFileUpload:
         finally:
             _os.remove(path)
 
+    @pytest.mark.filterwarnings('ignore::DeprecationWarning')
     def test_parses_xlsx(self):
         wb = Workbook()
         ws = wb.active

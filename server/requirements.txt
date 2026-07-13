@@ -29,6 +29,7 @@ chromadb>=0.5.0
 pandas>=2.0.0             # preinjected as pd in script_runner
 numpy>=1.24.0             # preinjected as np in script_runner
 openpyxl>=3.1.0           # .xlsx export for operation_logs / data_export
+xlrd>=2.0.0               # .xls (legacy Excel) read support for pandas.read_excel — openpyxl only covers .xlsx
 
 # --- Testing ---
 pytest>=7.4.0
