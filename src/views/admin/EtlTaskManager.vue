@@ -677,6 +677,7 @@ function handleEtlFileExceed(files: File[]): void {
   const file = files[0] as UploadRawFile
   file.uid = genFileId()
   etlUploadRef.value?.handleStart(file)
+  etlUploadRef.value?.submit()
 }
 
 function beforeEtlFileUpload(file: File): boolean {
