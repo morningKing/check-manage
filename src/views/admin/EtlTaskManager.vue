@@ -334,8 +334,11 @@
           <template v-if="editingStep.type === 'file_upload'">
             <el-form-item label="数据文件">
               <el-upload
+                ref="etlUploadRef"
                 :limit="1"
+                :file-list="[]"
                 :show-file-list="false"
+                :on-exceed="handleEtlFileExceed"
                 :before-upload="beforeEtlFileUpload"
                 :http-request="handleEtlFileUpload"
                 accept=".xlsx,.xls,.csv"
@@ -463,7 +466,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage } from 'element-plus'
+import { ElMessage, genFileId } from 'element-plus'
 import {
   Plus, Edit, Delete, Top, Bottom, Right,
   Download, Document, Promotion, Switch, Filter, Upload, UploadFilled,
@@ -484,7 +487,7 @@ import {
   uploadEtlFile,
 } from '@/api/etl'
 import type { EtlTask, EtlStep, EtlRunResult, EtlLog } from '@/types'
-import type { UploadRequestOptions } from 'element-plus'
+import type { UploadInstance, UploadRawFile, UploadRequestOptions } from 'element-plus'
 
 // ==================== CodeMirror ====================
 
@@ -667,6 +670,15 @@ function generateStepId(): string {
   return `step-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 }
 
+const etlUploadRef = ref<UploadInstance>()
+
+function handleEtlFileExceed(files: File[]): void {
+  etlUploadRef.value?.clearFiles()
+  const file = files[0] as UploadRawFile
+  file.uid = genFileId()
+  etlUploadRef.value?.handleStart(file)
+}
+
 function beforeEtlFileUpload(file: File): boolean {
   const ext = file.name.toLowerCase().split('.').pop() || ''
   if (!['xlsx', 'xls', 'csv'].includes(ext)) {
@@ -688,6 +700,7 @@ async function handleEtlFileUpload(options: UploadRequestOptions): Promise<void>
   } catch (err: any) {
     if (options.onError) options.onError(err)
     ElMessage.error(err?.message || '上传失败')
+    throw err
   }
 }
 
