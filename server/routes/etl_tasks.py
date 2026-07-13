@@ -7,7 +7,7 @@ ETL 任务管理路由
 - 执行日志查询
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import require_permission
 from utils.operation_log import log_operation
@@ -59,6 +59,28 @@ def log_row_to_dict(row):
 
 TASK_COLS = 'id, name, description, steps, enabled, last_run_at, last_run_status, created_at, updated_at'
 LOG_COLS = 'id, task_id, task_name, status, started_at, finished_at, total_records, success_count, error_count, step_results, error_detail'
+
+ETL_FILE_UPLOAD_EXTENSIONS = {'csv', 'xlsx', 'xls'}
+
+
+@etl_tasks_bp.route('/etlTasks/files/upload', methods=['POST'])
+@require_permission('admin.etl_tasks')
+def upload_etl_file():
+    """file_upload 步骤专用的文件上传：落到 data_files 表 + 磁盘（复用既有
+    存储 helper），权限门禁与本蓝图其余路由一致（admin.etl_tasks），而非
+    /data-files/upload 那套按数据页 CRUD 权限判断的模型。"""
+    f = request.files.get('file')
+    if not f or not f.filename:
+        return jsonify({'error': 'file required'}), 400
+    ext = f.filename.lower().rsplit('.', 1)[-1] if '.' in f.filename else ''
+    if ext not in ETL_FILE_UPLOAD_EXTENSIONS:
+        return jsonify({'error': f'不支持的文件格式: .{ext}（仅支持 csv/xlsx/xls）'}), 400
+
+    from routes.data_files import save_data_file
+    meta, err = save_data_file(f, uploaded_by=g.current_user['userId'])
+    if err:
+        return err
+    return jsonify(meta), 201
 
 
 @etl_tasks_bp.route('/etlTasks', methods=['GET'])

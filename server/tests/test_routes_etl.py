@@ -11,6 +11,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from io import BytesIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -163,4 +164,41 @@ class TestDevRoleAccess:
         dev_token = create_token({'id': 'u2', 'username': 'dev', 'role': 'developer'})
         headers = {'Authorization': f'Bearer {dev_token}'}
         resp = client.get('/etlTasks', headers=headers)
+        assert resp.status_code == 403
+
+
+class TestUploadEtlFile:
+    def test_missing_file(self, setup):
+        client, _, _, headers = setup
+        resp = client.post('/etlTasks/files/upload', data={}, content_type='multipart/form-data', headers=headers)
+        assert resp.status_code == 400
+
+    def test_unsupported_extension(self, setup):
+        client, _, _, headers = setup
+        data = {'file': (BytesIO(b'hello'), 'notes.txt')}
+        resp = client.post('/etlTasks/files/upload', data=data, content_type='multipart/form-data', headers=headers)
+        assert resp.status_code == 400
+        assert '不支持的文件格式' in resp.get_json()['error']
+
+    def test_uploads_csv(self, setup):
+        client, _, _, headers = setup
+        with patch('routes.data_files.save_data_file') as mock_save:
+            mock_save.return_value = (
+                {'id': 'df-1', 'name': 'data.csv', 'size': 10, 'mimeType': 'text/csv',
+                 'url': '/api/data-files/df-1/download'},
+                None,
+            )
+            data = {'file': (BytesIO(b'name,age\n\xe5\xbc\xa0\xe4\xb8\x89,25'), 'data.csv')}
+            resp = client.post('/etlTasks/files/upload', data=data, content_type='multipart/form-data', headers=headers)
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body['id'] == 'df-1'
+        assert body['name'] == 'data.csv'
+
+    def test_unauthorized_role(self, setup):
+        client, _, _, _ = setup
+        dev_token = create_token({'id': 'u2', 'username': 'dev', 'role': 'developer'})
+        headers = {'Authorization': f'Bearer {dev_token}'}
+        data = {'file': (BytesIO(b'a,b\n1,2'), 'data.csv')}
+        resp = client.post('/etlTasks/files/upload', data=data, content_type='multipart/form-data', headers=headers)
         assert resp.status_code == 403
