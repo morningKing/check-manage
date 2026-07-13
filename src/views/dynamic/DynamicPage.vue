@@ -932,7 +932,7 @@
  */
 import { ref, computed, watch, nextTick, onActivated, onDeactivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElLoading } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
@@ -2770,6 +2770,9 @@ async function handleFileSelected(e: Event): Promise<void> {
   // 重置 input 以便下次选同一文件仍然触发
   input.value = ''
 
+  // 解析在 Web Worker 里跑（见 utils/excel.ts），不会冻结页面；但大文件
+  // 解析本身仍需要真实耗时，这里显式给个 loading，避免用户以为点击没反应
+  const loading = ElLoading.service({ text: '正在解析文件，请稍候…', lock: true })
   try {
     const isJson = file.name.toLowerCase().endsWith('.json')
     const records = isJson
@@ -2779,9 +2782,12 @@ async function handleFileSelected(e: Event): Promise<void> {
       ElMessage.warning('文件中没有可导入的数据')
       return
     }
+    loading.close()
     await doImport(records)
   } catch (error) {
     ElMessage.error('文件解析失败，请检查文件格式')
+  } finally {
+    loading.close()
   }
 }
 

@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   getExportableFields,
-  parseImportFile,
-  parseJsonImportFile,
   exportToExcel,
   generateImportTemplate,
 } from '../excel'
+import { parseWorkbookBuffer, parseJsonText } from '../excelParseCore'
 import type { FieldConfig, ControlType } from '@/types'
 
 // Mock xlsx library
@@ -250,7 +249,11 @@ describe('Excel Utils', () => {
     })
   })
 
-  describe('parseImportFile', () => {
+  // parseImportFile/parseJsonImportFile（src/utils/excel.ts）现在只是
+  // 转发给 Web Worker 的胶水代码（见 workers/excelImportWorker.ts，避免
+  // 大文件解析冻结页面）——Worker 在 jsdom 下跑不起来，实际解析逻辑测的是
+  // excelParseCore.ts 里的同步纯函数 parseWorkbookBuffer/parseJsonText。
+  describe('parseWorkbookBuffer', () => {
     const mockRead = vi.mocked(XLSX.read)
     const mockSheetToJson = vi.mocked(XLSX.utils.sheet_to_json)
 
@@ -258,7 +261,7 @@ describe('Excel Utils', () => {
       vi.clearAllMocks()
     })
 
-    it('解析正常 Excel 文件', async () => {
+    it('解析正常 Excel 文件', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
         makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2 }),
@@ -277,8 +280,7 @@ describe('Excel Utils', () => {
         ['李四', 30],
       ])
 
-      const file = new File([''], 'test.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].name).toBe('张三')
@@ -288,7 +290,7 @@ describe('Excel Utils', () => {
       expect(result[1].age).toBe('30')
     })
 
-    it('空文件返回空数组', async () => {
+    it('空文件返回空数组', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
@@ -302,13 +304,12 @@ describe('Excel Utils', () => {
       mockRead.mockReturnValue(mockWorkbook as any)
       mockSheetToJson.mockReturnValue([['名称']])
 
-      const file = new File([''], 'empty.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toEqual([])
     })
 
-    it('支持字段名作为表头', async () => {
+    it('支持字段名作为表头', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
@@ -325,14 +326,13 @@ describe('Excel Utils', () => {
         ['张三'],
       ])
 
-      const file = new File([''], 'test.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].name).toBe('张三')
     })
 
-    it('跳过空行', async () => {
+    it('跳过空行', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
@@ -351,15 +351,14 @@ describe('Excel Utils', () => {
         ['李四'],
       ])
 
-      const file = new File([''], 'test.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].name).toBe('张三')
       expect(result[1].name).toBe('李四')
     })
 
-    it('select 字段标签转值', async () => {
+    it('select 字段标签转值', () => {
       const fields: FieldConfig[] = [
         makeField({
           fieldName: 'status',
@@ -386,15 +385,14 @@ describe('Excel Utils', () => {
         ['禁用'],
       ])
 
-      const file = new File([''], 'test.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].status).toBe('active')
       expect(result[1].status).toBe('inactive')
     })
 
-    it('multiSelect 字段标签转值', async () => {
+    it('multiSelect 字段标签转值', () => {
       const fields: FieldConfig[] = [
         makeField({
           fieldName: 'tags',
@@ -420,53 +418,37 @@ describe('Excel Utils', () => {
         ['标签A、标签B'],
       ])
 
-      const file = new File([''], 'test.xlsx')
-      const result = await parseImportFile(file, fields)
+      const result = parseWorkbookBuffer(new ArrayBuffer(0), fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].tags).toEqual(['a', 'b'])
     })
 
-    it('文件读取失败抛出错误', async () => {
+    it('XLSX.read 抛出的错误会同步传播（worker 里会被捕获转成 reject）', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
 
-      const file = new File([''], 'test.xlsx')
+      mockRead.mockImplementation(() => {
+        throw new Error('文件已损坏')
+      })
 
-      // 模拟 FileReader 错误
-      const originalFileReader = globalThis.FileReader
-      class MockFileReader {
-        onerror: (() => void) | null = null
-        readAsArrayBuffer() {
-          setTimeout(() => this.onerror?.(), 0)
-        }
-      }
-      globalThis.FileReader = MockFileReader as any
-
-      await expect(parseImportFile(file, fields)).rejects.toThrow('文件读取失败')
-
-      globalThis.FileReader = originalFileReader
+      expect(() => parseWorkbookBuffer(new ArrayBuffer(0), fields)).toThrow('文件已损坏')
     })
   })
 
-  describe('parseJsonImportFile', () => {
-    function makeJsonFile(data: any): File {
-      const content = JSON.stringify(data)
-      return new File([content], 'test.json', { type: 'application/json' })
-    }
-
-    it('解析正常 JSON 文件（key 为字段标签）', async () => {
+  describe('parseJsonText', () => {
+    it('解析正常 JSON 文件（key 为字段标签）', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
         makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2 }),
       ]
 
-      const file = makeJsonFile([
+      const text = JSON.stringify([
         { '名称': '张三', '年龄': 25 },
         { '名称': '李四', '年龄': 30 },
       ])
-      const result = await parseJsonImportFile(file, fields)
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].name).toBe('张三')
@@ -475,40 +457,47 @@ describe('Excel Utils', () => {
       expect(result[1].age).toBe(30)
     })
 
-    it('支持 fieldName 作为 key', async () => {
+    it('支持 fieldName 作为 key', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
 
-      const file = makeJsonFile([{ name: '张三' }])
-      const result = await parseJsonImportFile(file, fields)
+      const text = JSON.stringify([{ name: '张三' }])
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].name).toBe('张三')
     })
 
-    it('空数组返回空', async () => {
+    it('空数组返回空', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
 
-      const file = makeJsonFile([])
-      const result = await parseJsonImportFile(file, fields)
+      const result = parseJsonText(JSON.stringify([]), fields)
 
       expect(result).toEqual([])
     })
 
-    it('非数组 JSON 抛出错误', async () => {
+    it('非数组 JSON 抛出错误', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
 
-      const file = makeJsonFile({ name: '张三' })
+      const text = JSON.stringify({ name: '张三' })
 
-      await expect(parseJsonImportFile(file, fields)).rejects.toThrow('JSON 文件内容必须是数组')
+      expect(() => parseJsonText(text, fields)).toThrow('JSON 文件内容必须是数组')
     })
 
-    it('select 字段标签转值', async () => {
+    it('语法错误的 JSON 抛出错误', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      expect(() => parseJsonText('{not valid json', fields)).toThrow()
+    })
+
+    it('select 字段标签转值', () => {
       const fields: FieldConfig[] = [
         makeField({
           fieldName: 'status',
@@ -522,15 +511,15 @@ describe('Excel Utils', () => {
         }),
       ]
 
-      const file = makeJsonFile([{ '状态': '启用' }, { '状态': '禁用' }])
-      const result = await parseJsonImportFile(file, fields)
+      const text = JSON.stringify([{ '状态': '启用' }, { '状态': '禁用' }])
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].status).toBe('active')
       expect(result[1].status).toBe('inactive')
     })
 
-    it('multiSelect 字段 — 数组值中 label 转 value', async () => {
+    it('multiSelect 字段 — 数组值中 label 转 value', () => {
       const fields: FieldConfig[] = [
         makeField({
           fieldName: 'tags',
@@ -544,14 +533,14 @@ describe('Excel Utils', () => {
         }),
       ]
 
-      const file = makeJsonFile([{ '标签': ['标签A', '标签B'] }])
-      const result = await parseJsonImportFile(file, fields)
+      const text = JSON.stringify([{ '标签': ['标签A', '标签B'] }])
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].tags).toEqual(['a', 'b'])
     })
 
-    it('multiSelect 字段 — 字符串值分割转换', async () => {
+    it('multiSelect 字段 — 字符串值分割转换', () => {
       const fields: FieldConfig[] = [
         makeField({
           fieldName: 'tags',
@@ -565,64 +554,43 @@ describe('Excel Utils', () => {
         }),
       ]
 
-      const file = makeJsonFile([{ '标签': '标签A、标签B' }])
-      const result = await parseJsonImportFile(file, fields)
+      const text = JSON.stringify([{ '标签': '标签A、标签B' }])
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].tags).toEqual(['a', 'b'])
     })
 
-    it('number 字段保留数字类型', async () => {
+    it('number 字段保留数字类型', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'count', label: '数量', controlType: 'number', order: 1 }),
       ]
 
-      const file = makeJsonFile([{ '数量': 42 }])
-      const result = await parseJsonImportFile(file, fields)
+      const text = JSON.stringify([{ '数量': 42 }])
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(1)
       expect(result[0].count).toBe(42)
       expect(typeof result[0].count).toBe('number')
     })
 
-    it('跳过空值对象', async () => {
+    it('跳过空值对象', () => {
       const fields: FieldConfig[] = [
         makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
       ]
 
-      const file = makeJsonFile([
+      const text = JSON.stringify([
         { '名称': '张三' },
         { '名称': '' },
         { '名称': null },
         { '未知字段': '值' },
         { '名称': '李四' },
       ])
-      const result = await parseJsonImportFile(file, fields)
+      const result = parseJsonText(text, fields)
 
       expect(result).toHaveLength(2)
       expect(result[0].name).toBe('张三')
       expect(result[1].name).toBe('李四')
-    })
-
-    it('文件读取失败抛出错误', async () => {
-      const fields: FieldConfig[] = [
-        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
-      ]
-
-      const file = new File([''], 'test.json')
-
-      const originalFileReader = globalThis.FileReader
-      class MockFileReader {
-        onerror: (() => void) | null = null
-        readAsText() {
-          setTimeout(() => this.onerror?.(), 0)
-        }
-      }
-      globalThis.FileReader = MockFileReader as any
-
-      await expect(parseJsonImportFile(file, fields)).rejects.toThrow('文件读取失败')
-
-      globalThis.FileReader = originalFileReader
     })
   })
 })

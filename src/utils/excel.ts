@@ -9,6 +9,10 @@
 
 import * as XLSX from 'xlsx'
 import type { FieldConfig } from '@/types'
+import { getExportableFields } from './excelParseCore'
+import type { ImportWorkerRequest, ImportWorkerResponse } from '@/workers/excelImportWorker'
+
+export { getExportableFields }
 
 /**
  * 关联字段显示名称映射
@@ -16,20 +20,6 @@ import type { FieldConfig } from '@/types'
  * key: fieldName, value: Map<recordId, displayName>
  */
 export type RelationDisplayMap = Record<string, Map<string, string>>
-
-/**
- * 可导入导出的字段类型（排除文件、图片、关联）
- */
-const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect', 'richText', 'compositeText']
-
-/**
- * 筛选可导入导出的字段
- */
-export function getExportableFields(fields: FieldConfig[]): FieldConfig[] {
-  return fields
-    .filter((f) => EXPORTABLE_TYPES.includes(f.controlType) && !f.hidden)
-    .sort((a, b) => a.order - b.order)
-}
 
 /**
  * 将选项值转为显示标签
@@ -89,55 +79,6 @@ function valueToLabel(value: any, field: FieldConfig, record?: Record<string, an
   }
 
   return String(value)
-}
-
-/**
- * 将显示标签转回选项值
- */
-function labelToValue(label: string, field: FieldConfig): any {
-  if (!label) {
-    if (['multiSelect', 'checkbox', 'relation', 'quoteSelect'].includes(field.controlType)) return []
-    return ''
-  }
-
-  if (['select', 'radio'].includes(field.controlType)) {
-    const opt = field.options?.find((o) => o.label === label || o.value === label)
-    return opt?.value || label
-  }
-
-  if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-    const labels = label.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
-    return labels.map((l) => {
-      const opt = field.options?.find((o) => o.label === l || o.value === l)
-      return opt?.value || l
-    })
-  }
-
-  if (field.controlType === 'relation') {
-    return label.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
-  }
-
-  if (field.controlType === 'quoteSelect') {
-    return label.split(/[、,，]/).map((s) => s.trim()).filter(Boolean)
-  }
-
-  if (field.controlType === 'autoTimestamp') {
-    return null
-  }
-
-  if (field.controlType === 'autoSequence') {
-    return null
-  }
-
-  if (field.controlType === 'compositeText') {
-    return null
-  }
-
-  if (field.controlType === 'richText') {
-    return label
-  }
-
-  return label
 }
 
 /**
@@ -246,8 +187,70 @@ export function generateImportTemplate(
   XLSX.writeFile(wb, `${filename}.xlsx`)
 }
 
+// ==================== 导入文件解析：跑在 Web Worker 里 ====================
+// 100MB 级别的文件在主线程同步解析（XLSX.read/JSON.parse 都是阻塞调用）会把
+// 页面冻结几十秒到几分钟；实际的解析逻辑现在住在 workers/excelImportWorker.ts
+// （同步纯函数版本见 excelParseCore.ts），这里只是发消息 + 等回复的胶水代码，
+// 对外的函数签名和之前完全一样，调用方（DynamicPage.vue/ImportTab.vue）不用改。
+
+let importWorker: Worker | null = null
+let nextRequestId = 0
+const pendingRequests = new Map<
+  number,
+  { resolve: (records: Record<string, any>[]) => void; reject: (err: Error) => void }
+>()
+
+function getImportWorker(): Worker {
+  if (importWorker) return importWorker
+
+  const worker = new Worker(new URL('../workers/excelImportWorker.ts', import.meta.url), {
+    type: 'module',
+  })
+  worker.onmessage = (e: MessageEvent<ImportWorkerResponse>) => {
+    console.log('[importWorker] onmessage', e.data)
+    const msg = e.data
+    const pending = pendingRequests.get(msg.id)
+    if (!pending) return
+    pendingRequests.delete(msg.id)
+    if (msg.ok) {
+      pending.resolve(msg.records)
+    } else {
+      pending.reject(new Error(msg.error))
+    }
+  }
+  worker.onerror = (ev) => {
+    console.error('[importWorker] onerror', ev.message, ev.filename, ev.lineno, ev.error)
+    // worker 自身崩溃（比如加载失败）：让所有还在等的请求都失败，
+    // 不然调用方会一直悬挂在 await 上，看起来像卡死
+    for (const pending of pendingRequests.values()) {
+      pending.reject(new Error('文件解析出错'))
+    }
+    pendingRequests.clear()
+  }
+  importWorker = worker
+  return worker
+}
+
+function runImportInWorker(
+  mode: ImportWorkerRequest['mode'],
+  file: File,
+  fields: FieldConfig[]
+): Promise<Record<string, any>[]> {
+  return new Promise((resolve, reject) => {
+    const worker = getImportWorker()
+    const id = ++nextRequestId
+    pendingRequests.set(id, { resolve, reject })
+    // fields 来自 Pinia store，是 Vue reactive() 包出来的 Proxy；结构化克隆
+    // 算法认不出 Proxy，postMessage 会直接同步抛 DataCloneError。JSON 往返
+    // 一圈把它变回纯对象（FieldConfig 本身就是可 JSON 序列化的数据，没有
+    // 函数/循环引用，这个转换是安全的）。
+    const plainFields = JSON.parse(JSON.stringify(fields)) as FieldConfig[]
+    worker.postMessage({ id, mode, file, fields: plainFields } satisfies ImportWorkerRequest)
+  })
+}
+
 /**
- * 解析导入的 Excel 文件
+ * 解析导入的 Excel 文件（在 Web Worker 里跑，不阻塞页面）
  *
  * @param file - 上传的文件
  * @param fields - 字段配置
@@ -257,78 +260,11 @@ export function parseImportFile(
   file: File,
   fields: FieldConfig[]
 ): Promise<Record<string, any>[]> {
-  const exportFields = getExportableFields(fields)
-
-  // 建立 label / fieldName → field 映射（同时支持两种表头格式）
-  const headerToField = new Map<string, FieldConfig>()
-  exportFields.forEach((f) => {
-    headerToField.set(f.label, f)
-    if (!headerToField.has(f.fieldName)) {
-      headerToField.set(f.fieldName, f)
-    }
-  })
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target!.result as ArrayBuffer)
-        const wb = XLSX.read(data, { type: 'array' })
-
-        // 读取第一个 sheet
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { header: 1 }) as any[][]
-
-        if (jsonData.length < 2) {
-          resolve([])
-          return
-        }
-
-        // 第一行是表头
-        const headerRow = jsonData[0].map(String)
-
-        // 匹配表头到字段
-        const colFieldMap: (FieldConfig | null)[] = headerRow.map((header) => {
-          return headerToField.get(header) || null
-        })
-
-        // 解析数据行
-        const records: Record<string, any>[] = []
-        for (let i = 1; i < jsonData.length; i++) {
-          const row = jsonData[i]
-          if (!row || row.every((cell: any) => cell === null || cell === undefined || cell === '')) {
-            continue // 跳过空行
-          }
-
-          const record: Record<string, any> = {}
-          let hasData = false
-
-          colFieldMap.forEach((field, colIdx) => {
-            if (!field) return
-            const cellValue = row[colIdx]
-            if (cellValue !== null && cellValue !== undefined && cellValue !== '') {
-              record[field.fieldName] = labelToValue(String(cellValue), field)
-              hasData = true
-            }
-          })
-
-          if (hasData) {
-            records.push(record)
-          }
-        }
-
-        resolve(records)
-      } catch (err) {
-        reject(err)
-      }
-    }
-    reader.onerror = () => reject(new Error('文件读取失败'))
-    reader.readAsArrayBuffer(file)
-  })
+  return runImportInWorker('xlsx', file, fields)
 }
 
 /**
- * 解析导入的 JSON 文件
+ * 解析导入的 JSON 文件（在 Web Worker 里跑，不阻塞页面）
  *
  * @param file - 上传的文件
  * @param fields - 字段配置
@@ -338,76 +274,5 @@ export function parseJsonImportFile(
   file: File,
   fields: FieldConfig[]
 ): Promise<Record<string, any>[]> {
-  const exportFields = getExportableFields(fields)
-
-  // 建立 label / fieldName → field 映射（同时支持两种 key 格式）
-  const headerToField = new Map<string, FieldConfig>()
-  exportFields.forEach((f) => {
-    headerToField.set(f.label, f)
-    if (!headerToField.has(f.fieldName)) {
-      headerToField.set(f.fieldName, f)
-    }
-  })
-
-  const ARRAY_FIELD_TYPES = ['multiSelect', 'checkbox', 'relation', 'quoteSelect']
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const text = e.target!.result as string
-        const parsed = JSON.parse(text)
-
-        if (!Array.isArray(parsed)) {
-          throw new Error('JSON 文件内容必须是数组')
-        }
-
-        const records: Record<string, any>[] = []
-
-        for (const obj of parsed) {
-          if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
-
-          const record: Record<string, any> = {}
-          let hasData = false
-
-          for (const [key, value] of Object.entries(obj)) {
-            const field = headerToField.get(key)
-            if (!field) continue
-
-            if (value === null || value === undefined || value === '') continue
-
-            if (Array.isArray(value) && ARRAY_FIELD_TYPES.includes(field.controlType)) {
-              // 数组值：对 select 类字段做 label→value 映射
-              if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-                record[field.fieldName] = value.map((item) => {
-                  const opt = field.options?.find((o) => o.label === String(item) || o.value === String(item))
-                  return opt?.value || String(item)
-                })
-              } else {
-                // relation / quoteSelect — 保持字符串原样
-                record[field.fieldName] = value.map((item) => String(item))
-              }
-              hasData = true
-            } else if (typeof value === 'number' && field.controlType === 'number') {
-              record[field.fieldName] = value
-              hasData = true
-            } else {
-              record[field.fieldName] = labelToValue(String(value), field)
-              hasData = true
-            }
-          }
-
-          if (hasData) {
-            records.push(record)
-          }
-        }
-
-        resolve(records)
-      } catch (err) {
-        reject(err)
-      }
-    }
-    reader.onerror = () => reject(new Error('文件读取失败'))
-    reader.readAsText(file)
-  })
+  return runImportInWorker('json', file, fields)
 }
