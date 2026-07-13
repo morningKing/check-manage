@@ -330,6 +330,28 @@
             </el-form-item>
           </template>
 
+          <!-- 文件上传 -->
+          <template v-if="editingStep.type === 'file_upload'">
+            <el-form-item label="数据文件">
+              <el-upload
+                :limit="1"
+                :show-file-list="false"
+                :before-upload="beforeEtlFileUpload"
+                :http-request="handleEtlFileUpload"
+                accept=".xlsx,.xls,.csv"
+              >
+                <el-button type="primary">
+                  <el-icon><UploadFilled /></el-icon>
+                  {{ editingStep.config.fileName ? '重新上传' : '选择文件' }}
+                </el-button>
+              </el-upload>
+              <div v-if="editingStep.config.fileName" class="form-tip">
+                已上传：{{ editingStep.config.fileName }}（{{ formatFileSize(editingStep.config.fileSize) }}）
+              </div>
+              <div class="form-tip">支持 .xlsx / .xls / .csv，首行作为字段名。上传后固定绑定，之后每次运行都解析同一份文件</div>
+            </el-form-item>
+          </template>
+
           <!-- Python 脚本 -->
           <template v-if="editingStep.type === 'script'">
             <el-form-item label="脚本代码" class="code-form-item">
@@ -444,7 +466,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import {
   Plus, Edit, Delete, Top, Bottom, Right,
-  Download, Document, Promotion, Switch, Filter, Upload,
+  Download, Document, Promotion, Switch, Filter, Upload, UploadFilled,
   CircleCheckFilled, CircleCloseFilled,
 } from '@element-plus/icons-vue'
 import { Codemirror } from 'vue-codemirror'
@@ -459,8 +481,10 @@ import {
   deleteEtlTask,
   runEtlTask,
   getEtlLogs,
+  uploadEtlFile,
 } from '@/api/etl'
 import type { EtlTask, EtlStep, EtlRunResult, EtlLog } from '@/types'
+import type { UploadRequestOptions } from 'element-plus'
 
 // ==================== CodeMirror ====================
 
@@ -471,6 +495,7 @@ const cmExtensions = [python(), oneDark]
 const STEP_TYPES = [
   { value: 'http_request', label: 'HTTP 请求', icon: 'Download' },
   { value: 'json_input', label: 'JSON 输入', icon: 'Document' },
+  { value: 'file_upload', label: '文件上传', icon: 'UploadFilled' },
   { value: 'script', label: 'Python 脚本', icon: 'Promotion' },
   { value: 'field_mapping', label: '字段映射', icon: 'Switch' },
   { value: 'filter', label: '条件过滤', icon: 'Filter' },
@@ -480,6 +505,7 @@ const STEP_TYPES = [
 const STEP_ICONS: Record<string, any> = {
   http_request: Download,
   json_input: Document,
+  file_upload: UploadFilled,
   script: Promotion,
   field_mapping: Switch,
   filter: Filter,
@@ -489,6 +515,7 @@ const STEP_ICONS: Record<string, any> = {
 const STEP_COLORS: Record<string, string> = {
   http_request: '#409eff',
   json_input: '#67c23a',
+  file_upload: '#20a0ff',
   script: '#e6a23c',
   field_mapping: '#909399',
   filter: '#f56c6c',
@@ -577,6 +604,13 @@ function getStepTypeLabel(type: string) {
   return found ? found.label : type
 }
 
+function formatFileSize(bytes: number | null | undefined): string {
+  if (!bytes) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
 function getStepSummary(step: EtlStep): string {
   const c = step.config
   switch (step.type) {
@@ -584,6 +618,8 @@ function getStepSummary(step: EtlStep): string {
       return `${c.method || 'GET'} ${c.url || '(未配置)'}`
     case 'json_input':
       return c.data ? `${c.data.length} 字符 JSON` : '(未配置)'
+    case 'file_upload':
+      return c.fileName ? `${c.fileName}（${formatFileSize(c.fileSize)}）` : '(未上传文件)'
     case 'script':
       return c.script ? `Python 脚本 (${c.script.split('\n').length} 行)` : '(未配置)'
     case 'field_mapping': {
@@ -612,6 +648,8 @@ function createDefaultConfig(type: string): Record<string, any> {
       return { url: '', method: 'GET', headers: [], body: '', responsePath: '' }
     case 'json_input':
       return { data: '[\n  \n]' }
+    case 'file_upload':
+      return { fileId: null, fileName: null, fileSize: null }
     case 'script':
       return { script: '# records: list[dict] — 当前记录列表\n# 须设置 result 变量为转换后的列表\n\nresult = records\n' }
     case 'field_mapping':
@@ -627,6 +665,30 @@ function createDefaultConfig(type: string): Record<string, any> {
 
 function generateStepId(): string {
   return `step-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+}
+
+function beforeEtlFileUpload(file: File): boolean {
+  const ext = file.name.toLowerCase().split('.').pop() || ''
+  if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+    ElMessage.error('仅支持 .xlsx / .xls / .csv 文件')
+    return false
+  }
+  return true
+}
+
+async function handleEtlFileUpload(options: UploadRequestOptions): Promise<void> {
+  if (!editingStep.value) return
+  try {
+    const res = await uploadEtlFile(options.file as File)
+    editingStep.value.config.fileId = res.id
+    editingStep.value.config.fileName = res.name
+    editingStep.value.config.fileSize = res.size
+    if (options.onSuccess) options.onSuccess(res)
+    ElMessage.success('上传成功')
+  } catch (err: any) {
+    if (options.onError) options.onError(err)
+    ElMessage.error(err?.message || '上传失败')
+  }
 }
 
 // ==================== 数据加载 ====================
