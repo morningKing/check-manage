@@ -207,38 +207,15 @@ CREATE TABLE IF NOT EXISTS system_config (
 
 INSERT INTO system_config (id) VALUES (1) ON CONFLICT DO NOTHING;
 
--- ==================== home_widgets 表 ====================
-CREATE TABLE IF NOT EXISTS home_widgets (
-    id              VARCHAR(100) PRIMARY KEY,
-    widget_type     VARCHAR(50) NOT NULL,
-    title           VARCHAR(200),
-    content         JSONB,
-    enabled         BOOLEAN DEFAULT TRUE,
-    "order"         INTEGER DEFAULT 0,
-    visible_roles   JSONB DEFAULT '["admin","developer","guest"]',
-    layout_x        INTEGER NOT NULL DEFAULT 0,
-    layout_y        INTEGER NOT NULL DEFAULT 0,
-    layout_w        INTEGER NOT NULL DEFAULT 12,
-    layout_h        INTEGER NOT NULL DEFAULT 4,
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ DEFAULT NOW()
-);
-
--- 默认首页区块数据
-INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", layout_y) VALUES
-('welcome', 'welcome', '欢迎',
- '{"heading": "欢迎使用巡检用例管理系统", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
- true, 1, 0),
-('stats', 'stats', '系统概览',
- '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
- true, 2, 4),
-('quick-links', 'quick-links', '快捷入口',
- '{"links": [{"name": "菜单管理", "path": "/admin/menu", "icon": "Menu"}, {"name": "页面配置", "path": "/admin/page-config", "icon": "Files"}, {"name": "批量导出", "path": "", "icon": "Download", "action": "batchExport"}]}',
- true, 3, 8),
-('system-info', 'system-info', '系统说明',
- '{"markdown": "**技术栈：** Vue 3 + TypeScript + Element Plus + Pinia\\n\\n**主要功能：**\\n- 支持 1-3 级嵌套菜单配置\\n- 页面字段可视化配置\\n- 多种表单控件类型支持\\n- 动态数据页面渲染"}',
- true, 4, 12)
-ON CONFLICT (id) DO NOTHING;
+-- home_widgets 表：故意不在这里建。见下方"Migration: create home_widgets
+-- table if missing" + "Migration: add layout_x/y/w/h columns"——这两段
+-- guarded 迁移已经完整覆盖全新建表（带 layout 列 + 播种默认区块）和老库
+-- 补列两种场景。之前这里重复放了一份带 layout_y 的 CREATE TABLE IF NOT
+-- EXISTS + 无条件 INSERT：老库如果 home_widgets 表已存在但还没有
+-- layout_y 列（建表早于 layout 迁移上线），CREATE TABLE IF NOT EXISTS
+-- 是空操作，紧跟着的 INSERT 却直接报 "layout_y 字段不存在" 让整个
+-- init_db.py 在最开头就崩溃，后面那段本该补上 layout_y 列的迁移根本
+-- 没机会跑到。
 
 CREATE TABLE IF NOT EXISTS export_scripts (
     id              VARCHAR(100) PRIMARY KEY,
