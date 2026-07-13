@@ -84,13 +84,20 @@ function buildHeaderToField(fields: FieldConfig[]): Map<string, FieldConfig> {
 }
 
 /**
- * 解析 Excel 文件的字节内容（同步）
- *
- * @param buffer - 文件的 ArrayBuffer（调用方负责读取，worker 里用 file.arrayBuffer()）
- * @param fields - 字段配置
- * @returns 解析后的记录数组
+ * 已读取但尚未逐行处理的工作簿：XLSX.read + sheet_to_json + 表头匹配都是
+ * SheetJS 内部的整体操作，无法分片；分片处理的是这之后"每行 -> record"的
+ * 映射循环（见 processWorkbookRowRange），这部分对百万行文件才是可分片、
+ * 也值得分片的部分（worker 可以每处理一片就 postMessage 一次进度）。
  */
-export function parseWorkbookBuffer(buffer: ArrayBuffer, fields: FieldConfig[]): Record<string, any>[] {
+export interface WorkbookMeta {
+  colFieldMap: (FieldConfig | null)[]
+  dataRows: any[][] // 不含表头行
+}
+
+/**
+ * 读取 Excel 字节内容，解出表头映射和原始数据行（同步，不做逐行 record 映射）
+ */
+export function readWorkbookMeta(buffer: ArrayBuffer, fields: FieldConfig[]): WorkbookMeta {
   const headerToField = buildHeaderToField(fields)
 
   const data = new Uint8Array(buffer)
@@ -101,7 +108,7 @@ export function parseWorkbookBuffer(buffer: ArrayBuffer, fields: FieldConfig[]):
   const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { header: 1 }) as any[][]
 
   if (jsonData.length < 2) {
-    return []
+    return { colFieldMap: [], dataRows: [] }
   }
 
   // 第一行是表头
@@ -112,10 +119,19 @@ export function parseWorkbookBuffer(buffer: ArrayBuffer, fields: FieldConfig[]):
     return headerToField.get(header) || null
   })
 
-  // 解析数据行
+  return { colFieldMap, dataRows: jsonData.slice(1) }
+}
+
+/**
+ * 处理 [start, end) 范围内的数据行 -> record（同步纯函数，可分片调用）
+ */
+export function processWorkbookRowRange(meta: WorkbookMeta, start: number, end: number): Record<string, any>[] {
+  const { colFieldMap, dataRows } = meta
   const records: Record<string, any>[] = []
-  for (let i = 1; i < jsonData.length; i++) {
-    const row = jsonData[i]
+  const rangeEnd = Math.min(end, dataRows.length)
+
+  for (let i = start; i < rangeEnd; i++) {
+    const row = dataRows[i]
     if (!row || row.every((cell: any) => cell === null || cell === undefined || cell === '')) {
       continue // 跳过空行
     }
@@ -141,25 +157,52 @@ export function parseWorkbookBuffer(buffer: ArrayBuffer, fields: FieldConfig[]):
 }
 
 /**
- * 解析导入 JSON 文件的文本内容（同步）
+ * 解析 Excel 文件的字节内容（同步）
  *
- * @param text - 文件的文本内容
+ * @param buffer - 文件的 ArrayBuffer（调用方负责读取，worker 里用 file.arrayBuffer()）
  * @param fields - 字段配置
  * @returns 解析后的记录数组
  */
-export function parseJsonText(text: string, fields: FieldConfig[]): Record<string, any>[] {
-  const headerToField = buildHeaderToField(fields)
-  const ARRAY_FIELD_TYPES = ['multiSelect', 'checkbox', 'relation', 'quoteSelect']
+export function parseWorkbookBuffer(buffer: ArrayBuffer, fields: FieldConfig[]): Record<string, any>[] {
+  const meta = readWorkbookMeta(buffer, fields)
+  return processWorkbookRowRange(meta, 0, meta.dataRows.length)
+}
 
+const JSON_ARRAY_FIELD_TYPES = ['multiSelect', 'checkbox', 'relation', 'quoteSelect']
+
+/**
+ * JSON.parse 是整体操作、无法分片；分片处理的是这之后"每个数组元素 ->
+ * record"的映射循环（见 processJsonItemRange）。
+ */
+export interface JsonMeta {
+  headerToField: Map<string, FieldConfig>
+  items: any[]
+}
+
+/**
+ * 解析 JSON 文本为数组并建立表头映射（同步，不做逐条 record 映射）
+ */
+export function readJsonMeta(text: string, fields: FieldConfig[]): JsonMeta {
+  const headerToField = buildHeaderToField(fields)
   const parsed = JSON.parse(text)
 
   if (!Array.isArray(parsed)) {
     throw new Error('JSON 文件内容必须是数组')
   }
 
-  const records: Record<string, any>[] = []
+  return { headerToField, items: parsed }
+}
 
-  for (const obj of parsed) {
+/**
+ * 处理 [start, end) 范围内的数组元素 -> record（同步纯函数，可分片调用）
+ */
+export function processJsonItemRange(meta: JsonMeta, start: number, end: number): Record<string, any>[] {
+  const { headerToField, items } = meta
+  const records: Record<string, any>[] = []
+  const rangeEnd = Math.min(end, items.length)
+
+  for (let i = start; i < rangeEnd; i++) {
+    const obj = items[i]
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
 
     const record: Record<string, any> = {}
@@ -171,7 +214,7 @@ export function parseJsonText(text: string, fields: FieldConfig[]): Record<strin
 
       if (value === null || value === undefined || value === '') continue
 
-      if (Array.isArray(value) && ARRAY_FIELD_TYPES.includes(field.controlType)) {
+      if (Array.isArray(value) && JSON_ARRAY_FIELD_TYPES.includes(field.controlType)) {
         // 数组值：对 select 类字段做 label→value 映射
         if (['multiSelect', 'checkbox'].includes(field.controlType)) {
           record[field.fieldName] = value.map((item) => {
@@ -198,4 +241,16 @@ export function parseJsonText(text: string, fields: FieldConfig[]): Record<strin
   }
 
   return records
+}
+
+/**
+ * 解析导入 JSON 文件的文本内容（同步）
+ *
+ * @param text - 文件的文本内容
+ * @param fields - 字段配置
+ * @returns 解析后的记录数组
+ */
+export function parseJsonText(text: string, fields: FieldConfig[]): Record<string, any>[] {
+  const meta = readJsonMeta(text, fields)
+  return processJsonItemRange(meta, 0, meta.items.length)
 }

@@ -16,7 +16,11 @@ export interface ImportPageParams {
   onProgress?: (current: number, total: number) => void
 }
 
-const BATCH_SIZE = 500
+const BATCH_SIZE = 1000
+// 并发上传批次数。批次内部分主键校验是逐条查库的（见后端 check_primary_key_unique），
+// 单批太大会让单个请求变慢甚至超时；并发送多个中等大小的批次比"更大的单批"更稳妥，
+// 也比纯串行快数倍。3 是留有余量的保守值（后端 waitress 线程池默认 8，DB 连接池 20）。
+const CONCURRENCY = 3
 
 /**
  * 单页批量导入核心：盖保序 id → 解析引用/关联 → 生成序列 → 分批 batch-create。
@@ -57,9 +61,10 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
   const sequenceFields = Object.keys(sequenceValues)
 
   let success = 0, failed = 0, created = 0, updated = 0
-  const batches = Math.ceil(records.length / BATCH_SIZE)
+  let completed = 0
+  const batchCount = Math.ceil(records.length / BATCH_SIZE)
 
-  for (let batchIdx = 0; batchIdx < batches; batchIdx++) {
+  async function runBatch(batchIdx: number): Promise<void> {
     const start = batchIdx * BATCH_SIZE
     const end = Math.min(start + BATCH_SIZE, records.length)
     const batchRecords = records.slice(start, end)
@@ -100,8 +105,21 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
       console.error(`批次 ${batchIdx + 1} 导入失败:`, error)
       failed += batchRecords.length
     }
-    onProgress?.(end, records.length)
+    completed += batchRecords.length
+    onProgress?.(completed, records.length)
   }
+
+  // 有限并发：多个 worker 各自从共享游标领取下一个批次索引，直到取完。
+  // 批次按下标预切好（start/end 由 batchIdx 算出），与执行顺序无关，
+  // 所以并发执行不影响每批记录对应的序列值/进度计数是否正确。
+  let nextBatchIdx = 0
+  async function worker(): Promise<void> {
+    while (nextBatchIdx < batchCount) {
+      const batchIdx = nextBatchIdx++
+      await runBatch(batchIdx)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batchCount) }, () => worker()))
 
   return { success, failed, created, updated }
 }

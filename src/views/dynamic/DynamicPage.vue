@@ -853,7 +853,8 @@
     >
       <div v-if="importLoading" class="import-progress">
         <el-progress :percentage="importProgress" :stroke-width="20" striped striped-flow />
-        <p>正在导入... {{ importCurrent }} / {{ importTotal }}</p>
+        <p v-if="importPhase === 'parsing'">正在解析文件... {{ importCurrent }} / {{ importTotal }} 行</p>
+        <p v-else>正在导入... {{ importCurrent }} / {{ importTotal }}</p>
       </div>
       <div v-else-if="importResult" class="import-result">
         <el-result
@@ -932,7 +933,7 @@
  */
 import { ref, computed, watch, nextTick, onActivated, onDeactivated, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElLoading } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
@@ -1189,6 +1190,7 @@ const importLoading = ref(false)
 const importProgress = ref(0)
 const importCurrent = ref(0)
 const importTotal = ref(0)
+const importPhase = ref<'parsing' | 'uploading'>('parsing')
 
 /**
  * 导入结果
@@ -2770,24 +2772,38 @@ async function handleFileSelected(e: Event): Promise<void> {
   // 重置 input 以便下次选同一文件仍然触发
   input.value = ''
 
-  // 解析在 Web Worker 里跑（见 utils/excel.ts），不会冻结页面；但大文件
-  // 解析本身仍需要真实耗时，这里显式给个 loading，避免用户以为点击没反应
-  const loading = ElLoading.service({ text: '正在解析文件，请稍候…', lock: true })
+  // 解析在 Web Worker 里跑（见 utils/excel.ts），不会冻结页面；worker 按行分片
+  // 回传进度，这里复用导入对话框的进度条展示解析阶段，避免大文件时长时间
+  // 只有一个转圈动画、让人以为卡住了
+  importResult.value = null
+  importPhase.value = 'parsing'
+  importLoading.value = true
+  importProgress.value = 0
+  importCurrent.value = 0
+  importTotal.value = 0
+  importDialogVisible.value = true
+
   try {
     const isJson = file.name.toLowerCase().endsWith('.json')
+    const onParseProgress = (current: number, total: number): void => {
+      importCurrent.value = current
+      importTotal.value = total
+      importProgress.value = total > 0 ? Math.round((current / total) * 100) : 0
+    }
     const records = isJson
-      ? await parseJsonImportFile(file, pageFields.value)
-      : await parseImportFile(file, pageFields.value)
+      ? await parseJsonImportFile(file, pageFields.value, onParseProgress)
+      : await parseImportFile(file, pageFields.value, onParseProgress)
     if (records.length === 0) {
+      importDialogVisible.value = false
       ElMessage.warning('文件中没有可导入的数据')
       return
     }
-    loading.close()
     await doImport(records)
   } catch (error) {
+    importDialogVisible.value = false
     ElMessage.error('文件解析失败，请检查文件格式')
   } finally {
-    loading.close()
+    importLoading.value = false
   }
 }
 
@@ -2796,6 +2812,7 @@ async function handleFileSelected(e: Event): Promise<void> {
  */
 async function doImport(records: Record<string, any>[]): Promise<void> {
   importResult.value = null
+  importPhase.value = 'uploading'
   importLoading.value = true
   importProgress.value = 0
   importCurrent.value = 0

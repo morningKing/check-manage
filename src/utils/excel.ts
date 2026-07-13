@@ -197,7 +197,12 @@ let importWorker: Worker | null = null
 let nextRequestId = 0
 const pendingRequests = new Map<
   number,
-  { resolve: (records: Record<string, any>[]) => void; reject: (err: Error) => void }
+  {
+    resolve: (records: Record<string, any>[]) => void
+    reject: (err: Error) => void
+    records: Record<string, any>[]
+    onProgress?: (current: number, total: number) => void
+  }
 >()
 
 function getImportWorker(): Worker {
@@ -207,23 +212,28 @@ function getImportWorker(): Worker {
     type: 'module',
   })
   worker.onmessage = (e: MessageEvent<ImportWorkerResponse>) => {
-    console.log('[importWorker] onmessage', e.data)
     const msg = e.data
     const pending = pendingRequests.get(msg.id)
     if (!pending) return
-    pendingRequests.delete(msg.id)
-    if (msg.ok) {
-      pending.resolve(msg.records)
+    if (msg.type === 'chunk') {
+      // 分片累积：百万行级文件如果一次性 postMessage 整个 records 数组，
+      // 主线程收到消息时要做一次性 structured-clone 反序列化，实测在百万行
+      // 时会造成一次约 2 秒的真实卡顿。按片接收后单次 clone 的数据量小得多。
+      pending.records.push(...msg.records)
+      pending.onProgress?.(msg.processed, msg.total)
+    } else if (msg.type === 'done') {
+      pendingRequests.delete(msg.id)
+      pending.resolve(pending.records)
     } else {
+      pendingRequests.delete(msg.id)
       pending.reject(new Error(msg.error))
     }
   }
   worker.onerror = (ev) => {
-    console.error('[importWorker] onerror', ev.message, ev.filename, ev.lineno, ev.error)
     // worker 自身崩溃（比如加载失败）：让所有还在等的请求都失败，
     // 不然调用方会一直悬挂在 await 上，看起来像卡死
     for (const pending of pendingRequests.values()) {
-      pending.reject(new Error('文件解析出错'))
+      pending.reject(new Error(`文件解析出错: ${ev.message}`))
     }
     pendingRequests.clear()
   }
@@ -234,12 +244,13 @@ function getImportWorker(): Worker {
 function runImportInWorker(
   mode: ImportWorkerRequest['mode'],
   file: File,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  onProgress?: (current: number, total: number) => void
 ): Promise<Record<string, any>[]> {
   return new Promise((resolve, reject) => {
     const worker = getImportWorker()
     const id = ++nextRequestId
-    pendingRequests.set(id, { resolve, reject })
+    pendingRequests.set(id, { resolve, reject, records: [], onProgress })
     // fields 来自 Pinia store，是 Vue reactive() 包出来的 Proxy；结构化克隆
     // 算法认不出 Proxy，postMessage 会直接同步抛 DataCloneError。JSON 往返
     // 一圈把它变回纯对象（FieldConfig 本身就是可 JSON 序列化的数据，没有
@@ -254,13 +265,15 @@ function runImportInWorker(
  *
  * @param file - 上传的文件
  * @param fields - 字段配置
+ * @param onProgress - 解析进度回调（已处理行数、总行数），分片返回时逐片调用
  * @returns 解析后的记录数组
  */
 export function parseImportFile(
   file: File,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  onProgress?: (current: number, total: number) => void
 ): Promise<Record<string, any>[]> {
-  return runImportInWorker('xlsx', file, fields)
+  return runImportInWorker('xlsx', file, fields, onProgress)
 }
 
 /**
@@ -268,11 +281,13 @@ export function parseImportFile(
  *
  * @param file - 上传的文件
  * @param fields - 字段配置
+ * @param onProgress - 解析进度回调（已处理条数、总条数），分片返回时逐片调用
  * @returns 解析后的记录数组
  */
 export function parseJsonImportFile(
   file: File,
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  onProgress?: (current: number, total: number) => void
 ): Promise<Record<string, any>[]> {
-  return runImportInWorker('json', file, fields)
+  return runImportInWorker('json', file, fields, onProgress)
 }

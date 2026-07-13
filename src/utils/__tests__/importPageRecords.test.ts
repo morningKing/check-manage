@@ -87,4 +87,44 @@ describe('importPageRecords', () => {
     expect(result.failed).toBe(1)
     expect(result.success).toBe(0)
   })
+
+  it('splits large imports into multiple concurrent batches and aggregates all of them', async () => {
+    // BATCH_SIZE=1000，2500 条应切成 3 批（1000/1000/500），并发上传（CONCURRENCY=3）
+    const store = makeStore()
+    const post = vi.fn().mockImplementation(async (_url: string, body: any) => ({
+      created: body.records.length,
+      updated: 0,
+      failed: 0,
+    }))
+    const records = Array.from({ length: 2500 }, (_, i) => ({ name: `r${i}` }))
+    const onProgress = vi.fn()
+
+    const result = await importPageRecords({
+      store, post, pageId: 'page-orders', collection: 'orders', records, onProgress,
+    })
+
+    expect(post).toHaveBeenCalledTimes(3)
+    expect(result).toEqual({ success: 2500, failed: 0, created: 2500, updated: 0 })
+    // 进度回调的 current 单调递增，最终到达总数
+    const finalCall = onProgress.mock.calls[onProgress.mock.calls.length - 1]
+    expect(finalCall[0]).toBe(2500)
+    expect(finalCall[1]).toBe(2500)
+  })
+
+  it('one failing batch does not affect the other concurrently-run batches', async () => {
+    const store = makeStore()
+    const post = vi.fn().mockImplementation(async (_url: string, body: any) => {
+      // 第一条记录所在批次失败，其余批次照常成功
+      if (body.records[0].data.name === 'r0') throw new Error('batch 0 boom')
+      return { created: body.records.length, updated: 0, failed: 0 }
+    })
+    const records = Array.from({ length: 2500 }, (_, i) => ({ name: `r${i}` }))
+
+    const result = await importPageRecords({
+      store, post, pageId: 'page-orders', collection: 'orders', records,
+    })
+
+    expect(result.failed).toBe(1000) // 第一批 1000 条计入失败
+    expect(result.success).toBe(1500) // 剩余两批成功
+  })
 })

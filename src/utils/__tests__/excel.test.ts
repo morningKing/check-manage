@@ -4,7 +4,14 @@ import {
   exportToExcel,
   generateImportTemplate,
 } from '../excel'
-import { parseWorkbookBuffer, parseJsonText } from '../excelParseCore'
+import {
+  parseWorkbookBuffer,
+  parseJsonText,
+  readWorkbookMeta,
+  processWorkbookRowRange,
+  readJsonMeta,
+  processJsonItemRange,
+} from '../excelParseCore'
 import type { FieldConfig, ControlType } from '@/types'
 
 // Mock xlsx library
@@ -434,6 +441,84 @@ describe('Excel Utils', () => {
       })
 
       expect(() => parseWorkbookBuffer(new ArrayBuffer(0), fields)).toThrow('文件已损坏')
+    })
+  })
+
+  // readWorkbookMeta/processWorkbookRowRange、readJsonMeta/processJsonItemRange
+  // 是 excelImportWorker.ts 用来分片解析 + 分片回报进度的底层原语（大文件时
+  // 避免一次性 postMessage 整个 records 数组造成的一次性主线程卡顿）。
+  // parseWorkbookBuffer/parseJsonText 就是"meta + 整段 range"的薄封装，
+  // 这里单独测分片本身：任意切法拼起来必须等价于整段一次处理的结果。
+  describe('readWorkbookMeta + processWorkbookRowRange（分片解析）', () => {
+    const mockRead = vi.mocked(XLSX.read)
+    const mockSheetToJson = vi.mocked(XLSX.utils.sheet_to_json)
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('分两片处理，结果与整段一次处理一致', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const mockWorkbook = { SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([
+        ['名称'],
+        ['张三'],
+        ['李四'],
+        ['王五'],
+      ])
+
+      const meta = readWorkbookMeta(new ArrayBuffer(0), fields)
+      expect(meta.dataRows).toHaveLength(3)
+
+      const chunk1 = processWorkbookRowRange(meta, 0, 2)
+      const chunk2 = processWorkbookRowRange(meta, 2, 3)
+
+      expect(chunk1.map((r) => r.name)).toEqual(['张三', '李四'])
+      expect(chunk2.map((r) => r.name)).toEqual(['王五'])
+      expect([...chunk1, ...chunk2]).toEqual(parseWorkbookBuffer(new ArrayBuffer(0), fields))
+    })
+
+    it('end 超过数据行数时不越界', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const mockWorkbook = { SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }
+      mockRead.mockReturnValue(mockWorkbook as any)
+      mockSheetToJson.mockReturnValue([['名称'], ['张三']])
+
+      const meta = readWorkbookMeta(new ArrayBuffer(0), fields)
+      const result = processWorkbookRowRange(meta, 0, 999)
+
+      expect(result).toHaveLength(1)
+    })
+  })
+
+  describe('readJsonMeta + processJsonItemRange（分片解析）', () => {
+    it('分两片处理，结果与整段一次处理一致', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const text = JSON.stringify([{ 名称: '张三' }, { 名称: '李四' }, { 名称: '王五' }])
+
+      const meta = readJsonMeta(text, fields)
+      expect(meta.items).toHaveLength(3)
+
+      const chunk1 = processJsonItemRange(meta, 0, 2)
+      const chunk2 = processJsonItemRange(meta, 2, 3)
+
+      expect(chunk1.map((r) => r.name)).toEqual(['张三', '李四'])
+      expect(chunk2.map((r) => r.name)).toEqual(['王五'])
+      expect([...chunk1, ...chunk2]).toEqual(parseJsonText(text, fields))
+    })
+
+    it('非数组 JSON 在 readJsonMeta 阶段就抛出错误', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      expect(() => readJsonMeta(JSON.stringify({ name: '张三' }), fields)).toThrow('JSON 文件内容必须是数组')
     })
   })
 
