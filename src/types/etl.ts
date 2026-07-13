@@ -4,7 +4,7 @@ export interface EtlStepConfig {
 
 export interface EtlStep {
   id: string
-  type: 'http_request' | 'json_input' | 'script' | 'field_mapping' | 'filter' | 'save_to_collection'
+  type: 'http_request' | 'json_input' | 'file_upload' | 'script' | 'field_mapping' | 'filter' | 'save_to_collection'
   name: string
   config: EtlStepConfig
   onError: 'stop' | 'skip'

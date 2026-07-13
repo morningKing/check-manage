@@ -1,5 +1,6 @@
 import { get, post, put, del } from '@/utils/request'
 import type { EtlTask, EtlRunResult, EtlLog } from '@/types'
+import type { DataFileMeta } from './dataFiles'
 
 export function getEtlTasks() {
   return get<EtlTask[]>('/etlTasks')
@@ -23,4 +24,12 @@ export function runEtlTask(id: string, options: { dryRun?: boolean } = {}) {
 
 export function getEtlLogs(taskId: string) {
   return get<EtlLog[]>(`/etlTasks/${taskId}/logs`)
+}
+
+export function uploadEtlFile(file: File): Promise<DataFileMeta> {
+  const form = new FormData()
+  form.append('file', file)
+  return post('/etlTasks/files/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
 }
