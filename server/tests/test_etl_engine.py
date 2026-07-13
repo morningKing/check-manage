@@ -8,12 +8,17 @@ import sys
 import os
 import pytest
 from unittest.mock import MagicMock
+import csv
+import tempfile
+import os as _os
+from openpyxl import Workbook
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.etl_engine import (
     _resolve_path,
     _step_json_input,
+    _step_file_upload,
     _step_field_mapping,
     _step_filter,
     _step_script,
@@ -80,6 +85,82 @@ class TestJsonInput:
         ctx = {'records': []}
         _step_json_input({}, ctx)
         assert ctx['records'] == []
+
+
+# ==================== file_upload ====================
+
+class TestFileUpload:
+    def _mock_conn_for_file(self, original_name, storage_path):
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (original_name, storage_path)
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        return mock_conn
+
+    def test_missing_file_id(self):
+        ctx = {'records': []}
+        with pytest.raises(ValueError, match='未上传文件'):
+            _step_file_upload({}, ctx, MagicMock())
+
+    def test_file_id_not_found(self):
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = None
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cur
+        ctx = {'records': []}
+        with pytest.raises(ValueError, match='文件不存在或已被删除'):
+            _step_file_upload({'fileId': 'missing'}, ctx, mock_conn)
+
+    def test_unsupported_extension(self):
+        with tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as f:
+            f.write(b'hello')
+            path = f.name
+        try:
+            mock_conn = self._mock_conn_for_file('data.txt', path)
+            ctx = {'records': []}
+            with pytest.raises(ValueError, match='不支持的文件格式'):
+                _step_file_upload({'fileId': 'f1'}, ctx, mock_conn)
+        finally:
+            _os.remove(path)
+
+    def test_parses_csv_with_empty_cell_as_none(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name', 'age'])
+            writer.writerow(['张三', '25'])
+            writer.writerow(['李四', ''])
+            path = f.name
+        try:
+            mock_conn = self._mock_conn_for_file('数据.csv', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn)
+            assert len(ctx['records']) == 2
+            assert ctx['records'][0]['name'] == '张三'
+            assert ctx['records'][0]['age'] == 25
+            assert ctx['records'][1]['name'] == '李四'
+            assert ctx['records'][1]['age'] is None
+        finally:
+            _os.remove(path)
+
+    def test_parses_xlsx(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['name', 'age'])
+        ws.append(['张三', 25])
+        ws.append(['李四', 30])
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+            path = f.name
+        wb.save(path)
+        try:
+            mock_conn = self._mock_conn_for_file('数据.xlsx', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn)
+            assert len(ctx['records']) == 2
+            assert ctx['records'][0]['name'] == '张三'
+            assert ctx['records'][0]['age'] == 25
+            assert ctx['records'][1]['name'] == '李四'
+        finally:
+            _os.remove(path)
 
 
 # ==================== field_mapping ====================

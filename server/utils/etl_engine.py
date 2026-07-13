@@ -13,6 +13,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 import psycopg2.extras
+import pandas as pd
 
 from utils.script_runner import run_etl_script
 
@@ -84,6 +85,8 @@ def _execute_step(step_type, config, context, conn, dry_run):
         _step_http_request(config, context)
     elif step_type == 'json_input':
         _step_json_input(config, context)
+    elif step_type == 'file_upload':
+        _step_file_upload(config, context, conn)
     elif step_type == 'script':
         _step_script(config, context)
     elif step_type == 'field_mapping':
@@ -187,6 +190,33 @@ def _step_json_input(config, context):
         raise ValueError('JSON 数据必须是数组或对象')
 
     context['records'] = data
+
+
+def _step_file_upload(config, context, conn):
+    """文件上传步骤：读取配置时上传并固定的 Excel/CSV 文件，解析为记录列表。"""
+    file_id = config.get('fileId')
+    if not file_id:
+        raise ValueError('未上传文件')
+
+    cur = conn.cursor()
+    cur.execute('SELECT original_name, storage_path FROM data_files WHERE id = %s', (file_id,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError('文件不存在或已被删除')
+    original_name, storage_path = row
+
+    ext = original_name.lower().rsplit('.', 1)[-1] if '.' in original_name else ''
+    if ext == 'csv':
+        df = pd.read_csv(storage_path)
+    elif ext in ('xlsx', 'xls'):
+        df = pd.read_excel(storage_path)
+    else:
+        raise ValueError(f'不支持的文件格式: {ext}')
+
+    # NaN（空单元格）转 None，否则写入 dynamic_data 时 JSON 序列化会产出非法值
+    # 先转为 object dtype 确保 None 不会被转回 NaN
+    df = df.astype(object).where(pd.notnull(df), None)
+    context['records'] = df.to_dict('records')
 
 
 def _step_script(config, context):
