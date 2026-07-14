@@ -44,6 +44,7 @@ def setup(mock_conn, mock_cursor):
         patch('routes.relations.get_db', fake_db),
         patch('routes.api_keys.get_db', fake_db),
         patch('routes.open_api.get_db', fake_db),
+        patch('routes.data_files.get_db', fake_db),
         patch('auth.get_db', fake_db),
         patch('db.pool', MagicMock()),
         patch('utils.operation_log.log_operation'),
@@ -737,3 +738,55 @@ class TestUploadFile:
             data={'collection': 'devices'},
             content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 400
+
+    def test_field_name_rejects_disallowed_extension(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'attachment', 'controlType': 'file',
+                   'fileConfig': {'allowedExtensions': ['.pdf', '.docx']}}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),   # public + writable
+            (fields,),      # SELECT fields FROM page_configs (inside _check_allowed_extension)
+        ])
+        resp = client.post(
+            '/api/v1/files',
+            data={'collection': 'devices', 'fieldName': 'attachment',
+                  'file': (BytesIO(b'MZ...'), 'virus.exe')},
+            content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 400, resp.get_data(as_text=True)
+        assert '.exe' in resp.get_json()['error']
+
+    def test_field_name_accepts_allowed_extension(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'attachment', 'controlType': 'file',
+                   'fileConfig': {'allowedExtensions': ['.pdf', '.docx']}}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),   # public + writable
+            (fields,),      # SELECT fields FROM page_configs
+        ])
+        fake_meta = {'id': 'file-abc', 'name': 'report.pdf', 'size': 5,
+                     'mimeType': 'application/pdf', 'url': '/api/data-files/file-abc/download'}
+        with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
+            resp = client.post(
+                '/api/v1/files',
+                data={'collection': 'devices', 'fieldName': 'attachment',
+                      'file': (BytesIO(b'%PDF-1.4'), 'report.pdf')},
+                content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+
+    def test_field_name_for_unrestricted_field_allows_any_extension(self, setup):
+        """A field with no fileConfig is unrestricted, same as omitting fieldName."""
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'attachment', 'controlType': 'file'}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),   # public + writable
+            (fields,),      # SELECT fields FROM page_configs
+        ])
+        fake_meta = {'id': 'file-xyz', 'name': 'notes.xyz', 'size': 3,
+                     'mimeType': 'application/octet-stream', 'url': '/api/data-files/file-xyz/download'}
+        with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
+            resp = client.post(
+                '/api/v1/files',
+                data={'collection': 'devices', 'fieldName': 'attachment',
+                      'file': (BytesIO(b'abc'), 'notes.xyz')},
+                content_type='multipart/form-data', headers=api_h)
+        assert resp.status_code == 201, resp.get_data(as_text=True)

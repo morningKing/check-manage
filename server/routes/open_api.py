@@ -6,7 +6,7 @@ from config import OPEN_API_BRANCH
 from datetime import timezone
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.search_text import compute_search_text
-from routes.data_files import save_data_file
+from routes.data_files import save_data_file, _check_allowed_extension
 import uuid
 import json
 import psycopg2.extras
@@ -738,6 +738,10 @@ def api_upload_file():
     请求：multipart/form-data
       - `file`        : 要上传的文件（必填）
       - `collection`  : 目标数据页（必填，须为公开且可写的集合）
+      - `fieldName`   : 目标 file/image 字段名（选填）。带上该参数时，会按该
+                        字段在页面配置里的「允许的文件类型」做校验（与管理端
+                        网页上传走的是同一份约束），类型不符返回 400。不带则
+                        不做类型限制，保持向后兼容。
 
     返回 `{ data: { uid, name, size, mimeType, downloadUrl } }`。把
     `[{ "uid": <uid>, "name": <name>, "size": <size>, "type": <mimeType>,
@@ -747,6 +751,7 @@ def api_upload_file():
     collection = (request.form.get('collection') or '').strip()
     if not collection:
         return jsonify({'error': 'collection is required'}), 400
+    field_name = (request.form.get('fieldName') or '').strip()
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -758,6 +763,10 @@ def api_upload_file():
     f = request.files.get('file')
     if not f or not f.filename:
         return jsonify({'error': 'file is required'}), 400
+
+    type_error = _check_allowed_extension(collection, field_name, f.filename)
+    if type_error:
+        return jsonify({'error': type_error}), 400
 
     # API Key 无关联用户：uploaded_by 置空（该列可空）
     meta, err = save_data_file(f, uploaded_by=None)

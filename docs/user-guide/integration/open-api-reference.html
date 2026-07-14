@@ -1187,6 +1187,7 @@
             <tr><th>表单字段</th><th>必填</th><th>说明</th></tr>
             <tr><td>file</td><td>是</td><td>要上传的文件本体</td></tr>
             <tr><td>collection</td><td>是</td><td>目标数据页标识，须为「公开且允许写入」的集合</td></tr>
+            <tr><td>fieldName</td><td>否</td><td>目标 file/image 字段名。传了会按该字段在管理端「字段配置」里设置的「允许的文件类型」做校验（与网页端上传同一套约束），类型不符返回 400；不传则不限制类型（向后兼容）</td></tr>
           </table>
 
           <div class="code">
@@ -1217,6 +1218,7 @@ curl -s -X POST \
             <tr><td>400</td><td><code>collection is required</code></td><td>表单缺少 <code>collection</code> 字段</td></tr>
             <tr><td>404</td><td><code>Collection not found or not public</code></td><td>目标集合非公开</td></tr>
             <tr><td>403</td><td><code>Collection is read-only</code></td><td>目标集合未开启「允许写入」</td></tr>
+            <tr><td>400</td><td><code>不支持 .xxx 类型的文件，仅支持 ...</code></td><td>传了 <code>fieldName</code> 且文件扩展名不在该字段配置的「允许的文件类型」内</td></tr>
           </table>
         </div>
       </div>

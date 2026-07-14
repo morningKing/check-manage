@@ -254,11 +254,16 @@ class OpenApiClient:
         *,
         filename: Optional[str] = None,
         content_type: Optional[str] = None,
+        field_name: Optional[str] = None,
     ) -> dict:
         """上传单个文件，返回 {uid, name, size, mimeType, downloadUrl}。
 
         file 可以是文件路径（str / Path）或已打开的二进制文件对象；后者时
         建议显式传 filename，否则会尝试读取 file.name 或退化为 "upload.bin"。
+
+        field_name 可选：传入目标 file/image 字段名时，服务端会按该字段
+        在页面配置里配置的「允许的文件类型」做校验，类型不符会抛
+        ValidationError；不传则不做类型限制（向后兼容）。
         """
         close_after = False
         if isinstance(file, (str, os.PathLike)):
@@ -271,10 +276,13 @@ class OpenApiClient:
 
         try:
             upload_tuple = (filename, fh, content_type) if content_type else (filename, fh)
+            data = {"collection": collection}
+            if field_name:
+                data["fieldName"] = field_name
             resp = self._request(
                 "POST",
                 "/files",
-                data={"collection": collection},
+                data=data,
                 files={"file": upload_tuple},
             )
             return resp.json()["data"]
@@ -322,7 +330,10 @@ class OpenApiClient:
         """
         if isinstance(files, (str, os.PathLike)) or hasattr(files, "read"):
             files = [files]
-        file_field = [self.to_file_field(self.upload_file(collection, f)) for f in files]
+        file_field = [
+            self.to_file_field(self.upload_file(collection, f, field_name=field_name))
+            for f in files
+        ]
 
         payload = dict(data)
         payload[field_name] = file_field

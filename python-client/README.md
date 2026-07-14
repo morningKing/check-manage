@@ -60,10 +60,13 @@ client.attach_files(
 )
 ```
 
+`attach_files` 已知目标字段名，会自动带上，若该字段在管理端配置了「允许的文件类型」，
+类型不符时这里会抛 `ValidationError`。
+
 **分步调用（需要更细粒度控制时）：**
 
 ```python
-uploaded = client.upload_file("devices", "./report.pdf")   # -> {"uid": ..., "name": ..., ...}
+uploaded = client.upload_file("devices", "./report.pdf", field_name="附件")   # -> {"uid": ..., "name": ..., ...}
 file_field = client.to_file_field(uploaded)                # -> {"uid", "name", "size", "type"}
 
 client.create_record("devices", {
@@ -71,6 +74,9 @@ client.create_record("devices", {
     "附件": [file_field],
 })
 ```
+
+`field_name` 是可选参数：传了会按该字段配置的「允许的文件类型」做服务端校验（不传则不限制，
+向后兼容旧调用）。
 
 **下载文件**（记录里读到的文件对象，`apiUrl` 是 Open API 专用下载地址）：
 

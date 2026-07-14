@@ -255,6 +255,38 @@ def test_upload_file_from_path_sends_multipart(tmp_path):
     assert result["uid"] == "u1"
 
 
+def test_upload_file_with_field_name_sends_field_name(tmp_path):
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-1.4 fake content")
+
+    def fake_request(method, url, **kwargs):
+        assert kwargs["data"] == {"collection": "devices", "fieldName": "附件"}
+        return FakeResponse(
+            200,
+            {"data": {"uid": "u1", "name": "report.pdf", "size": 21, "mimeType": "application/pdf"}},
+        )
+
+    client, _ = make_client(fake_request)
+    result = client.upload_file("devices", f, field_name="附件")
+    assert result["uid"] == "u1"
+
+
+def test_upload_file_without_field_name_omits_it(tmp_path):
+    """field_name 未传时不带 fieldName 参数，保持向后兼容（后端不做类型限制）。"""
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"content")
+
+    def fake_request(method, url, **kwargs):
+        assert "fieldName" not in kwargs["data"]
+        return FakeResponse(
+            200,
+            {"data": {"uid": "u1", "name": "report.pdf", "size": 7, "mimeType": "application/pdf"}},
+        )
+
+    client, _ = make_client(fake_request)
+    client.upload_file("devices", f)
+
+
 def test_download_file_returns_bytes_and_writes_dest(tmp_path):
     def fake_request(method, url, **kwargs):
         assert url.endswith("/files/u1/download")
@@ -286,6 +318,9 @@ def test_attach_files_uploads_then_creates_record(tmp_path):
     def fake_request(method, url, **kwargs):
         calls.append((method, url))
         if url.endswith("/files"):
+            # attach_files 已知目标字段名，应该原样透传给 upload_file 触发
+            # 服务端的类型约束校验，而不是让它退化成"不限制"
+            assert kwargs["data"] == {"collection": "devices", "fieldName": "附件"}
             return FakeResponse(
                 200,
                 {"data": {"uid": "u1", "name": "report.pdf", "size": 7, "mimeType": "application/pdf"}},
