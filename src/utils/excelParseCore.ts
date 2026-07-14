@@ -104,7 +104,25 @@ export function readWorkbookMeta(buffer: ArrayBuffer, fields: FieldConfig[]): Wo
   const wb = XLSX.read(data, { type: 'array' })
 
   // 读取第一个 sheet
-  const ws = wb.Sheets[wb.SheetNames[0]]
+  const sheetName = wb.SheetNames[0]
+  const ws = wb.Sheets[sheetName]
+
+  // SheetJS 内部按 sheet 单独 try/catch（源码里叫 safe_parse_sheet）：某个
+  // sheet 解析失败（最常见的触发场景是该 sheet 解压后的 XML 超过 Node/V8
+  // 单个字符串的长度上限 0x1fffffe8 ≈ 512MB，行数多、内联字符串（未走
+  // sharedStrings 去重）多的表格很容易撞到）不会让 XLSX.read() 整体抛错，
+  // 而是把这个 sheet 从 wb.Sheets 里悄悄剔除——SheetNames 里还有名字，
+  // wb.Sheets[name] 却是 undefined。不判这一步，下面 sheet_to_json(undefined)
+  // 会静默退化成"当作空文件"，用户看到的是"文件中没有可导入的数据"这种
+  // 跟真实原因（文件太大解析失败）完全对不上号的提示，或者一直卡在解析中
+  // 不再有任何反馈。
+  if (!ws) {
+    throw new Error(
+      `工作表「${sheetName}」解析失败：文件内容过大，超出浏览器单次可处理的上限。` +
+      '请尝试拆分成多个较小的文件分批导入，或减少单元格中的重复长文本内容。'
+    )
+  }
+
   const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { header: 1 }) as any[][]
 
   if (jsonData.length < 2) {

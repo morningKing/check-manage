@@ -853,7 +853,13 @@
     >
       <div v-if="importLoading" class="import-progress">
         <el-progress :percentage="importProgress" :stroke-width="20" striped striped-flow />
-        <p v-if="importPhase === 'parsing'">正在解析文件... {{ importCurrent }} / {{ importTotal }} 行</p>
+        <template v-if="importPhase === 'parsing'">
+          <p v-if="importTotal > 0">正在解析文件... {{ importCurrent }} / {{ importTotal }} 行</p>
+          <p v-else>
+            正在读取文件结构...已用时 {{ importElapsedSeconds }} 秒
+            <span v-if="importElapsedSeconds >= 10">（文件较大，请耐心等待）</span>
+          </p>
+        </template>
         <p v-else>正在导入... {{ importCurrent }} / {{ importTotal }}</p>
       </div>
       <div v-else-if="importResult" class="import-result">
@@ -1191,6 +1197,9 @@ const importProgress = ref(0)
 const importCurrent = ref(0)
 const importTotal = ref(0)
 const importPhase = ref<'parsing' | 'uploading'>('parsing')
+// 解析阶段（XLSX.read/sheet_to_json 整体操作，无法报真实行级进度）期间每秒
+// 跳动一次，让"文件较大、正在读取结构"的等待期看得出是在真实工作、不是卡死
+const importElapsedSeconds = ref(0)
 
 /**
  * 导入结果
@@ -2774,14 +2783,25 @@ async function handleFileSelected(e: Event): Promise<void> {
 
   // 解析在 Web Worker 里跑（见 utils/excel.ts），不会冻结页面；worker 按行分片
   // 回传进度，这里复用导入对话框的进度条展示解析阶段，避免大文件时长时间
-  // 只有一个转圈动画、让人以为卡住了
+  // 只有一个转圈动画、让人以为卡住了。
+  //
+  // 但 XLSX.read()/sheet_to_json() 本身是 SheetJS 内部的整体操作、无法分片
+  // （见 excelParseCore.ts 顶部注释），文件足够大时这一步本身可能耗时数秒到
+  // 数十秒，期间没有任何真实的行级进度可报——如果只显示一个停在 0% 的进度条，
+  // 用户会以为卡住了。这里额外起一个每秒跳动的计时器，让"正在读取文件结构"
+  // 阶段也能看出程序仍在真实工作，而不是冻住。
   importResult.value = null
   importPhase.value = 'parsing'
   importLoading.value = true
   importProgress.value = 0
   importCurrent.value = 0
   importTotal.value = 0
+  importElapsedSeconds.value = 0
   importDialogVisible.value = true
+
+  const elapsedTimer = window.setInterval(() => {
+    importElapsedSeconds.value += 1
+  }, 1000)
 
   try {
     const isJson = file.name.toLowerCase().endsWith('.json')
@@ -2801,8 +2821,12 @@ async function handleFileSelected(e: Event): Promise<void> {
     await doImport(records)
   } catch (error) {
     importDialogVisible.value = false
-    ElMessage.error('文件解析失败，请检查文件格式')
+    // 部分解析失败（如文件过大导致工作表解析失败）会抛出具体原因，直接展示
+    // 给用户；拿不到具体信息时才退回通用提示。
+    const message = error instanceof Error && error.message ? error.message : '文件解析失败，请检查文件格式'
+    ElMessage.error(message)
   } finally {
+    window.clearInterval(elapsedTimer)
     importLoading.value = false
   }
 }

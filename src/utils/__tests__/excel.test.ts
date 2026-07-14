@@ -494,6 +494,23 @@ describe('Excel Utils', () => {
 
       expect(result).toHaveLength(1)
     })
+
+    it('sheet 因体积过大被 SheetJS 静默剔除（SheetNames 有名字但 Sheets 里没有）时抛出明确错误，而不是当成空文件', () => {
+      // 复现真实场景：某个 sheet 解压后的 XML 超过 Node/V8 单个字符串的长度
+      // 上限（0x1fffffe8 ≈ 512MB，行多、内联字符串多的大表格容易撞到）时，
+      // SheetJS 内部按 sheet 单独 try/catch（源码里叫 safe_parse_sheet），
+      // 不会让 XLSX.read() 整体抛错，而是把这个 sheet 从 wb.Sheets 里悄悄
+      // 剔除——SheetNames 里还留着名字，wb.Sheets[name] 却是 undefined。
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const mockWorkbook = { SheetNames: ['数据'], Sheets: {} } // Sheets 里没有 '数据'
+      mockRead.mockReturnValue(mockWorkbook as any)
+
+      expect(() => readWorkbookMeta(new ArrayBuffer(0), fields)).toThrow('解析失败')
+      // 不应该走到 sheet_to_json 那一步（undefined 传进去没有意义）
+      expect(mockSheetToJson).not.toHaveBeenCalled()
+    })
   })
 
   describe('readJsonMeta + processJsonItemRange（分片解析）', () => {
