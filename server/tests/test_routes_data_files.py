@@ -2,6 +2,7 @@
 import io
 import os
 import pytest
+import psycopg2.extras
 
 
 @pytest.fixture
@@ -101,6 +102,90 @@ def test_download_missing_file_returns_404(setup_app):
     client, admin_h, _, _ = setup_app
     r = client.get('/data-files/no-such-id/download', headers=admin_h)
     assert r.status_code == 404
+
+
+@pytest.fixture
+def page_with_file_constraint(db_conn):
+    """A page_configs row with a 'file' field restricted to .pdf/.docx."""
+    coll = 'test-file-constraint'
+    fields = [
+        {'fieldName': 'attachment', 'label': '附件', 'controlType': 'file',
+         'fileConfig': {'allowedExtensions': ['.pdf', '.docx']}},
+        {'fieldName': 'unrestricted', 'label': '任意文件', 'controlType': 'file'},
+    ]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO page_configs (id, name, fields) VALUES (%s, %s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET fields = EXCLUDED.fields",
+            (f'page-{coll}', coll, psycopg2.extras.Json(fields)),
+        )
+    db_conn.commit()
+    yield coll
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM page_configs WHERE id = %s", (f'page-{coll}',))
+    db_conn.commit()
+
+
+def test_upload_rejects_disallowed_extension(setup_app, page_with_file_constraint):
+    client, admin_h, _, _ = setup_app
+    payload = {
+        'file': (io.BytesIO(b'MZ...'), 'virus.exe'),
+        'collection': page_with_file_constraint,
+        'fieldName': 'attachment',
+    }
+    r = client.post('/data-files/upload', data=payload,
+                    content_type='multipart/form-data', headers=admin_h)
+    assert r.status_code == 400, r.get_data(as_text=True)
+    assert '.exe' in r.get_json()['error']
+
+
+def test_upload_accepts_allowed_extension(setup_app, page_with_file_constraint):
+    client, admin_h, _, _ = setup_app
+    payload = {
+        'file': (io.BytesIO(b'%PDF-1.4'), 'report.pdf'),
+        'collection': page_with_file_constraint,
+        'fieldName': 'attachment',
+    }
+    r = client.post('/data-files/upload', data=payload,
+                    content_type='multipart/form-data', headers=admin_h)
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+
+def test_upload_extension_check_is_case_insensitive(setup_app, page_with_file_constraint):
+    client, admin_h, _, _ = setup_app
+    payload = {
+        'file': (io.BytesIO(b'PK...'), 'contract.DOCX'),
+        'collection': page_with_file_constraint,
+        'fieldName': 'attachment',
+    }
+    r = client.post('/data-files/upload', data=payload,
+                    content_type='multipart/form-data', headers=admin_h)
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+
+def test_upload_unrestricted_field_allows_any_extension(setup_app, page_with_file_constraint):
+    """A field with no fileConfig (or an empty allowedExtensions) is unrestricted."""
+    client, admin_h, _, _ = setup_app
+    payload = {
+        'file': (io.BytesIO(b'anything'), 'notes.xyz'),
+        'collection': page_with_file_constraint,
+        'fieldName': 'unrestricted',
+    }
+    r = client.post('/data-files/upload', data=payload,
+                    content_type='multipart/form-data', headers=admin_h)
+    assert r.status_code == 201, r.get_data(as_text=True)
+
+
+def test_upload_without_field_name_is_unrestricted(setup_app, page_with_file_constraint):
+    """Backward compatibility: old callers that never send fieldName aren't blocked."""
+    client, admin_h, _, _ = setup_app
+    payload = {
+        'file': (io.BytesIO(b'anything'), 'notes.xyz'),
+        'collection': page_with_file_constraint,
+    }
+    r = client.post('/data-files/upload', data=payload,
+                    content_type='multipart/form-data', headers=admin_h)
+    assert r.status_code == 201, r.get_data(as_text=True)
 
 
 def test_metadata_endpoint(setup_app):

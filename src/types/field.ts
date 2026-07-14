@@ -145,6 +145,16 @@ export interface CompositeTextConfig {
 }
 
 /**
+ * 文件/图片上传约束配置接口
+ *
+ * @property allowedExtensions - 允许上传的扩展名列表（含前导点，小写，如 ['.pdf', '.docx']）；
+ *   为空数组或未配置表示不限制
+ */
+export interface FileConfig {
+  allowedExtensions: string[]
+}
+
+/**
  * 状态徽标选项接口
  *
  * @property value - 选项值（与字段实际存储值一致）
@@ -262,6 +272,8 @@ export interface FieldConfig {
   statusBadgeConfig?: StatusBadgeConfig
   /** 标记后台异步为该字段建 (data->>field) 表达式索引，加速筛选与排序（见 server/utils/field_indexes.py） */
   indexed?: boolean
+  /** 文件/图片上传的类型约束（仅 controlType 为 file/image 时生效） */
+  fileConfig?: FileConfig
 }
 
 /**
@@ -289,6 +301,7 @@ export interface FieldFormData {
   compositeTextConfig?: CompositeTextConfig
   statusBadgeConfig: StatusBadgeConfig
   indexed: boolean
+  fileConfig: FileConfig
 }
 
 /**
@@ -315,6 +328,7 @@ export function createEmptyFieldFormData(order: number = 1): FieldFormData {
     quoteConfig: { targetCollection: '', displayField: '' },
     compositeTextConfig: { sourceFields: [], separator: ' - ' },
     statusBadgeConfig: { options: [], pollIntervalSec: 5 },
-    indexed: false
+    indexed: false,
+    fileConfig: { allowedExtensions: [] }
   }
 }

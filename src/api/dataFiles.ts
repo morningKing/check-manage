@@ -17,11 +17,14 @@ export interface DataFileMeta {
   url: string  // bare relative path: /api/data-files/<id>/download
 }
 
-export function uploadDataFile(file: File, collection?: string): Promise<DataFileMeta> {
+export function uploadDataFile(file: File, collection?: string, fieldName?: string): Promise<DataFileMeta> {
   const form = new FormData()
   form.append('file', file)
   // 携带目标数据页，后端据此按「该数据页的写权限」鉴权（支持被授权的访客/自定义角色）
   if (collection) form.append('collection', collection)
+  // 携带字段名，后端据此查该字段的 fileConfig.allowedExtensions 做类型二次校验
+  // （前端 accept/beforeUpload 只是即时反馈，真正兜底在后端，防止绕过前端直接调接口）
+  if (fieldName) form.append('fieldName', fieldName)
   return post('/data-files/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })

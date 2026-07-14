@@ -699,6 +699,27 @@
           </div>
         </el-form-item>
 
+        <!-- 文件类型约束（仅文件/图片上传类型显示） -->
+        <el-form-item
+          v-if="showFileConfig"
+          label="允许的文件类型"
+        >
+          <div class="file-config">
+            <el-select
+              v-model="fieldFormData.fileConfig.allowedExtensions"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              placeholder="留空表示不限制，如 .pdf、.docx"
+              style="width: 100%"
+            />
+            <div class="file-config-tip">
+              输入扩展名后回车添加，如 pdf、.docx；留空表示不限制上传的文件类型
+            </div>
+          </div>
+        </el-form-item>
+
         <!-- 工作流配置（仅 select 类型显示） -->
         <el-form-item
           v-if="showWorkflowConfig"
@@ -915,6 +936,29 @@ const showCompositeTextConfig = computed(() => {
 const showStatusBadgeConfig = computed(() => {
   return fieldFormData.value.controlType === 'statusBadge'
 })
+
+const showFileConfig = computed(() => {
+  return ['file', 'image'].includes(fieldFormData.value.controlType)
+})
+
+/**
+ * 归一化用户输入的扩展名列表：补前导点、转小写、去空白、去重。
+ * 用户可能输入 "pdf"、".PDF"、" .pdf " 等形式，统一存成 ".pdf"。
+ */
+function normalizeExtensions(raw: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of raw) {
+    const trimmed = item.trim().toLowerCase()
+    if (!trimmed) continue
+    const ext = trimmed.startsWith('.') ? trimmed : `.${trimmed}`
+    if (!seen.has(ext)) {
+      seen.add(ext)
+      result.push(ext)
+    }
+  }
+  return result
+}
 
 const compositeSourceFieldOptions = computed(() => {
   return localFields.value
@@ -1178,7 +1222,10 @@ function handleEditField(field: FieldConfig, index: number): void {
     statusBadgeConfig: field.statusBadgeConfig
       ? { ...field.statusBadgeConfig, options: field.statusBadgeConfig.options.map(o => ({ ...o })) }
       : { options: [], pollIntervalSec: 5 },
-    indexed: field.indexed || false
+    indexed: field.indexed || false,
+    fileConfig: field.fileConfig
+      ? { allowedExtensions: [...field.fileConfig.allowedExtensions] }
+      : { allowedExtensions: [] }
   }
   // Load workflow config
   const wf = field.workflowConfig
@@ -1248,7 +1295,10 @@ async function handleSaveField(): Promise<void> {
             })),
         }
       : undefined,
-    indexed: showIndexedToggle.value ? (fieldFormData.value.indexed || undefined) : undefined
+    indexed: showIndexedToggle.value ? (fieldFormData.value.indexed || undefined) : undefined,
+    fileConfig: showFileConfig.value
+      ? { allowedExtensions: normalizeExtensions(fieldFormData.value.fileConfig.allowedExtensions) }
+      : undefined
   }
 
   if (editingIndex.value === -1) {
@@ -1557,6 +1607,16 @@ watch(
   border-radius: 4px;
   font-size: 13px;
   color: #606266;
+}
+
+.file-config {
+  width: 100%;
+
+  .file-config-tip {
+    margin-top: 6px;
+    font-size: 12px;
+    color: #909399;
+  }
 }
 
 .workflow-config {

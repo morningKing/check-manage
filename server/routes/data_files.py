@@ -34,6 +34,44 @@ data_files_bp = Blueprint('data_files', __name__)
 _MAX_BYTES = DATA_FILE_MAX_MB * 1024 * 1024
 
 
+def _get_file_extension(filename: str) -> str:
+    """Lowercase extension incl. leading dot, e.g. 'a.PDF' -> '.pdf'. No dot -> ''."""
+    _, ext = os.path.splitext(filename)
+    return ext.lower()
+
+
+def _check_allowed_extension(collection, field_name, filename):
+    """Look up the field's fileConfig.allowedExtensions on page_configs and
+    validate filename's extension against it.
+
+    Mirrors the frontend's accept/beforeUpload check — that one is UX-only
+    and trivially bypassed by calling this endpoint directly, so the real
+    enforcement has to live here. No collection/fieldName, no matching
+    field, or an empty allowedExtensions list all mean "unrestricted"
+    (backward compatible with fields that never configured this).
+
+    Returns an error message string, or None if the upload is allowed.
+    """
+    if not collection or not field_name:
+        return None
+    page_id = f'page-{collection}'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+        row = cur.fetchone()
+    fields = row[0] if row and row[0] else []
+    field = next((f for f in fields if f.get('fieldName') == field_name), None)
+    if not field:
+        return None
+    allowed = (field.get('fileConfig') or {}).get('allowedExtensions') or []
+    if not allowed:
+        return None
+    ext = _get_file_extension(filename)
+    if ext not in allowed:
+        return f'不支持 {ext or "该"} 类型的文件，仅支持 {"、".join(allowed)}'
+    return None
+
+
 def _storage_dir(file_id: str) -> Path:
     p = Path(DATA_FILES_ROOT) / file_id[:2] / file_id
     p.mkdir(parents=True, exist_ok=True)
@@ -91,12 +129,17 @@ def upload_data_file():
     # 未带 collection 的旧调用退回「非访客」校验，保持向后兼容。
     role = (g.current_user or {}).get('role')
     collection = (request.form.get('collection') or '').strip()
+    field_name = (request.form.get('fieldName') or '').strip()
     if collection:
         page_id = f'page-{collection}'
         if not (can_page(role, page_id, 'create') or can_page(role, page_id, 'update')):
             return jsonify({'error': '权限不足'}), 403
     elif role == 'guest':
         return jsonify({'error': '访客无操作权限'}), 403
+
+    type_error = _check_allowed_extension(collection, field_name, f.filename)
+    if type_error:
+        return jsonify({'error': type_error}), 400
 
     meta, err = save_data_file(f, uploaded_by=g.current_user['userId'])
     if err:

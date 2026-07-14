@@ -19,7 +19,7 @@
     :before-upload="beforeUpload"
     :disabled="field.disabled"
     :http-request="uploadToBackend"
-    accept="image/*"
+    :accept="acceptAttr"
   >
     <el-icon><Plus /></el-icon>
     <template #file="{ file }">
@@ -27,6 +27,11 @@
            inject the auth token so the <img> doesn't 401. -->
       <div class="el-upload-list__item-thumbnail">
         <img :src="authedDataFileUrl(file.url || '')" alt="" />
+      </div>
+    </template>
+    <template #tip>
+      <div class="el-upload__tip">
+        {{ tipText }}
       </div>
     </template>
   </el-upload>
@@ -49,12 +54,13 @@
  * - 点击预览大图
  * - 支持拖拽排序
  */
-import { ref, watch, inject } from 'vue'
+import { ref, computed, watch, inject } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
 import { uploadDataFile, authedDataFileUrl } from '@/api/dataFiles'
+import { isExtensionAllowed, getFileExtension } from '@/utils/fileUploadValidation'
 import { DYNAMIC_FORM_COLLECTION } from '../context'
 
 // ==================== Props & Emits ====================
@@ -90,6 +96,25 @@ const previewVisible = ref(false)
  */
 const previewUrl = ref('')
 
+// ==================== 计算属性 ====================
+
+/** 管理端配置的允许扩展名列表（未配置=不限制，退回默认的 image/* 校验） */
+const allowedExtensions = computed(() => props.field.fileConfig?.allowedExtensions || [])
+
+/** el-upload 的 accept 属性：未配置扩展名约束时退回默认的 image/* */
+const acceptAttr = computed(() =>
+  allowedExtensions.value.length > 0 ? allowedExtensions.value.join(',') : 'image/*'
+)
+
+/** 提示文案：优先用字段自定义的「占位提示」，否则按当前约束自动生成 */
+const tipText = computed(() => {
+  if (props.field.placeholder) return props.field.placeholder
+  const typeHint = allowedExtensions.value.length > 0
+    ? `仅支持 ${allowedExtensions.value.join('、')} 格式`
+    : '支持 jpg/png 等常见图片格式'
+  return `${typeHint}，单张图片不超过 5MB，最多上传 9 张`
+})
+
 // ==================== 监听 ====================
 
 /**
@@ -119,7 +144,7 @@ watch(
  */
 async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
   try {
-    const res = await uploadDataFile(options.file as File, formCollection?.value)
+    const res = await uploadDataFile(options.file as File, formCollection?.value, props.field.fieldName)
     const uploadedFile: UploadFileInfo = {
       uid: res.id,
       name: res.name,
@@ -141,8 +166,14 @@ async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
  * 上传前验证
  */
 function beforeUpload(file: File): boolean {
-  const isImage = file.type.startsWith('image/')
-  if (!isImage) {
+  if (allowedExtensions.value.length > 0) {
+    if (!isExtensionAllowed(file.name, allowedExtensions.value)) {
+      ElMessage.error(
+        `不支持 ${getFileExtension(file.name) || '该'} 类型的图片，仅支持 ${allowedExtensions.value.join('、')}！`
+      )
+      return false
+    }
+  } else if (!file.type.startsWith('image/')) {
     ElMessage.error('只能上传图片文件!')
     return false
   }
@@ -190,5 +221,11 @@ function handleRemove(file: UploadFile): void {
 :deep(.el-upload-list--picture-card .el-upload-list__item) {
   width: 100px;
   height: 100px;
+}
+
+.el-upload__tip {
+  color: #909399;
+  font-size: 12px;
+  margin-top: 8px;
 }
 </style>

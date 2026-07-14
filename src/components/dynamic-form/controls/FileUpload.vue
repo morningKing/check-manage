@@ -12,6 +12,7 @@
     v-model:file-list="fileList"
     :multiple="true"
     :limit="5"
+    :accept="acceptAttr"
     :on-exceed="handleExceed"
     :on-success="handleSuccess"
     :on-remove="handleRemove"
@@ -26,7 +27,7 @@
     </el-button>
     <template #tip>
       <div class="el-upload__tip">
-        支持上传任意文件，单个文件不超过 10MB，最多上传 5 个文件
+        {{ tipText }}
       </div>
     </template>
   </el-upload>
@@ -43,12 +44,13 @@
  * JSONB 里只存 {uid=data_files.id, name, url, size, type}。
  * url 是 /api/data-files/<id>/download,显示时需附 ?access_token=。
  */
-import { ref, watch, inject } from 'vue'
+import { ref, computed, watch, inject } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import type { UploadFile, UploadRequestOptions } from 'element-plus'
 import type { FieldConfig, UploadFile as UploadFileInfo } from '@/types'
 import { uploadDataFile, authedDataFileUrl } from '@/api/dataFiles'
+import { isExtensionAllowed, getFileExtension } from '@/utils/fileUploadValidation'
 import { DYNAMIC_FORM_COLLECTION } from '../context'
 
 // ==================== Props & Emits ====================
@@ -73,6 +75,26 @@ const emit = defineEmits<{
  * 文件列表（Element Plus 格式）
  */
 const fileList = ref<UploadFile[]>([])
+
+// ==================== 计算属性 ====================
+
+/** 管理端配置的允许扩展名列表（未配置=不限制） */
+const allowedExtensions = computed(() => props.field.fileConfig?.allowedExtensions || [])
+
+/** el-upload 的 accept 属性：引导系统文件选择器只显示对应类型，空值=不限制 */
+const acceptAttr = computed(() => allowedExtensions.value.join(','))
+
+/**
+ * 提示文案：优先用字段自定义的「占位提示」（此前配置了也不生效，
+ * 组件一直硬编码固定文案），否则按当前约束自动生成。
+ */
+const tipText = computed(() => {
+  if (props.field.placeholder) return props.field.placeholder
+  const typeHint = allowedExtensions.value.length > 0
+    ? `仅支持 ${allowedExtensions.value.join('、')} 格式`
+    : '支持上传任意文件'
+  return `${typeHint}，单个文件不超过 10MB，最多上传 5 个文件`
+})
 
 // ==================== 监听 ====================
 
@@ -104,7 +126,7 @@ watch(
  */
 async function uploadToBackend(options: UploadRequestOptions): Promise<void> {
   try {
-    const res = await uploadDataFile(options.file as File, formCollection?.value)
+    const res = await uploadDataFile(options.file as File, formCollection?.value, props.field.fieldName)
     const uploadedFile: UploadFileInfo = {
       uid: res.id,
       name: res.name,
@@ -135,6 +157,13 @@ function handlePreview(file: UploadFile): void {
  * 上传前验证
  */
 function beforeUpload(file: File): boolean {
+  if (!isExtensionAllowed(file.name, allowedExtensions.value)) {
+    ElMessage.error(
+      `不支持 ${getFileExtension(file.name) || '该'} 类型的文件，仅支持 ${allowedExtensions.value.join('、')}！`
+    )
+    return false
+  }
+
   const isLt10M = file.size / 1024 / 1024 < 10
   if (!isLt10M) {
     ElMessage.error('上传文件大小不能超过 10MB!')
