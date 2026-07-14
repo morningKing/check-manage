@@ -1112,6 +1112,12 @@
             <tr><td>400</td><td><code>Validation failed for one or more records</code></td><td><code>continueOnError=false</code> 且至少一条记录校验失败</td></tr>
             <tr><td>403</td><td><code>Collection is read-only</code></td><td>集合未开启「允许写入」</td></tr>
           </table>
+          <p style="font-size: 13px; margin-top: 12px;">单条记录失败时，<code>errors[].error</code> 可能是以下两种不同的 ID 冲突之一，不要混淆：</p>
+          <table class="params">
+            <tr><th>errors[].error</th><th>触发条件</th></tr>
+            <tr><td><code>Record ID already exists</code></td><td>该记录的 <code>id</code> 已存在于数据库中——<code>id</code> 在同一分支下<strong>跨集合全局唯一</strong>，即便冲突的记录属于另一个集合也会命中此错误</td></tr>
+            <tr><td><code>Duplicate ID in batch</code></td><td>该 <code>id</code> 是本次请求 <code>records</code> 数组内部重复出现的值，与数据库已有数据无关</td></tr>
+          </table>
         </div>
       </div>
     </section>

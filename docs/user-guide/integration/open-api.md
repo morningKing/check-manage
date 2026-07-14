@@ -597,6 +597,13 @@ Content-Type: application/json
 | 404 | `Collection not found or not public` | 集合不存在或未开放 API 访问 |
 | 404 | `Branch not found or not active` | 指定的分支不存在或非活跃状态 |
 
+单条记录失败时，`errors[].error` 可能是以下两种不同的 ID 冲突之一（不要混淆）：
+
+| `errors[].error` | 触发条件 |
+|-------------------|---------|
+| `Record ID already exists` | 该记录的 `id` 已存在于数据库中——注意 `id` 在同一分支下**跨集合全局唯一**（`dynamic_data` 的主键是 `(id, branch_id)`，不含 collection），即便冲突的记录属于另一个集合也会命中此错误 |
+| `Duplicate ID in batch` | 该 `id` 是本次请求 `records` 数组内部重复出现的值（与数据库里已有数据无关），重复的每个下标都会各算一条失败记录 |
+
 ---
 
 ### 5.8 修改记录

@@ -457,7 +457,7 @@ def create_batch_items(collection):
             return jsonify({'error': 'Request body is required'}), 400
 
         records = body.get('records')
-        if not records:
+        if not records or not isinstance(records, list):
             return jsonify({'error': 'records is required'}), 400
         if len(records) > MAX_BATCH_SIZE:
             return jsonify({'error': f'Batch size exceeds maximum of {MAX_BATCH_SIZE} records'}), 400
@@ -478,14 +478,20 @@ def create_batch_items(collection):
                 id_counts[rid] = id_counts.get(rid, 0) + 1
         duplicate_id_values = {rid for rid, count in id_counts.items() if count > 1}
 
-        # Batch-check which of the explicitly-provided ids already exist
-        # (one query for the whole batch, not one per record).
+        # Batch-check which of the explicitly-provided ids already exist.
+        # NOTE: dynamic_data's real PRIMARY KEY is (id, branch_id) — it does
+        # NOT include collection, so ids must be globally unique within a
+        # branch across ALL collections. Deliberately not filtering by
+        # collection here (matching create_collection_item's own id check)
+        # so a cross-collection collision is caught here as a clean
+        # per-record error instead of crashing the INSERT below on the real
+        # PK constraint and rolling back the whole batch.
         all_ids = list(id_counts.keys())
         existing_ids = set()
         if all_ids:
             cur.execute(
-                'SELECT id FROM dynamic_data WHERE collection = %s AND id = ANY(%s) AND branch_id = %s',
-                (collection, all_ids, branch_id),
+                'SELECT id FROM dynamic_data WHERE id = ANY(%s) AND branch_id = %s',
+                (all_ids, branch_id),
             )
             existing_ids = set(row[0] for row in cur.fetchall())
 
