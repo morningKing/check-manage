@@ -428,6 +428,150 @@ def create_collection_item(collection):
     return jsonify({'data': result}), 201
 
 
+@open_api_bp.route('/collections/<collection>/batch', methods=['POST'])
+@api_key_required
+def create_batch_items(collection):
+    """Batch-create multiple records in a public writable collection.
+
+    Create-only (no upsert): any record whose id already exists — either
+    duplicated within the batch or already present in the database — counts
+    as a failed record for that index, never overwrites an existing row.
+    """
+    MAX_BATCH_SIZE = 1000
+
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        # Check collection is public and writable
+        error_resp = check_collection_writable(cur, collection)
+        if error_resp:
+            return error_resp
+
+        # Get and validate branch_id
+        branch_id, branch_error = get_request_branch_id(cur)
+        if branch_error:
+            return branch_error
+
+        body = request.get_json(silent=True)
+        if body is None:
+            return jsonify({'error': 'Request body is required'}), 400
+
+        records = body.get('records')
+        if not records:
+            return jsonify({'error': 'records is required'}), 400
+        if len(records) > MAX_BATCH_SIZE:
+            return jsonify({'error': f'Batch size exceeds maximum of {MAX_BATCH_SIZE} records'}), 400
+
+        options = body.get('options', {})
+        continue_on_error = options.get('continueOnError', False)
+
+        fields = get_page_fields(cur, collection)
+        pk_fields = get_primary_key_fields(cur, collection)
+
+        # Duplicate ID detection within the batch: any id value that appears
+        # more than once fails ALL of its occurrences (not just the 2nd+),
+        # matching routes/dynamic.py::batch_create_items's convention.
+        id_counts = {}
+        for record in records:
+            rid = record.get('id')
+            if rid:
+                id_counts[rid] = id_counts.get(rid, 0) + 1
+        duplicate_id_values = {rid for rid, count in id_counts.items() if count > 1}
+
+        # Batch-check which of the explicitly-provided ids already exist
+        # (one query for the whole batch, not one per record).
+        all_ids = list(id_counts.keys())
+        existing_ids = set()
+        if all_ids:
+            cur.execute(
+                'SELECT id FROM dynamic_data WHERE collection = %s AND id = ANY(%s) AND branch_id = %s',
+                (collection, all_ids, branch_id),
+            )
+            existing_ids = set(row[0] for row in cur.fetchall())
+
+        from datetime import datetime
+        errors = []
+        prepared = []
+
+        for idx, record in enumerate(records):
+            rid = record.get('id')
+
+            if rid and rid in duplicate_id_values:
+                errors.append({'index': idx, 'error': 'Duplicate ID in batch', 'record': record})
+                continue
+
+            req_errors = validate_required_fields(record, fields)
+            if req_errors:
+                errors.append({
+                    'index': idx,
+                    'error': 'Validation failed: ' + '; '.join(req_errors),
+                    'record': record,
+                })
+                continue
+
+            body_copy = dict(record)
+            record_id = body_copy.pop('id', None) or f'api-{uuid.uuid4().hex[:12]}'
+
+            if rid and rid in existing_ids:
+                errors.append({'index': idx, 'error': 'Record ID already exists', 'record': record})
+                continue
+
+            if pk_fields:
+                pk_error = check_primary_key_unique(cur, collection, body_copy, pk_fields, branch_id=branch_id)
+                if pk_error:
+                    errors.append({'index': idx, 'error': pk_error, 'record': record})
+                    continue
+
+            data = {k: v for k, v in body_copy.items() if k not in ('createdAt', 'updatedAt', '_version')}
+
+            # statusBadge 字段：创建时若已带初始值，盖变化时间戳作为超时判定基准
+            # （与 create_collection_item 单条创建的逻辑一致）
+            for f in (fields or []):
+                if f.get('controlType') == 'statusBadge' and data.get(f.get('fieldName')):
+                    data[f'_statusBadge_{f["fieldName"]}_changedAt'] = datetime.now(timezone.utc).isoformat()
+
+            prepared.append({'id': record_id, 'data': data})
+
+        # continueOnError=false 且有任何一条失败：整批 400，不写入任何记录
+        if errors and not continue_on_error:
+            return jsonify({
+                'error': 'Validation failed for one or more records',
+                'failed': len(errors),
+                'errors': errors,
+            }), 400
+
+        created_records = []
+        if prepared:
+            values = [
+                (p['id'], collection, psycopg2.extras.Json(p['data']), branch_id,
+                 compute_search_text(p['data'], fields))
+                for p in prepared
+            ]
+            rows = psycopg2.extras.execute_values(
+                cur,
+                'INSERT INTO dynamic_data (id, collection, data, branch_id, search_text) VALUES %s '
+                'RETURNING id, collection, data, created_at',
+                values,
+                fetch=True,
+            )
+            for row in rows:
+                rec = row_to_record(row)
+                rec['branchId'] = branch_id
+                created_records.append(rec)
+
+            from utils.sequences import reseed_sequences
+            reseed_sequences(cur, collections=[collection])
+
+    result = {
+        'data': created_records,
+        'created': len(created_records),
+        'failed': len(errors),
+    }
+    if errors:
+        result['errors'] = errors
+    return jsonify(result), 201
+
+
 @open_api_bp.route('/collections/<collection>/<item_id>', methods=['PUT'])
 @api_key_required
 def update_collection_item(collection, item_id):

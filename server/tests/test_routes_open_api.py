@@ -250,6 +250,180 @@ class TestCreateRecord:
         assert resp.status_code == 409
 
 
+class TestBatchCreateRecords:
+    def test_collection_not_writable(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, False),  # public but not writable
+        ])
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': [{'name': 'A'}]}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 403
+
+    def test_missing_records_field(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),
+        ])
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 400
+        assert 'records is required' in resp.get_json()['error']
+
+    def test_batch_size_exceeds_limit(self, setup):
+        client, mock_cursor, api_h = setup
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),  # writable check
+        ])
+        records = [{'name': f'item-{i}'} for i in range(1001)]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 400
+        assert 'exceeds maximum' in resp.get_json()['error']
+
+    def test_batch_create_success(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'name', 'label': '名称', 'controlType': 'text', 'required': False}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),   # writable check
+            (fields,),      # get_page_fields
+            ([],),          # get_primary_key_fields -> pk_fields = []
+        ])
+        mock_cursor.fetchall.side_effect = [
+            [],  # existing-ids check: 'rec-1' not found in DB
+            [('rec-1', 'devices', {'name': 'A'}, now),
+             ('api-generated123', 'devices', {'name': 'B'}, now)],  # RETURNING rows
+            [],  # reseed_sequences -> _autoseq_fields_by_collection (no autoSequence fields)
+        ]
+        records = [
+            {'id': 'rec-1', 'name': 'A'},
+            {'name': 'B'},
+        ]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body['created'] == 2
+        assert body['failed'] == 0
+        assert len(body['data']) == 2
+        assert body['data'][0]['id'] == 'rec-1'
+        assert body['data'][0]['name'] == 'A'
+        assert 'errors' not in body
+
+    def test_continue_on_error_false_aborts_whole_batch(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'name', 'label': '名称', 'controlType': 'text', 'required': False}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),
+            (fields,),
+            ([],),
+        ])
+        mock_cursor.fetchall.side_effect = [
+            [('rec-1',)],  # existing-ids check: rec-1 already exists
+        ]
+        records = [
+            {'id': 'rec-1', 'name': 'A'},
+            {'name': 'B'},
+        ]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body['failed'] == 1
+        assert body['errors'][0]['index'] == 0
+        assert body['errors'][0]['error'] == 'Record ID already exists'
+        # Nothing should have been inserted
+        insert_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if c.args and 'INSERT INTO dynamic_data' in str(c.args[0])
+        ]
+        assert len(insert_calls) == 0
+
+    def test_continue_on_error_true_partial_success(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'name', 'label': '名称', 'controlType': 'text', 'required': False}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),
+            (fields,),
+            ([],),
+        ])
+        mock_cursor.fetchall.side_effect = [
+            [('rec-1',)],  # existing-ids check: rec-1 already exists
+            [('api-generated456', 'devices', {'name': 'B'}, now)],  # RETURNING (only the successful one)
+            [],  # reseed_sequences -> _autoseq_fields_by_collection (no autoSequence fields)
+        ]
+        records = [
+            {'id': 'rec-1', 'name': 'A'},  # will fail: already exists
+            {'name': 'B'},                 # will succeed
+        ]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records, 'options': {'continueOnError': True}}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 201
+        body = resp.get_json()
+        assert body['created'] == 1
+        assert body['failed'] == 1
+        assert body['errors'][0]['index'] == 0
+        assert len(body['data']) == 1
+        assert body['data'][0]['name'] == 'B'
+
+    def test_duplicate_id_within_batch(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [{'fieldName': 'name', 'label': '名称', 'controlType': 'text', 'required': False}]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),
+            (fields,),
+            ([],),
+        ])
+        mock_cursor.fetchall.side_effect = [
+            [],  # existing-ids check: 'dup-1' not found in DB
+        ]
+        records = [
+            {'id': 'dup-1', 'name': 'A'},
+            {'id': 'dup-1', 'name': 'B'},
+        ]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body['failed'] == 2
+        assert all(e['error'] == 'Duplicate ID in batch' for e in body['errors'])
+
+    def test_primary_key_conflict(self, setup):
+        client, mock_cursor, api_h = setup
+        fields = [
+            {'fieldName': 'sku', 'label': 'SKU', 'controlType': 'text', 'required': True, 'isPrimaryKey': True},
+        ]
+        _setup_auth_and_returns(mock_cursor, fetchone_returns=[
+            (True, True),           # writable
+            (fields,),              # get_page_fields
+            (fields,),              # get_primary_key_fields -> pk_fields = ['sku']
+            ('existing-rec-id',),   # check_primary_key_unique -> conflict found
+        ])
+        records = [{'sku': 'SKU-001'}]
+        resp = client.post('/api/v1/collections/devices/batch',
+                           data=json.dumps({'records': records}),
+                           content_type='application/json',
+                           headers=api_h)
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert body['failed'] == 1
+        assert 'Primary key conflict' in body['errors'][0]['error']
+
+
 class TestUpdateRecord:
     def test_collection_not_writable(self, setup):
         client, mock_cursor, api_h = setup
