@@ -20,7 +20,7 @@
     destroy-on-close
     class="file-preview-dialog"
   >
-    <div class="fp-body" v-loading="loading">
+    <div class="fp-body" :class="{ 'fp-body--office': !!officeComponent }" v-loading="loading">
       <!-- Office / PDF -->
       <component
         :is="officeComponent"
@@ -143,9 +143,20 @@ watch(
   min-height: 200px;
   max-height: 78vh;
   overflow: auto;
+
+  // @vue-office/excel 内部（x-spreadsheet）在 onMounted 时用 JS 读取容器的
+  // clientHeight 来定尺寸，而不是纯 CSS 自适应；父级只有 min-height/max-height
+  // （即 auto 高度）时 clientHeight 在挂载那一刻测不出有效值，会退化成写死的
+  // 300px 画布——弹窗本身很大，但表格只画了一小块，看起来"高度不对/预览不正常"。
+  // 展示 Office 类预览（含 Excel）时给一个确定的 height，让 .fp-office 的
+  // height:100% 能一路解析到具体像素值。
+  &.fp-body--office {
+    height: 78vh;
+  }
 }
 .fp-office {
   width: 100%;
+  height: 100%;
 }
 .fp-text {
   margin: 0;
