@@ -199,6 +199,29 @@ class OpenApiClient:
         )
         return resp.json()["data"]
 
+    def batch_create_records(
+        self,
+        collection: str,
+        records: list,
+        *,
+        branch_id: str = "main",
+        continue_on_error: bool = False,
+    ) -> dict:
+        """批量创建记录（单次最多 1000 条）。
+
+        返回 {"data": [...], "created": N, "failed": M, "errors"?: [...]}。
+        continue_on_error=False（默认）时，只要有一条记录校验失败就不会写入
+        任何记录，整个调用抛 ApiError 子类异常；True 时跳过失败记录，成功的
+        会写入，返回值里的 failed/errors 描述哪些没写进去。
+        """
+        resp = self._request(
+            "POST",
+            f"/collections/{collection}/batch",
+            json_body={"records": records, "options": {"continueOnError": continue_on_error}},
+            params={"branchId": branch_id},
+        )
+        return resp.json()
+
     def update_record(
         self,
         collection: str,

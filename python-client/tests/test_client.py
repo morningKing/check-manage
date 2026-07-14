@@ -126,6 +126,44 @@ def test_create_record_sends_json_body():
     assert client.create_record("devices", {"name": "x"})["id"] == "api-1"
 
 
+def test_batch_create_records_sends_records_and_options():
+    def fake_request(method, url, **kwargs):
+        assert method == "POST"
+        assert url == "http://x/api/v1/collections/devices/batch"
+        assert kwargs["json"] == {
+            "records": [{"name": "a"}, {"name": "b"}],
+            "options": {"continueOnError": True},
+        }
+        return FakeResponse(201, {"data": [{"id": "api-1", "name": "a"}], "created": 1, "failed": 1,
+                                   "errors": [{"index": 1, "error": "..."}]})
+
+    client, _ = make_client(fake_request)
+    result = client.batch_create_records(
+        "devices", [{"name": "a"}, {"name": "b"}], continue_on_error=True
+    )
+    assert result["created"] == 1
+    assert result["failed"] == 1
+
+
+def test_batch_create_records_default_continue_on_error_is_false():
+    def fake_request(method, url, **kwargs):
+        assert kwargs["json"]["options"] == {"continueOnError": False}
+        return FakeResponse(201, {"data": [{"id": "api-1"}], "created": 1, "failed": 0})
+
+    client, _ = make_client(fake_request)
+    client.batch_create_records("devices", [{"name": "a"}])
+
+
+def test_batch_create_records_raises_on_400():
+    def fake_request(method, url, **kwargs):
+        return FakeResponse(400, {"error": "Validation failed for one or more records",
+                                   "failed": 1, "errors": [{"index": 0, "error": "..."}]})
+
+    client, _ = make_client(fake_request)
+    with pytest.raises(ValidationError):
+        client.batch_create_records("devices", [{"name": "a"}])
+
+
 def test_update_record_merges_version_into_payload():
     def fake_request(method, url, **kwargs):
         assert method == "PUT"
