@@ -169,3 +169,69 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
 
   return { success, failed, created, updated, failures }
 }
+
+/**
+ * 重试一批之前失败的记录：直接重新提交它们已经就绪的请求体
+ * （不重新解析关联/引用/序列号——那些在首次导入时已经算好并塞进了 payload），
+ * 按与首次导入相同的 BATCH_SIZE/CONCURRENCY 重新分批提交。
+ */
+export async function retryImportFailures(
+  post: <T>(url: string, body: any) => Promise<T>,
+  collection: string,
+  failures: ImportFailure[],
+  onProgress?: (current: number, total: number) => void,
+): Promise<ImportPageResult> {
+  let success = 0, failed = 0, created = 0, updated = 0
+  let completed = 0
+  const remainingFailures: ImportFailure[] = []
+
+  async function runBatch(batchIdx: number): Promise<void> {
+    const start = batchIdx * BATCH_SIZE
+    const end = Math.min(start + BATCH_SIZE, failures.length)
+    const batchFailures = failures.slice(start, end)
+    const batchData = batchFailures.map((f) => f.payload)
+
+    try {
+      const result = await post<{
+        created: number
+        updated?: number
+        failed: number
+        errors?: Array<{ index: number; error: string; validationErrors?: string[]; record: any }>
+      }>(
+        `/${collection}/batch-create`,
+        { records: batchData, options: { skipValidation: false, generateSequence: true, continueOnError: true } },
+      )
+      success += result.created + (result.updated || 0)
+      created += result.created
+      updated += result.updated || 0
+      failed += result.failed
+      if (result.errors && result.errors.length > 0) {
+        for (const err of result.errors) {
+          remainingFailures.push({
+            originalRecord: batchFailures[err.index].originalRecord,
+            payload: batchFailures[err.index].payload,
+            reason: err.validationErrors && err.validationErrors.length > 0
+              ? err.validationErrors.join('; ')
+              : err.error,
+          })
+        }
+      }
+    } catch (error) {
+      failed += batchFailures.length
+      const message = error instanceof Error ? error.message : String(error)
+      batchFailures.forEach((f) => {
+        remainingFailures.push({
+          originalRecord: f.originalRecord,
+          payload: f.payload,
+          reason: `请求失败：${message}，可重试`,
+        })
+      })
+    }
+    completed += batchFailures.length
+    onProgress?.(completed, failures.length)
+  }
+
+  await runBatchesConcurrently(failures.length, runBatch)
+
+  return { success, failed, created, updated, failures: remainingFailures }
+}

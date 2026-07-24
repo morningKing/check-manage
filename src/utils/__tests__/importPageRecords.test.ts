@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { importPageRecords } from '../importPageRecords'
+import { importPageRecords, retryImportFailures } from '../importPageRecords'
 import { makeStableImportId } from '../importId'
 
 function makeStore(overrides: Record<string, any> = {}) {
@@ -176,5 +176,75 @@ describe('importPageRecords', () => {
     })
 
     expect(result.failures[0].reason).toBe('字段A必填; 字段B格式错误')
+  })
+})
+
+describe('retryImportFailures', () => {
+  function makeFailure(overrides: Partial<import('../importPageRecords').ImportFailure> = {}) {
+    return {
+      originalRecord: { name: 'a' },
+      payload: { id: 'orders-a', data: { name: 'a' }, relations: {} },
+      reason: '主键重复',
+      ...overrides,
+    }
+  }
+
+  it('re-posts the given payloads directly, without any resolution step', async () => {
+    const post = vi.fn().mockResolvedValue({ created: 1, updated: 0, failed: 0 })
+    const failures = [makeFailure()]
+
+    const result = await retryImportFailures(post, 'orders', failures)
+
+    expect(post).toHaveBeenCalledWith('/orders/batch-create', {
+      records: [failures[0].payload],
+      options: { skipValidation: false, generateSequence: true, continueOnError: true },
+    })
+    expect(result).toEqual({ success: 1, failed: 0, created: 1, updated: 0, failures: [] })
+  })
+
+  it('splits more than BATCH_SIZE failures into multiple concurrent batches', async () => {
+    const post = vi.fn().mockImplementation(async (_url: string, body: any) => ({
+      created: body.records.length, updated: 0, failed: 0,
+    }))
+    const failures = Array.from({ length: 2500 }, (_, i) => makeFailure({
+      originalRecord: { name: `r${i}` },
+      payload: { id: `orders-${i}`, data: { name: `r${i}` }, relations: {} },
+    }))
+    const onProgress = vi.fn()
+
+    const result = await retryImportFailures(post, 'orders', failures, onProgress)
+
+    expect(post).toHaveBeenCalledTimes(3) // 1000 / 1000 / 500
+    expect(result).toEqual({ success: 2500, failed: 0, created: 2500, updated: 0, failures: [] })
+    const finalCall = onProgress.mock.calls[onProgress.mock.calls.length - 1]
+    expect(finalCall).toEqual([2500, 2500])
+  })
+
+  it('returns only the still-failing subset, with the latest reason, after a partial retry', async () => {
+    const post = vi.fn().mockResolvedValue({
+      created: 1,
+      updated: 0,
+      failed: 1,
+      errors: [{ index: 1, error: '仍然重复', record: {} }],
+    })
+    const failures = [makeFailure({ originalRecord: { name: 'a' } }), makeFailure({ originalRecord: { name: 'b' } })]
+
+    const result = await retryImportFailures(post, 'orders', failures)
+
+    expect(result.failed).toBe(1)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].originalRecord).toEqual({ name: 'b' })
+    expect(result.failures[0].reason).toBe('仍然重复')
+  })
+
+  it('marks all as still-failing with an updated reason when the whole retry request throws', async () => {
+    const post = vi.fn().mockRejectedValue(new Error('还是超时'))
+    const failures = [makeFailure()]
+
+    const result = await retryImportFailures(post, 'orders', failures)
+
+    expect(result.failed).toBe(1)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].reason).toMatch(/请求失败.*还是超时.*可重试/)
   })
 })
