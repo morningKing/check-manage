@@ -1,10 +1,17 @@
 import { makeImportRowId, makeStableImportId } from '@/utils/importId'
 
+export interface ImportFailure {
+  originalRecord: Record<string, any>
+  payload: { id: string; data: any; relations: Record<string, string[]> }
+  reason: string
+}
+
 export interface ImportPageResult {
   success: number
   failed: number
   created: number
   updated: number
+  failures: ImportFailure[]
 }
 
 export interface ImportPageParams {
@@ -21,6 +28,26 @@ const BATCH_SIZE = 1000
 // 单批太大会让单个请求变慢甚至超时；并发送多个中等大小的批次比"更大的单批"更稳妥，
 // 也比纯串行快数倍。3 是留有余量的保守值（后端 waitress 线程池默认 8，DB 连接池 20）。
 const CONCURRENCY = 3
+
+/**
+ * 按 BATCH_SIZE 切分、以 CONCURRENCY 个并发 worker 跑完 itemCount 个条目。
+ * 每个 worker 从共享游标领取下一个批次下标，直到取完——与执行顺序无关，
+ * 供 importPageRecords 和 retryImportFailures 共用，避免重复实现同一套调度逻辑。
+ */
+async function runBatchesConcurrently(
+  itemCount: number,
+  runOne: (batchIdx: number) => Promise<void>
+): Promise<void> {
+  const batchCount = Math.ceil(itemCount / BATCH_SIZE)
+  let nextBatchIdx = 0
+  async function worker(): Promise<void> {
+    while (nextBatchIdx < batchCount) {
+      const batchIdx = nextBatchIdx++
+      await runOne(batchIdx)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batchCount) }, () => worker()))
+}
 
 /**
  * 单页批量导入核心：盖保序 id → 解析引用/关联 → 生成序列 → 分批 batch-create。
@@ -62,15 +89,16 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
 
   let success = 0, failed = 0, created = 0, updated = 0
   let completed = 0
-  const batchCount = Math.ceil(records.length / BATCH_SIZE)
+  const failures: ImportFailure[] = []
 
   async function runBatch(batchIdx: number): Promise<void> {
     const start = batchIdx * BATCH_SIZE
     const end = Math.min(start + BATCH_SIZE, records.length)
     const batchRecords = records.slice(start, end)
+    let batchData: Array<{ id: string; data: any; relations: Record<string, string[]> }> = []
 
     try {
-      const batchData = batchRecords.map((record, idx) => {
+      batchData = batchRecords.map((record, idx) => {
         const importId = record._importId as string | undefined
         const regularData = store.stripRelationFields(pageId, record)
         delete regularData._importId
@@ -90,7 +118,12 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
         }
       })
 
-      const result = await post<{ created: number; updated?: number; failed: number; errors?: Array<{ index: number; error: string; record: any }> }>(
+      const result = await post<{
+        created: number
+        updated?: number
+        failed: number
+        errors?: Array<{ index: number; error: string; validationErrors?: string[]; record: any }>
+      }>(
         `/${collection}/batch-create`,
         { records: batchData, options: { skipValidation: false, generateSequence: true, continueOnError: true } },
       )
@@ -100,26 +133,39 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
       failed += result.failed
       if (result.errors && result.errors.length > 0) {
         console.warn(`批次 ${batchIdx + 1} 失败记录:`, result.errors)
+        for (const err of result.errors) {
+          failures.push({
+            originalRecord: batchRecords[err.index],
+            payload: batchData[err.index],
+            reason: err.validationErrors && err.validationErrors.length > 0
+              ? err.validationErrors.join('; ')
+              : err.error,
+          })
+        }
       }
     } catch (error) {
       console.error(`批次 ${batchIdx + 1} 导入失败:`, error)
       failed += batchRecords.length
+      const message = error instanceof Error ? error.message : String(error)
+      batchRecords.forEach((record, idx) => {
+        failures.push({
+          originalRecord: record,
+          // batchData 构建阶段本身抛错（极少见）时兜底一个可用的最小请求体，
+          // 保证即使这种边界情况也不丢失可重试性
+          payload: batchData[idx] ?? {
+            id: (record._importId as string) || `${collection}-${Math.random().toString(36).slice(2, 10)}`,
+            data: record,
+            relations: {},
+          },
+          reason: `请求失败：${message}，可重试`,
+        })
+      })
     }
     completed += batchRecords.length
     onProgress?.(completed, records.length)
   }
 
-  // 有限并发：多个 worker 各自从共享游标领取下一个批次索引，直到取完。
-  // 批次按下标预切好（start/end 由 batchIdx 算出），与执行顺序无关，
-  // 所以并发执行不影响每批记录对应的序列值/进度计数是否正确。
-  let nextBatchIdx = 0
-  async function worker(): Promise<void> {
-    while (nextBatchIdx < batchCount) {
-      const batchIdx = nextBatchIdx++
-      await runBatch(batchIdx)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batchCount) }, () => worker()))
+  await runBatchesConcurrently(records.length, runBatch)
 
-  return { success, failed, created, updated }
+  return { success, failed, created, updated, failures }
 }

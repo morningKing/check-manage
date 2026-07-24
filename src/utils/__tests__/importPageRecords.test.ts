@@ -33,7 +33,7 @@ describe('importPageRecords', () => {
     expect(post).toHaveBeenCalledWith('/orders/batch-create', expect.objectContaining({
       records: expect.any(Array),
     }))
-    expect(result).toEqual({ success: 2, failed: 0, created: 2, updated: 0 })
+    expect(result).toEqual({ success: 2, failed: 0, created: 2, updated: 0, failures: [] })
   })
 
   it('reports progress for the final batch', async () => {
@@ -86,6 +86,9 @@ describe('importPageRecords', () => {
     })
     expect(result.failed).toBe(1)
     expect(result.success).toBe(0)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].originalRecord).toEqual({ name: 'a', _importId: expect.any(String) })
+    expect(result.failures[0].reason).toMatch(/请求失败.*boom.*可重试/)
   })
 
   it('splits large imports into multiple concurrent batches and aggregates all of them', async () => {
@@ -104,7 +107,7 @@ describe('importPageRecords', () => {
     })
 
     expect(post).toHaveBeenCalledTimes(3)
-    expect(result).toEqual({ success: 2500, failed: 0, created: 2500, updated: 0 })
+    expect(result).toEqual({ success: 2500, failed: 0, created: 2500, updated: 0, failures: [] })
     // 进度回调的 current 单调递增，最终到达总数
     const finalCall = onProgress.mock.calls[onProgress.mock.calls.length - 1]
     expect(finalCall[0]).toBe(2500)
@@ -126,5 +129,52 @@ describe('importPageRecords', () => {
 
     expect(result.failed).toBe(1000) // 第一批 1000 条计入失败
     expect(result.success).toBe(1500) // 剩余两批成功
+    expect(result.failures).toHaveLength(1000)
+    expect(result.failures[0].originalRecord.name).toBe('r0')
+    expect(result.failures[0].reason).toMatch(/请求失败.*batch 0 boom.*可重试/)
+  })
+
+  it('captures per-record failures reported by the backend, keyed back to the original record', async () => {
+    const store = makeStore()
+    const post = vi.fn().mockResolvedValue({
+      created: 1,
+      updated: 0,
+      failed: 1,
+      errors: [{ index: 1, error: '主键重复', record: { id: 'orders-b' } }],
+    })
+    const records = [{ name: 'a' }, { name: 'b' }]
+
+    const result = await importPageRecords({
+      store, post, pageId: 'page-orders', collection: 'orders', records,
+    })
+
+    expect(result.failed).toBe(1)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0].originalRecord).toEqual({ name: 'b', _importId: expect.any(String) })
+    expect(result.failures[0].reason).toBe('主键重复')
+    // payload 是已经构建好、可以直接重新 POST 的请求体
+    expect(result.failures[0].payload).toEqual(post.mock.calls[0][1].records[1])
+  })
+
+  it('joins validationErrors into a single reason string when the backend reports a validation-script failure', async () => {
+    const store = makeStore()
+    const post = vi.fn().mockResolvedValue({
+      created: 0,
+      updated: 0,
+      failed: 1,
+      errors: [{
+        index: 0,
+        error: '校验失败',
+        validationErrors: ['字段A必填', '字段B格式错误'],
+        record: { id: 'orders-a' },
+      }],
+    })
+    const records = [{ name: 'a' }]
+
+    const result = await importPageRecords({
+      store, post, pageId: 'page-orders', collection: 'orders', records,
+    })
+
+    expect(result.failures[0].reason).toBe('字段A必填; 字段B格式错误')
   })
 })
