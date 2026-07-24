@@ -421,7 +421,7 @@
           </el-tag>
         </div>
       </template>
-      <el-descriptions :column="1" border>
+      <el-descriptions class="view-descriptions" :column="1" border>
         <el-descriptions-item
           v-for="field in viewDisplayFields"
           :key="field.id"
@@ -3806,9 +3806,29 @@ html.dark .dynamic-page :deep(.highlight-flash) {
   border-radius: 4px;
 }
 
+.view-descriptions {
+  // 内容列不设固定宽度时，表格默认 table-layout:auto —— 一行放不下的长内容
+  // （无空格的整行文本、代码块）会把列撑宽，进而把整张表/弹窗顶出边界。
+  // 固定表格布局后内容列宽度确定，超出部分交给 .view-markdown 自己滚动/换行。
+  :deep(.el-descriptions__table) {
+    table-layout: fixed;
+  }
+}
+
 .view-markdown {
   max-height: 460px;
-  overflow-y: auto;
+  overflow: auto;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+
+  :deep(pre) {
+    overflow-x: auto;
+  }
+
+  :deep(table) {
+    display: block;
+    overflow-x: auto;
+  }
 }
 
 .view-file-item {
