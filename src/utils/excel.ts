@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx'
 import type { FieldConfig } from '@/types'
 import { getExportableFields } from './excelParseCore'
 import type { ImportWorkerRequest, ImportWorkerResponse } from '@/workers/excelImportWorker'
+import type { ImportFailure } from './importPageRecords'
 
 export { getExportableFields }
 
@@ -183,6 +184,39 @@ export function generateImportTemplate(
   const guideWs = XLSX.utils.aoa_to_sheet(guideRows)
   guideWs['!cols'] = [{ wch: 16 }, { wch: 20 }, { wch: 28 }, { wch: 10 }, { wch: 40 }]
   XLSX.utils.book_append_sheet(wb, guideWs, '字段说明')
+
+  XLSX.writeFile(wb, `${filename}.xlsx`)
+}
+
+/**
+ * 导出导入失败清单：字段列（与原始导入表头一致）+ 末尾"失败原因"列。
+ * 用户改完数据、删掉"失败原因"列，就是一份可以直接重新导入的文件。
+ */
+export function exportImportFailures(
+  failures: ImportFailure[],
+  fields: FieldConfig[],
+  filename: string
+): void {
+  const exportFields = getExportableFields(fields)
+  const headers = [...exportFields.map((f) => f.label), '失败原因']
+
+  const rows = failures.map((failure) => [
+    ...exportFields.map((field) => {
+      const value = failure.originalRecord[field.fieldName]
+      if (value === null || value === undefined) return ''
+      return Array.isArray(value) ? value.join('、') : value
+    }),
+    failure.reason,
+  ])
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = [
+    ...exportFields.map((f) => ({ wch: Math.max(f.label.length * 2 + 4, 12) })),
+    { wch: 40 },
+  ]
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, '失败记录')
 
   XLSX.writeFile(wb, `${filename}.xlsx`)
 }

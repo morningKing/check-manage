@@ -3,6 +3,7 @@ import {
   getExportableFields,
   exportToExcel,
   generateImportTemplate,
+  exportImportFailures,
 } from '../excel'
 import {
   parseWorkbookBuffer,
@@ -253,6 +254,73 @@ describe('Excel Utils', () => {
       // 应该调用两次 book_append_sheet：一次是数据模板，一次是字段说明
       const mockBookAppendSheet = vi.mocked(XLSX.utils.book_append_sheet)
       expect(mockBookAppendSheet).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('exportImportFailures', () => {
+    const mockWriteFile = vi.mocked(XLSX.writeFile)
+    const mockAoatoSheet = vi.mocked(XLSX.utils.aoa_to_sheet)
+    const mockBookAppendSheet = vi.mocked(XLSX.utils.book_append_sheet)
+
+    beforeEach(() => {
+      vi.clearAllMocks()
+    })
+
+    it('表头为字段 label 加末尾"失败原因"列，内容行取 originalRecord 的值', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'age', label: '年龄', controlType: 'number', order: 2 }),
+      ]
+      const failures = [
+        { originalRecord: { name: '张三', age: 25 }, payload: { id: 'x', data: {}, relations: {} }, reason: '主键重复' },
+      ]
+
+      exportImportFailures(failures, fields, 'test-failures')
+
+      const sheetArgs = mockAoatoSheet.mock.calls[0][0] as any[][]
+      expect(sheetArgs[0]).toEqual(['名称', '年龄', '失败原因'])
+      expect(sheetArgs[1]).toEqual(['张三', 25, '主键重复'])
+      expect(mockBookAppendSheet).toHaveBeenCalled()
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.anything(), 'test-failures.xlsx')
+    })
+
+    it('originalRecord 里缺失的字段值导出为空字符串', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+      const failures = [
+        { originalRecord: {}, payload: { id: 'x', data: {}, relations: {} }, reason: '缺少必填字段' },
+      ]
+
+      exportImportFailures(failures, fields, 'test')
+
+      const sheetArgs = mockAoatoSheet.mock.calls[0][0] as any[][]
+      expect(sheetArgs[1]).toEqual(['', '缺少必填字段'])
+    })
+
+    it('数组值（如多选）用顿号拼接', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'tags', label: '标签', controlType: 'multiSelect', order: 1 }),
+      ]
+      const failures = [
+        { originalRecord: { tags: ['a', 'b'] }, payload: { id: 'x', data: {}, relations: {} }, reason: '校验失败' },
+      ]
+
+      exportImportFailures(failures, fields, 'test')
+
+      const sheetArgs = mockAoatoSheet.mock.calls[0][0] as any[][]
+      expect(sheetArgs[1]).toEqual(['a、b', '校验失败'])
+    })
+
+    it('空 failures 只生成表头行', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+      ]
+
+      exportImportFailures([], fields, 'test')
+
+      const sheetArgs = mockAoatoSheet.mock.calls[0][0] as any[][]
+      expect(sheetArgs).toEqual([['名称', '失败原因']])
     })
   })
 
