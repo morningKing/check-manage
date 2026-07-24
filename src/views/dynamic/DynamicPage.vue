@@ -876,6 +876,10 @@
               ,失败 {{ importResult.failed }} 条
             </p>
           </template>
+          <template v-if="importResult.failed > 0" #extra>
+            <el-button @click="handleExportImportFailures">导出失败清单</el-button>
+            <el-button type="primary" @click="handleRetryImportFailures">重试失败记录</el-button>
+          </template>
         </el-result>
       </div>
       <template #footer>
@@ -946,8 +950,8 @@ import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore,
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
-import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile } from '@/utils/excel'
-import { importPageRecords } from '@/utils/importPageRecords'
+import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile, exportImportFailures } from '@/utils/excel'
+import { importPageRecords, retryImportFailures, type ImportPageResult } from '@/utils/importPageRecords'
 import { withBatch } from '@/utils/batch'
 import { getExportScriptsForCollection, executeExportScript } from '@/api/exportScript'
 import { listWorkflows, startWorkflow } from '@/api/workflow'
@@ -1204,7 +1208,7 @@ const importElapsedSeconds = ref(0)
 /**
  * 导入结果
  */
-const importResult = ref<{ success: number; failed: number; created?: number; updated?: number } | null>(null)
+const importResult = ref<ImportPageResult | null>(null)
 
 /**
  * 所有导出脚本（缓存）
@@ -2843,7 +2847,7 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   importTotal.value = records.length
   importDialogVisible.value = true
 
-  const { success, failed, created, updated } = await importPageRecords({
+  const result = await importPageRecords({
     store: pageConfigStore,
     post,
     pageId: pageId.value,
@@ -2856,8 +2860,53 @@ async function doImport(records: Record<string, any>[]): Promise<void> {
   })
 
   importLoading.value = false
-  importResult.value = { success, failed, created, updated }
-  if (success > 0) await loadPageData()
+  importResult.value = result
+  if (result.success > 0) await loadPageData()
+}
+
+/**
+ * 重试当前导入结果里仍失败的记录：直接重放已就绪的请求体，不重新解析文件/关联。
+ */
+async function handleRetryImportFailures(): Promise<void> {
+  const prev = importResult.value
+  if (!prev || prev.failures.length === 0) return
+
+  const retryTargets = prev.failures
+  importPhase.value = 'uploading'
+  importLoading.value = true
+  importProgress.value = 0
+  importCurrent.value = 0
+  importTotal.value = retryTargets.length
+
+  const retryResult = await retryImportFailures(post, collection.value, retryTargets, (current, total) => {
+    importCurrent.value = current
+    importProgress.value = Math.round((current / total) * 100)
+  })
+
+  importLoading.value = false
+  importResult.value = {
+    success: prev.success + retryResult.success,
+    created: prev.created + retryResult.created,
+    updated: prev.updated + retryResult.updated,
+    failed: retryResult.failed,
+    failures: retryResult.failures,
+  }
+  if (retryResult.success > 0) await loadPageData()
+}
+
+/**
+ * 导出当前导入结果里仍失败的记录：字段列 + 失败原因列，删掉原因列即可重新导入。
+ */
+function handleExportImportFailures(): void {
+  const failures = importResult.value?.failures
+  if (!failures || failures.length === 0) return
+
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const name = pageConfig.value?.name || '数据'
+
+  exportImportFailures(failures, pageFields.value, `导入失败记录_${name}_${ts}`)
 }
 
 /**
