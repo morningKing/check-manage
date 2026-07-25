@@ -159,37 +159,50 @@ class TestProgressAndCancel:
 
 class TestBatchFailureRollback:
     def test_batch_insert_failure_rolls_back_only_that_batch(self, monkeypatch):
-        """人为让 execute_values 在处理某一批时抛错，断言：(a) 这一批的记录
-        没有落库；(b) 连接在异常后仍然可用（能继续下一批，或至少调用方能正常
-        commit/rollback，不会因为"事务已中止"而级联失败）；(c) errors 里记录了
-        失败原因。"""
+        """构造一个真实的 SQL 失败（预先插入一行，第一批记录里有一条 id 和它
+        冲突，execute_values 对整批发一条 INSERT 语句，真实触发 UniqueViolation，
+        真实把事务打入 aborted 状态），验证：(a) 第一批的记录一条都没有落库
+        （execute_values 是单条语句，整批要么全成功要么全失败）；(b) 第二批在
+        conn.rollback() 之后能正常写入，证明 rollback 真的把连接恢复可用了——
+        如果把 etl_engine.py 里 _step_save_to_collection 的 conn.rollback()
+        去掉，第二批自己的 execute_values 会因为"事务已中止"而报错，success
+        会变成 0、error 会变成 4、数据库里只有预先插入的那 1 条，和这里断言的
+        success==2/error==2/3 条数据完全不同，所以这个测试真的挂在 rollback
+        这一行上，不是摆设。
+        """
         import utils.etl_engine as etl_engine
-
-        original_write_batch = etl_engine._write_batch
-        call_count = {'n': 0}
-
-        def _flaky_write_batch(cur, collection, mode, match_field, batch, now):
-            call_count['n'] += 1
-            if call_count['n'] == 1:
-                raise Exception('模拟批量写入失败')
-            return original_write_batch(cur, collection, mode, match_field, batch, now)
-
-        monkeypatch.setattr(etl_engine, '_write_batch', _flaky_write_batch)
         monkeypatch.setattr(etl_engine, 'SAVE_BATCH_SIZE', 2)
 
         with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s, %s, %s, %s)',
+                ('_t_dup_id', COLLECTION, psycopg2.extras.Json({'name': 'pre-existing'}),
+                 datetime.now(timezone.utc)),
+            )
+            conn.commit()
+
             ctx = {
-                'records': [{'name': f'r{i}'} for i in range(4)],  # 2 批
+                # 第一批（2 条，SAVE_BATCH_SIZE=2）：第一条的 id 和上面预先插入
+                # 的行冲突，execute_values 抛真实的 UniqueViolation，事务被中止。
+                # 第二批（2 条）：完全正常，验证 rollback 之后连接还能用。
+                'records': [
+                    {'id': '_t_dup_id', 'name': 'conflict'},
+                    {'name': 'also-in-failed-batch'},
+                    {'name': 'r2'},
+                    {'name': 'r3'},
+                ],
                 'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
             }
             _step_save_to_collection(
                 {'collection': COLLECTION, 'mode': 'insert'}, ctx, conn, dry_run=False,
             )
-            # 第一批失败（计入 error），第二批正常（计入 success）
-            assert ctx['success'] == 2
-            assert ctx['error'] == 2
-            assert any('模拟批量写入失败' in e for e in ctx['errors'])
+            assert ctx['success'] == 2   # 第二批
+            assert ctx['error'] == 2     # 第一批（整批失败）
+            assert any('批量写入失败' in e for e in ctx['errors'])
 
         rows = _fetch_all()
-        # 只有第二批（未失败的那批）的 2 条记录落库
-        assert len(rows) == 2
+        # 预先插入的 1 条 + 第二批成功的 2 条 = 3 条；第一批的 2 条一条都没进去
+        assert len(rows) == 3
+        names = {r[1]['name'] for r in rows}
+        assert names == {'pre-existing', 'r2', 'r3'}
