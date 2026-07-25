@@ -28,6 +28,7 @@ export interface EtlStepResult {
   status: 'success' | 'error' | 'skipped'
   recordCount?: number
   error?: string
+  sampleRecords?: Record<string, any>[]
 }
 
 export interface EtlRunResult {
@@ -37,6 +38,12 @@ export interface EtlRunResult {
   errorCount: number
   stepResults: EtlStepResult[]
   errors: string[]
+}
+
+/** POST /etlTasks/<id>/run（非 dry run）的立即响应：只有一个运行 ID，真正结果要轮询 EtlLog */
+export interface EtlRunStarted {
+  logId: string
+  status: string
 }
 
 export interface EtlLog {
@@ -51,4 +58,6 @@ export interface EtlLog {
   errorCount: number
   stepResults: EtlStepResult[]
   errorDetail?: string
+  progressCurrent?: number
+  currentStepName?: string
 }

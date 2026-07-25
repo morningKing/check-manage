@@ -22,6 +22,8 @@ import {
   deleteEtlTask,
   runEtlTask,
   getEtlLogs,
+  getEtlLog,
+  cancelEtlRun,
 } from '../etl'
 
 const mockGet = vi.mocked(get)
@@ -90,5 +92,28 @@ describe('ETL API', () => {
     const result = await getEtlLogs('etl-1')
     expect(mockGet).toHaveBeenCalledWith('/etlTasks/etl-1/logs')
     expect(result).toEqual(logs)
+  })
+
+  it('getEtlLog 调用 GET /etlTasks/{id}/logs/{logId}', async () => {
+    const log = { id: 'log-1', taskId: 'etl-1', status: 'running' }
+    mockGet.mockResolvedValueOnce(log as any)
+
+    const result = await getEtlLog('etl-1', 'log-1')
+    expect(mockGet).toHaveBeenCalledWith('/etlTasks/etl-1/logs/log-1')
+    expect(result).toEqual(log)
+  })
+
+  it('cancelEtlRun 调用 POST /etlTasks/{id}/logs/{logId}/cancel', async () => {
+    mockPost.mockResolvedValueOnce({ ok: true } as any)
+
+    await cancelEtlRun('etl-1', 'log-1')
+    expect(mockPost).toHaveBeenCalledWith('/etlTasks/etl-1/logs/log-1/cancel', {})
+  })
+
+  it('runEtlTask dryRun 时透传 sampleSize', async () => {
+    mockPost.mockResolvedValueOnce({ status: 'success' } as any)
+
+    await runEtlTask('etl-1', { dryRun: true, sampleSize: 20 })
+    expect(mockPost).toHaveBeenCalledWith('/etlTasks/etl-1/run', { dryRun: true, sampleSize: 20 })
   })
 })
