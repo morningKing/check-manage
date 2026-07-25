@@ -188,6 +188,55 @@ class TestFileUpload:
         finally:
             _os.remove(path)
 
+    def test_sample_limit_reads_only_first_n_rows_csv(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name'])
+            for i in range(10):
+                writer.writerow([f'row{i}'])
+            path = f.name
+        try:
+            mock_conn = self._mock_conn_for_file('数据.csv', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn, sample_limit=3)
+            assert len(ctx['records']) == 3
+            assert ctx['records'][0]['name'] == 'row0'
+        finally:
+            _os.remove(path)
+
+    @pytest.mark.filterwarnings('ignore::DeprecationWarning')
+    def test_sample_limit_reads_only_first_n_rows_xlsx(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.append(['name'])
+        for i in range(10):
+            ws.append([f'row{i}'])
+        with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as f:
+            path = f.name
+        wb.save(path)
+        try:
+            mock_conn = self._mock_conn_for_file('数据.xlsx', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn, sample_limit=3)
+            assert len(ctx['records']) == 3
+        finally:
+            _os.remove(path)
+
+    def test_no_sample_limit_reads_all_rows(self):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['name'])
+            for i in range(10):
+                writer.writerow([f'row{i}'])
+            path = f.name
+        try:
+            mock_conn = self._mock_conn_for_file('数据.csv', path)
+            ctx = {'records': []}
+            _step_file_upload({'fileId': 'f1'}, ctx, mock_conn)
+            assert len(ctx['records']) == 10
+        finally:
+            _os.remove(path)
+
 
 # ==================== field_mapping ====================
 
@@ -450,3 +499,55 @@ class TestExecuteTask:
         assert len(ctx['records']) == 1
         assert ctx['records'][0]['caseName'] == 'a'
         assert ctx['records'][0]['score'] == 80
+
+    def test_sample_limit_truncates_records_after_each_step(self):
+        """json_input 一次给 5 条，sample_limit=2 时每步执行完都截到前 2 条"""
+        task = {
+            'steps': [
+                {
+                    'id': 's1', 'name': 'input', 'type': 'json_input',
+                    'config': {'data': json.dumps([{'n': i} for i in range(5)])},
+                    'onError': 'stop',
+                },
+            ]
+        }
+        ctx = execute_task(task, None, sample_limit=2)
+        assert len(ctx['records']) == 2
+        assert ctx['step_results'][0]['recordCount'] == 2
+
+    def test_step_results_include_sample_records_capped_at_5(self):
+        task = {
+            'steps': [
+                {
+                    'id': 's1', 'name': 'input', 'type': 'json_input',
+                    'config': {'data': json.dumps([{'n': i} for i in range(20)])},
+                    'onError': 'stop',
+                },
+            ]
+        }
+        ctx = execute_task(task, None)
+        assert len(ctx['records']) == 20  # 不传 sample_limit，正式全量
+        assert len(ctx['step_results'][0]['sampleRecords']) == 5
+        assert ctx['step_results'][0]['sampleRecords'][0]['n'] == 0
+
+    def test_step_cb_called_with_step_name_before_each_step(self):
+        task = {
+            'steps': [
+                {'id': 's1', 'name': '第一步', 'type': 'json_input', 'config': {'data': '[{"a":1}]'}, 'onError': 'stop'},
+                {'id': 's2', 'name': '第二步', 'type': 'filter', 'config': {'expression': 'True'}, 'onError': 'stop'},
+            ]
+        }
+        seen = []
+        execute_task(task, None, step_cb=lambda name: seen.append(name))
+        assert seen == ['第一步', '第二步']
+
+    def test_cancel_check_stops_before_next_step(self):
+        task = {
+            'steps': [
+                {'id': 's1', 'name': '第一步', 'type': 'json_input', 'config': {'data': '[{"a":1}]'}, 'onError': 'stop'},
+                {'id': 's2', 'name': '第二步', 'type': 'filter', 'config': {'expression': 'True'}, 'onError': 'stop'},
+            ]
+        }
+        ctx = execute_task(task, None, cancel_check=lambda: True)
+        assert ctx['cancelled'] is True
+        assert len(ctx['step_results']) == 0  # 第一步开始前就被取消，一步都没跑

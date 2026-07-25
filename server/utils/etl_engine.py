@@ -21,7 +21,8 @@ from utils.script_runner import run_etl_script
 HTTP_TIMEOUT = 30
 
 
-def execute_task(task_dict, conn, dry_run=False):
+def execute_task(task_dict, conn, dry_run=False, sample_limit=None,
+                  step_cb=None, progress_cb=None, cancel_check=None):
     """
     执行 ETL 任务管道。
 
@@ -31,9 +32,15 @@ def execute_task(task_dict, conn, dry_run=False):
         task_dict: 任务字典，包含 steps 列表
         conn: 数据库连接
         dry_run: True 时不实际写入数据库
+        sample_limit: 不为空时，每步执行完都把 context['records'] 截到前 N 条
+            （dry run 用，配合 _step_file_upload 的 nrows= 避免读全量文件）
+        step_cb(step_name): 每步开始前调用一次，供调用方展示"当前在跑哪一步"
+        progress_cb(current, total): 透传给 save_to_collection，每写完一批调用一次
+        cancel_check() -> bool: 每步开始前检查一次；save_to_collection 内部
+            每批之间也会检查。返回 True 时立即停止，不再执行后续步骤
 
     返回:
-        context 字典，包含 records, step_results, total, success, error, errors
+        context 字典，包含 records, step_results, total, success, error, errors, cancelled
     """
     context = {
         'records': [],
@@ -42,6 +49,7 @@ def execute_task(task_dict, conn, dry_run=False):
         'success': 0,
         'error': 0,
         'errors': [],
+        'cancelled': False,
     }
 
     steps = task_dict.get('steps', [])
@@ -49,20 +57,34 @@ def execute_task(task_dict, conn, dry_run=False):
         return context
 
     for step in steps:
+        if cancel_check and cancel_check():
+            context['cancelled'] = True
+            break
+
         step_id = step.get('id', '')
         step_name = step.get('name', '')
         step_type = step.get('type', '')
         config = step.get('config', {})
         on_error = step.get('onError', 'stop')
 
+        if step_cb:
+            step_cb(step_name)
+
         try:
-            _execute_step(step_type, config, context, conn, dry_run)
+            _execute_step(step_type, config, context, conn, dry_run,
+                          sample_limit=sample_limit, progress_cb=progress_cb,
+                          cancel_check=cancel_check)
+            if sample_limit:
+                context['records'] = context['records'][:sample_limit]
             context['step_results'].append({
                 'stepId': step_id,
                 'stepName': step_name,
                 'status': 'success',
                 'recordCount': len(context['records']),
+                'sampleRecords': context['records'][:5],
             })
+            if context.get('cancelled'):
+                break
         except Exception as e:
             error_msg = f'步骤「{step_name}」执行失败: {str(e)}'
             context['errors'].append(error_msg)
@@ -79,14 +101,19 @@ def execute_task(task_dict, conn, dry_run=False):
     return context
 
 
-def _execute_step(step_type, config, context, conn, dry_run):
-    """根据步骤类型分发执行。"""
+def _execute_step(step_type, config, context, conn, dry_run,
+                   sample_limit=None, progress_cb=None, cancel_check=None):
+    """根据步骤类型分发执行。
+
+    sample_limit 只有 file_upload 用得到（限制读取行数）；progress_cb/cancel_check
+    只有 save_to_collection 用得到（Task 3 引入）；其余步骤类型忽略这几个参数。
+    """
     if step_type == 'http_request':
         _step_http_request(config, context)
     elif step_type == 'json_input':
         _step_json_input(config, context)
     elif step_type == 'file_upload':
-        _step_file_upload(config, context, conn)
+        _step_file_upload(config, context, conn, sample_limit=sample_limit)
     elif step_type == 'script':
         _step_script(config, context)
     elif step_type == 'field_mapping':
@@ -94,7 +121,8 @@ def _execute_step(step_type, config, context, conn, dry_run):
     elif step_type == 'filter':
         _step_filter(config, context)
     elif step_type == 'save_to_collection':
-        _step_save_to_collection(config, context, conn, dry_run)
+        _step_save_to_collection(config, context, conn, dry_run,
+                                  progress_cb=progress_cb, cancel_check=cancel_check)
     else:
         raise ValueError(f'未知的步骤类型: {step_type}')
 
@@ -192,8 +220,12 @@ def _step_json_input(config, context):
     context['records'] = data
 
 
-def _step_file_upload(config, context, conn):
-    """文件上传步骤：读取配置时上传并固定的 Excel/CSV 文件，解析为记录列表。"""
+def _step_file_upload(config, context, conn, sample_limit=None):
+    """文件上传步骤：读取配置时上传并固定的 Excel/CSV 文件，解析为记录列表。
+
+    sample_limit 不为空时用 nrows= 真正只读文件的前 N 行（不是读全量再截断）——
+    dry run 靠这个避免大文件读取本身拖慢试运行。
+    """
     file_id = config.get('fileId')
     if not file_id:
         raise ValueError('未上传文件')
@@ -206,10 +238,11 @@ def _step_file_upload(config, context, conn):
     original_name, storage_path = row
 
     ext = original_name.lower().rsplit('.', 1)[-1] if '.' in original_name else ''
+    read_kwargs = {'nrows': sample_limit} if sample_limit else {}
     if ext == 'csv':
-        df = pd.read_csv(storage_path)
+        df = pd.read_csv(storage_path, **read_kwargs)
     elif ext in ('xlsx', 'xls'):
-        df = pd.read_excel(storage_path)
+        df = pd.read_excel(storage_path, **read_kwargs)
     else:
         raise ValueError(f'不支持的文件格式: {ext}')
 
