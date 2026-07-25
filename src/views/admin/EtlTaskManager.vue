@@ -201,7 +201,31 @@
               </el-button>
             </div>
 
-            <!-- 运行结果（测试/执行后显示） -->
+            <!-- 正式运行中：轮询进度 -->
+            <div v-if="runningLogId" class="run-result">
+              <el-divider content-position="left">运行中</el-divider>
+              <el-alert type="info" :closable="false" show-icon>
+                <template #title>
+                  <span v-if="runningLog">
+                    正在执行「{{ runningLog.currentStepName || '...' }}」
+                    <template v-if="runningLog.totalRecords">
+                      —— 已处理 {{ runningLog.progressCurrent || 0 }} / {{ runningLog.totalRecords }} 条
+                    </template>
+                  </span>
+                  <span v-else>正在启动...</span>
+                </template>
+              </el-alert>
+              <el-progress
+                v-if="runningLog && runningLog.totalRecords"
+                :percentage="Math.round(((runningLog.progressCurrent || 0) / runningLog.totalRecords) * 100)"
+                :stroke-width="14"
+              />
+              <el-button type="danger" plain style="margin-top: 12px" @click="handleCancelRun">
+                取消运行
+              </el-button>
+            </div>
+
+            <!-- 运行结果（测试运行 / 正式运行结束后显示） -->
             <div v-if="runResult" class="run-result">
               <el-divider content-position="left">运行结果</el-divider>
               <el-alert
@@ -217,13 +241,29 @@
                   :key="sr.stepId"
                   class="step-result-item"
                 >
-                  <el-icon :color="sr.status === 'success' ? '#67c23a' : '#f56c6c'">
-                    <CircleCheckFilled v-if="sr.status === 'success'" />
-                    <CircleCloseFilled v-else />
-                  </el-icon>
-                  <span class="sr-name">{{ sr.stepName }}</span>
-                  <span v-if="sr.recordCount !== undefined" class="sr-count">{{ sr.recordCount }} 条</span>
-                  <span v-if="sr.error" class="sr-error">{{ sr.error }}</span>
+                  <div class="step-result-row">
+                    <el-icon :color="sr.status === 'success' ? '#67c23a' : '#f56c6c'">
+                      <CircleCheckFilled v-if="sr.status === 'success'" />
+                      <CircleCloseFilled v-else />
+                    </el-icon>
+                    <span class="sr-name">{{ sr.stepName }}</span>
+                    <span v-if="sr.recordCount !== undefined" class="sr-count">{{ sr.recordCount }} 条</span>
+                    <span v-if="sr.error" class="sr-error">{{ sr.error }}</span>
+                  </div>
+                  <!-- 样例数据预览：设计管道时调试用，测试运行/正式运行都带 -->
+                  <el-collapse v-if="sr.sampleRecords && sr.sampleRecords.length > 0" class="sample-collapse">
+                    <el-collapse-item :title="`样例数据（前 ${sr.sampleRecords.length} 条）`">
+                      <el-table :data="sr.sampleRecords" size="small" border>
+                        <el-table-column
+                          v-for="key in Object.keys(sr.sampleRecords[0])"
+                          :key="key"
+                          :prop="key"
+                          :label="key"
+                          show-overflow-tooltip
+                        />
+                      </el-table>
+                    </el-collapse-item>
+                  </el-collapse>
                 </div>
               </div>
               <!-- 错误详情 -->
@@ -464,7 +504,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, genFileId } from 'element-plus'
 import {
@@ -484,6 +524,8 @@ import {
   deleteEtlTask,
   runEtlTask,
   getEtlLogs,
+  getEtlLog,
+  cancelEtlRun,
   uploadEtlFile,
 } from '@/api/etl'
 import type { EtlTask, EtlStep, EtlRunResult, EtlLog } from '@/types'
@@ -544,6 +586,23 @@ const runLoading = ref(false)
 const deleteDialogVisible = ref(false)
 const taskToDelete = ref<EtlTask | null>(null)
 const runResult = ref<EtlRunResult | null>(null)
+
+// 正式运行时的轮询状态：runningLogId 非空表示当前有一个正式运行在轮询中，
+// runningLog 是最近一次轮询到的日志详情（渲染进度条用）
+const runningLogId = ref<string | null>(null)
+const runningLog = ref<EtlLog | null>(null)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+onUnmounted(() => {
+  stopPolling()
+})
 const logs = ref<EtlLog[]>([])
 
 // 步骤编辑
@@ -584,6 +643,8 @@ function statusType(status: string) {
   if (status === 'success') return 'success'
   if (status === 'partial') return 'warning'
   if (status === 'error') return 'danger'
+  if (status === 'running') return 'primary'
+  if (status === 'cancelled') return 'info'
   return 'info'
 }
 
@@ -591,6 +652,9 @@ function statusLabel(status: string) {
   if (status === 'success') return '成功'
   if (status === 'partial') return '部分成功'
   if (status === 'error') return '失败'
+  if (status === 'pending') return '排队中'
+  if (status === 'running') return '运行中'
+  if (status === 'cancelled') return '已取消'
   return status
 }
 
@@ -885,30 +949,88 @@ async function doRun(dryRun: boolean) {
   }
   saveLoading.value = false
 
-  runLoading.value = true
   runResult.value = null
+  runningLogId.value = null
+  runningLog.value = null
+
+  if (dryRun) {
+    runLoading.value = true
+    try {
+      const result = await runEtlTask(currentTaskId.value!, { dryRun: true }) as EtlRunResult
+      runResult.value = result
+      if (result.status === 'success') {
+        ElMessage.success('测试运行成功')
+      } else if (result.status === 'partial') {
+        ElMessage.warning('部分记录处理失败')
+      } else {
+        ElMessage.error('执行失败')
+      }
+    } catch (e: any) {
+      const errData = e.response?.data
+      if (errData) runResult.value = errData
+      ElMessage.error(e.response?.data?.errors?.[0] || '执行出错')
+    } finally {
+      runLoading.value = false
+    }
+    return
+  }
+
+  // 正式运行：拿到 logId 后开始轮询，不在这里直接展示结果
+  runLoading.value = true
   try {
-    const result = await runEtlTask(currentTaskId.value!, { dryRun })
-    runResult.value = result
-    if (result.status === 'success') {
-      ElMessage.success(dryRun ? '测试运行成功' : '执行成功')
-    } else if (result.status === 'partial') {
-      ElMessage.warning('部分记录处理失败')
-    } else {
-      ElMessage.error('执行失败')
-    }
-    if (!dryRun) {
-      await loadLogs(currentTaskId.value!)
-      await loadTasks()
-    }
+    const started = await runEtlTask(currentTaskId.value!, { dryRun: false }) as { logId: string; status: string }
+    runningLogId.value = started.logId
+    startPolling(started.logId)
   } catch (e: any) {
-    const errData = e.response?.data
-    if (errData) {
-      runResult.value = errData
-    }
-    ElMessage.error(e.response?.data?.errors?.[0] || '执行出错')
-  } finally {
     runLoading.value = false
+    ElMessage.error(e.response?.data?.error || '执行出错')
+  }
+}
+
+function startPolling(logId: string) {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    try {
+      const log = await getEtlLog(currentTaskId.value!, logId)
+      runningLog.value = log
+      if (['success', 'partial', 'error', 'cancelled'].includes(log.status)) {
+        stopPolling()
+        runLoading.value = false
+        runResult.value = {
+          status: log.status,
+          totalRecords: log.totalRecords,
+          successCount: log.successCount,
+          errorCount: log.errorCount,
+          stepResults: log.stepResults,
+          errors: log.errorDetail ? log.errorDetail.split('\n') : [],
+        }
+        runningLogId.value = null
+        runningLog.value = null
+        if (log.status === 'success') {
+          ElMessage.success('执行成功')
+        } else if (log.status === 'partial') {
+          ElMessage.warning('部分记录处理失败')
+        } else if (log.status === 'cancelled') {
+          ElMessage.info('已取消')
+        } else {
+          ElMessage.error('执行失败')
+        }
+        await loadLogs(currentTaskId.value!)
+        await loadTasks()
+      }
+    } catch {
+      // 单次轮询失败不中断，等下一次 tick 重试
+    }
+  }, 1500)
+}
+
+async function handleCancelRun() {
+  if (!currentTaskId.value || !runningLogId.value) return
+  try {
+    await cancelEtlRun(currentTaskId.value, runningLogId.value)
+    ElMessage.info('已请求取消，正在停止...')
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '取消失败')
   }
 }
 
@@ -1175,6 +1297,20 @@ onMounted(async () => {
         margin-bottom: 0;
       }
     }
+  }
+}
+
+.step-result-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sample-collapse {
+  margin: 8px 0 4px 24px;
+  :deep(.el-collapse-item__header) {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
   }
 }
 
