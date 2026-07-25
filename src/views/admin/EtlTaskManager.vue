@@ -978,18 +978,28 @@ async function doRun(dryRun: boolean) {
   // 正式运行：拿到 logId 后开始轮询，不在这里直接展示结果
   runLoading.value = true
   try {
-    const started = await runEtlTask(currentTaskId.value!, { dryRun: false }) as { logId: string; status: string }
+    const ownerTaskId = currentTaskId.value!
+    const started = await runEtlTask(ownerTaskId, { dryRun: false }) as { logId: string; status: string }
     runningLogId.value = started.logId
-    startPolling(started.logId)
+    startPolling(started.logId, ownerTaskId)
   } catch (e: any) {
     runLoading.value = false
     ElMessage.error(e.response?.data?.error || '执行出错')
   }
 }
 
-function startPolling(logId: string) {
+function startPolling(logId: string, ownerTaskId: string) {
   stopPolling()
   pollTimer = setInterval(async () => {
+    if (currentTaskId.value !== ownerTaskId) {
+      // 用户已切换到其他任务，本次轮询归属的任务已不再是当前选中任务，
+      // 停止过期轮询并复位运行态，避免 runLoading 永久卡住
+      stopPolling()
+      runningLogId.value = null
+      runningLog.value = null
+      runLoading.value = false
+      return
+    }
     try {
       const log = await getEtlLog(currentTaskId.value!, logId)
       runningLog.value = log
