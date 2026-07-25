@@ -54,11 +54,15 @@ def log_row_to_dict(row):
         'errorCount': row[8],
         'stepResults': row[9] or [],
         'errorDetail': row[10],
+        'progressCurrent': row[11],
+        'currentStepName': row[12],
     }
 
 
 TASK_COLS = 'id, name, description, steps, enabled, last_run_at, last_run_status, created_at, updated_at'
-LOG_COLS = 'id, task_id, task_name, status, started_at, finished_at, total_records, success_count, error_count, step_results, error_detail'
+LOG_COLS = ('id, task_id, task_name, status, started_at, finished_at, total_records, '
+            'success_count, error_count, step_results, error_detail, '
+            'progress_current, current_step_name')
 
 ETL_FILE_UPLOAD_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 
@@ -170,13 +174,15 @@ def delete_task(task_id):
     return jsonify({})
 
 
+DEFAULT_SAMPLE_SIZE = 50
+
+
 @etl_tasks_bp.route('/etlTasks/<task_id>/run', methods=['POST'])
 @require_permission('admin.etl_tasks')
 def run_task(task_id):
     body = request.get_json(force=True) if request.data else {}
     dry_run = body.get('dryRun', False)
 
-    # 获取任务
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(f'SELECT {TASK_COLS} FROM etl_tasks WHERE id = %s', (task_id,))
@@ -186,74 +192,56 @@ def run_task(task_id):
 
     task = task_row_to_dict(row)
 
-    # 使用独立连接执行（需要手动控制事务）
-    from db import pool
-    exec_conn = pool.getconn()
-    try:
-        from utils.etl_engine import execute_task
-        started_at = datetime.now(timezone.utc)
-        context = execute_task(task, exec_conn, dry_run=dry_run)
-        finished_at = datetime.now(timezone.utc)
-
-        if not dry_run:
-            exec_conn.commit()
-        else:
+    if dry_run:
+        sample_size = body.get('sampleSize') or DEFAULT_SAMPLE_SIZE
+        from db import pool
+        exec_conn = pool.getconn()
+        try:
+            from utils.etl_engine import execute_task
+            context = execute_task(task, exec_conn, dry_run=True, sample_limit=sample_size)
             exec_conn.rollback()
 
-        status = 'success'
-        if context['error'] > 0 and context['success'] > 0:
-            status = 'partial'
-        elif context['error'] > 0 and context['success'] == 0:
-            status = 'error'
+            status = 'success'
+            if context['error'] > 0 and context['success'] > 0:
+                status = 'partial'
+            elif context['error'] > 0 and context['success'] == 0:
+                status = 'error'
 
-        result = {
-            'status': status,
-            'totalRecords': context['total'],
-            'successCount': context['success'],
-            'errorCount': context['error'],
-            'stepResults': context['step_results'],
-            'errors': context['errors'],
-        }
+            return jsonify({
+                'status': status,
+                'totalRecords': context['total'],
+                'successCount': context['success'],
+                'errorCount': context['error'],
+                'stepResults': context['step_results'],
+                'errors': context['errors'],
+            })
+        except Exception as e:
+            exec_conn.rollback()
+            return jsonify({
+                'status': 'error',
+                'totalRecords': 0,
+                'successCount': 0,
+                'errorCount': 0,
+                'stepResults': [],
+                'errors': [str(e)],
+            }), 500
+        finally:
+            pool.putconn(exec_conn)
 
-        # 非 dry_run 时记录日志和更新任务
-        if not dry_run:
-            try:
-                with get_db() as conn2:
-                    cur2 = conn2.cursor()
-                    log_id = f'etl-log-{uuid.uuid4().hex[:12]}'
-                    cur2.execute(
-                        'INSERT INTO etl_logs (id, task_id, task_name, status, started_at, finished_at, '
-                        'total_records, success_count, error_count, step_results, error_detail) '
-                        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
-                        (
-                            log_id, task_id, task['name'], status,
-                            started_at, finished_at,
-                            context['total'], context['success'], context['error'],
-                            psycopg2.extras.Json(context['step_results']),
-                            '\n'.join(context['errors']) if context['errors'] else None,
-                        ),
-                    )
-                    cur2.execute(
-                        'UPDATE etl_tasks SET last_run_at = %s, last_run_status = %s WHERE id = %s',
-                        (finished_at, status, task_id),
-                    )
-            except Exception:
-                pass
+    # 正式运行：插入一条 pending 日志行立即返回，真正执行交给后台调度器
+    # （utils/etl_scheduler.py）。
+    log_id = f'etl-log-{uuid.uuid4().hex[:12]}'
+    started_at = datetime.now(timezone.utc)
+    with get_db() as conn2:
+        cur2 = conn2.cursor()
+        cur2.execute(
+            'INSERT INTO etl_logs (id, task_id, task_name, status, started_at, '
+            "total_records, success_count, error_count, step_results, progress_current, cancel_requested) "
+            "VALUES (%s, %s, %s, 'pending', %s, 0, 0, 0, '[]'::jsonb, 0, FALSE)",
+            (log_id, task_id, task['name'], started_at),
+        )
 
-        return jsonify(result)
-
-    except Exception as e:
-        exec_conn.rollback()
-        return jsonify({
-            'status': 'error',
-            'totalRecords': 0,
-            'successCount': 0,
-            'errorCount': 0,
-            'stepResults': [],
-            'errors': [str(e)],
-        }), 500
-    finally:
-        pool.putconn(exec_conn)
+    return jsonify({'logId': log_id, 'status': 'pending'}), 202
 
 
 @etl_tasks_bp.route('/etlTasks/<task_id>/logs', methods=['GET'])
@@ -267,3 +255,33 @@ def list_logs(task_id):
         )
         rows = cur.fetchall()
     return jsonify([log_row_to_dict(r) for r in rows])
+
+
+@etl_tasks_bp.route('/etlTasks/<task_id>/logs/<log_id>', methods=['GET'])
+@require_permission('admin.etl_tasks')
+def get_log_detail(task_id, log_id):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f'SELECT {LOG_COLS} FROM etl_logs WHERE id = %s AND task_id = %s',
+            (log_id, task_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return jsonify({'error': '日志不存在'}), 404
+    return jsonify(log_row_to_dict(row))
+
+
+@etl_tasks_bp.route('/etlTasks/<task_id>/logs/<log_id>/cancel', methods=['POST'])
+@require_permission('admin.etl_tasks')
+def cancel_log(task_id, log_id):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT status FROM etl_logs WHERE id = %s AND task_id = %s', (log_id, task_id))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': '日志不存在'}), 404
+        if row[0] not in ('pending', 'running'):
+            return jsonify({'error': '任务已结束，无法取消'}), 409
+        cur.execute('UPDATE etl_logs SET cancel_requested = TRUE WHERE id = %s', (log_id,))
+    return jsonify({'ok': True})

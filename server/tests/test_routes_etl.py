@@ -149,13 +149,106 @@ class TestGetLogs:
         client, mock_cursor, _, headers = setup
         now = datetime.now(timezone.utc)
         mock_cursor.fetchall.return_value = [
-            ('log-1', 'etl-1', '任务', 'success', now, now, 10, 10, 0, [], None),
+            ('log-1', 'etl-1', '任务', 'success', now, now, 10, 10, 0, [], None, 10, None),
         ]
         resp = client.get('/etlTasks/etl-1/logs', headers=headers)
         assert resp.status_code == 200
         data = resp.get_json()
         assert len(data) == 1
         assert data[0]['taskId'] == 'etl-1'
+
+
+class TestRunTaskAsync:
+    def test_real_run_returns_log_id_immediately(self, setup):
+        client, mock_cursor, mock_conn, headers = setup
+        # 第一次 fetchone：查 etl_tasks 拿任务定义；INSERT INTO etl_logs 不需要 fetchone
+        mock_cursor.fetchone.return_value = (
+            'etl-1', '任务1', '描述', [], True, None, None, None, None,
+        )
+        resp = client.post('/etlTasks/etl-1/run',
+                           data=json.dumps({'dryRun': False}),
+                           content_type='application/json',
+                           headers=headers)
+        assert resp.status_code == 202
+        data = resp.get_json()
+        assert data['status'] == 'pending'
+        assert data['logId'].startswith('etl-log-')
+        # 确认真的插入了一条 pending 日志（INSERT INTO etl_logs 出现在调用记录里）
+        calls = mock_cursor.execute.call_args_list
+        assert any('INSERT INTO etl_logs' in str(c) for c in calls)
+
+    def test_run_missing_task_returns_404(self, setup):
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        resp = client.post('/etlTasks/missing/run',
+                           data=json.dumps({'dryRun': False}),
+                           content_type='application/json',
+                           headers=headers)
+        assert resp.status_code == 404
+
+    def test_dry_run_still_synchronous_with_sample_size(self, setup):
+        client, mock_cursor, mock_conn, headers = setup
+        mock_cursor.fetchone.return_value = (
+            'etl-1', '任务1', '描述', [
+                {'id': 's1', 'name': '输入', 'type': 'json_input',
+                 'config': {'data': '[{"a":1}]'}, 'onError': 'stop'},
+            ], True, None, None, None, None,
+        )
+        resp = client.post('/etlTasks/etl-1/run',
+                           data=json.dumps({'dryRun': True, 'sampleSize': 10}),
+                           content_type='application/json',
+                           headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'stepResults' in data
+        assert data['stepResults'][0]['sampleRecords'] == [{'a': 1}]
+        # dry run 不应该插入 etl_logs 行
+        calls = mock_cursor.execute.call_args_list
+        assert not any('INSERT INTO etl_logs' in str(c) for c in calls)
+
+
+class TestLogDetail:
+    def test_returns_single_log(self, setup):
+        client, mock_cursor, _, headers = setup
+        now = datetime.now(timezone.utc)
+        mock_cursor.fetchone.return_value = (
+            'log-1', 'etl-1', '任务1', 'running', now, None,
+            100, 40, 0, [], None, 40, '写入集合',
+        )
+        resp = client.get('/etlTasks/etl-1/logs/log-1', headers=headers)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['status'] == 'running'
+        assert data['progressCurrent'] == 40
+        assert data['currentStepName'] == '写入集合'
+
+    def test_missing_log_returns_404(self, setup):
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        resp = client.get('/etlTasks/etl-1/logs/missing', headers=headers)
+        assert resp.status_code == 404
+
+
+class TestCancelRun:
+    def test_cancel_pending_or_running_sets_flag(self, setup):
+        client, mock_cursor, mock_conn, headers = setup
+        mock_cursor.fetchone.return_value = ('running',)
+        resp = client.post('/etlTasks/etl-1/logs/log-1/cancel', headers=headers)
+        assert resp.status_code == 200
+        calls = mock_cursor.execute.call_args_list
+        assert any('cancel_requested = TRUE' in str(c) for c in calls)
+
+    def test_cancel_finished_run_returns_409(self, setup):
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = ('success',)
+        resp = client.post('/etlTasks/etl-1/logs/log-1/cancel', headers=headers)
+        assert resp.status_code == 409
+
+    def test_cancel_missing_log_returns_404(self, setup):
+        client, mock_cursor, _, headers = setup
+        mock_cursor.fetchone.return_value = None
+        resp = client.post('/etlTasks/etl-1/logs/log-1/cancel', headers=headers)
+        assert resp.status_code == 404
 
 
 class TestDevRoleAccess:
