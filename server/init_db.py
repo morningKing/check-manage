@@ -276,6 +276,17 @@ CREATE TABLE IF NOT EXISTS etl_logs (
 CREATE INDEX IF NOT EXISTS idx_etl_logs_task_id ON etl_logs(task_id);
 CREATE INDEX IF NOT EXISTS idx_etl_logs_created_at ON etl_logs(created_at DESC);
 
+-- ETL 异步执行：progress_current/current_step_name 供轮询展示进度，
+-- cancel_requested 供取消接口置位、调度器在批次/步骤之间检查。
+ALTER TABLE etl_logs ADD COLUMN IF NOT EXISTS progress_current INTEGER DEFAULT 0;
+ALTER TABLE etl_logs ADD COLUMN IF NOT EXISTS current_step_name VARCHAR(200);
+ALTER TABLE etl_logs ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 调度器的认领查询只关心 status='pending' 的行，partial index 让这个查询
+-- 不随历史日志增长变慢（同一手法见 idx_dynamic_data_search_text_pending）。
+CREATE INDEX IF NOT EXISTS idx_etl_logs_status_pending
+  ON etl_logs(started_at) WHERE status = 'pending';
+
 -- ==================== 版本管理表 ====================
 
 CREATE TABLE IF NOT EXISTS collection_versions (
