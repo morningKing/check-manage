@@ -20,6 +20,10 @@ from utils.script_runner import run_etl_script
 # HTTP 请求超时（秒）
 HTTP_TIMEOUT = 30
 
+# save_to_collection 批量写库的批大小。大小上参照前端 importPageRecords.ts 的
+# BATCH_SIZE 惯例，但这是本文件里全新的常量，不是复用某个已有的共享常量。
+SAVE_BATCH_SIZE = 1000
+
 
 def execute_task(task_dict, conn, dry_run=False, sample_limit=None,
                   step_cb=None, progress_cb=None, cancel_check=None):
@@ -326,8 +330,88 @@ def _step_filter(config, context):
     context['records'] = filtered
 
 
-def _step_save_to_collection(config, context, conn, dry_run):
-    """写入集合步骤：将数据写入系统 dynamic_data 表。"""
+def _write_batch(cur, collection, mode, match_field, batch, now):
+    """写一批记录，返回 (success_count, skipped_count)。
+
+    任何异常直接向上抛，不在这里捕获——PostgreSQL 事务一旦出错，同一个连接
+    后续的语句会全部失败（"current transaction is aborted"），调用方必须先
+    ROLLBACK 才能继续用这个连接处理下一批，所以异常处理和 rollback 的职责
+    留给调用方（_step_save_to_collection），这里只管纯粹的写库逻辑。
+    """
+    if mode == 'insert':
+        values = []
+        for record in batch:
+            record_data = {k: v for k, v in record.items() if k not in ('id', 'createdAt')}
+            rid = record.get('id') or f'rec-{uuid.uuid4().hex[:12]}'
+            values.append((rid, collection, psycopg2.extras.Json(record_data), now))
+        psycopg2.extras.execute_values(
+            cur,
+            'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES %s',
+            values,
+        )
+        return len(batch), 0
+
+    if not match_field:
+        raise ValueError(f'{mode} 模式需要指定匹配字段')
+
+    # 批量找出这一批里已存在的匹配记录：一次查询代替原来"每条记录一次 SELECT"，
+    # 这是分批写库相对逐条写库的核心收益之一。
+    match_values = [str(r[match_field]) for r in batch if r.get(match_field) is not None]
+    existing_map = {}
+    if match_values:
+        cur.execute(
+            "SELECT id, data->>%s AS mv FROM dynamic_data WHERE collection = %s AND data->>%s = ANY(%s)",
+            (match_field, collection, match_field, match_values),
+        )
+        for eid, mv in cur.fetchall():
+            existing_map[mv] = eid
+
+    insert_values = []
+    updated = 0
+    skipped = 0
+    for record in batch:
+        record_data = {k: v for k, v in record.items() if k not in ('id', 'createdAt')}
+        match_val = record.get(match_field)
+        existing_id = existing_map.get(str(match_val)) if match_val is not None else None
+
+        if existing_id:
+            # 每条记录的 data 值都不同，UPDATE ... SET data = %s 无法用单条
+            # execute_values 语句一次性表达"多行各自不同的值"，仍然逐条执行——
+            # 但已经从"每条记录 1 次 SELECT + 1 次 UPDATE"降到"每批 1 次
+            # SELECT + 每条命中记录 1 次 UPDATE"，且不再是同步阻塞的单条请求。
+            cur.execute(
+                'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 WHERE id = %s',
+                (psycopg2.extras.Json(record_data), existing_id),
+            )
+            updated += 1
+        elif mode == 'upsert':
+            rid = record.get('id') or f'rec-{uuid.uuid4().hex[:12]}'
+            insert_values.append((rid, collection, psycopg2.extras.Json(record_data), now))
+        else:
+            # update 模式且没有匹配到已存在记录：计为失败（与原逐条实现一致）
+            skipped += 1
+
+    if insert_values:
+        psycopg2.extras.execute_values(
+            cur,
+            'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES %s',
+            insert_values,
+        )
+
+    return updated + len(insert_values), skipped
+
+
+def _step_save_to_collection(config, context, conn, dry_run, progress_cb=None, cancel_check=None):
+    """写入集合步骤：将数据分批写入系统 dynamic_data 表。
+
+    每批写完立即 commit（不再是整任务一个大事务）：一是让 progress_cb 汇报的
+    进度对其它连接（轮询接口）立即可见，二是让取消/崩溃时已经成功写入的批次
+    不会丢失——这是与用户确认过的行为变化，见设计文档「数据模型改动」一节。
+
+    progress_cb(current, total): 每批写完（或 dry_run 下每批"模拟写完"）调用一次
+    cancel_check() -> bool: 每批之间检查一次；返回 True 时停止后续批次，
+        context['cancelled'] 置 True，本批（已经写完的）不受影响
+    """
     collection = config.get('collection', '')
     mode = config.get('mode', 'insert')
     match_field = config.get('matchField', '')
@@ -344,85 +428,32 @@ def _step_save_to_collection(config, context, conn, dry_run):
     success = 0
     errors = 0
 
-    for record in records:
-        try:
-            if dry_run:
-                success += 1
-                continue
+    for start in range(0, len(records), SAVE_BATCH_SIZE):
+        batch = records[start:start + SAVE_BATCH_SIZE]
 
-            # 分离 id 和 createdAt
-            record_data = {k: v for k, v in record.items() if k not in ('id', 'createdAt')}
+        if dry_run:
+            success += len(batch)
+        else:
+            try:
+                batch_success, batch_skipped = _write_batch(cur, collection, mode, match_field, batch, now)
+                success += batch_success
+                errors += batch_skipped
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                errors += len(batch)
+                context['errors'].append(f'批量写入失败（{len(batch)} 条）: {str(e)}')
 
-            if mode == 'insert':
-                rid = record.get('id') or f'rec-{uuid.uuid4().hex[:12]}'
-                cur.execute(
-                    'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s, %s, %s, %s)',
-                    (rid, collection, psycopg2.extras.Json(record_data), now),
-                )
-                success += 1
+        if progress_cb:
+            progress_cb(success + errors, len(records))
+        if cancel_check and cancel_check():
+            context['cancelled'] = True
+            break
 
-            elif mode == 'upsert':
-                if not match_field:
-                    raise ValueError('upsert 模式需要指定匹配字段')
-                match_val = record.get(match_field)
-                if match_val is None:
-                    # 无匹配值，直接 insert
-                    rid = record.get('id') or f'rec-{uuid.uuid4().hex[:12]}'
-                    cur.execute(
-                        'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s, %s, %s, %s)',
-                        (rid, collection, psycopg2.extras.Json(record_data), now),
-                    )
-                    success += 1
-                else:
-                    cur.execute(
-                        "SELECT id FROM dynamic_data WHERE collection = %s AND data->>%s = %s LIMIT 1",
-                        (collection, match_field, str(match_val)),
-                    )
-                    existing = cur.fetchone()
-                    if existing:
-                        cur.execute(
-                            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 WHERE id = %s',
-                            (psycopg2.extras.Json(record_data), existing[0]),
-                        )
-                    else:
-                        rid = record.get('id') or f'rec-{uuid.uuid4().hex[:12]}'
-                        cur.execute(
-                            'INSERT INTO dynamic_data (id, collection, data, created_at) VALUES (%s, %s, %s, %s)',
-                            (rid, collection, psycopg2.extras.Json(record_data), now),
-                        )
-                    success += 1
-
-            elif mode == 'update':
-                if not match_field:
-                    raise ValueError('update 模式需要指定匹配字段')
-                match_val = record.get(match_field)
-                if match_val is not None:
-                    cur.execute(
-                        "SELECT id FROM dynamic_data WHERE collection = %s AND data->>%s = %s LIMIT 1",
-                        (collection, match_field, str(match_val)),
-                    )
-                    existing = cur.fetchone()
-                    if existing:
-                        cur.execute(
-                            'UPDATE dynamic_data SET data = %s, updated_at = NOW(), version = version + 1 WHERE id = %s',
-                            (psycopg2.extras.Json(record_data), existing[0]),
-                        )
-                        success += 1
-                    else:
-                        errors += 1
-                else:
-                    errors += 1
-
-        except Exception as e:
-            errors += 1
-            context['errors'].append(f'写入记录失败: {str(e)}')
-
-    # 闭合 autoSequence 计数器不变式：ETL 导入的记录可能携带超过 main 分支计数器的
-    # 编号，导入后重播种 main，避免后续 create_item 重号。INSERT 均未指定 branch_id
-    # → 默认 'main'。仅在实际写入（非 dry_run）且有成功写入时执行。
     if not dry_run and success > 0:
         from utils.sequences import reseed_sequences
         reseed_sequences(cur, collections=[collection], branch_id='main')
+        conn.commit()
 
     context['total'] = len(records)
     context['success'] = success

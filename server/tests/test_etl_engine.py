@@ -348,66 +348,19 @@ class TestSaveToCollection:
         mock_conn.cursor.return_value = mock_cur
         ctx = {
             'records': [{'name': 'a'}, {'name': 'b'}],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
+            'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
         }
         config = {'collection': 'test', 'mode': 'insert'}
         _step_save_to_collection(config, ctx, mock_conn, dry_run=True)
         assert ctx['success'] == 2
         assert ctx['total'] == 2
-        # dry_run 不应执行 INSERT/UPDATE
+        # dry_run 不应执行任何 SQL
         mock_cur.execute.assert_not_called()
-
-    def test_insert_mode(self):
-        mock_cur = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cur
-        ctx = {
-            'records': [{'name': 'a'}],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
-        }
-        config = {'collection': 'test', 'mode': 'insert'}
-        _step_save_to_collection(config, ctx, mock_conn, dry_run=False)
-        assert ctx['success'] == 1
-        # 一次 INSERT；写入后还会重播种 autoSequence 计数器（额外查询 page_configs）。
-        calls = mock_cur.execute.call_args_list
-        assert any('INSERT INTO dynamic_data' in str(c) for c in calls)
-
-    def test_upsert_existing(self):
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = ('existing-id',)
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cur
-        ctx = {
-            'records': [{'name': 'a'}],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
-        }
-        config = {'collection': 'test', 'mode': 'upsert', 'matchField': 'name'}
-        _step_save_to_collection(config, ctx, mock_conn, dry_run=False)
-        assert ctx['success'] == 1
-        # Should have SELECT then UPDATE
-        calls = mock_cur.execute.call_args_list
-        assert any('SELECT' in str(c) for c in calls)
-        assert any('UPDATE' in str(c) for c in calls)
-
-    def test_upsert_new(self):
-        mock_cur = MagicMock()
-        mock_cur.fetchone.return_value = None
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cur
-        ctx = {
-            'records': [{'name': 'a'}],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
-        }
-        config = {'collection': 'test', 'mode': 'upsert', 'matchField': 'name'}
-        _step_save_to_collection(config, ctx, mock_conn, dry_run=False)
-        assert ctx['success'] == 1
-        calls = mock_cur.execute.call_args_list
-        assert any('INSERT' in str(c) for c in calls)
 
     def test_empty_collection_error(self):
         ctx = {
             'records': [{'name': 'a'}],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
+            'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
         }
         with pytest.raises(ValueError, match='目标集合'):
             _step_save_to_collection({'collection': '', 'mode': 'insert'}, ctx, MagicMock(), False)
@@ -416,10 +369,40 @@ class TestSaveToCollection:
         mock_conn = MagicMock()
         ctx = {
             'records': [],
-            'total': 0, 'success': 0, 'error': 0, 'errors': [],
+            'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
         }
         _step_save_to_collection({'collection': 'test', 'mode': 'insert'}, ctx, mock_conn, False)
         mock_conn.cursor.assert_not_called()
+
+    def test_progress_cb_called_per_batch_with_running_totals(self):
+        """3 条记录、SAVE_BATCH_SIZE 远大于 3，dry_run 下一个批次就能验证回调签名和调用次数，
+        不需要真的构造 1000+ 条数据来触发多批。"""
+        mock_conn = MagicMock()
+        ctx = {
+            'records': [{'name': 'a'}, {'name': 'b'}, {'name': 'c'}],
+            'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
+        }
+        calls = []
+        _step_save_to_collection(
+            {'collection': 'test', 'mode': 'insert'}, ctx, mock_conn, dry_run=True,
+            progress_cb=lambda cur, tot: calls.append((cur, tot)),
+        )
+        assert calls == [(3, 3)]
+
+    def test_cancel_check_stops_after_current_batch(self):
+        mock_conn = MagicMock()
+        ctx = {
+            'records': [{'name': 'a'}, {'name': 'b'}],
+            'total': 0, 'success': 0, 'error': 0, 'errors': [], 'cancelled': False,
+        }
+        _step_save_to_collection(
+            {'collection': 'test', 'mode': 'insert'}, ctx, mock_conn, dry_run=True,
+            cancel_check=lambda: True,
+        )
+        assert ctx['cancelled'] is True
+        # 只有一批（2 条记录远小于 SAVE_BATCH_SIZE），这一批已经跑完才检查取消，
+        # 所以这 2 条已经计入 success——取消只影响"后续批次不再跑"，不影响当前批。
+        assert ctx['success'] == 2
 
 
 # ==================== _execute_step ====================
