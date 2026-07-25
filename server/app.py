@@ -124,6 +124,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.field_index_scheduler import start_field_index_scheduler
     start_field_index_scheduler(app)
 
+    # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
+    from utils.etl_scheduler import start_etl_scheduler
+    start_etl_scheduler(app)
+
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a
     # slow outbound call (AI query, webhook, ETL) no longer blocks the whole
