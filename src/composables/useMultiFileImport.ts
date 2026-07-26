@@ -67,6 +67,7 @@ export function useMultiFileImport(deps: UseMultiFileImportDeps) {
   }
 
   async function start(): Promise<void> {
+    if (state.running) return
     state.stageVisible = false
     state.running = true
     state.cancelRequested = false

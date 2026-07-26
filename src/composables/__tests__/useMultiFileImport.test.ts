@@ -125,4 +125,24 @@ describe('useMultiFileImport', () => {
     expect(m.state.fileResults[0].result?.failed).toBe(0)
     expect(retryFailures).toHaveBeenCalledWith([failingFailure], expect.any(Function))
   })
+
+  it('ignores a re-entrant start() call while already running', async () => {
+    const parseFile = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 5))
+      return [{ n: 1 }]
+    })
+    const uploadRecords = vi.fn(async () => okResult())
+    const retryFailures = vi.fn()
+
+    const m = useMultiFileImport({ parseFile, uploadRecords, retryFailures })
+    m.setFiles([file('a.xlsx')])
+
+    const firstStart = m.start()
+    const originalFileResults = m.state.fileResults
+    await m.start() // 重入调用——第一次 start() 仍在进行中，必须是空操作
+    await firstStart
+
+    expect(m.state.fileResults).toBe(originalFileResults) // 未被重入调用重新赋值
+    expect(parseFile).toHaveBeenCalledTimes(1)
+  })
 })

@@ -875,7 +875,7 @@
         <el-button @click="multiImport.state.stageVisible = false">取消</el-button>
         <el-button
           type="primary"
-          :disabled="multiImport.state.stagedFiles.length === 0"
+          :disabled="multiImport.state.stagedFiles.length === 0 || multiImport.state.running"
           @click="handleStartMultiImport"
         >
           开始导入（{{ multiImport.state.stagedFiles.length }} 个文件）
@@ -1011,7 +1011,7 @@
  * 2. 渲染数据表格
  * 3. 处理新增/编辑/删除操作
  */
-import { ref, computed, watch, nextTick, onActivated, onDeactivated, defineAsyncComponent } from 'vue'
+import { ref, computed, watch, nextTick, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
@@ -1268,6 +1268,18 @@ const importDialogVisible = ref(false)
 const importElapsedSeconds = ref(0)
 let importElapsedTimer: number | null = null
 
+/**
+ * 组件被 keep-alive 停用或卸载时，如果导入仍在进行（例如用户切走了页面），
+ * 这个计时器不会被 running->false 的 watch 触发清理，需要在生命周期钩子里
+ * 兜底清掉，否则会残留一个持续 setInterval 的泄漏。
+ */
+function clearImportElapsedTimer(): void {
+  if (importElapsedTimer !== null) {
+    window.clearInterval(importElapsedTimer)
+    importElapsedTimer = null
+  }
+}
+
 async function parseImportedFile(
   file: File,
   onProgress: (current: number, total: number) => void,
@@ -1308,9 +1320,8 @@ const multiImport = useMultiFileImport({
 watch(() => multiImport.state.running, (running) => {
   if (running) {
     importElapsedTimer = window.setInterval(() => { importElapsedSeconds.value += 1 }, 1000)
-  } else if (importElapsedTimer !== null) {
-    window.clearInterval(importElapsedTimer)
-    importElapsedTimer = null
+  } else {
+    clearImportElapsedTimer()
   }
 })
 
@@ -3493,6 +3504,11 @@ onActivated(async () => {
 
 onDeactivated(() => {
   statusBadgePolling.stop()
+  clearImportElapsedTimer()
+})
+
+onBeforeUnmount(() => {
+  clearImportElapsedTimer()
 })
 </script>
 
