@@ -95,7 +95,9 @@ class TestClaimOne:
 
 
 class TestRestartAudit:
-    def test_resets_running_rows_to_pending(self):
+    def test_marks_orphaned_running_rows_as_error(self):
+        # 崩溃恢复不再自动重新排队（会导致 insert 模式重复插入已成功的批次），
+        # 而是标记为 error，让用户自己决定要不要手动重新执行。
         log_id = _seed_pending_log()
         with get_db() as conn:
             cur = conn.cursor()
@@ -103,8 +105,16 @@ class TestRestartAudit:
 
         etl_scheduler._restart_audit()
 
-        status, *_ = _fetch_log(log_id)
-        assert status == 'pending'
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT status, error_detail, finished_at FROM etl_logs WHERE id = %s',
+                (log_id,),
+            )
+            status, error_detail, finished_at = cur.fetchone()
+        assert status == 'error'
+        assert error_detail
+        assert finished_at is not None
 
 
 class TestRunOneEndToEnd:

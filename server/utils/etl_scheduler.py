@@ -147,6 +147,12 @@ def _run_one(log_id, task_id):
                 'UPDATE etl_tasks SET last_run_at = %s, last_run_status = %s WHERE id = %s',
                 (finished_at, status, task_id),
             )
+        # execute_task 内部只在 _step_save_to_collection 真正写批次时才 commit
+        # exec_conn；如果任务没有 save_to_collection 步骤，或该步骤因 records
+        # 为空而提前返回，exec_conn 可能带着一个空事务被放回连接池（连接池里
+        # 出现 idle-in-transaction）。这里显式收尾，保证无论 execute_task 内部
+        # 提交与否，exec_conn 归还连接池时都处于干净的非事务状态。
+        exec_conn.commit()
     except Exception as e:
         exec_conn.rollback()
         with get_db() as conn:
@@ -175,10 +181,20 @@ def _safe_tick():
 
 
 def _restart_audit():
-    """进程重启时把遗留的 running 行重置回 pending，避免永远卡住。"""
+    """进程重启时把遗留的 running 行标记为失败，而不是自动重新排队。
+
+    insert 模式的记录 id 是随机生成的（_write_batch 里 rec-<uuid>），自动重新
+    跑一遍会把崩溃前已经成功提交的那部分批次重复插入一次——与其让这种重复
+    静默发生，不如让用户在任务列表里看到"失败"，自己决定要不要手动重新执行
+    （用户已确认接受这个取舍，见最终评审记录）。
+    """
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE etl_logs SET status = 'pending' WHERE status = 'running'")
+        cur.execute(
+            "UPDATE etl_logs SET status = 'error', finished_at = NOW(), "
+            "error_detail = '进程重启导致任务中断，可能存在部分数据已写入；请检查后再决定是否手动重新执行' "
+            "WHERE status = 'running'"
+        )
 
 
 def start_etl_scheduler(app):
