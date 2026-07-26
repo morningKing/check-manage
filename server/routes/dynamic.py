@@ -105,6 +105,86 @@ def check_primary_key_unique(cur, collection, data, pk_fields, exclude_id=None, 
     return None
 
 
+# find_existing_pk_conflicts 用来把"字段值为 None"和"字段值恰好等于某个真实
+# 字符串"区分开——两者必须映射到不同的比较键，否则会把它们误判为同一个主键
+# 值。NULL_MARKER/VALUE_PREFIX/FIELD_SEP 都是控制字符，正常业务数据不会包含，
+# 只在 Python 侧和下面 SQL 表达式两处使用，两处必须保持字节级一致。
+# 注意：不能用 \x00（NUL）——Postgres 的 text/varchar 一律拒绝值里包含 NUL
+# 字节（无论是不是合法 UTF-8），无论是当 bind 参数还是当 E'' 字面量都会报错
+# （这是这个方案第一次跑真实 DB 测试时就炸出来的，其余控制字符都没有这个限制）。
+_PK_NULL_MARKER = '\x02'
+_PK_VALUE_PREFIX = '\x01'
+_PK_FIELD_SEP = '\x1f'
+
+
+def _pk_key_for_data(data, pk_fields):
+    """Python 侧构造主键比较键，需与 _pk_key_sql_expr 生成的 SQL 表达式语义一致。"""
+    parts = []
+    for f in pk_fields:
+        v = data.get(f)
+        parts.append(_PK_NULL_MARKER if v is None else _PK_VALUE_PREFIX + str(v))
+    return _PK_FIELD_SEP.join(parts)
+
+
+def _pk_key_sql_expr(pk_fields):
+    """构造 SQL 表达式：把多个主键字段的值拼接成与 _pk_key_for_data 同构的
+    比较键。NULL 判断值/前缀/分隔符用 Postgres E'' 转义字符串直接写死在 SQL
+    文本里（不是用户输入，不走 bind 参数）——用普通 ''  字符串写 '\\x00' 这种
+    形式在标准 SQL 里不会被当转义序列解析，字面量会跟 Python 侧的真实字节对
+    不上；E'' 转义字符串才会正确把 \\xHH 解析成对应字节，从而与 Python 侧一致。
+    每个字段在表达式里出现两次（IS NULL 判断一次、取值一次），调用方拼 SQL
+    时字段名参数要按这个顺序重复一次。
+    """
+    per_field = [
+        r"(CASE WHEN data->>%s IS NULL THEN E'\x02' ELSE E'\x01' || (data->>%s) END)"
+        for _ in pk_fields
+    ]
+    return "(" + r" || E'\x1f' || ".join(per_field) + ")"
+
+
+def find_existing_pk_conflicts(cur, collection, records_data, pk_fields, branch_id=None):
+    """批量检查一组候选记录的主键唯一性：一次查询覆盖整批已存在的记录，而不是
+    每条记录一次查询——大批量导入时，逐条查询（且 data->>field 没有索引支持）
+    会随着已写入行数增长产生 O(N²) 的未索引 JSONB 扫描，是"多开窗口导入大
+    数据把服务拖垮、CPU 跑满"的根因。模仿本文件里已有的 id 批量查询模式
+    （见 batch_create_items 的「4. Check existing IDs」一步）。
+
+    参数:
+        records_data: 候选记录的 data 字典列表
+        pk_fields: 主键字段名列表（可能是复合主键）
+        branch_id: 只在这个分支内查重
+
+    返回: {pk_key: {existing_id, ...}}，pk_key 由 _pk_key_for_data 计算；
+        value 是数据库里已经拥有该主键值组合的全部记录 id（正常应该只有一个，
+        但如果历史数据本身就有重复，也要能找出全部——调用方按 exclude_id
+        自己排除"更新自己"的那一条）。pk_fields 为空、或没有候选记录时，
+        不发任何查询，直接返回空字典。
+    """
+    if not pk_fields or not records_data:
+        return {}
+
+    candidate_keys = list({_pk_key_for_data(data, pk_fields) for data in records_data})
+    if not candidate_keys:
+        return {}
+
+    key_expr = _pk_key_sql_expr(pk_fields)
+    field_params = []
+    for f in pk_fields:
+        field_params.extend([f, f])  # 每个字段名对应表达式里的两个 %s（IS NULL 判断 + 取值）
+
+    sql = (
+        f"SELECT id, {key_expr} AS pk_key FROM dynamic_data "
+        f"WHERE collection = %s AND branch_id = %s AND ({key_expr}) = ANY(%s)"
+    )
+    params = field_params + [collection, branch_id] + field_params + [candidate_keys]
+    cur.execute(sql, params)
+
+    conflicts = {}
+    for existing_id, pk_key in cur.fetchall():
+        conflicts.setdefault(pk_key, set()).add(existing_id)
+    return conflicts
+
+
 def acquire_pk_lock(cur, collection, pk_values):
     """对 (collection + 主键值拼接) 取事务级 advisory lock，串行化同主键并发写。
     pk_values: {field: value}。空 dict 则不加锁。事务提交/回滚自动释放。"""
@@ -1036,6 +1116,16 @@ def batch_create_items(collection):
         else:
             existing_ids = set()
 
+        # 4.5. Batch-check primary key uniqueness for the whole batch in one query
+        # (find_existing_pk_conflicts), instead of one query per record — the
+        # per-record check_primary_key_unique used to run inside the loop below,
+        # which produced an O(N^2) unindexed JSONB scan as previously-written rows
+        # accumulated (root cause of multi-window large imports pinning the CPU
+        # and starving the connection/thread pool for the whole service).
+        pk_conflicts = find_existing_pk_conflicts(
+            cur, collection, [r.get('data', {}) for r in records], pk_fields, branch_id=branch_id,
+        ) if pk_fields else {}
+
         # 5. Validate and prepare records
         prepared_records = []
         errors = []
@@ -1058,16 +1148,16 @@ def batch_create_items(collection):
             # the row we'd "collide" with is the row we're about to overwrite.
             is_update = bool(rid and rid in existing_ids)
 
-            # Check primary key uniqueness for composite keys (within same branch).
-            # Pass exclude_id so the row about to be updated does not flag itself.
+            # Check primary key uniqueness for composite keys (within same branch),
+            # using the batched lookup computed above. Mirrors check_primary_key_unique's
+            # exclude_id semantics: a row updating itself isn't flagged against itself,
+            # but IS flagged if some OTHER row (not just itself) shares its PK values.
             if pk_fields:
-                error = check_primary_key_unique(
-                    cur, collection, data, pk_fields,
-                    branch_id=branch_id,
-                    exclude_id=rid if is_update else None,
-                )
-                if error:
-                    errors.append({"index": idx, "error": error, "record": record})
+                key = _pk_key_for_data(data, pk_fields)
+                conflicting_ids = pk_conflicts.get(key)
+                if conflicting_ids and (not is_update or conflicting_ids - {rid}):
+                    labels = ', '.join(f'{f}={data.get(f)}' for f in pk_fields)
+                    errors.append({"index": idx, "error": f'主键重复：{labels}', "record": record})
                     continue
 
             # Run validation script if configured
