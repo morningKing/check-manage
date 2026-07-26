@@ -838,58 +838,128 @@
       ref="fileInputRef"
       type="file"
       accept=".xlsx,.xls,.json"
+      multiple
       style="display: none"
       @change="handleFileSelected"
     />
 
-    <!-- 导入进度对话框 -->
+    <!-- 待导入文件清单：多选文件后先确认/可移除，再开始顺序导入 -->
+    <el-dialog
+      v-model="multiImport.state.stageVisible"
+      title="待导入文件"
+      width="480px"
+      :close-on-click-modal="false"
+    >
+      <div class="import-stage-list">
+        <div
+          v-for="(file, idx) in multiImport.state.stagedFiles"
+          :key="idx"
+          class="import-stage-row"
+        >
+          <span class="import-stage-name">{{ file.name }}</span>
+          <span class="import-stage-size">{{ formatFileSize(file.size) }}</span>
+          <el-button
+            :icon="Delete"
+            circle
+            size="small"
+            @click="multiImport.removeStagedFile(idx)"
+          />
+        </div>
+        <el-empty
+          v-if="multiImport.state.stagedFiles.length === 0"
+          description="没有待导入的文件"
+          :image-size="60"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="multiImport.state.stageVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="multiImport.state.stagedFiles.length === 0"
+          @click="handleStartMultiImport"
+        >
+          开始导入（{{ multiImport.state.stagedFiles.length }} 个文件）
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导入进度 / 分文件结果对话框 -->
     <el-dialog
       v-model="importDialogVisible"
       title="导入数据"
-      width="450px"
+      width="520px"
       :close-on-click-modal="false"
-      :close-on-press-escape="!importLoading"
-      :show-close="!importLoading"
+      :close-on-press-escape="!multiImport.state.running"
+      :show-close="!multiImport.state.running"
     >
-      <div v-if="importLoading" class="import-progress">
-        <el-progress :percentage="importProgress" :stroke-width="20" striped striped-flow />
-        <template v-if="importPhase === 'parsing'">
-          <p v-if="importTotal > 0">正在解析文件... {{ importCurrent }} / {{ importTotal }} 行</p>
+      <div v-if="multiImport.state.running" class="import-progress">
+        <p class="import-progress-file">
+          文件 {{ multiImport.state.currentFileIndex + 1 }} / {{ multiImport.state.fileResults.length }}：
+          {{ multiImport.state.fileResults[multiImport.state.currentFileIndex]?.file.name }}
+        </p>
+        <el-progress
+          :percentage="multiImport.state.currentProgress.total > 0
+            ? Math.round((multiImport.state.currentProgress.current / multiImport.state.currentProgress.total) * 100)
+            : 0"
+          :stroke-width="20"
+          striped
+          striped-flow
+        />
+        <template v-if="multiImport.state.currentPhase === 'parsing'">
+          <p v-if="multiImport.state.currentProgress.total > 0">
+            正在解析文件... {{ multiImport.state.currentProgress.current }} / {{ multiImport.state.currentProgress.total }} 行
+          </p>
           <p v-else>
             正在读取文件结构...已用时 {{ importElapsedSeconds }} 秒
             <span v-if="importElapsedSeconds >= 10">（文件较大，请耐心等待）</span>
           </p>
         </template>
-        <p v-else>正在导入... {{ importCurrent }} / {{ importTotal }}</p>
+        <p v-else>
+          正在导入... {{ multiImport.state.currentProgress.current }} / {{ multiImport.state.currentProgress.total }}
+        </p>
       </div>
-      <div v-else-if="importResult" class="import-result">
-        <el-result
-          :icon="importResult.failed === 0 ? 'success' : 'warning'"
-          :title="importResult.failed === 0 ? '导入完成' : '导入完成（部分失败）'"
+      <div v-else-if="multiImport.state.fileResults.length > 0" class="import-file-results">
+        <div
+          v-for="(entry, idx) in multiImport.state.fileResults"
+          :key="idx"
+          class="import-file-result-row"
         >
-          <template #sub-title>
-            <p>
-              成功 {{ importResult.success }} 条
-              <template v-if="importResult.updated">
-                （新增 {{ importResult.created || 0 }} / 更新 {{ importResult.updated }}）
-              </template>
-              ,失败 {{ importResult.failed }} 条
-            </p>
-          </template>
-          <template v-if="importResult.failed > 0" #extra>
-            <el-button @click="handleExportImportFailures">导出失败清单</el-button>
-            <el-button type="primary" @click="handleRetryImportFailures">重试失败记录</el-button>
-          </template>
-        </el-result>
+          <div class="import-file-result-header">
+            <span class="import-file-result-name">{{ entry.file.name }}</span>
+            <el-tag v-if="entry.status === 'success'" type="success">成功</el-tag>
+            <el-tag v-else-if="entry.status === 'partial'" type="warning">部分失败</el-tag>
+            <el-tag v-else-if="entry.status === 'failed'" type="danger">解析失败</el-tag>
+            <el-tag v-else-if="entry.status === 'empty'" type="info">无数据</el-tag>
+            <el-tag v-else-if="entry.status === 'skipped'" type="info">已跳过</el-tag>
+          </div>
+          <p v-if="entry.status === 'failed'" class="import-file-result-detail">
+            {{ entry.errorMessage }}
+          </p>
+          <p v-else-if="entry.result" class="import-file-result-detail">
+            成功 {{ entry.result.success }} 条
+            <template v-if="entry.result.updated">
+              （新增 {{ entry.result.created }} / 更新 {{ entry.result.updated }}）
+            </template>
+            ，失败 {{ entry.result.failed }} 条
+          </p>
+          <div v-if="entry.result && entry.result.failed > 0" class="import-file-result-actions">
+            <el-button size="small" @click="handleExportFileFailures(idx)">导出失败清单</el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="entry.retrying"
+              @click="handleRetryFileFailures(idx)"
+            >
+              重试失败记录
+            </el-button>
+          </div>
+        </div>
       </div>
       <template #footer>
-        <el-button
-          v-if="!importLoading"
-          type="primary"
-          @click="importDialogVisible = false"
-        >
-          确定
+        <el-button v-if="multiImport.state.running" type="danger" plain @click="multiImport.cancel()">
+          取消
         </el-button>
+        <el-button v-else type="primary" @click="importDialogVisible = false">确定</el-button>
       </template>
     </el-dialog>
 
@@ -951,7 +1021,8 @@ import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimel
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile, exportImportFailures } from '@/utils/excel'
-import { importPageRecords, retryImportFailures, type ImportPageResult } from '@/utils/importPageRecords'
+import { importPageRecords, retryImportFailures, type ImportFailure } from '@/utils/importPageRecords'
+import { useMultiFileImport } from '@/composables/useMultiFileImport'
 import { withBatch } from '@/utils/batch'
 import { getExportScriptsForCollection, executeExportScript } from '@/api/exportScript'
 import { listWorkflows, startWorkflow } from '@/api/workflow'
@@ -1185,30 +1256,127 @@ const isEditMode = ref(false)
 const isCopyMode = ref(false)
 
 /**
- * 导入对话框可见性
+ * 导入对话框可见性（进度 + 分文件结果）
  */
 const importDialogVisible = ref(false)
 
 /**
- * 导入加载状态
+ * 解析阶段"正在读取文件结构"期间的秒数动画——XLSX.read()/JSON.parse() 本身
+ * 无法报真实进度，用这个每秒跳动的计时器让用户看出程序仍在工作，不是卡死。
+ * 每次进入新文件的解析阶段时重置为 0。
  */
-const importLoading = ref(false)
-
-/**
- * 导入进度
- */
-const importProgress = ref(0)
-const importCurrent = ref(0)
-const importTotal = ref(0)
-const importPhase = ref<'parsing' | 'uploading'>('parsing')
-// 解析阶段（XLSX.read/sheet_to_json 整体操作，无法报真实行级进度）期间每秒
-// 跳动一次，让"文件较大、正在读取结构"的等待期看得出是在真实工作、不是卡死
 const importElapsedSeconds = ref(0)
+let importElapsedTimer: number | null = null
+
+async function parseImportedFile(
+  file: File,
+  onProgress: (current: number, total: number) => void,
+): Promise<Record<string, any>[]> {
+  const isJson = file.name.toLowerCase().endsWith('.json')
+  return isJson
+    ? await parseJsonImportFile(file, pageFields.value, onProgress)
+    : await parseImportFile(file, pageFields.value, onProgress)
+}
+
+async function uploadImportedRecords(
+  records: Record<string, any>[],
+  onProgress: (current: number, total: number) => void,
+) {
+  return importPageRecords({
+    store: pageConfigStore,
+    post,
+    pageId: pageId.value,
+    collection: collection.value,
+    records,
+    onProgress,
+  })
+}
+
+async function retryImportedFailures(
+  failures: ImportFailure[],
+  onProgress: (current: number, total: number) => void,
+) {
+  return retryImportFailures(post, collection.value, failures, onProgress)
+}
+
+const multiImport = useMultiFileImport({
+  parseFile: parseImportedFile,
+  uploadRecords: uploadImportedRecords,
+  retryFailures: retryImportedFailures,
+})
+
+watch(() => multiImport.state.running, (running) => {
+  if (running) {
+    importElapsedTimer = window.setInterval(() => { importElapsedSeconds.value += 1 }, 1000)
+  } else if (importElapsedTimer !== null) {
+    window.clearInterval(importElapsedTimer)
+    importElapsedTimer = null
+  }
+})
+
+watch(() => [multiImport.state.currentFileIndex, multiImport.state.currentPhase], () => {
+  importElapsedSeconds.value = 0
+})
 
 /**
- * 导入结果
+ * 处理文件选择：读取多选的文件列表，展示待导入清单供用户确认/移除。
  */
-const importResult = ref<ImportPageResult | null>(null)
+function handleFileSelected(e: Event): void {
+  const input = e.target as HTMLInputElement
+  const files = input.files
+  if (!files || files.length === 0) return
+  // 必须先把 FileList 快照成数组，再清空 input.value——input.value = '' 会连带
+  // 清空这个 FileList 本身（同一个 live 对象被清空，不是重新赋值一个新对象），
+  // 如果先清空再 Array.from(files)，拿到的会是空数组（实测复现：多选文件后
+  // 弹出的"待导入文件"清单是空的）。旧的单文件版本用 input.files?.[0] 提前
+  // 取出了独立的 File 对象引用，不受这个影响，所以没暴露这个问题。
+  const fileArray = Array.from(files)
+  input.value = ''
+  multiImport.setFiles(fileArray)
+}
+
+/**
+ * 待导入清单确认后开始顺序导入；结束后只要有任意文件写入了数据就刷新一次表格。
+ */
+async function handleStartMultiImport(): Promise<void> {
+  importDialogVisible.value = true
+  await multiImport.start()
+  const anySuccess = multiImport.state.fileResults.some(
+    (r) => r.result && r.result.created + r.result.updated > 0,
+  )
+  if (anySuccess) await loadPageData()
+}
+
+/**
+ * 导出某个文件仍失败的记录：字段列 + 失败原因列，删掉原因列即可重新导入。
+ */
+function handleExportFileFailures(index: number): void {
+  const entry = multiImport.state.fileResults[index]
+  const failures = entry.result?.failures
+  if (!failures || failures.length === 0) return
+
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const baseName = entry.file.name.replace(/\.[^.]+$/, '')
+  exportImportFailures(failures, pageFields.value, `导入失败记录_${baseName}_${ts}`)
+}
+
+/**
+ * 重试某个文件仍失败的记录；有新增写入则刷新表格。
+ */
+async function handleRetryFileFailures(index: number): Promise<void> {
+  await multiImport.retryFileFailures(index)
+  const entry = multiImport.state.fileResults[index]
+  if (entry.result && entry.result.created + entry.result.updated > 0) await loadPageData()
+}
+
+function formatFileSize(bytes: number | null | undefined): string {
+  if (!bytes) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
 
 /**
  * 所有导出脚本（缓存）
@@ -2775,141 +2943,6 @@ function handleDownloadTemplate(): void {
 }
 
 /**
- * 处理文件选择
- */
-async function handleFileSelected(e: Event): Promise<void> {
-  const input = e.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  // 重置 input 以便下次选同一文件仍然触发
-  input.value = ''
-
-  // 解析在 Web Worker 里跑（见 utils/excel.ts），不会冻结页面；worker 按行分片
-  // 回传进度，这里复用导入对话框的进度条展示解析阶段，避免大文件时长时间
-  // 只有一个转圈动画、让人以为卡住了。
-  //
-  // 但 XLSX.read()/sheet_to_json() 本身是 SheetJS 内部的整体操作、无法分片
-  // （见 excelParseCore.ts 顶部注释），文件足够大时这一步本身可能耗时数秒到
-  // 数十秒，期间没有任何真实的行级进度可报——如果只显示一个停在 0% 的进度条，
-  // 用户会以为卡住了。这里额外起一个每秒跳动的计时器，让"正在读取文件结构"
-  // 阶段也能看出程序仍在真实工作，而不是冻住。
-  importResult.value = null
-  importPhase.value = 'parsing'
-  importLoading.value = true
-  importProgress.value = 0
-  importCurrent.value = 0
-  importTotal.value = 0
-  importElapsedSeconds.value = 0
-  importDialogVisible.value = true
-
-  const elapsedTimer = window.setInterval(() => {
-    importElapsedSeconds.value += 1
-  }, 1000)
-
-  try {
-    const isJson = file.name.toLowerCase().endsWith('.json')
-    const onParseProgress = (current: number, total: number): void => {
-      importCurrent.value = current
-      importTotal.value = total
-      importProgress.value = total > 0 ? Math.round((current / total) * 100) : 0
-    }
-    const records = isJson
-      ? await parseJsonImportFile(file, pageFields.value, onParseProgress)
-      : await parseImportFile(file, pageFields.value, onParseProgress)
-    if (records.length === 0) {
-      importDialogVisible.value = false
-      ElMessage.warning('文件中没有可导入的数据')
-      return
-    }
-    await doImport(records)
-  } catch (error) {
-    importDialogVisible.value = false
-    // 部分解析失败（如文件过大导致工作表解析失败）会抛出具体原因，直接展示
-    // 给用户；拿不到具体信息时才退回通用提示。
-    const message = error instanceof Error && error.message ? error.message : '文件解析失败，请检查文件格式'
-    ElMessage.error(message)
-  } finally {
-    window.clearInterval(elapsedTimer)
-    importLoading.value = false
-  }
-}
-
-/**
- * 执行批量导入
- */
-async function doImport(records: Record<string, any>[]): Promise<void> {
-  importResult.value = null
-  importPhase.value = 'uploading'
-  importLoading.value = true
-  importProgress.value = 0
-  importCurrent.value = 0
-  importTotal.value = records.length
-  importDialogVisible.value = true
-
-  const result = await importPageRecords({
-    store: pageConfigStore,
-    post,
-    pageId: pageId.value,
-    collection: collection.value,
-    records,
-    onProgress: (current, total) => {
-      importCurrent.value = current
-      importProgress.value = Math.round((current / total) * 100)
-    },
-  })
-
-  importLoading.value = false
-  importResult.value = result
-  if (result.success > 0) await loadPageData()
-}
-
-/**
- * 重试当前导入结果里仍失败的记录：直接重放已就绪的请求体，不重新解析文件/关联。
- */
-async function handleRetryImportFailures(): Promise<void> {
-  const prev = importResult.value
-  if (!prev || prev.failures.length === 0) return
-
-  const retryTargets = prev.failures
-  importPhase.value = 'uploading'
-  importLoading.value = true
-  importProgress.value = 0
-  importCurrent.value = 0
-  importTotal.value = retryTargets.length
-
-  const retryResult = await retryImportFailures(post, collection.value, retryTargets, (current, total) => {
-    importCurrent.value = current
-    importProgress.value = Math.round((current / total) * 100)
-  })
-
-  importLoading.value = false
-  importResult.value = {
-    success: prev.success + retryResult.success,
-    created: prev.created + retryResult.created,
-    updated: prev.updated + retryResult.updated,
-    failed: retryResult.failed,
-    failures: retryResult.failures,
-  }
-  if (retryResult.success > 0) await loadPageData()
-}
-
-/**
- * 导出当前导入结果里仍失败的记录：字段列 + 失败原因列，删掉原因列即可重新导入。
- */
-function handleExportImportFailures(): void {
-  const failures = importResult.value?.failures
-  if (!failures || failures.length === 0) return
-
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const now = new Date()
-  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  const name = pageConfig.value?.name || '数据'
-
-  exportImportFailures(failures, pageFields.value, `导入失败记录_${name}_${ts}`)
-}
-
-/**
  * 处理刷新
  */
 async function handleRefresh(): Promise<void> {
@@ -3596,8 +3629,75 @@ onDeactivated(() => {
   }
 }
 
-.import-result {
-  padding: 10px 0;
+.import-progress-file {
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.import-stage-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.import-stage-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+
+  .import-stage-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .import-stage-size {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+}
+
+.import-file-results {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.import-file-result-row {
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.import-file-result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+
+  .import-file-result-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.import-file-result-detail {
+  margin-top: 4px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.import-file-result-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 8px;
 }
 
 .batch-action-bar {

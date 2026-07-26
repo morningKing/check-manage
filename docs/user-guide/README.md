@@ -14,6 +14,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 
 | 文档 | 说明 |
 |------|------|
+| [import-export.md](./data/import-export.md) | 数据导入（含多文件顺序导入、失败清单导出/重试）与导出 |
 | [views.md](./data/views.md) | 表格 / 看板 / 日历 / 甘特 / Excel 视图、评论与变更历史 |
 | [relations.md](./data/relations.md) | 关联（M:N）、引用（1:N）、引用选择三种数据关系 |
 | [query-console.md](./data/query-console.md) | 数据查询控制台操作说明 |
