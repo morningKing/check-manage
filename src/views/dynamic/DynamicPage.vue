@@ -914,9 +914,14 @@
             <span v-if="importElapsedSeconds >= 10">（文件较大，请耐心等待）</span>
           </p>
         </template>
-        <p v-else>
-          正在导入... {{ multiImport.state.currentProgress.current }} / {{ multiImport.state.currentProgress.total }}
-        </p>
+        <template v-else>
+          <p v-if="resolvingActive">
+            正在解析关联/引用字段... {{ resolvingProgress.current }} / {{ resolvingProgress.total }}
+          </p>
+          <p v-else>
+            正在导入... {{ multiImport.state.currentProgress.current }} / {{ multiImport.state.currentProgress.total }}
+          </p>
+        </template>
       </div>
       <div v-else-if="multiImport.state.fileResults.length > 0" class="import-file-results">
         <div
@@ -1269,6 +1274,16 @@ const importElapsedSeconds = ref(0)
 let importElapsedTimer: number | null = null
 
 /**
+ * 关联/引用字段解析阶段的进度（导入的隐藏子阶段）。resolvingActive 为
+ * true 时，进度弹窗把"正在导入..."文案换成"正在解析关联/引用字段..."；
+ * 一旦真正的上传进度（onProgress）开始回调，立即置回 false。
+ * 有意不放进 useMultiFileImport 的 composable state——那个 composable
+ * 已经过审查并在生产使用，这里只是 DynamicPage 自己的 UI 细节。
+ */
+const resolvingActive = ref(false)
+const resolvingProgress = ref({ current: 0, total: 0 })
+
+/**
  * 组件被 keep-alive 停用或卸载时，如果导入仍在进行（例如用户切走了页面），
  * 这个计时器不会被 running->false 的 watch 触发清理，需要在生命周期钩子里
  * 兜底清掉，否则会残留一个持续 setInterval 的泄漏。
@@ -1294,13 +1309,22 @@ async function uploadImportedRecords(
   records: Record<string, any>[],
   onProgress: (current: number, total: number) => void,
 ) {
+  resolvingActive.value = false
+  resolvingProgress.value = { current: 0, total: 0 }
   return importPageRecords({
     store: pageConfigStore,
     post,
     pageId: pageId.value,
     collection: collection.value,
     records,
-    onProgress,
+    onProgress: (current, total) => {
+      resolvingActive.value = false
+      onProgress(current, total)
+    },
+    onResolveProgress: (current, total) => {
+      resolvingActive.value = true
+      resolvingProgress.value = { current, total }
+    },
   })
 }
 
