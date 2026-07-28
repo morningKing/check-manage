@@ -2169,3 +2169,118 @@ describe('PageConfig Store — refreshSingleRecord', () => {
     expect(result!._ref_templateRef_desc).toBe('描述A')
   })
 })
+
+describe('PageConfig Store — getResolveFieldCount', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('returns 0 when the page has no relation-type fields', () => {
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({ id: 'page-test', fields: [makeField({ id: 'f1', fieldName: 'name', controlType: 'text' })] }),
+      ],
+    })
+    expect(store.getResolveFieldCount('page-test')).toBe(0)
+  })
+
+  it('counts relation + reference + quoteSelect + collection-sourced select fields', () => {
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'rel', controlType: 'relation', relationConfig: { targetCollection: 'a', displayField: 'name', targetField: 'back' } }),
+            makeField({ id: 'f2', fieldName: 'ref', controlType: 'reference', referenceConfig: { targetCollection: 'b', displayField: 'name', inheritFields: [] } }),
+            makeField({ id: 'f3', fieldName: 'quo', controlType: 'quoteSelect', quoteConfig: { targetCollection: 'c', displayField: 'name' } }),
+            makeField({ id: 'f4', fieldName: 'sel', controlType: 'select', optionsSource: { type: 'collection', collection: 'd', labelField: 'name', valueField: 'id' } }),
+          ],
+        }),
+      ],
+    })
+    expect(store.getResolveFieldCount('page-test')).toBe(4)
+  })
+
+  it('does not count fields whose config is missing/incomplete', () => {
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [
+            makeField({ id: 'f1', fieldName: 'rel', controlType: 'relation' }), // no relationConfig
+            makeField({ id: 'f2', fieldName: 'ref', controlType: 'reference', referenceConfig: {} as any }), // no targetCollection
+            makeField({ id: 'f3', fieldName: 'quo', controlType: 'quoteSelect' }), // no quoteConfig
+            makeField({ id: 'f4', fieldName: 'sel', controlType: 'select' }), // no optionsSource
+          ],
+        }),
+      ],
+    })
+    expect(store.getResolveFieldCount('page-test')).toBe(0)
+  })
+})
+
+describe('PageConfig Store — resolve import values chunking/progress', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+  })
+
+  it('resolveRelationImportValues reports chunked progress that sums to records.length', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'rel', controlType: 'relation', relationConfig: { targetCollection: 'items', displayField: 'name', targetField: 'back' } })],
+        }),
+      ],
+    })
+    mockedGet.mockResolvedValueOnce({ data: [{ id: 'item-1', name: 'A' }], total: 1 })
+
+    // 记录数刻意超过 RESOLVE_CHUNK_SIZE（5000），验证真的分了多片
+    const records = Array.from({ length: 12000 }, () => ({ rel: ['A'] }))
+    const onChunkProcessed = vi.fn()
+
+    await store.resolveRelationImportValues('page-test', records, undefined, onChunkProcessed)
+
+    expect(onChunkProcessed).toHaveBeenCalledTimes(3) // 5000 + 5000 + 2000
+    const total = onChunkProcessed.mock.calls.reduce((sum, [n]) => sum + n, 0)
+    expect(total).toBe(12000)
+    // 分片不影响解析结果
+    expect(records[0].rel).toEqual(['item-1'])
+    expect(records[11999].rel).toEqual(['item-1'])
+  })
+
+  it('resolveReferenceImportValues works correctly when onChunkProcessed is omitted', async () => {
+    const mockedGet = vi.mocked(get)
+    mockedGet.mockReset()
+    store.$patch({
+      pageConfigs: [
+        makePageConfig({
+          id: 'page-test',
+          fields: [makeField({ id: 'f1', fieldName: 'ref', controlType: 'reference', referenceConfig: { targetCollection: 'items', displayField: 'name', inheritFields: [] } })],
+        }),
+      ],
+    })
+    mockedGet.mockResolvedValueOnce({ data: [{ id: 'item-1', name: 'A' }], total: 1 })
+
+    const records = [{ ref: 'A' }]
+    await store.resolveReferenceImportValues('page-test', records) // 不传 onChunkProcessed
+    expect(records[0].ref).toBe('item-1')
+  })
+
+  it('resolveQuoteImportValues does not call onChunkProcessed when there are no qualifying fields', async () => {
+    store.$patch({
+      pageConfigs: [makePageConfig({ id: 'page-test', fields: [] })],
+    })
+    const onChunkProcessed = vi.fn()
+    await store.resolveQuoteImportValues('page-test', [{ n: 1 }], undefined, onChunkProcessed)
+    expect(onChunkProcessed).not.toHaveBeenCalled()
+  })
+})

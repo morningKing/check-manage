@@ -1094,6 +1094,36 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     return result
   }
 
+  /** 每处理这么多条记录后让出一次主线程，避免同步循环卡住页面交互。 */
+  const RESOLVE_CHUNK_SIZE = 5000
+
+  function yieldToMain(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  /**
+   * 统计参与导入解析的关联类字段数（relation/reference/quoteSelect/来自集合的
+   * select 类字段），用于 importPageRecords 预估解析阶段的总步数
+   * （resolveFieldCount × records.length）。过滤条件必须和
+   * resolveRelationImportValues/resolveReferenceImportValues/
+   * resolveQuoteImportValues/resolveCollectionSelectImportValues 各自的
+   * "参与条件"保持一致，否则进度总数会跟实际处理步数对不上。
+   */
+  function getResolveFieldCount(pageId: string): number {
+    const config = pageConfigs.value.find((c) => c.id === pageId)
+    if (!config) return 0
+    const relationCount = getRelationFields(pageId).filter((f) => f.relationConfig).length
+    const referenceCount = getReferenceFields(pageId).filter((f) => f.referenceConfig?.targetCollection).length
+    const quoteCount = getQuoteFields(pageId).filter((f) => f.quoteConfig).length
+    const collectionSelectCount = config.fields.filter(
+      (f) =>
+        ['select', 'multiSelect', 'radio', 'checkbox'].includes(f.controlType) &&
+        f.optionsSource?.type === 'collection' &&
+        f.optionsSource?.collection
+    ).length
+    return relationCount + referenceCount + quoteCount + collectionSelectCount
+  }
+
   /**
    * 解析导入数据中的关联字段：将主键值 / 显示名称转为内部记录 ID
    *
@@ -1105,7 +1135,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveRelationImportValues(
     pageId: string,
     records: Record<string, any>[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, any[]>,
+    onChunkProcessed?: (n: number) => void
   ): Promise<void> {
     const cache = collectionCache || new Map<string, any[]>()
     const relationFields = getRelationFields(pageId)
@@ -1140,16 +1171,22 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         }
       }
 
-      // 解析每条导入记录的关联值
-      for (const record of records) {
-        const vals = record[field.fieldName]
-        if (!Array.isArray(vals) || vals.length === 0) continue
-        record[field.fieldName] = vals
-          .map((v: string) => {
-            if (idSet.has(v)) return v            // 已经是内部 ID
-            return pkToId.get(v) || displayToId.get(v) || null
-          })
-          .filter((v: string | null): v is string => v !== null)
+      // 解析每条导入记录的关联值（按 RESOLVE_CHUNK_SIZE 分片，避免大批量时卡住主线程）
+      for (let start = 0; start < records.length; start += RESOLVE_CHUNK_SIZE) {
+        const end = Math.min(start + RESOLVE_CHUNK_SIZE, records.length)
+        for (let i = start; i < end; i++) {
+          const record = records[i]
+          const vals = record[field.fieldName]
+          if (!Array.isArray(vals) || vals.length === 0) continue
+          record[field.fieldName] = vals
+            .map((v: string) => {
+              if (idSet.has(v)) return v            // 已经是内部 ID
+              return pkToId.get(v) || displayToId.get(v) || null
+            })
+            .filter((v: string | null): v is string => v !== null)
+        }
+        onChunkProcessed?.(end - start)
+        if (end < records.length) await yieldToMain()
       }
     }
   }
@@ -1165,7 +1202,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveReferenceImportValues(
     pageId: string,
     records: Record<string, any>[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, any[]>,
+    onChunkProcessed?: (n: number) => void
   ): Promise<void> {
     const cache = collectionCache || new Map<string, any[]>()
     const referenceFields = getReferenceFields(pageId)
@@ -1198,16 +1236,22 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         if (displayVal) displayToId.set(String(displayVal), r.id)
       }
 
-      // 解析每条导入记录
-      for (const record of records) {
-        const val = record[field.fieldName]
-        if (!val || val === '') continue
-        const strVal = String(val)
-        if (idSet.has(strVal)) continue                             // 已经是内部 ID
-        const resolved = pkToId.get(strVal) || displayToId.get(strVal)
-        if (resolved) {
-          record[field.fieldName] = resolved
+      // 解析每条导入记录（分片）
+      for (let start = 0; start < records.length; start += RESOLVE_CHUNK_SIZE) {
+        const end = Math.min(start + RESOLVE_CHUNK_SIZE, records.length)
+        for (let i = start; i < end; i++) {
+          const record = records[i]
+          const val = record[field.fieldName]
+          if (!val || val === '') continue
+          const strVal = String(val)
+          if (idSet.has(strVal)) continue                             // 已经是内部 ID
+          const resolved = pkToId.get(strVal) || displayToId.get(strVal)
+          if (resolved) {
+            record[field.fieldName] = resolved
+          }
         }
+        onChunkProcessed?.(end - start)
+        if (end < records.length) await yieldToMain()
       }
     }
   }
@@ -1253,7 +1297,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveQuoteImportValues(
     pageId: string,
     records: Record<string, any>[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, any[]>,
+    onChunkProcessed?: (n: number) => void
   ): Promise<void> {
     const cache = collectionCache || new Map<string, any[]>()
     const quoteFields = getQuoteFields(pageId)
@@ -1297,27 +1342,34 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         }
       }
 
-      for (const record of records) {
-        const vals = record[field.fieldName]
-        if (!Array.isArray(vals) || vals.length === 0) continue
-        const seen = new Set<string>()
-        const resolved: string[] = []
-        for (const v of vals) {
-          if (idSet.has(v)) {
-            if (!seen.has(v)) { seen.add(v); resolved.push(v) }
-          } else {
-            const ids = pkToIds.get(v) || displayToIds.get(v)
-            if (ids) {
-              for (const id of ids) {
-                if (!seen.has(id)) { seen.add(id); resolved.push(id) }
+      // 解析每条导入记录（分片）
+      for (let start = 0; start < records.length; start += RESOLVE_CHUNK_SIZE) {
+        const end = Math.min(start + RESOLVE_CHUNK_SIZE, records.length)
+        for (let i = start; i < end; i++) {
+          const record = records[i]
+          const vals = record[field.fieldName]
+          if (!Array.isArray(vals) || vals.length === 0) continue
+          const seen = new Set<string>()
+          const resolved: string[] = []
+          for (const v of vals) {
+            if (idSet.has(v)) {
+              if (!seen.has(v)) { seen.add(v); resolved.push(v) }
+            } else {
+              const ids = pkToIds.get(v) || displayToIds.get(v)
+              if (ids) {
+                for (const id of ids) {
+                  if (!seen.has(id)) { seen.add(id); resolved.push(id) }
+                }
+              } else if (!seen.has(v)) {
+                // 目标记录尚不存在：保留原始主键/显示值，供之后「重新解析引用」补全（不丢弃）
+                seen.add(v); resolved.push(v)
               }
-            } else if (!seen.has(v)) {
-              // 目标记录尚不存在：保留原始主键/显示值，供之后「重新解析引用」补全（不丢弃）
-              seen.add(v); resolved.push(v)
             }
           }
+          record[field.fieldName] = resolved
         }
-        record[field.fieldName] = resolved
+        onChunkProcessed?.(end - start)
+        if (end < records.length) await yieldToMain()
       }
     }
   }
@@ -1335,7 +1387,8 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
   async function resolveCollectionSelectImportValues(
     pageId: string,
     records: Record<string, any>[],
-    collectionCache?: Map<string, any[]>
+    collectionCache?: Map<string, any[]>,
+    onChunkProcessed?: (n: number) => void
   ): Promise<void> {
     const config = pageConfigs.value.find((c) => c.id === pageId)
     if (!config) return
@@ -1390,26 +1443,32 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
         }
       }
 
-      // 解析每条记录的选项值
-      for (const record of records) {
-        const val = record[field.fieldName]
-        if (val === null || val === undefined || val === '') continue
+      // 解析每条记录的选项值（分片）
+      for (let start = 0; start < records.length; start += RESOLVE_CHUNK_SIZE) {
+        const end = Math.min(start + RESOLVE_CHUNK_SIZE, records.length)
+        for (let i = start; i < end; i++) {
+          const record = records[i]
+          const val = record[field.fieldName]
+          if (val === null || val === undefined || val === '') continue
 
-        if (['select', 'radio'].includes(field.controlType)) {
-          // 单选：直接查找映射
-          const resolved = labelToVal.get(String(val))
-          if (resolved !== undefined) {
-            record[field.fieldName] = resolved
-          }
-        } else if (['multiSelect', 'checkbox'].includes(field.controlType)) {
-          // 多选：逐个映射
-          if (Array.isArray(val)) {
-            record[field.fieldName] = val.map((v: any) => {
-              const resolved = labelToVal.get(String(v))
-              return resolved !== undefined ? resolved : v
-            })
+          if (['select', 'radio'].includes(field.controlType)) {
+            // 单选：直接查找映射
+            const resolved = labelToVal.get(String(val))
+            if (resolved !== undefined) {
+              record[field.fieldName] = resolved
+            }
+          } else if (['multiSelect', 'checkbox'].includes(field.controlType)) {
+            // 多选：逐个映射
+            if (Array.isArray(val)) {
+              record[field.fieldName] = val.map((v: any) => {
+                const resolved = labelToVal.get(String(v))
+                return resolved !== undefined ? resolved : v
+              })
+            }
           }
         }
+        onChunkProcessed?.(end - start)
+        if (end < records.length) await yieldToMain()
       }
     }
   }
@@ -1596,6 +1655,7 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     reResolveReferences,
     // collection 类型选项解析
     resolveCollectionSelectImportValues,
+    getResolveFieldCount,
     // 自动字段
     generateNextSequenceValue,
     batchGenerateSequenceValues,
