@@ -21,6 +21,7 @@ export interface ImportPageParams {
   collection: string
   records: Record<string, any>[]
   onProgress?: (current: number, total: number) => void
+  onResolveProgress?: (current: number, total: number) => void
 }
 
 const BATCH_SIZE = 1000
@@ -54,7 +55,7 @@ async function runBatchesConcurrently(
  * 不含任何 Vue 响应式依赖，供 DynamicPage 与批量导入编排共用。
  */
 export async function importPageRecords(params: ImportPageParams): Promise<ImportPageResult> {
-  const { store, post, pageId, collection, records, onProgress } = params
+  const { store, post, pageId, collection, records, onProgress, onResolveProgress } = params
   const collectionCache = new Map<string, any[]>()
 
   // 主键派生的确定性 id：有主键字段且该行主键值齐全时，用主键哈希出稳定 id，
@@ -77,12 +78,22 @@ export async function importPageRecords(params: ImportPageParams): Promise<Impor
       : makeImportRowId(collection, i, records.length)
   })
 
-  await Promise.all([
-    store.resolveRelationImportValues(pageId, records, collectionCache),
-    store.resolveReferenceImportValues(pageId, records, collectionCache),
-    store.resolveQuoteImportValues(pageId, records, collectionCache),
-    store.resolveCollectionSelectImportValues(pageId, records, collectionCache),
-  ])
+  const resolveFieldCount = store.getResolveFieldCount(pageId)
+  if (resolveFieldCount > 0) {
+    const resolveTotal = resolveFieldCount * records.length
+    let resolveProcessed = 0
+    const onChunkProcessed = (n: number): void => {
+      resolveProcessed += n
+      onResolveProgress?.(resolveProcessed, resolveTotal)
+    }
+    // 串行执行（而不是 Promise.all）：这样才能在开始前用一个稳定的 resolveTotal
+    // 报告有意义的百分比；顺带消除了不同字段引用同一个尚未缓存的目标集合时，
+    // 并发下可能重复发起 fetch 的小问题。
+    await store.resolveRelationImportValues(pageId, records, collectionCache, onChunkProcessed)
+    await store.resolveReferenceImportValues(pageId, records, collectionCache, onChunkProcessed)
+    await store.resolveQuoteImportValues(pageId, records, collectionCache, onChunkProcessed)
+    await store.resolveCollectionSelectImportValues(pageId, records, collectionCache, onChunkProcessed)
+  }
 
   const sequenceValues = store.batchGenerateSequenceValues(pageId, records.length)
   const sequenceFields = Object.keys(sequenceValues)

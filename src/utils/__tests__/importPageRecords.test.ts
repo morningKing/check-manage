@@ -8,6 +8,7 @@ function makeStore(overrides: Record<string, any> = {}) {
     resolveReferenceImportValues: vi.fn().mockResolvedValue(undefined),
     resolveQuoteImportValues: vi.fn().mockResolvedValue(undefined),
     resolveCollectionSelectImportValues: vi.fn().mockResolvedValue(undefined),
+    getResolveFieldCount: vi.fn().mockReturnValue(1),
     batchGenerateSequenceValues: vi.fn().mockReturnValue({}),
     stripRelationFields: vi.fn((_p: string, r: any) => ({ ...r })),
     getRelationFields: vi.fn().mockReturnValue([]),
@@ -26,7 +27,7 @@ describe('importPageRecords', () => {
       store, post, pageId: 'page-orders', collection: 'orders', records,
     })
 
-    expect(store.resolveReferenceImportValues).toHaveBeenCalledWith('page-orders', records, expect.any(Map))
+    expect(store.resolveReferenceImportValues).toHaveBeenCalledWith('page-orders', records, expect.any(Map), expect.any(Function))
     expect(store.resolveRelationImportValues).toHaveBeenCalled()
     expect(store.resolveQuoteImportValues).toHaveBeenCalled()
     expect(store.resolveCollectionSelectImportValues).toHaveBeenCalled()
@@ -176,6 +177,62 @@ describe('importPageRecords', () => {
     })
 
     expect(result.failures[0].reason).toBe('字段A必填; 字段B格式错误')
+  })
+
+  it('calls the four resolve functions sequentially, not concurrently', async () => {
+    const callOrder: string[] = []
+    const store = makeStore({
+      resolveRelationImportValues: vi.fn(async () => { callOrder.push('start:relation'); await new Promise((r) => setTimeout(r, 5)); callOrder.push('end:relation') }),
+      resolveReferenceImportValues: vi.fn(async () => { callOrder.push('start:reference'); callOrder.push('end:reference') }),
+      resolveQuoteImportValues: vi.fn(async () => { callOrder.push('start:quote'); callOrder.push('end:quote') }),
+      resolveCollectionSelectImportValues: vi.fn(async () => { callOrder.push('start:collectionSelect'); callOrder.push('end:collectionSelect') }),
+    })
+    const post = vi.fn().mockResolvedValue({ created: 1, updated: 0, failed: 0 })
+
+    await importPageRecords({ store, post, pageId: 'page-orders', collection: 'orders', records: [{ name: 'a' }] })
+
+    expect(callOrder).toEqual([
+      'start:relation', 'end:relation',
+      'start:reference', 'end:reference',
+      'start:quote', 'end:quote',
+      'start:collectionSelect', 'end:collectionSelect',
+    ])
+  })
+
+  it('reports aggregated resolve progress across chunk callbacks from all four functions', async () => {
+    const store = makeStore({
+      getResolveFieldCount: vi.fn().mockReturnValue(2), // 2 个参与字段（比如 1 个 relation + 1 个 reference）
+      resolveRelationImportValues: vi.fn(async (_p, records, _c, onChunkProcessed) => {
+        onChunkProcessed?.(records.length)
+      }),
+      resolveReferenceImportValues: vi.fn(async (_p, records, _c, onChunkProcessed) => {
+        onChunkProcessed?.(records.length)
+      }),
+    })
+    const post = vi.fn().mockResolvedValue({ created: 3, updated: 0, failed: 0 })
+    const onResolveProgress = vi.fn()
+    const records = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
+
+    await importPageRecords({ store, post, pageId: 'page-orders', collection: 'orders', records, onResolveProgress })
+
+    // total = resolveFieldCount(2) * records.length(3) = 6；relation 报 3、reference 再报 3 → 累计 3 后 6
+    expect(onResolveProgress).toHaveBeenNthCalledWith(1, 3, 6)
+    expect(onResolveProgress).toHaveBeenNthCalledWith(2, 6, 6)
+  })
+
+  it('does not call onResolveProgress when the page has no resolve-eligible fields', async () => {
+    const store = makeStore({ getResolveFieldCount: vi.fn().mockReturnValue(0) })
+    const post = vi.fn().mockResolvedValue({ created: 1, updated: 0, failed: 0 })
+    const onResolveProgress = vi.fn()
+
+    await importPageRecords({ store, post, pageId: 'page-orders', collection: 'orders', records: [{ name: 'a' }], onResolveProgress })
+
+    expect(onResolveProgress).not.toHaveBeenCalled()
+    // resolveFieldCount === 0 时四个 resolve 函数也完全不必调用
+    expect(store.resolveRelationImportValues).not.toHaveBeenCalled()
+    expect(store.resolveReferenceImportValues).not.toHaveBeenCalled()
+    expect(store.resolveQuoteImportValues).not.toHaveBeenCalled()
+    expect(store.resolveCollectionSelectImportValues).not.toHaveBeenCalled()
   })
 })
 
