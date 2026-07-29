@@ -12,6 +12,7 @@ export interface ImportPageResult {
   created: number
   updated: number
   failures: ImportFailure[]
+  runId?: string | null
 }
 
 export interface ImportPageParams {
@@ -245,4 +246,27 @@ export async function retryImportFailures(
   await runBatchesConcurrently(failures.length, runBatch)
 
   return { success, failed, created, updated, failures: remainingFailures }
+}
+
+/**
+ * 计算一次重试前后的差集：哪些失败记录这次解决了（不在新的 failures 里
+ * 但在旧的里），以及本次重试贡献的成功/新增/更新增量——供调用方同步到
+ * /importRuns/<id>/retry-result。before/after 是同一累计口径的两个
+ * ImportPageResult 快照（比如 useMultiFileImport.retryFileFailures 合并
+ * 前后的 entry.result，或者调用方自己按同样的合并公式构造的一对）。
+ */
+export function diffRetryResult(
+  before: ImportPageResult,
+  after: ImportPageResult,
+): { resolvedRecordIds: string[]; successDelta: number; createdDelta: number; updatedDelta: number } {
+  const stillFailingIds = new Set(after.failures.map((f) => f.payload.id))
+  const resolvedRecordIds = before.failures
+    .map((f) => f.payload.id)
+    .filter((id) => !stillFailingIds.has(id))
+  return {
+    resolvedRecordIds,
+    successDelta: after.success - before.success,
+    createdDelta: after.created - before.created,
+    updatedDelta: after.updated - before.updated,
+  }
 }

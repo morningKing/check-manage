@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { importPageRecords, retryImportFailures } from '../importPageRecords'
+import { importPageRecords, retryImportFailures, diffRetryResult } from '../importPageRecords'
 import { makeStableImportId } from '../importId'
 
 function makeStore(overrides: Record<string, any> = {}) {
@@ -303,5 +303,47 @@ describe('retryImportFailures', () => {
     expect(result.failed).toBe(1)
     expect(result.failures).toHaveLength(1)
     expect(result.failures[0].reason).toMatch(/请求失败.*还是超时.*可重试/)
+  })
+})
+
+describe('diffRetryResult', () => {
+  function failure(id: string): import('../importPageRecords').ImportFailure {
+    return { originalRecord: { id }, payload: { id, data: {}, relations: {} }, reason: 'x' }
+  }
+  function result(overrides: Partial<import('../importPageRecords').ImportPageResult> = {}): import('../importPageRecords').ImportPageResult {
+    return { success: 0, failed: 0, created: 0, updated: 0, failures: [], ...overrides }
+  }
+
+  it('computes resolved ids as those present before but absent from after', () => {
+    const before = result({ success: 5, created: 5, failed: 3, failures: [failure('a'), failure('b'), failure('c')] })
+    const after = result({ success: 7, created: 7, failed: 1, failures: [failure('c')] })
+
+    const diff = diffRetryResult(before, after)
+
+    expect(diff.resolvedRecordIds.sort()).toEqual(['a', 'b'])
+    expect(diff.successDelta).toBe(2)
+    expect(diff.createdDelta).toBe(2)
+    expect(diff.updatedDelta).toBe(0)
+  })
+
+  it('returns an empty resolved list when nothing changed', () => {
+    const before = result({ success: 5, failed: 1, failures: [failure('a')] })
+    const after = result({ success: 5, failed: 1, failures: [failure('a')] })
+
+    const diff = diffRetryResult(before, after)
+
+    expect(diff.resolvedRecordIds).toEqual([])
+    expect(diff.successDelta).toBe(0)
+  })
+
+  it('handles all failures resolved', () => {
+    const before = result({ success: 0, created: 0, updated: 3, failed: 2, failures: [failure('a'), failure('b')] })
+    const after = result({ success: 3, created: 0, updated: 5, failed: 0, failures: [] })
+
+    const diff = diffRetryResult(before, after)
+
+    expect(diff.resolvedRecordIds.sort()).toEqual(['a', 'b'])
+    expect(diff.successDelta).toBe(3)
+    expect(diff.updatedDelta).toBe(2)
   })
 })
