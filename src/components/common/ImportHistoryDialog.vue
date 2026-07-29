@@ -165,7 +165,14 @@ async function handleRetryDetailFailures(): Promise<void> {
 
   retrying.value = true
   try {
-    const retryResult = await retryImportFailures(post, props.collection, before.failures, () => {})
+    let retryResult: Awaited<ReturnType<typeof retryImportFailures>>
+    try {
+      retryResult = await retryImportFailures(post, props.collection, before.failures, () => {})
+    } catch {
+      ElMessage.error('重试失败，请稍后再试')
+      return
+    }
+
     const after: ImportPageResult = {
       success: before.success + retryResult.success,
       created: before.created + retryResult.created,
@@ -175,20 +182,38 @@ async function handleRetryDetailFailures(): Promise<void> {
     }
     const diff = diffRetryResult(before, after)
 
-    if (diff.resolvedRecordIds.length > 0) {
+    if (diff.resolvedRecordIds.length === 0) {
+      ElMessage.warning('本次重试没有记录成功')
+      return
+    }
+
+    // 重试本身已经成功，无论后面的历史同步是否成功都要反映到本地状态
+    const updatedRun: ImportRunSummary = {
+      ...run,
+      successCount: after.success,
+      createdCount: after.created,
+      updatedCount: after.updated,
+      failedCount: after.failed,
+      status: after.failed > 0 ? 'partial' : 'success',
+    }
+    detailRun.value = updatedRun
+    detailFailures.value = detailFailures.value.filter(
+      (f) => !diff.resolvedRecordIds.includes(f.recordId),
+    )
+    const idx = runs.value.findIndex((r) => r.id === run.id)
+    if (idx !== -1) runs.value[idx] = { ...runs.value[idx], ...updatedRun }
+
+    try {
       const synced = await syncImportRunRetryResult(run.id, diff)
-      detailRun.value = { ...run, ...synced } as ImportRunSummary
-      detailFailures.value = detailFailures.value.filter(
-        (f) => !diff.resolvedRecordIds.includes(f.recordId),
-      )
-      const idx = runs.value.findIndex((r) => r.id === run.id)
+      detailRun.value = { ...detailRun.value, ...synced } as ImportRunSummary
       if (idx !== -1) runs.value[idx] = { ...runs.value[idx], ...synced } as ImportRunSummary
       ElMessage.success(`重试完成：解决 ${diff.resolvedRecordIds.length} 条，仍失败 ${after.failed} 条`)
-    } else {
-      ElMessage.warning('本次重试没有记录成功')
+    } catch (e) {
+      console.warn('导入历史同步失败（本次重试结果不受影响）', e)
+      ElMessage.warning(
+        `重试完成：解决 ${diff.resolvedRecordIds.length} 条，仍失败 ${after.failed} 条（导入历史同步失败，可能显示旧数字）`,
+      )
     }
-  } catch {
-    ElMessage.error('重试失败，请稍后再试')
   } finally {
     retrying.value = false
   }
