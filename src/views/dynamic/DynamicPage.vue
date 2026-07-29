@@ -188,6 +188,7 @@
               </el-dropdown-item>
               <el-dropdown-item v-if="canCreate" command="import" :icon="Upload">导入数据</el-dropdown-item>
               <el-dropdown-item v-if="canCreate" command="template" :icon="Download">下载导入模板</el-dropdown-item>
+              <el-dropdown-item v-if="canCreate" command="importHistory" :icon="Document">导入历史</el-dropdown-item>
 
               <template v-if="!isGuest && hasReferenceFields">
                 <el-dropdown-item divided disabled class="dropdown-group-label">引用 / 关系</el-dropdown-item>
@@ -977,6 +978,14 @@
       @refresh="loadPageData"
     />
 
+    <!-- 导入历史弹窗 -->
+    <ImportHistoryDialog
+      v-model="importHistoryDialogVisible"
+      :page-id="pageId"
+      :collection="collection"
+      :fields="pageFields"
+    />
+
     <!-- 关系图谱对话框 -->
     <RelationGraphDialog
       v-model="graphDialogVisible"
@@ -1022,11 +1031,12 @@ import { ElMessage } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
-import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
+import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ImportHistoryDialog, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
 import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile, exportImportFailures } from '@/utils/excel'
-import { importPageRecords, retryImportFailures, type ImportFailure } from '@/utils/importPageRecords'
+import { importPageRecords, retryImportFailures, diffRetryResult, type ImportFailure } from '@/utils/importPageRecords'
+import { createImportRun, syncImportRunRetryResult } from '@/api/importRuns'
 import { useMultiFileImport } from '@/composables/useMultiFileImport'
 import { withBatch } from '@/utils/batch'
 import { getExportScriptsForCollection, executeExportScript } from '@/api/exportScript'
@@ -1311,7 +1321,7 @@ async function uploadImportedRecords(
 ) {
   resolvingActive.value = false
   resolvingProgress.value = { current: 0, total: 0 }
-  return importPageRecords({
+  const result = await importPageRecords({
     store: pageConfigStore,
     post,
     pageId: pageId.value,
@@ -1326,6 +1336,34 @@ async function uploadImportedRecords(
       resolvingProgress.value = { current, total }
     },
   })
+
+  // 落库导入历史，best-effort：失败只警告，不影响导入本身的用户体验
+  // （这是"锦上添花"的审计功能，不应该因为网络抖动让用户觉得导入失败了）。
+  let runId: string | null = null
+  try {
+    const fileName = multiImport.state.fileResults[multiImport.state.currentFileIndex]?.file.name || ''
+    const { id } = await createImportRun({
+      pageId: pageId.value,
+      collection: collection.value,
+      branchId: currentBranch.value?.branchId || 'main',
+      fileName,
+      successCount: result.success,
+      createdCount: result.created,
+      updatedCount: result.updated,
+      failedCount: result.failed,
+      failures: result.failures.map((f) => ({
+        recordId: f.payload.id,
+        originalRecord: f.originalRecord,
+        payload: f.payload,
+        reason: f.reason,
+      })),
+    })
+    runId = id
+  } catch (e) {
+    console.warn('导入历史记录写入失败（不影响本次导入结果）', e)
+  }
+
+  return { ...result, runId }
 }
 
 async function retryImportedFailures(
@@ -1398,12 +1436,28 @@ function handleExportFileFailures(index: number): void {
 }
 
 /**
- * 重试某个文件仍失败的记录；有新增写入则刷新表格。
+ * 重试某个文件仍失败的记录；有新增写入则刷新表格；成功解决的失败记录
+ * 同步到导入历史（best-effort，失败不影响本次重试在弹窗里的表现）。
  */
 async function handleRetryFileFailures(index: number): Promise<void> {
-  await multiImport.retryFileFailures(index)
   const entry = multiImport.state.fileResults[index]
+  const before = entry.result
+  const runId = entry.result?.runId
+
+  await multiImport.retryFileFailures(index)
+
   if (entry.result && entry.result.created + entry.result.updated > 0) await loadPageData()
+
+  if (runId && before && entry.result) {
+    const diff = diffRetryResult(before, entry.result)
+    if (diff.resolvedRecordIds.length > 0) {
+      try {
+        await syncImportRunRetryResult(runId, diff)
+      } catch (e) {
+        console.warn('导入历史同步失败（本次重试结果不受影响）', e)
+      }
+    }
+  }
 }
 
 function formatFileSize(bytes: number | null | undefined): string {
@@ -1422,6 +1476,11 @@ const allExportScripts = ref<ExportScript[]>([])
  * 项目版本管理抽屉可见性
  */
 const projectVersionManagerVisible = ref(false)
+
+/**
+ * 导入历史弹窗可见性
+ */
+const importHistoryDialogVisible = ref(false)
 
 /**
  * 项目版本管理默认打开的Tab
@@ -2947,6 +3006,8 @@ function handleMoreCommand(command: string): void {
     handleImportCommand('import')
   } else if (command === 'template') {
     handleImportCommand('template')
+  } else if (command === 'importHistory') {
+    importHistoryDialogVisible.value = true
   } else if (command === 'version') {
     if (projectMenuId.value) {
       projectVersionManagerDefaultTab.value = 'versions'
