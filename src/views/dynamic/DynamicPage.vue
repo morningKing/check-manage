@@ -1446,6 +1446,11 @@ async function handleRetryFileFailures(index: number): Promise<void> {
 
   await multiImport.retryFileFailures(index)
 
+  // multiImport.retryFileFailures() rebuilds entry.result as a fresh object that
+  // doesn't carry runId (the composable doesn't know about it) — re-stamp it so a
+  // second/third retry on the same file can still find the run to sync against.
+  if (entry.result && runId) entry.result.runId = runId
+
   if (entry.result && entry.result.created + entry.result.updated > 0) await loadPageData()
 
   if (runId && before && entry.result) {
