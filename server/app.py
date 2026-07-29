@@ -41,6 +41,7 @@ from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.data_files import data_files_bp
 from routes.roles import roles_bp
 from routes.workflows import workflows_bp
+from routes.import_runs import import_runs_bp
 from routes.kefu_admin import kefu_admin_bp
 from routes.kefu_public import kefu_public_bp
 from utils.logging_setup import setup_logging
@@ -79,6 +80,7 @@ app.register_blueprint(ai_bp)
 app.register_blueprint(project_versions_bp)
 app.register_blueprint(cross_project_deps_bp)
 app.register_blueprint(webhook_bp)
+app.register_blueprint(import_runs_bp)
 app.register_blueprint(menu_export_bp)
 app.register_blueprint(system_config_bp)
 app.register_blueprint(home_widgets_bp)

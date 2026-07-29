@@ -532,6 +532,35 @@ WHERE wi.status = 'running' AND (wi.active_stages IS NULL OR wi.active_stages = 
 CREATE INDEX IF NOT EXISTS idx_wf_inst_status ON workflow_instances(status);
 CREATE INDEX IF NOT EXISTS idx_wf_inst_current ON workflow_instances(current_stage_id);
 CREATE INDEX IF NOT EXISTS idx_wf_inst_workflow ON workflow_instances(workflow_id);
+
+-- ==================== 导入历史表 ====================
+
+CREATE TABLE IF NOT EXISTS import_runs (
+    id              VARCHAR(100) PRIMARY KEY,
+    page_id         VARCHAR(100) NOT NULL,
+    collection      VARCHAR(200) NOT NULL,
+    branch_id       VARCHAR(100) NOT NULL DEFAULT 'main',
+    file_name       VARCHAR(500) NOT NULL,
+    success_count   INTEGER NOT NULL DEFAULT 0,
+    created_count   INTEGER NOT NULL DEFAULT 0,
+    updated_count   INTEGER NOT NULL DEFAULT 0,
+    failed_count    INTEGER NOT NULL DEFAULT 0,
+    status          VARCHAR(20) NOT NULL DEFAULT 'success',
+    operator        VARCHAR(100),
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_import_runs_page_created ON import_runs(page_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS import_run_failures (
+    id              VARCHAR(100) PRIMARY KEY,
+    run_id          VARCHAR(100) NOT NULL REFERENCES import_runs(id) ON DELETE CASCADE,
+    record_id       VARCHAR(200) NOT NULL,
+    original_record JSONB NOT NULL,
+    payload         JSONB NOT NULL,
+    reason          TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_import_run_failures_run_id ON import_run_failures(run_id);
 """
 
 DATA_FILES_DDL = """
