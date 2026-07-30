@@ -63,6 +63,38 @@ def test_bound_export_runs_when_target_matches():
         _cleanup([coll], [sid])
 
 
+def test_ties_on_created_at_break_by_id_matching_the_list_endpoint():
+    """批量导入时同一事务内所有行的 created_at 完全相同（PostgreSQL 的 NOW()
+    在事务内是常量，不是每行取一次实时时间）——这时导出必须按 id 兜底排序，
+    跟数据页/列表接口的默认排序（routes/dynamic.py 的
+    `ORDER BY created_at ASC, id ASC`）保持一致，否则同一批导入的数据在
+    数据页上看到的顺序和导出脚本 data 里的顺序会对不上。
+
+    故意按 r3, r1, r2 的顺序插入（且三行 created_at 完全相同，用同一条
+    INSERT 语句里三次 NOW() 调用制造），如果导出查询没有 id 兜底，很可能
+    按物理插入顺序返回 [r3, r1, r2]，暴露排序不一致的问题。
+    """
+    coll, sid = 'zzer_ties', 'zzer_ties_s1'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            _seed_page(cur, coll, [{'fieldName': 'name', 'controlType': 'text'}])
+            cur.execute(
+                "INSERT INTO dynamic_data (id, collection, data, branch_id, created_at) VALUES "
+                "(%s,%s,%s,'main', NOW()), (%s,%s,%s,'main', NOW()), (%s,%s,%s,'main', NOW())",
+                ('r3', coll, psycopg2.extras.Json({'name': 'C'}),
+                 'r1', coll, psycopg2.extras.Json({'name': 'A'}),
+                 'r2', coll, psycopg2.extras.Json({'name': 'B'}))
+            )
+            _seed_script(cur, sid, scope='page', bound_collection=coll)
+            conn.commit()
+            row = _fetch_script(cur, sid)
+            out, _, _ = execute_bound_export(cur, row, collection=coll, role='admin')
+        assert json.loads(out) == ['r1', 'r2', 'r3']
+    finally:
+        _cleanup([coll], [sid])
+
+
 def test_binding_mismatch_raises():
     coll, other, sid = 'zzer_b', 'zzer_b2', 'zzer_s2'
     try:

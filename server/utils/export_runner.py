@@ -78,8 +78,12 @@ def _fetch_page_data(cur, collection, branch_id, record_id=None):
                     'WHERE collection = %s AND id = %s AND branch_id = %s',
                     (collection, record_id, branch_id))
     else:
+        # 跟 routes/dynamic.py 列表接口的默认排序（ORDER BY created_at ASC, id ASC）
+        # 保持一致：批量导入时同一事务内所有行的 created_at 完全相同（PostgreSQL
+        # 的 NOW() 在事务内是常量），仅按 created_at 排序对这些同值行的先后顺序
+        # 未定义，会导致导出脚本拿到的 data 顺序和数据页/调试工具看到的不一致。
         cur.execute('SELECT id, data, created_at FROM dynamic_data '
-                    'WHERE collection = %s AND branch_id = %s ORDER BY created_at',
+                    'WHERE collection = %s AND branch_id = %s ORDER BY created_at, id',
                     (collection, branch_id))
     data = []
     for r in cur.fetchall():
