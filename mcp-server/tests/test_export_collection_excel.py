@@ -33,8 +33,9 @@ def _fake_db_seq(results):
 
 
 def test_export_writes_xlsx(tmp_path):
-    # call order: _menu_and_fields(fetchone) -> dynamic_data(fetchall) -> _workspace_for_session(fetchone)
+    # call order: resolve_collection(fetchone) -> _menu_and_fields(fetchone) -> dynamic_data(fetchall) -> _workspace_for_session(fetchone)
     results = [
+        ('page-ic',),
         ('page-ic', '巡检用例', ['admin', 'developer'],
          [{'fieldName': 'caseName', 'label': '用例名称'}, {'fieldName': 'priority', 'label': '优先级'}]),
         [[{'caseName': 'CPU', 'priority': '高'}], [{'caseName': 'Disk', 'priority': '中'}]],
@@ -55,7 +56,7 @@ def test_export_writes_xlsx(tmp_path):
 
 
 def test_export_role_denied(tmp_path):
-    results = [('page-ic', '保密表', ['admin'], [])]
+    results = [('page-ic',), ('page-ic', '保密表', ['admin'], [])]
     with patch('tools.export_collection_excel.get_db', _fake_db_seq(results)):
         from tools.export_collection_excel import handle, ExportError
         with pytest.raises(ExportError):
@@ -63,11 +64,26 @@ def test_export_role_denied(tmp_path):
 
 
 def test_export_unknown_collection(tmp_path):
-    results = [None]
+    results = [None]  # resolve step itself finds nothing
     with patch('tools.export_collection_excel.get_db', _fake_db_seq(results)):
         from tools.export_collection_excel import handle, ExportError
         with pytest.raises(ExportError):
             handle({'collection': 'ghost'}, _ctx('admin'))
+
+
+def test_export_resolves_by_data_menu_display_name(tmp_path):
+    results = [
+        ('page-ic',),
+        ('page-ic', '巡检用例', ['admin', 'developer'],
+         [{'fieldName': 'caseName', 'label': '用例名称'}]),
+        [[{'caseName': 'CPU'}]],
+        (str(tmp_path),),
+    ]
+    with patch('tools.export_collection_excel.get_db', _fake_db_seq(results)):
+        from tools.export_collection_excel import handle
+        res = handle({'collection': '巡检用例'}, _ctx('developer'))
+    assert res['saved'] is True
+    assert res['rows'] == 1
 
 
 def test_export_requires_collection():

@@ -11,6 +11,7 @@ import mcp.types as types
 from openpyxl import Workbook
 from db import get_db
 from context import ToolContext
+from collection_resolve import resolve_collection
 
 
 NAME = "export_collection_excel"
@@ -20,12 +21,13 @@ TOOL = types.Tool(
     description=(
         "把某个业务数据集合(collection)的真实数据导出为 Excel 文件,写入本次会话的"
         "产出目录(outputs/),用户可直接下载。当用户要求导出/下载某类数据为 excel 时调用。"
-        "参数:collection=集合标识(如 inspection-case;可先用 list_collections 查看)。"
+        "参数:collection=集合标识(如 inspection-case)或数据页显示名称(如「巡检记录」"
+        ",数据类型菜单名称全局唯一,不会歧义;可先用 list_collections 查看)。"
     ),
     inputSchema={
         "type": "object",
         "properties": {
-            "collection": {"type": "string", "description": "数据集合标识，如 inspection-case"},
+            "collection": {"type": "string", "description": "数据集合标识或数据页显示名称，如 inspection-case 或「巡检记录」"},
         },
         "required": ["collection"],
         "additionalProperties": False,
@@ -78,6 +80,14 @@ def handle(input: dict, ctx: ToolContext) -> dict:
     collection = (input or {}).get("collection") or ""
     if not collection:
         raise ExportError("collection is required")
+
+    # collection 参数可能是集合标识本身，也可能是数据页显示名称（全局唯一）。
+    with get_db() as conn:
+        cur = conn.cursor()
+        resolved = resolve_collection(cur, collection)
+    if not resolved:
+        raise ExportError(f"未找到数据集合：{collection}")
+    collection = resolved
 
     menu = _menu_and_fields(collection)
     if not menu:

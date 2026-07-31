@@ -40,6 +40,37 @@ def test_table_mode_returns_rows_json(fake_db, mock_cursor):
     assert out["rows"][0]["no"] == "A1"
 
 
+def test_resolves_by_data_menu_display_name(fake_db, mock_cursor):
+    """collection 参数传数据页显示名称（不在 page_configs 里直接匹配的
+    collection 键）时，回退按数据类型菜单名称解析成真正的 collection。"""
+    fields = _configs()["orders"]["fields"]
+    mock_cursor.fetchall.side_effect = [
+        [("page-orders", "订单", fields)],  # load_page_configs
+        [("id1", {"no": "A1", "status": "open"}, None, None)],  # run_query rows
+    ]
+    mock_cursor.fetchone.side_effect = [
+        ("page-orders",),   # resolve_collection: 订单管理 -> page-orders
+        (["developer"],),   # roles
+        (1,),                # count_rows
+        (1,),                # run_query internal count
+    ]
+    with patch("tools.query_collection.get_db", fake_db):
+        from tools.query_collection import handle
+        out = json.loads(handle({"collection": "订单管理"}, _ctx("developer")))
+    assert out["mode"] == "table"
+    assert out["collection"] == "orders"
+    assert out["rows"][0]["no"] == "A1"
+
+
+def test_raises_when_name_does_not_resolve_to_a_visible_collection(fake_db, mock_cursor):
+    mock_cursor.fetchall.side_effect = [[("page-orders", "订单", _configs()["orders"]["fields"])]]
+    mock_cursor.fetchone.side_effect = [None]  # resolve_collection finds nothing
+    with patch("tools.query_collection.get_db", fake_db):
+        from tools.query_collection import handle, QueryCollectionError
+        with pytest.raises(QueryCollectionError):
+            handle({"collection": "不存在的名字"}, _ctx("developer"))
+
+
 def test_file_mode_when_over_threshold(fake_db, mock_cursor, tmp_path, monkeypatch):
     fields = _configs()["orders"]["fields"]
     mock_cursor.fetchall.side_effect = [

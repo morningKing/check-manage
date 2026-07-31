@@ -14,6 +14,7 @@ from query_engine import (
     load_page_configs, count_rows, run_query, write_xlsx,
     MAX_TABLE_ROWS, MAX_XLSX_ROWS,
 )
+from collection_resolve import resolve_collection
 
 NAME = "query_collection"
 
@@ -21,7 +22,9 @@ TOOL = types.Tool(
     name=NAME,
     description=(
         "按条件只读查询某个业务数据集合，返回匹配的数据（结果在前端渲染为表格）。"
-        "用法：先用 list_collections 获取集合的字段(fieldName/label)与 select 选项；"
+        "collection 既可以传集合标识（如 inspection-case），也可以直接传数据页的显示"
+        "名称（如「巡检记录」，数据类型菜单名称全局唯一，不会有歧义）；想知道字段"
+        "(fieldName/label)与 select 选项，用 list_collections。"
         "filter 用 MongoDB 风格，字段名用 fieldName(英文)，select 类型的值用 option 的 value；"
         "支持操作符：精确匹配、$regex 模糊、$ne、$gt/$gte/$lt/$lte、$in/$nin、$or/$and。"
         "可选 lookup 关联其它集合（[{from, localField, as}]）。"
@@ -30,7 +33,7 @@ TOOL = types.Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "collection": {"type": "string", "description": "集合标识，如 inspection-case"},
+            "collection": {"type": "string", "description": "集合标识或数据页显示名称，如 inspection-case 或「巡检记录」"},
             "filter": {"type": "object", "description": "MongoDB 风格筛选条件，缺省为全部"},
             "lookup": {"type": "array", "items": {"type": "object"}, "description": "跨集合关联"},
             "select": {"type": "array", "items": {"type": "string"}, "description": "投影字段"},
@@ -73,7 +76,11 @@ def handle(input: dict, ctx: ToolContext):
         cur = conn.cursor()
         configs = load_page_configs(cur)
         if collection not in configs:
-            raise QueryCollectionError(f"集合不存在：{collection}")
+            # collection 参数可能是数据页显示名称（全局唯一），按名称回退解析。
+            resolved = resolve_collection(cur, collection)
+            if not resolved or resolved not in configs:
+                raise QueryCollectionError(f"集合不存在：{collection}")
+            collection = resolved
 
         cur.execute("SELECT roles FROM menus WHERE page_id = %s", ('page-' + collection,))
         mrow = cur.fetchone()

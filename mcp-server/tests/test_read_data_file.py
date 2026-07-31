@@ -10,15 +10,18 @@ def _ctx(role="developer"):
     return ToolContext(session_id="s1", user_id="u1", role=role)
 
 
-def _fake_get_db(record_data, file_row, menu_roles=None):
-    """Three-step get_db: first SELECT fetches the menus roles (menu-gate check),
-    second fetches the dynamic_data row, third fetches the data_files row.
-    menu_roles defaults to ['admin', 'developer'] so existing tests (role='developer')
-    pass the gate without changes to their call sites. file_row=None → 404 on file."""
+def _fake_get_db(record_data, file_row, menu_roles=None, resolved_page_id='page-ic'):
+    """Four-step get_db: first SELECT resolves the `collection` identifier
+    (slug or data-menu display name) to its page_id, second fetches the menus
+    roles (menu-gate check), third fetches the dynamic_data row, fourth
+    fetches the data_files row. menu_roles defaults to ['admin', 'developer']
+    so existing tests (role='developer') pass the gate without changes to
+    their call sites. file_row=None → 404 on file. resolved_page_id defaults
+    to 'page-ic' matching the 'ic' collection every existing test passes."""
     if menu_roles is None:
         menu_roles = ['admin', 'developer']
     cur = MagicMock()
-    sequence = [(menu_roles,), record_data, file_row]
+    sequence = [(resolved_page_id,), (menu_roles,), record_data, file_row]
     state = {"i": 0}
 
     def fetchone():
@@ -126,18 +129,18 @@ def test_admin_bypasses_menu_roles(tmp_path):
 
 
 def test_denied_when_menu_row_missing():
-    """Non-admin is denied when the menu row is missing (no row = deny)."""
+    """No matching data-menu (by slug or name) at all → 未找到数据集合, before any role check."""
     from tools.read_data_file import handle, ReadDataFileError
     from contextlib import contextmanager
     cur = MagicMock()
-    cur.fetchone.return_value = None   # no menu row → roles is None → deny
+    cur.fetchone.return_value = None   # resolve step finds no menu row
     conn = MagicMock()
     conn.cursor.return_value = cur
     @contextmanager
     def _get():
         yield conn
     with patch('tools.read_data_file.get_db', _get):
-        with pytest.raises(ReadDataFileError):
+        with pytest.raises(ReadDataFileError, match='未找到数据集合'):
             handle({'collection': 'secret', 'record_id': 'R1', 'field': 'f'},
                    _ctx('developer'))
 
@@ -148,7 +151,13 @@ def test_kefu_guest_denied_when_not_in_menu_roles(monkeypatch):
     from unittest.mock import MagicMock
     from contextlib import contextmanager
     cur = MagicMock()
-    cur.fetchone.return_value = (["admin", "developer"],)  # roles for the menu; no kefu-guest
+    # resolve step, then roles lookup
+    sequence = [('page-secret',), (["admin", "developer"],)]  # roles for the menu; no kefu-guest
+    state = {'i': 0}
+    def fetchone():
+        r = sequence[state['i']]; state['i'] += 1
+        return r
+    cur.fetchone.side_effect = fetchone
     conn = MagicMock()
     conn.cursor.return_value = cur
     @contextmanager
@@ -158,3 +167,18 @@ def test_kefu_guest_denied_when_not_in_menu_roles(monkeypatch):
     with pytest.raises(ReadDataFileError):
         handle({'collection': 'secret', 'record_id': 'R1', 'field': 'f'},
                ToolContext(session_id='s', user_id='kefu-bot', role='kefu-guest'))
+
+
+def test_resolves_collection_by_data_menu_display_name(tmp_path):
+    """collection 参数传数据页显示名称（而不是 slug）时也能正确解析定位。"""
+    sample = tmp_path / 'guide.txt'
+    sample.write_text('hello by name', encoding='utf-8')
+    record = ({'attachment': [{'uid': 'fid1', 'name': 'guide.txt'}]},)
+    file_row = ('guide.txt', 'text/plain', sample.stat().st_size, str(sample))
+    with patch('tools.read_data_file.get_db',
+               _fake_get_db(record, file_row, resolved_page_id='page-inspection-case')):
+        from tools.read_data_file import handle
+        res = handle({'collection': '巡检记录', 'record_id': 'r1',
+                      'field': 'attachment'}, _ctx())
+    assert res['found'] is True
+    assert 'hello by name' in res['content']

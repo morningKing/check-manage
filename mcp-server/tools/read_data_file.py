@@ -22,6 +22,7 @@ import mcp.types as types
 
 from db import get_db
 from context import ToolContext
+from collection_resolve import resolve_collection
 
 
 NAME = "read_data_file"
@@ -31,7 +32,8 @@ TOOL = types.Tool(
     name=NAME,
     description=(
         "读取数据页记录上文件字段所附的文件内容。\n"
-        "参数:collection=集合名(如 inspection-case),record_id=记录ID(如 IC-001),"
+        "参数:collection=集合名(如 inspection-case)或数据页显示名称(如「巡检记录」,"
+        "数据类型菜单名称全局唯一,不会歧义),record_id=记录ID(如 IC-001),"
         "field=字段名(如 attachment),index=该字段下第几个文件(从 0 开始,默认 0)。\n"
         "返回:found=true 时给 name/mime/size/content;二进制文件 content 是 base64,"
         "并带 encoding='base64' 标记;文本则直接是 UTF-8 字符串。"
@@ -40,7 +42,7 @@ TOOL = types.Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "collection": {"type": "string"},
+            "collection": {"type": "string", "description": "集合标识或数据页显示名称"},
             "record_id": {"type": "string"},
             "field": {"type": "string"},
             "index": {"type": "integer", "default": 0, "minimum": 0},
@@ -63,6 +65,14 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     if not collection or not record_id or not field:
         raise ReadDataFileError("collection, record_id, field required")
+
+    # collection 参数可能是集合标识本身，也可能是数据页显示名称（全局唯一）。
+    with get_db() as conn:
+        cur = conn.cursor()
+        resolved = resolve_collection(cur, collection)
+    if not resolved:
+        raise ReadDataFileError(f"未找到数据集合：{collection}")
+    collection = resolved
 
     # Menu-role gate: caller's role must be in the collection's menu roles (admin bypasses).
     with get_db() as conn:
