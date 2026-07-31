@@ -5,6 +5,7 @@ from auth import login_required, require_permission
 from utils.operation_log import log_operation
 from utils.script_runner import run_export_script, validate_export_script_scope
 import psycopg2.extras
+import psycopg2.errors
 import uuid
 import zipfile
 import io
@@ -118,16 +119,29 @@ def create_script():
         return jsonify({'error': str(e)}), 400
     script_id = body.get('id') or f'script-{uuid.uuid4().hex[:8]}'
     now = datetime.now(timezone.utc)
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            'INSERT INTO export_scripts (id, name, description, language, script, output_format, '
-            'created_at, updated_at, scope, bound_collection, bound_menu_id) '
-            'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-            (script_id, body.get('name', ''), body.get('description', ''),
-             body.get('language', 'python'), body.get('script', ''),
-             body.get('outputFormat', 'json'), now, now, scope, bound_collection, bound_menu_id),
-        )
+    name = body.get('name', '')
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+
+            # 导出脚本名称全局唯一，为 MCP 之后按名称定位脚本做准备（run_export_script
+            # 的 script_id 参数也接受脚本名称）；最后防线是数据库唯一索引
+            # idx_export_scripts_name_unique（见 init_db.py），下面 INSERT 撞上时
+            # 同样会被下面的 except 兜住。
+            cur.execute("SELECT id FROM export_scripts WHERE name = %s", (name,))
+            if cur.fetchone():
+                return jsonify({"error": f"导出脚本名称「{name}」已被占用，请换一个名称"}), 400
+
+            cur.execute(
+                'INSERT INTO export_scripts (id, name, description, language, script, output_format, '
+                'created_at, updated_at, scope, bound_collection, bound_menu_id) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                (script_id, name, body.get('description', ''),
+                 body.get('language', 'python'), body.get('script', ''),
+                 body.get('outputFormat', 'json'), now, now, scope, bound_collection, bound_menu_id),
+            )
+    except psycopg2.errors.UniqueViolation:
+        return jsonify({"error": f"导出脚本名称「{name}」已被占用，请换一个名称"}), 400
     log_operation('create', 'export_script', script_id, body.get('name', ''),
                   f'新增导出脚本「{body.get("name", "")}」')
     return jsonify({
@@ -144,61 +158,75 @@ def create_script():
 def update_script(script_id):
     body = request.get_json(force=True)
     now = datetime.now(timezone.utc)
-    with get_db() as conn:
-        cur = conn.cursor()
-        # Validate scope/code consistency. For partial updates, fall back to the
-        # stored value for whichever of scope/script isn't in the body.
-        if 'script' in body or 'scope' in body:
-            eff_scope = body.get('scope')
-            eff_script = body.get('script')
-            if eff_scope is None or eff_script is None:
-                cur.execute('SELECT script, scope FROM export_scripts WHERE id = %s', (script_id,))
-                existing = cur.fetchone()
-                if not existing:
-                    return jsonify({'error': 'Not found'}), 404
-                if eff_script is None:
-                    eff_script = existing[0]
-                if eff_scope is None:
-                    eff_scope = existing[1]
-            try:
-                validate_export_script_scope(eff_scope, eff_script)
-            except ValueError as e:
-                return jsonify({'error': str(e)}), 400
-        sets = ['updated_at=%s']
-        params = [now]
-        if 'name' in body:
-            sets.append('name=%s')
-            params.append(body['name'])
-        if 'description' in body:
-            sets.append('description=%s')
-            params.append(body['description'])
-        if 'language' in body:
-            sets.append('language=%s')
-            params.append(body['language'])
-        if 'script' in body:
-            sets.append('script=%s')
-            params.append(body['script'])
-        if 'outputFormat' in body:
-            sets.append('output_format=%s')
-            params.append(body['outputFormat'])
-        if 'scope' in body:
-            sets.append('scope=%s')
-            params.append(body['scope'])
-        if 'boundCollection' in body:
-            sets.append('bound_collection=%s')
-            params.append((body.get('boundCollection') or '').strip() or None)
-        if 'boundMenuId' in body:
-            sets.append('bound_menu_id=%s')
-            params.append((body.get('boundMenuId') or '').strip() or None)
-        params.append(script_id)
-        cur.execute(
-            f'UPDATE export_scripts SET {", ".join(sets)} WHERE id=%s', params
-        )
-        cur.execute(
-            'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
-            'FROM export_scripts WHERE id = %s', (script_id,)
-        )
-        row = cur.fetchone()
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            # Validate scope/code consistency. For partial updates, fall back to the
+            # stored value for whichever of scope/script isn't in the body.
+            if 'script' in body or 'scope' in body:
+                eff_scope = body.get('scope')
+                eff_script = body.get('script')
+                if eff_scope is None or eff_script is None:
+                    cur.execute('SELECT script, scope FROM export_scripts WHERE id = %s', (script_id,))
+                    existing = cur.fetchone()
+                    if not existing:
+                        return jsonify({'error': 'Not found'}), 404
+                    if eff_script is None:
+                        eff_script = existing[0]
+                    if eff_scope is None:
+                        eff_scope = existing[1]
+                try:
+                    validate_export_script_scope(eff_scope, eff_script)
+                except ValueError as e:
+                    return jsonify({'error': str(e)}), 400
+
+            # 改名时提交前查重，排除自身——见 create_script 里的同一注释。
+            if 'name' in body:
+                new_name = body['name']
+                cur.execute(
+                    "SELECT id FROM export_scripts WHERE name = %s AND id != %s",
+                    (new_name, script_id)
+                )
+                if cur.fetchone():
+                    return jsonify({"error": f"导出脚本名称「{new_name}」已被占用，请换一个名称"}), 400
+
+            sets = ['updated_at=%s']
+            params = [now]
+            if 'name' in body:
+                sets.append('name=%s')
+                params.append(body['name'])
+            if 'description' in body:
+                sets.append('description=%s')
+                params.append(body['description'])
+            if 'language' in body:
+                sets.append('language=%s')
+                params.append(body['language'])
+            if 'script' in body:
+                sets.append('script=%s')
+                params.append(body['script'])
+            if 'outputFormat' in body:
+                sets.append('output_format=%s')
+                params.append(body['outputFormat'])
+            if 'scope' in body:
+                sets.append('scope=%s')
+                params.append(body['scope'])
+            if 'boundCollection' in body:
+                sets.append('bound_collection=%s')
+                params.append((body.get('boundCollection') or '').strip() or None)
+            if 'boundMenuId' in body:
+                sets.append('bound_menu_id=%s')
+                params.append((body.get('boundMenuId') or '').strip() or None)
+            params.append(script_id)
+            cur.execute(
+                f'UPDATE export_scripts SET {", ".join(sets)} WHERE id=%s', params
+            )
+            cur.execute(
+                'SELECT id, name, description, language, script, output_format, created_at, updated_at, scope, bound_collection, bound_menu_id '
+                'FROM export_scripts WHERE id = %s', (script_id,)
+            )
+            row = cur.fetchone()
+    except psycopg2.errors.UniqueViolation:
+        return jsonify({"error": f"导出脚本名称「{body.get('name')}」已被占用，请换一个名称"}), 400
     if not row:
         return jsonify({'error': 'Not found'}), 404
     result = row_to_dict(row)

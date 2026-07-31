@@ -2164,6 +2164,32 @@ def init_db():
                 conn.commit()
                 print("Created idx_menus_data_name_unique (数据页菜单名称全局唯一).")
 
+        # Migration: 导出脚本名称全局唯一（同样是为 MCP 按名称定位脚本做准备，
+        # run_export_script 现在 script_id 参数也接受脚本名称）。export_scripts
+        # 没有 menu_type 那种子集区分，直接对整张表的 name 建普通唯一索引即可。
+        # 检测/跳过逻辑跟上面 idx_menus_data_name_unique 同一套路。
+        cur.execute("""
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = 'export_scripts' AND indexname = 'idx_export_scripts_name_unique'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                SELECT name, array_agg(id) FROM export_scripts
+                GROUP BY name HAVING COUNT(*) > 1
+            """)
+            dup_rows = cur.fetchall()
+            if dup_rows:
+                print(f"[WARN] 发现 {len(dup_rows)} 组重名导出脚本，跳过唯一索引创建：")
+                for name, ids in dup_rows:
+                    print(f"  - 「{name}」: {ids}")
+                print("  请手动改名消除重复后重跑 init_db.py 补上唯一索引。")
+            else:
+                cur.execute("""
+                    CREATE UNIQUE INDEX idx_export_scripts_name_unique ON export_scripts(name)
+                """)
+                conn.commit()
+                print("Created idx_export_scripts_name_unique (导出脚本名称全局唯一).")
+
         # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
         # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
         # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每

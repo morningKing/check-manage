@@ -148,9 +148,11 @@ class TestUpdateExportScript:
 
     def test_update_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
-        mock_cursor.fetchone.return_value = (
-            's1', '更新脚本', '描述', 'python', 'print(2)', 'json', now, now, 'page', None, None,
-        )
+        # 第一次 fetchone 是改名查重（None = 没有重名），第二次是更新后取回的完整行
+        mock_cursor.fetchone.side_effect = [
+            None,
+            ('s1', '更新脚本', '描述', 'python', 'print(2)', 'json', now, now, 'page', None, None),
+        ]
         resp = client.put('/exportScripts/s1',
                           data=json.dumps({'name': '更新脚本'}),
                           content_type='application/json',

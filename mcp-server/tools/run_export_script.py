@@ -19,12 +19,13 @@ TOOL = types.Tool(
     name=NAME,
     description=(
         "运行一个【已绑定】的导出脚本，把导出结果写入本次会话的产出目录(outputs/)，用户可直接下载，"
-        "并返回文件名/大小/前若干字预览。先用 list_export_scripts 拿到 script_id。"
-        "参数：script_id=脚本标识。"
+        "并返回文件名/大小/前若干字预览。"
+        "参数：script_id=脚本标识或脚本显示名称（脚本名称全局唯一，不会歧义；"
+        "也可以先用 list_export_scripts 查看可用脚本）。"
     ),
     inputSchema={
         "type": "object",
-        "properties": {"script_id": {"type": "string", "description": "导出脚本 id"}},
+        "properties": {"script_id": {"type": "string", "description": "导出脚本 id 或名称"}},
         "required": ["script_id"],
         "additionalProperties": False,
     },
@@ -53,7 +54,12 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(f"SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s", (script_id,))
+        # script_id 参数可能是脚本标识本身，也可能是脚本显示名称（export_scripts.name，
+        # 现在全局唯一，见 idx_export_scripts_name_unique）。
+        cur.execute(
+            f"SELECT {SCRIPT_SELECT} FROM export_scripts WHERE id = %s OR name = %s",
+            (script_id, script_id),
+        )
         row = cur.fetchone()
         if not row:
             raise RunExportError(f"脚本不存在：{script_id}")
