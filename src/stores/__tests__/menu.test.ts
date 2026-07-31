@@ -376,4 +376,50 @@ describe('Menu Store', () => {
       await expect(store.updateMenuOrder([{ id: 'm1', order: 2 }])).rejects.toThrow('更新失败')
     })
   })
+
+  describe('getFilteredMenuTree', () => {
+    it('admin 不在菜单 roles 里时，admin 看不到这个菜单（没有超管旁路）', () => {
+      store.$patch({
+        menuList: [
+          makeMenu({ id: 'm1', name: '仅开发者可见', parentId: null, roles: ['developer'] }),
+        ],
+      })
+      store.menuTree // 触发 cachedMenuTree 构建
+
+      expect(store.getFilteredMenuTree('admin')).toEqual([])
+    })
+
+    it('admin 在菜单 roles 里时，admin 能看到这个菜单', () => {
+      store.$patch({
+        menuList: [
+          makeMenu({ id: 'm1', name: '管理员可见', parentId: null, roles: ['admin'] }),
+        ],
+      })
+      store.menuTree
+
+      const result = store.getFilteredMenuTree('admin')
+      expect(result.map((m) => m.id)).toEqual(['m1'])
+    })
+
+    it('roles 为空数组时对所有角色（含 admin）可见', () => {
+      store.$patch({
+        menuList: [
+          makeMenu({ id: 'm1', name: '公开菜单', parentId: null, roles: [] }),
+        ],
+      })
+      store.menuTree
+
+      expect(store.getFilteredMenuTree('admin').map((m) => m.id)).toEqual(['m1'])
+      expect(store.getFilteredMenuTree('developer').map((m) => m.id)).toEqual(['m1'])
+    })
+
+    it('role 为空时返回空数组', () => {
+      store.$patch({
+        menuList: [makeMenu({ id: 'm1', name: 'x', parentId: null, roles: [] })],
+      })
+      store.menuTree
+
+      expect(store.getFilteredMenuTree(null)).toEqual([])
+    })
+  })
 })

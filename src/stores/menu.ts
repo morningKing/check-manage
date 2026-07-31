@@ -303,10 +303,11 @@ export const useMenuStore = defineStore('menu', () => {
    * @param role - 用户角色
    * @returns 过滤后的菜单树
    */
-  function getFilteredMenuTree(role: UserRole | null, isSuper = false): MenuItem[] {
-    // 超级用户（superuser）绕过角色过滤，展示全部菜单
-    if (isSuper) return cachedMenuTree.value
-
+  function getFilteredMenuTree(role: UserRole | null): MenuItem[] {
+    // 注意：这里故意不给 admin/superuser 开旁路——菜单可见性只看
+    // menu.roles 是否包含这个角色 slug（跟 admin.* 权限能不能访问路由是两回事，
+    // 见 CLAUDE.md「Capability ≠ menu visibility」）。取消勾选某菜单的 admin
+    // 角色后，admin 侧边栏也应该看不到它。
     if (!role) return []
 
     // 检查缓存
