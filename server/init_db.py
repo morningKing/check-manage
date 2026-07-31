@@ -2134,6 +2134,36 @@ def init_db():
             conn.commit()
             print("Created column_views table.")
 
+        # Migration: 数据类型菜单名称全局唯一（为 MCP 按名称定位数据页做准备）。
+        # 用部分唯一索引只约束 menu_type='data' 的菜单，工作空间/项目菜单不受影响。
+        # 用 pg_indexes 判断存在性而不是 CREATE UNIQUE INDEX IF NOT EXISTS：如果
+        # 库里已经有重名的数据类型菜单（老库/生产库可能存在，这个开发库目前没有），
+        # 直接尝试建索引会报错——这里先检测重名，有就打印警告、跳过建索引，不让
+        # 这一步中断整个 init_db.py；没有重名再正常建索引。索引名固定，管理员手动
+        # 改名消除重复后重跑 init_db.py 即可自动补上。
+        cur.execute("""
+            SELECT indexname FROM pg_indexes
+            WHERE tablename = 'menus' AND indexname = 'idx_menus_data_name_unique'
+        """)
+        if not cur.fetchone():
+            cur.execute("""
+                SELECT name, array_agg(id) FROM menus
+                WHERE menu_type = 'data' GROUP BY name HAVING COUNT(*) > 1
+            """)
+            dup_rows = cur.fetchall()
+            if dup_rows:
+                print(f"[WARN] 发现 {len(dup_rows)} 组重名数据页菜单，跳过唯一索引创建：")
+                for name, ids in dup_rows:
+                    print(f"  - 「{name}」: {ids}")
+                print("  请手动改名消除重复后重跑 init_db.py 补上唯一索引。")
+            else:
+                cur.execute("""
+                    CREATE UNIQUE INDEX idx_menus_data_name_unique
+                    ON menus(name) WHERE menu_type = 'data'
+                """)
+                conn.commit()
+                print("Created idx_menus_data_name_unique (数据页菜单名称全局唯一).")
+
         # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
         # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
         # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每

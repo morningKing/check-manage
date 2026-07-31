@@ -3,6 +3,7 @@ from db import get_db
 from auth import login_required, require_permission
 from utils.operation_log import log_operation
 import json
+import psycopg2.errors
 
 menus_bp = Blueprint('menus', __name__)
 
@@ -142,28 +143,44 @@ def create_menu():
     parent_id = body.get('parentId')
     menu_type = body.get('menuType', 'data')
     page_id = body.get('pageId')
+    name = body.get('name')
 
-    with get_db() as conn:
-        cur = conn.cursor()
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
 
-        valid, error = _validate_menu_type(cur, menu_type, parent_id, page_id)
-        if not valid:
-            return jsonify({"error": error}), 400
+            valid, error = _validate_menu_type(cur, menu_type, parent_id, page_id)
+            if not valid:
+                return jsonify({"error": error}), 400
 
-        project_id = None
-        if menu_type == 'data' and parent_id:
-            cur.execute('SELECT menu_type FROM menus WHERE id = %s', (parent_id,))
-            row = cur.fetchone()
-            if row and row[0] == 'project':
-                project_id = parent_id
+            # 数据页名称全局唯一（跨项目），为 MCP 之后按名称定位数据页做准备；
+            # 唯一约束的最后防线是数据库部分唯一索引 idx_menus_data_name_unique
+            # （见 init_db.py），这里先查一遍是为了给出友好错误而不是让原始
+            # psycopg2 异常冒泡——下面 INSERT 撞上索引时同样会被下面的 except 兜住。
+            if menu_type == 'data':
+                cur.execute(
+                    "SELECT id FROM menus WHERE menu_type = 'data' AND name = %s",
+                    (name,)
+                )
+                if cur.fetchone():
+                    return jsonify({"error": f"数据页名称「{name}」已被占用，请换一个名称"}), 400
 
-        roles = body.get('roles', ['admin', 'developer', 'guest'])
-        cur.execute(
-            'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, export_script_id, menu_type, project_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
-            (body.get('id'), body.get('name'), body.get('icon'), body.get('pageId'),
-             body.get('parentId'), body.get('order', 0), body.get('path'), json.dumps(roles), body.get('exportScriptId'),
-             menu_type, project_id),
-        )
+            project_id = None
+            if menu_type == 'data' and parent_id:
+                cur.execute('SELECT menu_type FROM menus WHERE id = %s', (parent_id,))
+                row = cur.fetchone()
+                if row and row[0] == 'project':
+                    project_id = parent_id
+
+            roles = body.get('roles', ['admin', 'developer', 'guest'])
+            cur.execute(
+                'INSERT INTO menus (id, name, icon, page_id, parent_id, "order", path, roles, export_script_id, menu_type, project_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                (body.get('id'), name, body.get('icon'), body.get('pageId'),
+                 body.get('parentId'), body.get('order', 0), body.get('path'), json.dumps(roles), body.get('exportScriptId'),
+                 menu_type, project_id),
+            )
+    except psycopg2.errors.UniqueViolation:
+        return jsonify({"error": f"数据页名称「{name}」已被占用，请换一个名称"}), 400
 
     body['roles'] = roles
     body['menuType'] = menu_type
@@ -219,15 +236,29 @@ def update_menu(menu_id):
             if row and row[0] == 'project':
                 project_id = new_parent_id
 
+    name = body.get('name')
     roles = body.get('roles', ['admin', 'developer', 'guest'])
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            'UPDATE menus SET name=%s, icon=%s, page_id=%s, parent_id=%s, "order"=%s, path=%s, roles=%s, export_script_id=%s, menu_type=%s, project_id=%s WHERE id=%s',
-            (body.get('name'), body.get('icon'), body.get('pageId'),
-             body.get('parentId'), body.get('order', 0), body.get('path'), json.dumps(roles), body.get('exportScriptId'),
-             menu_type, project_id, menu_id),
-        )
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+
+            # 数据页名称全局唯一（跨项目），排除自身——见 create_menu 里的同一注释。
+            if menu_type == 'data':
+                cur.execute(
+                    "SELECT id FROM menus WHERE menu_type = 'data' AND name = %s AND id != %s",
+                    (name, menu_id)
+                )
+                if cur.fetchone():
+                    return jsonify({"error": f"数据页名称「{name}」已被占用，请换一个名称"}), 400
+
+            cur.execute(
+                'UPDATE menus SET name=%s, icon=%s, page_id=%s, parent_id=%s, "order"=%s, path=%s, roles=%s, export_script_id=%s, menu_type=%s, project_id=%s WHERE id=%s',
+                (name, body.get('icon'), body.get('pageId'),
+                 body.get('parentId'), body.get('order', 0), body.get('path'), json.dumps(roles), body.get('exportScriptId'),
+                 menu_type, project_id, menu_id),
+            )
+    except psycopg2.errors.UniqueViolation:
+        return jsonify({"error": f"数据页名称「{name}」已被占用，请换一个名称"}), 400
     body['id'] = menu_id
     body['roles'] = roles
     body['menuType'] = menu_type
