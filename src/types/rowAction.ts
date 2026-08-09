@@ -56,4 +56,12 @@ export interface RunRowActionResult {
   ok: boolean
   /** 'running' = 已写入 runningValue，前端可轮询；'submitted' = 无状态字段，不轮询 */
   status: 'running' | 'submitted'
+  /**
+   * status='running' 时，该动作实际生效的状态字段/执行中值（AI 动作用所绑扫描
+   * 任务的配置，见后端 resolve_status_gate）。RowActionRunner 轮询时用它判断
+   * 该行是否已离开执行中态，离开就立即停止轮询，而不是盲等到 5 分钟上限。
+   * 缺省（后端解析失败等极端情况）时退回旧的盲等轮询。
+   */
+  statusField?: string | null
+  runningValue?: string | null
 }

@@ -11,7 +11,7 @@ from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
 from utils.search_text import compute_search_text
 from utils.field_indexes import sql_literal
-from utils.row_action_engine import run_action, RowActionError
+from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 import psycopg2.extras
 import json
 
@@ -1489,4 +1489,25 @@ def run_row_action(collection, record_id, action_id):
     log_operation('update', 'row_action', record_id, action.get('label'),
                   f'执行行操作「{action.get("label")}」（记录 {record_id}）',
                   branch_id=branch_id)
-    return jsonify({'ok': True, 'status': status})
+
+    # I3：把实际生效的状态字段/执行中值带回前端，供 RowActionRunner 轮询时
+    # 判断该行是否已离开执行中态——而不是不管三七二十一盲等到 5 分钟上限再
+    # 弹"执行时间较长"（哪怕行早就已经是终态）。AI 动作的状态字段来自所绑
+    # 扫描任务而非行动作自身，resolve_status_gate 是这条规则的唯一来源
+    # （run_action 内部也用它），这里重新解析一次成本很低（AI 情形只是多一次
+    # 对 ai_scan_tasks 的主键查询），换来路由层不用重复维护同一份判断逻辑。
+    status_field = running_value = None
+    if status == 'running':
+        try:
+            status_field, running_value, _task, _is_ai = resolve_status_gate(action)
+        except RowActionError:
+            # 理论上不会发生：run_action 刚成功过一次同样的解析。就算两次调用
+            # 之间任务被删，前端拿不到 statusField 时会退回旧的盲等轮询，不影响正确性。
+            pass
+
+    return jsonify({
+        'ok': True,
+        'status': status,
+        'statusField': status_field,
+        'runningValue': running_value,
+    })

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { ElMessage } from 'element-plus'
 import RowActionRunner from '../RowActionRunner.vue'
 import type { RowActionConfig } from '@/types/rowAction'
 
@@ -54,9 +55,9 @@ function makeAction(over: Partial<RowActionConfig> = {}): RowActionConfig {
   }
 }
 
-function mountRunner() {
+function mountRunner(extraProps: Record<string, unknown> = {}) {
   return mount(RowActionRunner, {
-    props: { collection: 'orders' },
+    props: { collection: 'orders', ...extraProps },
     global: { stubs: { teleport: true, DynamicForm: DynamicFormStub } },
   })
 }
@@ -175,5 +176,70 @@ describe('RowActionRunner', () => {
     // 但定时器本身没被清除）
     expect(clearIntervalSpy).toHaveBeenCalled()
     expect(clearTimeoutSpy).toHaveBeenCalled()
+  })
+
+  // ---------- I3：轮询应在行到达终态时立即停止，而不是盲等 5 分钟 ----------
+
+  it('行到达终态时立即停止轮询，且不弹"执行时间较长"的误导提示', async () => {
+    vi.useFakeTimers()
+    runRowAction.mockResolvedValue({
+      ok: true, status: 'running', statusField: 'syncStatus', runningValue: '同步中',
+    })
+    let currentStatus = '同步中'
+    const onRefresh = vi.fn(async () => {})
+    const getRowById = vi.fn((id: string) =>
+      id === 'rec-1' ? { id: 'rec-1', syncStatus: currentStatus } : undefined,
+    )
+    const w = mountRunner({ onRefresh, getRowById })
+    await (w.vm as any).run(makeAction(), { id: 'rec-1' })
+    await flushPromises()
+    expect((w.vm as any).isPolling).toBe(true)
+
+    // 模拟 webhook 在第一次轮询之前就已经跑完，行已经离开了 runningValue
+    currentStatus = '已同步'
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(onRefresh).toHaveBeenCalled()
+    expect(getRowById).toHaveBeenCalledWith('rec-1')
+    expect((w.vm as any).isPolling).toBe(false)
+    expect(ElMessage.info).not.toHaveBeenCalled()
+  })
+
+  it('行仍在执行中态时继续轮询，直到 5 分钟上限才弹提示', async () => {
+    vi.useFakeTimers()
+    runRowAction.mockResolvedValue({
+      ok: true, status: 'running', statusField: 'syncStatus', runningValue: '同步中',
+    })
+    const onRefresh = vi.fn(async () => {})
+    const getRowById = vi.fn(() => ({ id: 'rec-1', syncStatus: '同步中' }))
+    const w = mountRunner({ onRefresh, getRowById })
+    await (w.vm as any).run(makeAction(), { id: 'rec-1' })
+    await flushPromises()
+    expect((w.vm as any).isPolling).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 5000)
+
+    expect((w.vm as any).isPolling).toBe(false)
+    expect(ElMessage.info).toHaveBeenCalled()
+  })
+
+  it('拿不到 getRowById 时退回旧的盲等超时行为（不因缺信息而报错）', async () => {
+    vi.useFakeTimers()
+    runRowAction.mockResolvedValue({
+      ok: true, status: 'running', statusField: 'syncStatus', runningValue: '同步中',
+    })
+    const onRefresh = vi.fn(async () => {})
+    const w = mountRunner({ onRefresh })
+    await (w.vm as any).run(makeAction(), { id: 'rec-1' })
+    await flushPromises()
+    expect((w.vm as any).isPolling).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(onRefresh).toHaveBeenCalled()
+    expect((w.vm as any).isPolling).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    expect((w.vm as any).isPolling).toBe(false)
+    expect(ElMessage.info).toHaveBeenCalled()
   })
 })

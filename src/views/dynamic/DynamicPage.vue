@@ -291,7 +291,8 @@
     <RowActionRunner
       ref="rowActionRunnerRef"
       :collection="collection"
-      @refresh="loadPageData"
+      :on-refresh="loadPageData"
+      :get-row-by-id="(id: string) => tableData.find((r) => String(r.id) === id)"
     />
 
     <!-- 看板视图 -->

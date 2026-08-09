@@ -51,10 +51,30 @@ def test_happy_path_returns_running(client, admin_headers):
          patch('routes.dynamic.log_operation'):
         resp = client.post(URL, headers=admin_headers, json={'params': {'reason': 'x'}})
     assert resp.status_code == 200
-    assert resp.get_json() == {'ok': True, 'status': 'running'}
+    # I3：running 时把该动作实际生效的状态字段/执行中值一并带回，供前端轮询
+    # 判断行是否已离开执行中态——这里就是行动作自身的 statusField/runningValue
+    # （ACTION 是 webhook 类型，resolve_status_gate 不需要查 AI 扫描任务）。
+    assert resp.get_json() == {
+        'ok': True, 'status': 'running',
+        'statusField': 'syncStatus', 'runningValue': '同步中',
+    }
     assert ra.call_args[0][0] == 'orders'
     assert ra.call_args[0][1] == 'rec-1'
     assert ra.call_args[1]['params'] == {'reason': 'x'}
+
+
+def test_submitted_status_omits_status_field(client, admin_headers):
+    """status='submitted'（无状态字段配置）时不需要解析 resolve_status_gate，
+    statusField/runningValue 应为 null。"""
+    action = dict(ACTION, statusField=None, runningValue=None)
+    with _patch_lookup(row_actions=(action,)), \
+         patch('routes.dynamic.run_action', return_value='submitted'), \
+         patch('routes.dynamic.log_operation'):
+        resp = client.post(URL, headers=admin_headers, json={})
+    assert resp.get_json() == {
+        'ok': True, 'status': 'submitted',
+        'statusField': None, 'runningValue': None,
+    }
 
 
 def test_engine_error_is_translated_to_its_status(client, admin_headers):
