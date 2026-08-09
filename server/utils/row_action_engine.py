@@ -11,7 +11,8 @@
 
 import json
 import logging
-import threading
+import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from db import get_db
 from utils.row_action_condition import evaluate
 from utils.webhook_engine import fire_webhook_rule
 from utils.ai_scan_engine import (
-    claim_one, build_context_dir, assemble_prompt, _workspace_root,
+    claim_one, build_context_dir, assemble_prompt, _workspace_root, _revert_claimed,
 )
 from utils.ai_scan_repo import get_task
 from utils.batch_repo import create_batch
@@ -41,14 +42,27 @@ class RowActionError(Exception):
 
 # ==================== 可见性 ====================
 
-def is_visible(action, role, is_superuser, row_data):
-    """按钮对该角色 + 该行是否可见。前端与后端共用同一判断。"""
+def _visibility_denial_reason(action, role, is_superuser, row_data):
+    """是 is_visible 和 run_action 共用的唯一判断来源。
+
+    返回 None 表示可见/可执行；否则是被拒绝的原因：'disabled' | 'role' | 'condition'。
+    此前 run_action 把这三条判断逐字重写了一遍，导致 is_visible 的测试是假信心——
+    改坏 is_visible 不影响任何运行路径。两者现在共读这一个函数，run_action 借
+    reason 选择对应的 HTTP 状态码/中文提示，is_visible 只关心"能不能"。
+    """
     if not action.get('enabled', True):
-        return False
+        return 'disabled'
     roles = action.get('roles') or []
     if roles and not is_superuser and role not in roles:
-        return False
-    return evaluate(action.get('visibleWhen'), row_data or {})
+        return 'role'
+    if not evaluate(action.get('visibleWhen'), row_data or {}):
+        return 'condition'
+    return None
+
+
+def is_visible(action, role, is_superuser, row_data):
+    """按钮对该角色 + 该行是否可见。前端与后端共用同一判断语义。"""
+    return _visibility_denial_reason(action, role, is_superuser, row_data) is None
 
 
 # ==================== 行读写 ====================
@@ -73,10 +87,6 @@ def write_back(collection, record_id, branch_id, values):
             n = cur.rowcount
         conn.commit()
     return n
-
-
-def write_status(collection, record_id, branch_id, field, value):
-    return write_back(collection, record_id, branch_id, {field: value})
 
 
 # ==================== 陈旧阈值 ====================
@@ -139,45 +149,84 @@ def claim_for_webhook(collection, record_id, branch_id, field, running, stale_be
 
 # ==================== 主入口 ====================
 
+# 共享的小线程池：webhook 分支的执行是"点一次按钮起一个后台任务"，此前用裸
+# `threading.Thread(daemon=True)`，一个有权限的用户脚本循环点 1000 次就是
+# 1000 个线程 + 1000 次对外 HTTP（每次还带重试）。改成模块级共享的小池子
+# （webhook 请求本身有超时+重试上限，不会无限占用）。用真正的 Executor 而不是
+# daemon 线程还有个好处：进程退出时 concurrent.futures 自带的 atexit 钩子会
+# 等待在跑的任务收尾，不会像 daemon 线程那样被进程退出直接拦腰砍断、留下半
+# 写的 webhook 结果。
+_webhook_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix='row-action-webhook')
+
+
 def _spawn(fn, *args):
-    t = threading.Thread(target=fn, args=args, daemon=True)
-    t.start()
-    return t
+    return _webhook_executor.submit(fn, *args)
+
+
+def _branch_display_name(branch_id):
+    """把 branch_id 转成人话，用于 I5 的跨分支保护提示。"""
+    if not branch_id or branch_id == 'main':
+        return '主分支'
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT name FROM collection_versions WHERE id = %s', (branch_id,))
+            row = cur.fetchone()
+        return row[0] if row else branch_id
+    except Exception:
+        logger.exception('查询分支名称失败: %s', branch_id)
+        return branch_id
+
+
+def resolve_status_gate(action):
+    """解析该动作实际用于闸门/轮询的 (status_field, running_value, task, is_ai)。
+
+    webhook 用行动作自己的配置；AI **一律**用所绑扫描任务的配置（终态回写由
+    ai_scan_engine.on_child_finished 完成，它只认扫描任务的配置——行动作自己
+    再叠一套状态字段只会在行上留下一个永远卡在"执行中"、无人写终态的字段）。
+
+    run_action 和路由层（组装 /run 响应，供前端轮询判断终态）共读这一个函数，
+    避免"AI 用扫描任务的状态配置"这条规则被两处分别实现、后续改漏一处。
+
+    Raises: RowActionError（actionType='aiTask' 但绑定的扫描任务已被删除）
+    """
+    if action.get('actionType') == 'aiTask':
+        task = get_task(action.get('scanTaskId'))
+        if not task:
+            raise RowActionError('动作绑定的执行器已不存在', 400)
+        return task.get('statusField'), task.get('runningValue'), task, True
+    return action.get('statusField'), action.get('runningValue'), None, False
 
 
 def run_action(collection, record_id, action, row_data, role, operator,
                branch_id, params):
     """校验 → 写「执行中」→ 分派。返回 'running' 或 'submitted'。
 
-    状态字段的归属：
-      - webhook 动作用行动作自己配置的 statusField / 三个状态值
-      - AI 动作**一律**用所绑扫描任务的配置。终态回写由
-        ai_scan_engine.on_child_finished 完成，它只认扫描任务的配置；行动作
-        再叠一套只会在行上留下一个永远卡在「执行中」、无人写终态的字段。
-
     Raises: RowActionError
     """
     # 1. 后端复核（前端隐藏不算数）
-    if not action.get('enabled', True):
-        raise RowActionError('该行操作已停用', 400)
-    roles = action.get('roles') or []
     is_superuser = (role == 'admin')
-    if roles and not is_superuser and role not in roles:
+    reason = _visibility_denial_reason(action, role, is_superuser, row_data)
+    if reason == 'disabled':
+        raise RowActionError('该行操作已停用', 400)
+    if reason == 'role':
         raise RowActionError('权限不足', 403)
-    if not evaluate(action.get('visibleWhen'), row_data or {}):
+    if reason == 'condition':
         raise RowActionError('当前记录不满足该动作的执行条件', 409)
 
-    is_ai = action.get('actionType') == 'aiTask'
-    task = None
+    status_field, running, task, is_ai = resolve_status_gate(action)
+
+    # 1.5 AI 分支的跨分支保护：路由层的闸门读的是用户当前分支的这一行（同一
+    #     record_id 在分支复制后每个分支各有一份），但 claim_one 实际认领、
+    #     读写的是扫描任务绑定的 task['branchId']。两者不一致时，静默地按
+    #     用户当前分支的按钮改了 main（或别的分支）上那条他没在看的记录——
+    #     比直接报错更危险，必须在分派前挡住。
     if is_ai:
-        task = get_task(action.get('scanTaskId'))
-        if not task:
-            raise RowActionError('动作绑定的执行器已不存在', 400)
-        status_field = task.get('statusField')
-        running = task.get('runningValue')
-    else:
-        status_field = action.get('statusField')
-        running = action.get('runningValue')
+        task_branch = task.get('branchId') or 'main'
+        if task_branch != branch_id:
+            raise RowActionError(
+                f'该动作绑定的 AI 任务作用于「{_branch_display_name(task_branch)}」分支，'
+                '请切换分支后再执行', 409)
 
     # 2. 幂等闸门
     #    webhook：条件 UPDATE（CAS）原子抢占，避免并发「读后写」重复触发外部
@@ -235,8 +284,13 @@ def _run_webhook(collection, record_id, action, row_data, operator, branch_id, p
         ok = False
     finally:
         if status_field:
-            values[status_field] = (action.get('doneValue') if ok
-                                    else action.get('failedValue'))
+            # C1 修复：doneValue/failedValue 留空是合法配置（管理员想表达"成功
+            # 就别动这个字段"），但 write_back 对 None 值的兜底是写成 ''——
+            # 两者叠加会把行上一个正常业务字段（比如复用已有的 status 字段）
+            # 静默清空成空串。留空就不写这个字段，维持原值不变。
+            target = action.get('doneValue') if ok else action.get('failedValue')
+            if target:
+                values[status_field] = target
         if values:
             try:
                 write_back(collection, record_id, branch_id, values)
@@ -271,7 +325,10 @@ def _map_response(body, mapping):
     out = {}
     for m in mapping:
         key, col = m.get('jsonKey'), m.get('column')
-        if key and col and key in parsed:
+        # C1 修复：非 required 的映射键如果在响应里显式是 null，同样不该写——
+        # 走到 write_back 会被它的 None -> '' 兜底覆盖掉那个字段的现有值，
+        # 跟 required 缺失是同一类"映射值缺失就不该写那个字段"的问题。
+        if key and col and key in parsed and parsed[key] is not None:
             out[col] = parsed[key]
     return out, True
 
@@ -306,15 +363,31 @@ def _run_ai(record_id, action, task, params):
     if not rec:
         raise RowActionError('记录不存在或正被其他操作占用', 409)
 
-    rel = build_context_dir(task, rec)
-    append_params_to_context(rel, params)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
-    create_batch(
-        task['ownerUserId'],
-        name=f"行操作·{action.get('label')}·{stamp}",
-        prompt=assemble_prompt(task),
-        template_id=None,
-        files=[{'name': record_id, 'path': rel, 'recordId': record_id}],
-        scan_task_id=task['id'],
-        agent=task.get('agent') or None,
-    )
+    try:
+        rel = build_context_dir(task, rec)
+        append_params_to_context(rel, params)
+        stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+        create_batch(
+            task['ownerUserId'],
+            name=f"行操作·{action.get('label')}·{stamp}",
+            prompt=assemble_prompt(task),
+            template_id=None,
+            files=[{'name': record_id, 'path': rel, 'recordId': record_id}],
+            scan_task_id=task['id'],
+            agent=task.get('agent') or None,
+        )
+    except Exception as e:
+        # I4 修复：claim_one 已经把这一行翻成"处理中"；build_context_dir（文件
+        # IO、拷附件）/ create_batch（写库）任一步再抛错，此前完全没有兜底——
+        # 行永久卡在"处理中"、scan-staging/<task>/<record>/ 暂存目录残留、
+        # 异常一路冒到路由层变成裸 500（前端只看到通用错误提示）。对照
+        # ai_scan_engine.run_task 的同款兜底：还原行状态 + 清理暂存目录 +
+        # 抛 RowActionError 让路由层翻译成中文错误。
+        _revert_claimed(task, [record_id])
+        shutil.rmtree(
+            Path(_workspace_root()) / 'scan-staging' / task['id'] / record_id,
+            ignore_errors=True,
+        )
+        logger.exception('行操作 AI 分支执行失败: action=%s record=%s',
+                         action.get('id'), record_id)
+        raise RowActionError(f'AI 执行器启动失败：{e}', 500)
