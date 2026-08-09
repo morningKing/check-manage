@@ -14,8 +14,6 @@ import psycopg2.extras
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
-from db import get_db
-
 
 def fire_webhooks(
     event: str,
@@ -148,6 +146,7 @@ def fire_webhook_rule(
     Raises:
         ValueError: 规则不存在或已禁用
     """
+    from db import get_db
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -166,9 +165,10 @@ def fire_webhook_rule(
             action_id=action_id, action_label=action_label, params=params,
         )
 
+    # 兜底值与 webhook_rules 表 schema 的列默认值对齐（timeout DEFAULT 30 / retries DEFAULT 3）
     return _fire_single_webhook(
         rid, rname, url, secret, 'manual', payload,
-        timeout or 30, retries or 0,
+        timeout or 30, retries or 3,
     )
 
 

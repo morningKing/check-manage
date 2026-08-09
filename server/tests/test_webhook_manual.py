@@ -41,7 +41,7 @@ def test_build_payload_manual_carries_action_and_params():
 def test_fire_webhook_rule_calls_single_webhook_with_rule_config():
     import utils.webhook_engine as we
     fake_get_db, _cur = _db()
-    with patch.object(we, 'get_db', fake_get_db), \
+    with patch('db.get_db', fake_get_db), \
          patch.object(we, '_fire_single_webhook',
                       return_value={'success': True, 'logId': 'l1',
                                     'responseStatus': 200, 'errorMessage': None,
@@ -62,7 +62,7 @@ def test_fire_webhook_rule_calls_single_webhook_with_rule_config():
 def test_fire_webhook_rule_missing_rule_raises():
     import utils.webhook_engine as we
     fake_get_db, _cur = _db(rule_row=None)
-    with patch.object(we, 'get_db', fake_get_db):
+    with patch('db.get_db', fake_get_db):
         try:
             we.fire_webhook_rule('gone', 'orders', 'rec-1', {}, 'admin', {}, 'main',
                                  action_id='ra-1', action_label='x')
