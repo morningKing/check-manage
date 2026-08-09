@@ -332,8 +332,28 @@ const conditionOperator = computed<RowActionCondition['operator']>({
   set: (v) => {
     const vw = current.value?.visibleWhen
     if (!vw) return
+    const prevValue = vw.value
     vw.operator = v
-    if (NO_VALUE_OPERATORS.includes(v)) vw.value = undefined
+    if (NO_VALUE_OPERATORS.includes(v)) {
+      // empty/notEmpty 不需要值
+      vw.value = undefined
+    } else if (v === 'in' || v === 'notIn') {
+      // eq/ne 用的是标量字符串；切到 in/notIn 后求值器要求数组（见
+      // src/utils/rowActionCondition.ts 与后端同款求值器：非数组直接判负），
+      // 不转换的话条件会静默失效。已经是数组（比如从另一个 in/notIn 切过来）则保持不变。
+      if (typeof prevValue === 'string') {
+        vw.value = prevValue
+          ? prevValue.split(',').map((s) => s.trim()).filter(Boolean)
+          : []
+      }
+    } else {
+      // 切回 eq/ne：数组 -> 标量。多个已选值收窄成单值时语义不明确
+      // （逗号拼接成一个字符串不对应任何真实字段值，等于让条件必然为假），
+      // 取第一个已选值更符合"多选收窄成单选"的直觉，用户可以再手动确认/修改。
+      if (Array.isArray(prevValue)) {
+        vw.value = prevValue[0] ?? ''
+      }
+    }
   },
 })
 
@@ -357,17 +377,28 @@ const conditionValueText = computed<string>({
 // ---- actionType 切到 aiTask 时，清空 webhook 专属的执行结果配置 ----
 // 用 id 判断是否为"同一个动作的类型被改了"，与"只是切换了选中的另一个动作"区分开，
 // 否则单纯点击列表切换选中项也会因为两个动作 actionType 不同而被误判成"类型切换"。
+//
+// lastActionId 的刷新专门用一个只依赖 activeIndex 的 watch 来做，不能放在
+// actionType 的 watch 里顺带更新——那样会有个漏洞：如果连续选中的两个动作
+// actionType 恰好相同（比如都是 webhook），watch(actionType) 的值前后不变，
+// 根本不会触发，lastActionId 就没能跟着刷新到新选中的动作；等用户接下来真的把
+// 这个新选中动作的类型改掉时，代码会拿一个"上上个动作"的 stale id 去比较，
+// 误判成"只是切换了选中项"从而漏清空。（code review 发现 1 的回归用例见测试文件。）
 let lastActionId: string | undefined
+watch(
+  activeIndex,
+  () => {
+    lastActionId = current.value?.id
+  },
+  { immediate: true }
+)
+
 watch(
   () => current.value?.actionType,
   (newType) => {
     const item = current.value
     if (!item) return
-    const switchedSelection = item.id !== lastActionId
-    lastActionId = item.id
-    // immediate 首次调用（或单纯切换了选中项）都不算"类型被改了"，跳过清空；
-    // 只有同一个动作在被选中期间，类型确实发生变化才清空
-    if (switchedSelection) return
+    if (item.id !== lastActionId) return
     if (newType === 'aiTask') {
       item.statusField = undefined
       item.runningValue = undefined
@@ -375,8 +406,7 @@ watch(
       item.failedValue = undefined
       item.responseMapping = undefined
     }
-  },
-  { immediate: true }
+  }
 )
 
 // ---- 响应字段映射（仅 webhook） ----

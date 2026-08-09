@@ -187,4 +187,61 @@ describe('RowActionsEditor', () => {
     await flushPromises()
     expect(vm.list[0].statusField).toBe('status')
   })
+
+  // 回归用例（code review 发现 1）：两个动作类型相同（都是 webhook），先切换选中项，
+  // 此时 actionType 的值前后都是 'webhook'、没有变化；之后再对新选中的这个动作
+  // 做一次真正的类型切换（webhook -> aiTask）。如果"是否算真实类型切换"的判断
+  // 依赖的状态只在 actionType 值变化时才被刷新，这里会因为上一步"值没变"而没被
+  // 刷新，导致这次真实切换被误判成"只是切了选中项"，从而漏清空。
+  it('先切换选中的另一个同为 webhook 的动作，再把它的类型真的改成 aiTask，仍要清空五项', async () => {
+    const w = mountEditor([
+      { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true },
+      {
+        id: 'ra-2',
+        label: 'B',
+        actionType: 'webhook',
+        enabled: true,
+        statusField: 'status',
+        runningValue: '执行中',
+        doneValue: '已完成',
+        failedValue: '失败',
+        responseMapping: [{ jsonKey: 'ok', column: 'result', required: false }],
+      },
+    ])
+    await flushPromises()
+    const vm = w.vm as any
+    // 切换选中项：ra-1(webhook) -> ra-2(webhook)，actionType 值没变
+    vm.activeIndex = 1
+    await flushPromises()
+    // 再对 ra-2 做一次真实的类型切换
+    vm.current.actionType = 'aiTask'
+    await flushPromises()
+    expect(vm.current.statusField).toBeUndefined()
+    expect(vm.current.runningValue).toBeUndefined()
+    expect(vm.current.doneValue).toBeUndefined()
+    expect(vm.current.failedValue).toBeUndefined()
+    expect(vm.current.responseMapping).toBeUndefined()
+  })
+
+  // 回归用例（code review 发现 2）：eq/ne 用标量字符串，in/notIn 用数组；
+  // 只有算子切到 in/notIn 时把已有的标量值转成数组，才能保证
+  // rowActionCondition 求值器（前后端一致）的 in/notIn 分支不会因为
+  // "类型不是数组"而直接判负，导致条件静默失效。
+  it('算子从 eq 切到 in 时，已有的字符串值要转成数组', async () => {
+    const w = mountEditor([
+      {
+        id: 'ra-1',
+        label: 'A',
+        actionType: 'webhook',
+        enabled: true,
+        visibleWhen: { field: 'status', operator: 'eq', value: '已完成' },
+      },
+    ])
+    await flushPromises()
+    const vm = w.vm as any
+    vm.conditionOperator = 'in'
+    await flushPromises()
+    expect(Array.isArray(vm.current.visibleWhen.value)).toBe(true)
+    expect(vm.current.visibleWhen.value).toEqual(['已完成'])
+  })
 })
