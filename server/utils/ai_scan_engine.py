@@ -266,6 +266,37 @@ def claim_records(task):
     return [{'id': r[0], 'data': r[1]} for r in rows]
 
 
+def claim_one(task, record_id):
+    """认领单条记录并翻到 running_value，供自定义行操作按钮手动触发。
+
+    与 claim_records 的唯一语义差别：**不带 pending_value 谓词**。定时扫描只挑
+    「待处理」的行，而手动重跑必须能对已经「已处理」的行再来一次。
+
+    `task` 必须是 camelCase 形状（ai_scan_repo.get_task() 的返回值），与
+    build_context_dir 保持一致。
+
+    Returns: {'id', 'data'} 或 None（行不存在 / 已被其他事务锁住）
+    """
+    sql = (
+        "WITH picked AS ("
+        "  SELECT d.id FROM dynamic_data d "
+        "   WHERE d.id = %s AND d.collection = %s AND d.branch_id = %s "
+        "   FOR UPDATE SKIP LOCKED) "
+        "UPDATE dynamic_data d SET data = jsonb_set(d.data, ARRAY[%s], to_jsonb(%s::text)), "
+        "  updated_at = now(), version = d.version + 1 "
+        "FROM picked WHERE d.id = picked.id AND d.branch_id = %s "
+        "RETURNING d.id, d.data"
+    )
+    params = [record_id, task['collection'], task['branchId'],
+              task['statusField'], task['runningValue'], task['branchId']]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+        conn.commit()
+    return {'id': row[0], 'data': row[1]} if row else None
+
+
 def run_task(task):
     """One scan: claim → stage context → create batch → record run."""
     claimed = claim_records(task)
