@@ -277,9 +277,22 @@
           >
             导出：{{ s.name }}
           </el-dropdown-item>
+          <el-dropdown-item
+            v-for="a in visibleRowActionsFor(row)"
+            :key="a.id"
+            @click="rowActionRunnerRef?.run(a, row)"
+          >
+            {{ a.label }}
+          </el-dropdown-item>
         </template>
       </DataTable>
     </el-card>
+
+    <RowActionRunner
+      ref="rowActionRunnerRef"
+      :collection="collection"
+      @refresh="loadPageData"
+    />
 
     <!-- 看板视图 -->
     <el-card v-show="viewMode === 'kanban'" class="table-card kanban-card">
@@ -1052,6 +1065,9 @@ import { isVersionConflict, conflictMessage } from './conflict'
 import { isPreviewable, fileTypeIcon } from '@/utils/filePreview'
 import { authedDataFileUrl } from '@/api/dataFiles'
 import { useStatusBadgePolling } from '@/composables/useStatusBadgePolling'
+import RowActionRunner from '@/components/dynamic/RowActionRunner.vue'
+import { evaluateRowActionCondition } from '@/utils/rowActionCondition'
+import type { RowActionConfig } from '@/types/rowAction'
 
 // ==================== Props ====================
 
@@ -1088,6 +1104,11 @@ const dynamicFormRef = ref<InstanceType<typeof DynamicForm>>()
  * 数据表格引用
  */
 const dataTableRef = ref<InstanceType<typeof DataTable>>()
+
+/**
+ * 行操作执行器引用
+ */
+const rowActionRunnerRef = ref<InstanceType<typeof RowActionRunner> | null>(null)
 
 /**
  * 文件选择器引用
@@ -1701,6 +1722,25 @@ const boundExportScripts = computed<ExportScript[]>(() => {
 const boundRowExportScripts = computed<ExportScript[]>(() => {
   return allExportScripts.value.filter(s => s.scope === 'row')
 })
+
+/** 该页面配置的行操作（未过滤） */
+const rowActions = computed<RowActionConfig[]>(
+  () => pageConfig.value?.rowActions || [],
+)
+
+/**
+ * 对某一行可见的行操作。
+ * 前端过滤只是 UX，后端会用同一套规则复核一次。
+ */
+function visibleRowActionsFor(row: Record<string, unknown>): RowActionConfig[] {
+  const role = authStore.userRole
+  const superuser = authStore.isSuperuser
+  return rowActions.value.filter((a) => {
+    if (!a.enabled) return false
+    if (a.roles?.length && !superuser && (!role || !a.roles.includes(role))) return false
+    return evaluateRowActionCondition(a.visibleWhen, row)
+  })
+}
 
 /**
  * 全量展开字段列表（含引用字段展开的继承虚拟列，不做视图过滤）
