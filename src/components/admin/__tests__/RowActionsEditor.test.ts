@@ -74,7 +74,10 @@ const stubs = {
   'el-radio-group': { template: '<div><slot /></div>', props: ['modelValue'], emits: ['update:modelValue'] },
   'el-radio': { template: '<label><slot /></label>', props: ['label'] },
   'el-form': { template: '<form><slot /></form>' },
-  'el-form-item': { template: '<div><slot /></div>', props: ['label', 'required'] },
+  'el-form-item': {
+    template: '<div :data-label="label" :data-required="required"><slot /></div>',
+    props: { label: String, required: Boolean },
+  },
   'el-divider': { template: '<div><slot /></div>', props: ['contentPosition'] },
   'el-tag': { template: '<span><slot /></span>', props: ['type', 'size'] },
   'el-empty': { template: '<div class="empty">{{ description }}</div>', props: ['description', 'imageSize'] },
@@ -306,5 +309,53 @@ describe('RowActionsEditor', () => {
     await flushPromises()
     expect(Array.isArray(vm.current.visibleWhen.value)).toBe(true)
     expect(vm.current.visibleWhen.value).toEqual(['已完成'])
+  })
+
+  // ---- I1：非标量控件（数组类/关联类）不能进状态字段/显示条件/响应映射候选 ----
+
+  it('fieldOptions 过滤掉数组类与关联类控件，只保留标量字段', async () => {
+    const fieldsWithNonScalar = [
+      { fieldName: 'status', label: '状态', controlType: 'select' },
+      { fieldName: 'result', label: '结果', controlType: 'text' },
+      { fieldName: 'tags', label: '标签', controlType: 'multiSelect' },
+      { fieldName: 'flags', label: '标记', controlType: 'checkbox' },
+      { fieldName: 'attachments', label: '附件', controlType: 'file' },
+      { fieldName: 'cover', label: '封面', controlType: 'image' },
+      { fieldName: 'items', label: '关联项', controlType: 'relation' },
+      { fieldName: 'parent', label: '父项', controlType: 'reference' },
+      { fieldName: 'quoted', label: '引用', controlType: 'quoteSelect' },
+    ] as any
+    setActivePinia(createPinia())
+    const w = mount(RowActionsEditor, {
+      props: {
+        modelValue: [{ id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true }],
+        fields: fieldsWithNonScalar,
+      },
+      global: { stubs },
+    })
+    await flushPromises()
+    expect((w.vm as any).fieldOptions.map((o: any) => o.value)).toEqual(['status', 'result'])
+  })
+
+  // ---- C1：选了状态字段后，执行中值/成功值/失败值必须标必填 ----
+
+  it('选了状态字段后，执行中值/成功值/失败值三项标为必填', async () => {
+    const w = mountEditor([
+      { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true, statusField: 'status' },
+    ])
+    await flushPromises()
+    for (const label of ['执行中值', '成功值', '失败值']) {
+      const item = w.find(`[data-label="${label}"]`)
+      expect(item.exists()).toBe(true)
+      expect(item.attributes('data-required')).toBe('true')
+    }
+  })
+
+  it('未选状态字段时不渲染执行中值/成功值/失败值', async () => {
+    const w = mountEditor([
+      { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true },
+    ])
+    await flushPromises()
+    expect(w.find('[data-label="执行中值"]').exists()).toBe(false)
   })
 })

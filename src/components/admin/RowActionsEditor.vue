@@ -102,15 +102,18 @@
             </el-select>
           </el-form-item>
           <template v-if="current.statusField">
-            <el-form-item label="执行中值">
+            <el-form-item label="执行中值" required>
               <el-input v-model="current.runningValue" placeholder="如：执行中" />
             </el-form-item>
-            <el-form-item label="成功值">
+            <el-form-item label="成功值" required>
               <el-input v-model="current.doneValue" placeholder="如：已完成" />
             </el-form-item>
-            <el-form-item label="失败值">
+            <el-form-item label="失败值" required>
               <el-input v-model="current.failedValue" placeholder="如：执行失败" />
             </el-form-item>
+            <div class="ra-hint" style="margin-top: -8px; margin-bottom: 8px">
+              选了状态字段后，这三项必须都填写——留空会被引擎的兜底逻辑把该字段清空为空串。
+            </div>
           </template>
           <el-form-item label="响应字段映射">
             <div class="ra-mapping">
@@ -197,6 +200,17 @@ const ALLOWED_PARAM_CONTROLS = CONTROL_TYPE_OPTIONS.filter(
   (o) => !FORBIDDEN_PARAM_CONTROLS.includes(o.value)
 )
 
+/** 与后端 server/utils/row_action_validate.py::_NON_SCALAR_CONTROLS 保持一致：
+ *  multiSelect/checkbox/file/image 在 dynamic_data 里存的是数组，
+ *  relation/reference/quoteSelect 干脆不落在这行的 data 里（走 data_relations
+ *  表）。状态字段/显示条件字段/响应映射目标字段都要求"可比较、可整体覆盖写回
+ *  的标量"，选了这类控件配出来的条件求值器一律按 '' 处理（见
+ *  src/utils/rowActionCondition.ts），永远不会按直觉工作；写回则会把数组/
+ *  关联字段静默改写成字符串。索性在下拉里就不让选。 */
+const NON_SCALAR_CONTROLS: ControlType[] = [
+  'multiSelect', 'checkbox', 'file', 'image', 'relation', 'reference', 'quoteSelect',
+]
+
 const OPERATOR_OPTIONS: { label: string; value: RowActionCondition['operator'] }[] = [
   { label: '等于', value: 'eq' },
   { label: '不等于', value: 'ne' },
@@ -245,8 +259,12 @@ watch(
 )
 
 // ---- 下拉候选 ----
+// 状态字段 / 显示条件字段 / 响应映射目标字段三处共用这份列表，统一过滤掉
+// 非标量控件（见 NON_SCALAR_CONTROLS 的注释）。
 const fieldOptions = computed(() =>
-  props.fields.map((f) => ({ label: `${f.label}（${f.fieldName}）`, value: f.fieldName }))
+  props.fields
+    .filter((f) => !NON_SCALAR_CONTROLS.includes(f.controlType))
+    .map((f) => ({ label: `${f.label}（${f.fieldName}）`, value: f.fieldName }))
 )
 
 const roleStore = useRoleStore()
