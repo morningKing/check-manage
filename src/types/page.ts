@@ -5,6 +5,7 @@
  */
 
 import type { FieldConfig } from './field'
+import type { RowActionConfig } from './rowAction'
 
 /**
  * 继承字段映射接口
@@ -122,6 +123,7 @@ export interface PageConfig {
   validationScript?: string
   viewConfig?: ViewConfig
   deleteBinding?: DeleteBindingConfig
+  rowActions?: RowActionConfig[]
   createdAt: string
   updatedAt: string
 }
@@ -143,6 +145,7 @@ export interface PageFormData {
   validationScript?: string
   viewConfig?: ViewConfig
   deleteBinding?: DeleteBindingConfig
+  rowActions?: RowActionConfig[]
 }
 
 /**
@@ -161,6 +164,7 @@ export function createEmptyPageFormData(): PageFormData {
     apiWritable: false,
     validationScript: '',
     viewConfig: {},
+    rowActions: [],
   }
 }
 
