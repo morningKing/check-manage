@@ -26,6 +26,19 @@ vi.mock('element-plus', async (orig) => {
   }
 })
 
+// 只关心 RowActionRunner 怎么调用 DynamicForm 的 validate()/getFormData()（它没有
+// v-model，靠 ref 暴露这两个方法），不需要真的渲染表单控件
+const validateMock = vi.fn()
+const getFormDataMock = vi.fn()
+const DynamicFormStub = {
+  name: 'DynamicForm',
+  template: '<div class="dynamic-form-stub" />',
+  methods: {
+    validate: (...a: unknown[]) => validateMock(...a),
+    getFormData: (...a: unknown[]) => getFormDataMock(...a),
+  },
+}
+
 function makeAction(over: Partial<RowActionConfig> = {}): RowActionConfig {
   return {
     id: 'ra-1',
@@ -43,8 +56,8 @@ function makeAction(over: Partial<RowActionConfig> = {}): RowActionConfig {
 
 function mountRunner() {
   return mount(RowActionRunner, {
-    props: { collection: 'orders', fields: [] },
-    global: { stubs: { teleport: true } },
+    props: { collection: 'orders' },
+    global: { stubs: { teleport: true, DynamicForm: DynamicFormStub } },
   })
 }
 
@@ -54,6 +67,8 @@ describe('RowActionRunner', () => {
     vi.useRealTimers()
     runRowAction.mockResolvedValue({ ok: true, status: 'submitted' })
     confirmMock.mockResolvedValue('confirm')
+    validateMock.mockResolvedValue(true)
+    getFormDataMock.mockReturnValue({})
   })
 
   it('无 confirmText、无 paramFields 时直接提交', async () => {
@@ -93,6 +108,39 @@ describe('RowActionRunner', () => {
     expect((w.vm as any).paramDialogVisible).toBe(true)
   })
 
+  it('参数表单校验失败时不提交，对话框保持打开', async () => {
+    validateMock.mockResolvedValue(false)
+    const w = mountRunner()
+    const action = makeAction({
+      paramFields: [
+        { fieldName: 'reason', label: '原因', controlType: 'textarea' } as any,
+      ],
+    })
+    await (w.vm as any).run(action, { id: 'rec-1' })
+    await flushPromises()
+    await (w.vm as any).submitWithParams()
+    await flushPromises()
+    expect(runRowAction).not.toHaveBeenCalled()
+    expect((w.vm as any).paramDialogVisible).toBe(true)
+  })
+
+  it('参数表单校验通过时带着表单数据提交', async () => {
+    validateMock.mockResolvedValue(true)
+    getFormDataMock.mockReturnValue({ reason: '缺料' })
+    const w = mountRunner()
+    const action = makeAction({
+      paramFields: [
+        { fieldName: 'reason', label: '原因', controlType: 'textarea' } as any,
+      ],
+    })
+    await (w.vm as any).run(action, { id: 'rec-1' })
+    await flushPromises()
+    await (w.vm as any).submitWithParams()
+    await flushPromises()
+    expect(runRowAction).toHaveBeenCalledWith('orders', 'rec-1', 'ra-1', { reason: '缺料' })
+    expect((w.vm as any).paramDialogVisible).toBe(false)
+  })
+
   it('status=running 时启动轮询并在超时后停止', async () => {
     vi.useFakeTimers()
     runRowAction.mockResolvedValue({ ok: true, status: 'running' })
@@ -119,8 +167,13 @@ describe('RowActionRunner', () => {
     const w = mountRunner()
     await (w.vm as any).run(makeAction(), { id: 'rec-1' })
     await flushPromises()
-    const clearSpy = vi.spyOn(globalThis, 'clearInterval')
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
     w.unmount()
-    expect(clearSpy).toHaveBeenCalled()
+    // 轮询定时器（clearInterval）和 5 分钟超时定时器（clearTimeout）都要清，
+    // 否则组件卸载后超时定时器仍会残留触发（虽然此时组件已销毁、访问不到，
+    // 但定时器本身没被清除）
+    expect(clearIntervalSpy).toHaveBeenCalled()
+    expect(clearTimeoutSpy).toHaveBeenCalled()
   })
 })

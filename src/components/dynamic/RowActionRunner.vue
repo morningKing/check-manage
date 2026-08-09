@@ -33,12 +33,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import DynamicForm from '@/components/dynamic-form/DynamicForm.vue'
 import { runRowAction } from '@/api/rowAction'
 import type { RowActionConfig } from '@/types/rowAction'
-import type { FieldConfig } from '@/types/field'
 
 const props = defineProps<{
   collection: string
-  /** 当前数据页字段列表（预留，暂未使用） */
-  fields?: FieldConfig[]
 }>()
 
 const emit = defineEmits<{
@@ -76,11 +73,6 @@ function startPolling() {
   isPolling.value = true
   pollTimer = setInterval(() => emit('refresh'), POLL_INTERVAL_MS)
   pollStopTimer = setTimeout(() => stopPolling(true), POLL_MAX_MS)
-}
-
-/** 由父组件在该行离开 runningValue 后调用，提前结束轮询 */
-function notifySettled() {
-  stopPolling()
 }
 
 async function run(action: RowActionConfig, row: Record<string, unknown>) {
@@ -139,5 +131,5 @@ async function submit(params: Record<string, unknown>) {
 
 onUnmounted(() => stopPolling())
 
-defineExpose({ run, notifySettled, isPolling, paramDialogVisible })
+defineExpose({ run, submitWithParams, isPolling, paramDialogVisible })
 </script>
