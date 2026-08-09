@@ -38,5 +38,11 @@
   { "name": "科学计数法大数按 JS 记法比较", "condition": { "field": "n", "operator": "eq", "value": "1e+21" }, "data": { "n": 1e21 }, "expected": true },
   { "name": "科学计数法小数按 JS 记法比较（无前导零指数）", "condition": { "field": "n", "operator": "eq", "value": "1e-7" }, "data": { "n": 1e-7 }, "expected": true },
   { "name": "临界大数仍是定点小数（未到 1e21）", "condition": { "field": "n", "operator": "eq", "value": "999999999999999900000" }, "data": { "n": 9.999999999999999e20 }, "expected": true },
-  { "name": "临界小数仍是定点小数（未到 1e-6 以下）", "condition": { "field": "n", "operator": "eq", "value": "0.000001" }, "data": { "n": 0.000001 }, "expected": true }
+  { "name": "临界小数仍是定点小数（未到 1e-6 以下）", "condition": { "field": "n", "operator": "eq", "value": "0.000001" }, "data": { "n": 0.000001 }, "expected": true },
+
+  { "name": "eq 超大整数字面量按 JS 记法比较（1e21 量级，Python 侧是 int）", "condition": { "field": "n", "operator": "eq", "value": "1e+21" }, "data": { "n": 1000000000000000000000 }, "expected": true },
+  { "name": "eq 整数字面量超 2^53 精度对齐 JS 浮点截断（Python 侧是 int）", "condition": { "field": "n", "operator": "eq", "value": "9007199254740992" }, "data": { "n": 9007199254740993 }, "expected": true },
+  { "name": "eq 普通小整数字面量不受整数归一影响", "condition": { "field": "n", "operator": "eq", "value": "42" }, "data": { "n": 42 }, "expected": true },
+  { "name": "eq 负整数字面量按文本比较", "condition": { "field": "n", "operator": "eq", "value": "-7" }, "data": { "n": -7 }, "expected": true },
+  { "name": "eq 整数字面量零按文本比较", "condition": { "field": "n", "operator": "eq", "value": "0" }, "data": { "n": 0 }, "expected": true }
 ]

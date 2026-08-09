@@ -71,6 +71,16 @@ def _as_text(v):
     float(3.0)（str() 得 '3.0'），到浏览器是 number 3（String() 得 '3'）；
     极大/极小值还有科学计数法记法分叉（见 _format_float 的说明）。不归一的话，
     同一条数据前端判定「满足条件」而后端判定「不满足」，用户会看到按钮却点不动。
+
+    整数同样要走这条路径，而不能停在 str(v)：JSONB 里没有小数点的数字，
+    psycopg2 解析出来是 Python int（任意精度），但浏览器里的 JSON.parse 一律
+    产出 float64 number——超过 2^53 就会丢精度、超过 1e21 就会切到科学计数法。
+    直接 str(int) 会原样吐出任意精度整数（如 '1000000000000000000000' 或精确的
+    '9007199254740993'），跟前端 String(Number(...)) 的结果（'1e+21' /
+    '9007199254740992'）对不上，是与浮点数同一类"前端显示按钮、后端判不满足"
+    的分叉。所以要先 float(v) 把整数也砸扁成 float64（模拟 JS 那次精度损失），
+    再走同一套 _format_float。bool 是 int 的子类，必须在这条分支之前已经被
+    上面的 isinstance(v, bool) 拦掉，否则 True 会被当成 1 处理。
     """
     if v is None:
         return ''
@@ -78,8 +88,8 @@ def _as_text(v):
         return 'true' if v else 'false'
     if isinstance(v, (list, dict)):
         return ''
-    if isinstance(v, float):
-        return _format_float(v)
+    if isinstance(v, (int, float)):
+        return _format_float(float(v))
     return str(v)
 
 
