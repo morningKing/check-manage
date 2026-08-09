@@ -976,6 +976,99 @@ class TestUpsertModeRestore:
                 'replace mode must DELETE'
 
 
+class TestPageConfigsRowActionsBackup:
+    """I2 回归：page_configs.row_actions（自定义行操作按钮配置）此前不在
+    BACKUP_TABLES 的列清单里——replace 模式的还原会先 DELETE 整张
+    page_configs 表再按这份清单逐列 INSERT，row_actions 不在清单里就永远不会
+    被写回，落回列默认值 '[]'::jsonb，配置无声消失且备份文件里根本没这份
+    数据、不可恢复。"""
+
+    def test_page_configs_columns_include_row_actions_as_jsonb(self):
+        from utils.backup import BACKUP_TABLE_MAP
+        _, columns, jsonb_indices, _ = BACKUP_TABLE_MAP['page_configs']
+        assert 'row_actions' in columns
+        idx = columns.index('row_actions')
+        assert idx in jsonb_indices, 'row_actions 必须标记为 JSONB 列，否则还原时不会被 Json() 包装'
+
+    @patch('utils.backup._ensure_backup_dir')
+    @patch('utils.backup.get_db')
+    @patch('utils.backup.os.path.getsize')
+    def test_create_backup_exports_row_actions_column(self, mock_getsize, mock_get_db, mock_ensure_dir):
+        """备份导出 page_configs 时，SELECT 的列清单里必须带 row_actions，
+        否则备份文件里从一开始就没有这份数据，后面怎么改还原逻辑都补不回来。"""
+        from utils.backup import create_backup
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.__enter__ = lambda self: mock_conn
+        mock_conn.__exit__ = lambda self, *args: None
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        mock_get_db.return_value = mock_conn
+        mock_getsize.return_value = 1024
+
+        with workspace_temp_dir() as tmpdir:
+            with patch('utils.backup.BACKUP_DIR', tmpdir):
+                create_backup(backup_type='manual', created_by='admin', tables=['page_configs'])
+
+        select_sqls = [str(call[0][0]) for call in mock_cursor.execute.call_args_list
+                      if 'SELECT' in str(call[0][0]) and 'page_configs' in str(call[0][0])]
+        assert select_sqls, '应该有一条 SELECT page_configs 的语句'
+        assert any('row_actions' in s for s in select_sqls)
+
+    @patch('db.pool')
+    def test_restore_page_configs_writes_row_actions_column(self, mock_pool):
+        """还原时 row_actions 必须真的出现在 INSERT 的列清单和参数里——这是
+        整个回归的关键断言：修复前这里的 INSERT 完全不带 row_actions 列。"""
+        from utils.backup import restore_backup, BACKUP_VERSION
+        import psycopg2.extras as pg_extras
+
+        row_actions_payload = [{
+            'id': 'ra-1', 'label': '推送外部', 'actionType': 'webhook',
+            'enabled': True, 'webhookRuleId': 'wh-1',
+        }]
+
+        with workspace_temp_dir() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'page-configs-backup.zip')
+            manifest = {
+                'version': BACKUP_VERSION,
+                'id': 'backup-pc',
+                'name': 'page_configs 行操作备份',
+                'type': 'manual',
+                'scope': 'partial',
+                'tables': ['page_configs'],
+                'createdAt': datetime.now(timezone.utc).isoformat(),
+                'totalRecords': 1,
+            }
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                zf.writestr('manifest.json', json.dumps(manifest))
+                zf.writestr('page_configs.json', json.dumps([{
+                    'id': 'page-orders', 'name': '订单', 'description': None,
+                    'api_endpoint': None, 'fields': [], 'created_at': None,
+                    'updated_at': None, 'row_actions': row_actions_payload,
+                }]))
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_conn.cursor.return_value = mock_cursor
+            mock_pool.getconn.return_value = mock_conn
+            mock_pool.putconn.return_value = None
+
+            restore_backup(zip_path, tables=['page_configs'], mode='replace')
+
+            insert_calls = [call for call in mock_cursor.execute.call_args_list
+                            if 'INSERT INTO page_configs' in str(call[0][0])]
+            assert insert_calls, '应该有一条 INSERT INTO page_configs'
+            sql, params = insert_calls[0][0]
+            assert 'row_actions' in sql, 'INSERT 的列清单必须包含 row_actions'
+            # 找到对应位置的值，确认是被 Json() 包装过的、内容不丢的 row_actions
+            col_list = [c.strip() for c in sql.split('(')[1].split(')')[0].split(',')]
+            idx = col_list.index('row_actions')
+            value = params[idx]
+            assert isinstance(value, pg_extras.Json)
+            assert value.adapted == row_actions_payload
+
+
 class TestComputeRestoreWarnings:
     """compute_restore_warnings should flag tables whose dependents would be
     left with orphan FKs after a selective replace-mode restore."""
