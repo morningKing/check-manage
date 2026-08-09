@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required
+from auth import login_required, write_required
 from utils.permissions import can_page
 from utils.rbac_guard import require_page_action
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
@@ -11,6 +11,7 @@ from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
 from utils.search_text import compute_search_text
 from utils.field_indexes import sql_literal
+from utils.row_action_engine import run_action, RowActionError
 import psycopg2.extras
 import json
 
@@ -1425,3 +1426,67 @@ def batch_delete_items(collection, **kwargs):
     if blocked_ids:
         result["blocked"] = {rid: f'被「{"、".join(set(pages))}」引用' for rid, pages in blocked_ids.items()}
     return jsonify(result)
+
+
+def _load_row_action_context(collection, record_id, branch_id):
+    """一次性取出该页面的行操作配置和该行数据。
+
+    抽成独立函数是为了让路由测试能整体 patch 掉 DB 访问。
+    Returns: (row_actions: list, row_data: dict | None)
+    """
+    page_id = f'page-{collection}'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT row_actions FROM page_configs WHERE id = %s', (page_id,))
+        row = cur.fetchone()
+        row_actions = (row[0] if row else None) or []
+        cur.execute(
+            'SELECT data FROM dynamic_data '
+            'WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, record_id, branch_id),
+        )
+        rec = cur.fetchone()
+    return row_actions, (rec[0] if rec else None)
+
+
+@dynamic_bp.route('/<collection>/<record_id>/row-actions/<action_id>/run', methods=['POST'])
+@write_required
+def run_row_action(collection, record_id, action_id):
+    """触发一个自定义行级操作按钮。
+
+    行动作会改这一行的数据，所以权限等同于 update。实际执行是异步的，
+    这里立即返回；结果通过行上的状态字段回写体现。
+    """
+    if collection in RESERVED:
+        return jsonify({'error': 'Not found'}), 404
+    denied = require_page_action(collection, 'update')
+    if denied:
+        return denied
+
+    branch_id = _get_current_user_branch(collection)
+    row_actions, row_data = _load_row_action_context(collection, record_id, branch_id)
+
+    action = next((a for a in row_actions if a.get('id') == action_id), None)
+    if not action:
+        return jsonify({'error': '行操作不存在'}), 404
+    if row_data is None:
+        return jsonify({'error': '记录不存在'}), 404
+
+    body = request.get_json(silent=True) or {}
+    user = getattr(flask_g, 'current_user', {}) or {}
+
+    try:
+        status = run_action(
+            collection, record_id, action, row_data,
+            role=user.get('role'),
+            operator=user.get('username') or user.get('userId') or '',
+            branch_id=branch_id,
+            params=body.get('params') or {},
+        )
+    except RowActionError as e:
+        return jsonify({'error': e.message}), e.http_status
+
+    log_operation('update', 'row_action', record_id, action.get('label'),
+                  f'执行行操作「{action.get("label")}」（记录 {record_id}）',
+                  branch_id=branch_id)
+    return jsonify({'ok': True, 'status': status})
