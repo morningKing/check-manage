@@ -14,6 +14,8 @@ import psycopg2.extras
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
+from db import get_db
+
 
 def fire_webhooks(
     event: str,
@@ -126,6 +128,50 @@ def fire_webhooks(
     return result
 
 
+def fire_webhook_rule(
+    rule_id: str,
+    collection: str,
+    record_id: str,
+    row_data: dict,
+    operator: str,
+    params: Optional[dict],
+    branch_id: Optional[str],
+    action_id: str,
+    action_label: str,
+) -> dict:
+    """按 id 触发单条 webhook 规则（自定义行操作按钮专用）。
+
+    与 fire_webhooks 的区别：不做 event/collection 匹配，也**忽略规则自身的
+    trigger_condition** —— 触发条件由行动作的 visibleWhen 单点负责，避免两处
+    条件语义打架。签名、超时、重试、webhook_logs 全部复用 _fire_single_webhook。
+
+    Raises:
+        ValueError: 规则不存在或已禁用
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, name, webhook_url, secret, timeout, retries '
+            'FROM webhook_rules WHERE id = %s AND enabled = TRUE',
+            (rule_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError(f'Webhook 规则「{rule_id}」不存在或已禁用')
+        rid, rname, url, secret, timeout, retries = row
+
+        payload = _build_payload(
+            'after', 'manual', collection, record_id, None, row_data,
+            operator, rid, rname, branch_id, cur,
+            action_id=action_id, action_label=action_label, params=params,
+        )
+
+    return _fire_single_webhook(
+        rid, rname, url, secret, 'manual', payload,
+        timeout or 30, retries or 0,
+    )
+
+
 def _check_condition(condition: dict, old_data: Optional[dict], new_data: Optional[dict], event: str) -> bool:
     """
     Check if trigger condition is satisfied
@@ -184,6 +230,9 @@ def _build_payload(
     rule_name: str,
     branch_id: Optional[str],
     cur,
+    action_id: Optional[str] = None,
+    action_label: Optional[str] = None,
+    params: Optional[dict] = None,
 ) -> dict:
     """
     Build webhook payload for different event types and timing
@@ -206,8 +255,8 @@ def _build_payload(
         'branchId': branch_id,
     }
 
-    # Data events (create/update/delete)
-    if event in ('create', 'update', 'delete') and collection:
+    # Data events (create/update/delete/manual)
+    if event in ('create', 'update', 'delete', 'manual') and collection:
         payload['collection'] = collection
 
         # Get page name from page_configs
@@ -226,6 +275,15 @@ def _build_payload(
 
         payload['pageName'] = page_name
         payload['recordId'] = record_id
+
+        if event == 'manual':
+            # 手动行动作：无 before/after 之分，直接给当前行数据 + 动作元信息
+            payload['record'] = new_data
+            payload['oldRecord'] = None
+            payload['actionId'] = action_id
+            payload['actionLabel'] = action_label
+            payload['params'] = params or {}
+            return payload
 
         if timing == 'before':
             # Before payload: 预览数据
@@ -326,6 +384,7 @@ def _fire_single_webhook(
         'success': success,
         'logId': log_id,
         'responseStatus': response_status,
+        'responseBody': response_body,
         'errorMessage': error_message,
         'retryCount': retry_count,
     }
