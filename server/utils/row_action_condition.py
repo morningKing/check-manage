@@ -12,11 +12,18 @@ _OPERATORS = ('eq', 'ne', 'in', 'notIn', 'empty', 'notEmpty')
 
 
 def _as_text(v):
-    """与前端 asText() 保持一致：None/缺失 -> ''，布尔 -> 'true'/'false'。"""
+    """与前端 asText() 保持一致：None/缺失 -> ''，布尔 -> 'true'/'false'。
+
+    浮点数要额外归一：JSONB 里的 3.0 到 Python 是 float(3.0)（str() 得 '3.0'），
+    到浏览器是 number 3（String() 得 '3'）。不归一的话，同一条数据前端判定
+    「满足条件」而后端判定「不满足」，用户会看到按钮却点不动。
+    """
     if v is None:
         return ''
     if isinstance(v, bool):
         return 'true' if v else 'false'
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
     return str(v)
 
 

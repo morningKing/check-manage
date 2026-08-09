@@ -20,5 +20,10 @@
   { "name": "empty 有值", "condition": { "field": "note", "operator": "empty" }, "data": { "note": "x" }, "expected": false },
   { "name": "notEmpty 有值", "condition": { "field": "note", "operator": "notEmpty" }, "data": { "note": "x" }, "expected": true },
   { "name": "notEmpty 空串", "condition": { "field": "note", "operator": "notEmpty" }, "data": { "note": "" }, "expected": false },
-  { "name": "未知算子失败关闭", "condition": { "field": "status", "operator": "gt", "value": "1" }, "data": { "status": "5" }, "expected": false }
+  { "name": "未知算子失败关闭", "condition": { "field": "status", "operator": "gt", "value": "1" }, "data": { "status": "5" }, "expected": false },
+  { "name": "eq 整数值浮点数按整数文本比较", "condition": { "field": "n", "operator": "eq", "value": "3" }, "data": { "n": 3.0 }, "expected": true },
+  { "name": "eq 真小数保留小数文本", "condition": { "field": "n", "operator": "eq", "value": "3.5" }, "data": { "n": 3.5 }, "expected": true },
+  { "name": "ne 整数值浮点数", "condition": { "field": "n", "operator": "ne", "value": "3" }, "data": { "n": 3.0 }, "expected": false },
+  { "name": "in 整数值浮点数", "condition": { "field": "n", "operator": "in", "value": ["1", "3"] }, "data": { "n": 3.0 }, "expected": true },
+  { "name": "empty 数字零不算空", "condition": { "field": "n", "operator": "empty" }, "data": { "n": 0 }, "expected": false }
 ]
