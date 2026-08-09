@@ -10,7 +10,15 @@ import type { RowActionCondition } from '@/types/rowAction'
 const OPERATORS = ['eq', 'ne', 'in', 'notIn', 'empty', 'notEmpty'] as const
 
 /**
- * 与后端 _as_text() 一致：null/undefined -> ''，布尔 -> 'true'/'false'。
+ * 与后端 _as_text() 一致：null/undefined -> ''，布尔 -> 'true'/'false'，
+ * 数组/对象（非标量）-> ''。
+ *
+ * 数组/对象一律视为 ''：JS 对它们的 String() 结果（Array 会 join(',')，单元素
+ * 数组会退化成元素本身如 String(['a'])==='a'；对象是 '[object Object]'）既跟
+ * 后端 Python 的 str() 对不上，语义上也不是"标量值等于/属于"该有的比较对象。
+ * multiSelect/checkbox/file/image 存的就是数组，relation/reference/quoteSelect
+ * 干脆不在这行的 data 里——统一按"不是可比较的标量"处理，empty/notEmpty 仍按
+ * 直觉工作（空数组=空），eq/in 这类精确比较则总是不命中。
  *
  * 后端对整数值浮点数（如 3.0）额外做了归一（str(int(v)) -> '3'），是为了迁就
  * JS 的 String()：JS 里 number 没有 int/float 之分，String(3.0) 本来就是 '3'，
@@ -19,6 +27,7 @@ const OPERATORS = ['eq', 'ne', 'in', 'notIn', 'empty', 'notEmpty'] as const
 function asText(v: unknown): string {
   if (v === null || v === undefined) return ''
   if (typeof v === 'boolean') return v ? 'true' : 'false'
+  if (typeof v === 'object') return ''
   return String(v)
 }
 

@@ -25,5 +25,18 @@
   { "name": "eq 真小数保留小数文本", "condition": { "field": "n", "operator": "eq", "value": "3.5" }, "data": { "n": 3.5 }, "expected": true },
   { "name": "ne 整数值浮点数", "condition": { "field": "n", "operator": "ne", "value": "3" }, "data": { "n": 3.0 }, "expected": false },
   { "name": "in 整数值浮点数", "condition": { "field": "n", "operator": "in", "value": ["1", "3"] }, "data": { "n": 3.0 }, "expected": true },
-  { "name": "empty 数字零不算空", "condition": { "field": "n", "operator": "empty" }, "data": { "n": 0 }, "expected": false }
+  { "name": "empty 数字零不算空", "condition": { "field": "n", "operator": "empty" }, "data": { "n": 0 }, "expected": false },
+
+  { "name": "空数组视为空（非标量归一）", "condition": { "field": "tags", "operator": "empty" }, "data": { "tags": [] }, "expected": true },
+  { "name": "非空数组不等于其单元素文本（非标量归一）", "condition": { "field": "tags", "operator": "eq", "value": "a" }, "data": { "tags": ["a"] }, "expected": false },
+  { "name": "非空数组不属于其单元素文本（非标量归一）", "condition": { "field": "tags", "operator": "in", "value": ["a"] }, "data": { "tags": ["a"] }, "expected": false },
+  { "name": "数组的 ne 相应地总是通过（非标量归一）", "condition": { "field": "tags", "operator": "ne", "value": "a" }, "data": { "tags": ["a"] }, "expected": true },
+  { "name": "数组的 notIn 相应地总是通过（非标量归一）", "condition": { "field": "tags", "operator": "notIn", "value": ["a"] }, "data": { "tags": ["a"] }, "expected": true },
+  { "name": "非空对象也视为空（非标量归一）", "condition": { "field": "obj", "operator": "empty" }, "data": { "obj": { "k": 1 } }, "expected": true },
+  { "name": "非空对象不 notEmpty（非标量归一）", "condition": { "field": "obj", "operator": "notEmpty" }, "data": { "obj": { "k": 1 } }, "expected": false },
+
+  { "name": "科学计数法大数按 JS 记法比较", "condition": { "field": "n", "operator": "eq", "value": "1e+21" }, "data": { "n": 1e21 }, "expected": true },
+  { "name": "科学计数法小数按 JS 记法比较（无前导零指数）", "condition": { "field": "n", "operator": "eq", "value": "1e-7" }, "data": { "n": 1e-7 }, "expected": true },
+  { "name": "临界大数仍是定点小数（未到 1e21）", "condition": { "field": "n", "operator": "eq", "value": "999999999999999900000" }, "data": { "n": 9.999999999999999e20 }, "expected": true },
+  { "name": "临界小数仍是定点小数（未到 1e-6 以下）", "condition": { "field": "n", "operator": "eq", "value": "0.000001" }, "data": { "n": 0.000001 }, "expected": true }
 ]
