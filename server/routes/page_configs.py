@@ -67,9 +67,10 @@ def get_page_config(config_id):
 def create_page_config():
     body = request.get_json(force=True)
     config_id = body.get('id')
+    collection = config_id.replace('page-', '', 1) if config_id and config_id.startswith('page-') else config_id
     with get_db() as conn:
         cur = conn.cursor()
-        err = validate_row_actions(body.get('rowActions'), body.get('fields', []), cur)
+        err = validate_row_actions(body.get('rowActions'), body.get('fields', []), cur, collection)
         if err:
             return jsonify({'error': err}), 400
         cur.execute(
@@ -80,7 +81,6 @@ def create_page_config():
              psycopg2.extras.Json(body.get('rowActions') or [])),
         )
         if body.get('fields'):
-            collection = config_id.replace('page-', '', 1) if config_id and config_id.startswith('page-') else config_id
             sync_field_indexes(cur, collection, body['fields'])
     log_operation('create', 'page_config', body.get('id'), body.get('name'),
                   f'新增页面配置「{body.get("name")}」')
@@ -107,6 +107,7 @@ def page_config_has_data(config_id):
 @require_permission('admin.page_configs')
 def update_page_config(config_id):
     body = request.get_json(force=True)
+    collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
     with get_db() as conn:
         cur = conn.cursor()
 
@@ -114,7 +115,6 @@ def update_page_config(config_id):
         # only ADDING new fields is allowed. This protects data consistency
         # (renaming or retyping a field would orphan stored JSONB values).
         if 'fields' in body:
-            collection = config_id.replace('page-', '', 1) if config_id.startswith('page-') else config_id
             cur.execute(
                 'SELECT 1 FROM dynamic_data WHERE collection = %s LIMIT 1',
                 (collection,),
@@ -161,7 +161,7 @@ def update_page_config(config_id):
                 cur.execute('SELECT fields FROM page_configs WHERE id = %s', (config_id,))
                 _r = cur.fetchone()
                 eff_fields = (_r[0] if _r else []) or []
-            err = validate_row_actions(body['rowActions'], eff_fields, cur)
+            err = validate_row_actions(body['rowActions'], eff_fields, cur, collection)
             if err:
                 return jsonify({'error': err}), 400
 
