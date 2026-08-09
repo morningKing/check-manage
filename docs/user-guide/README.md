@@ -22,6 +22,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | [ai-query.md](./data/ai-query.md) | AI 自然语言查询配置与使用 |
 | [dashboards.md](./data/dashboards.md) | 仪表盘配置与各类图表使用 |
 | [workflow.md](./data/workflow.md) | 跨页工作流引擎：图形化 DAG 设计器、条件路由、并行分支、推进/驳回、收件箱 |
+| [row-actions.md](./data/row-actions.md) | 行操作：数据页行级自定义按钮，绑定 Webhook / AI 扫描任务，异步执行并回写字段 |
 
 ## 🔐 管理功能 · admin
 
