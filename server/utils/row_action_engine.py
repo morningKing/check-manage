@@ -12,7 +12,7 @@
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from db import get_db
@@ -52,18 +52,6 @@ def is_visible(action, role, is_superuser, row_data):
 
 
 # ==================== 行读写 ====================
-
-def _row_updated_at(collection, record_id, branch_id):
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            'SELECT updated_at FROM dynamic_data '
-            'WHERE collection = %s AND id = %s AND branch_id = %s',
-            (collection, record_id, branch_id),
-        )
-        row = cur.fetchone()
-    return row[0] if row else None
-
 
 def write_back(collection, record_id, branch_id, values):
     """把 {字段名: 值} 一次性写回该行（嵌套 jsonb_set，参数化）。"""
@@ -115,14 +103,38 @@ def _rule_stale_after_seconds(action):
     return MIN_STALE_SECONDS
 
 
-def _is_stale(collection, record_id, branch_id, action):
-    ts = _row_updated_at(collection, record_id, branch_id)
-    if ts is None:
-        return True
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - ts).total_seconds()
-    return age > _rule_stale_after_seconds(action)
+# ==================== webhook 幂等闸门（原子抢占） ====================
+
+def claim_for_webhook(collection, record_id, branch_id, field, running, stale_before):
+    """原子地把该行置为「执行中」，抢到返回 True，没抢到返回 False。
+
+    条件 UPDATE（CAS）而不是「读后写」：两个并发请求各自拿到「未在执行中」的
+    行快照时，读后写会双双通过闸门、双双 `_spawn` 重复触发外部 webhook。这里
+    把判断和写入压进同一条 UPDATE，由 Postgres 的行级锁保证并发下只有一个
+    请求能真正改到行——第二个请求的 UPDATE 会等第一个提交后再重新求值 WHERE
+    条件，此时该行已经是 running，条件不成立，rowcount = 0。
+
+    stale_before: 早于这个时刻的 updated_at 视为陈旧（进程崩溃留下的孤儿
+    行），允许重新抢占。传 None 表示不启用陈旧放行。
+    """
+    cond_sql = 'data->>%s IS DISTINCT FROM %s'
+    params = [field, running, record_id, collection, branch_id, field, running]
+    if stale_before is not None:
+        cond_sql = f'({cond_sql}) OR updated_at < %s'
+        params.append(stale_before)
+    sql = (
+        'UPDATE dynamic_data '
+        'SET data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text)), '
+        '    updated_at = now(), version = version + 1 '
+        'WHERE id = %s AND collection = %s AND branch_id = %s '
+        f'AND ({cond_sql})'
+    )
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            n = cur.rowcount
+        conn.commit()
+    return n > 0
 
 
 # ==================== 主入口 ====================
@@ -168,18 +180,23 @@ def run_action(collection, record_id, action, row_data, role, operator,
         running = action.get('runningValue')
 
     # 2. 幂等闸门
-    #    webhook：陈旧的 runningValue 放行，兜底进程崩溃留下的孤儿行
+    #    webhook：条件 UPDATE（CAS）原子抢占，避免并发「读后写」重复触发外部
+    #        webhook；陈旧的 runningValue（进程崩溃孤儿）放行重新抢占。
     #    AI：严格拦截，不看时间 —— AI 常跑超过 5 分钟，按时间放行会给同一条
-    #        记录并发出第二个子会话；孤儿由 ai_scan_engine.sweep_orphans 恢复
+    #        记录并发出第二个子会话；孤儿由 ai_scan_engine.sweep_orphans 恢复。
+    #        AI 分支的「执行中」由 claim_one 原子写入，这里不能抢先写，否则
+    #        claim_one 之前的窗口里状态已变但记录尚未真正认领。
     if status_field and running:
-        current = (row_data or {}).get(status_field)
-        if current == running:
-            if is_ai or not _is_stale(collection, record_id, branch_id, action):
+        if is_ai:
+            current = (row_data or {}).get(status_field)
+            if current == running:
                 raise RowActionError('该行有正在执行的动作，请稍后再试', 409)
-        if not is_ai:
-            # AI 分支的「执行中」由 claim_one 原子写入，这里不能抢先写，
-            # 否则 claim_one 之前的窗口里状态已变但记录尚未真正认领
-            write_status(collection, record_id, branch_id, status_field, running)
+        else:
+            stale_before = (datetime.now(timezone.utc)
+                            - timedelta(seconds=_rule_stale_after_seconds(action)))
+            if not claim_for_webhook(collection, record_id, branch_id,
+                                     status_field, running, stale_before):
+                raise RowActionError('该行有正在执行的动作，请稍后再试', 409)
 
     # 3. 分派
     if is_ai:
@@ -207,8 +224,11 @@ def _run_webhook(collection, record_id, action, row_data, operator, branch_id, p
         )
         ok = bool(res.get('success'))
         if ok:
-            values.update(_map_response(res.get('responseBody'),
-                                        action.get('responseMapping') or []))
+            mapped, mapping_ok = _map_response(res.get('responseBody'),
+                                               action.get('responseMapping') or [])
+            ok = mapping_ok
+            if mapping_ok:
+                values.update(mapped)
     except Exception:
         logger.exception('行操作 webhook 执行失败: action=%s record=%s',
                          action.get('id'), record_id)
@@ -225,21 +245,35 @@ def _run_webhook(collection, record_id, action, row_data, operator, branch_id, p
 
 
 def _map_response(body, mapping):
-    """按 responseMapping 从响应 JSON 取值。解析不了就返回空 dict（不算失败）。"""
-    if not mapping or not body:
-        return {}
-    try:
-        parsed = json.loads(body)
-    except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
+    """按 responseMapping 从响应 JSON 取值。
+
+    返回 (values, ok)：
+      - 响应体解析不出 JSON 对象时，没有 required 映射就不算失败（只是没有
+        可映射的值——对方返回 HTML 也要落 doneValue）；配了 required 映射时
+        解析不出 JSON 自然满足不了 required，判失败。
+      - 解析出 JSON 后，required 的 jsonKey 缺失或为 None/''（对齐
+        ai_scan_engine.on_child_finished 对 required 的判断）时判失败，且
+        不返回任何映射值——调用方据此只落 failedValue，不写半截数据。
+    """
+    required = [m.get('jsonKey') for m in mapping if m.get('required')]
+    parsed = None
+    if body:
+        try:
+            candidate = json.loads(body)
+        except (ValueError, TypeError):
+            candidate = None
+        if isinstance(candidate, dict):
+            parsed = candidate
+    if parsed is None:
+        return {}, not required
+    if any(parsed.get(k) in (None, '') for k in required):
+        return {}, False
     out = {}
     for m in mapping:
         key, col = m.get('jsonKey'), m.get('column')
         if key and col and key in parsed:
             out[col] = parsed[key]
-    return out
+    return out, True
 
 
 # ==================== AI 分支 ====================

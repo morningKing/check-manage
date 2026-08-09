@@ -1,8 +1,6 @@
 import os
 import sys
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -62,30 +60,32 @@ def test_visible_when_condition_met():
     assert is_visible(a, 'developer', False, {'status': '待审核'}) is True
 
 
-# ---------- 幂等闸门 ----------
+# ---------- 幂等闸门（webhook：原子 CAS 抢占） ----------
 
-def test_running_row_is_rejected():
+def test_webhook_claim_fails_row_is_rejected():
+    """claim_for_webhook 抢不到（rowcount=0，行仍在执行中且未陈旧）→ 409，不分派。"""
     import utils.row_action_engine as eng
-    with patch.object(eng, 'write_status') as ws, \
-         patch.object(eng, '_row_updated_at', return_value=datetime.now(timezone.utc)):
+    with patch.object(eng, '_rule_stale_after_seconds', return_value=300), \
+         patch.object(eng, 'claim_for_webhook', return_value=False) as claim, \
+         patch.object(eng, '_spawn') as spawn:
         with pytest.raises(eng.RowActionError) as ei:
             eng.run_action('orders', 'rec-1', _action(), {'syncStatus': '同步中'},
                            'admin', 'admin', 'main', {})
     assert ei.value.http_status == 409
-    ws.assert_not_called()
+    claim.assert_called_once()
+    spawn.assert_not_called()
 
 
-def test_stale_running_row_is_allowed_through():
-    """webhook 动作：卡住超过阈值的「同步中」视为陈旧，允许重新触发。"""
+def test_webhook_claim_succeeds_dispatches_and_returns_running():
+    """claim_for_webhook 抢到（rowcount=1，包括陈旧放行的情形）→ 正常分派，返回 'running'。"""
     import utils.row_action_engine as eng
-    stale = datetime.now(timezone.utc) - timedelta(minutes=30)
-    with patch.object(eng, 'write_status'), \
-         patch.object(eng, '_row_updated_at', return_value=stale), \
-         patch.object(eng, '_rule_stale_after_seconds', return_value=300), \
+    with patch.object(eng, '_rule_stale_after_seconds', return_value=300), \
+         patch.object(eng, 'claim_for_webhook', return_value=True) as claim, \
          patch.object(eng, '_spawn') as spawn:
         status = eng.run_action('orders', 'rec-1', _action(),
                                 {'syncStatus': '同步中'}, 'admin', 'admin', 'main', {})
     assert status == 'running'
+    claim.assert_called_once()
     spawn.assert_called_once()
 
 
@@ -137,11 +137,9 @@ def test_ai_action_ignores_action_status_field_when_gating():
 
 
 def test_ai_action_gate_is_strict_no_stale_bypass():
-    """AI 任务常跑超过 5 分钟，陈旧放行只对 webhook 生效。"""
+    """AI 任务常跑超过 5 分钟，陈旧放行只对 webhook 生效——AI 闸门完全不看时间。"""
     import utils.row_action_engine as eng
-    stale = datetime.now(timezone.utc) - timedelta(hours=2)
     with patch.object(eng, 'get_task', return_value=AI_TASK), \
-         patch.object(eng, '_row_updated_at', return_value=stale), \
          patch.object(eng, '_run_ai'):
         with pytest.raises(eng.RowActionError) as ei:
             eng.run_action('orders', 'rec-1', _ai_action(),
@@ -161,10 +159,12 @@ def test_ai_action_missing_task_raises_400_before_gate():
 def test_no_status_field_means_no_gate_and_submitted():
     import utils.row_action_engine as eng
     a = _action(statusField=None, runningValue=None, doneValue=None, failedValue=None)
-    with patch.object(eng, 'write_status') as ws, patch.object(eng, '_spawn'):
+    with patch.object(eng, 'claim_for_webhook') as claim, \
+         patch.object(eng, '_spawn') as spawn:
         status = eng.run_action('orders', 'rec-1', a, {}, 'admin', 'admin', 'main', {})
     assert status == 'submitted'
-    ws.assert_not_called()
+    claim.assert_not_called()
+    spawn.assert_called_once()
 
 
 # ---------- 后端复核 ----------
@@ -234,6 +234,39 @@ def test_webhook_unparseable_response_still_writes_done():
          patch.object(eng, 'write_back') as wb:
         eng._run_webhook('orders', 'rec-1', a, {}, 'admin', 'main', {})
     wb.assert_called_once_with('orders', 'rec-1', 'main', {'syncStatus': '已同步'})
+
+
+def test_webhook_required_field_missing_in_json_writes_failed_value():
+    """responseMapping 标了 required 的字段在响应 JSON 里缺失时判失败，不写映射字段。"""
+    import utils.row_action_engine as eng
+    a = _action(responseMapping=[{'jsonKey': 'code', 'column': 'extCode', 'required': True}])
+    with patch.object(eng, 'fire_webhook_rule',
+                      return_value={'success': True, 'responseBody': '{"other": "x"}'}), \
+         patch.object(eng, 'write_back') as wb:
+        eng._run_webhook('orders', 'rec-1', a, {}, 'admin', 'main', {})
+    wb.assert_called_once_with('orders', 'rec-1', 'main', {'syncStatus': '同步失败'})
+
+
+def test_webhook_required_field_empty_string_writes_failed_value():
+    """required 字段存在但是空字符串，同样判失败。"""
+    import utils.row_action_engine as eng
+    a = _action(responseMapping=[{'jsonKey': 'code', 'column': 'extCode', 'required': True}])
+    with patch.object(eng, 'fire_webhook_rule',
+                      return_value={'success': True, 'responseBody': '{"code": ""}'}), \
+         patch.object(eng, 'write_back') as wb:
+        eng._run_webhook('orders', 'rec-1', a, {}, 'admin', 'main', {})
+    wb.assert_called_once_with('orders', 'rec-1', 'main', {'syncStatus': '同步失败'})
+
+
+def test_webhook_unparseable_response_with_required_mapping_writes_failed_value():
+    """响应不是 JSON、且配了 required 映射时，required 自然满足不了，判失败（区别于无 required 时落 doneValue）。"""
+    import utils.row_action_engine as eng
+    a = _action(responseMapping=[{'jsonKey': 'code', 'column': 'extCode', 'required': True}])
+    with patch.object(eng, 'fire_webhook_rule',
+                      return_value={'success': True, 'responseBody': '<html>ok</html>'}), \
+         patch.object(eng, 'write_back') as wb:
+        eng._run_webhook('orders', 'rec-1', a, {}, 'admin', 'main', {})
+    wb.assert_called_once_with('orders', 'rec-1', 'main', {'syncStatus': '同步失败'})
 
 
 # ---------- AI 执行 ----------
