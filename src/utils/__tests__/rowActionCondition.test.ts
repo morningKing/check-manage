@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { evaluateRowActionCondition } from '../rowActionCondition'
 import type { RowActionCondition } from '@/types/rowAction'
+import fixtureCases from '../../../server/tests/fixtures/row_action_conditions.json'
 
 /**
  * 与后端 server/tests/test_row_action_condition.py 读同一份夹具。
@@ -15,12 +14,7 @@ interface Case {
   expected: boolean
 }
 
-const cases: Case[] = JSON.parse(
-  readFileSync(
-    resolve(process.cwd(), 'server/tests/fixtures/row_action_conditions.json'),
-    'utf-8',
-  ),
-)
+const cases = fixtureCases as unknown as Case[]
 
 describe('evaluateRowActionCondition', () => {
   it('夹具非空（防止路径写错导致空跑通过）', () => {
