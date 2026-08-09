@@ -149,7 +149,18 @@ describe('RowActionsEditor', () => {
     expect(w.html()).not.toContain('创建时同步')
   })
 
-  it('切换到 aiTask 类型会清空 webhook 专属的执行结果字段', async () => {
+  // ---- actionType 切换清空逻辑：四条不变式 ----
+  // 清空必须由「用户真的点了类型单选按钮」这个交互事件驱动（组件内部通过
+  // handleActionTypeChange，与模板里 el-radio-group 的 @change 绑定一致），
+  // 不能靠比较 activeIndex / actionType 的值变化来旁路推断——两轮 review 已经
+  // 证明了基于值比较的实现要么漏清空（同类型间切换选中项后再真实切类型，
+  // 旧状态没能及时刷新）要么误清空（切换选中项本身就会让 actionType 的
+  // 观测值变化，和"真的编辑了类型"从 watcher 角度完全等价，区分不出来）。
+  // 下面 4 条测试都直接调用暴露出来的 handleActionTypeChange（模拟真实的单选
+  // 按钮 change 事件），或者只做纯粹的"切换选中项/删除动作"操作、完全不触碰
+  // handleActionTypeChange，用来分别锁住"该清空时清空"和"不该清空时绝不清空"。
+
+  it('不变式 1：用户把当前动作的类型改成 aiTask，会清空五项', async () => {
     const w = mountEditor([
       {
         id: 'ra-1',
@@ -165,7 +176,9 @@ describe('RowActionsEditor', () => {
     ])
     await flushPromises()
     const vm = w.vm as any
+    // 模拟真实交互：v-model 先把值改过去，el-radio-group 的 change 事件随后触发
     vm.current.actionType = 'aiTask'
+    vm.handleActionTypeChange('aiTask')
     await flushPromises()
     expect(vm.current.statusField).toBeUndefined()
     expect(vm.current.runningValue).toBeUndefined()
@@ -174,26 +187,7 @@ describe('RowActionsEditor', () => {
     expect(vm.current.responseMapping).toBeUndefined()
   })
 
-  it('单纯切换选中的另一个动作不会清空数据（只有真正切换类型才清空）', async () => {
-    const w = mountEditor([
-      { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true, statusField: 'status' },
-      { id: 'ra-2', label: 'B', actionType: 'aiTask', enabled: true, scanTaskId: 'st-1' },
-    ])
-    await flushPromises()
-    const vm = w.vm as any
-    vm.activeIndex = 1
-    await flushPromises()
-    vm.activeIndex = 0
-    await flushPromises()
-    expect(vm.list[0].statusField).toBe('status')
-  })
-
-  // 回归用例（code review 发现 1）：两个动作类型相同（都是 webhook），先切换选中项，
-  // 此时 actionType 的值前后都是 'webhook'、没有变化；之后再对新选中的这个动作
-  // 做一次真正的类型切换（webhook -> aiTask）。如果"是否算真实类型切换"的判断
-  // 依赖的状态只在 actionType 值变化时才被刷新，这里会因为上一步"值没变"而没被
-  // 刷新，导致这次真实切换被误判成"只是切了选中项"，从而漏清空。
-  it('先切换选中的另一个同为 webhook 的动作，再把它的类型真的改成 aiTask，仍要清空五项', async () => {
+  it('不变式 2（交叉场景）：两个同为 webhook 的动作，先切选中项，再把新选中的这个改成 aiTask，仍要清空五项', async () => {
     const w = mountEditor([
       { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true },
       {
@@ -210,17 +204,86 @@ describe('RowActionsEditor', () => {
     ])
     await flushPromises()
     const vm = w.vm as any
-    // 切换选中项：ra-1(webhook) -> ra-2(webhook)，actionType 值没变
+    // 切换选中项：ra-1(webhook) -> ra-2(webhook)，纯粹切选中项，不触发类型 change
     vm.activeIndex = 1
     await flushPromises()
     // 再对 ra-2 做一次真实的类型切换
     vm.current.actionType = 'aiTask'
+    vm.handleActionTypeChange('aiTask')
     await flushPromises()
     expect(vm.current.statusField).toBeUndefined()
     expect(vm.current.runningValue).toBeUndefined()
     expect(vm.current.doneValue).toBeUndefined()
     expect(vm.current.failedValue).toBeUndefined()
     expect(vm.current.responseMapping).toBeUndefined()
+  })
+
+  it('不变式 3（本轮回归场景）：仅切换选中项到一个带遗留数据的 aiTask 动作，不做任何编辑，五项必须原样保留', async () => {
+    const w = mountEditor([
+      { id: 'ra-1', label: 'A', actionType: 'webhook', enabled: true },
+      {
+        id: 'ra-2',
+        label: 'B',
+        actionType: 'aiTask',
+        enabled: true,
+        scanTaskId: 'st-1',
+        statusField: 'status',
+        runningValue: '执行中',
+        doneValue: '已完成',
+        failedValue: '失败',
+        responseMapping: [{ jsonKey: 'ok', column: 'result', required: false }],
+      },
+    ])
+    await flushPromises()
+    const vm = w.vm as any
+    // 只是单纯点了一下列表里的 ra-2，没有做任何编辑，也没有触发 handleActionTypeChange
+    vm.activeIndex = 1
+    await flushPromises()
+    expect(vm.current.id).toBe('ra-2')
+    expect(vm.current.statusField).toBe('status')
+    expect(vm.current.runningValue).toBe('执行中')
+    expect(vm.current.doneValue).toBe('已完成')
+    expect(vm.current.failedValue).toBe('失败')
+    expect(vm.current.responseMapping).toEqual([{ jsonKey: 'ok', column: 'result', required: false }])
+  })
+
+  it('不变式 4：删除当前选中项使 activeIndex 被 clamp 回一条带遗留数据的 aiTask 动作，五项必须原样保留', async () => {
+    // ra-1 是带遗留数据的 aiTask；ra-2 是当前选中的 webhook。删除 ra-2 后
+    // activeIndex 从 1 被 clamp 回 0，被动选中 ra-1——这个"activeIndex 真的
+    // 发生了值变化"的路径，和不变式 3 的"直接赋值切换选中项"是同一类触发方式，
+    // 之前用 activeIndex watcher 维护 lastActionId 的方案在这条路径上一样会
+    // 误清空。
+    const w = mountEditor([
+      {
+        id: 'ra-1',
+        label: 'A',
+        actionType: 'aiTask',
+        enabled: true,
+        scanTaskId: 'st-1',
+        statusField: 'status',
+        runningValue: '执行中',
+        doneValue: '已完成',
+        failedValue: '失败',
+        responseMapping: [{ jsonKey: 'ok', column: 'result', required: false }],
+      },
+      { id: 'ra-2', label: 'B', actionType: 'webhook', enabled: true },
+    ])
+    await flushPromises()
+    const vm = w.vm as any
+    // 先选中 ra-2（真实的 activeIndex 值变化：0 -> 1）
+    vm.activeIndex = 1
+    await flushPromises()
+    expect(vm.current.id).toBe('ra-2')
+    // 删除当前选中的 ra-2，activeIndex 被 clamp 回 0（真实的值变化：1 -> 0），
+    // 被动重选到 ra-1
+    vm.removeAction(1)
+    await flushPromises()
+    expect(vm.current.id).toBe('ra-1')
+    expect(vm.current.statusField).toBe('status')
+    expect(vm.current.runningValue).toBe('执行中')
+    expect(vm.current.doneValue).toBe('已完成')
+    expect(vm.current.failedValue).toBe('失败')
+    expect(vm.current.responseMapping).toEqual([{ jsonKey: 'ok', column: 'result', required: false }])
   })
 
   // 回归用例（code review 发现 2）：eq/ne 用标量字符串，in/notIn 用数组；

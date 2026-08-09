@@ -41,7 +41,7 @@
           <el-input v-model="current.label" placeholder="显示在行「⋯」菜单里的文案" maxlength="30" />
         </el-form-item>
         <el-form-item label="类型">
-          <el-radio-group v-model="current.actionType">
+          <el-radio-group v-model="current.actionType" @change="handleActionTypeChange">
             <el-radio label="webhook">Webhook</el-radio>
             <el-radio label="aiTask">AI 任务</el-radio>
           </el-radio-group>
@@ -375,39 +375,27 @@ const conditionValueText = computed<string>({
 })
 
 // ---- actionType 切到 aiTask 时，清空 webhook 专属的执行结果配置 ----
-// 用 id 判断是否为"同一个动作的类型被改了"，与"只是切换了选中的另一个动作"区分开，
-// 否则单纯点击列表切换选中项也会因为两个动作 actionType 不同而被误判成"类型切换"。
 //
-// lastActionId 的刷新专门用一个只依赖 activeIndex 的 watch 来做，不能放在
-// actionType 的 watch 里顺带更新——那样会有个漏洞：如果连续选中的两个动作
-// actionType 恰好相同（比如都是 webhook），watch(actionType) 的值前后不变，
-// 根本不会触发，lastActionId 就没能跟着刷新到新选中的动作；等用户接下来真的把
-// 这个新选中动作的类型改掉时，代码会拿一个"上上个动作"的 stale id 去比较，
-// 误判成"只是切换了选中项"从而漏清空。（code review 发现 1 的回归用例见测试文件。）
-let lastActionId: string | undefined
-watch(
-  activeIndex,
-  () => {
-    lastActionId = current.value?.id
-  },
-  { immediate: true }
-)
-
-watch(
-  () => current.value?.actionType,
-  (newType) => {
-    const item = current.value
-    if (!item) return
-    if (item.id !== lastActionId) return
-    if (newType === 'aiTask') {
-      item.statusField = undefined
-      item.runningValue = undefined
-      item.doneValue = undefined
-      item.failedValue = undefined
-      item.responseMapping = undefined
-    }
-  }
-)
+// 这里必须由用户交互事件（el-radio-group 的 @change）驱动，不能用
+// watch(actionType) 或 watch(activeIndex) 之类"比较值变化"的旁路来推断。
+// 两轮 review 已经证明了：任何基于"值是否变化"的判断都无法区分
+// 「用户把当前这条的类型真的改了」和「用户切换选中了另一条本来就是别的类型的
+// 记录」——因为这两种操作都会让 current.value.actionType 这个被 watch 的值发生
+// 变化，watcher 层面完全等价，无论怎么加辅助状态去追踪"上一个是谁"都还是在
+// 这个变化事件本身之后才能做判断，而这个变化事件既可能来自"编辑"也可能来自
+// "切换选中项"，两者从 watcher 的角度看不出区别。只有绑定到真正触发变化的那个
+// DOM 交互事件（单选框的 change）才能确定"这次变化确实是用户在编辑当前这条"，
+// 因为程序化切换 activeIndex / 加载配置都不会触发 el-radio-group 的 change 事件。
+function handleActionTypeChange(val: string | number | boolean) {
+  if (val !== 'aiTask') return
+  const item = current.value
+  if (!item) return
+  item.statusField = undefined
+  item.runningValue = undefined
+  item.doneValue = undefined
+  item.failedValue = undefined
+  item.responseMapping = undefined
+}
 
 // ---- 响应字段映射（仅 webhook） ----
 function addMappingRow() {
@@ -449,6 +437,7 @@ defineExpose({
   removeAction,
   moveUp,
   moveDown,
+  handleActionTypeChange,
   addMappingRow,
   removeMappingRow,
   addParamField,
