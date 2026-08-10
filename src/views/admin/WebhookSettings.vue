@@ -89,9 +89,10 @@
             <el-option label="更新" value="update" />
             <el-option label="删除" value="delete" />
             <el-option label="合并" value="merge" />
+            <el-option label="手动" value="manual" />
           </el-select>
         </el-form-item>
-        <el-form-item label="触发时机">
+        <el-form-item label="触发时机" v-if="editForm.triggerEvent !== 'manual'">
           <el-radio-group v-model="editForm.triggerTiming">
             <el-radio value="before">操作前（可阻断）</el-radio>
             <el-radio value="after">操作后</el-radio>
@@ -104,10 +105,13 @@
           <el-switch v-model="editForm.rollbackOnFailure" />
           <div class="form-tip">启用后，after webhook失败时自动回滚merge操作（仅对merge事件有效）</div>
         </el-form-item>
-        <el-form-item label="触发条件">
+        <el-form-item label="触发条件" v-if="editForm.triggerEvent !== 'manual'">
           <el-input v-model="conditionJson" type="textarea" :rows="2" placeholder='可选，如：{"field":"status","value":"completed"}' />
           <div class="form-tip">满足条件时才触发 webhook，留空表示无条件触发</div>
         </el-form-item>
+        <div class="form-tip" v-if="editForm.triggerEvent === 'manual'" style="margin: -8px 0 18px 110px;">
+          手动规则由行操作按钮的可见性条件单独控制触发时机与条件，此处无需配置
+        </div>
         <el-form-item label="Webhook URL" prop="webhookUrl">
           <el-input v-model="editForm.webhookUrl" placeholder="https://example.com/webhook" />
         </el-form-item>
@@ -207,6 +211,7 @@ const eventLabels: Record<string, string> = {
   update: '更新',
   delete: '删除',
   merge: '合并',
+  manual: '手动',
 }
 
 const loading = ref(false)
@@ -248,7 +253,7 @@ const editForm = reactive({
   name: '',
   description: '',
   sourceCollections: [] as string[],
-  triggerEvent: 'create' as 'create' | 'update' | 'delete' | 'merge',
+  triggerEvent: 'create' as WebhookRule['triggerEvent'],
   triggerTiming: 'after' as 'before' | 'after',
   rollbackOnFailure: false,
   webhookUrl: '',
@@ -336,12 +341,16 @@ async function handleSave() {
   if (!formRef.value) return
   await formRef.value.validate()
 
+  const isManual = editForm.triggerEvent === 'manual'
+
   let triggerCondition = {}
-  try {
-    triggerCondition = JSON.parse(conditionJson.value || '{}')
-  } catch {
-    ElMessage.error('触发条件 JSON 格式错误')
-    return
+  if (!isManual) {
+    try {
+      triggerCondition = JSON.parse(conditionJson.value || '{}')
+    } catch {
+      ElMessage.error('触发条件 JSON 格式错误')
+      return
+    }
   }
 
   saving.value = true
@@ -351,8 +360,9 @@ async function handleSave() {
       description: editForm.description,
       sourceCollections: editForm.sourceCollections,
       triggerEvent: editForm.triggerEvent,
-      triggerTiming: editForm.triggerTiming,
-      rollbackOnFailure: editForm.rollbackOnFailure,
+      // manual 规则没有可回滚的事务、也没有独立触发时机；条件由按钮 visibleWhen 单点负责
+      triggerTiming: isManual ? 'after' : editForm.triggerTiming,
+      rollbackOnFailure: isManual ? false : editForm.rollbackOnFailure,
       triggerCondition,
       webhookUrl: editForm.webhookUrl,
       secret: editForm.secret,

@@ -54,3 +54,6 @@ export * from './columnView'
 
 // AI 定时扫描任务相关类型
 export * from './aiScanTask'
+
+// 数据页自定义行级操作按钮相关类型
+export * from './rowAction'

@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g as flask_g
 from db import get_db
 from datetime import datetime, timezone
-from auth import login_required
+from auth import login_required, write_required
 from utils.permissions import can_page
 from utils.rbac_guard import require_page_action
 from utils.operation_log import log_operation, get_page_info, pick_display_name, get_field_label_map
@@ -11,6 +11,7 @@ from utils.branch_lock import check_branch_lock
 from utils.sequences import allocate_sequence
 from utils.search_text import compute_search_text
 from utils.field_indexes import sql_literal
+from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 import psycopg2.extras
 import json
 
@@ -1425,3 +1426,88 @@ def batch_delete_items(collection, **kwargs):
     if blocked_ids:
         result["blocked"] = {rid: f'被「{"、".join(set(pages))}」引用' for rid, pages in blocked_ids.items()}
     return jsonify(result)
+
+
+def _load_row_action_context(collection, record_id, branch_id):
+    """一次性取出该页面的行操作配置和该行数据。
+
+    抽成独立函数是为了让路由测试能整体 patch 掉 DB 访问。
+    Returns: (row_actions: list, row_data: dict | None)
+    """
+    page_id = f'page-{collection}'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT row_actions FROM page_configs WHERE id = %s', (page_id,))
+        row = cur.fetchone()
+        row_actions = (row[0] if row else None) or []
+        cur.execute(
+            'SELECT data FROM dynamic_data '
+            'WHERE collection = %s AND id = %s AND branch_id = %s',
+            (collection, record_id, branch_id),
+        )
+        rec = cur.fetchone()
+    return row_actions, (rec[0] if rec else None)
+
+
+@dynamic_bp.route('/<collection>/<record_id>/row-actions/<action_id>/run', methods=['POST'])
+@write_required
+def run_row_action(collection, record_id, action_id):
+    """触发一个自定义行级操作按钮。
+
+    行动作会改这一行的数据，所以权限等同于 update。实际执行是异步的，
+    这里立即返回；结果通过行上的状态字段回写体现。
+    """
+    if collection in RESERVED:
+        return jsonify({'error': 'Not found'}), 404
+    denied = require_page_action(collection, 'update')
+    if denied:
+        return denied
+
+    branch_id = _get_current_user_branch(collection)
+    row_actions, row_data = _load_row_action_context(collection, record_id, branch_id)
+
+    action = next((a for a in row_actions if a.get('id') == action_id), None)
+    if not action:
+        return jsonify({'error': '行操作不存在'}), 404
+    if row_data is None:
+        return jsonify({'error': '记录不存在'}), 404
+
+    body = request.get_json(silent=True) or {}
+    user = getattr(flask_g, 'current_user', {}) or {}
+
+    try:
+        status = run_action(
+            collection, record_id, action, row_data,
+            role=user.get('role'),
+            operator=user.get('username') or user.get('userId') or '',
+            branch_id=branch_id,
+            params=body.get('params') or {},
+        )
+    except RowActionError as e:
+        return jsonify({'error': e.message}), e.http_status
+
+    log_operation('update', 'row_action', record_id, action.get('label'),
+                  f'执行行操作「{action.get("label")}」（记录 {record_id}）',
+                  branch_id=branch_id)
+
+    # I3：把实际生效的状态字段/执行中值带回前端，供 RowActionRunner 轮询时
+    # 判断该行是否已离开执行中态——而不是不管三七二十一盲等到 5 分钟上限再
+    # 弹"执行时间较长"（哪怕行早就已经是终态）。AI 动作的状态字段来自所绑
+    # 扫描任务而非行动作自身，resolve_status_gate 是这条规则的唯一来源
+    # （run_action 内部也用它），这里重新解析一次成本很低（AI 情形只是多一次
+    # 对 ai_scan_tasks 的主键查询），换来路由层不用重复维护同一份判断逻辑。
+    status_field = running_value = None
+    if status == 'running':
+        try:
+            status_field, running_value, _task, _is_ai = resolve_status_gate(action)
+        except RowActionError:
+            # 理论上不会发生：run_action 刚成功过一次同样的解析。就算两次调用
+            # 之间任务被删，前端拿不到 statusField 时会退回旧的盲等轮询，不影响正确性。
+            pass
+
+    return jsonify({
+        'ok': True,
+        'status': status,
+        'statusField': status_field,
+        'runningValue': running_value,
+    })
