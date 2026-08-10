@@ -20,7 +20,8 @@
   <el-container class="app-layout">
     <!-- 左侧导航区域 -->
     <el-aside :width="sidebarWidth + 'px'" class="app-aside">
-      <SideMenu />
+      <SettingsSideMenu v-if="isSettingsShell" />
+      <SideMenu v-else />
     </el-aside>
 
     <!-- 右侧内容区域 -->
@@ -161,6 +162,7 @@ import { useAppStore, useMenuStore, useAuthStore, useTabStore, useSystemConfigSt
 import { ROLE_LABELS } from '@/types'
 import { changePassword } from '@/api/auth'
 import SideMenu from './SideMenu.vue'
+import SettingsSideMenu from './SettingsSideMenu.vue'
 import ContentArea from './ContentArea.vue'
 import { NotificationBell, CommandPalette } from '@/components/common'
 
@@ -209,12 +211,22 @@ const globalLoading = computed(() => appStore.globalLoading)
  */
 const loadingText = computed(() => appStore.loadingText)
 
+/** 设置中心路由用独立外壳：设置侧边栏取代业务侧边栏 */
+const isSettingsShell = computed(() => route.meta.shell === 'settings')
+
 /**
  * 面包屑导航数据
  *
  * 根据当前路由和菜单配置生成面包屑路径
  */
 const breadcrumbs = computed(() => {
+  if (isSettingsShell.value) {
+    return [
+      { name: '设置中心', path: '/admin' },
+      { name: route.meta.title as string, path: route.path },
+    ]
+  }
+
   const currentMenu = menuStore.getMenuByPath(route.path)
   if (!currentMenu) return []
 

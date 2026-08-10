@@ -193,6 +193,11 @@ router.beforeEach(async (to) => {
     return '/home'
   }
 
+  // 5.5 记住最后一个业务路由，供设置中心的「返回工作区」使用
+  if (to.meta.shell !== 'settings' && to.path !== '/login') {
+    appStore.setLastBusinessPath(to.fullPath)
+  }
+
   // 6. 设置页面标题
   const title = to.meta.title as string
   document.title = title ? `${title} - 巡检用例管理系统` : '巡检用例管理系统'
