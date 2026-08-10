@@ -1,77 +1,104 @@
 import { describe, it, expect } from 'vitest'
 import {
-  SETTINGS_CATALOG,
-  filterCatalog,
-  categoryPerms,
-  resolveActiveTab,
-  firstAccessibleCategoryPath,
+  SETTINGS_GROUPS,
+  ALL_SETTINGS_ITEMS,
+  findSettingsItem,
+  filterGroups,
+  firstAccessibleItemPath,
+  LEGACY_PATH_ALIASES,
 } from '../settingsCatalog'
 
-describe('settingsCatalog', () => {
-  it('共 7 个分类，tab 总数 18', () => {
-    expect(SETTINGS_CATALOG).toHaveLength(7)
-    const tabCount = SETTINGS_CATALOG.reduce((n, c) => n + c.tabs.length, 0)
-    expect(tabCount).toBe(18)
+describe('SETTINGS_GROUPS', () => {
+  it('共 7 组 21 条', () => {
+    expect(SETTINGS_GROUPS).toHaveLength(7)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(21)
   })
 
-  it('集成对接分类含智能客服 tab（admin.kefu）', () => {
-    const integration = SETTINGS_CATALOG.find(c => c.id === 'integration')!
-    const kefu = integration.tabs.find(t => t.id === 'kefu')
-    expect(kefu).toBeTruthy()
-    expect(kefu!.perm).toBe('admin.kefu')
-    expect(kefu!.label).toBe('智能客服')
-  })
-
-  it('每个 tab 的权限 key 以 admin. 开头且唯一标识', () => {
-    const ids = SETTINGS_CATALOG.flatMap(c => c.tabs.map(t => `${c.id}/${t.id}`))
+  it('条目 id 全局唯一', () => {
+    const ids = ALL_SETTINGS_ITEMS.map(i => i.id)
     expect(new Set(ids).size).toBe(ids.length)
-    for (const c of SETTINGS_CATALOG)
-      for (const t of c.tabs) expect(t.perm.startsWith('admin.')).toBe(true)
   })
 
-  it('filterCatalog：超管式 can=()=>true 返回全部 7 类', () => {
-    expect(filterCatalog(() => true)).toHaveLength(7)
+  it('每条都有非空 label / perm / component', () => {
+    for (const it of ALL_SETTINGS_ITEMS) {
+      expect(it.label, it.id).toBeTruthy()
+      expect(it.perm, it.id).toMatch(/^admin\./)
+      expect(typeof it.component, it.id).toBe('function')
+    }
   })
 
-  it('filterCatalog：仅 admin.users 时只剩访问控制类且只含用户 tab', () => {
-    const out = filterCatalog(k => k === 'admin.users')
-    expect(out).toHaveLength(1)
-    expect(out[0].id).toBe('access')
-    expect(out[0].tabs.map(t => t.id)).toStrictEqual(['users'])
+  it('收编的 3 条在位且权限键正确', () => {
+    expect(findSettingsItem('trigger-rules')?.perm).toBe('admin.trigger_rules')
+    expect(findSettingsItem('dependency-manager')?.perm).toBe('admin.dependencies')
+    expect(findSettingsItem('factory-reset')?.perm).toBe('admin.backup')
   })
 
-  it('filterCatalog：无任何权限返回空数组', () => {
-    expect(filterCatalog(() => false)).toStrictEqual([])
+  it('danger 只标在 factory-reset 上', () => {
+    const dangers = ALL_SETTINGS_ITEMS.filter(i => i.danger).map(i => i.id)
+    expect(dangers).toEqual(['factory-reset'])
   })
 
-  it('filterCatalog 不污染 SETTINGS_CATALOG', () => {
-    filterCatalog(k => k === 'admin.users')
-    expect(SETTINGS_CATALOG).toHaveLength(7)
-    expect(SETTINGS_CATALOG[0].tabs).toHaveLength(2)
+  it('factory-reset 排在其所在组的最末', () => {
+    const g = SETTINGS_GROUPS.find(x => x.items.some(i => i.id === 'factory-reset'))!
+    expect(g.items[g.items.length - 1].id).toBe('factory-reset')
+  })
+})
+
+describe('findSettingsItem', () => {
+  it('命中返回条目', () => {
+    expect(findSettingsItem('users')?.label).toBe('用户管理')
+  })
+  it('未命中返回 undefined', () => {
+    expect(findSettingsItem('nope')).toBeUndefined()
+  })
+})
+
+describe('filterGroups', () => {
+  it('剔除无权限条目', () => {
+    const groups = filterGroups(k => k === 'admin.users')
+    expect(groups).toHaveLength(1)
+    expect(groups[0].items.map(i => i.id)).toEqual(['users'])
   })
 
-  it('categoryPerms：返回该分类全部 tab 权限 key', () => {
-    expect(categoryPerms('access')).toStrictEqual(['admin.users', 'admin.roles'])
-    expect(categoryPerms('data-ops')).toContain('admin.query')
-    expect(categoryPerms('不存在')).toStrictEqual([])
+  it('整组无权限时该组不出现', () => {
+    const groups = filterGroups(k => k === 'admin.users')
+    expect(groups.some(g => g.id === 'data-ops')).toBe(false)
   })
 
-  it('resolveActiveTab：query 命中则用之，否则取首个', () => {
-    const tabs = [{ id: 'a' }, { id: 'b' }] as any
-    expect(resolveActiveTab(tabs, 'b')).toBe('b')
-    expect(resolveActiveTab(tabs, 'x')).toBe('a')
-    expect(resolveActiveTab(tabs, undefined)).toBe('a')
-    expect(resolveActiveTab([], 'a')).toBe('')
+  it('全无权限返回空数组', () => {
+    expect(filterGroups(() => false)).toEqual([])
   })
 
-  it('firstAccessibleCategoryPath：超管 → 首个分类 access', () => {
-    expect(firstAccessibleCategoryPath(() => true)).toBe('/admin/access')
+  it('全有权限返回 7 组', () => {
+    expect(filterGroups(() => true)).toHaveLength(7)
   })
-  it('firstAccessibleCategoryPath：仅 data-ops 权限 → /admin/data-ops', () => {
-    const can = (k: string) => k === 'admin.query'
-    expect(firstAccessibleCategoryPath(can)).toBe('/admin/data-ops')
+})
+
+describe('firstAccessibleItemPath', () => {
+  it('返回首个有权限条目的路径', () => {
+    expect(firstAccessibleItemPath(k => k === 'admin.backup')).toBe('/admin/backup')
   })
-  it('firstAccessibleCategoryPath：无权限 → /home', () => {
-    expect(firstAccessibleCategoryPath(() => false)).toBe('/home')
+  it('无任何权限时回退 /home', () => {
+    expect(firstAccessibleItemPath(() => false)).toBe('/home')
+  })
+})
+
+describe('LEGACY_PATH_ALIASES', () => {
+  it('4 条老路径别名齐全且目标是合法条目', () => {
+    expect(LEGACY_PATH_ALIASES).toEqual({
+      'webhook-settings': 'webhook',
+      'ai-scan-tasks': 'ai-scan',
+      'menu-export': 'data-export',
+      'etl-tasks': 'etl',
+    })
+    for (const target of Object.values(LEGACY_PATH_ALIASES)) {
+      expect(findSettingsItem(target), target).toBeDefined()
+    }
+  })
+
+  it('别名 key 不与任何真实条目 id 重名', () => {
+    for (const alias of Object.keys(LEGACY_PATH_ALIASES)) {
+      expect(findSettingsItem(alias), alias).toBeUndefined()
+    }
   })
 })
