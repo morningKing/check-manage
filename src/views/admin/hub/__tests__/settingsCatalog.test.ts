@@ -102,3 +102,13 @@ describe('LEGACY_PATH_ALIASES', () => {
     }
   })
 })
+
+import { SETTINGS_GROUPS as _G, ALL_SETTINGS_ITEMS as _I } from '../settingsCatalog'
+
+describe('分组 id 与条目 id 不冲突', () => {
+  it('两者无交集（否则 /admin/<分组> 与 /admin/<条目> 路由打架）', () => {
+    const groupIds = new Set(_G.map(g => g.id))
+    const clash = _I.filter(i => groupIds.has(i.id)).map(i => i.id)
+    expect(clash).toEqual([])
+  })
+})

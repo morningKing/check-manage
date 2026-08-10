@@ -10,9 +10,9 @@
  * /login               - 登录页（公开）
  * /                    - 主布局（需认证）
  * ├── /home           - 首页
- * ├── /admin          - 设置中心（管理控制台，左栏 7 分类 + 右侧 tab，仅管理员）
- * │   └── /admin/{access|structure|integration|ai|data-ops|sys-ops|general}
- * ├── /admin/<旧路径>  - 兼容重定向到设置中心对应分类?tab=
+ * ├── /admin/<功能>    - 设置中心（21 个功能各自独立路由，由目录数据生成）
+ * ├── /admin          - 重定向到首个有权限的设置功能
+ * ├── /admin/<分类|老路径> - 兼容重定向
  * └── /...            - 动态数据页面（根据菜单配置自动注册）
  */
 
@@ -20,7 +20,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { generateRoutesFromMenus, addDynamicRoutes } from './dynamicRoutes'
 import { useAuthStore } from '@/stores/auth'
-import { firstAccessibleCategoryPath } from '@/views/admin/hub/settingsCatalog'
+import { buildSettingsRoutes, buildSettingsRedirects } from './settingsRoutes'
 
 /**
  * 静态路由配置
@@ -86,70 +86,12 @@ const staticRoutes: RouteRecordRaw[] = [
           title: '数据页面',
         },
       },
-      // 设置中心（管理控制台）：左栏分类 + 右侧 tab 容器
-      {
-        path: 'admin',
-        component: () => import('@/views/admin/hub/SettingsHub.vue'),
-        redirect: () => {
-          const auth = useAuthStore()
-          return firstAccessibleCategoryPath(auth.can)
-        },
-        children: [
-          { path: 'access', name: 'SettingsAccess', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '访问控制', categoryId: 'access' } },
-          { path: 'structure', name: 'SettingsStructure', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '结构配置', categoryId: 'structure' } },
-          { path: 'integration', name: 'SettingsIntegration', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '集成对接', categoryId: 'integration' } },
-          { path: 'ai', name: 'SettingsAi', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: 'AI 能力', categoryId: 'ai' } },
-          { path: 'data-ops', name: 'SettingsDataOps', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '数据运维', categoryId: 'data-ops' } },
-          { path: 'sys-ops', name: 'SettingsSysOps', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '系统运维', categoryId: 'sys-ops' } },
-          { path: 'general', name: 'SettingsGeneral', component: () => import('@/views/admin/hub/CategoryView.vue'), meta: { title: '通用设置', categoryId: 'general' } },
-        ],
-      },
-      // 旧管理路径 → 设置中心（保深链/书签）
-      { path: 'admin/users', redirect: '/admin/access?tab=users' },
-      { path: 'admin/roles', redirect: '/admin/access?tab=roles' },
-      { path: 'admin/menu', redirect: '/admin/structure?tab=menu' },
-      { path: 'admin/page-config', redirect: '/admin/structure?tab=page-config' },
-      { path: 'admin/api-keys', redirect: '/admin/integration?tab=api-keys' },
-      { path: 'admin/webhook-settings', redirect: '/admin/integration?tab=webhook' },
-      { path: 'admin/ai-settings', redirect: '/admin/ai?tab=ai-settings' },
-      { path: 'admin/ai-scan-tasks', redirect: '/admin/ai?tab=ai-scan' },
-      { path: 'admin/query', redirect: '/admin/data-ops?tab=query' },
-      { path: 'admin/menu-export', redirect: '/admin/data-ops?tab=data-export' },
-      { path: 'admin/etl-tasks', redirect: '/admin/data-ops?tab=etl' },
-      { path: 'admin/export-scripts', redirect: '/admin/data-ops?tab=export-scripts' },
-      { path: 'admin/validation-scripts', redirect: '/admin/data-ops?tab=validation-scripts' },
-      { path: 'admin/operation-log', redirect: '/admin/sys-ops?tab=operation-log' },
-      { path: 'admin/backup', redirect: '/admin/sys-ops?tab=backup' },
-      { path: 'admin/system-settings', redirect: '/admin/general' },
-      { path: 'admin/kefu', redirect: '/admin/integration?tab=kefu' },
-      {
-        path: 'admin/trigger-rules',
-        name: 'TriggerRuleManager',
-        component: () => import('@/views/admin/TriggerRuleManager.vue'),
-        meta: {
-          title: '联动规则',
-          icon: 'Connection',
-        },
-      },
-      {
-        path: 'admin/dependency-manager',
-        name: 'DependencyManager',
-        component: () => import('@/views/admin/DependencyManager.vue'),
-        meta: {
-          title: '依赖管理',
-          icon: 'Share',
-        },
-      },
-      // 隐藏页面：恢复出厂设置（不添加菜单项）
-      {
-        path: 'admin/factory-reset',
-        name: 'FactoryReset',
-        component: () => import('@/views/admin/FactoryReset.vue'),
-        meta: {
-          title: '恢复出厂设置',
-          hidden: true, // 隐藏路由，不在菜单中显示
-        },
-      },
+      // 设置中心：21 条功能路由（由目录数据生成） + 兼容重定向
+      ...buildSettingsRoutes(),
+      ...buildSettingsRedirects(() => {
+        const auth = useAuthStore()
+        return auth.can
+      }),
       {
         path: 'dashboard/:id?',
         name: 'Dashboard',
