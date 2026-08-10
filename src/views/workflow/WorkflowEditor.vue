@@ -169,7 +169,7 @@ const store = useWorkflowStore()
 const pageConfigStore = usePageConfigStore()
 const roleStore = useRoleStore()
 
-const LIST_PATH = '/admin/structure?tab=workflows'
+const LIST_PATH = '/admin/workflows'
 
 const loading = ref(false)
 const saving = ref(false)

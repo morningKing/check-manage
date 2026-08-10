@@ -58,7 +58,7 @@
 
 ### 3.1 进入角色权限页
 
-以管理员登录 → 侧边栏「系统配置 → 平台管理 → 角色权限」（路径 `/admin/roles`）。
+以管理员登录 → 侧边栏「设置中心 → 角色权限」（路径 `/admin/roles`）。
 
 ### 3.2 新建 / 编辑角色
 
@@ -119,7 +119,7 @@ users.role   (text，应用层校验存在于 roles 表，已去掉旧的 CHECK 
 - `src/stores/auth.ts`：
   - `isSuperuser`（= `permissions.isSuperuser`，缺失时回退 `role==='admin'`）。
   - `can(key)` / `canPage(pageId, action)`：均以 `isSuperuser` 为优先短路。
-  - `hasRoutePermission(path)`：`/admin/*` 按 `ADMIN_PATH_PERMISSION` 映射到能力 key 判定；
+  - `hasRoutePermission(path)`：`/admin/<功能>` 按设置中心目录（`settingsCatalog.ts`）查表拿到该功能的能力 key 判定；
     数据/菜单路径按 `menus.roles` 白名单（超管恒放行）。
 - `src/router/index.ts`：应用首次初始化时调用 `fetchCurrentUser()` 刷新权限。
 - `src/stores/menu.ts` + `SideMenu.vue`：超管显示全部菜单；否则按 `menus.roles` 过滤（支持自定义 slug）。

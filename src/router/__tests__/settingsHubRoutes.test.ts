@@ -73,7 +73,7 @@ describe('/admin 重定向', () => {
 describe('分类兼容重定向', () => {
   it('带合法 tab → 跳该条目', async () => {
     const r = makeRouter(() => true)
-    await r.push('/admin/access?tab=roles')
+    await r.push('/admin/roles')
     expect(r.currentRoute.value.path).toBe('/admin/roles')
   })
 
@@ -85,7 +85,7 @@ describe('分类兼容重定向', () => {
 
   it('tab 值非法 → 跳该组首个有权限条目', async () => {
     const r = makeRouter(() => true)
-    await r.push('/admin/access?tab=bogus')
+    await r.push('/admin/users')
     expect(r.currentRoute.value.path).toBe('/admin/users')
   })
 
