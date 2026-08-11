@@ -1,6 +1,6 @@
 # Webhook 规则
 
-Webhook 让系统在数据发生变化时，自动向**第三方 HTTP 端点**推送事件（带 HMAC-SHA256 签名）。入口为 **设置中心 → 集成对接（`/admin/integration`）→ Webhook**，需要管理员权限。
+Webhook 让系统在数据发生变化时，自动向**第三方 HTTP 端点**推送事件（带 HMAC-SHA256 签名）。入口为 **设置中心 → Webhook**（`/admin/webhook`），需要管理员权限。
 
 ## 触发事件
 

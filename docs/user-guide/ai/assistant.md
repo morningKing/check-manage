@@ -67,11 +67,11 @@ AI 助手是一个类 Claude 的对话抽屉，接入 **OpenCode** 智能体运�
 
 ## 管理配置
 
-AI 全局配置位于 **设置中心 → AI 能力（`/admin/ai`）**：模型 Provider、默认 Agent 等。
+AI 全局配置位于 **设置中心 → AI 配置（`/admin/ai-settings`）**：模型 Provider、默认 Agent 等。
 
 ### 外部 MCP 服务
 
-在 `/admin/ai` 的 **「外部 MCP 服务」** 卡片中，管理员可登记额外的 MCP 服务，让助手获得平台自带能力之外的工具（与平台自带 MCP **并存**）。支持两种类型：
+在 `/admin/ai-settings` 的 **「外部 MCP 服务」** 卡片中，管理员可登记额外的 MCP 服务，让助手获得平台自带能力之外的工具（与平台自带 MCP **并存**）。支持两种类型：
 
 - **远程（remote）**：填写 MCP 的 `URL`，可选填请求头（每行 `KEY=值`，如 `Authorization=Bearer xxx`）做鉴权。
 - **本地（local）**：填写启动命令（每行一个参数，如 `npx` / `-y` / `some-mcp-server`），可选填环境变量（每行 `KEY=值`）。

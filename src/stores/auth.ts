@@ -8,34 +8,11 @@ import { ref, computed } from 'vue'
 import { getStorage, setStorage, removeStorage, STORAGE_KEYS } from '@/utils/storage'
 import { login as loginApi, getCurrentUser as getMeApi } from '@/api/auth'
 import { useMenuStore } from '@/stores/menu'
-import { filterCatalog, categoryPerms } from '@/views/admin/hub/settingsCatalog'
+import { findSettingsItem, filterGroups } from '@/views/admin/hub/settingsCatalog'
 import type { UserInfo, UserRole, LoginParams } from '@/types'
 import type { CurrentBranch } from '@/api/projectVersion'
 
 type PageAction = 'read' | 'create' | 'update' | 'delete'
-
-/** /admin 路径 → 所需管理功能权限 key */
-const ADMIN_PATH_PERMISSION: Record<string, string> = {
-  '/admin/menu': 'admin.menus',
-  '/admin/menu-export': 'admin.menus',
-  '/admin/page-config': 'admin.page_configs',
-  '/admin/users': 'admin.users',
-  '/admin/roles': 'admin.roles',
-  '/admin/operation-log': 'admin.operation_logs',
-  '/admin/backup': 'admin.backup',
-  '/admin/factory-reset': 'admin.backup',
-  '/admin/export-scripts': 'admin.export_scripts',
-  '/admin/api-keys': 'admin.api_keys',
-  '/admin/validation-scripts': 'admin.validation_scripts',
-  '/admin/etl-tasks': 'admin.etl_tasks',
-  '/admin/query': 'admin.query',
-  '/admin/trigger-rules': 'admin.trigger_rules',
-  '/admin/ai-settings': 'admin.ai_settings',
-  '/admin/webhook-settings': 'admin.webhooks',
-  '/admin/dependency-manager': 'admin.dependencies',
-  '/admin/system-settings': 'admin.system_config',
-  '/admin/ai-scan-tasks': 'admin.ai_scan',
-}
 
 export const useAuthStore = defineStore('auth', () => {
   // ==================== State ====================
@@ -137,26 +114,26 @@ export const useAuthStore = defineStore('auth', () => {
   /**
    * 检查当前用户是否有权限访问指定路径
    *
-   * 基于菜单配置的 roles 字段判断权限
+   * 基于菜单配置的 roles 字段判断权限。
+   *
+   * @param meta 可选的路由 meta（`router.beforeEach` 里的 `to.meta`）。设置中心的
+   *   路由由 `buildSettingsRoutes` 生成，`meta.perm` 与实际匹配到的路由直接绑定，
+   *   优先使用；不传时（例如测试里直接传字符串路径）回退到按目录查表，语义不变。
    */
-  function hasRoutePermission(path: string): boolean {
+  function hasRoutePermission(path: string, meta?: Record<string, unknown>): boolean {
     if (!user.value) return false
 
     // 首页和根路径始终允许
     if (path === '/home' || path === '/') return true
 
-    // 设置中心：父路由按"是否有任一可见分类"放行；分类路由按该类是否有可见 tab
-    if (path === '/admin') return filterCatalog(can).length > 0
+    // 设置中心：/admin 按「是否有任一可见条目」放行；/admin/<id> 按该条目的能力 key
+    if (path === '/admin') return filterGroups(can).length > 0
     if (path.startsWith('/admin/')) {
-      const seg = path.split('/')[2]
-      const perms = categoryPerms(seg)
-      if (perms.length) return perms.some(k => can(k))
-      // seg 非分类 id（旧段 users/menu… 或 factory-reset/trigger-rules）→ 落到下方 ADMIN_PATH_PERMISSION
+      const metaPerm = typeof meta?.perm === 'string' ? meta.perm : undefined
+      const perm = metaPerm ?? findSettingsItem(path.split('/')[2])?.perm
+      if (perm) return can(perm)
+      // 非条目 id（分组 id / 老路径别名）→ 由路由重定向处理，这里落到下方兜底
     }
-
-    // 管理页：按所需能力 key 判定
-    const required = ADMIN_PATH_PERMISSION[path]
-    if (required) return can(required)
 
     // 从 menuStore 查找该路径对应的菜单
     const menuStore = useMenuStore()

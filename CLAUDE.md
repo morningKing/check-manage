@@ -215,6 +215,7 @@ A **generic** config-driven paradigm (audit is one instance): on a schedule, sca
 *   `src/stores/auth.ts`: JWT token management. localStorage keys prefixed `check-manage:`.
 *   `src/components/dynamic-form/controls/`: Field control components. Mapped by `controlType`.
 *   `src/api/`: Axios-based API layer. Base URL `/api`, 30s timeout. Request interceptor injects Bearer token.
+*   `src/views/admin/hub/settingsCatalog.ts`: 设置中心的**唯一真源**。21 个设置功能按 7 个视觉分组组织，每条带 `id`（路由末段）/`label`/`perm`（`admin.*` 能力键）/`component`（懒加载）。侧边栏渲染（`src/components/layout/SettingsSideMenu.vue`）、路由生成（`src/router/settingsRoutes.ts`）、权限判定（`auth` store 的 `hasRoutePermission`）全部从它派生 —— 新增一个设置功能只需在这里加一条。分组只是视觉分组，**不参与路由**：每个功能都是独立路由 `/admin/<id>`，一次点击到达。进入设置路由时 `AppLayout` 按 `meta.shell === 'settings'` 用设置侧边栏替换业务侧边栏。老路径兼容见 `LEGACY_PATH_ALIASES` 与 `buildSettingsRedirects`。
 
 ### Excel/JSON Data Import (Large-File Safe)
 

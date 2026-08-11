@@ -66,6 +66,16 @@ export const useAppStore = defineStore('app', () => {
    */
   const loadingText = ref('')
 
+  /**
+   * 进入设置中心前最后停留的业务路由，供「← 返回工作区」使用。
+   * 刻意不持久化：刷新后回退到 /home 即可，不值得为它引入存储。
+   */
+  const lastBusinessPath = ref<string>('/home')
+
+  function setLastBusinessPath(path: string): void {
+    lastBusinessPath.value = path
+  }
+
   // ==================== Getters ====================
 
   /**
@@ -215,11 +225,13 @@ export const useAppStore = defineStore('app', () => {
     themeMode,
     fontSize,
     compactMode,
+    lastBusinessPath,
     // Getters
     sidebarWidth,
     // Actions
     toggleSidebar,
     setSidebarCollapsed,
+    setLastBusinessPath,
     showLoading,
     hideLoading,
     initializeApp,
