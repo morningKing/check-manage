@@ -51,6 +51,17 @@ describe('SettingsSideMenu', () => {
     expect(labels).toEqual(['访问控制'])
   })
 
+  it('当前路由对应的条目带 active class（useRoute 桩固定为 /admin/users）', () => {
+    canImpl = () => true
+    const w = mountMenu()
+    const active = w.findAll('.settings-menu__item--active')
+    expect(active).toHaveLength(1)
+    expect(active[0].text()).toBe('用户管理')
+    // 同组的「角色权限」不应该被误判为 active
+    const roles = w.findAll('a').find(a => a.text() === '角色权限')!
+    expect(roles.classes()).not.toContain('settings-menu__item--active')
+  })
+
   it('danger 条目带 danger class', () => {
     canImpl = () => true
     const w = mountMenu()
