@@ -29,8 +29,9 @@
       <!-- 顶部工具栏 -->
       <el-header class="app-header">
         <div class="header-left">
-          <!-- 侧边栏折叠按钮 -->
+          <!-- 侧边栏折叠按钮：设置外壳下固定展开、不提供折叠入口 -->
           <el-button
+            v-if="!isSettingsShell"
             :icon="sidebarCollapsed ? 'Expand' : 'Fold'"
             text
             @click="toggleSidebar"
@@ -196,10 +197,21 @@ const fontSizeOptions = [
  */
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 
+/** 设置中心路由用独立外壳：设置侧边栏取代业务侧边栏 */
+const isSettingsShell = computed(() => route.meta.shell === 'settings')
+
 /**
  * 侧边栏宽度
+ *
+ * 设置外壳下固定用展开宽度（240，取自 app.ts::sidebarWidth 折叠态为假时的返回值），
+ * 不跟随业务侧边栏的折叠状态。SettingsItem 没有 icon 字段，折叠后无法像业务侧边栏
+ * 那样退化成纯图标 —— 若沿用 appStore.sidebarWidth，折叠态（持久化在
+ * localStorage，撞过一次就永远撞）下容器缩到 64px，21 条设置标签会被挤压成
+ * 每行一个字的竖排文本、不可读。
  */
-const sidebarWidth = computed(() => appStore.sidebarWidth)
+const sidebarWidth = computed(() =>
+  isSettingsShell.value ? 240 : appStore.sidebarWidth
+)
 
 /**
  * 全局加载状态
@@ -210,9 +222,6 @@ const globalLoading = computed(() => appStore.globalLoading)
  * 加载提示文本
  */
 const loadingText = computed(() => appStore.loadingText)
-
-/** 设置中心路由用独立外壳：设置侧边栏取代业务侧边栏 */
-const isSettingsShell = computed(() => route.meta.shell === 'settings')
 
 /**
  * 面包屑导航数据
