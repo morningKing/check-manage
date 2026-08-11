@@ -15,10 +15,11 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required
 from utils.batch_engine import get_worker
-from utils.batch_repo import (MAX_FILES_PER_BATCH, create_batch, get_batch_detail,
-                              list_batches)
+from utils.batch_repo import (MAX_FILES_PER_BATCH, create_batch, delete_batch,
+                              get_batch_detail, get_batch_results, list_batches,
+                              reset_failed_to_pending)
 from utils.filename import safe_filename
-from utils.workspace import batch_staging_dir, WorkspacePathError
+from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
                                 url_prefix='/api/v1/ai-batches')
@@ -27,6 +28,7 @@ MAX_FILE_BYTES = 20 * 1024 * 1024          # 单个文件 20 MB
 MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024  # 单次上传总计 100 MB
 STAGING_TTL_SECONDS = 24 * 3600            # 暂存目录保留 24 小时
 MAX_PROMPT_CHARS = 20000
+TERMINAL_STATUSES = ('completed', 'partial', 'failed')  # 重试/结果读取允许的终态
 
 
 def _current_key() -> dict:
@@ -219,3 +221,54 @@ def detail(batch_id):
     if not d:
         return jsonify({'error': '批任务不存在'}), 404
     return jsonify(_batch_out(d['batch']))
+
+
+@open_api_batches_bp.get('/<batch_id>/results')
+@api_key_required
+@require_bound_key
+def results(batch_id):
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    return jsonify({
+        'batchId': batch_id,
+        'status': d['batch']['status'],
+        'results': get_batch_results(batch_id),
+    })
+
+
+@open_api_batches_bp.delete('/<batch_id>')
+@api_key_required
+@require_bound_key
+def remove(batch_id):
+    key = _current_key()
+    owner = key['ownerUserId']
+    # Best-effort workspace teardown before the DB delete — same shared helper
+    # routes/ai_chat_batches.py::remove uses, see utils/workspace.py::
+    # cleanup_batch_workspaces. Skipped (not fatal) if the batch can't be found
+    # under this key: delete_batch below is the actual 404 authority.
+    d = get_batch_detail(owner, batch_id, api_key_id=key['id'])
+    if d:
+        cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
+    ok = delete_batch(owner, batch_id, api_key_id=key['id'])
+    if not ok:
+        return jsonify({'error': '批任务不存在'}), 404
+    return jsonify({'deleted': True})
+
+
+@open_api_batches_bp.post('/<batch_id>/retry-failed')
+@api_key_required
+@require_bound_key
+def retry_failed(batch_id):
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    if d['batch']['status'] not in TERMINAL_STATUSES:
+        return jsonify({'error': '该批任务仍在执行中'}), 409
+
+    n = reset_failed_to_pending(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if n:
+        get_worker().notify()
+    return jsonify({'retried': n})

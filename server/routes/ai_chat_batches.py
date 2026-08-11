@@ -10,7 +10,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
 from auth import login_required
-from utils.workspace import batch_staging_dir, WorkspacePathError
+from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
     append_to_batch,
@@ -127,15 +127,9 @@ def remove(batch_id):
     body = get_batch_detail(g.current_user['userId'], batch_id)
     if not body:
         return jsonify({'error': 'not found'}), 404
-    from utils.workspace import cleanup_session_workspace
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
         or os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
-    for s in body['sessions']:
-        try:
-            cleanup_session_workspace(workspace_root,
-                                      g.current_user['userId'], s['id'])
-        except Exception:
-            pass  # best-effort
+    cleanup_batch_workspaces(workspace_root, g.current_user['userId'], body['sessions'])
     delete_batch(g.current_user['userId'], batch_id)
     return '', 204
 

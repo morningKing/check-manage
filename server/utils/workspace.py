@@ -122,6 +122,28 @@ def cleanup_session_workspace(workspace_root: str, user_id: str, session_id: str
         shutil.rmtree(p, onerror=_rm_force)
 
 
+def cleanup_batch_workspaces(workspace_root: str, user_id: str, sessions: list) -> None:
+    """Best-effort teardown of every child session's workspace belonging to a
+    batch. Shared by both the internal batch routes (routes/ai_chat_batches.py)
+    and the external open-API batch routes (routes/open_api_batches.py) so
+    there's exactly one place that knows how to tear down a batch's workspaces.
+
+    Callers MUST run this BEFORE deleting the batch's DB rows (see
+    batch_repo.delete_batch's docstring) — once those rows are gone there's no
+    way to recover which session ids need their workspace directories removed.
+
+    `sessions` is the list of session dicts as returned by
+    `batch_repo.get_batch_detail(...)['sessions']` (each needs an `id` key).
+    A single session's cleanup failure (e.g. a held file handle) never blocks
+    the others — matches `cleanup_session_workspace`'s own best-effort contract.
+    """
+    for s in sessions:
+        try:
+            cleanup_session_workspace(workspace_root, user_id, s['id'])
+        except Exception:
+            pass  # best-effort
+
+
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
                           model: str = "", extra_mcp: dict | None = None) -> str:
     """Write opencode.json into the workspace so OpenCode (scoped to this dir)
