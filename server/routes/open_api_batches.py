@@ -14,6 +14,9 @@ from pathlib import PurePosixPath
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required
+from utils.batch_engine import get_worker
+from utils.batch_repo import (MAX_FILES_PER_BATCH, create_batch, get_batch_detail,
+                              list_batches)
 from utils.filename import safe_filename
 from utils.workspace import batch_staging_dir, WorkspacePathError
 
@@ -23,6 +26,7 @@ open_api_batches_bp = Blueprint('open_api_batches', __name__,
 MAX_FILE_BYTES = 20 * 1024 * 1024          # 单个文件 20 MB
 MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024  # 单次上传总计 100 MB
 STAGING_TTL_SECONDS = 24 * 3600            # 暂存目录保留 24 小时
+MAX_PROMPT_CHARS = 20000
 
 
 def _current_key() -> dict:
@@ -132,3 +136,86 @@ def upload_files():
                       'path': dest.relative_to(root).as_posix()})
 
     return jsonify({'files': saved}), 201
+
+
+def _batch_out(b: dict) -> dict:
+    """内部批任务行 → 对外契约字段。刻意只吐这几个，内部字段一律不外泄。"""
+    return {
+        'batchId': b['id'],
+        'name': b.get('name'),
+        'status': b.get('status'),
+        'total': b.get('total'),
+        'done': b.get('done'),
+        'failed': b.get('failed'),
+        'agent': b.get('agent'),
+        'model': b.get('model'),
+        'createdAt': b['created_at'].isoformat() if b.get('created_at') else None,
+        'completedAt': b['completed_at'].isoformat() if b.get('completed_at') else None,
+    }
+
+
+@open_api_batches_bp.post('')
+@api_key_required
+@require_bound_key
+def create():
+    key = _current_key()
+    owner = key['ownerUserId']
+    body = request.get_json(silent=True) or {}
+
+    name = (body.get('name') or '').strip()
+    prompt = (body.get('prompt') or '').strip()
+    files = body.get('files') or []
+
+    if not name or not prompt:
+        return jsonify({'error': 'name 与 prompt 均为必填'}), 400
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return jsonify({'error': f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限'}), 400
+    if not isinstance(files, list) or not files:
+        return jsonify({'error': '请至少提供一个文件'}), 400
+    if len(files) > MAX_FILES_PER_BATCH:
+        return jsonify({'error': f'单批最多 {MAX_FILES_PER_BATCH} 个文件'}), 400
+
+    for f in files:
+        if not isinstance(f, dict) or not f.get('name') or not f.get('path'):
+            return jsonify({'error': '每个文件需包含 name 与 path'}), 400
+        if not _validate_staged_path(f['path'], owner):
+            return jsonify({'error': '文件路径无效'}), 400
+
+    result = create_batch(
+        owner,
+        name=name, prompt=prompt, template_id=None, files=files,
+        agent=(body.get('agent') or '').strip() or None,
+        model=(body.get('model') or '').strip() or None,
+        api_key_id=key['id'],
+    )
+    get_worker().notify()
+    b = result['batch']
+    return jsonify({'batchId': b['id'], 'status': b['status'], 'total': b['total']}), 201
+
+
+@open_api_batches_bp.get('')
+@api_key_required
+@require_bound_key
+def list_():
+    key = _current_key()
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = min(max(1, int(request.args.get('pageSize', 20))), 100)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'page 与 pageSize 必须是整数'}), 400
+
+    data = list_batches(key['ownerUserId'], page=page, page_size=page_size,
+                        api_key_id=key['id'])
+    return jsonify({'items': [_batch_out(b) for b in data['items']],
+                    'total': data['total']})
+
+
+@open_api_batches_bp.get('/<batch_id>')
+@api_key_required
+@require_bound_key
+def detail(batch_id):
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    return jsonify(_batch_out(d['batch']))
