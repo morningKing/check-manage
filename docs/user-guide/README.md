@@ -40,6 +40,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | 文档 | 说明 |
 |------|------|
 | [open-api.md](./integration/open-api.md) | 外部系统经 API Key 按集合读写数据 |
+| [ai-batch-api.md](./integration/ai-batch-api.md) | 外部系统经 API Key 提交文件批量跑 AI 处理并轮询结果 |
 | [webhooks.md](./integration/webhooks.md) | Webhook 规则：事件触发 + HMAC 签名 + 重试 |
 | [etl.md](./integration/etl.md) | ETL 任务：抽取 / 转换 / 字段映射 / 过滤 / 写入 |
 | [trigger-rules.md](./integration/trigger-rules.md) | 触发规则：写入事件驱动的数据联动 |

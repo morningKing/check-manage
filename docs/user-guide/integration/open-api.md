@@ -16,6 +16,8 @@ http://<host>:<port>/api/v1
 
 **认证方式：** 通过 `X-API-Key` 请求头传递 API Key。
 
+> `/api/v1` 下除了本文档描述的数据集合接口，还有一套 AI 批任务接口（`/api/v1/ai-batches/*`），共用同一套 API Key，但要求密钥绑定用户（存量密钥需重新创建），且批任务严格按密钥隔离。详见 [ai-batch-api.md](./ai-batch-api.md)。
+
 ---
 
 ## 2. 认证
