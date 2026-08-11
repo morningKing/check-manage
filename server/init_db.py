@@ -2223,6 +2223,23 @@ def init_db():
             conn.commit()
             print("Added api_key_id column to ai_chat_batches table.")
 
+        # Migration: add seq to ai_chat_messages (确定的插入顺序列)。同一事务里
+        # 循环 INSERT 的多条消息（见 batch_engine._persist_conversation）会拿到
+        # 完全相同的 created_at —— Postgres 的 now()/DEFAULT NOW() 在同一事务内
+        # 是事务级常量，会导致 ORDER BY created_at 在打平时排序不确定。BIGSERIAL
+        # 让 Postgres 自动建一个序列、新插入行的 seq 严格递增，可作为可靠的插入
+        # 顺序列。注意：ALTER TABLE ADD COLUMN 给存量行回填的 seq 值顺序取决于
+        # 物理存储顺序，不保证等于这些行当年的真实插入顺序——这是可接受的，因为
+        # 存量数据本来就没有可靠顺序；加了这一列之后的新数据才有顺序保证。
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'ai_chat_messages' AND column_name = 'seq'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE ai_chat_messages ADD COLUMN seq BIGSERIAL")
+            conn.commit()
+            print("Added seq column to ai_chat_messages table.")
+
         # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
         # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
         # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每

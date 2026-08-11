@@ -291,6 +291,10 @@ def get_batch_results(batch_id: str) -> list[dict]:
     `output` 取该子会话**最后一条 assistant 消息**里全部 text 片段的拼接，
     而不是 ai_chat_sessions.last_message_preview —— 后者存的是
     batch_engine._preview_from() 取的第一行，读它会让调用方拿到被截断的输出。
+    「最后一条」按 `ai_chat_messages.seq`（自增，插入即定序）排序，不用
+    `created_at` —— batch_engine._persist_conversation 在同一事务里循环插入
+    多条 assistant 行，PG 的 now()/DEFAULT NOW() 在同一事务内是事务级常量，
+    同一事务插入的所有行 created_at 完全相同，排序不确定。
 
     `name` 取 batch_input_file 的 basename：该列存的是工作区相对路径
     （batch-staging/<userId>/<uploadId>/<文件名>），直接返回会泄漏内部 userId。
@@ -299,7 +303,7 @@ def get_batch_results(batch_id: str) -> list[dict]:
         SELECT s.batch_input_file, s.status, s.error_message,
                (SELECT m.content FROM ai_chat_messages m
                  WHERE m.session_id = s.id AND m.role = 'assistant'
-                 ORDER BY m.created_at DESC LIMIT 1) AS content
+                 ORDER BY m.seq DESC LIMIT 1) AS content
           FROM ai_chat_sessions s
          WHERE s.batch_id = %s
          ORDER BY s.batch_seq
