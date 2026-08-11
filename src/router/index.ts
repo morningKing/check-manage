@@ -188,13 +188,15 @@ router.beforeEach(async (to) => {
   }
 
   // 5. 权限检查
-  if (!authStore.hasRoutePermission(to.path)) {
+  if (!authStore.hasRoutePermission(to.path, to.meta)) {
     ElMessage.warning('您没有权限访问该页面')
     return '/home'
   }
 
   // 5.5 记住最后一个业务路由，供设置中心的「返回工作区」使用
-  if (to.meta.shell !== 'settings' && to.path !== '/login') {
+  // （`to.path !== '/login'` 在此处恒真、已删：/login 带 meta.public，第 1 步已
+  // return，走不到这里，留着只会误导后来人以为这条分支还有意义）
+  if (to.meta.shell !== 'settings') {
     appStore.setLastBusinessPath(to.fullPath)
   }
 

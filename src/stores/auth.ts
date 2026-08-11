@@ -114,9 +114,13 @@ export const useAuthStore = defineStore('auth', () => {
   /**
    * 检查当前用户是否有权限访问指定路径
    *
-   * 基于菜单配置的 roles 字段判断权限
+   * 基于菜单配置的 roles 字段判断权限。
+   *
+   * @param meta 可选的路由 meta（`router.beforeEach` 里的 `to.meta`）。设置中心的
+   *   路由由 `buildSettingsRoutes` 生成，`meta.perm` 与实际匹配到的路由直接绑定，
+   *   优先使用；不传时（例如测试里直接传字符串路径）回退到按目录查表，语义不变。
    */
-  function hasRoutePermission(path: string): boolean {
+  function hasRoutePermission(path: string, meta?: Record<string, unknown>): boolean {
     if (!user.value) return false
 
     // 首页和根路径始终允许
@@ -125,8 +129,9 @@ export const useAuthStore = defineStore('auth', () => {
     // 设置中心：/admin 按「是否有任一可见条目」放行；/admin/<id> 按该条目的能力 key
     if (path === '/admin') return filterGroups(can).length > 0
     if (path.startsWith('/admin/')) {
-      const item = findSettingsItem(path.split('/')[2])
-      if (item) return can(item.perm)
+      const metaPerm = typeof meta?.perm === 'string' ? meta.perm : undefined
+      const perm = metaPerm ?? findSettingsItem(path.split('/')[2])?.perm
+      if (perm) return can(perm)
       // 非条目 id（分组 id / 老路径别名）→ 由路由重定向处理，这里落到下方兜底
     }
 

@@ -76,4 +76,18 @@ describe('hasRoutePermission —— 设置中心', () => {
     const auth = makeAuth(['admin.users'])
     expect(auth.hasRoutePermission('/admin/nonexistent')).toBe(false)
   })
+
+  it('传入的 meta.perm 优先于按路径查表 —— 证明守卫真的消费 to.meta.perm', () => {
+    const auth = makeAuth(['admin.backup'])
+    // 按 /admin/users 查目录会解析出 perm='admin.users'，用户没有这个权限；
+    // 但真实路由的 meta.perm 是 'admin.backup'（此用户有），传了 meta 就该按它放行，
+    // 否则说明守卫仍在按字符串猜、meta.perm 依旧是没人读的死数据。
+    expect(auth.hasRoutePermission('/admin/users', { perm: 'admin.backup' })).toBe(true)
+  })
+
+  it('不传 meta 时按路径查表兜底，行为与老调用方一致', () => {
+    const auth = makeAuth(['admin.users'])
+    expect(auth.hasRoutePermission('/admin/users')).toBe(true)
+    expect(auth.hasRoutePermission('/admin/users', undefined)).toBe(true)
+  })
 })
