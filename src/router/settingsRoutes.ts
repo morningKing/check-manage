@@ -43,7 +43,10 @@ export function buildSettingsRedirects(
   const routes: RouteRecordRaw[] = [
     {
       path: '/admin',
-      redirect: () => firstAccessibleItemPath(getCan()),
+      // 返回 { path, query: {} } 而非裸字符串：函数式 redirect 返回字符串时
+      // vue-router 4 会默认继承原 query，裸字符串会让 ?tab= 之类的历史查询串
+      // 残留在地址栏上（下面两处同理，共 3 处）。
+      redirect: () => ({ path: firstAccessibleItemPath(getCan()), query: {} }),
     },
   ]
 
@@ -53,11 +56,15 @@ export function buildSettingsRedirects(
       redirect: (to) => {
         const can = getCan()
         const tab = to.query.tab
-        if (typeof tab === 'string' && findSettingsItem(tab)) {
-          return `/admin/${tab}`
+        const tabItem = typeof tab === 'string' ? findSettingsItem(tab) : undefined
+        // tab 必须既存在又是当前用户有权限的条目，否则落到该组首个有权限条目 ——
+        // 避免把只有分组内其他能力的用户，用老书签的 ?tab= 指到自己无权限的条目，
+        // 白白挨一次守卫拦截再弹回 /home（这本来是兜底分支该负责的体验）。
+        if (tabItem && can(tabItem.perm)) {
+          return { path: `/admin/${tabItem.id}`, query: {} }
         }
         const first = group.items.find(i => can(i.perm))
-        return first ? `/admin/${first.id}` : '/admin'
+        return { path: first ? `/admin/${first.id}` : '/admin', query: {} }
       },
     })
   }

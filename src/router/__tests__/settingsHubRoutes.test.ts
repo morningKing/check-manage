@@ -73,7 +73,7 @@ describe('/admin 重定向', () => {
 describe('分类兼容重定向', () => {
   it('带合法 tab → 跳该条目', async () => {
     const r = makeRouter(() => true)
-    await r.push('/admin/roles')
+    await r.push('/admin/access?tab=roles')
     expect(r.currentRoute.value.path).toBe('/admin/roles')
   })
 
@@ -85,7 +85,7 @@ describe('分类兼容重定向', () => {
 
   it('tab 值非法 → 跳该组首个有权限条目', async () => {
     const r = makeRouter(() => true)
-    await r.push('/admin/users')
+    await r.push('/admin/access?tab=不存在的id')
     expect(r.currentRoute.value.path).toBe('/admin/users')
   })
 
@@ -93,6 +93,30 @@ describe('分类兼容重定向', () => {
     const r = makeRouter(k => k === 'admin.backup')
     await r.push('/admin/access')
     expect(r.currentRoute.value.path).toBe('/admin/backup')
+  })
+
+  it('tab 指向的条目存在但当前用户无权限 → 不放行到该条目，落到该组首个有权限条目', async () => {
+    // access 组：users（admin.users）、roles（admin.roles）。该用户只有 admin.roles。
+    const r = makeRouter(k => k === 'admin.roles')
+    await r.push('/admin/access?tab=users')
+    expect(r.currentRoute.value.path).toBe('/admin/roles')
+  })
+
+  it('重定向后 URL 不残留 ?tab=', async () => {
+    const r = makeRouter(() => true)
+    await r.push('/admin/access?tab=roles')
+    expect(r.currentRoute.value.path).toBe('/admin/roles')
+    expect(r.currentRoute.value.query).toStrictEqual({})
+  })
+})
+
+describe('/admin 重定向不残留 query', () => {
+  it('/admin?foo=bar 重定向后 query 被清空', async () => {
+    const r = makeRouter(k => k === 'admin.backup')
+    await r.push('/admin?foo=bar')
+    await r.isReady()
+    expect(r.currentRoute.value.path).toBe('/admin/backup')
+    expect(r.currentRoute.value.query).toStrictEqual({})
   })
 })
 
