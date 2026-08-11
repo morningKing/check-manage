@@ -2216,7 +2216,8 @@ def init_db():
             WHERE table_name = 'ai_chat_batches' AND column_name = 'api_key_id'
         """)
         if not cur.fetchone():
-            cur.execute("ALTER TABLE ai_chat_batches ADD COLUMN api_key_id VARCHAR(100) REFERENCES api_keys(id)")
+            cur.execute("ALTER TABLE ai_chat_batches ADD COLUMN api_key_id VARCHAR(100) "
+                        "REFERENCES api_keys(id) ON DELETE SET NULL")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_api_key "
                         "ON ai_chat_batches(api_key_id, created_at DESC)")
             conn.commit()
