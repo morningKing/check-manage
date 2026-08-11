@@ -123,12 +123,26 @@ Key files: `server/utils/cross_project_dependency.py` (validation logic), `serve
 
 Event-driven webhooks with HMAC-SHA256 signature verification:
 
-*   **Trigger Events**: `create`, `update`, `delete`, `merge` on specified collections.
-*   **Trigger Conditions**: Optional JSON filter for conditional triggering (e.g., `{"status": "completed"}`).
+*   **Trigger Events**: `create`, `update`, `delete`, `merge` on specified collections, plus `manual` — never auto-fired by CRUD, only invocable by id (see Row Actions below). A `manual` rule ignores its own `triggerCondition`/`triggerTiming`/`rollbackOnFailure` (the management UI hides those fields when `triggerEvent==='manual'`); the calling site owns the condition instead.
+*   **Trigger Conditions**: Optional JSON filter for conditional triggering (e.g., `{"status": "completed"}`). Not applicable to `manual`.
 *   **Execution**: Retry logic with configurable timeout. Logs stored in `webhook_logs`.
 *   **Signature**: `X-Webhook-Signature` header contains HMAC-SHA256 of payload with rule's secret.
 
-Key files: `server/utils/webhook_engine.py` (execution, retry, signing), `server/routes/webhooks.py` (API), `src/types/webhook.ts`.
+Key files: `server/utils/webhook_engine.py` (execution, retry, signing; `fire_webhook_rule` fires a single rule by id for `manual` callers), `server/routes/webhooks.py` (API), `src/types/webhook.ts`.
+
+### 数据页自定义行级操作按钮（Row Actions）
+
+数据页可在行「⋯」菜单里配置自定义按钮，点击后对该行**异步**触发一条 Webhook 规则或一个 AI 扫描任务，执行状态与结果回写到该行字段。
+
+*   **配置**：`page_configs.row_actions`（JSONB 列，与 `view_config` / `delete_binding` 同构），在「页面配置管理 → 行操作」标签页编辑。每个动作是一层**薄绑定**：绑哪个执行器 + 角色可见性 + 单条件显示 (`visibleWhen`) + 二次确认 + 参数表单 (`paramFields`，复用 `FieldConfig`/`DynamicForm`，禁用 `relation`/`reference`/`quoteSelect`/`autoSequence`——这些控件要落库才有语义) + 状态字段与回写映射（`responseMapping`，同构于 `ai_scan_tasks.fieldMapping` 的 `FieldMappingRow`）。
+*   **执行器全部复用**：webhook 走 `webhook_engine.fire_webhook_rule`（要求规则 `triggerEvent='manual'`）；AI 走 `ai_scan_engine.claim_one`（`claim_records` 的单行版，**不带 `pendingValue` 谓词**，所以已处理的行能重跑）+ `create_batch` 单子会话（命名 `行操作·<按钮名>·<时间戳>`），回写仍由 `on_child_finished` 完成。**AI 动作一律使用所绑扫描任务自身的 `statusField`/三个状态值**——行动作自己的这五项（`statusField`/`runningValue`/`doneValue`/`failedValue`/`responseMapping`）只对 webhook 生效；配置 UI 在切到 AI 类型时隐藏并清空它们，因为终态回写由扫描任务的引擎完成，叠两套状态字段配置会留下一个永远卡在「执行中」、无人写终态的字段。
+*   **编排** `server/utils/row_action_engine.py`（`run_action`）：后端复核角色白名单 + `visibleWhen` → 幂等闸门 → 分派 → 落终态。**两条分支的闸门机制不同**：
+    *   Webhook 闸门是真正的**原子 CAS**：`claim_for_webhook` 把判断和写入压进同一条条件 `UPDATE`（`WHERE data->>field IS DISTINCT FROM running OR updated_at < stale_before`），靠 **rowcount** 判断是否抢到，而不是「读后写」——避免并发请求都读到「未在执行」的快照后双双触发外部 webhook。陈旧阈值 = 该规则 `timeout × (retries + 1)`，下限 5 分钟；超过视为进程崩溃留下的孤儿，放行重新触发。
+    *   AI 闸门基于路由层在请求开始时已读到的行快照做前置拦截（非原子，`row_action_engine.run_action` 里 `current == running` 的比较用的是调用方传入的 `row_data`），真正的原子认领由 `claim_one` 的 `FOR UPDATE SKIP LOCKED` 完成；**不做陈旧时间放行**（AI 常规要跑数分钟，按时间放行会给同一条记录并发出第二个子会话），孤儿由 `ai_scan_engine.sweep_orphans`（仅在后端进程启动时执行一次）清扫恢复。
+*   **端点** `POST /<collection>/<recordId>/row-actions/<actionId>/run`（`dynamic_bp`，`write_required` + `require_page_action(collection,'update')`）。前端 `RowActionRunner.vue` 提交后按 5s 间隔轮询该行状态，上限 5 分钟。
+*   **刻意不建执行记录表**：webhook 审计看 `webhook_logs`，AI 审计看子会话对话；行上的状态字段只回答「现在怎么样」。
+*   条件求值双份实现（`server/utils/row_action_condition.py` + `src/utils/rowActionCondition.ts`），共读夹具 `server/tests/fixtures/row_action_conditions.json` 防漂移；比较一律走文本化（`_as_text`），并对浮点数做整数归一（`3.0` vs `3`）避免前后端分叉误判。
+*   用户文档：`docs/user-guide/data/row-actions.md`。
 
 ### AI Agent Chat (M1)
 

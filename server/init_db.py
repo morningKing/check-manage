@@ -1117,6 +1117,16 @@ def init_db():
             conn.commit()
             print("Added delete_binding column to page_configs table.")
 
+        # Migration: add row_actions column to page_configs (自定义行级操作按钮)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'page_configs' AND column_name = 'row_actions'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE page_configs ADD COLUMN row_actions JSONB DEFAULT '[]'::jsonb")
+            conn.commit()
+            print("Added row_actions column to page_configs table.")
+
         # Migration: add field_changes column to operation_logs
         cur.execute("""
             SELECT column_name FROM information_schema.columns

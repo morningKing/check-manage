@@ -523,6 +523,27 @@
                 </el-form>
               </el-tab-pane>
 
+              <!-- Tab 4.5: 行操作 -->
+              <el-tab-pane label="行操作" name="rowActions">
+                <RowActionsEditor
+                  v-model="formData.rowActions"
+                  :fields="currentFields"
+                />
+                <div class="page-form" style="margin-top: 16px">
+                  <el-form label-width="100px">
+                    <el-form-item>
+                      <el-button
+                        type="primary"
+                        @click="handleSavePageInfo"
+                        :loading="saveLoading"
+                      >
+                        保存
+                      </el-button>
+                    </el-form-item>
+                  </el-form>
+                </div>
+              </el-tab-pane>
+
               <!-- Tab 5: 关系图谱 -->
               <el-tab-pane label="关系图谱" name="relations">
                 <PageConfigRelationGraph
@@ -717,6 +738,7 @@ import { useMenuStore } from '@/stores'
 import FieldConfigEditor from './FieldConfigEditor.vue'
 import PageConfigList from './components/PageConfigList.vue'
 import PageConfigRelationGraph from '@/components/PageConfigRelationGraph.vue'
+import RowActionsEditor from '@/components/admin/RowActionsEditor.vue'
 import type { PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
 import { parseFieldRow, mergeFields } from '@/utils/fieldImport'
 import type { ExportScript } from '@/types'
@@ -1012,6 +1034,7 @@ function loadFormForPage(id: string): void {
     apiEndpoint: config.apiEndpoint,
     exportScripts: config.exportScripts || [],
     rowExportScripts: config.rowExportScripts || [],
+    rowActions: config.rowActions || [],
     apiPublic: config.apiPublic || false,
     apiWritable: config.apiWritable || false,
     validationScript: config.validationScript || '',
@@ -1170,6 +1193,7 @@ async function handleSavePageInfo(): Promise<void> {
       apiEndpoint: formData.value.apiEndpoint,
       exportScripts: formData.value.exportScripts || [],
       rowExportScripts: formData.value.rowExportScripts || [],
+      rowActions: formData.value.rowActions || [],
       apiPublic: formData.value.apiPublic,
       apiWritable: formData.value.apiPublic ? formData.value.apiWritable : false,
       validationScript: formData.value.validationScript || undefined,
@@ -1428,6 +1452,7 @@ async function handleSaveDeleteBinding(): Promise<void> {
       apiEndpoint: currentConfig.apiEndpoint,
       exportScripts: currentConfig.exportScripts || [],
       rowExportScripts: currentConfig.rowExportScripts || [],
+      rowActions: currentConfig.rowActions || [],
       apiPublic: currentConfig.apiPublic || false,
       apiWritable: currentConfig.apiWritable || false,
       validationScript: currentConfig.validationScript || undefined,
