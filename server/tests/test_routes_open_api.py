@@ -66,7 +66,7 @@ def _setup_api_key_auth(mock_cursor, active=True):
     """Configure mock cursor to pass API key authentication.
 
     The api_key_required decorator performs:
-      1. SELECT id, name, is_active FROM api_keys WHERE key_hash = %s
+      1. SELECT id, name, is_active, owner_user_id FROM api_keys WHERE key_hash = %s
       2. UPDATE api_keys SET last_used_at = NOW() WHERE id = %s
     """
     original_side_effect = mock_cursor.fetchone.side_effect
@@ -74,7 +74,7 @@ def _setup_api_key_auth(mock_cursor, active=True):
     def auth_then_delegate(*args, **kwargs):
         # First call: api key lookup
         mock_cursor.fetchone.side_effect = original_side_effect
-        return ('ak-test', 'Test Key', active)
+        return ('ak-test', 'Test Key', active, 'user-owner')
 
     mock_cursor.fetchone.side_effect = auth_then_delegate
 
@@ -88,7 +88,7 @@ def _setup_auth_and_returns(mock_cursor, fetchone_returns=None, fetchall_returns
         call_count[0] += 1
         if idx == 0:
             # Auth: api key lookup
-            return ('ak-test', 'Test Key', True)
+            return ('ak-test', 'Test Key', True, 'user-owner')
         if fetchone_returns and idx - 1 < len(fetchone_returns):
             return fetchone_returns[idx - 1]
         return None

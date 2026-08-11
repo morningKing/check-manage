@@ -2200,6 +2200,28 @@ def init_db():
                 conn.commit()
                 print("Created idx_export_scripts_name_unique (导出脚本名称全局唯一).")
 
+        # Migration: add owner_user_id to api_keys (AI 批任务对外 API 需要把密钥绑定到用户)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'api_keys' AND column_name = 'owner_user_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE api_keys ADD COLUMN owner_user_id VARCHAR(100) REFERENCES users(id)")
+            conn.commit()
+            print("Added owner_user_id column to api_keys table.")
+
+        # Migration: add api_key_id to ai_chat_batches (对外 API 创建的批任务按密钥隔离)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'ai_chat_batches' AND column_name = 'api_key_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE ai_chat_batches ADD COLUMN api_key_id VARCHAR(100) REFERENCES api_keys(id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_api_key "
+                        "ON ai_chat_batches(api_key_id, created_at DESC)")
+            conn.commit()
+            print("Added api_key_id column to ai_chat_batches table.")
+
         # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
         # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
         # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每
