@@ -22,7 +22,7 @@ from utils.filename import safe_filename
 from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
-                                url_prefix='/api/v1/ai-batches')
+                                url_prefix='/v1/ai-batches')
 
 MAX_FILE_BYTES = 20 * 1024 * 1024          # 单个文件 20 MB
 MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024  # 单次上传总计 100 MB

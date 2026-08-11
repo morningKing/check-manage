@@ -100,7 +100,7 @@ def test_download_file_in_public_collection(client):
             path = _make_file(cur, fid, content=b'HELLO-PDF-BYTES')
             _seed_collection(cur, coll, fid, api_public=True)
             conn.commit()
-        r = client.get(f'/api/v1/files/{fid}/download', headers=_api_headers())
+        r = client.get(f'/v1/files/{fid}/download', headers=_api_headers())
         assert r.status_code == 200, r.get_data(as_text=True)
         assert r.data == b'HELLO-PDF-BYTES'
         assert 'attachment' in (r.headers.get('Content-Disposition') or '')
@@ -109,7 +109,7 @@ def test_download_file_in_public_collection(client):
 
 
 def test_download_requires_api_key(client):
-    r = client.get('/api/v1/files/anything/download')
+    r = client.get('/v1/files/anything/download')
     assert r.status_code == 401
 
 
@@ -124,7 +124,7 @@ def test_download_file_in_private_collection_is_404(client):
             path = _make_file(cur, fid)
             _seed_collection(cur, coll, fid, api_public=False)
             conn.commit()
-        r = client.get(f'/api/v1/files/{fid}/download', headers=_api_headers())
+        r = client.get(f'/v1/files/{fid}/download', headers=_api_headers())
         assert r.status_code == 404, r.get_data(as_text=True)
     finally:
         _cleanup([coll], [path] if path else [])
@@ -140,7 +140,7 @@ def test_file_metadata_endpoint(client):
             path = _make_file(cur, fid, name='report.pdf')
             _seed_collection(cur, coll, fid, api_public=True, file_name='report.pdf')
             conn.commit()
-        r = client.get(f'/api/v1/files/{fid}', headers=_api_headers())
+        r = client.get(f'/v1/files/{fid}', headers=_api_headers())
         assert r.status_code == 200, r.get_data(as_text=True)
         d = r.get_json()['data']
         assert d['name'] == 'report.pdf'
@@ -160,12 +160,12 @@ def test_record_response_enriches_file_apiurl(client):
             _seed_collection(cur, coll, fid, api_public=True)
             conn.commit()
         # 单条
-        r = client.get(f'/api/v1/collections/{coll}/{coll}-r1', headers=_api_headers())
+        r = client.get(f'/v1/collections/{coll}/{coll}-r1', headers=_api_headers())
         assert r.status_code == 200, r.get_data(as_text=True)
         att = r.get_json()['data']['attachment']
         assert att[0]['apiUrl'] == f'/api/v1/files/{fid}/download'
         # 列表
-        r2 = client.get(f'/api/v1/collections/{coll}', headers=_api_headers())
+        r2 = client.get(f'/v1/collections/{coll}', headers=_api_headers())
         assert r2.status_code == 200
         att2 = r2.get_json()['data'][0]['attachment']
         assert att2[0]['apiUrl'] == f'/api/v1/files/{fid}/download'

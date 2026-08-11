@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-BASE = '/api/v1/ai-batches'
+BASE = '/v1/ai-batches'
 HDR = {'X-API-Key': 'cm_x'}
 
 

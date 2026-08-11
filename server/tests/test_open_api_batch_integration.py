@@ -99,7 +99,7 @@ def test_cross_collection_id_collision_reported_as_clean_error_not_500(client):
             conn.commit()
 
         resp = client.post(
-            f'/api/v1/collections/{COLL_A}/batch',
+            f'/v1/collections/{COLL_A}/batch',
             json={
                 'records': [
                     {'id': SHARED_ID, 'name': 'colliding record'},

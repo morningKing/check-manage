@@ -119,7 +119,7 @@ def test_open_api_create_bumps_sequence_counter(real_client):
         conn.commit()
     try:
         headers = {'X-API-Key': api_key_plain}
-        resp = real_client.post(f'/api/v1/collections/{coll}',
+        resp = real_client.post(f'/v1/collections/{coll}',
                                 json={"id": f"{coll}-a", "code": "IC-040"}, headers=headers)
         assert resp.status_code in (200, 201), resp.get_data(as_text=True)
         # 下一次 allocate 应给 IC-041，不与 API 写入撞号
