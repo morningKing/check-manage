@@ -17,7 +17,8 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  agent: str | None = None,
                  model: str | None = None,
                  provision_repo: str | None = None,
-                 provision_ref: str | None = None) -> dict:
+                 provision_ref: str | None = None,
+                 api_key_id: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -27,6 +28,8 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     `agent` is an optional OpenCode agent name to use for this batch.
     `model` is an optional "<providerID>/<modelID>" to run this batch with;
     empty falls back to the global OPENCODE_MODEL / the agent's default.
+    `api_key_id` stamps the source API key (open API callers) that created this
+    batch; None for UI/scan-task created batches.
     Returns {batch, sessions}.
     """
     if not files:
@@ -40,10 +43,10 @@ def create_batch(user_id: str, *, name: str, prompt: str,
             cur.execute(
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
-                "   provision_repo, provision_ref) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s) RETURNING *",
+                "   provision_repo, provision_ref, api_key_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
-                 provision_repo, provision_ref),
+                 provision_repo, provision_ref, api_key_id),
             )
             batch = dict(cur.fetchone())
 
@@ -63,27 +66,42 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     return {'batch': batch, 'sessions': sessions}
 
 
-def list_batches(user_id: str, *, page: int, page_size: int) -> dict:
+def list_batches(user_id: str, *, page: int, page_size: int,
+                 api_key_id: str | None = None) -> dict:
+    """列出批任务。
+
+    `api_key_id` 非 None 时**再**按来源密钥圈一层 —— 对外 API 要求严格按密钥隔离。
+    传 None 时行为与加这个参数之前完全一致，故 UI / 扫描任务 / 行操作等既有调用点无需改动。
+    """
     offset = (page - 1) * page_size
+    scope = "WHERE user_id = %s"
+    base = [user_id]
+    if api_key_id is not None:
+        scope += " AND api_key_id = %s"
+        base.append(api_key_id)
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT * FROM ai_chat_batches WHERE user_id = %s "
+                f"SELECT * FROM ai_chat_batches {scope} "
                 "ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (user_id, page_size, offset),
+                (*base, page_size, offset),
             )
             items = [dict(r) for r in cur.fetchall()]
-            cur.execute("SELECT count(*) AS n FROM ai_chat_batches WHERE user_id = %s",
-                        (user_id,))
+            cur.execute(f"SELECT count(*) AS n FROM ai_chat_batches {scope}", tuple(base))
             total = cur.fetchone()['n']
     return {'items': items, 'total': total, 'page': page, 'pageSize': page_size}
 
 
-def get_batch_detail(user_id: str, batch_id: str) -> dict | None:
+def get_batch_detail(user_id: str, batch_id: str, *,
+                     api_key_id: str | None = None) -> dict | None:
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM ai_chat_batches WHERE id=%s AND user_id=%s",
-                        (batch_id, user_id))
+            sql = "SELECT * FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+            params = [batch_id, user_id]
+            if api_key_id is not None:
+                sql += " AND api_key_id = %s"
+                params.append(api_key_id)
+            cur.execute(sql, tuple(params))
             batch = cur.fetchone()
             if not batch:
                 return None
@@ -97,16 +115,23 @@ def get_batch_detail(user_id: str, batch_id: str) -> dict | None:
     return {'batch': dict(batch), 'sessions': sessions}
 
 
-def delete_batch(user_id: str, batch_id: str) -> bool:
+def delete_batch(user_id: str, batch_id: str, *,
+                 api_key_id: str | None = None) -> bool:
     """Returns True if deleted, False if not found.
 
     Callers MUST run per-session workspace cleanup BEFORE invoking this for
     children that have a workspace_path. See routes for the orchestration.
+
+    `api_key_id` non-None additionally scopes the delete to that source key.
     """
+    sql = "DELETE FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+    params = [batch_id, user_id]
+    if api_key_id is not None:
+        sql += " AND api_key_id = %s"
+        params.append(api_key_id)
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s AND user_id=%s",
-                        (batch_id, user_id))
+            cur.execute(sql, tuple(params))
             deleted = cur.rowcount > 0
         conn.commit()
     return deleted
@@ -226,17 +251,26 @@ def update_batch_config(user_id: str, batch_id: str, *,
     return get_batch_detail(user_id, batch_id)
 
 
-def reset_failed_to_pending(user_id: str, batch_id: str) -> int:
+def reset_failed_to_pending(user_id: str, batch_id: str, *,
+                            api_key_id: str | None = None) -> int:
     """Returns count of sessions reset. Also clears batch.failed counter and
-    recomputes batch.status."""
+    recomputes batch.status.
+
+    `api_key_id` non-None additionally scopes the reset to that source key.
+    """
+    owner_scope = "SELECT id FROM ai_chat_batches WHERE user_id=%s"
+    owner_params = [batch_id, user_id]
+    if api_key_id is not None:
+        owner_scope += " AND api_key_id = %s"
+        owner_params.append(api_key_id)
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE ai_chat_sessions "
                 "SET status='pending', error_message=NULL "
                 "WHERE batch_id=%s AND status='failed' "
-                "  AND batch_id IN (SELECT id FROM ai_chat_batches WHERE user_id=%s)",
-                (batch_id, user_id),
+                f"  AND batch_id IN ({owner_scope})",
+                tuple(owner_params),
             )
             count = cur.rowcount
             if count:
@@ -249,3 +283,53 @@ def reset_failed_to_pending(user_id: str, batch_id: str) -> int:
                 )
             conn.commit()
     return count
+
+
+def get_batch_results(batch_id: str) -> list[dict]:
+    """按 batch_seq 顺序返回每个子任务的结果。
+
+    `output` 取该子会话**最后一条 assistant 消息**里全部 text 片段的拼接，
+    而不是 ai_chat_sessions.last_message_preview —— 后者存的是
+    batch_engine._preview_from() 取的第一行，读它会让调用方拿到被截断的输出。
+
+    `name` 取 batch_input_file 的 basename：该列存的是工作区相对路径
+    （batch-staging/<userId>/<uploadId>/<文件名>），直接返回会泄漏内部 userId。
+    """
+    sql = """
+        SELECT s.batch_input_file, s.status, s.error_message,
+               (SELECT m.content FROM ai_chat_messages m
+                 WHERE m.session_id = s.id AND m.role = 'assistant'
+                 ORDER BY m.created_at DESC LIMIT 1) AS content
+          FROM ai_chat_sessions s
+         WHERE s.batch_id = %s
+         ORDER BY s.batch_seq
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, (batch_id,))
+            rows = [dict(r) for r in cur.fetchall()]
+
+    results = []
+    for r in rows:
+        raw = r.get('batch_input_file') or ''
+        name = raw.replace('\\', '/').rsplit('/', 1)[-1]
+        results.append({
+            'name': name,
+            'status': r['status'],
+            'output': _text_from_content(r.get('content')),
+            'error': r.get('error_message'),
+        })
+    return results
+
+
+def _text_from_content(content) -> str | None:
+    """把 ai_chat_messages.content（typed parts 数组）里的 text 片段拼成纯文本。
+
+    工具调用等非 text 片段一律丢弃 —— 对外只承诺「AI 的最终回复文本」，
+    不暴露 OpenCode 的消息结构与 MCP 工具名。
+    """
+    if not content or not isinstance(content, list):
+        return None
+    texts = [p.get('text') for p in content
+             if isinstance(p, dict) and p.get('type') == 'text' and p.get('text')]
+    return '\n'.join(texts) if texts else None
