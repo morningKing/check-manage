@@ -2228,9 +2228,21 @@ def init_db():
         # 完全相同的 created_at —— Postgres 的 now()/DEFAULT NOW() 在同一事务内
         # 是事务级常量，会导致 ORDER BY created_at 在打平时排序不确定。BIGSERIAL
         # 让 Postgres 自动建一个序列、新插入行的 seq 严格递增，可作为可靠的插入
-        # 顺序列。注意：ALTER TABLE ADD COLUMN 给存量行回填的 seq 值顺序取决于
-        # 物理存储顺序，不保证等于这些行当年的真实插入顺序——这是可接受的，因为
-        # 存量数据本来就没有可靠顺序；加了这一列之后的新数据才有顺序保证。
+        # 顺序列——普通整数列做不到这一点（没有数据库端原子分配，并发写入下
+        # 应用层赋值会重号），必须是 serial/序列。注意：ALTER TABLE ADD COLUMN
+        # 给存量行回填的 seq 值顺序取决于物理存储顺序，不保证等于这些行当年的
+        # 真实插入顺序——这是可接受的，因为存量数据本来就没有可靠顺序；加了这
+        # 一列之后的新数据才有顺序保证。
+        #
+        # ⚠️ 代价：因为默认值来自序列（每行取值不同、非常量），这条 ALTER TABLE
+        # 走不了 Postgres「只改元数据」的快速加列路径，会对整张表做一次全表
+        # 重写，期间持 ACCESS EXCLUSIVE 锁——ai_chat_messages 在此期间不可写
+        # （正在跑的 AI 会话落不了库）。这是 init_db.py 里第一次出现
+        # ADD COLUMN ... SERIAL/BIGSERIAL，没有先例评估过代价，人类已裁决接受
+        # ——这是内部管理平台、init_db.py 本来就是部署时手动跑的，不是热路径上
+        # 的自动迁移；开发库实测这张表只有 121 行/144 kB，代价可忽略。但如果
+        # 部署到消息量已经很大的库，请选低峰期执行本次迁移（跑 init_db.py 前
+        # 停掉/暂停 AI Chat 相关写入，或直接安排在维护窗口）。
         cur.execute("""
             SELECT column_name FROM information_schema.columns
             WHERE table_name = 'ai_chat_messages' AND column_name = 'seq'
