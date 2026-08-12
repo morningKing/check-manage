@@ -285,3 +285,31 @@ def test_reexecute_missing_child_is_404(client, admin_headers):
          patch('routes.ai_batch_admin.log_operation'):
         resp = client.post(f'{BASE}/b-1/sessions/s-1/reexecute', headers=admin_headers)
     assert resp.status_code == 404
+
+
+# --- 子代理对话（管理员，只读） -----------------------------------------------
+
+def test_admin_subtask_messages_requires_admin(client, dev_headers):
+    resp = client.get(f'{BASE}/b-1/sessions/s-1/subtasks/ses_x/messages',
+                      headers=dev_headers)
+    assert resp.status_code == 403
+
+
+def test_admin_subtask_messages_not_found_is_404(client, admin_headers):
+    with patch('routes.ai_batch_admin.get_subtask_messages', return_value=None):
+        resp = client.get(f'{BASE}/b-1/sessions/s-1/subtasks/ses_x/messages',
+                          headers=admin_headers)
+    assert resp.status_code == 404
+
+
+def test_admin_subtask_messages_does_not_scope_by_owner(client, admin_headers):
+    """管理员路径不传 owner_user_id——鉴权已经在 require_permission 做过，
+    子代理数据不按归属过滤（这正是管理员视角存在的意义）。"""
+    payload = {'subtask': {'id': 'ses_x', 'agent': 'build', 'description': 'd',
+                           'status': 'running'},
+              'messages': [], 'truncated': False, 'total': 0}
+    with patch('routes.ai_batch_admin.get_subtask_messages', return_value=payload) as gm:
+        resp = client.get(f'{BASE}/b-1/sessions/s-1/subtasks/ses_x/messages',
+                          headers=admin_headers)
+    assert resp.status_code == 200
+    assert 'owner_user_id' not in gm.call_args[1]
