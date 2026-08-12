@@ -10,7 +10,7 @@ Open API 允许外部系统通过 API Key 认证方式，以 RESTful 接口读�
 http://<host>:<port>/api/v1
 ```
 
-默认开发环境为 `http://localhost:7001/api/v1`。
+生产环境经 `proxy.py` 反向代理，端口为 `8080`，即 `http://localhost:8080/api/v1`（本机开发时也可用 Vite 开发服务器的 `http://localhost:5173/api/v1`，它会代理到后端）。
 
 **数据格式：** 所有接口均返回 `application/json`。写入接口的请求体也必须是 `application/json`。
 
@@ -805,7 +805,7 @@ X-API-Key: cm_xxx
 ```bash
 # 设置 API Key
 API_KEY="cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"
-BASE_URL="http://localhost:7001/api/v1"
+BASE_URL="http://localhost:8080/api/v1"
 
 # 1. 查看所有已开放的集合
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/collections" | jq
@@ -849,7 +849,7 @@ curl -s -X PUT \
 import requests
 
 API_KEY = "cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"
-BASE_URL = "http://localhost:7001/api/v1"
+BASE_URL = "http://localhost:8080/api/v1"
 HEADERS = {"X-API-Key": API_KEY}
 
 
@@ -983,7 +983,7 @@ if __name__ == "__main__":
 
 ```javascript
 const API_KEY = "cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2";
-const BASE_URL = "http://localhost:7001/api/v1";
+const BASE_URL = "http://localhost:8080/api/v1";
 
 async function fetchAPI(path, options = {}) {
   const url = new URL(`${BASE_URL}${path}`);
@@ -1126,7 +1126,7 @@ import com.google.gson.*;
 
 public class OpenApiClient {
     private static final String API_KEY = "cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2";
-    private static final String BASE_URL = "http://localhost:7001/api/v1";
+    private static final String BASE_URL = "http://localhost:8080/api/v1";
     private static final HttpClient client = HttpClient.newHttpClient();
     private static final Gson gson = new Gson();
 
