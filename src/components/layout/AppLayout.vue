@@ -206,7 +206,7 @@ const isSettingsShell = computed(() => route.meta.shell === 'settings')
  * 设置外壳下固定用展开宽度（240，取自 app.ts::sidebarWidth 折叠态为假时的返回值），
  * 不跟随业务侧边栏的折叠状态。SettingsItem 没有 icon 字段，折叠后无法像业务侧边栏
  * 那样退化成纯图标 —— 若沿用 appStore.sidebarWidth，折叠态（持久化在
- * localStorage，撞过一次就永远撞）下容器缩到 64px，21 条设置标签会被挤压成
+ * localStorage，撞过一次就永远撞）下容器缩到 64px，22 条设置标签会被挤压成
  * 每行一个字的竖排文本、不可读。
  */
 const sidebarWidth = computed(() =>
