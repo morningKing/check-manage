@@ -475,6 +475,19 @@ export const useAiChatStore = defineStore('aiChat', {
               result: st.output ?? st.result,
               durationMs: (tt.start && tt.end) ? Math.max(0, tt.end - tt.start) : undefined,
             })
+          } else if (part.type === 'subtask') {
+            // 委托子代理——先渲染一个占位气泡（agent + description），状态给
+            // 默认值 'running' 即可：这只是"让用户立刻看到委托发生了"，真正的
+            // 状态与内容由 SubtaskBubble 展开时向 REST 端点现取现查（跟顶层
+            // 消息持久化后 status 会被刷新是同一个道理——SSE 这里只负责"存在
+            // 性"的实时提示，不负责权威状态）。
+            this._upsertAssistantPart(sid, part.id, {
+              type: 'subtask_use',
+              subtaskId: part.sessionID,
+              agent: part.agent ?? null,
+              description: part.description ?? null,
+              status: 'running',
+            })
           }
           break
         }
