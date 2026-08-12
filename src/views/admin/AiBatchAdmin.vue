@@ -14,6 +14,12 @@
       <el-button :loading="store.loading" @click="reload">刷新</el-button>
     </div>
 
+    <el-alert v-if="store.pollError" type="warning" show-icon :closable="false"
+              class="batch-admin__poll-error"
+              title="后台自动刷新已连续多次失败并已停止，当前列表可能不是最新数据">
+      <el-button size="small" type="warning" plain @click="reload">重新加载</el-button>
+    </el-alert>
+
     <el-table :data="store.items" v-loading="store.loading" style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip />
       <el-table-column prop="ownerUsername" label="归属用户" width="140" />
@@ -149,8 +155,16 @@ async function onPage(p: number) {
 }
 
 async function openDetail(row: AdminBatch) {
-  detail.value = await getAdminBatch(row.batchId)
-  detailOpen.value = true
+  try {
+    detail.value = await getAdminBatch(row.batchId)
+    detailOpen.value = true
+  } catch (e: any) {
+    // 所有者在列表渲染与点击之间删掉了该批任务：全局拦截器已弹出「请求资源不存在」，
+    // 这里只需把陈旧行从列表里清掉，不然它会一直留在表格里，再点还是 404。
+    if (e?.response?.status === 404) {
+      await store.fetchList()
+    }
+  }
 }
 
 async function onRetryAll() {
@@ -179,6 +193,11 @@ async function onReexecute(row: AdminChild) {
 async function openConversation(row: AdminChild) {
   if (!detail.value) return
   convName.value = row.name
+  // 先清空再开弹窗：否则连续点击两个不同子任务时，新标题下会短暂（或请求失败时永久）
+  // 显示上一个子任务的旧对话内容。
+  convMessages.value = []
+  convTruncated.value = false
+  convTotal.value = 0
   convOpen.value = true
   convLoading.value = true
   try {
@@ -197,6 +216,7 @@ onUnmounted(() => store.stopPolling())
 
 <style scoped lang="scss">
 .batch-admin__filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.batch-admin__poll-error { margin-bottom: 12px; }
 .batch-admin__pager { margin-top: 12px; justify-content: flex-end; }
 .batch-admin__actions { margin: 12px 0; }
 </style>

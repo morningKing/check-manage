@@ -102,6 +102,74 @@ describe('aiBatchAdmin store', () => {
     store.stopPolling()
   })
 
+  it('轮询连续失败达到阈值后自动停止并置错误态（不再无限重试）', async () => {
+    vi.mocked(listAdminBatches)
+      .mockResolvedValueOnce({ items: [{ batchId: 'b1', status: 'running' } as any], total: 1 }) // 初次 fetchList
+      .mockRejectedValue(new Error('网络连接失败')) // 之后每次轮询都失败（模拟权限撤销/token 过期/网络抖动）
+
+    const store = useAiBatchAdminStore()
+    await store.fetchList()
+    store.startPolling()
+    expect(store.pollError).toBe(false)
+
+    // 前两次失败还没到阈值（3），轮询应该继续
+    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.pollError).toBe(false)
+    expect(vi.mocked(listAdminBatches).mock.calls.length).toBe(3) // 1 次初始 + 2 次轮询
+
+    // 第 3 次失败达到阈值：应停止轮询并置显式错误态，而不是无限重试
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.pollError).toBe(true)
+    const callsAtThreshold = vi.mocked(listAdminBatches).mock.calls.length
+    expect(callsAtThreshold).toBe(4)
+
+    // 继续推进远超轮询间隔的时间，不应再有新请求 —— 显式断言调用次数，
+    // 不能只靠"没抛错"就当作通过（这个分支已经栽过断言没发生某事却写成假绿的坑）
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(vi.mocked(listAdminBatches).mock.calls.length).toBe(callsAtThreshold)
+  })
+
+  it('轮询请求携带 silent，不打断用户（不像手动 fetchList 那样传裸调用）', async () => {
+    vi.mocked(listAdminBatches).mockResolvedValue({
+      items: [{ batchId: 'b1', status: 'running' } as any],
+      total: 1,
+    })
+    const store = useAiBatchAdminStore()
+    await store.fetchList()
+    store.startPolling()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+
+    const pollCall = vi.mocked(listAdminBatches).mock.calls[1]
+    expect(pollCall[3]).toEqual({ silent: true })
+  })
+
+  it('轮询失败后若恢复成功，失败计数与错误态被清除', async () => {
+    vi.mocked(listAdminBatches)
+      .mockResolvedValueOnce({ items: [{ batchId: 'b1', status: 'running' } as any], total: 1 })
+      .mockRejectedValueOnce(new Error('网络连接失败'))
+      .mockRejectedValueOnce(new Error('网络连接失败'))
+      .mockResolvedValueOnce({ items: [{ batchId: 'b1', status: 'running' } as any], total: 1 }) // 第三次轮询恢复
+
+    const store = useAiBatchAdminStore()
+    await store.fetchList()
+    store.startPolling()
+
+    await vi.advanceTimersByTimeAsync(10_000) // 失败 1
+    await vi.advanceTimersByTimeAsync(10_000) // 失败 2（还没到阈值 3）
+    await vi.advanceTimersByTimeAsync(10_000) // 恢复成功
+    expect(store.pollError).toBe(false)
+
+    // 恢复后再连续失败，应该要再攒够 3 次才会停止（说明计数确实被清零重新计）
+    vi.mocked(listAdminBatches).mockRejectedValue(new Error('网络连接失败'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.pollError).toBe(false)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(store.pollError).toBe(true)
+  })
+
   it('stopPolling 之后不再发请求', async () => {
     vi.mocked(listAdminBatches).mockResolvedValue({
       items: [{ batchId: 'b1', status: 'running' } as any],

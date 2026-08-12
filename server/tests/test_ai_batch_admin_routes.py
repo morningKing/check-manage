@@ -52,11 +52,38 @@ def test_read_routes_require_admin_capability(client, method, url):
 
 
 def test_every_admin_route_is_permission_gated(app, client):
-    """遍历式兜底：任何新增端点漏挂 require_permission 都会在这里红。"""
+    """遍历式兜底：任何新增端点漏挂 require_permission 都会在这里红。
+
+    注意：这条和上面那条一样**不带 Authorization 头**，只能证明"匿名请求被拦"，
+    走的是 require_permission 的第一层 401 分支——根本没到能力键判定。
+    真正的能力键覆盖见下面 test_every_admin_route_rejects_authenticated_non_admin。
+    """
     leaked = []
     for method, url in _admin_routes(app):
         resp = client.open(url, method=method)
         if resp.status_code not in (401, 403):
+            leaked.append((method, url, resp.status_code))
+    assert leaked == []
+
+
+def test_every_admin_route_rejects_authenticated_non_admin(app, client, dev_headers):
+    """本文件真正的安全边界测试。
+
+    上面两条测试都不带 Authorization 头，只能验证"未登录被拦"——它们连
+    require_permission 的能力键判定分支都没走到。曾经变异验证过：把全部
+    5 处 @require_permission('admin.ai_chat_admin') 换成 @login_required，
+    上面两条测试依然全绿（19 passed），developer 角色实测能拿到跨全部用户
+    的批任务列表（200）。
+
+    这条用一个**已登录但没有任何 admin 能力**的角色（dev_headers，conftest
+    的 autouse fixture 已把 developer 角色预置为 admin_keys=set()）逐个打
+    全部端点，断言一律 403。日后有人把装饰器换成 login_required 或其他弱
+    装饰器，这条测试会红；上面两条不带 token 的测试不会。
+    """
+    leaked = []
+    for method, url in _admin_routes(app):
+        resp = client.open(url, method=method, headers=dev_headers)
+        if resp.status_code != 403:
             leaked.append((method, url, resp.status_code))
     assert leaked == []
 
@@ -103,6 +130,41 @@ def test_detail_not_found_is_404(client, admin_headers):
     with patch('routes.ai_batch_admin.admin_get_batch_detail', return_value=None):
         resp = client.get(f'{BASE}/b-nope', headers=admin_headers)
     assert resp.status_code == 404
+
+
+def test_detail_returns_contract_fields_only(client, admin_headers):
+    """list 端点有 test_list_returns_contract_fields_only 精确断言键集合，detail 端点
+    此前只测了 404 分支，_session_out 的输出形状从未被断言过——这类错完全无声，
+    表现为抽屉表格整列空白、不报任何错误（前端按 sessionId/seq/name/status/error/
+    preview 这几个 prop 取值，键名或取值逻辑错了只是渲染成空白）。
+
+    这条同时钉住 name 字段的 basename 提取逻辑：
+    `(batch_input_file or '').replace('\\\\','/').rsplit('/',1)[-1]`，给一个带路径
+    分隔符（含反斜杠，模拟 Windows 存储路径）的输入，断言只剩文件名。
+    """
+    batch_row = {'id': 'b-1', 'name': '报告批', 'status': 'running', 'total': 2,
+                 'done': 1, 'failed': 0, 'agent': None, 'model': None,
+                 'created_at': None, 'completed_at': None,
+                 'owner_username': 'alice', 'source': 'ui'}
+    session_row = {'id': 's-1', 'batch_seq': 1,
+                   'batch_input_file': 'uploads\\sub\\report.docx',
+                   'status': 'completed', 'error_message': None,
+                   'last_message_preview': '处理完成'}
+    with patch('routes.ai_batch_admin.admin_get_batch_detail',
+               return_value={'batch': batch_row, 'sessions': [session_row]}):
+        resp = client.get(f'{BASE}/b-1', headers=admin_headers)
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body['batch']) == {
+        'batchId', 'name', 'status', 'total', 'done', 'failed', 'agent', 'model',
+        'createdAt', 'completedAt', 'ownerUsername', 'source'}
+    assert set(body['sessions'][0]) == {
+        'sessionId', 'seq', 'name', 'status', 'error', 'preview'}
+    assert body['sessions'][0]['name'] == 'report.docx'
+    assert body['sessions'][0]['sessionId'] == 's-1'
+    assert body['sessions'][0]['seq'] == 1
+    assert body['sessions'][0]['preview'] == '处理完成'
 
 
 def test_messages_not_found_is_404(client, admin_headers):

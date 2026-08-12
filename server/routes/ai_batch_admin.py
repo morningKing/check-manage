@@ -126,8 +126,14 @@ def retry_failed(batch_id):
     if n:
         get_worker().notify()
 
-    d = admin_get_batch_detail(batch_id)
-    name = (d or {}).get('batch', {}).get('name') or batch_id
+    # 取名只是为了让日志文案好读；这一步若抛异常（DB 抖动 / 连接池耗尽）不能让重置
+    # 已生效但审计写不进去——那就是「管理员代改他人数据无痕」。取不到名字就退化用
+    # batch_id，但 log_operation 必须执行到。
+    try:
+        d = admin_get_batch_detail(batch_id)
+        name = (d or {}).get('batch', {}).get('name') or batch_id
+    except Exception:
+        name = batch_id
     log_operation('update', 'ai_chat_batch', batch_id, name,
                   f'管理员重试批任务「{name}」中 {n} 个失败的子任务')
     return jsonify({'retried': n})

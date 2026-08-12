@@ -41,8 +41,11 @@ export interface AdminFilters {
 
 const BASE = '/ai/chat/admin/batches'
 
-export function listAdminBatches(filters: AdminFilters, page: number, pageSize: number) {
-  return get<{ items: AdminBatch[]; total: number }>(BASE, { ...filters, page, pageSize })
+export function listAdminBatches(
+  filters: AdminFilters, page: number, pageSize: number,
+  config?: { silent?: boolean },
+) {
+  return get<{ items: AdminBatch[]; total: number }>(BASE, { ...filters, page, pageSize }, config)
 }
 
 export function getAdminBatch(batchId: string) {
