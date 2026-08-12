@@ -168,7 +168,7 @@ def _rebind_module_get_db_to_real():
     if hasattr(db_module.pool, '_mock_name'):
         db_module.pool = None
     for mod_name in ('utils.prompt_template', 'utils.batch_repo',
-                     'utils.batch_engine'):
+                     'utils.batch_engine', 'utils.subtask_repo'):
         try:
             mod = importlib.import_module(mod_name)
             if hasattr(mod, 'get_db'):
