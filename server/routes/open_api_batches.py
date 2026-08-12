@@ -15,9 +15,9 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required
 from utils.batch_engine import get_worker
-from utils.batch_repo import (MAX_FILES_PER_BATCH, create_batch, delete_batch,
-                              get_batch_detail, get_batch_results, list_batches,
-                              reset_failed_to_pending)
+from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, create_batch,
+                              delete_batch, get_batch_detail, get_batch_results,
+                              list_batches, reset_failed_to_pending)
 from utils.filename import safe_filename
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
@@ -192,6 +192,30 @@ def upload_files():
     return jsonify({'files': saved}), 201
 
 
+def _validate_files(files: list, owner_user_id: str):
+    """校验 files[] 的形状、路径归属与文件是否还在。
+
+    合法返回 None，否则返回可直接 `return` 的 (response, status) 二元组。
+    `create` 与 `append` 共用 —— 两处各抄一份必然漂移，而这里每一条都是安全边界：
+    漏掉路径归属校验就是横向越权，漏掉存在性校验就会留下一个注定空跑的子任务。
+    """
+    root = _workspace_root()
+    for f in files:
+        if not isinstance(f, dict) or not f.get('name') or not f.get('path'):
+            return jsonify({'error': '每个文件需包含 name 与 path'}), 400
+        if not _validate_staged_path(f['path'], owner_user_id):
+            return jsonify({'error': '文件路径无效'}), 400
+        # 形状合法 ≠ 文件还在。暂存目录超过 TTL 会被 _sweep_stale_staging 清掉；
+        # 不在这里拦住的话，_prepare_workspace 会抛 FileNotFoundError 把子任务直接
+        # 标成失败 —— 与其让调用方事后从结果里发现，不如在提交时就明确拒绝。
+        if not os.path.isfile(os.path.join(root, str(f['path']).replace('\\', '/'))):
+            return jsonify({
+                'error': f'文件「{f["name"]}」已过期或不存在，'
+                         f'请重新调用 /uploads 上传后再提交'
+            }), 400
+    return None
+
+
 def _batch_out(b: dict) -> dict:
     """内部批任务行 → 对外契约字段。刻意只吐这几个，内部字段一律不外泄。"""
     return {
@@ -229,21 +253,9 @@ def create():
     if len(files) > MAX_FILES_PER_BATCH:
         return jsonify({'error': f'单批最多 {MAX_FILES_PER_BATCH} 个文件'}), 400
 
-    root = _workspace_root()
-    for f in files:
-        if not isinstance(f, dict) or not f.get('name') or not f.get('path'):
-            return jsonify({'error': '每个文件需包含 name 与 path'}), 400
-        if not _validate_staged_path(f['path'], owner):
-            return jsonify({'error': '文件路径无效'}), 400
-        # 形状合法 ≠ 文件还在。暂存目录超过 TTL 会被 _sweep_stale_staging 清掉；
-        # 不在这里拦住的话，_prepare_workspace 会建出一个空的 uploads/，AI 拿着
-        # 「请先读取 uploads/xxx」的提示在空工作区里跑完，子任务被标成 completed、
-        # output 是一段「我读不到文件」的垃圾，集成方毫无察觉。
-        if not os.path.isfile(os.path.join(root, str(f['path']).replace('\\', '/'))):
-            return jsonify({
-                'error': f'文件「{f["name"]}」已过期或不存在，'
-                         f'请重新调用 /uploads 上传后再创建批任务'
-            }), 400
+    err = _validate_files(files, owner)
+    if err:
+        return err
 
     result = create_batch(
         owner,
@@ -334,3 +346,41 @@ def retry_failed(batch_id):
     if n:
         get_worker().notify()
     return jsonify({'retried': n})
+
+
+@open_api_batches_bp.post('/<batch_id>/append')
+@api_key_required
+@require_bound_key
+def append(batch_id):
+    """向已有批任务追加文件。
+
+    刻意**不限终态**（与 retry-failed 不同）：追加的语义是「这批还没做完，再加几个」，
+    对一个已经 completed 的批任务追加是合法用法。追加后批任务重回 running，
+    total += N，worker 自动捡起新子任务。已完成的子任务不受影响、不会重跑。
+    """
+    key = _current_key()
+    owner = key['ownerUserId']
+    body = request.get_json(silent=True) or {}
+    files = body.get('files') or []
+
+    if not isinstance(files, list) or not files:
+        return jsonify({'error': '请至少提供一个文件'}), 400
+    if len(files) > MAX_FILES_PER_BATCH:
+        return jsonify({'error': f'单次最多追加 {MAX_FILES_PER_BATCH} 个文件'}), 400
+
+    err = _validate_files(files, owner)
+    if err:
+        return err
+
+    try:
+        d = append_to_batch(owner, batch_id, files, api_key_id=key['id'])
+    except ValueError as e:
+        # 唯一的 ValueError 来源是「追加后超过单批文件数上限」（空 files 已在上面挡掉）。
+        return jsonify({'error': str(e)}), 400
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+
+    get_worker().notify()
+    b = d['batch']
+    return jsonify({'batchId': b['id'], 'status': b['status'],
+                    'total': b['total'], 'appended': len(files)})

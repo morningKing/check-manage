@@ -102,6 +102,7 @@ curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/$BATCH_ID/results" | jq
 | GET | `/api/v1/ai-batches/{batchId}/results` | 取回每个文件的处理结果 |
 | DELETE | `/api/v1/ai-batches/{batchId}` | 删除批任务（不可逆） |
 | POST | `/api/v1/ai-batches/{batchId}/retry-failed` | 把批任务中失败的子任务重置为待处理，交由后台重跑 |
+| POST | `/api/v1/ai-batches/{batchId}/append` | 向已有批任务追加文件（任何状态都可追加） |
 
 以上全部接口都要求请求头携带 `X-API-Key`，且密钥必须已绑定用户（见第 2 节），否则返回 401/403。
 
@@ -339,6 +340,76 @@ POST /api/v1/ai-batches/{batchId}/retry-failed
 
 ---
 
+### 4.8 向已有批任务追加文件
+
+```
+POST /api/v1/ai-batches/{batchId}/append
+Content-Type: application/json
+```
+
+给一个已经存在的批任务再加几个文件，沿用它原有的 `prompt` / `agent` / `model`。适合「同一批处理任务的输入是陆续到齐的」这种场景 —— 不用为后到的文件另建一个批任务、也就不用在自己这边把多个 `batchId` 拼回一组。
+
+**与 `retry-failed` 不同，本接口不要求批任务处于终态**：`pending` / `running` / `completed` / `partial` / `failed` 任何状态都可以追加。
+
+**请求体**
+
+```json
+{
+  "files": [
+    { "name": "report-03.pdf", "path": "batch-staging/<userId>/<uploadId>/report-03.pdf" }
+  ]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `files` | array | 是 | 先调 `/uploads` 拿到的 `files` 数组（或其子集），每项需含 `name` 与 `path`；单次最多 50 个 |
+
+**响应 — 200**
+
+```json
+{ "batchId": "b-1", "status": "running", "total": 6, "appended": 1 }
+```
+
+| 字段 | 说明 |
+|------|------|
+| `total` | 追加**之后**批任务的文件总数 |
+| `appended` | 本次追加的文件数 |
+| `status` | 追加后的批任务状态，必然回到非终态（见下） |
+
+**追加后发生了什么**
+
+- 新子任务以 `pending` 入队，`batch_seq` 从当前最大值往后续，后台 worker 会自动开始处理，无需再做任何调用；
+- 批任务的 `total` 增加，状态**从终态回到 `running`**（或 `pending`，取决于是否已有子任务开始跑）；
+- **已完成的子任务不受影响**，不会重跑，它们的结果仍留在 `/results` 里；
+- 因此调用 `/results` 时你会同时看到旧的 `completed` 子任务和新的 `pending` 子任务。
+
+> ⚠️ 如果你的集成代码用「批任务进入终态」作为整批处理完成的信号，注意追加会让它**退出终态**。在你自己追加之后，需要重新开始轮询等待新的终态。
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `files` 为空、单次超过 50 个、缺少 `name`/`path`、路径不属于本密钥属主、文件已过期或不存在、或追加后超过单批 50 个文件的上限 |
+| 404 | `batchId` 不存在或不属于本密钥 |
+
+**示例**
+
+```bash
+# 1) 先把新到的文件传到暂存区
+curl -X POST http://localhost:8080/api/v1/ai-batches/uploads \
+  -H "X-API-Key: $API_KEY" \
+  -F "files=@./report-03.pdf"
+
+# 2) 用返回的 path 追加到已有批任务
+curl -X POST http://localhost:8080/api/v1/ai-batches/b-1/append \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"files":[{"name":"report-03.pdf","path":"batch-staging/<userId>/<uploadId>/report-03.pdf"}]}'
+```
+
+---
+
 ## 5. 状态说明
 
 ### 5.1 批任务状态（`status`）
@@ -351,7 +422,10 @@ POST /api/v1/ai-batches/{batchId}/retry-failed
 | `partial` | 全部子任务已结束，但有成功也有失败（部分完成） |
 | `failed` | 全部子任务都失败 |
 
-`completed` / `partial` / `failed` 均为终态，不会再变化（`retry-failed` 会把失败的子任务打回 `pending` 并让批任务重新回到 `running`，此时批任务状态不再是终态）。
+`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有两个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
+
+- `retry-failed`：把失败的子任务打回 `pending`；
+- `append`：追加新文件（新子任务以 `pending` 入队）。
 
 ### 5.2 子任务状态（`results[].status`）
 
@@ -397,7 +471,7 @@ POST /api/v1/ai-batches/{batchId}/retry-failed
 |-------------|---------|
 | 401 | 请求头缺少 `X-API-Key`（`Missing API key`）/ 密钥不存在（`Invalid API key`）/ 密钥已停用（`API key has been revoked`） |
 | 403 | 密钥未绑定用户（存量密钥），见第 2 节 |
-| 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建：`name`/`prompt` 缺失、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在。列表：`page`/`pageSize` 不是整数 |
+| 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建：`name`/`prompt` 缺失、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
 | 404 | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
 | 409 | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed` |
 | 411 | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |
@@ -436,6 +510,7 @@ POST /api/v1/ai-batches/{batchId}/retry-failed
 3. **删除不可逆**：`DELETE /{batchId}` 会清理 AI 会话工作区并删库，无法恢复；确需保留结果的场景，删除前先调 `/results`。
 4. **暂存文件有效期 24 小时**：`/uploads` 返回的 `path` 请尽快用于创建批任务，不要存起来隔天再用。超过 24 小时的暂存文件会被清理，此时创建批任务会因文件不存在被 400 拒绝；如果批任务已创建但排队超过 24 小时才轮到执行，对应子任务会因输入文件已被清理而 `failed`。清理规则的完整说明见 4.1。
 5. **`retry-failed` 只重置失败的子任务**：不会重跑已成功的子任务，也不会修改批任务的 prompt/agent/model；如需更换 prompt 重新处理，需要重新走一遍上传 + 创建流程。
+6. **`append` 会让批任务退出终态**：追加的新子任务以 `pending` 入队，批任务状态从 `completed`/`partial`/`failed` 回到 `running`。如果你的集成代码把「进入终态」当作整批完成的信号，追加之后要重新开始轮询。已完成的子任务不会被重跑，追加沿用批任务原有的 prompt/agent/model——**追加不能换 prompt**，需要换就新建一个批任务。
 
 ---
 
