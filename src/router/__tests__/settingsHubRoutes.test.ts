@@ -16,7 +16,7 @@ vi.mock('@/components/common', () => {
   return new Proxy({}, { get: () => Stub })
 })
 
-// 首次真实导航仍要懒加载/转换本文件涉及的设置页组件本身（21 个 .vue 文件
+// 首次真实导航仍要懒加载/转换本文件涉及的设置页组件本身（22 个 .vue 文件
 // + 各自的 api/types 依赖），实测首次约 6s，全量测试并行跑时会更久；调大
 // 本文件超时留够余量，避免和机器负载相关的抖动。
 vi.setConfig({ testTimeout: 20000 })
@@ -32,7 +32,7 @@ function makeRouter(can: (k: string) => boolean) {
 }
 
 describe('buildSettingsRoutes', () => {
-  it('生成 21 条路由', () => {
+  it('生成 22 条路由', () => {
     expect(buildSettingsRoutes()).toHaveLength(ALL_SETTINGS_ITEMS.length)
   })
 

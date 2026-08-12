@@ -10,7 +10,7 @@
  * /login               - 登录页（公开）
  * /                    - 主布局（需认证）
  * ├── /home           - 首页
- * ├── /admin/<功能>    - 设置中心（21 个功能各自独立路由，由目录数据生成）
+ * ├── /admin/<功能>    - 设置中心（22 个功能各自独立路由，由目录数据生成）
  * ├── /admin          - 重定向到首个有权限的设置功能
  * ├── /admin/<分类|老路径> - 兼容重定向
  * └── /...            - 动态数据页面（根据菜单配置自动注册）
@@ -86,7 +86,7 @@ const staticRoutes: RouteRecordRaw[] = [
           title: '数据页面',
         },
       },
-      // 设置中心：21 条功能路由（由目录数据生成） + 兼容重定向
+      // 设置中心：22 条功能路由（由目录数据生成） + 兼容重定向
       ...buildSettingsRoutes(),
       ...buildSettingsRedirects(() => {
         const auth = useAuthStore()

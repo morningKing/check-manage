@@ -14,7 +14,7 @@ import {
   LEGACY_PATH_ALIASES,
 } from '@/views/admin/hub/settingsCatalog'
 
-/** 21 条功能路由。路径写全 /admin/<id>，直接挂为 AppLayout 的子路由。 */
+/** 22 条功能路由。路径写全 /admin/<id>，直接挂为 AppLayout 的子路由。 */
 export function buildSettingsRoutes(): RouteRecordRaw[] {
   return ALL_SETTINGS_ITEMS.map(item => ({
     path: `/admin/${item.id}`,
