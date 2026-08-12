@@ -1,4 +1,5 @@
 import { get, post } from '@/utils/request'
+import type { SubtaskMessagesResult } from './aiChat'
 
 export interface AdminBatch {
   batchId: string
@@ -55,6 +56,11 @@ export function getAdminBatch(batchId: string) {
 export function getAdminChildMessages(batchId: string, sessionId: string) {
   return get<{ messages: AdminMessage[]; truncated: boolean; total: number }>(
     `${BASE}/${batchId}/sessions/${sessionId}/messages`)
+}
+
+export function getAdminSubtaskMessages(batchId: string, sid: string, subtaskId: string) {
+  return get<SubtaskMessagesResult>(
+    `${BASE}/${batchId}/sessions/${sid}/subtasks/${subtaskId}/messages`)
 }
 
 export function retryAdminBatch(batchId: string) {

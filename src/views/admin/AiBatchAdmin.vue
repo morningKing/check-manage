@@ -95,7 +95,8 @@
 
     <el-dialog v-model="convOpen" :title="`子任务对话：${convName}`" width="70%" top="6vh">
       <BatchConversationView :messages="convMessages" :truncated="convTruncated"
-                             :total="convTotal" :loading="convLoading" />
+                             :total="convTotal" :loading="convLoading"
+                             :session-id="convSessionId" :fetch-subtask-fn="fetchSubtaskForConv" />
     </el-dialog>
   </div>
 </template>
@@ -107,6 +108,7 @@ import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
+  getAdminSubtaskMessages,
   type AdminBatch, type AdminChild, type AdminMessage,
 } from '@/api/aiBatchAdmin'
 
@@ -126,10 +128,17 @@ const detail = ref<{ batch: AdminBatch; sessions: AdminChild[] } | null>(null)
 const retrying = ref(false)
 const convOpen = ref(false)
 const convName = ref('')
+const convSessionId = ref('')
 const convMessages = ref<AdminMessage[]>([])
 const convTruncated = ref(false)
 const convTotal = ref(0)
 const convLoading = ref(false)
+
+// BatchConversationView 递归渲染子代理气泡时惰性拉取用——绑定当前批任务 id,
+// 因为管理员视角走的是 /ai/chat/admin/batches 这套鉴权端点,不是普通用户端点。
+function fetchSubtaskForConv(sessionId: string, subtaskId: string) {
+  return getAdminSubtaskMessages(detail.value!.batch.batchId, sessionId, subtaskId)
+}
 
 function statusLabel(s: string) { return LABELS[s] || s }
 function statusTagType(s: string) {
@@ -193,6 +202,7 @@ async function onReexecute(row: AdminChild) {
 async function openConversation(row: AdminChild) {
   if (!detail.value) return
   convName.value = row.name
+  convSessionId.value = row.sessionId
   // 先清空再开弹窗：否则连续点击两个不同子任务时，新标题下会短暂（或请求失败时永久）
   // 显示上一个子任务的旧对话内容。
   convMessages.value = []
