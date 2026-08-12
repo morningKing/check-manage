@@ -280,16 +280,10 @@ class _TurnFailed(Exception):
     """
 
     def __init__(self, error: dict):
+        from utils.opencode_parts import format_opencode_error
         self.error = error or {}
-        name = self.error.get('name') or 'UnknownError'
-        data = self.error.get('data') or {}
-        detail = data.get('message') or ''
-        provider = data.get('providerID') or ''
-        head = f'OpenCode 报告本轮失败: {name}'
-        if provider:
-            head += f'（provider={provider}）'
-        super().__init__(f'{head}: {detail}' if detail else head)
-        self.name = name
+        super().__init__(format_opencode_error(self.error))
+        self.name = self.error.get('name') or 'UnknownError'
 
 
 class BatchWorker:
@@ -741,27 +735,21 @@ class BatchWorker:
         return (count, total_text, tuple(tool_sig))
 
     @staticmethod
-    def _content_from_parts(parts) -> list:
+    def _content_from_parts(parts, subtask_status: dict | None = None) -> list:
         """Map one OpenCode message's parts to persisted typed content: text +
-        tool_use (matches interactive build_content + the AiContentPart schema).
-        Drops reasoning/step markers."""
+        tool_use + subtask_use (matches interactive build_content + the
+        AiContentPart schema). Drops reasoning/step markers. 委托给
+        utils.opencode_parts.map_part（chat_persist.py 共用同一份映射）；空文本
+        的过滤保留在这里——这是原有实现的分工，map_part 本身不过滤。"""
+        from utils.opencode_parts import map_part
         out = []
         for p in (parts or []):
-            t = p.get('type')
-            if t == 'text':
-                if (p.get('text') or '').strip():
-                    out.append({'type': 'text', 'text': p['text']})
-            elif t == 'tool':
-                st = p.get('state') or {}
-                out.append({
-                    'type': 'tool_use',
-                    'name': p.get('tool') or 'tool',
-                    'title': st.get('title') or '',
-                    'status': st.get('status'),
-                    'input': st.get('input'),
-                    'result': st.get('output'),
-                    'durationMs': tool_duration_ms(st),
-                })
+            mapped = map_part(p, subtask_status=subtask_status)
+            if mapped is None:
+                continue
+            if mapped['type'] == 'text' and not mapped['text'].strip():
+                continue
+            out.append(mapped)
         return out
 
     @staticmethod

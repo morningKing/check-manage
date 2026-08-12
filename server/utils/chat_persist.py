@@ -77,24 +77,12 @@ def apply_event(state, evt, opencode_session_id):
         pid = part.get('id')
         if pid and part.get('messageID') in state['assistant_msg_ids']:
             ptype = part.get('type')
-            if ptype == 'text':
+            if ptype in ('text', 'tool'):
+                from utils.opencode_parts import map_part
+                mapped = map_part(part)
                 if pid not in state['parts_by_id']:
                     state['part_order'].append(pid)
-                state['parts_by_id'][pid] = {'type': 'text', 'text': part.get('text', '')}
-                return 'changed'
-            elif ptype == 'tool':
-                if pid not in state['parts_by_id']:
-                    state['part_order'].append(pid)
-                st = part.get('state') or {}
-                state['parts_by_id'][pid] = {
-                    'type': 'tool_use',
-                    'name': part.get('tool') or 'tool',
-                    'title': st.get('title'),
-                    'status': st.get('status'),
-                    'input': st.get('input'),
-                    'result': st.get('output') if st.get('output') is not None else st.get('result'),
-                    'durationMs': tool_duration_ms(st),
-                }
+                state['parts_by_id'][pid] = mapped
                 return 'changed'
     elif etype == 'session.idle':
         return 'idle'
