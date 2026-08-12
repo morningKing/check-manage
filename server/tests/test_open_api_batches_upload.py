@@ -87,6 +87,61 @@ def test_single_file_over_limit_is_400(client, mock_conn, mock_cursor, tmp_path)
     assert '20' in resp.get_json()['error']
 
 
+# ---------- 请求体大小前置门（对外端点的 body DoS 面）----------
+
+def test_oversized_upload_is_rejected_before_body_is_parsed(client):
+    """声明超大 Content-Length 的上传请求必须在解析 body 之前就被拒。
+
+    视图里的 20 MB / 100 MB 判断发生在 `f.read()` 之后 —— 那时整个 multipart
+    body 已被 Werkzeug 解析完（大 body 落临时文件），来不及保护线程池和磁盘。
+    这里刻意只发几十字节的 body、但把 Content-Length 声明成 10 GB：如果实现是
+    「读完再判断」，这条请求会因为 body 与声明长度不符而挂住/报别的错，绝不会
+    干净地返回 413 —— 干净的 413 恰恰证明判断只看了请求头。
+    """
+    from routes.open_api_batches import MAX_UPLOAD_REQUEST_BYTES
+    resp = client.post(UPLOAD_URL,
+                       headers={'X-API-Key': 'cm_x'},
+                       content_type='multipart/form-data',
+                       data={'files': (io.BytesIO(b'x' * 16), 'a.bin')},
+                       # EnvironBuilder 会用真实 body 长度覆盖 headers 里的
+                       # Content-Length，所以只能直接改 WSGI environ。
+                       environ_overrides={'CONTENT_LENGTH': str(10 * 1024 ** 3)})
+    assert resp.status_code == 413
+    assert str(MAX_UPLOAD_REQUEST_BYTES // 1024 // 1024) in resp.get_json()['error']
+
+
+def test_oversized_json_body_is_rejected(client):
+    """JSON 端点（创建/重试）也有 1 MB 前置门。"""
+    resp = client.post('/v1/ai-batches',
+                       headers={'X-API-Key': 'cm_x',
+                                'Content-Type': 'application/json'},
+                       data=b'{}',
+                       environ_overrides={'CONTENT_LENGTH': str(64 * 1024 * 1024)})
+    assert resp.status_code == 413
+
+
+def test_chunked_upload_without_content_length_is_411(client):
+    """没有 Content-Length 就没法预判大小，分块传输一律拒绝。"""
+    resp = client.post(UPLOAD_URL,
+                       headers={'X-API-Key': 'cm_x',
+                                'Transfer-Encoding': 'chunked'},
+                       content_type='multipart/form-data',
+                       data={'files': (io.BytesIO(b'x' * 8), 'a.bin')})
+    assert resp.status_code == 411
+
+
+def test_normal_sized_upload_passes_the_gate(client, mock_conn, mock_cursor, tmp_path):
+    """前置门不能误伤正常上传（回归保护：别把限额设成把合法请求也挡住）。"""
+    _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key_info()), \
+         patch('routes.open_api_batches._workspace_root', return_value=str(tmp_path)):
+        resp = client.post(UPLOAD_URL, headers={'X-API-Key': 'cm_x'},
+                           content_type='multipart/form-data',
+                           data={'files': (io.BytesIO(b'a' * 1024), 'a.pdf')})
+    assert resp.status_code == 201
+
+
 # ---------- 路径校验（这是对外后唯一新增的横向越权面）----------
 
 def test_validate_staged_path_accepts_own_dir():

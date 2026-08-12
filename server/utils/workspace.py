@@ -199,8 +199,12 @@ def batch_staging_dir(workspace_root: str, user_id: str,
                       upload_session_id: str) -> Path:
     """Return (and create) the staging dir for a not-yet-created batch.
 
-    Lives under <workspace_root>/batch-staging/<user_id>/<upload_session_id>/
-    and is moved into per-session workspaces when the batch is created.
+    Lives under <workspace_root>/batch-staging/<user_id>/<upload_session_id>/.
+    The staged file is **copied** (shutil.copy2 / copytree, see
+    batch_engine._prepare_workspace) into the per-session workspace when the
+    worker actually runs the child — NOT moved, and not at batch-creation time.
+    So the staging dir survives the whole batch lifecycle and is only reclaimed
+    by the TTL sweep (routes/open_api_batches._sweep_stale_staging).
     """
     # sanitize the upload_session_id (allow uuids/letters/digits/hyphens only)
     safe = ''.join(ch for ch in upload_session_id

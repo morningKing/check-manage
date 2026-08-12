@@ -36,6 +36,18 @@ def _ok_file():
     return {'name': 'a.pdf', 'path': 'batch-staging/user-42/abc/a.pdf'}
 
 
+def _stage(tmp_path, rel='batch-staging/user-42/abc/a.pdf'):
+    """在临时工作区根目录下真实落一个暂存文件。
+
+    创建接口会校验 `files[].path` 指向的文件**当前确实存在**（超过 TTL 被
+    _sweep_stale_staging 清掉的路径必须在创建时就被拒），所以走到创建成功那条
+    路径的测试必须先把文件放上去。"""
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b'pdf')
+    return p
+
+
 def test_create_requires_name_and_prompt(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
@@ -87,11 +99,35 @@ def test_create_rejects_overlong_prompt(client, mock_conn, mock_cursor):
     assert resp.status_code == 400
 
 
-def test_create_passes_api_key_id_and_owner(client, mock_conn, mock_cursor):
+def test_create_rejects_missing_staged_file(client, mock_conn, mock_cursor, tmp_path):
+    """path 形状合法（属于本密钥属主、无穿越），但文件已被 TTL 清理 / 从未存在。
+
+    不拦住的话：create 返回 201 → _prepare_workspace 建出空 uploads/ → AI 拿着
+    「请先读取 uploads/a.pdf」在空工作区里跑完 → 子任务被标 completed、output 是
+    「我读不到文件」这类垃圾，集成方毫无察觉。
+    """
     _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches._workspace_root', return_value=str(tmp_path)), \
+         patch('routes.open_api_batches.create_batch',
+               return_value={'batch': {'id': 'b-x', 'status': 'pending', 'total': 1},
+                             'sessions': []}) as cb, \
+         patch('routes.open_api_batches.get_worker'):
+        resp = client.post(BASE, headers=HDR,
+                           json={'name': 'n', 'prompt': 'p', 'files': [_ok_file()]})
+    assert resp.status_code == 400
+    assert '已过期或不存在' in resp.get_json()['error']
+    cb.assert_not_called()   # 不能留下一个注定空跑的批任务
+
+
+def test_create_passes_api_key_id_and_owner(client, mock_conn, mock_cursor, tmp_path):
+    _auth_passes(mock_cursor)
+    _stage(tmp_path)
     created = {'batch': {'id': 'b-1', 'status': 'pending', 'total': 1}, 'sessions': []}
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
          patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches._workspace_root', return_value=str(tmp_path)), \
          patch('routes.open_api_batches.create_batch', return_value=created) as cb, \
          patch('routes.open_api_batches.get_worker'):
         resp = client.post(BASE, headers=HDR,
