@@ -28,12 +28,12 @@ function mountMenu() {
 }
 
 describe('SettingsSideMenu', () => {
-  it('全权限时渲染 7 个分组标题与 21 个条目链接', () => {
+  it('全权限时渲染 7 个分组标题与 22 个条目链接', () => {
     canImpl = () => true
     const w = mountMenu()
     expect(w.findAll('.settings-menu__group-label')).toHaveLength(7)
-    // 返回工作区是 <button>（非 RouterLink），不计入 'a' 选择器；21 个条目链接即总数。
-    expect(w.findAll('a')).toHaveLength(21)
+    // 返回工作区是 <button>（非 RouterLink），不计入 'a' 选择器；22 个条目链接即总数。
+    expect(w.findAll('a')).toHaveLength(22)
   })
 
   it('无权限的条目不渲染', () => {
