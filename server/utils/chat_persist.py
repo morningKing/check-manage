@@ -14,7 +14,7 @@ import time
 from db import get_db
 from utils.opencode_client import OpenCodeClient
 from utils.ai_message_meta import (
-    meta_from_info, aggregate_metas, public_meta, tool_duration_ms)
+    meta_from_info, aggregate_metas, public_meta)
 from config import OPENCODE_BASE_URL
 
 logger = logging.getLogger(__name__)

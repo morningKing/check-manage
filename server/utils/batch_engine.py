@@ -32,7 +32,7 @@ from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from utils.workspace import create_session_workspace, _rm_force
-from utils.ai_message_meta import meta_from_info, public_meta, tool_duration_ms
+from utils.ai_message_meta import meta_from_info, public_meta
 
 logger = logging.getLogger(__name__)
 
@@ -737,13 +737,18 @@ class BatchWorker:
     @staticmethod
     def _content_from_parts(parts, subtask_status: dict | None = None) -> list:
         """Map one OpenCode message's parts to persisted typed content: text +
-        tool_use + subtask_use (matches interactive build_content + the
-        AiContentPart schema). Drops reasoning/step markers. 委托给
-        utils.opencode_parts.map_part（chat_persist.py 共用同一份映射）；空文本
-        的过滤保留在这里——这是原有实现的分工，map_part 本身不过滤。"""
+        tool_use (matches interactive build_content + the AiContentPart schema).
+        Drops reasoning/step markers. 委托给 utils.opencode_parts.map_part
+        （chat_persist.py 共用同一份映射）；空文本的过滤保留在这里——这是原有
+        实现的分工，map_part 本身不过滤。`subtask` part 目前被过滤掉（未接入
+        Task 4/5 的子代理追踪前，产出一条永远卡在 'running' 的占位比什么都不
+        写更糟）——`subtask_status` 参数继续保留在签名里，为 Task 4/5 打开这
+        道过滤铺路。"""
         from utils.opencode_parts import map_part
         out = []
         for p in (parts or []):
+            if p.get('type') not in ('text', 'tool'):
+                continue
             mapped = map_part(p, subtask_status=subtask_status)
             if mapped is None:
                 continue

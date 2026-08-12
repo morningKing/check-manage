@@ -28,6 +28,20 @@ def test_content_from_parts_drops_empty_text():
     assert out == []
 
 
+def test_content_from_parts_drops_subtask_parts():
+    """subtask part 不该泄漏进批任务持久化内容——Task 4/5 落地前，产出一条
+    status 永远卡在 'running' 的 subtask_use 占位比什么都不写更糟（没有任何
+    东西会去更新它）。只保留 text/tool 两种既有类型。"""
+    parts = [
+        {'type': 'text', 'text': 'doing work'},
+        {'type': 'subtask', 'sessionID': 'ses_child_abc', 'agent': 'build',
+         'description': '重构模块 X'},
+    ]
+    out = eng.BatchWorker._content_from_parts(parts)
+    assert out == [{'type': 'text', 'text': 'doing work'}]
+    assert not any(p.get('type') == 'subtask_use' for p in out)
+
+
 # ---------------------------------------------------------------------------
 # _persist_conversation – full conversation persistence
 # ---------------------------------------------------------------------------
