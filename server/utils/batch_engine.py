@@ -286,6 +286,51 @@ class _TurnFailed(Exception):
         self.name = self.error.get('name') or 'UnknownError'
 
 
+MAX_SUBTASK_DEPTH = 5
+
+
+def discover_subtasks(messages: list, known: dict, parent_depth: int,
+                      parent_sid: str | None) -> dict:
+    """扫描一批（同一个会话拉到的）原始 OpenCode 消息，找出其中携带的 subtask
+    part、且还不在 `known` 里的子代理，返回新发现的
+    {sessionID: {'depth', 'parent_id', 'agent', 'description'}}。不递归深入
+    已知子代理自己的消息——调用方对每个已知子代理的消息列表各自再调一次本
+    函数，`parent_depth`/`parent_sid` 传该子代理自己的 depth/id（顶层扫描
+    传 depth=0, parent_sid=None）。"""
+    found = {}
+    for m in (messages or []):
+        for p in (m.get('parts') or []):
+            if p.get('type') != 'subtask':
+                continue
+            sid = p.get('sessionID')
+            if not sid or sid in known or sid in found:
+                continue
+            if parent_depth + 1 > MAX_SUBTASK_DEPTH:
+                continue
+            found[sid] = {'depth': parent_depth + 1, 'parent_id': parent_sid,
+                          'agent': p.get('agent'), 'description': p.get('description')}
+    return found
+
+
+def subtask_status_from_messages(messages: list) -> tuple[str, str | None]:
+    """从子代理自己的原始消息列表判定当前状态：('failed', 原因) / ('completed', None)
+    / ('running', None)。跟批任务顶层的完成/报错判定同源（复用
+    opencode_parts.format_opencode_error），不是另起一套。"""
+    from utils.opencode_parts import format_opencode_error
+    for m in reversed(messages or []):
+        info = m.get('info') or {}
+        if info.get('role') != 'assistant':
+            continue
+        if info.get('error'):
+            return 'failed', format_opencode_error(info['error'])
+        finish = info.get('finish')
+        completed = (info.get('time') or {}).get('completed')
+        if completed and finish not in (None, '', 'tool-calls', 'tool_use'):
+            return 'completed', None
+        return 'running', None
+    return 'running', None
+
+
 class BatchWorker:
     MAX_CONCURRENT = 3
     POLL_INTERVAL_SEC = 2
@@ -737,17 +782,18 @@ class BatchWorker:
     @staticmethod
     def _content_from_parts(parts, subtask_status: dict | None = None) -> list:
         """Map one OpenCode message's parts to persisted typed content: text +
-        tool_use (matches interactive build_content + the AiContentPart schema).
-        Drops reasoning/step markers. 委托给 utils.opencode_parts.map_part
-        （chat_persist.py 共用同一份映射）；空文本的过滤保留在这里——这是原有
-        实现的分工，map_part 本身不过滤。`subtask` part 目前被过滤掉（未接入
-        Task 4/5 的子代理追踪前，产出一条永远卡在 'running' 的占位比什么都不
-        写更糟）——`subtask_status` 参数继续保留在签名里，为 Task 4/5 打开这
-        道过滤铺路。"""
+        tool_use + subtask_use (matches interactive build_content + the
+        AiContentPart schema). Drops reasoning/step markers. 委托给
+        utils.opencode_parts.map_part（chat_persist.py 共用同一份映射）；空文本
+        的过滤保留在这里——这是原有实现的分工，map_part 本身不过滤。`subtask`
+        part 自 Task 5 起放行给 map_part：批任务路径每次都重新拉取完整消息列表
+        （REST 快照式，见 `_persist_conversation`/`_collect_subtasks`），调用方
+        总能传入当前整棵子代理树算好的 `subtask_status`，所以占位气泡不会像
+        Task 4/5 接入前那样卡死在默认的 'running'。"""
         from utils.opencode_parts import map_part
         out = []
         for p in (parts or []):
-            if p.get('type') not in ('text', 'tool'):
+            if p.get('type') not in ('text', 'tool', 'subtask'):
                 continue
             mapped = map_part(p, subtask_status=subtask_status)
             if mapped is None:
@@ -764,6 +810,65 @@ class BatchWorker:
                 t = part['text'].strip().splitlines()
                 return (t[0] if t else '')[:200]
         return None
+
+    def _collect_subtasks(self, messages: list, known: dict, child_messages: dict,
+                          parent_depth: int, parent_sid: str | None, directory: str):
+        """阶段一（只发现、不持久化）：递归扫描 messages 里的子代理，拉取
+        每一个的自己的消息、算出它自己的状态，全部记进 known/child_messages。
+        `known` 在递归调用之间原地累积（同一个字典对象一路传下去），既防止
+        重复处理同一个子代理，也是深度判断的依据。持久化留到阶段二统一做——
+        必须先拿到整棵树的完整状态快照，各层的占位气泡才能在同一次持久化里
+        全部用上最新状态，不会出现"父级先写了、子代理的状态后来才算出来"
+        这种顺序问题。"""
+        newly = discover_subtasks(messages, known, parent_depth, parent_sid)
+        for sid, info in newly.items():
+            known[sid] = info
+            try:
+                msgs = opencode_client.get_messages(sid, directory=directory) or []
+            except Exception:
+                msgs = []
+            status, error = subtask_status_from_messages(msgs)
+            info['status'] = status
+            info['error'] = error
+            child_messages[sid] = msgs
+            self._collect_subtasks(msgs, known, child_messages, info['depth'], sid, directory)
+
+    def _write_subtask(self, root_session_id: str, subtask_id: str, info: dict,
+                       subtask_status: dict, child_messages: list):
+        """阶段二：把一个子代理的摘要行 + 它当前拉到的全部消息 upsert 进库。
+        `subtask_status` 是整棵树的完整状态快照（阶段一算好的），传给
+        `_content_from_parts` 让这个子代理自己内容里（如果有）更深一层的
+        占位气泡也能用上最新状态——跟顶层的处理方式统一。"""
+        import json as _json
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO ai_chat_subtasks "
+                "  (id, root_session_id, parent_subtask_id, agent, description, status, "
+                "   error_message, completed_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, "
+                "        CASE WHEN %s IN ('completed','failed') THEN now() ELSE NULL END) "
+                "ON CONFLICT (id) DO UPDATE SET "
+                "  status = EXCLUDED.status, error_message = EXCLUDED.error_message, "
+                "  completed_at = COALESCE(ai_chat_subtasks.completed_at, EXCLUDED.completed_at)",
+                (subtask_id, root_session_id, info.get('parent_id'), info.get('agent'),
+                 info.get('description'), info['status'], info.get('error'), info['status']),
+            )
+            for m in child_messages:
+                minfo = m.get('info') or {}
+                if minfo.get('role') != 'assistant':
+                    continue
+                content = self._content_from_parts(m.get('parts'), subtask_status)
+                if not content:
+                    continue
+                mid = minfo.get('id') or f'{subtask_id}:a:{id(m)}'
+                cur.execute(
+                    "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                    "VALUES (%s, %s, 'assistant', %s) "
+                    "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
+                    (mid, subtask_id, _json.dumps(content)),
+                )
+            conn.commit()
 
     def _persist_conversation(self, session_id: str, prompt: str,
                               oc_session_id: str, assistant_msg: dict | None,
@@ -785,12 +890,26 @@ class BatchWorker:
                 raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
             except Exception:
                 raw = []
+
+            # 阶段一：递归发现整棵子代理树 + 各自的当前状态。
+            known: dict = {}
+            child_messages: dict = {}
+            self._collect_subtasks(raw, known, child_messages, parent_depth=0,
+                                   parent_sid=None, directory=directory)
+            subtask_status = {sid: info['status'] for sid, info in known.items()}
+
+            # 阶段二：先落每个子代理自己的行/消息，再落顶层——都用同一份
+            # subtask_status，占位气泡不会有哪一层状态落后。
+            for sid, info in known.items():
+                self._write_subtask(session_id, sid, info, subtask_status,
+                                    child_messages.get(sid, []))
+
             assistant_rows = []   # (message_id, content, meta)
             for m in raw:
                 info = m.get('info') or {}
                 if info.get('role') != 'assistant':
                     continue
-                content = self._content_from_parts(m.get('parts'))
+                content = self._content_from_parts(m.get('parts'), subtask_status)
                 if content:
                     meta = public_meta(meta_from_info(info))
                     assistant_rows.append((info.get('id') or f'{session_id}:a:{len(assistant_rows)}',

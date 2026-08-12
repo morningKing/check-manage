@@ -648,3 +648,148 @@ def test_await_finished_ignores_error_none(monkeypatch):
     preview, msg = w._await_finished('oc')
 
     assert msg['finished'] is True
+
+
+# ---------------------------------------------------------------------------
+# Subtask discovery / status / two-phase persistence (Task 5)
+# ---------------------------------------------------------------------------
+
+def test_discover_subtasks_from_messages_finds_new_child():
+    """扫描一批消息，发现其中的 subtask part，返回新发现的 sessionID 集合。"""
+    import utils.batch_engine as eng
+    msgs = [
+        {'info': {'role': 'assistant', 'id': 'm1'},
+         'parts': [{'type': 'text', 'text': 'hi'},
+                  {'type': 'subtask', 'sessionID': 'ses_child1',
+                   'agent': 'build', 'description': 'x'}]},
+    ]
+    found = eng.discover_subtasks(msgs, known={}, parent_depth=0, parent_sid=None)
+    assert found['ses_child1']['depth'] == 1
+    assert found['ses_child1']['parent_id'] is None
+    assert found['ses_child1']['agent'] == 'build'
+    assert found['ses_child1']['description'] == 'x'
+
+
+def test_discover_subtasks_sets_parent_sid_for_nested_scan():
+    """递归扫描某个子代理自己的消息时，parent_sid 传该子代理自己的 id，
+    发现的孙代的 parent_id 要是它，不是 None。"""
+    import utils.batch_engine as eng
+    msgs = [{'info': {'role': 'assistant', 'id': 'cm1'},
+            'parts': [{'type': 'subtask', 'sessionID': 'ses_grandchild',
+                      'agent': 'review', 'description': 'y'}]}]
+    found = eng.discover_subtasks(msgs, known={}, parent_depth=1, parent_sid='ses_child1')
+    assert found['ses_grandchild']['depth'] == 2
+    assert found['ses_grandchild']['parent_id'] == 'ses_child1'
+
+
+def test_discover_subtasks_skips_already_known():
+    import utils.batch_engine as eng
+    msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
+            'parts': [{'type': 'subtask', 'sessionID': 'ses_child1',
+                      'agent': 'build', 'description': 'x'}]}]
+    already = {'ses_child1': {'depth': 1, 'parent_id': None}}
+    found = eng.discover_subtasks(msgs, known=already, parent_depth=0, parent_sid=None)
+    assert found == {}
+
+
+def test_discover_subtasks_respects_depth_cap():
+    import utils.batch_engine as eng
+    msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
+            'parts': [{'type': 'subtask', 'sessionID': 'ses_too_deep',
+                      'agent': 'x', 'description': 'y'}]}]
+    found = eng.discover_subtasks(msgs, known={}, parent_depth=eng.MAX_SUBTASK_DEPTH,
+                                  parent_sid='whatever')
+    assert found == {}
+
+
+def test_subtask_status_from_messages_detects_error():
+    """子代理自己的消息列表里出现 error -> failed；出现 finished 的 assistant
+    消息且无 error -> completed；否则 running。跟批任务顶层复用同一套
+    finish/error 判定，不是重新发明。"""
+    import utils.batch_engine as eng
+    errored = [{'info': {'role': 'assistant', 'id': 'm1',
+                        'error': {'name': 'ProviderAuthError',
+                                 'data': {'providerID': 'a', 'message': 'no key'}}}}]
+    status, err = eng.subtask_status_from_messages(errored)
+    assert status == 'failed'
+    assert 'ProviderAuthError' in err
+
+    running = [{'info': {'role': 'assistant', 'id': 'm1'},
+               'parts': [{'type': 'text', 'text': 'wip'}]}]
+    status, err = eng.subtask_status_from_messages(running)
+    assert status == 'running'
+    assert err is None
+
+    finished = [{'info': {'role': 'assistant', 'id': 'm1', 'finish': 'stop',
+                         'time': {'created': 1, 'completed': 2}}}]
+    status, err = eng.subtask_status_from_messages(finished)
+    assert status == 'completed'
+
+
+def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_stub(monkeypatch):
+    """_persist_conversation 拉到的顶层消息里含 subtask part 时，要：
+    (1) 递归拉取该子代理自己的消息并落库到 ai_chat_subtasks/ai_chat_subtask_messages；
+    (2) 顶层自己持久化的 ai_chat_messages 内容里，也要有一条 subtask_use 占位，
+        且它的 status 反映子代理**当前**的真实状态（这条子代理已经 finish 了，
+        占位不能还停在 'running'）——这是本任务的核心断言，不是只落子代理
+        自己的数据就算完事。"""
+    import uuid
+    import json
+    import utils.batch_engine as eng
+    from db import get_db
+    from unittest.mock import MagicMock
+
+    uid = 'u-be-sub-' + uuid.uuid4().hex[:6]
+    sid = 's-be-sub-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    try:
+        top_msgs = [
+            {'info': {'role': 'assistant', 'id': 'm1'},
+             'parts': [{'type': 'subtask', 'sessionID': 'ses_child_be',
+                       'agent': 'build', 'description': 'do y'}]},
+        ]
+        # 子代理自己已经跑完了（finish='stop' + time.completed）
+        child_msgs = [
+            {'info': {'role': 'assistant', 'id': 'cm1', 'finish': 'stop',
+                      'time': {'created': 1, 'completed': 2}},
+             'parts': [{'type': 'text', 'text': 'child hi'}]},
+        ]
+        fake = MagicMock()
+        fake.get_messages.side_effect = lambda oc_id, directory='': (
+            top_msgs if oc_id == 'oc-top' else child_msgs)
+        monkeypatch.setattr(eng, 'opencode_client', fake)
+
+        w = eng.BatchWorker()
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM ai_chat_subtasks WHERE id = %s",
+                           ('ses_child_be',))
+                assert cur.fetchone() == ('completed',)
+                cur.execute("SELECT content FROM ai_chat_subtask_messages "
+                           "WHERE subtask_id = %s", ('ses_child_be',))
+                content = cur.fetchone()[0]
+                assert content == [{'type': 'text', 'text': 'child hi'}]
+                # 顶层自己的消息里必须有一条状态已刷新的占位
+                cur.execute("SELECT content FROM ai_chat_messages WHERE session_id = %s "
+                           "AND role = 'assistant'", (sid,))
+                top_content = cur.fetchone()[0]
+                stubs = [p for p in top_content if p['type'] == 'subtask_use']
+                assert stubs == [{'type': 'subtask_use', 'subtaskId': 'ses_child_be',
+                                  'agent': 'build', 'description': 'do y',
+                                  'status': 'completed'}]
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()

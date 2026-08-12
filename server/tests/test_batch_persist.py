@@ -28,18 +28,30 @@ def test_content_from_parts_drops_empty_text():
     assert out == []
 
 
-def test_content_from_parts_drops_subtask_parts():
-    """subtask part 不该泄漏进批任务持久化内容——Task 4/5 落地前，产出一条
-    status 永远卡在 'running' 的 subtask_use 占位比什么都不写更糟（没有任何
-    东西会去更新它）。只保留 text/tool 两种既有类型。"""
+def test_content_from_parts_maps_subtask_parts():
+    """自 Task 5 起，subtask part 会被映射成一条 subtask_use 占位——批任务
+    路径每次都重新拉取完整消息列表并算好整棵子代理树的当前状态
+    （`_collect_subtasks`/`_persist_conversation`），所以占位不会再像
+    Task 4/5 落地前那样永远卡在默认值。这里直接调用 `_content_from_parts`
+    (未接入 `_persist_conversation` 的两阶段流程) 时，没有调用方传入的
+    `subtask_status` 快照，`map_part` 对未知子代理回退到默认状态
+    'running'——传入快照后应反映快照里的真实状态。"""
     parts = [
         {'type': 'text', 'text': 'doing work'},
         {'type': 'subtask', 'sessionID': 'ses_child_abc', 'agent': 'build',
          'description': '重构模块 X'},
     ]
     out = eng.BatchWorker._content_from_parts(parts)
-    assert out == [{'type': 'text', 'text': 'doing work'}]
-    assert not any(p.get('type') == 'subtask_use' for p in out)
+    assert {'type': 'text', 'text': 'doing work'} in out
+    stub = [p for p in out if p.get('type') == 'subtask_use']
+    assert stub == [{'type': 'subtask_use', 'subtaskId': 'ses_child_abc',
+                     'agent': 'build', 'description': '重构模块 X',
+                     'status': 'running'}]
+
+    out2 = eng.BatchWorker._content_from_parts(
+        parts, subtask_status={'ses_child_abc': 'completed'})
+    stub2 = [p for p in out2 if p.get('type') == 'subtask_use']
+    assert stub2[0]['status'] == 'completed'
 
 
 # ---------------------------------------------------------------------------
