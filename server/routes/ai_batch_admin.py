@@ -12,8 +12,12 @@
 from flask import Blueprint, jsonify, request
 
 from auth import require_permission
+from utils.batch_engine import get_worker
 from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
-                              admin_get_child_messages, admin_list_batches)
+                              admin_get_batch_owner, admin_get_child_messages,
+                              admin_list_batches, reexecute_child,
+                              reset_failed_to_pending)
+from utils.operation_log import log_operation
 
 ai_batch_admin_bp = Blueprint('ai_batch_admin', __name__,
                               url_prefix='/ai/chat/admin/batches')
@@ -98,3 +102,55 @@ def child_messages(batch_id, sid):
         'truncated': data['truncated'],
         'total': data['total'],
     })
+
+
+# --- 写操作 -----------------------------------------------------------------
+# 这里**不使用**任何"不按归属过滤的写函数"：先用 admin_get_batch_owner 查出批任务
+# 的归属用户，再拿它调用既有的按归属过滤的写函数。读路径泄漏的是可见性，写路径泄漏
+# 的是数据完整性，后者严重得多——所以系统里干脆不存在这种写函数。
+
+@ai_batch_admin_bp.post('/<batch_id>/retry-failed')
+@require_permission('admin.ai_chat_admin')
+def retry_failed(batch_id):
+    """重试该批任务中全部失败的子任务。
+
+    刻意**不设终态门**（与对外 API 的 409 相反）：reset_failed_to_pending 只动
+    已经 failed 的子任务，一个仍在跑的大批任务里已经挂掉的那几条，管理员应该能
+    立刻重试而不必等整批结束。
+    """
+    owner = admin_get_batch_owner(batch_id)
+    if owner is None:
+        return jsonify({'error': '批任务不存在'}), 404
+
+    n = reset_failed_to_pending(owner, batch_id)
+    if n:
+        get_worker().notify()
+
+    d = admin_get_batch_detail(batch_id)
+    name = (d or {}).get('batch', {}).get('name') or batch_id
+    log_operation('update', 'ai_chat_batch', batch_id, name,
+                  f'管理员重试批任务「{name}」中 {n} 个失败的子任务')
+    return jsonify({'retried': n})
+
+
+@ai_batch_admin_bp.post('/<batch_id>/sessions/<sid>/reexecute')
+@require_permission('admin.ai_chat_admin')
+def reexecute(batch_id, sid):
+    """重跑单个子任务（从头开始，清掉旧消息）。"""
+    owner = admin_get_batch_owner(batch_id)
+    if owner is None:
+        return jsonify({'error': '批任务不存在'}), 404
+
+    try:
+        d = reexecute_child(owner, batch_id, sid)
+    except ValueError as e:
+        # repo 只在"子任务不是 completed/failed"时抛这个——它正在跑，重跑会与
+        # 运行中的会话冲突。409 而不是 500。
+        return jsonify({'error': str(e)}), 409
+    if d is None:
+        return jsonify({'error': '子任务不存在'}), 404
+
+    get_worker().notify()
+    log_operation('update', 'ai_chat_batch', batch_id, batch_id,
+                  f'管理员重跑批任务 {batch_id} 的子任务 {sid}')
+    return jsonify({'reexecuted': True})
