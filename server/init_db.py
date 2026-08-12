@@ -2201,14 +2201,39 @@ def init_db():
                 print("Created idx_export_scripts_name_unique (导出脚本名称全局唯一).")
 
         # Migration: add owner_user_id to api_keys (AI 批任务对外 API 需要把密钥绑定到用户)
+        #
+        # 外键必须是 ON DELETE SET NULL：这是可空列，属主被删除后密钥自动退化为
+        # 「未绑定」，被 routes/open_api_batches.require_bound_key 挡在 AI 批任务
+        # 接口之外——不会再有人以一个已注销用户的名义跑 AI、烧额度。默认的
+        # NO ACTION 则是把 users 行钉死（删不掉）而不是让密钥失效。
         cur.execute("""
             SELECT column_name FROM information_schema.columns
             WHERE table_name = 'api_keys' AND column_name = 'owner_user_id'
         """)
         if not cur.fetchone():
-            cur.execute("ALTER TABLE api_keys ADD COLUMN owner_user_id VARCHAR(100) REFERENCES users(id)")
+            cur.execute("ALTER TABLE api_keys ADD COLUMN owner_user_id VARCHAR(100) "
+                        "REFERENCES users(id) ON DELETE SET NULL")
             conn.commit()
             print("Added owner_user_id column to api_keys table.")
+        else:
+            # 列已存在但可能是本分支早期版本建的（无 ON DELETE，即 confdeltype='a'）。
+            # 幂等修正：只在约束确实不是 SET NULL（'n'）时重建，正常库上是纯读检查。
+            cur.execute("""
+                SELECT c.conname FROM pg_constraint c
+                JOIN pg_attribute a
+                  ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.conrelid = 'api_keys'::regclass
+                  AND c.contype = 'f'
+                  AND a.attname = 'owner_user_id'
+                  AND c.confdeltype <> 'n'
+            """)
+            stale = cur.fetchone()
+            if stale:
+                cur.execute(f'ALTER TABLE api_keys DROP CONSTRAINT "{stale[0]}"')
+                cur.execute("ALTER TABLE api_keys ADD CONSTRAINT api_keys_owner_user_id_fkey "
+                            "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL")
+                conn.commit()
+                print("Fixed api_keys.owner_user_id foreign key -> ON DELETE SET NULL.")
 
         # Migration: add api_key_id to ai_chat_batches (对外 API 创建的批任务按密钥隔离)
         cur.execute("""
