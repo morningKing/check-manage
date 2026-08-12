@@ -1051,6 +1051,7 @@ def clear_session(sid):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s", (sid,))
         cur.execute(
             "UPDATE ai_chat_sessions SET opencode_session_id = %s, status = 'active', "
             "workspace_path = %s WHERE id = %s AND user_id = %s",
