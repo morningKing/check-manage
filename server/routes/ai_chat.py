@@ -575,12 +575,27 @@ def sse_events(sid):
             for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
                 props = (evt.get('data') or {}).get('properties') or {}
-
                 ev_sid = event_session_id(props)
-                if ev_sid and ev_sid != opencode_session_id:
+
+                # apply_event is the routing authority — it already knows how to
+                # tell a subtask's own events apart from a genuinely unrelated
+                # session (and, for a message.part.updated part announcing a new
+                # delegation, how to resolve scope even though the part's own
+                # sessionID names the *delegate target*, not the owning session).
+                # Call it unconditionally: for a truly unrelated session it's a
+                # no-op (_resolve_scope returns (None, False) and apply_event
+                # returns None immediately), so this is safe. Check `relevant`
+                # *after* the call — state['subtasks'] only gains the new entry
+                # as a side effect of this same call, so checking beforehand
+                # would drop the very event that discovers the subtask.
+                sig = apply_event(state, evt, opencode_session_id)
+
+                relevant = (not ev_sid) or (ev_sid == opencode_session_id) \
+                    or (ev_sid in state['subtasks'])
+                if not relevant:
                     continue
 
-                if apply_event(state, evt, opencode_session_id) == 'idle':
+                if sig == 'idle':
                     # Don't persist for a batch child — its worker is the sole
                     # writer (REST, keyed on message ids); persisting here (a
                     # merged turn keyed on a mid-stream turn_msg_id) would
