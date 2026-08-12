@@ -355,3 +355,119 @@ def _text_from_content(content) -> str | None:
     texts = [p.get('text') for p in content
              if isinstance(p, dict) and p.get('type') == 'text' and p.get('text')]
     return '\n'.join(texts) if texts else None
+
+
+# ---------------------------------------------------------------------------
+# 管理员作用域（跨用户）—— 只读
+#
+# 与上面那些函数的语义**相反**：这里刻意不按归属用户过滤。之所以另起函数而不是把
+# 既有函数的 user_id 改成可空，是因为那样一次手滑（忘传参数）会从"报错"变成
+# "返回全部用户的数据"——这类默认值是安全事故的常见来源。写路径不设这种函数：
+# 重试走 admin_get_batch_owner 拿到归属用户后，复用既有的按归属过滤的写函数。
+# ---------------------------------------------------------------------------
+
+MAX_ADMIN_MESSAGES = 500
+
+_ADMIN_SELECT = """
+    SELECT b.*, u.username AS owner_username,
+           CASE WHEN b.api_key_id IS NULL THEN 'ui' ELSE 'api' END AS source
+      FROM ai_chat_batches b
+      JOIN users u ON u.id = b.user_id
+"""
+
+
+def _admin_filters(status, owner_keyword, source, name_keyword):
+    """把筛选条件编成 (where_sql, params)。空条件不产生任何谓词。"""
+    where, params = [], []
+    if status:
+        where.append("b.status = %s")
+        params.append(status)
+    if owner_keyword:
+        where.append("u.username ILIKE %s")
+        params.append(f'%{owner_keyword}%')
+    if source == 'ui':
+        where.append("b.api_key_id IS NULL")
+    elif source == 'api':
+        where.append("b.api_key_id IS NOT NULL")
+    if name_keyword:
+        where.append("b.name ILIKE %s")
+        params.append(f'%{name_keyword}%')
+    return (' WHERE ' + ' AND '.join(where)) if where else '', params
+
+
+def admin_list_batches(*, page: int, page_size: int,
+                       status: str | None = None,
+                       owner_keyword: str | None = None,
+                       source: str | None = None,
+                       name_keyword: str | None = None) -> dict:
+    """跨全部用户列出批任务，附归属用户名与来源。"""
+    where, params = _admin_filters(status, owner_keyword, source, name_keyword)
+    offset = (page - 1) * page_size
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                _ADMIN_SELECT + where + " ORDER BY b.created_at DESC LIMIT %s OFFSET %s",
+                (*params, page_size, offset))
+            items = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT count(*) AS n FROM ai_chat_batches b "
+                "JOIN users u ON u.id = b.user_id" + where, tuple(params))
+            total = cur.fetchone()['n']
+    return {'items': items, 'total': total, 'page': page, 'pageSize': page_size}
+
+
+def admin_get_batch_detail(batch_id: str) -> dict | None:
+    """跨用户取批任务详情 + 子任务清单。"""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(_ADMIN_SELECT + " WHERE b.id = %s", (batch_id,))
+            batch = cur.fetchone()
+            if not batch:
+                return None
+            cur.execute(
+                "SELECT id, status, batch_seq, batch_input_file, error_message, "
+                "       last_message_preview "
+                "  FROM ai_chat_sessions WHERE batch_id = %s ORDER BY batch_seq",
+                (batch_id,))
+            sessions = [dict(r) for r in cur.fetchall()]
+    return {'batch': dict(batch), 'sessions': sessions}
+
+
+def admin_get_batch_owner(batch_id: str) -> str | None:
+    """该批任务的归属用户 id。写路径专用：拿到它之后复用按归属过滤的写函数，
+    这样系统里永远不存在"不按归属过滤的写"。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT user_id FROM ai_chat_batches WHERE id = %s", (batch_id,))
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
+def admin_get_child_messages(batch_id: str, session_id: str,
+                             limit: int = MAX_ADMIN_MESSAGES) -> dict | None:
+    """某个子任务的对话（只读）。session 不属于该 batch 时返回 None。
+
+    按 `seq` 而非 `created_at` 排序：worker 批量持久化时同事务内 now() 是常量，
+    多条消息的 created_at 相同，按它排序取不出确定顺序（`ai_chat_messages.seq`
+    这一列正是为此新增的）。
+
+    有界：取**最近** limit 条后再反转为升序，让调用方拿到的始终是自然阅读顺序。
+    子会话持久化的是完整对话含工具调用，长 agent 运行可能数百条、体积可观。
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT 1 FROM ai_chat_sessions WHERE id = %s AND batch_id = %s",
+                (session_id, batch_id))
+            if not cur.fetchone():
+                return None
+            cur.execute("SELECT count(*) AS n FROM ai_chat_messages WHERE session_id = %s",
+                        (session_id,))
+            total = cur.fetchone()['n']
+            cur.execute(
+                "SELECT id, role, content, created_at, meta FROM ai_chat_messages "
+                " WHERE session_id = %s ORDER BY seq DESC LIMIT %s",
+                (session_id, limit))
+            rows = [dict(r) for r in cur.fetchall()]
+    rows.reverse()
+    return {'messages': rows, 'truncated': total > len(rows), 'total': total}
