@@ -288,6 +288,14 @@ def reset_failed_to_pending(user_id: str, batch_id: str, *,
 def get_batch_results(batch_id: str) -> list[dict]:
     """按 batch_seq 顺序返回每个子任务的结果。
 
+    `output` **只在子任务 status == 'completed' 时返回**，其余状态一律 None。
+    这是对外契约的一部分（见 docs/user-guide/integration/ai-batch-api.md 4.5/9.2），
+    也是一道必须的安全门：batch_engine._run_one 会以 PROGRESS_PERSIST_SEC 为周期
+    在会话**运行期间**反复调 _persist_conversation 落库（为了让界面能实时看到
+    对话），所以 running 的子任务、以及跑到一半超时被标 failed 的子任务，
+    ai_chat_messages 里都已经躺着**半截 AI 文本**。不设这道门，集成方会按文档
+    推荐的「终态后取结果」流程拿到被截断的输出并写进下游业务系统。
+
     `output` 取该子会话**最后一条 assistant 消息**里全部 text 片段的拼接，
     而不是 ai_chat_sessions.last_message_preview —— 后者存的是
     batch_engine._preview_from() 取的第一行，读它会让调用方拿到被截断的输出。
@@ -317,10 +325,11 @@ def get_batch_results(batch_id: str) -> list[dict]:
     for r in rows:
         raw = r.get('batch_input_file') or ''
         name = raw.replace('\\', '/').rsplit('/', 1)[-1]
+        completed = r['status'] == 'completed'
         results.append({
             'name': name,
             'status': r['status'],
-            'output': _text_from_content(r.get('content')),
+            'output': _text_from_content(r.get('content')) if completed else None,
             'error': r.get('error_message'),
         })
     return results
