@@ -2200,6 +2200,83 @@ def init_db():
                 conn.commit()
                 print("Created idx_export_scripts_name_unique (导出脚本名称全局唯一).")
 
+        # Migration: add owner_user_id to api_keys (AI 批任务对外 API 需要把密钥绑定到用户)
+        #
+        # 外键必须是 ON DELETE SET NULL：这是可空列，属主被删除后密钥自动退化为
+        # 「未绑定」，被 routes/open_api_batches.require_bound_key 挡在 AI 批任务
+        # 接口之外——不会再有人以一个已注销用户的名义跑 AI、烧额度。默认的
+        # NO ACTION 则是把 users 行钉死（删不掉）而不是让密钥失效。
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'api_keys' AND column_name = 'owner_user_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE api_keys ADD COLUMN owner_user_id VARCHAR(100) "
+                        "REFERENCES users(id) ON DELETE SET NULL")
+            conn.commit()
+            print("Added owner_user_id column to api_keys table.")
+        else:
+            # 列已存在但可能是本分支早期版本建的（无 ON DELETE，即 confdeltype='a'）。
+            # 幂等修正：只在约束确实不是 SET NULL（'n'）时重建，正常库上是纯读检查。
+            cur.execute("""
+                SELECT c.conname FROM pg_constraint c
+                JOIN pg_attribute a
+                  ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.conrelid = 'api_keys'::regclass
+                  AND c.contype = 'f'
+                  AND a.attname = 'owner_user_id'
+                  AND c.confdeltype <> 'n'
+            """)
+            stale = cur.fetchone()
+            if stale:
+                cur.execute(f'ALTER TABLE api_keys DROP CONSTRAINT "{stale[0]}"')
+                cur.execute("ALTER TABLE api_keys ADD CONSTRAINT api_keys_owner_user_id_fkey "
+                            "FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL")
+                conn.commit()
+                print("Fixed api_keys.owner_user_id foreign key -> ON DELETE SET NULL.")
+
+        # Migration: add api_key_id to ai_chat_batches (对外 API 创建的批任务按密钥隔离)
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'ai_chat_batches' AND column_name = 'api_key_id'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE ai_chat_batches ADD COLUMN api_key_id VARCHAR(100) "
+                        "REFERENCES api_keys(id) ON DELETE SET NULL")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_batches_api_key "
+                        "ON ai_chat_batches(api_key_id, created_at DESC)")
+            conn.commit()
+            print("Added api_key_id column to ai_chat_batches table.")
+
+        # Migration: add seq to ai_chat_messages (确定的插入顺序列)。同一事务里
+        # 循环 INSERT 的多条消息（见 batch_engine._persist_conversation）会拿到
+        # 完全相同的 created_at —— Postgres 的 now()/DEFAULT NOW() 在同一事务内
+        # 是事务级常量，会导致 ORDER BY created_at 在打平时排序不确定。BIGSERIAL
+        # 让 Postgres 自动建一个序列、新插入行的 seq 严格递增，可作为可靠的插入
+        # 顺序列——普通整数列做不到这一点（没有数据库端原子分配，并发写入下
+        # 应用层赋值会重号），必须是 serial/序列。注意：ALTER TABLE ADD COLUMN
+        # 给存量行回填的 seq 值顺序取决于物理存储顺序，不保证等于这些行当年的
+        # 真实插入顺序——这是可接受的，因为存量数据本来就没有可靠顺序；加了这
+        # 一列之后的新数据才有顺序保证。
+        #
+        # ⚠️ 代价：因为默认值来自序列（每行取值不同、非常量），这条 ALTER TABLE
+        # 走不了 Postgres「只改元数据」的快速加列路径，会对整张表做一次全表
+        # 重写，期间持 ACCESS EXCLUSIVE 锁——ai_chat_messages 在此期间不可写
+        # （正在跑的 AI 会话落不了库）。这是 init_db.py 里第一次出现
+        # ADD COLUMN ... SERIAL/BIGSERIAL，没有先例评估过代价，人类已裁决接受
+        # ——这是内部管理平台、init_db.py 本来就是部署时手动跑的，不是热路径上
+        # 的自动迁移；开发库实测这张表只有 121 行/144 kB，代价可忽略。但如果
+        # 部署到消息量已经很大的库，请选低峰期执行本次迁移（跑 init_db.py 前
+        # 停掉/暂停 AI Chat 相关写入，或直接安排在维护窗口）。
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'ai_chat_messages' AND column_name = 'seq'
+        """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE ai_chat_messages ADD COLUMN seq BIGSERIAL")
+            conn.commit()
+            print("Added seq column to ai_chat_messages table.")
+
         # 示例/演示数据（巡检管理菜单树 + 页面配置 + 示例记录）只在数据库彻底为空时
         # 播种一次——用 page_configs 是否一条不剩作为"全新库"的信号，跟下面管理员
         # 账号的判断方式（SELECT COUNT(*) FROM users）是同一个套路。之前这里按每

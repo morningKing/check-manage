@@ -180,7 +180,15 @@ BACKUP_TABLES = [
                           'created_at', 'last_active_at', 'status',
                           'batch_id', 'batch_seq', 'batch_input_file',
                           'error_message', 'last_message_preview'], set(), 'AI会话'),
-    ('ai_chat_messages', ['id', 'session_id', 'role', 'content', 'created_at'], {3}, 'AI消息'),
+    # meta（既有缺口，本次一并补上）：每条消息的耗时/token/成本元数据，之前
+    # 备份/还原会静默丢失。seq（本次修复引入，见 get_batch_results 的
+    # ORDER BY m.seq）：显式列名 INSERT 会把每行捕获到的真实 seq 值原样写回
+    # （不依赖 _export_table 的导出顺序——它没有 ORDER BY），配合下面
+    # restore_backup 里的 setval 重播种，保证还原后"插入即定序"这个不变量不
+    # 会被清零重来。旧版备份没有 meta/seq 字段时，restore 阶段的 `present`
+    # 过滤逻辑会自动跳过它们，交给数据库默认值（NULL / 序列自增），向后兼容。
+    ('ai_chat_messages', ['id', 'session_id', 'role', 'content', 'meta',
+                          'created_at', 'seq'], {3, 4}, 'AI消息'),
 ]
 
 # 表名到定义的映射
@@ -869,6 +877,23 @@ def restore_backup(zip_path, tables=None, mode='upsert',
             # 若按 collection 过滤还原，仅重播种这些 collection；否则全量
             _affected = list(collection_filters['dynamic_data']) if collection_filters.get('dynamic_data') else None
             reseed_sequences(cur, collections=_affected)
+
+        # 还原 ai_chat_messages 后重播种 seq 列背后的真实 Postgres 序列。
+        # 上面 INSERT 阶段把每行备份里捕获到的原始 seq 值原样写回（不依赖
+        # _export_table 的导出顺序——每行携带自己的真实值，_export_table
+        # 对这张表没有 ORDER BY，导出顺序本就不可信），但序列对象自身的
+        # nextval() 计数器不会跟着这些手写值自动前移，还停在还原之前的位置。
+        # 不重播种的话，还原后第一条新插入的消息会拿到一个 <= 已还原数据里
+        # 最大 seq 的值，与还原数据重新打平——get_batch_results 靠 seq 定序
+        # 的前提就被还原操作本身破坏了。这是 backup.py 里第一次出现要重播种
+        # 真正的 Postgres 序列（而不是 dynamic_sequences 表那种应用层计数器），
+        # 之前从没处理过，此处新增。空表兜底为 1（COALESCE），避免 setval
+        # 在 MAX(seq) 为 NULL 时报错。
+        if 'ai_chat_messages' in tables_to_restore:
+            cur.execute(
+                "SELECT setval(pg_get_serial_sequence('ai_chat_messages', 'seq'), "
+                "  COALESCE((SELECT MAX(seq) FROM ai_chat_messages), 1))"
+            )
 
         conn.commit()
         main_success = True  # 主操作成功

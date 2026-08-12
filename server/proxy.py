@@ -19,6 +19,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
+# 唯一真源：AI 批任务对外端点的请求体上限（Flask 侧同一份数字，见
+# routes/open_api_batches.py 的 before_request）。该模块零依赖，可以在这个
+# 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
+from utils.upload_limits import body_limit_for_path
+
 # Load server/.env so PROXY_*/BACKEND_URL/MCP_*/CORS_* take effect from the file
 # (this process is separate from Flask's config.py, which loads it for the app).
 load_dotenv(Path(__file__).resolve().parent / '.env', override=False)
@@ -115,6 +120,17 @@ class ProxyHandler(SimpleHTTPRequestHandler):
 
         # Read request body
         content_length = int(self.headers.get('Content-Length', 0))
+
+        # AI 批任务对外端点：在把 body 读进本进程内存之前按 Content-Length 拒绝。
+        # 下面那行 rfile.read() 是同步整体读，发生在 Flask 的 before_request 之前
+        # —— 只在 Flask 里设限，这道门在生产入口 :8080 上等于不存在。
+        # body_limit_for_path 对其余路径返回 None（不限制），备份还原上传的 ZIP
+        # 大小本质无上界，绝不能在这里设全局上限。
+        limit = body_limit_for_path(self.path)
+        if limit is not None and content_length > limit:
+            self._reject_oversized(limit)
+            return
+
         body = self.rfile.read(content_length) if content_length > 0 else None
 
         # Build upstream request, forward relevant headers
@@ -150,6 +166,41 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.wfile.write(msg)
         except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected
+
+    # 拒绝超限请求后最多再读走（并丢弃）这么多字节，且最多等这么久。
+    LINGER_DRAIN_BYTES = 64 * 1024
+    LINGER_DRAIN_SECONDS = 0.5
+
+    def _reject_oversized(self, limit):
+        """在读取 body 之前用 413 拒绝，然后**关闭连接**。
+
+        为什么是关连接、而不是把声明的 body 读完再回响应：读完正是我们要避免的
+        事（10 GB 的 Content-Length 读完就等于攻击成功）。但 keep-alive 下不读走
+        请求体又会让后续请求在同一连接上错位 —— 所以这里发 `Connection: close`
+        并置 `close_connection`，连接就此终结，不存在"下一个请求"，错位不可能发生。
+
+        收尾再做一次**有界**的 lingering drain（最多 64 KB / 0.5 s，读到就丢）：
+        纯粹是提高客户端读到这条 413 的概率 —— 客户端此刻很可能还在发 body，
+        服务端直接关会让它先收到 RST 而看不到响应（nginx 的 lingering_close 同理）。
+        有界且带超时，所以它自己不会变成新的 DoS 面。
+        """
+        msg = f'{{"error":"请求体超过 {limit // 1024 // 1024} MB 的上限"}}'.encode()
+        self.close_connection = True
+        self.send_response(413)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', len(msg))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        try:
+            self.wfile.write(msg)
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+        try:
+            self.connection.settimeout(self.LINGER_DRAIN_SECONDS)
+            self.rfile.read(self.LINGER_DRAIN_BYTES)
+        except (OSError, ValueError):
+            pass   # 超时/客户端已断开：无所谓，连接马上就关
 
     def _relay_buffered(self, resp):
         """Read the whole upstream response, then forward it (normal API calls)."""

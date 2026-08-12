@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from db import get_db
 from datetime import timezone
 from auth import hash_api_key, require_permission
@@ -55,8 +55,8 @@ def create_api_key():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            'INSERT INTO api_keys (id, name, key_hash) VALUES (%s, %s, %s)',
-            (key_id, name, key_hash_val),
+            'INSERT INTO api_keys (id, name, key_hash, owner_user_id) VALUES (%s, %s, %s, %s)',
+            (key_id, name, key_hash_val, g.current_user['userId']),
         )
         cur.execute(
             'SELECT id, name, created_at, last_used_at, is_active '

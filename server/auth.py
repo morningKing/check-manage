@@ -141,7 +141,7 @@ def api_key_required(f):
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute(
-                'SELECT id, name, is_active FROM api_keys WHERE key_hash = %s',
+                'SELECT id, name, is_active, owner_user_id FROM api_keys WHERE key_hash = %s',
                 (key_hash,),
             )
             row = cur.fetchone()
@@ -155,6 +155,6 @@ def api_key_required(f):
                 (row[0],),
             )
 
-        g.api_key_info = {'id': row[0], 'name': row[1]}
+        g.api_key_info = {'id': row[0], 'name': row[1], 'ownerUserId': row[3]}
         return f(*args, **kwargs)
     return decorated

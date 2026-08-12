@@ -66,7 +66,7 @@ def _setup_api_key_auth(mock_cursor, active=True):
     """Configure mock cursor to pass API key authentication.
 
     The api_key_required decorator performs:
-      1. SELECT id, name, is_active FROM api_keys WHERE key_hash = %s
+      1. SELECT id, name, is_active, owner_user_id FROM api_keys WHERE key_hash = %s
       2. UPDATE api_keys SET last_used_at = NOW() WHERE id = %s
     """
     original_side_effect = mock_cursor.fetchone.side_effect
@@ -74,7 +74,7 @@ def _setup_api_key_auth(mock_cursor, active=True):
     def auth_then_delegate(*args, **kwargs):
         # First call: api key lookup
         mock_cursor.fetchone.side_effect = original_side_effect
-        return ('ak-test', 'Test Key', active)
+        return ('ak-test', 'Test Key', active, 'user-owner')
 
     mock_cursor.fetchone.side_effect = auth_then_delegate
 
@@ -88,7 +88,7 @@ def _setup_auth_and_returns(mock_cursor, fetchone_returns=None, fetchall_returns
         call_count[0] += 1
         if idx == 0:
             # Auth: api key lookup
-            return ('ak-test', 'Test Key', True)
+            return ('ak-test', 'Test Key', True, 'user-owner')
         if fetchone_returns and idx - 1 < len(fetchone_returns):
             return fetchone_returns[idx - 1]
         return None
@@ -101,21 +101,21 @@ def _setup_auth_and_returns(mock_cursor, fetchone_returns=None, fetchall_returns
 class TestAuthentication:
     def test_missing_api_key(self, setup):
         client, _, _ = setup
-        resp = client.get('/api/v1/collections')
+        resp = client.get('/v1/collections')
         assert resp.status_code == 401
         assert 'Missing' in resp.get_json()['error']
 
     def test_invalid_api_key(self, setup):
         client, mock_cursor, _ = setup
         mock_cursor.fetchone.return_value = None
-        resp = client.get('/api/v1/collections',
+        resp = client.get('/v1/collections',
                           headers={'X-API-Key': 'cm_invalid'})
         assert resp.status_code == 401
 
     def test_revoked_api_key(self, setup):
         client, mock_cursor, _ = setup
         mock_cursor.fetchone.return_value = ('ak-1', 'Key', False)
-        resp = client.get('/api/v1/collections',
+        resp = client.get('/v1/collections',
                           headers={'X-API-Key': VALID_API_KEY})
         assert resp.status_code == 401
         assert 'revoked' in resp.get_json()['error']
@@ -128,7 +128,7 @@ class TestListCollections:
             ('page-devices', '设备台账', '设备信息', True),
             ('page-cases', '用例管理', '用例', False),
         ])
-        resp = client.get('/api/v1/collections', headers=api_h)
+        resp = client.get('/v1/collections', headers=api_h)
         assert resp.status_code == 200
         data = resp.get_json()['data']
         assert len(data) == 2
@@ -153,7 +153,7 @@ class TestListCollectionData:
                 ('rec-1', 'devices', {'name': 'A'}, now),
             ],
         )
-        resp = client.get('/api/v1/collections/devices?page=2&pageSize=20',
+        resp = client.get('/v1/collections/devices?page=2&pageSize=20',
                           headers=api_h)
         assert resp.status_code == 200
 
@@ -172,7 +172,7 @@ class TestCreateRecord:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (False, False),  # api_public=False, api_writable=False
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'name': 'Device1'}),
                            content_type='application/json',
                            headers=api_h)
@@ -183,7 +183,7 @@ class TestCreateRecord:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (True, False),  # api_public=True, api_writable=False
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'name': 'Device1'}),
                            content_type='application/json',
                            headers=api_h)
@@ -195,7 +195,7 @@ class TestCreateRecord:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (True, True),  # writable
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            headers=api_h)
         assert resp.status_code == 400
 
@@ -210,7 +210,7 @@ class TestCreateRecord:
             None,              # ID uniqueness check (not found = OK)
             ([],),             # pk_fields (no pk fields)
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'status': 'active'}),
                            content_type='application/json',
                            headers=api_h)
@@ -229,7 +229,7 @@ class TestCreateRecord:
             ([],),             # pk_fields
             ('rec-1', 'devices', {'name': 'Device1'}, now),  # RETURNING
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'name': 'Device1'}),
                            content_type='application/json',
                            headers=api_h)
@@ -244,7 +244,7 @@ class TestCreateRecord:
             ([],),             # get_page_fields (no fields)
             ('existing-id',),  # ID uniqueness check: found!
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'id': 'existing-id', 'name': 'X'}),
                            content_type='application/json',
                            headers=api_h)
@@ -257,7 +257,7 @@ class TestBatchCreateRecords:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (True, False),  # public but not writable
         ])
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': [{'name': 'A'}]}),
                            content_type='application/json',
                            headers=api_h)
@@ -268,7 +268,7 @@ class TestBatchCreateRecords:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (True, True),
         ])
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({}),
                            content_type='application/json',
                            headers=api_h)
@@ -281,7 +281,7 @@ class TestBatchCreateRecords:
             (True, True),  # writable check
         ])
         records = [{'name': f'item-{i}'} for i in range(1001)]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records}),
                            content_type='application/json',
                            headers=api_h)
@@ -306,7 +306,7 @@ class TestBatchCreateRecords:
             {'id': 'rec-1', 'name': 'A'},
             {'name': 'B'},
         ]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records}),
                            content_type='application/json',
                            headers=api_h)
@@ -334,7 +334,7 @@ class TestBatchCreateRecords:
             {'id': 'rec-1', 'name': 'A'},
             {'name': 'B'},
         ]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records}),
                            content_type='application/json',
                            headers=api_h)
@@ -367,7 +367,7 @@ class TestBatchCreateRecords:
             {'id': 'rec-1', 'name': 'A'},  # will fail: already exists
             {'name': 'B'},                 # will succeed
         ]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records, 'options': {'continueOnError': True}}),
                            content_type='application/json',
                            headers=api_h)
@@ -394,7 +394,7 @@ class TestBatchCreateRecords:
             {'id': 'dup-1', 'name': 'A'},
             {'id': 'dup-1', 'name': 'B'},
         ]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records}),
                            content_type='application/json',
                            headers=api_h)
@@ -415,7 +415,7 @@ class TestBatchCreateRecords:
             ('existing-rec-id',),   # check_primary_key_unique -> conflict found
         ])
         records = [{'sku': 'SKU-001'}]
-        resp = client.post('/api/v1/collections/devices/batch',
+        resp = client.post('/v1/collections/devices/batch',
                            data=json.dumps({'records': records}),
                            content_type='application/json',
                            headers=api_h)
@@ -431,7 +431,7 @@ class TestUpdateRecord:
         _setup_auth_and_returns(mock_cursor, fetchone_returns=[
             (True, False),  # public but not writable
         ])
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'name': 'Updated'}),
                           content_type='application/json',
                           headers=api_h)
@@ -443,7 +443,7 @@ class TestUpdateRecord:
             (True, True),  # writable
             None,          # record lookup: not found
         ])
-        resp = client.put('/api/v1/collections/devices/nonexistent',
+        resp = client.put('/v1/collections/devices/nonexistent',
                           data=json.dumps({'name': 'Updated'}),
                           content_type='application/json',
                           headers=api_h)
@@ -459,7 +459,7 @@ class TestUpdateRecord:
             ('rec-1', 'devices', {'name': 'Updated', 'status': 'active'}, now),  # updated row
         ])
         mock_cursor.rowcount = 1
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'name': 'Updated'}),
                           content_type='application/json',
                           headers=api_h)
@@ -473,7 +473,7 @@ class TestUpdateRecord:
             (True, True),                           # writable
             ('rec-1', {'name': 'Old'}, 5),          # existing, version=5
         ])
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'name': 'Updated', '_version': 3}),
                           content_type='application/json',
                           headers=api_h)
@@ -492,7 +492,7 @@ class TestUpdateRecord:
             ('rec-1', 'devices', {'name': 'Device1', 'status': 'inactive', 'location': 'A'}, now),
         ])
         mock_cursor.rowcount = 1
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'status': 'inactive'}),
                           content_type='application/json',
                           headers=api_h)
@@ -528,7 +528,7 @@ class TestStatusBadgeTimestampOpenApi:
             ([],),                                                 # pk_fields
             ('rec-1', 'devices', {'status': 'pending'}, now),      # RETURNING
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'id': 'rec-1', 'status': 'pending'}),
                            content_type='application/json',
                            headers=api_h)
@@ -548,7 +548,7 @@ class TestStatusBadgeTimestampOpenApi:
             ([],),
             ('rec-1', 'devices', {'name': 'X'}, now),
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'id': 'rec-1', 'name': 'X'}),
                            content_type='application/json',
                            headers=api_h)
@@ -568,7 +568,7 @@ class TestStatusBadgeTimestampOpenApi:
             ('rec-1', 'devices', {'status': 'processing'}, now),   # updated row
         ])
         mock_cursor.rowcount = 1
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'status': 'processing'}),
                           content_type='application/json',
                           headers=api_h)
@@ -590,7 +590,7 @@ class TestStatusBadgeTimestampOpenApi:
             ('rec-1', 'devices', dict(old_data), now),             # updated row
         ])
         mock_cursor.rowcount = 1
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'status': 'pending'}),
                           content_type='application/json',
                           headers=api_h)
@@ -632,7 +632,7 @@ class TestSearchTextStampingOpenApi:
             ([],),                                                 # pk_fields
             ('rec-1', 'devices', {'name': '张三', 'note': '备注'}, now),  # RETURNING
         ])
-        resp = client.post('/api/v1/collections/devices',
+        resp = client.post('/v1/collections/devices',
                            data=json.dumps({'id': 'rec-1', 'name': '张三', 'note': '备注', 'ref': 'x'}),
                            content_type='application/json',
                            headers=api_h)
@@ -651,7 +651,7 @@ class TestSearchTextStampingOpenApi:
             ('rec-1', 'devices', {'name': '新名字', 'note': '旧备注'}, now),  # updated row
         ])
         mock_cursor.rowcount = 1
-        resp = client.put('/api/v1/collections/devices/rec-1',
+        resp = client.put('/v1/collections/devices/rec-1',
                           data=json.dumps({'name': '新名字'}),
                           content_type='application/json',
                           headers=api_h)
@@ -669,7 +669,7 @@ class TestSchemaIncludesWritable:
                 {'fieldName': 'name', 'label': '名称', 'controlType': 'text', 'required': True},
             ], True, True),  # api_public=True, api_writable=True
         ])
-        resp = client.get('/api/v1/collections/devices/schema', headers=api_h)
+        resp = client.get('/v1/collections/devices/schema', headers=api_h)
         assert resp.status_code == 200
         data = resp.get_json()['data']
         assert data['writable'] is True
@@ -682,7 +682,7 @@ class TestUploadFile:
         client, mock_cursor, api_h = setup
         _setup_auth_and_returns(mock_cursor)  # auth only
         resp = client.post(
-            '/api/v1/files',
+            '/v1/files',
             data={'file': (BytesIO(b'hello'), 'a.txt')},
             content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 400
@@ -694,7 +694,7 @@ class TestUploadFile:
             (False, False),  # check_collection_public -> not public
         ])
         resp = client.post(
-            '/api/v1/files',
+            '/v1/files',
             data={'collection': 'devices', 'file': (BytesIO(b'hello'), 'a.txt')},
             content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 404
@@ -705,7 +705,7 @@ class TestUploadFile:
             (True, False),  # public but not writable
         ])
         resp = client.post(
-            '/api/v1/files',
+            '/v1/files',
             data={'collection': 'devices', 'file': (BytesIO(b'hello'), 'a.txt')},
             content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 403
@@ -719,7 +719,7 @@ class TestUploadFile:
                      'mimeType': 'text/plain', 'url': '/api/data-files/file-xyz/download'}
         with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
             resp = client.post(
-                '/api/v1/files',
+                '/v1/files',
                 data={'collection': 'devices', 'file': (BytesIO(b'hello'), '巡检.txt')},
                 content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 201
@@ -734,7 +734,7 @@ class TestUploadFile:
             (True, True),  # public + writable
         ])
         resp = client.post(
-            '/api/v1/files',
+            '/v1/files',
             data={'collection': 'devices'},
             content_type='multipart/form-data', headers=api_h)
         assert resp.status_code == 400
@@ -748,7 +748,7 @@ class TestUploadFile:
             (fields,),      # SELECT fields FROM page_configs (inside _check_allowed_extension)
         ])
         resp = client.post(
-            '/api/v1/files',
+            '/v1/files',
             data={'collection': 'devices', 'fieldName': 'attachment',
                   'file': (BytesIO(b'MZ...'), 'virus.exe')},
             content_type='multipart/form-data', headers=api_h)
@@ -767,7 +767,7 @@ class TestUploadFile:
                      'mimeType': 'application/pdf', 'url': '/api/data-files/file-abc/download'}
         with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
             resp = client.post(
-                '/api/v1/files',
+                '/v1/files',
                 data={'collection': 'devices', 'fieldName': 'attachment',
                       'file': (BytesIO(b'%PDF-1.4'), 'report.pdf')},
                 content_type='multipart/form-data', headers=api_h)
@@ -785,7 +785,7 @@ class TestUploadFile:
                      'mimeType': 'application/octet-stream', 'url': '/api/data-files/file-xyz/download'}
         with patch('routes.open_api.save_data_file', return_value=(fake_meta, None)):
             resp = client.post(
-                '/api/v1/files',
+                '/v1/files',
                 data={'collection': 'devices', 'fieldName': 'attachment',
                       'file': (BytesIO(b'abc'), 'notes.xyz')},
                 content_type='multipart/form-data', headers=api_h)

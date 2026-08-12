@@ -11,7 +11,7 @@ import uuid
 import json
 import psycopg2.extras
 
-open_api_bp = Blueprint('open_api', __name__, url_prefix='/api/v1')
+open_api_bp = Blueprint('open_api', __name__, url_prefix='/v1')
 
 
 def format_ts(dt):

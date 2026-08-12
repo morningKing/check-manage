@@ -180,9 +180,18 @@ def _prepare_workspace(user_id: str, session_id: str,
     Returns the absolute workspace path.  Pure side-effect — no DB writes.
     Can be monkeypatched in tests:
         monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+
+    Raises FileNotFoundError if the staged input is gone (e.g. the staging dir
+    was swept after its 24h TTL, or the batch row outlived its files). Silently
+    producing an EMPTY uploads/ would be worse: the prompt still tells the agent
+    to read uploads/<name> (see _with_input_hint), so the child would "succeed"
+    with garbage output. Raising here makes _run_one mark the child failed.
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
     src = Path(_workspace_root()) / staged_file_path
+    if not src.exists():
+        raise FileNotFoundError(
+            f'输入文件不存在或已被清理: {staged_file_path}')
     up = Path(ws) / 'uploads'
     up.mkdir(parents=True, exist_ok=True)
     # On Windows, copying a just-created staging dir can intermittently raise
@@ -193,7 +202,7 @@ def _prepare_workspace(user_id: str, session_id: str,
             if src.is_dir():
                 # scan-task context directory: copy its whole contents into uploads/
                 shutil.copytree(str(src), str(up), dirs_exist_ok=True)
-            elif src.exists():
+            else:
                 dst = up / Path(staged_file_path).name
                 shutil.copy2(str(src), str(dst))
             last_err = None

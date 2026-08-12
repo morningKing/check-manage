@@ -26,6 +26,46 @@ def test_prepare_workspace_single_file_still_works(tmp_path, monkeypatch):
     assert (Path(ws) / 'uploads' / 'f.txt').read_text(encoding='utf-8') == 'x'
 
 
+def test_prepare_workspace_raises_when_staged_input_missing(tmp_path, monkeypatch):
+    """源文件不存在时必须抛错，不能静默产出一个空的 uploads/。
+
+    静默返回的后果：prompt 里仍拼着「输入文件已放在工作区 uploads/x.pdf，请先
+    读取该文件」（_with_input_hint），AI 在空工作区里跑完 → 子任务被标 completed、
+    输出是「我读不到文件」这类垃圾。抛错则由 _run_one 的 except 落成 failed。
+    """
+    import pytest
+    import utils.batch_engine as eng
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    with pytest.raises(FileNotFoundError):
+        eng._prepare_workspace('u', 's', 'batch-staging/u/gone/x.pdf')
+
+
+def test_run_one_marks_child_failed_when_staged_input_missing(monkeypatch):
+    """_prepare_workspace 抛出的 FileNotFoundError 必须被 _run_one 接住并落成
+    failed —— 不能冒泡出去炸掉 worker 线程，也不能把子任务留在 running。
+    同时要通知扫描任务侧（内部 UI 批任务 / AI 扫描任务共用这条路径）。"""
+    import utils.batch_engine as eng
+    w = eng.BatchWorker()
+    monkeypatch.setattr(w, '_fetch_batch_context',
+                        lambda bid: ('p', None, None, None, None))
+    monkeypatch.setattr(eng, '_prepare_workspace',
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            FileNotFoundError('输入文件不存在或已被清理: x')))
+    marked = {}
+    monkeypatch.setattr(w, '_mark_failed',
+                        lambda sid, bid, error: marked.update(sid=sid, error=error))
+    notified = {}
+    monkeypatch.setattr(w, '_notify_scan',
+                        lambda row, msg, ok: notified.update(ok=ok))
+
+    w._run_one({'id': 's-1', 'user_id': 'u-1', 'batch_id': 'b-1',
+                'batch_input_file': 'batch-staging/u-1/gone/x.pdf'})
+
+    assert marked['sid'] == 's-1'
+    assert 'FileNotFoundError' in marked['error']
+    assert notified['ok'] is False
+
+
 def test_prepare_workspace_retries_on_permission_error(tmp_path, monkeypatch):
     import utils.batch_engine as eng
     monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
