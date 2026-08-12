@@ -135,10 +135,13 @@ class _OpenCodeFacade:
             completed = (info.get('time') or {}).get('completed')
             finished = bool(completed) and finish not in (None, '') \
                 and finish not in self._CONTINUATION_FINISH
+            # `error` 必须透出：出错的一轮往往没有 finish / time.completed / 文本，
+            # 不带出来的话上层看到的就是「什么都没发生」，只能等 STALL 超时。
             out.append({'role': 'assistant', 'finished': finished, 'content': content,
-                        'finish': finish, 'running_tool': running_tool})
+                        'finish': finish, 'running_tool': running_tool,
+                        'error': info.get('error')})
         return out or [{'role': 'assistant', 'finished': False, 'content': [],
-                        'finish': None, 'running_tool': False}]
+                        'finish': None, 'running_tool': False, 'error': None}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
@@ -261,6 +264,32 @@ class _SessionTimeout(Exception):
         super().__init__(f'{reason} after {seconds}s')
         self.seconds = seconds
         self.reason = reason
+
+
+class _TurnFailed(Exception):
+    """OpenCode 明确报告这一轮失败了（AssistantMessage.error）。
+
+    与 _SessionTimeout 的区别是「知道原因」：OpenCode 的 OpenAPI 把 error 定义为
+    ProviderAuthError / UnknownError / MessageOutputLengthError /
+    MessageAbortedError / StructuredOutputError / ContextOverflowError / APIError
+    七选一。这类消息通常没有文本片段、没有运行中的工具，而 `finish` 与
+    `time.completed` 在规格里都不是必填、出错时一般也不带 —— 所以若不读 error，
+    它在进度签名里就是「什么都没发生」，会一路拖到 STALL_TIMEOUT_SEC 才以
+    `stalled (no progress)` 失败：把一个精确、可立即行动的原因，换成了一个通用且
+    误导的超时（provider 密钥没配好时，整批子任务会全部呈现为这个症状）。
+    """
+
+    def __init__(self, error: dict):
+        self.error = error or {}
+        name = self.error.get('name') or 'UnknownError'
+        data = self.error.get('data') or {}
+        detail = data.get('message') or ''
+        provider = data.get('providerID') or ''
+        head = f'OpenCode 报告本轮失败: {name}'
+        if provider:
+            head += f'（provider={provider}）'
+        super().__init__(f'{head}: {detail}' if detail else head)
+        self.name = name
 
 
 class BatchWorker:
@@ -485,7 +514,8 @@ class BatchWorker:
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
-        except _SessionTimeout as e:
+        except (_SessionTimeout, _TurnFailed) as e:
+            # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             self._mark_failed(sid, batch_id, error=str(e)[:500])
             self._notify_scan(session_row, None, ok=False)
         except Exception as e:
@@ -661,6 +691,11 @@ class BatchWorker:
                 if m.get('role') == 'assistant':
                     last_preview = self._preview_from(m)
                     last_message = m
+                    # OpenCode 明说这一轮挂了 —— 立刻带着原因失败，不要等 STALL。
+                    # 放在 finished 判断之前：出错的消息有时也会带上终态 finish，
+                    # 那种情况下当成"成功"会更糟（子任务标 completed、输出为空）。
+                    if m.get('error'):
+                        raise _TurnFailed(m['error'])
                     if m.get('finished'):
                         return last_preview, last_message
                     # The model is mid tool-call (incl. delegating to a subagent
