@@ -189,6 +189,13 @@ BACKUP_TABLES = [
     # 过滤逻辑会自动跳过它们，交给数据库默认值（NULL / 序列自增），向后兼容。
     ('ai_chat_messages', ['id', 'session_id', 'role', 'content', 'meta',
                           'created_at', 'seq'], {3, 4}, 'AI消息'),
+    # 子代理（subtask/subagent 委托）执行轨迹。id 就是 OpenCode 自己的子会话
+    # sessionID，还原时原样写回即可，不需要额外的 id 映射。
+    ('ai_chat_subtasks', ['id', 'root_session_id', 'parent_subtask_id', 'parent_part_id',
+                          'agent', 'prompt', 'description', 'status', 'error_message',
+                          'created_at', 'completed_at'], set(), 'AI子代理'),
+    ('ai_chat_subtask_messages', ['id', 'subtask_id', 'role', 'content', 'meta',
+                                  'created_at', 'seq'], {3, 4}, 'AI子代理消息'),
 ]
 
 # 表名到定义的映射
@@ -244,8 +251,10 @@ RESTORE_ORDER = [
     'webhook_logs',                 # Depends on webhook_rules
     'trigger_logs',                 # Depends on trigger_rules
     'ai_chat_sessions',             # Depends on users, ai_chat_batches
+    'ai_chat_subtasks',             # Depends on ai_chat_sessions
     # Level 5
     'ai_chat_messages',             # Depends on ai_chat_sessions
+    'ai_chat_subtask_messages',     # Depends on ai_chat_subtasks
 ]
 
 
@@ -893,6 +902,15 @@ def restore_backup(zip_path, tables=None, mode='upsert',
             cur.execute(
                 "SELECT setval(pg_get_serial_sequence('ai_chat_messages', 'seq'), "
                 "  COALESCE((SELECT MAX(seq) FROM ai_chat_messages), 1))"
+            )
+
+        # 同样的道理：ai_chat_subtask_messages.seq 也是真正的 Postgres 序列，
+        # 还原后必须重播种，否则新插入的子代理消息会拿到 <= 已还原数据里最大
+        # seq 的值，subtask_repo 靠 seq 定序的前提就被还原操作本身破坏了。
+        if 'ai_chat_subtask_messages' in tables_to_restore:
+            cur.execute(
+                "SELECT setval(pg_get_serial_sequence('ai_chat_subtask_messages', 'seq'), "
+                "  COALESCE((SELECT MAX(seq) FROM ai_chat_subtask_messages), 1))"
             )
 
         conn.commit()

@@ -152,6 +152,33 @@ def test_clear_session_resets_messages_workspace_and_opencode():
     assert logop.call_args.args[:2] == ('update', 'ai_chat_session')
 
 
+def test_clear_session_deletes_subtasks():
+    """clear 是原地重置、不删会话行本身——子代理数据必须跟着清，否则留下一批
+    没有任何消息引用得到的孤儿数据（ai_chat_subtask_messages 靠 FK CASCADE
+    跟着走，这里只需断言 ai_chat_subtasks 的 DELETE 语句被发出）。"""
+    import routes.ai_chat as ac
+    fake, cur = _db([('s1', 'u1', 'oc_old', 'active', '/ws')])  # _load_session_for_user row
+    oc_client = MagicMock()
+    oc_client.create_session.return_value = 'oc_new'
+    with patch.object(ac, 'get_db', fake), \
+         patch.object(ac, 'stop_listener'), \
+         patch.object(ac, 'OpenCodeClient', return_value=oc_client), \
+         patch.object(ac, 'cleanup_session_workspace'), \
+         patch.object(ac, 'create_session_workspace', return_value='/ws'), \
+         patch.object(ac, 'write_opencode_config'), \
+         patch.object(ac, 'generate_token', return_value='tok_new'), \
+         patch.object(ac, 'log_operation'):
+        r = _client().post('/ai/chat/sessions/s1/clear', headers=_h())
+    assert r.status_code == 200
+    sql_calls = [str(c.args[0]) for c in cur.execute.call_args_list]
+    assert any('DELETE FROM ai_chat_subtasks' in s and 'root_session_id' in s
+               for s in sql_calls)
+    # scoped to this session's subtasks, not a blanket delete
+    subtask_delete = next(c for c in cur.execute.call_args_list
+                          if 'DELETE FROM ai_chat_subtasks' in str(c.args[0]))
+    assert subtask_delete.args[1] == ('s1',)
+
+
 def test_clear_others_session_404():
     import routes.ai_chat as ac
     fake, cur = _db([None])

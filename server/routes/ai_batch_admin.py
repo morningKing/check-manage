@@ -18,6 +18,7 @@ from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_list_batches, reexecute_child,
                               reset_failed_to_pending)
 from utils.operation_log import log_operation
+from utils.subtask_repo import get_subtask_messages
 
 ai_batch_admin_bp = Blueprint('ai_batch_admin', __name__,
                               url_prefix='/ai/chat/admin/batches')
@@ -160,3 +161,28 @@ def reexecute(batch_id, sid):
     log_operation('update', 'ai_chat_batch', batch_id, batch_id,
                   f'管理员重跑批任务 {batch_id} 的子任务 {sid}')
     return jsonify({'reexecuted': True})
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/subtasks/<subtask_id>/messages')
+@require_permission('admin.ai_chat_admin')
+def child_subtask_messages(batch_id, sid, subtask_id):
+    """子代理的完整对话（管理员视角，只读）。不传 owner_user_id——鉴权已经
+    在 require_permission 做过，跨用户可见正是管理员视角存在的意义。"""
+    data = get_subtask_messages(subtask_id)
+    if data is None:
+        return jsonify({'error': '子代理不存在'}), 404
+    st = data['subtask']
+    return jsonify({
+        'subtask': {
+            'id': st['id'], 'agent': st.get('agent'), 'description': st.get('description'),
+            'status': st['status'], 'error': st.get('error_message'),
+        },
+        'messages': [
+            {'id': m['id'], 'role': m['role'], 'content': m['content'],
+             'createdAt': m['created_at'].isoformat() if m.get('created_at') else None,
+             'meta': m.get('meta')}
+            for m in data['messages']
+        ],
+        'truncated': data['truncated'],
+        'total': data['total'],
+    })

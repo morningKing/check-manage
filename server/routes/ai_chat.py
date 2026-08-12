@@ -47,6 +47,7 @@ from utils.chat_persist import (
     has_listener,
 )
 from utils.session_token import generate_token, revoke_token
+from utils.subtask_repo import get_subtask_messages
 from utils.data_export import (
     is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
 )
@@ -518,6 +519,33 @@ def get_messages(sid):
     })
 
 
+@ai_chat_bp.route('/sessions/<sid>/subtasks/<subtask_id>/messages', methods=['GET'])
+@login_required
+def get_subtask_messages_route(sid, subtask_id):
+    """子代理的完整对话，只读。归属校验靠子代理自己的 root_session_id 一路
+    追溯到当前用户，不需要额外确认 sid 就是那个 root（subtaskId 本身已经
+    是全局唯一的 OpenCode sessionID，subtask_repo 已经做了归属判断）。"""
+    user = flask_g.current_user
+    data = get_subtask_messages(subtask_id, owner_user_id=user['userId'])
+    if data is None:
+        return jsonify({'error': 'subtask not found', 'code': 'SUBTASK_NOT_FOUND'}), 404
+    st = data['subtask']
+    return jsonify({
+        'subtask': {
+            'id': st['id'], 'agent': st.get('agent'), 'description': st.get('description'),
+            'status': st['status'], 'error': st.get('error_message'),
+        },
+        'messages': [
+            {'id': m['id'], 'role': m['role'], 'content': m['content'],
+             'createdAt': m['created_at'].isoformat() if m.get('created_at') else None,
+             'meta': m.get('meta')}
+            for m in data['messages']
+        ],
+        'truncated': data['truncated'],
+        'total': data['total'],
+    })
+
+
 def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -547,12 +575,27 @@ def sse_events(sid):
             for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
                 props = (evt.get('data') or {}).get('properties') or {}
-
                 ev_sid = event_session_id(props)
-                if ev_sid and ev_sid != opencode_session_id:
+
+                # apply_event is the routing authority — it already knows how to
+                # tell a subtask's own events apart from a genuinely unrelated
+                # session (and, for a message.part.updated part announcing a new
+                # delegation, how to resolve scope even though the part's own
+                # sessionID names the *delegate target*, not the owning session).
+                # Call it unconditionally: for a truly unrelated session it's a
+                # no-op (_resolve_scope returns (None, False) and apply_event
+                # returns None immediately), so this is safe. Check `relevant`
+                # *after* the call — state['subtasks'] only gains the new entry
+                # as a side effect of this same call, so checking beforehand
+                # would drop the very event that discovers the subtask.
+                sig = apply_event(state, evt, opencode_session_id)
+
+                relevant = (not ev_sid) or (ev_sid == opencode_session_id) \
+                    or (ev_sid in state['subtasks'])
+                if not relevant:
                     continue
 
-                if apply_event(state, evt, opencode_session_id) == 'idle':
+                if sig == 'idle':
                     # Don't persist for a batch child — its worker is the sole
                     # writer (REST, keyed on message ids); persisting here (a
                     # merged turn keyed on a mid-stream turn_msg_id) would
@@ -1023,6 +1066,7 @@ def clear_session(sid):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (sid,))
+        cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s", (sid,))
         cur.execute(
             "UPDATE ai_chat_sessions SET opencode_session_id = %s, status = 'active', "
             "workspace_path = %s WHERE id = %s AND user_id = %s",

@@ -448,6 +448,38 @@ CREATE INDEX IF NOT EXISTS idx_chat_msg_sess
 -- add for existing deployments.
 ALTER TABLE ai_chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
 
+-- ==================== 子代理（subtask/subagent 委托）执行轨迹 ====================
+-- id 就是 OpenCode 自己的子会话 sessionID（ses... 格式），不发明并行的合成 id——
+-- 子代理总是先在 OpenCode 侧存在、我们才从 SubtaskPart 里发现它，跟顶层会话
+-- "先建行再补 opencode_session_id" 的顺序正好相反。
+CREATE TABLE IF NOT EXISTS ai_chat_subtasks (
+    id                VARCHAR(100) PRIMARY KEY,
+    root_session_id   VARCHAR(100) NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    parent_subtask_id VARCHAR(100) REFERENCES ai_chat_subtasks(id) ON DELETE CASCADE,
+    parent_part_id    VARCHAR(100),
+    agent             TEXT,
+    prompt            TEXT,
+    description       TEXT,
+    status            VARCHAR(20) NOT NULL DEFAULT 'running'
+                      CHECK (status IN ('running','completed','failed')),
+    error_message     TEXT,
+    created_at        TIMESTAMPTZ DEFAULT NOW(),
+    completed_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_chat_subtask_root ON ai_chat_subtasks(root_session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_subtask_parent ON ai_chat_subtasks(parent_subtask_id);
+
+CREATE TABLE IF NOT EXISTS ai_chat_subtask_messages (
+    id          VARCHAR(100) PRIMARY KEY,
+    subtask_id  VARCHAR(100) NOT NULL REFERENCES ai_chat_subtasks(id) ON DELETE CASCADE,
+    role        VARCHAR(20) NOT NULL,
+    content     JSONB NOT NULL,
+    meta        JSONB,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    seq         BIGSERIAL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_subtask_msg_subtask ON ai_chat_subtask_messages(subtask_id, seq);
+
 -- ==================== 智能客服：实例表 + 会话增列 ====================
 CREATE TABLE IF NOT EXISTS kefu_instances (
   id               VARCHAR(100) PRIMARY KEY,

@@ -43,6 +43,7 @@ export type AiContentPart =
   | { type: 'file'; name: string; path: string }
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
   | { type: 'mcp_services'; servers: McpServer[] }
+  | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
 
 export interface AiFile {
   name: string
@@ -100,6 +101,26 @@ export function clearSession(id: string) {
 export function getMessages(id: string, since?: string) {
   const q = since ? `?since=${encodeURIComponent(since)}` : ''
   return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
+}
+
+export interface SubtaskSummary {
+  id: string
+  agent: string | null
+  description: string | null
+  status: 'running' | 'completed' | 'failed'
+  error: string | null
+}
+
+export interface SubtaskMessagesResult {
+  subtask: SubtaskSummary
+  messages: AiMessage[]
+  truncated: boolean
+  total: number
+}
+
+export function getSubtaskMessages(sessionId: string, subtaskId: string) {
+  return get<SubtaskMessagesResult>(
+    `/ai/chat/sessions/${encodeURIComponent(sessionId)}/subtasks/${encodeURIComponent(subtaskId)}/messages`)
 }
 
 export interface AgentMention { name: string; value: string; start: number; end: number }

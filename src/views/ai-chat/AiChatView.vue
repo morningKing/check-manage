@@ -20,6 +20,7 @@ import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
+import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
@@ -35,7 +36,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -697,6 +698,12 @@ function onKey(e: Event) {
                     <McpServicesBlock
                       v-else-if="p.type === 'mcp_services'"
                       :servers="p.servers"
+                    />
+                    <SubtaskBubble
+                      v-else-if="p.type === 'subtask_use'"
+                      :subtask-id="p.subtaskId" :session-id="activeId!"
+                      :agent="p.agent" :description="p.description" :status="p.status"
+                      :depth="1" :fetch-fn="getSubtaskMessages"
                     />
                     <template v-else-if="p.type === 'text' && p.text">
                       <!-- assistant: lift big code/doc blocks into artifact cards -->

@@ -13,6 +13,12 @@
               <pre>{{ JSON.stringify(p, null, 2) }}</pre>
             </el-collapse-item>
           </el-collapse>
+          <SubtaskBubble
+            v-else-if="p.type === 'subtask_use'"
+            :subtask-id="p.subtaskId" :session-id="sessionId"
+            :agent="p.agent" :description="p.description" :status="p.status"
+            :depth="1" :fetch-fn="fetchSubtaskFn"
+          />
         </template>
       </div>
     </div>
@@ -21,6 +27,7 @@
 
 <script setup lang="ts">
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
+import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import type { AdminMessage } from '@/api/aiBatchAdmin'
 
 // 只读：刻意没有输入框。管理员在别人的会话里发消息语义上说不通（以谁的身份发？）。
@@ -29,6 +36,8 @@ defineProps<{
   truncated: boolean
   total: number
   loading: boolean
+  sessionId: string
+  fetchSubtaskFn: (sessionId: string, subtaskId: string) => Promise<import('@/api/aiChat').SubtaskMessagesResult>
 }>()
 </script>
 
