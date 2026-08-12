@@ -19,18 +19,16 @@ from utils.batch_repo import (MAX_FILES_PER_BATCH, create_batch, delete_batch,
                               get_batch_detail, get_batch_results, list_batches,
                               reset_failed_to_pending)
 from utils.filename import safe_filename
+# 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
+# rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
+from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
+                                 MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
 from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
                                 url_prefix='/v1/ai-batches')
 
 MAX_FILE_BYTES = 20 * 1024 * 1024          # 单个文件 20 MB
-MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024  # 单次上传总计 100 MB
-# multipart 的分隔符/各分部头部会让整个请求体略大于文件字节之和，留 1 MB 余量，
-# 免得一次正好 100 MB 的合法上传被这道前置门误伤（真正的 100 MB 判定仍在视图里）。
-MAX_UPLOAD_REQUEST_BYTES = MAX_UPLOAD_TOTAL_BYTES + 1024 * 1024
-# 其余端点都是 JSON：prompt 上限 20000 字符 + 最多 50 个文件项，1 MB 绰绰有余。
-MAX_JSON_BODY_BYTES = 1024 * 1024
 STAGING_TTL_SECONDS = 24 * 3600            # 暂存目录保留 24 小时
 MAX_PROMPT_CHARS = 20000
 TERMINAL_STATUSES = ('completed', 'partial', 'failed')  # 重试/结果读取允许的终态
@@ -51,9 +49,13 @@ def _guard_request_body_size():
     `data_files/`，大小本质无上界，任何一个拍脑袋的全局值都会直接打断还原。
     另外 Flask 3.0 的 `request.max_content_length` 是只读属性（没有 setter，
     Flask 3.1 才支持逐请求覆盖），所以逐请求限制只能靠这里读 `content_length`。
+
+    ⚠️ 这道门只覆盖直连后端 / 经 Vite 开发代理的请求。生产入口 `proxy.py` 在
+    转发前就把整个 body 读进代理进程内存（`self.rfile.read(content_length)`），
+    发生在本钩子之前 —— 所以 `proxy.py` 里有一道**同源**的前置门（共用
+    `utils/upload_limits.py` 的数值），两处必须都在。
     """
-    limit = (MAX_UPLOAD_REQUEST_BYTES if request.path.endswith('/uploads')
-             else MAX_JSON_BODY_BYTES)
+    limit = body_limit_for_path(request.path) or MAX_JSON_BODY_BYTES
     length = request.content_length
     if length is None:
         # 没有 Content-Length 就无法预判大小。分块传输一律拒绝（生产入口
