@@ -563,3 +563,88 @@ def test_run_one_passes_agent_to_opencode(user_id, db_conn, monkeypatch, tmp_pat
     worker._run_one(claimed[0])
 
     assert sent_agents == ['my-agent']
+
+
+# --- OpenCode 报错必须被透出，而不是被静默成 180 秒后的「无进展」 -------------
+# 背景：OpenCode 的 AssistantMessage 有一个 `error` 字段（其 OpenAPI 里定义为
+# ProviderAuthError / ContextOverflowError / APIError 等七选一）。出错的那条消息
+# 通常没有文本片段、没有运行中的工具，而 `finish` 与 `time.completed` 在规格里都
+# 不是必填、出错时一般也不带。若不读 error，这条消息在我们的映射里就是「什么都没
+# 发生」——进度签名恒定 → 180 秒后抛 stalled (no progress)，把一个精确且可立即
+# 行动的原因，换成了一个通用且误导的超时。
+
+def _raw_errored_msg(name='ProviderAuthError', provider='anthropic',
+                     message='API key not found'):
+    """OpenCode /session/<id>/message 返回的原始形状（出错的一轮）。"""
+    return {'info': {'id': 'm1', 'role': 'assistant', 'time': {'created': 1},
+                     'error': {'name': name,
+                               'data': {'providerID': provider, 'message': message}}},
+            'parts': []}
+
+
+def test_facade_surfaces_opencode_error(monkeypatch):
+    """list_messages 必须把 info.error 带出来，否则上层无从判断。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.get_messages.return_value = [_raw_errored_msg()]
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+
+    out = eng._OpenCodeFacade().list_messages('oc')
+
+    assert len(out) == 1
+    assert out[0]['error'] is not None
+    assert out[0]['error']['name'] == 'ProviderAuthError'
+
+
+def test_await_finished_fails_fast_on_opencode_error(monkeypatch):
+    """出错的一轮必须**立刻**失败，且错误信息里带上 OpenCode 给的原因。
+
+    鉴别力所在：如果错误检查被去掉，这里会退化成等满 STALL_TIMEOUT 再抛
+    _SessionTimeout('stalled')，断言的类型、内容、耗时三项会同时红。
+    """
+    import time as _time
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    import pytest as _pytest
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 5          # 远大于本用例应有的耗时
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 30
+    errored = {'role': 'assistant', 'finished': False, 'finish': None,
+               'running_tool': False, 'content': [],
+               'error': {'name': 'ProviderAuthError',
+                         'data': {'providerID': 'anthropic',
+                                  'message': 'API key not found'}}}
+    fake = MagicMock()
+    fake.list_messages.return_value = [errored]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+
+    t0 = _time.time()
+    with _pytest.raises(eng._TurnFailed) as ei:
+        w._await_finished('oc')
+    elapsed = _time.time() - t0
+
+    msg = str(ei.value)
+    assert 'ProviderAuthError' in msg          # 错误种类
+    assert 'anthropic' in msg                  # 是哪个 provider
+    assert 'API key not found' in msg          # OpenCode 的原始说明
+    assert elapsed < 2                         # 立刻失败，不是等满 stall
+
+
+def test_await_finished_ignores_error_none(monkeypatch):
+    """error 为 None 的正常消息不受影响 —— 不能把没出错的轮次误判成失败。"""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.POLL_INTERVAL_SEC = 0.02
+    done = {'role': 'assistant', 'finished': True, 'finish': 'stop',
+            'running_tool': False, 'error': None,
+            'content': [{'type': 'text', 'text': '正常输出'}]}
+    fake = MagicMock()
+    fake.list_messages.return_value = [done]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+
+    preview, msg = w._await_finished('oc')
+
+    assert msg['finished'] is True
