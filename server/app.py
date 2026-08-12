@@ -1,10 +1,12 @@
+import logging
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask
 from flask_cors import CORS
-from config import FLASK_PORT, FLASK_DEBUG, CORS_ALLOWED_ORIGINS
+from config import (FLASK_PORT, FLASK_DEBUG, CORS_ALLOWED_ORIGINS,
+                    JWT_SECRET_IS_DEFAULT)
 from routes.menus import menus_bp
 from routes.page_configs import page_configs_bp
 from routes.relations import relations_bp
@@ -50,6 +52,16 @@ from utils.logging_setup import setup_logging
 # Configure logging (console + rotating file) before anything logs. Skip the
 # file handler under pytest so test runs don't spew ai-chat.log.
 setup_logging(to_file='pytest' not in sys.modules)
+
+# 未设置 JWT_SECRET 时，登录令牌是用一个**仓库里公开可见的常量**签的 —— 任何读过
+# 源码的人都能伪造管理员 token。config.py 已经保证默认值长度合法（否则新版 PyJWT
+# 会拒签），所以它不会再以报错的形式暴露出来，只能靠这里喊一嗓子。
+if JWT_SECRET_IS_DEFAULT and 'pytest' not in sys.modules:
+    logging.getLogger(__name__).warning(
+        '安全警告：未设置 JWT_SECRET，正在使用源码里的公开默认值签发登录令牌。'
+        '任何人都可据此伪造任意用户（含管理员）的身份。'
+        '生产环境务必设置：python -c "import secrets;print(secrets.token_urlsafe(48))" '
+        '并写入 server/.env 的 JWT_SECRET=')
 
 app = Flask(__name__)
 if CORS_ALLOWED_ORIGINS:

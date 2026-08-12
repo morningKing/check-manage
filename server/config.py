@@ -40,7 +40,35 @@ DB_CONFIG = {
 FLASK_PORT = _to_int(os.getenv('FLASK_PORT'), 3002)
 FLASK_DEBUG = _to_bool(os.getenv('FLASK_DEBUG'), False)  # Disabled for now to fix module loading issue
 
-JWT_SECRET = os.getenv('JWT_SECRET', 'dev-only-change-me')
+# --- JWT 签名密钥 ------------------------------------------------------------
+# HS256 的密钥长度有硬性下界：PyJWT 自 2.10 起按 RFC 7518 §3.2 拒绝短于摘要长度
+# （SHA256 = 32 字节）的密钥。requirements.txt 写的是 `PyJWT>=2.8.0` 且无上界，
+# 所以同一份代码在旧环境能跑、在新装环境登录即炸，报一句
+# "The HMAC key is 18 bytes long..." —— 与真实问题毫不相干的密码学细节。
+#
+# 旧默认值 'dev-only-change-me' 正好 18 字节，两个毛病叠在一起：
+#   1. 新版 PyJWT 下直接不可用；
+#   2. 更要命的是，它是**仓库里公开可见的常量**。任何未设 JWT_SECRET 的部署，
+#      都在用一把人人可读的钥匙签发身份令牌 —— 谁都能伪造管理员 token。
+# 所以这里不能只是"把默认值改长"了事：默认值仅供本地开发，且必须让"正在用默认值"
+# 这件事在启动时可被察觉（见 app.py 的启动告警）。
+_JWT_MIN_BYTES = 32
+_JWT_DEV_DEFAULT = 'dev-only-insecure-jwt-secret-do-not-use-in-production'
+
+_jwt_secret_env = (os.getenv('JWT_SECRET') or '').strip()
+JWT_SECRET_IS_DEFAULT = not _jwt_secret_env
+
+if _jwt_secret_env and len(_jwt_secret_env.encode('utf-8')) < _JWT_MIN_BYTES:
+    # 显式配了但太短：**启动期**就失败，别拖到第一次登录才炸一句看不懂的话。
+    raise RuntimeError(
+        f'JWT_SECRET 太短：当前 {len(_jwt_secret_env.encode("utf-8"))} 字节，'
+        f'HS256 要求至少 {_JWT_MIN_BYTES} 字节（RFC 7518 §3.2）。\n'
+        f'生成一个：python -c "import secrets;print(secrets.token_urlsafe(48))"\n'
+        f'然后写进 server/.env 的 JWT_SECRET=。\n'
+        f'注意：更换密钥会使所有已签发的登录令牌失效，用户需要重新登录。'
+    )
+
+JWT_SECRET = _jwt_secret_env or _JWT_DEV_DEFAULT
 JWT_EXPIRY_HOURS = _to_int(os.getenv('JWT_EXPIRY_HOURS'), 24)
 
 CORS_ALLOWED_ORIGINS = _split_csv(os.getenv('CORS_ALLOWED_ORIGINS', ''))
