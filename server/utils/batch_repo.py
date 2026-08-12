@@ -137,16 +137,25 @@ def delete_batch(user_id: str, batch_id: str, *,
     return deleted
 
 
-def append_to_batch(user_id: str, batch_id: str, files: list[dict]) -> dict | None:
+def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
+                    api_key_id: str | None = None) -> dict | None:
     """Append N child sessions to an existing batch (any status). seq continues
     from max+1, total += N, status recomputed (-> running). Returns
-    {batch, sessions} or None if the batch isn't found / not owned."""
+    {batch, sessions} or None if the batch isn't found / not owned.
+
+    `api_key_id` non-None additionally scopes the append to that source key, so
+    the external API can't grow a batch that a different key (or the UI) created.
+    """
     if not files:
         raise ValueError("at least one file required")
+    sql = "SELECT total FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+    params = [batch_id, user_id]
+    if api_key_id is not None:
+        sql += " AND api_key_id = %s"
+        params.append(api_key_id)
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT total FROM ai_chat_batches WHERE id=%s AND user_id=%s",
-                        (batch_id, user_id))
+            cur.execute(sql, tuple(params))
             row = cur.fetchone()
             if not row:
                 return None
@@ -169,7 +178,7 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict]) -> dict | No
                         (len(files), batch_id))
         conn.commit()
     _recompute_batch_status_for(batch_id)
-    return get_batch_detail(user_id, batch_id)
+    return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
 
 
 def _recompute_batch_status_for(batch_id: str) -> None:
