@@ -126,12 +126,18 @@ def test_get_owner_returns_the_real_owner(two_users_two_batches):
 
 
 @pytest.fixture
-def batch_with_many_messages(two_users_two_batches):
-    """给子任务塞 3 条消息，且**故意让 created_at 完全相同、seq 乱序**。
+def batch_with_tied_created_at_messages(two_users_two_batches):
+    """线上真实持久化形态：worker 在**同一事务**里批量写入子会话消息，PG 的
+    now() 在同一事务内是事务级常量，导致三条消息 created_at 完全相同。
 
-    这是本文件最关键的构造：批任务子会话的消息由 worker 批量持久化，同事务内
-    now() 是常量，created_at 相同，按它排序取不出确定结果。若实现改回
-    ORDER BY created_at，本用例会红。
+    这条夹具只验证"这种真实形态下查询不出错、结果仍然是按 seq 排出的确定结果"——
+    **不承担鉴别力**。已经验证过：在本机默认执行计划下，若把实现误改成按
+    created_at 排序，Postgres 对这条查询选的 Index Scan Backward（覆盖
+    `(session_id, created_at)` 的 `idx_chat_msg_sess`）对并列值的 tie-break 恰好
+    也会重现 seq 顺序——这条用例照样通过，看不出实现被改错了（只有用
+    `PGOPTIONS="-c enable_indexscan=off -c enable_bitmapscan=off"` 关掉 index scan
+    才能现红，CI/日常开发不会这么跑）。真正有鉴别力、且不依赖执行计划的用例见
+    下面的 `batch_with_seq_created_at_reversed` 及其两个测试。
     """
     f = two_users_two_batches
     sid = f['sid']
@@ -151,6 +157,42 @@ def batch_with_many_messages(two_users_two_batches):
     yield {**f, 'expected_order': ['第三条', '第一条', '第二条']}
 
 
+@pytest.fixture
+def batch_with_seq_created_at_reversed(two_users_two_batches):
+    """**关键夹具**：seq 与 created_at 的顺序故意相反，让排序鉴别力不依赖
+    Postgres 执行计划对并列值的 tie-break（对照上面 `batch_with_tied_created_at_messages`
+    的说明——那条夹具已被证实无法在默认执行计划下抓出"排序列被改错"这类缺陷）。
+
+    按 seq 递增插入 m1 -> m2 -> m3（m1 seq 最小、最先插入；m3 seq 最大、最后插入），
+    但赋予它们**递减**的 created_at（m1 最新、m3 最旧）。于是：
+      - 正确实现（ORDER BY seq DESC 取最近的再反转为升序）拿到 m1, m2, m3——
+        与插入顺序一致的自然阅读顺序。
+      - 若误按 created_at 排序，ORDER BY created_at DESC 取"最近的"会先取到 m1、
+        再 m2、再 m3，反转后是 m3, m2, m1——与正确结果**完全颠倒**。
+    两个方向都没有并列值，结果不吃 tie-break，与 Postgres 选择哪种执行计划无关，
+    误改排序列必然被抓包。
+    """
+    f = two_users_two_batches
+    sid = f['sid']
+    import json
+    rows = (
+        ('m1', 'user', '第一条', '2026-01-01 00:00:03+08'),
+        ('m2', 'assistant', '第二条', '2026-01-01 00:00:02+08'),
+        ('m3', 'assistant', '第三条', '2026-01-01 00:00:01+08'),
+    )
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for mid, role, text, created_at in rows:
+                cur.execute(
+                    "INSERT INTO ai_chat_messages (id, session_id, role, content, created_at) "
+                    "VALUES (%s,%s,%s,%s::jsonb,%s::timestamptz)",
+                    (mid + '-' + sid, sid, role,
+                     json.dumps([{'type': 'text', 'text': text}]), created_at))
+        conn.commit()
+    # seq 由 BIGSERIAL 按插入顺序生成：m1 < m2 < m3；created_at 与之完全相反。
+    yield {**f, 'expected_order': ['第一条', '第二条', '第三条']}
+
+
 def _texts(res):
     out = []
     for m in res['messages']:
@@ -160,24 +202,43 @@ def _texts(res):
     return out
 
 
-def test_messages_ordered_by_seq_not_created_at(batch_with_many_messages):
-    f = batch_with_many_messages
+def test_messages_return_seq_order_even_when_created_at_is_tied(batch_with_tied_created_at_messages):
+    """真实形态（同事务写入、created_at 全同）下不崩、结果仍按 seq 排出确定顺序。
+
+    不是鉴别力用例——见 fixture docstring；鉴别力由
+    `test_messages_ordered_by_seq_not_created_at` 承担。
+    """
+    f = batch_with_tied_created_at_messages
     res = batch_repo.admin_get_child_messages(f['bid_api'], f['sid'])
     assert _texts(res) == f['expected_order']
     assert res['total'] == 3
     assert res['truncated'] is False
 
 
-def test_messages_truncate_to_the_most_recent(batch_with_many_messages):
-    """截断必须取**最近**的若干条，并仍以 seq 升序返回（自然阅读顺序）。"""
-    f = batch_with_many_messages
+def test_messages_ordered_by_seq_not_created_at(batch_with_seq_created_at_reversed):
+    """核心鉴别用例：created_at 与 seq 顺序故意相反，不吃任何 tie-break /
+    执行计划——若实现误改成按 created_at 排序，结果会完全颠倒，必然变红。"""
+    f = batch_with_seq_created_at_reversed
+    res = batch_repo.admin_get_child_messages(f['bid_api'], f['sid'])
+    assert _texts(res) == f['expected_order']
+    assert res['total'] == 3
+    assert res['truncated'] is False
+
+
+def test_messages_truncate_to_the_most_recent(batch_with_seq_created_at_reversed):
+    """截断必须取**按 seq 的最近**若干条，并仍以 seq 升序返回（自然阅读顺序）。
+
+    用 created_at 与 seq 反向的夹具，保证这一点也不依赖执行计划的 tie-break——
+    若误按 created_at 截断，取到的会是另外两条消息，而不是 expected_order[-2:]。
+    """
+    f = batch_with_seq_created_at_reversed
     res = batch_repo.admin_get_child_messages(f['bid_api'], f['sid'], limit=2)
     assert res['truncated'] is True
     assert res['total'] == 3
-    assert _texts(res) == f['expected_order'][-2:]     # 最近 2 条，升序
+    assert _texts(res) == f['expected_order'][-2:]     # 按 seq 最近 2 条，升序
 
 
-def test_messages_reject_session_from_another_batch(batch_with_many_messages):
+def test_messages_reject_session_from_another_batch(two_users_two_batches):
     """sessionId 必须属于该 batchId，否则这个路径就成了"用任意 batchId 读任意会话"。"""
-    f = batch_with_many_messages
+    f = two_users_two_batches
     assert batch_repo.admin_get_child_messages(f['bid_ui'], f['sid']) is None
