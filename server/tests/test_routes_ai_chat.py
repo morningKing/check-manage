@@ -603,6 +603,96 @@ def test_list_changes_other_users_session_404(setup):
     assert resp.status_code == 404
 
 
+def test_list_changes_records_files_into_independent_table(setup):
+    """面板刷新顺手把扫描结果写进 ai_chat_session_files（独立记录）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    changes = [{'path': 'new.py', 'status': 'added'}]
+    with patch('routes.ai_chat.git_changes', return_value=(changes, False, True)), \
+         patch('routes.ai_chat.record_session_files') as rec:
+        resp = client.get('/ai/chat/sessions/sess_x/changes', headers=dev_h)
+    assert resp.status_code == 200
+    rec.assert_called_once_with('sess_x', changes)
+
+
+def test_list_changes_scan_failure_does_not_record(setup):
+    """ok=False 的失败扫描不能覆盖/写入记录。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    with patch('routes.ai_chat.git_changes', return_value=([], False, False)), \
+         patch('routes.ai_chat.record_session_files') as rec:
+        client.get('/ai/chat/sessions/sess_x/changes', headers=dev_h)
+    rec.assert_not_called()
+
+
+def test_session_files_endpoint_returns_records(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    files = [{'path': 'new.py', 'status': 'added',
+              'firstSeenAt': '2026-08-13T00:00:00+00:00',
+              'lastSeenAt': '2026-08-13T00:00:00+00:00'}]
+    with patch('routes.ai_chat.get_session_files', return_value=files) as gsf:
+        resp = client.get('/ai/chat/sessions/sess_x/file-records', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'files': files}
+    gsf.assert_called_once_with('sess_x')
+
+
+def test_session_files_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.get('/ai/chat/sessions/sess_other/file-records', headers=dev_h)
+    assert resp.status_code == 404
+
+
+def test_import_session_files_happy_path(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    results = [{'path': 'a.py', 'status': 'imported', 'file': {'id': 'df-1'}}]
+    with patch('routes.ai_chat.import_recorded_files', return_value=results) as imp:
+        resp = client.post('/ai/chat/sessions/sess_x/file-records/import',
+                           json={'paths': ['a.py']}, headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'results': results}
+    # 会话归属 + 工作区 + 上传者都传对了
+    assert imp.call_args[0][:3] == ('sess_x', '/tmp/ws', ['a.py'])
+    assert imp.call_args[1]['uploaded_by'] == 'user-1'
+
+
+def test_import_session_files_bad_body_400(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/file-records/import',
+                       json={}, headers=dev_h)
+    assert resp.status_code == 400
+
+
+def test_import_session_files_no_workspace_400(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', None)
+    resp = client.post('/ai/chat/sessions/sess_x/file-records/import',
+                       json={'paths': ['a.py']}, headers=dev_h)
+    assert resp.status_code == 400
+
+
+def test_import_session_files_too_many_400(setup):
+    from utils.session_file_import import MAX_IMPORT_PATHS
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/file-records/import',
+                       json={'paths': [f'f{i}.py' for i in range(MAX_IMPORT_PATHS + 1)]},
+                       headers=dev_h)
+    assert resp.status_code == 400
+
+
+def test_import_session_files_other_users_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.post('/ai/chat/sessions/sess_other/file-records/import',
+                       json={'paths': ['a.py']}, headers=dev_h)
+    assert resp.status_code == 404
+
+
 def test_run_script_requires_code(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wsrun2'; ws.mkdir(parents=True, exist_ok=True)

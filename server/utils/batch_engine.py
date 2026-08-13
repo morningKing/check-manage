@@ -32,6 +32,7 @@ from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from utils.workspace import create_session_workspace, _rm_force
+from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 
 logger = logging.getLogger(__name__)
@@ -549,6 +550,7 @@ class BatchWorker:
         prompt, agent, model, provision_repo, provision_ref = ctx
         prompt = self._with_input_hint(prompt, session_row)
 
+        ws = None
         try:
             ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
             # Provision project-level agents/skills BEFORE the session starts —
@@ -593,6 +595,19 @@ class BatchWorker:
             self._mark_failed(sid, batch_id,
                               error=f'{type(e).__name__}: {e}'[:500])
             self._notify_scan(session_row, None, ok=False)
+        finally:
+            # 收尾：无论成功失败，把工作区里已产生的新增/修改文件记进独立表
+            # （best-effort，失败不影响子任务本身的状态落库）。
+            if ws:
+                self._record_workspace_files(sid, ws)
+
+    def _record_workspace_files(self, session_id: str, ws: str):
+        try:
+            changes, _truncated, ok = git_changes(ws)
+            if ok:
+                record_session_files(session_id, changes)
+        except Exception:
+            pass  # best-effort
 
     def _persist_provision_notice(self, session_id: str, warning: str):
         """Insert a notice into the child's thread when workspace provisioning

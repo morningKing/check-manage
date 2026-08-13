@@ -478,6 +478,21 @@ def backfill_from_rest(state, client, opencode_session_id, directory=''):
     return changed
 
 
+def _record_workspace_files(sid, directory):
+    """回合收尾把会话工作区的新增/修改文件记进独立表 ai_chat_session_files。
+    `directory` 就是工作区路径（ensure_listener 传进来的 sess workspace_path）；
+    为空（无工作区）时跳过。Best-effort，不抛异常。"""
+    if not directory:
+        return
+    try:
+        from utils.workspace_changes import git_changes, record_session_files
+        changes, _truncated, ok = git_changes(directory)
+        if ok:
+            record_session_files(sid, changes)
+    except Exception as e:
+        logger.warning('record workspace files failed session=%s: %s', sid, e)
+
+
 def _run_listener(sid, opencode_session_id, event_source, directory=''):
     """Consume events, persisting the assistant message on session.idle and
     incrementally (time-debounced) while the turn streams, so switching sessions
@@ -513,6 +528,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory=''):
                 logger.warning('backfill failed session=%s: %s', sid, e)
             persist_turn(sid, state)
             persist_subtasks(sid, state)
+            _record_workspace_files(sid, directory)
             logger.debug('persist listener idle->persisted+exit session=%s parts=%d',
                          sid, len(state.get('part_order', [])))
             try:

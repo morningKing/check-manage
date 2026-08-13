@@ -312,6 +312,70 @@ def results(batch_id):
     })
 
 
+def _child_name(s) -> str:
+    """与 /results 的 name 同口径：batch_input_file 的 basename。"""
+    return (s.get('batch_input_file') or '').replace('\\', '/').rsplit('/', 1)[-1]
+
+
+@open_api_batches_bp.get('/<batch_id>/file-records')
+@api_key_required
+@require_bound_key
+def file_records(batch_id):
+    """每个子会话被自动记录的新增/修改文件（ai_chat_session_files）。
+    `name` 与 /results 同口径，`seq` 是稳定序号——POST /import 用二者定位子会话。"""
+    from utils.workspace_changes import get_session_files
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    out = []
+    for s in d['sessions']:
+        out.append({
+            'name': _child_name(s),
+            'seq': s.get('batch_seq'),
+            'status': s.get('status'),
+            'files': get_session_files(s['id']),
+        })
+    return jsonify({'batchId': batch_id, 'status': d['batch']['status'],
+                    'results': out})
+
+
+@open_api_batches_bp.post('/<batch_id>/import')
+@api_key_required
+@require_bound_key
+def import_files(batch_id):
+    """把子会话工作区里被记录过的文件按需导入系统 data_files，返回文件 id。
+    body: {'name' 或 'seq'（二选一定位子会话）, 'paths': [...]}。幂等——
+    已导入过的路径返回原 id。uploaded_by 为 None（API key 来源）。"""
+    from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    body = request.get_json(silent=True) or {}
+    paths = body.get('paths')
+    if not isinstance(paths, list) or not paths:
+        return jsonify({'error': 'paths required'}), 400
+    if len(paths) > MAX_IMPORT_PATHS:
+        return jsonify({'error': f'单次最多导入 {MAX_IMPORT_PATHS} 个文件'}), 400
+    name, seq = body.get('name'), body.get('seq')
+    child = None
+    if seq is not None:
+        child = next((s for s in d['sessions'] if s.get('batch_seq') == seq), None)
+    elif name:
+        child = next((s for s in d['sessions'] if _child_name(s) == name), None)
+    else:
+        return jsonify({'error': '需提供 name 或 seq 定位子会话'}), 400
+    if child is None:
+        return jsonify({'error': '子会话不存在'}), 404
+    if not child.get('workspace_path'):
+        return jsonify({'error': '该子会话没有工作区'}), 400
+    results = import_recorded_files(child['id'], child['workspace_path'], paths,
+                                    uploaded_by=None)
+    return jsonify({'batchId': batch_id, 'name': _child_name(child),
+                    'seq': child.get('batch_seq'), 'results': results})
+
+
 @open_api_batches_bp.delete('/<batch_id>')
 @api_key_required
 @require_bound_key

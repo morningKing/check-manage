@@ -106,7 +106,7 @@ def get_batch_detail(user_id: str, batch_id: str, *,
             if not batch:
                 return None
             cur.execute(
-                "SELECT id, status, batch_seq, batch_input_file, "
+                "SELECT id, status, batch_seq, batch_input_file, workspace_path, "
                 "       opencode_session_id, error_message, last_message_preview "
                 "FROM ai_chat_sessions WHERE batch_id=%s ORDER BY batch_seq",
                 (batch_id,),

@@ -480,6 +480,24 @@ CREATE TABLE IF NOT EXISTS ai_chat_subtask_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_subtask_msg_subtask ON ai_chat_subtask_messages(subtask_id, seq);
 
+-- ==================== 会话产出文件记录 ====================
+-- 自动记录每个会话工作区里出现过的新增/修改文件路径（git 扫描结果幂等
+-- upsert），除会话本身的「变更文件」面板外提供独立、可查询的记录。
+CREATE TABLE IF NOT EXISTS ai_chat_session_files (
+    id            BIGSERIAL PRIMARY KEY,
+    session_id    VARCHAR(100) NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    path          TEXT NOT NULL,
+    status        VARCHAR(20) NOT NULL CHECK (status IN ('added','modified')),
+    data_file_id  VARCHAR(100),
+    first_seen_at TIMESTAMPTZ DEFAULT NOW(),
+    last_seen_at  TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (session_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_session_files_sess ON ai_chat_session_files(session_id);
+-- 老库补齐列（幂等）。不设外键指向 data_files：备份还原时两张表顺序独立，
+-- 松引用即可（值始终是 data_files.id 或 NULL）。
+ALTER TABLE ai_chat_session_files ADD COLUMN IF NOT EXISTS data_file_id VARCHAR(100);
+
 -- ==================== 智能客服：实例表 + 会话增列 ====================
 CREATE TABLE IF NOT EXISTS kefu_instances (
   id               VARCHAR(100) PRIMARY KEY,

@@ -40,7 +40,10 @@ from utils.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
 )
-from utils.workspace_changes import git_changes, file_diff, expand_untracked_dir, read_file_preview
+from utils.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
+                                     read_file_preview, record_session_files,
+                                     get_session_files)
+from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.mcp_servers import enabled_mcp_config
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
@@ -745,7 +748,45 @@ def list_changes(sid):
     if not sess[4]:   # batch child sessions have no workspace dir
         return jsonify({'changes': [], 'truncated': False, 'ok': True})
     changes, truncated, ok = git_changes(sess[4])
+    if ok:
+        record_session_files(sid, changes)   # 面板刷新顺手维护独立记录
     return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
+
+
+@ai_chat_bp.route('/sessions/<sid>/file-records', methods=['GET'])
+@login_required
+def session_file_records(sid):
+    """会话产出文件的独立记录（ai_chat_session_files）：历次扫描累积的新增/
+    修改路径，含首次/最近出现时间。与 /changes 的实时面板互补——这里只读、
+    不触发 git 扫描，文件即使后来被还原也保留记录。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    return jsonify({'files': get_session_files(sid)})
+
+
+@ai_chat_bp.route('/sessions/<sid>/file-records/import', methods=['POST'])
+@login_required
+def import_session_files(sid):
+    """把记录过的会话产出文件按需导入系统 data_files，返回文件 id。
+    body: {'paths': [<工作区相对路径>, ...]}。幂等——已导入过的直接返回原 id。
+    只允许导入被自动记录过的路径（白名单），见 utils/session_file_import.py。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if not sess[4]:
+        return jsonify({'error': 'session has no workspace', 'code': 'NO_WORKSPACE'}), 400
+    paths = (request.get_json(silent=True) or {}).get('paths')
+    if not isinstance(paths, list) or not paths:
+        return jsonify({'error': 'paths required', 'code': 'PATHS_REQUIRED'}), 400
+    if len(paths) > MAX_IMPORT_PATHS:
+        return jsonify({'error': f'单次最多导入 {MAX_IMPORT_PATHS} 个文件',
+                        'code': 'TOO_MANY'}), 400
+    results = import_recorded_files(sid, sess[4], paths,
+                                    uploaded_by=user['userId'])
+    return jsonify({'results': results})
 
 
 @ai_chat_bp.route('/sessions/<sid>/changes/expand', methods=['GET'])

@@ -414,3 +414,92 @@ def file_diff(workspace_path, rel_path):
         content, truncated = _cap(content)
         return {'status': 'added', 'content': content, 'truncated': truncated}
     return {'status': status, 'truncated': False}
+
+
+# ==================== 会话产出文件记录（独立落库） ====================
+
+def record_session_files(session_id, changes):
+    """把一次 git_changes() 扫描里的真实文件路径幂等 upsert 进
+    ai_chat_session_files。折叠的 `dir/` 条目（kind='dir'）不落库——记录的是
+    具体文件；status 以最后一次扫描为准（新增的文件后来被改过就变 modified），
+    first_seen_at 保留第一次出现的时间。Best-effort，不抛异常。"""
+    from db import get_db
+    rows = [(c['path'], c['status']) for c in changes
+            if c.get('kind') != 'dir' and c['status'] in ('added', 'modified')]
+    if not rows:
+        return
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            for path, status in rows:
+                cur.execute(
+                    "INSERT INTO ai_chat_session_files (session_id, path, status) "
+                    "VALUES (%s, %s, %s) "
+                    "ON CONFLICT (session_id, path) DO UPDATE SET "
+                    "  status = EXCLUDED.status, last_seen_at = now()",
+                    (session_id, path, status),
+                )
+            conn.commit()
+    except Exception:
+        pass  # best-effort: a DB hiccup must not break the scan/panel
+
+
+def get_session_files(session_id):
+    """某个会话已记录的全部产出文件（按路径排序）。读失败返回空列表。"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT path, status, data_file_id, first_seen_at, last_seen_at "
+                "FROM ai_chat_session_files WHERE session_id = %s ORDER BY path",
+                (session_id,),
+            )
+            return [{'path': r[0], 'status': r[1], 'dataFileId': r[2],
+                     'firstSeenAt': r[3].isoformat() if r[3] else None,
+                     'lastSeenAt': r[4].isoformat() if r[4] else None}
+                    for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def get_recorded_paths(session_id):
+    """该会话记录过的路径集合——导入端点用它做白名单：只有被自动记录过的
+    文件才允许导入系统，防止借导入端点把工作区里任意文件搬进 data_files。"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT path FROM ai_chat_session_files WHERE session_id = %s",
+                        (session_id,))
+            return {r[0] for r in cur.fetchall()}
+    except Exception:
+        return set()
+
+
+def get_recorded_path(session_id, path):
+    """单条记录（含 data_file_id），不存在返回 None。"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT path, status, data_file_id FROM ai_chat_session_files "
+                        "WHERE session_id = %s AND path = %s", (session_id, path))
+            r = cur.fetchone()
+            return {'path': r[0], 'status': r[1], 'dataFileId': r[2]} if r else None
+    except Exception:
+        return None
+
+
+def set_data_file_id(session_id, path, data_file_id):
+    """导入成功后回填映射（幂等导入的依据）。Best-effort。"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("UPDATE ai_chat_session_files SET data_file_id = %s "
+                        "WHERE session_id = %s AND path = %s",
+                        (data_file_id, session_id, path))
+            conn.commit()
+    except Exception:
+        pass

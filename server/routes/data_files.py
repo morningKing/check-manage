@@ -116,6 +116,40 @@ def save_data_file(f, uploaded_by=None):
     }, None
 
 
+def data_file_meta(file_id: str):
+    """已存在文件的对外 meta（与 save_data_file 的返回同形）；不存在返回 None。
+    「按需导入会话产出文件」的幂等分支用它把已有 id 原样返回。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, original_name, mime_type, size_bytes FROM data_files WHERE id = %s',
+            (file_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        'id': row[0],
+        'name': row[1],
+        'size': row[3],
+        'mimeType': row[2],
+        'url': f'/api/data-files/{row[0]}/download',
+    }
+
+
+def save_workspace_file(abs_path: str, rel_path: str, uploaded_by=None):
+    """把会话工作区里的一个磁盘文件收进 data_files，返回与 save_data_file
+    相同的 (meta, error)。供「会话产出文件按需导入系统」端点复用——存储布局、
+    大小上限、文件名清洗全部走既有路径，不另起炉灶。"""
+    import mimetypes
+    from werkzeug.datastructures import FileStorage
+    name = rel_path.replace('\\', '/').rsplit('/', 1)[-1]
+    mime = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+    with open(abs_path, 'rb') as fh:
+        fs = FileStorage(stream=fh, filename=name, content_type=mime)
+        return save_data_file(fs, uploaded_by=uploaded_by)
+
+
 @data_files_bp.route('/data-files/upload', methods=['POST'])
 @login_required
 def upload_data_file():

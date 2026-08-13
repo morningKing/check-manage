@@ -196,6 +196,9 @@ BACKUP_TABLES = [
                           'created_at', 'completed_at'], set(), 'AI子代理'),
     ('ai_chat_subtask_messages', ['id', 'subtask_id', 'role', 'content', 'meta',
                                   'created_at', 'seq'], {3, 4}, 'AI子代理消息'),
+    # 会话产出文件的独立记录（新增/修改路径的历史累积）。
+    ('ai_chat_session_files', ['id', 'session_id', 'path', 'status',
+                               'first_seen_at', 'last_seen_at'], set(), 'AI会话产出文件'),
 ]
 
 # 表名到定义的映射
@@ -255,6 +258,7 @@ RESTORE_ORDER = [
     # Level 5
     'ai_chat_messages',             # Depends on ai_chat_sessions
     'ai_chat_subtask_messages',     # Depends on ai_chat_subtasks
+    'ai_chat_session_files',        # Depends on ai_chat_sessions
 ]
 
 
@@ -911,6 +915,14 @@ def restore_backup(zip_path, tables=None, mode='upsert',
             cur.execute(
                 "SELECT setval(pg_get_serial_sequence('ai_chat_subtask_messages', 'seq'), "
                 "  COALESCE((SELECT MAX(seq) FROM ai_chat_subtask_messages), 1))"
+            )
+
+        # ai_chat_session_files.id 同样是 BIGSERIAL——还原时原样写回备份里的
+        # id，序列计数器需要跟着重播种，否则新插入的记录会与还原数据撞 id。
+        if 'ai_chat_session_files' in tables_to_restore:
+            cur.execute(
+                "SELECT setval(pg_get_serial_sequence('ai_chat_session_files', 'id'), "
+                "  COALESCE((SELECT MAX(id) FROM ai_chat_session_files), 1))"
             )
 
         conn.commit()
