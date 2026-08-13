@@ -579,3 +579,50 @@ def test_git_changes_omits_deletions_end_to_end(tmp_path):
     paths = {c['path'] for c in changes}
     assert paths == {'repo/amod.txt', 'repo/bnew.txt'}
     assert not any(c['status'] == 'deleted' for c in changes)
+
+
+def test_git_changes_excludes_pycache_in_root_repo(tmp_path):
+    """Python bytecode caches must never show in the 变更文件 panel — even in
+    workspaces whose .gitignore lacks the rule (old sessions). The scan writes
+    the patterns into .git/info/exclude, so git itself hides them."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)   # NO .gitignore — simulates an old workspace
+    os.makedirs(os.path.join(ws, '__pycache__'))
+    with open(os.path.join(ws, '__pycache__', 'mod.cpython-312.pyc'), 'w') as f:
+        f.write('bytecode')
+    with open(os.path.join(ws, 'real.py'), 'w') as f:
+        f.write('print(1)')
+    changes, _, ok = git_changes(ws)
+    paths = {c['path'] for c in changes}
+    assert ok is True
+    assert paths == {'real.py'}                      # only the real file shows
+    # the exclude was written into the repo (idempotently — marker present)
+    with open(os.path.join(ws, '.git', 'info', 'exclude'), encoding='utf-8') as f:
+        exclude = f.read()
+    assert '__pycache__/' in exclude and '*.pyc' in exclude
+    assert exclude.count('# check-manage noise excludes') == 1
+    # second scan stays idempotent
+    git_changes(ws)
+    with open(os.path.join(ws, '.git', 'info', 'exclude'), encoding='utf-8') as f:
+        assert f.read().count('# check-manage noise excludes') == 1
+
+
+def test_git_changes_excludes_pycache_in_nested_repo(tmp_path):
+    """A nested clone's own .gitignore does NOT inherit the workspace root's
+    rules — a __pycache__ inside it must still be hidden from the panel."""
+    from utils.workspace_changes import git_changes
+    ws = str(tmp_path)
+    _init_repo(ws)
+    nested = os.path.join(ws, 'cloned-repo')
+    _init_repo(nested)
+    with open(os.path.join(nested, 'app.py'), 'w') as f:
+        f.write('base\n')
+    _git(nested, 'add', '-A')
+    _git(nested, 'commit', '-q', '-m', 'base')      # born -> not auto-baselined
+    os.makedirs(os.path.join(nested, '__pycache__'))
+    with open(os.path.join(nested, '__pycache__', 'app.cpython-312.pyc'), 'w') as f:
+        f.write('bytecode')
+    changes, _, ok = git_changes(ws)
+    assert ok is True
+    assert changes == []                             # cache hidden, no real edits

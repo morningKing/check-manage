@@ -24,6 +24,39 @@ MAX_DIFF_BYTES = 256 * 1024
 UNTRACKED_DIR_EXPAND_LIMIT = 10
 _SKIP_DIRS = {'uploads', 'outputs', 'node_modules', '.venv', '__pycache__'}
 
+# Noise that must never appear in the 变更文件 panel regardless of each repo's
+# own .gitignore. Written into every scanned repo's .git/info/exclude: that
+# covers nested clones (whose .gitignore may lack the rule — the workspace
+# root .gitignore does NOT apply inside them) and workspaces created before
+# the rule landed in _DEFAULT_GITIGNORE, without touching files git tracks.
+_EXCLUDE_NOISE = ['__pycache__/', '*.pyc']
+_EXCLUDE_MARKER = '# check-manage noise excludes'
+
+
+def _ensure_repo_excludes(repo):
+    """Idempotently append the noise patterns to the repo's .git/info/exclude.
+    Best-effort — a failure just leaves the repo as-is."""
+    try:
+        exclude_path = os.path.join(repo, '.git', 'info', 'exclude')
+        if not os.path.isfile(exclude_path):
+            info_dir = os.path.dirname(exclude_path)
+            if not os.path.isdir(info_dir):
+                return
+            with open(exclude_path, 'w', encoding='utf-8') as f:
+                f.write('')
+        with open(exclude_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        if _EXCLUDE_MARKER in content:
+            return
+        with open(exclude_path, 'a', encoding='utf-8') as f:
+            if content and not content.endswith('\n'):
+                f.write('\n')
+            f.write(_EXCLUDE_MARKER + '\n')
+            for pat in _EXCLUDE_NOISE:
+                f.write(pat + '\n')
+    except Exception:
+        pass
+
 
 def _find_git_repos(workspace_path, max_depth=3):
     """Return dirs that are git repos under workspace_path (bounded depth,
@@ -226,6 +259,9 @@ def git_changes(workspace_path):
     # Treat pulled 代码仓 without history as the initial state (one-time baseline)
     # before scanning, so they don't show up as a flood of "新增".
     _ensure_pulled_repo_baseline(repos, workspace_path)
+    # Keep bytecode caches etc. out of the panel in EVERY repo (root + nested).
+    for repo in repos:
+        _ensure_repo_excludes(repo)
     # If the workspace root is also a repo (new sessions: we git init it on
     # creation) and nested clones exist below it, the outer's `git status`
     # will see each nested clone as a single untracked dir entry. Suppress
