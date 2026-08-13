@@ -699,6 +699,11 @@ function onKey(e: Event) {
                       v-else-if="p.type === 'mcp_services'"
                       :servers="p.servers"
                     />
+                    <Thinking
+                      v-else-if="p.type === 'reasoning' && p.text"
+                      class="ai-thinking"
+                      :content="p.text" status="end" :auto-collapse="true"
+                    />
                     <SubtaskBubble
                       v-else-if="p.type === 'subtask_use'"
                       :subtask-id="p.subtaskId" :session-id="activeId!"

@@ -255,9 +255,9 @@ def send_message(sid):
     oc_sid = sess[2]
     model = inst.get('model') or OPENCODE_MODEL
     agent = inst.get('agent') or ''
+    ensure_listener(sid, oc_sid, workspace_path)
     client.send_prompt_async(oc_sid, prompt.strip(), model=model,
                              directory=workspace_path, agent=agent, agent_parts=[])
-    ensure_listener(sid, oc_sid, workspace_path)
     return jsonify({'messageId': msg_id}), 202
 
 

@@ -14,13 +14,14 @@ def test_content_from_parts_maps_text_and_tool():
         {'type': 'step-finish'},
     ]
     out = eng.BatchWorker._content_from_parts(parts)
+    assert {'type': 'reasoning', 'text': 'thinking'} in out
     assert {'type': 'text', 'text': '总结：项目甲进行中。'} in out
     tool = [p for p in out if p['type'] == 'tool_use']
     assert len(tool) == 1
     assert tool[0] == {'type': 'tool_use', 'name': 'read', 'title': 'T',
                        'status': 'completed', 'input': {'p': 1}, 'result': 'OUT',
                        'durationMs': 350}
-    assert all(p['type'] in ('text', 'tool_use') for p in out)
+    assert all(p['type'] in ('text', 'tool_use', 'reasoning') for p in out)
 
 
 def test_content_from_parts_drops_empty_text():

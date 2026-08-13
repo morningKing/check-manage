@@ -5,9 +5,10 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [vue()],
   resolve: {
-    alias: {
-      '@': resolve(__dirname, 'src')
-    }
+    alias: [
+      { find: '@', replacement: resolve(__dirname, 'src') },
+      { find: /^vue-element-plus-x$/, replacement: resolve(__dirname, 'src/test/vue-element-plus-x.ts') },
+    ]
   },
   test: {
     environment: 'jsdom',

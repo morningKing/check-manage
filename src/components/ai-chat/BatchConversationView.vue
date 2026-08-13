@@ -8,6 +8,10 @@
       <div class="msg__body">
         <template v-for="(p, i) in (m.content || [])" :key="i">
           <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
+          <Thinking
+            v-else-if="p.type === 'reasoning' && p.text"
+            :content="p.text" status="end" :auto-collapse="true"
+          />
           <el-collapse v-else-if="p.type === 'tool_use'" class="msg__tool">
             <el-collapse-item :title="`工具调用：${p.name || '未知'}`">
               <pre>{{ JSON.stringify(p, null, 2) }}</pre>
@@ -26,6 +30,7 @@
 </template>
 
 <script setup lang="ts">
+import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import type { AdminMessage } from '@/api/aiBatchAdmin'

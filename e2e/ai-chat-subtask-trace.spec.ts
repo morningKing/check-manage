@@ -85,6 +85,65 @@ test('subtask bubble renders and expands with correct child session data', async
 })
 
 /**
+ * Real delegation end-to-end: send a message that forces the model to
+ * delegate via the task tool, wait for the SubtaskBubble to appear and
+ * complete, expand it, and verify the child's execution trace
+ * (delegation input + tool calls / text) is rendered — not just
+ * input/output.
+ */
+test('natural-language delegation shows full child trace in subtask bubble', async ({ page }) => {
+  test.setTimeout(180_000)
+
+  await page.goto('/')
+  await page.fill('input[placeholder*="用户名"]', 'admin')
+  await page.fill('input[placeholder*="密码"]', 'admin123')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
+
+  await page.getByRole('button', { name: /AI 助手/ }).click()
+  const input = page.getByPlaceholder(/给 AI 助手发消息/)
+  await input.waitFor({ state: 'visible', timeout: 15_000 })
+
+  // Fresh session so stale history from previous runs can't interfere
+  await page.getByRole('button', { name: '新建会话' }).first().click()
+
+  await input.fill('请立即使用 task 工具委托一个 general 子代理去完成：统计当前工作区 AGENTS.md 文件的行数。你必须委托子代理执行，不要自己数。')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  // The delegation bubble must appear (live SSE or post-turn persisted render)
+  const bubble = page.locator('.subtask-bubble').first()
+  await bubble.waitFor({ state: 'visible', timeout: 120_000 })
+  await expect(bubble.locator('.subtask-bubble__agent')).toBeVisible()
+
+  // Wait until the child finishes (running spinner replaced by ok/err icon).
+  // Fallback: the turn-end reload can race the server's final persist, so if
+  // the completed state never shows, reload once and check the persisted render.
+  const completed = page.locator('.subtask-bubble--completed').first()
+  try {
+    await completed.waitFor({ state: 'visible', timeout: 120_000 })
+  } catch {
+    await page.reload()
+    await completed.waitFor({ state: 'visible', timeout: 30_000 })
+  }
+
+  // Expand and verify the trace content fetched from the REST endpoint
+  await bubble.locator('.subtask-bubble__head').click()
+  const body = bubble.locator('.subtask-bubble__body')
+  await expect(body).toBeVisible({ timeout: 10_000 })
+  await body.locator('.subtask-bubble__msg').first().waitFor({ state: 'visible', timeout: 10_000 })
+
+  // Delegation input (the child's user message) is rendered
+  await expect(body.locator('.subtask-bubble__role').first()).toContainText('委托输入')
+
+  // The trace must contain real activity: tool calls and/or substantive text —
+  // the regression this guards against is "only input and output, no trace".
+  const toolCalls = await body.locator('.tool-call').count()
+  const bodyText = (await body.innerText()).trim()
+  expect(toolCalls > 0 || bodyText.length > 200).toBeTruthy()
+
+  await page.screenshot({ path: 'e2e-screenshots/subtask-trace-expanded.png', fullPage: true })
+})
+
+/**
  * API-level test: verifies the subtask messages endpoint returns correct data
  * when given a valid subtaskId. This tests the C-1 fix at the API level.
  */

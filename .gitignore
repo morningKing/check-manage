@@ -74,3 +74,7 @@ superpowers/
 .trae/
 .claude/worktrees/
 SKILLS.md
+
+# Playwright artifacts
+test-results/
+e2e-screenshots/

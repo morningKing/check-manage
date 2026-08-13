@@ -39,6 +39,7 @@ export interface AiMessage {
 
 export type AiContentPart =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'tool_use'; name: string; title?: string; status?: string; input?: unknown; result?: unknown; durationMs?: number }
   | { type: 'file'; name: string; path: string }
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }

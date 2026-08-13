@@ -58,8 +58,13 @@ def test_map_part_subtask_without_session_id_is_dropped():
     assert map_part({'type': 'subtask', 'agent': 'build'}) is None
 
 
+def test_map_part_reasoning_is_kept():
+    assert map_part({'type': 'reasoning', 'text': 'thinking...'}) == \
+        {'type': 'reasoning', 'text': 'thinking...'}
+
+
 def test_map_part_unknown_type_is_dropped():
-    assert map_part({'type': 'reasoning', 'text': 'thinking...'}) is None
+    assert map_part({'type': 'step-start'}) is None
 
 
 def test_format_opencode_error_with_provider_and_message():

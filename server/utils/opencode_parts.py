@@ -29,8 +29,31 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
     t = part.get('type')
     if t == 'text':
         return {'type': 'text', 'text': part.get('text', '')}
+    if t == 'reasoning':
+        # 模型的思考/推理段——不持久化的话，刷新页面后（_reloadPersisted 用落库
+        # 内容替换内存流式内容）以及子代理轨迹里都会凭空消失。
+        return {'type': 'reasoning', 'text': part.get('text', '')}
     if t == 'tool':
         st = part.get('state') or {}
+        # 自然语言委托走的是普通 tool:'task' part（没有配套 subtask part）。
+        # 只要 metadata 里有子会话 id，就映射成 subtask_use 占位——跟 subtask
+        # part 路径共用同一个 SubtaskBubble，用户能展开看子代理完整轨迹，
+        # 而不只是一个只有输入/输出的工具卡片。
+        if part.get('tool') == 'task':
+            child_sid = (st.get('metadata') or {}).get('sessionId')
+            if child_sid:
+                inp = st.get('input') or {}
+                tool_status = st.get('status')
+                fallback = ('completed' if tool_status == 'completed'
+                            else 'failed' if tool_status == 'error'
+                            else 'running')
+                return {
+                    'type': 'subtask_use',
+                    'subtaskId': child_sid,
+                    'agent': inp.get('subagent_type'),
+                    'description': inp.get('description'),
+                    'status': (subtask_status or {}).get(child_sid, fallback),
+                }
         return {
             'type': 'tool_use',
             'name': part.get('tool') or 'tool',

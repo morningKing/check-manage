@@ -677,6 +677,27 @@ def test_discover_subtasks_from_messages_finds_new_child():
     assert found['ses_child1']['_part_id'] == 'prt_subtask1'
 
 
+def test_discover_subtasks_unpaired_task_tool_discovers_child():
+    """自然语言委托只有 tool:'task' part、没有配套 subtask part——也要能发现
+    子会话，agent/description 从工具输入取，_part_id 用 tool part 的 id。"""
+    import utils.batch_engine as eng
+    msgs = [
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'ses_parent'},
+         'parts': [{'type': 'text', 'text': 'delegating'},
+                  {'type': 'tool', 'tool': 'task', 'id': 'prt_task_nl',
+                   'state': {'status': 'completed',
+                             'input': {'subagent_type': 'general',
+                                       'description': 'count lines'},
+                             'metadata': {'sessionId': 'ses_child_nl'}}}]},
+    ]
+    found = eng.discover_subtasks(msgs, known={}, parent_depth=0, parent_sid=None)
+    assert found['ses_child_nl']['depth'] == 1
+    assert found['ses_child_nl']['agent'] == 'general'
+    assert found['ses_child_nl']['description'] == 'count lines'
+    assert found['ses_child_nl']['_part_id'] == 'prt_task_nl'
+    assert found['ses_child_nl']['_parent_session_id'] == 'ses_parent'
+
+
 def test_discover_subtasks_sets_parent_sid_for_nested_scan():
     """递归扫描某个子代理自己的消息时，parent_sid 传该子代理自己的 id，
     发现的孙代的 parent_id 要是它，不是 None。"""
@@ -810,6 +831,71 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
                 assert stubs == [{'type': 'subtask_use', 'subtaskId': 'ses_child_be',
                                   'agent': 'build', 'description': 'do y',
                                   'status': 'completed'}]
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()
+
+
+def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monkeypatch):
+    """批任务路径落子代理消息时，要保留完整执行轨迹：user（委托输入）、
+    reasoning（思考过程）、tool_use（工具调用）、text（输出），不能只剩 text。"""
+    import uuid
+    import utils.batch_engine as eng
+    from db import get_db
+    from unittest.mock import MagicMock
+
+    uid = 'u-be-trace-' + uuid.uuid4().hex[:6]
+    sid = 's-be-trace-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    try:
+        top_msgs = [
+            {'info': {'role': 'assistant', 'id': 'm1'},
+             'parts': [{'type': 'tool', 'tool': 'task', 'id': 'prt_task_t',
+                        'state': {'status': 'completed',
+                                  'input': {'subagent_type': 'general',
+                                            'description': 'trace'},
+                                  'metadata': {'sessionId': 'ses_child_t'}}}]},
+        ]
+        child_msgs = [
+            {'info': {'role': 'user', 'id': 'cu1'},
+             'parts': [{'type': 'text', 'text': 'delegation input'}]},
+            {'info': {'role': 'assistant', 'id': 'cm1', 'finish': 'stop',
+                      'time': {'created': 1, 'completed': 2}},
+             'parts': [{'type': 'reasoning', 'text': 'thinking about it'},
+                      {'type': 'tool', 'tool': 'bash',
+                       'state': {'status': 'completed', 'title': 'run',
+                                 'input': {'command': 'ls'}}},
+                      {'type': 'text', 'text': 'final answer'}]},
+        ]
+        fake = MagicMock()
+        fake.get_messages.side_effect = lambda oc_id, directory='': (
+            top_msgs if oc_id == 'oc-top' else child_msgs)
+        monkeypatch.setattr(eng, 'opencode_client', fake)
+
+        w = eng.BatchWorker()
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT role, content FROM ai_chat_subtask_messages "
+                           "WHERE subtask_id = %s ORDER BY seq", ('ses_child_t',))
+                rows = cur.fetchall()
+                assert rows[0][0] == 'user'
+                assert rows[0][1] == [{'type': 'text', 'text': 'delegation input'}]
+                assert rows[1][0] == 'assistant'
+                types = [p['type'] for p in rows[1][1]]
+                assert types == ['reasoning', 'tool_use', 'text']
     finally:
         with get_db() as conn:
             with conn.cursor() as cur:

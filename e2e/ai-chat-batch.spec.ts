@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 
 test('batch task: create, run, retry, delete', async ({ page }) => {
+  test.setTimeout(180_000)
   // Navigate to home
   await page.goto('/')
 
@@ -9,70 +10,70 @@ test('batch task: create, run, retry, delete', async ({ page }) => {
   await page.fill('input[placeholder*="密码"]', 'admin123')
   await page.getByRole('button', { name: /登\s*录/ }).click()
 
-  // Navigate to /ai-chat
+  // Wait for login to actually complete before navigating — otherwise the
+  // /ai-chat route guard can redirect back to the login page (auth race).
+  await page.getByRole('button', { name: /登\s*录/ }).waitFor({ state: 'hidden', timeout: 10_000 })
+
+  // Navigate to /ai-chat. NOTE: no networkidle wait — the page keeps an SSE
+  // stream open, so the network never settles; wait for real elements instead.
   await page.goto('/ai-chat')
-  await page.waitForLoadState('networkidle', { timeout: 10_000 })
 
-  // Click the 批任务 tab in .ai-sidebar__tabs
-  const batchTaskTab = page.locator('.ai-sidebar__tabs button', { hasText: '批任务' })
-  await batchTaskTab.waitFor({ state: 'visible', timeout: 5_000 })
-  await batchTaskTab.click()
-
-  // Click "+ 新建批任务" button in .batch-list
-  const createBatchBtn = page.locator('button', { hasText: /^\+\s*新建批任务/ })
-  await createBatchBtn.waitFor({ state: 'visible', timeout: 5_000 })
+  // The batch section lives directly in the sidebar (no tabs anymore)
+  const createBatchBtn = page.locator('.ai-sidebar__batches-head button', { hasText: '新建' })
+  await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
   await createBatchBtn.click()
 
-  // Fill dialog: name and prompt using data-test selectors
-  const nameInput = page.locator('input[data-test="name"]')
-  const promptInput = page.locator('textarea[data-test="prompt"]')
-  await nameInput.waitFor({ state: 'visible', timeout: 5_000 })
+  // Everything below is scoped to the dialog — the page has other file inputs
+  // (chat composer) and stale batch children can share file names.
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+
+  const nameInput = dialog.locator('input[data-test="name"]')
+  const promptInput = dialog.locator('textarea[data-test="prompt"]')
   await nameInput.fill('e2e-batch')
   await promptInput.fill('echo hi')
 
-  // Upload 2 in-memory files via ElUpload's input[type=file]
-  const fileInput = page.locator('input[type="file"]').first()
-  await fileInput.setInputFiles([
+  // Upload 2 in-memory files via the dialog's ElUpload input[type=file]
+  await dialog.locator('input[type="file"]').setInputFiles([
     { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
     { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('B') },
   ])
 
-  // Wait for staged files to appear in the dialog file list
-  await expect(page.getByText('a.txt')).toBeVisible({ timeout: 8_000 })
-  await expect(page.getByText('b.txt')).toBeVisible({ timeout: 8_000 })
+  // Wait for staged files in the dialog's own file list
+  await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+  await expect(dialog.locator('.files')).toContainText('b.txt', { timeout: 8_000 })
 
-  // Click the create button using data-test selector
-  const createBtn = page.locator('button[data-test="create-btn"]')
-  await createBtn.waitFor({ state: 'visible', timeout: 5_000 })
+  const createBtn = dialog.locator('button[data-test="create-btn"]')
+  await expect(createBtn).toBeEnabled({ timeout: 8_000 })
   await createBtn.click()
 
-  // Confirm BatchDetailView mounts with the batch name in .batch-detail .title
-  const batchTitle = page.locator('.batch-detail .title', { hasText: 'e2e-batch' })
-  await batchTitle.waitFor({ state: 'visible', timeout: 10_000 })
+  // The batch shows up as a .batch-group in the sidebar
+  const group = page.locator('.batch-group', { hasText: 'e2e-batch' }).first()
+  await group.waitFor({ state: 'visible', timeout: 10_000 })
 
-  // Confirm the sessions table has 2 rows: table.sessions tbody tr count = 2
-  const sessionRows = page.locator('table.sessions tbody tr')
-  await expect(sessionRows).toHaveCount(2, { timeout: 5_000 })
+  // Expand it: one child session per input file. The list polls/re-renders,
+  // which can swallow the toggle click — retry until the body is really there.
+  const head = group.locator('.batch-group__head')
+  for (let i = 0; i < 5 && (await group.locator('.batch-group__body').count()) === 0; i++) {
+    await head.click()
+    await page.waitForTimeout(500)
+  }
+  await expect(group.locator('.bg-child')).toHaveCount(2, { timeout: 10_000 })
 
-  // Wait up to 90s for both children to reach a terminal state (badge--completed or badge--failed)
+  // Wait up to 120s for the batch to reach a terminal status badge
   await page.waitForFunction(() => {
-    const rows = document.querySelectorAll('table.sessions tbody tr')
-    if (rows.length !== 2) return false
-    return Array.from(rows).every(r => {
-      const badge = r.querySelector('[class*="badge--"]')
-      return badge && (badge.className.includes('badge--completed') ||
-                       badge.className.includes('badge--failed'))
-    })
-  }, { timeout: 90_000 })
+    const groups = Array.from(document.querySelectorAll('.batch-group'))
+    const g = groups.find(el => el.querySelector('.bg-name')?.textContent?.includes('e2e-batch'))
+    const badge = g?.querySelector('.badge')
+    return !!badge && ['completed', 'failed', 'partial'].some(
+      s => badge.classList.contains(`badge--${s}`))
+  }, undefined, { timeout: 120_000 })
 
-  // Click 删除, accept the confirm dialog (ElMessageBox, not native dialog)
-  const deleteBtn = page.getByRole('button', { name: '删除' })
-  await deleteBtn.click()
+  // Delete via the 删除批次 icon, confirm in the ElMessageBox
+  await group.locator('[title="删除批次"]').click()
+  await page.locator('.el-message-box__btns .el-button--primary').click()
 
-  // For ElMessageBox, click the confirm button text directly
-  const confirmDeleteBtn = page.getByRole('button', { name: '删除', exact: true }).last()
-  await confirmDeleteBtn.click()
-
-  // Confirm batch row no longer visible in the list
-  await expect(page.getByText('e2e-batch')).not.toBeVisible({ timeout: 5_000 })
+  // Confirm the batch is gone from the sidebar
+  await expect(page.locator('.batch-group', { hasText: 'e2e-batch' }))
+    .toHaveCount(0, { timeout: 5_000 })
 })

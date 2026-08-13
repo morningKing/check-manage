@@ -122,6 +122,28 @@ describe('useAiChatStore', () => {
     expect(store.streaming['sess_1']).toBe(true)
   })
 
+  it('send during an in-flight startNewSession lands in the NEW session', async () => {
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(api.sendMessage).mockResolvedValue({ messageId: 'msg_1', model: null })
+    let release: (v: any) => void = () => {}
+    vi.mocked(api.createSession).mockReturnValueOnce(new Promise<any>(res => { release = res }))
+
+    const store = useAiChatStore()
+    store.activeSessionId = 'old_session'
+    store.messages['old_session'] = []
+
+    const creating = store.startNewSession()
+    const sending = store.sendUserMessage('hi')
+    // send is parked until creation resolves, then targets the new session
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    release({ id: 'sess_new', title: '新会话', workspacePath: '/ws' })
+    await creating
+    await sending
+    expect(api.sendMessage).toHaveBeenCalledWith('sess_new', 'hi', [], '', '', [])
+    expect(store.messages['sess_new'][0].role).toBe('user')
+    expect(store.messages['old_session']).toEqual([])
+  })
+
   it('captures tool-use parts (MCP/built-in tool calls) on the assistant message', async () => {
     vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
     vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
@@ -142,6 +164,57 @@ describe('useAiChatStore', () => {
     expect(tool.name).toBe('list_collections')
     expect(tool.status).toBe('completed')
     expect(tool.result).toBe('ok')
+  })
+
+  it('renders task tool delegation as a subtask_use bubble (natural-language path)', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: {
+      id: 'tp', type: 'tool', messageID: 'm1', tool: 'task',
+      state: { status: 'running',
+               input: { subagent_type: 'general', description: 'count lines' },
+               metadata: { sessionId: 'ses_child' } },
+    } } })
+
+    const parts = store.messages['sess_1'][0].content
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ type: 'subtask_use', subtaskId: 'ses_child',
+                                     agent: 'general', description: 'count lines',
+                                     status: 'running' })
+  })
+
+  it('dedupes subtask part + task tool part into one bubble with the child id', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    // subtask part 先到——sessionID 是父会话，暂时只能用
+    handlers.onEvent({ event: 'message.part.updated', data: { part: {
+      id: 'sp', type: 'subtask', messageID: 'm1', sessionID: 'sess_parent_oc',
+      agent: 'build', description: 'review changes',
+    } } })
+    // tool:'task' 后到——带上真实子会话 id，回补到已有气泡上，不新增气泡
+    handlers.onEvent({ event: 'message.part.updated', data: { part: {
+      id: 'tp', type: 'tool', messageID: 'm1', tool: 'task',
+      state: { status: 'running', metadata: { sessionId: 'ses_child_real' } },
+    } } })
+
+    const parts = store.messages['sess_1'][0].content
+    const stubs = parts.filter((p: any) => p.type === 'subtask_use') as any[]
+    expect(stubs).toHaveLength(1)
+    expect(stubs[0].subtaskId).toBe('ses_child_real')
+    expect(stubs[0].agent).toBe('build')
+    expect(stubs[0].description).toBe('review changes')
   })
 
   it('accumulates reasoning text and toggles thinking', async () => {

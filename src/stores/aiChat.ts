@@ -67,6 +67,14 @@ let _streamingAssistantMsgId: Record<string, string | null> = {}
 let _assistantMsgIds: Record<string, Set<string>> = {}
 let _partIndexById: Record<string, Record<string, number>> = {}
 let _reasoningByPart: Record<string, Record<string, string>> = {}
+// messageID -> 真实子会话 id（来自 tool:'task' part 的 state.metadata.sessionId）
+let _toolChildByMsg: Record<string, Record<string, string>> = {}
+// messageID -> subtask part 的 part id（用于同消息去重/回补子会话 id）
+let _subtaskPartByMsg: Record<string, Record<string, string>> = {}
+// 新建会话是异步的（先走 createSession API 才切 activeSessionId）；期间用户
+// 点发送会用旧 activeSessionId 把消息发进上一个会话。记录进行中的创建，
+// sendUserMessage 先等它落定。
+let _pendingNewSession: Promise<string> | null = null
 
 export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
@@ -119,18 +127,26 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async startNewSession(projectMenuId?: string) {
-      const meta = await createSession(projectMenuId)
-      this.sessions.unshift({ id: meta.id, title: meta.title })
-      this.activeSessionId = meta.id
-      this.messages[meta.id] = []
-      this.streaming[meta.id] = false
-      this.attachments[meta.id] = []
-      this._resetStreamState(meta.id)
-      const history = await getMessages(meta.id)
-      this.messages[meta.id] = history.messages
-      this.loadPaletteItems(meta.id)
-      this._openStream(meta.id)
-      return meta.id
+      const pending = (async () => {
+        const meta = await createSession(projectMenuId)
+        this.sessions.unshift({ id: meta.id, title: meta.title })
+        this.activeSessionId = meta.id
+        this.messages[meta.id] = []
+        this.streaming[meta.id] = false
+        this.attachments[meta.id] = []
+        this._resetStreamState(meta.id)
+        const history = await getMessages(meta.id)
+        this.messages[meta.id] = history.messages
+        this.loadPaletteItems(meta.id)
+        this._openStream(meta.id)
+        return meta.id
+      })()
+      _pendingNewSession = pending
+      try {
+        return await pending
+      } finally {
+        if (_pendingNewSession === pending) _pendingNewSession = null
+      }
     },
 
     async openSession(id: string, opts: { stream?: boolean } = {}) {
@@ -252,6 +268,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async sendUserMessage(content: string) {
+      if (_pendingNewSession) {
+        try { await _pendingNewSession } catch { /* 创建失败就用当前会话继续 */ }
+      }
       if (!this.activeSessionId) throw new Error('no active session')
       const sid = this.activeSessionId
       const pending = this.attachments[sid] ?? []
@@ -463,8 +482,37 @@ export const useAiChatStore = defineStore('aiChat', {
             this.thinking[sid] = true
             this._upsertReasoning(sid, part.id, part.text ?? '')
           } else if (part.type === 'tool') {
-            // MCP / built-in tool call — render inline as a collapsible card.
             const st = part.state || {}
+            // 委托子代理的 task 工具：metadata 里一有真实子会话 id 就渲染成
+            // subtask_use 气泡（自然语言委托只有这个 part，没有 subtask part）。
+            const childSid = st.metadata?.sessionId
+            if (part.tool === 'task' && childSid) {
+              ;(_toolChildByMsg[sid] ?? (_toolChildByMsg[sid] = {}))[part.messageID] = childSid
+              const subPartId = _subtaskPartByMsg[sid]?.[part.messageID]
+              if (subPartId) {
+                // /command 路径已经有 subtask part 气泡了——只修正它的子会话 id
+                //（subtask part 自己的 sessionID 是父会话），不再加第二个气泡。
+                const list = this.messages[sid] ?? []
+                const msg = list.length ? list[list.length - 1] : undefined
+                const idx = _partIndexById[sid]?.[subPartId]
+                const cur = msg && idx !== undefined ? msg.content[idx] : null
+                if (cur && cur.type === 'subtask_use') {
+                  this._upsertAssistantPart(sid, subPartId, { ...cur, subtaskId: childSid })
+                }
+              } else {
+                const inp = st.input || {}
+                this._upsertAssistantPart(sid, part.id, {
+                  type: 'subtask_use',
+                  subtaskId: childSid,
+                  agent: inp.subagent_type ?? null,
+                  description: inp.description ?? null,
+                  status: st.status === 'completed' ? 'completed'
+                    : st.status === 'error' ? 'failed' : 'running',
+                })
+              }
+              break
+            }
+            // MCP / built-in tool call — render inline as a collapsible card.
             const tt = st.time || {}
             this._upsertAssistantPart(sid, part.id, {
               type: 'tool_use',
@@ -480,10 +528,12 @@ export const useAiChatStore = defineStore('aiChat', {
             // 默认值 'running' 即可：这只是"让用户立刻看到委托发生了"，真正的
             // 状态与内容由 SubtaskBubble 展开时向 REST 端点现取现查（跟顶层
             // 消息持久化后 status 会被刷新是同一个道理——SSE 这里只负责"存在
-            // 性"的实时提示，不负责权威状态）。
+            // 性"的实时提示，不负责权威状态）。注意 part.sessionID 是父会话，
+            // 真实子会话 id 优先用同消息 tool:'task' part 已给出的值。
+            ;(_subtaskPartByMsg[sid] ?? (_subtaskPartByMsg[sid] = {}))[part.messageID] = part.id
             this._upsertAssistantPart(sid, part.id, {
               type: 'subtask_use',
-              subtaskId: part.sessionID,
+              subtaskId: _toolChildByMsg[sid]?.[part.messageID] ?? part.sessionID,
               agent: part.agent ?? null,
               description: part.description ?? null,
               status: 'running',
@@ -527,6 +577,8 @@ export const useAiChatStore = defineStore('aiChat', {
       _assistantMsgIds[sid] = new Set()
       _partIndexById[sid] = {}
       _reasoningByPart[sid] = {}
+      _toolChildByMsg[sid] = {}
+      _subtaskPartByMsg[sid] = {}
     },
 
     _upsertReasoning(sid: string, partId: string, text: string) {

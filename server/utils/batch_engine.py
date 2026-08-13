@@ -305,19 +305,23 @@ def discover_subtasks(messages: list, known: dict, parent_depth: int,
     found = {}
     for m in (messages or []):
         parts = m.get('parts') or []
-        child_sids = []
+        task_tools = []
         subtask_parts = []
         for p in parts:
             if p.get('type') == 'tool' and p.get('tool') == 'task':
                 sid = ((p.get('state') or {}).get('metadata') or {}).get('sessionId')
                 if sid:
-                    child_sids.append(sid)
+                    task_tools.append((sid, p))
             elif p.get('type') == 'subtask':
                 subtask_parts.append(p)
+        # subtask part 按出现顺序与 tool:'task' 一一配对（/command 路径两者并存）；
+        # 配不上对的 tool:'task'（自然语言委托，只有 tool part）单独发现。
+        paired = 0
         for i, sp in enumerate(subtask_parts):
-            if i >= len(child_sids):
+            if i >= len(task_tools):
                 break
-            sid = child_sids[i]
+            paired += 1
+            sid, _tp = task_tools[i]
             if sid in known or sid in found:
                 continue
             if parent_depth + 1 > MAX_SUBTASK_DEPTH:
@@ -326,6 +330,17 @@ def discover_subtasks(messages: list, known: dict, parent_depth: int,
                           'agent': sp.get('agent'), 'description': sp.get('description'),
                           '_parent_session_id': sp.get('sessionID'),
                           '_part_id': sp.get('id')}
+        for sid, tp in task_tools[paired:]:
+            if sid in known or sid in found:
+                continue
+            if parent_depth + 1 > MAX_SUBTASK_DEPTH:
+                continue
+            inp = ((tp.get('state') or {}).get('input') or {})
+            found[sid] = {'depth': parent_depth + 1, 'parent_id': parent_sid,
+                          'agent': inp.get('subagent_type'),
+                          'description': inp.get('description'),
+                          '_parent_session_id': m.get('info', {}).get('sessionID'),
+                          '_part_id': tp.get('id')}
     return found
 
 
@@ -811,16 +826,32 @@ class BatchWorker:
         part 的 id 映射到正确的子会话 sessionID（修复 SubtaskPart.sessionID
         实际是父会话的 bug）。"""
         from utils.opencode_parts import map_part
-        out = []
+        # /command 路径同一消息里 subtask part 与 tool:'task' part 并存且指向
+        # 同一子会话：subtask part 的占位元数据（agent/description）更准确，
+        # 先收集，tool part 派生的占位去重时让位。
+        subtask_by_child = {}
         for p in (parts or []):
-            if p.get('type') not in ('text', 'tool', 'subtask'):
+            if p.get('type') == 'subtask':
+                mapped = map_part(p, subtask_status=subtask_status,
+                                  subtask_id_map=subtask_id_map)
+                if mapped:
+                    subtask_by_child[mapped['subtaskId']] = mapped
+        out = []
+        seen_subtask_ids = set()
+        for p in (parts or []):
+            if p.get('type') not in ('text', 'tool', 'subtask', 'reasoning'):
                 continue
             mapped = map_part(p, subtask_status=subtask_status,
                               subtask_id_map=subtask_id_map)
             if mapped is None:
                 continue
-            if mapped['type'] == 'text' and not mapped['text'].strip():
+            if mapped['type'] in ('text', 'reasoning') and not mapped['text'].strip():
                 continue
+            if mapped['type'] == 'subtask_use':
+                mapped = subtask_by_child.get(mapped['subtaskId'], mapped)
+                if mapped['subtaskId'] in seen_subtask_ids:
+                    continue
+                seen_subtask_ids.add(mapped['subtaskId'])
             out.append(mapped)
         return out
 
@@ -879,7 +910,22 @@ class BatchWorker:
             )
             for m in child_messages:
                 minfo = m.get('info') or {}
-                if minfo.get('role') != 'assistant':
+                role = minfo.get('role')
+                if role == 'user':
+                    texts = [p.get('text', '') for p in (m.get('parts') or [])
+                             if p.get('type') == 'text' and (p.get('text') or '').strip()]
+                    if not texts:
+                        continue
+                    content = [{'type': 'text', 'text': t} for t in texts]
+                    mid = minfo.get('id') or f'{subtask_id}:u:{id(m)}'
+                    cur.execute(
+                        "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                        "VALUES (%s, %s, 'user', %s) "
+                        "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
+                        (mid, subtask_id, _json.dumps(content)),
+                    )
+                    continue
+                if role != 'assistant':
                     continue
                 content = self._content_from_parts(m.get('parts'), subtask_status,
                                                    subtask_id_map)

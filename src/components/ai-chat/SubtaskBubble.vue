@@ -23,8 +23,14 @@
                   :title="`仅显示最近 ${result.messages.length} 条，共 ${result.total} 条`" />
         <el-empty v-if="!result.messages.length" description="子代理还没有对话记录" />
         <div v-for="m in result.messages" :key="m.id" class="subtask-bubble__msg">
+          <div v-if="m.role === 'user'" class="subtask-bubble__role">委托输入</div>
           <template v-for="(p, i) in m.content" :key="i">
             <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
+            <Thinking
+              v-else-if="p.type === 'reasoning' && p.text"
+              class="subtask-bubble__thinking"
+              :content="p.text" status="end" :auto-collapse="true"
+            />
             <ToolCallBubble
               v-else-if="p.type === 'tool_use'"
               :name="p.name" :title="p.title" :status="p.status"
@@ -47,6 +53,7 @@
 import { ref } from 'vue'
 import { ElIcon, ElAlert, ElEmpty } from 'element-plus'
 import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading } from '@element-plus/icons-vue'
+import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import type { SubtaskMessagesResult } from '@/api/aiChat'
@@ -111,6 +118,11 @@ async function toggle() {
 .subtask-bubble__body { padding: 4px 12px 12px; border-top: 1px solid var(--el-border-color-lighter); }
 .subtask-bubble__loading { padding: 12px; color: var(--el-text-color-secondary); font-size: 12px; }
 .subtask-bubble__msg { padding: 8px 0; }
+.subtask-bubble__role {
+  font-size: 12px; font-weight: 600; color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
+}
+.subtask-bubble__thinking { margin: 4px 0; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>

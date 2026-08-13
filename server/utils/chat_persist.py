@@ -61,10 +61,11 @@ def new_state():
             '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
 
 
-def _new_subtask_scope(parent_id, depth, agent, description):
+def _new_subtask_scope(parent_id, depth, agent, description, prompt=None):
     return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [],
             'parent_id': parent_id, 'depth': depth, 'agent': agent,
             'description': description, 'status': 'running', 'error': None,
+            'prompt': prompt,
             '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
 
 
@@ -119,18 +120,30 @@ def apply_event(state, evt, opencode_session_id):
         pid = part.get('id')
         if pid and part.get('messageID') in scope['assistant_msg_ids']:
             ptype = part.get('type')
-            if ptype in ('text', 'tool'):
+            if ptype in ('text', 'tool', 'reasoning'):
                 # tool:'task' parts carry the real child session ID in
                 # state.metadata.sessionId — extract and store for cross-
                 # referencing with subtask parts (which arrive in the same
-                # message but as a separate part).
+                # message but as a separate part). Natural-language
+                # delegation produces ONLY this tool part (no subtask part),
+                # so discovery must also happen from here.
                 if ptype == 'tool' and part.get('tool') == 'task':
-                    child_sid = ((part.get('state') or {}).get('metadata') or {}).get('sessionId')
+                    st = part.get('state') or {}
+                    child_sid = (st.get('metadata') or {}).get('sessionId')
                     msg_id = part.get('messageID')
                     if child_sid and msg_id:
                         scope['_tool_sessions_by_msg'][msg_id] = child_sid
-                        _try_discover_pending_subtask(
-                            state, scope, scope_sid, is_subtask, msg_id, child_sid)
+                        pending = scope.get('_pending_subtasks_by_msg', {}).pop(msg_id, None)
+                        if pending:
+                            _discover_subtask(state, scope, scope_sid, is_subtask,
+                                                pending, child_sid)
+                        else:
+                            inp = st.get('input') or {}
+                            _discover_subtask(
+                                state, scope, scope_sid, is_subtask,
+                                {'id': pid, 'agent': inp.get('subagent_type'),
+                                 'description': inp.get('description')},
+                                child_sid, prompt=inp.get('prompt'))
                 from utils.opencode_parts import map_part
                 mapped = map_part(part)
                 if pid not in scope['parts_by_id']:
@@ -192,35 +205,41 @@ def _scope_owning_message(state, message_id, opencode_session_id):
 
 
 def _discover_subtask(state, current_scope, current_sid, current_is_subtask, part,
-                      child_session_id):
-    """A `subtask` part was seen inside `current_scope`'s own messages —
-    register its child sessionID for tracking, unless we're already at the
-    depth cap. `child_session_id` is the real child session ID extracted from
-    the sibling tool:'task' part's state.metadata.sessionId (NOT from
-    SubtaskPart.sessionID, which is the parent/owning session)."""
+                      child_session_id, prompt=None):
+    """A delegation was seen inside `current_scope`'s own messages — register
+    its child sessionID for tracking, unless we're already at the depth cap.
+    `child_session_id` is the real child session ID extracted from the
+    tool:'task' part's state.metadata.sessionId (NOT from
+    SubtaskPart.sessionID, which is the parent/owning session). `part` may be
+    a real subtask part or a synthetic {'id','agent','description'} derived
+    from a bare tool:'task' part (natural-language delegation). `prompt` is
+    the delegated task prompt (from the tool input), persisted as the child's
+    own user message."""
     sid = child_session_id
-    if not sid or sid in state['subtasks']:
+    if not sid:
         return
     parent_depth = current_scope['depth'] if current_is_subtask else 0
     if parent_depth + 1 > MAX_SUBTASK_DEPTH:
         return
+    # Record the part-id -> child session mapping BEFORE the "already known"
+    # guard: when a tool:'task' part discovers the child first and a sibling
+    # subtask part arrives later, that subtask part still needs its own id
+    # mapped so its placeholder points at the right child.
+    if part.get('id'):
+        state.setdefault('_subtask_part_id_map', {})[part.get('id')] = sid
+    if sid in state['subtasks']:
+        sub = state['subtasks'][sid]
+        if prompt and not sub.get('prompt'):
+            sub['prompt'] = prompt
+        if part.get('agent') and not sub.get('agent'):
+            sub['agent'] = part['agent']
+        if part.get('description') and not sub.get('description'):
+            sub['description'] = part['description']
+        return
     parent_id = current_sid if current_is_subtask else None
     state['subtasks'][sid] = _new_subtask_scope(
-        parent_id, parent_depth + 1, part.get('agent'), part.get('description'))
-    # Record the mapping from subtask part ID to child session ID so that
-    # _flatten_scope can produce correct subtask_use placeholders.
-    state.setdefault('_subtask_part_id_map', {})[part.get('id')] = sid
-
-
-def _try_discover_pending_subtask(state, scope, scope_sid, is_subtask, msg_id,
-                                  child_sid):
-    """A tool:'task' part just arrived with a child session ID — check if a
-    subtask part for the same message was already seen (and stored as pending).
-    If so, discover the subtask now."""
-    pending = scope.get('_pending_subtasks_by_msg', {})
-    part = pending.pop(msg_id, None)
-    if part:
-        _discover_subtask(state, scope, scope_sid, is_subtask, part, child_sid)
+        parent_id, parent_depth + 1, part.get('agent'), part.get('description'),
+        prompt=prompt)
 
 
 def _status_snapshot(state):
@@ -235,7 +254,19 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
     每次都用当前的 `subtask_status` 重新调 map_part，状态不会定型不变。
     `subtask_id_map` 把 subtask part 的 id 映射到正确的子会话 sessionID。"""
     from utils.opencode_parts import map_part
+    # /command 路径同一消息里会同时有 subtask part 和 tool:'task' part，都指向
+    # 同一个子会话。先收集 subtask part 的占位（agent/description 更准确），
+    # tool part 派生的占位在去重时让位——但仍出现在 tool part 自己的位置上。
+    subtask_by_child = {}
+    for pid in scope['part_order']:
+        p = scope['parts_by_id'].get(pid)
+        if p and '_subtask_part' in p:
+            mapped = map_part(p['_subtask_part'], subtask_status=subtask_status,
+                              subtask_id_map=subtask_id_map)
+            if mapped:
+                subtask_by_child[mapped['subtaskId']] = mapped
     content = []
+    seen_subtask_ids = set()
     for pid in scope['part_order']:
         p = scope['parts_by_id'].get(pid)
         if not p:
@@ -243,14 +274,23 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
         if '_subtask_part' in p:
             mapped = map_part(p['_subtask_part'], subtask_status=subtask_status,
                               subtask_id_map=subtask_id_map)
-            if mapped:
+            if mapped and mapped['subtaskId'] not in seen_subtask_ids:
+                seen_subtask_ids.add(mapped['subtaskId'])
                 content.append(mapped)
             continue
         if p['type'] == 'text':
             if (p.get('text') or '').strip():
                 content.append({'type': 'text', 'text': p['text']})
+        elif p['type'] == 'reasoning':
+            if (p.get('text') or '').strip():
+                content.append({'type': 'reasoning', 'text': p['text']})
         elif p['type'] == 'tool_use':
             content.append(p)
+        elif p['type'] == 'subtask_use':
+            mapped = subtask_by_child.get(p['subtaskId'], p)
+            if mapped['subtaskId'] not in seen_subtask_ids:
+                seen_subtask_ids.add(mapped['subtaskId'])
+                content.append(mapped)
     return content
 
 
@@ -314,6 +354,14 @@ def persist_subtasks(root_session_id, state):
                     (sid, root_session_id, sub['parent_id'], sub['agent'],
                      sub['description'], sub['status'], sub.get('error'), sub['status']),
                 )
+                if sub.get('prompt'):
+                    cur.execute(
+                        "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                        "VALUES (%s, %s, 'user', %s) "
+                        "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
+                        (f'{sid}:u', sid,
+                         json.dumps([{'type': 'text', 'text': sub['prompt']}])),
+                    )
                 if content:
                     cur.execute(
                         "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
@@ -327,7 +375,110 @@ def persist_subtasks(root_session_id, state):
                            root_session_id, sid, e)
 
 
-def _run_listener(sid, opencode_session_id, event_source):
+def _synth_message_event(info):
+    return {'event': 'message.updated', 'data': {'properties': {'info': info}}}
+
+
+def _synth_part_event(part):
+    return {'event': 'message.part.updated', 'data': {'properties': {'part': part}}}
+
+
+def _replay_rest_messages(state, msgs, opencode_session_id, min_created_ms=0):
+    """Re-synthesize SSE events for REST assistant messages/parts the live
+    stream missed, feeding them through apply_event so accumulation, subtask
+    discovery and scope routing stay identical. Returns True if anything new
+    was captured."""
+    changed = False
+    for m in msgs:
+        info = m.get('info') or {}
+        if info.get('role') != 'assistant':
+            continue
+        created = ((info.get('time') or {}).get('created')) or 0
+        if created and created < min_created_ms:
+            continue
+        ev_sid = event_session_id({'info': info})
+        scope, _ = _resolve_scope(state, ev_sid, opencode_session_id)
+        if scope is None:
+            continue
+        if info.get('id') and info.get('id') not in scope['assistant_msg_ids']:
+            if apply_event(state, _synth_message_event(info), opencode_session_id):
+                changed = True
+        for p in m.get('parts') or []:
+            pid = p.get('id')
+            if not pid or pid in scope['parts_by_id']:
+                continue
+            if apply_event(state, _synth_part_event(p), opencode_session_id):
+                changed = True
+    return changed
+
+
+def _reorder_by_rest(scope, msgs):
+    """回放只能按“到达”顺序追加 part_order——竞态下晚到的首条消息的
+    part 会排在已流式捕获的后一条消息的 part 后面。REST 消息顺序是
+    唯一可靠的真序，回放完按它重排一次。"""
+    rest_pos = {}
+    pos = 0
+    for m in msgs:
+        if (m.get('info') or {}).get('role') != 'assistant':
+            continue
+        for p in m.get('parts') or []:
+            if p.get('id'):
+                rest_pos[p['id']] = pos
+                pos += 1
+    if rest_pos:
+        scope['part_order'].sort(key=lambda pid: rest_pos.get(pid, 1 << 30))
+
+
+def backfill_from_rest(state, client, opencode_session_id, directory=''):
+    """REST safety net for the turn-start SSE race: `ensure_listener` can only
+    subscribe *after* the prompt was dispatched, so events for the turn's
+    FIRST assistant message (message.updated + its reasoning/tool parts,
+    including the tool:'task' part that discovers the subtask) are frequently
+    emitted before the subscription exists and are lost. Called on
+    session.idle: re-fetch the parent session's messages (only this turn's —
+    assistant messages after the last user message) and replay whatever the
+    accumulator is missing; then do the same for every discovered child
+    session so subtask traces survive even if all of the child's SSE events
+    were missed. Best-effort; never raises into the listener loop."""
+    changed = False
+    try:
+        msgs = client.get_messages(opencode_session_id, directory=directory) or []
+    except Exception as e:
+        logger.warning('backfill fetch failed oc=%s: %s', opencode_session_id, e)
+        return False
+    turn_starts = [((m.get('info') or {}).get('time') or {}).get('created') or 0
+                   for m in msgs
+                   if (m.get('info') or {}).get('role') == 'user']
+    min_created = max(turn_starts) if turn_starts else 0
+    try:
+        changed = _replay_rest_messages(state, msgs, opencode_session_id,
+                                        min_created_ms=min_created) or changed
+        _reorder_by_rest(state, msgs)
+    except Exception as e:
+        logger.warning('backfill replay failed oc=%s: %s', opencode_session_id, e)
+    for child_sid in list(state.get('subtasks', {}).keys()):
+        sub = state['subtasks'][child_sid]
+        try:
+            child_msgs = client.get_messages(child_sid, directory=directory) or []
+        except Exception as e:
+            logger.warning('backfill fetch failed child=%s: %s', child_sid, e)
+            continue
+        try:
+            changed = _replay_rest_messages(state, child_msgs,
+                                            opencode_session_id) or changed
+            _reorder_by_rest(sub, child_msgs)
+        except Exception as e:
+            logger.warning('backfill replay failed child=%s: %s', child_sid, e)
+        if sub['status'] == 'running' and any(
+                (m.get('info') or {}).get('role') == 'assistant'
+                and (((m.get('info') or {}).get('time') or {}).get('completed'))
+                for m in child_msgs):
+            sub['status'] = 'completed'
+            changed = True
+    return changed
+
+
+def _run_listener(sid, opencode_session_id, event_source, directory=''):
     """Consume events, persisting the assistant message on session.idle and
     incrementally (time-debounced) while the turn streams, so switching sessions
     mid-stream recovers the partial answer. Returns after the turn's idle (or
@@ -355,7 +506,13 @@ def _run_listener(sid, opencode_session_id, event_source):
             persist_subtasks(sid, state)
             continue
         if sig == 'idle':
+            try:
+                backfill_from_rest(state, OpenCodeClient(OPENCODE_BASE_URL),
+                                   opencode_session_id, directory=directory)
+            except Exception as e:
+                logger.warning('backfill failed session=%s: %s', sid, e)
             persist_turn(sid, state)
+            persist_subtasks(sid, state)
             logger.debug('persist listener idle->persisted+exit session=%s parts=%d',
                          sid, len(state.get('part_order', [])))
             try:
@@ -380,7 +537,7 @@ def _listener_thread(sid, opencode_session_id, directory):
         source = OpenCodeClient(OPENCODE_BASE_URL).subscribe_events(
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
-        _run_listener(sid, opencode_session_id, source)
+        _run_listener(sid, opencode_session_id, source, directory=directory)
         logger.info('persist listener stream ended session=%s', sid)
     except Exception:
         # Previously swallowed — the #1 reason a "stuck" session left no trace.
