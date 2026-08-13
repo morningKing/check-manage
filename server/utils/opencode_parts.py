@@ -14,11 +14,17 @@ ai_chat_subtask_messages）单独持久化，这里只映射成一个轻量占�
 from utils.ai_message_meta import tool_duration_ms
 
 
-def map_part(part: dict, *, subtask_status: dict | None = None) -> dict | None:
+def map_part(part: dict, *, subtask_status: dict | None = None,
+             subtask_id_map: dict | None = None) -> dict | None:
     """把一个 OpenCode message part 映射成持久化内容的形状。
 
     返回 None 表示这个 part 不需要持久化（未知类型，或 subtask 缺 sessionID
     这种畸形数据——没有 sessionID 就没法在前端拉取，占位没有意义）。
+
+    `subtask_id_map` 把 subtask part 的 id 映射到正确的子会话 sessionID——
+    SubtaskPart.sessionID 实际是 PartBase 的标准"所属会话"字段（等于父会话），
+    真正的子会话 id 在配套的 tool:'task' part 的 state.metadata.sessionId 里。
+    调用方在发现阶段已经算好了这个映射，传进来让占位气泡引用正确的子代理。
     """
     t = part.get('type')
     if t == 'text':
@@ -35,7 +41,7 @@ def map_part(part: dict, *, subtask_status: dict | None = None) -> dict | None:
             'durationMs': tool_duration_ms(st),
         }
     if t == 'subtask':
-        sid = part.get('sessionID')
+        sid = (subtask_id_map or {}).get(part.get('id')) or part.get('sessionID')
         if not sid:
             return None
         return {

@@ -306,34 +306,39 @@ def test_sse_events_filters_other_sessions(setup):
 
 def test_sse_events_forwards_subtask_events_not_just_top_level(setup):
     """A subagent delegation runs under its own OpenCode sessionID, distinct
-    from the top-level session's opencode_session_id. Before this fix, the SSE
-    proxy filtered every event by `ev_sid == opencode_session_id` *before*
-    apply_event ever ran, so a subtask's own events (including the one that
-    announces the delegation itself) were silently dropped — apply_event's
-    subtask-tracking (Task 4) never got invoked on this path, and the browser
-    never saw a single subtask frame. All three of the events below must be
-    forwarded (yielded), not just the top-level one."""
+    from the top-level session's opencode_session_id. The SSE proxy must forward
+    subtask events, not just top-level ones. The discovery flow is:
+    1) tool:'task' part arrives with state.metadata.sessionId (the real child ID)
+    2) subtask part arrives (sessionID is the parent, not the child)
+    3) child's own events arrive scoped to the child sessionID
+    All must be forwarded."""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
     oc.subscribe_events.return_value = iter([
         # 1) top-level assistant message announced
         {'event': 'message.updated', 'data': {'type': 'message.updated',
             'properties': {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},
-        # 2) top-level message grows a `subtask` part — this is the event that
-        #    *discovers* the delegation; its part.sessionID names the child
-        #    (ses_child1), not the owning (top-level) session.
+        # 2) tool:'task' part arrives with the real child session ID
+        {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
+            'properties': {'part': {'id': 'pt1', 'type': 'tool', 'tool': 'task',
+                                    'messageID': 'm1', 'sessionID': 'oc_sess_42',
+                                    'state': {'status': 'completed',
+                                              'metadata': {'sessionId': 'ses_child1'}}}}}},
+        # 3) subtask part arrives (sessionID is the parent, child ID already known)
         {'event': 'message.part.updated', 'data': {'type': 'message.part.updated',
             'properties': {'part': {'id': 'p1', 'type': 'subtask', 'messageID': 'm1',
-                                    'sessionID': 'ses_child1', 'agent': 'build',
-                                    'description': 'x'}}}},
-        # 3) the child subagent's own assistant message, scoped to ses_child1
+                                    'sessionID': 'oc_sess_42', 'id': 'prt_sub1',
+                                    'agent': 'build', 'description': 'x'}}}},
+        # 4) the child subagent's own assistant message, scoped to ses_child1
         {'event': 'message.updated', 'data': {'type': 'message.updated',
             'properties': {'info': {'id': 'cm1', 'role': 'assistant', 'sessionID': 'ses_child1'}}}},
     ])
     resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
     body = b''.join(resp.response).decode('utf-8')
+    # message.updated: top-level (m1) + child (cm1) = 2
     assert body.count('event: message.updated') == 2
-    assert body.count('event: message.part.updated') == 1
+    # message.part.updated: tool:'task' (pt1) + subtask (p1) = 2
+    assert body.count('event: message.part.updated') == 2
     assert 'ses_child1' in body
 
 

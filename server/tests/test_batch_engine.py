@@ -655,12 +655,18 @@ def test_await_finished_ignores_error_none(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_discover_subtasks_from_messages_finds_new_child():
-    """扫描一批消息，发现其中的 subtask part，返回新发现的 sessionID 集合。"""
+    """扫描一批消息，发现其中的 subtask part，返回新发现的 sessionID 集合。
+    子代理的真实 sessionID 在配套的 tool:'task' part 的 state.metadata.sessionId
+    里，不在 subtask part 的 sessionID（那是父会话）。"""
     import utils.batch_engine as eng
     msgs = [
         {'info': {'role': 'assistant', 'id': 'm1'},
          'parts': [{'type': 'text', 'text': 'hi'},
-                  {'type': 'subtask', 'sessionID': 'ses_child1',
+                  {'type': 'tool', 'tool': 'task',
+                   'state': {'status': 'completed',
+                             'metadata': {'sessionId': 'ses_child1'}}},
+                  {'type': 'subtask', 'sessionID': 'ses_parent',
+                   'id': 'prt_subtask1',
                    'agent': 'build', 'description': 'x'}]},
     ]
     found = eng.discover_subtasks(msgs, known={}, parent_depth=0, parent_sid=None)
@@ -668,6 +674,7 @@ def test_discover_subtasks_from_messages_finds_new_child():
     assert found['ses_child1']['parent_id'] is None
     assert found['ses_child1']['agent'] == 'build'
     assert found['ses_child1']['description'] == 'x'
+    assert found['ses_child1']['_part_id'] == 'prt_subtask1'
 
 
 def test_discover_subtasks_sets_parent_sid_for_nested_scan():
@@ -675,8 +682,12 @@ def test_discover_subtasks_sets_parent_sid_for_nested_scan():
     发现的孙代的 parent_id 要是它，不是 None。"""
     import utils.batch_engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'cm1'},
-            'parts': [{'type': 'subtask', 'sessionID': 'ses_grandchild',
-                      'agent': 'review', 'description': 'y'}]}]
+            'parts': [{'type': 'tool', 'tool': 'task',
+                       'state': {'status': 'completed',
+                                 'metadata': {'sessionId': 'ses_grandchild'}}},
+                      {'type': 'subtask', 'sessionID': 'ses_child1',
+                       'id': 'prt_gc',
+                       'agent': 'review', 'description': 'y'}]}]
     found = eng.discover_subtasks(msgs, known={}, parent_depth=1, parent_sid='ses_child1')
     assert found['ses_grandchild']['depth'] == 2
     assert found['ses_grandchild']['parent_id'] == 'ses_child1'
@@ -685,8 +696,12 @@ def test_discover_subtasks_sets_parent_sid_for_nested_scan():
 def test_discover_subtasks_skips_already_known():
     import utils.batch_engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
-            'parts': [{'type': 'subtask', 'sessionID': 'ses_child1',
-                      'agent': 'build', 'description': 'x'}]}]
+            'parts': [{'type': 'tool', 'tool': 'task',
+                       'state': {'status': 'completed',
+                                 'metadata': {'sessionId': 'ses_child1'}}},
+                      {'type': 'subtask', 'sessionID': 'ses_parent',
+                       'id': 'prt_st1',
+                       'agent': 'build', 'description': 'x'}]}]
     already = {'ses_child1': {'depth': 1, 'parent_id': None}}
     found = eng.discover_subtasks(msgs, known=already, parent_depth=0, parent_sid=None)
     assert found == {}
@@ -695,8 +710,12 @@ def test_discover_subtasks_skips_already_known():
 def test_discover_subtasks_respects_depth_cap():
     import utils.batch_engine as eng
     msgs = [{'info': {'role': 'assistant', 'id': 'm1'},
-            'parts': [{'type': 'subtask', 'sessionID': 'ses_too_deep',
-                      'agent': 'x', 'description': 'y'}]}]
+            'parts': [{'type': 'tool', 'tool': 'task',
+                       'state': {'status': 'completed',
+                                 'metadata': {'sessionId': 'ses_too_deep'}}},
+                      {'type': 'subtask', 'sessionID': 'ses_parent',
+                       'id': 'prt_deep',
+                       'agent': 'x', 'description': 'y'}]}]
     found = eng.discover_subtasks(msgs, known={}, parent_depth=eng.MAX_SUBTASK_DEPTH,
                                   parent_sid='whatever')
     assert found == {}
@@ -753,8 +772,12 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
     try:
         top_msgs = [
             {'info': {'role': 'assistant', 'id': 'm1'},
-             'parts': [{'type': 'subtask', 'sessionID': 'ses_child_be',
-                       'agent': 'build', 'description': 'do y'}]},
+             'parts': [{'type': 'tool', 'tool': 'task',
+                        'state': {'status': 'completed',
+                                  'metadata': {'sessionId': 'ses_child_be'}}},
+                       {'type': 'subtask', 'sessionID': 'ses_parent',
+                        'id': 'prt_sub_be',
+                        'agent': 'build', 'description': 'do y'}]},
         ]
         # 子代理自己已经跑完了（finish='stop' + time.completed）
         child_msgs = [

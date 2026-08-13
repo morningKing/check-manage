@@ -880,10 +880,15 @@ def run_session_command(sid):
             "VALUES (%s, %s, 'user', %s)",
             (msg_id, sid, json.dumps([{'type': 'text', 'text': shown}])),
         )
+    # Attach the persistence listener BEFORE the blocking run_command call:
+    # run_command waits for the full turn to complete (can be minutes), and SSE
+    # events are not replayable — by the time it returns, every event for this
+    # turn has already been emitted and lost. ensure_listener is a no-op if a
+    # live listener is already running for this session.
+    ensure_listener(sid, sess[2], sess[4])
     OpenCodeClient(OPENCODE_BASE_URL).run_command(
         sess[2], command, arguments, model=OPENCODE_MODEL, directory=sess[4],
     )
-    ensure_listener(sid, sess[2], sess[4])
     return jsonify({'messageId': msg_id}), 202
 
 

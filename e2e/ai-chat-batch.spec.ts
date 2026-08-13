@@ -6,8 +6,8 @@ test('batch task: create, run, retry, delete', async ({ page }) => {
 
   // Log in as admin (same pattern as ai-chat-smoke.spec.ts)
   await page.fill('input[placeholder*="用户名"]', 'admin')
-  await page.fill('input[type="password"]', 'admin123')
-  await page.getByRole('button', { name: /登录|Login/ }).click()
+  await page.fill('input[placeholder*="密码"]', 'admin123')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
 
   // Navigate to /ai-chat
   await page.goto('/ai-chat')

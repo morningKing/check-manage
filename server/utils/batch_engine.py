@@ -296,19 +296,36 @@ def discover_subtasks(messages: list, known: dict, parent_depth: int,
     {sessionID: {'depth', 'parent_id', 'agent', 'description'}}。不递归深入
     已知子代理自己的消息——调用方对每个已知子代理的消息列表各自再调一次本
     函数，`parent_depth`/`parent_sid` 传该子代理自己的 depth/id（顶层扫描
-    传 depth=0, parent_sid=None）。"""
+    传 depth=0, parent_sid=None）。
+
+    子代理的真实 sessionID 不在 SubtaskPart.sessionID（那是 PartBase 的标准
+    "所属会话"字段，等于父/根会话自己），而在同一消息里配套产出的
+    tool:'task' part 的 state.metadata.sessionId——按出现顺序与 subtask part
+    一一配对。"""
     found = {}
     for m in (messages or []):
-        for p in (m.get('parts') or []):
-            if p.get('type') != 'subtask':
-                continue
-            sid = p.get('sessionID')
-            if not sid or sid in known or sid in found:
+        parts = m.get('parts') or []
+        child_sids = []
+        subtask_parts = []
+        for p in parts:
+            if p.get('type') == 'tool' and p.get('tool') == 'task':
+                sid = ((p.get('state') or {}).get('metadata') or {}).get('sessionId')
+                if sid:
+                    child_sids.append(sid)
+            elif p.get('type') == 'subtask':
+                subtask_parts.append(p)
+        for i, sp in enumerate(subtask_parts):
+            if i >= len(child_sids):
+                break
+            sid = child_sids[i]
+            if sid in known or sid in found:
                 continue
             if parent_depth + 1 > MAX_SUBTASK_DEPTH:
                 continue
             found[sid] = {'depth': parent_depth + 1, 'parent_id': parent_sid,
-                          'agent': p.get('agent'), 'description': p.get('description')}
+                          'agent': sp.get('agent'), 'description': sp.get('description'),
+                          '_parent_session_id': sp.get('sessionID'),
+                          '_part_id': sp.get('id')}
     return found
 
 
@@ -780,7 +797,8 @@ class BatchWorker:
         return (count, total_text, tuple(tool_sig))
 
     @staticmethod
-    def _content_from_parts(parts, subtask_status: dict | None = None) -> list:
+    def _content_from_parts(parts, subtask_status: dict | None = None,
+                            subtask_id_map: dict | None = None) -> list:
         """Map one OpenCode message's parts to persisted typed content: text +
         tool_use + subtask_use (matches interactive build_content + the
         AiContentPart schema). Drops reasoning/step markers. 委托给
@@ -789,13 +807,16 @@ class BatchWorker:
         part 自 Task 5 起放行给 map_part：批任务路径每次都重新拉取完整消息列表
         （REST 快照式，见 `_persist_conversation`/`_collect_subtasks`），调用方
         总能传入当前整棵子代理树算好的 `subtask_status`，所以占位气泡不会像
-        Task 4/5 接入前那样卡死在默认的 'running'。"""
+        Task 4/5 接入前那样卡死在默认的 'running'。`subtask_id_map` 把 subtask
+        part 的 id 映射到正确的子会话 sessionID（修复 SubtaskPart.sessionID
+        实际是父会话的 bug）。"""
         from utils.opencode_parts import map_part
         out = []
         for p in (parts or []):
             if p.get('type') not in ('text', 'tool', 'subtask'):
                 continue
-            mapped = map_part(p, subtask_status=subtask_status)
+            mapped = map_part(p, subtask_status=subtask_status,
+                              subtask_id_map=subtask_id_map)
             if mapped is None:
                 continue
             if mapped['type'] == 'text' and not mapped['text'].strip():
@@ -834,11 +855,13 @@ class BatchWorker:
             self._collect_subtasks(msgs, known, child_messages, info['depth'], sid, directory)
 
     def _write_subtask(self, root_session_id: str, subtask_id: str, info: dict,
-                       subtask_status: dict, child_messages: list):
+                       subtask_status: dict, child_messages: list,
+                       subtask_id_map: dict | None = None):
         """阶段二：把一个子代理的摘要行 + 它当前拉到的全部消息 upsert 进库。
         `subtask_status` 是整棵树的完整状态快照（阶段一算好的），传给
         `_content_from_parts` 让这个子代理自己内容里（如果有）更深一层的
-        占位气泡也能用上最新状态——跟顶层的处理方式统一。"""
+        占位气泡也能用上最新状态——跟顶层的处理方式统一。`subtask_id_map` 把
+        subtask part 的 id 映射到正确的子会话 sessionID。"""
         import json as _json
         with get_db() as conn:
             cur = conn.cursor()
@@ -858,7 +881,8 @@ class BatchWorker:
                 minfo = m.get('info') or {}
                 if minfo.get('role') != 'assistant':
                     continue
-                content = self._content_from_parts(m.get('parts'), subtask_status)
+                content = self._content_from_parts(m.get('parts'), subtask_status,
+                                                   subtask_id_map)
                 if not content:
                     continue
                 mid = minfo.get('id') or f'{subtask_id}:a:{id(m)}'
@@ -897,19 +921,24 @@ class BatchWorker:
             self._collect_subtasks(raw, known, child_messages, parent_depth=0,
                                    parent_sid=None, directory=directory)
             subtask_status = {sid: info['status'] for sid, info in known.items()}
+            # subtask part 的 id -> 正确的子会话 sessionID（修复 SubtaskPart.sessionID
+            # 实际是父会话的 bug）：发现阶段已经把 _part_id 记进了 info。
+            subtask_id_map = {info['_part_id']: sid for sid, info in known.items()
+                              if info.get('_part_id')}
 
             # 阶段二：先落每个子代理自己的行/消息，再落顶层——都用同一份
-            # subtask_status，占位气泡不会有哪一层状态落后。
+            # subtask_status / subtask_id_map，占位气泡不会有哪一层状态落后。
             for sid, info in known.items():
                 self._write_subtask(session_id, sid, info, subtask_status,
-                                    child_messages.get(sid, []))
+                                    child_messages.get(sid, []), subtask_id_map)
 
             assistant_rows = []   # (message_id, content, meta)
             for m in raw:
                 info = m.get('info') or {}
                 if info.get('role') != 'assistant':
                     continue
-                content = self._content_from_parts(m.get('parts'), subtask_status)
+                content = self._content_from_parts(m.get('parts'), subtask_status,
+                                                   subtask_id_map)
                 if content:
                     meta = public_meta(meta_from_info(info))
                     assistant_rows.append((info.get('id') or f'{session_id}:a:{len(assistant_rows)}',

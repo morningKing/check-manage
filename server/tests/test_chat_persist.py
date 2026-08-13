@@ -212,14 +212,22 @@ def test_apply_event_ignores_unrelated_session_still_works():
 def test_apply_event_subtask_part_appears_in_parent_content():
     """核心断言：父级消息里出现 subtask part 之后，父级自己 flatten 出来的
     content 里必须真的有一条 subtask_use——这是 Task 6 渲染唯一的数据来源，
-    只在 state['subtasks'] 里记追踪状态而不放进父级 content 就是白做。"""
+    只在 state['subtasks'] 里记追踪状态而不放进父级 content 就是白做。
+    子代理的真实 sessionID 来自配套的 tool:'task' part。"""
     from utils.chat_persist import new_state, apply_event, build_content
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    # tool:'task' part arrives first with the real child session ID
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
     sig = apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     assert sig == 'subtask'
     content = build_content(s)
     stubs = [p for p in content if p['type'] == 'subtask_use']
@@ -233,8 +241,14 @@ def test_apply_event_discovers_subtask_with_depth_and_parent():
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     assert s['subtasks']['ses_child1']['depth'] == 1
     assert s['subtasks']['ses_child1']['parent_id'] is None
     assert s['subtasks']['ses_child1']['status'] == 'running'
@@ -248,8 +262,14 @@ def test_apply_event_routes_child_events_into_subtask_scope():
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1'}}), 'oc')
     sig = apply_event(s, _ev('message.part.updated',
@@ -265,8 +285,14 @@ def test_apply_event_subtask_idle_marks_completed():
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     sig = apply_event(s, _ev('session.idle', {'sessionID': 'ses_child1'}), 'oc')
     assert sig == 'subtask'
     assert s['subtasks']['ses_child1']['status'] == 'completed'
@@ -282,11 +308,19 @@ def test_apply_event_parent_stub_reflects_child_status_after_it_finishes():
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
-    assert build_content(s)[0]['status'] == 'running'
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    stubs = [p for p in build_content(s) if p['type'] == 'subtask_use']
+    assert stubs[0]['status'] == 'running'
     apply_event(s, _ev('session.idle', {'sessionID': 'ses_child1'}), 'oc')
-    assert build_content(s)[0]['status'] == 'completed'
+    stubs = [p for p in build_content(s) if p['type'] == 'subtask_use']
+    assert stubs[0]['status'] == 'completed'
 
 
 def test_apply_event_subtask_error_marks_failed_immediately():
@@ -297,8 +331,14 @@ def test_apply_event_subtask_error_marks_failed_immediately():
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     sig = apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1',
                   'error': {'name': 'ProviderAuthError',
@@ -316,14 +356,28 @@ def test_apply_event_nested_subtask_depth_increments():
     s = new_state()
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    # Top-level discovers child via tool:'task' + subtask pair
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                  'sessionID': 'ses_child1', 'agent': 'build', 'description': 'x'}}), 'oc')
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
     apply_event(s, _ev('message.updated',
         {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1'}}), 'oc')
+    # Child discovers grandchild via tool:'task' + subtask pair
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'cpt1', 'messageID': 'cm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_grandchild'}},
+                  'sessionID': 'ses_child1'}}), 'oc')
     apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'subtask',
-                  'sessionID': 'ses_grandchild', 'agent': 'review', 'description': 'y'}}), 'oc')
+                  'sessionID': 'ses_child1', 'id': 'prt_gc1',
+                  'agent': 'review', 'description': 'y'}}), 'oc')
     assert s['subtasks']['ses_grandchild']['depth'] == 2
     assert s['subtasks']['ses_grandchild']['parent_id'] == 'ses_child1'
     # 顶层 content 里只有对 ses_child1 的占位，没有孙代
@@ -343,10 +397,17 @@ def test_apply_event_depth_limit_stops_at_five():
         'assistant_msg_ids': {'dm1'}, 'parts_by_id': {}, 'part_order': [],
         'parent_id': None, 'depth': 5, 'agent': 'x', 'description': 'y',
         'status': 'running', 'error': None,
+        '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {},
     }
     apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'dpt1', 'messageID': 'dm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_too_deep'}},
+                  'sessionID': 'ses_deep'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
         {'part': {'id': 'dp1', 'messageID': 'dm1', 'type': 'subtask',
-                  'sessionID': 'ses_too_deep', 'agent': 'z', 'description': 'w'}}), 'oc')
+                  'sessionID': 'ses_deep', 'id': 'prt_deep',
+                  'agent': 'z', 'description': 'w'}}), 'oc')
     assert 'ses_too_deep' not in s['subtasks']
 
 
@@ -373,8 +434,14 @@ def test_persist_subtasks_writes_rows_and_messages():
         apply_event(s, _ev('message.updated',
             {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
         apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                      'state': {'status': 'completed',
+                                'metadata': {'sessionId': 'ses_child_persist'}},
+                      'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
             {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
-                      'sessionID': 'ses_child_persist', 'agent': 'build',
+                      'sessionID': 'oc', 'id': 'prt_sub_persist',
+                      'agent': 'build',
                       'description': 'do x'}}), 'oc')
         apply_event(s, _ev('message.updated',
             {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child_persist'}}), 'oc')

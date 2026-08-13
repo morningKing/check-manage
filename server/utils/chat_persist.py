@@ -52,15 +52,20 @@ def new_state():
     for why this is safe to scope per-turn: delegating to a subagent is a
     *blocking* tool call from the parent's perspective, so the parent's own
     session.idle cannot fire before every subtask under it has already
-    idled/failed."""
+    idled/failed. `_tool_sessions_by_msg` maps messageID -> child sessionID
+    from tool:'task' parts (the real child session ID). `_pending_subtasks_by_msg`
+    maps messageID -> subtask part metadata, waiting for the tool:'task' part
+    to arrive (or vice versa)."""
     return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [],
-            'turn_msg_id': None, 'meta_by_msg': {}, 'subtasks': {}}
+            'turn_msg_id': None, 'meta_by_msg': {}, 'subtasks': {},
+            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
 
 
 def _new_subtask_scope(parent_id, depth, agent, description):
     return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [],
             'parent_id': parent_id, 'depth': depth, 'agent': agent,
-            'description': description, 'status': 'running', 'error': None}
+            'description': description, 'status': 'running', 'error': None,
+            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
 
 
 MAX_SUBTASK_DEPTH = 5
@@ -82,16 +87,13 @@ def apply_event(state, evt, opencode_session_id):
     scope_sid = ev_sid if is_subtask else opencode_session_id
     if scope is None and etype == 'message.part.updated':
         # For a `subtask`-typed part, `part.sessionID` (which is what
-        # event_session_id() reads off `props.part.sessionID` above) names
-        # the *delegate target* session, not the session that owns this
-        # event — unlike every other part type, where sessionID == owning
-        # session (see opencode_parts.map_part's subtask branch: it reads
-        # that same field as the child's own id). That makes `ev_sid`
-        # unusable for scope resolution on exactly the event that's
-        # supposed to *discover* the subtask (its target session isn't
-        # tracked yet). Fall back to resolving by which known scope's own
-        # message this part belongs to — message.updated/session.idle don't
-        # have this ambiguity, so they never need this fallback.
+        # event_session_id() reads off `props.part.sessionID` above) is the
+        # PartBase standard "owning session" field — equal to the parent/root
+        # session, NOT the delegate target. The real child session ID lives
+        # in the sibling tool:'task' part's state.metadata.sessionId. This
+        # makes `ev_sid` unusable for scope resolution on exactly the event
+        # that's supposed to *discover* the subtask. Fall back to resolving
+        # by which known scope's own message this part belongs to.
         mid = (props.get('part') or {}).get('messageID')
         scope_sid, scope, is_subtask = _scope_owning_message(state, mid, opencode_session_id)
     if scope is None:
@@ -118,6 +120,17 @@ def apply_event(state, evt, opencode_session_id):
         if pid and part.get('messageID') in scope['assistant_msg_ids']:
             ptype = part.get('type')
             if ptype in ('text', 'tool'):
+                # tool:'task' parts carry the real child session ID in
+                # state.metadata.sessionId — extract and store for cross-
+                # referencing with subtask parts (which arrive in the same
+                # message but as a separate part).
+                if ptype == 'tool' and part.get('tool') == 'task':
+                    child_sid = ((part.get('state') or {}).get('metadata') or {}).get('sessionId')
+                    msg_id = part.get('messageID')
+                    if child_sid and msg_id:
+                        scope['_tool_sessions_by_msg'][msg_id] = child_sid
+                        _try_discover_pending_subtask(
+                            state, scope, scope_sid, is_subtask, msg_id, child_sid)
                 from utils.opencode_parts import map_part
                 mapped = map_part(part)
                 if pid not in scope['parts_by_id']:
@@ -131,7 +144,13 @@ def apply_event(state, evt, opencode_session_id):
                 if pid not in scope['parts_by_id']:
                     scope['part_order'].append(pid)
                 scope['parts_by_id'][pid] = {'_subtask_part': part}
-                _discover_subtask(state, scope, scope_sid, is_subtask, part)
+                msg_id = part.get('messageID')
+                child_sid = scope['_tool_sessions_by_msg'].get(msg_id)
+                if child_sid:
+                    _discover_subtask(state, scope, scope_sid, is_subtask, part, child_sid)
+                else:
+                    # tool:'task' part hasn't arrived yet — store as pending.
+                    scope['_pending_subtasks_by_msg'][msg_id] = part
                 return 'subtask'
     elif etype == 'session.idle':
         if is_subtask:
@@ -172,12 +191,14 @@ def _scope_owning_message(state, message_id, opencode_session_id):
     return None, None, False
 
 
-def _discover_subtask(state, current_scope, current_sid, current_is_subtask, part):
+def _discover_subtask(state, current_scope, current_sid, current_is_subtask, part,
+                      child_session_id):
     """A `subtask` part was seen inside `current_scope`'s own messages —
     register its child sessionID for tracking, unless we're already at the
-    depth cap. `current_scope`'s own depth (0 for the top-level) determines
-    the new entry's depth."""
-    sid = part.get('sessionID')
+    depth cap. `child_session_id` is the real child session ID extracted from
+    the sibling tool:'task' part's state.metadata.sessionId (NOT from
+    SubtaskPart.sessionID, which is the parent/owning session)."""
+    sid = child_session_id
     if not sid or sid in state['subtasks']:
         return
     parent_depth = current_scope['depth'] if current_is_subtask else 0
@@ -186,6 +207,20 @@ def _discover_subtask(state, current_scope, current_sid, current_is_subtask, par
     parent_id = current_sid if current_is_subtask else None
     state['subtasks'][sid] = _new_subtask_scope(
         parent_id, parent_depth + 1, part.get('agent'), part.get('description'))
+    # Record the mapping from subtask part ID to child session ID so that
+    # _flatten_scope can produce correct subtask_use placeholders.
+    state.setdefault('_subtask_part_id_map', {})[part.get('id')] = sid
+
+
+def _try_discover_pending_subtask(state, scope, scope_sid, is_subtask, msg_id,
+                                  child_sid):
+    """A tool:'task' part just arrived with a child session ID — check if a
+    subtask part for the same message was already seen (and stored as pending).
+    If so, discover the subtask now."""
+    pending = scope.get('_pending_subtasks_by_msg', {})
+    part = pending.pop(msg_id, None)
+    if part:
+        _discover_subtask(state, scope, scope_sid, is_subtask, part, child_sid)
 
 
 def _status_snapshot(state):
@@ -193,11 +228,12 @@ def _status_snapshot(state):
     return {sid: sub['status'] for sid, sub in state.get('subtasks', {}).items()}
 
 
-def _flatten_scope(scope, subtask_status):
+def _flatten_scope(scope, subtask_status, subtask_id_map=None):
     """把一个累加器（顶层 state 本身，或某个子代理的嵌套 scope）的
     part_order/parts_by_id 展开成持久化内容。text 分支保留既有的"空文本
     过滤"（build_content 原有行为，见 Task 2 的行为不变约束）；subtask 分支
-    每次都用当前的 `subtask_status` 重新调 map_part，状态不会定型不变。"""
+    每次都用当前的 `subtask_status` 重新调 map_part，状态不会定型不变。
+    `subtask_id_map` 把 subtask part 的 id 映射到正确的子会话 sessionID。"""
     from utils.opencode_parts import map_part
     content = []
     for pid in scope['part_order']:
@@ -205,7 +241,8 @@ def _flatten_scope(scope, subtask_status):
         if not p:
             continue
         if '_subtask_part' in p:
-            mapped = map_part(p['_subtask_part'], subtask_status=subtask_status)
+            mapped = map_part(p['_subtask_part'], subtask_status=subtask_status,
+                              subtask_id_map=subtask_id_map)
             if mapped:
                 content.append(mapped)
             continue
@@ -222,7 +259,8 @@ def build_content(state):
     _flatten_scope so the top-level's own subtask_use stubs (if any) get the
     same "status re-derived fresh at flatten time" treatment as everything
     else — see _flatten_scope's docstring."""
-    return _flatten_scope(state, _status_snapshot(state))
+    return _flatten_scope(state, _status_snapshot(state),
+                          subtask_id_map=state.get('_subtask_part_id_map'))
 
 
 def persist_turn(session_id, state):
@@ -258,9 +296,10 @@ def persist_subtasks(root_session_id, state):
     子代理自己的 content 里如果又有更深一层的占位，同样交给 _flatten_scope
     用当前状态现查现填。Best-effort；不抛异常，不打断调用方的事件循环。"""
     snapshot = _status_snapshot(state)
+    subtask_id_map = state.get('_subtask_part_id_map')
     for sid, sub in state.get('subtasks', {}).items():
         try:
-            content = _flatten_scope(sub, snapshot)
+            content = _flatten_scope(sub, snapshot, subtask_id_map=subtask_id_map)
             with get_db() as conn:
                 cur = conn.cursor()
                 cur.execute(
