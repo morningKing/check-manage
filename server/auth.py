@@ -100,6 +100,19 @@ def admin_required(f):
     return decorated
 
 
+def _user_has_permission(payload, permission_key):
+    """能力门：超管（roles.is_superuser=True）放行、否则靠 admin_keys 命中判定。
+
+    本 helper 给 require_permission 与 require_permission_sse 共用。两装饰
+    器只在 token 提取方式上不同（header only / header or query），能力判定
+    收敛到此唯一路径——逻辑漂移是安全事故常见来源。超管放行靠 DB 的
+    roles.is_superuser（经 utils.permissions.can_admin），不在 JWT role slug
+    上做任何短路，保留与重构前完全一致的判定语义。
+    """
+    from utils.permissions import can_admin
+    return can_admin(payload.get('role'), permission_key)
+
+
 def require_permission(permission_key):
     """Decorator: require the current user's role to hold `permission_key`
     (superuser bypasses). Implies login_required.
@@ -114,10 +127,38 @@ def require_permission(permission_key):
             payload = decode_token(token)
             if not payload:
                 return jsonify({'error': '登录已过期'}), 401
-            from utils.permissions import can_admin
-            if not can_admin(payload.get('role'), permission_key):
+            if not _user_has_permission(payload, permission_key):
                 return jsonify({'error': '权限不足'}), 403
             g.current_user = payload
+            return f(*args, **kwargs)
+        return decorated
+    return wrapper
+
+
+def require_permission_sse(permission_key):
+    """Like require_permission, but also accepts the JWT via ?access_token=
+    (browser <a download> / EventSource can't set Authorization header).
+
+    能力判定与 require_permission 完全同源——都通过 _user_has_permission
+    走 utils.permissions.can_admin，两份实现一锁定就同步锁定，避免一处改
+    了 header-only 装饰器忘了改 SSE 装饰器的关系人权限事故。
+    """
+    def wrapper(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header.split(' ', 1)[1]
+            else:
+                token = request.args.get('access_token', '')
+            if not token:
+                return jsonify({'error': '未登录'}), 401
+            payload = decode_token(token)
+            if not payload:
+                return jsonify({'error': '登录已过期'}), 401
+            g.current_user = payload
+            if not _user_has_permission(payload, permission_key):
+                return jsonify({'error': '权限不足'}), 403
             return f(*args, **kwargs)
         return decorated
     return wrapper
