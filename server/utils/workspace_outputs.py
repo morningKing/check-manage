@@ -64,3 +64,28 @@ def list_session_files(workspace_path: str) -> tuple[list[dict], bool]:
             if len(out) >= LISTFILES_MAX_FILES:
                 return out, True
     return out, False
+
+
+def augment_with_data_file_id(session_id: str, files: list[dict]) -> None:
+    """原地给每个文件项加 dataFileId（从 ai_chat_session_files 表 LEFT JOIN 来）。
+
+    没记录的填 None；live scan 没出现的旧 DB 记录不补（调用方只看 live）。
+    单条 SELECT，构造 {path: data_file_id} 后 in-place fill，**不**逐文件 N+1。
+
+    Best-effort：DB 异常时 silent（与 record_session_files 同契约），不阻断 ADMIN 看文件。
+    """
+    from db import get_db
+    if not files:
+        return
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT path, data_file_id FROM ai_chat_session_files WHERE session_id = %s",
+                (session_id,),
+            )
+            dfid_map = {r[0]: r[1] for r in cur.fetchall()}
+    except Exception:
+        dfid_map = {}
+    for f in files:
+        f['dataFileId'] = dfid_map.get(f['path'])
