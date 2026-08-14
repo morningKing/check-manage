@@ -443,6 +443,29 @@ def admin_get_batch_owner(batch_id: str) -> str | None:
     return row[0] if row else None
 
 
+def admin_get_child_session(batch_id: str, session_id: str) -> dict | None:
+    """跨用户取单个子任务的关键列。校验 session 属于该 batch。
+
+    轻量单行查询：返回 {id, status, workspace_path, ownerUserId} 或 None。
+    workspace_path 可能为 NULL（子会话归档/清理后）；调用方据此区分
+    files 端点返空数组 vs preview/download/import 返 400 NO_WORKSPACE。
+    ownerUserId 来自 JOIN ai_chat_batches，用于导入归属（uploaded_by=owner）。
+
+    不复用 admin_get_batch_detail（拉整批 sessions 的 N+1 重调用）；本场景是单 session 操作。
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT s.id, s.status, s.workspace_path, b.user_id AS \"ownerUserId\" "
+                "  FROM ai_chat_sessions s "
+                "  JOIN ai_chat_batches b ON b.id = s.batch_id "
+                " WHERE s.id = %s AND s.batch_id = %s",
+                (session_id, batch_id),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def admin_get_child_messages(batch_id: str, session_id: str,
                              limit: int = MAX_ADMIN_MESSAGES) -> dict | None:
     """某个子任务的对话（只读）。session 不属于该 batch 时返回 None。
