@@ -43,6 +43,7 @@ from utils.workspace import (
 from utils.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
                                      read_file_preview, record_session_files,
                                      get_session_files)
+from utils.workspace_outputs import list_session_files
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.mcp_servers import enabled_mcp_config
 from utils.chat_persist import (
@@ -674,66 +675,27 @@ def upload_skill(sid):
     return jsonify(res), 201
 
 
-# Dirs never scanned for 产出文件: user input, our own .git, and well-known
-# noise. Hidden dirs (starting with '.') are skipped too.
-_LISTFILES_SKIP_DIRS = {'uploads', '.git', 'node_modules', '.venv', '__pycache__', '.opencode'}
-_LISTFILES_MAX_DEPTH = 8     # guard against pathological deep trees
-_LISTFILES_MAX_FILES = 1000  # cap response size
-
-
 @ai_chat_bp.route('/sessions/<sid>/files', methods=['GET'])
 @login_required
 def list_files(sid):
     """List the session's files for the 产出文件 / inputs panels.
 
-    Returns every generated file under the workspace — recursively, so files in
-    plain subdirectories surface too (tagged dir='outputs' under outputs/, else
-    dir='workspace') — plus uploads/ inputs (dir='uploads'). Excludes: nested
-    git repos (clone+edit changes are reported by 变更文件), noise dirs
-    (node_modules/.venv/...), dotfiles, and the per-session opencode.json."""
+    Returns every generated file under the workspace (recursively, tagged
+    dir='outputs' under outputs/, else dir='workspace') plus uploads/ inputs
+    (dir='uploads'). Excludes nested git repos, noise dirs, dotfiles and the
+    per-session opencode.json. Heavy lifting lives in
+    utils.workspace_outputs.list_session_files so the admin cross-user endpoint
+    and future callers share one scan impl — see §2.7 of the admin 产出文件
+    design."""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     workspace_path = sess[4]
     if not workspace_path:   # batch child sessions have no workspace dir
-        return jsonify({'files': []})
-    out = []
-    # uploads/ — user inputs, direct children only (frontend drops these from 产出文件)
-    up = os.path.join(workspace_path, 'uploads')
-    if os.path.isdir(up):
-        for name in sorted(os.listdir(up)):
-            fp = os.path.join(up, name)
-            if os.path.isfile(fp):
-                out.append({'name': name, 'path': f"uploads/{name}",
-                            'dir': 'uploads', 'size': os.path.getsize(fp)})
-    # Everything else under the workspace = generated files, walked recursively.
-    ws_real = os.path.realpath(workspace_path)
-    base_depth = ws_real.rstrip(os.sep).count(os.sep)
-    for dirpath, dirnames, filenames in os.walk(workspace_path):
-        # A nested git repo's changes belong to 变更文件, not 产出文件 — skip it
-        # entirely. The workspace root is OUR auto-init repo, so keep listing it.
-        if os.path.realpath(dirpath) != ws_real and os.path.isdir(os.path.join(dirpath, '.git')):
-            dirnames[:] = []
-            continue
-        depth = os.path.realpath(dirpath).rstrip(os.sep).count(os.sep) - base_depth
-        if depth >= _LISTFILES_MAX_DEPTH:
-            dirnames[:] = []
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in _LISTFILES_SKIP_DIRS and not d.startswith('.')
-        )
-        for name in sorted(filenames):
-            if name.startswith('.') or name == 'opencode.json':
-                continue
-            fp = os.path.join(dirpath, name)
-            if not os.path.isfile(fp):
-                continue
-            rel = os.path.relpath(fp, workspace_path).replace(os.sep, '/')
-            sub = 'outputs' if rel.startswith('outputs/') else 'workspace'
-            out.append({'name': name, 'path': rel, 'dir': sub, 'size': os.path.getsize(fp)})
-            if len(out) >= _LISTFILES_MAX_FILES:
-                return jsonify({'files': out, 'truncated': True})
-    return jsonify({'files': out})
+        return jsonify({'files': [], 'truncated': False})
+    files, truncated = list_session_files(workspace_path)
+    return jsonify({'files': files, 'truncated': truncated})
 
 
 @ai_chat_bp.route('/sessions/<sid>/changes', methods=['GET'])
