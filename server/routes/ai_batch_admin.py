@@ -9,16 +9,22 @@
 列出全部用户的 AI 会话，而批任务的子任务就是会话——能看会话就已经能看到这里的
 全部内容，再拆一个键是假粒度。
 """
-from flask import Blueprint, jsonify, request
+import os
 
-from auth import require_permission
+from flask import Blueprint, jsonify, request, send_file
+
+from auth import require_permission, require_permission_sse
 from utils.batch_engine import get_worker
 from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_get_batch_owner, admin_get_child_messages,
-                              admin_list_batches, reexecute_child,
-                              reset_failed_to_pending)
+                              admin_get_child_session, admin_list_batches,
+                              reexecute_child, reset_failed_to_pending)
 from utils.operation_log import log_operation
+from utils.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
 from utils.subtask_repo import get_subtask_messages
+from utils.workspace import WorkspacePathError, safe_resolve
+from utils.workspace_changes import file_diff, git_changes, read_file_preview
+from utils.workspace_outputs import augment_with_data_file_id, list_session_files
 
 ai_batch_admin_bp = Blueprint('ai_batch_admin', __name__,
                               url_prefix='/ai/chat/admin/batches')
@@ -186,3 +192,161 @@ def child_subtask_messages(batch_id, sid, subtask_id):
         'truncated': data['truncated'],
         'total': data['total'],
     })
+
+
+# --- 产出文件端点（管理员跨用户视角） -----------------------------------------
+# 6 个端点全部挂 @require_permission_sse('admin.ai_chat_admin')：download 需要
+# ?access_token= 兼容浏览器 <a download> 链接（无法带 Authorization 头），其余
+# 5 个走同一装饰器保持一致；该装饰器对 Bearer 头的接受与 require_permission
+# 完全同源，普通 admin 客户端调用不受影响。
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files')
+@require_permission_sse('admin.ai_chat_admin')
+def list_child_files(batch_id, sid):
+    """列子任务产出文件：live scan + LEFT JOIN ai_chat_session_files.data_file_id。
+
+    刻意**只读不写**（spec §1.2）：live-scan 不回写 ai_chat_session_files。
+    DB 记录的累积维护由 list_child_changes 端点里的 record_session_files 负责
+    （与 owner 端 routes/ai_chat.py::list_changes 同口径）——这里只拿当下能下/
+    能导入的文件清单给前端。
+    """
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'files': [], 'truncated': False})
+    files, truncated = list_session_files(sess['workspace_path'])
+    augment_with_data_file_id(sid, files)
+    return jsonify({'files': files, 'truncated': truncated})
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files/preview')
+@require_permission_sse('admin.ai_chat_admin')
+def preview_child_file(batch_id, sid):
+    """单文件文本预览（封顶），与 routes/ai_chat.py::preview_file 同实现。"""
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'error': '该子会话没有工作区', 'code': 'NO_WORKSPACE'}), 400
+    rel = (request.args.get('path') or '').strip()
+    if not rel:
+        return jsonify({'error': 'path required', 'code': 'PATH_REQUIRED'}), 400
+    try:
+        abs_path = safe_resolve(sess['workspace_path'], rel)
+    except WorkspacePathError:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
+    return jsonify(read_file_preview(abs_path))
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files/download')
+@require_permission_sse('admin.ai_chat_admin')
+def download_child_file(batch_id, sid):
+    """下载工作区文件。
+
+    `require_permission_sse` 已支持 ?access_token= 透传 JWT，浏览器
+    `<a href=...?access_token=>` 下载链接专用。
+    """
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'error': '该子会话没有工作区', 'code': 'NO_WORKSPACE'}), 400
+    rel = (request.args.get('path') or '').strip()
+    if not rel:
+        return jsonify({'error': 'path required', 'code': 'PATH_REQUIRED'}), 400
+    try:
+        abs_path = safe_resolve(sess['workspace_path'], rel)
+    except WorkspacePathError:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({'error': 'not found', 'code': 'FILE_NOT_FOUND'}), 404
+    return send_file(abs_path, as_attachment=True,
+                     download_name=os.path.basename(abs_path))
+
+
+@ai_batch_admin_bp.post('/<batch_id>/sessions/<sid>/files/import')
+@require_permission_sse('admin.ai_chat_admin')
+def import_child_files(batch_id, sid):
+    """导入子任务产出文件到系统 data_files。
+
+    - extra_whitelist = live-scan 所有 file paths（admin 视角放行 outputs/ +
+      workspace + uploads 混合，避免 outputs/ 被 .gitignore 屏蔽不入 DB 时拒掉）
+    - uploaded_by = 批任务原 owner（不是管理员本人）——守住数据归属
+    - log_operation 触发审计：operator 自动是当前管理员（g.current_user），
+      target_id 是导入成功的 data_file id 用 ';' 拼接
+    """
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'error': '该子会话没有工作区', 'code': 'NO_WORKSPACE'}), 400
+    body = request.get_json(silent=True) or {}
+    paths = body.get('paths')
+    if not isinstance(paths, list) or not paths:
+        return jsonify({'error': 'paths required', 'code': 'PATHS_REQUIRED'}), 400
+    if len(paths) > MAX_IMPORT_PATHS:
+        return jsonify({'error': f'单次最多导入 {MAX_IMPORT_PATHS} 个文件',
+                        'code': 'TOO_MANY'}), 400
+    ws = sess['workspace_path']
+    files_live, _tr = list_session_files(ws)
+    live_paths = {f['path'] for f in files_live}
+    results = import_recorded_files(
+        sess['id'], ws, paths,
+        uploaded_by=sess['ownerUserId'],
+        extra_whitelist=live_paths,
+    )
+    imported_ids = [r['file']['id'] for r in results
+                    if r.get('status') in ('imported', 'existing') and r.get('file')]
+    # 位置参数而非关键字：与同文件 retry_failed/reexecute 的 log_operation 调用
+    # 风格一致，也让审计测试可以 call_args.args[2..4] 直接读 target_id/name/desc。
+    log_operation(
+        'create', 'data_file',
+        ';'.join(imported_ids) if imported_ids else None,
+        f'批任务 {batch_id} 子任务 {sid}',
+        f'管理员代导入 {len(imported_ids)} 个产出文件（归属 {sess["ownerUserId"]}）',
+    )
+    return jsonify({'results': results})
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/changes')
+@require_permission_sse('admin.ai_chat_admin')
+def list_child_changes(batch_id, sid):
+    """列 git 变更文件（routes/ai_chat.py::list_changes 的管理员跨用户版）。
+
+    镜像 owner 端语义：ok=True 时顺手 record_session_files 维护
+    ai_chat_session_files 记录（这是 git-changes 历史表的维护入口，不是 live
+    scan）。list_child_files 端点刻意不写 DB，写 DB 责任全在这里。
+    """
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'changes': [], 'truncated': False, 'ok': True})
+    changes, truncated, ok = git_changes(sess['workspace_path'])
+    if ok:
+        # 延迟导入：与 routes/ai_chat.py:752 同风格，避免顶层循环依赖
+        from utils.workspace_changes import record_session_files
+        record_session_files(sid, changes)
+    return jsonify({'changes': changes, 'truncated': truncated, 'ok': ok})
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files/diff')
+@require_permission_sse('admin.ai_chat_admin')
+def child_file_diff(batch_id, sid):
+    """单文件 diff（modified）/封顶内容（added）。"""
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    if not sess['workspace_path']:
+        return jsonify({'error': '该子会话没有工作区', 'code': 'NO_WORKSPACE'}), 400
+    rel = (request.args.get('path') or '').strip()
+    if not rel:
+        return jsonify({'error': 'path required', 'code': 'PATH_REQUIRED'}), 400
+    try:
+        safe_resolve(sess['workspace_path'], rel)  # 校验越界；结果弃用
+    except WorkspacePathError:
+        return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
+    return jsonify(file_diff(sess['workspace_path'], rel))
