@@ -7,7 +7,7 @@
  *   close at any time.
  */
 
-import { get, post, del, patch } from '@/utils/request'
+import { get, post, del, patch, authParam } from '@/utils/request'
 
 export interface AiSession {
   id: string
@@ -292,21 +292,6 @@ export interface StreamHandlers {
 // backend/network blip just appears as "reconnecting" in the UI and resumes
 // when service returns.
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 60000]
-
-// EventSource / download links can't set an Authorization header, so those
-// endpoints accept the JWT via ?access_token=. Read the same token axios uses.
-function authParam(prefix: '?' | '&' = '?'): string {
-  const raw = localStorage.getItem('check-manage:token')
-  if (!raw) return ''
-  let token = raw
-  try {
-    const parsed = JSON.parse(raw)
-    if (parsed) token = parsed
-  } catch {
-    /* raw is already the token string */
-  }
-  return token ? `${prefix}access_token=${encodeURIComponent(token)}` : ''
-}
 
 export function createEventStream(sessionId: string, h: StreamHandlers) {
   const url = `/api/ai/chat/sessions/${encodeURIComponent(sessionId)}/events${authParam('?')}`

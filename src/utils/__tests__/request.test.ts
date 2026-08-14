@@ -39,7 +39,7 @@ vi.mock('axios', () => ({
   },
 }))
 
-import { get, post, put, del } from '../request'
+import { get, post, put, del, authParam } from '../request'
 
 describe('request 封装', () => {
   beforeEach(() => {
@@ -155,5 +155,29 @@ describe('请求拦截器注册', () => {
       }
       await expect(responseError(error)).rejects.toBe(error)
     })
+  })
+})
+
+describe('authParam', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('no token → empty string', () => {
+    expect(authParam('?')).toBe('')
+  })
+
+  it('plain string token → encoded', () => {
+    localStorage.setItem('check-manage:token', 'abc.def.ghi')
+    expect(authParam('?')).toBe('?access_token=abc.def.ghi')
+    expect(authParam('&')).toBe('&access_token=abc.def.ghi')
+  })
+
+  it('JSON-wrapped token → unwrap', () => {
+    localStorage.setItem('check-manage:token', JSON.stringify('tok-123'))
+    expect(authParam('?')).toBe('?access_token=tok-123')
+  })
+
+  it('special chars in token → URL-encoded', () => {
+    localStorage.setItem('check-manage:token', 'a+b/=')
+    expect(authParam('?')).toBe('?access_token=a%2Bb%2F%3D')
   })
 })

@@ -1,4 +1,4 @@
-import { get, post } from '@/utils/request'
+import { get, post, authParam } from '@/utils/request'
 import type { SubtaskMessagesResult } from './aiChat'
 
 export interface AdminBatch {
@@ -69,4 +69,43 @@ export function retryAdminBatch(batchId: string) {
 
 export function reexecuteAdminChild(batchId: string, sessionId: string) {
   return post<{ reexecuted: boolean }>(`${BASE}/${batchId}/sessions/${sessionId}/reexecute`)
+}
+
+export interface AdminChildFile {
+  name: string
+  path: string
+  dir: 'uploads' | 'outputs' | 'workspace'
+  size: number
+  dataFileId: string | null
+}
+
+export interface AdminImportResult {
+  path: string
+  status?: 'imported' | 'existing'
+  file?: { id: string; name: string; size: number }
+  error?: string
+  code?: 'NOT_RECORDED' | 'BAD_PATH' | 'FILE_MISSING' | 'TOO_LARGE' | 'IMPORT_FAILED' | 'PATHS_REQUIRED' | 'TOO_MANY'
+}
+
+export function listAdminChildFiles(batchId: string, sessionId: string) {
+  return get<{ files: AdminChildFile[]; truncated: boolean }>(
+    `${BASE}/${batchId}/sessions/${sessionId}/files`)
+}
+
+export function getAdminChildFilePreview(batchId: string, sessionId: string, path: string) {
+  return get<{ content: string; truncated: boolean }>(
+    `${BASE}/${batchId}/sessions/${sessionId}/files/preview`, { path })
+}
+
+export function importAdminChildFiles(batchId: string, sessionId: string, paths: string[]) {
+  return post<{ results: AdminImportResult[] }>(
+    `${BASE}/${batchId}/sessions/${sessionId}/files/import`, { paths })
+}
+
+// 返字符串 URL 而非 axios 请求：浏览器 <a href download> 直接下载
+export function adminChildFileDownloadUrl(batchId: string, sessionId: string, path: string): string {
+  const bid = encodeURIComponent(batchId)
+  const sid = encodeURIComponent(sessionId)
+  const p = encodeURIComponent(path)
+  return `/api${BASE}/${bid}/sessions/${sid}/files/download?path=${p}${authParam('&')}`
 }

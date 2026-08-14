@@ -9,6 +9,7 @@ vi.mock('@/utils/request', () => ({
   post: vi.fn(),
   put: vi.fn(),
   del: vi.fn(),
+  authParam: vi.fn(() => ''),
 }))
 
 import { createEventStream } from '../aiChat'

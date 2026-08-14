@@ -194,3 +194,18 @@ export function del<T = any>(url: string, config?: AxiosRequestConfig): Promise<
 
 // 导出 axios 实例供特殊场景使用
 export default service
+
+// JWT 透传给不能带 Authorization 头的 URL（浏览器 <a download> / EventSource）。
+// aiChat 的 downloadFileUrl 与 aiBatchAdmin 的 adminChildFileDownloadUrl 共用，避免两份逻辑漂移。
+export function authParam(prefix: '?' | '&' = '?'): string {
+  const raw = localStorage.getItem('check-manage:token')
+  if (!raw) return ''
+  let token = raw
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed) token = parsed
+  } catch {
+    /* raw is already the token string */
+  }
+  return token ? `${prefix}access_token=${encodeURIComponent(token)}` : ''
+}
