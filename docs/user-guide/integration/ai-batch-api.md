@@ -103,6 +103,8 @@ curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/$BATCH_ID/results" | jq
 | DELETE | `/api/v1/ai-batches/{batchId}` | 删除批任务（不可逆） |
 | POST | `/api/v1/ai-batches/{batchId}/retry-failed` | 把批任务中失败的子任务重置为待处理，交由后台重跑 |
 | POST | `/api/v1/ai-batches/{batchId}/append` | 向已有批任务追加文件（任何状态都可追加） |
+| GET | `/api/v1/ai-batches/{batchId}/file-records` | 获取每个子会话被自动记录的新增/修改文件 |
+| POST | `/api/v1/ai-batches/{batchId}/import` | 把子会话工作区里被记录过的文件按需导入系统 data_files |
 
 以上全部接口都要求请求头携带 `X-API-Key`，且密钥必须已绑定用户（见第 2 节），否则返回 401/403。
 
@@ -410,6 +412,148 @@ curl -X POST http://localhost:8080/api/v1/ai-batches/b-1/append \
 
 ---
 
+### 4.9 获取子会话文件记录
+
+```
+GET /api/v1/ai-batches/{batchId}/file-records
+```
+
+获取每个子会话工作区中被自动记录的新增/修改文件。这些记录由系统在扫描会话变更文件时自动维护，即使文件后来被还原或删除，记录仍然保留。
+
+**响应 — 200**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "status": "completed",
+  "results": [
+    {
+      "name": "report1.pdf",
+      "seq": 1,
+      "status": "completed",
+      "files": [
+        {
+          "path": "output/analysis.md",
+          "status": "added",
+          "dataFileId": null,
+          "firstSeenAt": "2026-08-10T03:22:00.000Z",
+          "lastSeenAt": "2026-08-10T03:24:00.000Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `batchId` | string | 批任务 ID |
+| `status` | string | 批任务整体状态 |
+| `results[].name` | string | 子会话对应的文件名（取自 `batch_input_file` 的 basename） |
+| `results[].seq` | integer | 子会话的稳定序号 |
+| `results[].status` | string | 子会话状态：`pending` / `running` / `completed` / `failed` |
+| `results[].files[].path` | string | 工作区中的相对路径 |
+| `results[].files[].status` | string | 文件状态：`added` / `modified` |
+| `results[].files[].dataFileId` | string \| null | 如果已导入到系统 `data_files`，这里返回文件 ID |
+| `results[].files[].firstSeenAt` | string \| null | 首次发现时间（ISO 8601） |
+| `results[].files[].lastSeenAt` | string \| null | 最近一次扫描时间（ISO 8601） |
+
+**错误响应**：与 4.4 相同（404）。
+
+---
+
+### 4.10 导入子会话文件到系统
+
+```
+POST /api/v1/ai-batches/{batchId}/import
+Content-Type: application/json
+```
+
+把子会话工作区里被自动记录过的文件按需导入系统 `data_files`，返回文件 ID。只有被自动记录过的路径才能导入（白名单机制），防止借导入端点把工作区里任意文件搬进系统。
+
+**请求体**
+
+```json
+{
+  "name": "report1.pdf",
+  "paths": ["output/analysis.md", "data/results.csv"]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 否 | 通过文件名定位子会话（与 `seq` 二选一） |
+| `seq` | integer | 否 | 通过序号定位子会话（与 `name` 二选一） |
+| `paths` | array | 是 | 要导入的文件路径列表（工作区相对路径），单次最多 100 个 |
+
+**响应 — 200**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "name": "report1.pdf",
+  "seq": 1,
+  "results": [
+    {
+      "path": "output/analysis.md",
+      "status": "imported",
+      "file": {
+        "id": "df-abc123",
+        "name": "analysis.md",
+        "size": 1234,
+        "mimeType": "text/markdown",
+        "url": "/api/data-files/df-abc123/download"
+      }
+    },
+    {
+      "path": "data/results.csv",
+      "status": "existing",
+      "file": {
+        "id": "df-def456",
+        "name": "results.csv",
+        "size": 5678,
+        "mimeType": "text/csv",
+        "url": "/api/data-files/df-def456/download"
+      }
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `results[].path` | string | 导入的文件路径 |
+| `results[].status` | string | `imported`（新导入）/ `existing`（已存在，返回原 ID） |
+| `results[].file` | object | 文件元数据，结构与 `/uploads` 响应一致 |
+| `results[].error` | string \| null | 如果导入失败，这里返回错误信息 |
+| `results[].code` | string \| null | 错误码：`NOT_RECORDED`（不在记录中）/ `BAD_PATH`（路径无效）/ `FILE_MISSING`（文件已不存在）/ `TOO_LARGE`（文件过大）/ `IMPORT_FAILED`（导入失败） |
+
+**幂等性**：已导入过的文件再次导入会返回 `existing` 状态和原文件 ID，不会重复入库。
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `paths` 缺失或为空数组；单次超过 100 个路径；`name` 和 `seq` 都未提供；子会话没有工作区 |
+| 404 | `batchId` 不存在或不属于本密钥；通过 `name` 或 `seq` 找不到对应的子会话 |
+
+**示例**
+
+```bash
+# 1) 查看批任务的文件记录
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/file-records" | jq
+
+# 2) 导入第一个子会话的两个文件到系统
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"seq": 1, "paths": ["output/analysis.md", "data/results.csv"]}' \
+  "http://localhost:8080/api/v1/ai-batches/b-1/import" | jq
+```
+
+---
+
 ## 5. 状态说明
 
 ### 5.1 批任务状态（`status`）
@@ -452,6 +596,8 @@ curl -X POST http://localhost:8080/api/v1/ai-batches/b-1/append \
 | `/uploads` 单次请求体 | 101 MB（含 multipart 编码开销，超出直接 413，不解析请求体） |
 | 其余接口（JSON）单次请求体 | 1 MB（超出直接 413） |
 | 暂存文件保留时间 | 24 小时（按目录最后修改时间算，与是否已创建批任务无关，详见 4.1） |
+| `/import` 单次路径数 | 100 个（超出返回 400） |
+| 文件记录保留时间 | 无限期（但依赖会话存在，会话删除时记录级联删除） |
 
 ---
 
@@ -511,6 +657,9 @@ curl -X POST http://localhost:8080/api/v1/ai-batches/b-1/append \
 4. **暂存文件有效期 24 小时**：`/uploads` 返回的 `path` 请尽快用于创建批任务，不要存起来隔天再用。超过 24 小时的暂存文件会被清理，此时创建批任务会因文件不存在被 400 拒绝；如果批任务已创建但排队超过 24 小时才轮到执行，对应子任务会因输入文件已被清理而 `failed`。清理规则的完整说明见 4.1。
 5. **`retry-failed` 只重置失败的子任务**：不会重跑已成功的子任务，也不会修改批任务的 prompt/agent/model；如需更换 prompt 重新处理，需要重新走一遍上传 + 创建流程。
 6. **`append` 会让批任务退出终态**：追加的新子任务以 `pending` 入队，批任务状态从 `completed`/`partial`/`failed` 回到 `running`。如果你的集成代码把「进入终态」当作整批完成的信号，追加之后要重新开始轮询。已完成的子任务不会被重跑，追加沿用批任务原有的 prompt/agent/model——**追加不能换 prompt**，需要换就新建一个批任务。
+7. **文件记录是自动维护的**：`/file-records` 返回的文件列表由系统在扫描会话变更文件时自动记录，不需要手动创建。记录会持久化保存，即使文件后来被还原或删除，记录仍然保留。但记录依赖于会话存在，会话删除时记录会级联删除。
+8. **导入是幂等的**：`/import` 端点支持幂等导入，已导入过的文件再次导入会返回 `existing` 状态和原文件 ID，不会重复入库。只有被自动记录过的路径才能导入（白名单机制），防止借导入端点把工作区里任意文件搬进系统。
+9. **导入文件大小限制**：导入的文件大小受系统 `data_files` 的限制（单文件 20 MB），超过限制会返回 `TOO_LARGE` 错误。
 
 ---
 
@@ -543,3 +692,23 @@ curl -X POST http://localhost:8080/api/v1/ai-batches/b-1/append \
 **Q: 通过 API 创建的批任务，登录界面的账号本人能不能看到、能不能删？**
 
 能看到，也能删——而且能重试、能改 agent/model、能追加文件、能重新执行单条子任务，权限和界面手工创建的批任务完全一样。批任务的密钥隔离只挡「别的密钥/别的账号」，挡不住「密钥所绑定账号本人在界面上的操作」，详见第 8 节。
+
+**Q: `/file-records` 返回的文件列表是实时的吗？**
+
+不是实时的。文件记录是在系统扫描会话变更文件时自动维护的，记录的是历史出现过的文件，即使文件后来被还原或删除，记录仍然保留。如果需要查看当前工作区的实时文件状态，请使用 `/results` 端点。
+
+**Q: `/import` 端点能导入任意文件吗？**
+
+不能。只有被系统自动记录过的文件才能导入（白名单机制），这是为了防止借导入端点把工作区里任意文件搬进系统。如果尝试导入未记录的文件，会返回 `NOT_RECORDED` 错误。
+
+**Q: 导入的文件存储在哪里？**
+
+导入的文件存储在系统的 `data_files` 中，可以通过 `/api/data-files/{fileId}/download` 端点下载。文件 ID 在导入响应中返回。
+
+**Q: 文件记录会占用额外的存储空间吗？**
+
+文件记录只存储文件路径和元数据，不存储文件内容本身，因此占用的存储空间很小。文件内容仍然存储在会话工作区中，直到会话被删除。
+
+**Q: 如果批任务被删除，文件记录会怎样？**
+
+批任务删除时，会话工作区会被清理，但文件记录本身不会立即删除。文件记录依赖于会话存在，如果会话被删除，文件记录会级联删除。但批任务删除不会直接删除文件记录，除非批任务删除导致会话被删除。
