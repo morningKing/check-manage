@@ -25,7 +25,8 @@ def test_list_files_null_workspace_returns_empty():
     with patch.object(ac, '_load_session_for_user', return_value=_NULL_WS_SESSION):
         r = _client().get('/ai/chat/sessions/s1/files', headers=_h())
     assert r.status_code == 200
-    assert r.get_json() == {'files': []}
+    # spec §2.7: list_files returns {files, truncated} (see routes/ai_chat.py:list_files)
+    assert r.get_json() == {'files': [], 'truncated': False}
 
 
 def test_list_changes_null_workspace_returns_empty():
