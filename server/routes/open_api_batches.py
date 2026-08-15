@@ -448,3 +448,210 @@ def append(batch_id):
     b = d['batch']
     return jsonify({'batchId': b['id'], 'status': b['status'],
                     'total': b['total'], 'appended': len(files)})
+
+
+# ---------------------------------------------------------------------------
+# 子会话级别端点：对话 / 文件 / 继续对话
+# ---------------------------------------------------------------------------
+
+def _resolve_child(d: dict, child_id: str):
+    """从批任务详情中定位子会话。
+
+    child_id 为纯数字时按 batch_seq 匹配，否则按 batch_input_file 的 basename 匹配。
+    返回 (child_dict, error_response) 二元组——找到时 error_response 为 None。
+    """
+    sessions = d.get('sessions') or []
+    child = None
+    if child_id.isdigit():
+        child = next((s for s in sessions if s.get('batch_seq') == int(child_id)), None)
+    else:
+        child = next((s for s in sessions if _child_name(s) == child_id), None)
+    if child is None:
+        return None, (jsonify({'error': '子会话不存在'}), 404)
+    return child, None
+
+
+@open_api_batches_bp.get('/<batch_id>/sessions/<child_id>/messages')
+@api_key_required
+@require_bound_key
+def session_messages(batch_id, child_id):
+    """获取子会话的完整对话历史。"""
+    from utils.batch_repo import get_child_messages
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    messages = get_child_messages(child['id'])
+    return jsonify({
+        'batchId': batch_id,
+        'child': {'name': _child_name(child), 'seq': child.get('batch_seq'),
+                   'status': child.get('status')},
+        'messages': messages['messages'],
+        'total': messages['total'],
+        'truncated': messages['truncated'],
+    })
+
+
+@open_api_batches_bp.get('/<batch_id>/sessions/<child_id>/files')
+@api_key_required
+@require_bound_key
+def session_files(batch_id, child_id):
+    """实时扫描子会话工作区，返回当前文件列表。"""
+    from utils.workspace_outputs import list_session_files
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    ws = child.get('workspace_path')
+    if not ws:
+        return jsonify({
+            'batchId': batch_id,
+            'child': {'name': _child_name(child), 'seq': child.get('batch_seq'),
+                       'status': child.get('status')},
+            'files': [],
+        })
+    files, _truncated = list_session_files(ws)
+    return jsonify({
+        'batchId': batch_id,
+        'child': {'name': _child_name(child), 'seq': child.get('batch_seq'),
+                   'status': child.get('status')},
+        'files': files,
+    })
+
+
+@open_api_batches_bp.get('/<batch_id>/sessions/<child_id>/files/download')
+@api_key_required
+@require_bound_key
+def session_file_download(batch_id, child_id):
+    """下载子会话工作区中的单个文件。"""
+    from flask import send_file
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    ws = child.get('workspace_path')
+    if not ws:
+        return jsonify({'error': '该子会话没有工作区'}), 400
+    rel_path = request.args.get('path', '').strip()
+    if not rel_path:
+        return jsonify({'error': 'path 参数必填'}), 400
+    # 安全校验：禁止 .. 穿越
+    normalized = os.path.normpath(rel_path)
+    if '..' in normalized.split(os.sep):
+        return jsonify({'error': '路径非法'}), 400
+    abs_path = os.path.join(ws, normalized)
+    # 确保路径落在工作区内
+    if not os.path.commonpath([ws, abs_path]).startswith(ws):
+        return jsonify({'error': '路径非法'}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({'error': '文件不存在'}), 404
+    return send_file(abs_path, as_attachment=True)
+
+
+@open_api_batches_bp.get('/<batch_id>/sessions/<child_id>/files/download-all')
+@api_key_required
+@require_bound_key
+def session_files_download_all(batch_id, child_id):
+    """将子会话工作区中所有新增和修改的文件打包为 ZIP 下载。"""
+    import io
+    import zipfile
+    from utils.workspace_changes import get_session_files as get_recorded_files
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    ws = child.get('workspace_path')
+    if not ws:
+        return jsonify({'error': '该子会话没有工作区'}), 400
+    # 筛选参数
+    include_str = request.args.get('include', 'added,modified')
+    include_statuses = {s.strip() for s in include_str.split(',') if s.strip()}
+    # 获取变更记录
+    records = get_recorded_files(child['id'])
+    # 构建 ZIP
+    child_name = _child_name(child)
+    # 去掉扩展名，截断至 50 字符
+    zip_root = os.path.splitext(child_name)[0][:50] or 'session'
+    buf = io.BytesIO()
+    skipped = []
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for rec in records:
+            if rec.get('status') not in include_statuses:
+                continue
+            rel_path = rec.get('path', '')
+            if not rel_path:
+                continue
+            # 安全校验
+            normalized = os.path.normpath(rel_path)
+            if '..' in normalized.split(os.sep):
+                continue
+            abs_path = os.path.join(ws, normalized)
+            if not os.path.commonpath([ws, abs_path]).startswith(ws):
+                continue
+            if not os.path.isfile(abs_path):
+                skipped.append(rel_path)
+                continue
+            # 单文件过大跳过
+            try:
+                if os.path.getsize(abs_path) > 50 * 1024 * 1024:
+                    skipped.append(rel_path)
+                    continue
+            except OSError:
+                skipped.append(rel_path)
+                continue
+            arc_name = f'{zip_root}/{rel_path}'
+            try:
+                zf.write(abs_path, arc_name)
+            except Exception:
+                skipped.append(rel_path)
+    buf.seek(0)
+    from flask import send_file
+    return send_file(
+        buf,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'{zip_root}.zip',
+    )
+
+
+@open_api_batches_bp.post('/<batch_id>/sessions/<child_id>/continue')
+@api_key_required
+@require_bound_key
+def session_continue(batch_id, child_id):
+    """在已完成/失败的子会话上追加一轮对话，保留历史上下文。"""
+    from utils.batch_repo import continue_child
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    body = request.get_json(silent=True) or {}
+    prompt = (body.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt 必填'}), 400
+    if len(prompt) > MAX_PROMPT_CHARS:
+        return jsonify({'error': f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限'}), 400
+    try:
+        continue_child(key['ownerUserId'], batch_id, child['id'], prompt)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    get_worker().notify()
+    return jsonify({
+        'batchId': batch_id,
+        'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
+        'status': 'running',
+    }), 202

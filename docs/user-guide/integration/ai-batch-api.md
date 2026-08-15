@@ -85,6 +85,25 @@ done
 
 # 4. 取回每个文件的处理结果
 curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/$BATCH_ID/results" | jq
+
+# 5. （可选）获取某个子会话的完整对话历史
+curl -s -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/$BATCH_ID/sessions/report1.pdf/messages" | jq
+
+# 6. （可选）列出并下载某个子会话的产出文件
+curl -s -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/$BATCH_ID/sessions/report1.pdf/files" | jq
+
+curl -s -H "X-API-Key: $API_KEY" \
+  "$BASE_URL/$BATCH_ID/sessions/report1.pdf/files/download-all" \
+  -o session-report1.zip
+
+# 7. （可选）在已完成的子会话上继续对话
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "请进一步分析风险因素，给出具体的改进建议。"}' \
+  "$BASE_URL/$BATCH_ID/sessions/report1.pdf/continue" | jq
 ```
 
 没有完成回调（webhook）、没有 SSE 推送，**只能轮询**。建议轮询间隔 5~15 秒，进入 `completed`/`partial`/`failed` 任一终态后停止轮询并调用 `/results`。
@@ -105,8 +124,20 @@ curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/$BATCH_ID/results" | jq
 | POST | `/api/v1/ai-batches/{batchId}/append` | 向已有批任务追加文件（任何状态都可追加） |
 | GET | `/api/v1/ai-batches/{batchId}/file-records` | 获取每个子会话被自动记录的新增/修改文件 |
 | POST | `/api/v1/ai-batches/{batchId}/import` | 把子会话工作区里被记录过的文件按需导入系统 data_files |
+| GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/messages` | 获取子会话的完整对话历史（含工具调用） |
+| GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files` | 实时扫描子会话工作区，返回当前文件列表 |
+| GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download?path=...` | 下载子会话工作区中的单个文件 |
+| GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download-all` | 打包下载子会话所有新增/修改文件（ZIP） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/continue` | 在已完成/失败的子会话上继续对话（保留历史） |
 
 以上全部接口都要求请求头携带 `X-API-Key`，且密钥必须已绑定用户（见第 2 节），否则返回 401/403。
+
+**路径参数说明**
+
+| 参数 | 说明 | 如何获取 |
+|------|------|---------|
+| `batchId` | 批任务 ID | 创建批任务时（4.2）响应中的 `batchId` 字段，或列出批任务（4.3）响应中每个条目的 `batchId` |
+| `childId` | 子会话标识 | 通过 `/results`（4.5）或 `/file-records`（4.9）响应中的 `name`（文件名）或 `seq`（序号）获取。两种方式等价：`childId` 为纯数字时按序号匹配，否则按文件名匹配。例如 `/results` 返回 `"name": "report1.pdf"`，则 `/sessions/report1.pdf/messages` 和 `/sessions/1/messages` 定位的是同一个子会话 |
 
 ---
 
@@ -554,6 +585,283 @@ curl -s -X POST \
 
 ---
 
+### 4.11 获取子会话对话历史
+
+```
+GET /api/v1/ai-batches/{batchId}/sessions/{childId}/messages
+```
+
+获取某个子会话的完整对话历史，包括用户消息、assistant 回复和工具调用。
+
+**子会话定位**：`childId` 用于指定操作哪个子会话。获取方式：先调用 `/results`（4.5），响应中每个条目的 `name` 和 `seq` 就是 `childId`。`childId` 为纯数字时按序号（`seq`）匹配，否则按文件名（`name`）匹配——例如 `report1.pdf` 和 `1` 定位的是同一个子会话。
+
+**响应 — 200**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "child": { "name": "report1.pdf", "seq": 1, "status": "completed" },
+  "messages": [
+    {
+      "id": "msg-001",
+      "role": "user",
+      "content": [{ "type": "text", "text": "请总结这份报告..." }],
+      "createdAt": "2026-08-10T03:20:00.000Z"
+    },
+    {
+      "id": "msg-002",
+      "role": "assistant",
+      "content": [
+        { "type": "text", "text": "报告核心结论如下..." },
+        { "type": "tool_use", "id": "tu-1", "name": "read", "input": { "path": "uploads/report1.pdf" } }
+      ],
+      "createdAt": "2026-08-10T03:21:00.000Z"
+    }
+  ],
+  "total": 12,
+  "truncated": false
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `child.name` | string | 子会话文件名 |
+| `child.seq` | integer | 子会话序号 |
+| `child.status` | string | 子会话状态 |
+| `messages[].id` | string | 消息 ID |
+| `messages[].role` | string | `user` / `assistant` |
+| `messages[].content` | array | 内容片段数组 |
+| `messages[].createdAt` | string | ISO 8601 时间戳 |
+| `total` | integer | 消息总数 |
+| `truncated` | boolean | 是否被截断（上限 500 条） |
+
+**`content` 数组的 `type` 取值**：
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `text` | `text` | 文本内容 |
+| `tool_use` | `id`, `name`, `input` | 工具调用（`input` 为 JSON 对象） |
+
+**示例**
+
+```bash
+# 按文件名定位
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/messages" | jq
+
+# 按序号定位
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/1/messages" | jq
+```
+
+**错误响应**：404（批任务不存在/不属于本密钥，或子会话未找到）。
+
+---
+
+### 4.12 获取子会话文件列表
+
+```
+GET /api/v1/ai-batches/{batchId}/sessions/{childId}/files
+```
+
+实时扫描子会话工作区，返回当前存在的文件列表（非变更记录）。`childId` 的获取和匹配规则见 4.11。
+
+**响应 — 200**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "child": { "name": "report1.pdf", "seq": 1, "status": "completed" },
+  "files": [
+    {
+      "name": "report1.pdf",
+      "path": "uploads/report1.pdf",
+      "dir": "uploads",
+      "size": 102400,
+      "modifiedAt": "2026-08-10T03:20:00.000Z"
+    },
+    {
+      "name": "analysis.md",
+      "path": "output/analysis.md",
+      "dir": "outputs",
+      "size": 5120,
+      "modifiedAt": "2026-08-10T03:23:00.000Z"
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `files[].name` | string | 文件名 |
+| `files[].path` | string | 工作区相对路径（用于 `/files/download` 的 `path` 参数） |
+| `files[].dir` | string | 分类：`uploads` / `outputs` / `workspace` |
+| `files[].size` | integer | 字节数 |
+| `files[].modifiedAt` | string \| null | 最后修改时间 |
+
+**示例**
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/files" | jq
+```
+
+**错误响应**：404（同上）。
+
+---
+
+### 4.13 下载子会话单个文件
+
+```
+GET /api/v1/ai-batches/{batchId}/sessions/{childId}/files/download?path=output/analysis.md
+```
+
+下载子会话工作区中的单个文件。`childId` 的获取和匹配规则见 4.11。`path` 参数来自 4.12 响应的 `files[].path`。
+
+**查询参数**
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `path` | string | 是 | 工作区相对路径 |
+
+**响应 — 200**：文件流（`Content-Disposition: attachment`）。
+
+**示例**
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/files/download?path=output/analysis.md" \
+  -o analysis.md
+```
+
+**错误响应**：400（路径非法）、404（批任务/子会话不存在，或文件不存在）。
+
+---
+
+### 4.14 打包下载子会话产出文件
+
+```
+GET /api/v1/ai-batches/{batchId}/sessions/{childId}/files/download-all
+```
+
+将子会话工作区中所有**新增和修改**的文件打包为 ZIP 下载。`childId` 的获取和匹配规则见 4.11。筛选依据是系统自动记录的文件变更（`/file-records` 同源），只包含 `added` 和 `modified` 状态的文件。
+
+**查询参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `include` | string | 否 | `added,modified` | 筛选文件状态，逗号分隔。可选值：`added`、`modified` |
+
+**响应 — 200**：ZIP 文件流。
+
+```
+Content-Type: application/zip
+Content-Disposition: attachment; filename="report1.zip"
+```
+
+ZIP 内部目录结构：
+```
+report1/
+  output/
+    analysis.md
+  data/
+    results.csv
+```
+
+- 根目录名为子会话文件名（去掉扩展名，截断至 50 字符）
+- 保持文件在工作区中的相对路径结构
+- 不存在的文件自动跳过（不报错）
+- 单文件超过 50 MB 自动跳过
+
+**示例**
+
+```bash
+# 下载所有新增/修改文件
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/files/download-all" \
+  -o session-report1.zip
+
+# 只下载新增文件
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/files/download-all?include=added" \
+  -o session-report1.zip
+```
+
+**错误响应**：404（批任务/子会话不存在）。
+
+---
+
+### 4.15 在子会话上继续对话
+
+```
+POST /api/v1/ai-batches/{batchId}/sessions/{childId}/continue
+Content-Type: application/json
+```
+
+在已完成或失败的子会话上追加一轮对话，**保留历史上下文**。`childId` 的获取和匹配规则见 4.11。AI 会看到之前的完整对话历史，然后根据新的 prompt 继续工作。
+
+**请求体**
+
+```json
+{
+  "prompt": "请进一步分析风险因素，给出具体的改进建议。"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `prompt` | string | 是 | 追加的提示词，最长 20000 字符 |
+
+**响应 — 202**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "child": { "name": "report1.pdf", "seq": 1 },
+  "status": "running"
+}
+```
+
+**与 `retry-failed` / `reexecute` 的区别**：
+
+| 操作 | 历史消息 | AI 会话 | prompt |
+|------|---------|---------|--------|
+| `retry-failed` | 保留（仅 failed 子任务） | **新建** | 原始 prompt |
+| `reexecute`（仅内部） | **删除** | **新建** | 原始 prompt |
+| **`continue`** | **保留** | **复用** | **新 prompt** |
+
+**追加后发生了什么**：
+
+- 子会话状态从终态回到 `pending`，由后台 worker 异步执行
+- AI 能看到之前的完整对话历史，根据新 prompt 继续工作
+- 新消息追加到已有对话末尾
+- 批任务整体状态会从终态回到 `running`，需要重新轮询
+
+**示例**
+
+```bash
+# 1) 在已完成的子会话上继续对话
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "请进一步分析风险因素，给出具体的改进建议。"}' \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/continue" | jq
+
+# 2) 轮询等待完成（复用现有 /results 或 /messages 端点）
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/messages" | jq
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `prompt` 缺失或超过 20000 字符 |
+| 404 | 批任务不存在/不属于本密钥，或子会话未找到 |
+| 409 | 子会话不在终态（`pending` / `running`） |
+
+---
+
 ## 5. 状态说明
 
 ### 5.1 批任务状态（`status`）
@@ -566,10 +874,11 @@ curl -s -X POST \
 | `partial` | 全部子任务已结束，但有成功也有失败（部分完成） |
 | `failed` | 全部子任务都失败 |
 
-`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有两个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
+`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有三个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
 
 - `retry-failed`：把失败的子任务打回 `pending`；
-- `append`：追加新文件（新子任务以 `pending` 入队）。
+- `append`：追加新文件（新子任务以 `pending` 入队）；
+- `continue`：在某个子会话上继续对话（该子任务回到 `pending`）。
 
 ### 5.2 子任务状态（`results[].status`）
 
@@ -619,7 +928,7 @@ curl -s -X POST \
 | 403 | 密钥未绑定用户（存量密钥），见第 2 节 |
 | 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建：`name`/`prompt` 缺失、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
 | 404 | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
-| 409 | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed` |
+| 409 | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed`；对处于非终态的子会话调用 `continue` |
 | 411 | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |
 | 413 | 请求体超过上限（`/uploads` 为 101 MB，其余 JSON 接口为 1 MB）。这道门在**读取/解析请求体之前**就生效（反向代理与应用层各有一道），因此超大请求不会等到读完文件才报错；服务端会连同 `Connection: close` 一起返回并关闭连接，客户端若仍在发送请求体，可能会看到连接被关闭——请以收到的 413 响应为准，不要重试整包上传，先分批到 100 MB 以内 |
 
@@ -660,6 +969,10 @@ curl -s -X POST \
 7. **文件记录是自动维护的**：`/file-records` 返回的文件列表由系统在扫描会话变更文件时自动记录，不需要手动创建。记录会持久化保存，即使文件后来被还原或删除，记录仍然保留。但记录依赖于会话存在，会话删除时记录会级联删除。
 8. **导入是幂等的**：`/import` 端点支持幂等导入，已导入过的文件再次导入会返回 `existing` 状态和原文件 ID，不会重复入库。只有被自动记录过的路径才能导入（白名单机制），防止借导入端点把工作区里任意文件搬进系统。
 9. **导入文件大小限制**：导入的文件大小受系统 `data_files` 的限制（单文件 20 MB），超过限制会返回 `TOO_LARGE` 错误。
+10. **`continue` 会让子会话和批任务退出终态**：`continue` 将目标子会话从终态（`completed`/`failed`）拉回 `pending`，批任务整体状态也随之回到 `running`。如果你的集成代码把「进入终态」当作整批完成的信号，`continue` 之后要重新开始轮询。其他已完成的子会话不受影响。
+11. **`continue` 保留历史上下文**：与 `retry-failed`（新建会话、用原始 prompt 重跑）不同，`continue` 复用原有的 AI 会话，AI 能看到之前的完整对话历史。适合「结果基本满意但需要补充」的场景，不适合「结果完全错误需要推倒重来」的场景——后者请用 `retry-failed`。
+12. **`download-all` 基于变更记录**：`/files/download-all` 打包的文件来源是系统自动记录的变更文件（与 `/file-records` 同源），不是工作区的实时扫描。如果 AI 产出的文件没有被 git 追踪到（极少见），可能不会出现在 ZIP 中。此时可用 `/files`（实时扫描）+ `/files/download`（逐个下载）作为备选。
+13. **对话历史有上限**：`/messages` 最多返回 500 条消息（按时间倒序截断后反转为正序）。对于大多数场景足够，超长 agent 运行可能被截断，响应中 `truncated: true` 会告知。
 
 ---
 
@@ -712,3 +1025,19 @@ curl -s -X POST \
 **Q: 如果批任务被删除，文件记录会怎样？**
 
 批任务删除时，会话工作区会被清理，但文件记录本身不会立即删除。文件记录依赖于会话存在，如果会话被删除，文件记录会级联删除。但批任务删除不会直接删除文件记录，除非批任务删除导致会话被删除。
+
+**Q: `childId` 怎么填？**
+
+`childId` 是子会话的标识，有两种等价的填写方式：文件名或序号。先调用 `/results`（4.5），响应中每个条目的 `name` 字段（如 `report1.pdf`）和 `seq` 字段（如 `1`）都可以作为 `childId`。例如 `/sessions/report1.pdf/messages` 和 `/sessions/1/messages` 定位的是同一个子会话。
+
+**Q: `continue` 和 `retry-failed` 有什么区别？**
+
+`retry-failed` 只能重试失败的子任务，会**新建**一个 AI 会话并用**原始 prompt** 重跑，历史对话不保留。`continue` 可以对已完成或失败的子会话追加新 prompt，**复用**原有 AI 会话，历史对话完整保留——AI 能看到之前做了什么，然后根据新指令继续工作。简单说：`retry-failed` 是「重来」，`continue` 是「接着做」。
+
+**Q: `download-all` 和逐个 `/files/download` 有什么区别？**
+
+`download-all` 一次打包所有新增/修改的文件为 ZIP，适合「拿到全部产出」的场景。逐个 `/files/download` 需要先通过 `/files` 拿到文件列表再逐个下载，适合「只需要某一个文件」或「需要查看实时文件列表」的场景。`download-all` 的文件来源是系统自动记录的变更（可能不含未被追踪的文件），`/files` 是实时扫描（含所有文件）。
+
+**Q: `continue` 后原来的 prompt 还在吗？**
+
+在。`continue` 不会修改或删除原始 prompt，新 prompt 作为新的一轮用户消息追加到对话末尾。AI 能看到完整的对话历史（包括原始 prompt 和所有回复），然后根据新 prompt 继续工作。

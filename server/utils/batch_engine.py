@@ -548,28 +548,52 @@ class BatchWorker:
             # no live session get reset to pending).
             return
         prompt, agent, model, provision_repo, provision_ref = ctx
-        prompt = self._with_input_hint(prompt, session_row)
+
+        # Detect "continue" mode: opencode_session_id already set + continue_prompt
+        is_continue = bool(session_row.get('opencode_session_id')
+                          and session_row.get('continue_prompt'))
+        if is_continue:
+            prompt = session_row['continue_prompt']
+            # Clear continue_prompt immediately so it's not re-sent on retry
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL "
+                                "WHERE id = %s", (sid,))
+                conn.commit()
+        else:
+            prompt = self._with_input_hint(prompt, session_row)
 
         ws = None
         try:
-            ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
-            # Provision project-level agents/skills BEFORE the session starts —
-            # OpenCode binds the agent at prompt time, so the repo must be in
-            # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
-            # the child (global agents/skills still work); we just post a notice.
-            prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
-            if prov_warn:
-                self._persist_provision_notice(sid, prov_warn)
-            # Fail FAST on an unusable agent. OpenCode silently produces nothing
-            # for an unknown / subagent-as-primary agent, which would otherwise
-            # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).
-            agent_err = self._check_agent(agent, ws)
-            if agent_err:
-                self._mark_failed(sid, batch_id, error=agent_err)
-                self._notify_scan(session_row, None, ok=False)
-                return
-            oc_session_id = opencode_client.create_session(directory=ws)
-            self._set_opencode_id(sid, oc_session_id, ws)
+            if is_continue:
+                # Reuse existing workspace — don't re-prepare
+                ws = session_row.get('workspace_path')
+                if not ws or not os.path.isdir(ws):
+                    self._mark_failed(sid, batch_id,
+                                      error='继续对话失败：工作区已不存在')
+                    self._notify_scan(session_row, None, ok=False)
+                    return
+                oc_session_id = session_row['opencode_session_id']
+            else:
+                ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
+                # Provision project-level agents/skills BEFORE the session starts —
+                # OpenCode binds the agent at prompt time, so the repo must be in
+                # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
+                # the child (global agents/skills still work); we just post a notice.
+                prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
+                if prov_warn:
+                    self._persist_provision_notice(sid, prov_warn)
+                # Fail FAST on an unusable agent. OpenCode silently produces nothing
+                # for an unknown / subagent-as-primary agent, which would otherwise
+                # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).
+                agent_err = self._check_agent(agent, ws)
+                if agent_err:
+                    self._mark_failed(sid, batch_id, error=agent_err)
+                    self._notify_scan(session_row, None, ok=False)
+                    return
+                oc_session_id = opencode_client.create_session(directory=ws)
+                self._set_opencode_id(sid, oc_session_id, ws)
+
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt)

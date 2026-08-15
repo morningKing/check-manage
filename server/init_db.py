@@ -720,6 +720,9 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_scan
   ON ai_chat_sessions(scan_task_id, source_record_id);
 -- Idempotent upgrade: add `agent` to DBs created before it joined the CREATE above.
 ALTER TABLE ai_scan_tasks ADD COLUMN IF NOT EXISTS agent TEXT;
+-- Continue conversation: store the prompt for a "continue" operation so the
+-- worker can pick it up and send it to the existing OpenCode session.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS continue_prompt TEXT;
 """
 
 

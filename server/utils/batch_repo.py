@@ -237,6 +237,46 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
     return get_batch_detail(user_id, batch_id)
 
 
+def continue_child(user_id: str, batch_id: str, session_id: str,
+                   prompt: str) -> dict | None:
+    """Continue a TERMINAL (completed/failed) batch child with a new prompt,
+    preserving conversation history and reusing the existing OpenCode session.
+
+    Unlike reexecute_child: does NOT delete messages, does NOT null out
+    opencode_session_id. Sets continue_prompt so the worker can pick it up
+    and send the new prompt to the existing OpenCode session.
+
+    Returns updated detail, or None if child not found / not owned.
+    Raises ValueError if child is not in a terminal state.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.status FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            status = row[0]
+            if status not in ('completed', 'failed'):
+                raise ValueError('only completed/failed children can be continued')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET status='pending', "
+                "  continue_prompt=%s, error_message=NULL WHERE id = %s",
+                (prompt, session_id),
+            )
+            if status == 'completed':
+                cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
+            else:
+                cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
+        conn.commit()
+    _recompute_batch_status_for(batch_id)
+    return get_batch_detail(user_id, batch_id)
+
+
 def update_batch_config(user_id: str, batch_id: str, *,
                         agent: str | None, model: str | None,
                         provision_repo: str | None = None,
@@ -355,6 +395,31 @@ def _text_from_content(content) -> str | None:
     texts = [p.get('text') for p in content
              if isinstance(p, dict) and p.get('type') == 'text' and p.get('text')]
     return '\n'.join(texts) if texts else None
+
+
+MAX_CHILD_MESSAGES = 500
+
+
+def get_child_messages(session_id: str,
+                       limit: int = MAX_CHILD_MESSAGES) -> dict:
+    """某个子任务的对话（只读）。
+
+    按 `seq` 排序。有界：取最近 limit 条后再反转为升序，让调用方拿到自然阅读顺序。
+    与 admin_get_child_messages 不同：不做 batch_id 校验（调用方已通过 get_batch_detail
+    校验过归属）。
+    """
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT count(*) AS n FROM ai_chat_messages WHERE session_id = %s",
+                        (session_id,))
+            total = cur.fetchone()['n']
+            cur.execute(
+                "SELECT id, role, content, created_at FROM ai_chat_messages "
+                " WHERE session_id = %s ORDER BY seq DESC LIMIT %s",
+                (session_id, limit))
+            rows = [dict(r) for r in cur.fetchall()]
+    rows.reverse()
+    return {'messages': rows, 'truncated': total > len(rows), 'total': total}
 
 
 # ---------------------------------------------------------------------------
