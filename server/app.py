@@ -40,6 +40,7 @@ from routes.ai_chat import ai_chat_bp
 from routes.ai_chat_prompt_templates import ai_chat_prompt_templates_bp
 from routes.ai_chat_batches import ai_chat_batches_bp
 from routes.ai_batch_admin import ai_batch_admin_bp
+from routes.ai_session_admin import ai_session_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.data_files import data_files_bp
@@ -104,6 +105,7 @@ app.register_blueprint(ai_chat_bp)
 app.register_blueprint(ai_chat_prompt_templates_bp)
 app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(ai_batch_admin_bp)
+app.register_blueprint(ai_session_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
 app.register_blueprint(data_files_bp)
