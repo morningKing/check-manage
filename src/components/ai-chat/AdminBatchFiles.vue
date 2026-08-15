@@ -27,6 +27,8 @@
         <div v-show="!collapsed[g.dirKey]" class="admin-files__group-body">
           <div v-for="f in g.files" :key="f.path" class="admin-files__row">
             <el-checkbox v-model="selection[f.path]" :disabled="!!f.dataFileId" />
+            <img v-if="isImageFile(f.name)" :src="downloadUrl(f.path)" :alt="f.name"
+                 class="admin-files__thumb" loading="lazy" />
             <span class="admin-files__name">{{ f.name }}</span>
             <span class="admin-files__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
             <el-button link type="primary" @click="emit('preview', f.path)">预览</el-button>
@@ -44,6 +46,7 @@ import { computed, reactive } from 'vue'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { ElCheckbox, ElButton, ElEmpty, ElIcon, ElScrollbar, ElAlert } from 'element-plus'
 import { adminChildFileDownloadUrl, type AdminChildFile } from '@/api/aiBatchAdmin'
+import { isImageFile } from '@/utils/artifacts'
 
 const props = defineProps<{
   batchId: string
@@ -103,4 +106,12 @@ function onImport() { emit('import', selectedPaths.value) }
 .admin-files__flag { color: var(--el-text-color-secondary); font-size: 12px; margin-left: auto; }
 .admin-files__dl { color: var(--el-color-primary); text-decoration: none; }
 .admin-files__size { color: var(--el-text-color-secondary); font-size: 12px; }
+.admin-files__thumb {
+  width: auto;
+  max-height: 60px;
+  max-width: 80px;
+  object-fit: contain;
+  border-radius: 4px;
+  border: 1px solid var(--el-border-color);
+}
 </style>

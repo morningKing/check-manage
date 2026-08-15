@@ -78,4 +78,12 @@ describe('AdminBatchFiles', () => {
     const w = makeWrapper({ loading: true })
     expect(w.text()).toMatch(/加载中|loading/i)
   })
+
+  it('image rows render <img> thumbnail with download URL', () => {
+    const pngFiles = [{ name: 'snap.png', path: 'outputs/snap.png', dir: 'outputs', size: 1024, dataFileId: null }]
+    const w = makeWrapper({ files: pngFiles })
+    const img = w.find('.admin-files__row img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toContain('/files/download?path=outputs%2Fsnap.png')
+  })
 })
