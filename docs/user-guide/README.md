@@ -52,7 +52,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | 文档 | 说明 |
 |------|------|
 | [assistant.md](./ai/assistant.md) | AI 助手对话：@子智能体、模型选择、工具调用 |
-| [batch-tasks.md](./ai/batch-tasks.md) | AI 批任务：N 文件 + 1 Prompt 并发处理 |
+| [batch-tasks.md](./ai/batch-tasks.md) | AI 批任务：N 文件 + 1 Prompt 并发处理；管理员跨用户查看产出文件、下载、导入到 data_files |
 | [scan-tasks.md](./ai/scan-tasks.md) | 定时 AI 数据流水线：扫描数据页 → AI 处理 → 结构化回写 |
 | [export-via-chat.md](./ai/export-via-chat.md) | AI 助手调用导出脚本：对话中执行已绑定脚本并下载结果 |
 | [long-term-memory.md](./ai/long-term-memory.md) | AI 长期记忆：自动记住偏好与关键事实，跨会话调用 |
