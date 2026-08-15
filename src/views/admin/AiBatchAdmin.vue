@@ -82,9 +82,10 @@
             </template>
           </el-table-column>
           <el-table-column prop="error" label="错误信息" min-width="220" show-overflow-tooltip />
-          <el-table-column label="操作" width="150" fixed="right">
+          <el-table-column label="操作" width="230" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
+              <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
               <el-button link type="warning" :disabled="!isTerminal(row.status)"
                          @click="onReexecute(row)">重跑</el-button>
             </template>
@@ -98,6 +99,29 @@
                              :total="convTotal" :loading="convLoading"
                              :session-id="convSessionId" :fetch-subtask-fn="fetchSubtaskForConv" />
     </el-dialog>
+
+    <el-dialog v-model="filesOpen" :title="`产出文件：${filesIdent}`" width="70%" top="6vh">
+      <AdminBatchFiles
+        v-if="filesOpen"
+        :batch-id="filesBatchId"
+        :session-id="filesSessionId"
+        :files="childFiles"
+        :loading="childFilesLoading"
+        :truncated="childFilesTruncated"
+        :ident="filesIdent"
+        @preview="onPreviewChildFile"
+        @import="onImportChildFiles"
+      />
+    </el-dialog>
+
+    <el-dialog v-model="previewOpen" :title="`预览：${previewPath}`" width="60%" top="10vh" append-to-body>
+      <div v-if="previewLoading" class="admin-preview__hint">加载中…</div>
+      <template v-else>
+        <pre class="admin-preview__text">{{ previewContent }}</pre>
+        <el-alert v-if="previewTruncated" type="info" :closable="false"
+                  title="内容过长，已截断显示" />
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -106,10 +130,13 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
+import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
   getAdminSubtaskMessages,
+  listAdminChildFiles, importAdminChildFiles, getAdminChildFilePreview,
   type AdminBatch, type AdminChild, type AdminMessage,
+  type AdminChildFile, type AdminImportResult,
 } from '@/api/aiBatchAdmin'
 
 const STATUSES = [
@@ -220,6 +247,78 @@ async function openConversation(row: AdminChild) {
   }
 }
 
+// 产出文件 dialog —— 同 convOpen 风格的局部 state（不进 store）。先清空再开弹窗，
+// 这样切换子任务时不会泄露上一行残留列表；列表为空时 AdminBatchFiles 显示
+// "加载中…" loading 占位，请求完成后再填充。
+const filesOpen = ref(false)
+const filesBatchId = ref('')
+const filesSessionId = ref('')
+const filesIdent = ref('')
+const childFiles = ref<AdminChildFile[]>([])
+const childFilesLoading = ref(false)
+const childFilesTruncated = ref(false)
+
+// 预览嵌套 dialog：append-to-body 让它脱离 filesOpen 的 z-index 上下文，
+// 否则会被父 dialog 的 mask 盖住。
+const previewOpen = ref(false)
+const previewPath = ref('')
+const previewContent = ref('')
+const previewTruncated = ref(false)
+const previewLoading = ref(false)
+
+async function openChildFiles(row: AdminChild) {
+  if (!detail.value) return
+  filesBatchId.value = detail.value.batch.batchId
+  filesSessionId.value = row.sessionId
+  filesIdent.value = `${row.name} #${row.seq}`
+  childFiles.value = []
+  childFilesTruncated.value = false
+  childFilesLoading.value = true
+  filesOpen.value = true
+  try {
+    const res = await listAdminChildFiles(filesBatchId.value, filesSessionId.value)
+    childFiles.value = res.files
+    childFilesTruncated.value = res.truncated
+  } finally {
+    childFilesLoading.value = false
+  }
+}
+
+async function onPreviewChildFile(path: string) {
+  previewPath.value = path
+  // 复用同 conv 风格：先清空 content 再开，避免上一文件预览残留
+  previewContent.value = ''
+  previewTruncated.value = false
+  previewOpen.value = true
+  previewLoading.value = true
+  try {
+    const res = await getAdminChildFilePreview(filesBatchId.value, filesSessionId.value, path)
+    previewContent.value = res.content
+    previewTruncated.value = res.truncated
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function onImportChildFiles(paths: string[]) {
+  if (!paths.length) return
+  try {
+    const res = await importAdminChildFiles(filesBatchId.value, filesSessionId.value, paths)
+    const results: AdminImportResult[] = res.results
+    // 按 AdminImportResult 不变量:成功行带 status('imported'|'existing')、无 code;
+    // 失败行带 code、无 status。两条互斥,所以 r.status / r.code 各自只命中一边。
+    const ok = results.filter(r => r.status).length
+    const fail = results.filter(r => r.code).length
+    ElMessage.success(`已导入 ${ok} 个文件${fail ? `，${fail} 个失败` : ''}`)
+    // 重新拉列表以刷新 dataFileId：不能乐观更新，导入是否生效要看服务端权威。
+    const fresh = await listAdminChildFiles(filesBatchId.value, filesSessionId.value)
+    childFiles.value = fresh.files
+    childFilesTruncated.value = fresh.truncated
+  } catch {
+    // 全局 axios 拦截器已弹错；这里不再二次 toast。
+  }
+}
+
 onMounted(reload)
 onUnmounted(() => store.stopPolling())
 </script>
@@ -229,4 +328,17 @@ onUnmounted(() => store.stopPolling())
 .batch-admin__poll-error { margin-bottom: 12px; }
 .batch-admin__pager { margin-top: 12px; justify-content: flex-end; }
 .batch-admin__actions { margin: 12px 0; }
+.admin-preview__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--el-fill-color-light);
+  padding: 12px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+.admin-preview__hint { color: var(--el-text-color-secondary); padding: 12px 0; }
 </style>
