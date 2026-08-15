@@ -232,6 +232,74 @@ def _batch_out(b: dict) -> dict:
     }
 
 
+@open_api_batches_bp.get('/agents')
+@api_key_required
+@require_bound_key
+def list_agents():
+    """列出可用的 OpenCode agent（创建批任务时可指定）。
+
+    返回 primary（可用于批任务 agent 参数）和 subagent（仅供参考）两组。
+    过滤掉 OpenCode 内部 agent（compaction/title/summary）。
+    """
+    from utils.opencode_client import OpenCodeClient
+    from config import OPENCODE_BASE_URL
+    try:
+        raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
+    except Exception as e:
+        return jsonify({'error': f'OpenCode 不可用: {e}',
+                        'agents': [], 'default': None}), 502
+    _INTERNAL = {'compaction', 'title', 'summary'}
+    agents = [
+        {'name': a.get('name'), 'description': a.get('description') or ''}
+        for a in (raw or [])
+        if a.get('mode') == 'primary' and a.get('name') not in _INTERNAL
+    ]
+    names = {a['name'] for a in agents}
+    default = 'build' if 'build' in names else (agents[0]['name'] if agents else None)
+    return jsonify({'agents': agents, 'default': default})
+
+
+@open_api_batches_bp.get('/models')
+@api_key_required
+@require_bound_key
+def list_models():
+    """列出可用的 LLM 模型（创建批任务时可指定 model 参数）。
+
+    只返回已连接的 provider 下的模型。id 格式为 `<providerID>/<modelID>`，
+    可直接作为创建批任务时的 model 参数。
+    """
+    from utils.opencode_client import OpenCodeClient
+    from config import OPENCODE_BASE_URL, OPENCODE_MODEL
+    try:
+        provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
+    except Exception as e:
+        return jsonify({'error': f'OpenCode 不可用: {e}',
+                        'models': [], 'default': ''}), 502
+    connected = provider_info.get('connected') or {}
+    if isinstance(connected, list):
+        connected_set = set(connected)
+    else:
+        connected_set = {pid for pid, ok in connected.items() if ok}
+    models = []
+    for prov in provider_info.get('all') or []:
+        pid = prov.get('id')
+        pname = prov.get('name') or pid
+        if pid not in connected_set:
+            continue
+        for mid, mdef in (prov.get('models') or {}).items():
+            models.append({
+                'id': f'{pid}/{mid}',
+                'label': f'{pname} / {mdef.get("name") or mid}',
+                'providerID': pid,
+                'modelID': mid,
+            })
+    models.sort(key=lambda m: (m['label'].lower(), m['id']))
+    return jsonify({
+        'models': models,
+        'default': OPENCODE_MODEL or '',
+    })
+
+
 @open_api_batches_bp.post('')
 @api_key_required
 @require_bound_key
@@ -655,3 +723,33 @@ def session_continue(batch_id, child_id):
         'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
         'status': 'running',
     }), 202
+
+
+@open_api_batches_bp.post('/<batch_id>/sessions/<child_id>/reexecute')
+@api_key_required
+@require_bound_key
+def session_reexecute(batch_id, child_id):
+    """重新执行单个子会话（清掉历史，从头开始）。
+
+    与 continue 不同：删除旧对话、新建 OpenCode 会话、用批任务原始 prompt 重跑。
+    与 retry-failed 不同：可对已完成的子会话重执行，不限于 failed。
+    仅限终态（completed/failed）的子会话。
+    """
+    from utils.batch_repo import reexecute_child
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return jsonify({'error': '批任务不存在'}), 404
+    child, err = _resolve_child(d, child_id)
+    if err:
+        return err
+    try:
+        reexecute_child(key['ownerUserId'], batch_id, child['id'])
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    get_worker().notify()
+    return jsonify({
+        'batchId': batch_id,
+        'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
+        'status': 'running',
+    })

@@ -114,6 +114,8 @@ curl -s -X POST \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/ai-batches/agents` | 列出可用的 AI agent（创建批任务时可指定） |
+| GET | `/api/v1/ai-batches/models` | 列出可用的 LLM 模型（创建批任务时可指定） |
 | POST | `/api/v1/ai-batches/uploads` | 上传文件到暂存区，拿到创建批任务要用的 `files` 数组 |
 | POST | `/api/v1/ai-batches` | 创建批任务（每个文件对应一个子任务/AI 会话） |
 | GET | `/api/v1/ai-batches` | 分页列出本密钥创建的所有批任务 |
@@ -122,6 +124,7 @@ curl -s -X POST \
 | DELETE | `/api/v1/ai-batches/{batchId}` | 删除批任务（不可逆） |
 | POST | `/api/v1/ai-batches/{batchId}/retry-failed` | 把批任务中失败的子任务重置为待处理，交由后台重跑 |
 | POST | `/api/v1/ai-batches/{batchId}/append` | 向已有批任务追加文件（任何状态都可追加） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/reexecute` | 重新执行单个子会话（清掉历史，从头开始） |
 | GET | `/api/v1/ai-batches/{batchId}/file-records` | 获取每个子会话被自动记录的新增/修改文件 |
 | POST | `/api/v1/ai-batches/{batchId}/import` | 把子会话工作区里被记录过的文件按需导入系统 data_files |
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/messages` | 获取子会话的完整对话历史（含工具调用） |
@@ -138,6 +141,82 @@ curl -s -X POST \
 |------|------|---------|
 | `batchId` | 批任务 ID | 创建批任务时（4.2）响应中的 `batchId` 字段，或列出批任务（4.3）响应中每个条目的 `batchId` |
 | `childId` | 子会话标识 | 通过 `/results`（4.5）或 `/file-records`（4.9）响应中的 `name`（文件名）或 `seq`（序号）获取。两种方式等价：`childId` 为纯数字时按序号匹配，否则按文件名匹配。例如 `/results` 返回 `"name": "report1.pdf"`，则 `/sessions/report1.pdf/messages` 和 `/sessions/1/messages` 定位的是同一个子会话 |
+
+---
+
+### 4.0a 列出可用 Agent
+
+```
+GET /api/v1/ai-batches/agents
+```
+
+列出可用的 AI agent，供创建批任务时 `agent` 参数参考。只返回 `primary` 类型的 agent（可用于批任务），过滤掉内部 agent。
+
+**响应 — 200**
+
+```json
+{
+  "agents": [
+    { "name": "build", "description": "Full tool access, governed by user/session permission config." },
+    { "name": "plan", "description": "Read-only design mode." }
+  ],
+  "default": "build"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `agents[].name` | string | agent 名称，可直接作为创建批任务时的 `agent` 参数 |
+| `agents[].description` | string | agent 描述 |
+| `default` | string \| null | 推荐的默认 agent（通常为 `build`） |
+
+**示例**
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/agents" | jq
+```
+
+**错误响应**：502（OpenCode 不可用）。
+
+---
+
+### 4.0b 列出可用模型
+
+```
+GET /api/v1/ai-batches/models
+```
+
+列出可用的 LLM 模型，供创建批任务时 `model` 参数参考。只返回已连接的 provider 下的模型。
+
+**响应 — 200**
+
+```json
+{
+  "models": [
+    { "id": "openai/gpt-4", "label": "OpenAI / GPT-4", "providerID": "openai", "modelID": "gpt-4" },
+    { "id": "openai/gpt-3.5-turbo", "label": "OpenAI / GPT-3.5 Turbo", "providerID": "openai", "modelID": "gpt-3.5-turbo" }
+  ],
+  "default": "openai/gpt-4"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `models[].id` | string | 模型 ID（`<providerID>/<modelID>` 格式），可直接作为创建批任务时的 `model` 参数 |
+| `models[].label` | string | 显示名称 |
+| `models[].providerID` | string | provider ID |
+| `models[].modelID` | string | 模型 ID |
+| `default` | string | 服务端配置的默认模型 |
+
+**示例**
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/models" | jq
+```
+
+**错误响应**：502（OpenCode 不可用）。
 
 ---
 
@@ -862,6 +941,49 @@ curl -s -H "X-API-Key: $API_KEY" \
 
 ---
 
+### 4.16 重新执行单个子会话
+
+```
+POST /api/v1/ai-batches/{batchId}/sessions/{childId}/reexecute
+```
+
+重新执行单个子会话：**删除旧对话、新建 AI 会话、用批任务原始 prompt 从头重跑**。`childId` 的获取和匹配规则见 4.11。
+
+**与 `retry-failed` / `continue` 的区别**：
+
+| 操作 | 历史消息 | AI 会话 | prompt | 适用范围 |
+|------|---------|---------|--------|---------|
+| `retry-failed` | 保留（仅 failed） | **新建** | 原始 | 仅 failed 子任务 |
+| `continue` | **保留** | **复用** | **新 prompt** | completed / failed |
+| **`reexecute`** | **删除** | **新建** | **原始** | completed / failed |
+
+**响应 — 200**
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "child": { "name": "report1.pdf", "seq": 0 },
+  "status": "running"
+}
+```
+
+**示例**
+
+```bash
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/b-1/sessions/report1.pdf/reexecute" | jq
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 404 | 批任务不存在/不属于本密钥，或子会话未找到 |
+| 409 | 子会话不在终态（`pending` / `running`） |
+
+---
+
 ## 5. 状态说明
 
 ### 5.1 批任务状态（`status`）
@@ -874,11 +996,12 @@ curl -s -H "X-API-Key: $API_KEY" \
 | `partial` | 全部子任务已结束，但有成功也有失败（部分完成） |
 | `failed` | 全部子任务都失败 |
 
-`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有三个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
+`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有四个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
 
 - `retry-failed`：把失败的子任务打回 `pending`；
 - `append`：追加新文件（新子任务以 `pending` 入队）；
-- `continue`：在某个子会话上继续对话（该子任务回到 `pending`）。
+- `continue`：在某个子会话上继续对话（该子任务回到 `pending`）；
+- `reexecute`：重新执行某个子会话（该子任务回到 `pending`，历史清空）。
 
 ### 5.2 子任务状态（`results[].status`）
 

@@ -1,11 +1,14 @@
-"""Tests for the 5 new sub-session endpoints on /v1/ai-batches.
+"""Tests for sub-session + discovery endpoints on /v1/ai-batches.
 
 Endpoints covered:
+  GET  /agents
+  GET  /models
   GET  /<batch_id>/sessions/<child_id>/messages
   GET  /<batch_id>/sessions/<child_id>/files
   GET  /<batch_id>/sessions/<child_id>/files/download
   GET  /<batch_id>/sessions/<child_id>/files/download-all
   POST /<batch_id>/sessions/<child_id>/continue
+  POST /<batch_id>/sessions/<child_id>/reexecute
 
 Uses the same mock-based pattern as test_open_api_batches_crud.py.
 Route handlers import helper modules locally (inside the function body),
@@ -667,3 +670,137 @@ class TestGetChildMessages:
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
             db_conn.commit()
+
+
+# ──────────────────────────────────────────────────────────────────
+# GET /agents
+# ──────────────────────────────────────────────────────────────────
+
+class TestListAgents:
+    def test_502_when_opencode_unreachable(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('utils.opencode_client.OpenCodeClient.list_agents',
+                   side_effect=ConnectionError('refused')):
+            resp = client.get(f'{BASE}/agents', headers=HDR)
+        assert resp.status_code == 502
+        assert 'OpenCode' in resp.get_json()['error']
+
+    def test_returns_filtered_primary_agents(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        raw = [
+            {'name': 'build', 'description': 'Build agent', 'mode': 'primary'},
+            {'name': 'plan', 'description': 'Plan agent', 'mode': 'primary'},
+            {'name': 'compaction', 'description': 'Internal', 'mode': 'primary'},
+            {'name': 'explore', 'description': 'Explore', 'mode': 'subagent'},
+        ]
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('utils.opencode_client.OpenCodeClient.list_agents',
+                   return_value=raw):
+            resp = client.get(f'{BASE}/agents', headers=HDR)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        names = [a['name'] for a in body['agents']]
+        assert 'build' in names
+        assert 'plan' in names
+        assert 'compaction' not in names
+        assert 'explore' not in names
+        assert body['default'] == 'build'
+
+
+# ──────────────────────────────────────────────────────────────────
+# GET /models
+# ──────────────────────────────────────────────────────────────────
+
+class TestListModels:
+    def test_502_when_opencode_unreachable(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('utils.opencode_client.OpenCodeClient.list_providers',
+                   side_effect=ConnectionError('refused')):
+            resp = client.get(f'{BASE}/models', headers=HDR)
+        assert resp.status_code == 502
+
+    def test_returns_connected_models(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        providers = {
+            'connected': {'openai': True, 'anthropic': False},
+            'all': [
+                {
+                    'id': 'openai', 'name': 'OpenAI',
+                    'models': {'gpt-4': {'name': 'GPT-4'}, 'gpt-3.5-turbo': {'name': 'GPT-3.5'}},
+                },
+                {
+                    'id': 'anthropic', 'name': 'Anthropic',
+                    'models': {'claude-3': {'name': 'Claude 3'}},
+                },
+            ],
+            'default': {'openai': 'gpt-4'},
+        }
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('utils.opencode_client.OpenCodeClient.list_providers',
+                   return_value=providers), \
+             patch('config.OPENCODE_MODEL', 'openai/gpt-4'):
+            resp = client.get(f'{BASE}/models', headers=HDR)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        ids = [m['id'] for m in body['models']]
+        assert 'openai/gpt-4' in ids
+        assert 'openai/gpt-3.5-turbo' in ids
+        assert 'anthropic/claude-3' not in ids
+        assert body['default'] == 'openai/gpt-4'
+
+
+# ──────────────────────────────────────────────────────────────────
+# POST /<batch_id>/sessions/<child_id>/reexecute
+# ──────────────────────────────────────────────────────────────────
+
+class TestSessionReexecute:
+    def test_404_when_batch_missing(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('routes.open_api_batches.get_batch_detail', return_value=None):
+            resp = client.post(f'{BASE}/b-x/sessions/s-1/reexecute', headers=HDR)
+        assert resp.status_code == 404
+
+    def test_404_when_child_not_found(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        detail = _batch_detail()
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('routes.open_api_batches.get_batch_detail', return_value=detail):
+            resp = client.post(f'{BASE}/b-1/sessions/nonexistent/reexecute', headers=HDR)
+        assert resp.status_code == 404
+
+    def test_409_when_child_not_terminal(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        detail = _batch_detail(sessions=[_child_session(status='running')])
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
+             patch('utils.batch_repo.reexecute_child',
+                   side_effect=ValueError('only completed/failed')):
+            resp = client.post(f'{BASE}/b-1/sessions/0/reexecute', headers=HDR)
+        assert resp.status_code == 409
+
+    def test_success_on_completed_child(self, client, mock_conn, mock_cursor):
+        _auth_passes(mock_cursor)
+        detail = _batch_detail()
+        with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+             patch('routes.open_api_batches._current_key', return_value=_key()), \
+             patch('routes.open_api_batches.get_batch_detail', return_value=detail), \
+             patch('utils.batch_repo.reexecute_child', return_value=detail), \
+             patch('routes.open_api_batches.get_worker') as mock_worker:
+            mock_worker.return_value.notify = MagicMock()
+            resp = client.post(f'{BASE}/b-1/sessions/report.pdf/reexecute', headers=HDR)
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['batchId'] == 'b-1'
+        assert body['child']['name'] == 'report.pdf'
+        assert body['status'] == 'running'
+        mock_worker.return_value.notify.assert_called_once()
