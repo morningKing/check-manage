@@ -492,14 +492,25 @@ def get_recorded_path(session_id, path):
 
 
 def set_data_file_id(session_id, path, data_file_id):
-    """导入成功后回填映射（幂等导入的依据）。Best-effort。"""
+    """导入成功后回填映射（幂等导入的依据）。Best-effort。
+
+    UPSERT — 若该 session/path 还没有 `ai_chat_session_files` 行（admin 端
+    导入 outputs/ 文件 via extra_whitelist 的常见情形：.gitignore 屏蔽了
+    outputs/ 故 record_session_files 不曾 INSERT 它），先 INSERT，再下次
+    admin 导入同一 path 时 get_recorded_path 会命中并直接返 existing，避免
+    重复 save_workspace_file 写第二份 data_files 行。Best-effort。
+    """
     from db import get_db
     try:
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("UPDATE ai_chat_session_files SET data_file_id = %s "
-                        "WHERE session_id = %s AND path = %s",
-                        (data_file_id, session_id, path))
+            cur.execute(
+                "INSERT INTO ai_chat_session_files (session_id, path, status, data_file_id) "
+                "VALUES (%s, %s, 'added', %s) "
+                "ON CONFLICT (session_id, path) DO UPDATE "
+                "SET data_file_id = EXCLUDED.data_file_id, last_seen_at = now()",
+                (session_id, path, data_file_id),
+            )
             conn.commit()
     except Exception:
         pass
