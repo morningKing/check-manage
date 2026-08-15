@@ -753,3 +753,79 @@ def session_reexecute(batch_id, child_id):
         'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
         'status': 'running',
     })
+
+
+@open_api_batches_bp.patch('/<batch_id>')
+@api_key_required
+@require_bound_key
+def update_config(batch_id):
+    """修改批任务的 agent/model 配置。
+
+    空字符串清除为默认值。修改在下一次 worker 拾取时生效
+    （retry / reexecute / continue / pending）。
+    """
+    from utils.batch_repo import update_batch_config
+    key = _current_key()
+    body = request.get_json(silent=True) or {}
+    agent = (body.get('agent') or '').strip() or None
+    model = (body.get('model') or '').strip() or None
+    result = update_batch_config(
+        key['ownerUserId'], batch_id,
+        agent=agent, model=model,
+        api_key_id=key['id'],
+    )
+    if result is None:
+        return jsonify({'error': '批任务不存在'}), 404
+    return jsonify(_batch_out(result))
+
+
+@open_api_batches_bp.post('/query')
+@api_key_required
+@require_bound_key
+def ai_query():
+    """自然语言查询翻译：将中文/英文问题转换为 MongoDB 风格的过滤器 JSON。
+
+    不执行查询本身，只返回 filter。调用方可用返回的 filter 调用
+    GET /v1/collections/<collection>?q=<filter> 获取实际数据。
+    """
+    from utils.ai_query import nl_to_mongo_filter
+    from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
+    body = request.get_json(force=True)
+    collection = (body.get('collection') or '').strip()
+    question = (body.get('question') or '').strip()
+
+    if not collection or not question:
+        return jsonify({'error': 'collection 和 question 均为必填'}), 400
+
+    # 获取字段 schema
+    page_id = f'page-{collection}'
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('SELECT fields FROM page_configs WHERE id = %s', (page_id,))
+        row = cur.fetchone()
+
+    if not row or not row[0]:
+        return jsonify({'error': f'未找到页面配置: {collection}'}), 404
+
+    fields = row[0]
+
+    # 调用 LLM 翻译
+    try:
+        raw_filter = nl_to_mongo_filter(question, fields, collection)
+    except RuntimeError as e:
+        status = 503 if 'API Key' in str(e) else 500
+        return jsonify({'error': str(e)}), status
+
+    # 安全回落：修正 LLM 可能使用的中文标签
+    safe_filter = remap_labels(raw_filter, fields)
+
+    # 通过 mongo_translate 做语法校验（dry run）
+    try:
+        mongo_translate(safe_filter)
+    except MongoQueryError as e:
+        return jsonify({
+            'error': f'AI 生成的查询语法无效: {e}',
+            'raw_filter': safe_filter,
+        }), 422
+
+    return jsonify({'filter': safe_filter})
