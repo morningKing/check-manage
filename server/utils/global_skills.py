@@ -125,9 +125,12 @@ def install_skill_from_zip(zip_path: str, description: str,
             zf.extractall(tmp_dir)
 
         # Find the extracted content — may be in a subdirectory
+        # e.g. zip contains test-skill/SKILL.md → extractall gives tmp/test-skill/SKILL.md
+        # We want dest_dir/SKILL.md, not dest_dir/test-skill/SKILL.md
         extracted = tmp_dir
         entries = os.listdir(tmp_dir)
         if len(entries) == 1 and os.path.isdir(os.path.join(tmp_dir, entries[0])):
+            # Single top-level directory — use its contents directly
             extracted = os.path.join(tmp_dir, entries[0])
 
         # Calculate total file size
