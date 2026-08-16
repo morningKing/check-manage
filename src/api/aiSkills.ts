@@ -49,5 +49,7 @@ export function uploadGlobalSkill(file: File, description: string) {
   const form = new FormData()
   form.append('file', file)
   form.append('description', description)
-  return post<GlobalSkill>(BASE, form)
+  return post<GlobalSkill>(BASE, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
 }
