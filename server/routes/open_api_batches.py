@@ -300,6 +300,23 @@ def list_models():
     })
 
 
+@open_api_batches_bp.get('/skills')
+@api_key_required
+@require_bound_key
+def list_skills():
+    """列出可用的全局 skill（创建批任务时可指定 skills 参数）。
+
+    只返回 enabled 的 skill。
+    """
+    from utils.global_skills import list_global_skills
+    skills = [
+        {'name': s['name'], 'description': s.get('description', '')}
+        for s in list_global_skills()
+        if s.get('enabled')
+    ]
+    return jsonify({'skills': skills})
+
+
 @open_api_batches_bp.post('')
 @api_key_required
 @require_bound_key

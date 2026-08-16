@@ -583,6 +583,15 @@ class BatchWorker:
                 prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
                 if prov_warn:
                     self._persist_provision_notice(sid, prov_warn)
+                # Inject global skills (symlink/copy from central storage)
+                try:
+                    from utils.global_skills import inject_global_skills
+                    injected = inject_global_skills(ws)
+                    if injected:
+                        self._persist_provision_notice(
+                            sid, f'已注入全局技能: {", ".join(injected)}')
+                except Exception:
+                    pass  # best-effort: don't fail the child
                 # Fail FAST on an unusable agent. OpenCode silently produces nothing
                 # for an unknown / subagent-as-primary agent, which would otherwise
                 # hang until STALL_TIMEOUT (the "批任务一直待运行 with custom agent" bug).

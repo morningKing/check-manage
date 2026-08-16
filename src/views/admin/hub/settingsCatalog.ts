@@ -63,6 +63,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiBatchAdmin.vue') },
     { id: 'ai-sessions', label: 'AI 会话管理', perm: 'admin.ai_chat_admin',
       component: () => import('@/views/admin/AiSessionAdmin.vue') },
+    { id: 'ai-skills', label: 'AI 技能管理', perm: 'admin.ai_settings',
+      component: () => import('@/views/admin/AiSkillManager.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
     { id: 'query', label: '数据查询', perm: 'admin.query',

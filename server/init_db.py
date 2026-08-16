@@ -729,6 +729,19 @@ CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list
   ON ai_chat_sessions(status, created_at DESC);
 """
 
+GLOBAL_SKILLS_DDL = """
+CREATE TABLE IF NOT EXISTS global_skills (
+    id          VARCHAR(100) PRIMARY KEY,
+    name        VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    uploaded_by VARCHAR(100) REFERENCES users(id) ON DELETE SET NULL,
+    file_size   INT NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+
 
 RBAC_DDL = """
 CREATE TABLE IF NOT EXISTS roles (
@@ -901,6 +914,11 @@ def init_db():
         cur.execute(AI_SCAN_TASKS_DDL)
         conn.commit()
         print("ai_scan_tasks table + ai_chat_sessions scan columns created.")
+
+        # Global skills registry
+        cur.execute(GLOBAL_SKILLS_DDL)
+        conn.commit()
+        print("global_skills table created.")
 
         # RBAC custom roles (Phase 0)
         cur.execute(RBAC_DDL)
