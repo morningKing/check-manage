@@ -14,6 +14,7 @@ from pathlib import PurePosixPath
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required
+from db import get_db
 from utils.batch_engine import get_worker
 from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, create_batch,
                               delete_batch, get_batch_detail, get_batch_results,
@@ -793,7 +794,7 @@ def update_config(batch_id):
     )
     if result is None:
         return jsonify({'error': '批任务不存在'}), 404
-    return jsonify(_batch_out(result))
+    return jsonify(_batch_out(result['batch']))
 
 
 @open_api_batches_bp.post('/query')
