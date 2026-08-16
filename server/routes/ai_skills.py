@@ -13,6 +13,7 @@ import os
 
 from flask import Blueprint, g, jsonify, request
 from auth import require_permission
+from config import AI_WORKSPACE_ROOT
 from utils.global_skills import (
     delete_global_skill,
     get_global_skill,
@@ -75,8 +76,7 @@ def create_skill():
         f.save(tmp)
         tmp.close()
         user_id = g.current_user.get('userId') or g.current_user.get('id')
-        skill = install_skill_from_zip(tmp.name, description, user_id,
-                                       os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces'))
+        skill = install_skill_from_zip(tmp.name, description, user_id, AI_WORKSPACE_ROOT)
         return jsonify(_row_out(skill)), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -106,7 +106,7 @@ def update_skill(skill_id):
 @ai_skills_bp.delete('/<skill_id>')
 @require_permission('admin.ai_settings')
 def delete_skill(skill_id):
-    ws = os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    ws = AI_WORKSPACE_ROOT
     if not delete_global_skill(skill_id, ws):
         return jsonify({'error': '技能不存在'}), 404
     return jsonify({'deleted': True})
@@ -115,7 +115,7 @@ def delete_skill(skill_id):
 @ai_skills_bp.get('/<skill_id>/files')
 @require_permission('admin.ai_settings')
 def skill_files(skill_id):
-    ws = os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    ws = AI_WORKSPACE_ROOT
     skill = get_global_skill(skill_id)
     if not skill:
         return jsonify({'error': '技能不存在'}), 404
@@ -126,7 +126,7 @@ def skill_files(skill_id):
 @ai_skills_bp.get('/<skill_id>/files/<path:file_path>')
 @require_permission('admin.ai_settings')
 def skill_file_content(skill_id, file_path):
-    ws = os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    ws = AI_WORKSPACE_ROOT
     result = read_skill_file(skill_id, file_path, ws)
     if result is None:
         return jsonify({'error': '文件不存在'}), 404

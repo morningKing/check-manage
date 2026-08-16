@@ -586,7 +586,7 @@ class BatchWorker:
                 # Inject global skills (symlink/copy from central storage)
                 try:
                     from utils.global_skills import inject_global_skills
-                    injected = inject_global_skills(ws)
+                    injected = inject_global_skills(ws, _workspace_root())
                     if injected:
                         self._persist_provision_notice(
                             sid, f'已注入全局技能: {", ".join(injected)}')

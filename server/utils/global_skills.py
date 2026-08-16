@@ -284,11 +284,15 @@ def read_skill_file(skill_id: str, file_path: str,
     return {'content': content, 'truncated': truncated, 'binary': False}
 
 
-def inject_global_skills(workspace_path: str) -> list[str]:
+def inject_global_skills(workspace_path: str,
+                         workspace_root: str | None = None) -> list[str]:
     """Symlink (or copy) all enabled global skills into a session workspace.
 
     Creates links in <workspace>/.opencode/skills/<name> -> global-skills/<name>.
     Returns list of injected skill names.
+
+    `workspace_root` is the parent of all user workspace dirs (e.g. ai-workspaces/).
+    If None, derived from workspace_path (assumes <root>/<user>/<session>).
 
     Best-effort: failures for individual skills are logged but don't stop others.
     """
@@ -297,13 +301,15 @@ def inject_global_skills(workspace_path: str) -> list[str]:
     if not enabled:
         return []
 
-    # Determine workspace root from workspace_path structure
-    # workspace_path is like <root>/<user_id>/<session_id>
-    # global-skills is at <root>/global-skills
-    parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
-    if len(parts) < 2:
-        return []
-    workspace_root = '/'.join(parts[:-2]) if len(parts) >= 3 else '/'.join(parts[:-1])
+    if workspace_root is None:
+        # Derive from workspace_path: <root>/<user_id>/<session_id> -> <root>
+        parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
+        if len(parts) < 3:
+            return []
+        workspace_root = '/'.join(parts[:-2])
+
+    # Resolve to absolute path (workspace_root may be relative)
+    workspace_root = os.path.abspath(workspace_root)
     gs_root = global_skills_root(workspace_root)
     if not os.path.isdir(gs_root):
         return []

@@ -140,6 +140,13 @@ def create_session():
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
                           model=OPENCODE_MODEL, extra_mcp=_external_mcp())
 
+    # 3.5) Inject global skills into the workspace
+    try:
+        from utils.global_skills import inject_global_skills
+        inject_global_skills(workspace_path, AI_WORKSPACE_ROOT)
+    except Exception:
+        pass  # best-effort
+
     # 4) ask OpenCode to start a session bound to this workspace (directory query param)
     client = OpenCodeClient(OPENCODE_BASE_URL)
     opencode_session_id = client.create_session(directory=workspace_path, title='新会话')
