@@ -13,7 +13,7 @@ import os
 # Hidden dirs (starting with '.') are skipped too. ⚠ outputs/ 故意不在集中——
 # 它要被列出（dir='outputs'），与 git_changes 的 .gitignore 名单是两份独立集合。
 LISTFILES_SKIP_DIRS = {'uploads', '.git', 'node_modules', '.venv', '__pycache__', '.opencode'}
-LISTFILES_MAX_DEPTH = 8
+LISTFILES_MAX_DEPTH = 32
 LISTFILES_MAX_FILES = 1000
 
 

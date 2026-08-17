@@ -65,9 +65,26 @@ def test_list_session_files_excludes_noise_and_dotfiles():
 def test_listfiles_constants_match_old_definitions():
     """常量值与 routes/ai_chat.py 里抽走前一致（防误改）。"""
     assert LISTFILES_MAX_FILES == 1000
-    assert LISTFILES_MAX_DEPTH == 8
+    assert LISTFILES_MAX_DEPTH == 32
     # outputs/ 故意不在跳过集（它要被列）；uploads/ 不在跳过集（被列但分类为 uploads）
     assert LISTFILES_SKIP_DIRS == {'uploads', '.git', 'node_modules', '.venv', '__pycache__', '.opencode'}
+
+
+def test_list_session_files_finds_deeply_nested_files():
+    """回归测试：曾经 LISTFILES_MAX_DEPTH=8 会静默丢弃更深层的新增/修改文件
+    （用户报告"新增或修改的文件目录过深，在会话管理里显示不出来"）。"""
+    with tempfile.TemporaryDirectory() as td:
+        deep_dir = os.path.join(td, 'outputs')
+        for i in range(12):
+            deep_dir = os.path.join(deep_dir, f'level{i}')
+        os.makedirs(deep_dir, exist_ok=True)
+        with open(os.path.join(deep_dir, 'deep.txt'), 'w') as f:
+            f.write('deep')
+        files, truncated = list_session_files(td)
+        paths = {f['path'] for f in files}
+        expected = 'outputs/' + '/'.join(f'level{i}' for i in range(12)) + '/deep.txt'
+        assert expected in paths
+        assert truncated is False
 
 
 def test_augment_with_data_file_id_in_place():
