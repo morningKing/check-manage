@@ -149,3 +149,52 @@
 - **不支持批量执行**：一次只能对一行触发，没有勾选多行统一触发的入口。需要批量场景请用「AI 定时任务」的整页扫描，或直接调用 Webhook 规则的事件触发。
 - **显示条件只支持单条**：`visibleWhen` 是 `{字段, 算子, 值}` 三元组，不支持 and/or 组合出复杂条件。
 - **不建执行记录表**：行操作本身没有独立的「执行历史」列表，要查历史得分别去 Webhook 日志或 AI 批任务面板（见 §8）。
+
+## 11. 对外触发（API Key）
+
+```
+POST /api/v1/collections/<collection>/<recordId>/row-actions/<actionId>/run
+X-API-Key: cm_xxx
+Content-Type: application/json
+
+{ "params": { ... } }
+```
+
+外部系统可以用 API Key 直接触发已经在页面上配置好的行操作，效果和登录用户在「⋯」菜单里点这个按钮完全一样——走同一条 `run_action` 编排逻辑，同一套幂等闸门（webhook 原子 CAS / AI `FOR UPDATE SKIP LOCKED`），同一套状态回写。
+
+**鉴权与角色**：请求头带 `X-API-Key`，密钥必须已绑定用户（去密钥管理页新建，参见 `ai-batch-api.md` 第 2 节）。行操作的「可见角色」白名单按**这把密钥绑定用户本人的角色**判断——等价于「这把密钥的操作权限=它绑定的用户本人」，和批任务对外 API 的归属模型一致。
+
+**写入权限**：目标集合必须在页面配置里开启「允许写入」（`api_writable`），否则 403——触发行操作本质是引发一次写入，和 `PUT`/`POST` 记录同一道门。集合未开放 API 或不存在则 404。
+
+**`actionId` 从哪来**：这个端点不提供行操作发现/列表接口，`actionId` 需要从配置这个行操作的管理员那里线下拿到（在「页面配置管理 → 行操作」标签页可以看到每条动作的 id），和获取 `scanTaskId`/`webhookRuleId` 的方式一致。
+
+**`params`**：原样透传给 `run_action`，不做二次类型/必填校验——和界面点击时的行为一致（界面侧的表单校验是前端职责），调用方需要自己保证传的值符合该动作 `paramFields` 的预期形状。
+
+**分支**：默认作用于系统配置的对外默认分支（`OPEN_API_BRANCH`，通常是 `main`），可用 `?branchId=` 查询参数指定其它分支，规则与 `open-api.md` 里数据集合接口的分支解析一致。
+
+**响应 — 200**
+
+```json
+{ "ok": true, "status": "running", "statusField": "status", "runningValue": "处理中" }
+```
+`status` 为 `submitted`（无状态门/webhook 已发出）或 `running`（有状态门、正在轮询终态）；`statusField`/`runningValue` 仅在 `status='running'` 时非空，供调用方知道该轮询记录的哪个字段等哪个终态。
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | 该动作已被停用（`enabled=false`） |
+| 403 | 集合未开启写入权限；调用方角色不在该动作的可见角色白名单里 |
+| 404 | 集合不存在/未开放 API；记录不存在；`actionId` 不存在；密钥未绑定用户 |
+| 409 | 该行有正在执行的动作（幂等闸门）；AI 类型动作绑定的扫描任务作用于另一个分支 |
+
+> ⚠️ **本端点的 `error` 文案是中文**，和 `open-api.md` 里数据集合接口"全英文 error"的约定不同——错误消息直接来自 `run_action` 内部的 `RowActionError`，为了不因为翻译而和界面上看到的提示语不一致，这里原样透传，不做英文改写。
+
+**curl 示例**
+
+```bash
+curl -s -X POST \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"params": {"note": "外部系统触发"}}' \
+  "http://localhost:8080/api/v1/collections/orders/rec-123/row-actions/act-1/run" | jq
+```

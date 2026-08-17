@@ -69,9 +69,10 @@ def test_delete_api_key_with_batches_succeeds_and_nulls_api_key_id():
 def test_delete_owner_user_nulls_api_key_owner():
     """密钥属主被删除 → api_keys.owner_user_id 自动置空（ON DELETE SET NULL）。
 
-    这是一道 fail-safe：置空后的密钥被 routes/open_api_batches.require_bound_key
-    当作「未绑定」挡在 AI 批任务接口之外（403），不会再有人以一个已注销用户的
-    名义跑 AI、烧他的额度。默认的 NO ACTION 则是把 users 行钉死删不掉。
+    这是一道 fail-safe：置空后的密钥被 auth.require_bound_key（所有对外 AI/
+    集合以外的密钥端点共用这一道闸门）当作「未绑定」挡在接口之外（403），
+    不会再有人以一个已注销用户的名义跑 AI、烧他的额度。默认的 NO ACTION
+    则是把 users 行钉死删不掉。
     """
     uid = f'user-fktest-{uuid.uuid4().hex[:8]}'
     key_id = f'ak-ownertest-{uuid.uuid4().hex[:8]}'

@@ -43,6 +43,33 @@ def get_task(task_id):
         return _row_to_dict(r) if r else None
 
 
+def list_tasks_for_owner(owner_user_id):
+    """按 owner_user_id 过滤的 list_tasks——供对外 API Key 端点用，内部
+    admin 路由继续用不带过滤的 list_tasks（管理员本就该看到全部任务）。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT {', '.join(_FIELDS)} FROM ai_scan_tasks "
+            "WHERE owner_user_id = %s ORDER BY created_at DESC",
+            (owner_user_id,),
+        )
+        return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def get_task_for_owner(task_id, owner_user_id):
+    """按 owner_user_id 过滤的 get_task——供对外 API Key 端点用，防止用别人
+    的 taskId 探测/触发不属于自己的扫描任务。"""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT {', '.join(_FIELDS)} FROM ai_scan_tasks "
+            "WHERE id = %s AND owner_user_id = %s",
+            (task_id, owner_user_id),
+        )
+        r = cur.fetchone()
+        return _row_to_dict(r) if r else None
+
+
 def create_task(body, owner_user_id):
     tid = f"scan-{uuid.uuid4().hex[:8]}"
     with get_db() as conn:

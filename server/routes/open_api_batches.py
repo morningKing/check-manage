@@ -13,7 +13,7 @@ from pathlib import PurePosixPath
 
 from flask import Blueprint, g, jsonify, request
 
-from auth import api_key_required
+from auth import api_key_required, require_bound_key
 from db import get_db
 from utils.batch_engine import get_worker
 from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, create_batch,
@@ -79,22 +79,6 @@ def _current_key() -> dict:
 
 def _workspace_root() -> str:
     return os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
-
-
-def require_bound_key(f):
-    """挡住未绑定用户的密钥。
-
-    存量密钥的 owner_user_id 是 NULL。放行它们会导致外部调用以某个人的名义
-    跑 AI、烧他的额度、把任务塞进他的侧边栏 —— 所以一律拒绝，要求重建密钥。
-    """
-    from functools import wraps
-
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not _current_key().get('ownerUserId'):
-            return jsonify({'error': '该密钥未绑定用户，请在密钥管理中重新创建'}), 403
-        return f(*args, **kwargs)
-    return decorated
 
 
 def _validate_staged_path(path: str, owner_user_id: str) -> bool:

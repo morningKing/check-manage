@@ -38,10 +38,16 @@ def test_missing_api_key_is_401(client):
 
 
 def test_key_without_owner_is_403(client, mock_conn, mock_cursor):
-    """存量密钥（owner_user_id 为 NULL）不能用 AI 批任务接口。"""
-    _auth_passes(mock_cursor)
-    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
-         patch('routes.open_api_batches._current_key', return_value=_key_info(None)):
+    """存量密钥（owner_user_id 为 NULL）不能用 AI 批任务接口。
+
+    `require_bound_key` 现在住在 auth.py，直接读真实的 g.api_key_info（由
+    api_key_required 从 DB 行填充），所以要让它看到 owner=None 得从
+    api_key_required 查询本身的返回行控制（_auth_passes(..., owner=None)），
+    而不是 patch routes.open_api_batches._current_key ——那只影响视图函数体
+    自己的取值，对装饰器已经不起作用了。
+    """
+    _auth_passes(mock_cursor, owner=None)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)):
         resp = client.post(UPLOAD_URL, headers={'X-API-Key': 'cm_x'})
     assert resp.status_code == 403
     assert '未绑定用户' in resp.get_json()['error']

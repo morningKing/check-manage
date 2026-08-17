@@ -114,3 +114,42 @@
 
 - 后端：`tests/test_ai_scan_engine.py`、`tests/test_ai_scan_writeback.py`、`tests/test_routes_ai_scan_tasks.py`（认领/上下文/提示词/JSON 提取/回写成功+失败/路由+RBAC/camelCase 往返/Windows 拷贝重试）。
 - 端到端（Playwright 已实测）：建任务 → 立即运行 → 批任务面板出现批任务 → 记录状态 `待处理→处理中→已处理`，映射列被写入；失败子会话置 `处理失败`。
+
+## 10. 对外触发（API Key）
+
+管理页的「立即运行」（§7）之外，还有一套 API Key 鉴权的对外端点，供外部系统按自己的节奏触发扫描——比如收到别的系统事件后想"现在马上处理这批数据"，不想等下一次分钟级调度。
+
+```
+GET  /api/v1/ai-scan-tasks              # 列出这把密钥能看到的扫描任务
+GET  /api/v1/ai-scan-tasks/{taskId}     # 查询单个任务
+POST /api/v1/ai-scan-tasks/{taskId}/run-now   # 立即触发一次扫描
+```
+
+**鉴权与归属**：请求头带 `X-API-Key`，密钥必须已绑定用户。只能看到、触发**这把密钥所属用户创建**的任务——按 `ai_scan_tasks.owner_user_id` 与密钥的所属用户匹配过滤，和批任务对外 API（`ai-batch-api.md`）的归属模型一致；`taskId` 不存在或不属于这把密钥一律 404，不用 403。
+
+**`run-now` 是什么意思**：和管理页的「立即运行」完全一样，同步完成"认领当前符合条件的待处理记录（最多 `maxRecordsPerScan` 条）+ 建一个批任务"，请求会等这一步做完再返回；真正的 AI 处理是异步的（批任务 worker 接手），所以这一步很快，不会因为要等 AI 跑完才超时。响应里的 `claimedCount` 就是这次实际认领到的记录数（可能是 0，代表当前没有符合条件的待处理记录）。
+
+**不检查 `enabled`**：即使任务在管理页被禁用（`enabled=false`，只是不再被定时调度器自动拾取），`run-now` 依然可以手动触发——和管理页「立即运行」按钮的既有行为一致。
+
+**响应 — 200**（`run-now`）
+
+```json
+{ "triggered": true, "claimedCount": 3, "lastError": null }
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 401/403 | 密钥缺失/无效/已停用/未绑定用户 |
+| 404 | `taskId` 不存在，或存在但不属于这把密钥 |
+| 500 | 扫描引擎执行异常（认领/建批任务失败），详情请查看服务端日志 |
+
+> ⚠️ 本端点的 `error` 文案是中文，与 `ai-batch-api.md` 同一惯例（AI 相关对外端点家族），不同于 `open-api.md` 数据集合接口的英文惯例。
+
+**curl 示例**
+
+```bash
+curl -s -X POST -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-scan-tasks/scan-abc12345/run-now" | jq
+```

@@ -70,6 +70,26 @@
 
 常用提示词可保存为 **Prompt 模板**（按用户维护），在创建批任务时一键选用。
 
+### 对外 API
+
+除了界面维护，Prompt 模板也有一套 API Key 鉴权的对外 CRUD（`/api/v1/prompt-templates`），供外部系统脚本化维护自己的常用提示词库：
+
+```
+GET    /api/v1/prompt-templates          # 列出这把密钥所属用户的全部模板
+POST   /api/v1/prompt-templates          # 新建，body: {name, content}
+GET    /api/v1/prompt-templates/{id}     # 查询单个
+PUT    /api/v1/prompt-templates/{id}     # 修改，body 同 POST
+DELETE /api/v1/prompt-templates/{id}     # 删除
+```
+
+鉴权同批任务对外 API：请求头带 `X-API-Key`，密钥必须已绑定用户；只能读写**这把密钥所属用户自己的**模板，跨用户一律 404（不用 403，不泄漏存在性）。`name` 在同一用户下唯一，重名返回 409。响应字段：`{id, name, content, createdAt, updatedAt}`（不含内部 `userId`）。
+
+```bash
+curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"周报总结","content":"请总结以下文档的核心结论与风险点。"}' \
+  "http://localhost:8080/api/v1/prompt-templates" | jq
+```
+
 ## 管理员：批任务管理页
 
 普通用户只能在 AI 助手侧边栏看到**自己**创建的批任务。设置中心的 **AI 批任务** 页面面向管理员，提供**跨全部用户**的只读监控与有限的运维操作。

@@ -40,3 +40,31 @@
 ## 备份与恢复
 
 长期记忆（向量库）随系统备份一起备份：备份会把向量库目录（`MEM0_STORE_ROOT`，默认 `~/.check-manage/mem0/`）打进备份 ZIP 的 `vector_store/`，恢复时整目录还原（全量覆盖）。这样记忆数据与数据库里的引用 id 在同一份备份里配套一致，不会错位。
+
+## 对外 API（API Key）
+
+「我的记忆」抽屉的查看/补写/删除，也有一套 API Key 鉴权的对外等价物（`/api/v1/memories`），供外部系统脚本化管理自己账号下的长期记忆：
+
+```
+GET    /api/v1/memories          # 列出这把密钥所属用户的全部记忆
+POST   /api/v1/memories          # 补写一条，body: {text, verbatim?}
+DELETE /api/v1/memories/{id}     # 删除一条
+```
+
+鉴权同批任务对外 API：请求头带 `X-API-Key`，密钥必须已绑定用户；只能读写**这把密钥所属用户自己的**记忆。
+
+**`POST` 参数**：`text`（必填，非空、≤2000 字符）；`verbatim`（可选布尔，默认 `false`——默认会被 AI 提炼成简洁事实再入库，`true` 则原样保存不提炼，同界面「原样保存」开关）。若系统未配置/未启用记忆功能（缺 AI API Key 或开关关闭），返回 `409 { "code": "MEMORY_UNAVAILABLE" }`。
+
+**`memory_id` 是不透明的 mem0 UUID**：由 mem0 自己生成，本系统不做二次映射。**`DELETE` 会先校验这条记忆确实属于这把密钥所属的用户**（内部会先拉一遍该用户的全部记忆 id 做归属确认），目标 id 不在该用户名下一律 404——不能靠猜/枚举别人的 `memory_id` 删掉不属于自己的记忆。
+
+**响应 — 200**（`GET`/`POST` 均含 `memories` 数组，原样透传 mem0 的返回形状，通常每条含 `id`/`memory`/等字段）
+
+```json
+{ "memories": [{ "id": "mem-abc123", "memory": "偏好用中文回复" }] }
+```
+
+```bash
+curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d '{"text": "偏好简洁的代码风格，不要多余注释"}' \
+  "http://localhost:8080/api/v1/memories" | jq
+```

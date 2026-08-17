@@ -199,3 +199,18 @@ def api_key_required(f):
         g.api_key_info = {'id': row[0], 'name': row[1], 'ownerUserId': row[3]}
         return f(*args, **kwargs)
     return decorated
+
+
+def require_bound_key(f):
+    """挡住未绑定用户的密钥（用在 api_key_required 之后的对外端点上）。
+
+    存量密钥的 owner_user_id 是 NULL。放行它们会导致外部调用以某个人的名义
+    跑 AI、烧他的额度、把任务/数据塞进他的账号下 —— 所以一律拒绝，要求重建密钥。
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        info = getattr(g, 'api_key_info', {}) or {}
+        if not info.get('ownerUserId'):
+            return jsonify({'error': '该密钥未绑定用户，请在密钥管理中重新创建'}), 403
+        return f(*args, **kwargs)
+    return decorated
