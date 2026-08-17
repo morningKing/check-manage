@@ -228,13 +228,14 @@ def _recompute_batch_status(batch_id: str) -> None:
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT done, failed, total FROM ai_chat_batches WHERE id = %s",
+                "SELECT done, failed, total, callback_url, callback_secret "
+                "FROM ai_chat_batches WHERE id = %s",
                 (batch_id,),
             )
             row = cur.fetchone()
             if not row:
                 return
-            done, failed, total = row
+            done, failed, total, callback_url, callback_secret = row
             terminal = done + failed
             if terminal == 0:
                 new_status = 'pending'
@@ -254,6 +255,41 @@ def _recompute_batch_status(batch_id: str) -> None:
                 (new_status, terminal, batch_id),
             )
         conn.commit()
+    if new_status in ('completed', 'partial', 'failed'):
+        _notify_callback(batch_id, new_status, callback_url, callback_secret,
+                         done, failed, total)
+
+
+def _notify_callback(batch_id, status, callback_url, callback_secret,
+                     done, failed, total):
+    """Best-effort open-API completion callback: POST to `callback_url` (if
+    set) once the batch reaches a terminal status, HMAC-signed via the
+    existing webhook engine. Fires on every terminal transition, not just the
+    first — retry-failed/append/continue can push a terminal batch back to
+    running and it may reach a terminal status again later; each is a real
+    "batch done" event worth notifying about.
+
+    Dispatched on a daemon thread: _fire_single_webhook can block for
+    timeout * (retries + 1) (~120s worst case) and batch_engine's worker pool
+    only has 3 concurrent slots, so a synchronous call here would stall other
+    queued batch children whenever the callback endpoint is slow/down.
+    """
+    if not callback_url:
+        return
+    def _fire():
+        try:
+            from utils.webhook_engine import _fire_single_webhook
+            _fire_single_webhook(
+                rule_id=f'batch-{batch_id}', rule_name='AI批任务完成回调',
+                webhook_url=callback_url, secret=callback_secret or '',
+                event_type='ai_batch_completed',
+                payload={'event': 'ai_batch_completed', 'batchId': batch_id,
+                        'status': status, 'total': total, 'done': done, 'failed': failed},
+                timeout=30, retries=3,
+            )
+        except Exception:
+            traceback.print_exc()
+    threading.Thread(target=_fire, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +588,10 @@ class BatchWorker:
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
                           and session_row.get('continue_prompt'))
+        # Only set for a fresh (non-continue) turn — a continued turn reuses an
+        # OpenCode session that already has full conversation history, so
+        # re-injecting/re-recording memory there would be redundant.
+        user_prompt_for_memory = None
         if is_continue:
             prompt = session_row['continue_prompt']
             # Clear continue_prompt immediately so it's not re-sent on retry
@@ -562,6 +602,10 @@ class BatchWorker:
                 conn.commit()
         else:
             prompt = self._with_input_hint(prompt, session_row)
+            user_prompt_for_memory = prompt
+            from utils.memory import search_memory, render_memory_block
+            mem_block = render_memory_block(search_memory(user_id, prompt, limit=5))
+            prompt = mem_block + prompt
 
         ws = None
         try:
@@ -620,6 +664,8 @@ class BatchWorker:
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
+            if user_prompt_for_memory is not None:
+                self._record_memory(user_id, user_prompt_for_memory, final_msg)
         except (_SessionTimeout, _TurnFailed) as e:
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             self._mark_failed(sid, batch_id, error=str(e)[:500])
@@ -668,6 +714,24 @@ class BatchWorker:
         try:
             from utils.ai_scan_engine import on_child_finished
             on_child_finished(session_row, final_msg, ok=ok)
+        except Exception:
+            traceback.print_exc()
+
+    def _record_memory(self, user_id, user_text, final_msg):
+        """Best-effort：把这轮批任务/扫描任务的问答写入用户长期记忆（mem0），
+        与交互式聊天的 extract_from_turn 对齐，但走独立的直调路径——
+        extract_from_turn 专为真人交互会话设计，会主动跳过 batch/scan 子会话。"""
+        if not user_id:
+            return
+        try:
+            from utils.ai_scan_engine import message_text
+            assistant_text = message_text(final_msg)
+            if not assistant_text:
+                return
+            from utils.memory import add_memory
+            messages = [{'role': 'user', 'content': user_text},
+                       {'role': 'assistant', 'content': assistant_text}]
+            threading.Thread(target=add_memory, args=(user_id, messages), daemon=True).start()
         except Exception:
             traceback.print_exc()
 

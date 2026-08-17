@@ -140,6 +140,62 @@ def test_create_passes_api_key_id_and_owner(client, mock_conn, mock_cursor, tmp_
     assert cb.call_args[1]['agent'] == 'build'
 
 
+def test_create_rejects_invalid_callback_url(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()):
+        resp = client.post(BASE, headers=HDR,
+                           json={'name': 'n', 'prompt': 'p', 'files': [_ok_file()],
+                                 'callbackUrl': 'not-a-url'})
+    assert resp.status_code == 400
+    assert 'callbackUrl' in resp.get_json()['error']
+
+
+def test_create_passes_callback_fields(client, mock_conn, mock_cursor, tmp_path):
+    _auth_passes(mock_cursor)
+    _stage(tmp_path)
+    created = {'batch': {'id': 'b-1', 'status': 'pending', 'total': 1}, 'sessions': []}
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches._workspace_root', return_value=str(tmp_path)), \
+         patch('routes.open_api_batches.create_batch', return_value=created) as cb, \
+         patch('routes.open_api_batches.get_worker'):
+        resp = client.post(BASE, headers=HDR,
+                           json={'name': 'n', 'prompt': 'p', 'files': [_ok_file()],
+                                 'callbackUrl': 'https://example.com/hook',
+                                 'callbackSecret': 's3cret'})
+    assert resp.status_code == 201
+    assert cb.call_args[1]['callback_url'] == 'https://example.com/hook'
+    assert cb.call_args[1]['callback_secret'] == 's3cret'
+
+
+def test_patch_forwards_callback_fields(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    updated = {'batch': {'id': 'b-1', 'status': 'pending', 'total': 1, 'done': 0,
+                         'failed': 0, 'name': 'n', 'agent': None, 'model': None,
+                         'callback_url': 'https://example.com/hook',
+                         'created_at': None, 'completed_at': None}}
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('utils.batch_repo.update_batch_config', return_value=updated) as uc:
+        resp = client.patch(f'{BASE}/b-1', headers=HDR,
+                            json={'callbackUrl': 'https://example.com/hook',
+                                  'callbackSecret': 's3cret'})
+    assert resp.status_code == 200
+    assert uc.call_args[1]['callback_url'] == 'https://example.com/hook'
+    assert uc.call_args[1]['callback_secret'] == 's3cret'
+    assert resp.get_json()['callbackUrl'] == 'https://example.com/hook'
+    assert 's3cret' not in resp.get_data(as_text=True)
+
+
+def test_patch_rejects_invalid_callback_url(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_batches._current_key', return_value=_key()):
+        resp = client.patch(f'{BASE}/b-1', headers=HDR, json={'callbackUrl': 'ftp://x'})
+    assert resp.status_code == 400
+
+
 def test_list_is_scoped_to_key(client, mock_conn, mock_cursor):
     _auth_passes(mock_cursor)
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
@@ -176,6 +232,8 @@ def test_detail_returns_contract_fields_only(client, mock_conn, mock_cursor):
     detail = {'batch': {'id': 'b-1', 'name': 'n', 'status': 'running',
                         'total': 3, 'done': 1, 'failed': 0,
                         'agent': 'build', 'model': None,
+                        'callback_url': 'https://example.com/hook',
+                        'callback_secret': 'top-secret',
                         'created_at': None, 'completed_at': None,
                         'user_id': 'user-42', 'api_key_id': 'ak-1',
                         'prompt': '内部 prompt'},
@@ -186,6 +244,10 @@ def test_detail_returns_contract_fields_only(client, mock_conn, mock_cursor):
         resp = client.get(f'{BASE}/b-1', headers=HDR)
     body = resp.get_json()
     assert set(body) == {'batchId', 'name', 'status', 'total', 'done', 'failed',
-                         'agent', 'model', 'createdAt', 'completedAt'}
+                         'agent', 'model', 'callbackUrl', 'createdAt', 'completedAt'}
+    assert body['callbackUrl'] == 'https://example.com/hook'
     assert 'opencode_session_id' not in resp.get_data(as_text=True)
     assert 'user_id' not in resp.get_data(as_text=True)
+    # callback_secret 绝不外泄——这是本用例的核心安全断言。
+    assert 'top-secret' not in resp.get_data(as_text=True)
+    assert 'callback_secret' not in resp.get_data(as_text=True)

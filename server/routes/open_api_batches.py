@@ -218,7 +218,11 @@ def _validate_files(files: list, owner_user_id: str):
 
 
 def _batch_out(b: dict) -> dict:
-    """内部批任务行 → 对外契约字段。刻意只吐这几个，内部字段一律不外泄。"""
+    """内部批任务行 → 对外契约字段。刻意只吐这几个，内部字段一律不外泄。
+
+    `callbackSecret` 刻意不回显——调用方自己设置的密钥没必要在每次
+    list/detail 轮询里明文回传；只回 `callbackUrl` 供确认当前配置。
+    """
     return {
         'batchId': b['id'],
         'name': b.get('name'),
@@ -228,9 +232,20 @@ def _batch_out(b: dict) -> dict:
         'failed': b.get('failed'),
         'agent': b.get('agent'),
         'model': b.get('model'),
+        'callbackUrl': b.get('callback_url'),
         'createdAt': b['created_at'].isoformat() if b.get('created_at') else None,
         'completedAt': b['completed_at'].isoformat() if b.get('completed_at') else None,
     }
+
+
+def _validate_callback_url(url: str | None):
+    """None/空字符串合法（表示不设置回调）。非空必须是 http(s) URL，否则返回
+    可直接 `return` 的 (response, status) 二元组；合法返回 None。"""
+    if not url:
+        return None
+    if not (url.startswith('http://') or url.startswith('https://')):
+        return jsonify({'error': 'callbackUrl 必须是 http:// 或 https:// 开头的 URL'}), 400
+    return None
 
 
 @open_api_batches_bp.get('/agents')
@@ -329,6 +344,8 @@ def create():
     name = (body.get('name') or '').strip()
     prompt = (body.get('prompt') or '').strip()
     files = body.get('files') or []
+    callback_url = (body.get('callbackUrl') or '').strip() or None
+    callback_secret = (body.get('callbackSecret') or '').strip() or None
 
     if not name or not prompt:
         return jsonify({'error': 'name 与 prompt 均为必填'}), 400
@@ -338,6 +355,9 @@ def create():
         return jsonify({'error': '请至少提供一个文件'}), 400
     if len(files) > MAX_FILES_PER_BATCH:
         return jsonify({'error': f'单批最多 {MAX_FILES_PER_BATCH} 个文件'}), 400
+    err = _validate_callback_url(callback_url)
+    if err:
+        return err
 
     err = _validate_files(files, owner)
     if err:
@@ -349,6 +369,8 @@ def create():
         agent=(body.get('agent') or '').strip() or None,
         model=(body.get('model') or '').strip() or None,
         api_key_id=key['id'],
+        callback_url=callback_url,
+        callback_secret=callback_secret,
     )
     get_worker().notify()
     b = result['batch']
@@ -777,20 +799,29 @@ def session_reexecute(batch_id, child_id):
 @api_key_required
 @require_bound_key
 def update_config(batch_id):
-    """修改批任务的 agent/model 配置。
+    """修改批任务的 agent/model/callback 配置。
 
-    空字符串清除为默认值。修改在下一次 worker 拾取时生效
-    （retry / reexecute / continue / pending）。
+    整体替换语义，不是局部 patch：省略的字段会被清空为默认值（空字符串同样
+    视为清空），所以每次调用都要把想保留的字段一起带上——包括 callbackUrl/
+    callbackSecret，只改 agent/model 而不重传它们会把已配置的回调清掉。
+    修改在下一次 worker 拾取时生效（retry / reexecute / continue / pending）。
     """
     from utils.batch_repo import update_batch_config
     key = _current_key()
     body = request.get_json(silent=True) or {}
     agent = (body.get('agent') or '').strip() or None
     model = (body.get('model') or '').strip() or None
+    callback_url = (body.get('callbackUrl') or '').strip() or None
+    callback_secret = (body.get('callbackSecret') or '').strip() or None
+    err = _validate_callback_url(callback_url)
+    if err:
+        return err
     result = update_batch_config(
         key['ownerUserId'], batch_id,
         agent=agent, model=model,
         api_key_id=key['id'],
+        callback_url=callback_url,
+        callback_secret=callback_secret,
     )
     if result is None:
         return jsonify({'error': '批任务不存在'}), 404

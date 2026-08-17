@@ -106,7 +106,7 @@ curl -s -X POST \
   "$BASE_URL/$BATCH_ID/sessions/report1.pdf/continue" | jq
 ```
 
-没有完成回调（webhook）、没有 SSE 推送，**只能轮询**。建议轮询间隔 5~15 秒，进入 `completed`/`partial`/`failed` 任一终态后停止轮询并调用 `/results`。
+没有 SSE 推送，默认**只能轮询**；如果创建批任务时提供了 `callbackUrl`（见 4.2b），批任务进入终态时会额外收到一次 HTTP 回调通知，可以不轮询、等回调即可。轮询场景下建议间隔 5~15 秒，进入 `completed`/`partial`/`failed` 任一终态后停止轮询并调用 `/results`。
 
 ---
 
@@ -118,6 +118,7 @@ curl -s -X POST \
 | GET | `/api/v1/ai-batches/models` | 列出可用的 LLM 模型（创建批任务时可指定） |
 | POST | `/api/v1/ai-batches/uploads` | 上传文件到暂存区，拿到创建批任务要用的 `files` 数组 |
 | POST | `/api/v1/ai-batches` | 创建批任务（每个文件对应一个子任务/AI 会话） |
+| PATCH | `/api/v1/ai-batches/{batchId}` | 修改批任务的 agent/model/回调配置（整体替换，见 4.2a） |
 | GET | `/api/v1/ai-batches` | 分页列出本密钥创建的所有批任务 |
 | GET | `/api/v1/ai-batches/{batchId}` | 查询单个批任务的状态与进度 |
 | GET | `/api/v1/ai-batches/{batchId}/results` | 取回每个文件的处理结果 |
@@ -273,7 +274,9 @@ Content-Type: application/json
     { "name": "report1.pdf", "path": "batch-staging/u-123/a1b2c3d4e5f6g7h8/report1.pdf" }
   ],
   "agent": "",
-  "model": ""
+  "model": "",
+  "callbackUrl": "",
+  "callbackSecret": ""
 }
 ```
 
@@ -284,6 +287,8 @@ Content-Type: application/json
 | `files` | array | 是 | 上一步 `/uploads` 返回的 `files` 数组（或其子集），每项需含 `name` 与 `path`；最多 50 个 |
 | `agent` | string | 否 | 指定 OpenCode agent 名称；留空/不传使用系统默认 |
 | `model` | string | 否 | 指定模型（`<providerID>/<modelID>` 格式）；留空/不传使用系统默认 |
+| `callbackUrl` | string | 否 | 批任务进入终态时接收 HMAC 签名回调通知的 URL（必须 `http://` 或 `https://` 开头）；留空/不传则不发回调，只能轮询。见 4.2b |
+| `callbackSecret` | string | 否 | 用于计算回调签名的密钥；留空则回调仍会发送，但签名用空字符串计算（不建议在公网环境这样用） |
 
 **响应 — 201**
 
@@ -295,7 +300,7 @@ Content-Type: application/json
 
 | HTTP 状态码 | 触发条件 |
 |-------------|---------|
-| 400 | `name` 或 `prompt` 缺失；`prompt` 超过 20000 字符；`files` 为空/不是数组；`files` 超过 50 个；某个文件项缺 `name`/`path`；`files[].path` 未通过合法性校验（不属于本密钥所属用户、包含 `..`、格式不对等）；`files[].path` 指向的文件**已过期或不存在**（错误信息形如「文件「xxx.pdf」已过期或不存在，请重新调用 /uploads 上传后再创建批任务」） |
+| 400 | `name` 或 `prompt` 缺失；`prompt` 超过 20000 字符；`files` 为空/不是数组；`files` 超过 50 个；某个文件项缺 `name`/`path`；`files[].path` 未通过合法性校验（不属于本密钥所属用户、包含 `..`、格式不对等）；`files[].path` 指向的文件**已过期或不存在**（错误信息形如「文件「xxx.pdf」已过期或不存在，请重新调用 /uploads 上传后再创建批任务」）；`callbackUrl` 非空但不是 `http://`/`https://` 开头 |
 | 413 | 请求体超过 1 MB（本接口是 JSON，正常调用远小于此） |
 
 > `files[].path` 必须是调用 `/uploads` 拿到的路径，且必须落在**本密钥所属用户**的暂存目录下。别的用户的路径、或手工构造/篡改的路径（含 `..` 穿越），一律按非法路径拒绝（400），不会读到别人的文件。
@@ -303,6 +308,74 @@ Content-Type: application/json
 > ⚠️ 注意这条校验的粒度是**用户**，不是密钥：同一个用户名下的多把密钥共享同一个暂存空间，用密钥 B 上传得到的 `path`，可以用密钥 A 来创建批任务。跨用户才会被拒绝。详见第 8 节。
 >
 > 服务端还会检查该路径对应的文件**当前是否真的存在**（不只是格式合法），因此超过 24 小时被清理掉的暂存路径会在这一步直接 400，而不是留下一个注定跑空的批任务。
+
+---
+
+### 4.2a 修改批任务配置
+
+```
+PATCH /api/v1/ai-batches/{batchId}
+X-API-Key: cm_xxx
+Content-Type: application/json
+```
+
+**请求体**（字段与 4.2 创建批任务相同：`agent`/`model`/`callbackUrl`/`callbackSecret`，均可选）
+
+```json
+{ "agent": "build", "model": "", "callbackUrl": "https://example.com/hook", "callbackSecret": "s3cret" }
+```
+
+**响应 — 200**（字段同 4.4 查询批任务详情）
+
+⚠️ **这是整体替换，不是局部 patch**：请求体里省略的字段会被清空为默认值（空字符串同样视为清空），不是「只改你传的那几个字段、其余保持原样」。所以每次调用都要把想保留的配置**一起**带上——只传 `agent` 而不重传 `callbackUrl`，会把已经配置好的回调清掉。修改在下一次 worker 拾取该批任务时生效（`retry-failed`/`reexecute`/`continue`/待执行中的子任务），不会影响已经在跑或已完成的子任务。
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400 | `callbackUrl` 非空但不是 `http://`/`https://` 开头 |
+| 404 | `batchId` 不存在，或不是用这把密钥创建的 |
+
+---
+
+### 4.2b 完成回调（Webhook）
+
+创建/修改批任务时设置了 `callbackUrl`，批任务进入终态（`completed`/`partial`/`failed`）时会收到一次 HTTP POST 通知，不必再轮询 `GET /{batchId}`。
+
+**触发时机**：每次批任务的状态**收敛为终态**都会触发一次——包括 `retry-failed`/`append`/`continue` 把已终态的批任务重新拉回 `running` 后，再次跑到终态的情况。也就是说同一个 `batchId` 的完成回调可能收到不止一次，请按 `payload.status` 处理，不要假设只会收到一次。
+
+**请求**
+
+```
+POST <callbackUrl>
+Content-Type: application/json
+X-Webhook-Timestamp: 1755400000
+X-Webhook-Signature: <hex>
+X-Webhook-Event: ai_batch_completed
+```
+
+```json
+{
+  "event": "ai_batch_completed",
+  "batchId": "b1c2d3e4-...",
+  "status": "completed",
+  "total": 2,
+  "done": 2,
+  "failed": 0
+}
+```
+
+**签名校验**：`X-Webhook-Signature` = `HMAC-SHA256(secret, "{X-Webhook-Timestamp}.{原始请求体字节}")`（用创建/修改批任务时提供的 `callbackSecret`）。接收端应以相同算法重新计算并比对，确认请求确实来自本系统、payload 未被篡改：
+
+```python
+import hmac, hashlib
+expected = hmac.new(secret.encode(), f"{timestamp}.{raw_body}".encode(), hashlib.sha256).hexdigest()
+assert hmac.compare_digest(expected, signature_header)
+```
+
+**超时与重试**：回调请求 30 秒超时，失败（网络错误或非 2xx 响应）重试 3 次，每次间隔 1 秒；全部失败也**不会**让批任务本身的状态回滚或标记异常——回调是通知，不是批任务生命周期的一部分。若始终没收到回调，请照旧回退到轮询 `GET /{batchId}`。
+
+**不设 `callbackUrl` 的批任务**：完全不受影响，行为与之前一样只能轮询。
 
 ---
 
@@ -331,6 +404,7 @@ GET /api/v1/ai-batches?page=1&pageSize=20
       "failed": 0,
       "agent": null,
       "model": null,
+      "callbackUrl": null,
       "createdAt": "2026-08-10T03:20:00.000Z",
       "completedAt": null
     }
@@ -361,6 +435,7 @@ GET /api/v1/ai-batches/{batchId}
   "failed": 0,
   "agent": null,
   "model": null,
+  "callbackUrl": null,
   "createdAt": "2026-08-10T03:20:00.000Z",
   "completedAt": "2026-08-10T03:24:00.000Z"
 }
@@ -906,7 +981,7 @@ Content-Type: application/json
 | 操作 | 历史消息 | AI 会话 | prompt |
 |------|---------|---------|--------|
 | `retry-failed` | 保留（仅 failed 子任务） | **新建** | 原始 prompt |
-| `reexecute`（仅内部） | **删除** | **新建** | 原始 prompt |
+| `reexecute` | **删除** | **新建** | 原始 prompt |
 | **`continue`** | **保留** | **复用** | **新 prompt** |
 
 **追加后发生了什么**：
@@ -1030,6 +1105,7 @@ curl -s -X POST \
 | 暂存文件保留时间 | 24 小时（按目录最后修改时间算，与是否已创建批任务无关，详见 4.1） |
 | `/import` 单次路径数 | 100 个（超出返回 400） |
 | 文件记录保留时间 | 无限期（但依赖会话存在，会话删除时记录级联删除） |
+| 完成回调超时/重试 | 30 秒超时，失败重试 3 次，每次间隔 1 秒（见 4.2b） |
 
 ---
 
@@ -1049,7 +1125,7 @@ curl -s -X POST \
 |-------------|---------|
 | 401 | 请求头缺少 `X-API-Key`（`Missing API key`）/ 密钥不存在（`Invalid API key`）/ 密钥已停用（`API key has been revoked`） |
 | 403 | 密钥未绑定用户（存量密钥），见第 2 节 |
-| 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建：`name`/`prompt` 缺失、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
+| 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建/修改配置：`name`/`prompt` 缺失（仅创建）、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在、`callbackUrl` 非空但不是 `http://`/`https://` 开头。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
 | 404 | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
 | 409 | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed`；对处于非终态的子会话调用 `continue` |
 | 411 | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |
@@ -1083,7 +1159,7 @@ curl -s -X POST \
 
 ## 9. 注意事项
 
-1. **异步处理，仅支持轮询**：创建批任务后立即返回 `pending`，没有完成回调（webhook）也没有 SSE 推送。集成方需要自行定时轮询 `GET /{batchId}`，直到 `status` 进入终态（`completed`/`partial`/`failed`）再调用 `/results` 一次性取回全部结果。
+1. **异步处理，默认仅支持轮询**：创建批任务后立即返回 `pending`，没有 SSE 推送。集成方需要自行定时轮询 `GET /{batchId}`，直到 `status` 进入终态（`completed`/`partial`/`failed`）再调用 `/results` 一次性取回全部结果。如果不想轮询，创建/修改批任务时提供 `callbackUrl` 可以改为等待完成回调（见 4.2b）——但回调本身是 best-effort（超时/网络故障会重试 3 次后放弃，不会反过来影响批任务状态），所以生产环境建议回调 + 兜底轮询两者都留着，不要只依赖回调。
 2. **只有 `completed` 的子任务才有 `output`**：`results[].status` 不是 `completed` 时（`pending`/`running`/`failed`），`results[].output` 一律是 `null`——服务端按状态设门，执行中产生的半截文本、以及跑到一半超时失败留下的残留文本都不会返回。所以不要在轮询未结束时把 `null` 当成"处理结果为空"；也不要指望从 `failed` 的子任务里捞出部分输出，失败的子任务请用 `retry-failed` 重跑。
 3. **删除不可逆**：`DELETE /{batchId}` 会清理 AI 会话工作区并删库，无法恢复；确需保留结果的场景，删除前先调 `/results`。
 4. **暂存文件有效期 24 小时**：`/uploads` 返回的 `path` 请尽快用于创建批任务，不要存起来隔天再用。超过 24 小时的暂存文件会被清理，此时创建批任务会因文件不存在被 400 拒绝；如果批任务已创建但排队超过 24 小时才轮到执行，对应子任务会因输入文件已被清理而 `failed`。清理规则的完整说明见 4.1。
@@ -1096,6 +1172,8 @@ curl -s -X POST \
 11. **`continue` 保留历史上下文**：与 `retry-failed`（新建会话、用原始 prompt 重跑）不同，`continue` 复用原有的 AI 会话，AI 能看到之前的完整对话历史。适合「结果基本满意但需要补充」的场景，不适合「结果完全错误需要推倒重来」的场景——后者请用 `retry-failed`。
 12. **`download-all` 基于变更记录**：`/files/download-all` 打包的文件来源是系统自动记录的变更文件（与 `/file-records` 同源），不是工作区的实时扫描。如果 AI 产出的文件没有被 git 追踪到（极少见），可能不会出现在 ZIP 中。此时可用 `/files`（实时扫描）+ `/files/download`（逐个下载）作为备选。
 13. **对话历史有上限**：`/messages` 最多返回 500 条消息（按时间倒序截断后反转为正序）。对于大多数场景足够，超长 agent 运行可能被截断，响应中 `truncated: true` 会告知。
+14. **`PATCH` 是整体替换，不是局部 patch**：省略的字段会被清空为默认值，不是「保持原样」。只传 `agent` 而不重传已经配置好的 `callbackUrl`/`callbackSecret`，会把回调配置一并清空——每次 `PATCH` 都要把想保留的字段一起带上。详见 4.2a。
+15. **完成回调可能不止一次**：`retry-failed`/`append`/`continue` 都可能让一个已终态的批任务重新变回 `running`，之后再次跑到终态时会再收到一次回调。按 `payload.status` 处理，不要假设 `callbackUrl` 对同一个 `batchId` 只会被调用一次。
 
 ---
 
@@ -1112,6 +1190,10 @@ curl -s -X POST \
 **Q: 批任务一直卡在 `running` 不结束怎么办？**
 
 先确认没有子任务卡在 `pending`（说明后台worker尚未处理到）；如果长时间无进展，可联系管理员在系统侧核实 AI 会话是否异常。批任务本身没有超时自动失败的机制暴露给外部 API。
+
+**Q: 除了轮询，有没有办法在批任务完成时主动收到通知？**
+
+有。创建批任务（4.2）或事后 `PATCH`（4.2a）时设置 `callbackUrl`，批任务进入终态时会收到一次 HMAC 签名的 HTTP 回调，详见 4.2b。回调是尽力而为（失败重试 3 次后放弃、不影响批任务本身状态），建议同时保留轮询作为兜底。
 
 **Q: `retry-failed` 返回 `{"retried": 0}` 算错误吗？**
 

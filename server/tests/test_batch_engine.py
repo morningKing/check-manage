@@ -141,6 +141,67 @@ def test_run_one_happy_path_marks_completed(user_id, db_conn, monkeypatch, tmp_p
 
 
 # ---------------------------------------------------------------------------
+# Test 2b: mem0 injection into the prompt + extraction after completion
+# ---------------------------------------------------------------------------
+
+def test_run_one_injects_and_records_memory(user_id, db_conn, monkeypatch, tmp_path):
+    """记忆注入：发给 OpenCode 的 prompt 应包含 render_memory_block 的输出；
+    记忆抽取：成功完成后应异步调用 add_memory(user_id, [user, assistant])，
+    且 user 消息用的是未拼记忆块的原始 prompt（不能把记忆块自己再存回记忆库）。"""
+    import threading
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+    import utils.memory as mem
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-session-1'
+    sent_prompts = []
+
+    def _capture_send_message(oc_sid, prompt, **kw):
+        sent_prompts.append(prompt)
+        return {'id': 'msg-1'}
+    fake_oc.send_message.side_effect = _capture_send_message
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done!'}]}
+    ]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    ws = str(tmp_path)
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+
+    monkeypatch.setattr(
+        mem, 'search_memory',
+        lambda user_id, query, limit=5: [{'memory': '偏好用中文回复'}])
+
+    called = threading.Event()
+    captured = {}
+
+    def _fake_add_memory(user_id, messages):
+        captured['user_id'] = user_id
+        captured['messages'] = messages
+        called.set()
+    monkeypatch.setattr(mem, 'add_memory', _fake_add_memory)
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+
+    assert sent_prompts, 'send_message was never called'
+    assert '偏好用中文回复' in sent_prompts[0]
+    assert '关于当前用户的长期记忆' in sent_prompts[0]
+
+    assert called.wait(timeout=5), 'add_memory was not called'
+    assert captured['user_id'] == user_id
+    assert captured['messages'][0]['role'] == 'user'
+    assert '长期记忆' not in captured['messages'][0]['content']
+    assert captured['messages'][1]['role'] == 'assistant'
+    assert 'done!' in captured['messages'][1]['content']
+
+
+# ---------------------------------------------------------------------------
 # Test 3: HTTP error → failed
 # ---------------------------------------------------------------------------
 
@@ -249,6 +310,64 @@ def test_batch_status_partial_when_mix(user_id, db_conn):
     with db_conn.cursor() as cur:
         cur.execute("SELECT status FROM ai_chat_batches WHERE id = %s", (bid,))
         assert cur.fetchone()[0] == 'partial'
+
+
+# ---------------------------------------------------------------------------
+# Test 5b: terminal status fires the open-API completion callback
+# ---------------------------------------------------------------------------
+
+def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, monkeypatch):
+    """批任务收敛为终态且配置了 callback_url 时，应通过 webhook_engine 异步通知。"""
+    import threading
+    import utils.webhook_engine as wh
+    from utils.batch_engine import _recompute_batch_status
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_chat_batches SET done = 1, callback_url = %s, callback_secret = %s "
+            "WHERE id = %s",
+            ('https://example.com/hook', 'sec', bid),
+        )
+    db_conn.commit()
+
+    called = threading.Event()
+    captured = {}
+
+    def _fake_fire(**kwargs):
+        captured.update(kwargs)
+        called.set()
+        return {'success': True}
+
+    monkeypatch.setattr(wh, '_fire_single_webhook', _fake_fire)
+
+    _recompute_batch_status(bid)
+
+    assert called.wait(timeout=5), 'callback webhook was not fired'
+    assert captured['webhook_url'] == 'https://example.com/hook'
+    assert captured['secret'] == 'sec'
+    assert captured['event_type'] == 'ai_batch_completed'
+    assert captured['payload']['batchId'] == bid
+    assert captured['payload']['status'] == 'completed'
+
+
+def test_recompute_batch_status_no_callback_when_url_unset(user_id, db_conn, monkeypatch):
+    """没配置 callback_url 的批任务收敛为终态时，不应触发任何 webhook 调用。"""
+    import utils.webhook_engine as wh
+    from utils.batch_engine import _recompute_batch_status
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_batches SET done = 1 WHERE id = %s", (bid,))
+    db_conn.commit()
+
+    fire = MagicMock()
+    monkeypatch.setattr(wh, '_fire_single_webhook', fire)
+
+    _recompute_batch_status(bid)
+    time.sleep(0.2)  # give any (unexpected) background thread a chance to run
+
+    fire.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -670,6 +670,11 @@ ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS model TEXT;
 -- .opencode/ before its session starts (so project-level agents are usable).
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS provision_repo TEXT;
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS provision_ref TEXT;
+-- Optional completion callback for the open API (/api/v1/ai-batches): POSTed
+-- to callback_url, HMAC-signed with callback_secret, when the batch reaches a
+-- terminal status. NULL callback_url means "no callback, poll instead".
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS callback_url TEXT;
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS callback_secret TEXT;
 """
 
 AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """

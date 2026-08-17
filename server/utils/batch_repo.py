@@ -18,7 +18,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  model: str | None = None,
                  provision_repo: str | None = None,
                  provision_ref: str | None = None,
-                 api_key_id: str | None = None) -> dict:
+                 api_key_id: str | None = None,
+                 callback_url: str | None = None,
+                 callback_secret: str | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -30,6 +32,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     empty falls back to the global OPENCODE_MODEL / the agent's default.
     `api_key_id` stamps the source API key (open API callers) that created this
     batch; None for UI/scan-task created batches.
+    `callback_url`/`callback_secret` (open API only): when set, batch_engine
+    POSTs an HMAC-signed completion notification to `callback_url` once the
+    batch reaches a terminal status, instead of requiring the caller to poll.
     Returns {batch, sessions}.
     """
     if not files:
@@ -43,10 +48,10 @@ def create_batch(user_id: str, *, name: str, prompt: str,
             cur.execute(
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
-                "   provision_repo, provision_ref, api_key_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
+                "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
-                 provision_repo, provision_ref, api_key_id),
+                 provision_repo, provision_ref, api_key_id, callback_url, callback_secret),
             )
             batch = dict(cur.fetchone())
 
@@ -281,18 +286,25 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         agent: str | None, model: str | None,
                         provision_repo: str | None = None,
                         provision_ref: str | None = None,
-                        api_key_id: str | None = None) -> dict | None:
-    """Update a batch's agent/model/provision repo (owner-only). NULL clears to
-    the default. Returns updated detail, or None if not found / not owned. Takes
-    effect on the next run the worker claims (retry / reexecute / pending), since
-    the worker reads these fresh per run via _fetch_batch_context.
+                        api_key_id: str | None = None,
+                        callback_url: str | None = None,
+                        callback_secret: str | None = None) -> dict | None:
+    """Update a batch's agent/model/provision repo/callback (owner-only). This
+    is a full-replace, not a partial patch: every column here is set to
+    whatever was passed, so an omitted field (default None) is cleared to the
+    default — callers must resend a field to keep it. Returns updated detail,
+    or None if not found / not owned. Takes effect on the next run the worker
+    claims (retry / reexecute / pending), since the worker reads these fresh
+    per run via _fetch_batch_context.
 
     `api_key_id` non-None additionally scopes the update to that source key.
     """
     sql = ("UPDATE ai_chat_batches SET agent = %s, model = %s, "
-           "  provision_repo = %s, provision_ref = %s "
+           "  provision_repo = %s, provision_ref = %s, "
+           "  callback_url = %s, callback_secret = %s "
            "WHERE id = %s AND user_id = %s")
-    params = [agent, model, provision_repo, provision_ref, batch_id, user_id]
+    params = [agent, model, provision_repo, provision_ref,
+             callback_url, callback_secret, batch_id, user_id]
     if api_key_id is not None:
         sql += " AND api_key_id = %s"
         params.append(api_key_id)
