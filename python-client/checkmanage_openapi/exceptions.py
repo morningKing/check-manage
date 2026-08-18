@@ -40,3 +40,8 @@ class ConflictError(OpenApiError):
 
 class VersionConflictError(ConflictError):
     """409 code=VERSION_CONFLICT：PUT 时乐观锁并发冲突，需重新 GET 后携带最新 _version 重试。"""
+
+
+class MemoryUnavailableError(ConflictError):
+    """409 code=MEMORY_UNAVAILABLE：add_memory 时记忆功能未配置（缺 AI API Key 或
+    mem0 未启用），需去设置中心把「AI 设置」配完整后再重试，不是并发冲突。"""

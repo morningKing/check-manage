@@ -2,6 +2,7 @@ from .client import DEFAULT_BASE_URL, OpenApiClient
 from .exceptions import (
     AuthenticationError,
     ConflictError,
+    MemoryUnavailableError,
     NotFoundError,
     OpenApiError,
     ValidationError,
@@ -9,7 +10,7 @@ from .exceptions import (
     WriteNotAllowedError,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "OpenApiClient",
@@ -21,4 +22,5 @@ __all__ = [
     "ValidationError",
     "ConflictError",
     "VersionConflictError",
+    "MemoryUnavailableError",
 ]

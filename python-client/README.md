@@ -1,10 +1,16 @@
 # check-manage Open API Python 客户端
 
-`check-manage` Open API 的官方 Python 客户端。封装了认证、集合读写、分支选择、文件上传/下载，
-以及"上传文件 + 写入 file/image 字段"的一步式便捷方法，方便直接在你自己的代码里集成。
+`check-manage` Open API 的官方 Python 客户端。封装了认证、集合读写、分支选择、文件上传/下载、
+"上传文件 + 写入 file/image 字段"的一步式便捷方法，以及 AI 批任务、行操作触发、AI 定时任务、
+Prompt 模板、长期记忆管理这几套 AI 相关的对外端点，方便直接在你自己的代码里集成。
 
-接口行为的权威说明见 [`docs/user-guide/integration/open-api.md`](../docs/user-guide/integration/open-api.md)；
-本客户端只是对文档中接口的薄封装，不引入额外行为。
+接口行为的权威说明分散在几份文档里，本客户端只是对其中接口的薄封装，不引入额外行为：
+- 数据集合/分支/文件：[`docs/user-guide/integration/open-api.md`](../docs/user-guide/integration/open-api.md)
+- AI 批任务：[`docs/user-guide/integration/ai-batch-api.md`](../docs/user-guide/integration/ai-batch-api.md)
+- Row Actions 对外触发：[`docs/user-guide/data/row-actions.md`](../docs/user-guide/data/row-actions.md) §11
+- AI 定时扫描任务：[`docs/user-guide/ai/scan-tasks.md`](../docs/user-guide/ai/scan-tasks.md) §10
+- Prompt 模板对外 API：[`docs/user-guide/ai/batch-tasks.md`](../docs/user-guide/ai/batch-tasks.md)「Prompt 模板」节
+- 长期记忆对外 API：[`docs/user-guide/ai/long-term-memory.md`](../docs/user-guide/ai/long-term-memory.md)「对外 API」节
 
 ## 安装
 
@@ -112,6 +118,9 @@ except AuthenticationError:
 | `ValidationError` | 400 | 请求体为空或必填字段缺失（`.details` 为具体字段列表） |
 | `ConflictError` | 409 | 记录 ID 冲突 / 主键冲突 |
 | `VersionConflictError`（`ConflictError` 子类） | 409 | 乐观锁并发冲突，需重新 GET 最新 `_version` 后重试 |
+| `MemoryUnavailableError`（`ConflictError` 子类） | 409 | `add_memory` 时记忆功能未配置（缺 AI API Key 或 mem0 未启用） |
+
+> AI 相关端点的 `error` 文案有中文也有英文（批任务/Prompt 模板是英文，行操作/AI 定时任务是中文——服务端历史决定，不代表本客户端做了翻译），异常判定纯看状态码 + `code`，跟文案语言无关。
 
 ## 分支（Branch）
 
@@ -121,6 +130,63 @@ except AuthenticationError:
 branches = client.list_branches()
 client.list_records("devices", branch_id="pv-abc123")
 client.create_record("devices", {"名称": "x"}, branch_id="pv-abc123")
+```
+
+## AI 相关能力
+
+除数据集合外，本客户端还覆盖了 5 套 AI 相关的对外端点。所有新增方法的返回值都是响应体
+`resp.json()` 的原样 dict（文件下载方法返回 `bytes`，204 的删除方法返回 `None`），不做拆包改形。
+
+**AI 批任务**（每个文件对应一个子任务/AI 会话，异步处理）：
+
+```python
+uploaded = client.upload_batch_files(["./report1.pdf", "./report2.pdf"])
+batch = client.create_batch(
+    "季度报告分析", "请总结每份文档的核心结论，并列出风险点。",
+    uploaded["files"], agent="build",
+)
+# 轮询，或创建时传 callback_url 改为等待完成回调（见 ai-batch-api.md §4.2b）
+detail = client.get_batch(batch["batchId"])
+if detail["status"] in ("completed", "partial", "failed"):
+    results = client.get_batch_results(batch["batchId"])["results"]
+```
+
+**Row Actions 对外触发**（触发页面上已配置好的行操作按钮）：
+
+```python
+client.run_row_action("orders", "rec-123", "act-1", params={"note": "外部系统触发"})
+```
+
+**AI 定时任务**（立即触发一次已配置的扫描任务）：
+
+```python
+for task in client.list_scan_tasks()["tasks"]:
+    print(task["id"], task["name"], task["enabled"])
+
+result = client.run_scan_task_now("scan-abc12345")
+print("本次认领记录数:", result["claimedCount"])
+```
+
+**Prompt 模板**（按密钥所属用户维护的常用提示词库）：
+
+```python
+tpl = client.create_prompt_template("周报总结", "请总结以下文档的核心结论与风险点。")
+client.update_prompt_template(tpl["id"], "周报总结v2", "请总结核心结论、风险点与下一步建议。")
+client.delete_prompt_template(tpl["id"])
+```
+
+**长期记忆**：
+
+```python
+from checkmanage_openapi import MemoryUnavailableError
+
+try:
+    client.add_memory("偏好简洁的代码风格，不要多余注释", verbatim=True)
+except MemoryUnavailableError:
+    print("记忆功能未配置：去设置中心把「AI 设置」的 API Key 和记忆开关配完整")
+
+for m in client.list_memories()["memories"]:
+    print(m["id"], m["memory"])
 ```
 
 ## 运行测试
