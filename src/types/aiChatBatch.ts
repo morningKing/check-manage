@@ -11,6 +11,10 @@ export interface AiChatBatch {
   model: string | null
   provision_repo?: string | null
   provision_ref?: string | null
+  /** Set when this batch was created by an AI 定时任务 scan run
+   *  (ai_scan_engine.run_task), not a user via 新建批任务/对外 API.
+   *  Drives the "AI定时任务" sidebar section in AiChatView.vue. */
+  scan_task_id?: string | null
   status: BatchStatus
   total: number
   done: number

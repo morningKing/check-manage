@@ -723,6 +723,13 @@ ALTER TABLE ai_chat_sessions
   ADD COLUMN IF NOT EXISTS source_record_id VARCHAR(100) NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_scan
   ON ai_chat_sessions(scan_task_id, source_record_id);
+-- Same signal, stamped on the batch itself (not just its child sessions) so the
+-- AI 助手 sidebar can group "AI 定时任务" batches separately from user-created
+-- ones without joining to ai_chat_sessions. Lives here (not in
+-- AI_CHAT_BATCHES_DDL, which runs before this table exists) because the FK
+-- target ai_scan_tasks is only created a few statements above.
+ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS scan_task_id VARCHAR(100)
+  REFERENCES ai_scan_tasks(id) ON DELETE SET NULL;
 -- Idempotent upgrade: add `agent` to DBs created before it joined the CREATE above.
 ALTER TABLE ai_scan_tasks ADD COLUMN IF NOT EXISTS agent TEXT;
 -- Continue conversation: store the prompt for a "continue" operation so the

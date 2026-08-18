@@ -26,7 +26,10 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     `files` is a list of {name, path} dicts where `path` is workspace-relative
     (under batch-staging/...). Each entry may also carry an optional `recordId`
     key: the source record id, stamped into `source_record_id` for scan tasks.
-    `scan_task_id` is an optional param linking the child sessions to a scan task.
+    `scan_task_id` is an optional param linking the batch and its child sessions
+    to a scan task (stamped on both the batch row and every child session row —
+    the batch-level copy lets the AI 助手 sidebar group scan-task batches apart
+    from user-created ones without joining to sessions).
     `agent` is an optional OpenCode agent name to use for this batch.
     `model` is an optional "<providerID>/<modelID>" to run this batch with;
     empty falls back to the global OPENCODE_MODEL / the agent's default.
@@ -48,10 +51,12 @@ def create_batch(user_id: str, *, name: str, prompt: str,
             cur.execute(
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
-                "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
+                "   scan_task_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
-                 provision_repo, provision_ref, api_key_id, callback_url, callback_secret),
+                 provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
+                 scan_task_id),
             )
             batch = dict(cur.fetchone())
 

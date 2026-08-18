@@ -27,6 +27,8 @@ export const STORAGE_KEYS = {
   RECENT_PAGES: 'check-manage:recentPages',
   /** 收藏的页面菜单ID */
   FAVORITE_PAGES: 'check-manage:favoritePages',
+  /** AI 助手侧边栏三个分区（会话/批任务/AI定时任务）的折叠状态 */
+  AI_CHAT_SIDEBAR_SECTIONS: 'check-manage:aiChatSidebarSections',
 } as const
 
 /**

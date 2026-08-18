@@ -126,6 +126,21 @@ def test_create_batch_stamps_scan_columns():
     assert 'task-1' in flat and 'rec-1' in flat
 
 
+def test_create_batch_stamps_scan_task_id_on_batch_row():
+    """ai_chat_batches 自己也要记 scan_task_id（不只是子会话）——AI 助手
+    侧边栏靠这个字段把定时任务产生的批次和用户手建的分到不同分区。"""
+    import utils.batch_repo as repo
+    fake, cur = _mock_db()
+    with patch('utils.batch_repo.get_db', fake):
+        repo.create_batch('user-1', name='n', prompt='p', template_id=None,
+                          files=[{'name': 'r1', 'path': 'scan-staging/t/r1', 'recordId': 'rec-1'}],
+                          scan_task_id='task-1')
+    inserts = [c for c in cur.execute.call_args_list if 'INSERT INTO ai_chat_batches' in str(c.args[0])]
+    assert inserts
+    assert 'scan_task_id' in str(inserts[0].args[0])
+    assert 'task-1' in inserts[0].args[1]
+
+
 def test_run_one_invokes_scan_hook_on_success(monkeypatch):
     import utils.batch_engine as eng
     calls = {}
