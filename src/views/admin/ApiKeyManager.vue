@@ -5,10 +5,19 @@
         <div class="card-header">
           <h2>Open API 密钥管理</h2>
           <div class="header-actions">
-            <el-button tag="a" href="/docs/open-api-reference.html" target="_blank">
-              <el-icon><Document /></el-icon>
-              查看接口文档
-            </el-button>
+            <el-dropdown trigger="click" @command="handleOpenDocs">
+              <el-button>
+                <el-icon><Document /></el-icon>
+                查看接口文档
+                <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="/docs/open-api-reference.html">数据集合接口（增删改查、文件）</el-dropdown-item>
+                  <el-dropdown-item command="/docs/ai-api-reference.html">AI 相关接口（单会话/批任务/行操作/定时任务/模板/记忆）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
             <el-button type="primary" @click="handleAdd">
               <el-icon><Plus /></el-icon>
               创建密钥
@@ -27,7 +36,7 @@
           外部系统通过 <strong>X-API-Key</strong> 请求头携带密钥访问
           <code>/api/v1/collections</code> 等接口读取和写入数据。
           需在「页面配置」中开启 Open API 开关的数据页才可被访问，开启「允许写入」后支持新增和修改。
-          完整接口说明见上方「查看接口文档」。
+          完整接口说明见上方「查看接口文档」（数据集合接口 / AI 相关接口分两份文档）。
         </template>
       </el-alert>
 
@@ -124,7 +133,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Document } from '@element-plus/icons-vue'
+import { Plus, Document, ArrowDown } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { getApiKeyList, createApiKey, toggleApiKey, deleteApiKey } from '@/api/apiKey'
 import { ConfirmDialog } from '@/components/common'
@@ -172,6 +181,10 @@ async function loadKeys(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+function handleOpenDocs(path: string): void {
+  window.open(path, '_blank')
 }
 
 function handleAdd(): void {

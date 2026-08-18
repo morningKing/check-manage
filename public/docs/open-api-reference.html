@@ -184,6 +184,18 @@
     margin: 2px 0 26px 17px;
   }
 
+  .sidebar-back {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: none;
+    margin: 0 0 20px 17px;
+    border-bottom: 1px dotted var(--line-strong);
+    width: fit-content;
+  }
+
+  .sidebar-back:hover { color: var(--accent-ink); }
+
   .nav-group {
     margin-bottom: 22px;
   }
@@ -734,6 +746,7 @@
   <nav class="sidebar" id="sidebar" aria-label="文档目录">
     <div class="sidebar-brand"><span class="mark"></span><strong>Open API</strong></div>
     <p class="sidebar-sub">check-manage 集成参考</p>
+    <a class="sidebar-back" href="./ai-api-reference.html">AI 相关对外接口 &rarr;</a>
 
     <div class="nav-group">
       <p class="nav-group-label">开始</p>

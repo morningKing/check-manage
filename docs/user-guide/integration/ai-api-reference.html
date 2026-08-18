@@ -1,0 +1,1820 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 相关对外接口文档</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --bg-raised: #ffffff;
+    --ink: #10141c;
+    --ink-soft: #2b3342;
+    --muted: #5b6472;
+    --line: rgba(16, 20, 28, 0.12);
+    --line-strong: rgba(16, 20, 28, 0.2);
+    --accent: #c97a2b;
+    --accent-ink: #7a4813;
+    --accent-soft: #f3e3cd;
+    --code-bg: #10141c;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #8592a3;
+    --get: #2c7a9b;
+    --post: #3f8d4f;
+    --put: #8a5cc7;
+    --patch: #0f9b8e;
+    --delete: #c1483d;
+    --radius: 4px;
+    --shadow: 0 1px 2px rgba(16, 20, 28, 0.05), 0 10px 28px rgba(16, 20, 28, 0.07);
+    --sidebar-w: 260px;
+    --measure: 42rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f131b;
+      --bg-raised: #171c26;
+      --ink: #eef1f4;
+      --ink-soft: #c7cdd6;
+      --muted: #8b95a3;
+      --line: rgba(238, 241, 244, 0.1);
+      --line-strong: rgba(238, 241, 244, 0.18);
+      --accent: #e3a458;
+      --accent-ink: #f6d9ab;
+      --accent-soft: rgba(227, 164, 88, 0.14);
+      --code-bg: #0a0d13;
+      --code-ink: #e8ecef;
+      --code-accent: #e3a458;
+      --code-muted: #7f8a99;
+      --get: #57a8c9;
+      --post: #64ba71;
+      --put: #ab8bdf;
+      --patch: #4fd6c8;
+      --delete: #e17b6d;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f131b;
+    --bg-raised: #171c26;
+    --ink: #eef1f4;
+    --ink-soft: #c7cdd6;
+    --muted: #8b95a3;
+    --line: rgba(238, 241, 244, 0.1);
+    --line-strong: rgba(238, 241, 244, 0.18);
+    --accent: #e3a458;
+    --accent-ink: #f6d9ab;
+    --accent-soft: rgba(227, 164, 88, 0.14);
+    --code-bg: #0a0d13;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #7f8a99;
+    --get: #57a8c9;
+    --post: #64ba71;
+    --put: #ab8bdf;
+    --patch: #4fd6c8;
+    --delete: #e17b6d;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f4f6f8;
+    --bg-raised: #ffffff;
+    --ink: #10141c;
+    --ink-soft: #2b3342;
+    --muted: #5b6472;
+    --line: rgba(16, 20, 28, 0.12);
+    --line-strong: rgba(16, 20, 28, 0.2);
+    --accent: #c97a2b;
+    --accent-ink: #7a4813;
+    --accent-soft: #f3e3cd;
+    --code-bg: #10141c;
+    --code-ink: #e8ecef;
+    --code-accent: #e3a458;
+    --code-muted: #8592a3;
+    --get: #2c7a9b;
+    --post: #3f8d4f;
+    --put: #8a5cc7;
+    --patch: #0f9b8e;
+    --delete: #c1483d;
+    --shadow: 0 1px 2px rgba(16, 20, 28, 0.05), 0 10px 28px rgba(16, 20, 28, 0.07);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink-soft);
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1, h2, h3, h4 {
+    color: var(--ink);
+    font-weight: 700;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  code, pre, .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Roboto Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- shell ---------- */
+
+  .shell {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px 40px 28px;
+    border-right: 1px solid var(--line);
+    scrollbar-width: thin;
+  }
+
+  .sidebar-brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .sidebar-brand .mark {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex: none;
+  }
+
+  .sidebar-brand strong {
+    font-size: 15px;
+    color: var(--ink);
+    letter-spacing: 0.01em;
+  }
+
+  .sidebar-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 2px 0 26px 17px;
+  }
+
+  .sidebar-back {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: none;
+    margin: 0 0 20px 17px;
+    border-bottom: 1px dotted var(--line-strong);
+    width: fit-content;
+  }
+
+  .sidebar-back:hover { color: var(--accent-ink); }
+
+  .nav-group {
+    margin-bottom: 20px;
+  }
+
+  .nav-group-label {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px 2px;
+  }
+
+  .nav-group a {
+    display: block;
+    text-decoration: none;
+    font-size: 13px;
+    color: var(--ink-soft);
+    padding: 4px 8px;
+    border-radius: var(--radius);
+    margin: 1px 0;
+    border-left: 2px solid transparent;
+  }
+
+  .nav-group a:hover { background: var(--accent-soft); color: var(--accent-ink); }
+
+  .nav-group a.active {
+    border-left-color: var(--accent);
+    color: var(--accent-ink);
+    background: var(--accent-soft);
+    font-weight: 600;
+  }
+
+  .content {
+    padding: 48px clamp(20px, 5vw, 64px) 120px;
+    min-width: 0;
+  }
+
+  section { margin-bottom: 60px; scroll-margin-top: 24px; }
+
+  section > h2 {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+
+  section > .section-desc {
+    color: var(--muted);
+    max-width: var(--measure);
+    margin: 10px 0 26px;
+  }
+
+  h3.sub {
+    font-size: 16px;
+    margin: 32px 0 10px;
+    padding-top: 4px;
+  }
+
+  p { max-width: var(--measure); }
+
+  .scroll-x { overflow-x: auto; }
+
+  /* ---------- hero ---------- */
+
+  .hero {
+    padding: 40px 0 8px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 48px;
+  }
+
+  .hero h1 {
+    font-size: clamp(26px, 3.6vw, 34px);
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+  }
+
+  .hero p.lead {
+    max-width: 42rem;
+    color: var(--muted);
+    font-size: 16px;
+    margin-bottom: 24px;
+  }
+
+  .hero-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+
+  .fact-chip {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 12.5px;
+  }
+
+  .fact-chip .k { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .fact-chip .v { font-family: ui-monospace, monospace; color: var(--ink); }
+
+  /* ---------- endpoint index table ---------- */
+
+  table.endpoint-index {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  table.endpoint-index th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  table.endpoint-index td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  table.endpoint-index tr:hover td { background: var(--accent-soft); }
+
+  table.endpoint-index td.path { font-family: ui-monospace, monospace; color: var(--ink); }
+
+  /* ---------- method badge ---------- */
+
+  .m {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    color: #fff;
+    min-width: 52px;
+  }
+
+  .m-get { background: var(--get); }
+  .m-post { background: var(--post); }
+  .m-put { background: var(--put); }
+  .m-patch { background: var(--patch); }
+  .m-delete { background: var(--delete); }
+
+  /* ---------- endpoint card ---------- */
+
+  .endpoint {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--bg-raised);
+    box-shadow: var(--shadow);
+    margin: 18px 0 36px;
+    overflow: hidden;
+  }
+
+  .endpoint-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+
+  .endpoint-head .path {
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--ink);
+  }
+
+  .endpoint-head .flags {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+  }
+
+  .flag {
+    font-size: 10.5px;
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+  }
+
+  .flag.write { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
+
+  .endpoint-body { padding: 18px 18px 22px; }
+
+  .endpoint-body > p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+
+  /* ---------- param tables ---------- */
+
+  table.params {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin: 10px 0 18px;
+  }
+
+  table.params th {
+    text-align: left;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--line-strong);
+  }
+
+  table.params td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  table.params td:first-child { font-family: ui-monospace, monospace; color: var(--ink); white-space: nowrap; }
+
+  table.params tr:last-child td { border-bottom: none; }
+
+  /* ---------- code panel ---------- */
+
+  .code {
+    position: relative;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 5px;
+    margin: 12px 0 18px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .code .code-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--code-muted);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .code .code-bar .dots { display: flex; gap: 5px; margin-right: 4px; }
+  .code .code-bar .dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,0.14); }
+
+  .code .copy-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.14);
+    color: var(--code-muted);
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+
+  .code .copy-btn:hover { color: var(--code-ink); border-color: rgba(255,255,255,0.3); }
+  .code .copy-btn:focus-visible { outline: 2px solid var(--code-accent); outline-offset: 1px; }
+
+  .code pre {
+    margin: 0;
+    padding: 14px 16px 16px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+  }
+
+  .code .k { color: var(--code-accent); }
+  .code .s { color: #9fd8a3; }
+  .code .c { color: var(--code-muted); font-style: italic; }
+  .code .n { color: #7bb8e8; }
+
+  /* ---------- callouts ---------- */
+
+  .callout {
+    border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 5px 5px 0;
+    padding: 12px 16px;
+    margin: 16px 0;
+    font-size: 13.5px;
+    max-width: var(--measure);
+  }
+
+  .callout p { margin: 0 0 6px; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout strong { color: var(--accent-ink); }
+
+  .callout.warn { border-left-color: var(--delete); }
+  .callout.warn strong { color: var(--delete); }
+
+  /* ---------- onboarding steps ---------- */
+
+  .steps {
+    counter-reset: step;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: var(--measure);
+    margin-top: 20px;
+  }
+
+  .steps li {
+    list-style: none;
+    display: flex;
+    gap: 16px;
+    padding: 0 0 22px;
+    position: relative;
+  }
+
+  .steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    font-family: ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--accent);
+  }
+
+  .steps li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 13px;
+    top: 26px;
+    bottom: 0;
+    width: 1px;
+    background: var(--line-strong);
+  }
+
+  .steps li .step-body h4 { font-size: 14.5px; margin-bottom: 3px; }
+  .steps li .step-body p { font-size: 13.5px; color: var(--muted); margin: 0; }
+
+  /* ---------- security / plain table ---------- */
+
+  table.sec {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    max-width: 46rem;
+  }
+
+  table.sec td {
+    padding: 11px 4px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+
+  table.sec td:first-child {
+    width: 150px;
+    color: var(--ink);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* ---------- faq ---------- */
+
+  details.faq {
+    border-bottom: 1px solid var(--line);
+    padding: 14px 0;
+  }
+
+  details.faq summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--ink);
+    font-size: 14px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  details.faq summary::-webkit-details-marker { display: none; }
+
+  details.faq summary::before {
+    content: "+";
+    font-family: ui-monospace, monospace;
+    color: var(--accent);
+    font-size: 15px;
+    width: 16px;
+    flex: none;
+  }
+
+  details.faq[open] summary::before { content: "\2013"; }
+
+  details.faq .faq-body {
+    margin: 10px 0 0 26px;
+    color: var(--muted);
+    font-size: 13.5px;
+    max-width: 38rem;
+  }
+
+  details.faq .faq-body code { color: var(--ink-soft); }
+
+  /* ---------- footer ---------- */
+
+  .footnote {
+    color: var(--muted);
+    font-size: 12.5px;
+    border-top: 1px solid var(--line);
+    padding-top: 20px;
+    margin-top: 8px;
+  }
+
+  /* ---------- mobile nav toggle ---------- */
+
+  .mobile-bar { display: none; }
+
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+
+    .mobile-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--bg);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 18px;
+    }
+
+    .mobile-bar .mark { width: 9px; height: 9px; border-radius: 2px; background: var(--accent); }
+    .mobile-bar strong { color: var(--ink); font-size: 14px; }
+    .mobile-bar button {
+      margin-left: auto;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      background: var(--bg-raised);
+      border: 1px solid var(--line-strong);
+      color: var(--ink-soft);
+      padding: 5px 10px;
+      border-radius: var(--radius);
+    }
+
+    .sidebar {
+      position: static;
+      height: auto;
+      display: none;
+      border-right: none;
+      border-bottom: 1px solid var(--line);
+      padding: 18px;
+    }
+
+    .sidebar.open { display: block; }
+
+    .content { padding: 28px 18px 100px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<div class="mobile-bar">
+  <span class="mark"></span>
+  <strong>AI Open API</strong>
+  <button id="navToggle" type="button">目录</button>
+</div>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar" aria-label="文档目录">
+    <div class="sidebar-brand"><span class="mark"></span><strong>AI Open API</strong></div>
+    <p class="sidebar-sub">check-manage AI 能力集成参考</p>
+    <a class="sidebar-back" href="./open-api-reference.html">&larr; 数据集合 Open API 参考</a>
+
+    <div class="nav-group">
+      <p class="nav-group-label">开始</p>
+      <a href="#overview">概述</a>
+      <a href="#auth">认证与密钥绑定</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">AI 单会话</p>
+      <a href="#ep-session-create">创建单会话</a>
+      <a href="#ep-session-get">查询会话状态</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">AI 批任务 · 发现</p>
+      <a href="#ep-batch-agents">列出可用 Agent</a>
+      <a href="#ep-batch-models">列出可用模型</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">AI 批任务 · 生命周期</p>
+      <a href="#ep-batch-upload">上传文件</a>
+      <a href="#ep-batch-create">创建批任务</a>
+      <a href="#ep-batch-patch">修改批任务配置</a>
+      <a href="#ep-batch-callback">完成回调（Webhook）</a>
+      <a href="#ep-batch-list">列出批任务</a>
+      <a href="#ep-batch-detail">查询批任务详情</a>
+      <a href="#ep-batch-results">取回处理结果</a>
+      <a href="#ep-batch-delete">删除批任务</a>
+      <a href="#ep-batch-retry">重试失败子任务</a>
+      <a href="#ep-batch-append">追加文件</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">AI 批任务 · 子会话</p>
+      <a href="#ep-batch-filerecords">文件记录</a>
+      <a href="#ep-batch-import">导入文件到系统</a>
+      <a href="#ep-batch-messages">对话历史</a>
+      <a href="#ep-batch-files">文件列表</a>
+      <a href="#ep-batch-download">下载单个文件</a>
+      <a href="#ep-batch-downloadall">打包下载产出文件</a>
+      <a href="#ep-batch-continue">继续对话</a>
+      <a href="#ep-batch-reexecute">重新执行</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">Row Actions</p>
+      <a href="#ep-row-action">触发行操作</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">AI 定时任务</p>
+      <a href="#ep-scan-list">列出扫描任务</a>
+      <a href="#ep-scan-detail">查询单个任务</a>
+      <a href="#ep-scan-runnow">立即触发扫描</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">Prompt 模板</p>
+      <a href="#ep-prompt-list">列出模板</a>
+      <a href="#ep-prompt-create">新建模板</a>
+      <a href="#ep-prompt-detail">查询单个模板</a>
+      <a href="#ep-prompt-update">修改模板</a>
+      <a href="#ep-prompt-delete">删除模板</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">长期记忆</p>
+      <a href="#ep-memory-list">列出记忆</a>
+      <a href="#ep-memory-add">补写记忆</a>
+      <a href="#ep-memory-delete">删除记忆</a>
+    </div>
+
+    <div class="nav-group">
+      <p class="nav-group-label">参考</p>
+      <a href="#limits">限制</a>
+      <a href="#errors">错误处理</a>
+      <a href="#faq">常见问题</a>
+    </div>
+  </nav>
+
+  <main class="content">
+
+    <section class="hero" id="overview">
+      <p class="eyebrow">AI Open API Reference</p>
+      <h1>把 AI 能力开放给外部系统</h1>
+      <p class="lead">除了<a href="./open-api-reference.html" style="color: var(--accent-ink); font-weight: 600;">数据集合读写接口</a>，check-manage 还把六类 AI 相关能力经同一套 API Key 体系开放出来：单会话问答、批量文件处理、行级 AI/Webhook 触发、定时扫描任务、Prompt 模板管理、长期记忆管理。全部收发 <code>application/json</code>（文件上传除外）。</p>
+
+      <div class="hero-facts">
+        <div class="fact-chip"><span class="k">Base&nbsp;URL</span><span class="v">http://&lt;host&gt;:&lt;port&gt;/api/v1</span></div>
+        <div class="fact-chip"><span class="k">生产入口</span><span class="v">http://localhost:8080/api/v1</span></div>
+        <div class="fact-chip"><span class="k">认证头</span><span class="v">X-API-Key: cm_xxx</span></div>
+        <div class="fact-chip"><span class="k">error 语言</span><span class="v">中文</span></div>
+      </div>
+
+      <div class="callout">
+        <p><strong>与数据集合接口的关系</strong>：`/api/v1` 这个 Base Path 下同时挂了两类接口——<a href="./open-api-reference.html" style="color: var(--accent-ink); font-weight: 600;">数据集合读写接口</a>按「页面是否开放 API 访问」授权，本页描述的六类 AI 接口按「密钥是否绑定用户」授权，两者共用同一套 API Key，但权限维度不同，见下一节。</p>
+      </div>
+
+      <p style="max-width: var(--measure); color: var(--muted); font-size: 13.5px;">
+        六类能力共用的两个约定：① 所有接口要求密钥<strong>已绑定创建者</strong>（下方「认证与密钥绑定」）；② <code>error</code> 字段一律是<strong>中文</strong>——这是 AI 相关端点家族的既有惯例，与数据集合接口的英文 error 文案不同。
+      </p>
+    </section>
+
+    <section id="auth">
+      <p class="eyebrow">Authentication</p>
+      <h2>认证与密钥绑定</h2>
+      <p class="section-desc">六类 AI 接口都在数据集合接口的 <code>X-API-Key</code> 鉴权基础上，多加了一条「密钥必须绑定用户」的前置要求。</p>
+
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>headers</div>
+        <pre><code>X-API-Key: cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2</code></pre>
+      </div>
+
+      <h3 class="sub">为什么要绑定用户</h3>
+      <p style="color: var(--muted); font-size: 14px;">AI 相关操作会以某个用户的身份运行 AI 会话、占用其额度、把任务/记忆/模板关联到该用户，因此密钥必须绑定创建者（<code>owner_user_id</code>）才能调用这六类接口——单纯的数据读写接口没有这条限制。</p>
+
+      <div class="callout warn">
+        <p><strong>本功能上线前创建的存量密钥没有绑定关系</strong>，拿它们调用任何一个本页描述的接口都会返回：</p>
+        <div class="code" style="margin: 10px 0 0;">
+          <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>403</div>
+          <pre><code>{ <span class="k">"error"</span>: <span class="s">"该密钥未绑定用户，请在密钥管理中重新创建"</span> }</code></pre>
+        </div>
+        <p style="margin-top: 10px;"><strong>解决办法</strong>：去密钥管理页重新创建一个新密钥（新建的密钥会自动绑定当前登录用户），旧密钥无法通过编辑补上绑定关系。新建路径：管理员登录系统 → 「系统配置 → 集成对接 → Open API」→「创建密钥」。新建的密钥同时可用于本页六类接口和数据集合接口。</p>
+      </div>
+
+      <h3 class="sub">隔离粒度：按密钥，不是按账号</h3>
+      <p style="color: var(--muted); font-size: 14px;">每把 API Key 只能看到、操作<strong>它自己创建</strong>的批任务/单会话/模板；用同一账号新建的另一把密钥调用同样接口，看到的列表不会包含对方创建的资源，查/删/改对方的资源一律 404（不用 403，不泄漏存在性）。<strong>暂存文件（批任务上传）例外</strong>：按<strong>用户</strong>隔离而非按密钥，同一用户名下的多把密钥共享同一个暂存空间。行操作触发、AI 定时任务同样按创建者/所属用户过滤。</p>
+    </section>
+
+    <section id="ep-session-create">
+      <p class="eyebrow">AI 单会话 · 1</p>
+      <h2>创建单会话</h2>
+      <p class="section-desc">给一句 prompt，不需要文件，创建一个独立 AI 会话；跟批任务共用同一套执行引擎（并发/超时/失败检测），只是没有文件、没有子任务概念。</p>
+
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-sessions</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{
+  <span class="k">"prompt"</span>: <span class="s">"帮我用三句话总结一下敏捷开发的核心理念。"</span>,
+  <span class="k">"agent"</span>: <span class="s">""</span>,
+  <span class="k">"model"</span>: <span class="s">""</span>,
+  <span class="k">"title"</span>: <span class="s">""</span>
+}</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>prompt</td><td>是</td><td>下发给 AI 会话的指令，最长 20000 字符</td></tr>
+            <tr><td>agent</td><td>否</td><td>指定 OpenCode agent；留空用系统默认，可选值见 <a href="#ep-batch-agents" style="color: var(--accent-ink);">批任务 agents 端点</a></td></tr>
+            <tr><td>model</td><td>否</td><td>指定模型（<code>&lt;providerID&gt;/&lt;modelID&gt;</code>）；留空用默认，可选值见 <a href="#ep-batch-models" style="color: var(--accent-ink);">批任务 models 端点</a></td></tr>
+            <tr><td>title</td><td>否</td><td>会话标题；不传默认「新会话」</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{ <span class="k">"sessionId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"status"</span>: <span class="s">"pending"</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>prompt</code> 缺失/为空；超过 20000 字符</td></tr>
+            <tr><td>401/403</td><td>密钥缺失/无效/已停用/未绑定用户</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-session-get">
+      <p class="eyebrow">AI 单会话 · 2</p>
+      <h2>查询会话状态</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-sessions/{sessionId}</span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"sessionId"</span>: <span class="s">"b1c2d3e4-..."</span>,
+  <span class="k">"status"</span>: <span class="s">"completed"</span>,
+  <span class="k">"title"</span>: <span class="s">"新会话"</span>,
+  <span class="k">"agent"</span>: <span class="n">null</span>,
+  <span class="k">"model"</span>: <span class="n">null</span>,
+  <span class="k">"createdAt"</span>: <span class="s">"2026-08-18T03:20:00.000Z"</span>,
+  <span class="k">"lastActiveAt"</span>: <span class="s">"2026-08-18T03:20:12.000Z"</span>,
+  <span class="k">"output"</span>: <span class="s">"敏捷开发的核心理念可以概括为三点：……"</span>,
+  <span class="k">"error"</span>: <span class="n">null</span>
+}</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>说明</th></tr>
+            <tr><td>status</td><td><code>pending</code> / <code>running</code> / <code>completed</code> / <code>failed</code></td></tr>
+            <tr><td>output</td><td><strong>只在 <code>status='completed'</code> 时非 null</strong>——运行中/失败可能已落库半截文本，不设这道门会把截断输出当结果返回</td></tr>
+            <tr><td>error</td><td><strong>只在 <code>status='failed'</code> 时非 null</strong>，可读的失败原因（如指定了不存在的 agent）</td></tr>
+          </table>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>404</td><td><code>sessionId</code> 不存在，或不是用这把密钥创建的（不区分，均 404）</td></tr>
+          </table>
+          <p style="font-size: 13px;">建议轮询间隔 3~10 秒，无 SSE 推送。没有 list/delete/continue/retry——只有创建 + 查状态两个端点；需要更完整的生命周期管理请用下方「AI 批任务」（可以只传一个文件）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-agents">
+      <p class="eyebrow">AI 批任务 · 发现</p>
+      <h2>列出可用 Agent</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/agents</span>
+        </div>
+        <div class="endpoint-body">
+          <p>只返回 <code>primary</code> 类型的 agent（可用作会话主 agent），过滤掉内部 agent。批任务、单会话创建时的 <code>agent</code> 参数都参考这里。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"agents"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"build"</span>, <span class="k">"description"</span>: <span class="s">"Full tool access, governed by user/session permission config."</span> },
+    { <span class="k">"name"</span>: <span class="s">"plan"</span>, <span class="k">"description"</span>: <span class="s">"Read-only design mode."</span> }
+  ],
+  <span class="k">"default"</span>: <span class="s">"build"</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;">错误响应：502（OpenCode 不可用）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-models">
+      <p class="eyebrow">AI 批任务 · 发现</p>
+      <h2>列出可用模型</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/models</span>
+        </div>
+        <div class="endpoint-body">
+          <p>只返回已连接 provider 下的模型。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"models"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"openai/gpt-4"</span>, <span class="k">"label"</span>: <span class="s">"OpenAI / GPT-4"</span>, <span class="k">"providerID"</span>: <span class="s">"openai"</span>, <span class="k">"modelID"</span>: <span class="s">"gpt-4"</span> }
+  ],
+  <span class="k">"default"</span>: <span class="s">"openai/gpt-4"</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>models[].id</code> 即 <code>&lt;providerID&gt;/&lt;modelID&gt;</code>，直接作为创建时的 <code>model</code> 参数。错误响应：502（OpenCode 不可用）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-upload">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.1</p>
+      <h2>上传文件</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/uploads</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p><code>multipart/form-data</code>，字段名固定为 <code>files</code>，可重复出现以一次上传多个。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{
+  <span class="k">"files"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"path"</span>: <span class="s">"batch-staging/u-123/a1b2c3d4/report1.pdf"</span> }
+  ]
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>path</code> 是不透明字符串，创建批任务时原样传回，不要自行拼接或修改。</p>
+          <div class="callout warn">
+            <p><strong>限制</strong>：单文件最大 20 MB；单次请求累计最大 100 MB；整个请求体超过 101 MB 直接 413（不解析请求体）。</p>
+            <p><strong>暂存 24 小时后清理</strong>（按目录最后修改时间，不看是否已被引用）——拿到 <code>path</code> 后请尽快创建批任务，不要隔天再用；清理由下一次 <code>/uploads</code> 顺带触发，按<strong>用户</strong>维度扫描整个暂存目录（会波及界面手工上传的暂存文件）。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-create">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.2</p>
+      <h2>创建批任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>每个文件对应一个隔离的 AI 子会话，并发处理（限流 3 个并发）。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{
+  <span class="k">"name"</span>: <span class="s">"季度报告分析"</span>,
+  <span class="k">"prompt"</span>: <span class="s">"请总结每份文档的核心结论，并列出风险点。"</span>,
+  <span class="k">"files"</span>: [ { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"path"</span>: <span class="s">"batch-staging/u-123/a1b2c3d4/report1.pdf"</span> } ],
+  <span class="k">"agent"</span>: <span class="s">""</span>,
+  <span class="k">"model"</span>: <span class="s">""</span>,
+  <span class="k">"callbackUrl"</span>: <span class="s">""</span>,
+  <span class="k">"callbackSecret"</span>: <span class="s">""</span>
+}</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>name</td><td>是</td><td>批任务名称</td></tr>
+            <tr><td>prompt</td><td>是</td><td>下发给每个文件对应会话的指令，最长 20000 字符</td></tr>
+            <tr><td>files</td><td>是</td><td><code>/uploads</code> 返回的 <code>files</code> 数组（或子集），最多 50 个</td></tr>
+            <tr><td>agent / model</td><td>否</td><td>同单会话</td></tr>
+            <tr><td>callbackUrl</td><td>否</td><td>批任务进入终态时接收 HMAC 签名回调的 URL（见 <a href="#ep-batch-callback" style="color: var(--accent-ink);">完成回调</a>）；留空只能轮询</td></tr>
+            <tr><td>callbackSecret</td><td>否</td><td>计算回调签名用的密钥</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{ <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"status"</span>: <span class="s">"pending"</span>, <span class="k">"total"</span>: <span class="n">2</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>name</code>/<code>prompt</code> 缺失；<code>prompt</code> 超长；<code>files</code> 为空/超过 50 个/缺字段；<code>files[].path</code> 不合法或指向的文件已过期/不存在；<code>callbackUrl</code> 格式不对</td></tr>
+            <tr><td>413</td><td>请求体超过 1 MB（JSON 接口）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-patch">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.3</p>
+      <h2>修改批任务配置</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-patch">PATCH</span>
+          <span class="path">/api/v1/ai-batches/{batchId}</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>请求体字段与创建相同（<code>agent</code>/<code>model</code>/<code>callbackUrl</code>/<code>callbackSecret</code>，均可选）。响应字段同「查询批任务详情」。</p>
+          <div class="callout warn">
+            <p><strong>整体替换，不是局部 patch</strong>：省略的字段会被清空为默认值——只传 <code>agent</code> 而不重传已配置好的 <code>callbackUrl</code>，会把回调配置一并清空。每次调用都要把想保留的字段一起带上。修改在下一次 worker 拾取该批任务时生效（<code>retry-failed</code>/<code>reexecute</code>/<code>continue</code>/待执行子任务），不影响正在跑或已完成的子任务。</p>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>callbackUrl</code> 格式不对</td></tr>
+            <tr><td>404</td><td><code>batchId</code> 不存在或不属于本密钥</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-callback">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.4</p>
+      <h2>完成回调（Webhook）</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">&lt;callbackUrl&gt;</span>
+        </div>
+        <div class="endpoint-body">
+          <p>创建/修改批任务时设置了 <code>callbackUrl</code>，批任务进入终态（<code>completed</code>/<code>partial</code>/<code>failed</code>）时收到一次 HTTP POST，不必再轮询。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request</div>
+            <pre><code>Content-Type: application/json
+X-Webhook-Timestamp: 1755400000
+X-Webhook-Signature: &lt;hex&gt;
+X-Webhook-Event: ai_batch_completed
+
+{
+  <span class="k">"event"</span>: <span class="s">"ai_batch_completed"</span>, <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>,
+  <span class="k">"status"</span>: <span class="s">"completed"</span>, <span class="k">"total"</span>: <span class="n">2</span>, <span class="k">"done"</span>: <span class="n">2</span>, <span class="k">"failed"</span>: <span class="n">0</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><strong>签名校验</strong>：<code>X-Webhook-Signature</code> = <code>HMAC-SHA256(secret, "{timestamp}.{原始请求体}")</code>。<strong>超时/重试</strong>：30 秒超时，失败重试 3 次（间隔 1 秒），全部失败不影响批任务状态本身。</p>
+          <div class="callout warn">
+            <p><strong>可能不止一次</strong>：<code>retry-failed</code>/<code>append</code>/<code>continue</code> 都能把已终态的批任务重新拉回运行中，之后再次收敛到终态会再触发一次回调——按 <code>status</code> 处理，不要假设只调用一次。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-list">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.5</p>
+      <h2>列出批任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches?page=1&amp;pageSize=20</span>
+        </div>
+        <div class="endpoint-body">
+          <table class="params">
+            <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+            <tr><td>page</td><td>1</td><td>页码，从 1 开始</td></tr>
+            <tr><td>pageSize</td><td>20</td><td>每页条数，最大 100</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"items"</span>: [
+    { <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"name"</span>: <span class="s">"季度报告分析"</span>, <span class="k">"status"</span>: <span class="s">"running"</span>,
+      <span class="k">"total"</span>: <span class="n">2</span>, <span class="k">"done"</span>: <span class="n">1</span>, <span class="k">"failed"</span>: <span class="n">0</span>, <span class="k">"agent"</span>: <span class="n">null</span>, <span class="k">"model"</span>: <span class="n">null</span>,
+      <span class="k">"callbackUrl"</span>: <span class="n">null</span>, <span class="k">"createdAt"</span>: <span class="s">"2026-08-10T03:20:00.000Z"</span>, <span class="k">"completedAt"</span>: <span class="n">null</span> }
+  ],
+  <span class="k">"total"</span>: <span class="n">1</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;">只返回<strong>用当前这把密钥创建</strong>的批任务。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-detail">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.6</p>
+      <h2>查询批任务详情</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>响应字段同「列出批任务」的 <code>items</code> 元素。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>404</td><td><code>batchId</code> 不存在，或存在但不是用这把密钥创建的（不区分，均 404）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-results">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.7</p>
+      <h2>取回处理结果</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/results</span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"status"</span>: <span class="s">"completed"</span>,
+  <span class="k">"results"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>,  <span class="k">"status"</span>: <span class="s">"completed"</span>, <span class="k">"output"</span>: <span class="s">"……AI 的完整回复文本……"</span>, <span class="k">"error"</span>: <span class="n">null</span> },
+    { <span class="k">"name"</span>: <span class="s">"report2.docx"</span>, <span class="k">"status"</span>: <span class="s">"failed"</span>,    <span class="k">"output"</span>: <span class="n">null</span>, <span class="k">"error"</span>: <span class="s">"OpenCode 会话超时"</span> }
+  ]
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>results[].name</code> 取自 <code>files[].path</code> 的最后一段（安全化后的文件名），<strong>不是</strong>创建时传入的 <code>files[].name</code>。<code>output</code> 只在该子任务 <code>status='completed'</code> 时非 null；未到终态也能调用，只是部分/全部 <code>output</code> 仍是 null。<code>results</code> 数组按创建时 <code>files</code> 的顺序返回。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-delete">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.8</p>
+      <h2>删除批任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-delete">DELETE</span>
+          <span class="path">/api/v1/ai-batches/{batchId}</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"deleted"</span>: <span class="n">true</span> }</code></pre>
+          </div>
+          <div class="callout warn">
+            <p><strong>不可逆</strong>：清理该批任务下每个子任务的 AI 会话工作区，并删除数据库记录（含全部处理结果）。删除前如需保留结果，先调用「取回处理结果」。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-retry">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.9</p>
+      <h2>重试失败子任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/retry-failed</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>把 <code>failed</code> 的子任务重置为 <code>pending</code>，保留原有 prompt/agent/model 配置，交由后台重新处理。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"retried"</span>: <span class="n">1</span> }</code></pre>
+          </div>
+          <p style="font-size: 13px;">没有失败子任务时返回 <code>{"retried": 0}</code>，不算错误。只有批任务处于终态（<code>completed</code>/<code>partial</code>/<code>failed</code>）才允许调用。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>404</td><td><code>batchId</code> 不存在或不属于本密钥</td></tr>
+            <tr><td>409</td><td>批任务处于 <code>pending</code>/<code>running</code>（非终态）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-append">
+      <p class="eyebrow">AI 批任务 · 生命周期 5.10</p>
+      <h2>追加文件</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/append</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>给已存在的批任务再加几个文件，沿用原有 prompt/agent/model。<strong>不要求终态</strong>——任何状态都可追加，这点与「重试失败」不同。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"files"</span>: [ { <span class="k">"name"</span>: <span class="s">"report-03.pdf"</span>, <span class="k">"path"</span>: <span class="s">"batch-staging/.../report-03.pdf"</span> } ] }</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"batchId"</span>: <span class="s">"b-1"</span>, <span class="k">"status"</span>: <span class="s">"running"</span>, <span class="k">"total"</span>: <span class="n">6</span>, <span class="k">"appended"</span>: <span class="n">1</span> }</code></pre>
+          </div>
+          <div class="callout warn">
+            <p><strong>会让批任务退出终态</strong>：新子任务以 <code>pending</code> 入队，批任务状态从终态回到 <code>running</code>；已完成的子任务不受影响、不会重跑。如果把「进入终态」当作整批完成的信号，追加之后需要重新开始轮询。<strong>不能换 prompt</strong>——追加沿用原有配置，需要换 prompt 请新建批任务。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-filerecords">
+      <p class="eyebrow">AI 批任务 · 子会话 5.11</p>
+      <h2>获取子会话文件记录</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/file-records</span>
+        </div>
+        <div class="endpoint-body">
+          <p>获取每个子会话工作区中被自动记录的新增/修改文件；即使文件后来被还原或删除，记录仍保留（不是实时扫描，实时扫描见下方「子会话文件列表」）。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"status"</span>: <span class="s">"completed"</span>,
+  <span class="k">"results"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"seq"</span>: <span class="n">1</span>, <span class="k">"status"</span>: <span class="s">"completed"</span>,
+      <span class="k">"files"</span>: [ { <span class="k">"path"</span>: <span class="s">"output/analysis.md"</span>, <span class="k">"status"</span>: <span class="s">"added"</span>, <span class="k">"dataFileId"</span>: <span class="n">null</span> } ] }
+  ]
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>files[].status</code>：<code>added</code> / <code>modified</code>；<code>dataFileId</code> 非空表示该文件已导入系统 <code>data_files</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-import">
+      <p class="eyebrow">AI 批任务 · 子会话 5.12</p>
+      <h2>导入子会话文件到系统</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/import</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>把子会话工作区里被自动记录过的文件导入系统 <code>data_files</code>，返回文件 ID。<strong>白名单机制</strong>：只有被记录过的路径才能导入，防止借此端点搬运工作区里任意文件。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"paths"</span>: [<span class="s">"output/analysis.md"</span>, <span class="s">"data/results.csv"</span>] }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>name / seq</td><td>二选一</td><td>定位子会话（文件名或序号）</td></tr>
+            <tr><td>paths</td><td>是</td><td>要导入的工作区相对路径，单次最多 100 个</td></tr>
+          </table>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"results"</span>: [
+    { <span class="k">"path"</span>: <span class="s">"output/analysis.md"</span>, <span class="k">"status"</span>: <span class="s">"imported"</span>,
+      <span class="k">"file"</span>: { <span class="k">"id"</span>: <span class="s">"df-abc123"</span>, <span class="k">"name"</span>: <span class="s">"analysis.md"</span>, <span class="k">"size"</span>: <span class="n">1234</span>, <span class="k">"mimeType"</span>: <span class="s">"text/markdown"</span>, <span class="k">"url"</span>: <span class="s">"/api/data-files/df-abc123/download"</span> } }
+  ]
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><strong>幂等</strong>：已导入过的文件再次导入返回 <code>existing</code> 状态和原文件 ID。错误码：<code>NOT_RECORDED</code> / <code>BAD_PATH</code> / <code>FILE_MISSING</code> / <code>TOO_LARGE</code> / <code>IMPORT_FAILED</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-messages">
+      <p class="eyebrow">AI 批任务 · 子会话 5.13</p>
+      <h2>获取子会话对话历史</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/messages</span>
+        </div>
+        <div class="endpoint-body">
+          <div class="callout">
+            <p><strong><code>childId</code> 怎么填</strong>：先调「取回处理结果」，响应里每条的 <code>name</code>（文件名）或 <code>seq</code>（序号）都可以作为 <code>childId</code>——<code>report1.pdf</code> 和 <code>1</code> 定位同一个子会话，纯数字按序号匹配，否则按文件名匹配。本节及以下 5 个端点通用此规则。</p>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"child"</span>: { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"seq"</span>: <span class="n">1</span>, <span class="k">"status"</span>: <span class="s">"completed"</span> },
+  <span class="k">"messages"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"msg-001"</span>, <span class="k">"role"</span>: <span class="s">"user"</span>, <span class="k">"content"</span>: [{ <span class="k">"type"</span>: <span class="s">"text"</span>, <span class="k">"text"</span>: <span class="s">"请总结这份报告..."</span> }], <span class="k">"createdAt"</span>: <span class="s">"..."</span> },
+    { <span class="k">"id"</span>: <span class="s">"msg-002"</span>, <span class="k">"role"</span>: <span class="s">"assistant"</span>, <span class="k">"content"</span>: [
+        { <span class="k">"type"</span>: <span class="s">"text"</span>, <span class="k">"text"</span>: <span class="s">"报告核心结论如下..."</span> },
+        { <span class="k">"type"</span>: <span class="s">"tool_use"</span>, <span class="k">"id"</span>: <span class="s">"tu-1"</span>, <span class="k">"name"</span>: <span class="s">"read"</span>, <span class="k">"input"</span>: { <span class="k">"path"</span>: <span class="s">"uploads/report1.pdf"</span> } }
+      ], <span class="k">"createdAt"</span>: <span class="s">"..."</span> }
+  ],
+  <span class="k">"total"</span>: <span class="n">12</span>, <span class="k">"truncated"</span>: <span class="n">false</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;">最多返回 500 条消息，超过时 <code>truncated: true</code>。错误响应：404（批任务/子会话不存在）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-files">
+      <p class="eyebrow">AI 批任务 · 子会话 5.14</p>
+      <h2>获取子会话文件列表</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/files</span>
+        </div>
+        <div class="endpoint-body">
+          <p><strong>实时扫描</strong>工作区，返回当前存在的文件列表（区别于「文件记录」的历史记录）。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{
+  <span class="k">"files"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"analysis.md"</span>, <span class="k">"path"</span>: <span class="s">"output/analysis.md"</span>, <span class="k">"dir"</span>: <span class="s">"outputs"</span>, <span class="k">"size"</span>: <span class="n">5120</span>, <span class="k">"modifiedAt"</span>: <span class="s">"..."</span> }
+  ]
+}</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>dir</code>：<code>uploads</code> / <code>outputs</code> / <code>workspace</code>。<code>path</code> 用于下方「下载单个文件」的 <code>path</code> 参数。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-download">
+      <p class="eyebrow">AI 批任务 · 子会话 5.15</p>
+      <h2>下载子会话单个文件</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download?path=...</span>
+        </div>
+        <div class="endpoint-body">
+          <p><code>path</code> 参数来自「文件列表」的 <code>files[].path</code>。响应为文件流（<code>Content-Disposition: attachment</code>）。错误响应：400（路径非法）、404（文件不存在）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-downloadall">
+      <p class="eyebrow">AI 批任务 · 子会话 5.16</p>
+      <h2>打包下载产出文件</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download-all</span>
+        </div>
+        <div class="endpoint-body">
+          <p>把工作区中所有<strong>新增和修改</strong>的文件打包为 ZIP。筛选依据与「文件记录」同源（自动变更记录，非实时扫描），只包含 <code>added</code>/<code>modified</code>。</p>
+          <table class="params">
+            <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+            <tr><td>include</td><td>added,modified</td><td>逗号分隔筛选文件状态</td></tr>
+          </table>
+          <p style="font-size: 13px;">根目录名为子会话文件名（去扩展名，截断 50 字符）；单文件超 50 MB 自动跳过；不存在的文件跳过不报错。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-continue">
+      <p class="eyebrow">AI 批任务 · 子会话 5.17</p>
+      <h2>在子会话上继续对话</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/continue</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>在已完成/失败的子会话上追加一轮对话，<strong>保留历史上下文</strong>——AI 能看到之前的完整对话，再根据新 prompt 继续工作。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"prompt"</span>: <span class="s">"请进一步分析风险因素，给出具体的改进建议。"</span> }</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 202</div>
+            <pre><code>{ <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"child"</span>: { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"seq"</span>: <span class="n">1</span> }, <span class="k">"status"</span>: <span class="s">"running"</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>操作</th><th>历史消息</th><th>AI 会话</th><th>prompt</th></tr>
+            <tr><td>retry-failed</td><td>保留（仅 failed）</td><td>新建</td><td>原始</td></tr>
+            <tr><td>reexecute</td><td>删除</td><td>新建</td><td>原始</td></tr>
+            <tr><td><strong>continue</strong></td><td><strong>保留</strong></td><td><strong>复用</strong></td><td><strong>新 prompt</strong></td></tr>
+          </table>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>prompt</code> 缺失或超长</td></tr>
+            <tr><td>404</td><td>批任务/子会话不存在</td></tr>
+            <tr><td>409</td><td>子会话不在终态</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-batch-reexecute">
+      <p class="eyebrow">AI 批任务 · 子会话 5.18</p>
+      <h2>重新执行单个子会话</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-batches/{batchId}/sessions/{childId}/reexecute</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p><strong>删除旧对话、新建 AI 会话、用批任务原始 prompt 从头重跑</strong>。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"batchId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"child"</span>: { <span class="k">"name"</span>: <span class="s">"report1.pdf"</span>, <span class="k">"seq"</span>: <span class="n">0</span> }, <span class="k">"status"</span>: <span class="s">"running"</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>404</td><td>批任务/子会话不存在</td></tr>
+            <tr><td>409</td><td>子会话不在终态</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-row-action">
+      <p class="eyebrow">Row Actions</p>
+      <h2>触发行操作</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/collections/{collection}/{recordId}/row-actions/{actionId}/run</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>用 API Key 直接触发数据页上已配置好的<a href="../data/row-actions.md" style="color: var(--accent-ink);">行操作按钮</a>（Webhook 或 AI 扫描任务），效果和登录用户在「⋯」菜单里点这个按钮完全一样——同一条 <code>run_action</code> 编排、同一套幂等闸门、同一套状态回写。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"params"</span>: { <span class="k">"note"</span>: <span class="s">"外部系统触发"</span> } }</code></pre>
+          </div>
+          <p style="font-size: 13px;"><strong>可见角色</strong>按密钥绑定用户本人的角色判断。<strong>写入权限</strong>：目标集合必须开启「允许写入」。<code>actionId</code> 不提供发现端点，需线下从配置该行操作的管理员处获取。<code>params</code> 原样透传，不做二次校验。默认作用于系统配置的对外默认分支，可用 <code>?branchId=</code> 指定。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"ok"</span>: <span class="n">true</span>, <span class="k">"status"</span>: <span class="s">"running"</span>, <span class="k">"statusField"</span>: <span class="s">"status"</span>, <span class="k">"runningValue"</span>: <span class="s">"处理中"</span> }</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>status</code> 为 <code>submitted</code>（无状态门/webhook 已发出）或 <code>running</code>（有状态门，正在轮询终态）；<code>statusField</code>/<code>runningValue</code> 仅 <code>status='running'</code> 时非空。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>400</td><td>该动作已停用</td></tr>
+            <tr><td>403</td><td>集合未开放写入；调用方角色不在可见角色白名单</td></tr>
+            <tr><td>404</td><td>集合不存在/未开放；记录不存在；<code>actionId</code> 不存在；密钥未绑定用户</td></tr>
+            <tr><td>409</td><td>该行有正在执行的动作（幂等闸门）；AI 动作绑定的扫描任务作用于另一个分支</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-scan-list">
+      <p class="eyebrow">AI 定时任务</p>
+      <h2>列出扫描任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-scan-tasks</span>
+        </div>
+        <div class="endpoint-body">
+          <p>列出这把密钥所属用户创建的<a href="../ai/scan-tasks.md" style="color: var(--accent-ink);">定时 AI 数据流水线</a>任务（按 <code>owner_user_id</code> 过滤）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-scan-detail">
+      <p class="eyebrow">AI 定时任务</p>
+      <h2>查询单个任务</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/ai-scan-tasks/{taskId}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>错误响应：404（<code>taskId</code> 不存在或不属于这把密钥，不区分，不用 403）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-scan-runnow">
+      <p class="eyebrow">AI 定时任务</p>
+      <h2>立即触发扫描</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/ai-scan-tasks/{taskId}/run-now</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>和管理页「立即运行」完全一样：同步完成「认领当前符合条件的待处理记录（最多 <code>maxRecordsPerScan</code> 条）+ 建一个批任务」，真正的 AI 处理异步进行，所以这一步很快、不会因为要等 AI 跑完才超时。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"triggered"</span>: <span class="n">true</span>, <span class="k">"claimedCount"</span>: <span class="n">3</span>, <span class="k">"lastError"</span>: <span class="n">null</span> }</code></pre>
+          </div>
+          <p style="font-size: 13px;"><strong>不检查 <code>enabled</code></strong>：即使任务在管理页被禁用，<code>run-now</code> 依然可以手动触发。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>404</td><td><code>taskId</code> 不存在或不属于这把密钥</td></tr>
+            <tr><td>500</td><td>扫描引擎执行异常（认领/建批任务失败）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-prompt-list">
+      <p class="eyebrow">Prompt 模板</p>
+      <h2>列出模板</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/prompt-templates</span>
+        </div>
+        <div class="endpoint-body">
+          <p>列出这把密钥所属用户的全部 Prompt 模板。响应字段：<code>{id, name, content, createdAt, updatedAt}</code>（不含内部 <code>userId</code>）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-prompt-create">
+      <p class="eyebrow">Prompt 模板</p>
+      <h2>新建模板</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/prompt-templates</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"name"</span>: <span class="s">"周报总结"</span>, <span class="k">"content"</span>: <span class="s">"请总结以下文档的核心结论与风险点。"</span> }</code></pre>
+          </div>
+          <p style="font-size: 13px;"><code>name</code> 在同一用户下唯一，重名返回 <code>409</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-prompt-detail">
+      <p class="eyebrow">Prompt 模板</p>
+      <h2>查询单个模板</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/prompt-templates/{id}</span>
+        </div>
+        <div class="endpoint-body">
+          <p>只能读<strong>这把密钥所属用户自己</strong>的模板，跨用户一律 404。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-prompt-update">
+      <p class="eyebrow">Prompt 模板</p>
+      <h2>修改模板</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-put">PUT</span>
+          <span class="path">/api/v1/prompt-templates/{id}</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>请求体同「新建模板」（<code>name</code>/<code>content</code>）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-prompt-delete">
+      <p class="eyebrow">Prompt 模板</p>
+      <h2>删除模板</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-delete">DELETE</span>
+          <span class="path">/api/v1/prompt-templates/{id}</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>删除后不可恢复。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-memory-list">
+      <p class="eyebrow">长期记忆</p>
+      <h2>列出记忆</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-get">GET</span>
+          <span class="path">/api/v1/memories</span>
+        </div>
+        <div class="endpoint-body">
+          <p>列出这把密钥所属用户的全部<a href="../ai/long-term-memory.md" style="color: var(--accent-ink);">长期记忆</a>。是「我的记忆」抽屉的对外等价物。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 200</div>
+            <pre><code>{ <span class="k">"memories"</span>: [{ <span class="k">"id"</span>: <span class="s">"mem-abc123"</span>, <span class="k">"memory"</span>: <span class="s">"偏好用中文回复"</span> }] }</code></pre>
+          </div>
+          <p style="font-size: 13px;">原样透传 mem0 的返回形状。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-memory-add">
+      <p class="eyebrow">长期记忆</p>
+      <h2>补写记忆</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/memories</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{ <span class="k">"text"</span>: <span class="s">"偏好简洁的代码风格，不要多余注释"</span>, <span class="k">"verbatim"</span>: <span class="n">false</span> }</code></pre>
+          </div>
+          <table class="params">
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+            <tr><td>text</td><td>是</td><td>非空，≤2000 字符</td></tr>
+            <tr><td>verbatim</td><td>否</td><td>默认 <code>false</code>（AI 提炼成简洁事实再入库）；<code>true</code> 原样保存不提炼，同界面「原样保存」开关</td></tr>
+          </table>
+          <table class="params">
+            <tr><th>状态码</th><th>触发条件</th></tr>
+            <tr><td>409</td><td><code>{"code": "MEMORY_UNAVAILABLE"}</code> —— 系统未配置/未启用记忆功能（缺 AI API Key 或开关关闭）</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-memory-delete">
+      <p class="eyebrow">长期记忆</p>
+      <h2>删除记忆</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-delete">DELETE</span>
+          <span class="path">/api/v1/memories/{id}</span>
+          <span class="flags"><span class="flag write">需绑定密钥</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p><code>id</code> 是不透明的 mem0 UUID。服务端先校验这条记忆确实属于这把密钥所属的用户，目标 id 不在该用户名下一律 404——不能靠猜测/枚举删除不属于自己的记忆。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="limits">
+      <p class="eyebrow">Limits</p>
+      <h2>限制</h2>
+      <div class="scroll-x">
+        <table class="endpoint-index">
+          <tr><th>项目</th><th>上限</th></tr>
+          <tr><td class="path">单批文件数</td><td>50 个</td></tr>
+          <tr><td class="path">单个文件大小</td><td>20 MB</td></tr>
+          <tr><td class="path">/uploads 单次总大小</td><td>100 MB（请求体含编码开销超 101 MB 直接 413）</td></tr>
+          <tr><td class="path">prompt 长度</td><td>20000 字符（单会话/批任务/continue 均适用）</td></tr>
+          <tr><td class="path">memories.text 长度</td><td>2000 字符</td></tr>
+          <tr><td class="path">列表分页 pageSize</td><td>100（超过按 100 处理）</td></tr>
+          <tr><td class="path">其余 JSON 接口单次请求体</td><td>1 MB（超出直接 413）</td></tr>
+          <tr><td class="path">暂存文件保留时间</td><td>24 小时（按目录最后修改时间，与是否已创建批任务无关）</td></tr>
+          <tr><td class="path">/import 单次路径数</td><td>100 个</td></tr>
+          <tr><td class="path">/messages 返回条数</td><td>最多 500 条（超出 truncated: true）</td></tr>
+          <tr><td class="path">完成回调超时/重试</td><td>30 秒超时，失败重试 3 次，间隔 1 秒</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="errors">
+      <p class="eyebrow">Error handling</p>
+      <h2>错误处理</h2>
+
+      <h3 class="sub">统一错误格式</h3>
+      <div class="code">
+        <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>error shape</div>
+        <pre><code>{ <span class="k">"error"</span>: <span class="s">"错误描述信息"</span> }</code></pre>
+      </div>
+      <div class="callout warn">
+        <p><strong>本页描述的六类接口 error 文案一律是中文</strong>，与<a href="./open-api-reference.html" style="color: var(--accent-ink);">数据集合接口</a>的英文 error 约定不同（唯一例外：数据集合接口自身在文件类型校验失败时也会返回中文提示）。</p>
+      </div>
+
+      <h3 class="sub">通用错误码</h3>
+      <div class="scroll-x">
+        <table class="endpoint-index">
+          <tr><th>状态码</th><th>触发条件</th></tr>
+          <tr><td>401</td><td>请求头缺少 <code>X-API-Key</code> / 密钥不存在 / 密钥已停用</td></tr>
+          <tr><td>403</td><td>密钥未绑定用户（存量密钥），见「认证与密钥绑定」</td></tr>
+          <tr><td>404</td><td>目标资源不存在，或存在但不属于本密钥（不区分两种情况，不泄漏存在性）</td></tr>
+          <tr><td>409</td><td>对处于非终态的资源调用只允许终态操作的端点（<code>retry-failed</code>/<code>continue</code>/<code>reexecute</code>）</td></tr>
+          <tr><td>411</td><td>请求使用分块传输、没有 <code>Content-Length</code></td></tr>
+          <tr><td>413</td><td>请求体超过上限（<code>/uploads</code> 101 MB，其余 JSON 1 MB）——在读取/解析请求体之前生效</td></tr>
+          <tr><td>502</td><td>OpenCode 运行时不可用（<code>/agents</code>、<code>/models</code>）</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="faq">
+      <p class="eyebrow">FAQ</p>
+      <h2>常见问题</h2>
+
+      <details class="faq">
+        <summary>用旧密钥调用一直返回 403，什么原因？</summary>
+        <div class="faq-body">本功能上线前创建的密钥没有绑定用户，去密钥管理页新建一个密钥即可，详见「认证与密钥绑定」。</div>
+      </details>
+
+      <details class="faq">
+        <summary>批任务和单会话该选哪个？</summary>
+        <div class="faq-body">只是「给一句 prompt 要一个答案」、不需要文件，用单会话；需要处理一批文件、需要追加/继续对话/重试/删除等完整生命周期管理，用批任务（批任务也支持只传一个文件）。</div>
+      </details>
+
+      <details class="faq">
+        <summary>批任务一直卡在 running 不结束怎么办？</summary>
+        <div class="faq-body">先确认没有子任务卡在 pending（说明后台 worker 尚未处理到）；长时间无进展可联系管理员核实 AI 会话是否异常。批任务本身没有暴露给外部 API 的超时自动失败机制。</div>
+      </details>
+
+      <details class="faq">
+        <summary>除了轮询，有没有办法在批任务完成时主动收到通知？</summary>
+        <div class="faq-body">有。创建批任务或事后 PATCH 时设置 callbackUrl，批任务进入终态时会收到一次 HMAC 签名的 HTTP 回调，见「完成回调（Webhook）」。回调是尽力而为，建议同时保留轮询作为兜底。</div>
+      </details>
+
+      <details class="faq">
+        <summary>continue 和 retry-failed 有什么区别？</summary>
+        <div class="faq-body">retry-failed 只能重试失败的子任务，新建一个 AI 会话并用原始 prompt 重跑，历史不保留。continue 可以对已完成或失败的子会话追加新 prompt，复用原有 AI 会话，历史完整保留。简单说：retry-failed 是「重来」，continue 是「接着做」。</div>
+      </details>
+
+      <details class="faq">
+        <summary>通过 API 创建的批任务，登录界面的账号本人能不能看到、能不能删？</summary>
+        <div class="faq-body">能看到，也能删——而且能重试、能改 agent/model、能追加文件、能重新执行单条子任务，权限和界面手工创建的批任务完全一样。批任务的密钥隔离只挡「别的密钥/别的账号」，挡不住密钥所绑定账号本人在界面上的操作。</div>
+      </details>
+
+      <details class="faq">
+        <summary>行操作的 actionId、扫描任务的 taskId 怎么获取？</summary>
+        <div class="faq-body">这两套接口都不提供发现/列表端点（AI 定时任务的列表端点除外），需要线下从配置它们的管理员那里获取，和批任务需要先知道 batchId 是同一类约定——本页只覆盖"已知 id 之后如何调用"。</div>
+      </details>
+
+      <details class="faq">
+        <summary>AI 类型的行操作，状态字段该怎么配？</summary>
+        <div class="faq-body">不需要配。AI 类型行操作的执行状态与结果回写，一律使用所绑「AI 扫描任务」自己的状态字段配置——终态回写由扫描任务的引擎完成，行操作层面不重复设置，详见 row-actions.md。</div>
+      </details>
+
+      <details class="faq">
+        <summary>记忆的 memory_id 能自己编吗？</summary>
+        <div class="faq-body">不能。memory_id 是 mem0 生成的不透明 UUID，删除时服务端会先校验这条记忆确实属于当前密钥所属的用户，猜测/枚举他人的 id 一律返回 404。</div>
+      </details>
+
+      <details class="faq">
+        <summary>API Key 泄露了怎么办？</summary>
+        <div class="faq-body">立即登录系统，在「Open API」管理页面停用该密钥，然后创建一个新密钥重新分发给外部系统——记得新密钥同样需要走一遍「已绑定用户」的新建流程。</div>
+      </details>
+    </section>
+
+    <p class="footnote">依据 <code>docs/user-guide/integration/ai-batch-api.md</code>、<code>ai-session-api.md</code>、<code>data/row-actions.md</code> §11、<code>ai/scan-tasks.md</code> §10、<code>ai/batch-tasks.md</code>「Prompt 模板」节、<code>ai/long-term-memory.md</code>「对外 API」节整理生成，为完整清单的浓缩版本；详尽的注意事项、隔离说明、完整 FAQ 请查阅对应 Markdown 源文档。接口行为以后端实现为准。</p>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var toggle = document.getElementById("navToggle");
+    var sidebar = document.getElementById("sidebar");
+    if (toggle && sidebar) {
+      toggle.addEventListener("click", function () {
+        sidebar.classList.toggle("open");
+      });
+    }
+
+    // copy buttons on code panels
+    document.querySelectorAll(".code").forEach(function (panel) {
+      var bar = panel.querySelector(".code-bar");
+      var codeEl = panel.querySelector("pre code");
+      if (!bar || !codeEl) return;
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-btn";
+      btn.textContent = "复制";
+      btn.addEventListener("click", function () {
+        var text = codeEl.textContent;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            btn.textContent = "已复制";
+            setTimeout(function () { btn.textContent = "复制"; }, 1400);
+          }).catch(function () {});
+        }
+      });
+      bar.appendChild(btn);
+    });
+
+    // scroll-spy active nav
+    var links = Array.prototype.slice.call(document.querySelectorAll(".nav-group a"));
+    var map = {};
+    links.forEach(function (a) {
+      var href = a.getAttribute("href");
+      if (!href || href.charAt(0) !== "#") return;
+      var id = href.slice(1);
+      var el = document.getElementById(id);
+      if (el) map[id] = a;
+    });
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        var link = map[entry.target.id];
+        if (!link) return;
+        if (entry.isIntersecting) {
+          links.forEach(function (l) { l.classList.remove("active"); });
+          link.classList.add("active");
+        }
+      });
+    }, { rootMargin: "-10% 0px -75% 0px", threshold: 0 });
+    Object.keys(map).forEach(function (id) {
+      observer.observe(document.getElementById(id));
+    });
+  })();
+</script>
+</body>
+</html>
