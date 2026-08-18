@@ -4,10 +4,16 @@
       <template #header>
         <div class="card-header">
           <h2>Open API 密钥管理</h2>
-          <el-button type="primary" @click="handleAdd">
-            <el-icon><Plus /></el-icon>
-            创建密钥
-          </el-button>
+          <div class="header-actions">
+            <el-button tag="a" href="/docs/open-api-reference.html" target="_blank">
+              <el-icon><Document /></el-icon>
+              查看接口文档
+            </el-button>
+            <el-button type="primary" @click="handleAdd">
+              <el-icon><Plus /></el-icon>
+              创建密钥
+            </el-button>
+          </div>
         </div>
       </template>
 
@@ -21,6 +27,7 @@
           外部系统通过 <strong>X-API-Key</strong> 请求头携带密钥访问
           <code>/api/v1/collections</code> 等接口读取和写入数据。
           需在「页面配置」中开启 Open API 开关的数据页才可被访问，开启「允许写入」后支持新增和修改。
+          完整接口说明见上方「查看接口文档」。
         </template>
       </el-alert>
 
@@ -117,7 +124,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Document } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { getApiKeyList, createApiKey, toggleApiKey, deleteApiKey } from '@/api/apiKey'
 import { ConfirmDialog } from '@/components/common'
@@ -245,6 +252,11 @@ onMounted(() => {
     font-size: 18px;
     font-weight: 600;
     color: #303133;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
   }
 }
 </style>

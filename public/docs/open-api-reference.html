@@ -755,6 +755,7 @@
     <div class="nav-group">
       <p class="nav-group-label">写入接口</p>
       <a href="#ep-create">新增记录</a>
+      <a href="#ep-batch-create">批量新增记录</a>
       <a href="#ep-update">修改记录</a>
     </div>
 
@@ -782,7 +783,7 @@
 
       <div class="hero-facts">
         <div class="fact-chip"><span class="k">Base&nbsp;URL</span><span class="v">http://&lt;host&gt;:&lt;port&gt;/api/v1</span></div>
-        <div class="fact-chip"><span class="k">开发环境</span><span class="v">http://localhost:7001/api/v1</span></div>
+        <div class="fact-chip"><span class="k">生产入口</span><span class="v">http://localhost:8080/api/v1</span></div>
         <div class="fact-chip"><span class="k">认证头</span><span class="v">X-API-Key: cm_xxx</span></div>
         <div class="fact-chip"><span class="k">数据格式</span><span class="v">application/json</span></div>
       </div>
@@ -1074,8 +1075,55 @@
       </div>
     </section>
 
-    <section id="ep-update">
+    <section id="ep-batch-create">
       <p class="eyebrow">5.7</p>
+      <h2>批量新增记录</h2>
+      <div class="endpoint">
+        <div class="endpoint-head">
+          <span class="m m-post">POST</span>
+          <span class="path">/api/v1/collections/{collection}/batch</span>
+          <span class="flags"><span class="flag write">需允许写入</span></span>
+        </div>
+        <div class="endpoint-body">
+          <p>一次请求创建多条记录（单次最多 1000 条）。<strong>create-only，不做 upsert</strong>——批次里任何一条 <code>id</code> 已存在都算该条失败，不会更新已有记录。</p>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>request body</div>
+            <pre><code>{
+  <span class="k">"records"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"prod-001"</span>, <span class="k">"name"</span>: <span class="s">"产品A"</span> },
+    { <span class="k">"name"</span>: <span class="s">"产品B"</span> }
+  ],
+  <span class="k">"options"</span>: { <span class="k">"continueOnError"</span>: <span class="s">true</span> }
+}</code></pre>
+          </div>
+          <div class="code">
+            <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
+            <pre><code>{
+  <span class="k">"data"</span>: [ { <span class="k">"id"</span>: <span class="s">"prod-001"</span>, ... } ],
+  <span class="k">"created"</span>: <span class="n">2</span>,
+  <span class="k">"failed"</span>: <span class="n">0</span>
+}</code></pre>
+          </div>
+          <p style="font-size: 13px; margin-top: -8px;"><code>options.continueOnError</code> 默认 <code>false</code>：任何一条记录失败就整批 400、不写入；传 <code>true</code> 则跳过失败记录，成功的照常写入，响应体 <code>errors</code> 数组列出失败详情。</p>
+          <table class="params">
+            <tr><th>状态码</th><th>error</th><th>触发条件</th></tr>
+            <tr><td>400</td><td><code>records is required</code></td><td><code>records</code> 为空数组或缺失</td></tr>
+            <tr><td>400</td><td><code>Batch size exceeds maximum of 1000 records</code></td><td>单次请求记录数超过 1000</td></tr>
+            <tr><td>400</td><td><code>Validation failed for one or more records</code></td><td><code>continueOnError=false</code> 且至少一条记录校验失败</td></tr>
+            <tr><td>403</td><td><code>Collection is read-only</code></td><td>集合未开启「允许写入」</td></tr>
+          </table>
+          <p style="font-size: 13px; margin-top: 12px;">单条记录失败时，<code>errors[].error</code> 可能是以下两种不同的 ID 冲突之一，不要混淆：</p>
+          <table class="params">
+            <tr><th>errors[].error</th><th>触发条件</th></tr>
+            <tr><td><code>Record ID already exists</code></td><td>该记录的 <code>id</code> 已存在于数据库中——<code>id</code> 在同一分支下<strong>跨集合全局唯一</strong>，即便冲突的记录属于另一个集合也会命中此错误</td></tr>
+            <tr><td><code>Duplicate ID in batch</code></td><td>该 <code>id</code> 是本次请求 <code>records</code> 数组内部重复出现的值，与数据库已有数据无关</td></tr>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="ep-update">
+      <p class="eyebrow">5.8</p>
       <h2>修改记录</h2>
       <div class="endpoint">
         <div class="endpoint-head">
@@ -1100,7 +1148,7 @@
     </section>
 
     <section id="files">
-      <p class="eyebrow">5.8 · 深入讲解</p>
+      <p class="eyebrow">5.9 · 深入讲解</p>
       <h2>文件上传 &amp; 文件字段录入</h2>
       <p class="section-desc">
         <code>file</code> / <code>image</code> 类型的字段在数据库里存的不是二进制内容，而是一个<strong>文件对象数组</strong>。
@@ -1139,6 +1187,7 @@
             <tr><th>表单字段</th><th>必填</th><th>说明</th></tr>
             <tr><td>file</td><td>是</td><td>要上传的文件本体</td></tr>
             <tr><td>collection</td><td>是</td><td>目标数据页标识，须为「公开且允许写入」的集合</td></tr>
+            <tr><td>fieldName</td><td>否</td><td>目标 file/image 字段名。传了会按该字段在管理端「字段配置」里设置的「允许的文件类型」做校验（与网页端上传同一套约束），类型不符返回 400；不传则不限制类型（向后兼容）</td></tr>
           </table>
 
           <div class="code">
@@ -1169,6 +1218,7 @@ curl -s -X POST \
             <tr><td>400</td><td><code>collection is required</code></td><td>表单缺少 <code>collection</code> 字段</td></tr>
             <tr><td>404</td><td><code>Collection not found or not public</code></td><td>目标集合非公开</td></tr>
             <tr><td>403</td><td><code>Collection is read-only</code></td><td>目标集合未开启「允许写入」</td></tr>
+            <tr><td>400</td><td><code>不支持 .xxx 类型的文件，仅支持 ...</code></td><td>传了 <code>fieldName</code> 且文件扩展名不在该字段配置的「允许的文件类型」内</td></tr>
           </table>
         </div>
       </div>
@@ -1242,7 +1292,7 @@ curl -s -X POST \
         <pre><code><span class="k">import</span> requests
 
 API_KEY = <span class="s">"cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"</span>
-BASE_URL = <span class="s">"http://localhost:7001/api/v1"</span>
+BASE_URL = <span class="s">"http://localhost:8080/api/v1"</span>
 HEADERS = {<span class="s">"X-API-Key"</span>: API_KEY}
 
 
@@ -1294,7 +1344,7 @@ print(<span class="k">f</span><span class="s">"新增成功: {record['id']}"</sp
     </section>
 
     <section id="ep-download">
-      <p class="eyebrow">5.9</p>
+      <p class="eyebrow">5.10</p>
       <h2>下载文件</h2>
       <p class="section-desc">查询记录时，每个文件对象都会附带一个 <code>apiUrl</code> —— 这才是 Open API 应该用来下载的地址（区别于内部 <code>url</code>，后者走网页端 JWT，外部系统调用不了）。</p>
 
@@ -1355,7 +1405,7 @@ print(<span class="k">f</span><span class="s">"新增成功: {record['id']}"</sp
         <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>bash</div>
         <pre><code><span class="c"># 环境变量</span>
 API_KEY=<span class="s">"cm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2"</span>
-BASE_URL=<span class="s">"http://localhost:7001/api/v1"</span>
+BASE_URL=<span class="s">"http://localhost:8080/api/v1"</span>
 
 <span class="c"># 1. 查看所有已开放的集合</span>
 curl -s -H <span class="s">"X-API-Key: $API_KEY"</span> <span class="s">"$BASE_URL/collections"</span> | jq
