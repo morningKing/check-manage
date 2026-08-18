@@ -746,6 +746,15 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(100)
   REFERENCES api_keys(id) ON DELETE SET NULL;
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS agent TEXT;
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS model TEXT;
+-- Optional file attachments for a standalone session (POST /v1/ai-sessions
+-- body.files). JSONB array of {"name","path"} — same shape as
+-- ai_chat_batches' per-child files, staged via the same POST
+-- /v1/ai-batches/uploads endpoint (no dedicated upload endpoint for
+-- sessions). NULL when the session has no attachments. batch_engine._run_one
+-- copies every path into the session's uploads/ (see _prepare_workspace's
+-- str|list[str] handling) instead of the single batch_input_file column,
+-- since one session can carry more than one file.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS input_files JSONB;
 -- Admin session list index: covers ORDER BY created_at DESC with optional
 -- status/source_type filters. Partial index on status keeps it small.
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list

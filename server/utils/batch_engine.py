@@ -178,53 +178,65 @@ def _workspace_root() -> str:
 
 
 def _prepare_workspace(user_id: str, session_id: str,
-                       staged_file_path: str) -> str:
-    """Create the per-session workspace and copy the staged file into uploads/.
+                       staged_file_path) -> str:
+    """Create the per-session workspace and copy the staged input(s) into uploads/.
+
+    `staged_file_path` accepts either a single string (existing callers:
+    batch children pass one file path, scan-task children pass one context
+    directory path) or a list of path strings (standalone /v1/ai-sessions
+    children with 2+ files in `body.files` — see open_api_ai_sessions.py).
+    A single string is internally treated as a one-element list, so existing
+    callers' behavior is unchanged byte-for-byte; the list form just repeats
+    the same per-path copy for each entry, letting one session pull in files
+    staged across multiple separate /uploads calls (no requirement that they
+    share a parent staging directory).
 
     Returns the absolute workspace path.  Pure side-effect — no DB writes.
     Can be monkeypatched in tests:
         monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
 
-    Raises FileNotFoundError if the staged input is gone (e.g. the staging dir
+    Raises FileNotFoundError if a staged input is gone (e.g. the staging dir
     was swept after its 24h TTL, or the batch row outlived its files). Silently
     producing an EMPTY uploads/ would be worse: the prompt still tells the agent
     to read uploads/<name> (see _with_input_hint), so the child would "succeed"
     with garbage output. Raising here makes _run_one mark the child failed.
 
-    `staged_file_path` empty/falsy (standalone /v1/ai-sessions children, which
-    have no staged file at all — see open_api_ai_sessions.py) short-circuits to
-    a bare empty uploads/. Without this, `Path(root) / ''` evaluates to `root`
-    itself, which exists and is a dir, so the code below would recursively
-    copy the ENTIRE workspace root (every user's every session) into this
-    session's own uploads/ — a real bug, not a graceful no-file case.
+    `staged_file_path` empty/falsy (standalone /v1/ai-sessions children with no
+    attachments at all — see open_api_ai_sessions.py) short-circuits to a bare
+    empty uploads/. Without this, `Path(root) / ''` evaluates to `root` itself,
+    which exists and is a dir, so the code below would recursively copy the
+    ENTIRE workspace root (every user's every session) into this session's own
+    uploads/ — a real bug, not a graceful no-file case.
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
     if not staged_file_path:
         return ws
-    src = Path(_workspace_root()) / staged_file_path
-    if not src.exists():
-        raise FileNotFoundError(
-            f'输入文件不存在或已被清理: {staged_file_path}')
+    paths = staged_file_path if isinstance(staged_file_path, list) else [staged_file_path]
+    root = Path(_workspace_root())
     up = Path(ws) / 'uploads'
     up.mkdir(parents=True, exist_ok=True)
-    # On Windows, copying a just-created staging dir can intermittently raise
-    # PermissionError (antivirus / handle-settling contention). Retry a few times.
-    last_err = None
-    for _attempt in range(3):
-        try:
-            if src.is_dir():
-                # scan-task context directory: copy its whole contents into uploads/
-                shutil.copytree(str(src), str(up), dirs_exist_ok=True)
-            else:
-                dst = up / Path(staged_file_path).name
-                shutil.copy2(str(src), str(dst))
-            last_err = None
-            break
-        except (PermissionError, OSError) as e:
-            last_err = e
-            time.sleep(0.3)
-    if last_err is not None:
-        raise last_err
+    for rel in paths:
+        src = root / rel
+        if not src.exists():
+            raise FileNotFoundError(f'输入文件不存在或已被清理: {rel}')
+        # On Windows, copying a just-created staging dir can intermittently raise
+        # PermissionError (antivirus / handle-settling contention). Retry a few times.
+        last_err = None
+        for _attempt in range(3):
+            try:
+                if src.is_dir():
+                    # scan-task context directory: copy its whole contents into uploads/
+                    shutil.copytree(str(src), str(up), dirs_exist_ok=True)
+                else:
+                    dst = up / Path(rel).name
+                    shutil.copy2(str(src), str(dst))
+                last_err = None
+                break
+            except (PermissionError, OSError) as e:
+                last_err = e
+                time.sleep(0.3)
+        if last_err is not None:
+            raise last_err
     return ws
 
 
@@ -569,12 +581,24 @@ class BatchWorker:
 
     @staticmethod
     def _with_input_hint(prompt: str, session_row) -> str:
-        """Prepend a hint telling the agent where its uploaded input file is, so it
-        reads it instead of asking for a path. Scan-task children already carry their
-        own context preamble (ai_scan_engine.assemble_prompt), so they're left as-is;
-        children without an input file are unchanged too."""
+        """Prepend a hint telling the agent where its uploaded input file(s) are, so
+        it reads them instead of asking for a path. Scan-task children already carry
+        their own context preamble (ai_scan_engine.assemble_prompt), so they're left
+        as-is; children without an input file are unchanged too.
+
+        Standalone /v1/ai-sessions children may carry multiple files (input_files,
+        JSONB array) instead of the single-file batch_input_file column — phrased
+        without naming a specific file when there's more than one."""
         if session_row.get('scan_task_id'):
             return prompt
+        input_files = session_row.get('input_files') or []
+        if input_files:
+            if len(input_files) == 1:
+                name = os.path.basename(str(input_files[0]['path']).replace('\\', '/'))
+                return (f'本任务的输入文件已放在工作区 uploads/{name}，'
+                        f'请先读取该文件的内容，再完成下面的要求：\n\n{prompt}')
+            return (f'本任务的输入文件已放在工作区 uploads/ 目录下（共 {len(input_files)} 个），'
+                    f'请先读取这些文件的内容，再完成下面的要求：\n\n{prompt}')
         rel = session_row.get('batch_input_file') or ''
         name = os.path.basename(rel.replace('\\', '/'))
         if not name:
@@ -647,7 +671,11 @@ class BatchWorker:
                     return
                 oc_session_id = session_row['opencode_session_id']
             else:
-                ws = _prepare_workspace(user_id, sid, session_row['batch_input_file'] or '')
+                if session_row.get('input_files'):
+                    staged = [f['path'] for f in session_row['input_files']]
+                else:
+                    staged = session_row.get('batch_input_file') or ''
+                ws = _prepare_workspace(user_id, sid, staged)
                 # Provision project-level agents/skills BEFORE the session starts —
                 # OpenCode binds the agent at prompt time, so the repo must be in
                 # .opencode/ first. Degrades gracefully: a clone failure doesn't fail

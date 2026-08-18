@@ -7,7 +7,7 @@
 接口行为的权威说明分散在几份文档里，本客户端只是对其中接口的薄封装，不引入额外行为：
 - 数据集合/分支/文件：[`docs/user-guide/integration/open-api.md`](../docs/user-guide/integration/open-api.md)
 - AI 批任务：[`docs/user-guide/integration/ai-batch-api.md`](../docs/user-guide/integration/ai-batch-api.md)
-- AI 单会话（无需文件）：[`docs/user-guide/integration/ai-session-api.md`](../docs/user-guide/integration/ai-session-api.md)
+- AI 单会话（可选带文件）：[`docs/user-guide/integration/ai-session-api.md`](../docs/user-guide/integration/ai-session-api.md)
 - Row Actions 对外触发：[`docs/user-guide/data/row-actions.md`](../docs/user-guide/data/row-actions.md) §11
 - AI 定时扫描任务：[`docs/user-guide/ai/scan-tasks.md`](../docs/user-guide/ai/scan-tasks.md) §10
 - Prompt 模板对外 API：[`docs/user-guide/ai/batch-tasks.md`](../docs/user-guide/ai/batch-tasks.md)「Prompt 模板」节
@@ -152,13 +152,19 @@ if detail["status"] in ("completed", "partial", "failed"):
     results = client.get_batch_results(batch["batchId"])["results"]
 ```
 
-**AI 单会话**（不需要文件，给一句 prompt 要一个答案）：
+**AI 单会话**（一句 prompt 要一个答案，可选带上几个文件——全部读进同一个会话，不像批任务那样按文件拆分）：
 
 ```python
 session = client.create_ai_session("帮我用三句话总结一下敏捷开发的核心理念。")
 detail = client.get_ai_session(session["sessionId"])
 if detail["status"] in ("completed", "failed"):
     print(detail["output"] or detail["error"])
+
+# 带文件：复用批任务的上传接口暂存，再传给单会话
+uploaded = client.upload_batch_files(["./report1.pdf", "./report2.pdf"])
+session = client.create_ai_session(
+    "请总结这两份报告的共同风险点。", files=uploaded["files"],
+)
 ```
 
 **Row Actions 对外触发**（触发页面上已配置好的行操作按钮）：

@@ -27,7 +27,7 @@ def _row(**overrides):
     r = {
         'id': 'sess-1', 'title': '新会话', 'status': 'pending',
         'agent': None, 'model': None, 'createdAt': None, 'lastActiveAt': None,
-        'output': None, 'error': None,
+        'output': None, 'error': None, 'files': [],
     }
     r.update(overrides)
     return r
@@ -65,7 +65,7 @@ def test_create_success_notifies_worker_and_returns_pending(client, mock_conn, m
     assert cs.call_args[0][0] == 'user-42'
     assert cs.call_args[1] == {
         'prompt': '帮我写一句问候语', 'agent': 'build', 'model': 'm1',
-        'title': '打招呼', 'api_key_id': 'ak-1',
+        'title': '打招呼', 'api_key_id': 'ak-1', 'files': None,
     }
     gw.return_value.notify.assert_called_once()
 
@@ -81,6 +81,54 @@ def test_create_omits_optional_fields_when_unset(client, mock_conn, mock_cursor)
     assert cs.call_args[1]['agent'] is None
     assert cs.call_args[1]['model'] is None
     assert cs.call_args[1]['title'] is None
+
+
+def test_create_rejects_non_list_files(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_ai_sessions._current_key', return_value=_key()):
+        resp = client.post(BASE, headers=HDR, json={'prompt': 'hi', 'files': 'not-a-list'})
+    assert resp.status_code == 400
+
+
+def test_create_rejects_too_many_files(client, mock_conn, mock_cursor):
+    from routes.open_api_ai_sessions import MAX_FILES_PER_BATCH
+    _auth_passes(mock_cursor)
+    files = [{'name': f'f{i}.txt', 'path': f'batch-staging/user-42/x/f{i}.txt'}
+             for i in range(MAX_FILES_PER_BATCH + 1)]
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_ai_sessions._current_key', return_value=_key()):
+        resp = client.post(BASE, headers=HDR, json={'prompt': 'hi', 'files': files})
+    assert resp.status_code == 400
+
+
+def test_create_validates_files_and_propagates_error(client, mock_conn, mock_cursor):
+    """files 的形状/归属/存在性校验复用 open_api_batches._validate_files——不重
+    复实现一遍，一处改动两处生效。"""
+    _auth_passes(mock_cursor)
+    files = [{'name': 'report.pdf', 'path': 'batch-staging/user-42/x/report.pdf'}]
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_ai_sessions._current_key', return_value=_key()), \
+         patch('routes.open_api_ai_sessions._validate_files',
+               return_value=({'error': '文件路径无效'}, 400)) as vf:
+        resp = client.post(BASE, headers=HDR, json={'prompt': 'hi', 'files': files})
+    vf.assert_called_once_with(files, 'user-42')
+    assert resp.status_code == 400
+    assert resp.get_json()['error'] == '文件路径无效'
+
+
+def test_create_passes_validated_files_to_create_session(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    files = [{'name': 'report.pdf', 'path': 'batch-staging/user-42/x/report.pdf'}]
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_ai_sessions._current_key', return_value=_key()), \
+         patch('routes.open_api_ai_sessions._validate_files', return_value=None), \
+         patch('routes.open_api_ai_sessions.create_session',
+               return_value={'id': 'sess-1', 'status': 'pending'}) as cs, \
+         patch('routes.open_api_ai_sessions.get_worker'):
+        resp = client.post(BASE, headers=HDR, json={'prompt': 'hi', 'files': files})
+    assert resp.status_code == 201
+    assert cs.call_args[1]['files'] == files
 
 
 def test_detail_not_found_is_404(client, mock_conn, mock_cursor):
@@ -130,6 +178,18 @@ def test_detail_failed_returns_error(client, mock_conn, mock_cursor):
     assert body['status'] == 'failed'
     assert 'Agent' in body['error']
     assert body['output'] is None
+
+
+def test_detail_returns_attached_files(client, mock_conn, mock_cursor):
+    _auth_passes(mock_cursor)
+    row = _row(status='completed', output='已读取两份报告。',
+              files=[{'name': 'report1.pdf'}, {'name': 'report2.pdf'}])
+    with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
+         patch('routes.open_api_ai_sessions._current_key', return_value=_key()), \
+         patch('routes.open_api_ai_sessions.get_session_for_owner', return_value=row):
+        resp = client.get(f'{BASE}/sess-1', headers=HDR)
+    body = resp.get_json()
+    assert body['files'] == [{'name': 'report1.pdf'}, {'name': 'report2.pdf'}]
 
 
 def test_detail_scoped_by_owner_and_api_key(client, mock_conn, mock_cursor):

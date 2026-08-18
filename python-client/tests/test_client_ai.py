@@ -340,6 +340,26 @@ def test_create_ai_session_includes_optional_fields_when_given():
     client.create_ai_session("hi", agent="build", model="m1", title="打招呼")
 
 
+def test_create_ai_session_includes_files_when_given():
+    files = [{"name": "report1.pdf", "path": "batch-staging/u/x/report1.pdf"}]
+
+    def fake_request(method, url, **kwargs):
+        assert kwargs["json"] == {"prompt": "总结一下", "files": files}
+        return FakeResponse(201, {"sessionId": "sess-1", "status": "pending"})
+
+    client, _ = make_client(fake_request)
+    client.create_ai_session("总结一下", files=files)
+
+
+def test_create_ai_session_omits_files_key_when_not_given():
+    def fake_request(method, url, **kwargs):
+        assert "files" not in kwargs["json"]
+        return FakeResponse(201, {"sessionId": "sess-1", "status": "pending"})
+
+    client, _ = make_client(fake_request)
+    client.create_ai_session("hi")
+
+
 def test_create_ai_session_rejects_empty_prompt():
     def fake_request(method, url, **kwargs):
         return FakeResponse(400, {"error": "prompt 必填"})
@@ -368,12 +388,13 @@ def test_get_ai_session_completed_returns_output():
     def fake_request(method, url, **kwargs):
         return FakeResponse(200, {
             "sessionId": "sess-1", "status": "completed", "output": "你好！",
-            "error": None,
+            "error": None, "files": [{"name": "report1.pdf"}],
         })
 
     client, _ = make_client(fake_request)
     result = client.get_ai_session("sess-1")
     assert result["output"] == "你好！"
+    assert result["files"] == [{"name": "report1.pdf"}]
 
 
 def test_get_ai_session_not_found():

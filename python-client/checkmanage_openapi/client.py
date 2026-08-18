@@ -638,10 +638,12 @@ class OpenApiClient:
     # ---------------------------------------------------------------
     # AI 单会话（/v1/ai-sessions，对照
     # docs/user-guide/integration/ai-session-api.md）——批任务要求至少一个
-    # 文件；单会话是"只给一句 prompt，不需要文件"的轻量版，跟批任务共用同一套
-    # 执行引擎与并发上限，只是没有 list/delete/continue/retry，只有创建和
-    # 查状态两个端点。agent/model 的可选值发现复用 list_batch_agents()/
-    # list_batch_models()，不重复建端点。
+    # 文件、且每个文件拆一个子会话；单会话是"一句 prompt（可选带上几个文件）
+    # 要一个综合答案"的轻量版，跟批任务共用同一套执行引擎、并发上限、以及
+    # upload_batch_files() 这同一个上传接口（没有专属上传端点），只是所有
+    # 文件进同一个会话、不拆分子任务，也没有 list/delete/continue/retry，
+    # 只有创建和查状态两个端点。agent/model 的可选值发现复用
+    # list_batch_agents()/list_batch_models()，不重复建端点。
     # ---------------------------------------------------------------
 
     def create_ai_session(
@@ -651,9 +653,14 @@ class OpenApiClient:
         agent: Optional[str] = None,
         model: Optional[str] = None,
         title: Optional[str] = None,
+        files: Optional[list] = None,
     ) -> dict:
         """创建一个单会话。立即返回 pending，真正执行是异步的（跟批任务同一个
         worker），用 get_ai_session() 轮询直到进入终态。返回 {sessionId, status}。
+
+        files（可选）是 upload_batch_files() 返回的 files 数组（或其子集），
+        每项需含 name 与 path；最多 50 个，不要求来自同一次上传调用。留空 =
+        纯文本会话；随附的文件全部进入这一个 AI 会话供 prompt 读取。
         """
         body = {"prompt": prompt}
         if agent is not None:
@@ -662,6 +669,8 @@ class OpenApiClient:
             body["model"] = model
         if title is not None:
             body["title"] = title
+        if files is not None:
+            body["files"] = files
         return self._request("POST", "/ai-sessions", json_body=body).json()
 
     def get_ai_session(self, session_id: str) -> dict:

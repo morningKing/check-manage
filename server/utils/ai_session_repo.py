@@ -8,6 +8,7 @@ queries the external API needs: create + owner-scoped read.
 """
 import uuid
 
+import psycopg2.extras
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
@@ -18,7 +19,8 @@ def create_session(user_id: str, *, prompt: str,
                    agent: str | None = None,
                    model: str | None = None,
                    title: str | None = None,
-                   api_key_id: str | None = None) -> dict:
+                   api_key_id: str | None = None,
+                   files: list[dict] | None = None) -> dict:
     """Insert a pending standalone session; the worker picks it up on its next
     dispatch tick.
 
@@ -26,15 +28,22 @@ def create_session(user_id: str, *, prompt: str,
     reads it on first claim (the `batch_id is None` branch) and clears it
     immediately, exactly like the existing "continue an existing session"
     flow already does with that same column.
+
+    `files` (optional list of {"name","path"}, already validated by the
+    route via open_api_batches._validate_files) is stored as-is in the
+    input_files JSONB column; batch_engine._run_one copies every path into
+    the session's uploads/ before sending the prompt.
     """
     sid = str(uuid.uuid4())
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 "INSERT INTO ai_chat_sessions "
-                "  (id, user_id, title, status, continue_prompt, agent, model, api_key_id) "
-                "VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s) RETURNING *",
-                (sid, user_id, title or '新会话', prompt, agent, model, api_key_id),
+                "  (id, user_id, title, status, continue_prompt, agent, model, "
+                "   api_key_id, input_files) "
+                "VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s, %s) RETURNING *",
+                (sid, user_id, title or '新会话', prompt, agent, model, api_key_id,
+                 psycopg2.extras.Json(files) if files else None),
             )
             row = dict(cur.fetchone())
         conn.commit()
@@ -53,7 +62,7 @@ def get_session_for_owner(session_id: str, user_id: str, api_key_id: str) -> dic
     """
     sql = """
         SELECT s.id, s.title, s.status, s.agent, s.model, s.error_message,
-               s.created_at, s.last_active_at,
+               s.created_at, s.last_active_at, s.input_files,
                (SELECT m.content FROM ai_chat_messages m
                  WHERE m.session_id = s.id AND m.role = 'assistant'
                  ORDER BY m.seq DESC LIMIT 1) AS content
@@ -78,4 +87,5 @@ def get_session_for_owner(session_id: str, user_id: str, api_key_id: str) -> dic
         'lastActiveAt': row['last_active_at'],
         'output': _text_from_content(row.get('content')) if completed else None,
         'error': row.get('error_message'),
+        'files': [{'name': f['name']} for f in (row.get('input_files') or [])],
     }

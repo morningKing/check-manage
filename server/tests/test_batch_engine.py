@@ -99,10 +99,15 @@ def test_claim_pending_respects_limit(user_id, db_conn):
 # with batch_id=NULL, api_key_id set, prompt stashed in continue_prompt.
 # ---------------------------------------------------------------------------
 
-def _seed_standalone_session(db_conn, user_id, *, prompt='hello', agent=None, model=None):
+def _seed_standalone_session(db_conn, user_id, *, prompt='hello', agent=None, model=None,
+                             files=None):
     """Insert a throwaway api_keys row + a pending, batch-less session.
     Returns (session_id, api_key_id); caller's `user_id` fixture cleans up the
-    session (WHERE user_id=...), but the api_keys row needs its own cleanup."""
+    session (WHERE user_id=...), but the api_keys row needs its own cleanup.
+
+    `files` (optional list of {"name","path"}) seeds input_files exactly like
+    open_api_ai_sessions.py::create() does after validation."""
+    import psycopg2.extras
     key_id = f'ak-test-{uuid.uuid4().hex[:8]}'
     sid = str(uuid.uuid4())
     with db_conn.cursor() as cur:
@@ -112,9 +117,11 @@ def _seed_standalone_session(db_conn, user_id, *, prompt='hello', agent=None, mo
         )
         cur.execute(
             "INSERT INTO ai_chat_sessions "
-            "  (id, user_id, status, batch_id, continue_prompt, agent, model, api_key_id) "
-            "VALUES (%s, %s, 'pending', NULL, %s, %s, %s, %s)",
-            (sid, user_id, prompt, agent, model, key_id),
+            "  (id, user_id, status, batch_id, continue_prompt, agent, model, "
+            "   api_key_id, input_files) "
+            "VALUES (%s, %s, 'pending', NULL, %s, %s, %s, %s, %s)",
+            (sid, user_id, prompt, agent, model, key_id,
+             psycopg2.extras.Json(files) if files else None),
         )
     db_conn.commit()
     return sid, key_id
@@ -141,6 +148,138 @@ def test_prepare_workspace_empty_staged_path_does_not_copy_workspace_root(tmp_pa
 
     uploads = list(Path(ws, 'uploads').iterdir()) if Path(ws, 'uploads').exists() else []
     assert uploads == []
+
+
+def test_prepare_workspace_accepts_list_of_paths(tmp_path, monkeypatch):
+    """staged_file_path as a list copies every entry into uploads/ — used by
+    standalone /v1/ai-sessions children with 2+ files (input_files), which
+    need not share a common parent staging directory."""
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    staging_a = root / 'batch-staging' / 'u1' / 'upload-a'
+    staging_a.mkdir(parents=True)
+    (staging_a / 'report1.pdf').write_text('report one')
+    staging_b = root / 'batch-staging' / 'u1' / 'upload-b'
+    staging_b.mkdir(parents=True)
+    (staging_b / 'report2.pdf').write_text('report two')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = eng._prepare_workspace('u1', 'sid-multi', [
+        'batch-staging/u1/upload-a/report1.pdf',
+        'batch-staging/u1/upload-b/report2.pdf',
+    ])
+
+    uploaded = sorted(p.name for p in Path(ws, 'uploads').iterdir())
+    assert uploaded == ['report1.pdf', 'report2.pdf']
+    assert Path(ws, 'uploads', 'report1.pdf').read_text() == 'report one'
+    assert Path(ws, 'uploads', 'report2.pdf').read_text() == 'report two'
+
+
+def test_prepare_workspace_single_element_list_matches_string_behavior(tmp_path, monkeypatch):
+    """A one-item list and the equivalent plain string produce the same
+    uploads/ contents — the list form is a pure generalization, not a
+    separate code path for existing single-file callers."""
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    staging = root / 'batch-staging' / 'u1' / 'upload-a'
+    staging.mkdir(parents=True)
+    (staging / 'report1.pdf').write_text('report one')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = eng._prepare_workspace('u1', 'sid-single', ['batch-staging/u1/upload-a/report1.pdf'])
+
+    assert [p.name for p in Path(ws, 'uploads').iterdir()] == ['report1.pdf']
+
+
+def test_prepare_workspace_list_raises_on_missing_entry(tmp_path, monkeypatch):
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    root.mkdir(parents=True)
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    with pytest.raises(FileNotFoundError):
+        eng._prepare_workspace('u1', 'sid-missing', ['batch-staging/u1/gone/x.pdf'])
+
+
+def test_with_input_hint_single_file_names_it(user_id):
+    from utils.batch_engine import BatchWorker
+    row = {'input_files': [{'name': 'report1.pdf', 'path': 'batch-staging/u1/a/report1.pdf'}]}
+    hint = BatchWorker._with_input_hint('总结一下。', row)
+    assert 'uploads/report1.pdf' in hint
+    assert hint.endswith('总结一下。')
+
+
+def test_with_input_hint_multi_file_does_not_name_any_single_file(user_id):
+    from utils.batch_engine import BatchWorker
+    row = {'input_files': [
+        {'name': 'report1.pdf', 'path': 'batch-staging/u1/a/report1.pdf'},
+        {'name': 'report2.pdf', 'path': 'batch-staging/u1/b/report2.pdf'},
+    ]}
+    hint = BatchWorker._with_input_hint('总结一下。', row)
+    assert 'uploads/ 目录下（共 2 个）' in hint
+    assert 'report1.pdf' not in hint
+    assert 'report2.pdf' not in hint
+
+
+def test_with_input_hint_falls_back_to_batch_input_file_when_no_input_files(user_id):
+    """input_files 恒为空的既有路径（批任务子会话）行为不变。"""
+    from utils.batch_engine import BatchWorker
+    row = {'input_files': None, 'batch_input_file': 'batch-staging/u1/a/report1.pdf'}
+    hint = BatchWorker._with_input_hint('总结一下。', row)
+    assert 'uploads/report1.pdf' in hint
+
+
+def test_run_one_standalone_session_with_multiple_files(user_id, db_conn, monkeypatch, tmp_path):
+    """两个文件都真的被拷进这个会话自己的 uploads/，且 prompt 提示语没有点名
+    某一个具体文件（措辞见 _with_input_hint 的多文件分支）。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    staging = root / 'batch-staging' / user_id / 'upload-x'
+    staging.mkdir(parents=True)
+    (staging / 'report1.pdf').write_text('report one')
+    (staging / 'report2.pdf').write_text('report two')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    files = [
+        {'name': 'report1.pdf', 'path': f'batch-staging/{user_id}/upload-x/report1.pdf'},
+        {'name': 'report2.pdf', 'path': f'batch-staging/{user_id}/upload-x/report2.pdf'},
+    ]
+    sid, key_id = _seed_standalone_session(
+        db_conn, user_id, prompt='请总结这两份报告。', files=files)
+    try:
+        fake_oc = MagicMock()
+        fake_oc.create_session.return_value = 'oc-multi-1'
+        fake_oc.list_agents.return_value = [{'name': 'build', 'mode': 'primary'}]
+        fake_oc.send_message.return_value = {'id': 'msg-1'}
+        fake_oc.list_messages.return_value = [
+            {'role': 'assistant', 'finished': True,
+             'content': [{'type': 'text', 'text': '两份报告都已读取。'}]}
+        ]
+        fake_oc.get_messages.return_value = []
+        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        assert claimed[0]['input_files'] == files
+        w._run_one(claimed[0])
+
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, workspace_path FROM ai_chat_sessions WHERE id = %s", (sid,))
+            status, ws_path = cur.fetchone()
+            assert status == 'completed'
+            uploaded = sorted(p.name for p in Path(ws_path, 'uploads').iterdir())
+            assert uploaded == ['report1.pdf', 'report2.pdf']
+
+        sent_prompt = fake_oc.send_message.call_args[0][1]
+        assert 'uploads/ 目录下（共 2 个）' in sent_prompt
+    finally:
+        _cleanup_api_key(db_conn, key_id)
 
 
 def test_claim_picks_up_standalone_session(user_id, db_conn):

@@ -828,7 +828,7 @@
     <section id="ep-session-create">
       <p class="eyebrow">AI 单会话 · 1</p>
       <h2>创建单会话</h2>
-      <p class="section-desc">给一句 prompt，不需要文件，创建一个独立 AI 会话；跟批任务共用同一套执行引擎（并发/超时/失败检测），只是没有文件、没有子任务概念。</p>
+      <p class="section-desc">给一句 prompt（可选带上几个文件），创建一个独立 AI 会话；跟批任务共用同一套执行引擎（并发/超时/失败检测），区别是没有子任务概念——随附的文件全部进同一个 AI 会话，不像批任务那样按文件拆分。</p>
 
       <div class="endpoint">
         <div class="endpoint-head">
@@ -843,7 +843,8 @@
   <span class="k">"prompt"</span>: <span class="s">"帮我用三句话总结一下敏捷开发的核心理念。"</span>,
   <span class="k">"agent"</span>: <span class="s">""</span>,
   <span class="k">"model"</span>: <span class="s">""</span>,
-  <span class="k">"title"</span>: <span class="s">""</span>
+  <span class="k">"title"</span>: <span class="s">""</span>,
+  <span class="k">"files"</span>: []
 }</code></pre>
           </div>
           <table class="params">
@@ -852,14 +853,18 @@
             <tr><td>agent</td><td>否</td><td>指定 OpenCode agent；留空用系统默认，可选值见 <a href="#ep-batch-agents" style="color: var(--accent-ink);">批任务 agents 端点</a></td></tr>
             <tr><td>model</td><td>否</td><td>指定模型（<code>&lt;providerID&gt;/&lt;modelID&gt;</code>）；留空用默认，可选值见 <a href="#ep-batch-models" style="color: var(--accent-ink);">批任务 models 端点</a></td></tr>
             <tr><td>title</td><td>否</td><td>会话标题；不传默认「新会话」</td></tr>
+            <tr><td>files</td><td>否</td><td>要让 AI 读取的文件，形状同批任务的 <code>files</code>：<code>[{name,path}]</code>；<code>path</code> 来自 <a href="#ep-batch-upload" style="color: var(--accent-ink);">批任务上传接口</a>（单会话没有自己专属的上传端点，复用同一个）。留空 = 纯文本会话；单次最多 50 个，不要求来自同一次上传调用</td></tr>
           </table>
+          <div class="callout">
+            <p><strong>先传文件，再建会话</strong>：<code>POST /api/v1/ai-batches/uploads</code> 拿到 <code>{name,path}</code>，原样放进本接口的 <code>files</code> 数组即可——跟批任务共用同一个暂存池，只是消费方不同。</p>
+          </div>
           <div class="code">
             <div class="code-bar"><span class="dots"><span></span><span></span><span></span></span>response · 201</div>
             <pre><code>{ <span class="k">"sessionId"</span>: <span class="s">"b1c2d3e4-..."</span>, <span class="k">"status"</span>: <span class="s">"pending"</span> }</code></pre>
           </div>
           <table class="params">
             <tr><th>状态码</th><th>触发条件</th></tr>
-            <tr><td>400</td><td><code>prompt</code> 缺失/为空；超过 20000 字符</td></tr>
+            <tr><td>400</td><td><code>prompt</code> 缺失/为空；超过 20000 字符；<code>files</code> 不是数组/超过 50 个/缺字段；<code>files[].path</code> 不合法或指向的文件已过期/不存在</td></tr>
             <tr><td>401/403</td><td>密钥缺失/无效/已停用/未绑定用户</td></tr>
           </table>
         </div>
@@ -886,7 +891,8 @@
   <span class="k">"createdAt"</span>: <span class="s">"2026-08-18T03:20:00.000Z"</span>,
   <span class="k">"lastActiveAt"</span>: <span class="s">"2026-08-18T03:20:12.000Z"</span>,
   <span class="k">"output"</span>: <span class="s">"敏捷开发的核心理念可以概括为三点：……"</span>,
-  <span class="k">"error"</span>: <span class="n">null</span>
+  <span class="k">"error"</span>: <span class="n">null</span>,
+  <span class="k">"files"</span>: []
 }</code></pre>
           </div>
           <table class="params">
@@ -894,12 +900,13 @@
             <tr><td>status</td><td><code>pending</code> / <code>running</code> / <code>completed</code> / <code>failed</code></td></tr>
             <tr><td>output</td><td><strong>只在 <code>status='completed'</code> 时非 null</strong>——运行中/失败可能已落库半截文本，不设这道门会把截断输出当结果返回</td></tr>
             <tr><td>error</td><td><strong>只在 <code>status='failed'</code> 时非 null</strong>，可读的失败原因（如指定了不存在的 agent）</td></tr>
+            <tr><td>files</td><td>创建时随附的文件，<code>[{"name": "report1.pdf"}]</code>；没有文件时为 <code>[]</code>，只回显文件名</td></tr>
           </table>
           <table class="params">
             <tr><th>状态码</th><th>触发条件</th></tr>
             <tr><td>404</td><td><code>sessionId</code> 不存在，或不是用这把密钥创建的（不区分，均 404）</td></tr>
           </table>
-          <p style="font-size: 13px;">建议轮询间隔 3~10 秒，无 SSE 推送。没有 list/delete/continue/retry——只有创建 + 查状态两个端点；需要更完整的生命周期管理请用下方「AI 批任务」（可以只传一个文件）。</p>
+          <p style="font-size: 13px;">建议轮询间隔 3~10 秒，无 SSE 推送。没有 list/delete/continue/retry，也没有批任务那套 <code>/files</code>/<code>/files/download</code> 事后查看产出文件的能力——只有创建 + 查状态两个端点，附带的文件只是这一轮的输入；需要更完整的生命周期管理或产出文件管理，请用下方「AI 批任务」（可以只传一个文件）。</p>
         </div>
       </div>
     </section>
@@ -1711,7 +1718,7 @@ X-Webhook-Event: ai_batch_completed
 
       <details class="faq">
         <summary>批任务和单会话该选哪个？</summary>
-        <div class="faq-body">只是「给一句 prompt 要一个答案」、不需要文件，用单会话；需要处理一批文件、需要追加/继续对话/重试/删除等完整生命周期管理，用批任务（批任务也支持只传一个文件）。</div>
+        <div class="faq-body">要一个综合答案（哪怕带几份文档，也是放一起分析），用单会话；需要把 N 个文件各自独立处理成 N 份结果、需要追加/继续对话/重试/删除等完整生命周期管理，用批任务（批任务也支持只传一个文件）。单会话的文件支持是"全部塞进同一个 AI 会话"，不按文件拆分子任务。</div>
       </details>
 
       <details class="faq">
