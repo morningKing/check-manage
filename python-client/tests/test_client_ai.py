@@ -1,4 +1,4 @@
-"""AI 相关端点（批任务 / Row Actions / AI 定时任务 / Prompt 模板 / 记忆）的客户端测试。
+"""AI 相关端点（批任务 / 单会话 / Row Actions / AI 定时任务 / Prompt 模板 / 记忆）的客户端测试。
 
 独立于 test_client.py（该文件测最基础的集合/文件 API），避免单文件过大。
 FakeResponse/make_client 是同一套模式的独立副本，不改动 test_client.py。
@@ -13,6 +13,7 @@ from checkmanage_openapi import (
     MemoryUnavailableError,
     NotFoundError,
     OpenApiClient,
+    ValidationError,
 )
 
 
@@ -310,6 +311,78 @@ def test_list_batch_agents_models_skills():
     assert client.list_batch_models()["models"] == []
     assert client.list_batch_skills()["skills"] == []
     assert len(calls) == 3
+
+
+# ---------------------------------------------------------------------------
+# AI 单会话
+# ---------------------------------------------------------------------------
+
+def test_create_ai_session_sends_prompt_only_by_default():
+    def fake_request(method, url, **kwargs):
+        assert method == "POST"
+        assert url.endswith("/ai-sessions")
+        assert kwargs["json"] == {"prompt": "帮我写一句问候语"}
+        return FakeResponse(201, {"sessionId": "sess-1", "status": "pending"})
+
+    client, _ = make_client(fake_request)
+    result = client.create_ai_session("帮我写一句问候语")
+    assert result == {"sessionId": "sess-1", "status": "pending"}
+
+
+def test_create_ai_session_includes_optional_fields_when_given():
+    def fake_request(method, url, **kwargs):
+        assert kwargs["json"] == {
+            "prompt": "hi", "agent": "build", "model": "m1", "title": "打招呼",
+        }
+        return FakeResponse(201, {"sessionId": "sess-1", "status": "pending"})
+
+    client, _ = make_client(fake_request)
+    client.create_ai_session("hi", agent="build", model="m1", title="打招呼")
+
+
+def test_create_ai_session_rejects_empty_prompt():
+    def fake_request(method, url, **kwargs):
+        return FakeResponse(400, {"error": "prompt 必填"})
+
+    client, _ = make_client(fake_request)
+    with pytest.raises(ValidationError):
+        client.create_ai_session("")
+
+
+def test_get_ai_session_pending_has_no_output():
+    def fake_request(method, url, **kwargs):
+        assert url.endswith("/ai-sessions/sess-1")
+        return FakeResponse(200, {
+            "sessionId": "sess-1", "status": "pending", "title": "新会话",
+            "agent": None, "model": None, "createdAt": "2026-01-01T00:00:00",
+            "lastActiveAt": "2026-01-01T00:00:00", "output": None, "error": None,
+        })
+
+    client, _ = make_client(fake_request)
+    result = client.get_ai_session("sess-1")
+    assert result["status"] == "pending"
+    assert result["output"] is None
+
+
+def test_get_ai_session_completed_returns_output():
+    def fake_request(method, url, **kwargs):
+        return FakeResponse(200, {
+            "sessionId": "sess-1", "status": "completed", "output": "你好！",
+            "error": None,
+        })
+
+    client, _ = make_client(fake_request)
+    result = client.get_ai_session("sess-1")
+    assert result["output"] == "你好！"
+
+
+def test_get_ai_session_not_found():
+    def fake_request(method, url, **kwargs):
+        return FakeResponse(404, {"error": "会话不存在"})
+
+    client, _ = make_client(fake_request)
+    with pytest.raises(NotFoundError):
+        client.get_ai_session("missing")
 
 
 # ---------------------------------------------------------------------------

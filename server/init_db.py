@@ -735,6 +735,17 @@ ALTER TABLE ai_scan_tasks ADD COLUMN IF NOT EXISTS agent TEXT;
 -- Continue conversation: store the prompt for a "continue" operation so the
 -- worker can pick it up and send it to the existing OpenCode session.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS continue_prompt TEXT;
+-- Standalone single-session open API (/v1/ai-sessions): a session with no
+-- parent ai_chat_batches row. api_key_id mirrors ai_chat_batches.api_key_id's
+-- isolation model; agent/model mirror ai_chat_batches' same-named columns
+-- (a standalone session has no parent batch row to hold them). The initial
+-- prompt to send reuses the continue_prompt column above rather than adding
+-- a new one — batch_engine._run_one reads it on first claim and clears it
+-- immediately, the same way the existing "continue" flow does.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(100)
+  REFERENCES api_keys(id) ON DELETE SET NULL;
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS agent TEXT;
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 -- Admin session list index: covers ORDER BY created_at DESC with optional
 -- status/source_type filters. Partial index on status keeps it small.
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list

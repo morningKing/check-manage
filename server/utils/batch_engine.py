@@ -190,8 +190,17 @@ def _prepare_workspace(user_id: str, session_id: str,
     producing an EMPTY uploads/ would be worse: the prompt still tells the agent
     to read uploads/<name> (see _with_input_hint), so the child would "succeed"
     with garbage output. Raising here makes _run_one mark the child failed.
+
+    `staged_file_path` empty/falsy (standalone /v1/ai-sessions children, which
+    have no staged file at all — see open_api_ai_sessions.py) short-circuits to
+    a bare empty uploads/. Without this, `Path(root) / ''` evaluates to `root`
+    itself, which exists and is a dir, so the code below would recursively
+    copy the ENTIRE workspace root (every user's every session) into this
+    session's own uploads/ — a real bug, not a graceful no-file case.
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
+    if not staged_file_path:
+        return ws
     src = Path(_workspace_root()) / staged_file_path
     if not src.exists():
         raise FileNotFoundError(
@@ -520,7 +529,8 @@ class BatchWorker:
                 cur.execute(
                     "WITH picked AS ( "
                     "  SELECT id FROM ai_chat_sessions "
-                    "   WHERE status = 'pending' AND batch_id IS NOT NULL "
+                    "   WHERE status = 'pending' "
+                    "     AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL) "
                     "   ORDER BY created_at, batch_seq "
                     "   FOR UPDATE SKIP LOCKED LIMIT %s "
                     ") "
@@ -550,7 +560,8 @@ class BatchWorker:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE ai_chat_sessions SET status = 'pending' "
-                    "WHERE status = 'running' AND batch_id IS NOT NULL"
+                    "WHERE status = 'running' "
+                    "  AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL)"
                 )
             conn.commit()
 
@@ -575,15 +586,32 @@ class BatchWorker:
         sid = session_row['id']
         user_id = session_row['user_id']
         batch_id = session_row['batch_id']
-        ctx = self._fetch_batch_context(batch_id)
-        if ctx is None:
-            # Batch was deleted between claim and prompt fetch.
-            # FK CASCADE has already removed our session row; nothing to mark.
-            # Scan-task children are intentionally NOT notified via _notify_scan on
-            # this path: recovery is handled by the orphan sweep (running rows with
-            # no live session get reset to pending).
-            return
-        prompt, agent, model, provision_repo, provision_ref = ctx
+        if batch_id is None:
+            # Standalone /v1/ai-sessions child (open_api_ai_sessions.py) —
+            # no parent ai_chat_batches row to source prompt/agent/model from.
+            # The initial prompt was stashed in continue_prompt at creation
+            # time (create_session()); read it here and clear it immediately
+            # so it's never mistaken for a real "continue" on some future
+            # claim of this same row.
+            prompt = session_row.get('continue_prompt') or ''
+            agent = session_row.get('agent')
+            model = session_row.get('model')
+            provision_repo = provision_ref = None
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL "
+                                "WHERE id = %s", (sid,))
+                conn.commit()
+        else:
+            ctx = self._fetch_batch_context(batch_id)
+            if ctx is None:
+                # Batch was deleted between claim and prompt fetch.
+                # FK CASCADE has already removed our session row; nothing to mark.
+                # Scan-task children are intentionally NOT notified via _notify_scan on
+                # this path: recovery is handled by the orphan sweep (running rows with
+                # no live session get reset to pending).
+                return
+            prompt, agent, model, provision_repo, provision_ref = ctx
 
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
@@ -1136,12 +1164,14 @@ class BatchWorker:
                     "WHERE id = %s",
                     (last_preview, session_id),
                 )
-                cur.execute(
-                    "UPDATE ai_chat_batches SET done = done + 1 WHERE id = %s",
-                    (batch_id,),
-                )
+                if batch_id is not None:
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET done = done + 1 WHERE id = %s",
+                        (batch_id,),
+                    )
             conn.commit()
-        _recompute_batch_status(batch_id)
+        if batch_id is not None:
+            _recompute_batch_status(batch_id)
 
     def _mark_failed(self, session_id: str, batch_id: str, error: str):
         with get_db() as conn:
@@ -1152,10 +1182,12 @@ class BatchWorker:
                     "WHERE id = %s",
                     (error, session_id),
                 )
-                cur.execute(
-                    "UPDATE ai_chat_batches SET failed = failed + 1 "
-                    "WHERE id = %s",
-                    (batch_id,),
-                )
+                if batch_id is not None:
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET failed = failed + 1 "
+                        "WHERE id = %s",
+                        (batch_id,),
+                    )
             conn.commit()
-        _recompute_batch_status(batch_id)
+        if batch_id is not None:
+            _recompute_batch_status(batch_id)

@@ -22,6 +22,8 @@ http://<host>:<port>/api/v1/ai-batches
 
 **与 open-api.md 的关系：** `/api/v1` 这个 Base Path 下同时挂了两类接口——[open-api.md](./open-api.md) 描述的数据集合读写接口，以及本文档描述的 AI 批任务接口（`/api/v1/ai-batches/*`）。两者共用 API Key 鉴权机制，但**权限维度不同**：数据集合接口按「页面是否开放 API 访问」授权；AI 批任务接口按「密钥是否绑定用户」授权（见下一节），且所有批任务严格按创建它的密钥隔离。
 
+**只是一句 prompt、不需要文件？** 批任务要求至少一个文件；如果你的场景是"给一句话 prompt，要一个答案"，用不着文件，见 [ai-session-api.md](./ai-session-api.md)（`/api/v1/ai-sessions/*`）——跟批任务共用同一套执行引擎和 `agents`/`models` 发现端点，只是轻量得多。
+
 ---
 
 ## 2. 前提：密钥必须绑定用户（新建密钥）

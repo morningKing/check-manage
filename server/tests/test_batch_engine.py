@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -91,6 +92,146 @@ def test_claim_pending_respects_limit(user_id, db_conn):
             (bid,),
         )
         assert cur.fetchone()[0] == 2
+
+
+# ---------------------------------------------------------------------------
+# Standalone /v1/ai-sessions children (open_api_ai_sessions.py): a session
+# with batch_id=NULL, api_key_id set, prompt stashed in continue_prompt.
+# ---------------------------------------------------------------------------
+
+def _seed_standalone_session(db_conn, user_id, *, prompt='hello', agent=None, model=None):
+    """Insert a throwaway api_keys row + a pending, batch-less session.
+    Returns (session_id, api_key_id); caller's `user_id` fixture cleans up the
+    session (WHERE user_id=...), but the api_keys row needs its own cleanup."""
+    key_id = f'ak-test-{uuid.uuid4().hex[:8]}'
+    sid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO api_keys (id, name, key_hash) VALUES (%s, %s, %s)",
+            (key_id, 'engine-test-key', f'fake-hash-{key_id}'),
+        )
+        cur.execute(
+            "INSERT INTO ai_chat_sessions "
+            "  (id, user_id, status, batch_id, continue_prompt, agent, model, api_key_id) "
+            "VALUES (%s, %s, 'pending', NULL, %s, %s, %s, %s)",
+            (sid, user_id, prompt, agent, model, key_id),
+        )
+    db_conn.commit()
+    return sid, key_id
+
+
+def _cleanup_api_key(db_conn, key_id):
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM api_keys WHERE id = %s", (key_id,))
+    db_conn.commit()
+
+
+def test_prepare_workspace_empty_staged_path_does_not_copy_workspace_root(tmp_path, monkeypatch):
+    """回归测试：staged_file_path='' 曾经会把整个 workspace 根目录（含其它
+    session 的文件）递归拷进这个 session 自己的 uploads/。"""
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    other_session = root / 'someone-else' / 'other-sid'
+    other_session.mkdir(parents=True)
+    (other_session / 'secret.txt').write_text('should not leak')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = eng._prepare_workspace('u1', 'sid-standalone', '')
+
+    uploads = list(Path(ws, 'uploads').iterdir()) if Path(ws, 'uploads').exists() else []
+    assert uploads == []
+
+
+def test_claim_picks_up_standalone_session(user_id, db_conn):
+    """batch_id IS NULL 但 api_key_id 非空的行也要被 dispatcher 捞到——不是只有
+    批任务子会话才能进 pending/running 状态机。"""
+    from utils.batch_engine import BatchWorker
+    sid, key_id = _seed_standalone_session(db_conn, user_id)
+    try:
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        assert len(claimed) == 1
+        assert claimed[0]['id'] == sid
+        assert claimed[0]['batch_id'] is None
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_chat_sessions WHERE id = %s", (sid,))
+            assert cur.fetchone()[0] == 'running'
+    finally:
+        _cleanup_api_key(db_conn, key_id)
+
+
+def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tmp_path):
+    """无父批任务的独立会话：prompt 从 continue_prompt 取、agent/model 从会话
+    行取、跑完 continue_prompt 被清空、_mark_done 不会因为 batch_id=None 报错。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    sid, key_id = _seed_standalone_session(
+        db_conn, user_id, prompt='帮我写一句问候语', agent='build', model='m1')
+    try:
+        fake_oc = MagicMock()
+        fake_oc.create_session.return_value = 'oc-standalone-1'
+        fake_oc.list_agents.return_value = [{'name': 'build', 'mode': 'primary'}]
+        fake_oc.send_message.return_value = {'id': 'msg-1'}
+        fake_oc.list_messages.return_value = [
+            {'role': 'assistant', 'finished': True,
+             'content': [{'type': 'text', 'text': '你好！'}]}
+        ]
+        fake_oc.get_messages.return_value = []
+        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        ws = str(tmp_path)
+        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        w._run_one(claimed[0])
+
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, opencode_session_id, last_message_preview, continue_prompt "
+                "FROM ai_chat_sessions WHERE id = %s",
+                (sid,),
+            )
+            status, oc_id, preview, remaining_prompt = cur.fetchone()
+            assert status == 'completed'
+            assert oc_id == 'oc-standalone-1'
+            assert preview is not None
+            assert remaining_prompt is None  # cleared, not left dangling for a future claim
+
+        # send_message got the sourced agent/model (not None from a missing batch row)
+        assert fake_oc.send_message.call_args.kwargs['agent'] == 'build'
+        assert fake_oc.send_message.call_args.kwargs['model'] == 'm1'
+    finally:
+        _cleanup_api_key(db_conn, key_id)
+
+
+def test_run_one_standalone_session_failure_does_not_touch_batches_table(
+        user_id, db_conn, monkeypatch, tmp_path):
+    """batch_id=None 时 _mark_failed 不该再去碰 ai_chat_batches（之前是安全的
+    空操作，现在直接跳过）——这里断言失败路径本身照常工作。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    sid, key_id = _seed_standalone_session(db_conn, user_id, prompt='p')
+    try:
+        fake_oc = MagicMock()
+        fake_oc.create_session.side_effect = RuntimeError('opencode unreachable')
+        monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+        monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+
+        w = BatchWorker()
+        claimed = w._claim_pending_sessions(limit=1)
+        w._run_one(claimed[0])  # must not raise
+
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT status, error_message FROM ai_chat_sessions WHERE id = %s", (sid,))
+            status, error = cur.fetchone()
+            assert status == 'failed'
+            assert 'opencode unreachable' in (error or '')
+    finally:
+        _cleanup_api_key(db_conn, key_id)
 
 
 # ---------------------------------------------------------------------------

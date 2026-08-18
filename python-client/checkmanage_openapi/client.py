@@ -636,6 +636,41 @@ class OpenApiClient:
         ).json()
 
     # ---------------------------------------------------------------
+    # AI 单会话（/v1/ai-sessions，对照
+    # docs/user-guide/integration/ai-session-api.md）——批任务要求至少一个
+    # 文件；单会话是"只给一句 prompt，不需要文件"的轻量版，跟批任务共用同一套
+    # 执行引擎与并发上限，只是没有 list/delete/continue/retry，只有创建和
+    # 查状态两个端点。agent/model 的可选值发现复用 list_batch_agents()/
+    # list_batch_models()，不重复建端点。
+    # ---------------------------------------------------------------
+
+    def create_ai_session(
+        self,
+        prompt: str,
+        *,
+        agent: Optional[str] = None,
+        model: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> dict:
+        """创建一个单会话。立即返回 pending，真正执行是异步的（跟批任务同一个
+        worker），用 get_ai_session() 轮询直到进入终态。返回 {sessionId, status}。
+        """
+        body = {"prompt": prompt}
+        if agent is not None:
+            body["agent"] = agent
+        if model is not None:
+            body["model"] = model
+        if title is not None:
+            body["title"] = title
+        return self._request("POST", "/ai-sessions", json_body=body).json()
+
+    def get_ai_session(self, session_id: str) -> dict:
+        """查询单会话状态。`status` 为 pending/running/completed/failed；
+        `output` 只在 completed 时非 null，`error` 只在 failed 时非 null。
+        没有 SSE——轮询是唯一的完成信号获取方式。"""
+        return self._request("GET", f"/ai-sessions/{session_id}").json()
+
+    # ---------------------------------------------------------------
     # Row Actions 对外触发（/v1/collections/.../row-actions/.../run，
     # 对照 docs/user-guide/data/row-actions.md §11）
     # ---------------------------------------------------------------

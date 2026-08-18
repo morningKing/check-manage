@@ -1,12 +1,13 @@
 # check-manage Open API Python 客户端
 
 `check-manage` Open API 的官方 Python 客户端。封装了认证、集合读写、分支选择、文件上传/下载、
-"上传文件 + 写入 file/image 字段"的一步式便捷方法，以及 AI 批任务、行操作触发、AI 定时任务、
-Prompt 模板、长期记忆管理这几套 AI 相关的对外端点，方便直接在你自己的代码里集成。
+"上传文件 + 写入 file/image 字段"的一步式便捷方法，以及 AI 批任务、AI 单会话、行操作触发、AI
+定时任务、Prompt 模板、长期记忆管理这几套 AI 相关的对外端点，方便直接在你自己的代码里集成。
 
 接口行为的权威说明分散在几份文档里，本客户端只是对其中接口的薄封装，不引入额外行为：
 - 数据集合/分支/文件：[`docs/user-guide/integration/open-api.md`](../docs/user-guide/integration/open-api.md)
 - AI 批任务：[`docs/user-guide/integration/ai-batch-api.md`](../docs/user-guide/integration/ai-batch-api.md)
+- AI 单会话（无需文件）：[`docs/user-guide/integration/ai-session-api.md`](../docs/user-guide/integration/ai-session-api.md)
 - Row Actions 对外触发：[`docs/user-guide/data/row-actions.md`](../docs/user-guide/data/row-actions.md) §11
 - AI 定时扫描任务：[`docs/user-guide/ai/scan-tasks.md`](../docs/user-guide/ai/scan-tasks.md) §10
 - Prompt 模板对外 API：[`docs/user-guide/ai/batch-tasks.md`](../docs/user-guide/ai/batch-tasks.md)「Prompt 模板」节
@@ -134,7 +135,7 @@ client.create_record("devices", {"名称": "x"}, branch_id="pv-abc123")
 
 ## AI 相关能力
 
-除数据集合外，本客户端还覆盖了 5 套 AI 相关的对外端点。所有新增方法的返回值都是响应体
+除数据集合外，本客户端还覆盖了 6 套 AI 相关的对外端点。所有新增方法的返回值都是响应体
 `resp.json()` 的原样 dict（文件下载方法返回 `bytes`，204 的删除方法返回 `None`），不做拆包改形。
 
 **AI 批任务**（每个文件对应一个子任务/AI 会话，异步处理）：
@@ -149,6 +150,15 @@ batch = client.create_batch(
 detail = client.get_batch(batch["batchId"])
 if detail["status"] in ("completed", "partial", "failed"):
     results = client.get_batch_results(batch["batchId"])["results"]
+```
+
+**AI 单会话**（不需要文件，给一句 prompt 要一个答案）：
+
+```python
+session = client.create_ai_session("帮我用三句话总结一下敏捷开发的核心理念。")
+detail = client.get_ai_session(session["sessionId"])
+if detail["status"] in ("completed", "failed"):
+    print(detail["output"] or detail["error"])
 ```
 
 **Row Actions 对外触发**（触发页面上已配置好的行操作按钮）：

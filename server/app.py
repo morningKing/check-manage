@@ -23,6 +23,7 @@ from routes.open_api_row_actions import open_api_row_actions_bp
 from routes.open_api_scan_tasks import open_api_scan_tasks_bp
 from routes.open_api_prompt_templates import open_api_prompt_templates_bp
 from routes.open_api_memories import open_api_memories_bp
+from routes.open_api_ai_sessions import open_api_ai_sessions_bp
 from routes.validation_scripts import validation_scripts_bp
 from routes.etl_tasks import etl_tasks_bp
 from routes.relation_graph import relation_graph_bp
@@ -92,6 +93,7 @@ app.register_blueprint(open_api_row_actions_bp)
 app.register_blueprint(open_api_scan_tasks_bp)
 app.register_blueprint(open_api_prompt_templates_bp)
 app.register_blueprint(open_api_memories_bp)
+app.register_blueprint(open_api_ai_sessions_bp)
 app.register_blueprint(validation_scripts_bp)
 app.register_blueprint(etl_tasks_bp)
 app.register_blueprint(relation_graph_bp)
