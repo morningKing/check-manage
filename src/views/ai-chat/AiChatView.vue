@@ -27,7 +27,7 @@ import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
-import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, type CodeSegment } from '@/utils/artifacts'
+import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, mergeReasoningParts, type CodeSegment } from '@/utils/artifacts'
 import { activeMentionToken } from '@/utils/agentMentions'
 import { copyText } from '@/utils/clipboard'
 import { summarizeMeta } from '@/utils/aiMeta'
@@ -738,7 +738,7 @@ function onKey(e: Event) {
                 :class="['ai-bubble', 'ai-bubble--' + m.role]"
               >
                 <template #content>
-                  <template v-for="(p, i) in m.content" :key="i">
+                  <template v-for="(p, i) in mergeReasoningParts(m.content)" :key="i">
                     <ChatFile v-if="p.type === 'file'" :name="p.name" :src="fileUrl(p.path)" />
                     <template v-else-if="p.type === 'tool_use'">
                       <TodoListBlock

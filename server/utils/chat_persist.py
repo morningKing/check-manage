@@ -282,8 +282,17 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
             if (p.get('text') or '').strip():
                 content.append({'type': 'text', 'text': p['text']})
         elif p['type'] == 'reasoning':
+            # OpenCode 有时把一段连续的推理过程拆成很多个短小的 reasoning
+            # part（各有自己的 id，每个只有一两个 token），而不是复用同一个
+            # id 增量续写——直接一个 part 一个 content 条目，会在前端渲成一
+            # 长串「思考完成」气泡。这里把**相邻**的 reasoning part 直接拼进
+            # 上一条（不留分隔符，它们本就是同一段话被截断的碎片），只有中间
+            # 被别的 part 类型（文本/工具调用）隔开时才算另一段真正独立的思考。
             if (p.get('text') or '').strip():
-                content.append({'type': 'reasoning', 'text': p['text']})
+                if content and content[-1]['type'] == 'reasoning':
+                    content[-1]['text'] += p['text']
+                else:
+                    content.append({'type': 'reasoning', 'text': p['text']})
         elif p['type'] == 'tool_use':
             content.append(p)
         elif p['type'] == 'subtask_use':

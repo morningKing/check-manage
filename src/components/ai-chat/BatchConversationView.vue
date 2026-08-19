@@ -6,7 +6,7 @@
     <div v-for="m in messages" :key="m.id" class="msg" :class="`msg--${m.role}`">
       <div class="msg__role">{{ m.role === 'user' ? '提问' : '助手' }}</div>
       <div class="msg__body">
-        <template v-for="(p, i) in (m.content || [])" :key="i">
+        <template v-for="(p, i) in mergeReasoningParts(m.content || [])" :key="i">
           <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
           <Thinking
             v-else-if="p.type === 'reasoning' && p.text"
@@ -33,6 +33,7 @@
 import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
+import { mergeReasoningParts } from '@/utils/artifacts'
 import type { AdminMessage } from '@/api/aiBatchAdmin'
 
 // 只读：刻意没有输入框。管理员在别人的会话里发消息语义上说不通（以谁的身份发？）。

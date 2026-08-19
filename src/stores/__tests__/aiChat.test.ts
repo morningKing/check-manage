@@ -234,6 +234,21 @@ describe('useAiChatStore', () => {
     expect(store.thinking['sess_1']).toBe(false)
   })
 
+  it('拼接多个 reasoning part 的文本时不插入换行（OpenCode 把一段推理拆成多个短 part）', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    let handlers: any
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { handlers = h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    handlers.onEvent({ event: 'message.updated', data: { info: { id: 'm1', role: 'assistant' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'r1', type: 'reasoning', messageID: 'm1', text: '我' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'r2', type: 'reasoning', messageID: 'm1', text: '在' } } })
+    handlers.onEvent({ event: 'message.part.updated', data: { part: { id: 'r3', type: 'reasoning', messageID: 'm1', text: '想' } } })
+    expect(store.reasoning['sess_1']).toBe('我在想')
+  })
+
   it('loadChanges populates changes for the session', async () => {
     const store = useAiChatStore()
     ;(api.getChanges as any).mockResolvedValue({

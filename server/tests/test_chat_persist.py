@@ -530,6 +530,49 @@ def test_apply_event_reasoning_part_persisted():
     ]
 
 
+def test_apply_event_merges_adjacent_reasoning_parts():
+    """OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（各自独立 id，
+    每个只有一两个 token），不是复用同一个 id 增量续写——相邻的应该合并成一条，
+    否则前端会渲成一长串「思考完成」气泡。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    for pid, text in [('r1', '我'), ('r2', '在'), ('r3', '想')]:
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': pid, 'messageID': 'm1', 'type': 'reasoning',
+                      'text': text, 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 't1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'answer', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == [
+        {'type': 'reasoning', 'text': '我在想'},
+        {'type': 'text', 'text': 'answer'},
+    ]
+
+
+def test_apply_event_reasoning_parts_separated_by_text_stay_separate():
+    """中间隔了别的 part 类型才算另一段独立的思考，不跨类型合并。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r1', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': '第一段', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 't1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'mid answer', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r2', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': '第二段', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == [
+        {'type': 'reasoning', 'text': '第一段'},
+        {'type': 'text', 'text': 'mid answer'},
+        {'type': 'reasoning', 'text': '第二段'},
+    ]
+
+
 def test_apply_event_subtask_and_tool_part_dedupe_placeholder():
     """/command 路径 subtask part 与 tool:'task' part 并存时，父级内容里只能有
     一个占位，且用 subtask part 的元数据（更准确）。"""

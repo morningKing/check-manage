@@ -1020,6 +1020,14 @@ class BatchWorker:
                 if mapped['subtaskId'] in seen_subtask_ids:
                     continue
                 seen_subtask_ids.add(mapped['subtaskId'])
+            # OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part
+            # （各自独立 id，每个只有一两个 token），不是复用同一个 id 增量
+            # 续写——原样一个 part 一个 content 条目会渲成一长串「思考完成」
+            # 气泡（同一处理见 chat_persist.py::_flatten_scope）。相邻的直接
+            # 拼进上一条，不留分隔符；中间隔了别的 part 类型才算另一段。
+            if mapped['type'] == 'reasoning' and out and out[-1]['type'] == 'reasoning':
+                out[-1]['text'] += mapped['text']
+                continue
             out.append(mapped)
         return out
 

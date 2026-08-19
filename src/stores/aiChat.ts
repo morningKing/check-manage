@@ -582,9 +582,14 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     _upsertReasoning(sid: string, partId: string, text: string) {
+      // OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（各自
+      // 独立 id，每个只有一两个 token），不是复用同一个 id 增量续写这段话。
+      // 按 partId 分开存、值直接拼接展示——用 '\n' 分隔会把一句连续的话拆成
+      // 一大堆换行（"思考过程一个 token 一行"），这些 part 本就是同一段话
+      // 被拆碎的片段，拼接顺序靠 Object.values 天然保留插入序即可。
       const map = _reasoningByPart[sid] ?? (_reasoningByPart[sid] = {})
       map[partId] = text
-      this.reasoning[sid] = Object.values(map).join('\n')
+      this.reasoning[sid] = Object.values(map).join('')
     },
 
     _upsertAssistantPart(sid: string, partId: string, partData: AiContentPart) {

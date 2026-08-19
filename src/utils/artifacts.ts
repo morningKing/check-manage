@@ -6,6 +6,8 @@
  * Small inline snippets are left in the prose (rendered as normal code).
  */
 
+import type { AiContentPart } from '@/api/aiChat'
+
 export interface TextSegment { type: 'text'; text: string }
 export interface CodeSegment { type: 'code'; lang: string; code: string }
 export type Segment = TextSegment | CodeSegment
@@ -165,6 +167,27 @@ export function groupFilesByDir<T extends { path: string }>(files: T[]): FileGro
     files: map.get(dir)!.slice().sort((x, y) =>
       x.path < y.path ? -1 : x.path > y.path ? 1 : 0),
   }))
+}
+
+/**
+ * OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（每个只有一两个
+ * token，各自独立 id），不是复用同一个 id 增量续写——后端持久化时会把相邻的
+ * 合并成一条（见 server/utils/chat_persist.py::_flatten_scope），但已经落库的
+ * 历史会话可能是在那个修复之前存的。这里在渲染前兜底再合并一次，避免旧会话
+ * 打开时仍然看到一长串「思考完成」气泡。中间隔了别的 part 类型（文本/工具
+ * 调用）才算另一段独立的思考，不跨类型合并；不改变原数组，返回新数组。
+ */
+export function mergeReasoningParts(content: AiContentPart[]): AiContentPart[] {
+  const out: AiContentPart[] = []
+  for (const p of content) {
+    const prev = out[out.length - 1]
+    if (p.type === 'reasoning' && prev?.type === 'reasoning') {
+      prev.text = (prev.text || '') + (p.text || '')
+    } else {
+      out.push({ ...p })
+    }
+  }
+  return out
 }
 
 export function downloadText(filename: string, content: string) {

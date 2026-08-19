@@ -1238,6 +1238,42 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
             conn.commit()
 
 
+def test_content_from_parts_merges_adjacent_reasoning_parts():
+    """OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（各自独立
+    id，每个只有一两个 token），不是复用同一个 id 增量续写——相邻的应该合并
+    成一条，否则前端会渲成一长串「思考完成」气泡（同一处理见
+    chat_persist.py::_flatten_scope，两条持久化路径共用 map_part 但各自
+    flatten，这条覆盖批任务路径）。"""
+    import utils.batch_engine as eng
+    parts = [
+        {'type': 'reasoning', 'id': 'r1', 'text': '我'},
+        {'type': 'reasoning', 'id': 'r2', 'text': '在'},
+        {'type': 'reasoning', 'id': 'r3', 'text': '想'},
+        {'type': 'text', 'id': 't1', 'text': 'answer'},
+    ]
+    out = eng.BatchWorker._content_from_parts(parts)
+    assert out == [
+        {'type': 'reasoning', 'text': '我在想'},
+        {'type': 'text', 'text': 'answer'},
+    ]
+
+
+def test_content_from_parts_reasoning_separated_by_tool_stays_separate():
+    """中间隔了别的 part 类型才算另一段独立的思考，不跨类型合并。"""
+    import utils.batch_engine as eng
+    parts = [
+        {'type': 'reasoning', 'id': 'r1', 'text': '第一段'},
+        {'type': 'tool', 'id': 'pt1', 'tool': 'bash',
+         'state': {'status': 'completed', 'title': 'run', 'input': {}}},
+        {'type': 'reasoning', 'id': 'r2', 'text': '第二段'},
+    ]
+    out = eng.BatchWorker._content_from_parts(parts)
+    types = [p['type'] for p in out]
+    assert types == ['reasoning', 'tool_use', 'reasoning']
+    assert out[0]['text'] == '第一段'
+    assert out[2]['text'] == '第二段'
+
+
 def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monkeypatch):
     """批任务路径落子代理消息时，要保留完整执行轨迹：user（委托输入）、
     reasoning（思考过程）、tool_use（工具调用）、text（输出），不能只剩 text。"""

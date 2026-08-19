@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile, groupFilesByDir } from '../artifacts'
+import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile, groupFilesByDir, mergeReasoningParts } from '../artifacts'
+import type { AiContentPart } from '@/api/aiChat'
 
 describe('groupFilesByDir', () => {
   it('groups files by parent directory, root-first then alphabetical', () => {
@@ -30,6 +31,52 @@ describe('groupFilesByDir', () => {
 
   it('returns [] for no files', () => {
     expect(groupFilesByDir([])).toEqual([])
+  })
+})
+
+describe('mergeReasoningParts', () => {
+  it('合并相邻的 reasoning part（OpenCode 把一段推理拆成很多短小 part）', () => {
+    const content: AiContentPart[] = [
+      { type: 'reasoning', text: '我' },
+      { type: 'reasoning', text: '在' },
+      { type: 'reasoning', text: '想' },
+    ]
+    const out = mergeReasoningParts(content)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toEqual({ type: 'reasoning', text: '我在想' })
+  })
+
+  it('中间隔了别的 part 类型时不合并，算两段独立的思考', () => {
+    const content: AiContentPart[] = [
+      { type: 'reasoning', text: '第一段' },
+      { type: 'text', text: '中间的回复' },
+      { type: 'reasoning', text: '第二段' },
+    ]
+    const out = mergeReasoningParts(content)
+    expect(out).toEqual([
+      { type: 'reasoning', text: '第一段' },
+      { type: 'text', text: '中间的回复' },
+      { type: 'reasoning', text: '第二段' },
+    ])
+  })
+
+  it('没有 reasoning part 时原样返回（浅拷贝）', () => {
+    const content: AiContentPart[] = [{ type: 'text', text: 'hi' }]
+    expect(mergeReasoningParts(content)).toEqual(content)
+  })
+
+  it('不修改原数组/原对象', () => {
+    const content: AiContentPart[] = [
+      { type: 'reasoning', text: 'a' },
+      { type: 'reasoning', text: 'b' },
+    ]
+    const out = mergeReasoningParts(content)
+    expect(content).toEqual([{ type: 'reasoning', text: 'a' }, { type: 'reasoning', text: 'b' }])
+    expect(out).not.toBe(content)
+  })
+
+  it('空数组返回空数组', () => {
+    expect(mergeReasoningParts([])).toEqual([])
   })
 })
 

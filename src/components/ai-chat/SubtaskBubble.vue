@@ -24,7 +24,7 @@
         <el-empty v-if="!result.messages.length" description="子代理还没有对话记录" />
         <div v-for="m in result.messages" :key="m.id" class="subtask-bubble__msg">
           <div v-if="m.role === 'user'" class="subtask-bubble__role">委托输入</div>
-          <template v-for="(p, i) in m.content" :key="i">
+          <template v-for="(p, i) in mergeReasoningParts(m.content)" :key="i">
             <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
             <Thinking
               v-else-if="p.type === 'reasoning' && p.text"
@@ -56,6 +56,7 @@ import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading } from '@elem
 import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
+import { mergeReasoningParts } from '@/utils/artifacts'
 import type { SubtaskMessagesResult } from '@/api/aiChat'
 
 // 递归组件需要显式声明 name 才能在自己的模板里引用自己。
