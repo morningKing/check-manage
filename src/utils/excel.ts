@@ -79,6 +79,15 @@ function valueToLabel(value: any, field: FieldConfig, record?: Record<string, an
     return value?.replace(/<[^>]*>/g, '') || ''
   }
 
+  if (['file', 'image'].includes(field.controlType)) {
+    // 存储值是文件对象数组 {uid, name, size, type, url, apiUrl}[]，uid = data_files.id。
+    // 导出的是 id，不是文件名——文件名不唯一、也不足以定位到实际文件。
+    if (Array.isArray(value)) {
+      return value.map((f) => f?.uid ?? '').filter(Boolean).join('、')
+    }
+    return String(value)
+  }
+
   return String(value)
 }
 
@@ -96,7 +105,7 @@ export function exportToExcel(
   filename: string,
   relationDisplayMap?: RelationDisplayMap
 ): void {
-  const exportFields = getExportableFields(fields)
+  const exportFields = getExportableFields(fields, true)
 
   // 构建表头
   const headers = exportFields.map((f) => f.label)

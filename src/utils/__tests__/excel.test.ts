@@ -121,6 +121,25 @@ describe('Excel Utils', () => {
       expect(result).toHaveLength(2)
       expect(result[0].fieldName).toBe('quoted')
     })
+
+    it('includeFiles=true 时额外包含 file/image 字段（导出 Excel 专用）', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'avatar', controlType: 'image', order: 2 }),
+        makeField({ fieldName: 'attachment', controlType: 'file', order: 3 }),
+      ]
+      const result = getExportableFields(fields, true)
+      expect(result.map((f) => f.fieldName)).toEqual(['name', 'avatar', 'attachment'])
+    })
+
+    it('不传 includeFiles（导入相关调用方）时仍排除 file/image', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'avatar', controlType: 'image', order: 2 }),
+      ]
+      expect(getExportableFields(fields).map((f) => f.fieldName)).toEqual(['name'])
+      expect(getExportableFields(fields, false).map((f) => f.fieldName)).toEqual(['name'])
+    })
   })
 
   describe('exportToExcel', () => {
@@ -214,6 +233,52 @@ describe('Excel Utils', () => {
       const callArgs = mockAoatoSheet.mock.calls[0][0]
       const dataRow = callArgs[1]
       expect(dataRow[0]).toBe('标签A、标签B')
+    })
+
+    it('file 字段列出现在表头里，值是文件 id（uid）', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'name', label: '名称', controlType: 'text', order: 1 }),
+        makeField({ fieldName: 'attachment', label: '附件', controlType: 'file', order: 2 }),
+      ]
+      const data = [{
+        name: '报告',
+        attachment: [{ uid: 'df-abc123', name: 'report.pdf', size: 100, type: 'application/pdf' }],
+      }]
+
+      exportToExcel(data, fields, 'test')
+
+      const callArgs = mockAoatoSheet.mock.calls[0][0]
+      const headerRow = callArgs[0]
+      const dataRow = callArgs[1]
+      expect(headerRow).toEqual(['名称', '附件'])
+      expect(dataRow).toEqual(['报告', 'df-abc123'])
+    })
+
+    it('image 字段挂多个文件时用顿号分隔多个 id', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'photos', label: '照片', controlType: 'image', order: 1 }),
+      ]
+      const data = [{
+        photos: [{ uid: 'df-1', name: 'a.png' }, { uid: 'df-2', name: 'b.png' }],
+      }]
+
+      exportToExcel(data, fields, 'test')
+
+      const dataRow = mockAoatoSheet.mock.calls[0][0][1]
+      expect(dataRow[0]).toBe('df-1、df-2')
+    })
+
+    it('file 字段无值时导出空字符串', () => {
+      const fields: FieldConfig[] = [
+        makeField({ fieldName: 'attachment', label: '附件', controlType: 'file', order: 1 }),
+      ]
+      const data = [{ attachment: [] }, {}]
+
+      exportToExcel(data, fields, 'test')
+
+      const rows = mockAoatoSheet.mock.calls[0][0]
+      expect(rows[1][0]).toBe('')
+      expect(rows[2][0]).toBe('')
     })
   })
 

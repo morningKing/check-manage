@@ -9,16 +9,27 @@ import * as XLSX from 'xlsx'
 import type { FieldConfig } from '@/types'
 
 /**
- * 可导入导出的字段类型（排除文件、图片、关联）
+ * 可导入导出的字段类型（排除文件、图片；关联/引用等仍在列，导入导出都支持）
  */
 export const EXPORTABLE_TYPES = ['text', 'textarea', 'number', 'date', 'datetime', 'select', 'multiSelect', 'radio', 'checkbox', 'relation', 'reference', 'autoTimestamp', 'autoSequence', 'quoteSelect', 'richText', 'compositeText']
 
 /**
- * 筛选可导入导出的字段
+ * 文件/图片字段导出时额外包含（导出文件 id，即 data_files.id，见 excel.ts::valueToLabel）。
+ * 仅供"导出到 Excel"使用——导入模板生成、失败清单导出（同一份要能重新导入）、
+ * 导入解析的表头匹配都不走这条，因为文件字段不支持从 Excel 导入。
  */
-export function getExportableFields(fields: FieldConfig[]): FieldConfig[] {
+const FILE_FIELD_TYPES = ['file', 'image']
+
+/**
+ * 筛选可导入导出的字段
+ *
+ * @param includeFiles - true 时额外包含 file/image 字段（导出文件 id），
+ *   仅供 exportToExcel 使用；其余导入相关调用方不传，保持原有排除行为。
+ */
+export function getExportableFields(fields: FieldConfig[], includeFiles = false): FieldConfig[] {
+  const types = includeFiles ? [...EXPORTABLE_TYPES, ...FILE_FIELD_TYPES] : EXPORTABLE_TYPES
   return fields
-    .filter((f) => EXPORTABLE_TYPES.includes(f.controlType) && !f.hidden)
+    .filter((f) => types.includes(f.controlType) && !f.hidden)
     .sort((a, b) => a.order - b.order)
 }
 
