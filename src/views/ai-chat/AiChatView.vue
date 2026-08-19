@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, defineAsyncComponent } from 'vue'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
@@ -39,6 +39,11 @@ import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
 import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
+import { previewKind } from '@/utils/filePreview'
+
+// 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
+// 顾虑——避免这些重型库进这个页面的主 chunk。
+const FilePreviewDialog = defineAsyncComponent(() => import('@/components/common/FilePreviewDialog.vue'))
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
@@ -176,8 +181,24 @@ const GROUP_META: { key: 'added' | 'modified'; label: string; type: any }[] = [
   { key: 'added', label: '新增', type: 'success' },
   { key: 'modified', label: '修改', type: 'warning' },
 ]
+
+// Word/Excel/PPT/PDF 不是能有意义地当纯文本/diff 展示的格式（这就是 xlsx 打开后
+// 显示"二进制文件，无法预览"的根因）——这几种改走 FilePreviewDialog 的
+// @vue-office 渲染器，跟数据页文件字段用的是同一套。其余类型仍走原有的
+// diff/文本预览抽屉。
+const officePreviewVisible = ref(false)
+const officePreviewFile = ref<{ name: string; url: string } | null>(null)
+function openOfficePreview(name: string, path: string): boolean {
+  if (!['docx', 'excel', 'pptx', 'pdf'].includes(previewKind(name))) return false
+  if (!activeId.value) return false
+  officePreviewFile.value = { name, url: fileUrl(path) }
+  officePreviewVisible.value = true
+  return true
+}
+
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
+  if (openOfficePreview(c.path.split('/').pop() || c.path, c.path)) return
   diffFile.value = c.path
   diffData.value = null
   diffOpen.value = true
@@ -200,6 +221,7 @@ async function previewChange(c: ChangedFile) {
 // 产出文件预览：复用 diff 抽屉，但走 git-independent 的 /preview 读文件内容。
 async function previewOutput(f: { name: string; path: string }) {
   if (!activeId.value) return
+  if (openOfficePreview(f.name, f.path)) return
   diffFile.value = f.path
   diffData.value = null
   diffOpen.value = true
@@ -1033,6 +1055,9 @@ function onKey(e: Event) {
         >下载完整文件</a>
       </div>
     </ElDrawer>
+
+    <!-- Word/Excel/PPT/PDF 预览（产出文件 + 变更文件共用） -->
+    <FilePreviewDialog v-model="officePreviewVisible" :file="officePreviewFile" />
 
     <!-- 批任务对话框 -->
     <CreateBatchDialog

@@ -93,7 +93,7 @@ export function listAdminChildFiles(batchId: string, sessionId: string) {
 }
 
 export function getAdminChildFilePreview(batchId: string, sessionId: string, path: string) {
-  return get<{ content: string; truncated: boolean }>(
+  return get<{ content: string; truncated: boolean; binary: boolean }>(
     `${BASE}/${batchId}/sessions/${sessionId}/files/preview`, { path })
 }
 

@@ -31,7 +31,7 @@
                  class="admin-files__thumb" loading="lazy" />
             <span class="admin-files__name">{{ f.name }}</span>
             <span class="admin-files__size">{{ (f.size / 1024).toFixed(1) }} KB</span>
-            <el-button link type="primary" @click="emit('preview', f.path)">预览</el-button>
+            <el-button link type="primary" @click="emit('preview', f)">预览</el-button>
             <a class="admin-files__dl" :href="downloadUrl(f.path)" target="_blank" rel="noopener">下载</a>
             <span v-if="f.dataFileId" class="admin-files__flag">已导入</span>
           </div>
@@ -56,7 +56,7 @@ const props = defineProps<{
   truncated: boolean
   ident?: string
 }>()
-const emit = defineEmits<{ preview: [string]; import: [string[]] }>()
+const emit = defineEmits<{ preview: [AdminChildFile]; import: [string[]] }>()
 
 const DIR_LABELS: Record<string, string> = {
   outputs: 'outputs/（agent 输出）',

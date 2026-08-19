@@ -122,22 +122,31 @@
                   title="内容过长，已截断显示" />
       </template>
     </el-dialog>
+
+    <!-- Word/Excel/PPT/PDF 预览；append-to-body 同上，避免被 filesOpen 的 mask 盖住 -->
+    <FilePreviewDialog v-model="officePreviewVisible" :file="officePreviewFile" append-to-body />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
+import { previewKind } from '@/utils/filePreview'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
   getAdminSubtaskMessages,
   listAdminChildFiles, importAdminChildFiles, getAdminChildFilePreview,
+  adminChildFileDownloadUrl,
   type AdminBatch, type AdminChild, type AdminMessage,
   type AdminChildFile, type AdminImportResult,
 } from '@/api/aiBatchAdmin'
+
+// 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
+// 顾虑——避免这些重型库进这个页面的主 chunk。
+const FilePreviewDialog = defineAsyncComponent(() => import('@/components/common/FilePreviewDialog.vue'))
 
 const STATUSES = [
   { value: 'pending', label: '待处理' },
@@ -266,6 +275,11 @@ const previewContent = ref('')
 const previewTruncated = ref(false)
 const previewLoading = ref(false)
 
+// Word/Excel/PPT/PDF 不是能有意义地当纯文本展示的格式，改走 FilePreviewDialog
+// 的 @vue-office 渲染器；同样 append-to-body 避免被 filesOpen 的 mask 盖住。
+const officePreviewVisible = ref(false)
+const officePreviewFile = ref<{ name: string; url: string } | null>(null)
+
 async function openChildFiles(row: AdminChild) {
   if (!detail.value) return
   filesBatchId.value = detail.value.batch.batchId
@@ -284,15 +298,23 @@ async function openChildFiles(row: AdminChild) {
   }
 }
 
-async function onPreviewChildFile(path: string) {
-  previewPath.value = path
+async function onPreviewChildFile(f: AdminChildFile) {
+  if (['docx', 'excel', 'pptx', 'pdf'].includes(previewKind(f.name))) {
+    officePreviewFile.value = {
+      name: f.name,
+      url: adminChildFileDownloadUrl(filesBatchId.value, filesSessionId.value, f.path),
+    }
+    officePreviewVisible.value = true
+    return
+  }
+  previewPath.value = f.path
   // 复用同 conv 风格：先清空 content 再开，避免上一文件预览残留
   previewContent.value = ''
   previewTruncated.value = false
   previewOpen.value = true
   previewLoading.value = true
   try {
-    const res = await getAdminChildFilePreview(filesBatchId.value, filesSessionId.value, path)
+    const res = await getAdminChildFilePreview(filesBatchId.value, filesSessionId.value, f.path)
     previewContent.value = res.content
     previewTruncated.value = res.truncated
   } finally {

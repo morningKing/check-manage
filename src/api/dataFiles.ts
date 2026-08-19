@@ -42,6 +42,11 @@ export function getDataFileMetadata(id: string): Promise<DataFileMeta> {
  */
 export function authedDataFileUrl(url: string): string {
   if (!url) return url
+  // Idempotent: some callers (e.g. AI 助手产出文件/变更文件预览, which reuse
+  // this dialog with a URL built by their own authParam()) already carry a
+  // token. Appending a second one is harmless to the server but produces an
+  // ugly doubled query param, so skip it.
+  if (url.includes('access_token=')) return url
   try {
     const raw = localStorage.getItem('check-manage:token')
     const token = raw ? JSON.parse(raw) : ''

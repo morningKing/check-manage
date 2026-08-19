@@ -84,6 +84,9 @@ const loading = ref(false)
 const textContent = ref('')
 const errorMsg = ref('')
 
+// authedDataFileUrl 对已带 access_token= 的 url 是幂等的（见 dataFiles.ts）——
+// AI 助手产出文件/变更文件预览传入的 url 已经带了自己模块 authParam() 加的
+// token，这里不会重复叠加。
 const authedUrl = computed(() => (props.file?.url ? authedDataFileUrl(props.file.url) : ''))
 const kind = computed(() => previewKind(props.file?.name))
 
