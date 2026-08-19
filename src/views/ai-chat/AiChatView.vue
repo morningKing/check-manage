@@ -9,6 +9,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
+  ChatDotRound, Tickets,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -637,6 +638,7 @@ function onKey(e: Event) {
         <ElScrollbar class="ai-chat__sessions">
           <div class="ai-sidebar__section-head" @click="toggleSection('sessions')">
             <ElIcon class="caret"><ArrowRight v-if="collapsedSections.sessions" /><ArrowDown v-else /></ElIcon>
+            <ElIcon class="section-icon"><ChatDotRound /></ElIcon>
             会话
           </div>
           <div v-show="!collapsedSections.sessions">
@@ -659,6 +661,7 @@ function onKey(e: Event) {
 
           <div class="ai-sidebar__section-head" @click="toggleSection('batches')">
             <ElIcon class="caret"><ArrowRight v-if="collapsedSections.batches" /><ArrowDown v-else /></ElIcon>
+            <ElIcon class="section-icon"><Tickets /></ElIcon>
             批任务
             <ElButton link size="small" :icon="Plus" @click.stop="showCreateBatch = true">新建</ElButton>
           </div>

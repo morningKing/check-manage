@@ -9,9 +9,9 @@ import {
 } from '../settingsCatalog'
 
 describe('SETTINGS_GROUPS', () => {
-  it('共 7 组 22 条', () => {
+  it('共 7 组 24 条', () => {
     expect(SETTINGS_GROUPS).toHaveLength(7)
-    expect(ALL_SETTINGS_ITEMS).toHaveLength(22)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(24)
   })
 
   it('条目 id 全局唯一', () => {
@@ -19,10 +19,11 @@ describe('SETTINGS_GROUPS', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('每条都有非空 label / perm / component', () => {
+  it('每条都有非空 label / perm / icon / component', () => {
     for (const it of ALL_SETTINGS_ITEMS) {
       expect(it.label, it.id).toBeTruthy()
       expect(it.perm, it.id).toMatch(/^admin\./)
+      expect(it.icon, it.id).toBeTruthy()
       expect(typeof it.component, it.id).toBe('function')
     }
   })

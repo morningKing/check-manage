@@ -21,7 +21,8 @@
             'settings-menu__item--danger': item.danger,
           }"
         >
-          {{ item.label }}
+          <el-icon><component :is="iconOf(item.icon)" /></el-icon>
+          <span>{{ item.label }}</span>
         </RouterLink>
       </div>
     </nav>
@@ -40,6 +41,9 @@ import { computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import {
   ArrowLeft, Lock, Files, Link, MagicStick, DataLine, Monitor, Setting,
+  User, UserFilled, Menu, Document, Share, Connection, Key, Service,
+  Timer, Tickets, ChatDotRound, Search, Download, Refresh, DocumentCopy,
+  CircleCheck, Notification, List, FolderOpened, WarningFilled,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 import { useAuthStore, useAppStore } from '@/stores'
@@ -54,6 +58,9 @@ const groups = computed(() => filterGroups(auth.can))
 
 const ICON_MAP: Record<string, Component> = {
   Lock, Files, Link, MagicStick, DataLine, Monitor, Setting,
+  User, UserFilled, Menu, Document, Share, Connection, Key, Service,
+  Timer, Tickets, ChatDotRound, Search, Download, Refresh, DocumentCopy,
+  CircleCheck, Notification, List, FolderOpened, WarningFilled,
 }
 function iconOf(name: string): Component {
   return ICON_MAP[name] ?? Setting
@@ -102,11 +109,15 @@ function goBack(): void {
 }
 
 .settings-menu__item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 7px 22px 7px 44px;
   color: var(--el-text-color-regular);
   font-size: 14px;
   text-decoration: none;
+
+  .el-icon { font-size: 14px; flex: none; }
 
   &:hover { background: var(--el-fill-color-light); }
 }

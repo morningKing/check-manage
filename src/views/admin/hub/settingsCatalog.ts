@@ -16,6 +16,8 @@ export interface SettingsItem {
   perm: string
   /** 懒加载的功能组件 */
   component: () => Promise<Component>
+  /** Element Plus 图标组件名，渲染在侧边栏条目文字前 */
+  icon: string
   /** 不可逆/高危操作：视觉区分，且排在所在组最末 */
   danger?: boolean
 }
@@ -31,65 +33,65 @@ export interface SettingsGroup {
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   { id: 'access', label: '访问控制', icon: 'Lock', items: [
-    { id: 'users', label: '用户管理', perm: 'admin.users',
+    { id: 'users', label: '用户管理', perm: 'admin.users', icon: 'User',
       component: () => import('@/views/admin/UserManager.vue') },
-    { id: 'roles', label: '角色权限', perm: 'admin.roles',
+    { id: 'roles', label: '角色权限', perm: 'admin.roles', icon: 'UserFilled',
       component: () => import('@/views/admin/RoleManager.vue') },
   ] },
   { id: 'structure', label: '结构配置', icon: 'Files', items: [
-    { id: 'menu', label: '菜单管理', perm: 'admin.menus',
+    { id: 'menu', label: '菜单管理', perm: 'admin.menus', icon: 'Menu',
       component: () => import('@/views/admin/MenuManager.vue') },
-    { id: 'page-config', label: '页面配置', perm: 'admin.page_configs',
+    { id: 'page-config', label: '页面配置', perm: 'admin.page_configs', icon: 'Document',
       component: () => import('@/views/admin/PageConfigManager.vue') },
-    { id: 'workflows', label: '工作流', perm: 'admin.workflows',
+    { id: 'workflows', label: '工作流', perm: 'admin.workflows', icon: 'Share',
       component: () => import('@/views/admin/WorkflowManager.vue') },
-    { id: 'dependency-manager', label: '依赖管理', perm: 'admin.dependencies',
+    { id: 'dependency-manager', label: '依赖管理', perm: 'admin.dependencies', icon: 'Connection',
       component: () => import('@/views/admin/DependencyManager.vue') },
   ] },
   { id: 'integration', label: '集成对接', icon: 'Link', items: [
-    { id: 'api-keys', label: 'Open API', perm: 'admin.api_keys',
+    { id: 'api-keys', label: 'Open API', perm: 'admin.api_keys', icon: 'Key',
       component: () => import('@/views/admin/ApiKeyManager.vue') },
-    { id: 'webhook', label: 'Webhook', perm: 'admin.webhooks',
+    { id: 'webhook', label: 'Webhook', perm: 'admin.webhooks', icon: 'Link',
       component: () => import('@/views/admin/WebhookSettings.vue') },
-    { id: 'kefu', label: '智能客服', perm: 'admin.kefu',
+    { id: 'kefu', label: '智能客服', perm: 'admin.kefu', icon: 'Service',
       component: () => import('@/views/admin/KefuManager.vue') },
   ] },
   { id: 'ai', label: 'AI 能力', icon: 'MagicStick', items: [
-    { id: 'ai-settings', label: 'AI 配置', perm: 'admin.ai_settings',
+    { id: 'ai-settings', label: 'AI 配置', perm: 'admin.ai_settings', icon: 'Setting',
       component: () => import('@/views/admin/AiSettings.vue') },
-    { id: 'ai-scan', label: 'AI 定时任务', perm: 'admin.ai_scan',
+    { id: 'ai-scan', label: 'AI 定时任务', perm: 'admin.ai_scan', icon: 'Timer',
       component: () => import('@/views/admin/AiScanTaskManager.vue') },
-    { id: 'ai-batches', label: 'AI 批任务', perm: 'admin.ai_chat_admin',
+    { id: 'ai-batches', label: 'AI 批任务', perm: 'admin.ai_chat_admin', icon: 'Tickets',
       component: () => import('@/views/admin/AiBatchAdmin.vue') },
-    { id: 'ai-sessions', label: 'AI 会话管理', perm: 'admin.ai_chat_admin',
+    { id: 'ai-sessions', label: 'AI 会话管理', perm: 'admin.ai_chat_admin', icon: 'ChatDotRound',
       component: () => import('@/views/admin/AiSessionAdmin.vue') },
-    { id: 'ai-skills', label: 'AI 技能管理', perm: 'admin.ai_settings',
+    { id: 'ai-skills', label: 'AI 技能管理', perm: 'admin.ai_settings', icon: 'MagicStick',
       component: () => import('@/views/admin/AiSkillManager.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
-    { id: 'query', label: '数据查询', perm: 'admin.query',
+    { id: 'query', label: '数据查询', perm: 'admin.query', icon: 'Search',
       component: () => import('@/views/admin/QueryConsole.vue') },
-    { id: 'data-export', label: '数据导出', perm: 'admin.menus',
+    { id: 'data-export', label: '数据导出', perm: 'admin.menus', icon: 'Download',
       component: () => import('@/views/admin/DataMigrationPage.vue') },
-    { id: 'etl', label: 'ETL 管理', perm: 'admin.etl_tasks',
+    { id: 'etl', label: 'ETL 管理', perm: 'admin.etl_tasks', icon: 'Refresh',
       component: () => import('@/views/admin/EtlTaskManager.vue') },
-    { id: 'export-scripts', label: '导出脚本', perm: 'admin.export_scripts',
+    { id: 'export-scripts', label: '导出脚本', perm: 'admin.export_scripts', icon: 'DocumentCopy',
       component: () => import('@/views/admin/ExportScriptManager.vue') },
-    { id: 'validation-scripts', label: '校验脚本', perm: 'admin.validation_scripts',
+    { id: 'validation-scripts', label: '校验脚本', perm: 'admin.validation_scripts', icon: 'CircleCheck',
       component: () => import('@/views/admin/ValidationScriptManager.vue') },
-    { id: 'trigger-rules', label: '联动规则', perm: 'admin.trigger_rules',
+    { id: 'trigger-rules', label: '联动规则', perm: 'admin.trigger_rules', icon: 'Notification',
       component: () => import('@/views/admin/TriggerRuleManager.vue') },
   ] },
   { id: 'sys-ops', label: '系统运维', icon: 'Monitor', items: [
-    { id: 'operation-log', label: '操作日志', perm: 'admin.operation_logs',
+    { id: 'operation-log', label: '操作日志', perm: 'admin.operation_logs', icon: 'List',
       component: () => import('@/views/admin/OperationLog.vue') },
-    { id: 'backup', label: '系统备份', perm: 'admin.backup',
+    { id: 'backup', label: '系统备份', perm: 'admin.backup', icon: 'FolderOpened',
       component: () => import('@/views/admin/BackupManager.vue') },
-    { id: 'factory-reset', label: '恢复出厂设置', perm: 'admin.backup', danger: true,
+    { id: 'factory-reset', label: '恢复出厂设置', perm: 'admin.backup', danger: true, icon: 'WarningFilled',
       component: () => import('@/views/admin/FactoryReset.vue') },
   ] },
   { id: 'general', label: '通用设置', icon: 'Setting', items: [
-    { id: 'system-settings', label: '系统设置', perm: 'admin.system_config',
+    { id: 'system-settings', label: '系统设置', perm: 'admin.system_config', icon: 'Setting',
       component: () => import('@/views/admin/SystemSettings.vue') },
   ] },
 ]
