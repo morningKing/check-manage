@@ -1,4 +1,4 @@
-import { get, post } from '@/utils/request'
+import { get, post, authParam } from '@/utils/request'
 
 const BASE = '/ai/chat/admin/sessions/v2'
 
@@ -76,4 +76,16 @@ export function getSessionFiles(sessionId: string) {
 
 export function archiveSession(sessionId: string) {
   return post(`/ai/chat/sessions/${sessionId}/archive`)
+}
+
+/**
+ * 返回字符串 URL 而非 axios 请求：`window.open`/`<a href download>` 直接下载，
+ * 拿不到 axios 拦截器加的 Authorization 头，靠 `require_permission_sse` 支持的
+ * `?access_token=` 查询参数鉴权（跟 aiBatchAdmin.ts::adminChildFileDownloadUrl
+ * 同一个模式）。
+ */
+export function sessionFileDownloadUrl(sessionId: string, path: string): string {
+  const sid = encodeURIComponent(sessionId)
+  const p = encodeURIComponent(path)
+  return `/api${BASE}/${sid}/files/download?path=${p}${authParam('&')}`
 }

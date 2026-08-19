@@ -174,7 +174,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiSessionAdminStore } from '@/stores/aiSessionAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
-import { getSessionMessages } from '@/api/aiSessionAdmin'
+import { getSessionMessages, sessionFileDownloadUrl } from '@/api/aiSessionAdmin'
 
 const store = useAiSessionAdminStore()
 
@@ -278,10 +278,7 @@ async function onArchive(sessionId: string) {
 
 function downloadFile(path: string) {
   if (!store.detail) return
-  const sid = encodeURIComponent(store.detail.id)
-  const p = encodeURIComponent(path)
-  // Use the session admin download endpoint
-  window.open(`/api/ai/chat/admin/sessions/v2/${sid}/files/download?path=${p}`)
+  window.open(sessionFileDownloadUrl(store.detail.id, path))
 }
 
 // Subtask fetch function for BatchConversationView
