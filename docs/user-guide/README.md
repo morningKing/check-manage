@@ -29,6 +29,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | 文档 | 说明 |
 |------|------|
 | [system-settings.md](./admin/system-settings.md) | 系统品牌与**登录页文案**定制（标题 / 副标题 / 页脚） |
+| [ai-page-designer.md](./admin/ai-page-designer.md) | AI 建表：自然语言描述 → 一次性生成页面配置字段 + API 端点 + 菜单路由 |
 | [roles-rbac.md](./admin/roles-rbac.md) | 自定义角色与 RBAC 权限（管理功能开关 / 数据页 CRUD / 菜单可见性） |
 | [backups.md](./admin/backups.md) | 系统备份：手动 / 定时全量备份、还原、差异对比 |
 | [notifications.md](./admin/notifications.md) | 通知中心：依赖告警、工作流待办等系统通知 |

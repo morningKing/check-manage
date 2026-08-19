@@ -17,7 +17,12 @@
       <el-col :span="8">
         <el-card class="list-card">
           <template #header>
-            <span>页面配置列表</span>
+            <div class="list-card__header">
+              <span>页面配置列表</span>
+              <el-button link type="primary" :icon="MagicStick" @click="aiDialogVisible = true">
+                AI 建表
+              </el-button>
+            </div>
           </template>
           <PageConfigList
             v-model="currentPageId"
@@ -26,6 +31,11 @@
           />
         </el-card>
       </el-col>
+
+      <AiPageDesignDialog
+        v-model="aiDialogVisible"
+        @created="handleAiCreated"
+      />
 
       <!-- 右侧：页面详情和字段配置 -->
       <el-col :span="16">
@@ -732,13 +742,14 @@
 import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage } from 'element-plus'
-import { Right, Upload, Download } from '@element-plus/icons-vue'
+import { Right, Upload, Download, MagicStick } from '@element-plus/icons-vue'
 import { usePageConfigStore } from '@/stores'
 import { useMenuStore } from '@/stores'
 import FieldConfigEditor from './FieldConfigEditor.vue'
 import PageConfigList from './components/PageConfigList.vue'
 import PageConfigRelationGraph from '@/components/PageConfigRelationGraph.vue'
 import RowActionsEditor from '@/components/admin/RowActionsEditor.vue'
+import AiPageDesignDialog from '@/components/admin/AiPageDesignDialog.vue'
 import type { PageFormData, FieldConfig, DeleteBindingConfig, InheritFieldMapping } from '@/types'
 import { parseFieldRow, mergeFields } from '@/utils/fieldImport'
 import type { ExportScript } from '@/types'
@@ -791,6 +802,11 @@ const addFormData = ref<PageFormData>(createEmptyPageFormData())
  * 新增对话框可见性
  */
 const addDialogVisible = ref(false)
+
+/**
+ * AI 建表对话框可见性
+ */
+const aiDialogVisible = ref(false)
 
 /**
  * 保存加载状态
@@ -1101,6 +1117,13 @@ watch(currentPageId, async (id) => {
 function handleAdd(): void {
   addFormData.value = createEmptyPageFormData()
   addDialogVisible.value = true
+}
+
+/**
+ * AI 建表完成：选中新创建的页面（跟手动新增一致）
+ */
+function handleAiCreated(pageId: string): void {
+  currentPageId.value = pageId
 }
 
 /**
@@ -1549,6 +1572,12 @@ onActivated(async () => {
 }
 
 .card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.list-card__header {
   display: flex;
   justify-content: space-between;
   align-items: center;

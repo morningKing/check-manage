@@ -43,6 +43,29 @@ export function updatePageConfig(id: string, config: Partial<PageConfig>) {
 }
 
 /**
+ * AI 建表：自然语言描述 → 页面草案（不落库，仅返回草案供预览编辑）
+ *
+ * @param description - 业务实体的自然语言描述
+ */
+export function draftPageConfigWithAi(description: string) {
+  return post<{
+    name: string
+    description: string
+    collectionSlug: string
+    menuName: string
+    menuPath: string
+    fields: Array<{
+      fieldName: string
+      label: string
+      controlType: string
+      required: boolean
+      options?: { label: string; value: string }[]
+      sequenceConfig?: { prefix: string; max: number }
+    }>
+  }>('/pageConfigs/ai-draft', { description })
+}
+
+/**
  * 删除页面配置
  *
  * @param id - 页面ID

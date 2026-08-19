@@ -6,6 +6,7 @@ from utils.operation_log import log_operation
 from utils.page_config_relations import get_page_config_relations
 from utils.field_indexes import sync_field_indexes, mark_all_dropping
 from utils.row_action_validate import validate_row_actions
+from utils.ai_schema_designer import draft_page_schema
 import psycopg2.extras
 
 page_configs_bp = Blueprint('page_configs', __name__)
@@ -85,6 +86,26 @@ def create_page_config():
     log_operation('create', 'page_config', body.get('id'), body.get('name'),
                   f'新增页面配置「{body.get("name")}」')
     return jsonify(body), 201
+
+
+@page_configs_bp.route('/pageConfigs/ai-draft', methods=['POST'])
+@require_permission('admin.page_configs')
+def ai_draft_page_config():
+    """AI 建表向导：自然语言描述 → 页面草案（name/description/collectionSlug/
+    menuName/menuPath/fields）。只生成草案，不写库——真正的创建仍走
+    POST /pageConfigs（+ 前端另调 POST /menus 挂菜单）。"""
+    body = request.get_json(force=True)
+    description = (body.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'description 不能为空'}), 400
+
+    try:
+        draft = draft_page_schema(description)
+    except RuntimeError as e:
+        status = 503 if ('API Key' in str(e) or '未启用' in str(e)) else 500
+        return jsonify({'error': str(e)}), status
+
+    return jsonify(draft)
 
 
 @page_configs_bp.route('/pageConfigs/<config_id>/has-data', methods=['GET'])

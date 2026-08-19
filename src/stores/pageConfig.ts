@@ -114,12 +114,13 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
    * @returns 创建的页面配置
    */
   async function addPageConfig(
-    config: Omit<PageConfig, 'id' | 'createdAt' | 'updatedAt'>
+    config: Omit<PageConfig, 'id' | 'createdAt' | 'updatedAt'>,
+    options?: { id?: string }
   ): Promise<PageConfig> {
     const now = new Date().toISOString()
     const newConfig: PageConfig = {
       ...config,
-      id: `page-${uuidv4().slice(0, 8)}`,
+      id: options?.id || `page-${uuidv4().slice(0, 8)}`,
       createdAt: now,
       updatedAt: now
     }

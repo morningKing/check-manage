@@ -120,6 +120,59 @@ class TestCreatePageConfig:
         assert resp.status_code == 403
 
 
+class TestAiDraftPageConfig:
+    def test_requires_description(self, setup):
+        client, _, admin_h, _ = setup
+        resp = client.post('/pageConfigs/ai-draft',
+                           data=json.dumps({}),
+                           content_type='application/json',
+                           headers=admin_h)
+        assert resp.status_code == 400
+
+    def test_developer_forbidden(self, setup):
+        client, _, _, dev_h = setup
+        resp = client.post('/pageConfigs/ai-draft',
+                           data=json.dumps({'description': '订货表'}),
+                           content_type='application/json',
+                           headers=dev_h)
+        assert resp.status_code == 403
+
+    def test_success_returns_draft(self, setup):
+        client, _, admin_h, _ = setup
+        draft = {
+            'name': '订货表', 'description': '', 'collectionSlug': 'purchase-orders',
+            'menuName': '订货表', 'menuPath': '/purchase-orders',
+            'fields': [{'fieldName': 'customer', 'label': '客户', 'controlType': 'text', 'required': True}],
+        }
+        with patch('routes.page_configs.draft_page_schema', return_value=draft):
+            resp = client.post('/pageConfigs/ai-draft',
+                               data=json.dumps({'description': '我要创建一张订货表'}),
+                               content_type='application/json',
+                               headers=admin_h)
+        assert resp.status_code == 200
+        assert resp.get_json()['collectionSlug'] == 'purchase-orders'
+
+    def test_not_enabled_maps_to_503(self, setup):
+        client, _, admin_h, _ = setup
+        with patch('routes.page_configs.draft_page_schema',
+                   side_effect=RuntimeError('AI 建表功能未启用，请在系统配置中开启')):
+            resp = client.post('/pageConfigs/ai-draft',
+                               data=json.dumps({'description': '订货表'}),
+                               content_type='application/json',
+                               headers=admin_h)
+        assert resp.status_code == 503
+
+    def test_generic_failure_maps_to_500(self, setup):
+        client, _, admin_h, _ = setup
+        with patch('routes.page_configs.draft_page_schema',
+                   side_effect=RuntimeError('AI 返回内容无法解析为 JSON: garbage')):
+            resp = client.post('/pageConfigs/ai-draft',
+                               data=json.dumps({'description': '订货表'}),
+                               content_type='application/json',
+                               headers=admin_h)
+        assert resp.status_code == 500
+
+
 class TestUpdatePageConfig:
     def test_update_success(self, setup):
         client, mock_cursor, admin_h, _ = setup
