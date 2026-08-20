@@ -553,7 +553,7 @@ def test_run_one_timeout_marks_failed(user_id, db_conn, monkeypatch, tmp_path):
         )
         status, err = cur.fetchone()
         assert status == 'failed'
-        assert 'timeout' in (err or '').lower()
+        assert '最长执行时间上限' in (err or '')
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +775,8 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
     monkeypatch.setattr(eng, 'opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc')
-    assert 'stalled' in str(ei.value)
+    assert ei.value.reason == 'stalled (no progress)'
+    assert '没有任何新进展' in str(ei.value)
 
 
 def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
@@ -817,6 +818,63 @@ def test_progress_signature_counts_tool_activity():
     # status change and output growth both register as progress
     assert sig(pending) != sig(running)
     assert sig(running) != sig(grew)
+
+
+def test_progress_signature_counts_reasoning_growth():
+    """Extended-thinking models stream reasoning tokens for a while before any
+    text/tool part appears — that must register as progress too, else a
+    genuinely active turn is indistinguishable from a dead one."""
+    from utils.batch_engine import BatchWorker
+    sig = BatchWorker._progress_signature
+    short = [{'role': 'assistant', 'content': [{'type': 'reasoning', 'text': 'thinking'}]}]
+    longer = [{'role': 'assistant', 'content': [{'type': 'reasoning', 'text': 'thinking about it more'}]}]
+    assert sig(short) != sig(longer)
+
+
+def test_await_finished_no_stall_while_reasoning_growing(monkeypatch):
+    """A turn that's streaming reasoning tokens (no text/tool part yet) must NOT
+    be killed by the stall watchdog — regression guard for a real incident where
+    a long-thinking turn got marked 'failed' by the stall watchdog while OpenCode
+    (never aborted) kept running and finished moments later, leaving a session
+    that actually completed marked as failed."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    w = eng.BatchWorker()
+    w.STALL_TIMEOUT_SEC = 0.5
+    w.POLL_INTERVAL_SEC = 0.02
+    w.SESSION_TIMEOUT_SEC = 5
+    # Each poll returns a slightly longer reasoning text -> real progress.
+    seq = [[{'role': 'assistant', 'finished': False, 'finish': None,
+             'running_tool': False,
+             'content': [{'type': 'reasoning', 'text': 'x' * i}]}]
+           for i in range(1, 61)]
+    seq.append([{'role': 'assistant', 'finished': True, 'finish': 'stop',
+                 'running_tool': False, 'content': [{'type': 'text', 'text': 'done'}]}])
+    calls = {'i': 0}
+    fake = MagicMock()
+    def lm(oc, directory=''):
+        i = min(calls['i'], len(seq) - 1)
+        calls['i'] += 1
+        return seq[i]
+    fake.list_messages.side_effect = lm
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    preview, msg = w._await_finished('oc')
+    assert msg['finished'] is True          # completed, NOT stalled
+
+
+def test_list_messages_maps_reasoning_parts(monkeypatch):
+    """The facade must surface `reasoning` parts (not just text/tool) so the
+    poll loop's progress signature can see them."""
+    import utils.batch_engine as eng
+    from unittest.mock import MagicMock
+    client = MagicMock()
+    client.get_messages.return_value = [{
+        'info': {'id': 'm1', 'role': 'assistant', 'time': {}},
+        'parts': [{'type': 'reasoning', 'text': 'pondering...'}],
+    }]
+    monkeypatch.setattr(eng._OpenCodeFacade, '_client', lambda self: client)
+    out = eng._OpenCodeFacade().list_messages('oc')
+    assert out[0]['content'] == [{'type': 'reasoning', 'text': 'pondering...'}]
 
 
 def test_await_finished_no_stall_while_tool_running(monkeypatch):
@@ -863,7 +921,8 @@ def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
     monkeypatch.setattr(eng, 'opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
         w._await_finished('oc')
-    assert 'stalled' in str(ei.value)
+    assert ei.value.reason == 'stalled (no progress)'
+    assert '没有任何新进展' in str(ei.value)
 
 
 def test_dispatch_tick_survives_claim_error():

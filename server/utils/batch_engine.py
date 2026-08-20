@@ -120,6 +120,15 @@ class _OpenCodeFacade:
                 t = p.get('type')
                 if t == 'text' and p.get('text'):
                     content.append({'type': 'text', 'text': p.get('text', '')})
+                elif t == 'reasoning' and p.get('text'):
+                    # Extended-thinking models can stream reasoning tokens for a
+                    # long time before emitting any text/tool part. Without this,
+                    # that phase is invisible to _progress_signature — a genuinely
+                    # active turn looks identical to a dead one, and the stall
+                    # watchdog kills it after STALL_TIMEOUT_SEC while OpenCode (never
+                    # aborted) keeps running and finishes moments later, leaving a
+                    # session marked 'failed' that actually completed.
+                    content.append({'type': 'reasoning', 'text': p.get('text', '')})
                 elif t == 'tool':
                     st = p.get('state') or {}
                     status = st.get('status')
@@ -318,8 +327,18 @@ def _notify_callback(batch_id, status, callback_url, callback_secret,
 # ---------------------------------------------------------------------------
 
 class _SessionTimeout(Exception):
+    """会话超时/停滞。区分两种情况给出可读的中文原因（而不是原始英文短语，那对
+    管理员是噪音）：`stalled (no progress)` 是「STALL_TIMEOUT_SEC 内既无新文本
+    也无工具在跑」的停滞检测；其余情况是达到 SESSION_TIMEOUT_SEC 硬上限。"""
+
     def __init__(self, seconds: int, reason: str = 'timeout'):
-        super().__init__(f'{reason} after {seconds}s')
+        if reason == 'stalled (no progress)':
+            msg = (f'AI 会话已 {seconds} 秒没有任何新进展（既无新文本输出，也没有工具调用在执行），'
+                   f'可能是模型响应卡住、上游服务异常或网络问题，请重试该会话')
+        else:
+            msg = (f'AI 会话执行时间超过 {seconds} 秒仍未完成，已达到系统设置的最长执行时间上限，'
+                   f'请重试或联系管理员调整超时设置')
+        super().__init__(msg)
         self.seconds = seconds
         self.reason = reason
 
@@ -972,7 +991,7 @@ class BatchWorker:
             if m.get('role') == 'assistant':
                 count += 1
                 for p in (m.get('content') or []):
-                    if p.get('type') == 'text':
+                    if p.get('type') in ('text', 'reasoning'):
                         total_text += len(p.get('text') or '')
                     elif p.get('type') == 'tool_use':
                         tool_sig.append((p.get('name'), p.get('status'),

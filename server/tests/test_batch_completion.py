@@ -116,5 +116,5 @@ def test_await_finished_stalls_fast_not_session_timeout(monkeypatch):
     elapsed = time.time() - t0
 
     assert raised is not None
-    assert 'stall' in str(raised).lower()
+    assert raised.reason == 'stalled (no progress)'
     assert elapsed < 10            # failed via stall, not the 30s session timeout

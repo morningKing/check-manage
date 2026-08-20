@@ -113,7 +113,14 @@
       "PowerShell(Get-NetTCPConnection *)",
       "Bash(PGPASSWORD=casemanage psql *)",
       "Bash(sed -n '27,65p')",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "PowerShell(Get-Process *)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_run_code_unsafe",
+      "mcp__playwright__browser_find",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_take_screenshot"
     ]
   }
 }
