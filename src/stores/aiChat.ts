@@ -14,9 +14,10 @@ import {
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage,
+  getPendingQuestion, replyQuestion, rejectQuestion,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
-  type PaletteCommand, type StreamStatus, type AgentInfo,
+  type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 
@@ -60,6 +61,14 @@ interface State {
   // Concurrent uploads (file + skill) used to clobber a single boolean; this is
   // a refcount so the spinner only clears when ALL in-flight uploads finish.
   uploadingCount: number
+  /**
+   * OpenCode's built-in interactive multi-choice tool, currently blocking the
+   * turn on a user answer. Deliberately NOT part of `messages[sid]` content —
+   * it's live turn state, driven by the dedicated `question.*` SSE events (see
+   * _handleEvent) plus a REST rehydrate call on session open (SSE is fire-once
+   * and would otherwise lose a question asked while disconnected).
+   */
+  pendingQuestion: Record<string, QuestionRequest | null>
   _stream: { close(): void } | null
 }
 
@@ -93,6 +102,7 @@ export const useAiChatStore = defineStore('aiChat', {
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     streamStatus: {} as Record<string, StreamStatus>,
     uploadingCount: 0,
+    pendingQuestion: {},
     _stream: null,
   }),
 
@@ -117,6 +127,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     uploading(state): boolean {
       return state.uploadingCount > 0
+    },
+    activePendingQuestion(state): QuestionRequest | null {
+      return state.activeSessionId ? state.pendingQuestion[state.activeSessionId] ?? null : null
     },
   },
 
@@ -164,6 +177,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadFiles(id)
       this.loadChanges(id)
       this.loadPaletteItems(id)
+      this.loadPendingQuestion(id)
       // Batch children are driven by the worker and viewed via polling
       // (reloadMessages). Opening an SSE stream for them would let the live
       // _upsertAssistantPart write into the poll-replaced message array at stale
@@ -240,6 +254,29 @@ export const useAiChatStore = defineStore('aiChat', {
       // optimistic UI: clear locally; session.idle event will re-affirm
       this.streaming[sid] = false
       this.thinking[sid] = false
+    },
+
+    async loadPendingQuestion(id: string) {
+      try {
+        const { data } = await getPendingQuestion(id)
+        this.pendingQuestion[id] = data
+      } catch { /* best-effort: don't block session open on this */ }
+    },
+
+    async answerPendingQuestion(sid: string, answers: string[][]) {
+      const q = this.pendingQuestion[sid]
+      if (!q) return
+      await replyQuestion(sid, q.id, answers)
+      // optimistic: don't wait for the question.replied echo (also handles it,
+      // for the multi-tab case, but the local answerer sees it clear now).
+      this.pendingQuestion[sid] = null
+    },
+
+    async rejectPendingQuestion(sid: string) {
+      const q = this.pendingQuestion[sid]
+      if (!q) return
+      await rejectQuestion(sid, q.id)
+      this.pendingQuestion[sid] = null
     },
 
     async showMcpServices() {
@@ -545,6 +582,7 @@ export const useAiChatStore = defineStore('aiChat', {
           this.streaming[sid] = false
           this.thinking[sid] = false
           this._resetStreamState(sid)
+          this.pendingQuestion[sid] = null  // defensive: a finished turn can't still have one pending
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           this.loadChanges(sid)
           this._reloadPersisted(sid)  // converge on server-persisted turn (incl. tool calls)
@@ -552,6 +590,21 @@ export const useAiChatStore = defineStore('aiChat', {
         case 'session.error':
           this.streaming[sid] = false
           this.thinking[sid] = false
+          break
+        // OpenCode's built-in interactive multi-choice tool ("question").
+        // Verified live (2026-08-21): the turn stays non-idle (streaming/
+        // thinking) while a question is pending — the underlying tool call
+        // sits in 'running' state via the normal message.part.updated stream
+        // in parallel; we don't special-case that part here (kept generic,
+        // matching whatever the answered-tool card ends up showing).
+        case 'question.asked':
+          this.pendingQuestion[sid] = data as QuestionRequest
+          break
+        case 'question.replied':
+        case 'question.rejected':
+          if (this.pendingQuestion[sid]?.id === data?.requestID) {
+            this.pendingQuestion[sid] = null
+          }
           break
       }
     },

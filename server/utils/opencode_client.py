@@ -197,6 +197,41 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def list_questions(self, directory: str = "") -> list:
+        """Pending QuestionRequest objects (OpenCode's built-in interactive
+        multi-choice tool, e.g. `{id, sessionID, questions:[{question, header,
+        options:[{label,description}], multiple?, custom?}], tool}`) across the
+        given directory. Used to rehydrate a question a client missed while its
+        SSE connection was down (the event is fire-once; unlike batch turns,
+        interactive sessions have no server-side persistence of pending state)."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/question"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def reply_question(self, request_id: str, answers: list, directory: str = "") -> bool:
+        """Answer a pending QuestionRequest. `answers` is a list of string
+        lists, one per `questions[i]`, each holding the selected option
+        label(s) (or free-typed text when that question allows `custom`)."""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/question/{request_id}/reply"),
+            params=params, json={"answers": answers}, timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def reject_question(self, request_id: str, directory: str = "") -> bool:
+        """Decline a pending QuestionRequest; the underlying tool call resolves
+        as rejected and the model continues without an answer."""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/question/{request_id}/reject"),
+            params=params, timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.

@@ -15,6 +15,7 @@ import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
+import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
 import { parseTodos } from '@/utils/todos'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
@@ -241,6 +242,7 @@ async function previewOutput(f: { name: string; path: string }) {
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
 const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
+const pendingQuestion = computed(() => store.activePendingQuestion)
 
 const canSend = computed(() => !streaming.value && (input.value.trim() || attachments.value.length))
 
@@ -839,6 +841,13 @@ function onKey(e: Event) {
             >
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
             </div>
+
+            <QuestionCard
+              v-if="pendingQuestion"
+              :request="pendingQuestion"
+              @reply="(answers) => store.answerPendingQuestion(activeId!, answers)"
+              @reject="() => store.rejectPendingQuestion(activeId!)"
+            />
 
             <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">

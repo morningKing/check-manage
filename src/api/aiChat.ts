@@ -46,6 +46,29 @@ export type AiContentPart =
   | { type: 'mcp_services'; servers: McpServer[] }
   | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
 
+// OpenCode's built-in interactive multi-choice tool ("question"). Decoupled
+// from AiContentPart/message history on purpose: this is live turn-blocking
+// state (is the model waiting on the user right now?), not a persisted
+// message part — see aiChat store's `pendingQuestion`.
+export interface QuestionOption {
+  label: string
+  description: string
+}
+
+export interface QuestionInfo {
+  question: string
+  header: string
+  options: QuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export interface QuestionRequest {
+  id: string
+  sessionID: string
+  questions: QuestionInfo[]
+}
+
 export interface AiFile {
   name: string
   path: string
@@ -235,6 +258,23 @@ export function abortSession(id: string) {
   return post<{ ok: boolean }>(`/ai/chat/sessions/${encodeURIComponent(id)}/abort`)
 }
 
+export function getPendingQuestion(id: string) {
+  return get<{ data: QuestionRequest | null }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/pending-question`, undefined, { silent: true },
+  )
+}
+export function replyQuestion(id: string, requestId: string, answers: string[][]) {
+  return post<{ ok: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/questions/${encodeURIComponent(requestId)}/reply`,
+    { answers },
+  )
+}
+export function rejectQuestion(id: string, requestId: string) {
+  return post<{ ok: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/questions/${encodeURIComponent(requestId)}/reject`,
+  )
+}
+
 export function deleteFromMessage(id: string, msgId: string) {
   return del<{ deleted: number }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages/${encodeURIComponent(msgId)}`,
@@ -311,7 +351,10 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
       }
     }
     // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy
-    for (const name of ['message.updated', 'message.part.updated', 'session.idle', 'session.error']) {
+    for (const name of [
+      'message.updated', 'message.part.updated', 'session.idle', 'session.error',
+      'question.asked', 'question.replied', 'question.rejected',
+    ]) {
       es.addEventListener(name, (e: MessageEvent) => {
         try {
           h.onEvent({ event: name, data: JSON.parse(e.data) })

@@ -773,6 +773,113 @@ def test_abort_session_other_users_404(setup):
     assert resp.status_code == 404
 
 
+def test_get_pending_question_returns_matching_session(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    other = {'id': 'que_other', 'sessionID': 'oc_sess_unrelated', 'questions': []}
+    mine = {'id': 'que_1', 'sessionID': 'oc_sess', 'questions': [{'question': 'q', 'header': 'H', 'options': []}]}
+    oc.list_questions.return_value = [other, mine]
+    resp = client.get('/ai/chat/sessions/sess_x/pending-question', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['data'] == mine
+    a, k = oc.list_questions.call_args
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_get_pending_question_none_when_no_match(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.return_value = []
+    resp = client.get('/ai/chat/sessions/sess_x/pending-question', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['data'] is None
+
+
+def test_get_pending_question_best_effort_on_opencode_error(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.side_effect = Exception('boom')
+    resp = client.get('/ai/chat/sessions/sess_x/pending-question', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['data'] is None
+
+
+def test_get_pending_question_other_users_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = None
+    resp = client.get('/ai/chat/sessions/sess_other/pending-question', headers=dev_h)
+    assert resp.status_code == 404
+
+
+def test_reply_question_forwards_answers(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.return_value = [{'id': 'que_1', 'sessionID': 'oc_sess', 'questions': []}]
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reply',
+                        json={'answers': [['Blue']]}, headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'ok': True}
+    a, k = oc.reply_question.call_args
+    assert a[0] == 'que_1'
+    assert a[1] == [['Blue']]
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_reply_question_missing_answers_400(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reply', json={}, headers=dev_h)
+    assert resp.status_code == 400
+    oc.reply_question.assert_not_called()
+
+
+def test_reply_question_not_owned_by_session_404(setup):
+    """requestID exists but belongs to a different OpenCode session — must not
+    forward the reply (owned-id-set IDOR guard, mirrors ai.py::delete_my_memory)."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.return_value = [{'id': 'que_1', 'sessionID': 'oc_sess_someone_else', 'questions': []}]
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reply',
+                        json={'answers': [['Blue']]}, headers=dev_h)
+    assert resp.status_code == 404
+    assert resp.get_json()['code'] == 'QUESTION_NOT_FOUND'
+    oc.reply_question.assert_not_called()
+
+
+def test_reply_question_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reply',
+                        json={'answers': [['Blue']]}, headers=guest_h)
+    assert resp.status_code == 403
+
+
+def test_reject_question_forwards(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.return_value = [{'id': 'que_1', 'sessionID': 'oc_sess', 'questions': []}]
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reject', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'ok': True}
+    a, k = oc.reject_question.call_args
+    assert a[0] == 'que_1'
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_reject_question_not_owned_by_session_404(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_questions.return_value = []
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reject', headers=dev_h)
+    assert resp.status_code == 404
+    oc.reject_question.assert_not_called()
+
+
+def test_reject_question_guest_403(setup):
+    client, *_, guest_h, _ = setup
+    resp = client.post('/ai/chat/sessions/sess_x/questions/que_1/reject', headers=guest_h)
+    assert resp.status_code == 403
+
+
 def test_list_mcp_services_merges_servers_and_tools(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')

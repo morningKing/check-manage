@@ -58,4 +58,20 @@ describe('createEventStream', () => {
     expect(onError).toHaveBeenCalledTimes(4)
     stream.close()
   })
+
+  it('registers a named listener for every custom SSE event the store handles', () => {
+    // Regression guard: `es.onmessage` only catches the unnamed default SSE
+    // event. A named OpenCode event (e.g. `question.asked`) needs an explicit
+    // addEventListener() call here or it's silently dropped — the store's
+    // _handleEvent switch never even sees it. Bit this exact bug once: the
+    // store had a `question.asked` case that worked in unit tests (which call
+    // _handleEvent directly) but never fired for real because this list
+    // hadn't been updated.
+    createEventStream('sess_1', { onEvent: () => {}, onError: () => {} })
+    const names = FakeEventSource.last!.addEventListener.mock.calls.map((c: any[]) => c[0])
+    expect(names).toEqual(expect.arrayContaining([
+      'message.updated', 'message.part.updated', 'session.idle', 'session.error',
+      'question.asked', 'question.replied', 'question.rejected',
+    ]))
+  })
 })

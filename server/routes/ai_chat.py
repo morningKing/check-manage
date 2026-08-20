@@ -14,6 +14,9 @@ Routes registered:
     GET    /ai/chat/sessions/:id/commands list OpenCode commands + skills
     POST   /ai/chat/sessions/:id/command  run an OpenCode command
     POST   /ai/chat/sessions/:id/abort    abort the in-flight turn
+    GET    /ai/chat/sessions/:id/pending-question   get_pending_question
+    POST   /ai/chat/sessions/:id/questions/:req_id/reply   reply_question
+    POST   /ai/chat/sessions/:id/questions/:req_id/reject  reject_question
     POST   /ai/chat/sessions/:id/close    close_session
     POST   /ai/chat/sessions/:id/reopen   reopen_session
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
@@ -919,6 +922,67 @@ def abort_session(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+    return jsonify({'ok': True}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/pending-question', methods=['GET'])
+@login_required
+def get_pending_question(sid):
+    """Rehydrate a still-unanswered `question.asked` (OpenCode's built-in
+    interactive multi-choice tool) for this session. Needed because the SSE
+    event fires once — a question asked while the browser tab was closed or
+    mid-reconnect is otherwise lost forever (unlike batch turns, interactive
+    sessions have no server-side accumulation of pending state)."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    try:
+        pending = OpenCodeClient(OPENCODE_BASE_URL).list_questions(directory=sess[4])
+    except Exception:
+        logger.exception('list_questions failed session=%s', sid)
+        return jsonify({'data': None}), 200
+    match = next((q for q in pending if q.get('sessionID') == sess[2]), None)
+    return jsonify({'data': match}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/questions/<request_id>/reply', methods=['POST'])
+@write_required
+def reply_question(sid, request_id):
+    """Answer a pending question. `request_id` must actually belong to this
+    session's own pending list (checked against a fresh `list_questions()`,
+    same owned-id-set pattern as `routes/ai.py::delete_my_memory`) — otherwise
+    a caller could pass another session's/user's requestID and answer on their
+    behalf, since OpenCode's own endpoint doesn't scope by our session/user."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    body = request.get_json(force=True) or {}
+    answers = body.get('answers')
+    if not isinstance(answers, list) or not answers:
+        return jsonify({'error': 'answers is required'}), 400
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    pending = client.list_questions(directory=sess[4])
+    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+        return jsonify({'error': 'question not found', 'code': 'QUESTION_NOT_FOUND'}), 404
+    client.reply_question(request_id, answers, directory=sess[4])
+    return jsonify({'ok': True}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/questions/<request_id>/reject', methods=['POST'])
+@write_required
+def reject_question(sid, request_id):
+    """Decline a pending question (same ownership check as reply_question)."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    pending = client.list_questions(directory=sess[4])
+    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+        return jsonify({'error': 'question not found', 'code': 'QUESTION_NOT_FOUND'}), 404
+    client.reject_question(request_id, directory=sess[4])
     return jsonify({'ok': True}), 200
 
 
