@@ -29,12 +29,14 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import requests
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from utils.workspace import create_session_workspace, _rm_force
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
+from utils.session_history import render_history_block
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +105,6 @@ class _OpenCodeFacade:
         A transient REST error is reported as "not finished" so the poll loop
         retries; a persistent failure still hits SESSION_TIMEOUT_SEC -> failed.
         """
-        import requests
         try:
             raw = self._client().get_messages(oc_session_id, directory=directory) or []
         except requests.RequestException:
@@ -775,8 +776,20 @@ class BatchWorker:
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt)
-            opencode_client.send_message(oc_session_id, prompt, directory=ws,
-                                         agent=agent, model=model)
+            try:
+                opencode_client.send_message(oc_session_id, prompt, directory=ws,
+                                             agent=agent, model=model)
+            except requests.exceptions.RequestException as e:
+                # oc_session_id 对 OpenCode 已经不可用了（比如工作区 .git 被
+                # 改动过导致 project 身份变了，或 OpenCode 自己的库被清理/
+                # 迁移过）——continue 模式尤其容易撞上这个，因为它盲目复用
+                # 存量 opencode_session_id，此前没有任何校验。只包这一层
+                # send_message，不包上面的 create_session：那意味着 OpenCode
+                # 整体不可达，重建 session 大概率立刻复现同样的错误。
+                logger.warning('batch send_message dispatch failed sid=%s oc=%s: %s; '
+                               'recovering session', sid, oc_session_id, e)
+                oc_session_id = self._recover_session(sid, ws, prompt, agent, model)
+                logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
 
             # Persist the conversation progressively from the worker's own REST
             # polling (the path that already drives completion detection), so the
@@ -948,6 +961,25 @@ class BatchWorker:
                         (oc_session_id, session_id),
                     )
             conn.commit()
+
+    def _recover_session(self, session_id: str, ws: str, prompt: str,
+                         agent: str, model: str) -> str:
+        """OpenCode session 失效时（send_message 派发失败）的恢复：新建
+        session + 注入历史摘要 + 更新绑定 + 重发。返回新的 opencode_session_id。
+
+        镜像 routes/ai_chat.py::_recover_session_and_resend（M3，交互式聊天
+        侧的同一个机制），共用 utils/session_history.py 的历史摘要渲染。
+
+        恢复本身失败就直接抛，不重试——调用方 _run_one 的 except Exception
+        会接住，落 failed 并带上真实的恢复失败原因；原始的派发失败原因已经
+        在调用前被 logger.warning 记下，不会丢失。
+        """
+        new_oc = opencode_client.create_session(directory=ws)
+        self._set_opencode_id(session_id, new_oc, ws)
+        history = render_history_block(session_id, exclude_msg_id=f'{session_id}:user')
+        opencode_client.send_message(new_oc, (history + prompt).strip(),
+                                     directory=ws, agent=agent, model=model)
+        return new_oc
 
     def _persist_user_prompt(self, session_id: str, prompt: str):
         """Persist the child's prompt as a user message (deterministic id, write

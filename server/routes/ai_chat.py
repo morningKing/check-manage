@@ -48,6 +48,7 @@ from utils.workspace_changes import (git_changes, file_diff, expand_untracked_di
                                      get_session_files)
 from utils.workspace_outputs import list_session_files
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
+from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
@@ -459,43 +460,11 @@ def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_00
         return None
 
 
-def _render_history_block(sid, exclude_msg_id, max_turns=6):
-    """最近 max_turns*2 条消息（不含当前这条）渲染成纯文本摘要，供会话复活时重注上下文。"""
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT id, role, content FROM ai_chat_messages "
-                "WHERE session_id=%s AND id != %s "
-                "ORDER BY created_at DESC, id DESC LIMIT %s",
-                (sid, exclude_msg_id, max_turns * 2),
-            )
-            rows = cur.fetchall()
-    except Exception:
-        return ''
-    if not rows:
-        return ''
-    rows = list(reversed(rows))
-    lines = []
-    for _id, role, content in rows:
-        text = ''
-        if isinstance(content, list):
-            text = '\n'.join(p.get('text', '') for p in content
-                             if isinstance(p, dict) and p.get('type') == 'text').strip()
-        if not text:
-            continue
-        who = '用户' if role == 'user' else '助手'
-        lines.append(f'{who}: {text}')
-    if not lines:
-        return ''
-    return '[此前对话摘要（会话已恢复，供你延续上下文）]\n' + '\n'.join(lines) + '\n\n'
-
-
 def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
                                 prompt, model, agent, agent_parts):
     """OpenCode session 失效时：新建 session + 注入历史 + 更新绑定 + 重发。返回新的 opencode_session_id。"""
     new_oc = client.create_session(directory=workspace_path, title='恢复会话')
-    history = _render_history_block(sid, exclude_msg_id=current_msg_id)
+    history = render_history_block(sid, exclude_msg_id=current_msg_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s WHERE id=%s", (new_oc, sid))

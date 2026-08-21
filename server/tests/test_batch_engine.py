@@ -557,6 +557,159 @@ def test_run_one_timeout_marks_failed(user_id, db_conn, monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Test 4b: OpenCode session recovery on dispatch failure (mirrors
+# routes/ai_chat.py's M3 _recover_session_and_resend for the batch/scan path)
+# ---------------------------------------------------------------------------
+
+def test_run_one_recovers_stale_session_on_dispatch_failure(user_id, db_conn, monkeypatch, tmp_path):
+    """send_message 第一次派发失败（RequestException）：应新建 OpenCode
+    session、把 DB 的 opencode_session_id 更新为新 id、第二次 send_message
+    收到「历史摘要 + 原始 prompt」，最终仍正常完成。"""
+    import requests
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+
+    fake_oc = MagicMock()
+    fake_oc.create_session.side_effect = ['oc-stale', 'oc-recovered']
+    send_calls = []
+
+    def _send(oc_sid, content, **kw):
+        send_calls.append((oc_sid, content))
+        if oc_sid == 'oc-stale':
+            raise requests.exceptions.ConnectionError('session gone')
+        return {'id': 'msg-1'}
+    fake_oc.send_message.side_effect = _send
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'recovered reply'}]}
+    ]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    ws = str(tmp_path)
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    # No prior history for this brand-new session — render_history_block should
+    # return '' (nothing to inject), so the resent content is just the prompt.
+    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+
+    assert [c[0] for c in send_calls] == ['oc-stale', 'oc-recovered'], \
+        'expected exactly one retry against the recovered session, no more'
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, opencode_session_id FROM ai_chat_sessions WHERE id = %s",
+            (sids[0],),
+        )
+        status, oc_id = cur.fetchone()
+        assert status == 'completed'
+        assert oc_id == 'oc-recovered', 'DB binding must follow the recovered session'
+
+
+def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypatch, tmp_path):
+    """continue 模式（复用存量 opencode_session_id）遇到派发失败时，同样要
+    触发恢复，而不是直接落 failed——这是本次要补的那个不对称。"""
+    import requests
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    ws = str(tmp_path)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_chat_sessions SET status='pending', "
+            "  opencode_session_id='oc-stale', workspace_path=%s, "
+            "  continue_prompt='继续：再深入一点' WHERE id=%s",
+            (ws, sids[0]),
+        )
+    db_conn.commit()
+
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-recovered'
+    send_calls = []
+
+    def _send(oc_sid, content, **kw):
+        send_calls.append((oc_sid, content))
+        if oc_sid == 'oc-stale':
+            raise requests.exceptions.ConnectionError('session gone')
+        return {'id': 'msg-1'}
+    fake_oc.send_message.side_effect = _send
+    fake_oc.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'recovered reply'}]}
+    ]
+    fake_oc.get_messages.return_value = []
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr(eng, 'render_history_block',
+                        lambda *a, **kw: '[此前对话摘要]\n用户: 你好\n\n')
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    assert claimed[0]['opencode_session_id'] == 'oc-stale'   # sanity: is_continue path
+    w._run_one(claimed[0])
+
+    assert [c[0] for c in send_calls] == ['oc-stale', 'oc-recovered']
+    # The resent content must carry the injected history, not just the bare prompt.
+    assert '此前对话摘要' in send_calls[1][1]
+    assert '继续：再深入一点' in send_calls[1][1]
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, opencode_session_id FROM ai_chat_sessions WHERE id = %s",
+            (sids[0],),
+        )
+        status, oc_id = cur.fetchone()
+        assert status == 'completed'
+        assert oc_id == 'oc-recovered'
+
+
+def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_conn, monkeypatch, tmp_path):
+    """恢复本身也失败（新 session 建出来了，但重发也炸了）：应该落 failed，
+    错误信息反映的是恢复失败的原因，且只重试一次（不会死循环）。"""
+    import requests
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+
+    fake_oc = MagicMock()
+    fake_oc.create_session.side_effect = ['oc-stale', 'oc-recovered']
+
+    def _send(oc_sid, content, **kw):
+        raise requests.exceptions.ConnectionError(f'still broken for {oc_sid}')
+    fake_oc.send_message.side_effect = _send
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    ws = str(tmp_path)
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: ws)
+    monkeypatch.setattr(eng, 'render_history_block', lambda *a, **kw: '')
+
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+
+    assert fake_oc.create_session.call_count == 2, 'exactly one recovery attempt, no retry loop'
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, error_message, opencode_session_id FROM ai_chat_sessions WHERE id = %s",
+            (sids[0],),
+        )
+        status, err, oc_id = cur.fetchone()
+        assert status == 'failed'
+        assert 'oc-recovered' in (err or ''), \
+            'error should reflect the recovery attempt failing, not the original dispatch failure'
+        # _set_opencode_id already ran before the resend failed, so the DB
+        # binding is left pointing at the (also-broken) recovered session —
+        # a subsequent manual retry will try that one next, not loop back to
+        # the original stale id.
+        assert oc_id == 'oc-recovered'
+
+
+# ---------------------------------------------------------------------------
 # Test 5: partial status when mix of done + failed
 # ---------------------------------------------------------------------------
 
