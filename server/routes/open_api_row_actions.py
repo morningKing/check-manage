@@ -17,10 +17,14 @@ from flask import Blueprint, jsonify, request
 from auth import api_key_required, require_bound_key
 from db import get_db
 from routes.open_api import check_collection_writable, get_request_branch_id
+from utils.api_errors import (CONFLICT, FORBIDDEN, INTERNAL_ERROR, INVALID_ARGUMENT,
+                              NOT_FOUND, err, register_error_handlers)
+from utils.operation_log import log_api_operation
 from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 
 open_api_row_actions_bp = Blueprint(
     'open_api_row_actions', __name__, url_prefix='/v1/collections')
+register_error_handlers(open_api_row_actions_bp)
 
 
 def _current_key() -> dict:
@@ -47,12 +51,7 @@ def _load_row_action_context(collection, record_id, branch_id):
     return row_actions, (rec[0] if rec else None)
 
 
-def _owner_role(owner_user_id):
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute('SELECT role FROM users WHERE id = %s', (owner_user_id,))
-        row = cur.fetchone()
-    return row[0] if row else None
+_STATUS_TO_CODE = {400: INVALID_ARGUMENT, 403: FORBIDDEN, 404: NOT_FOUND, 409: CONFLICT}
 
 
 @open_api_row_actions_bp.route(
@@ -74,11 +73,11 @@ def run_row_action(collection, record_id, action_id):
     row_actions, row_data = _load_row_action_context(collection, record_id, branch_id)
     action = next((a for a in row_actions if a.get('id') == action_id), None)
     if not action:
-        return jsonify({'error': '行操作不存在'}), 404
+        return err('行操作不存在', NOT_FOUND, 404)
     if row_data is None:
-        return jsonify({'error': '记录不存在'}), 404
+        return err('记录不存在', NOT_FOUND, 404)
 
-    role = _owner_role(key['ownerUserId'])
+    role = key.get('ownerRole')
     body = request.get_json(silent=True) or {}
 
     try:
@@ -90,7 +89,7 @@ def run_row_action(collection, record_id, action_id):
             params=body.get('params') or {},
         )
     except RowActionError as e:
-        return jsonify({'error': e.message}), e.http_status
+        return err(e.message, _STATUS_TO_CODE.get(e.http_status, INTERNAL_ERROR), e.http_status)
 
     status_field = running_value = None
     if status == 'running':
@@ -99,6 +98,8 @@ def run_row_action(collection, record_id, action_id):
         except RowActionError:
             pass
 
+    log_api_operation('update', 'dynamic_data', record_id, action.get('name'),
+                      f'通过 API Key 触发行操作「{action.get("name")}」（{collection}/{record_id}）')
     return jsonify({
         'ok': True, 'status': status,
         'statusField': status_field, 'runningValue': running_value,

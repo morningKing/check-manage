@@ -28,8 +28,11 @@ def _auth_passes(mock_cursor, owner='user-42'):
     这里返回的 owner 只是让网关本身的 SELECT 有个合理的行可用，不代表测试断言的
     ownerUserId ——各测试仍通过 patch('routes.open_api_batches._current_key', ...)
     单独控制 g.api_key_info 在视图逻辑里的取值，两者互不干扰。
+
+    username/role（末两个字段）留空：只有 log_api_operation 会读它们，留空让
+    该调用静默跳过，不用为每个测试额外打桩一次假的审计 INSERT。
     """
-    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner)
+    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner, None, None)
 
 
 def test_missing_api_key_is_401(client):

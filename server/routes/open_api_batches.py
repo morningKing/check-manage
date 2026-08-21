@@ -15,11 +15,16 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
 from db import get_db
+from utils.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND,
+                              PAYLOAD_TOO_LARGE, UPSTREAM_UNAVAILABLE, err,
+                              register_error_handlers)
 from utils.batch_engine import get_worker
-from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, create_batch,
-                              delete_batch, get_batch_detail, get_batch_results,
+from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, cancel_batch,
+                              create_batch, delete_batch, get_batch_detail,
+                              get_batch_results, get_batch_usage, get_session_usage,
                               list_batches, reset_failed_to_pending)
 from utils.filename import safe_filename
+from utils.operation_log import log_api_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
 from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
@@ -28,6 +33,7 @@ from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, Workspa
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
                                 url_prefix='/v1/ai-batches')
+register_error_handlers(open_api_batches_bp)
 
 MAX_FILE_BYTES = 20 * 1024 * 1024          # 单个文件 20 MB
 STAGING_TTL_SECONDS = 24 * 3600            # 暂存目录保留 24 小时
@@ -63,12 +69,10 @@ def _guard_request_body_size():
         # proxy.py 本来也只转发带 Content-Length 的请求体）；其余无 body 的
         # GET/DELETE 正常放行。
         if 'chunked' in (request.headers.get('Transfer-Encoding') or '').lower():
-            return jsonify({'error': '请求必须携带 Content-Length，不支持分块传输'}), 411
+            return err('请求必须携带 Content-Length，不支持分块传输', INVALID_ARGUMENT, 411)
         return None
     if length > limit:
-        return jsonify({
-            'error': f'请求体超过 {limit // 1024 // 1024} MB 的上限'
-        }), 413
+        return err(f'请求体超过 {limit // 1024 // 1024} MB 的上限', PAYLOAD_TOO_LARGE, 413)
     return None
 
 
@@ -140,7 +144,7 @@ def upload_files():
     owner = _current_key()['ownerUserId']
     files = request.files.getlist('files')
     if not files:
-        return jsonify({'error': '请通过 files 字段上传至少一个文件'}), 400
+        return err('请通过 files 字段上传至少一个文件', INVALID_ARGUMENT, 400)
 
     root = _workspace_root()
     _sweep_stale_staging(root, owner)
@@ -149,26 +153,24 @@ def upload_files():
     try:
         staging = batch_staging_dir(root, owner, upload_session_id)
     except WorkspacePathError as e:
-        return jsonify({'error': str(e)}), 400
+        return err(str(e), INVALID_ARGUMENT, 400)
 
     total = 0
     saved = []
     for f in files:
         name = safe_filename(f.filename or '')
         if not name:
-            return jsonify({'error': '文件名无效'}), 400
+            return err('文件名无效', INVALID_ARGUMENT, 400)
         blob = f.read()
         if len(blob) > MAX_FILE_BYTES:
-            return jsonify({
-                'error': f'文件「{name}」超过单个文件 '
-                         f'{MAX_FILE_BYTES // 1024 // 1024} MB 的上限'
-            }), 400
+            return err(f'文件「{name}」超过单个文件 '
+                      f'{MAX_FILE_BYTES // 1024 // 1024} MB 的上限',
+                      PAYLOAD_TOO_LARGE, 400)
         total += len(blob)
         if total > MAX_UPLOAD_TOTAL_BYTES:
-            return jsonify({
-                'error': f'单次上传总大小超过 '
-                         f'{MAX_UPLOAD_TOTAL_BYTES // 1024 // 1024} MB 的上限'
-            }), 400
+            return err(f'单次上传总大小超过 '
+                      f'{MAX_UPLOAD_TOTAL_BYTES // 1024 // 1024} MB 的上限',
+                      PAYLOAD_TOO_LARGE, 400)
         dest = staging / name
         dest.write_bytes(blob)
         saved.append({'name': name,
@@ -187,17 +189,15 @@ def _validate_files(files: list, owner_user_id: str):
     root = _workspace_root()
     for f in files:
         if not isinstance(f, dict) or not f.get('name') or not f.get('path'):
-            return jsonify({'error': '每个文件需包含 name 与 path'}), 400
+            return err('每个文件需包含 name 与 path', INVALID_ARGUMENT, 400)
         if not _validate_staged_path(f['path'], owner_user_id):
-            return jsonify({'error': '文件路径无效'}), 400
+            return err('文件路径无效', INVALID_ARGUMENT, 400)
         # 形状合法 ≠ 文件还在。暂存目录超过 TTL 会被 _sweep_stale_staging 清掉；
         # 不在这里拦住的话，_prepare_workspace 会抛 FileNotFoundError 把子任务直接
         # 标成失败 —— 与其让调用方事后从结果里发现，不如在提交时就明确拒绝。
         if not os.path.isfile(os.path.join(root, str(f['path']).replace('\\', '/'))):
-            return jsonify({
-                'error': f'文件「{f["name"]}」已过期或不存在，'
-                         f'请重新调用 /uploads 上传后再提交'
-            }), 400
+            return err(f'文件「{f["name"]}」已过期或不存在，'
+                      f'请重新调用 /uploads 上传后再提交', INVALID_ARGUMENT, 400)
     return None
 
 
@@ -219,6 +219,7 @@ def _batch_out(b: dict) -> dict:
         'callbackUrl': b.get('callback_url'),
         'createdAt': b['created_at'].isoformat() if b.get('created_at') else None,
         'completedAt': b['completed_at'].isoformat() if b.get('completed_at') else None,
+        'usage': get_batch_usage(b['id']),
     }
 
 
@@ -228,7 +229,7 @@ def _validate_callback_url(url: str | None):
     if not url:
         return None
     if not (url.startswith('http://') or url.startswith('https://')):
-        return jsonify({'error': 'callbackUrl 必须是 http:// 或 https:// 开头的 URL'}), 400
+        return err('callbackUrl 必须是 http:// 或 https:// 开头的 URL', INVALID_ARGUMENT, 400)
     return None
 
 
@@ -246,7 +247,7 @@ def list_agents():
     try:
         raw = OpenCodeClient(OPENCODE_BASE_URL).list_agents()
     except Exception as e:
-        return jsonify({'error': f'OpenCode 不可用: {e}',
+        return jsonify({'error': f'OpenCode 不可用: {e}', 'code': UPSTREAM_UNAVAILABLE,
                         'agents': [], 'default': None}), 502
     _INTERNAL = {'compaction', 'title', 'summary'}
     agents = [
@@ -273,7 +274,7 @@ def list_models():
     try:
         provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
     except Exception as e:
-        return jsonify({'error': f'OpenCode 不可用: {e}',
+        return jsonify({'error': f'OpenCode 不可用: {e}', 'code': UPSTREAM_UNAVAILABLE,
                         'models': [], 'default': ''}), 502
     connected = provider_info.get('connected') or {}
     if isinstance(connected, list):
@@ -332,20 +333,20 @@ def create():
     callback_secret = (body.get('callbackSecret') or '').strip() or None
 
     if not name or not prompt:
-        return jsonify({'error': 'name 与 prompt 均为必填'}), 400
+        return err('name 与 prompt 均为必填', INVALID_ARGUMENT, 400)
     if len(prompt) > MAX_PROMPT_CHARS:
-        return jsonify({'error': f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限'}), 400
+        return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
     if not isinstance(files, list) or not files:
-        return jsonify({'error': '请至少提供一个文件'}), 400
+        return err('请至少提供一个文件', INVALID_ARGUMENT, 400)
     if len(files) > MAX_FILES_PER_BATCH:
-        return jsonify({'error': f'单批最多 {MAX_FILES_PER_BATCH} 个文件'}), 400
-    err = _validate_callback_url(callback_url)
-    if err:
-        return err
+        return err(f'单批最多 {MAX_FILES_PER_BATCH} 个文件', INVALID_ARGUMENT, 400)
+    url_err = _validate_callback_url(callback_url)
+    if url_err:
+        return url_err
 
-    err = _validate_files(files, owner)
-    if err:
-        return err
+    file_err = _validate_files(files, owner)
+    if file_err:
+        return file_err
 
     result = create_batch(
         owner,
@@ -358,6 +359,8 @@ def create():
     )
     get_worker().notify()
     b = result['batch']
+    log_api_operation('create', 'ai_chat_batch', b['id'], name,
+                      f'通过 API Key 创建批任务「{name}」（{len(files)} 个文件）')
     return jsonify({'batchId': b['id'], 'status': b['status'], 'total': b['total']}), 201
 
 
@@ -370,7 +373,7 @@ def list_():
         page = max(1, int(request.args.get('page', 1)))
         page_size = min(max(1, int(request.args.get('pageSize', 20))), 100)
     except (TypeError, ValueError):
-        return jsonify({'error': 'page 与 pageSize 必须是整数'}), 400
+        return err('page 与 pageSize 必须是整数', INVALID_ARGUMENT, 400)
 
     data = list_batches(key['ownerUserId'], page=page, page_size=page_size,
                         api_key_id=key['id'])
@@ -385,7 +388,7 @@ def detail(batch_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
     return jsonify(_batch_out(d['batch']))
 
 
@@ -396,7 +399,7 @@ def results(batch_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
     return jsonify({
         'batchId': batch_id,
         'status': d['batch']['status'],
@@ -419,7 +422,7 @@ def file_records(batch_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
     out = []
     for s in d['sessions']:
         out.append({
@@ -443,13 +446,13 @@ def import_files(batch_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
     body = request.get_json(silent=True) or {}
     paths = body.get('paths')
     if not isinstance(paths, list) or not paths:
-        return jsonify({'error': 'paths required'}), 400
+        return err('paths required', INVALID_ARGUMENT, 400)
     if len(paths) > MAX_IMPORT_PATHS:
-        return jsonify({'error': f'单次最多导入 {MAX_IMPORT_PATHS} 个文件'}), 400
+        return err(f'单次最多导入 {MAX_IMPORT_PATHS} 个文件', INVALID_ARGUMENT, 400)
     name, seq = body.get('name'), body.get('seq')
     child = None
     if seq is not None:
@@ -457,13 +460,15 @@ def import_files(batch_id):
     elif name:
         child = next((s for s in d['sessions'] if _child_name(s) == name), None)
     else:
-        return jsonify({'error': '需提供 name 或 seq 定位子会话'}), 400
+        return err('需提供 name 或 seq 定位子会话', INVALID_ARGUMENT, 400)
     if child is None:
-        return jsonify({'error': '子会话不存在'}), 404
+        return err('子会话不存在', NOT_FOUND, 404)
     if not child.get('workspace_path'):
-        return jsonify({'error': '该子会话没有工作区'}), 400
+        return err('该子会话没有工作区', INVALID_ARGUMENT, 400)
     results = import_recorded_files(child['id'], child['workspace_path'], paths,
                                     uploaded_by=None)
+    log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 导入批任务「{d["batch"].get("name")}」子会话产出文件（{len(paths)} 个）')
     return jsonify({'batchId': batch_id, 'name': _child_name(child),
                     'seq': child.get('batch_seq'), 'results': results})
 
@@ -483,8 +488,30 @@ def remove(batch_id):
         cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
     ok = delete_batch(owner, batch_id, api_key_id=key['id'])
     if not ok:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
+    log_api_operation('delete', 'ai_chat_batch', batch_id,
+                      d['batch'].get('name') if d else None,
+                      f'通过 API Key 删除批任务「{d["batch"].get("name") if d else batch_id}」')
     return jsonify({'deleted': True})
+
+
+@open_api_batches_bp.post('/<batch_id>/cancel')
+@api_key_required
+@require_bound_key
+def cancel(batch_id):
+    """请求取消一个批任务：pending 的子任务会在 worker 下一轮直接落 cancelled
+    （不占并发槽位），running 的子任务由 worker 协作式打断（调 OpenCode abort +
+    提前结束轮询）。已终态的批任务返回 409。"""
+    key = _current_key()
+    try:
+        d = cancel_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    except ValueError as e:
+        return err(str(e), CONFLICT, 409)
+    if d is None:
+        return err('批任务不存在', NOT_FOUND, 404)
+    log_api_operation('cancel', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 请求取消批任务「{d["batch"].get("name")}」')
+    return jsonify(_batch_out(d['batch']))
 
 
 @open_api_batches_bp.post('/<batch_id>/retry-failed')
@@ -494,13 +521,15 @@ def retry_failed(batch_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
     if d['batch']['status'] not in TERMINAL_STATUSES:
-        return jsonify({'error': '该批任务仍在执行中'}), 409
+        return err('该批任务仍在执行中', CONFLICT, 409)
 
     n = reset_failed_to_pending(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if n:
         get_worker().notify()
+    log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 重试批任务「{d["batch"].get("name")}」的失败子任务（{n} 个）')
     return jsonify({'retried': n})
 
 
@@ -520,24 +549,26 @@ def append(batch_id):
     files = body.get('files') or []
 
     if not isinstance(files, list) or not files:
-        return jsonify({'error': '请至少提供一个文件'}), 400
+        return err('请至少提供一个文件', INVALID_ARGUMENT, 400)
     if len(files) > MAX_FILES_PER_BATCH:
-        return jsonify({'error': f'单次最多追加 {MAX_FILES_PER_BATCH} 个文件'}), 400
+        return err(f'单次最多追加 {MAX_FILES_PER_BATCH} 个文件', INVALID_ARGUMENT, 400)
 
-    err = _validate_files(files, owner)
-    if err:
-        return err
+    file_err = _validate_files(files, owner)
+    if file_err:
+        return file_err
 
     try:
         d = append_to_batch(owner, batch_id, files, api_key_id=key['id'])
     except ValueError as e:
         # 唯一的 ValueError 来源是「追加后超过单批文件数上限」（空 files 已在上面挡掉）。
-        return jsonify({'error': str(e)}), 400
+        return err(str(e), INVALID_ARGUMENT, 400)
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
 
     get_worker().notify()
     b = d['batch']
+    log_api_operation('update', 'ai_chat_batch', batch_id, b.get('name'),
+                      f'通过 API Key 向批任务「{b.get("name")}」追加 {len(files)} 个文件')
     return jsonify({'batchId': b['id'], 'status': b['status'],
                     'total': b['total'], 'appended': len(files)})
 
@@ -559,7 +590,7 @@ def _resolve_child(d: dict, child_id: str):
     else:
         child = next((s for s in sessions if _child_name(s) == child_id), None)
     if child is None:
-        return None, (jsonify({'error': '子会话不存在'}), 404)
+        return None, err('子会话不存在', NOT_FOUND, 404)
     return child, None
 
 
@@ -572,10 +603,10 @@ def session_messages(batch_id, child_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     messages = get_child_messages(child['id'])
     return jsonify({
         'batchId': batch_id,
@@ -596,10 +627,10 @@ def session_files(batch_id, child_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     ws = child.get('workspace_path')
     if not ws:
         return jsonify({
@@ -626,26 +657,26 @@ def session_file_download(batch_id, child_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     ws = child.get('workspace_path')
     if not ws:
-        return jsonify({'error': '该子会话没有工作区'}), 400
+        return err('该子会话没有工作区', INVALID_ARGUMENT, 400)
     rel_path = request.args.get('path', '').strip()
     if not rel_path:
-        return jsonify({'error': 'path 参数必填'}), 400
+        return err('path 参数必填', INVALID_ARGUMENT, 400)
     # 安全校验：禁止 .. 穿越
     normalized = os.path.normpath(rel_path)
     if '..' in normalized.split(os.sep):
-        return jsonify({'error': '路径非法'}), 400
+        return err('路径非法', INVALID_ARGUMENT, 400)
     abs_path = os.path.join(ws, normalized)
     # 确保路径落在工作区内
     if not os.path.commonpath([ws, abs_path]).startswith(ws):
-        return jsonify({'error': '路径非法'}), 400
+        return err('路径非法', INVALID_ARGUMENT, 400)
     if not os.path.isfile(abs_path):
-        return jsonify({'error': '文件不存在'}), 404
+        return err('文件不存在', NOT_FOUND, 404)
     return send_file(abs_path, as_attachment=True)
 
 
@@ -660,13 +691,13 @@ def session_files_download_all(batch_id, child_id):
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     ws = child.get('workspace_path')
     if not ws:
-        return jsonify({'error': '该子会话没有工作区'}), 400
+        return err('该子会话没有工作区', INVALID_ARGUMENT, 400)
     # 筛选参数
     include_str = request.args.get('include', 'added,modified')
     include_statuses = {s.strip() for s in include_str.split(',') if s.strip()}
@@ -722,26 +753,28 @@ def session_files_download_all(batch_id, child_id):
 @api_key_required
 @require_bound_key
 def session_continue(batch_id, child_id):
-    """在已完成/失败的子会话上追加一轮对话，保留历史上下文。"""
+    """在已完成/失败/已取消的子会话上追加一轮对话，保留历史上下文。"""
     from utils.batch_repo import continue_child
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     body = request.get_json(silent=True) or {}
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
-        return jsonify({'error': 'prompt 必填'}), 400
+        return err('prompt 必填', INVALID_ARGUMENT, 400)
     if len(prompt) > MAX_PROMPT_CHARS:
-        return jsonify({'error': f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限'}), 400
+        return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
     try:
         continue_child(key['ownerUserId'], batch_id, child['id'], prompt)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 409
+        return err(str(e), CONFLICT, 409)
     get_worker().notify()
+    log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 继续批任务「{d["batch"].get("name")}」子会话「{_child_name(child)}」')
     return jsonify({
         'batchId': batch_id,
         'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
@@ -757,21 +790,23 @@ def session_reexecute(batch_id, child_id):
 
     与 continue 不同：删除旧对话、新建 OpenCode 会话、用批任务原始 prompt 重跑。
     与 retry-failed 不同：可对已完成的子会话重执行，不限于 failed。
-    仅限终态（completed/failed）的子会话。
+    仅限终态（completed/failed/cancelled）的子会话。
     """
     from utils.batch_repo import reexecute_child
     key = _current_key()
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
-        return jsonify({'error': '批任务不存在'}), 404
-    child, err = _resolve_child(d, child_id)
-    if err:
-        return err
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
     try:
         reexecute_child(key['ownerUserId'], batch_id, child['id'])
     except ValueError as e:
-        return jsonify({'error': str(e)}), 409
+        return err(str(e), CONFLICT, 409)
     get_worker().notify()
+    log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 重新执行批任务「{d["batch"].get("name")}」子会话「{_child_name(child)}」')
     return jsonify({
         'batchId': batch_id,
         'child': {'name': _child_name(child), 'seq': child.get('batch_seq')},
@@ -797,9 +832,9 @@ def update_config(batch_id):
     model = (body.get('model') or '').strip() or None
     callback_url = (body.get('callbackUrl') or '').strip() or None
     callback_secret = (body.get('callbackSecret') or '').strip() or None
-    err = _validate_callback_url(callback_url)
-    if err:
-        return err
+    url_err = _validate_callback_url(callback_url)
+    if url_err:
+        return url_err
     result = update_batch_config(
         key['ownerUserId'], batch_id,
         agent=agent, model=model,
@@ -808,7 +843,9 @@ def update_config(batch_id):
         callback_secret=callback_secret,
     )
     if result is None:
-        return jsonify({'error': '批任务不存在'}), 404
+        return err('批任务不存在', NOT_FOUND, 404)
+    log_api_operation('update', 'ai_chat_batch', batch_id, result['batch'].get('name'),
+                      f'通过 API Key 修改批任务「{result["batch"].get("name")}」配置')
     return jsonify(_batch_out(result['batch']))
 
 
@@ -828,7 +865,7 @@ def ai_query():
     question = (body.get('question') or '').strip()
 
     if not collection or not question:
-        return jsonify({'error': 'collection 和 question 均为必填'}), 400
+        return err('collection 和 question 均为必填', INVALID_ARGUMENT, 400)
 
     # 获取字段 schema
     page_id = f'page-{collection}'
@@ -838,7 +875,7 @@ def ai_query():
         row = cur.fetchone()
 
     if not row or not row[0]:
-        return jsonify({'error': f'未找到页面配置: {collection}'}), 404
+        return err(f'未找到页面配置: {collection}', NOT_FOUND, 404)
 
     fields = row[0]
 
@@ -847,7 +884,8 @@ def ai_query():
         raw_filter = nl_to_mongo_filter(question, fields, collection)
     except RuntimeError as e:
         status = 503 if 'API Key' in str(e) else 500
-        return jsonify({'error': str(e)}), status
+        code = UPSTREAM_UNAVAILABLE if status == 503 else INTERNAL_ERROR
+        return err(str(e), code, status)
 
     # 安全回落：修正 LLM 可能使用的中文标签
     safe_filter = remap_labels(raw_filter, fields)
@@ -858,6 +896,7 @@ def ai_query():
     except MongoQueryError as e:
         return jsonify({
             'error': f'AI 生成的查询语法无效: {e}',
+            'code': INVALID_ARGUMENT,
             'raw_filter': safe_filter,
         }), 422
 

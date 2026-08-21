@@ -16,7 +16,7 @@ def _fake_auth_db(mock_conn):
 
 
 def _auth_passes(mock_cursor, owner='user-42'):
-    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner)
+    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner, None, None)
 
 
 def _key(owner='user-42'):

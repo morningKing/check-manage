@@ -35,7 +35,7 @@ def _fake_auth_db(mock_conn):
 
 
 def _auth_passes(mock_cursor, owner='user-42'):
-    mock_cursor.fetchone.return_value = ('ak-1', 'k', True, owner)
+    mock_cursor.fetchone.return_value = ('ak-1', 'k', True, owner, None, None)
 
 
 # ---------- file-records ----------

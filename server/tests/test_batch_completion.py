@@ -110,7 +110,7 @@ def test_await_finished_stalls_fast_not_session_timeout(monkeypatch):
     t0 = time.time()
     raised = None
     try:
-        w._await_finished('oc-x')
+        w._await_finished('oc-x', 'sid-test')
     except eng._SessionTimeout as e:
         raised = e
     elapsed = time.time() - t0

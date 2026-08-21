@@ -145,7 +145,7 @@ POST /api/v1/ai-scan-tasks/{taskId}/run-now   # 立即触发一次扫描
 | 404 | `taskId` 不存在，或存在但不属于这把密钥 |
 | 500 | 扫描引擎执行异常（认领/建批任务失败），详情请查看服务端日志 |
 
-> ⚠️ 本端点的 `error` 文案是中文，与 `ai-batch-api.md` 同一惯例（AI 相关对外端点家族），不同于 `open-api.md` 数据集合接口的英文惯例。
+> ⚠️ 本端点的 `error` 文案是中文，与 `ai-batch-api.md` 同一惯例（AI 相关对外端点家族），不同于 `open-api.md` 数据集合接口的英文惯例。响应体还带一个机器可判别的 `code` 字段（取值同 `ai-batch-api.md` §7.2：`NOT_FOUND`/`INTERNAL_ERROR` 等），`error` 字符串本身不变，程序化判断请优先用 `code`。
 
 **curl 示例**
 

@@ -17,10 +17,14 @@ mem0 的 m.delete(memory_id=...)），所以删除前必须先 list_memories(own
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
+from utils.api_errors import (INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FOUND, err,
+                              register_error_handlers)
 from utils.memory import add_memory_text, delete_memory, get_memory, list_memories
+from utils.operation_log import log_api_operation
 
 open_api_memories_bp = Blueprint(
     'open_api_memories', __name__, url_prefix='/v1/memories')
+register_error_handlers(open_api_memories_bp)
 
 
 def _current_key() -> dict:
@@ -44,14 +48,16 @@ def add_my_memory():
     text = (body.get('text') or '').strip()
     verbatim = bool(body.get('verbatim'))
     if not text:
-        return jsonify({'error': '内容不能为空'}), 400
+        return err('内容不能为空', INVALID_ARGUMENT, 400)
     if len(text) > 2000:
-        return jsonify({'error': '内容过长（上限 2000 字符）'}), 400
+        return err('内容过长（上限 2000 字符）', INVALID_ARGUMENT, 400)
     if get_memory() is None:
         return jsonify({'error': '记忆功能未配置（缺少 API Key 或未启用底层）',
                         'code': 'MEMORY_UNAVAILABLE'}), 409
     if not add_memory_text(owner, text, infer=not verbatim):
-        return jsonify({'error': '写入失败'}), 500
+        return err('写入失败', INTERNAL_ERROR, 500)
+    log_api_operation('create', 'ai_memory', None, None,
+                      '通过 API Key 补写长期记忆' + ('（原样保存）' if verbatim else ''))
     return jsonify({'ok': True, 'memories': list_memories(owner)})
 
 
@@ -64,6 +70,8 @@ def delete_my_memory(memory_id):
     # delete_memory 本身不做这个校验，见文件头注释。
     owned = {m.get('id') for m in list_memories(owner)}
     if memory_id not in owned:
-        return jsonify({'error': 'not found'}), 404
+        return err('not found', NOT_FOUND, 404)
     delete_memory(memory_id)
+    log_api_operation('delete', 'ai_memory', memory_id, None,
+                      f'通过 API Key 删除长期记忆 {memory_id}')
     return jsonify({'ok': True})

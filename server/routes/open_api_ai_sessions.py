@@ -19,11 +19,14 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
 from routes.open_api_batches import MAX_FILES_PER_BATCH, MAX_PROMPT_CHARS, _validate_files
-from utils.ai_session_repo import create_session, get_session_for_owner
+from utils.ai_session_repo import cancel_session, create_session, get_session_for_owner
+from utils.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
 from utils.batch_engine import get_worker
+from utils.operation_log import log_api_operation
 
 open_api_ai_sessions_bp = Blueprint(
     'open_api_ai_sessions', __name__, url_prefix='/v1/ai-sessions')
+register_error_handlers(open_api_ai_sessions_bp)
 
 
 def _current_key() -> dict:
@@ -42,6 +45,7 @@ def _session_out(row: dict) -> dict:
         'output': row.get('output'),
         'error': row.get('error'),
         'files': row.get('files') or [],
+        'usage': row.get('usage'),
     }
 
 
@@ -55,28 +59,30 @@ def create():
     body = request.get_json(silent=True) or {}
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
-        return jsonify({'error': 'prompt 必填'}), 400
+        return err('prompt 必填', INVALID_ARGUMENT, 400)
     if len(prompt) > MAX_PROMPT_CHARS:
-        return jsonify({'error': f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限'}), 400
+        return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
     title = (body.get('title') or '').strip() or None
     agent = (body.get('agent') or '').strip() or None
     model = (body.get('model') or '').strip() or None
 
     files = body.get('files') or []
     if not isinstance(files, list):
-        return jsonify({'error': 'files 必须是数组'}), 400
+        return err('files 必须是数组', INVALID_ARGUMENT, 400)
     if len(files) > MAX_FILES_PER_BATCH:
-        return jsonify({'error': f'files 最多 {MAX_FILES_PER_BATCH} 个'}), 400
+        return err(f'files 最多 {MAX_FILES_PER_BATCH} 个', INVALID_ARGUMENT, 400)
     if files:
-        err = _validate_files(files, key['ownerUserId'])
-        if err:
-            return err
+        file_err = _validate_files(files, key['ownerUserId'])
+        if file_err:
+            return file_err
 
     row = create_session(
         key['ownerUserId'], prompt=prompt, agent=agent, model=model,
         title=title, api_key_id=key['id'], files=files or None,
     )
     get_worker().notify()
+    log_api_operation('create', 'ai_chat_session', row['id'], title,
+                      f'通过 API Key 创建单会话「{title or row["id"]}」')
     return jsonify({'sessionId': row['id'], 'status': row['status']}), 201
 
 
@@ -84,11 +90,30 @@ def create():
 @api_key_required
 @require_bound_key
 def detail(session_id):
-    """查询单会话状态。`status` 为 pending/running/completed/failed；`output`
-    只在 completed 时非 null，`error` 只在 failed 时非 null。没有 SSE——轮询
-    是唯一的完成信号获取方式。"""
+    """查询单会话状态。`status` 为 pending/running/completed/failed/cancelled；
+    `output` 只在 completed 时非 null，`error` 只在 failed 时非 null。没有
+    SSE——轮询是唯一的完成信号获取方式。"""
     key = _current_key()
     row = get_session_for_owner(session_id, key['ownerUserId'], key['id'])
     if not row:
-        return jsonify({'error': '会话不存在'}), 404
+        return err('会话不存在', NOT_FOUND, 404)
+    return jsonify(_session_out(row))
+
+
+@open_api_ai_sessions_bp.post('/<session_id>/cancel')
+@api_key_required
+@require_bound_key
+def cancel(session_id):
+    """请求取消一个单会话：pending 时 worker 下一轮直接落 cancelled（不占并发
+    槽位）；running 时 worker 协作式打断（调 OpenCode abort + 提前结束轮询）。
+    已终态的会话返回 409。"""
+    key = _current_key()
+    try:
+        row = cancel_session(session_id, key['ownerUserId'], key['id'])
+    except ValueError as e:
+        return err(str(e), CONFLICT, 409)
+    if row is None:
+        return err('会话不存在', NOT_FOUND, 404)
+    log_api_operation('cancel', 'ai_chat_session', session_id, row.get('title'),
+                      f'通过 API Key 请求取消单会话「{row.get("title") or session_id}」')
     return jsonify(_session_out(row))

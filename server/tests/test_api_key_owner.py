@@ -32,12 +32,16 @@ def test_api_key_info_carries_owner_user_id():
     def probe():
         return jsonify(g.api_key_info)
 
-    # (id, name, is_active, owner_user_id)
-    with patch.object(auth_mod, 'get_db', _fake_db(('ak-1', '集成密钥', True, 'user-42'))):
+    # (id, name, is_active, owner_user_id, owner_username, owner_role)
+    with patch.object(auth_mod, 'get_db',
+                      _fake_db(('ak-1', '集成密钥', True, 'user-42', 'alice', 'developer'))):
         resp = app.test_client().get('/probe', headers={'X-API-Key': 'cm_whatever'})
 
     assert resp.status_code == 200
-    assert resp.get_json() == {'id': 'ak-1', 'name': '集成密钥', 'ownerUserId': 'user-42'}
+    assert resp.get_json() == {
+        'id': 'ak-1', 'name': '集成密钥', 'ownerUserId': 'user-42',
+        'ownerUsername': 'alice', 'ownerRole': 'developer',
+    }
 
 
 def test_api_key_info_owner_can_be_none_for_legacy_keys():
@@ -52,7 +56,7 @@ def test_api_key_info_owner_can_be_none_for_legacy_keys():
     def probe():
         return jsonify(g.api_key_info)
 
-    with patch.object(auth_mod, 'get_db', _fake_db(('ak-old', '老密钥', True, None))):
+    with patch.object(auth_mod, 'get_db', _fake_db(('ak-old', '老密钥', True, None, None, None))):
         resp = app.test_client().get('/probe', headers={'X-API-Key': 'cm_whatever'})
 
     assert resp.status_code == 200

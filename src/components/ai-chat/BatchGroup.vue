@@ -21,10 +21,10 @@
         <span class="bg-child__file">{{ fileName(s.batch_input_file) }}</span>
         <span class="bg-child__preview"
               :class="{ 'is-error': s.status === 'failed' && !!s.error_message }"
-              :title="(s.status === 'failed' && s.error_message) || s.last_message_preview || ''">
-          {{ (s.status === 'failed' && s.error_message) ? s.error_message : (s.last_message_preview || '') }}
+              :title="(['failed', 'cancelled'].includes(s.status) && s.error_message) || s.last_message_preview || ''">
+          {{ (['failed', 'cancelled'].includes(s.status) && s.error_message) ? s.error_message : (s.last_message_preview || '') }}
         </span>
-        <ElIcon v-if="s.status === 'completed' || s.status === 'failed'"
+        <ElIcon v-if="['completed', 'failed', 'cancelled'].includes(s.status)"
                 class="bg-child__reexec" title="重新执行（清空上下文）"
                 @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
       </div>
@@ -95,6 +95,7 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .dot--completed { background: var(--el-color-success); }
 .dot--failed { background: var(--el-color-danger); }
 .dot--running { background: var(--el-color-warning); }
+.dot--cancelled { background: var(--el-text-color-secondary); }
 .bg-child__reexec { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__reexec:hover { color: var(--el-color-primary); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }

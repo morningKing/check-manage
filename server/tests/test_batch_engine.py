@@ -774,7 +774,7 @@ def test_await_finished_no_session_cap_but_stall_still_guards(monkeypatch):
     fake = MagicMock(); fake.list_messages.return_value = [idle]
     monkeypatch.setattr(eng, 'opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
-        w._await_finished('oc')
+        w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
     assert '没有任何新进展' in str(ei.value)
 
@@ -799,7 +799,7 @@ def test_await_finished_calls_on_progress_for_live_persist(monkeypatch):
     fake.list_messages.side_effect = lm
     monkeypatch.setattr(eng, 'opencode_client', fake)
     progress = {'n': 0}
-    w._await_finished('oc', on_progress=lambda: progress.__setitem__('n', progress['n'] + 1))
+    w._await_finished('oc', 'sid-test', on_progress=lambda: progress.__setitem__('n', progress['n'] + 1))
     assert progress['n'] >= 2   # persisted live during the run, not just at the end
 
 
@@ -858,7 +858,7 @@ def test_await_finished_no_stall_while_reasoning_growing(monkeypatch):
         return seq[i]
     fake.list_messages.side_effect = lm
     monkeypatch.setattr(eng, 'opencode_client', fake)
-    preview, msg = w._await_finished('oc')
+    preview, msg = w._await_finished('oc', 'sid-test')
     assert msg['finished'] is True          # completed, NOT stalled
 
 
@@ -900,7 +900,7 @@ def test_await_finished_no_stall_while_tool_running(monkeypatch):
         return seq[i]
     fake.list_messages.side_effect = lm
     monkeypatch.setattr(eng, 'opencode_client', fake)
-    preview, msg = w._await_finished('oc')
+    preview, msg = w._await_finished('oc', 'sid-test')
     assert msg['finished'] is True          # completed, NOT stalled
 
 
@@ -920,7 +920,7 @@ def test_await_finished_still_stalls_when_truly_idle(monkeypatch):
     fake.list_messages.return_value = [idle]
     monkeypatch.setattr(eng, 'opencode_client', fake)
     with _pytest.raises(_SessionTimeout) as ei:
-        w._await_finished('oc')
+        w._await_finished('oc', 'sid-test')
     assert ei.value.reason == 'stalled (no progress)'
     assert '没有任何新进展' in str(ei.value)
 
@@ -1080,7 +1080,7 @@ def test_await_finished_fails_fast_on_opencode_error(monkeypatch):
 
     t0 = _time.time()
     with _pytest.raises(eng._TurnFailed) as ei:
-        w._await_finished('oc')
+        w._await_finished('oc', 'sid-test')
     elapsed = _time.time() - t0
 
     msg = str(ei.value)
@@ -1103,7 +1103,7 @@ def test_await_finished_ignores_error_none(monkeypatch):
     fake.list_messages.return_value = [done]
     monkeypatch.setattr(eng, 'opencode_client', fake)
 
-    preview, msg = w._await_finished('oc')
+    preview, msg = w._await_finished('oc', 'sid-test')
 
     assert msg['finished'] is True
 

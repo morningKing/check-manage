@@ -127,6 +127,12 @@ CREATE TABLE IF NOT EXISTS operation_logs (
 CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_action ON operation_logs(action);
 CREATE INDEX IF NOT EXISTS idx_operation_logs_target_type ON operation_logs(target_type);
+-- Marks a log row as originating from an external API Key call rather than a
+-- JWT/UI action by the same operator. operator_id/name/role still attribute
+-- the call to the key's bound user (log_api_operation in utils/operation_log.py) —
+-- this column is only the "came in via a key" flag, nullable so UI-originated
+-- rows stay untouched.
+ALTER TABLE operation_logs ADD COLUMN IF NOT EXISTS api_key_id VARCHAR(100);
 
 CREATE TABLE IF NOT EXISTS backups (
     id              VARCHAR(100) PRIMARY KEY,
@@ -755,6 +761,12 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 -- str|list[str] handling) instead of the single batch_input_file column,
 -- since one session can carry more than one file.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS input_files JSONB;
+-- Cooperative-cancel flag for the external POST .../cancel endpoints (both
+-- batch children and standalone sessions live in this one table). No CHECK
+-- constraint on `status`, so the worker can write the literal 'cancelled'
+-- terminal value straight into that column — see utils/batch_engine.py's
+-- claim-time sweep + mid-run _await_finished check.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE;
 -- Admin session list index: covers ORDER BY created_at DESC with optional
 -- status/source_type filters. Partial index on status keeps it small.
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list

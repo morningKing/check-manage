@@ -1,5 +1,9 @@
 export type BatchStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
-export type BatchSessionStatus = 'pending' | 'running' | 'completed' | 'failed'
+// 'cancelled' 只会出现在对外 API 触发的取消（POST .../cancel，见
+// docs/user-guide/integration/ai-batch-api.md）——UI 目前没有取消入口，但外部
+// 调用方取消后，这条子会话状态会经同一个 batch worker 落回这张表，UI 侧的批
+// 任务详情/管理页也会看到它，所以类型和展示分支都要能处理它。
+export type BatchSessionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface AiChatBatch {
   id: string

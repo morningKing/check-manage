@@ -1,0 +1,946 @@
+openapi: 3.1.0
+info:
+  title: check-manage AI 能力对外 API
+  version: "1.0.0"
+  description: |
+    覆盖对外 API Key 鉴权的六大 AI 能力家族：AI 批任务、AI 单会话、AI 定时扫描任务触发、
+    行操作触发、Prompt 模板、长期记忆。**不含** `open-api.md` 描述的数据集合 CRUD 接口
+    （那部分是独立的 `open-api-reference.html`/openapi 文档范围）。
+
+    详细的流程说明、限制、常见问题见各自的 Markdown 文档（本文件只是机器可读的契约，
+    人读的叙述性内容请参见）：
+    - docs/user-guide/integration/ai-batch-api.md
+    - docs/user-guide/integration/ai-session-api.md
+    - docs/user-guide/ai/scan-tasks.md（§10）
+    - docs/user-guide/data/row-actions.md（§11）
+    - docs/user-guide/ai/batch-tasks.md（Prompt 模板 → 对外 API）
+    - docs/user-guide/ai/long-term-memory.md（对外 API）
+
+    **鉴权**：所有端点要求请求头 `X-API-Key: <密钥>`，且该密钥必须已绑定用户（在密钥管理页
+    新建的密钥默认绑定创建者本人；存量未绑定密钥会被拒绝，需要重新创建）。
+
+    **错误响应**：统一的 JSON 形状 `{"error": "...", "code": "..."}`。`error` 是人读文案
+    （AI 批任务/单会话/扫描任务/行操作家族为中文，Prompt 模板/长期记忆家族沿用各自内部路由
+    的既有语言，行操作端点的 `error` 是唯一保留中文原文的例外——见 row-actions.md §11 的
+    专门说明）；`code` 是新增的机器可判别字段，取值见下方 `ErrorCode` schema。未预期的服务端
+    异常也保证返回这个 JSON 形状（而不是 HTML 错误页），`code` 为 `INTERNAL_ERROR`。
+  license:
+    name: Internal use only
+
+servers:
+  - url: https://<host>/api
+    description: 生产环境（经 proxy.py 反向代理）
+  - url: http://localhost:3002
+    description: 开发环境直连后端
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: ai-batches
+    description: AI 批任务（N 个文件 → N 个独立 AI 会话）
+  - name: ai-sessions
+    description: AI 单会话（一句 prompt → 一个 AI 会话）
+  - name: ai-scan-tasks
+    description: AI 定时扫描任务的对外查询与立即触发
+  - name: row-actions
+    description: 数据页行操作的对外触发
+  - name: prompt-templates
+    description: Prompt 模板对外 CRUD
+  - name: memories
+    description: 长期记忆对外管理
+
+paths:
+  /v1/ai-batches/agents:
+    get:
+      tags: [ai-batches]
+      summary: 列出可用 Agent
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                  default: { type: string, nullable: true }
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+
+  /v1/ai-batches/models:
+    get:
+      tags: [ai-batches]
+      summary: 列出可用模型
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: "openai/gpt-4" }
+                        label: { type: string }
+                        providerID: { type: string }
+                        modelID: { type: string }
+                  default: { type: string }
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+
+  /v1/ai-batches/skills:
+    get:
+      tags: [ai-batches]
+      summary: 列出可用全局 Skill
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skills:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+
+  /v1/ai-batches/uploads:
+    post:
+      tags: [ai-batches]
+      summary: 上传文件到暂存区
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        path: { type: string, description: 不透明的暂存路径，原样传给创建/追加接口 }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /v1/ai-batches:
+    post:
+      tags: [ai-batches]
+      summary: 创建批任务
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, prompt, files]
+              properties:
+                name: { type: string }
+                prompt: { type: string, maxLength: 20000 }
+                files:
+                  type: array
+                  items: { $ref: '#/components/schemas/StagedFileRef' }
+                agent: { type: string, nullable: true }
+                model: { type: string, nullable: true }
+                callbackUrl: { type: string, nullable: true, format: uri }
+                callbackSecret: { type: string, nullable: true }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId: { type: string }
+                  status: { $ref: '#/components/schemas/BatchStatus' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+    get:
+      tags: [ai-batches]
+      summary: 分页列出本密钥创建的批任务
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: pageSize
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/BatchSummary' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+
+  /v1/ai-batches/{batchId}:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    get:
+      tags: [ai-batches]
+      summary: 查询批任务详情
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [ai-batches]
+      summary: 修改批任务配置（整体替换，非局部 patch）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                agent: { type: string, nullable: true }
+                model: { type: string, nullable: true }
+                callbackUrl: { type: string, nullable: true, format: uri }
+                callbackSecret: { type: string, nullable: true }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchSummary' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [ai-batches]
+      summary: 删除批任务（不可逆）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    post:
+      tags: [ai-batches]
+      summary: 请求取消批任务
+      description: |
+        协作式取消：pending 子任务在下一轮调度时直接标记 cancelled（不占并发槽位），
+        running 子任务在下一次轮询时（通常几秒内）被中止后标记 cancelled。调用后仍需
+        轮询 GET /{batchId} 或 /results 确认取消生效。已终态的批任务返回 409。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BatchSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/results:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    get:
+      tags: [ai-batches]
+      summary: 取回每个文件的处理结果
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId: { type: string }
+                  status: { $ref: '#/components/schemas/BatchStatus' }
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChildResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/retry-failed:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    post:
+      tags: [ai-batches]
+      summary: 把失败的子任务重置为待处理
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retried: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/append:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    post:
+      tags: [ai-batches]
+      summary: 向已有批任务追加文件（任何状态均可）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items: { $ref: '#/components/schemas/StagedFileRef' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId: { type: string }
+                  status: { $ref: '#/components/schemas/BatchStatus' }
+                  total: { type: integer }
+                  appended: { type: integer }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/sessions/{childId}/continue:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+      - $ref: '#/components/parameters/ChildId'
+    post:
+      tags: [ai-batches]
+      summary: 在已终态（completed/failed/cancelled）子会话上继续对话（保留历史）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string, maxLength: 20000 }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildActionAck' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/sessions/{childId}/reexecute:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+      - $ref: '#/components/parameters/ChildId'
+    post:
+      tags: [ai-batches]
+      summary: 重新执行单个子会话（清空历史，从头重跑，仅限终态）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChildActionAck' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/sessions/{childId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+      - $ref: '#/components/parameters/ChildId'
+    get:
+      tags: [ai-batches]
+      summary: 获取子会话完整对话历史
+      responses:
+        '200':
+          description: OK
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/file-records:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    get:
+      tags: [ai-batches]
+      summary: 获取每个子会话被自动记录的新增/修改文件
+      responses:
+        '200':
+          description: OK
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/import:
+    parameters:
+      - $ref: '#/components/parameters/BatchId'
+    post:
+      tags: [ai-batches]
+      summary: 把子会话工作区里记录过的文件导入系统 data_files
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [paths]
+              properties:
+                name: { type: string, description: "定位子会话（与 seq 二选一）" }
+                seq: { type: integer, description: "定位子会话（与 name 二选一）" }
+                paths:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: OK
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-sessions:
+    post:
+      tags: [ai-sessions]
+      summary: 创建单会话
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string, maxLength: 20000 }
+                agent: { type: string, nullable: true }
+                model: { type: string, nullable: true }
+                title: { type: string, nullable: true }
+                files:
+                  type: array
+                  items: { $ref: '#/components/schemas/StagedFileRef' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId: { type: string }
+                  status: { $ref: '#/components/schemas/SessionStatus' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+
+  /v1/ai-sessions/{sessionId}:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    get:
+      tags: [ai-sessions]
+      summary: 查询单会话状态，完成后拿回答
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-sessions/{sessionId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SessionId'
+    post:
+      tags: [ai-sessions]
+      summary: 请求取消单会话
+      description: |
+        协作式取消，语义同批任务的 cancel 端点。已终态（completed/failed/cancelled）的
+        会话返回 409。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-scan-tasks:
+    get:
+      tags: [ai-scan-tasks]
+      summary: 列出这把密钥能看到的扫描任务
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items: { $ref: '#/components/schemas/ScanTask' }
+
+  /v1/ai-scan-tasks/{taskId}:
+    parameters:
+      - in: path
+        name: taskId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [ai-scan-tasks]
+      summary: 查询单个扫描任务
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScanTask' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-scan-tasks/{taskId}/run-now:
+    parameters:
+      - in: path
+        name: taskId
+        required: true
+        schema: { type: string }
+    post:
+      tags: [ai-scan-tasks]
+      summary: 立即触发一次扫描（同步认领 + 建批任务，AI 处理异步）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  triggered: { type: boolean }
+                  claimedCount: { type: integer, nullable: true }
+                  lastError: { type: string, nullable: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /v1/collections/{collection}/{recordId}/row-actions/{actionId}/run:
+    parameters:
+      - in: path
+        name: collection
+        required: true
+        schema: { type: string }
+      - in: path
+        name: recordId
+        required: true
+        schema: { type: string }
+      - in: path
+        name: actionId
+        required: true
+        schema: { type: string }
+      - in: query
+        name: branchId
+        schema: { type: string }
+        description: 默认作用于系统配置的对外默认分支
+    post:
+      tags: [row-actions]
+      summary: 触发一个已在页面上配置好的行操作
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                params:
+                  type: object
+                  description: 原样透传给 run_action，不做二次类型/必填校验
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string, enum: [submitted, running] }
+                  statusField: { type: string, nullable: true }
+                  runningValue: { type: string, nullable: true }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/prompt-templates:
+    get:
+      tags: [prompt-templates]
+      summary: 列出当前用户的全部模板
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items: { $ref: '#/components/schemas/PromptTemplate' }
+    post:
+      tags: [prompt-templates]
+      summary: 新建模板
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name: { type: string, maxLength: 200 }
+                content: { type: string }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromptTemplate' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/prompt-templates/{templateId}:
+    parameters:
+      - in: path
+        name: templateId
+        required: true
+        schema: { type: string }
+    get:
+      tags: [prompt-templates]
+      summary: 查询单个模板
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromptTemplate' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [prompt-templates]
+      summary: 修改模板
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name: { type: string, maxLength: 200 }
+                content: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PromptTemplate' }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [prompt-templates]
+      summary: 删除模板
+      responses:
+        '204':
+          description: No Content
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories:
+    get:
+      tags: [memories]
+      summary: 列出当前用户的全部长期记忆
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memories:
+                    type: array
+                    items: { type: object, description: 原样透传 mem0 返回形状 }
+    post:
+      tags: [memories]
+      summary: 补写一条记忆
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text: { type: string, maxLength: 2000 }
+                verbatim: { type: boolean, default: false }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  memories:
+                    type: array
+                    items: { type: object }
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '409':
+          description: 记忆功能未配置/未启用
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [MEMORY_UNAVAILABLE] }
+
+  /v1/memories/{memoryId}:
+    parameters:
+      - in: path
+        name: memoryId
+        required: true
+        schema: { type: string }
+        description: mem0 生成的不透明 UUID
+    delete:
+      tags: [memories]
+      summary: 删除一条记忆
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  parameters:
+    BatchId:
+      in: path
+      name: batchId
+      required: true
+      schema: { type: string }
+    ChildId:
+      in: path
+      name: childId
+      required: true
+      schema: { type: string }
+      description: 子会话的 batch_seq（纯数字）或文件名，两者等价
+    SessionId:
+      in: path
+      name: sessionId
+      required: true
+      schema: { type: string }
+
+  schemas:
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_ARGUMENT
+        - NOT_FOUND
+        - UNAUTHORIZED
+        - FORBIDDEN
+        - PAYLOAD_TOO_LARGE
+        - CONFLICT
+        - INTERNAL_ERROR
+        - UPSTREAM_UNAVAILABLE
+        - MEMORY_UNAVAILABLE
+      description: |
+        MEMORY_UNAVAILABLE 只出现在 /v1/memories 的 409 响应里；其余七个across 六大家族通用。
+        UNAUTHORIZED/FORBIDDEN 在 401（密钥缺失/无效/已停用）场景下不一定携带 code
+        字段——那一步鉴权发生在更底层的网关，早于各蓝图自己的错误处理。
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, description: 人读文案，语言因端点家族而异，见顶层 description }
+        code: { $ref: '#/components/schemas/ErrorCode' }
+
+    Usage:
+      type: object
+      nullable: true
+      description: 用量汇总，还没有可用数据时为 null。仅供成本核算参考，不是精确计费依据。
+      properties:
+        durationMs: { type: integer }
+        tokensInput: { type: integer }
+        tokensOutput: { type: integer }
+        cost: { type: number }
+
+    StagedFileRef:
+      type: object
+      required: [name, path]
+      properties:
+        name: { type: string }
+        path: { type: string, description: "来自 POST /v1/ai-batches/uploads 响应，原样传回" }
+
+    BatchStatus:
+      type: string
+      enum: [pending, running, completed, partial, failed]
+
+    SessionStatus:
+      type: string
+      enum: [pending, running, completed, failed, cancelled]
+
+    BatchSummary:
+      type: object
+      properties:
+        batchId: { type: string }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/BatchStatus' }
+        total: { type: integer }
+        done: { type: integer }
+        failed: { type: integer, description: 含被取消（cancelled）的子任务 }
+        agent: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        callbackUrl: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+        usage: { $ref: '#/components/schemas/Usage' }
+
+    ChildResult:
+      type: object
+      properties:
+        name: { type: string }
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        output: { type: string, nullable: true, description: 仅 status=completed 时非 null }
+        error: { type: string, nullable: true }
+        usage: { $ref: '#/components/schemas/Usage' }
+
+    ChildActionAck:
+      type: object
+      properties:
+        batchId: { type: string }
+        child:
+          type: object
+          properties:
+            name: { type: string }
+            seq: { type: integer }
+        status: { type: string, enum: [running] }
+
+    SessionDetail:
+      type: object
+      properties:
+        sessionId: { type: string }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        title: { type: string, nullable: true }
+        agent: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        lastActiveAt: { type: string, format: date-time }
+        output: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+        usage: { $ref: '#/components/schemas/Usage' }
+
+    ScanTask:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        collection: { type: string }
+        branchId: { type: string }
+        scheduleIntervalMinutes: { type: integer }
+        maxRecordsPerScan: { type: integer }
+        lastRunAt: { type: string, format: date-time, nullable: true }
+        lastScanCount: { type: integer, nullable: true }
+        lastError: { type: string, nullable: true }
+
+    PromptTemplate:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        content: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+  responses:
+    InvalidArgument:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: 目标不存在，或存在但不属于本密钥（不区分两种情况，一律 404）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: 密钥未绑定用户 / 权限不足
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: 状态冲突（如对非终态资源做仅限终态的操作）
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: 请求体超过大小上限
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UpstreamUnavailable:
+      description: 底层 OpenCode 服务不可达
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: 未预期的服务端异常
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

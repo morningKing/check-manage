@@ -82,7 +82,7 @@ PUT    /api/v1/prompt-templates/{id}     # 修改，body 同 POST
 DELETE /api/v1/prompt-templates/{id}     # 删除
 ```
 
-鉴权同批任务对外 API：请求头带 `X-API-Key`，密钥必须已绑定用户；只能读写**这把密钥所属用户自己的**模板，跨用户一律 404（不用 403，不泄漏存在性）。`name` 在同一用户下唯一，重名返回 409。响应字段：`{id, name, content, createdAt, updatedAt}`（不含内部 `userId`）。
+鉴权同批任务对外 API：请求头带 `X-API-Key`，密钥必须已绑定用户；只能读写**这把密钥所属用户自己的**模板，跨用户一律 404（不用 403，不泄漏存在性）。`name` 在同一用户下唯一，重名返回 409。响应字段：`{id, name, content, createdAt, updatedAt}`（不含内部 `userId`）。错误响应沿用本文件自己一贯的英文 `error` 文案（不是批任务 API 的中文惯例），并额外带一个机器可判别的 `code` 字段（如 `INVALID_ARGUMENT`/`NOT_FOUND`/`CONFLICT`），`error` 字符串本身不变。
 
 ```bash
 curl -s -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \

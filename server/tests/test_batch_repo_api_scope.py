@@ -97,11 +97,13 @@ def test_get_batch_results_uses_basename_not_full_path():
     """batch_input_file 存的是工作区相对路径，直接返回会泄漏内部 userId。"""
     import utils.batch_repo as repo
     fake, cur = _capture_db()
-    cur.fetchall.return_value = [
-        {'batch_input_file': 'batch-staging/user-42/abc/订单A.pdf',
+    # 第一次 fetchall 是子会话行本身；第二次是 get_batch_results 为每个子会话
+    # 顺带调用 get_session_usage() 查询 ai_chat_messages.meta——没有 usage 数据。
+    cur.fetchall.side_effect = [[
+        {'id': 's-1', 'batch_input_file': 'batch-staging/user-42/abc/订单A.pdf',
          'status': 'completed', 'error_message': None,
          'content': [{'type': 'text', 'text': '第一行\n第二行'}]},
-    ]
+    ], []]
     with patch.object(repo, 'get_db', fake):
         results = repo.get_batch_results('b-1')
     assert results[0]['name'] == '订单A.pdf'
@@ -112,11 +114,11 @@ def test_get_batch_results_returns_full_text_not_first_line():
     """output 必须是完整回复，不能是 last_message_preview 的首行。"""
     import utils.batch_repo as repo
     fake, cur = _capture_db()
-    cur.fetchall.return_value = [
-        {'batch_input_file': 'batch-staging/u/s/a.pdf',
+    cur.fetchall.side_effect = [[
+        {'id': 's-1', 'batch_input_file': 'batch-staging/u/s/a.pdf',
          'status': 'completed', 'error_message': None,
          'content': [{'type': 'text', 'text': '第一行\n第二行'}]},
-    ]
+    ], []]
     with patch.object(repo, 'get_db', fake):
         results = repo.get_batch_results('b-1')
     assert '第二行' in results[0]['output']
@@ -125,13 +127,13 @@ def test_get_batch_results_returns_full_text_not_first_line():
 def test_get_batch_results_concatenates_multiple_text_parts():
     import utils.batch_repo as repo
     fake, cur = _capture_db()
-    cur.fetchall.return_value = [
-        {'batch_input_file': 'batch-staging/u/s/a.pdf',
+    cur.fetchall.side_effect = [[
+        {'id': 's-1', 'batch_input_file': 'batch-staging/u/s/a.pdf',
          'status': 'completed', 'error_message': None,
          'content': [{'type': 'text', 'text': 'AAA'},
                      {'type': 'tool_use', 'name': 'read'},
                      {'type': 'text', 'text': 'BBB'}]},
-    ]
+    ], []]
     with patch.object(repo, 'get_db', fake):
         results = repo.get_batch_results('b-1')
     assert results[0]['output'] == 'AAA\nBBB'   # tool_use 部分被丢弃
@@ -140,23 +142,23 @@ def test_get_batch_results_concatenates_multiple_text_parts():
 def test_get_batch_results_pending_child_has_null_output():
     import utils.batch_repo as repo
     fake, cur = _capture_db()
-    cur.fetchall.return_value = [
-        {'batch_input_file': 'batch-staging/u/s/a.pdf',
+    cur.fetchall.side_effect = [[
+        {'id': 's-1', 'batch_input_file': 'batch-staging/u/s/a.pdf',
          'status': 'pending', 'error_message': None, 'content': None},
-    ]
+    ], []]
     with patch.object(repo, 'get_db', fake):
         results = repo.get_batch_results('b-1')
     assert results[0] == {'name': 'a.pdf', 'status': 'pending',
-                          'output': None, 'error': None}
+                          'output': None, 'error': None, 'usage': None}
 
 
 def test_get_batch_results_failed_child_carries_error():
     import utils.batch_repo as repo
     fake, cur = _capture_db()
-    cur.fetchall.return_value = [
-        {'batch_input_file': 'batch-staging/u/s/a.pdf',
+    cur.fetchall.side_effect = [[
+        {'id': 's-1', 'batch_input_file': 'batch-staging/u/s/a.pdf',
          'status': 'failed', 'error_message': '超时', 'content': None},
-    ]
+    ], []]
     with patch.object(repo, 'get_db', fake):
         results = repo.get_batch_results('b-1')
     assert results[0]['status'] == 'failed'

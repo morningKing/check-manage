@@ -21,7 +21,7 @@ http://<host>:<port>/api/v1/ai-sessions
 
 ## 2. 范围（重要，请先读完再设计集成流程）
 
-**只有两个端点：创建 + 查状态。** 没有 list、没有 delete、没有 continue（追加一轮对话）、没有 retry。
+**只有三个端点：创建、查状态、取消。** 没有 list、没有 delete、没有 continue（追加一轮对话）、没有 retry。
 
 - 创建之后**没有 SSE 推送**，轮询 `GET /api/v1/ai-sessions/{sessionId}` 是唯一的完成信号获取方式（跟批任务一样）。
 - 一个单会话只能问一句话、拿一个答案；需要多轮对话、需要重跑、需要事后管理（列表/删除）的场景，请用批任务 API（可以只传一个文件，或者等这几个能力后续补上单会话版本）。
@@ -33,6 +33,7 @@ http://<host>:<port>/api/v1/ai-sessions
 |------|------|------|
 | POST | `/api/v1/ai-sessions` | 创建一个单会话 |
 | GET | `/api/v1/ai-sessions/{sessionId}` | 查询状态，完成后拿回答 |
+| POST | `/api/v1/ai-sessions/{sessionId}/cancel` | 请求取消一个单会话 |
 
 ### 3.1 创建单会话
 
@@ -112,22 +113,50 @@ GET /api/v1/ai-sessions/{sessionId}
   "lastActiveAt": "2026-08-18T03:20:12.000Z",
   "output": "敏捷开发的核心理念可以概括为三点：……",
   "error": null,
-  "files": []
+  "files": [],
+  "usage": { "durationMs": 8340, "tokensInput": 1200, "tokensOutput": 210, "cost": 0.0041 }
 }
 ```
 
 | 字段 | 说明 |
 |------|------|
-| `status` | `pending`（排队中）/ `running`（AI 处理中）/ `completed`（已完成）/ `failed`（失败） |
+| `status` | `pending`（排队中）/ `running`（AI 处理中）/ `completed`（已完成）/ `failed`（失败）/ `cancelled`（已被调用方取消，见 3.3） |
 | `output` | **只在 `status='completed'` 时非 null**——运行中或失败的会话可能已经落库半截文本，不设这道门会把截断的输出当成结果返回。跟批任务 `results[].output` 同一个安全门。 |
-| `error` | **只在 `status='failed'` 时非 null**，可读的失败原因（比如指定了一个 OpenCode 里不存在的 agent） |
+| `error` | **只在 `status='failed'`/`status='cancelled'` 时非 null**，可读的失败原因（`cancelled` 时是固定的"已被调用方取消"说明） |
 | `files` | 创建时随附的文件列表，`[{"name": "report1.pdf"}]`；没有文件时为 `[]`。只回显文件名，不回显内部暂存路径 |
+| `usage` | 该会话的用量汇总（`durationMs`/`tokensInput`/`tokensOutput`/`cost`），还没有可用数据时为 `null`。仅供成本核算参考，不是精确计费依据 |
 
 **错误响应**
 
 | HTTP 状态码 | 触发条件 |
 |-------------|---------|
 | 404 | `sessionId` 不存在，或存在但不是用这把密钥创建的（不区分这两种情况，均返回 404，防止探测他人会话是否存在） |
+
+### 3.3 取消会话
+
+```
+POST /api/v1/ai-sessions/{sessionId}/cancel
+```
+
+请求取消这个会话。**协作式取消，不是立即生效**：还在排队（`pending`）的会话会在下一轮调度时直接标记为 `cancelled`，从未真正开始；正在执行（`running`）的会话会在下一次轮询时（通常几秒内）中止底层 AI 会话，随后标记为 `cancelled`——调用后仍需按 3.2 轮询确认。已终态（`completed`/`failed`/`cancelled`）的会话无法再取消。
+
+**响应 — 200**（字段同 3.2）
+
+```json
+{
+  "sessionId": "b1c2d3e4-...", "status": "cancelled",
+  "title": "新会话", "agent": null, "model": null,
+  "createdAt": "2026-08-18T03:20:00.000Z", "lastActiveAt": "2026-08-18T03:20:12.000Z",
+  "output": null, "error": "已被调用方取消", "files": [], "usage": null
+}
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 404 | `sessionId` 不存在或不属于本密钥 |
+| 409 | 会话已处于终态（`completed`/`failed`/`cancelled`），无法取消 |
 
 ## 4. 轮询建议
 
@@ -147,7 +176,7 @@ SESSION_ID=$(curl -s -X POST "$BASE_URL" \
 while true; do
   RESP=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/$SESSION_ID")
   STATUS=$(echo "$RESP" | jq -r .status)
-  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ]; then
+  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "cancelled" ]; then
     echo "$RESP" | jq .
     break
   fi
@@ -172,3 +201,7 @@ done
 **Q: 传了文件之后还能查看/下载 AI 产出的文件吗？**
 
 不能。单会话没有批任务那套 `/sessions/{childId}/files`/`/files/download` 端点——`files` 只是这一轮的输入，回答只能通过 `output` 文本字段拿到。需要文件产出物管理，请用批任务 API。
+
+**Q: 发起后能取消吗？**
+
+能，见 §3.3。是协作式取消（下一轮调度/轮询时才真正生效），不是同步中断，所以取消请求返回后仍要用 §3.2 轮询确认状态变成 `cancelled`。

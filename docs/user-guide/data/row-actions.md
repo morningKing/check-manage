@@ -189,6 +189,8 @@ Content-Type: application/json
 | 409 | 该行有正在执行的动作（幂等闸门）；AI 类型动作绑定的扫描任务作用于另一个分支 |
 
 > ⚠️ **本端点的 `error` 文案是中文**，和 `open-api.md` 里数据集合接口"全英文 error"的约定不同——错误消息直接来自 `run_action` 内部的 `RowActionError`，为了不因为翻译而和界面上看到的提示语不一致，这里原样透传，不做英文改写。
+>
+> 响应体还带一个机器可判别的 `code` 字段（比如 `{"error": "记录不存在", "code": "NOT_FOUND"}`），取值与 `ai-batch-api.md` §7.2 的错误码表同一套（`INVALID_ARGUMENT`/`FORBIDDEN`/`NOT_FOUND`/`CONFLICT`/`INTERNAL_ERROR`），`error` 字符串保持不变、`code` 是新增的兄弟字段，程序化判断请优先用 `code`。
 
 **curl 示例**
 

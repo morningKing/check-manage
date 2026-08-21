@@ -25,7 +25,7 @@ def _auth_passes(mock_cursor, owner='user-42'):
     ownerUserId ——各测试仍通过 patch('routes.open_api_batches._current_key', ...)
     单独控制 g.api_key_info 在视图逻辑里的取值，两者互不干扰。
     """
-    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner)
+    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner, None, None)
 
 
 def _key(owner='user-42'):
@@ -244,7 +244,8 @@ def test_detail_returns_contract_fields_only(client, mock_conn, mock_cursor):
         resp = client.get(f'{BASE}/b-1', headers=HDR)
     body = resp.get_json()
     assert set(body) == {'batchId', 'name', 'status', 'total', 'done', 'failed',
-                         'agent', 'model', 'callbackUrl', 'createdAt', 'completedAt'}
+                         'agent', 'model', 'callbackUrl', 'createdAt', 'completedAt',
+                         'usage'}
     assert body['callbackUrl'] == 'https://example.com/hook'
     assert 'opencode_session_id' not in resp.get_data(as_text=True)
     assert 'user_id' not in resp.get_data(as_text=True)

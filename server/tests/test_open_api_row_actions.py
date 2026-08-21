@@ -20,11 +20,14 @@ def _fake_auth_db(mock_conn):
 
 
 def _auth_passes(mock_cursor, owner='user-42'):
-    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner)
+    # username/role 留空：这两个测试字段只在 log_api_operation 里用到（route 自己
+    # 的角色判断走的是被 patch 的 _current_key()，见 _key()），留空让审计日志调用
+    # 自然静默跳过，不用在每个测试里额外 patch get_db 来接一次假的 INSERT。
+    mock_cursor.fetchone.return_value = ('ak-1', '集成密钥', True, owner, None, None)
 
 
-def _key(owner='user-42', name='集成密钥'):
-    return {'id': 'ak-1', 'name': name, 'ownerUserId': owner}
+def _key(owner='user-42', name='集成密钥', role='developer'):
+    return {'id': 'ak-1', 'name': name, 'ownerUserId': owner, 'ownerRole': role}
 
 
 ACTION = {'id': 'act-1', 'label': '标记完成', 'actionType': 'webhook'}
@@ -41,7 +44,7 @@ def _patched(mock_conn, key=None, writable_error=None, branch=('main', None),
     测试场景要传 row_data=None），不能像 row_actions 那样用 None 复用默认值——
     两者语义不同：row_data=None 是一个合法的、有意义的测试输入。
     """
-    key = key or _key()
+    key = key or _key(role=role)
     row_actions = [ACTION] if row_actions is None else row_actions
     row_data = {'status': 'pending'} if row_data is _UNSET else row_data
     return [
@@ -53,7 +56,6 @@ def _patched(mock_conn, key=None, writable_error=None, branch=('main', None),
               return_value=branch),
         patch('routes.open_api_row_actions._load_row_action_context',
               return_value=(row_actions, row_data)),
-        patch('routes.open_api_row_actions._owner_role', return_value=role),
     ]
 
 

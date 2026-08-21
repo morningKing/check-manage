@@ -14,9 +14,12 @@ from flask import Blueprint, g, jsonify
 
 from auth import api_key_required, require_bound_key
 from utils import ai_scan_repo
+from utils.api_errors import INTERNAL_ERROR, NOT_FOUND, err, register_error_handlers
+from utils.operation_log import log_api_operation
 
 open_api_scan_tasks_bp = Blueprint(
     'open_api_scan_tasks', __name__, url_prefix='/v1/ai-scan-tasks')
+register_error_handlers(open_api_scan_tasks_bp)
 
 
 def _current_key() -> dict:
@@ -56,7 +59,7 @@ def get_task(task_id):
     owner = _current_key()['ownerUserId']
     t = ai_scan_repo.get_task_for_owner(task_id, owner)
     if not t:
-        return jsonify({'error': '任务不存在'}), 404
+        return err('任务不存在', NOT_FOUND, 404)
     return jsonify(_task_out(t))
 
 
@@ -67,7 +70,7 @@ def run_now(task_id):
     owner = _current_key()['ownerUserId']
     t = ai_scan_repo.get_task_for_owner(task_id, owner)
     if not t:
-        return jsonify({'error': '任务不存在'}), 404
+        return err('任务不存在', NOT_FOUND, 404)
 
     from utils.ai_scan_engine import run_task
     try:
@@ -75,9 +78,11 @@ def run_now(task_id):
     except Exception:
         import traceback
         traceback.print_exc()
-        return jsonify({'error': '运行失败，请查看服务端日志'}), 500
+        return err('运行失败，请查看服务端日志', INTERNAL_ERROR, 500)
 
     t2 = ai_scan_repo.get_task_for_owner(task_id, owner) or t
+    log_api_operation('update', 'ai_scan_task', task_id, t.get('name'),
+                      f'通过 API Key 立即运行扫描任务「{t.get("name")}」')
     return jsonify({
         'triggered': True,
         'claimedCount': t2.get('lastScanCount'),

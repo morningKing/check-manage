@@ -125,6 +125,7 @@ curl -s -X POST \
 | GET | `/api/v1/ai-batches/{batchId}` | 查询单个批任务的状态与进度 |
 | GET | `/api/v1/ai-batches/{batchId}/results` | 取回每个文件的处理结果 |
 | DELETE | `/api/v1/ai-batches/{batchId}` | 删除批任务（不可逆） |
+| POST | `/api/v1/ai-batches/{batchId}/cancel` | 请求取消批任务（尚未开始的子任务直接标记取消，正在运行的会被中止） |
 | POST | `/api/v1/ai-batches/{batchId}/retry-failed` | 把批任务中失败的子任务重置为待处理，交由后台重跑 |
 | POST | `/api/v1/ai-batches/{batchId}/append` | 向已有批任务追加文件（任何状态都可追加） |
 | POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/reexecute` | 重新执行单个子会话（清掉历史，从头开始） |
@@ -408,14 +409,15 @@ GET /api/v1/ai-batches?page=1&pageSize=20
       "model": null,
       "callbackUrl": null,
       "createdAt": "2026-08-10T03:20:00.000Z",
-      "completedAt": null
+      "completedAt": null,
+      "usage": null
     }
   ],
   "total": 1
 }
 ```
 
-只会返回**用当前这把密钥创建**的批任务（见第 8 节「隔离说明」）。
+只会返回**用当前这把密钥创建**的批任务（见第 8 节「隔离说明」）。`usage` 字段说明见 4.4。
 
 ---
 
@@ -439,9 +441,14 @@ GET /api/v1/ai-batches/{batchId}
   "model": null,
   "callbackUrl": null,
   "createdAt": "2026-08-10T03:20:00.000Z",
-  "completedAt": "2026-08-10T03:24:00.000Z"
+  "completedAt": "2026-08-10T03:24:00.000Z",
+  "usage": { "durationMs": 45230, "tokensInput": 12800, "tokensOutput": 640, "cost": 0.0312 }
 }
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `usage` | object \| null | 批任务下全部子任务的用量汇总，任一子任务还没有可用数据时（比如批任务仍是 `pending`）为 `null`。`durationMs`/`tokensOutput`/`cost` 是各子任务对应值的**累加**；`tokensInput` 也是累加（不同子任务是各自独立的 AI 会话上下文，互不共享，因此不做"取最大值"的去重）。数据来源于各子任务底层 AI 会话的执行记录，仅供成本核算参考，不是精确计费依据 |
 
 **错误响应**
 
@@ -464,8 +471,9 @@ GET /api/v1/ai-batches/{batchId}/results
   "batchId": "b1c2d3e4-...",
   "status": "completed",
   "results": [
-    { "name": "report1.pdf",  "status": "completed", "output": "……AI 的完整回复文本……", "error": null },
-    { "name": "report2.docx", "status": "failed",     "output": null, "error": "OpenCode 会话超时" }
+    { "name": "report1.pdf",  "status": "completed", "output": "……AI 的完整回复文本……", "error": null,
+      "usage": { "durationMs": 22110, "tokensInput": 6400, "tokensOutput": 320, "cost": 0.0156 } },
+    { "name": "report2.docx", "status": "failed",     "output": null, "error": "OpenCode 会话超时", "usage": null }
   ]
 }
 ```
@@ -474,9 +482,10 @@ GET /api/v1/ai-batches/{batchId}/results
 |------|------|------|
 | `status` | string | 批任务整体状态，取值同第 5 节 |
 | `results[].name` | string | 文件名，取自创建时传入的 `files[].path` 的最后一段（即 `/uploads` 落盘时用的安全化文件名）。**不是**创建时传入的 `files[].name`——如果你传的 `name` 和 `path` 的文件名部分不一致，这里返回的是后者 |
-| `results[].status` | string | 该文件对应子任务的状态：`pending` / `running` / `completed` / `failed` |
+| `results[].status` | string | 该文件对应子任务的状态：`pending` / `running` / `completed` / `failed` / `cancelled` |
 | `results[].output` | string \| null | AI 处理结果的完整文本；**该子任务 `status` 不是 `completed` 时恒为 `null`**（服务端按状态设门：执行中的半截文本、以及跑到一半超时失败的残留文本，都不会被返回） |
-| `results[].error` | string \| null | 失败原因；非 `failed` 状态恒为 `null` |
+| `results[].error` | string \| null | 失败原因；非 `failed`/`cancelled` 状态恒为 `null`（`cancelled` 时是固定的"已被调用方取消"说明） |
+| `results[].usage` | object \| null | 该子任务自己的用量，字段同 4.4 的 `usage`（单子任务口径，不做累加）；还没有可用数据时为 `null` |
 
 `results` 数组按创建时 `files` 的顺序返回，可与请求时的顺序一一对应。批任务未到终态时也能调用本接口，只是部分/全部 `output` 仍是 `null`。
 
@@ -499,6 +508,42 @@ DELETE /api/v1/ai-batches/{batchId}
 **⚠️ 不可逆**：会清理该批任务下每个子任务的 AI 会话工作区，并删除数据库记录（含全部处理结果）。删除前如果还需要结果，请先调用 4.5 取回。
 
 **错误响应**：与 4.4 相同（404）。
+
+---
+
+### 4.6a 取消批任务
+
+```
+POST /api/v1/ai-batches/{batchId}/cancel
+```
+
+请求取消该批任务下所有还没结束的子任务（`pending` 或 `running`）。**协作式取消，不是立即生效**：
+
+- 还在排队（`pending`）的子任务，会在后台下一轮调度时直接标记为 `cancelled`，从未真正开始，不消耗任何 AI 调用；
+- 正在执行（`running`）的子任务，后台会在下一次轮询时（通常几秒内）中止其底层 AI 会话，随后标记为 `cancelled`——调用本接口后仍需按 4.4/4.5 轮询，才能确认取消已经生效。
+
+被取消的子任务在批任务的 `failed` 计数里体现（与真正失败的子任务合并计数），但其自身 `status` 字段忠实记录为 `cancelled`（而不是 `failed`），便于区分"主动取消"和"真的报错"。已取消的子任务允许后续用 4.15（继续对话）或 4.16（重新执行）重新拉起。
+
+**响应 — 200**（字段同 4.4）
+
+```json
+{
+  "batchId": "b1c2d3e4-...",
+  "name": "季度报告分析",
+  "status": "running",
+  "total": 2, "done": 0, "failed": 1,
+  "agent": null, "model": null, "callbackUrl": null,
+  "createdAt": "2026-08-10T03:20:00.000Z", "completedAt": null,
+  "usage": null
+}
+```
+
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 404 | `batchId` 不存在或不属于本密钥 |
+| 409 | 批任务已处于终态（`completed`/`partial`/`failed`），没有可取消的子任务 |
 
 ---
 
@@ -954,7 +999,7 @@ POST /api/v1/ai-batches/{batchId}/sessions/{childId}/continue
 Content-Type: application/json
 ```
 
-在已完成或失败的子会话上追加一轮对话，**保留历史上下文**。`childId` 的获取和匹配规则见 4.11。AI 会看到之前的完整对话历史，然后根据新的 prompt 继续工作。
+在已完成、失败或已取消的子会话上追加一轮对话，**保留历史上下文**。`childId` 的获取和匹配规则见 4.11。AI 会看到之前的完整对话历史，然后根据新的 prompt 继续工作。
 
 **请求体**
 
@@ -1031,8 +1076,8 @@ POST /api/v1/ai-batches/{batchId}/sessions/{childId}/reexecute
 | 操作 | 历史消息 | AI 会话 | prompt | 适用范围 |
 |------|---------|---------|--------|---------|
 | `retry-failed` | 保留（仅 failed） | **新建** | 原始 | 仅 failed 子任务 |
-| `continue` | **保留** | **复用** | **新 prompt** | completed / failed |
-| **`reexecute`** | **删除** | **新建** | **原始** | completed / failed |
+| `continue` | **保留** | **复用** | **新 prompt** | completed / failed / cancelled |
+| **`reexecute`** | **删除** | **新建** | **原始** | completed / failed / cancelled |
 
 **响应 — 200**
 
@@ -1073,8 +1118,9 @@ curl -s -X POST \
 | `partial` | 全部子任务已结束，但有成功也有失败（部分完成） |
 | `failed` | 全部子任务都失败 |
 
-`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有四个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
+`completed` / `partial` / `failed` 均为终态，不会**自行**再变化。但有五个接口会主动把批任务从终态拉回非终态，调用它们之后需要重新轮询：
 
+- `cancel`：把还没结束的子任务标记为取消（该子任务计入 `failed` 计数，见 4.6a）；
 - `retry-failed`：把失败的子任务打回 `pending`；
 - `append`：追加新文件（新子任务以 `pending` 入队）；
 - `continue`：在某个子会话上继续对话（该子任务回到 `pending`）；
@@ -1088,8 +1134,9 @@ curl -s -X POST \
 | `running` | AI 正在处理该文件 |
 | `completed` | 处理成功，`output` 已可用 |
 | `failed` | 处理失败，`error` 说明原因 |
+| `cancelled` | 调用方通过 4.6a 主动取消，`error` 为固定说明文案 |
 
-子任务没有 `partial` 状态——`partial` 只出现在批任务整体状态上。
+子任务没有 `partial` 状态——`partial` 只出现在批任务整体状态上。批任务的 `failed` 计数把 `failed` 与 `cancelled` 两种子任务合并统计，但子任务自身的 `status` 字段保留区分。
 
 ---
 
@@ -1116,22 +1163,24 @@ curl -s -X POST \
 ### 7.1 统一错误格式
 
 ```json
-{ "error": "错误描述信息" }
+{ "error": "错误描述信息", "code": "INVALID_ARGUMENT" }
 ```
 
-> 与 `open-api.md` 描述的数据集合接口不同，本套接口的 `error` 文案为**中文**。
+> 与 `open-api.md` 描述的数据集合接口不同，本套接口的 `error` 文案为**中文**。`code` 是机器可判别的错误类型，取值见下表；`error` 字符串本身可能随文案措辞调整，程序化判断请优先使用 `code`。未预期的服务端异常会返回 `code: "INTERNAL_ERROR"`（HTTP 500），恒为 JSON，不会是 HTML 错误页。
 
 ### 7.2 错误码汇总
 
-| HTTP 状态码 | 触发条件 |
-|-------------|---------|
-| 401 | 请求头缺少 `X-API-Key`（`Missing API key`）/ 密钥不存在（`Invalid API key`）/ 密钥已停用（`API key has been revoked`） |
-| 403 | 密钥未绑定用户（存量密钥），见第 2 节 |
-| 400 | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建/修改配置：`name`/`prompt` 缺失（仅创建）、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在、`callbackUrl` 非空但不是 `http://`/`https://` 开头。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
-| 404 | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
-| 409 | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed`；对处于非终态的子会话调用 `continue` |
-| 411 | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |
-| 413 | 请求体超过上限（`/uploads` 为 101 MB，其余 JSON 接口为 1 MB）。这道门在**读取/解析请求体之前**就生效（反向代理与应用层各有一道），因此超大请求不会等到读完文件才报错；服务端会连同 `Connection: close` 一起返回并关闭连接，客户端若仍在发送请求体，可能会看到连接被关闭——请以收到的 413 响应为准，不要重试整包上传，先分批到 100 MB 以内 |
+| HTTP 状态码 | `code` | 触发条件 |
+|-------------|--------|---------|
+| 401 | — | 请求头缺少 `X-API-Key`（`Missing API key`）/ 密钥不存在（`Invalid API key`）/ 密钥已停用（`API key has been revoked`）。这三种由更底层的鉴权网关统一处理，不带 `code` 字段 |
+| 403 | `FORBIDDEN` | 密钥未绑定用户（存量密钥），见第 2 节 |
+| 400 | `INVALID_ARGUMENT` | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建/修改配置：`name`/`prompt` 缺失（仅创建）、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在、`callbackUrl` 非空但不是 `http://`/`https://` 开头。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
+| 404 | `NOT_FOUND` | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
+| 409 | `CONFLICT` | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed`；对处于非终态的子会话调用 `continue`；对已处于终态的批任务调用 `cancel`（见 4.6a） |
+| 411 | `INVALID_ARGUMENT` | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |
+| 413 | `PAYLOAD_TOO_LARGE` | 请求体超过上限（`/uploads` 为 101 MB，其余 JSON 接口为 1 MB）。这道门在**读取/解析请求体之前**就生效（反向代理与应用层各有一道），因此超大请求不会等到读完文件才报错；服务端会连同 `Connection: close` 一起返回并关闭连接，客户端若仍在发送请求体，可能会看到连接被关闭——请以收到的 413 响应为准，不要重试整包上传，先分批到 100 MB 以内 |
+| 502 | `UPSTREAM_UNAVAILABLE` | `/agents`/`/models` 调用时底层 OpenCode 服务不可达 |
+| 500 | `INTERNAL_ERROR` | 未预期的服务端异常 |
 
 > **关于「文件名无效」**：服务端对上传的原始文件名做安全化处理（去除路径、控制字符、非法字符等）后再落盘；该净化逻辑保证总能产出一个非空的文件名（无可用字符时回落为随机名），因此这条 400 在正常调用下不会触发，只是代码里保留的一处防御性兜底判断，这里列出仅为完整对应错误码。
 

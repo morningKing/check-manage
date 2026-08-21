@@ -181,8 +181,14 @@ def api_key_required(f):
 
         with get_db() as conn:
             cur = conn.cursor()
+            # LEFT JOIN (not JOIN): stock keys predating owner_user_id, or a
+            # deleted owner, leave owner_user_id/ownerUsername/ownerRole all
+            # NULL — require_bound_key already rejects those, this just keeps
+            # the SELECT from filtering the key row itself out.
             cur.execute(
-                'SELECT id, name, is_active, owner_user_id FROM api_keys WHERE key_hash = %s',
+                'SELECT k.id, k.name, k.is_active, k.owner_user_id, u.username, u.role '
+                'FROM api_keys k LEFT JOIN users u ON u.id = k.owner_user_id '
+                'WHERE k.key_hash = %s',
                 (key_hash,),
             )
             row = cur.fetchone()
@@ -196,7 +202,10 @@ def api_key_required(f):
                 (row[0],),
             )
 
-        g.api_key_info = {'id': row[0], 'name': row[1], 'ownerUserId': row[3]}
+        g.api_key_info = {
+            'id': row[0], 'name': row[1], 'ownerUserId': row[3],
+            'ownerUsername': row[4], 'ownerRole': row[5],
+        }
         return f(*args, **kwargs)
     return decorated
 

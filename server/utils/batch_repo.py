@@ -147,6 +147,43 @@ def delete_batch(user_id: str, batch_id: str, *,
     return deleted
 
 
+def cancel_batch(user_id: str, batch_id: str, *,
+                 api_key_id: str | None = None) -> dict | None:
+    """Request cancellation of every pending/running child of a batch.
+
+    Pending children are converted to 'cancelled' on the worker's next
+    dispatch tick without ever running (batch_engine._cancel_pending_requests);
+    running children are cooperatively aborted mid-poll
+    (batch_engine.BatchWorker._await_finished). This function only flips the
+    cancel_requested flag — it does not itself touch status/counters, since
+    the worker owns every status transition (touching it here too would race
+    the worker's own claim/poll cycle).
+
+    Raises ValueError if the batch is already terminal (nothing to cancel).
+    Returns updated batch detail, or None if not found / not owned.
+    """
+    sql = "SELECT status FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+    params = [batch_id, user_id]
+    if api_key_id is not None:
+        sql += " AND api_key_id = %s"
+        params.append(api_key_id)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row[0] in ('completed', 'partial', 'failed'):
+                raise ValueError('批任务已结束，无法取消')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET cancel_requested = true "
+                "WHERE batch_id = %s AND status IN ('pending', 'running')",
+                (batch_id,),
+            )
+        conn.commit()
+    return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
+
+
 def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
                     api_key_id: str | None = None) -> dict | None:
     """Append N child sessions to an existing batch (any status). seq continues
@@ -230,17 +267,20 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
             if not row:
                 return None
             status = row[0]
-            if status not in ('completed', 'failed'):
-                raise ValueError('only completed/failed children can be re-executed')
+            if status not in ('completed', 'failed', 'cancelled'):
+                raise ValueError('only completed/failed/cancelled children can be re-executed')
             cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (session_id,))
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
-                "  last_message_preview=NULL, error_message=NULL WHERE id = %s",
+                "  last_message_preview=NULL, error_message=NULL, cancel_requested=false "
+                "WHERE id = %s",
                 (session_id,),
             )
             if status == 'completed':
                 cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
             else:
+                # 'failed' 与 'cancelled' 都记在 failed 计数里（见
+                # batch_engine._cancel_pending_requests / _mark_cancelled）。
                 cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
         conn.commit()
     _recompute_batch_status_for(batch_id)
@@ -271,16 +311,18 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
             if not row:
                 return None
             status = row[0]
-            if status not in ('completed', 'failed'):
-                raise ValueError('only completed/failed children can be continued')
+            if status not in ('completed', 'failed', 'cancelled'):
+                raise ValueError('only completed/failed/cancelled children can be continued')
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', "
-                "  continue_prompt=%s, error_message=NULL WHERE id = %s",
+                "  continue_prompt=%s, error_message=NULL, cancel_requested=false "
+                "WHERE id = %s",
                 (prompt, session_id),
             )
             if status == 'completed':
                 cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
             else:
+                # 'failed' 与 'cancelled' 都记在 failed 计数里。
                 cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
         conn.commit()
     _recompute_batch_status_for(batch_id)
@@ -380,7 +422,7 @@ def get_batch_results(batch_id: str) -> list[dict]:
     （batch-staging/<userId>/<uploadId>/<文件名>），直接返回会泄漏内部 userId。
     """
     sql = """
-        SELECT s.batch_input_file, s.status, s.error_message,
+        SELECT s.id, s.batch_input_file, s.status, s.error_message,
                (SELECT m.content FROM ai_chat_messages m
                  WHERE m.session_id = s.id AND m.role = 'assistant'
                  ORDER BY m.seq DESC LIMIT 1) AS content
@@ -403,8 +445,70 @@ def get_batch_results(batch_id: str) -> list[dict]:
             'status': r['status'],
             'output': _text_from_content(r.get('content')) if completed else None,
             'error': r.get('error_message'),
+            'usage': get_session_usage(r['id']),
         })
     return results
+
+
+def get_session_usage(session_id: str) -> dict | None:
+    """Aggregate one session's per-message `meta` (durationMs/tokensInput/
+    tokensOutput/cost — stamped by batch_engine._persist_conversation via
+    utils.ai_message_meta.meta_from_info/public_meta, one row per OpenCode
+    assistant message) into a single usage summary for the external API.
+
+    Same combination rule as ai_message_meta.aggregate_metas (tokensInput
+    takes the max, not the sum — OpenCode resends the growing context on
+    every message, so summing would double-count; tokensOutput/cost/
+    durationMs sum since each message is genuinely separate model output).
+    We can't reuse aggregate_metas directly: it needs the `_created`/
+    `_completed` timestamps to compute a true start→finish span, but
+    `public_meta` strips those before persisting (by design — they're not
+    part of the documented per-message shape), so `durationMs` here is a sum
+    of each message's own already-computed duration instead of a span.
+
+    Returns None when the session has no usable meta yet (still pending/
+    running, or every turn ended before a measurable finish).
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT meta FROM ai_chat_messages "
+                "WHERE session_id = %s AND role = 'assistant' AND meta IS NOT NULL",
+                (session_id,),
+            )
+            metas = [r[0] for r in cur.fetchall()]
+    if not metas:
+        return None
+    return {
+        'durationMs': sum(m.get('durationMs') or 0 for m in metas),
+        'tokensInput': max(m.get('tokensInput') or 0 for m in metas),
+        'tokensOutput': sum(m.get('tokensOutput') or 0 for m in metas),
+        'cost': round(sum(m.get('cost') or 0 for m in metas), 6),
+    }
+
+
+def get_batch_usage(batch_id: str) -> dict | None:
+    """Batch-level usage: sum each child's own get_session_usage() across the
+    whole batch. Unlike within one session, children are independent
+    OpenCode contexts (separate files/prompts), so tokensInput sums here
+    too — there's no shared growing context to dedupe via max().
+
+    Returns None when no child has usable meta yet (batch still pending).
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM ai_chat_sessions WHERE batch_id = %s", (batch_id,))
+            child_ids = [r[0] for r in cur.fetchall()]
+    per_child = [get_session_usage(cid) for cid in child_ids]
+    usable = [u for u in per_child if u]
+    if not usable:
+        return None
+    return {
+        'durationMs': sum(u['durationMs'] for u in usable),
+        'tokensInput': sum(u['tokensInput'] for u in usable),
+        'tokensOutput': sum(u['tokensOutput'] for u in usable),
+        'cost': round(sum(u['cost'] for u in usable), 6),
+    }
 
 
 def _text_from_content(content) -> str | None:

@@ -12,7 +12,7 @@ import psycopg2.extras
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from utils.batch_repo import _text_from_content
+from utils.batch_repo import _text_from_content, get_session_usage
 
 
 def create_session(user_id: str, *, prompt: str,
@@ -88,4 +88,37 @@ def get_session_for_owner(session_id: str, user_id: str, api_key_id: str) -> dic
         'output': _text_from_content(row.get('content')) if completed else None,
         'error': row.get('error_message'),
         'files': [{'name': f['name']} for f in (row.get('input_files') or [])],
+        'usage': get_session_usage(row['id']),
     }
+
+
+def cancel_session(session_id: str, user_id: str, api_key_id: str) -> dict | None:
+    """Request cancellation of a standalone session (mirrors
+    batch_repo.cancel_batch for a single non-batch row). A pending session is
+    converted to 'cancelled' on the worker's next tick without ever running;
+    a running one is cooperatively aborted mid-poll — see
+    utils.batch_engine.BatchWorker._await_finished / _cancel_pending_requests
+    (both key off cancel_requested with no batch_id filter, so they already
+    cover standalone sessions for free).
+
+    Raises ValueError if the session is already terminal. Returns updated
+    detail, or None if not found / not owned.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status FROM ai_chat_sessions "
+                "WHERE id = %s AND user_id = %s AND api_key_id = %s",
+                (session_id, user_id, api_key_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row[0] not in ('pending', 'running'):
+                raise ValueError('会话已结束，无法取消')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET cancel_requested = true WHERE id = %s",
+                (session_id,),
+            )
+        conn.commit()
+    return get_session_for_owner(session_id, user_id, api_key_id)

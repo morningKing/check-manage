@@ -36,7 +36,7 @@ def _auth_passes(mock_cursor, owner='user-42'):
     ownerUserId ——各测试仍通过 patch('routes.open_api_batches._current_key', ...)
     单独控制 g.api_key_info 在视图逻辑里的取值，两者互不干扰。
     """
-    mock_cursor.fetchone.return_value = ('ak-1', 'k', True, owner)
+    mock_cursor.fetchone.return_value = ('ak-1', 'k', True, owner, None, None)
 
 
 # ---------- results ----------

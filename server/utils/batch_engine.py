@@ -25,6 +25,7 @@ import subprocess
 import threading
 import time
 import traceback
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -162,6 +163,12 @@ class _OpenCodeFacade:
         """OpenCode agents available in `directory`'s scope (global + project),
         each {'name','mode',...}. Used to validate a batch's chosen agent."""
         return self._client().list_agents(directory=directory) or []
+
+    def abort_session(self, oc_session_id: str, directory: str = '') -> None:
+        """Best-effort abort of a running OpenCode session — used by the
+        cooperative-cancel check in _await_finished. Same underlying call as
+        routes/ai_chat.py's interactive abort endpoint."""
+        self._client().abort_session(oc_session_id, directory=directory)
 
 
 # The module-level name that tests monkeypatch.
@@ -363,6 +370,16 @@ class _TurnFailed(Exception):
         self.name = self.error.get('name') or 'UnknownError'
 
 
+class _SessionCancelled(Exception):
+    """协作式取消：调用方经 POST .../cancel 把 cancel_requested 置真，
+    _await_finished 的轮询循环下一轮发现后主动 abort OpenCode 会话并提前退出，
+    而不是继续等到完成或超时。跟 etl_scheduler.py 的 cancel_requested 检查是
+    同一个模式，只是这里是在轮询循环内部检查，而不是逐步骤检查。"""
+
+    def __init__(self):
+        super().__init__('已被调用方取消')
+
+
 MAX_SUBTASK_DEPTH = 5
 
 
@@ -526,6 +543,7 @@ class BatchWorker:
         worker thread — that would leave every future batch hanging in 'pending'
         forever with no error and no recovery until Flask restarts."""
         try:
+            self._cancel_pending_requests()
             with self._lock:
                 free = self.MAX_CONCURRENT - len(self._running_session_ids)
             if free <= 0:
@@ -583,6 +601,38 @@ class BatchWorker:
                     )
             conn.commit()
         return rows
+
+    def _cancel_pending_requests(self):
+        """Convert every still-pending child with cancel_requested=true straight
+        to 'cancelled', before the claim CTE below ever sees them — so a
+        cancelled-while-queued child never occupies a worker slot. Mirrors
+        etl_scheduler.py's cancel_requested pattern, but checked pre-claim
+        instead of mid-run (the mid-run check lives in _await_finished).
+
+        Cancelled children count toward the batch's `failed` counter (same
+        aggregate bucket _mark_failed uses) — _recompute_batch_status only
+        looks at done/failed/total, so no changes needed there; the
+        distinguishing 'cancelled' vs 'failed' literal lives on the child row
+        itself for callers who want to tell the two apart.
+        """
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_sessions SET status = 'cancelled', "
+                    "  error_message = '已被调用方取消' "
+                    "WHERE status = 'pending' AND cancel_requested "
+                    "RETURNING id, batch_id"
+                )
+                rows = cur.fetchall()
+                counts = Counter(r[1] for r in rows if r[1])
+                for bid, n in counts.items():
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET failed = failed + %s WHERE id = %s",
+                        (n, bid),
+                    )
+            conn.commit()
+        for bid in counts:
+            _recompute_batch_status(bid)
 
     def _restart_audit(self):
         """Reset any 'running' batch session left over from a previous Flask
@@ -734,13 +784,16 @@ class BatchWorker:
             # background listener. Idempotent (keyed on OpenCode message ids).
             def _persist_progress():
                 self._persist_conversation(sid, prompt, oc_session_id, None, directory=ws)
-            preview, final_msg = self._await_finished(oc_session_id, directory=ws,
+            preview, final_msg = self._await_finished(oc_session_id, sid, directory=ws,
                                                       on_progress=_persist_progress)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
             if user_prompt_for_memory is not None:
                 self._record_memory(user_id, user_prompt_for_memory, final_msg)
+        except _SessionCancelled:
+            self._mark_cancelled(sid, batch_id)
+            self._notify_scan(session_row, None, ok=False)
         except (_SessionTimeout, _TurnFailed) as e:
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             self._mark_failed(sid, batch_id, error=str(e)[:500])
@@ -914,7 +967,7 @@ class BatchWorker:
             traceback.print_exc()
 
 
-    def _await_finished(self, oc_session_id: str,
+    def _await_finished(self, oc_session_id: str, sid: str,
                         directory: str = '',
                         on_progress=None) -> tuple[str | None, dict | None]:
         """Poll until the latest assistant message reports finished.
@@ -926,6 +979,11 @@ class BatchWorker:
         `on_progress` (optional) is called at most every PROGRESS_PERSIST_SEC
         while the turn runs, so callers can persist the conversation live off the
         same REST poll. Best-effort: an error there never aborts the wait.
+
+        `sid` (the child's own ai_chat_sessions.id) is checked once per poll for
+        cancel_requested — a caller-triggered cancel. When set, aborts the
+        OpenCode session (best-effort) and raises _SessionCancelled so _run_one
+        can mark the child 'cancelled' instead of waiting out the full timeout.
         """
         cap = self.SESSION_TIMEOUT_SEC
         deadline = (time.time() + cap) if cap and cap > 0 else None   # None = no hard cap
@@ -936,6 +994,12 @@ class BatchWorker:
         last_persist_at = 0.0
         first = True
         while deadline is None or time.time() < deadline:
+            if self._is_cancel_requested(sid):
+                try:
+                    opencode_client.abort_session(oc_session_id, directory=directory)
+                except Exception:
+                    traceback.print_exc()
+                raise _SessionCancelled()
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
             if on_progress and time.time() - last_persist_at >= self.PROGRESS_PERSIST_SEC:
@@ -1246,3 +1310,37 @@ class BatchWorker:
             conn.commit()
         if batch_id is not None:
             _recompute_batch_status(batch_id)
+
+    def _mark_cancelled(self, session_id: str, batch_id: str | None):
+        """Same shape as _mark_failed (cancelled counts toward the batch's
+        `failed` aggregate — see _cancel_pending_requests), but writes the
+        literal 'cancelled' status so callers can tell a deliberate cancel
+        apart from a genuine error."""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_sessions "
+                    "SET status = 'cancelled', error_message = %s "
+                    "WHERE id = %s",
+                    ('已被调用方取消', session_id),
+                )
+                if batch_id is not None:
+                    cur.execute(
+                        "UPDATE ai_chat_batches SET failed = failed + 1 "
+                        "WHERE id = %s",
+                        (batch_id,),
+                    )
+            conn.commit()
+        if batch_id is not None:
+            _recompute_batch_status(batch_id)
+
+    @staticmethod
+    def _is_cancel_requested(session_id: str) -> bool:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT cancel_requested FROM ai_chat_sessions WHERE id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+                return bool(row and row[0])

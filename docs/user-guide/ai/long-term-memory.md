@@ -53,7 +53,7 @@ DELETE /api/v1/memories/{id}     # 删除一条
 
 鉴权同批任务对外 API：请求头带 `X-API-Key`，密钥必须已绑定用户；只能读写**这把密钥所属用户自己的**记忆。
 
-**`POST` 参数**：`text`（必填，非空、≤2000 字符）；`verbatim`（可选布尔，默认 `false`——默认会被 AI 提炼成简洁事实再入库，`true` 则原样保存不提炼，同界面「原样保存」开关）。若系统未配置/未启用记忆功能（缺 AI API Key 或开关关闭），返回 `409 { "code": "MEMORY_UNAVAILABLE" }`。
+**`POST` 参数**：`text`（必填，非空、≤2000 字符）；`verbatim`（可选布尔，默认 `false`——默认会被 AI 提炼成简洁事实再入库，`true` 则原样保存不提炼，同界面「原样保存」开关）。若系统未配置/未启用记忆功能（缺 AI API Key 或开关关闭），返回 `409 { "code": "MEMORY_UNAVAILABLE" }`——其余错误响应也统一带这个机器可判别的 `code` 字段（如 `INVALID_ARGUMENT`/`NOT_FOUND`），`error` 字符串本身不变。
 
 **`memory_id` 是不透明的 mem0 UUID**：由 mem0 自己生成，本系统不做二次映射。**`DELETE` 会先校验这条记忆确实属于这把密钥所属的用户**（内部会先拉一遍该用户的全部记忆 id 做归属确认），目标 id 不在该用户名下一律 404——不能靠猜/枚举别人的 `memory_id` 删掉不属于自己的记忆。
 
