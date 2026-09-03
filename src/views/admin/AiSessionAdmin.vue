@@ -71,9 +71,11 @@
       <el-table-column label="最后活跃" width="170">
         <template #default="{ row }">{{ fmt(row.lastActiveAt || row.createdAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="100" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click.stop="openDetail(row.id)">详情</el-button>
+          <el-button link type="success" :loading="analyzing"
+                     @click.stop="onAnalyze(row.id)">分析</el-button>
           <el-button v-if="row.status === 'active'" link type="warning"
                      @click.stop="onArchive(row.id)">归档</el-button>
         </template>
@@ -129,6 +131,11 @@
                 <el-text type="danger">{{ store.detail.errorMessage }}</el-text>
               </el-descriptions-item>
             </el-descriptions>
+            <div style="margin-top: 16px">
+              <el-button type="primary" :loading="analyzing" @click="onAnalyze(store.detail!.id)">
+                轨迹分析
+              </el-button>
+            </div>
           </div>
         </el-tab-pane>
 
@@ -174,9 +181,10 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiSessionAdminStore } from '@/stores/aiSessionAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
-import { getSessionMessages, sessionFileDownloadUrl } from '@/api/aiSessionAdmin'
+import { getSessionMessages, sessionFileDownloadUrl, analyzeSession } from '@/api/aiSessionAdmin'
 
 const store = useAiSessionAdminStore()
+const analyzing = ref(false)
 
 // Filter local state
 const sourceType = ref('')
@@ -274,6 +282,20 @@ async function onArchive(sessionId: string) {
     await store.doArchive(sessionId)
     ElMessage.success('已归档')
   } catch { /* cancelled */ }
+}
+
+async function onAnalyze(sessionId: string) {
+  analyzing.value = true
+  try {
+    const res = await analyzeSession(sessionId)
+    ElMessage.success(res.message || '轨迹分析已触发')
+    // Open the analysis session in a new tab
+    window.open(`/ai-chat?session=${res.analysisSessionId}`, '_blank')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '触发分析失败')
+  } finally {
+    analyzing.value = false
+  }
 }
 
 function downloadFile(path: string) {

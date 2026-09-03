@@ -89,3 +89,13 @@ export function sessionFileDownloadUrl(sessionId: string, path: string): string 
   const p = encodeURIComponent(path)
   return `/api${BASE}/${sid}/files/download?path=${p}${authParam('&')}`
 }
+
+/**
+ * Trigger trace analysis for a session. Creates a new analysis session
+ * with the trace-analyzer skill and returns its ID.
+ */
+export function analyzeSession(sessionId: string) {
+  return post<{ analysisSessionId: string; message: string }>(
+    `${BASE}/${sessionId}/analyze`,
+  )
+}

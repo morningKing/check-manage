@@ -6,10 +6,13 @@ Endpoints (all require admin.ai_chat_admin):
   GET  /ai/chat/admin/sessions/v2/<sid>/messages — conversation history
   GET  /ai/chat/admin/sessions/v2/<sid>/files    — workspace file list
   GET  /ai/chat/admin/sessions/v2/<sid>/files/download — download file
+  POST /ai/chat/admin/sessions/v2/<sid>/analyze  — trigger trace analysis
 """
 import os
+import secrets
+import logging
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g as flask_g, jsonify, request
 from auth import require_permission, require_permission_sse
 from utils.session_admin_repo import (
     admin_get_session_detail,
@@ -144,3 +147,124 @@ def session_file_download(session_id):
     if not os.path.isfile(abs_path):
         return jsonify({'error': '文件不存在'}), 404
     return send_file(abs_path, as_attachment=True)
+
+
+@ai_session_admin_bp.post('/<session_id>/analyze')
+@require_permission('admin.ai_chat_admin')
+def analyze_session(session_id):
+    """Trigger trace analysis for a session.
+
+    Creates a new analysis session with the trace-analyzer skill injected,
+    sends an analysis prompt, and returns the new session ID.
+    """
+    from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, MCP_NAME, OPENCODE_MODEL
+    from utils.opencode_client import OpenCodeClient
+    from utils.workspace import create_session_workspace, write_opencode_config
+    from utils.session_token import generate_token
+    from utils.mcp_servers import enabled_mcp_config
+
+    logger = logging.getLogger('ai_session_admin')
+
+    # 1. Verify target session exists
+    detail = admin_get_session_detail(session_id)
+    if not detail:
+        return jsonify({'error': '会话不存在'}), 404
+
+    user = flask_g.current_user
+    user_id = user['userId']
+
+    # 2. Create analysis session
+    analysis_sid = 'sess_' + secrets.token_hex(6)
+    workspace_path = create_session_workspace(AI_WORKSPACE_ROOT, user_id, analysis_sid)
+
+    # 3. Insert DB row
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_sessions "
+            "(id, user_id, title, workspace_path, session_token, "
+            " token_expires_at, status) "
+            "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', 'active')",
+            (analysis_sid, user_id, f'轨迹分析: {session_id}', workspace_path, '_pending_'),
+        )
+
+    # 4. Generate token + write opencode.json
+    token = generate_token(analysis_sid, 24)
+    mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
+    extra_mcp = enabled_mcp_config()
+    write_opencode_config(
+        workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
+        model=OPENCODE_MODEL, extra_mcp=extra_mcp,
+    )
+
+    # 5. Inject global skills (including trace-analyzer)
+    try:
+        from utils.global_skills import inject_global_skills
+        inject_global_skills(workspace_path, AI_WORKSPACE_ROOT)
+    except Exception:
+        pass
+
+    # 6. Create OpenCode session
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    try:
+        oc_sid = client.create_session(
+            directory=workspace_path,
+            title=f'轨迹分析: {session_id}',
+        )
+    except Exception as e:
+        logger.warning('analyze: OpenCode create_session failed: %s', e)
+        return jsonify({'error': f'OpenCode 会话创建失败: {e}'}), 502
+
+    # 7. Persist opencode_session_id
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET opencode_session_id = %s WHERE id = %s",
+            (oc_sid, analysis_sid),
+        )
+
+    # 8. Build analysis prompt
+    source_info = ''
+    if detail.get('scan_task_id'):
+        source_info = f'扫描任务 {detail.get("scan_task_name") or detail["scan_task_id"]}'
+    elif detail.get('batch_id'):
+        source_info = f'批任务 {detail.get("batch_name") or detail["batch_id"]}'
+    else:
+        source_info = '交互会话'
+
+    analysis_prompt = (
+        f'使用 `trace-analyzer` 技能: '
+        f'分析会话 {session_id} 的执行轨迹。\n\n'
+        f'## 会话概况\n'
+        f'- 来源: {source_info}\n'
+        f'- 状态: {detail.get("status", "未知")}\n'
+        f'- Agent: {detail.get("agent") or detail.get("batch_agent") or "默认"}\n'
+    )
+    if detail.get('error_message'):
+        analysis_prompt += f'- 错误信息: {detail["error_message"]}\n'
+
+    # 9. Persist user message
+    msg_id = 'msg_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'user', %s)",
+            (msg_id, analysis_sid,
+             '[{"type": "text", "text": ' + __import__('json').dumps(analysis_prompt) + '}]'),
+        )
+
+    # 10. Send prompt to OpenCode
+    try:
+        client.send_prompt_async(oc_sid, analysis_prompt, directory=workspace_path)
+    except Exception as e:
+        logger.warning('analyze: send_prompt_async failed: %s', e)
+        return jsonify({'error': f'发送分析请求失败: {e}'}), 502
+
+    logger.info('analyze: triggered for %s -> analysis session %s (oc=%s)',
+                session_id, analysis_sid, oc_sid)
+
+    return jsonify({
+        'analysisSessionId': analysis_sid,
+        'message': f'已触发轨迹分析，分析会话: {analysis_sid}',
+    })
