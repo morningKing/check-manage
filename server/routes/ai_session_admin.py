@@ -13,6 +13,7 @@ import secrets
 import logging
 
 from flask import Blueprint, g as flask_g, jsonify, request
+from db import get_db
 from auth import require_permission, require_permission_sse
 from utils.session_admin_repo import (
     admin_get_session_detail,
