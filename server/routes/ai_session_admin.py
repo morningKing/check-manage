@@ -157,12 +157,13 @@ def analyze_session(session_id):
     Creates a new analysis session with the trace-analyzer skill injected,
     sends an analysis prompt, and returns the new session ID.
     """
-    from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, MCP_NAME, OPENCODE_MODEL
+    from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, OPENCODE_MODEL
     from utils.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
     from utils.session_token import generate_token
     from utils.mcp_servers import enabled_mcp_config
 
+    MCP_NAME = 'check-manage'
     logger = logging.getLogger('ai_session_admin')
 
     # 1. Verify target session exists
@@ -191,7 +192,7 @@ def analyze_session(session_id):
     # 4. Generate token + write opencode.json
     token = generate_token(analysis_sid, 24)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
-    extra_mcp = enabled_mcp_config()
+    extra_mcp = enabled_mcp_config(reserved_names=[MCP_NAME])
     write_opencode_config(
         workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
         model=OPENCODE_MODEL, extra_mcp=extra_mcp,
