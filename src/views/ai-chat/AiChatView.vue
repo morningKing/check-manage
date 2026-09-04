@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, defineAsyncComponent } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag,
@@ -387,7 +388,15 @@ function batchStatusLabel(s: string) {
 onMounted(async () => {
   try {
     await store.loadSessions()
-    if (sessions.value.length) {
+    // Check URL query parameter: /ai-chat?session=xxx
+    const route = useRoute()
+    const querySessionId = route.query.session as string | undefined
+    if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
+      // Open the specified session from URL
+      await store.openSession(querySessionId)
+      store.hydrateSessionModel(querySessionId)
+      store.hydrateSessionAgent(querySessionId)
+    } else if (sessions.value.length) {
       await store.openSession(sessions.value[0].id)
       store.hydrateSessionModel(sessions.value[0].id)
       store.hydrateSessionAgent(sessions.value[0].id)
