@@ -366,6 +366,133 @@ class TestAnalyzeTrace:
         assert "tool_calls" not in st
         assert "messages_summary" not in st
 
+    # ── anomaly detection ─────────────────────────────────────────────────
+
+    def test_detects_tool_loop(self, fake_db, mock_cursor):
+        """3+ consecutive identical tool calls detected as tool_loop."""
+        mock_cursor.fetchone.return_value = _session_row(status="failed")
+        loop_calls = [
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 1000},
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 1000},
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 1000},
+        ]
+        messages = [_msg_row("m1", "assistant", loop_calls)]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        assert len(result["anomalies"]) >= 1
+        loop = [a for a in result["anomalies"] if a["type"] == "tool_loop"]
+        assert len(loop) == 1
+        assert loop[0]["tool"] == "run_python"
+
+    def test_detects_timeout(self, fake_db, mock_cursor):
+        """Tool call with duration > 30s detected as timeout."""
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = [_msg_row("m1", "assistant", [
+            {"type": "tool_use", "name": "run_python",
+             "input": {"code": "slow"}, "status": "completed", "durationMs": 45000,
+             "result": "done"},
+        ])]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        timeout = [a for a in result["anomalies"] if a["type"] == "timeout"]
+        assert len(timeout) == 1
+        assert timeout[0]["duration_ms"] == 45000
+
+    def test_detects_empty_output(self, fake_db, mock_cursor):
+        """Completed tool call with no result detected as empty_output."""
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = [_msg_row("m1", "assistant", [
+            {"type": "tool_use", "name": "save_artifact",
+             "input": {"filename": "x.md"}, "status": "completed", "durationMs": 100},
+        ])]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        empty = [a for a in result["anomalies"] if a["type"] == "empty_output"]
+        assert len(empty) == 1
+
+    def test_detects_subtask_failed(self, fake_db, mock_cursor):
+        """Failed subtask detected as subtask_failed anomaly."""
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = []
+        subtask = _subtask_row(status="failed", error_message="timeout")
+        mock_cursor.fetchall.side_effect = [messages, [subtask], []]
+        mock_cursor.fetchone.side_effect = [_session_row(), (1, 1000, 500)]
+
+        result = self._call(fake_db, mock_cursor)
+
+        failed = [a for a in result["anomalies"] if a["type"] == "subtask_failed"]
+        assert len(failed) == 1
+        assert "timeout" in failed[0]["message"]
+
+    def test_no_anomalies_for_clean_session(self, fake_db, mock_cursor):
+        """Clean session with no issues produces empty anomalies list."""
+        mock_cursor.fetchone.return_value = _session_row(status="completed")
+        messages = [
+            _msg_row("m1", "user", [{"type": "text", "text": "do task"}]),
+            _msg_row("m2", "assistant", [
+                {"type": "text", "text": "done"},
+                {"type": "tool_use", "name": "read", "input": {"f": "x"},
+                 "status": "completed", "durationMs": 500, "result": "ok"},
+            ]),
+        ]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        assert result["anomalies"] == []
+
+    # ── scoring ────────────────────────────────────────────────────────────
+
+    def test_scores_present_for_completed_session(self, fake_db, mock_cursor):
+        """Completed session gets high task_completion score."""
+        mock_cursor.fetchone.return_value = _session_row(status="completed")
+        messages = [
+            _msg_row("m1", "assistant", [
+                {"type": "text", "text": "done"},
+                {"type": "tool_use", "name": "read", "input": {},
+                 "status": "completed", "durationMs": 500, "result": "ok"},
+            ]),
+        ]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        scores = result["scores"]
+        assert scores["task_completion"]["score"] >= 90
+        assert scores["tool_efficiency"]["score"] >= 90
+        assert scores["total"] >= 70
+        assert scores["computed_dimensions"] == 4
+        assert scores["pending_llm_dimensions"] == 2
+
+    def test_scores_penalize_anomalies(self, fake_db, mock_cursor):
+        """Anomalies reduce tool_efficiency score."""
+        mock_cursor.fetchone.return_value = _session_row(status="failed")
+        messages = [_msg_row("m1", "assistant", [
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 35000},
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 35000},
+            {"type": "tool_use", "name": "run_python", "input": {"code": "x"},
+             "status": "error", "durationMs": 35000},
+        ])]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+
+        result = self._call(fake_db, mock_cursor)
+
+        scores = result["scores"]
+        # Should be penalized for: tool_loop + timeout + invalid_retry
+        assert scores["tool_efficiency"]["score"] < 70
+        assert scores["task_completion"]["score"] < 50
+
     # ── file changes ─────────────────────────────────────────────────────
 
     def test_returns_file_changes(self, fake_db, mock_cursor):

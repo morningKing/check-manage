@@ -100,7 +100,40 @@ query_sessions(source_type="scan", status="failed", created_after="昨天日期"
 
 ### 第六步：执行评分（六维打分系统）
 
-对执行轨迹进行六维评分，每维 0-100 分。参考 MAST 失败分类法（14 种失败模式 × 3 大类）和 Agent-as-a-Judge 评估框架。
+`analyze_trace` 返回的 `anomalies` 和 `scores` 字段已包含**服务端自动计算**的异常检测和部分维度评分。你需要做的是：
+
+1. **审查 `anomalies`**：确认自动检测的异常是否准确，补充遗漏的异常
+2. **补全 `scores` 中 `computed: false` 的维度**：`instruction_adherence` 和 `reasoning_quality` 需要 LLM 判断
+3. **Skill 步骤校验**：检查 Agent 是否遵循了 Skill 定义的步骤（见下方说明）
+4. **合并输出**：将服务端分数和你的分析合并为最终评分
+
+#### 服务端已计算的维度（`scores` 字段中 `computed: true`）
+
+这些分数已由 `analyze_trace` 自动计算，你可以直接使用或微调：
+
+| 维度 | 计算依据 | 可调整情况 |
+|------|----------|-----------|
+| `task_completion` | 会话状态（completed/failed/cancelled）+ 有无最终回复 | 可根据实际输出质量微调 |
+| `tool_efficiency` | 异常扣分（tool_loop -15, invalid_retry -10, timeout -10, empty_output -5） | 可根据上下文调整扣分幅度 |
+| `resource_efficiency` | 工具调用数量 + 超时次数 | 可结合 token 消耗调整 |
+| `error_resilience` | 错误次数 + 无效重试比例 | 可根据错误恢复策略调整 |
+
+#### 需要 LLM 判断的维度（`scores` 字段中 `computed: false`）
+
+**1. 指令遵循度（权重 20%）**
+
+检查 Agent 是否遵循了 Skill/Agent 定义的指令：
+- Skill 定义的步骤是否按顺序执行？
+- "不要修改数据"等约束是否被遵守？
+- 指定的工具是否被使用？
+- 输出格式是否符合要求？
+
+**2. 推理质量（权重 15%）**
+
+检查 Agent 的逻辑推理能力（需要 `include_reasoning=true`）：
+- 是否有矛盾的判断？
+- 是否有错误的假设？
+- 问题分解是否合理？
 
 #### 评分维度
 
@@ -218,27 +251,76 @@ query_sessions(source_type="scan", status="failed", created_after="昨天日期"
 | 60-69 | D | 勉强：任务勉强完成，问题较多 |
 | 0-59 | F | 失败：任务未完成或严重偏离 |
 
+#### Skill 步骤校验
+
+检查 Agent 是否遵循了 Skill 定义的步骤。对比 `tool_calls` 序列和 Skill 的预期步骤：
+
+**通用检查规则：**
+
+| 检查项 | 方法 | 扣分 |
+|--------|------|------|
+| 缺少关键步骤 | 对比成功案例的 tool_calls，缺失的步骤标记为"遗漏" | -10/步骤 |
+| 步骤顺序错误 | 检查 tool_calls 的调用顺序是否合理 | -5 |
+| 跳过前置步骤 | 如未读取数据就直接处理 | -15 |
+| 输出格式不符 | Skill 要求 JSON 但输出了纯文本 | -10 |
+
+**常见 Skill 步骤映射：**
+
+| Skill 步骤 | 预期工具调用 | 校验方法 |
+|------------|-------------|----------|
+| "读取数据" | `read` / `read_upload` | 检查是否有 read 类调用 |
+| "查询集合" | `query_collection` | 检查是否有 query 调用 |
+| "执行脚本" | `run_python` | 检查是否有 python 调用 |
+| "保存结果" | `save_artifact` | 检查是否有 artifact 调用 |
+| "对比分析" | 多次 `query_collection` / `analyze_trace` | 检查是否有对比行为 |
+| "输出 JSON" | 最后一条 assistant text 包含 JSON | 检查输出格式 |
+
+**步骤遗漏检测方法：**
+
+1. 对比成功案例的 `tool_calls` 序列，找出失败案例缺失的工具调用
+2. 检查 Skill 定义中提到的工具是否都被调用过
+3. 检查是否有"跳步"行为（如从第一步直接跳到第五步）
+
+在 `instruction_adherence` 评分中体现步骤校验结果。
+
 ### 第七步：生成诊断结论
 
 综合以上分析和评分，**输出以下 JSON 格式的诊断结论**（必须是合法 JSON，不要包含其他文字）：
 
 ```json
 {
+  "server_scores": {
+    "note": "以下分数由 analyze_trace 服务端自动计算，LLM 仅审核和微调",
+    "anomalies": ["从 analyze_trace 返回的 anomalies 数组原样复制"],
+    "computed_scores": {
+      "task_completion": {"score": 20, "computed": true},
+      "tool_efficiency": {"score": 55, "computed": true},
+      "resource_efficiency": {"score": 50, "computed": true},
+      "error_resilience": {"score": 30, "computed": true}
+    }
+  },
   "scores": {
     "task_completion": {
-      "score": 45,
+      "score": 20,
       "weight": 0.30,
-      "reasons": ["扫描任务处理了 5 条记录，但 3 条写回失败"]
+      "reasons": ["会话状态 failed，无有效输出"]
     },
     "instruction_adherence": {
-      "score": 70,
+      "score": 60,
       "weight": 0.20,
-      "reasons": ["遵循了主要流程，但跳过了输出格式验证步骤"]
+      "reasons": ["遵循了主要流程，但跳过了第五步对比成功案例"],
+      "step_validation": {
+        "expected_steps": ["获取数据", "审查工具", "审查推理", "审查子代理", "对比成功案例", "生成结论"],
+        "executed_steps": ["获取数据", "审查工具"],
+        "skipped_steps": ["审查推理", "审查子代理", "对比成功案例", "生成结论"],
+        "penalty": -40
+      }
     },
     "tool_efficiency": {
-      "score": 30,
+      "score": 55,
       "weight": 0.20,
-      "reasons": ["run_python 连续 3 次超时，存在工具循环"]
+      "reasons": ["run_python 超时 1 次，但无工具循环"],
+      "server_computed": true
     },
     "reasoning_quality": {
       "score": 50,
@@ -246,14 +328,16 @@ query_sessions(source_type="scan", status="failed", created_after="昨天日期"
       "reasons": ["推理过程有矛盾：先判断用批量查询，后改为逐行查询"]
     },
     "resource_efficiency": {
-      "score": 25,
+      "score": 50,
       "weight": 0.10,
-      "reasons": ["Token 消耗是成功案例的 4.5 倍，耗时 6 倍"]
+      "reasons": ["工具调用 12 次，处于 P50 水平"],
+      "server_computed": true
     },
-    "error_recovery": {
-      "score": 20,
+    "error_resilience": {
+      "score": 30,
       "weight": 0.05,
-      "reasons": ["超时后重试了 3 次相同方法，未调整策略"]
+      "reasons": ["超时后重试了 1 次相同方法"],
+      "server_computed": true
     },
     "total": 42,
     "grade": "F"
