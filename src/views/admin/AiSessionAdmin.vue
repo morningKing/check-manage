@@ -74,7 +74,7 @@
       <el-table-column label="操作" width="80" fixed="right">
         <template #default="{ row }">
           <el-dropdown trigger="click" @command="(cmd: string) => onRowAction(cmd, row)">
-            <el-button link type="primary">
+            <el-button link type="primary" @click.stop>
               操作 <el-icon><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
