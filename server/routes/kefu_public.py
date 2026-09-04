@@ -18,7 +18,7 @@ from utils.chat_persist import (
 )
 from utils.workspace import safe_resolve, WorkspacePathError
 from utils.filename import safe_filename
-from config import OPENCODE_BASE_URL, OPENCODE_MODEL
+from config import OPENCODE_BASE_URL, get_default_chat_model
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +253,7 @@ def send_message(sid):
 
     client = OpenCodeClient(OPENCODE_BASE_URL)
     oc_sid = sess[2]
-    model = inst.get('model') or OPENCODE_MODEL
+    model = inst.get('model') or get_default_chat_model()
     agent = inst.get('agent') or ''
     ensure_listener(sid, oc_sid, workspace_path)
     client.send_prompt_async(oc_sid, prompt.strip(), model=model,

@@ -270,7 +270,7 @@ def list_models():
     可直接作为创建批任务时的 model 参数。
     """
     from utils.opencode_client import OpenCodeClient
-    from config import OPENCODE_BASE_URL, OPENCODE_MODEL
+    from config import OPENCODE_BASE_URL, get_default_chat_model
     try:
         provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
     except Exception as e:
@@ -297,7 +297,7 @@ def list_models():
     models.sort(key=lambda m: (m['label'].lower(), m['id']))
     return jsonify({
         'models': models,
-        'default': OPENCODE_MODEL or '',
+        'default': get_default_chat_model() or '',
     })
 
 

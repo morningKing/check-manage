@@ -71,13 +71,13 @@ class _OpenCodeFacade:
         discard the return value — the real work happens on the SSE stream.
 
         `model` ("<providerID>/<modelID>") is the per-batch model; empty falls
-        back to the global OPENCODE_MODEL (which itself may be empty, leaving the
+        back to the global default chat model (which itself may be empty, leaving the
         choice to OpenCode / the agent default).
         """
-        from config import OPENCODE_MODEL
+        from config import get_default_chat_model
         self._client().send_prompt_async(
             oc_session_id, prompt,
-            model=model or OPENCODE_MODEL,
+            model=model or get_default_chat_model(),
             directory=directory,
             agent=agent,
         )

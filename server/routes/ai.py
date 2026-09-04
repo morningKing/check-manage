@@ -99,6 +99,7 @@ def put_settings():
 
     mem0_enabled = bool(body.get('mem0Enabled', False))
     embedding_model = (body.get('embeddingModel') or 'text-embedding-v3').strip()
+    default_chat_model = (body.get('defaultChatModel') or '').strip()
 
     # If api_key is all-masked (unchanged from frontend), keep the old value
     current = get_ai_settings()
@@ -106,7 +107,8 @@ def put_settings():
         api_key = current['apiKey']
 
     settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
-                                  mem0_enabled=mem0_enabled, embedding_model=embedding_model)
+                                  mem0_enabled=mem0_enabled, embedding_model=embedding_model,
+                                  default_chat_model=default_chat_model)
     reset_memory_singleton()
     # Mask before returning
     key = settings.get('apiKey', '')

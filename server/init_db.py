@@ -180,6 +180,7 @@ INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 -- （等价于 add_mem0_settings_columns.py，纳入 init_db 后新部署无需再跑该迁移脚本）。
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3';
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS default_chat_model VARCHAR(200) NOT NULL DEFAULT '';
 
 -- External MCP servers registered by an admin and merged into every AI-chat
 -- session's opencode.json (alongside the platform's own MCP). `name` is the key

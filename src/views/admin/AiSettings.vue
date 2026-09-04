@@ -70,6 +70,15 @@
           />
         </el-form-item>
 
+        <el-form-item label="AI 对话默认模型">
+          <el-input
+            v-model="settings.defaultChatModel"
+            placeholder="留空则由 OpenCode 自动选择"
+            :disabled="!settings.enabled"
+          />
+          <span class="hint">AI 对话/批任务/定时扫描使用的默认模型（格式：provider/model）</span>
+        </el-form-item>
+
         <el-form-item label="长期记忆 (mem0)">
           <el-switch v-model="settings.mem0Enabled" />
           <span class="hint">开启后，AI 会话将自动形成并调用按用户的长期记忆</span>
@@ -190,6 +199,7 @@ interface AiSettingsData {
   maxTokens: number
   mem0Enabled?: boolean
   embeddingModel?: string
+  defaultChatModel?: string
   updatedAt: string | null
 }
 
@@ -205,6 +215,7 @@ const settings = reactive<AiSettingsData>({
   maxTokens: 1024,
   mem0Enabled: false,
   embeddingModel: 'text-embedding-v3',
+  defaultChatModel: '',
   updatedAt: null,
 })
 
@@ -225,6 +236,7 @@ async function loadSettings() {
     settings.maxTokens = s.maxTokens
     settings.mem0Enabled = !!s.mem0Enabled
     settings.embeddingModel = s.embeddingModel || 'text-embedding-v3'
+    settings.defaultChatModel = s.defaultChatModel || ''
     settings.updatedAt = s.updatedAt
   } catch {
     // silent
@@ -245,6 +257,7 @@ async function handleSave() {
       maxTokens: settings.maxTokens,
       mem0Enabled: settings.mem0Enabled,
       embeddingModel: settings.embeddingModel,
+      defaultChatModel: settings.defaultChatModel,
     }) as any
     // Update local state with response
     if (data) {

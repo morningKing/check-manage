@@ -158,7 +158,7 @@ def analyze_session(session_id):
     Creates a new analysis session with the trace-analyzer skill injected,
     sends an analysis prompt, and returns the new session ID.
     """
-    from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, OPENCODE_MODEL
+    from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, get_default_chat_model
     from utils.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
     from utils.session_token import generate_token
@@ -196,7 +196,7 @@ def analyze_session(session_id):
     extra_mcp = enabled_mcp_config(reserved_names=[MCP_NAME])
     write_opencode_config(
         workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-        model=OPENCODE_MODEL, extra_mcp=extra_mcp,
+        model=get_default_chat_model(), extra_mcp=extra_mcp,
     )
 
     # 5. Inject global skills (including trace-analyzer)

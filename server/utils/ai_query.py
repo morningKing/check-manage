@@ -64,7 +64,7 @@ def get_ai_settings():
         cur = conn.cursor()
         cur.execute(
             'SELECT enabled, api_key, endpoint, model, timeout, max_tokens, updated_at, '
-            'mem0_enabled, embedding_model FROM ai_settings WHERE id = 1'
+            'mem0_enabled, embedding_model, default_chat_model FROM ai_settings WHERE id = 1'
         )
         row = cur.fetchone()
 
@@ -79,6 +79,7 @@ def get_ai_settings():
             'updatedAt': None,
             'mem0Enabled': False,
             'embeddingModel': 'text-embedding-v3',
+            'defaultChatModel': '',
         }
 
     return {
@@ -91,11 +92,13 @@ def get_ai_settings():
         'updatedAt': row[6].isoformat() if row[6] else None,
         'mem0Enabled': bool(row[7]) if len(row) > 7 else False,
         'embeddingModel': (row[8] if len(row) > 8 else None) or 'text-embedding-v3',
+        'defaultChatModel': (row[9] if len(row) > 9 else None) or '',
     }
 
 
 def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
-                       mem0_enabled=False, embedding_model='text-embedding-v3'):
+                       mem0_enabled=False, embedding_model='text-embedding-v3',
+                       default_chat_model=''):
     """Persist AI settings and return updated dict."""
     now = datetime.now(timezone.utc)
     with get_db() as conn:
@@ -103,9 +106,9 @@ def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
         cur.execute(
             'UPDATE ai_settings SET enabled = %s, api_key = %s, endpoint = %s, '
             'model = %s, timeout = %s, max_tokens = %s, mem0_enabled = %s, '
-            'embedding_model = %s, updated_at = %s WHERE id = 1',
+            'embedding_model = %s, default_chat_model = %s, updated_at = %s WHERE id = 1',
             (enabled, api_key, endpoint, model, timeout, max_tokens,
-             mem0_enabled, embedding_model, now),
+             mem0_enabled, embedding_model, default_chat_model, now),
         )
     return get_ai_settings()
 

@@ -65,7 +65,7 @@ from utils.memory import search_memory, render_memory_block
 from utils.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
-    AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
+    AI_SESSION_TTL_HOURS, get_default_chat_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ def create_session():
     #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=OPENCODE_MODEL, extra_mcp=_external_mcp())
+                          model=get_default_chat_model(), extra_mcp=_external_mcp())
 
     # 3.5) Inject global skills into the workspace
     try:
@@ -183,7 +183,7 @@ def list_models():
         "default": "<configured_default>" or empty string,
         "openCodeDefaults": { providerID: modelID } }
     Only connected providers are surfaced. `default` is the server-side
-    OPENCODE_MODEL config; the picker uses it as the "Default" option label.
+    get_default_chat_model() config; the picker uses it as the "Default" option label.
     """
     try:
         provider_info = OpenCodeClient(OPENCODE_BASE_URL).list_providers()
@@ -215,7 +215,7 @@ def list_models():
     models.sort(key=lambda m: (m['label'].lower(), m['id']))
     return jsonify({
         'models': models,
-        'default': OPENCODE_MODEL or '',
+        'default': get_default_chat_model() or '',
         'openCodeDefaults': provider_info.get('default') or {},
     })
 
@@ -396,10 +396,10 @@ def send_message(sid):
         )
 
     # Per-message model override: composer dropdown sends a `model` field
-    # ("<providerID>/<modelID>"). Empty/missing falls back to OPENCODE_MODEL
+    # ("<providerID>/<modelID>"). Empty/missing falls back to get_default_chat_model()
     # (which itself may be empty, in which case OpenCode picks its default).
     requested_model = (body.get('model') or '').strip()
-    effective_model = requested_model or OPENCODE_MODEL
+    effective_model = requested_model or get_default_chat_model()
     requested_agent = (body.get('agent') or '').strip()
     agent_mentions = body.get('agentMentions')
     if not isinstance(agent_mentions, list):
@@ -876,7 +876,7 @@ def run_session_command(sid):
     # live listener is already running for this session.
     ensure_listener(sid, sess[2], sess[4])
     OpenCodeClient(OPENCODE_BASE_URL).run_command(
-        sess[2], command, arguments, model=OPENCODE_MODEL, directory=sess[4],
+        sess[2], command, arguments, model=get_default_chat_model(), directory=sess[4],
     )
     return jsonify({'messageId': msg_id}), 202
 
@@ -1114,7 +1114,7 @@ def clear_session(sid):
     token = generate_token(sid, AI_SESSION_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=OPENCODE_MODEL, extra_mcp=_external_mcp())
+                          model=get_default_chat_model(), extra_mcp=_external_mcp())
     # 4) 新建 OpenCode 会话（绑定重建后的工作区）= 上下文重置
     new_oc = client.create_session(directory=workspace_path, title='新会话')
     # 5) 删历史 + 重绑 opencode_session_id + 置 active

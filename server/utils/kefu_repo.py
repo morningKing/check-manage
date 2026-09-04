@@ -16,7 +16,7 @@ from utils.session_token import generate_token
 from utils.opencode_client import OpenCodeClient
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
-    AI_SESSION_TTL_HOURS, OPENCODE_MODEL,
+    AI_SESSION_TTL_HOURS, get_default_chat_model,
 )
 
 MCP_NAME = 'check-manage'
@@ -204,7 +204,7 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
         workspace_path,
         mcp_name=MCP_NAME,
         mcp_url=mcp_url,
-        model=(instance.get('model') or OPENCODE_MODEL),
+        model=(instance.get('model') or get_default_chat_model()),
     )
 
     client = OpenCodeClient(OPENCODE_BASE_URL)

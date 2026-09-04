@@ -97,6 +97,26 @@ AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
 # editing this file. Override via OPENCODE_MODEL env var or `server/.env`.
 OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
 
+
+def get_default_chat_model() -> str:
+    """Get the default chat model, preferring the database setting over env var.
+
+    Reads from ai_settings.default_chat_model first; falls back to OPENCODE_MODEL
+    env var. Returns empty string if neither is set (lets OpenCode pick its default).
+    """
+    try:
+        from db import get_db
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT default_chat_model FROM ai_settings WHERE id = 1")
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0].strip()
+    except Exception:
+        pass
+    return OPENCODE_MODEL
+
+
 # Data-page file/image field storage. Files live OUTSIDE the repo (same
 # reasoning as ai-workspaces: keeps user-uploaded blobs out of OpenCode's
 # file-tool reach and out of git). Override via DATA_FILES_ROOT.
