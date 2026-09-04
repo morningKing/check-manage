@@ -71,12 +71,25 @@
         </el-form-item>
 
         <el-form-item label="AI 对话默认模型">
-          <el-input
+          <el-select
             v-model="settings.defaultChatModel"
             placeholder="留空则由 OpenCode 自动选择"
+            clearable
+            filterable
             :disabled="!settings.enabled"
-          />
-          <span class="hint">AI 对话/批任务/定时扫描使用的默认模型（格式：provider/model）</span>
+            style="width: 100%"
+          >
+            <el-option
+              v-for="m in models"
+              :key="m.id"
+              :label="m.label"
+              :value="m.id"
+            >
+              <span>{{ m.label }}</span>
+              <el-tag v-if="!m.connected" size="small" type="info" style="margin-left: 8px">未连接</el-tag>
+            </el-option>
+          </el-select>
+          <span class="hint">AI 对话/批任务/定时扫描使用的默认模型</span>
         </el-form-item>
 
         <el-form-item label="长期记忆 (mem0)">
@@ -189,6 +202,7 @@ import {
   listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer,
   type McpServer,
 } from '@/api/aiMcpServers'
+import { listModels, type ModelInfo } from '@/api/aiChat'
 
 interface AiSettingsData {
   enabled: boolean
@@ -205,6 +219,7 @@ interface AiSettingsData {
 
 const loading = ref(false)
 const saving = ref(false)
+const models = ref<ModelInfo[]>([])
 
 const settings = reactive<AiSettingsData>({
   enabled: false,
@@ -242,6 +257,15 @@ async function loadSettings() {
     // silent
   } finally {
     loading.value = false
+  }
+}
+
+async function loadModels() {
+  try {
+    const res = await listModels()
+    models.value = res.models || []
+  } catch {
+    // silent
   }
 }
 
@@ -383,6 +407,7 @@ async function removeMcp(row: McpServer) {
 
 onMounted(() => {
   loadSettings()
+  loadModels()
   loadMcp()
 })
 </script>
