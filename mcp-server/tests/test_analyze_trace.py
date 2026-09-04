@@ -306,6 +306,66 @@ class TestAnalyzeTrace:
 
         assert result["subtasks"] == []
 
+    def test_subtask_details_includes_tool_calls(self, fake_db, mock_cursor):
+        """include_subtask_details=true returns subagent internal tool calls."""
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = [
+            _msg_row("m1", "assistant", [
+                {"type": "subtask_use", "subtaskId": "ses_child_001", "agent": "explore",
+                 "description": "Analyze", "status": "completed"},
+            ]),
+        ]
+        subtask = _subtask_row(st_id="ses_child_001", status="failed", error_message="timeout")
+        subtask_messages = [
+            ("user", [{"type": "text", "text": "Analyze this data"}]),
+            ("assistant", [
+                {"type": "text", "text": "Let me read the file"},
+                {"type": "tool_use", "name": "read", "input": {"file": "data.csv"},
+                 "result": "...", "status": "completed", "durationMs": 500},
+            ]),
+            ("assistant", [
+                {"type": "tool_use", "name": "run_python", "input": {"code": "import time; time.sleep(60)"},
+                 "status": "error", "durationMs": 30000},
+            ]),
+        ]
+        # fetchall: messages, subtasks, subtask_messages, files
+        # (subtask details query runs BEFORE files query)
+        mock_cursor.fetchall.side_effect = [messages, [subtask], subtask_messages, []]
+        # fetchone: session, subtask stats
+        mock_cursor.fetchone.side_effect = [_session_row(), (3, 30500, 2000)]
+
+        result = self._call(fake_db, mock_cursor, include_subtask_details=True)
+
+        st = result["subtasks"][0]
+        assert st["id"] == "ses_child_001"
+        assert st["status"] == "failed"
+        assert len(st["tool_calls"]) == 2
+        assert st["tool_calls"][0]["name"] == "read"
+        assert st["tool_calls"][0]["status"] == "completed"
+        assert st["tool_calls"][1]["name"] == "run_python"
+        assert st["tool_calls"][1]["status"] == "error"
+        assert st["tool_calls"][1]["duration_ms"] == 30000
+        assert len(st["messages_summary"]) == 3
+
+    def test_subtask_details_skipped_by_default(self, fake_db, mock_cursor):
+        """Without include_subtask_details, subtasks have no tool_calls."""
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = [
+            _msg_row("m1", "assistant", [
+                {"type": "subtask_use", "subtaskId": "ses_child_001", "agent": "explore",
+                 "description": "Analyze", "status": "completed"},
+            ]),
+        ]
+        subtask = _subtask_row()
+        mock_cursor.fetchall.side_effect = [messages, [subtask], []]
+        mock_cursor.fetchone.side_effect = [_session_row(), (1, 1000, 500)]
+
+        result = self._call(fake_db, mock_cursor)
+
+        st = result["subtasks"][0]
+        assert "tool_calls" not in st
+        assert "messages_summary" not in st
+
     # ── file changes ─────────────────────────────────────────────────────
 
     def test_returns_file_changes(self, fake_db, mock_cursor):

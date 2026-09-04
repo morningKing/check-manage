@@ -19,7 +19,8 @@ TOOL = types.Tool(
         "获取指定 AI 会话的结构化执行轨迹，包括工具调用序列、子代理委托链、"
         "性能指标（耗时/Token/成本）、错误信息、工作区文件变更。"
         "用于分析会话失败原因、诊断执行问题。"
-        "参数: session_id(必填), include_subtasks(默认true), include_reasoning(默认false)。"
+        "参数: session_id(必填), include_subtasks(默认true), include_reasoning(默认false),"
+        " include_subtask_details(默认false, 返回子代理内部的工具调用序列)。"
     ),
     inputSchema={
         "type": "object",
@@ -35,6 +36,10 @@ TOOL = types.Tool(
             "include_reasoning": {
                 "type": "boolean",
                 "description": "是否包含 reasoning tokens（默认 false，可能很长）",
+            },
+            "include_subtask_details": {
+                "type": "boolean",
+                "description": "是否返回子代理内部的工具调用序列（默认 false，仅返回元数据）",
             },
         },
         "required": ["session_id"],
@@ -81,6 +86,35 @@ def _resolve_source(session: dict) -> dict:
     return {"type": "interactive"}
 
 
+def _extract_tool_calls_from_content(content: list, include_reasoning: bool) -> list:
+    """从消息 content JSONB 中提取工具调用列表（复用于主会话和子代理）。"""
+    tool_calls = []
+    for part in (content or []):
+        ptype = part.get("type")
+        if ptype == "tool_use":
+            tc = {
+                "name": part.get("name", ""),
+                "status": part.get("status", ""),
+                "duration_ms": part.get("durationMs", 0),
+            }
+            tc["input"] = _trunc(
+                json.dumps(part.get("input"), ensure_ascii=False), 500
+            ) if part.get("input") else None
+            result_raw = part.get("result") or part.get("output")
+            if result_raw:
+                tc["result"] = _trunc(str(result_raw), 300 if not include_reasoning else 1000)
+            tool_calls.append(tc)
+        elif ptype == "reasoning" and include_reasoning:
+            tool_calls.append({
+                "name": "_reasoning",
+                "input": None,
+                "result": _trunc(part.get("text", ""), 1000),
+                "status": "completed",
+                "duration_ms": 0,
+            })
+    return tool_calls
+
+
 def handle(input: dict, ctx: ToolContext) -> dict:
     """构建指定会话的结构化执行轨迹。"""
     session_id = (input or {}).get("session_id")
@@ -89,6 +123,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     include_subtasks = (input or {}).get("include_subtasks", True)
     include_reasoning = (input or {}).get("include_reasoning", False)
+    include_subtask_details = (input or {}).get("include_subtask_details", False)
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -148,30 +183,9 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             meta = msg["meta"] or {}
 
             if msg["role"] == "assistant":
-                for part in content:
-                    ptype = part.get("type")
-                    if ptype == "tool_use":
-                        tc = {
-                            "name": part.get("name", ""),
-                            "status": part.get("status", ""),
-                            "duration_ms": part.get("durationMs", 0),
-                        }
-                        # input 始终返回（通常不大）
-                        tc["input"] = _trunc(json.dumps(part.get("input"), ensure_ascii=False), 500) if part.get("input") else None
-                        # result 默认截断；include_reasoning 时保留更多
-                        result_raw = part.get("result") or part.get("output")
-                        if result_raw:
-                            tc["result"] = _trunc(str(result_raw), 300 if not include_reasoning else 1000)
-                        tool_calls.append(tc)
-                    elif ptype == "reasoning" and include_reasoning:
-                        tool_calls.append({
-                            "name": "_reasoning",
-                            "input": None,
-                            "result": _trunc(part.get("text", ""), 1000),
-                            "status": "completed",
-                            "duration_ms": 0,
-                        })
-
+                tool_calls.extend(
+                    _extract_tool_calls_from_content(content, include_reasoning)
+                )
                 total_duration += meta.get("durationMs", 0)
                 total_tokens_in += meta.get("tokensInput", 0)
                 total_tokens_out += meta.get("tokensOutput", 0)
@@ -227,6 +241,42 @@ def handle(input: dict, ctx: ToolContext) -> dict:
                 st["duration_ms"] = stats[1] or 0
                 st["tokens_total"] = stats[2] or 0
                 st["prompt"] = _trunc(st.get("prompt"), 300)
+
+                # 子代理内部工具调用（可选）
+                if include_subtask_details:
+                    cur.execute(
+                        """
+                        SELECT role, content
+                        FROM ai_chat_subtask_messages
+                        WHERE subtask_id = %s
+                        ORDER BY seq
+                        """,
+                        (st["id"],),
+                    )
+                    st_tool_calls = []
+                    st_summary = []
+                    for stm in cur.fetchall():
+                        stm_content = stm[1] or []
+                        if stm[0] == "assistant":
+                            st_tool_calls.extend(
+                                _extract_tool_calls_from_content(stm_content, include_reasoning)
+                            )
+                        # 消息摘要
+                        st_text = ""
+                        st_tc_names = []
+                        for p in stm_content:
+                            if p.get("type") == "text" and p.get("text") and not st_text:
+                                st_text = p["text"][:100]
+                            if p.get("type") == "tool_use":
+                                st_tc_names.append(p.get("name", ""))
+                        st_summary.append({
+                            "role": stm[0],
+                            "text_preview": st_text,
+                            "tool_calls": st_tc_names or None,
+                        })
+                    st["tool_calls"] = st_tool_calls
+                    st["messages_summary"] = st_summary
+
                 subtasks.append(st)
 
         # ── 5. 工作区文件变更 ──────────────────────────────────────────

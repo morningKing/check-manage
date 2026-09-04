@@ -25,7 +25,12 @@ description: 分析 AI 会话执行轨迹，诊断失败根因，给出优化建
 
 调用 `analyze_trace` 工具获取结构化执行轨迹。
 
-如果用户提供了具体的 session_id，直接使用：
+如果用户提供的会话可能有子代理（批任务、扫描任务、使用了 @agent 的会话），使用 `include_subtask_details=true` 获取子代理内部的工具调用序列：
+```
+analyze_trace(session_id="sess_xxx", include_subtasks=true, include_subtask_details=true)
+```
+
+如果是简单交互会话（无子代理），可以省略 `include_subtask_details`：
 ```
 analyze_trace(session_id="sess_xxx", include_subtasks=true)
 ```
@@ -61,6 +66,22 @@ query_sessions(source_type="scan", status="failed", created_after="昨天日期"
 - `error_message` 是否有内容
 - `duration_ms` 是否异常（过长可能卡住，过短可能没真正执行）
 - 子代理的 `prompt` 是否清晰（模糊的 prompt 会导致子代理跑偏）
+
+**如果使用了 `include_subtask_details=true`**，每个子代理会包含 `tool_calls` 和 `messages_summary`。对**失败的子代理**（`status != 'completed'`）进行深入分析：
+
+1. 检查子代理内部的 `tool_calls` 序列：
+   - 是否有工具循环（连续 3+ 次相同工具 + 相同 input）？
+   - 是否有无效重试（工具返回错误但继续用相同参数调用）？
+   - 是否有超时（`duration_ms > 30000`）？
+   - 是否有空输出（`status=completed` 但 result 为空）？
+
+2. 检查子代理的 `messages_summary`：
+   - 最后一条 assistant 消息是否有实质内容？
+   - 是否有意外终止（最后一条 tool_use 后没有 text 回复）？
+
+3. 如果子代理内部也有子代理（嵌套），递归检查每一层。
+
+**子代理失败往往是整个会话失败的根因。** 在诊断结论的 `failure_chain` 中，要明确指出是哪一层、哪个子代理、哪个工具调用出了问题。
 
 ### 第五步：对比成功案例（关键步骤）
 
@@ -130,13 +151,14 @@ query_sessions(source_type="scan", status="failed", created_after="昨天日期"
 - `session_id`（必填）：会话 ID
 - `include_subtasks`（可选，默认 true）：是否包含子代理轨迹
 - `include_reasoning`（可选，默认 false）：是否包含 reasoning tokens
+- `include_subtask_details`（可选，默认 false）：是否返回子代理内部的工具调用序列和消息摘要（用于深入分析失败子代理的根因）
 
 **返回字段说明**：
 - `session`：会话元数据（状态、Agent、Model、错误信息）
 - `source`：触发来源（类型、ID、名称）
 - `performance`：性能指标（耗时、Token、成本、消息数、工具调用数）
 - `tool_calls`：工具调用序列（名称、输入、输出、状态、耗时）
-- `subtasks`：子代理列表（Agent、描述、状态、错误、耗时）
+- `subtasks`：子代理列表（Agent、描述、状态、错误、耗时）。当 `include_subtask_details=true` 时，每个子代理额外包含 `tool_calls`（内部工具调用序列）和 `messages_summary`（内部消息摘要）
 - `messages_summary`：消息摘要（角色、文本预览、工具调用列表）
 - `files_changed`：工作区文件变更
 
