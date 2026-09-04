@@ -71,13 +71,24 @@
       <el-table-column label="最后活跃" width="170">
         <template #default="{ row }">{{ fmt(row.lastActiveAt || row.createdAt) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="140" fixed="right">
+      <el-table-column label="操作" width="80" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click.stop="openDetail(row.id)">详情</el-button>
-          <el-button link type="success" :loading="analyzing"
-                     @click.stop="onAnalyze(row.id)">分析</el-button>
-          <el-button v-if="row.status === 'active'" link type="warning"
-                     @click.stop="onArchive(row.id)">归档</el-button>
+          <el-dropdown trigger="click" @command="(cmd: string) => onRowAction(cmd, row)">
+            <el-button link type="primary">
+              操作 <el-icon><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="detail">详情</el-dropdown-item>
+                <el-dropdown-item command="analyze">
+                  <span style="color: #67c23a">轨迹分析</span>
+                </el-dropdown-item>
+                <el-dropdown-item v-if="row.status === 'active'" command="archive">
+                  <span style="color: #e6a23c">归档</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </template>
       </el-table-column>
     </el-table>
@@ -179,6 +190,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { useAiSessionAdminStore } from '@/stores/aiSessionAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import { getSessionMessages, sessionFileDownloadUrl, analyzeSession } from '@/api/aiSessionAdmin'
@@ -296,6 +308,12 @@ async function onAnalyze(sessionId: string) {
   } finally {
     analyzing.value = false
   }
+}
+
+function onRowAction(command: string, row: any) {
+  if (command === 'detail') openDetail(row.id)
+  else if (command === 'analyze') onAnalyze(row.id)
+  else if (command === 'archive') onArchive(row.id)
 }
 
 function downloadFile(path: string) {
