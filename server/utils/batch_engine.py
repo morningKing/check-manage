@@ -666,15 +666,15 @@ class BatchWorker:
             if len(input_files) == 1:
                 name = os.path.basename(str(input_files[0]['path']).replace('\\', '/'))
                 return (f'本任务的输入文件已放在工作区 uploads/{name}，'
-                        f'请先读取该文件的内容，再完成下面的要求：\n\n{prompt}')
+                        f'请完成下面的要求：\n\n{prompt}')
             return (f'本任务的输入文件已放在工作区 uploads/ 目录下（共 {len(input_files)} 个），'
-                    f'请先读取这些文件的内容，再完成下面的要求：\n\n{prompt}')
+                    f'请完成下面的要求：\n\n{prompt}')
         rel = session_row.get('batch_input_file') or ''
         name = os.path.basename(rel.replace('\\', '/'))
         if not name:
             return prompt
         return (f'本任务的输入文件已放在工作区 uploads/{name}，'
-                f'请先读取该文件的内容，再完成下面的要求：\n\n{prompt}')
+                f'请完成下面的要求：\n\n{prompt}')
 
     def _run_one(self, session_row):
         sid = session_row['id']
