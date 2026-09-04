@@ -184,6 +184,56 @@ def cancel_batch(user_id: str, batch_id: str, *,
     return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
 
 
+def cancel_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
+    """Request cancellation of a single child session within a batch.
+
+    Sets cancel_requested=true on the child. The worker will:
+    - Pending: convert to 'cancelled' on next dispatch tick
+    - Running: cooperatively abort via OpenCode abort_session
+
+    Returns the updated session dict, or None if not found/not owned.
+    Raises ValueError if the child is already terminal.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.status FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            status = row[0]
+            if status in ('completed', 'failed', 'cancelled'):
+                raise ValueError(f'子任务已结束（{status}），无法取消')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET cancel_requested = true WHERE id = %s",
+                (session_id,),
+            )
+        conn.commit()
+    return get_child_session(user_id, batch_id, session_id)
+
+
+def get_child_session(user_id: str, batch_id: str, session_id: str) -> dict | None:
+    """Get a single child session within a batch."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.id, s.status, s.error_message, s.cancel_requested "
+                "FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return {'id': row[0], 'status': row[1], 'error_message': row[2],
+                    'cancel_requested': row[3]}
+
+
 def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
                     api_key_id: str | None = None) -> dict | None:
     """Append N child sessions to an existing batch (any status). seq continues

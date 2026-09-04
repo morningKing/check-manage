@@ -40,6 +40,10 @@ export function reexecuteChild(batchId: string, sessionId: string) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/reexecute`, {})
 }
 
+export function cancelChild(batchId: string, sessionId: string) {
+  return post<{ id: string; status: string }>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/cancel`, {})
+}
+
 export function updateBatchConfig(id: string, body: {
   agent: string | null
   model: string | null

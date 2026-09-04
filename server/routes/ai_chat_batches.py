@@ -14,6 +14,7 @@ from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, Workspa
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
     append_to_batch,
+    cancel_child,
     create_batch,
     delete_batch,
     get_batch_detail,
@@ -142,6 +143,22 @@ def retry_failed(batch_id):
         from utils.batch_engine import get_worker
         get_worker().notify()
     return jsonify({'retried': count})
+
+
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/cancel')
+@login_required
+def cancel_single_child(batch_id, session_id):
+    """Cancel a single child session within a batch."""
+    try:
+        result = cancel_child(g.current_user['userId'], batch_id, session_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    # Notify worker to pick up the cancellation
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
 
 
 @ai_chat_batches_bp.post('/<batch_id>/append')

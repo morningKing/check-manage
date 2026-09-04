@@ -24,6 +24,9 @@
               :title="(['failed', 'cancelled'].includes(s.status) && s.error_message) || s.last_message_preview || ''">
           {{ (['failed', 'cancelled'].includes(s.status) && s.error_message) ? s.error_message : (s.last_message_preview || '') }}
         </span>
+        <ElIcon v-if="['pending', 'running'].includes(s.status)"
+                class="bg-child__cancel" title="中断此任务"
+                @click.stop="onCancel(s.id)"><VideoPause /></ElIcon>
         <ElIcon v-if="['completed', 'failed', 'cancelled'].includes(s.status)"
                 class="bg-child__reexec" title="重新执行（清空上下文）"
                 @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
@@ -37,8 +40,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
+import { cancelChild } from '@/api/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
 import EditBatchConfigDialog from './EditBatchConfigDialog.vue'
 import type { AiChatBatch } from '@/types/aiChatBatch'
@@ -72,6 +76,18 @@ async function onReexec(sessionId: string) {
     ElMessage.error(err.response?.data?.error || '重新执行失败')
   }
 }
+async function onCancel(sessionId: string) {
+  try {
+    await ElMessageBox.confirm('确定中断此任务？中断后不可恢复。', '中断任务', { type: 'warning' })
+    await cancelChild(props.batch.id, sessionId)
+    ElMessage.success('已请求中断')
+    if (expanded.value) await store.selectBatch(props.batch.id)
+  } catch (e: unknown) {
+    if (e === 'cancel') return
+    const err = e as { response?: { data?: { error?: string } } }
+    ElMessage.error(err.response?.data?.error || '中断失败')
+  }
+}
 async function onAppended() { if (expanded.value) await store.selectBatch(props.batch.id) }
 async function onConfigSaved() { if (expanded.value) await store.selectBatch(props.batch.id) }
 </script>
@@ -96,6 +112,8 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .dot--failed { background: var(--el-color-danger); }
 .dot--running { background: var(--el-color-warning); }
 .dot--cancelled { background: var(--el-text-color-secondary); }
+.bg-child__cancel { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
+.bg-child__cancel:hover { color: var(--el-color-danger); }
 .bg-child__reexec { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__reexec:hover { color: var(--el-color-primary); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }
