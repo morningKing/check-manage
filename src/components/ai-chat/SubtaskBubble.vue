@@ -13,6 +13,12 @@
         <ElIcon v-else-if="status === 'failed'" class="err"><CircleClose /></ElIcon>
         <ElIcon v-else class="run spin"><Loading /></ElIcon>
       </span>
+      <button
+        v-if="status !== 'running'"
+        class="subtask-bubble__compact" type="button"
+        title="压缩此子代理的上下文（后续 task_id 续跑基于总结继续）"
+        :disabled="compacting" @click.stop="onCompact"
+      ><ElIcon><Brush /></ElIcon></button>
     </div>
     <div v-show="open" class="subtask-bubble__body">
       <div v-if="loading" class="subtask-bubble__loading">加载中…</div>
@@ -51,13 +57,13 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ElIcon, ElAlert, ElEmpty } from 'element-plus'
-import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading } from '@element-plus/icons-vue'
+import { ElIcon, ElAlert, ElEmpty, ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading, Brush } from '@element-plus/icons-vue'
 import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import { mergeReasoningParts } from '@/utils/artifacts'
-import type { SubtaskMessagesResult } from '@/api/aiChat'
+import { compactSubtask, type SubtaskMessagesResult } from '@/api/aiChat'
 
 // 递归组件需要显式声明 name 才能在自己的模板里引用自己。
 defineOptions({ name: 'SubtaskBubble' })
@@ -87,6 +93,37 @@ async function toggle() {
     }
   }
 }
+
+// 压缩此子代理会话：清掉已缓存的轨迹，压缩完成后重拉即可看到总结
+// （总结由服务端持久化监听器更新进 ai_chat_subtask_messages）。
+const compacting = ref(false)
+async function onCompact() {
+  if (compacting.value) return
+  try {
+    await ElMessageBox.confirm(
+      '压缩会把该子代理的对话历史总结成精简上下文，后续用 task_id 续跑时基于总结继续（原始轨迹仍可回看）。继续？',
+      '压缩子代理上下文',
+      { confirmButtonText: '压缩', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  compacting.value = true
+  try {
+    const res = await compactSubtask(props.sessionId, props.subtaskId)
+    ElMessage.success(res.message || '已开始压缩子代理上下文')
+    if (open.value) {
+      // 压缩回合约需 10-60s；延迟重拉一次让总结在展开态直接可见
+      setTimeout(async () => {
+        loading.value = true
+        try { result.value = await props.fetchFn(props.sessionId, props.subtaskId) }
+        finally { loading.value = false }
+      }, 20000)
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '压缩失败')
+  } finally {
+    compacting.value = false
+  }
+}
 </script>
 
 <style scoped lang="scss">
@@ -107,6 +144,15 @@ async function toggle() {
   display: flex; align-items: center; gap: 6px; padding: 8px 12px;
   cursor: pointer; user-select: none;
   &:hover { background: var(--el-fill-color-light); }
+}
+.subtask-bubble__compact {
+  margin-left: auto;
+  display: inline-flex; align-items: center;
+  border: none; background: transparent; cursor: pointer;
+  color: var(--el-text-color-secondary);
+  padding: 2px; border-radius: 4px;
+  &:hover { color: var(--el-color-primary); background: var(--el-fill-color); }
+  &:disabled { opacity: 0.5; cursor: default; }
 }
 .subtask-bubble__chev { transition: transform 0.15s; color: var(--el-text-color-secondary); &.open { transform: rotate(90deg); } }
 .subtask-bubble__icon { color: var(--el-color-primary); flex-shrink: 0; }

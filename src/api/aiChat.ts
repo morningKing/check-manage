@@ -35,6 +35,8 @@ export interface AiMessage {
   content: AiContentPart[]
   createdAt?: string
   meta?: AiMessageMeta | null
+  /** 运行中插话的排队标记：true = 尚未发送给 OpenCode，等当前回合结束自动发出 */
+  queued?: boolean
 }
 
 export type AiContentPart =
@@ -44,6 +46,7 @@ export type AiContentPart =
   | { type: 'file'; name: string; path: string }
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
   | { type: 'mcp_services'; servers: McpServer[] }
+  | { type: 'lsp_formatter'; lsp: LspServerStatus[]; formatters: FormatterStatus[]; error?: string }
   | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
 
 // OpenCode's built-in interactive multi-choice tool ("question"). Decoupled
@@ -94,6 +97,11 @@ export interface FileDiff {
 
 export interface McpTool { name: string; description: string }
 export interface McpServer { name: string; status: string; tools: McpTool[] }
+
+/** OpenCode 按工作区文件类型惰性启动的 LSP 服务（字段随版本可能有差异，宽松解析） */
+export interface LspServerStatus { name?: string; status?: string; root?: string; [k: string]: unknown }
+/** Formatter 目录条目：默认全部 enabled:false，需在 OpenCode 配置 `formatter` 键启用 */
+export interface FormatterStatus { name: string; extensions: string[]; enabled: boolean }
 
 export function createSession(projectMenuId?: string) {
   return post<AiSession>('/ai/chat/sessions', { projectMenuId })
@@ -248,6 +256,13 @@ export function getMcpServices(id: string) {
   )
 }
 
+// LSP 活跃服务 + Formatter 目录（工作区维度，透传 OpenCode）。
+export function getLspFormatter(id: string) {
+  return get<{ lsp: LspServerStatus[]; formatters: FormatterStatus[] }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/lsp-formatter`, undefined, { silent: true },
+  )
+}
+
 export interface PaletteCommand { name: string; description: string }
 export function getCommands(id: string) {
   return get<{ commands: PaletteCommand[]; skills: PaletteCommand[] }>(
@@ -278,6 +293,25 @@ export function rejectQuestion(id: string, requestId: string) {
 export function deleteFromMessage(id: string, msgId: string) {
   return del<{ deleted: number }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages/${encodeURIComponent(msgId)}`,
+  )
+}
+
+// 触发上下文压缩（TUI 的 /compact）：后端在后台线程调 OpenCode summarize，
+// 压缩过程与结果经 SSE 推送。`model` 可选（"provider/model"），缺省用后端配置
+// 的默认对话模型。
+export function compactSession(id: string, model?: string) {
+  return post<{ ok: boolean; message: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/compact`,
+    model ? { model } : {},
+  )
+}
+
+// 压缩一个子代理会话（task_id 复用场景下子会话上下文会单调增长）。
+// 仅对已完结（completed/failed）的子任务开放；运行中返回 409。
+export function compactSubtask(sid: string, subtaskId: string, model?: string) {
+  return post<{ ok: boolean; message: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(sid)}/subtasks/${encodeURIComponent(subtaskId)}/compact`,
+    model ? { model } : {},
   )
 }
 

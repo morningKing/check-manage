@@ -13,10 +13,12 @@ import {
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
-  getCommands, postCommand, abortSession, deleteFromMessage,
+  getCommands, postCommand, abortSession, deleteFromMessage, compactSession as apiCompactSession,
+  getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
+  type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
@@ -30,6 +32,13 @@ interface SessionMeta {
 interface PendingAttachment {
   name: string
   path: string
+}
+
+/** 运行中插话的排队项：回合结束后按序自动发出（见 _drainQueue）。 */
+interface QueuedMessage {
+  localId: string
+  content: string
+  paths: string[]
 }
 
 interface State {
@@ -69,6 +78,13 @@ interface State {
    * and would otherwise lose a question asked while disconnected).
    */
   pendingQuestion: Record<string, QuestionRequest | null>
+  /**
+   * 运行中插话队列（TUI 的 mid-turn queueing）：streaming 时发送的消息不调
+   * 接口，先挂在这里并渲染成带「排队中」标记的本地气泡；当前回合 session.idle
+   * 后逐条发出。drain 点有二：session.idle 事件、SSE (重)连 open（补偿断线期
+   * 错过的 idle）。
+   */
+  queuedBySession: Record<string, QueuedMessage[]>
   _stream: { close(): void } | null
 }
 
@@ -103,6 +119,7 @@ export const useAiChatStore = defineStore('aiChat', {
     streamStatus: {} as Record<string, StreamStatus>,
     uploadingCount: 0,
     pendingQuestion: {},
+    queuedBySession: {} as Record<string, QueuedMessage[]>,
     _stream: null,
   }),
 
@@ -294,6 +311,26 @@ export const useAiChatStore = defineStore('aiChat', {
       })
     },
 
+    async showLspFormatter() {
+      const sid = this.activeSessionId
+      if (!sid) return
+      let lsp: LspServerStatus[] = []
+      let formatters: FormatterStatus[] = []
+      let error: string | undefined
+      try {
+        const res = await getLspFormatter(sid)
+        lsp = res.lsp
+        formatters = res.formatters
+      } catch (e) {
+        error = '无法获取（OpenCode 不可用）'
+      }
+      ;(this.messages[sid] ?? (this.messages[sid] = [])).push({
+        id: 'lsp_' + Date.now(),
+        role: 'assistant',
+        content: [{ type: 'lsp_formatter', lsp, formatters, error }],
+      })
+    },
+
     appendMessage(id: string, msg: AiMessage) {
       ;(this.messages[id] ?? (this.messages[id] = [])).push(msg)
     },
@@ -316,13 +353,28 @@ export const useAiChatStore = defineStore('aiChat', {
       for (const a of pending) parts.push({ type: 'file', name: a.name, path: a.path })
 
       const localId = 'local_' + Date.now()
+      const paths = pending.map(a => a.path)
+      this.attachments[sid] = []
+      // 运行中插话（TUI mid-turn queueing）：当前回合没结束就不调发送接口，
+      // 挂进队列等 session.idle 后自动发出；气泡先渲染，带「排队中」标记。
+      if (this.streaming[sid]) {
+        this.messages[sid].push({ id: localId, role: 'user', content: parts, queued: true })
+        ;(this.queuedBySession[sid] ?? (this.queuedBySession[sid] = [])).push({ localId, content, paths })
+        return
+      }
       this.messages[sid].push({ id: localId, role: 'user', content: parts })
+      this._beginTurn(sid)
+      await this._transmitUserMessage(sid, content, paths, localId)
+    },
+
+    _beginTurn(sid: string) {
       this.streaming[sid] = true
       this.reasoning[sid] = ''
       this.thinking[sid] = true
       this._resetStreamState(sid)
-      const paths = pending.map(a => a.path)
-      this.attachments[sid] = []
+    },
+
+    async _transmitUserMessage(sid: string, content: string, paths: string[], localId: string) {
       // Per-session model preference, persisted in localStorage by AiChatView.
       // Empty string → backend falls back to OPENCODE_MODEL config (which itself
       // may be empty, in which case OpenCode picks its own default).
@@ -334,6 +386,20 @@ export const useAiChatStore = defineStore('aiChat', {
       // adopt the real DB id so Edit/Retry can target this row server-side
       const msg = this.messages[sid].find((m) => m.id === localId)
       if (msg && messageId) msg.id = messageId
+    },
+
+    _drainQueue(sid: string) {
+      if (this.streaming[sid]) return
+      const queue = this.queuedBySession[sid]
+      if (!queue?.length) return
+      const item = queue.shift()!
+      // 排队气泡转为正常发送：去掉标记、复用本地 id（sendMessage 成功后仍会被
+      // 替换成真实 DB id，与普通发送一致）。
+      const msg = this.messages[sid]?.find((m) => m.id === item.localId)
+      if (msg) delete msg.queued
+      this._beginTurn(sid)
+      this._transmitUserMessage(sid, item.content, item.paths, item.localId)
+        .catch(() => { /* 发送失败：错误由 interceptor 提示，气泡保留为普通消息 */ })
     },
 
     async deleteFromMessage(id: string, msgId: string) {
@@ -466,6 +532,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.sessions = this.sessions.filter(x => x.id !== id)
       delete this.messages[id]
       delete this.streaming[id]
+      delete this.queuedBySession[id]
     },
 
     async clearSession(id: string) {
@@ -478,6 +545,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.attachments[id] = []
       this.streaming[id] = false
       this.thinking[id] = false
+      this.queuedBySession[id] = []  // 上下文已整体重置，排队的插话一并作废
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'active'
       // 旧 SSE 绑定的是已删的 OpenCode 会话，活跃会话需重连到新上下文。
@@ -487,12 +555,26 @@ export const useAiChatStore = defineStore('aiChat', {
       }
     },
 
+    async compactSession(id: string, model?: string) {
+      // 上下文压缩（TUI 的 /compact）：后端在后台线程调 OpenCode summarize，
+      // 请求立即返回；压缩 agent 的总结作为普通 assistant 回合经 SSE 流式到达，
+      // 结束时 session.idle 走既有收尾（loadFiles/_reloadPersisted/_drainQueue）。
+      const res = await apiCompactSession(id, model)
+      this._beginTurn(id)
+      return res
+    },
+
     _openStream(sid: string) {
       this._closeStream()
       this._stream = createEventStream(sid, {
         onEvent: ({ event, data }) => this._handleEvent(sid, event, data as any),
         onError: () => { /* api layer handles reconnect */ },
-        onStatus: (s) => { this.streamStatus[sid] = s },
+        onStatus: (s) => {
+          this.streamStatus[sid] = s
+          // 断线期间可能错过 session.idle；SSE（重）连上时补一发 drain，
+          // 否则运行中排的队会一直挂着不发送。
+          if (s === 'open') this._drainQueue(sid)
+        },
       })
     },
 
@@ -586,6 +668,8 @@ export const useAiChatStore = defineStore('aiChat', {
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           this.loadChanges(sid)
           this._reloadPersisted(sid)  // converge on server-persisted turn (incl. tool calls)
+          // 回合真正结束，补发运行期间排队的插话（若有）。
+          this._drainQueue(sid)
           break
         case 'session.error':
           this.streaming[sid] = false

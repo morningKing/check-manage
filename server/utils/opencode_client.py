@@ -197,6 +197,23 @@ class OpenCodeClient:
         )
         resp.raise_for_status()
 
+    def summarize_session(self, opencode_session_id: str, provider_id: str,
+                          model_id: str, directory: str = "") -> None:
+        """Trigger context compaction for the session (the TUI's /compact): the
+        built-in `compaction` agent summarizes the conversation so far into a
+        condensed context the next turn builds on. Like run_command, this runs
+        a full model turn and blocks until it completes — keep a short connect
+        timeout and no read timeout. Body is the {providerID, modelID} OBJECT
+        form (verified live on opencode 1.2.26: {} → 400 invalid_type on both
+        paths — unlike /command, which wants a "provider/model" string)."""
+        params = {"directory": directory} if directory else None
+        resp = requests.post(
+            self._url(f"/session/{opencode_session_id}/summarize"),
+            params=params, json={"providerID": provider_id, "modelID": model_id},
+            timeout=(10, None),
+        )
+        resp.raise_for_status()
+
     def list_questions(self, directory: str = "") -> list:
         """Pending QuestionRequest objects (OpenCode's built-in interactive
         multi-choice tool, e.g. `{id, sessionID, questions:[{question, header,
@@ -238,6 +255,25 @@ class OpenCodeClient:
         """
         params = {"directory": directory} if directory else None
         resp = requests.get(self._url("/mcp"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_lsp(self, directory: str = "") -> list:
+        """LSP servers OpenCode started for this workspace (file-type detected).
+        Empty until a session in the directory has touched matching files —
+        servers start lazily. Edit/write tool results get LSP diagnostics
+        attached server-side automatically while a server is running."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/lsp"), params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_formatters(self, directory: str = "") -> list:
+        """Formatter catalog for `directory`: each entry {name, extensions[],
+        enabled} — enabled reflects config (all OFF unless the user enabled
+        them via opencode.json's `formatter` key)."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/formatter"), params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
 

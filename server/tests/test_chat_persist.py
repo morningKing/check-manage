@@ -183,7 +183,7 @@ def test_ensure_listener_dedups_per_session(monkeypatch):
     started = []
     block = _threading.Event()
 
-    def fake_target(sid, oc, d):
+    def fake_target(sid, oc, d, known_subtasks=None):
         started.append(sid)
         block.wait(2)
 

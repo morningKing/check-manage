@@ -502,7 +502,8 @@ def _record_workspace_files(sid, directory):
         logger.warning('record workspace files failed session=%s: %s', sid, e)
 
 
-def _run_listener(sid, opencode_session_id, event_source, directory=''):
+def _run_listener(sid, opencode_session_id, event_source, directory='',
+                  known_subtasks=None):
     """Consume events, persisting the assistant message on session.idle and
     incrementally (time-debounced) while the turn streams, so switching sessions
     mid-stream recovers the partial answer. Returns after the turn's idle (or
@@ -516,8 +517,25 @@ def _run_listener(sid, opencode_session_id, event_source, directory=''):
     exceeded" and dropped events. The next turn re-creates a fresh listener via
     ensure_listener(). The pre-idle read timeout (INACTIVITY_TIMEOUT) still
     tolerates long silent tool calls *within* a turn. `event_source` is
-    injectable for tests."""
+    injectable for tests.
+
+    `known_subtasks` is an optional list of (childSessionID, status) pairs to
+    pre-register into state['subtasks'] before consuming events — used by the
+    subtask-compact route: a fresh listener has never "discovered" the reused
+    child session (no fresh tool:'task' part will arrive during a compaction
+    turn), so without pre-registration the child's compaction-turn events would
+    be routed to no scope and silently dropped. Status is seeded from the DB so
+    persist_subtasks doesn't rewrite a failed subtask as completed (the idle
+    handler only flips 'running')."""
     state = new_state()
+    for child_sid, child_status in (known_subtasks or []):
+        # depth=1: the pre-registered scope only receives the child's own events
+        # for persistence; a delegation discovered *inside* it would register at
+        # depth 2 (max-subtask-depth check for exotic nesting is slightly lax
+        # here, accepted — normal usage never reaches the cap).
+        scope = _new_subtask_scope(None, 1, None, None)
+        scope['status'] = child_status or 'completed'
+        state['subtasks'][child_sid] = scope
     last_persist = time.monotonic()
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
@@ -553,7 +571,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory=''):
                 last_persist = now
 
 
-def _listener_thread(sid, opencode_session_id, directory):
+def _listener_thread(sid, opencode_session_id, directory, known_subtasks=None):
     """Thread target: subscribe to OpenCode events for this session's workspace
     and run the persist loop. Exits on inactivity read-timeout or any error;
     removes itself from the registry so a later turn can start a fresh one."""
@@ -562,7 +580,8 @@ def _listener_thread(sid, opencode_session_id, directory):
         source = OpenCodeClient(OPENCODE_BASE_URL).subscribe_events(
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
-        _run_listener(sid, opencode_session_id, source, directory=directory)
+        _run_listener(sid, opencode_session_id, source, directory=directory,
+                      known_subtasks=known_subtasks)
         logger.info('persist listener stream ended session=%s', sid)
     except Exception:
         # Previously swallowed — the #1 reason a "stuck" session left no trace.
@@ -572,16 +591,22 @@ def _listener_thread(sid, opencode_session_id, directory):
             _listeners.pop(sid, None)
 
 
-def ensure_listener(sid, opencode_session_id, directory):
+def ensure_listener(sid, opencode_session_id, directory, known_subtasks=None):
     """Start a background persistence listener for `sid` if none is running.
     Called when a turn begins, so persistence happens even with no browser
-    connected."""
+    connected. `known_subtasks` pre-registers reused child sessions (see
+    _run_listener) — needed by the subtask-compact route, where the fresh
+    listener would otherwise never discover the child being compacted.
+    NOTE: if a listener is already alive it is reused as-is (its own discovery
+    state wins); compacting a child it never saw during an active listener's
+    lifetime is the one uncovered edge."""
     with _lock:
         existing = _listeners.get(sid)
         if existing and existing.is_alive():
             return
         t = threading.Thread(
-            target=_listener_thread, args=(sid, opencode_session_id, directory), daemon=True,
+            target=_listener_thread,
+            args=(sid, opencode_session_id, directory, known_subtasks), daemon=True,
         )
         _listeners[sid] = t
         t.start()

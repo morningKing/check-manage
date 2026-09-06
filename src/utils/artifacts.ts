@@ -179,7 +179,11 @@ export function groupFilesByDir<T extends { path: string }>(files: T[]): FileGro
  */
 export function mergeReasoningParts(content: AiContentPart[]): AiContentPart[] {
   const out: AiContentPart[] = []
+  // 流式期间 content 可能瞬态出现稀疏洞/非对象条目（part upsert 与渲染竞态），
+  // 渲染必须对脏数据鲁棒——跳过而不是抛 TypeError 打断整棵消息树的渲染。
+  if (!Array.isArray(content)) return out
   for (const p of content) {
+    if (!p || typeof p !== 'object' || !p.type) continue
     const prev = out[out.length - 1]
     if (p.type === 'reasoning' && prev?.type === 'reasoning') {
       prev.text = (prev.text || '') + (p.text || '')

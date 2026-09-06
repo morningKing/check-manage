@@ -23,6 +23,7 @@ import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
+import LspFormatterBlock from '@/components/ai-chat/LspFormatterBlock.vue'
 import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
@@ -49,6 +50,11 @@ const FilePreviewDialog = defineAsyncComponent(() => import('@/components/common
 
 const store = useAiChatStore()
 const batches = useAiChatBatchesStore()
+// Must be captured synchronously in setup(): calling useRoute() inside the
+// async onMounted callback (after an await) loses the setup context, inject()
+// returns undefined and route.query throws — silently swallowed, leaving the
+// view stuck on the empty state with no session opened (regression from 0e0babc).
+const route = useRoute()
 
 const showCreateBatch = ref(false)
 const showTemplateManager = ref(false)
@@ -161,6 +167,24 @@ const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
+// 执行计划（对齐 OpenCode TUI 的 todo 侧栏）：取会话里**最近一次** todowrite
+// 的清单快照。agent 每次调 todowrite 都带全量列表，SSE 的 message.part.updated
+// 会把新 tool part 实时 upsert 进消息流，这个 computed 随之自动重算——无需任何
+// 轮询，面板即随 agent 推进步骤实时刷新。倒序扫描取第一个含清单的 todo part。
+const activeTodos = computed(() => {
+  const msgs = messages.value
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) continue
+    for (let j = m.content.length - 1; j >= 0; j--) {
+      const p = m.content[j]
+      if (!p || p.type !== 'tool_use') continue
+      const todos = parseTodos(p)
+      if (todos) return todos
+    }
+  }
+  return []
+})
 // 产出文件按目录分组，每个目录一个可折叠分组（默认展开）。
 const groupedOutputs = computed(() => groupFilesByDir(outputs.value))
 const outputsCollapsed = reactive<Record<string, boolean>>({})
@@ -245,7 +269,8 @@ const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 const pendingQuestion = computed(() => store.activePendingQuestion)
 
-const canSend = computed(() => !streaming.value && (input.value.trim() || attachments.value.length))
+// 运行中也允许发送（进插话队列，回合结束后自动发出），只要求有内容或附件。
+const canSend = computed(() => !!(input.value.trim() || attachments.value.length))
 
 // ---- Artifacts (Claude-style file preview + version history) ----
 // Group artifacts by filename across the whole session. Named files (the fence
@@ -389,7 +414,6 @@ onMounted(async () => {
   try {
     await store.loadSessions()
     // Check URL query parameter: /ai-chat?session=xxx
-    const route = useRoute()
     const querySessionId = route.query.session as string | undefined
     if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
       // Open the specified session from URL
@@ -638,6 +662,16 @@ async function send() {
   input.value = ''
   if (!activeId.value) await newSession()
   const sid = activeId.value!
+  // 运行中插话只排队纯文本：/命令的执行路径是阻塞式 POST，不支持排队——
+  // 命令等回合结束后再发（提示用户，避免静默把 "/xxx" 当普通文本入队）。
+  if (streaming.value) {
+    if (parseCommandLine(text)) {
+      ElMessage.info('当前回合结束后再执行 / 命令；这条消息未入队')
+      return
+    }
+    await store.sendUserMessage(text)
+    return
+  }
   const parsed = parseCommandLine(text)
   if (parsed) {
     const fc = findFrontendCommand(parsed.name)
@@ -649,6 +683,27 @@ async function send() {
     // unknown /xxx → fall through to a normal message
   }
   try { await store.sendUserMessage(text) } catch { ElMessage.error('发送失败') }
+}
+
+const compacting = ref(false)
+async function onCompact() {
+  if (!activeId.value || compacting.value) return
+  try {
+    await ElMessageBox.confirm(
+      '压缩会把此前的对话历史总结成精简上下文（TUI 的 /compact），后续对话基于总结继续，原始消息仍可回看。继续？',
+      '压缩上下文',
+      { confirmButtonText: '压缩', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  compacting.value = true
+  try {
+    const res = await store.compactSession(activeId.value, composerModel.value || undefined)
+    ElMessage.success(res.message || '已开始压缩上下文')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || e?.message || '压缩失败')
+  } finally {
+    compacting.value = false
+  }
 }
 
 function onKey(e: Event) {
@@ -749,6 +804,9 @@ function onKey(e: Event) {
                 :class="['ai-bubble', 'ai-bubble--' + m.role]"
               >
                 <template #content>
+                  <div v-if="m.queued" class="msg__queued-tag">
+                    <ElIcon><Clock /></ElIcon> 排队中 · 回合结束后自动发送
+                  </div>
                   <template v-for="(p, i) in mergeReasoningParts(m.content)" :key="i">
                     <ChatFile v-if="p.type === 'file'" :name="p.name" :src="fileUrl(p.path)" />
                     <template v-else-if="p.type === 'tool_use'">
@@ -773,6 +831,10 @@ function onKey(e: Event) {
                     <McpServicesBlock
                       v-else-if="p.type === 'mcp_services'"
                       :servers="p.servers"
+                    />
+                    <LspFormatterBlock
+                      v-else-if="p.type === 'lsp_formatter'"
+                      :lsp="p.lsp" :formatters="p.formatters" :error="p.error"
                     />
                     <Thinking
                       v-else-if="p.type === 'reasoning' && p.text"
@@ -857,6 +919,13 @@ function onKey(e: Event) {
               @reply="(answers) => store.answerPendingQuestion(activeId!, answers)"
               @reject="() => store.rejectPendingQuestion(activeId!)"
             />
+
+            <!-- 执行计划面板（agent 的最新 todo 快照，随 todowrite 实时刷新，
+                 对齐 OpenCode TUI 把 todo 挂在侧栏持续可见的做法；会话里没有
+                 todo 时整块不渲染，不占空间） -->
+            <div v-if="activeTodos.length" class="ai-todos">
+              <TodoListBlock :todos="activeTodos" />
+            </div>
 
             <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
             <div v-if="outputs.length" class="ai-outputs">
@@ -968,7 +1037,9 @@ function onKey(e: Event) {
               ref="composerInputEl"
               v-model="input" type="textarea" :autosize="{ minRows: 1, maxRows: 8 }"
               class="composer-input"
-              placeholder="给 AI 助手发消息…（Enter 发送，Shift+Enter 换行）"
+              :placeholder="streaming
+                ? 'AI 正在回复…此时发送的消息将排队，回合结束后自动发出（Enter 排队）'
+                : '给 AI 助手发消息…（Enter 发送，Shift+Enter 换行）'"
               @keydown="onKey"
               @click="syncCursor"
               @keyup="syncCursor"
@@ -977,6 +1048,12 @@ function onKey(e: Event) {
               <div class="composer-bar__left">
                 <input ref="fileInputEl" type="file" multiple hidden @change="onFilesPicked" />
                 <input ref="skillInput" type="file" accept=".zip" hidden @change="onSkillPicked" />
+                <ElButton
+                  class="composer-add" :icon="Brush" circle text
+                  :disabled="streaming || !activeId" :loading="compacting"
+                  aria-label="压缩上下文" title="压缩上下文（用小模型总结历史，释放上下文空间）"
+                  @click="onCompact"
+                />
                 <ElDropdown trigger="click" @command="handleAddMenu">
                   <ElButton
                     class="composer-add" :icon="Plus" circle text
@@ -1035,10 +1112,10 @@ function onKey(e: Event) {
                   @click="store.abortStreaming()"
                 />
                 <ElButton
-                  v-else
                   class="composer-send" type="primary" circle :icon="Top"
                   :disabled="!canSend" @click="send"
-                  title="发送" aria-label="发送"
+                  :title="streaming ? '排队发送（回合结束后自动发出）' : '发送'"
+                  :aria-label="streaming ? '排队发送' : '发送'"
                 />
               </div>
             </div>
@@ -1167,6 +1244,15 @@ function onKey(e: Event) {
 }
 /* User: a single gray rounded block on the right (no inner box) */
 .msg--user { display: flex; flex-direction: column; align-items: flex-end; }
+/* 运行中插话的排队标记（气泡内顶部一行小字，发送后随 queued 标记消失） */
+.msg__queued-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
 .msg__meta {
   margin-top: 2px;
   font-size: 12px;
@@ -1220,6 +1306,8 @@ function onKey(e: Event) {
 }
 .ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
 .ai-thinking { max-width: 780px; margin: 0 auto 24px; }
+/* 执行计划面板：与产出/变更面板同一行节奏，卡片本身由 TodoListBlock 自带 */
+.ai-todos { margin: 4px 0 24px; }
 .ai-outputs {
   margin: 4px 0 24px;
   padding: 12px 14px;

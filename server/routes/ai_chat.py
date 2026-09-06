@@ -28,6 +28,7 @@ import os
 import json
 import logging
 import secrets
+import threading
 import requests
 from datetime import datetime, timezone, timedelta
 
@@ -49,7 +50,7 @@ from utils.workspace_changes import (git_changes, file_diff, expand_untracked_di
 from utils.workspace_outputs import list_session_files
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
-from utils.mcp_servers import enabled_mcp_config
+from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener,
@@ -142,7 +143,8 @@ def create_session():
     #    per-session MCP API — config is per-directory (see spec §12).
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=get_default_chat_model(), extra_mcp=_external_mcp())
+                          model=get_default_chat_model(), extra_mcp=_external_mcp(),
+                          include_internal=internal_mcp_enabled())
 
     # 3.5) Inject global skills into the workspace
     try:
@@ -332,6 +334,47 @@ def _load_session_for_user(session_id: str, user_id: str):
             (timedelta(hours=AI_SESSION_TTL_HOURS), session_id),
         )
         return row
+
+
+@ai_chat_bp.route('/sessions/<sid>/compact', methods=['POST'])
+@write_required
+def compact_session(sid):
+    """Trigger context compaction (the TUI's /compact): the compaction agent
+    summarizes the conversation so far into condensed context that the next
+    turn builds on. The summarize call blocks for the whole model turn, so it
+    is dispatched on a background thread — progress and result reach the user
+    via the SSE stream, and the request returns immediately instead of pinning
+    a waitress thread (and past the browser's 30s axios timeout) for minutes."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if not sess[2]:
+        return jsonify({'error': '会话尚未关联 OpenCode，无法压缩', 'code': 'NO_OPENCODE_SESSION'}), 400
+
+    body = request.get_json(silent=True) or {}
+    model = (body.get('model') or get_default_chat_model() or '').strip()
+    provider_id, _, model_id = model.partition('/')
+    if not provider_id or not model_id:
+        return jsonify({
+            'error': '未指定模型：请先在 AI 设置中配置默认对话模型，或在输入区选择模型后再压缩',
+            'code': 'MODEL_REQUIRED',
+        }), 400
+
+    # Listener BEFORE dispatch (same ordering as run_session_command / analyze):
+    # the compaction turn's output must persist even if the browser disconnects.
+    ensure_listener(sid, sess[2], sess[4])
+
+    def _run():
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).summarize_session(
+                sess[2], provider_id, model_id, directory=sess[4])
+            logger.info('compact done session=%s model=%s', sid, model)
+        except Exception:
+            logger.warning('compact failed session=%s model=%s', sid, model, exc_info=True)
+
+    threading.Thread(target=_run, daemon=True, name=f'compact-{sid}').start()
+    return jsonify({'ok': True, 'message': '已开始压缩上下文'})
 
 
 @ai_chat_bp.route('/sessions/<sid>/messages', methods=['POST'])
@@ -536,6 +579,58 @@ def get_subtask_messages_route(sid, subtask_id):
     })
 
 
+@ai_chat_bp.route('/sessions/<sid>/subtasks/<subtask_id>/compact', methods=['POST'])
+@write_required
+def compact_subtask(sid, subtask_id):
+    """压缩一个子代理会话的上下文（task_id 复用场景下，子会话跨多轮迭代
+    上下文单调增长，与主会话面临同样的问题——子会话就是普通 OpenCode
+    session，summarize 一视同仁）。与主会话 compact 相同的后台线程模式；
+    仅对已完结的子任务开放，运行中的子会话压缩会和在跑的回合冲突。
+    压缩后用 task_id 续跑依然有效（resume 从总结继续）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if not sess[2] or not sess[4]:
+        return jsonify({'error': '会话尚未关联 OpenCode 工作区', 'code': 'NO_OPENCODE_SESSION'}), 400
+
+    data = get_subtask_messages(subtask_id, owner_user_id=user['userId'])
+    if data is None:
+        return jsonify({'error': 'subtask not found', 'code': 'SUBTASK_NOT_FOUND'}), 404
+    if data['subtask'].get('status') == 'running':
+        return jsonify({'error': '子代理仍在运行中，结束后才能压缩', 'code': 'SUBTASK_RUNNING'}), 409
+
+    body = request.get_json(silent=True) or {}
+    model = (body.get('model') or get_default_chat_model() or '').strip()
+    provider_id, _, model_id = model.partition('/')
+    if not provider_id or not model_id:
+        return jsonify({
+            'error': '未指定模型：请先在 AI 设置中配置默认对话模型，或在输入区选择模型后再压缩',
+            'code': 'MODEL_REQUIRED',
+        }), 400
+
+    # 子会话的压缩回合事件经由父会话工作区的事件流到达：ensure_listener 挂上
+    # 后，persist_subtasks 会把总结更新进 ai_chat_subtask_messages（SubtaskBubble
+    # 重新展开即可看到），浏览器断开也不丢。必须把目标子会话**预注册**进监听器
+    # 的追踪状态——新监听器没有历史发现记录（压缩回合不会产生新的 tool:'task'
+    # part 触发发现），不预注册的话子会话事件会被当成无关会话直接丢弃。
+    ensure_listener(sid, sess[2], sess[4],
+                    known_subtasks=[(subtask_id, data['subtask'].get('status'))])
+
+    def _run():
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).summarize_session(
+                subtask_id, provider_id, model_id, directory=sess[4])
+            logger.info('subtask compact done session=%s subtask=%s model=%s',
+                        sid, subtask_id, model)
+        except Exception:
+            logger.warning('subtask compact failed session=%s subtask=%s model=%s',
+                           sid, subtask_id, model, exc_info=True)
+
+    threading.Thread(target=_run, daemon=True, name=f'compact-subtask-{subtask_id}').start()
+    return jsonify({'ok': True, 'message': '已开始压缩子代理上下文'})
+
+
 def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
@@ -611,6 +706,30 @@ def sse_events(sid):
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+
+
+@ai_chat_bp.route('/sessions/<sid>/lsp-formatter', methods=['GET'])
+@login_required
+def lsp_formatter_status(sid):
+    """LSP 活跃服务 + Formatter 目录（透传 OpenCode，工作区维度）。
+    LSP 由 OpenCode 按工作区文件类型惰性启动，编辑工具的结果会自动附带
+    LSP 诊断（服务端行为）；Formatter 默认全部关闭，需在 OpenCode 配置的
+    `formatter` 键里启用。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    out = {'lsp': [], 'formatters': []}
+    try:
+        out['lsp'] = client.list_lsp(directory=sess[4])
+    except Exception:
+        logger.warning('lsp status failed session=%s', sid, exc_info=True)
+    try:
+        out['formatters'] = client.list_formatters(directory=sess[4])
+    except Exception:
+        logger.warning('formatter status failed session=%s', sid, exc_info=True)
+    return jsonify(out)
 
 
 @ai_chat_bp.route('/sessions/<sid>/files', methods=['POST'])
@@ -1114,7 +1233,8 @@ def clear_session(sid):
     token = generate_token(sid, AI_SESSION_TTL_HOURS)
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
     write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=get_default_chat_model(), extra_mcp=_external_mcp())
+                          model=get_default_chat_model(), extra_mcp=_external_mcp(),
+                          include_internal=internal_mcp_enabled())
     # 4) 新建 OpenCode 会话（绑定重建后的工作区）= 上下文重置
     new_oc = client.create_session(directory=workspace_path, title='新会话')
     # 5) 删历史 + 重绑 opencode_session_id + 置 active
