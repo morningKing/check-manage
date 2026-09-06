@@ -59,6 +59,7 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | [export-via-chat.md](./ai/export-via-chat.md) | AI 助手调用导出脚本：对话中执行已绑定脚本并下载结果 |
 | [long-term-memory.md](./ai/long-term-memory.md) | AI 长期记忆：自动记住偏好与关键事实，跨会话调用 |
 | [smart-customer-service.md](./ai/smart-customer-service.md) | 智能客服：公开匿名访客对话入口，OpenCode Agent 驱动，RBAC 只读钳制 |
+| [trace-analysis.md](./ai/trace-analysis.md) | AI 执行轨迹分析：管理员对任意 AI 会话发起六步诊断（评分 / 根因 / 优化建议） |
 
 ## 📚 参考
 

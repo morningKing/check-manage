@@ -744,7 +744,7 @@ class TestListModels:
              patch('routes.open_api_batches._current_key', return_value=_key()), \
              patch('utils.opencode_client.OpenCodeClient.list_providers',
                    return_value=providers), \
-             patch('config.OPENCODE_MODEL', 'openai/gpt-4'):
+             patch('config.get_default_chat_model', return_value='openai/gpt-4'):
             resp = client.get(f'{BASE}/models', headers=HDR)
         assert resp.status_code == 200
         body = resp.get_json()
