@@ -12,6 +12,7 @@ from werkzeug.security import generate_password_hash
 from db import get_db
 from utils.kefu_guardrail import assemble_system_prompt
 from utils.workspace import create_session_workspace, write_opencode_config
+from utils.mcp_servers import internal_mcp_enabled
 from utils.session_token import generate_token
 from utils.opencode_client import OpenCodeClient
 from config import (
@@ -205,6 +206,7 @@ def create_kefu_session(instance: dict, visitor_id: str) -> dict:
         mcp_name=MCP_NAME,
         mcp_url=mcp_url,
         model=(instance.get('model') or get_default_chat_model()),
+        include_internal=internal_mcp_enabled(),
     )
 
     client = OpenCodeClient(OPENCODE_BASE_URL)

@@ -17,6 +17,7 @@ from utils.memory import (
 from utils.mongo_query import translate as mongo_translate, remap_labels, MongoQueryError
 from utils.mcp_servers import (
     list_servers, create_server, update_server, delete_server, McpServerError,
+    internal_mcp_enabled, set_internal_mcp_enabled,
 )
 
 ai_bp = Blueprint('ai', __name__, url_prefix='/ai')
@@ -173,7 +174,49 @@ def _mcp_payload(body):
 @ai_bp.route('/mcp-servers', methods=['GET'])
 @require_permission('admin.ai_settings')
 def list_mcp_servers():
-    return jsonify({'servers': list_servers()})
+    from config import MCP_SERVER_URL
+    return jsonify({
+        'servers': list_servers(),
+        # 平台内置 MCP 的管理视图：AI 设置页与外部服务同一张卡片里管理。
+        'internal': {
+            'name': 'check-manage',
+            'url': MCP_SERVER_URL,
+            'enabled': internal_mcp_enabled(),
+        },
+    })
+
+
+@ai_bp.route('/mcp-servers/internal/health', methods=['GET'])
+@require_permission('admin.ai_settings')
+def internal_mcp_health():
+    """Probe the internal MCP server's /health (the trace-analysis outage showed
+    this endpoint was the operational blind spot: sessions kept failing with no
+    config-level signal). Returns ok + latency, or ok=False with the error."""
+    import time
+    import urllib.request
+    from config import MCP_SERVER_URL
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(f'{MCP_SERVER_URL}/health', timeout=3) as resp:
+            body = resp.read().decode('utf-8', errors='replace')
+            ok = resp.status == 200 and 'ok' in body
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e), 'url': MCP_SERVER_URL}), 502
+    latency_ms = int((time.monotonic() - started) * 1000)
+    return jsonify({'ok': ok, 'latencyMs': latency_ms, 'url': MCP_SERVER_URL})
+
+
+@ai_bp.route('/mcp-servers/internal', methods=['PUT'])
+@require_permission('admin.ai_settings')
+def update_internal_mcp():
+    """Toggle the platform's own MCP server for NEW/reset session workspaces.
+    Existing workspaces are never rewritten (same semantics as external MCP
+    edits). Registered BEFORE the /<server_id> rules so 'internal' is not
+    captured as an id."""
+    body = request.get_json(silent=True) or {}
+    enabled = set_internal_mcp_enabled(bool(body.get('enabled', True)))
+    from config import MCP_SERVER_URL
+    return jsonify({'enabled': enabled, 'name': 'check-manage', 'url': MCP_SERVER_URL})
 
 
 @ai_bp.route('/mcp-servers', methods=['POST'])

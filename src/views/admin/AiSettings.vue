@@ -119,16 +119,43 @@
     <el-card class="mcp-card">
       <template #header>
         <div class="card-header">
-          <h2>外部 MCP 服务</h2>
+          <h2>MCP 服务</h2>
           <el-button type="primary" size="small" style="margin-left: auto" @click="openMcpDialog()">
-            添加 MCP
+            添加外部 MCP
           </el-button>
         </div>
       </template>
 
       <p class="hint hint--block">
-        在此登记的外部 MCP 服务会自动合并进每个 AI 会话的 <code>opencode.json</code>，供助手调用其工具（与平台自带 MCP 并存）。修改后对**新建 / 清空（重置）**的会话生效。
+        此处管理 AI 会话可用的 MCP 服务，均会合并进每个 AI 会话的 <code>opencode.json</code>。修改后对**新建 / 清空（重置）**的会话生效，已有会话不回改。
       </p>
+
+      <!-- 平台内置 MCP：与外部服务同一张卡片里管理（开关 + 连接健康） -->
+      <div class="internal-mcp">
+        <div class="internal-mcp__row">
+          <el-tag type="success" size="small">内置</el-tag>
+          <span class="mono internal-mcp__name">{{ internalMcp.name }}</span>
+          <span class="mono internal-mcp__url">{{ internalMcp.url }}</span>
+          <el-tag
+            v-if="internalHealth"
+            :type="internalHealth.ok ? 'success' : 'danger'"
+            size="small"
+          >
+            {{ internalHealth.ok ? `已连接（${internalHealth.latencyMs}ms）` : '连接失败' }}
+          </el-tag>
+          <el-button size="small" text :loading="healthLoading" @click="checkInternalHealth">
+            检测连接
+          </el-button>
+          <el-switch
+            :model-value="internalMcp.enabled"
+            style="margin-left: auto"
+            @change="(v: string | number | boolean) => toggleInternal(!!v)"
+          />
+        </div>
+        <div class="internal-mcp__desc">
+          平台自带 MCP，是 AI 助手数据查询、长期记忆、执行轨迹分析等平台工具的来源。禁用后仅影响之后新建/清空的会话；期间「执行轨迹分析」会拒绝执行并提示。
+        </div>
+      </div>
 
       <el-table :data="mcpServers" v-loading="mcpLoading" size="small">
         <el-table-column prop="name" label="名称" min-width="120" />
@@ -200,7 +227,8 @@ import { get } from '@/utils/request'
 import service from '@/utils/request'
 import {
   listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer,
-  type McpServer,
+  getInternalMcpHealth, setInternalMcpEnabled,
+  type McpServer, type InternalMcp, type InternalMcpHealth,
 } from '@/api/aiMcpServers'
 import { listModels, type ModelInfo } from '@/api/aiChat'
 
@@ -306,6 +334,42 @@ const mcpForm = reactive({
   headersText: '', commandText: '', envText: '', enabled: true,
 })
 
+// --- Internal (platform) MCP server -----------------------------------------
+const internalMcp = ref<InternalMcp>({ name: 'check-manage', url: '', enabled: true })
+const internalHealth = ref<InternalMcpHealth | null>(null)
+const healthLoading = ref(false)
+
+async function checkInternalHealth() {
+  healthLoading.value = true
+  try {
+    internalHealth.value = await getInternalMcpHealth()
+  } catch (e: any) {
+    // 网络层失败（502）：后端已探测过，这里把结果标成不可达
+    internalHealth.value = { ok: false, error: e?.response?.data?.error || e?.message || '探测失败', url: internalMcp.value.url }
+  } finally {
+    healthLoading.value = false
+  }
+}
+
+async function toggleInternal(enabled: boolean) {
+  if (!enabled) {
+    try {
+      await ElMessageBox.confirm(
+        '禁用内置 MCP 后，新建/清空的 AI 会话将无法使用数据查询、长期记忆、执行轨迹分析等平台工具。确认禁用？',
+        '禁用内置 MCP',
+        { confirmButtonText: '禁用', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch { return }
+  }
+  try {
+    const r = await setInternalMcpEnabled(enabled)
+    internalMcp.value.enabled = r.enabled
+    ElMessage.success(enabled ? '已启用，对之后新建/清空的会话生效' : '已禁用，对之后新建/清空的会话生效')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '更新失败')
+  }
+}
+
 function parseKv(text: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const line of text.split('\n')) {
@@ -326,7 +390,11 @@ function parseLines(text: string): string[] {
 
 async function loadMcp() {
   mcpLoading.value = true
-  try { mcpServers.value = await listMcpServers() } catch { /* surfaced */ } finally { mcpLoading.value = false }
+  try {
+    const r = await listMcpServers()
+    mcpServers.value = r.servers
+    if (r.internal) internalMcp.value = r.internal
+  } catch { /* surfaced */ } finally { mcpLoading.value = false }
 }
 
 function openMcpDialog(row?: McpServer) {
@@ -409,6 +477,7 @@ onMounted(() => {
   loadSettings()
   loadModels()
   loadMcp()
+  checkInternalHealth()
 })
 </script>
 
@@ -441,6 +510,33 @@ onMounted(() => {
 
 .mcp-card {
   margin-top: 16px;
+}
+
+/* 平台内置 MCP 管理节：开关 + 连接健康，位于外部服务表格上方 */
+.internal-mcp {
+  border: 1px dashed var(--el-border-color);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: var(--el-fill-color-lighter);
+}
+.internal-mcp__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.internal-mcp__name {
+  font-weight: 600;
+}
+.internal-mcp__url {
+  color: var(--el-text-color-secondary);
+}
+.internal-mcp__desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
 }
 
 .hint--block {

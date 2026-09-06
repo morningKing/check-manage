@@ -162,10 +162,38 @@ def analyze_session(session_id):
     from utils.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
     from utils.session_token import generate_token
-    from utils.mcp_servers import enabled_mcp_config
+    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
 
     MCP_NAME = 'check-manage'
     logger = logging.getLogger('ai_session_admin')
+
+    # 0. Pre-flight: the analysis agent's core capability is the check-manage
+    #    MCP toolset (analyze_trace / query_sessions). If the MCP server is
+    #    down the turn would still "run" but silently degrade to wandering the
+    #    workspace filesystem (observed live: the agent loads the skill, finds
+    #    the tools missing, and starts bash/glob-ing around). Fail fast with an
+    #    actionable error instead.
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f'{MCP_SERVER_URL}/health', timeout=3) as resp:
+            if resp.status != 200:
+                raise OSError(f'HTTP {resp.status}')
+    except Exception as e:
+        logger.warning('analyze: MCP server unreachable at %s: %s', MCP_SERVER_URL, e)
+        return jsonify({
+            'error': (f'MCP 服务不可用（{MCP_SERVER_URL}）：轨迹分析依赖 '
+                      f'analyze_trace / query_sessions MCP 工具。'
+                      f'请先启动 MCP 服务器（npm run mcp 或 npm run dev:all）后重试。'),
+        }), 502
+    if not internal_mcp_enabled():
+        # The analysis agent is built on the internal MCP tools
+        # (analyze_trace / query_sessions) — without the internal entry in its
+        # opencode.json the session would run blind, so refuse up front (before
+        # creating any session row / workspace) rather than degrade silently.
+        return jsonify({
+            'error': ('平台内置 MCP 已被禁用：轨迹分析依赖 analyze_trace / query_sessions '
+                      '内部工具。请在 AI 设置中重新启用内置 MCP 后重试。'),
+        }), 409
 
     # 1. Verify target session exists
     detail = admin_get_session_detail(session_id)
@@ -197,6 +225,7 @@ def analyze_session(session_id):
     write_opencode_config(
         workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
         model=get_default_chat_model(), extra_mcp=extra_mcp,
+        include_internal=internal_enabled,
     )
 
     # 5. Inject global skills (including trace-analyzer)
@@ -256,7 +285,17 @@ def analyze_session(session_id):
              '[{"type": "text", "text": ' + __import__('json').dumps(analysis_prompt) + '}]'),
         )
 
-    # 10. Send prompt to OpenCode
+    # 10. Attach the persistence listener BEFORE dispatching the prompt — same
+    #     fix as run_session_command's listener-before-run_command ordering.
+    #     send_prompt_async returns immediately, but the analysis turn can run
+    #     for minutes; without a server-side listener its assistant output is
+    #     only persisted if the admin happens to keep the auto-opened tab open
+    #     for the whole turn (browser SSE proxy fallback), otherwise the
+    #     session is left with the user prompt and nothing else.
+    from utils.chat_persist import ensure_listener
+    ensure_listener(analysis_sid, oc_sid, workspace_path)
+
+    # 11. Send prompt to OpenCode
     try:
         client.send_prompt_async(oc_sid, analysis_prompt, directory=workspace_path)
     except Exception as e:

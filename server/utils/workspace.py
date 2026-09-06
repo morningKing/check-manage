@@ -145,7 +145,8 @@ def cleanup_batch_workspaces(workspace_root: str, user_id: str, sessions: list) 
 
 
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
-                          model: str = "", extra_mcp: dict | None = None) -> str:
+                          model: str = "", extra_mcp: dict | None = None,
+                          include_internal: bool = True) -> str:
     """Write opencode.json into the workspace so OpenCode (scoped to this dir)
     connects to our MCP server at `mcp_url` (which carries the session token)
     and, when given, uses `model` ("<providerID>/<modelID>").
@@ -153,15 +154,19 @@ def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
     `extra_mcp` is an optional map of additional OpenCode MCP entries (admin-
     registered external MCP servers) merged in alongside the platform's own; the
     platform entry (`mcp_name`) always wins so external config can't shadow it.
+    `include_internal=False` (admin disabled the internal MCP in AI settings)
+    omits the platform entry entirely — external entries are still written.
+    Callers pass `utils.mcp_servers.internal_mcp_enabled()`; the flag only
+    affects newly written configs, existing workspaces are never rewritten.
     Returns the config file path.
     """
-    mcp = {
-        mcp_name: {
+    mcp = {}
+    if include_internal:
+        mcp[mcp_name] = {
             "type": "remote",
             "url": mcp_url,
             "enabled": True,
-        },
-    }
+        }
     if extra_mcp:
         for name, entry in extra_mcp.items():
             if name != mcp_name:           # never let an external entry shadow ours

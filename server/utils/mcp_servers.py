@@ -138,3 +138,34 @@ def enabled_mcp_config(reserved_names=()):
                 entry['headers'] = dict(s['headers'])
         out[s['name']] = entry
     return out
+
+
+def internal_mcp_enabled() -> bool:
+    """Whether the platform's own (internal) check-manage MCP server should be
+    written into NEW/reset session workspaces' opencode.json. Admin-toggled from
+    AI settings; existing workspaces are never rewritten, same as external MCP
+    changes. Degrades to True on any DB problem — the internal MCP is what
+    powers data queries / memory tools / trace analysis, so failing OPEN is the
+    safe direction."""
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT mcp_internal_enabled FROM ai_settings WHERE id = 1")
+            row = cur.fetchone()
+        return bool(row[0]) if row else True
+    except Exception:
+        return True
+
+
+def set_internal_mcp_enabled(enabled: bool) -> bool:
+    """Persist the internal MCP toggle. Returns the resulting state."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_settings SET mcp_internal_enabled = %s, updated_at = NOW() "
+            "WHERE id = 1 RETURNING mcp_internal_enabled",
+            (bool(enabled),),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    return bool(row[0]) if row else bool(enabled)

@@ -181,6 +181,9 @@ INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT DO NOTHING;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mem0_enabled    BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(200) NOT NULL DEFAULT 'text-embedding-v3';
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS default_chat_model VARCHAR(200) NOT NULL DEFAULT '';
+-- 平台内置 MCP（check-manage）启用开关：FALSE 时新建/清空的会话 opencode.json
+-- 不再写入内部 MCP 条目（外部 MCP 照常）。默认开启。
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mcp_internal_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- External MCP servers registered by an admin and merged into every AI-chat
 -- session's opencode.json (alongside the platform's own MCP). `name` is the key
