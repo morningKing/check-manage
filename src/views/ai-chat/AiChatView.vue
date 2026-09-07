@@ -18,7 +18,9 @@ import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
+import QuestionResultCard from '@/components/ai-chat/QuestionResultCard.vue'
 import { parseTodos } from '@/utils/todos'
+import { parseQuestionPart } from '@/utils/questionPart'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
 import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
@@ -817,6 +819,13 @@ function onKey(e: Event) {
                       <QueryResultBlock
                         v-else-if="parseQueryResult(p)"
                         :result="parseQueryResult(p)!" :download-url="fileUrl"
+                      />
+                      <!-- question 工具完成后保留卡片渲染（勾选你的选择），
+                           而不是折叠成 JSON 工具气泡；运行中只留一条占位提示，
+                           交互卡片在对话流末尾。 -->
+                      <QuestionResultCard
+                        v-else-if="parseQuestionPart(p)"
+                        :view="parseQuestionPart(p)!"
                       />
                       <ToolCallBubble
                         v-else
