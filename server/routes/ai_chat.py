@@ -181,7 +181,8 @@ def list_models():
 
     Flattens OpenCode's /provider response into:
       { "models": [{ "id": "<providerID>/<modelID>", "label": "<provider> / <model>",
-                     "providerID": "...", "modelID": "...", "connected": bool }],
+                     "providerID": "...", "modelID": "...", "connected": bool,
+                     "contextLimit": int|null }],
         "default": "<configured_default>" or empty string,
         "openCodeDefaults": { providerID: modelID } }
     Only connected providers are surfaced. `default` is the server-side
@@ -212,6 +213,9 @@ def list_models():
                 'providerID': pid,
                 'modelID': mid,
                 'connected': True,
+                # context window size, for the chat's 上下文水位线 (F1);
+                # None when the provider doesn't declare a limit.
+                'contextLimit': (mdef.get('limit') or {}).get('context'),
             })
     # stable ordering for the UI: provider name then model name
     models.sort(key=lambda m: (m['label'].lower(), m['id']))

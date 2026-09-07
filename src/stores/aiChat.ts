@@ -22,6 +22,7 @@ import {
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
+import { computeUsage, EMPTY_USAGE, type SessionUsage } from '@/utils/aiUsage'
 
 interface SessionMeta {
   id: string
@@ -85,6 +86,11 @@ interface State {
    * 错过的 idle）。
    */
   queuedBySession: Record<string, QueuedMessage[]>
+  /**
+   * 每会话 token 用量（F1 上下文水位线/成本感知）：由消息 meta 计算，
+   * 会话打开 / 回合结束重算，message.updated 流式中就地刷新 contextTokens。
+   */
+  usageBySession: Record<string, SessionUsage>
   _stream: { close(): void } | null
 }
 
@@ -120,6 +126,7 @@ export const useAiChatStore = defineStore('aiChat', {
     uploadingCount: 0,
     pendingQuestion: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
+    usageBySession: {} as Record<string, SessionUsage>,
     _stream: null,
   }),
 
@@ -148,6 +155,11 @@ export const useAiChatStore = defineStore('aiChat', {
     activePendingQuestion(state): QuestionRequest | null {
       return state.activeSessionId ? state.pendingQuestion[state.activeSessionId] ?? null : null
     },
+    activeUsage(state): SessionUsage {
+      return state.activeSessionId
+        ? state.usageBySession[state.activeSessionId] ?? { ...EMPTY_USAGE }
+        : { ...EMPTY_USAGE }
+    },
   },
 
   actions: {
@@ -167,6 +179,7 @@ export const useAiChatStore = defineStore('aiChat', {
         this._resetStreamState(meta.id)
         const history = await getMessages(meta.id)
         this.messages[meta.id] = history.messages
+        this._recomputeUsage(meta.id)
         this.loadPaletteItems(meta.id)
         this._openStream(meta.id)
         return meta.id
@@ -191,6 +204,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this._resetStreamState(id)
       const history = await getMessages(id)
       this.messages[id] = history.messages
+      this._recomputeUsage(id)
       this.loadFiles(id)
       this.loadChanges(id)
       this.loadPaletteItems(id)
@@ -217,6 +231,7 @@ export const useAiChatStore = defineStore('aiChat', {
         // bubbles could momentarily vanish during a live batch run.)
         if (history.messages.length >= (this.messages[id]?.length ?? 0)) {
           this.messages[id] = history.messages
+          this._recomputeUsage(id)
         }
       } catch { /* non-fatal */ }
     },
@@ -335,6 +350,11 @@ export const useAiChatStore = defineStore('aiChat', {
       ;(this.messages[id] ?? (this.messages[id] = [])).push(msg)
     },
 
+    /** 从消息 meta 重算会话用量（上下文水位线/累计 token）。幂等。 */
+    _recomputeUsage(sid: string) {
+      this.usageBySession[sid] = computeUsage(this.messages[sid])
+    },
+
     async renameSession(id: string, title: string) {
       await apiRenameSession(id, title)
       const s = this.sessions.find(x => x.id === id)
@@ -407,6 +427,7 @@ export const useAiChatStore = defineStore('aiChat', {
       const arr = this.messages[id] ?? []
       const idx = arr.findIndex((m) => m.id === msgId)
       if (idx >= 0) this.messages[id] = arr.slice(0, idx)
+      this._recomputeUsage(id)  // 被删回合的 token 不再计入累计
       this.streaming[id] = false
       this.thinking[id] = false
     },
@@ -533,6 +554,7 @@ export const useAiChatStore = defineStore('aiChat', {
       delete this.messages[id]
       delete this.streaming[id]
       delete this.queuedBySession[id]
+      delete this.usageBySession[id]
     },
 
     async clearSession(id: string) {
@@ -545,6 +567,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.attachments[id] = []
       this.streaming[id] = false
       this.thinking[id] = false
+      this.usageBySession[id] = { ...EMPTY_USAGE }  // 上下文重置，用量归零
       this.queuedBySession[id] = []  // 上下文已整体重置，排队的插话一并作废
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'active'
@@ -589,6 +612,17 @@ export const useAiChatStore = defineStore('aiChat', {
           const info = data?.info
           if (info?.role === 'assistant' && info?.id) {
             ;(_assistantMsgIds[sid] ?? (_assistantMsgIds[sid] = new Set())).add(info.id)
+            // 已完成的消息快照自带 token —— 回合还在流式进行时就地刷新
+            // 「当前上下文占用」，让水位线随每步推进实时变化；累计口径等
+            // idle 落库后由 _reloadPersisted → _recomputeUsage 统一重算。
+            const tok = info.tokens
+            if (info.time?.completed && tok && (tok.input != null || tok.output != null)) {
+              const cur = this.usageBySession[sid] ?? { ...EMPTY_USAGE }
+              this.usageBySession[sid] = {
+                ...cur,
+                contextTokens: (tok.input ?? 0) + (tok.output ?? 0),
+              }
+            }
           }
           break
         }
@@ -705,6 +739,7 @@ export const useAiChatStore = defineStore('aiChat', {
         const current = this.messages[sid]?.length ?? 0
         if (!this.streaming[sid] && history.messages.length >= current) {
           this.messages[sid] = history.messages
+          this._recomputeUsage(sid)  // 本回合 meta 已落库 → 状态条数值刷新
         }
       } catch { /* non-fatal: keep the in-memory copy */ }
     },

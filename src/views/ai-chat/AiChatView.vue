@@ -19,6 +19,7 @@ import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
 import QuestionResultCard from '@/components/ai-chat/QuestionResultCard.vue'
+import ContextStatusBar from '@/components/ai-chat/ContextStatusBar.vue'
 import { parseTodos } from '@/utils/todos'
 import { parseQuestionPart } from '@/utils/questionPart'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
@@ -82,12 +83,15 @@ const scanBatches = computed(() => batches.items.filter(b => !!b.scan_task_id))
 // the store's setSessionModel / hydrateSessionModel actions.
 const models = ref<ModelInfo[]>([])
 const modelsLoading = ref(false)
+// 服务端配置的默认对话模型（水位线要拿它的 contextLimit 算百分比）。
+const defaultModel = ref('')
 async function fetchModels() {
   if (modelsLoading.value) return
   modelsLoading.value = true
   try {
     const r = await listModels()
     models.value = r.models
+    defaultModel.value = r.default || ''
   } catch { /* surfaced by interceptor */ }
   finally { modelsLoading.value = false }
 }
@@ -114,6 +118,14 @@ const composerAgent = computed<string>({
   get: () => (activeId.value ? store.agentBySession[activeId.value] || '' : ''),
   set: (v) => { if (activeId.value) store.setSessionAgent(activeId.value, v) },
 })
+
+// ---- 上下文水位线（F1）：当前生效模型（会话选择 > 服务端默认）及其窗口大小 ----
+const activeUsage = computed(() => store.activeUsage)
+const effectiveModel = computed(() => composerModel.value || defaultModel.value)
+const modelInfo = computed(() => models.value.find((m) => m.id === effectiveModel.value))
+const contextLimit = computed(() => modelInfo.value?.contextLimit ?? null)
+const modelLabel = computed(() => modelInfo.value?.label
+  || (effectiveModel.value ? effectiveModel.value.split('/').pop() || effectiveModel.value : '默认'))
 
 
 const input = ref('')
@@ -1030,6 +1042,17 @@ function onKey(e: Event) {
         </span>
         <span class="batch-bar__cfg">Agent：{{ activeBatchInfo.agent || '默认' }} · 模型：{{ activeBatchInfo.model || '默认' }}</span>
       </div>
+
+      <!-- 用量状态条（F1）：模型 ｜ 上下文水位线 ｜ 累计 token/费用；:key 让切换
+           会话时重置「稍后」静音状态。 -->
+      <ContextStatusBar
+        v-if="activeId"
+        :key="activeId"
+        :usage="activeUsage"
+        :model-label="modelLabel"
+        :context-limit="contextLimit"
+        @compact="onCompact"
+      />
 
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
       <div class="ai-chat__composer">

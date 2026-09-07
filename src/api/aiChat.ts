@@ -173,6 +173,8 @@ export interface ModelInfo {
   providerID: string
   modelID: string
   connected: boolean
+  /** 上下文窗口大小（tokens），供水位线计算；Provider 未声明时为空 */
+  contextLimit?: number | null
 }
 
 export function listModels() {

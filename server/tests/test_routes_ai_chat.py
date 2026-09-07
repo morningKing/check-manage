@@ -152,7 +152,8 @@ def test_list_models_flattens_connected_providers(setup):
     oc.list_providers.return_value = {
         'all': [
             {'id': 'p1', 'name': 'Provider One',
-             'models': {'m1': {'name': 'Model 1'}, 'm2': {'name': 'Model 2'}}},
+             'models': {'m1': {'name': 'Model 1', 'limit': {'context': 200000}},
+                        'm2': {'name': 'Model 2'}}},
             {'id': 'p2', 'name': 'Provider Two',
              'models': {'mX': {'name': 'X'}}},
             {'id': 'p3', 'name': 'Not Connected',
@@ -170,6 +171,11 @@ def test_list_models_flattens_connected_providers(setup):
     # labels carry the human-readable form
     p1m1 = next(m for m in body['models'] if m['id'] == 'p1/m1')
     assert p1m1['label'] == 'Provider One / Model 1'
+    # context window limit is surfaced for the 上下文水位线; None when the
+    # provider doesn't declare one
+    assert p1m1['contextLimit'] == 200000
+    p1m2 = next(m for m in body['models'] if m['id'] == 'p1/m2')
+    assert p1m2['contextLimit'] is None
 
 
 def test_get_messages_returns_history(setup):
