@@ -225,7 +225,7 @@ def analyze_session(session_id):
     write_opencode_config(
         workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
         model=get_default_chat_model(), extra_mcp=extra_mcp,
-        include_internal=internal_enabled,
+        include_internal=internal_mcp_enabled(),
     )
 
     # 5. Inject global skills (including trace-analyzer)
