@@ -47,6 +47,7 @@ import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
 import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit } from '@/api/aiChat'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
+import { useChatScroll } from '@/composables/useChatScroll'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
 // 顾虑——避免这些重型库进这个页面的主 chunk。
@@ -146,6 +147,19 @@ watch(input, async () => {
 const activeIndex = ref(0)
 const fileInputEl = ref<HTMLInputElement | null>(null)
 const scroller = ref<InstanceType<typeof ElScrollbar> | null>(null)
+
+// ---- 流式智能滚动（F4）：贴底才自动跟随；上滑回看时不被打断，显示「回到底部」----
+function getScrollEl(): HTMLElement | null {
+  const inst = scroller.value as unknown as { wrapRef?: HTMLElement | { value?: HTMLElement } } | null
+  const w = inst?.wrapRef
+  if (!w) return null
+  return w instanceof HTMLElement ? w : (w.value ?? null)
+}
+const {
+  pinned: pinnedToBottom, unread: unreadCount,
+  onScroll: onChatScroll, onNewMessage: onChatNewMessage,
+  onStreamDelta: onChatStreamDelta, pinToBottom,
+} = useChatScroll(getScrollEl)
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
@@ -410,7 +424,7 @@ async function runArtifact(seg: CodeSegment, idx: number) {
     } else {
       ElMessage.error('脚本运行出错，详见运行结果')
     }
-    scrollToBottom()
+    void pinToBottom()
   } catch {
     ElMessage.error('运行失败')
   } finally {
@@ -431,12 +445,15 @@ function parseQueryResult(p: any): any | null {
   return r && typeof r === 'object' && typeof r.mode === 'string' ? r : null
 }
 
-async function scrollToBottom() {
-  await nextTick()
-  scroller.value?.setScrollTop(9_999_999)
-}
-watch(() => messages.value.map(m => m.content.map(c => (c as any).text || '').join()).join('|'), scrollToBottom)
-watch(reasoning, scrollToBottom)
+// 滚动门控（F4）：只有贴底时才跟随流式自动滚动；用户上滑回看时不被打断，
+// 期间新消息计入 unread，由「回到底部」浮动按钮承载。
+// - 消息条数变化 = 新消息：贴底跟随，否则累计未读
+watch(() => messages.value.length, () => onChatNewMessage())
+// - 同一消息内的文本/思考增量：贴底才跟随，不累计未读
+watch(() => messages.value.map(m => m.content.map(c => (c as any).text || '').join()).join('|'), () => onChatStreamDelta())
+watch(reasoning, () => onChatStreamDelta())
+// 切换会话：恢复贴底并滚到最新（消息异步加载后由长度 watch 再次跟随）
+watch(activeId, () => { void pinToBottom() })
 
 // Live view for a running batch child: its work is persisted incrementally on
 // the server but not pushed over SSE, so poll its messages while it runs. The
@@ -743,6 +760,7 @@ async function send() {
       return
     }
     await store.sendUserMessage(text)
+    void pinToBottom()
     return
   }
   const parsed = parseCommandLine(text)
@@ -755,7 +773,7 @@ async function send() {
     }
     // unknown /xxx → fall through to a normal message
   }
-  try { await store.sendUserMessage(text) } catch { ElMessage.error('发送失败') }
+  try { await store.sendUserMessage(text); void pinToBottom() } catch { ElMessage.error('发送失败') }
 }
 
 const compacting = ref(false)
@@ -892,7 +910,8 @@ function onKey(e: Event) {
       <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>
-      <ElScrollbar ref="scroller" class="ai-chat__messages">
+      <div class="ai-chat__messages-wrap">
+      <ElScrollbar ref="scroller" class="ai-chat__messages" @scroll="onChatScroll">
         <div v-if="!activeId" class="ai-chat__welcome">
           <ElEmpty description="开启一个会话，向 AI 助手提问或上传文件">
             <ElButton type="primary" :icon="Plus" @click="newSession">开启新会话</ElButton>
@@ -1127,6 +1146,21 @@ function onKey(e: Event) {
           </div>
         </template>
       </ElScrollbar>
+        <!-- 流式自动滚动（F4）：用户上滑后出现，显示未读数；点击回到底部并恢复跟随 -->
+        <transition name="jump-fade">
+          <button
+            v-if="activeId && !pinnedToBottom"
+            type="button"
+            class="ai-chat__jump-bottom"
+            :title="'回到底部'"
+            @click="pinToBottom"
+          >
+            <ElIcon><ArrowDown /></ElIcon>
+            <span v-if="unreadCount" class="ai-chat__jump-badge">{{ unreadCount }}</span>
+            <span class="ai-chat__jump-label">{{ unreadCount ? `${unreadCount} 条新消息` : '回到底部' }}</span>
+          </button>
+        </transition>
+      </div>
 
       <!-- 批任务子会话：显示该批次的 Agent/模型与运行状态（普通会话由底部选择器自管） -->
       <div v-if="activeBatchInfo" class="batch-bar" :class="`batch-bar--${activeBatchInfo.status}`">
@@ -1362,8 +1396,27 @@ function onKey(e: Event) {
   mark { background: var(--el-color-warning-light-7); color: inherit; padding: 0 1px; border-radius: 2px; }
 }
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.ai-chat__messages { flex: 1; min-height: 0; }
+.ai-chat__messages-wrap { flex: 1; min-height: 0; position: relative; }
+.ai-chat__messages { height: 100%; }
 .ai-chat__welcome { height: 100%; display: flex; align-items: center; justify-content: center; }
+/* 「回到底部」浮动按钮（流式自动滚动 F4） */
+.ai-chat__jump-bottom {
+  position: absolute; right: 20px; bottom: 16px; z-index: 20;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border: none; border-radius: 999px;
+  background: var(--el-color-primary); color: #fff; font-size: 13px; line-height: 1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+  &:hover { background: var(--el-color-primary-light-3); transform: translateY(-1px); }
+}
+.ai-chat__jump-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: rgba(255, 255, 255, 0.28);
+  font-size: 12px; font-weight: 600; line-height: 1;
+}
+.jump-fade-enter-active, .jump-fade-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.jump-fade-enter-from, .jump-fade-leave-to { opacity: 0; transform: translateY(8px); }
 .ai-chat__reconnect {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 16px; font-size: 13px;
