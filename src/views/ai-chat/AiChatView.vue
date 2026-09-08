@@ -10,7 +10,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
-  ChatDotRound, Tickets,
+  ChatDotRound, Tickets, Search,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -44,8 +44,9 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit } from '@/api/aiChat'
 import { previewKind } from '@/utils/filePreview'
+import { highlightHtml } from '@/utils/highlight'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
 // 顾虑——避免这些重型库进这个页面的主 chunk。
@@ -148,6 +149,59 @@ const scroller = ref<InstanceType<typeof ElScrollbar> | null>(null)
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
+
+// ---- 会话搜索（F6）：按标题 + 消息内容全文检索，debounce 300ms ----
+const sessionQuery = ref('')
+const sessionHits = ref<AiSessionSearchHit[]>([])
+const sessionSearching = ref(false)
+const sessionSearchEl = ref<InstanceType<typeof ElInput> | null>(null)
+let _sessionSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+const sessionSearchMode = computed(() => sessionQuery.value.trim().length > 0)
+
+async function runSessionSearch() {
+  const q = sessionQuery.value.trim()
+  if (!q) { sessionHits.value = []; sessionSearching.value = false; return }
+  sessionSearching.value = true
+  try {
+    const { sessions: hits } = await searchSessions(q)
+    // 请求返回时若查询已被清空/改变则丢弃，避免旧结果覆盖新查询
+    if (sessionQuery.value.trim() === q) sessionHits.value = hits
+  } catch {
+    if (sessionQuery.value.trim() === q) sessionHits.value = []
+  } finally {
+    if (sessionQuery.value.trim() === q) sessionSearching.value = false
+  }
+}
+
+function onSessionSearchInput() {
+  if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer)
+  _sessionSearchTimer = setTimeout(runSessionSearch, 300)
+}
+
+function clearSessionSearch() {
+  sessionQuery.value = ''
+  sessionHits.value = []
+  sessionSearching.value = false
+}
+
+async function selectSearchHit(id: string) {
+  clearSessionSearch()
+  await selectSession(id)
+}
+
+// 关键词高亮（先转义再包 <mark>，XSS 安全）
+function hl(text: string): string {
+  return highlightHtml(text || '', sessionQuery.value)
+}
+
+// Ctrl/Cmd+K 聚焦会话搜索框
+function onGlobalKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    sessionSearchEl.value?.focus()
+  }
+}
 const palette = computed<PaletteItem[]>(() => {
   const raw = input.value.trimStart()
   if (!raw.startsWith('/')) return []
@@ -445,8 +499,13 @@ onMounted(async () => {
   fetchAgents()
   // load batch list for the unified sidebar
   batches.fetchList().then(() => batches.startListPolling()).catch(() => {})
+  window.addEventListener('keydown', onGlobalKeydown)
 })
-onUnmounted(() => batches.stopListPolling())
+onUnmounted(() => {
+  batches.stopListPolling()
+  window.removeEventListener('keydown', onGlobalKeydown)
+  if (_sessionSearchTimer) clearTimeout(_sessionSearchTimer)
+})
 
 async function newSession() {
   try { await store.startNewSession() } catch { ElMessage.error('创建会话失败') }
@@ -737,7 +796,41 @@ function onKey(e: Event) {
     <aside class="ai-chat__sidebar">
       <div class="ai-sidebar__sessions-wrap">
         <ElButton class="ai-chat__new" type="primary" :icon="Plus" @click="newSession">新建会话</ElButton>
+        <ElInput
+          ref="sessionSearchEl"
+          v-model="sessionQuery"
+          class="ai-sidebar__search"
+          size="small"
+          placeholder="搜索会话标题或内容…"
+          clearable
+          :prefix-icon="Search"
+          @input="onSessionSearchInput"
+          @clear="clearSessionSearch"
+        />
         <ElScrollbar class="ai-chat__sessions">
+          <!-- 搜索态：标题/消息内容命中结果（关键词高亮） -->
+          <template v-if="sessionSearchMode">
+            <div v-if="sessionSearching" class="ai-sidebar__search-hint">
+              <ElIcon class="is-loading"><Loading /></ElIcon> 搜索中…
+            </div>
+            <template v-else>
+              <div
+                v-for="h in sessionHits" :key="h.id"
+                class="session-item session-item--hit"
+                :class="{ active: h.id === activeId, 'is-closed': h.status === 'closed' }"
+                @click="selectSearchHit(h.id)"
+              >
+                <span class="session-item__body">
+                  <span class="session-item__title" v-html="hl(h.title)"></span>
+                  <span v-if="h.snippet" class="session-item__snippet" v-html="hl(h.snippet)"></span>
+                </span>
+              </div>
+              <ElEmpty v-if="!sessionHits.length" description="未找到匹配会话" :image-size="48" />
+            </template>
+          </template>
+
+          <!-- 常规态：会话 / 批任务 / 定时任务 分组列表 -->
+          <template v-else>
           <div class="ai-sidebar__section-head" @click="toggleSection('sessions')">
             <ElIcon class="caret"><ArrowRight v-if="collapsedSections.sessions" /><ArrowDown v-else /></ElIcon>
             <ElIcon class="section-icon"><ChatDotRound /></ElIcon>
@@ -789,6 +882,7 @@ function onKey(e: Event) {
             />
             <ElEmpty v-if="!scanBatches.length" description="暂无 AI 定时任务" :image-size="48" />
           </div>
+          </template>
         </ElScrollbar>
       </div>
     </aside>
@@ -1233,6 +1327,11 @@ function onKey(e: Event) {
 }
 .ai-chat__new { width: 100%; }
 .ai-chat__sessions { flex: 1; min-height: 0; }
+.ai-sidebar__search { width: 100%; }
+.ai-sidebar__search-hint {
+  display: flex; align-items: center; gap: 6px; justify-content: center;
+  padding: 16px 8px; font-size: 13px; color: var(--el-text-color-secondary);
+}
 .session-item {
   display: flex;
   align-items: center;
@@ -1248,6 +1347,19 @@ function onKey(e: Event) {
   &__actions { display: none; gap: 6px; .el-icon { &:hover { color: var(--el-color-primary); } } }
   &:hover &__actions { display: flex; }
   &.is-closed { opacity: 0.55; }
+  // 搜索命中项：标题 + 一行摘要纵向排列
+  &--hit { align-items: flex-start; }
+  &__body {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 0; flex: 1;
+    .session-item__title { font-weight: 500; }
+  }
+  &__snippet {
+    font-size: 12px; color: var(--el-text-color-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    mark { background: var(--el-color-warning-light-7); color: inherit; padding: 0 1px; border-radius: 2px; }
+  }
+  mark { background: var(--el-color-warning-light-7); color: inherit; padding: 0 1px; border-radius: 2px; }
 }
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ai-chat__messages { flex: 1; min-height: 0; }

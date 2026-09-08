@@ -22,6 +22,18 @@ export interface AiSessionSummary {
   lastActiveAt?: string
 }
 
+/** 会话搜索命中：在标题或消息文本中匹配到关键词的会话。 */
+export interface AiSessionSearchHit {
+  id: string
+  title: string
+  status?: string
+  lastActiveAt?: string
+  /** 命中字段：标题命中为 'title'，消息内容命中为 'content' */
+  matchField: 'title' | 'content'
+  /** 内容命中时的一行摘要（围绕关键词，已折叠换行）；标题命中时为空串 */
+  snippet?: string
+}
+
 export interface AiMessageMeta {
   durationMs?: number
   tokensInput?: number
@@ -109,6 +121,11 @@ export function createSession(projectMenuId?: string) {
 
 export function listSessions() {
   return get<{ sessions: AiSessionSummary[] }>('/ai/chat/sessions')
+}
+
+/** 搜索当前用户的会话：按标题或消息文本匹配（见后端 search_sessions）。 */
+export function searchSessions(q: string) {
+  return get<{ sessions: AiSessionSearchHit[] }>('/ai/chat/sessions/search', { q })
 }
 
 export function renameSession(id: string, title: string) {

@@ -255,6 +255,55 @@ def list_agents():
     return jsonify({'agents': agents, 'subagents': subagents, 'default': default})
 
 
+def _session_title(stored_title, batch_id, batch_input_file):
+    """Display title for a session row: explicit title > batch file name > 默认。"""
+    if stored_title:
+        return stored_title
+    if batch_id and batch_input_file:
+        basename = batch_input_file.rsplit('/', 1)[-1]
+        return f'[批] {basename}'
+    return '新会话'
+
+
+def _ilike_pattern(q: str) -> str:
+    """Build a safe ILIKE pattern: literal % and _ are escaped so user input
+    never acts as a wildcard (use together with `ESCAPE '\\'`)."""
+    escaped = q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    return f'%{escaped}%'
+
+
+def _content_snippet(content, query: str, width: int = 40) -> str:
+    """Extract a one-line snippet around the first (case-insensitive) match of
+    `query` in a message's JSONB text parts. Tool/file parts are ignored.
+    Returns '' when there is no text or no match."""
+    if not isinstance(content, list):
+        return ''
+    texts = [
+        p.get('text') or ''
+        for p in content
+        if isinstance(p, dict) and p.get('type') == 'text'
+    ]
+    blob = '\n'.join(t for t in texts if t)
+    if not blob:
+        return ''
+    idx = blob.lower().find(query.lower())
+    if idx < 0:
+        # No hit inside the text parts (the match was in the title, or the SQL
+        # matched a part shape we don't render) — show the opening text.
+        seg = blob[: width * 2].replace('\n', ' ').strip()
+        return ('…' if len(blob) > width * 2 else '') + seg
+    start = max(0, idx - width)
+    end = min(len(blob), idx + len(query) + width)
+    seg = blob[start:end].replace('\n', ' ').strip()
+    prefix = '…' if start > 0 else ''
+    suffix = '…' if end < len(blob) else ''
+    return f'{prefix}{seg}{suffix}'
+
+
+# Max search hits returned per query (keeps the sidebar responsive).
+_SEARCH_LIMIT = 50
+
+
 @ai_chat_bp.route('/sessions', methods=['GET'])
 @login_required
 def list_sessions():
@@ -278,20 +327,80 @@ def list_sessions():
         )
         rows = cur.fetchall()
 
-    def _title(stored_title, batch_id, batch_input_file):
-        if stored_title:
-            return stored_title
-        if batch_id and batch_input_file:
-            basename = batch_input_file.rsplit('/', 1)[-1]
-            return f'[批] {basename}'
-        return '新会话'
-
     return jsonify({
         'sessions': [
             {'id': r[0],
-             'title': _title(r[1], r[3], r[4]),
+             'title': _session_title(r[1], r[3], r[4]),
              'lastActiveAt': r[2].isoformat() if r[2] else None,
              'status': r[5]}
+            for r in rows
+        ],
+    })
+
+
+@ai_chat_bp.route('/sessions/search', methods=['GET'])
+@login_required
+def search_sessions():
+    """Search the current user's regular sessions by title or message content.
+
+    Matches a session when its title matches ILIKE `q`, OR when one of its
+    messages has a `text` content-part matching ILIKE `q`. Title hits sort
+    first; within each group, newest activity first. Batch-child sessions
+    (status='pending') are excluded by the same status filter as list_sessions.
+
+    Returns each hit with `matchField` ('title'|'content') and a one-line
+    `snippet` (content hits only, centred on the keyword) for the sidebar.
+    """
+    user = flask_g.current_user
+    q = (request.args.get('q') or '').strip()
+    if not q:
+        return jsonify({'sessions': []})
+
+    pat = _ilike_pattern(q)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT s.id, s.title, s.last_active_at, s.status, "
+            "       s.batch_id, s.batch_input_file, "
+            "       COALESCE(s.title ILIKE %s ESCAPE '\\', false) AS title_match, "
+            "       ( "
+            "         SELECT m.content FROM ai_chat_messages m "
+            "         WHERE m.session_id = s.id "
+            "           AND EXISTS ( "
+            "             SELECT 1 FROM jsonb_array_elements(m.content) p "
+            "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %s ESCAPE '\\' "
+            "           ) "
+            "         ORDER BY m.created_at DESC LIMIT 1 "
+            "       ) AS hit_content "
+            "FROM ai_chat_sessions s "
+            "WHERE s.user_id = %s "
+            "  AND s.status IN ('active', 'closed') "
+            "  AND ( "
+            "    COALESCE(s.title ILIKE %s ESCAPE '\\', false) "
+            "    OR EXISTS ( "
+            "      SELECT 1 FROM ai_chat_messages m2 "
+            "      CROSS JOIN jsonb_array_elements(m2.content) p "
+            "      WHERE m2.session_id = s.id "
+            "        AND p->>'type' = 'text' "
+            "        AND p->>'text' ILIKE %s ESCAPE '\\' "
+            "    ) "
+            "  ) "
+            "ORDER BY title_match DESC, s.last_active_at DESC NULLS LAST "
+            "LIMIT %s",
+            (pat, pat, user['userId'], pat, pat, _SEARCH_LIMIT),
+        )
+        rows = cur.fetchall()
+
+    return jsonify({
+        'sessions': [
+            {
+                'id': r[0],
+                'title': _session_title(r[1], r[4], r[5]),
+                'lastActiveAt': r[2].isoformat() if r[2] else None,
+                'status': r[3],
+                'matchField': 'title' if r[6] else 'content',
+                'snippet': '' if r[6] else _content_snippet(r[7], q),
+            }
             for r in rows
         ],
     })
