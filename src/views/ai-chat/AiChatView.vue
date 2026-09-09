@@ -10,7 +10,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
-  ChatDotRound, Tickets, Search,
+  ChatDotRound, Tickets, Search, BellFilled, MuteNotification,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -48,6 +48,7 @@ import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFil
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import { useChatScroll } from '@/composables/useChatScroll'
+import { useTurnNotify } from '@/composables/useTurnNotify'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
 // 顾虑——避免这些重型库进这个页面的主 chunk。
@@ -163,6 +164,52 @@ const {
 
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
+
+// ---- F9 长任务完成：浏览器系统通知（切走/失焦时弹 OS Toast）+ 提示音 + Tab 角标 ----
+const {
+  supported: notifySupported,
+  permission: notifyPermission,
+  browserEnabled: notifyBrowserOn,
+  canBrowserNotify,
+  enableBrowserNotify,
+  disableBrowserNotify,
+  soundEnabled: notifySoundOn,
+  toggleSound: toggleNotifySound,
+  notifyTurnComplete,
+} = useTurnNotify()
+
+// 跟踪每个会话回合的起始时刻：streaming true→false 时算耗时，超阈值且页面在
+// 后台则弹系统通知（站内铃铛通知由服务端另发，覆盖标签已关闭的场景）。
+const turnStartBy: Record<string, number> = {}
+watch(
+  () => Object.entries(store.streaming).map(([id, v]) => `${id}:${v ? 1 : 0}`).join(','),
+  () => {
+    const flags = store.streaming as Record<string, boolean>
+    const now = Date.now()
+    for (const id of Object.keys(flags)) {
+      if (flags[id]) {
+        if (!turnStartBy[id]) turnStartBy[id] = now
+      } else if (turnStartBy[id]) {
+        const start = turnStartBy[id]
+        delete turnStartBy[id]
+        const title = sessions.value.find(s => s.id === id)?.title || '新会话'
+        notifyTurnComplete(title, now - start, () => {
+          if (activeId.value !== id) void store.openSession(id)
+        })
+      }
+    }
+  },
+)
+
+async function onToggleBrowserNotify() {
+  if (notifyBrowserOn.value) {
+    disableBrowserNotify()
+  } else {
+    const result = await enableBrowserNotify()
+    if (result === 'denied') ElMessage.warning('浏览器通知权限被拒绝，请到浏览器站点设置中开启')
+    else if (result === 'granted') ElMessage.success('已开启长任务完成通知')
+  }
+}
 
 // ---- 会话搜索（F6）：按标题 + 消息内容全文检索，debounce 300ms ----
 const sessionQuery = ref('')
@@ -1228,6 +1275,31 @@ function onKey(e: Event) {
                     </ElDropdownMenu>
                   </template>
                 </ElDropdown>
+                <!-- F9 长任务完成通知开关：系统浏览器通知 + 提示音 -->
+                <ElDropdown
+                  v-if="notifySupported"
+                  trigger="click"
+                  @command="(c: string) => c === 'browser' ? onToggleBrowserNotify() : toggleNotifySound()"
+                >
+                  <ElButton
+                    class="composer-add" circle text
+                    :icon="canBrowserNotify ? BellFilled : MuteNotification"
+                    :class="{ 'composer-add--active': canBrowserNotify }"
+                    :title="`长任务完成通知：系统通知${notifyBrowserOn ? '开' : '关'}`"
+                    aria-label="长任务完成通知设置"
+                  />
+                  <template #dropdown>
+                    <ElDropdownMenu>
+                      <ElDropdownItem command="browser"
+                        :title="notifyPermission === 'denied' ? '浏览器已拒绝权限，请到站点设置开启' : ''">
+                        系统通知（切走时弹提醒）：{{ notifyBrowserOn ? '开' : '关' }}
+                      </ElDropdownItem>
+                      <ElDropdownItem command="sound">
+                        完成提示音：{{ notifySoundOn ? '开' : '关' }}
+                      </ElDropdownItem>
+                    </ElDropdownMenu>
+                  </template>
+                </ElDropdown>
               </div>
               <div class="composer-bar__right">
                 <ElSelect
@@ -1624,6 +1696,7 @@ function onKey(e: Event) {
   font-size: 18px;
   &:hover { color: var(--el-color-primary); background: var(--el-fill-color); }
 }
+.composer-add--active { color: var(--el-color-primary); }
 .composer-send { font-size: 16px; }
 .preview-head { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px;
   &__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

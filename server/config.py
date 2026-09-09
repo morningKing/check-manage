@@ -88,6 +88,10 @@ OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
 AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
+# Long-turn in-app notification (F9): when an interactive agent turn runs at
+# least this many seconds, the session owner gets a notification-center entry
+# on completion (even if the tab was closed). 0 disables.
+AI_CHAT_NOTIFY_MIN_SECONDS = _to_int(os.getenv('AI_CHAT_NOTIFY_MIN_SECONDS'), 30)
 # Default OpenCode model id, "<providerID>/<modelID>". Used by:
 #   - single chat: when the user picks "default" (or doesn't pick anything)
 #     in the composer's model dropdown,

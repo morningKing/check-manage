@@ -743,6 +743,98 @@ def test_backfill_recovers_missed_first_message_and_subtask():
     assert child_content == [{'type': 'text', 'text': 'child says hi'}]
 
 
+# ---- F9: 长任务完成站内通知 ----------------------------------------------
+
+def _fake_db_session_row(row):
+    """Fake get_db context manager whose single SELECT returns `row`
+    (user_id, title, batch_id) from fetchone()."""
+    @contextlib.contextmanager
+    def _cm():
+        class _Cur:
+            def execute(self, sql, params=None): pass
+            def fetchone(self): return row
+        class _Conn:
+            def cursor(self): return _Cur()
+        yield _Conn()
+    return _cm
+
+
+def _patch_notifier(monkeypatch, chat_persist):
+    calls = []
+    monkeypatch.setattr(chat_persist, 'create_notification',
+                        lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
+def test_notify_long_turn_creates_notification(monkeypatch):
+    """耗时超过阈值的交互会话 idle -> 给所有者发 aiChatTurnDone 通知，跳转回聊天页。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '我的会话', None)))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    long_ago = _time.monotonic() - 60  # 60s 前开始，超过默认 30s 阈值
+    chat_persist._maybe_notify_turn_done('sess_abc', long_ago)
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    user_id, ntype, title, content = args
+    assert user_id == 'user-1'
+    assert ntype == 'aiChatTurnDone'
+    assert '我的会话' in title
+    assert kwargs['source_collection'] == 'ai-chat'   # 铃铛点击 -> /ai-chat?session=...
+    assert kwargs['source_record_id'] == 'sess_abc'
+    assert content  # 含耗时描述
+
+
+def test_notify_short_turn_skipped(monkeypatch):
+    """耗时低于阈值 -> 不通知（且不查库）。"""
+    from utils import chat_persist
+    queried = []
+    @contextlib.contextmanager
+    def _cm():
+        queried.append(True)
+        class _Cur:
+            def execute(self, sql, params=None): pass
+            def fetchone(self): return ('user-1', 't', None)
+        class _Conn:
+            def cursor(self): return _Cur()
+        yield _Conn()
+    monkeypatch.setattr(chat_persist, 'get_db', _cm)
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_abc', _time.monotonic())  # ~0s
+    assert calls == []
+    assert queried == []  # 阈值判断先于查库
+
+
+def test_notify_batch_child_skipped(monkeypatch):
+    """批任务子会话（batch_id 非空）-> 不通知（批任务另有其进度界面）。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '子任务', 'batch_xyz')))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_child', _time.monotonic() - 120)
+    assert calls == []
+
+
+def test_notify_analysis_session_skipped(monkeypatch):
+    """后台轨迹分析会话（标题以「轨迹分析:」开头）-> 不通知。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '轨迹分析: sess_xyz', None)))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_an', _time.monotonic() - 120)
+    assert calls == []
+
+
+def test_notify_missing_owner_skipped(monkeypatch):
+    """会话无 user_id 或查不到 -> 不通知、不抛错。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(None))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_x', _time.monotonic() - 120)
+    assert calls == []
+
+
 def test_backfill_ignores_messages_before_last_user_message():
     """兜底只回放本轮（最后一条 user 消息之后）的 assistant 消息，避免把
     上一轮内容并进当前轮。"""

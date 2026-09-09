@@ -15,7 +15,8 @@ from db import get_db
 from utils.opencode_client import OpenCodeClient
 from utils.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta)
-from config import OPENCODE_BASE_URL
+from utils.notifier import create_notification
+from config import OPENCODE_BASE_URL, AI_CHAT_NOTIFY_MIN_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +503,47 @@ def _record_workspace_files(sid, directory):
         logger.warning('record workspace files failed session=%s: %s', sid, e)
 
 
+def _maybe_notify_turn_done(sid, turn_start):
+    """F9 长任务完成通知：后台监听线程在回合 idle 时调用（即使没有浏览器连接
+    也会触发）。仅当回合耗时达到阈值，且为交互型会话（非批任务子会话、非后台
+    「轨迹分析」作业）时，给会话所有者写一条站内通知；通知失败不影响主流程。
+
+    通知的 source_collection/source_record_id 指向聊天页：铃铛点击即跳转到
+    /ai-chat?session=<sid>。"""
+    try:
+        if AI_CHAT_NOTIFY_MIN_SECONDS <= 0:
+            return
+        duration = time.monotonic() - turn_start
+        if duration < AI_CHAT_NOTIFY_MIN_SECONDS:
+            return
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                'SELECT user_id, title, batch_id FROM ai_chat_sessions WHERE id = %s',
+                (sid,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return
+        user_id, title, batch_id = row[0], row[1], row[2]
+        if not user_id or batch_id:
+            return                      # 无主会话或批任务子会话
+        if title and title.startswith('轨迹分析:'):
+            return                      # 后台轨迹分析为系统内部作业，另有界面流转
+        secs = int(duration)
+        dur_text = f'{secs // 60} 分 {secs % 60} 秒' if secs >= 60 else f'{secs} 秒'
+        create_notification(
+            user_id,
+            'aiChatTurnDone',
+            f'AI 助手已完成：{title or "新会话"}',
+            f'本轮耗时 {dur_text}，点击查看对话。',
+            source_collection='ai-chat',
+            source_record_id=sid,
+        )
+    except Exception as e:
+        logger.debug('turn-done notification failed session=%s: %s', sid, e)
+
+
 def _run_listener(sid, opencode_session_id, event_source, directory='',
                   known_subtasks=None):
     """Consume events, persisting the assistant message on session.idle and
@@ -537,6 +579,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         scope['status'] = child_status or 'completed'
         state['subtasks'][child_sid] = scope
     last_persist = time.monotonic()
+    turn_start = time.monotonic()  # F9: 回合起始时刻，用于长任务完成通知阈值
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
         if sig == 'subtask':
@@ -563,6 +606,8 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                 extract_from_turn(sid, state)
             except Exception as e:
                 logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
+            # F9 长任务完成通知：达到阈值的交互回合，给会话所有者发站内通知。
+            _maybe_notify_turn_done(sid, turn_start)
             return
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()
