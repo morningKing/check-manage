@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
-export interface PaletteItem { kind: 'builtin' | 'command' | 'skill' | 'agent'; name: string; description: string }
+export interface PaletteItem { kind: 'builtin' | 'command' | 'skill' | 'agent' | 'file'; name: string; description: string }
 const props = withDefaults(defineProps<{ items: PaletteItem[]; activeIndex: number; prefix?: string }>(), { prefix: '/' })
 defineEmits<{ (e: 'select', item: PaletteItem): void }>()
 
-const groupLabel: Record<PaletteItem['kind'], string> = { builtin: '内置', command: '命令', skill: '技能', agent: '智能体' }
+const groupLabel: Record<PaletteItem['kind'], string> = { builtin: '内置', command: '命令', skill: '技能', agent: '智能体', file: '文件' }
 // Flat list keeps activeIndex simple; insert a group header row whenever the kind changes.
 const rows = computed(() => {
   const out: { header?: string; item?: PaletteItem; idx: number }[] = []
@@ -47,6 +47,6 @@ const rows = computed(() => {
   border-radius: 6px; cursor: pointer;
   &.active, &:hover { background: var(--el-fill-color); }
 }
-.palette-item__name { font-family: var(--el-font-family-mono, monospace); }
-.palette-item__desc { font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item__name { font-family: var(--el-font-family-mono, monospace); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item__desc { font-size: 12px; color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; max-width: 40%; }
 </style>

@@ -25,4 +25,17 @@ describe('CommandPalette', () => {
     const w = mount(CommandPalette, { props: { items: [], activeIndex: 0 } })
     expect(w.find('.command-palette').exists()).toBe(false)
   })
+  it('renders a 文件 group header for file items (F2)', () => {
+    const items: PaletteItem[] = [
+      { kind: 'agent', name: 'build', description: '构建助手' },
+      { kind: 'file', name: 'uploads/data.csv', description: '上传文件 · 1.0 KB' },
+      { kind: 'file', name: 'outputs/report.json', description: '产出 · 0.5 KB' },
+    ]
+    const w = mount(CommandPalette, { props: { items, activeIndex: 0, prefix: '@' } })
+    const text = w.text()
+    expect(text).toContain('智能体')
+    expect(text).toContain('文件')
+    expect(text).toContain('@uploads/data.csv')
+    expect(text).toContain('@outputs/report.json')
+  })
 })

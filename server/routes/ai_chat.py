@@ -48,6 +48,7 @@ from utils.workspace_changes import (git_changes, file_diff, expand_untracked_di
                                      read_file_preview, record_session_files,
                                      get_session_files)
 from utils.workspace_outputs import list_session_files
+from utils.mention_files import inline_file_mentions
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
@@ -523,6 +524,20 @@ def send_message(sid):
         else:
             abs_path = _safe_workspace_path(workspace_path, rel)
             prompt += f"\n\n[用户上传的文件 {name}，路径：{abs_path}（如需要可用工具读取）]"
+
+    # @-mentioned files in the message text (F2): inline their contents for the
+    # agent with the same text/binary handling as attachments. Agent @mentions
+    # (structured agentMentions) and files already attached are skipped; the
+    # stored user text keeps the raw `@path` markers so the bubble renders them
+    # as clickable file chips (the agent sees both the marker and the content).
+    _agent_mention_names = [
+        a.get('name') for a in (body.get('agentMentions') or [])
+        if isinstance(a, dict) and a.get('name')
+    ]
+    prompt += inline_file_mentions(
+        workspace_path, content,
+        agent_names=_agent_mention_names, already_attached=attachments,
+    )
 
     # Export-intent fallback: if the user asks to export a known collection to
     # Excel, do it server-side and deterministically (real platform data), so a

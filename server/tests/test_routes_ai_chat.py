@@ -429,6 +429,86 @@ def test_send_message_inlines_uploaded_text_for_agent(setup):
     assert any('"type": "file"' in a[1][2] for a in inserts)
 
 
+def test_send_message_inlines_at_mentioned_file_text(setup):
+    """F2: a file referenced as `@uploads/x` in the message text is inlined into
+    the agent prompt, while the stored message keeps the raw @path marker (and
+    does NOT add a separate file/attachment part)."""
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsmention'
+    (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+    (ws / 'uploads' / 'data.csv').write_text('id,name\n1,alpha\n', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', str(ws))
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': '帮我分析 @uploads/data.csv 这个文件'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    args, _ = oc.send_prompt_async.call_args
+    prompt = args[1]
+    assert 'id,name' in prompt and 'alpha' in prompt     # file content inlined
+    assert '@uploads/data.csv' in prompt                # marker still present
+    # stored user message keeps the @path text but no extra file part
+    inserts = [c.args for c in cursor.execute.call_args_list if 'INSERT INTO ai_chat_messages' in c.args[0]]
+    stored = inserts[-1][1][2]
+    assert '@uploads/data.csv' in stored
+    assert '"type": "file"' not in stored
+
+
+def test_send_message_at_mentioned_binary_gets_tool_pointer(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsmentionbin'
+    (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+    (ws / 'outputs' / 'r.xlsx').write_bytes(b'\x00\x01\x02\xff\xfe\xfd')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', str(ws))
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': '看看 @outputs/r.xlsx'},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    args, _ = oc.send_prompt_async.call_args
+    prompt = args[1]
+    # binary bytes are not inlined; the agent is pointed at the path instead
+    assert 'outputs/r.xlsx' in prompt
+    assert '工具读取' in prompt or '工具' in prompt
+
+
+def test_send_message_at_mention_traversal_is_blocked(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsmentiontrav'
+    ws.mkdir(parents=True, exist_ok=True)
+    secret = ws_root / 'outside.txt'
+    secret.write_text('OUTSIDE-SECRET', encoding='utf-8')
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', str(ws))
+    try:
+        resp = client.post(
+            '/ai/chat/sessions/sess_x/messages',
+            json={'content': '偷看 @../outside.txt 和 @uploads/missing.csv'},
+            headers=dev_h,
+        )
+        assert resp.status_code == 202
+        args, _ = oc.send_prompt_async.call_args
+        assert 'OUTSIDE-SECRET' not in args[1]
+    finally:
+        secret.unlink(missing_ok=True)
+
+
+def test_send_message_agent_mention_not_inlined_as_file(setup):
+    client, cursor, oc, dev_h, _, ws_root = setup
+    ws = ws_root / 'wsmentionagent'
+    ws.mkdir(parents=True, exist_ok=True)
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', str(ws))
+    resp = client.post(
+        '/ai/chat/sessions/sess_x/messages',
+        json={'content': '@build 帮我构建', 'agentMentions': [{'name': 'build', 'value': '@build'}]},
+        headers=dev_h,
+    )
+    assert resp.status_code == 202
+    args, _ = oc.send_prompt_async.call_args
+    assert '引用的文件' not in args[1]
+
+
 def test_list_files_returns_uploads_and_outputs(setup):
     client, cursor, oc, dev_h, _, ws_root = setup
     ws = ws_root / 'wslist'

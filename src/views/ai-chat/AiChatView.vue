@@ -34,7 +34,8 @@ import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPa
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
 import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, mergeReasoningParts, type CodeSegment, type FileGroup } from '@/utils/artifacts'
-import { activeMentionToken } from '@/utils/agentMentions'
+import { activeAtToken, filterFileItems } from '@/utils/fileMentions'
+import UserMentionText from '@/components/ai-chat/UserMentionText.vue'
 import { copyText } from '@/utils/clipboard'
 import { summarizeMeta } from '@/utils/aiMeta'
 import { useAiChatStore } from '@/stores/aiChat'
@@ -44,7 +45,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile } from '@/api/aiChat'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import { useChatScroll } from '@/composables/useChatScroll'
@@ -279,19 +280,38 @@ const palette = computed<PaletteItem[]>(() => {
   const skills: PaletteItem[] = (cached?.skills ?? []).map((s) => ({ kind: 'skill', name: s.name, description: s.description }))
   return [...builtin, ...commands, ...skills].filter((it) => !q || it.name.toLowerCase().includes(q))
 })
-const mentionToken = computed(() => activeMentionToken(input.value, cursorPos.value))
+// ---- F2 @-mention 文件：当前会话工作区文件（uploads + outputs/根目录），用于
+// 补全列表与用户气泡里的可点击文件 chip ----
+const mentionFiles = computed<AiFile[]>(() => [...store.activeUploads, ...store.activeOutputs])
+const FILE_DIR_LABEL: Record<string, string> = { uploads: '上传文件', outputs: '产出', workspace: '工作区' }
+function fileItemDesc(f: AiFile): string {
+  const dir = FILE_DIR_LABEL[f.dir] ?? '文件'
+  return f.size != null ? `${dir} · ${(f.size / 1024).toFixed(1)} KB` : dir
+}
+const mentionToken = computed(() => activeAtToken(input.value, cursorPos.value))
 const mentionPalette = computed<PaletteItem[]>(() => {
   const tok = mentionToken.value
   if (!tok) return []
-  const q = tok.query.toLowerCase()
-  return store.subagents
-    .filter((a) => !q || a.name.toLowerCase().includes(q))
-    .map((a) => ({ kind: 'agent' as const, name: a.name, description: a.description }))
+  const q = tok.query
+  const agentItems: PaletteItem[] = store.subagents
+    .filter((a) => !q || a.name.toLowerCase().includes(q.toLowerCase()))
+    .map((a) => ({ kind: 'agent', name: a.name, description: a.description }))
+  const fileItems: PaletteItem[] = filterFileItems(mentionFiles.value, q)
+    .map((f) => ({ kind: 'file', name: f.path, description: fileItemDesc(f) }))
+  // agents first, then files — CommandPalette inserts a group header per kind
+  return [...agentItems, ...fileItems]
 })
 // mention token present → show mention palette; otherwise the `/` command palette
 const activePalette = computed<PaletteItem[]>(() => (mentionToken.value ? mentionPalette.value : palette.value))
 const paletteOpen = computed(() => activePalette.value.length > 0)
 watch(activePalette, () => { activeIndex.value = 0 })
+// 首次在会话里唤起 @ 补全时懒加载工作区文件（openSession 已加载，这里给新建会话/
+// 尚未触发加载的场景兜底；失败不影响输入）。
+watch(mentionToken, (tok) => {
+  if (tok && activeId.value && mentionFiles.value.length === 0) {
+    store.loadFiles(activeId.value).catch(() => { /* non-fatal */ })
+  }
+})
 const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
@@ -700,8 +720,8 @@ async function onSkillPicked(e: Event) {
 }
 
 function acceptItem(item: PaletteItem) {
-  if (item.kind === 'agent') {
-    const tok = activeMentionToken(input.value, cursorPos.value)
+  if (item.kind === 'agent' || item.kind === 'file') {
+    const tok = activeAtToken(input.value, cursorPos.value)
     if (tok) {
       const before = input.value.slice(0, tok.start)
       const after = input.value.slice(tok.end)
@@ -714,6 +734,11 @@ function acceptItem(item: PaletteItem) {
   if (item.kind === 'skill') input.value = '使用 `' + item.name + '` 技能:'
   else input.value = '/' + item.name + ' '
   activeIndex.value = 0
+}
+
+// 用户气泡里点击 @文件 chip → 打开文件预览（富预览优先，回退 diff 抽屉）。
+function onMentionPreview(path: string) {
+  previewOutput({ name: path.split('/').pop() || path, path })
 }
 
 // User-bubble Copy / Edit / Retry. Edit + Retry are destructive (delete the
@@ -1062,7 +1087,13 @@ function onKey(e: Event) {
                           />
                         </template>
                       </template>
-                      <MarkdownView v-else :text="p.text" />
+                      <!-- user: @文件路径 renders as a clickable chip (F2) -->
+                      <UserMentionText
+                        v-else
+                        :text="p.text"
+                        :files="mentionFiles"
+                        @preview="onMentionPreview"
+                      />
                     </template>
                   </template>
                 </template>
