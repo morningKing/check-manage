@@ -1549,3 +1549,92 @@ def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monk
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
             conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# F9: 批任务子会话完成通知（默认开启的站内铃铛通知）
+# ---------------------------------------------------------------------------
+
+def _child_row(**over):
+    base = {'id': 'sess_child_1', 'user_id': 'u1', 'batch_id': 'batch_1',
+            'title': '分析报告 X'}
+    base.update(over)
+    return base
+
+
+def test_notify_child_done_success(monkeypatch):
+    """成功完成：写一条 aiBatchChildDone 通知，指向该会话，含耗时。"""
+    import utils.batch_engine as eng
+    calls = []
+    monkeypatch.setattr(eng, 'create_notification',
+                        lambda *a, **k: calls.append((a, k)))
+    eng.BatchWorker()._notify_child_done(_child_row(), True, elapsed=125)
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == 'u1'                  # user_id
+    assert args[1] == 'aiBatchChildDone'    # type
+    assert '分析报告 X' in args[2]           # 标题含会话名
+    assert kwargs.get('source_collection') == 'ai-chat'
+    assert kwargs.get('source_record_id') == 'sess_child_1'
+    assert '分' in args[3]                   # 125s -> "2 分 5 秒"
+
+
+def test_notify_child_done_failure_includes_reason(monkeypatch):
+    """失败：写 aiBatchChildFailed，正文带错误原因。"""
+    import utils.batch_engine as eng
+    calls = []
+    monkeypatch.setattr(eng, 'create_notification',
+                        lambda *a, **k: calls.append((a, k)))
+    eng.BatchWorker()._notify_child_done(
+        _child_row(), False, elapsed=30, error='模型超时')
+
+    assert len(calls) == 1
+    args, _ = calls[0]
+    assert args[1] == 'aiBatchChildFailed'
+    assert '失败' in args[2]
+    assert '模型超时' in args[3]
+
+
+def test_notify_child_skipped_for_openapi_standalone(monkeypatch):
+    """open-api 独立子会话（batch_id 为空）不发界面通知。"""
+    import utils.batch_engine as eng
+    calls = []
+    monkeypatch.setattr(eng, 'create_notification',
+                        lambda *a, **k: calls.append(a))
+    eng.BatchWorker()._notify_child_done(
+        _child_row(batch_id=None), True, elapsed=10)
+    assert calls == []
+
+
+def test_notify_child_skipped_without_owner(monkeypatch):
+    """无主会话不发（也不报错）。"""
+    import utils.batch_engine as eng
+    calls = []
+    monkeypatch.setattr(eng, 'create_notification',
+                        lambda *a, **k: calls.append(a))
+    eng.BatchWorker()._notify_child_done(_child_row(user_id=None), True)
+    assert calls == []
+
+
+def test_notify_child_skipped_for_scan_task(monkeypatch):
+    """定时扫描（轨迹分析）子会话不发逐个铃铛通知——一次调度几十上百个、且按计划
+    反复运行，会刷爆通知中心；结果另有数据表状态回写界面。"""
+    import utils.batch_engine as eng
+    calls = []
+    monkeypatch.setattr(eng, 'create_notification',
+                        lambda *a, **k: calls.append(a))
+    eng.BatchWorker()._notify_child_done(
+        _child_row(scan_task_id='scan_1'), True, elapsed=10)
+    assert calls == []
+
+
+def test_notify_child_swallows_notifier_error(monkeypatch):
+    """通知发送失败不影响主流程（不抛异常）。"""
+    import utils.batch_engine as eng
+
+    def _boom(*a, **k):
+        raise RuntimeError('db down')
+
+    monkeypatch.setattr(eng, 'create_notification', _boom)
+    eng.BatchWorker()._notify_child_done(_child_row(), True, elapsed=10)

@@ -37,8 +37,15 @@ from utils.workspace import create_session_workspace, _rm_force
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 from utils.session_history import render_history_block
+from utils.notifier import create_notification
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_elapsed(secs: float) -> str:
+    """把耗时秒数格式化为「X 分 Y 秒」/「Y 秒」（与交互式长任务通知一致）。"""
+    s = max(0, int(secs))
+    return f'{s // 60} 分 {s % 60} 秒' if s >= 60 else f'{s} 秒'
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +687,7 @@ class BatchWorker:
         sid = session_row['id']
         user_id = session_row['user_id']
         batch_id = session_row['batch_id']
+        turn_start = time.monotonic()  # 用于子任务完成通知的耗时
         if batch_id is None:
             # Standalone /v1/ai-sessions child (open_api_ai_sessions.py) —
             # no parent ai_chat_batches row to source prompt/agent/model from.
@@ -738,6 +746,10 @@ class BatchWorker:
                     self._mark_failed(sid, batch_id,
                                       error='继续对话失败：工作区已不存在')
                     self._notify_scan(session_row, None, ok=False)
+                    self._notify_child_done(
+                        session_row, False,
+                        elapsed=time.monotonic() - turn_start,
+                        error='继续对话失败：工作区已不存在')
                     return
                 oc_session_id = session_row['opencode_session_id']
             else:
@@ -769,6 +781,9 @@ class BatchWorker:
                 if agent_err:
                     self._mark_failed(sid, batch_id, error=agent_err)
                     self._notify_scan(session_row, None, ok=False)
+                    self._notify_child_done(
+                        session_row, False,
+                        elapsed=time.monotonic() - turn_start, error=agent_err)
                     return
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
@@ -802,19 +817,27 @@ class BatchWorker:
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
+            self._notify_child_done(
+                session_row, True, elapsed=time.monotonic() - turn_start)
             if user_prompt_for_memory is not None:
                 self._record_memory(user_id, user_prompt_for_memory, final_msg)
         except _SessionCancelled:
+            # 用户主动取消，不发完成通知
             self._mark_cancelled(sid, batch_id)
             self._notify_scan(session_row, None, ok=False)
         except (_SessionTimeout, _TurnFailed) as e:
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
-            self._mark_failed(sid, batch_id, error=str(e)[:500])
+            err = str(e)[:500]
+            self._mark_failed(sid, batch_id, error=err)
             self._notify_scan(session_row, None, ok=False)
+            self._notify_child_done(
+                session_row, False, elapsed=time.monotonic() - turn_start, error=err)
         except Exception as e:
-            self._mark_failed(sid, batch_id,
-                              error=f'{type(e).__name__}: {e}'[:500])
+            err = f'{type(e).__name__}: {e}'[:500]
+            self._mark_failed(sid, batch_id, error=err)
             self._notify_scan(session_row, None, ok=False)
+            self._notify_child_done(
+                session_row, False, elapsed=time.monotonic() - turn_start, error=err)
         finally:
             # 收尾：无论成功失败，把工作区里已产生的新增/修改文件记进独立表
             # （best-effort，失败不影响子任务本身的状态落库）。
@@ -828,6 +851,55 @@ class BatchWorker:
                 record_session_files(session_id, changes)
         except Exception:
             pass  # best-effort
+
+    def _notify_child_done(self, session_row: dict, ok: bool,
+                           elapsed: float | None = None, error: str | None = None):
+        """批任务每个子会话到达终态时，给任务所有者发一条站内通知（F9）。
+
+        批任务是用户发起后通常会离开的异步作业，所以这里**默认开启**、不依赖
+        浏览器开关/通知权限，标签页关闭也不丢——下次打开页面铃铛即显示未读。
+        成功与失败都通知（失败恰恰是离开后最需要知道的）；用户主动取消不通知。
+        通知 source 指向 ai-chat 会话，铃铛点击即 /ai-chat?session=<sid>。
+        best-effort：通知失败不影响子任务状态落库。
+
+        定时扫描（轨迹分析）子会话不在此通知：一次调度会按记录数产出几十上百个
+        子会话且按计划反复运行，逐个发铃铛会把通知中心刷爆；其结果通过数据表
+        状态回写（ai_scan_engine.on_child_finished）呈现，与交互式路径跳过
+        「轨迹分析:」会话的处理保持一致。"""
+        try:
+            sid = session_row.get('id')
+            user_id = session_row.get('user_id')
+            # 仅批任务子会话通知；open-api 独立子会话（batch_id 为空）是程序化调用，
+            # 不产生界面铃铛通知。
+            if not sid or not user_id or not session_row.get('batch_id'):
+                return
+            # 定时扫描子会话：高并发 + 周期性自动运行，结果另有数据表回写界面，不发铃铛。
+            if session_row.get('scan_task_id'):
+                return
+            title = session_row.get('title') or '子任务'
+            dur = _fmt_elapsed(elapsed) if elapsed is not None else ''
+            if ok:
+                create_notification(
+                    user_id,
+                    'aiBatchChildDone',
+                    f'批任务子任务已完成：{title}',
+                    f'耗时 {dur}，点击查看对话。' if dur else '点击查看对话。',
+                    source_collection='ai-chat',
+                    source_record_id=sid,
+                )
+            else:
+                reason = f'（{error[:80]}）' if error else ''
+                create_notification(
+                    user_id,
+                    'aiBatchChildFailed',
+                    f'批任务子任务失败：{title}',
+                    f'子任务未成功完成{reason}，点击查看。',
+                    source_collection='ai-chat',
+                    source_record_id=sid,
+                )
+        except Exception as e:
+            logger.debug('batch child turn-done notification failed sid=%s: %s',
+                         session_row.get('id'), e)
 
     def _persist_provision_notice(self, session_id: str, warning: str):
         """Insert a notice into the child's thread when workspace provisioning
