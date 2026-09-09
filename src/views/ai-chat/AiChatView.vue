@@ -33,7 +33,7 @@ import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
-import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, mergeReasoningParts, type CodeSegment } from '@/utils/artifacts'
+import { splitArtifacts, sniffLang, artifactFilename, isImageFile, groupFilesByDir, mergeReasoningParts, type CodeSegment, type FileGroup } from '@/utils/artifacts'
 import { activeMentionToken } from '@/utils/agentMentions'
 import { copyText } from '@/utils/clipboard'
 import { summarizeMeta } from '@/utils/aiMeta'
@@ -296,6 +296,19 @@ const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
+// 用户上传到 uploads/ 的文件（上传后实时刷新可见）。
+const uploads = computed(() => store.activeUploads)
+// 产出文件抽屉内的目录分组：上传文件作为第一个分组，与 agent 产出（根目录、
+// outputs/ 等）共用同一个抽屉卡片。
+const fileDrawerGroups = computed<FileGroup<(typeof uploads.value)[number]>[]>(() => {
+  const groups: FileGroup<(typeof uploads.value)[number]>[] = []
+  if (uploads.value.length) {
+    groups.push({ dir: 'uploads', label: '上传文件', files: uploads.value.slice() })
+  }
+  for (const g of groupedOutputs.value) groups.push(g)
+  return groups
+})
+const fileDrawerTotal = computed(() => outputs.value.length + uploads.value.length)
 // 执行计划（对齐 OpenCode TUI 的 todo 侧栏）：取会话里**最近一次** todowrite
 // 的清单快照。agent 每次调 todowrite 都带全量列表，SSE 的 message.part.updated
 // 会把新 tool part 实时 upsert 进消息流，这个 computed 随之自动重算——无需任何
@@ -337,14 +350,18 @@ const GROUP_META: { key: 'added' | 'modified'; label: string; type: any }[] = [
   { key: 'modified', label: '修改', type: 'warning' },
 ]
 
-// Word/Excel/PPT/PDF 不是能有意义地当纯文本/diff 展示的格式（这就是 xlsx 打开后
-// 显示"二进制文件，无法预览"的根因）——这几种改走 FilePreviewDialog 的
-// @vue-office 渲染器，跟数据页文件字段用的是同一套。其余类型仍走原有的
-// diff/文本预览抽屉。
+// 富渲染预览统一走 FilePreviewDialog（与数据页文件字段同一套，懒加载重型库）：
+//   docx/excel/pptx/pdf → @vue-office 渲染；图片 → <img>；Markdown → 排版渲染。
+// 这些格式当纯文本/diff 展示无意义（这就是 xlsx/png/md 预览"打不开/只显示源码"
+// 的根因）。其余文本/代码仍走原有的 diff/文本预览抽屉（带行号，更适合代码）。
+const RICH_PREVIEW_KINDS = ['docx', 'excel', 'pptx', 'pdf', 'image', 'markdown'] as const
 const officePreviewVisible = ref(false)
 const officePreviewFile = ref<{ name: string; url: string } | null>(null)
-function openOfficePreview(name: string, path: string): boolean {
-  if (!['docx', 'excel', 'pptx', 'pdf'].includes(previewKind(name))) return false
+function openRichPreview(name: string, path: string, opts: { markdown?: boolean } = {}): boolean {
+  const kind = previewKind(name)
+  // 变更文件审阅时 Markdown 走 diff 更有意义；文件抽屉里 Markdown 直接渲染排版。
+  if (kind === 'markdown' && opts.markdown === false) return false
+  if (!RICH_PREVIEW_KINDS.includes(kind as (typeof RICH_PREVIEW_KINDS)[number])) return false
   if (!activeId.value) return false
   officePreviewFile.value = { name, url: fileUrl(path) }
   officePreviewVisible.value = true
@@ -353,7 +370,8 @@ function openOfficePreview(name: string, path: string): boolean {
 
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
-  if (openOfficePreview(c.path.split('/').pop() || c.path, c.path)) return
+  // 变更文件里图片/Office 无法做文本 diff，走富预览；Markdown 保留 diff（审阅改动）。
+  if (openRichPreview(c.path.split('/').pop() || c.path, c.path, { markdown: false })) return
   diffFile.value = c.path
   diffData.value = null
   diffOpen.value = true
@@ -373,10 +391,11 @@ async function previewChange(c: ChangedFile) {
     diffLoading.value = false
   }
 }
-// 产出文件预览：复用 diff 抽屉，但走 git-independent 的 /preview 读文件内容。
+// 文件抽屉预览：Office/图片/Markdown 走 FilePreviewDialog 富渲染；
+// 其余文本/代码复用 diff 抽屉（走 git-independent 的 /preview 读文件内容）。
 async function previewOutput(f: { name: string; path: string }) {
   if (!activeId.value) return
-  if (openOfficePreview(f.name, f.path)) return
+  if (openRichPreview(f.name, f.path)) return
   diffFile.value = f.path
   diffData.value = null
   diffOpen.value = true
@@ -1108,10 +1127,11 @@ function onKey(e: Event) {
               <TodoListBlock :todos="activeTodos" />
             </div>
 
-            <!-- 产出文件（agent 写入 outputs/ 或 workspace 根目录的真实文件） -->
-            <div v-if="outputs.length" class="ai-outputs">
-              <div class="ai-outputs__title">产出文件 <span class="ai-outputs__count">({{ outputs.length }})</span></div>
-              <div v-for="g in groupedOutputs" :key="g.dir" class="output-group">
+            <!-- 文件抽屉：上传文件（uploads/）与 agent 产出（根目录、outputs/ 等）
+                 共用同一张卡片，每个目录一个可折叠分组；上传文件排在最前。 -->
+            <div v-if="activeId && fileDrawerTotal" class="ai-outputs">
+              <div class="ai-outputs__title">文件 <span class="ai-outputs__count">({{ fileDrawerTotal }})</span></div>
+              <div v-for="g in fileDrawerGroups" :key="g.dir" class="output-group">
                 <button class="output-group__head" type="button" @click="toggleOutputGroup(g.dir)">
                   <ElIcon class="output-group__chev" :class="{ open: !outputsCollapsed[g.dir] }"><ArrowRight /></ElIcon>
                   <span class="output-group__dir">{{ g.label }}</span>

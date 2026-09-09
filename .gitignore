@@ -68,6 +68,8 @@ msgs.json
 # AI-chat runtime per-session workspaces (created at runtime)
 ai-workspaces/
 **/ai-workspaces/
+# Local dev override when AI_WORKSPACE_ROOT points into the repo
+.dev-ai-workspaces/
 # Superpowers / Trae / Claude local tooling dirs & generated indexes
 .superpowers/
 superpowers/

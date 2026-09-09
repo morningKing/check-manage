@@ -65,6 +65,8 @@ interface State {
   /** Cached list of subagents fetched by AiChatView. Used to resolve @ mentions on send. */
   subagents: AgentInfo[]
   outputs: Record<string, AiFile[]>
+  /** 用户上传到会话 uploads/ 目录的文件（与 agent 产出分开列示，实时刷新）。 */
+  uploads: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
   streamStatus: Record<string, StreamStatus>
@@ -120,6 +122,7 @@ export const useAiChatStore = defineStore('aiChat', {
     agentBySession: {} as Record<string, string>,
     subagents: [] as AgentInfo[],
     outputs: {},
+    uploads: {},
     changes: {} as Record<string, ChangedFile[]>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     streamStatus: {} as Record<string, StreamStatus>,
@@ -142,6 +145,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activeOutputs(state): AiFile[] {
       return state.activeSessionId ? state.outputs[state.activeSessionId] ?? [] : []
+    },
+    activeUploads(state): AiFile[] {
+      return state.activeSessionId ? state.uploads[state.activeSessionId] ?? [] : []
     },
     activeChanges(state): ChangedFile[] {
       return state.activeSessionId ? state.changes[state.activeSessionId] ?? [] : []
@@ -240,9 +246,10 @@ export const useAiChatStore = defineStore('aiChat', {
       try {
         const { files } = await listFiles(id)
         // 产出文件 surfaces everything the agent generated: files written to
-        // outputs/ AND files written directly under the workspace root. Only
-        // user-uploaded inputs (uploads/) are excluded.
+        // outputs/ AND files written directly under the workspace root.
         this.outputs[id] = files.filter(f => f.dir !== 'uploads')
+        // 用户上传的输入文件（uploads/）单独成组，上传后实时可见。
+        this.uploads[id] = files.filter(f => f.dir === 'uploads')
       } catch { /* non-fatal */ }
     },
 
@@ -449,6 +456,8 @@ export const useAiChatStore = defineStore('aiChat', {
       try {
         const res = await uploadFile(sid, file)
         ;(this.attachments[sid] ?? (this.attachments[sid] = [])).push({ name: res.name, path: res.path })
+        // 实时刷新文件抽屉：新上传的文件立即出现在「上传文件」分组里。
+        await this.loadFiles(sid)
       } finally {
         this.uploadingCount--
       }
@@ -563,6 +572,7 @@ export const useAiChatStore = defineStore('aiChat', {
       await apiClearSession(id)
       this.messages[id] = []
       this.outputs[id] = []
+      this.uploads[id] = []
       this.changes[id] = []
       this.attachments[id] = []
       this.streaming[id] = false

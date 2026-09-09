@@ -260,7 +260,7 @@ describe('useAiChatStore', () => {
     expect(store.activeChanges).toEqual([{ path: 'repo/new.txt', status: 'added' }])
   })
 
-  it('surfaces outputs/ and workspace-root generated files (not uploads) after session.idle', async () => {
+  it('surfaces outputs/ and workspace-root generated files, and lists uploads/ separately, after session.idle', async () => {
     vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
     vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
     let handlers: any
@@ -276,8 +276,33 @@ describe('useAiChatStore', () => {
     handlers.onEvent({ event: 'session.idle', data: { sessionID: 'oc' } })
     await Promise.resolve(); await Promise.resolve()  // let loadFiles promise settle
 
-    // generated artifacts (outputs/ + workspace root) surface; uploaded input does not
+    // generated artifacts (outputs/ + workspace root) surface in outputs…
     expect(store.outputs['sess_1'].map(f => f.name)).toEqual(['out.py', 'report.md'])
+    // …and user uploads surface in their own group (so the file drawer shows them)
+    expect(store.uploads['sess_1'].map(f => f.name)).toEqual(['in.txt'])
+  })
+
+  it('uploadAttachment refreshes the file list so the new upload shows immediately', async () => {
+    vi.mocked(api.createSession).mockResolvedValue({ id: 'sess_1', title: '新会话', workspacePath: '/ws' })
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { void h; return { close: vi.fn() } })
+    vi.mocked(api.uploadFile).mockResolvedValue({ name: 'data.csv', path: 'uploads/data.csv', size: 7 })
+    vi.mocked(api.listFiles).mockResolvedValue({ files: [] })
+
+    const store = useAiChatStore()
+    await store.startNewSession()
+    const listCallsBefore = vi.mocked(api.listFiles).mock.calls.length
+
+    // After the upload, the refresh returns the freshly uploaded file.
+    vi.mocked(api.listFiles).mockResolvedValue({
+      files: [{ name: 'data.csv', path: 'uploads/data.csv', dir: 'uploads', size: 7 }],
+    })
+    await store.uploadAttachment(new File(['x'], 'data.csv'))
+
+    // attachment chip added AND file list re-fetched so the drawer shows the upload
+    expect(api.uploadFile).toHaveBeenCalledWith('sess_1', expect.any(File))
+    expect(vi.mocked(api.listFiles).mock.calls.length).toBeGreaterThan(listCallsBefore)
+    expect(store.uploads['sess_1'].map(f => f.name)).toEqual(['data.csv'])
   })
 
   it('clearSession wipes local history/files, keeps the session active, and reopens the stream', async () => {
