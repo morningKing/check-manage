@@ -1,6 +1,7 @@
 """Global skill management — disk + DB operations.
 
-Central storage: <AI_CHAT_WORKSPACE_ROOT>/global-skills/<name>/
+Central storage: <AI_WORKSPACE_ROOT>/global-skills/<name>/
+(same root chat sessions use — batch children inject from here too)
 DB table: global_skills (id, name, description, enabled, uploaded_by, file_size)
 
 Symlink injection into session workspaces is handled by batch_engine._inject_global_skills.

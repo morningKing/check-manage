@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from config import AI_WORKSPACE_ROOT
+
 
 # Make the workspace itself a git repo so any file the agent writes anywhere
 # under it appears in `git status` — without needing the skill to `git clone`
@@ -136,12 +138,18 @@ def cleanup_batch_workspaces(workspace_root: str, user_id: str, sessions: list) 
     `batch_repo.get_batch_detail(...)['sessions']` (each needs an `id` key).
     A single session's cleanup failure (e.g. a held file handle) never blocks
     the others — matches `cleanup_session_workspace`'s own best-effort contract.
+
+    Sweeps BOTH the unified and the legacy batch root: batches created before
+    the root unification keep their workspaces under the legacy tree, and a
+    delete must not leak those directories.
     """
+    roots = {os.path.abspath(r) for r in (workspace_root, legacy_batch_workspace_root())}
     for s in sessions:
-        try:
-            cleanup_session_workspace(workspace_root, user_id, s['id'])
-        except Exception:
-            pass  # best-effort
+        for root in roots:
+            try:
+                cleanup_session_workspace(root, user_id, s['id'])
+            except Exception:
+                pass  # best-effort
 
 
 def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
@@ -198,6 +206,52 @@ def safe_resolve(root: str, rel_path: str) -> str:
     except ValueError:
         raise WorkspacePathError(f"path escapes workspace: {rel_path}")
     return str(target)
+
+
+def batch_workspace_root() -> str:
+    """Root for batch-task child workspaces and batch/scan staging.
+
+    Batch code historically used its own env var (AI_CHAT_WORKSPACE_ROOT)
+    defaulting to a cwd-relative 'ai-workspaces', which silently diverged from
+    AI_WORKSPACE_ROOT (default ~/.check-manage/ai-workspaces) where chat
+    sessions and global-skills live — batch children then injected global
+    skills from a different (stale) directory than the admin upload UI writes
+    to. The default is now the shared AI_WORKSPACE_ROOT; the old env var still
+    wins when explicitly set (existing deployments keep their layout).
+    """
+    return os.environ.get('AI_CHAT_WORKSPACE_ROOT') or AI_WORKSPACE_ROOT
+
+
+def legacy_batch_workspace_root() -> str:
+    """Where batch data lived before the root unification: the old default was
+    a cwd-relative 'ai-workspaces', i.e. <server pkg dir>/ai-workspaces under
+    `npm run server` (cd server). Read-only fallback — old staged files and
+    child workspaces are still resolved/cleaned here so no data migration is
+    needed; nothing new is ever created here.
+    """
+    return str(Path(__file__).resolve().parent.parent / 'ai-workspaces')
+
+
+def batch_roots() -> list:
+    """[unified root, legacy root] deduped by resolved path, new data first."""
+    out, seen = [], set()
+    for r in (batch_workspace_root(), legacy_batch_workspace_root()):
+        key = os.path.abspath(r).lower() if os.name == 'nt' else os.path.abspath(r)
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def resolve_batch_data_path(rel_path: str, roots=None) -> str:
+    """Resolve a stored batch-relative path (staged input / scan context dir)
+    across the unified and legacy roots — old pending sessions keep working
+    without migration. Raises FileNotFoundError if neither root has it."""
+    for root in (roots if roots is not None else batch_roots()):
+        p = Path(root) / rel_path
+        if p.exists():
+            return str(p)
+    raise FileNotFoundError(f'输入文件不存在或已被清理: {rel_path}')
 
 
 def batch_staging_dir(workspace_root: str, user_id: str,

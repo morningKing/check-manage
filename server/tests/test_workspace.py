@@ -131,3 +131,82 @@ def test_write_opencode_config_includes_model_when_given(tmp_path):
 def create_ws(tmp_path):
     from utils.workspace import create_session_workspace
     return create_session_workspace(str(tmp_path), "u", "s")
+
+
+# ---------------------------------------------------------------------------
+# Batch root unification: batch data moves to config.AI_WORKSPACE_ROOT while
+# pre-unification data stays readable/cleanable from the legacy tree — no
+# migration required.
+# ---------------------------------------------------------------------------
+
+def test_batch_workspace_root_honors_env_override(monkeypatch, tmp_path):
+    from utils.workspace import batch_workspace_root
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    assert batch_workspace_root() == str(tmp_path)
+
+
+def test_batch_workspace_root_defaults_to_config_root(monkeypatch):
+    from utils import workspace as ws_mod
+    from config import AI_WORKSPACE_ROOT
+    monkeypatch.delenv('AI_CHAT_WORKSPACE_ROOT', raising=False)
+    assert ws_mod.batch_workspace_root() == AI_WORKSPACE_ROOT
+
+
+def test_batch_roots_dedupes_same_path(monkeypatch):
+    """When the unified root IS the legacy dir (old deployment layout), the
+    deduped list has exactly one entry — sweeps must not run twice."""
+    from utils import workspace as ws_mod
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT',
+                       ws_mod.legacy_batch_workspace_root())
+    roots = ws_mod.batch_roots()
+    assert len(roots) == 1
+
+
+def test_resolve_batch_data_path_falls_back_to_legacy(tmp_path, monkeypatch):
+    """A staged file uploaded before unification (legacy tree) resolves even
+    though it's absent from the unified root — old pending batches still run."""
+    from utils import workspace as ws_mod
+    unified, legacy = tmp_path / 'unified', tmp_path / 'legacy'
+    staged = legacy / 'batch-staging' / 'u1' / 'upl-1' / 'input.txt'
+    staged.parent.mkdir(parents=True)
+    staged.write_text('X', encoding='utf-8')
+    monkeypatch.setattr(ws_mod, 'legacy_batch_workspace_root', lambda: str(legacy))
+    got = ws_mod.resolve_batch_data_path(
+        'batch-staging/u1/upl-1/input.txt', roots=(str(unified), str(legacy)))
+    assert Path(got) == staged
+
+
+def test_resolve_batch_data_path_prefers_unified_root(tmp_path, monkeypatch):
+    from utils.workspace import resolve_batch_data_path
+    unified, legacy = tmp_path / 'unified', tmp_path / 'legacy'
+    for root in (unified, legacy):
+        p = root / 'batch-staging' / 'u1' / 'upl-1' / 'input.txt'
+        p.parent.mkdir(parents=True)
+        p.write_text(root.name, encoding='utf-8')
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(unified))
+    got = resolve_batch_data_path('batch-staging/u1/upl-1/input.txt')
+    assert Path(got).read_text(encoding='utf-8') == 'unified'
+
+
+def test_resolve_batch_data_path_missing_raises(tmp_path, monkeypatch):
+    from utils.workspace import resolve_batch_data_path
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path / 'unified'))
+    with pytest.raises(FileNotFoundError):
+        resolve_batch_data_path('batch-staging/u1/gone.txt')
+
+
+def test_cleanup_batch_workspaces_sweeps_legacy_root(tmp_path, monkeypatch):
+    """Deleting a batch tears down child workspaces in BOTH roots: sessions
+    created before unification keep their dirs under the legacy tree."""
+    from utils import workspace as ws_mod
+    unified_root = str(tmp_path / 'unified')
+    legacy_root = str(tmp_path / 'legacy')
+    monkeypatch.setattr(ws_mod, 'legacy_batch_workspace_root', lambda: legacy_root)
+    sessions = [{'id': 'old-sess'}, {'id': 'new-sess'}]
+    for root, sid in ((legacy_root, 'old-sess'), (unified_root, 'new-sess')):
+        ws = Path(root) / 'user-1' / sid
+        ws.mkdir(parents=True)
+        (ws / 'keep.txt').write_text('x', encoding='utf-8')
+    ws_mod.cleanup_batch_workspaces(unified_root, 'user-1', sessions)
+    assert not (Path(legacy_root) / 'user-1' / 'old-sess').exists()
+    assert not (Path(unified_root) / 'user-1' / 'new-sess').exists()

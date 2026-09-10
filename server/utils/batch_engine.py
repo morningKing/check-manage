@@ -33,7 +33,10 @@ import requests
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from utils.workspace import create_session_workspace, _rm_force
+from config import AI_WORKSPACE_ROOT
+from utils.workspace import (create_session_workspace, _rm_force,
+                             batch_workspace_root, legacy_batch_workspace_root,
+                             resolve_batch_data_path)
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 from utils.session_history import render_history_block
@@ -198,7 +201,10 @@ def get_worker() -> 'BatchWorker':
 
 
 def _workspace_root() -> str:
-    return os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    # Unified with the chat/global-skills root (config.AI_WORKSPACE_ROOT);
+    # AI_CHAT_WORKSPACE_ROOT still wins when explicitly set. Kept as a function
+    # because tests monkeypatch it.
+    return batch_workspace_root()
 
 
 def _prepare_workspace(user_id: str, session_id: str,
@@ -236,13 +242,14 @@ def _prepare_workspace(user_id: str, session_id: str,
     if not staged_file_path:
         return ws
     paths = staged_file_path if isinstance(staged_file_path, list) else [staged_file_path]
-    root = Path(_workspace_root())
     up = Path(ws) / 'uploads'
     up.mkdir(parents=True, exist_ok=True)
     for rel in paths:
-        src = root / rel
-        if not src.exists():
-            raise FileNotFoundError(f'输入文件不存在或已被清理: {rel}')
+        # Staged paths are stored relative to the batch root. Sessions staged
+        # before the root unification still point into the legacy tree, so
+        # resolve across both — no data migration needed.
+        src = Path(resolve_batch_data_path(
+            rel, roots=(_workspace_root(), legacy_batch_workspace_root())))
         # On Windows, copying a just-created staging dir can intermittently raise
         # PermissionError (antivirus / handle-settling contention). Retry a few times.
         last_err = None
@@ -765,13 +772,16 @@ class BatchWorker:
                 prov_warn = self._provision_workspace(ws, provision_repo, provision_ref)
                 if prov_warn:
                     self._persist_provision_notice(sid, prov_warn)
-                # Inject global skills (symlink/copy from central storage)
+                # Inject global skills (symlink/copy from central storage).
+                # Skills always come from the upload root (config), regardless
+                # of where this child's workspace/staging lives.
                 try:
                     from utils.global_skills import inject_global_skills
-                    injected = inject_global_skills(ws, _workspace_root())
+                    injected = inject_global_skills(ws, AI_WORKSPACE_ROOT)
                     if injected:
                         self._persist_provision_notice(
-                            sid, f'已注入全局技能: {", ".join(injected)}')
+                            sid, f'已注入全局技能: {", ".join(injected)}',
+                            header=None)
                 except Exception:
                     pass  # best-effort: don't fail the child
                 # Fail FAST on an unusable agent. OpenCode silently produces nothing
@@ -901,15 +911,18 @@ class BatchWorker:
             logger.debug('batch child turn-done notification failed sid=%s: %s',
                          session_row.get('id'), e)
 
-    def _persist_provision_notice(self, session_id: str, warning: str):
-        """Insert a notice into the child's thread when workspace provisioning
-        failed, so the user sees that it degraded to the global agents/skills.
-        Inserted before the turn so it sorts to the top. Best-effort."""
+    def _persist_provision_notice(self, session_id: str, warning: str,
+                                  header: str | None = (
+                                      '⚠️ 预置仓库克隆失败，已使用全局 Agent / Skill 继续。')):
+        """Insert a notice into the child's thread about workspace provisioning
+        (clone failure by default; `header=None` posts `warning` verbatim —
+        used for the global-skills injection success notice). Inserted before
+        the turn so it sorts to the top. Best-effort."""
         try:
             import uuid as _uuid
             import json as _json
-            content = [{'type': 'text',
-                        'text': f'⚠️ 预置仓库克隆失败，已使用全局 Agent / Skill 继续。\n\n{warning}'}]
+            text = f'{header}\n\n{warning}' if header else warning
+            content = [{'type': 'text', 'text': text}]
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(

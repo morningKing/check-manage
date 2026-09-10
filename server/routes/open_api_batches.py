@@ -29,7 +29,9 @@ from utils.operation_log import log_api_operation
 # rfile.read() 之前拦截），两处各写一遍必然漂移。见 utils/upload_limits.py。
 from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
-from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
+from utils.workspace import (batch_staging_dir, batch_workspace_root,
+                             legacy_batch_workspace_root,
+                             cleanup_batch_workspaces, WorkspacePathError)
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
                                 url_prefix='/v1/ai-batches')
@@ -82,7 +84,9 @@ def _current_key() -> dict:
 
 
 def _workspace_root() -> str:
-    return os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    # Unified with config.AI_WORKSPACE_ROOT (see utils.workspace); kept as a
+    # function because tests patch it.
+    return batch_workspace_root()
 
 
 def _validate_staged_path(path: str, owner_user_id: str) -> bool:
@@ -148,6 +152,10 @@ def upload_files():
 
     root = _workspace_root()
     _sweep_stale_staging(root, owner)
+    # 统一前上传的暂存目录留在 legacy 树里，同样按 TTL 清掉，避免永久堆积
+    legacy = legacy_batch_workspace_root()
+    if os.path.abspath(legacy) != os.path.abspath(root):
+        _sweep_stale_staging(legacy, owner)
 
     upload_session_id = uuid.uuid4().hex[:16]
     try:
@@ -195,7 +203,10 @@ def _validate_files(files: list, owner_user_id: str):
         # 形状合法 ≠ 文件还在。暂存目录超过 TTL 会被 _sweep_stale_staging 清掉；
         # 不在这里拦住的话，_prepare_workspace 会抛 FileNotFoundError 把子任务直接
         # 标成失败 —— 与其让调用方事后从结果里发现，不如在提交时就明确拒绝。
-        if not os.path.isfile(os.path.join(root, str(f['path']).replace('\\', '/'))):
+        # 统一 root 与旧 root 各找一遍：统一前上传的暂存文件仍在旧树里。
+        rel = str(f['path']).replace('\\', '/')
+        if not any(os.path.isfile(os.path.join(r, rel)) for r
+                   in (root, legacy_batch_workspace_root())):
             return err(f'文件「{f["name"]}」已过期或不存在，'
                       f'请重新调用 /uploads 上传后再提交', INVALID_ARGUMENT, 400)
     return None

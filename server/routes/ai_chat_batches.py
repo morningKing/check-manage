@@ -2,7 +2,6 @@
 
 Worker engine lives in utils.batch_engine; this module only owns the HTTP edge.
 """
-import os
 import uuid
 from pathlib import Path
 
@@ -10,7 +9,8 @@ from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
 from auth import login_required
-from utils.workspace import batch_staging_dir, cleanup_batch_workspaces, WorkspacePathError
+from utils.workspace import (batch_staging_dir, batch_workspace_root,
+                             cleanup_batch_workspaces, WorkspacePathError)
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
     append_to_batch,
@@ -40,7 +40,7 @@ def staging_upload():
     filename = safe_filename(f.filename or '')  # preserves Unicode (e.g. 中文) names
 
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
-        or os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+        or batch_workspace_root()
     try:
         staging = batch_staging_dir(workspace_root,
                                     g.current_user['userId'],
@@ -129,7 +129,8 @@ def remove(batch_id):
     if not body:
         return jsonify({'error': 'not found'}), 404
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
-        or os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+        or batch_workspace_root()
+    # cleanup_batch_workspaces sweeps both the unified and the legacy root
     cleanup_batch_workspaces(workspace_root, g.current_user['userId'], body['sessions'])
     delete_batch(g.current_user['userId'], batch_id)
     return '', 204

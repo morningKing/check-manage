@@ -8,6 +8,7 @@ from pathlib import Path
 from db import get_db
 from utils.batch_repo import create_batch
 from utils.ai_scan_repo import mark_run
+from utils.workspace import batch_workspace_root, legacy_batch_workspace_root
 
 
 def extract_json(text):
@@ -136,7 +137,9 @@ def on_child_finished(session_row, final_msg, ok):
 
 
 def _workspace_root():
-    return os.environ.get('AI_CHAT_WORKSPACE_ROOT', 'ai-workspaces')
+    # Unified with config.AI_WORKSPACE_ROOT (see utils.workspace); kept as a
+    # function because tests monkeypatch it.
+    return batch_workspace_root()
 
 
 def _page_config_fields(collection):
@@ -319,8 +322,11 @@ def run_task(task):
         # revert claimed records to pending so they retry next scan
         _revert_claimed(task, [r['id'] for r in claimed])
         # remove any staging dirs already written for this task's claimed records
-        shutil.rmtree(Path(_workspace_root()) / 'scan-staging' / task['id'],
-                      ignore_errors=True)
+        # (both roots: tasks staged before the root unification live in the
+        # legacy tree — see utils.workspace.batch_roots)
+        for _root in {_workspace_root(), legacy_batch_workspace_root()}:
+            shutil.rmtree(Path(_root) / 'scan-staging' / task['id'],
+                          ignore_errors=True)
         mark_run(task['id'], 0, error=f'{type(e).__name__}: {e}'[:500])
         raise
 
