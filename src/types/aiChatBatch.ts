@@ -1,4 +1,4 @@
-export type BatchStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed'
+export type BatchStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled'
 // 'cancelled' 只会出现在对外 API 触发的取消（POST .../cancel，见
 // docs/user-guide/integration/ai-batch-api.md）——UI 目前没有取消入口，但外部
 // 调用方取消后，这条子会话状态会经同一个 batch worker 落回这张表，UI 侧的批

@@ -50,6 +50,7 @@ import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import { useChatScroll } from '@/composables/useChatScroll'
 import { useTurnNotify } from '@/composables/useTurnNotify'
+import { batchStatusLabel, isBatchChildAutomatic } from './batchChildState'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
 // 顾虑——避免这些重型库进这个页面的主 chunk。
@@ -555,11 +556,15 @@ watch(
     stopLivePoll()
     const id = activeId.value
     if (!id) return
-    const child = batches.activeSessions.find((s) => s.id === id)
+    const child = batches.getChild(id)
     if (!child) return                       // not a child of the selected batch
     store.reloadMessages(id)                  // reflect latest (covers completion)
     if (child.status === 'running') {
       liveTimer = setInterval(() => store.reloadMessages(id), 2500)
+    } else {
+      // A continuation can finish before its SSE subscription receives idle;
+      // the terminal poll is the authoritative handoff back to persisted state.
+      store.finishBatchChild(id)
     }
   },
   { immediate: true },
@@ -572,21 +577,25 @@ onUnmounted(stopLivePoll)
 const activeBatchInfo = computed(() => {
   const id = activeId.value
   if (!id) return null
-  const child = batches.activeSessions.find((s) => s.id === id)
+  const child = batches.getChild(id)
   if (!child) return null
   const b = batches.activeBatch
-  return { status: child.status, agent: b?.agent || '', model: b?.model || '' }
+  return { batchId: b?.id || '', status: child.status, agent: b?.agent || '', model: b?.model || '' }
 })
-function batchStatusLabel(s: string) {
-  return ({ pending: '待运行', running: '正在运行', completed: '已完成', failed: '失败' } as Record<string, string>)[s] || s
-}
+const batchChildExecuting = computed(() =>
+  activeBatchInfo.value ? isBatchChildAutomatic(activeBatchInfo.value.status) : false,
+)
 
 onMounted(async () => {
   try {
     await store.loadSessions()
+    await batches.fetchList()
     // Check URL query parameter: /ai-chat?session=xxx
     const querySessionId = route.query.session as string | undefined
-    if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
+    const batch = querySessionId ? await batches.findBatchForChild(querySessionId) : null
+    if (batch) {
+      await selectBatchChild(querySessionId!)
+    } else if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
       // Open the specified session from URL
       await store.openSession(querySessionId)
       store.hydrateSessionModel(querySessionId)
@@ -601,7 +610,7 @@ onMounted(async () => {
   fetchModels()
   fetchAgents()
   // load batch list for the unified sidebar
-  batches.fetchList().then(() => batches.startListPolling()).catch(() => {})
+  batches.startListPolling()
   window.addEventListener('keydown', onGlobalKeydown)
 })
 onUnmounted(() => {
@@ -618,10 +627,9 @@ async function selectSession(id: string) {
   store.hydrateSessionModel(id)
   store.hydrateSessionAgent(id)
 }
-// Batch children are worker-driven and viewed via polling (reloadMessages).
-// Open them WITHOUT an SSE stream so we don't add an OpenCode /event
-// subscription per viewed child (Node EventEmitter cap) and so the live
-// _upsertAssistantPart can't fight the poll-replaced message array.
+// Batch children are worker-driven and viewed via polling until a user sends a
+// continuation. The continuation action safely hands the child over to the
+// ordinary SSE lifecycle.
 async function selectBatchChild(id: string) {
   if (id !== activeId.value) await store.openSession(id, { stream: false })
 }
@@ -843,6 +851,19 @@ async function send() {
   input.value = ''
   if (!activeId.value) await newSession()
   const sid = activeId.value!
+  const batchInfo = activeBatchInfo.value
+  if (batchInfo && !batchChildExecuting.value) {
+    try {
+      await store.continueBatchChild(batchInfo.batchId, sid, {
+        content: text,
+        attachments: attachments.value.map(a => a.path),
+        agent: composerAgent.value || undefined,
+        model: composerModel.value || undefined,
+      })
+      void pinToBottom()
+    } catch { ElMessage.error('发送失败') }
+    return
+  }
   // 运行中插话只排队纯文本：/命令的执行路径是阻塞式 POST，不支持排队——
   // 命令等回合结束后再发（提示用户，避免静默把 "/xxx" 当普通文本入队）。
   if (streaming.value) {
@@ -1281,7 +1302,7 @@ function onKey(e: Event) {
       />
 
       <!-- 输入区：统一圆角卡片（Claude 风格） -->
-      <div class="ai-chat__composer">
+      <div v-if="!batchChildExecuting" class="ai-chat__composer">
         <CommandPalette :items="activePalette" :active-index="activeIndex" :prefix="mentionToken ? '@' : '/'" @select="acceptItem" />
         <div class="composer-inner">
           <div class="composer-card">

@@ -44,6 +44,17 @@ export function cancelChild(batchId: string, sessionId: string) {
   return post<{ id: string; status: string }>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/cancel`, {})
 }
 
+export function continueBatchChild(batchId: string, sessionId: string, body: {
+  content: string
+  attachments?: string[]
+  agent?: string
+  model?: string
+}) {
+  return post<{ messageId: string; status: string }>(
+    `/ai/chat/batches/${batchId}/sessions/${sessionId}/continue`, body,
+  )
+}
+
 export function updateBatchConfig(id: string, body: {
   agent: string | null
   model: string | null

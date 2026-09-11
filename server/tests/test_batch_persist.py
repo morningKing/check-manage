@@ -66,6 +66,7 @@ from contextlib import contextmanager
 def _capture_db():
     inserts = []
     conn = MagicMock(); cur = MagicMock()
+    cur.fetchone.return_value = None
     def _exec(sql, params=None):
         if 'INSERT INTO ai_chat_messages' in sql:
             inserts.append(params)

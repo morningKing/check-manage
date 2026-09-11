@@ -55,6 +55,32 @@ describe('aiChatBatches store', () => {
     expect(s.polling).toBe(false)
   })
 
+  it.each(['partial', 'cancelled'] as const)('stops polling for %s batch status', async (status) => {
+    vi.mocked(api.getBatch).mockResolvedValue({
+      batch: { ...mockBatch, status } as any, sessions: [],
+    })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    expect(s.polling).toBe(false)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.getBatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes a child predicate and marks a continued child as running', async () => {
+    vi.mocked(api.getBatch).mockResolvedValue({
+      batch: mockBatch, sessions: [{
+        id: 'child_1', status: 'completed', batch_seq: 1, batch_input_file: 'a.txt',
+        opencode_session_id: 'oc', error_message: null, last_message_preview: 'done',
+      }],
+    })
+    vi.mocked(api.continueBatchChild).mockResolvedValue({ messageId: 'm2', status: 'pending' })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    expect(s.isBatchChild('child_1')).toBe(true)
+    await s.markChildContinuing('child_1')
+    expect(s.getChild('child_1')?.status).toBe('running')
+  })
+
   it('retryFailed optimistically clears failed count and refetches', async () => {
     vi.mocked(api.getBatch).mockResolvedValue({
       batch: { ...mockBatch, failed: 2, status: 'partial' as const }, sessions: [],

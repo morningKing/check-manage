@@ -23,6 +23,8 @@ import {
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { computeUsage, EMPTY_USAGE, type SessionUsage } from '@/utils/aiUsage'
+import { continueBatchChild as apiContinueBatchChild } from '@/api/aiChatBatches'
+import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 
 interface SessionMeta {
   id: string
@@ -392,6 +394,51 @@ export const useAiChatStore = defineStore('aiChat', {
       this.messages[sid].push({ id: localId, role: 'user', content: parts })
       this._beginTurn(sid)
       await this._transmitUserMessage(sid, content, paths, localId)
+    },
+
+    async continueBatchChild(batchId: string, sessionId: string, body: {
+      content: string
+      attachments?: string[]
+      agent?: string
+      model?: string
+    }) {
+      if (this.activeSessionId !== sessionId) throw new Error('no active session')
+      const pending = this.attachments[sessionId] ?? []
+      const paths = body.attachments ?? pending.map(a => a.path)
+      const parts: AiContentPart[] = []
+      if (body.content) parts.push({ type: 'text', text: body.content })
+      for (const path of paths) {
+        const attachment = pending.find(a => a.path === path)
+        parts.push({ type: 'file', name: attachment?.name ?? path.split('/').pop() ?? path, path })
+      }
+      const localId = 'local_' + Date.now()
+      this.attachments[sessionId] = []
+      this.messages[sessionId] ??= []
+      this.messages[sessionId].push({ id: localId, role: 'user', content: parts })
+      this._beginTurn(sessionId)
+      try {
+        const result = await apiContinueBatchChild(batchId, sessionId, {
+          ...body,
+          attachments: paths,
+        })
+        const msg = this.messages[sessionId].find(m => m.id === localId)
+        if (msg) msg.id = result.messageId
+        useAiChatBatchesStore().markChildContinuing(sessionId)
+        this._openStream(sessionId)
+        return result
+      } catch (error) {
+        this.streaming[sessionId] = false
+        this.thinking[sessionId] = false
+        throw error
+      }
+    },
+
+    finishBatchChild(sessionId: string) {
+      if (this.activeSessionId !== sessionId) return
+      this._closeStream()
+      this.streaming[sessionId] = false
+      this.thinking[sessionId] = false
+      void this._reloadPersisted(sessionId)
     },
 
     _beginTurn(sid: string) {

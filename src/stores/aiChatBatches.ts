@@ -5,7 +5,7 @@ import type {
   AiChatBatch, AiChatBatchDetail, AiChatBatchSession,
 } from '@/types/aiChatBatch'
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed'])
+const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled'])
 const DETAIL_POLL_MS = 5000
 const LIST_POLL_MS = 10000
 
@@ -48,9 +48,39 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     }
   }
 
+  async function findBatchForChild(sessionId: string) {
+    for (const batch of items.value) {
+      const detail = await api.getBatch(batch.id)
+      if (detail.sessions.some(session => session.id === sessionId)) {
+        applyDetail(detail)
+        if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(detail.batch.id)
+        return detail.batch
+      }
+    }
+    return null
+  }
+
   function applyDetail(detail: AiChatBatchDetail) {
     activeBatch.value = detail.batch
     activeSessions.value = detail.sessions
+  }
+
+  function getChild(sessionId: string) {
+    return activeSessions.value.find(session => session.id === sessionId)
+  }
+
+  function isBatchChild(sessionId: string) {
+    return !!getChild(sessionId)
+  }
+
+  async function markChildContinuing(sessionId: string) {
+    const child = getChild(sessionId)
+    if (!child) return
+    child.status = 'running'
+    if (activeBatch.value && TERMINAL_STATUSES.has(activeBatch.value.status)) {
+      activeBatch.value.status = 'running'
+    }
+    if (activeBatch.value) startDetailPolling(activeBatch.value.id)
   }
 
   function startDetailPolling(id: string) {
@@ -174,7 +204,8 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   return {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
-    selectBatch, clearSelection, retryFailed, reexecuteChild,
+    selectBatch, findBatchForChild, clearSelection, retryFailed, reexecuteChild,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
+    getChild, isBatchChild, markChildContinuing,
   }
 })

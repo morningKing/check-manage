@@ -59,7 +59,7 @@ function toggle() {
   else store.selectBatch(props.batch.id)
 }
 function statusLabel(s: string) {
-  return ({ pending: '待运行', running: '运行中', completed: '已完成', partial: '部分失败', failed: '失败' } as Record<string, string>)[s] || s
+  return ({ pending: '待运行', running: '运行中', completed: '已完成', partial: '部分失败', failed: '失败', cancelled: '已取消' } as Record<string, string>)[s] || s
 }
 function fileName(p?: string | null) { return (p || '').split('/').pop() || '' }
 async function onRetry() { try { await store.retryFailed(props.batch.id) } catch { ElMessage.error('重试失败') } }

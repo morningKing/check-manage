@@ -13,14 +13,19 @@ vi.mock('@/api/aiChat', () => ({
   clearSession: vi.fn(),
   getMessages: vi.fn(),
   sendMessage: vi.fn(),
+  continueBatchChild: vi.fn(),
   uploadFile: vi.fn(),
   listFiles: vi.fn(() => Promise.resolve({ files: [] })),
   getChanges: vi.fn(),
   createEventStream: vi.fn(() => ({ close: vi.fn() })),
 }))
+vi.mock('@/api/aiChatBatches', () => ({
+  continueBatchChild: vi.fn(),
+}))
 
 import { useAiChatStore } from '../aiChat'
 import * as api from '@/api/aiChat'
+import * as batchApi from '@/api/aiChatBatches'
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -328,5 +333,41 @@ describe('useAiChatStore', () => {
     expect(store.sessions.find(s => s.id === 'sess_1')?.status).toBe('active')
     // active session reconnects to the fresh OpenCode context
     expect(vi.mocked(api.createEventStream).mock.calls.length).toBe(streamCallsBefore + 1)
+  })
+
+  it('continues a terminal batch child through the batch API and then opens SSE', async () => {
+    vi.mocked(api.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(batchApi.continueBatchChild).mockResolvedValue({ messageId: 'm2', status: 'pending' })
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { void h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    store.activeSessionId = 'child_1'
+    store.messages['child_1'] = []
+    store.attachments['child_1'] = [{ name: 'note.txt', path: 'uploads/note.txt' }]
+
+    await store.continueBatchChild('batch_1', 'child_1', { content: 'continue this', agent: 'build', model: 'm' })
+
+    expect(batchApi.continueBatchChild).toHaveBeenCalledWith('batch_1', 'child_1', {
+      content: 'continue this', attachments: ['uploads/note.txt'], agent: 'build', model: 'm',
+    })
+    expect(store.messages['child_1'][0]).toMatchObject({ role: 'user', id: 'm2' })
+    expect(store.streaming['child_1']).toBe(true)
+    expect(api.createEventStream).toHaveBeenCalledWith('child_1', expect.any(Object))
+  })
+
+  it('continues a batch child when its message cache has not loaded yet', async () => {
+    vi.mocked(batchApi.continueBatchChild).mockResolvedValue({ messageId: 'm3', status: 'pending' })
+    vi.mocked(api.createEventStream).mockImplementation((_id, h) => { void h; return { close: vi.fn() } })
+
+    const store = useAiChatStore()
+    store.activeSessionId = 'child_2'
+    delete store.messages['child_2']
+
+    await store.continueBatchChild('batch_2', 'child_2', { content: 'continue this' })
+
+    expect(store.messages['child_2'][0]).toMatchObject({ role: 'user', id: 'm3' })
+    expect(batchApi.continueBatchChild).toHaveBeenCalledWith('batch_2', 'child_2', {
+      content: 'continue this', attachments: [], agent: undefined, model: undefined,
+    })
   })
 })

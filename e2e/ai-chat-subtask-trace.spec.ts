@@ -143,6 +143,65 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   await page.screenshot({ path: 'e2e-screenshots/subtask-trace-expanded.png', fullPage: true })
 })
 
+test('batch child delegation shows the subagent conversation in chat', async ({ page }) => {
+  test.setTimeout(420_000)
+  const batchName = `batch-subtask-${Date.now()}`
+
+  await page.goto('/')
+  await page.fill('input[placeholder*="用户名"]', 'admin')
+  await page.fill('input[placeholder*="密码"]', 'admin123')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
+  await page.getByRole('button', { name: /登\s*录/ }).waitFor({ state: 'hidden', timeout: 10_000 })
+  await page.goto('/ai-chat')
+
+  const createBatch = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .locator('button', { hasText: '新建' })
+  await createBatch.waitFor({ state: 'visible', timeout: 15_000 })
+  await createBatch.click()
+
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  await dialog.locator('input[data-test="name"]').fill(batchName)
+  await dialog.locator('textarea[data-test="prompt"]').fill(
+    '你必须使用 task 工具委托一个 general 子代理去完成：统计当前工作区 AGENTS.md 文件的行数。'
+    + '不要自己读取或统计，必须由子代理执行并返回结果。',
+  )
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'subtask-probe.txt', mimeType: 'text/plain', buffer: (globalThis as any).Buffer.from('probe') },
+  ])
+  await expect(dialog.locator('.files')).toContainText('subtask-probe.txt', { timeout: 8_000 })
+  await dialog.locator('button[data-test="create-btn"]').click()
+
+  const group = page.locator('.batch-group', { hasText: batchName }).first()
+  await group.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.waitForFunction((name) => {
+    const group = Array.from(document.querySelectorAll('.batch-group'))
+      .find(el => el.querySelector('.bg-name')?.textContent?.includes(name))
+    const badge = group?.querySelector('.badge')
+    return !!badge && ['completed', 'failed', 'partial'].some(s => badge.classList.contains(`badge--${s}`))
+  }, batchName, { timeout: 360_000 })
+
+  const head = group.locator('.batch-group__head')
+  for (let i = 0; i < 5 && (await group.locator('.bg-child').count()) === 0; i++) {
+    await head.click()
+    await page.waitForTimeout(500)
+  }
+  await expect(group.locator('.bg-child')).toHaveCount(1, { timeout: 10_000 })
+  await group.locator('.bg-child').first().click()
+
+  const bubble = page.locator('.subtask-bubble').first()
+  await bubble.waitFor({ state: 'visible', timeout: 120_000 })
+  await expect(bubble.locator('.subtask-bubble__agent')).toContainText('general')
+  await expect(page.locator('.subtask-bubble--completed').first()).toBeVisible({ timeout: 120_000 })
+
+  await bubble.locator('.subtask-bubble__head').click()
+  const body = bubble.locator('.subtask-bubble__body')
+  await expect(body).toBeVisible({ timeout: 10_000 })
+  await expect(body.locator('.subtask-bubble__role').first()).toContainText('委托输入')
+  await expect(body.locator('.subtask-bubble__msg').first()).toBeVisible()
+  await page.screenshot({ path: '.playwright-mcp/batch-subtask-trace-expanded.png', fullPage: true })
+})
+
 /**
  * API-level test: verifies the subtask messages endpoint returns correct data
  * when given a valid subtaskId. This tests the C-1 fix at the API level.
