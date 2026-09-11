@@ -26,3 +26,20 @@
 
 - Batch worker execution was intentionally not changed in Task 1; later work will consume the shared helper. External `/v1/ai-sessions` behavior was not changed.
 - The regression suite emits existing Python 3.12 `datetime.utcnow()` deprecation warnings from `auth.py`; no new warnings were introduced by this task.
+
+## Reviewer Fix Round
+
+- Reworked `test_ordinary_route_and_batch_worker_inputs_have_full_prompt_parity` so the ordinary side uses route-shaped `content`/`attachments`/`agentMentions` data and the batch side uses a session-shaped `continue_prompt`/`input_files` row, independently mapped into the helper before comparing results.
+- Added genuine unattached `@uploads/mentioned.txt` and `@uploads/mentioned.bin` cases. The test verifies text inlining, binary tool pointers, and that mentions do not become stored file chips.
+- The parity assertion now covers memory injection, export fallback, text and binary attachments, and both text and binary genuine file mentions.
+
+### Fix-round verification
+
+- Focused parity test: `set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest tests/test_session_prompt.py -v` — `2 passed`.
+- Covering regression command: `set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest tests/test_session_prompt.py tests/test_ai_chat_directive.py tests/test_routes_ai_chat.py tests/test_batch_engine.py::test_batch_uses_shared_prompt_contract_before_input_hint -v` — `96 passed, 178 warnings`.
+- `git diff --check` — passed.
+
+### Fix-round concerns
+
+- This review round required test-only changes; no production behavior changed.
+- Existing `datetime.utcnow()` deprecation warnings remain in `auth.py`.

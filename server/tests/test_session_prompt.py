@@ -47,26 +47,71 @@ def test_build_session_prompt_augments_inputs_but_keeps_stored_parts_raw(tmp_pat
     assert '[MEMORY]' not in stored[0]['text']
 
 
-def test_shared_helper_gives_ordinary_and_batch_inputs_same_augmented_prompt(tmp_path,
-                                                                               monkeypatch):
+def test_ordinary_route_and_batch_worker_inputs_have_full_prompt_parity(tmp_path, monkeypatch):
     from utils import session_prompt
 
     (tmp_path / 'uploads').mkdir()
-    (tmp_path / 'uploads' / 'input.txt').write_text('SHARED-CONTENT', encoding='utf-8')
-    monkeypatch.setattr(session_prompt, 'search_memory', lambda *args, **kwargs: [])
-    monkeypatch.setattr(session_prompt, 'is_export_intent', lambda content: False)
+    (tmp_path / 'uploads' / 'attached.txt').write_text('ATTACHED-TEXT', encoding='utf-8')
+    (tmp_path / 'uploads' / 'attached.bin').write_bytes(b'\x00\xffATTACHED-BINARY')
+    (tmp_path / 'uploads' / 'mentioned.txt').write_text('MENTIONED-TEXT', encoding='utf-8')
+    (tmp_path / 'uploads' / 'mentioned.bin').write_bytes(b'\x00\xffMENTIONED-BINARY')
 
-    kwargs = dict(
-        content='总结 @uploads/input.txt',
-        workspace_path=str(tmp_path),
-        attachments=['uploads/input.txt'],
-        agent_mentions=[],
-        user_id='user-1',
-        role=None,
+    monkeypatch.setattr(
+        session_prompt, 'search_memory',
+        lambda user_id, content, limit=5: [f'memory for {user_id}'],
     )
-    ordinary_prompt, ordinary_parts = session_prompt.build_session_prompt(**kwargs)
-    batch_prompt, batch_parts = session_prompt.build_session_prompt(**kwargs)
+    monkeypatch.setattr(session_prompt, 'render_memory_block',
+                        lambda memories: '[MEMORY ' + ','.join(memories) + ']\n')
+    monkeypatch.setattr(session_prompt, 'is_export_intent', lambda content: True)
+    monkeypatch.setattr(session_prompt, 'resolve_collection_from_text',
+                        lambda content: ('cases', 'Cases'))
+    monkeypatch.setattr(session_prompt, 'export_collection_to_xlsx',
+                        lambda collection, workspace_path, role=None:
+                        {'path': 'outputs/cases.xlsx', 'rows': 3})
+
+    content = ('请处理 @uploads/mentioned.txt 和 @uploads/mentioned.bin，'
+               '并导出 Cases 数据')
+    ordinary_request = {
+        'content': content,
+        'attachments': ['uploads/attached.txt', 'uploads/attached.bin'],
+        'agentMentions': [],
+    }
+    ordinary_prompt, ordinary_parts = session_prompt.build_session_prompt(
+        content=ordinary_request['content'],
+        workspace_path=str(tmp_path),
+        attachments=ordinary_request['attachments'],
+        agent_mentions=ordinary_request['agentMentions'],
+        user_id='user-1',
+        role='developer',
+    )
+
+    batch_session = {
+        'continue_prompt': content,
+        'input_files': [
+            {'name': 'attached.txt', 'path': 'batch-staging/user-1/attached.txt'},
+            {'name': 'attached.bin', 'path': 'batch-staging/user-1/attached.bin'},
+        ],
+        'user_id': 'user-1',
+        'role': 'developer',
+    }
+    batch_prompt, batch_parts = session_prompt.build_session_prompt(
+        content=batch_session['continue_prompt'],
+        workspace_path=str(tmp_path),
+        attachments=[f['path'].replace('batch-staging/user-1/', 'uploads/')
+                     for f in batch_session['input_files']],
+        agent_mentions=[],
+        user_id=batch_session['user_id'],
+        role=batch_session['role'],
+    )
 
     assert batch_prompt == ordinary_prompt
     assert batch_parts == ordinary_parts
-    assert 'SHARED-CONTENT' in batch_prompt
+    assert 'ATTACHED-TEXT' in batch_prompt
+    assert 'MENTIONED-TEXT' in batch_prompt
+    assert 'attached.bin' in batch_prompt and '工具读取' in batch_prompt
+    assert 'mentioned.bin' in batch_prompt and '工具读取' in batch_prompt
+    assert '[MEMORY memory for user-1]' in batch_prompt
+    assert 'outputs/cases.xlsx' in batch_prompt
+    assert all(part['type'] in ('text', 'file') for part in batch_parts)
+    assert '@uploads/mentioned.txt' in batch_parts[0]['text']
+    assert not any(part.get('path') == 'uploads/mentioned.txt' for part in batch_parts)
