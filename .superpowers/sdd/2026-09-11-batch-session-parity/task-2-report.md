@@ -44,4 +44,4 @@ Result: `80 passed in 30.56s`.
 
 The focused covering run also passed: `2 passed, 19 deselected` for the parity and retry-delay tests.
 
-Fix commit: pending at report authoring time.
+Fix commit: `c3c7865` (`fix: cover batch workspace configuration parity`).
