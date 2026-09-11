@@ -780,7 +780,7 @@ def session_continue(batch_id, child_id):
     if len(prompt) > MAX_PROMPT_CHARS:
         return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
     try:
-        continue_child(key['ownerUserId'], batch_id, child['id'], prompt)
+        continue_child(batch_id, child['id'], key['ownerUserId'], prompt, [], None, None)
     except ValueError as e:
         return err(str(e), CONFLICT, 409)
     get_worker().notify()

@@ -195,6 +195,61 @@ def test_retry_failed_resets_failed_to_pending(setup_app, db_conn, tmp_path, mon
         client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
 
 
+def test_continue_child_returns_202_and_stores_message(setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='continue.txt', upload_session_id='u-cont')
+    created = client.post(
+        '/ai/chat/batches', json={'name': 'continue', 'prompt': 'initial', 'files': [f1]},
+        headers=admin_headers,
+    ).get_json()
+    bid = created['batch']['id']
+    sid = created['sessions'][0]['id']
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s", (sid,))
+        cur.execute("UPDATE ai_chat_batches SET done=1, status='completed' WHERE id=%s", (bid,))
+    db_conn.commit()
+    try:
+        response = client.post(
+            f'/ai/chat/batches/{bid}/sessions/{sid}/continue',
+            json={'content': 'please refine', 'agent': 'reviewer'},
+            headers=admin_headers,
+        )
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body['messageId']
+        assert body['status'] == 'pending'
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sid,))
+            assert cur.fetchone()[0] == 'pending'
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+def test_continue_running_child_returns_stable_conflict(setup_app, db_conn, tmp_path, monkeypatch):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f1 = _stage_one(client, admin_headers, name='running.txt', upload_session_id='u-cont-running')
+    created = client.post(
+        '/ai/chat/batches', json={'name': 'running', 'prompt': 'initial', 'files': [f1]},
+        headers=admin_headers,
+    ).get_json()
+    bid = created['batch']['id']
+    sid = created['sessions'][0]['id']
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (sid,))
+    db_conn.commit()
+    try:
+        response = client.post(
+            f'/ai/chat/batches/{bid}/sessions/{sid}/continue',
+            json={'content': 'race'}, headers=admin_headers,
+        )
+        assert response.status_code == 409
+        assert response.get_json()['code'] == 'CHILD_NOT_TERMINAL'
+    finally:
+        client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
 def test_create_batch_stores_agent(setup_app, tmp_path, monkeypatch, db_conn):
     """agent field is persisted and returned in the batch response."""
     client, admin_headers = setup_app

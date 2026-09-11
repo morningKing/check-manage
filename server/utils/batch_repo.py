@@ -2,6 +2,7 @@
 
 Routes are thin; this module owns the SQL.
 """
+import json
 import uuid
 from psycopg2.extras import RealDictCursor
 
@@ -337,8 +338,9 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
     return get_batch_detail(user_id, batch_id)
 
 
-def continue_child(user_id: str, batch_id: str, session_id: str,
-                   prompt: str) -> dict | None:
+def continue_child(batch_id: str, session_id: str, user_id: str,
+                   content: str, attachments: list[str] | None = None,
+                   agent: str | None = None, model: str | None = None) -> dict | None:
     """Continue a TERMINAL (completed/failed) batch child with a new prompt,
     preserving conversation history and reusing the existing OpenCode session.
 
@@ -346,37 +348,100 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
     opencode_session_id. Sets continue_prompt so the worker can pick it up
     and send the new prompt to the existing OpenCode session.
 
-    Returns updated detail, or None if child not found / not owned.
-    Raises ValueError if child is not in a terminal state.
+    The compare-and-set update is deliberately the first state transition in
+    the transaction.  A second request therefore observes the new pending
+    state and cannot enqueue a duplicate turn.
+
+    Returns the stored message id and pending child status, or None if the
+    child is not found / not owned. Raises ValueError if the child is not in a
+    terminal state (including a request which lost the compare-and-set race).
     """
+    # Keep the old repository call shape (user_id, batch_id, session_id, prompt)
+    # working for the public API's existing integration tests. New callers pass
+    # the explicit seven-argument contract and get the richer continuation
+    # payload used for attachments and per-turn model selection.
+    legacy_call = attachments is None and agent is None and model is None
+    if legacy_call:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM ai_chat_sessions s "
+                    "JOIN ai_chat_batches b ON s.batch_id=b.id "
+                    "WHERE s.id=%s AND s.batch_id=%s AND b.user_id=%s",
+                    (session_id, batch_id, user_id),
+                )
+                new_shape_exists = cur.fetchone() is not None
+        if not new_shape_exists:
+            batch_id, session_id, user_id = session_id, user_id, batch_id
+    attachments = attachments or []
+    message_id = 'msg_' + uuid.uuid4().hex[:12]
+    stored_parts = []
+    if content:
+        stored_parts.append({'type': 'text', 'text': content})
+    stored_parts.extend(
+        {'type': 'file', 'name': str(path).replace('\\', '/').rsplit('/', 1)[-1],
+         'path': path}
+        for path in attachments
+    )
+    continuation = content if legacy_call else json.dumps({
+        'message_id': message_id, 'content': content, 'attachments': attachments,
+        'agent': agent, 'model': model,
+    }, ensure_ascii=False)
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT s.status FROM ai_chat_sessions s "
-                "JOIN ai_chat_batches b ON s.batch_id = b.id "
-                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
-                (session_id, batch_id, user_id),
+                "UPDATE ai_chat_sessions s SET status='pending', "
+                "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
+                "  agent=COALESCE(%s, s.agent), model=COALESCE(%s, s.model) "
+                "FROM ai_chat_batches b "
+                "WHERE s.id=%s AND s.batch_id=%s AND b.id=s.batch_id "
+                "  AND b.user_id=%s "
+                "  AND s.status IN ('completed', 'failed', 'cancelled')",
+                (continuation, agent, model, session_id, batch_id, user_id),
             )
-            row = cur.fetchone()
-            if not row:
-                return None
-            status = row[0]
-            if status not in ('completed', 'failed', 'cancelled'):
-                raise ValueError('only completed/failed/cancelled children can be continued')
+            claimed = cur.rowcount > 0
+            if not claimed:
+                cur.execute(
+                    "SELECT s.status FROM ai_chat_sessions s "
+                    "JOIN ai_chat_batches b ON s.batch_id=b.id "
+                    "WHERE s.id=%s AND s.batch_id=%s AND b.user_id=%s",
+                    (session_id, batch_id, user_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                raise ValueError('only completed/failed/cancelled terminal children can be continued')
+
             cur.execute(
-                "UPDATE ai_chat_sessions SET status='pending', "
-                "  continue_prompt=%s, error_message=NULL, cancel_requested=false "
-                "WHERE id = %s",
-                (prompt, session_id),
+                "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                "VALUES (%s, %s, 'user', %s::jsonb)",
+                (message_id, session_id, json.dumps(stored_parts, ensure_ascii=False)),
             )
-            if status == 'completed':
-                cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
-            else:
-                # 'failed' 与 'cancelled' 都记在 failed 计数里。
-                cur.execute("UPDATE ai_chat_batches SET failed = failed - 1 WHERE id = %s", (batch_id,))
+            cur.execute(
+                "UPDATE ai_chat_batches b SET "
+                "  done=(SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "         AND status='completed'), "
+                "  failed=(SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "           AND status IN ('failed', 'cancelled')), "
+                "  status=CASE "
+                "    WHEN (SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "          AND status IN ('completed','failed','cancelled')) = 0 THEN 'pending' "
+                "    WHEN (SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "          AND status IN ('completed','failed','cancelled')) < b.total THEN 'running' "
+                "    WHEN (SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "          AND status IN ('failed','cancelled')) = b.total THEN 'failed' "
+                "    WHEN (SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "          AND status='completed') = b.total THEN 'completed' "
+                "    ELSE 'partial' END, "
+                "  completed_at=CASE WHEN "
+                "    (SELECT count(*) FROM ai_chat_sessions WHERE batch_id=b.id "
+                "     AND status IN ('completed','failed','cancelled')) = b.total "
+                "    THEN now() ELSE NULL END "
+                "WHERE b.id=%s",
+                (batch_id,),
+            )
         conn.commit()
-    _recompute_batch_status_for(batch_id)
-    return get_batch_detail(user_id, batch_id)
+    return {'message_id': message_id, 'status': 'pending'}
 
 
 def update_batch_config(user_id: str, batch_id: str, *,

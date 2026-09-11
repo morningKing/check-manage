@@ -37,6 +37,7 @@ from config import AI_WORKSPACE_ROOT, AI_SESSION_TTL_HOURS, MCP_SERVER_URL
 from utils.workspace import _rm_force, batch_workspace_root
 from utils.session_token import generate_token
 from utils.session_workspace import prepare_interactive_session_workspace
+from utils.session_prompt import build_session_prompt
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 from utils.session_history import render_history_block
@@ -702,12 +703,31 @@ class BatchWorker:
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
                           and session_row.get('continue_prompt'))
+        continuation_message_id = f'{sid}:user'
         # Only set for a fresh (non-continue) turn — a continued turn reuses an
         # OpenCode session that already has full conversation history, so
         # re-injecting/re-recording memory there would be redundant.
         user_prompt_for_memory = None
         if is_continue:
-            prompt = session_row['continue_prompt']
+            import json
+            raw_continuation = session_row['continue_prompt']
+            try:
+                continuation = json.loads(raw_continuation)
+            except (TypeError, json.JSONDecodeError):
+                continuation = {'content': raw_continuation, 'attachments': []}
+            content = (continuation.get('content') or '').strip()
+            attachments = continuation.get('attachments') or []
+            continuation_message_id = continuation.get('message_id') or continuation_message_id
+            agent = continuation.get('agent') or agent
+            model = continuation.get('model') or model
+            prompt, _stored_parts = build_session_prompt(
+                content=content,
+                workspace_path=session_row.get('workspace_path') or '',
+                attachments=attachments,
+                agent_mentions=[],
+                user_id=user_id,
+                role=session_row.get('role'),
+            )
             # Clear continue_prompt immediately so it's not re-sent on retry
             with get_db() as conn:
                 with conn.cursor() as cur:
@@ -777,9 +797,11 @@ class BatchWorker:
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
 
-            # Persist the prompt up front so opening this child mid-run shows the
-            # question immediately.
-            self._persist_user_prompt(sid, prompt)
+            # The internal continuation route already stored the raw user message
+            # atomically with the state transition. Standalone legacy rows do not,
+            # so retain the deterministic fallback for those rows.
+            if not (is_continue and continuation_message_id != f'{sid}:user'):
+                self._persist_user_prompt(sid, prompt)
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
@@ -792,7 +814,8 @@ class BatchWorker:
                 # 整体不可达，重建 session 大概率立刻复现同样的错误。
                 logger.warning('batch send_message dispatch failed sid=%s oc=%s: %s; '
                                'recovering session', sid, oc_session_id, e)
-                oc_session_id = self._recover_session(sid, ws, prompt, agent, model)
+                oc_session_id = self._recover_session(
+                    sid, ws, prompt, agent, model, current_message_id=continuation_message_id)
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
 
             # Persist the conversation progressively from the worker's own REST
@@ -1027,7 +1050,8 @@ class BatchWorker:
             conn.commit()
 
     def _recover_session(self, session_id: str, ws: str, prompt: str,
-                         agent: str, model: str) -> str:
+                         agent: str, model: str,
+                         current_message_id: str | None = None) -> str:
         """OpenCode session 失效时（send_message 派发失败）的恢复：新建
         session + 注入历史摘要 + 更新绑定 + 重发。返回新的 opencode_session_id。
 
@@ -1040,7 +1064,8 @@ class BatchWorker:
         """
         new_oc = opencode_client.create_session(directory=ws)
         self._set_opencode_id(session_id, new_oc, ws)
-        history = render_history_block(session_id, exclude_msg_id=f'{session_id}:user')
+        history = render_history_block(
+            session_id, exclude_msg_id=current_message_id or f'{session_id}:user')
         opencode_client.send_message(new_oc, (history + prompt).strip(),
                                      directory=ws, agent=agent, model=model)
         return new_oc

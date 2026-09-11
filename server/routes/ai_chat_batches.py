@@ -8,9 +8,10 @@ from pathlib import Path
 from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
-from auth import login_required
+from auth import login_required, write_required
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
-                             cleanup_batch_workspaces, WorkspacePathError)
+                              cleanup_batch_workspaces, WorkspacePathError,
+                              safe_resolve)
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
     append_to_batch,
@@ -21,6 +22,7 @@ from utils.batch_repo import (
     list_batches,
     reexecute_child,
     reset_failed_to_pending,
+    continue_child,
     update_batch_config,
 )
 
@@ -195,3 +197,50 @@ def reexecute(batch_id, session_id):
     from utils.batch_engine import get_worker
     get_worker().notify()
     return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/continue')
+@write_required
+def continue_session(batch_id, session_id):
+    """Queue one additional turn for a terminal batch child."""
+    body = request.get_json(silent=True) or {}
+    content = (body.get('content') or '').strip()
+    attachments = body.get('attachments') or []
+    if not content and not attachments:
+        return jsonify({'error': 'content or attachments required',
+                        'code': 'CONTENT_REQUIRED'}), 400
+    if not isinstance(attachments, list) or any(
+            not isinstance(path, str) or not path.strip() for path in attachments):
+        return jsonify({'error': 'attachments must be relative paths',
+                        'code': 'INVALID_ATTACHMENTS'}), 400
+
+    detail = get_batch_detail(g.current_user['userId'], batch_id)
+    if not detail:
+        return jsonify({'error': 'not found', 'code': 'BATCH_CHILD_NOT_FOUND'}), 404
+    child = next((row for row in detail['sessions'] if row['id'] == session_id), None)
+    if not child:
+        return jsonify({'error': 'not found', 'code': 'BATCH_CHILD_NOT_FOUND'}), 404
+    workspace = child.get('workspace_path')
+    if attachments and not workspace:
+        return jsonify({'error': 'child has no workspace', 'code': 'NO_WORKSPACE'}), 400
+    try:
+        for path in attachments:
+            safe_resolve(workspace, path)
+    except (TypeError, ValueError, WorkspacePathError):
+        return jsonify({'error': 'invalid attachment path',
+                        'code': 'INVALID_ATTACHMENTS'}), 400
+
+    agent = (body.get('agent') or '').strip() or None
+    model = (body.get('model') or '').strip() or None
+    try:
+        result = continue_child(
+            batch_id, session_id, g.current_user['userId'], content,
+            attachments, agent, model,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc), 'code': 'CHILD_NOT_TERMINAL'}), 409
+    if result is None:
+        return jsonify({'error': 'not found', 'code': 'BATCH_CHILD_NOT_FOUND'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify({'messageId': result['message_id'], 'status': result['status']}), 202
