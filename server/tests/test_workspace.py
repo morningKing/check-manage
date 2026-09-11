@@ -150,6 +150,90 @@ def test_prepare_interactive_session_workspace_copies_inputs_and_writes_mcp(tmp_
     assert config['model'] == 'provider/model'
 
 
+def test_prepare_workspace_retries_staged_copy_with_handle_settling_delay(tmp_path, monkeypatch):
+    from utils import session_workspace
+
+    root = tmp_path / 'workspaces'
+    staged = root / 'batch-staging' / 'user-1' / 'upload-1' / 'brief.txt'
+    staged.parent.mkdir(parents=True)
+    staged.write_text('brief', encoding='utf-8')
+    real_copy2 = session_workspace.shutil.copy2
+    attempts = iter([PermissionError('locked'), PermissionError('locked'), None])
+    sleeps = []
+
+    def flaky_copy2(source, target):
+        result = next(attempts)
+        if result:
+            raise result
+        return real_copy2(source, target)
+
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(root))
+    monkeypatch.setattr(session_workspace.shutil, 'copy2', flaky_copy2)
+    monkeypatch.setattr(session_workspace.time, 'sleep', sleeps.append)
+
+    session_workspace.prepare_interactive_session_workspace(
+        'user-1', 'session-retry',
+        staged_inputs='batch-staging/user-1/upload-1/brief.txt',
+        mcp_name='check-manage', mcp_url='http://mcp', token='opaque',
+    )
+
+    assert sleeps == [0.3, 0.3]
+
+
+def test_ordinary_and_worker_workspace_configs_have_same_mcp_entries(tmp_path, monkeypatch):
+    import json
+    from utils import batch_engine, session_workspace
+
+    external = {
+        'review-tools': {
+            'type': 'remote', 'url': 'https://review.example/mcp', 'enabled': True,
+        },
+    }
+    monkeypatch.setattr(session_workspace, 'enabled_mcp_config',
+                        lambda reserved_names: external)
+    monkeypatch.setattr(session_workspace, 'internal_mcp_enabled', lambda: True)
+
+    ordinary_root = tmp_path / 'ordinary'
+    worker_root = tmp_path / 'worker'
+    ordinary = session_workspace.prepare_interactive_session_workspace(
+        'user-1', 'ordinary-session', staged_inputs=None,
+        mcp_name='check-manage', mcp_url='http://mcp', token='ordinary-token',
+        model='provider/model', workspace_root=str(ordinary_root),
+    )
+    monkeypatch.setattr(batch_engine, '_workspace_root', lambda: str(worker_root))
+    monkeypatch.setattr(batch_engine, 'MCP_SERVER_URL', 'http://mcp')
+    worker = batch_engine._prepare_workspace(
+        'user-1', 'worker-session', '', token='worker-token', model='provider/model',
+    )
+
+    ordinary_cfg = json.loads((Path(ordinary) / 'opencode.json').read_text())
+    worker_cfg = json.loads((Path(worker) / 'opencode.json').read_text())
+    assert ordinary_cfg['mcp'] == {
+        'check-manage': {
+            'type': 'remote', 'url': 'http://mcp/mcp?token=ordinary-token',
+            'enabled': True,
+        },
+        'review-tools': external['review-tools'],
+    }
+    assert worker_cfg['mcp'] == {
+        'check-manage': {
+            'type': 'remote', 'url': 'http://mcp/mcp?token=worker-token',
+            'enabled': True,
+        },
+        'review-tools': external['review-tools'],
+    }
+    assert ordinary_cfg['model'] == worker_cfg['model'] == 'provider/model'
+
+    monkeypatch.setattr(session_workspace, 'internal_mcp_enabled', lambda: False)
+    no_internal = session_workspace.prepare_interactive_session_workspace(
+        'user-1', 'no-internal', staged_inputs=None,
+        mcp_name='check-manage', mcp_url='http://mcp', token='no-internal-token',
+        workspace_root=str(tmp_path / 'no-internal'),
+    )
+    no_internal_cfg = json.loads((Path(no_internal) / 'opencode.json').read_text())
+    assert no_internal_cfg['mcp'] == external
+
+
 def create_ws(tmp_path):
     from utils.workspace import create_session_workspace
     return create_session_workspace(str(tmp_path), "u", "s")

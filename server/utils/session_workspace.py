@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import time
 from pathlib import Path
 
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
@@ -41,6 +42,7 @@ def _copy_staged_inputs(workspace_path: str, staged_inputs, workspace_root: str)
                 break
             except (PermissionError, OSError) as error:
                 last_error = error
+                time.sleep(0.3)
         if last_error is not None:
             raise last_error
 
