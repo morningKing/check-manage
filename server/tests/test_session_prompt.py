@@ -109,7 +109,11 @@ def test_ordinary_route_and_batch_worker_inputs_have_full_prompt_parity(tmp_path
     assert 'ATTACHED-TEXT' in batch_prompt
     assert 'MENTIONED-TEXT' in batch_prompt
     assert 'attached.bin' in batch_prompt and '工具读取' in batch_prompt
-    assert 'mentioned.bin' in batch_prompt and '工具读取' in batch_prompt
+    mentioned_binary_path = str(tmp_path / 'uploads' / 'mentioned.bin')
+    assert (
+        '[用户用 @ 引用的文件 uploads/mentioned.bin 为二进制或超过内联大小限制，'
+        f'如需请直接用工具读取，工作区绝对路径：{mentioned_binary_path}]'
+    ) in batch_prompt
     assert '[MEMORY memory for user-1]' in batch_prompt
     assert 'outputs/cases.xlsx' in batch_prompt
     assert all(part['type'] in ('text', 'file') for part in batch_parts)

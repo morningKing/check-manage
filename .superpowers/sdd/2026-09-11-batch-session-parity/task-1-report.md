@@ -43,3 +43,17 @@
 
 - This review round required test-only changes; no production behavior changed.
 - Existing `datetime.utcnow()` deprecation warnings remain in `auth.py`.
+
+## Final Reviewer Fix Round
+
+- Strengthened the binary unattached `@uploads/mentioned.bin` assertion in `server/tests/test_session_prompt.py` to require the exact mention-specific pointer prefix and resolved absolute path for that file. It can no longer pass from the attached binary file or generic `工具读取` text.
+
+### Final fix-round verification
+
+- Command: `set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest tests/test_session_prompt.py -v`
+- Output: `2 passed in 0.90s`.
+- `git diff --check`: passed.
+
+### Final fix-round concerns
+
+- Test-only assertion change; no production behavior changed.
