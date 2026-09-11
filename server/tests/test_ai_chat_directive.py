@@ -22,3 +22,10 @@ def test_agent_directive_says_results_render_as_table():
     """Agent should not re-state query data as text; results render as a table."""
     from routes.ai_chat import _AGENT_DIRECTIVE
     assert '表格呈现' in _AGENT_DIRECTIVE
+
+
+def test_session_prompt_exports_the_same_directive():
+    from routes.ai_chat import _AGENT_DIRECTIVE
+    from utils.session_prompt import _AGENT_DIRECTIVE as shared_directive
+
+    assert shared_directive == _AGENT_DIRECTIVE

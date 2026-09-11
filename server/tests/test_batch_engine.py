@@ -193,6 +193,29 @@ def test_prepare_workspace_single_element_list_matches_string_behavior(tmp_path,
     assert [p.name for p in Path(ws, 'uploads').iterdir()] == ['report1.pdf']
 
 
+def test_batch_uses_shared_prompt_contract_before_input_hint(tmp_path, monkeypatch):
+    from utils import session_prompt
+    from utils.batch_engine import BatchWorker
+
+    (tmp_path / 'uploads').mkdir()
+    (tmp_path / 'uploads' / 'input.txt').write_text('BATCH-CONTENT', encoding='utf-8')
+    monkeypatch.setattr(session_prompt, 'search_memory', lambda *args, **kwargs: [])
+    monkeypatch.setattr(session_prompt, 'is_export_intent', lambda content: False)
+
+    prompt, stored = session_prompt.build_session_prompt(
+        content='总结文件', workspace_path=str(tmp_path),
+        attachments=['uploads/input.txt'], agent_mentions=[],
+        user_id='u1', role=None,
+    )
+    hinted = BatchWorker._with_input_hint(
+        prompt, {'batch_input_file': 'batch-staging/u1/input.txt'}
+    )
+
+    assert 'BATCH-CONTENT' in hinted
+    assert stored[-1] == {'type': 'file', 'name': 'input.txt', 'path': 'uploads/input.txt'}
+    assert '[系统规则]' in hinted
+
+
 def test_prepare_workspace_list_raises_on_missing_entry(tmp_path, monkeypatch):
     import utils.batch_engine as eng
 

@@ -624,8 +624,8 @@ def test_send_message_export_intent_fallback_writes_xlsx(setup):
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
     # stub the export so we don't need real DB collections; assert it's invoked + noted
     fake = {'path': 'outputs/inspection-case-x.xlsx', 'rows': 2, 'columns': 6, 'label': '巡检用例'}
-    with patch('routes.ai_chat.resolve_collection_from_text', return_value=('inspection-case', '巡检用例')), \
-         patch('routes.ai_chat.export_collection_to_xlsx', return_value=fake) as exp:
+    with patch('utils.session_prompt.resolve_collection_from_text', return_value=('inspection-case', '巡检用例')), \
+         patch('utils.session_prompt.export_collection_to_xlsx', return_value=fake) as exp:
         resp = client.post(
             '/ai/chat/sessions/sess_x/messages',
             json={'content': '请把巡检用例数据导出成 excel 文件'},
@@ -644,7 +644,7 @@ def test_send_message_non_export_does_not_export(setup):
     ws = ws_root / 'wsnoexport'
     ws.mkdir(parents=True, exist_ok=True)
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc', 'active', str(ws))
-    with patch('routes.ai_chat.export_collection_to_xlsx') as exp:
+    with patch('utils.session_prompt.export_collection_to_xlsx') as exp:
         resp = client.post(
             '/ai/chat/sessions/sess_x/messages',
             json={'content': '你好，帮我解释一下什么是巡检'},

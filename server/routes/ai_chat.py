@@ -48,7 +48,6 @@ from utils.workspace_changes import (git_changes, file_diff, expand_untracked_di
                                      read_file_preview, record_session_files,
                                      get_session_files)
 from utils.workspace_outputs import list_session_files
-from utils.mention_files import inline_file_mentions
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
@@ -58,12 +57,9 @@ from utils.chat_persist import (
 )
 from utils.session_token import generate_token, revoke_token
 from utils.subtask_repo import get_subtask_messages
-from utils.data_export import (
-    is_export_intent, resolve_collection_from_text, export_collection_to_xlsx, ExportError,
-)
+from utils.session_prompt import _AGENT_DIRECTIVE, build_session_prompt
 from utils.py_runner import run_python_in_workspace
 from utils.skill_upload import extract_skill_zip, SkillUploadError
-from utils.memory import search_memory, render_memory_block
 from utils.operation_log import log_operation
 from config import (
     AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL,
@@ -506,56 +502,15 @@ def send_message(sid):
         return jsonify({'error': 'content required', 'code': 'CONTENT_REQUIRED'}), 400
 
     workspace_path = sess[4]
-    # Stored message keeps the user's text + file chips; the agent gets an
-    # augmented prompt with the uploaded files' text content inlined (reliable
-    # and model-agnostic — see notes in send_message tests).
-    stored_parts = [{'type': 'text', 'text': content}] if content else []
-    mem_block = ''
-    if content:
-        mems = search_memory(user['userId'], content, limit=5)
-        mem_block = render_memory_block(mems)
-    prompt = _AGENT_DIRECTIVE + mem_block + content
-    for rel in attachments:
-        name = os.path.basename(rel)
-        stored_parts.append({'type': 'file', 'name': name, 'path': rel})
-        inlined = _read_text_attachment(workspace_path, rel)
-        if inlined is not None:
-            prompt += f"\n\n[用户上传的文件 {name}]\n```\n{inlined}\n```"
-        else:
-            abs_path = _safe_workspace_path(workspace_path, rel)
-            prompt += f"\n\n[用户上传的文件 {name}，路径：{abs_path}（如需要可用工具读取）]"
-
-    # @-mentioned files in the message text (F2): inline their contents for the
-    # agent with the same text/binary handling as attachments. Agent @mentions
-    # (structured agentMentions) and files already attached are skipped; the
-    # stored user text keeps the raw `@path` markers so the bubble renders them
-    # as clickable file chips (the agent sees both the marker and the content).
-    _agent_mention_names = [
-        a.get('name') for a in (body.get('agentMentions') or [])
-        if isinstance(a, dict) and a.get('name')
-    ]
-    prompt += inline_file_mentions(
-        workspace_path, content,
-        agent_names=_agent_mention_names, already_attached=attachments,
+    prompt, stored_parts = build_session_prompt(
+        content=content,
+        workspace_path=workspace_path,
+        attachments=attachments,
+        agent_mentions=body.get('agentMentions')
+        if isinstance(body.get('agentMentions'), list) else [],
+        user_id=user['userId'],
+        role=user.get('role'),
     )
-
-    # Export-intent fallback: if the user asks to export a known collection to
-    # Excel, do it server-side and deterministically (real platform data), so a
-    # real .xlsx lands in outputs/ even when the model doesn't call the MCP tool.
-    # The produced file is surfaced via the outputs/ list on session.idle.
-    role = user.get('role')
-    if is_export_intent(content):
-        match = resolve_collection_from_text(content)
-        if match:
-            collection, label = match
-            try:
-                res = export_collection_to_xlsx(collection, workspace_path, role=role)
-                prompt += (
-                    f"\n\n[系统已将「{label}」的 {res['rows']} 条数据导出为文件 {res['path']}，"
-                    "用户可在「产出文件」处下载。请简要告知用户已导出，不要重复生成脚本。]"
-                )
-            except ExportError:
-                pass  # unknown collection / no permission → let the agent handle it
 
     msg_id = 'msg_' + secrets.token_hex(6)
     with get_db() as conn:
@@ -607,28 +562,6 @@ def send_message(sid):
         'model': effective_model or None,
         'agent': requested_agent or None,
     }), 202
-
-
-def _safe_workspace_path(workspace_path: str, rel: str):
-    try:
-        return safe_resolve(workspace_path, rel)
-    except Exception:
-        return None
-
-
-def _read_text_attachment(workspace_path: str, rel: str, max_bytes: int = 200_000):
-    """Return decoded text of an uploaded file, or None if missing/binary/too big."""
-    abs_path = _safe_workspace_path(workspace_path, rel)
-    if not abs_path or not os.path.isfile(abs_path):
-        return None
-    try:
-        if os.path.getsize(abs_path) > max_bytes:
-            return None
-        with open(abs_path, 'rb') as f:
-            raw = f.read()
-        return raw.decode('utf-8')
-    except (UnicodeDecodeError, OSError):
-        return None
 
 
 def _recover_session_and_resend(client, sid, workspace_path, current_msg_id,
@@ -1439,5 +1372,3 @@ def archive_session(sid):
             return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     log_operation('update', 'ai_chat_session', sid, sid, '归档会话（admin）')
     return jsonify({'ok': True, 'status': 'archived'})
-
-
