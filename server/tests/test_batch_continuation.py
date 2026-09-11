@@ -166,3 +166,61 @@ def test_worker_continuation_uses_existing_workspace_and_shared_prompt_builder(
     assert sends == [('oc-existing', 'BUILT PROMPT', {
         'directory': str(workspace), 'agent': 'reviewer', 'model': 'model/x'})]
     assert queued['message_id']
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT content FROM ai_chat_messages "
+            "WHERE session_id=%s AND role='user'", (sid,))
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        stored_content = rows[0][0]
+        assert stored_content == [{'type': 'text', 'text': 'refine this'},
+                                  {'type': 'file', 'name': 'notes.txt',
+                                   'path': 'notes.txt'}]
+        cur.execute("SELECT continue_prompt FROM ai_chat_sessions WHERE id=%s", (sid,))
+        assert cur.fetchone()[0] is None
+
+
+def test_worker_restart_preserves_continuation_after_process_crash(
+        continuation_user, db_conn, tmp_path, monkeypatch):
+    import utils.batch_engine as engine
+    from utils.batch_engine import BatchWorker
+    from utils.batch_repo import continue_child
+
+    bid, sid = _seed_terminal_child(db_conn, continuation_user)
+    workspace = tmp_path / 'child'
+    workspace.mkdir()
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET workspace_path=%s WHERE id=%s",
+                    (str(workspace), sid))
+    db_conn.commit()
+    continue_child(bid, sid, continuation_user, 'survive restart', [], None, None)
+
+    fake_oc = type('FakeOpenCode', (), {})()
+    fake_oc.send_message = lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt())
+    monkeypatch.setattr(engine, 'opencode_client', fake_oc)
+    monkeypatch.setattr(engine, 'build_session_prompt',
+                        lambda **kwargs: ('BUILT', []))
+    worker = BatchWorker()
+    claimed = worker._claim_pending_sessions(limit=1)
+    with pytest.raises(KeyboardInterrupt):
+        worker._run_one(claimed[0])
+
+    worker._restart_audit()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, continue_prompt FROM ai_chat_sessions WHERE id=%s", (sid,))
+        status, envelope = cur.fetchone()
+        assert status == 'pending'
+        assert json.loads(envelope)['content'] == 'survive restart'
+
+    claimed_again = worker._claim_pending_sessions(limit=1)
+    assert claimed_again[0]['continue_prompt'] == envelope
+    sends = []
+    fake_oc.send_message = lambda oc, prompt, **kwargs: sends.append((oc, prompt, kwargs))
+    fake_oc.list_messages = lambda *args, **kwargs: [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'recovered'}]},
+    ]
+    fake_oc.get_messages = lambda *args, **kwargs: []
+    worker._run_one(claimed_again[0])
+    assert sends == [('oc-existing', 'BUILT', {
+        'directory': str(workspace), 'agent': '', 'model': ''})]

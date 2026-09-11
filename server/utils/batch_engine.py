@@ -700,9 +700,11 @@ class BatchWorker:
                 return
             prompt, agent, model, provision_repo, provision_ref = ctx
 
-        # Detect "continue" mode: opencode_session_id already set + continue_prompt
-        is_continue = bool(session_row.get('opencode_session_id')
-                          and session_row.get('continue_prompt'))
+        # Only batch children use the continuation envelope. Standalone external
+        # /v1/ai-sessions rows also use continue_prompt for their initial prompt.
+        is_continue = bool(batch_id is not None
+                           and session_row.get('opencode_session_id')
+                           and session_row.get('continue_prompt'))
         continuation_message_id = f'{sid}:user'
         # Only set for a fresh (non-continue) turn — a continued turn reuses an
         # OpenCode session that already has full conversation history, so
@@ -728,12 +730,9 @@ class BatchWorker:
                 user_id=user_id,
                 role=session_row.get('role'),
             )
-            # Clear continue_prompt immediately so it's not re-sent on retry
-            with get_db() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL "
-                                "WHERE id = %s", (sid,))
-                conn.commit()
+            # Keep the envelope until _mark_done commits the completed status.
+            # If the process dies while the row is running, _restart_audit can
+            # reset it to pending and the next worker still has the turn data.
         else:
             prompt = self._with_input_hint(prompt, session_row)
             user_prompt_for_memory = prompt
@@ -827,7 +826,8 @@ class BatchWorker:
             preview, final_msg = self._await_finished(oc_session_id, sid, directory=ws,
                                                       on_progress=_persist_progress)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
-            self._mark_done(sid, batch_id, last_preview=preview)
+            self._mark_done(sid, batch_id, last_preview=preview,
+                            clear_continue=is_continue)
             self._notify_scan(session_row, final_msg, ok=True)
             self._notify_child_done(
                 session_row, True, elapsed=time.monotonic() - turn_start)
@@ -1078,11 +1078,16 @@ class BatchWorker:
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                        "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
-                        (f'{session_id}:user', session_id,
-                         _json.dumps([{'type': 'text', 'text': prompt}])),
-                    )
+                        "SELECT 1 FROM ai_chat_messages WHERE session_id=%s "
+                        "AND role='user' LIMIT 1", (session_id,))
+                    has_user_message = cur.fetchone() is not None
+                    if not has_user_message:
+                        cur.execute(
+                            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                            "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
+                            (f'{session_id}:user', session_id,
+                             _json.dumps([{'type': 'text', 'text': prompt}])),
+                        )
                 conn.commit()
         except Exception:
             traceback.print_exc()
@@ -1376,11 +1381,16 @@ class BatchWorker:
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO ai_chat_messages (id, session_id, role, content) "
-                        "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
-                        (f'{session_id}:user', session_id,
-                         _json.dumps([{'type': 'text', 'text': prompt}])),
-                    )
+                        "SELECT 1 FROM ai_chat_messages WHERE session_id=%s "
+                        "AND role='user' LIMIT 1", (session_id,))
+                    has_user_message = cur.fetchone() is not None
+                    if not has_user_message:
+                        cur.execute(
+                            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                            "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
+                            (f'{session_id}:user', session_id,
+                             _json.dumps([{'type': 'text', 'text': prompt}])),
+                        )
                     for mid, content, meta in assistant_rows:
                         cur.execute(
                             "INSERT INTO ai_chat_messages (id, session_id, role, content, meta) "
@@ -1395,12 +1405,13 @@ class BatchWorker:
             traceback.print_exc()
 
     def _mark_done(self, session_id: str, batch_id: str,
-                   last_preview: str | None):
+                   last_preview: str | None, clear_continue: bool = False):
         with get_db() as conn:
             with conn.cursor() as cur:
+                clear_sql = ", continue_prompt = NULL" if clear_continue else ""
                 cur.execute(
                     "UPDATE ai_chat_sessions "
-                    "SET status = 'completed', last_message_preview = %s "
+                    f"SET status = 'completed', last_message_preview = %s{clear_sql} "
                     "WHERE id = %s",
                     (last_preview, session_id),
                 )
