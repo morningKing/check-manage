@@ -21,7 +21,7 @@ The warnings are existing Python 3.12 deprecation warnings from JWT timestamp cr
 
 ## Commits
 
-- Implementation commit: pending at report authoring time.
+- Implementation commit: `923a627` (`feat: prepare batch sessions like interactive sessions`).
 
 ## Concerns
 
