@@ -44,6 +44,7 @@ from utils.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
 )
+from utils.session_workspace import prepare_interactive_session_workspace
 from utils.workspace_changes import (git_changes, file_diff, expand_untracked_dir,
                                      read_file_preview, record_session_files,
                                      get_session_files)
@@ -117,10 +118,7 @@ def create_session():
     project_menu_id = body.get('projectMenuId')
 
     session_id = _new_session_id()
-    workspace_path = create_session_workspace(
-        AI_WORKSPACE_ROOT, user['userId'], session_id,
-    )
-
+    workspace_path = ''
     # 1) insert row (need a row before session_token utility can UPDATE it)
     with get_db() as conn:
         cur = conn.cursor()
@@ -129,19 +127,26 @@ def create_session():
             "(id, user_id, title, workspace_path, session_token, "
             " token_expires_at, project_menu_id, status) "
             "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', %s, 'active')",
-            (session_id, user['userId'], '新会话', workspace_path,
-             '_pending_', project_menu_id),
+             (session_id, user['userId'], '新会话', '',
+              '_pending_', project_menu_id),
         )
     # 2) overwrite the token via the dedicated utility (single source of truth for TTL math)
     token = generate_token(session_id, AI_SESSION_TTL_HOURS)
 
-    # 3) write opencode.json into the workspace so OpenCode (scoped to this dir)
-    #    connects to our MCP server with this session's token. OpenCode has no
-    #    per-session MCP API — config is per-directory (see spec §12).
+    # 3) Prepare the workspace and write opencode.json so OpenCode (scoped to
+    #    this directory) connects with this session's token.
     mcp_url = f"{MCP_SERVER_URL}/mcp?token={token}"
-    write_opencode_config(workspace_path, mcp_name=MCP_NAME, mcp_url=mcp_url,
-                          model=get_default_chat_model(), extra_mcp=_external_mcp(),
-                          include_internal=internal_mcp_enabled())
+    workspace_path = prepare_interactive_session_workspace(
+        user['userId'], session_id, staged_inputs=None, mcp_name=MCP_NAME,
+        mcp_url=mcp_url, token=token, model=get_default_chat_model(),
+        workspace_root=AI_WORKSPACE_ROOT,
+    )
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_sessions SET workspace_path = %s WHERE id = %s",
+            (workspace_path, session_id),
+        )
 
     # 3.5) Inject global skills into the workspace
     try:

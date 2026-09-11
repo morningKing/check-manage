@@ -176,6 +176,27 @@ def test_prepare_workspace_accepts_list_of_paths(tmp_path, monkeypatch):
     assert Path(ws, 'uploads', 'report2.pdf').read_text() == 'report two'
 
 
+def test_prepare_workspace_writes_session_mcp_config(tmp_path, monkeypatch):
+    import json
+    import utils.batch_engine as eng
+
+    root = tmp_path / 'ai-workspaces'
+    staged = root / 'batch-staging' / 'u1' / 'upload-a'
+    staged.mkdir(parents=True)
+    (staged / 'report.txt').write_text('report')
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+
+    ws = eng._prepare_workspace(
+        'u1', 'sid-config', 'batch-staging/u1/upload-a/report.txt',
+        token='worker-token', model='provider/model',
+    )
+
+    config = json.loads(Path(ws, 'opencode.json').read_text(encoding='utf-8'))
+    assert config['mcp']['check-manage']['url'].endswith('token=worker-token')
+    assert config['model'] == 'provider/model'
+    assert Path(ws, 'uploads', 'report.txt').read_text() == 'report'
+
+
 def test_prepare_workspace_single_element_list_matches_string_behavior(tmp_path, monkeypatch):
     """A one-item list and the equivalent plain string produce the same
     uploads/ contents — the list form is a pure generalization, not a

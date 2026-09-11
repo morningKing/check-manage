@@ -128,6 +128,28 @@ def test_write_opencode_config_includes_model_when_given(tmp_path):
     assert cfg["model"] == "opencode/deepseek-v4-flash-free"
 
 
+def test_prepare_interactive_session_workspace_copies_inputs_and_writes_mcp(tmp_path, monkeypatch):
+    import json
+    from utils import session_workspace
+
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path / 'workspaces'))
+    staged = tmp_path / 'workspaces' / 'batch-staging' / 'user-1' / 'upload-1' / 'brief.txt'
+    staged.parent.mkdir(parents=True)
+    staged.write_text('brief', encoding='utf-8')
+
+    workspace = session_workspace.prepare_interactive_session_workspace(
+        'user-1', 'session-1', staged_inputs='batch-staging/user-1/upload-1/brief.txt',
+        mcp_name='check-manage', mcp_url='http://mcp/mcp?token=opaque',
+        token='opaque', model='provider/model',
+    )
+
+    path = Path(workspace)
+    assert (path / 'uploads' / 'brief.txt').read_text(encoding='utf-8') == 'brief'
+    config = json.loads((path / 'opencode.json').read_text(encoding='utf-8'))
+    assert config['mcp']['check-manage']['url'].endswith('token=opaque')
+    assert config['model'] == 'provider/model'
+
+
 def create_ws(tmp_path):
     from utils.workspace import create_session_workspace
     return create_session_workspace(str(tmp_path), "u", "s")

@@ -222,6 +222,11 @@ def batch_workspace_root() -> str:
     return os.environ.get('AI_CHAT_WORKSPACE_ROOT') or AI_WORKSPACE_ROOT
 
 
+def interactive_workspace_root() -> str:
+    """Return the root shared by ordinary and worker-created sessions."""
+    return os.environ.get('AI_CHAT_WORKSPACE_ROOT') or AI_WORKSPACE_ROOT
+
+
 def legacy_batch_workspace_root() -> str:
     """Where batch data lived before the root unification: the old default was
     a cwd-relative 'ai-workspaces', i.e. <server pkg dir>/ai-workspaces under

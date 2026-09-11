@@ -33,10 +33,10 @@ import requests
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
-from config import AI_WORKSPACE_ROOT
-from utils.workspace import (create_session_workspace, _rm_force,
-                             batch_workspace_root, legacy_batch_workspace_root,
-                             resolve_batch_data_path)
+from config import AI_WORKSPACE_ROOT, AI_SESSION_TTL_HOURS, MCP_SERVER_URL
+from utils.workspace import _rm_force, batch_workspace_root
+from utils.session_token import generate_token
+from utils.session_workspace import prepare_interactive_session_workspace
 from utils.workspace_changes import git_changes, record_session_files
 from utils.ai_message_meta import meta_from_info, public_meta
 from utils.session_history import render_history_block
@@ -208,7 +208,8 @@ def _workspace_root() -> str:
 
 
 def _prepare_workspace(user_id: str, session_id: str,
-                       staged_file_path) -> str:
+                       staged_file_path, *, token: str = '', model: str = '',
+                       agent: str = '') -> str:
     """Create the per-session workspace and copy the staged input(s) into uploads/.
 
     `staged_file_path` accepts either a single string (existing callers:
@@ -238,37 +239,13 @@ def _prepare_workspace(user_id: str, session_id: str,
     ENTIRE workspace root (every user's every session) into this session's own
     uploads/ — a real bug, not a graceful no-file case.
     """
-    ws = create_session_workspace(_workspace_root(), user_id, session_id)
-    if not staged_file_path:
-        return ws
-    paths = staged_file_path if isinstance(staged_file_path, list) else [staged_file_path]
-    up = Path(ws) / 'uploads'
-    up.mkdir(parents=True, exist_ok=True)
-    for rel in paths:
-        # Staged paths are stored relative to the batch root. Sessions staged
-        # before the root unification still point into the legacy tree, so
-        # resolve across both — no data migration needed.
-        src = Path(resolve_batch_data_path(
-            rel, roots=(_workspace_root(), legacy_batch_workspace_root())))
-        # On Windows, copying a just-created staging dir can intermittently raise
-        # PermissionError (antivirus / handle-settling contention). Retry a few times.
-        last_err = None
-        for _attempt in range(3):
-            try:
-                if src.is_dir():
-                    # scan-task context directory: copy its whole contents into uploads/
-                    shutil.copytree(str(src), str(up), dirs_exist_ok=True)
-                else:
-                    dst = up / Path(rel).name
-                    shutil.copy2(str(src), str(dst))
-                last_err = None
-                break
-            except (PermissionError, OSError) as e:
-                last_err = e
-                time.sleep(0.3)
-        if last_err is not None:
-            raise last_err
-    return ws
+    return prepare_interactive_session_workspace(
+        user_id, session_id, staged_inputs=staged_file_path,
+        mcp_name='check-manage',
+        mcp_url=f'{MCP_SERVER_URL}/mcp?token={token}',
+        token=token, agent=agent, model=model,
+        workspace_root=_workspace_root(),
+    )
 
 
 def _recompute_batch_status(batch_id: str) -> None:
@@ -764,7 +741,9 @@ class BatchWorker:
                     staged = [f['path'] for f in session_row['input_files']]
                 else:
                     staged = session_row.get('batch_input_file') or ''
-                ws = _prepare_workspace(user_id, sid, staged)
+                token = generate_token(sid, AI_SESSION_TTL_HOURS)
+                ws = _prepare_workspace(user_id, sid, staged, token=token,
+                                        agent=agent, model=model)
                 # Provision project-level agents/skills BEFORE the session starts —
                 # OpenCode binds the agent at prompt time, so the repo must be in
                 # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
