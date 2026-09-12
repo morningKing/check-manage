@@ -8,6 +8,11 @@
       <ElIcon class="subtask-bubble__icon"><MagicStick /></ElIcon>
       <span class="subtask-bubble__agent">{{ agent || '子代理' }}</span>
       <span v-if="description" class="subtask-bubble__desc" :title="description">{{ description }}</span>
+      <span class="subtask-bubble__task-id" :title="`task_id: ${subtaskId}`">task_id: {{ subtaskId }}</span>
+      <button
+        class="subtask-bubble__copy" type="button" title="复制 task_id"
+        @click.stop="onCopyTaskId"
+      >{{ copied ? '已复制' : '复制' }}</button>
       <span class="subtask-bubble__status">
         <ElIcon v-if="status === 'completed'" class="ok"><CircleCheck /></ElIcon>
         <ElIcon v-else-if="status === 'failed'" class="err"><CircleClose /></ElIcon>
@@ -79,6 +84,7 @@ const props = defineProps<{
 }>()
 
 const open = ref(false)
+const copied = ref(false)
 const loading = ref(false)
 const result = ref<SubtaskMessagesResult | null>(null)
 
@@ -92,6 +98,13 @@ async function toggle() {
       loading.value = false
     }
   }
+}
+
+async function onCopyTaskId() {
+  if (!navigator.clipboard?.writeText) return
+  await navigator.clipboard.writeText(props.subtaskId)
+  copied.value = true
+  window.setTimeout(() => { copied.value = false }, 1500)
 }
 
 // 压缩此子代理会话：清掉已缓存的轨迹，压缩完成后重拉即可看到总结
@@ -160,6 +173,17 @@ async function onCompact() {
 .subtask-bubble__desc {
   color: var(--el-text-color-secondary); font-size: 12px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;
+}
+.subtask-bubble__task-id {
+  flex-shrink: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--el-text-color-secondary); font-size: 11px;
+  font-family: var(--el-font-family-mono, monospace);
+}
+.subtask-bubble__copy {
+  flex-shrink: 0; border: 1px solid var(--el-border-color); border-radius: 4px;
+  padding: 1px 5px; background: transparent; color: var(--el-text-color-secondary);
+  font-size: 11px; cursor: pointer;
+  &:hover { color: var(--el-color-primary); border-color: var(--el-color-primary); }
 }
 .subtask-bubble__status { margin-left: auto; flex-shrink: 0; .ok { color: var(--el-color-success); } .err { color: var(--el-color-danger); } .run { color: var(--el-color-primary); } }
 .subtask-bubble__body { padding: 4px 12px 12px; border-top: 1px solid var(--el-border-color-lighter); }

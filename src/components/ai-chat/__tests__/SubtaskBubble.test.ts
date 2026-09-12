@@ -21,6 +21,19 @@ describe('SubtaskBubble', () => {
     expect(getSubtaskMessages).not.toHaveBeenCalled()
   })
 
+  it('标题显示 task_id 并支持复制完整 ID', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    const wrapper = mount(SubtaskBubble, {
+      props: { subtaskId: 'ses_task_123', sessionId: 's-1', agent: 'build',
+               description: 'do x', status: 'completed', depth: 1, fetchFn: getSubtaskMessages },
+    })
+
+    expect(wrapper.find('.subtask-bubble__task-id').text()).toContain('ses_task_123')
+    await wrapper.find('.subtask-bubble__copy').trigger('click')
+    expect(writeText).toHaveBeenCalledWith('ses_task_123')
+  })
+
   it('点击展开后发起一次请求', async () => {
     vi.mocked(getSubtaskMessages).mockResolvedValue({
       subtask: { id: 'ses_x', agent: 'build', description: 'do x', status: 'completed', error: null },

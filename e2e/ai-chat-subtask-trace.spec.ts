@@ -192,6 +192,8 @@ test('batch child delegation shows the subagent conversation in chat', async ({ 
   const bubble = page.locator('.subtask-bubble').first()
   await bubble.waitFor({ state: 'visible', timeout: 120_000 })
   await expect(bubble.locator('.subtask-bubble__agent')).toContainText('general')
+  await expect(bubble.locator('.subtask-bubble__task-id')).toContainText('task_id: ses_')
+  await expect(bubble.locator('.subtask-bubble__copy')).toBeVisible()
   await expect(page.locator('.subtask-bubble--completed').first()).toBeVisible({ timeout: 120_000 })
 
   await bubble.locator('.subtask-bubble__head').click()
