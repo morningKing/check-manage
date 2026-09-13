@@ -107,14 +107,14 @@ OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
 # Windows — NOT `~/.opencode`). Config is loaded ONCE at serve startup and
 # never hot-reloaded (verified: file writes and PATCH /global/config are both
 # invisible to a running serve), so every change needs a serve restart to take
-# effect; the restart lever is SERVE_CMD below since the platform does not
-# otherwise own the opencode process. RESTART_POLICY=auto makes every admin
-# save immediately restart serve (interrupts running turns); manual (default)
-# only marks entries "pending restart" and the admin restarts explicitly.
+# effect. The serve command itself lives in utils/opencode_launch.py — one
+# source shared with proxy.py's managed startup (OPENCODE_BIN /
+# OPENCODE_SERVE_CMD / OPENCODE_SERVE_CWD / OPENCODE_AUTOSTART in server/.env).
+# RESTART_POLICY=auto makes every admin save immediately restart serve
+# (interrupts running turns); manual (default) only marks entries "pending
+# restart" and the admin restarts explicitly.
 OPENCODE_GLOBAL_DIR    = os.getenv('OPENCODE_GLOBAL_DIR', '').strip() or os.path.join(
     os.path.expanduser('~'), '.config', 'opencode')
-OPENCODE_SERVE_CMD     = os.getenv('OPENCODE_SERVE_CMD', 'opencode serve').strip()
-OPENCODE_SERVE_CWD     = os.getenv('OPENCODE_SERVE_CWD', '').strip() or os.path.expanduser('~')
 OPENCODE_RESTART_POLICY = os.getenv('OPENCODE_RESTART_POLICY', 'manual').strip().lower()
 # Health probe window after a restart before we give up reporting failure.
 OPENCODE_RESTART_TIMEOUT_SEC = _to_int(os.getenv('OPENCODE_RESTART_TIMEOUT_SEC'), 60)

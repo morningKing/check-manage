@@ -42,7 +42,8 @@ def overview():
     health = ocg.serve_health()
     skills = ocg.merged_skills()
     agents = ocg.merged_agents()
-    from config import (OPENCODE_RESTART_POLICY, OPENCODE_SERVE_CMD)
+    from config import OPENCODE_RESTART_POLICY
+    from utils import opencode_launch
     return jsonify({
         'globalDir': ocg.global_dir(),
         'skillsDir': ocg.skills_dir(),
@@ -52,7 +53,7 @@ def overview():
         'serve': health,
         'pendingChanges': skills['pendingCount'] + agents['pendingCount'],
         'restartPolicy': OPENCODE_RESTART_POLICY,
-        'serveCmd': OPENCODE_SERVE_CMD,
+        'serveCmd': opencode_launch.serve_cmd_display(),
         'activeWorkload': ocg.active_workload(),
     })
 

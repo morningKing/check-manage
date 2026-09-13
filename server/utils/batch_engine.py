@@ -21,7 +21,10 @@ so all three calls resolve through the patched object.
 import logging
 import os
 import shutil
+import sys
 import subprocess
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 import threading
 import time
 import traceback
@@ -1005,7 +1008,8 @@ class BatchWorker:
             args += ['--branch', ref]
         args += [repo, dest]
         try:
-            out = subprocess.run(args, capture_output=True, timeout=180)
+            out = subprocess.run(args, capture_output=True, timeout=180,
+                                 creationflags=_NO_WINDOW)
             if out.returncode != 0:
                 err = (out.stderr or b'').decode('utf-8', 'replace').strip()
                 return f'预置仓库克隆失败 (rc={out.returncode}): {err[:300]}'

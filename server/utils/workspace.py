@@ -7,9 +7,14 @@ per-directory config (see spec §12).
 """
 
 import os
+import sys
 import json
 import shutil
 import subprocess
+import subprocess
+import sys
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 from pathlib import Path
 
 from config import AI_WORKSPACE_ROOT
@@ -83,6 +88,7 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
             subprocess.run(
                 ["git", "init", "-q"], cwd=str(p),
                 check=False, timeout=10, capture_output=True,
+                creationflags=_NO_WINDOW,
             )
             # Commit the auto-generated .gitignore so it doesn't pollute the
             # 变更文件 panel with two perennial "untracked" entries on every
@@ -91,12 +97,14 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
             subprocess.run(
                 ["git", "add", ".gitignore"], cwd=str(p),
                 check=False, timeout=10, capture_output=True,
+                creationflags=_NO_WINDOW,
             )
             subprocess.run(
                 ["git", "-c", "user.name=check-manage",
                  "-c", "user.email=check-manage@local",
                  "commit", "-q", "-m", "init"],
                 cwd=str(p), check=False, timeout=10, capture_output=True,
+                creationflags=_NO_WINDOW,
             )
         except Exception:
             pass  # fail-open: missing git is non-fatal

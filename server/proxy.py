@@ -13,6 +13,11 @@ import urllib.request
 import urllib.error
 import subprocess
 import time
+
+# 子进程一律不带控制台窗口：proxy 常由计划任务/服务/后台脚本拉起，没有可继承
+# 的 console，Windows 会为每个 console 子进程（git/python/opencode）新建可见
+# 窗口。非 Windows 传 0 无害。
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 import signal
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -23,6 +28,7 @@ from dotenv import load_dotenv
 # routes/open_api_batches.py 的 before_request）。该模块零依赖，可以在这个
 # 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
 from utils.upload_limits import body_limit_for_path
+from utils import opencode_launch
 
 # Load server/.env so PROXY_*/BACKEND_URL/MCP_*/CORS_* take effect from the file
 # (this process is separate from Flask's config.py, which loads it for the app).
@@ -38,8 +44,10 @@ DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'
 
 # AI chat dependencies (see CLAUDE.md "AI Agent Chat"):
 #   - MCP server: standalone service started here, has its OWN venv.
-#   - OpenCode: external agent runtime (`opencode serve`), NOT started here
-#     because it holds provider API keys in its own global config.
+#   - OpenCode: agent runtime started here when not already reachable
+#     (OPENCODE_BIN/OPENCODE_SERVE_CMD in server/.env; OPENCODE_AUTOSTART=0
+#     restores the old probe-and-warn-only behavior). It holds provider API
+#     keys in its own global config (~/.config/opencode), which we never touch.
 MCP_HEALTH_URL = os.environ.get('MCP_HEALTH_URL', 'http://127.0.0.1:3003/health')
 OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 
@@ -47,6 +55,7 @@ OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 # diagnosable trace. .gitignore already excludes *.log.
 BACKEND_LOG = os.path.join(os.path.dirname(__file__), 'proxy-backend.log')
 MCP_LOG = os.path.join(os.path.dirname(__file__), 'proxy-mcp.log')
+OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'proxy-opencode.log')
 
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
@@ -344,6 +353,7 @@ def start_backend():
          f'serve(app.app, host="0.0.0.0", port={_backend_port()}, threads={threads})'],
         cwd=server_dir,
         env=env,
+        creationflags=_NO_WINDOW,
         stdout=log,
         stderr=subprocess.STDOUT,
     )
@@ -424,6 +434,7 @@ def start_mcp():
         env=os.environ.copy(),
         stdout=log,
         stderr=subprocess.STDOUT,
+        creationflags=_NO_WINDOW,
     )
     return proc
 
@@ -444,8 +455,7 @@ def wait_for_mcp(url, timeout=15):
 
 
 def check_opencode(base_url, timeout=3):
-    """Probe whether OpenCode is reachable. It's an external prerequisite (holds
-    provider API keys in its own global config); we only warn if it's down."""
+    """Probe whether OpenCode is reachable."""
     try:
         urllib.request.urlopen(base_url, timeout=timeout)
         return True
@@ -453,6 +463,44 @@ def check_opencode(base_url, timeout=3):
         return True  # any HTTP response means it's up
     except Exception:
         return False
+
+
+def start_opencode():
+    """Start `opencode serve` as a managed subprocess (killed on shutdown).
+
+    Returns the process, or None when nothing should be launched: OpenCode is
+    already reachable elsewhere (hand-launched / service-managed — we must not
+    own or kill that one) or OPENCODE_AUTOSTART is disabled.
+    """
+    target, use_shell = opencode_launch.serve_launch()
+    if sys.platform == 'win32' and not use_shell \
+            and '/' not in target[0] and '\\' not in target[0] \
+            and not target[0].lower().endswith(('.exe', '.cmd', '.bat')):
+        # Bare name on Windows: CreateProcess can't resolve npm's .cmd wrapper
+        # without a shell — point OPENCODE_BIN at the real .exe to avoid a
+        # confusingly empty proxy-opencode.log.
+        print('       [HINT] OPENCODE_BIN 是裸命令名，Windows 下无法直接以 argv 拉起，'
+              '建议在 server/.env 配置 opencode.exe 的完整路径', flush=True)
+    log = open(OPENCODE_LOG, 'w', encoding='utf-8', errors='replace')
+    return subprocess.Popen(
+        target,
+        shell=use_shell,
+        cwd=opencode_launch.serve_cwd(),
+        env=os.environ.copy(),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=_NO_WINDOW,
+    )
+
+
+def wait_for_opencode(base_url, timeout=20):
+    """Wait until OpenCode responds at all."""
+    start = time.time()
+    while time.time() - start < timeout:
+        if check_opencode(base_url, timeout=2):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def main():
@@ -469,7 +517,7 @@ def main():
     procs = []
 
     # Start Flask backend
-    print('[1/3] Starting backend (Flask) ...', flush=True)
+    print('[1/4] Starting backend (Flask) ...', flush=True)
     backend_proc = start_backend()
     procs.append(backend_proc)
     if wait_for_backend(BACKEND_URL):
@@ -486,7 +534,7 @@ def main():
               f'see {BACKEND_LOG}', flush=True)
 
     # Start MCP server (AI chat capability provider)
-    print('[2/3] Starting MCP server ...', flush=True)
+    print('[2/4] Starting MCP server ...', flush=True)
     mcp_proc = start_mcp()
     if mcp_proc is not None:
         procs.append(mcp_proc)
@@ -500,15 +548,32 @@ def main():
         else:
             print('       [WARN] MCP server may not be ready yet', flush=True)
 
-    # OpenCode is an external prerequisite for AI chat: probe and warn only.
+    # OpenCode agent runtime: if already reachable we leave it alone (whoever
+    # started it owns it); otherwise launch it here as a managed subprocess.
+    print('[3/4] Starting OpenCode agent runtime ...', flush=True)
     if check_opencode(OPENCODE_BASE_URL):
         print(f'       OpenCode reachable ({OPENCODE_BASE_URL})', flush=True)
     else:
-        print(f'       [WARN] OpenCode not reachable at {OPENCODE_BASE_URL}; '
-              'AI chat needs it (run: opencode serve)', flush=True)
+        oc_proc = start_opencode()
+        if oc_proc is None:
+            print(f'       [WARN] OpenCode not reachable at {OPENCODE_BASE_URL} and '
+                  'OPENCODE_AUTOSTART is disabled; AI chat needs it '
+                  '(run: opencode serve)', flush=True)
+        elif wait_for_opencode(OPENCODE_BASE_URL):
+            procs.append(oc_proc)
+            print(f'       OpenCode started ({OPENCODE_BASE_URL}, '
+                  f'cmd: {opencode_launch.serve_cmd_display()})', flush=True)
+        elif _report_dead_subprocess('OpenCode', oc_proc, OPENCODE_LOG):
+            # AI chat only; the rest of the app still serves.
+            print('       [WARN] OpenCode failed to start; AI chat disabled '
+                  '(rest of the app still serves).', flush=True)
+        else:
+            procs.append(oc_proc)
+            print('       [WARN] OpenCode slow to respond but still running; '
+                  f'see {OPENCODE_LOG}', flush=True)
 
     # Start reverse proxy (threaded so long-lived SSE streams don't block others)
-    print('[3/3] Starting reverse proxy ...', flush=True)
+    print('[4/4] Starting reverse proxy ...', flush=True)
     server = ThreadingHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
     print(f'       Serving at http://localhost:{PROXY_PORT}', flush=True)
     print(f'       Static files: {DIST_DIR}', flush=True)

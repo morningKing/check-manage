@@ -771,12 +771,16 @@ def restart_serve() -> dict:
     """Restart `opencode serve` so freshly written skill/agent files load.
 
     The platform does not otherwise own this process, so the sequence is:
-    kill whatever listens on the OPENCODE_BASE_URL port → spawn SERVE_CMD
-    (admin-configured env, hence shell=True is acceptable) detached → poll
-    /global/health until healthy. Raises OpenCodeGlobalError('RESTART_FAILED')
-    if health never comes back — the admin then restarts by hand.
+    kill whatever listens on the OPENCODE_BASE_URL port → spawn via the shared
+    launch config (utils.opencode_launch — same OPENCODE_BIN/SERVE_CMD the
+    proxy uses) → poll /global/health until healthy. Raises
+    OpenCodeGlobalError('RESTART_FAILED') if health never comes back — the
+    admin then restarts by hand.
     """
     from urllib.parse import urlparse
+
+    from utils import opencode_launch
+
     port = urlparse(config.OPENCODE_BASE_URL).port or 4096
 
     pids = _serve_pids_on_port(port)
@@ -784,11 +788,11 @@ def restart_serve() -> dict:
         _kill_pids(pids)
         time.sleep(1.0)
 
+    target, use_shell = opencode_launch.serve_launch()
     creationflags = 0
     if sys.platform == 'win32':
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(config.OPENCODE_SERVE_CMD, shell=True,
-                     cwd=config.OPENCODE_SERVE_CWD,
+    subprocess.Popen(target, shell=use_shell, cwd=opencode_launch.serve_cwd(),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=creationflags,
                      start_new_session=(sys.platform != 'win32'))
@@ -806,4 +810,4 @@ def restart_serve() -> dict:
     raise OpenCodeGlobalError(
         'RESTART_FAILED',
         f'OpenCode 已重新拉起但 {config.OPENCODE_RESTART_TIMEOUT_SEC}s 内未通过健康检查，'
-        f'请手动确认 serve 状态（命令：{config.OPENCODE_SERVE_CMD}）', 502)
+        f'请手动确认 serve 状态（命令：{opencode_launch.serve_cmd_display()}）', 502)

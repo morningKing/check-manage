@@ -15,6 +15,9 @@ import os
 import re
 import sys
 import subprocess
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
+
 import tempfile
 
 _TIMEOUT = 30
@@ -63,6 +66,7 @@ def run_python_in_workspace(code: str, workspace_path: str, timeout: int = _TIME
             proc = subprocess.run(
                 [_interpreter(), script],
                 cwd=workspace_path, capture_output=True, text=True, timeout=timeout,
+                creationflags=_NO_WINDOW,
             )
             stdout, stderr, rc, timed_out = proc.stdout, proc.stderr, proc.returncode, False
         except subprocess.TimeoutExpired as e:

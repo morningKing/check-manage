@@ -12,6 +12,10 @@ files in the session's outputs/ so the user can download them."""
 import os
 import sys
 import subprocess
+import sys
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
+
 import tempfile
 
 import mcp.types as types
@@ -100,6 +104,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             proc = subprocess.run(
                 [_interpreter(), script],
                 cwd=ws, capture_output=True, text=True, timeout=_TIMEOUT,
+                creationflags=_NO_WINDOW,
             )
             stdout, stderr, rc = proc.stdout, proc.stderr, proc.returncode
             timed_out = False
