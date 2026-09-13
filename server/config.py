@@ -101,6 +101,24 @@ AI_CHAT_NOTIFY_MIN_SECONDS = _to_int(os.getenv('AI_CHAT_NOTIFY_MIN_SECONDS'), 30
 # editing this file. Override via OPENCODE_MODEL env var or `server/.env`.
 OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
 
+# OpenCode global runtime management (admin「OpenCode 运行时」page).
+# GLOBAL_DIR is where `opencode serve` loads global `skill/<name>/SKILL.md` and
+# `agent/<name>.md` from (verified v1.15.1: `~/.config/opencode` even on
+# Windows — NOT `~/.opencode`). Config is loaded ONCE at serve startup and
+# never hot-reloaded (verified: file writes and PATCH /global/config are both
+# invisible to a running serve), so every change needs a serve restart to take
+# effect; the restart lever is SERVE_CMD below since the platform does not
+# otherwise own the opencode process. RESTART_POLICY=auto makes every admin
+# save immediately restart serve (interrupts running turns); manual (default)
+# only marks entries "pending restart" and the admin restarts explicitly.
+OPENCODE_GLOBAL_DIR    = os.getenv('OPENCODE_GLOBAL_DIR', '').strip() or os.path.join(
+    os.path.expanduser('~'), '.config', 'opencode')
+OPENCODE_SERVE_CMD     = os.getenv('OPENCODE_SERVE_CMD', 'opencode serve').strip()
+OPENCODE_SERVE_CWD     = os.getenv('OPENCODE_SERVE_CWD', '').strip() or os.path.expanduser('~')
+OPENCODE_RESTART_POLICY = os.getenv('OPENCODE_RESTART_POLICY', 'manual').strip().lower()
+# Health probe window after a restart before we give up reporting failure.
+OPENCODE_RESTART_TIMEOUT_SEC = _to_int(os.getenv('OPENCODE_RESTART_TIMEOUT_SEC'), 60)
+
 
 def get_default_chat_model() -> str:
     """Get the default chat model, preferring the database setting over env var.
