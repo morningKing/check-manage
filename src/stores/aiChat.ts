@@ -704,6 +704,31 @@ export const useAiChatStore = defineStore('aiChat', {
           }
           break
         }
+        case 'message.part.delta': {
+          // OpenCode ≥1.15 的流式协议:part 创建时发一次 part.updated(带类型),
+          // 之后内容追加只发 part.delta 增量片段({field, delta})。只处理
+          // field==='text'(text 与 reasoning part 的正文都在 text 字段,类型
+          // 已由创建时的 updated 快照定好);state/time 等结构性字段无法按
+          // 字符串增量拼装,留到 idle 的 _reloadPersisted 全量校正。
+          const { messageID, partID, field, delta } = data ?? {}
+          if (!partID || field !== 'text' || typeof delta !== 'string' || !delta) break
+          if (!_assistantMsgIds[sid]?.has(messageID)) break
+          const list = this.messages[sid] ?? []
+          const msg = list.length ? list[list.length - 1] : undefined
+          const idx = _partIndexById[sid]?.[partID]
+          const cur = msg && idx !== undefined ? msg.content[idx] : null
+          if (cur?.type === 'reasoning') {
+            // _upsertReasoning 语义是"该 part 的完整文本"——旧值 + 增量
+            const prev = _reasoningByPart[sid]?.[partID] ?? ''
+            this._upsertReasoning(sid, partID, prev + delta)
+          } else if (cur?.type === 'text') {
+            this._upsertAssistantPart(sid, partID, { ...cur, text: (cur.text ?? '') + delta })
+          } else {
+            // part 创建快照丢失时按 text 兜底(idle 后全量校正)
+            this._upsertAssistantPart(sid, partID, { type: 'text', text: delta })
+          }
+          break
+        }
         case 'session.idle':
           this.streaming[sid] = false
           this.thinking[sid] = false

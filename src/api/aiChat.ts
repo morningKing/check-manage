@@ -403,9 +403,13 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
         h.onEvent({ event: 'message', data: e.data })
       }
     }
-    // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy
+    // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy.
+    // OpenCode ≥1.15 streams token deltas as `message.part.delta` (part creation
+    // still arrives as a `message.part.updated` snapshot); without this listener
+    // every turn renders all at once after session.idle instead of streaming.
     for (const name of [
-      'message.updated', 'message.part.updated', 'session.idle', 'session.error',
+      'message.updated', 'message.part.updated', 'message.part.delta',
+      'session.idle', 'session.error',
       'question.asked', 'question.replied', 'question.rejected',
     ]) {
       es.addEventListener(name, (e: MessageEvent) => {
