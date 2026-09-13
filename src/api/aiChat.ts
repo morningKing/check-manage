@@ -239,6 +239,12 @@ export function listFiles(id: string) {
   )
 }
 
+/** 批任务子会话 → 所属批次 id(404 = 非批子会话)。通知/URL 直开批子会话用。 */
+export function getBatchOfSession(sessionId: string) {
+  return get<{ batchId: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(sessionId)}/batch`, undefined, { silent: true })
+}
+
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean; ok: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },

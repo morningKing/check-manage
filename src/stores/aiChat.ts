@@ -14,6 +14,7 @@ import {
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
   getCommands, postCommand, abortSession, deleteFromMessage, compactSession as apiCompactSession,
+  getSubtaskMessages,
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
   createEventStream,
@@ -22,6 +23,7 @@ import {
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
+import { latestTodosFromMessages, type TodoItem } from '@/utils/todos'
 import { computeUsage, EMPTY_USAGE, type SessionUsage } from '@/utils/aiUsage'
 
 interface SessionMeta {
@@ -64,6 +66,12 @@ interface State {
   agentBySession: Record<string, string>
   /** Cached list of subagents fetched by AiChatView. Used to resolve @ mentions on send. */
   subagents: AgentInfo[]
+  /**
+   * 每个子代理的执行计划(todo 快照),由轮询从子会话消息中提取。
+   * key: 父会话 id;内层 key: 子会话 id。子代理的 SSE 事件不流经前端,
+   * 这里的数据靠 pollSubtaskTodos 的轻量 REST 轮询维护。
+   */
+  subtaskTodoGroups: Record<string, Record<string, SubtaskTodoGroup>>
   outputs: Record<string, AiFile[]>
   /** 用户上传到会话 uploads/ 目录的文件（与 agent 产出分开列示，实时刷新）。 */
   uploads: Record<string, AiFile[]>
@@ -94,6 +102,8 @@ interface State {
    */
   usageBySession: Record<string, SessionUsage>
   _stream: { close(): void } | null
+  /** 当前 SSE 订阅所属的会话 id(批子会话 live-poll 的让位依据) */
+  streamSid: string | null
 }
 
 let _streamingAssistantMsgId: Record<string, string | null> = {}
@@ -108,6 +118,19 @@ let _subtaskPartByMsg: Record<string, Record<string, string>> = {}
 // 点发送会用旧 activeSessionId 把消息发进上一个会话。记录进行中的创建，
 // sendUserMessage 先等它落定。
 let _pendingNewSession: Promise<string> | null = null
+// 子代理 todo 轮询进行中的会话(防重入;子代理的 SSE 事件不流经前端,
+// 实测 1.18.30 下 446 帧全属父会话,所以走 REST 轻轮询)。
+const _subTodoPolling: Record<string, boolean> = {}
+
+export interface SubtaskTodoGroup {
+  childSid: string
+  agent: string | null
+  description: string | null
+  status: 'running' | 'completed' | 'failed'
+  /** 委托气泡所在父消息下标(todo 定位按钮的跳转锚点) */
+  delegateMsgIdx: number
+  todos: TodoItem[] | null
+}
 
 export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
@@ -121,6 +144,7 @@ export const useAiChatStore = defineStore('aiChat', {
     modelBySession: {},
     agentBySession: {} as Record<string, string>,
     subagents: [] as AgentInfo[],
+    subtaskTodoGroups: {} as Record<string, Record<string, SubtaskTodoGroup>>,
     outputs: {},
     uploads: {},
     changes: {} as Record<string, ChangedFile[]>,
@@ -131,6 +155,7 @@ export const useAiChatStore = defineStore('aiChat', {
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
     _stream: null,
+    streamSid: null,
   }),
 
   getters: {
@@ -599,6 +624,7 @@ export const useAiChatStore = defineStore('aiChat', {
 
     _openStream(sid: string) {
       this._closeStream()
+      this.streamSid = sid
       this._stream = createEventStream(sid, {
         onEvent: ({ event, data }) => this._handleEvent(sid, event, data as any),
         onError: () => { /* api layer handles reconnect */ },
@@ -611,9 +637,58 @@ export const useAiChatStore = defineStore('aiChat', {
       })
     },
 
+    /**
+     * 子代理 todo 轮询:对父会话消息流中 status==='running' 的委托气泡,
+     * 每 3s 拉一次子会话消息并提取最新 todowrite 快照。子代理的 SSE 事件
+     * 不流经前端(实测),这是保持父面板实时可见的唯一通道。
+     * 全部委托结束(无 running)后停止;父回合 idle 后由 idle 分支再收尾一轮。
+     */
+    async pollSubtaskTodos(sid: string) {
+      if (_subTodoPolling[sid]) return
+      _subTodoPolling[sid] = true
+      try {
+        for (let round = 0; round < 400; round++) {
+          const list = this.messages[sid] ?? []
+          // 1) 从父消息流重建子代理分组(保留委托元数据与定位锚点)
+          const groups: Record<string, SubtaskTodoGroup> = {}
+          for (let mi = 0; mi < list.length; mi++) {
+            const m = list[mi]
+            for (const p of (m.content ?? [])) {
+              if (p.type === 'subtask_use' && p.subtaskId) {
+                groups[p.subtaskId] = {
+                  childSid: p.subtaskId,
+                  agent: p.agent ?? null,
+                  description: p.description ?? null,
+                  status: p.status ?? 'running',
+                  delegateMsgIdx: mi,
+                  todos: this.subtaskTodoGroups[sid]?.[p.subtaskId]?.todos ?? null,
+                }
+              }
+            }
+          }
+          const active = Object.values(groups).filter(g => g.status === 'running')
+          // 2) 拉每个(含刚完成的)子代理的最新 todo 快照
+          for (const g of Object.values(groups)) {
+            try {
+              const res = await getSubtaskMessages(sid, g.childSid)
+              const todos = latestTodosFromMessages(res.messages ?? [])
+              if (todos) g.todos = todos
+            } catch { /* 子会话消息暂不可得,下轮再试 */ }
+          }
+          this.subtaskTodoGroups[sid] = groups
+          // 3) 没有运行中的委托即停止
+          if (!active.length || round >= 399) break
+          await new Promise(r => setTimeout(r, 3000))
+        }
+      } finally {
+        _subTodoPolling[sid] = false
+      }
+    },
+
     _closeStream() {
       this._stream?.close()
       this._stream = null
+      this.streamSid = null
     },
 
     _handleEvent(sid: string, event: string, data: any) {
@@ -650,6 +725,8 @@ export const useAiChatStore = defineStore('aiChat', {
             // subtask_use 气泡（自然语言委托只有这个 part，没有 subtask part）。
             const childSid = st.metadata?.sessionId
             if (part.tool === 'task' && childSid) {
+              // 委托发生/状态推进:启动(或继续)子代理 todo 轮询
+              void this.pollSubtaskTodos(sid)
               ;(_toolChildByMsg[sid] ?? (_toolChildByMsg[sid] = {}))[part.messageID] = childSid
               const subPartId = _subtaskPartByMsg[sid]?.[part.messageID]
               if (subPartId) {
@@ -732,6 +809,7 @@ export const useAiChatStore = defineStore('aiChat', {
         case 'session.idle':
           this.streaming[sid] = false
           this.thinking[sid] = false
+          void this.pollSubtaskTodos(sid)  // 收尾:拉取子代理的最终 todo 快照
           this._resetStreamState(sid)
           this.pendingQuestion[sid] = null  // defensive: a finished turn can't still have one pending
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/

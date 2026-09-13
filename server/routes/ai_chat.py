@@ -763,6 +763,25 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+@ai_chat_bp.route('/sessions/<sid>/batch', methods=['GET'])
+@login_required
+def batch_of_session(sid):
+    """批任务子会话 → 所属批次 id(归属校验)。供前端从通知/URL 直开批子会话:
+    批子会话不在普通会话列表里,前端需要先选中批次再以轮询方式打开子会话。"""
+    user = flask_g.current_user
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.batch_id FROM ai_chat_sessions s "
+                "WHERE s.id = %s AND s.user_id = %s AND s.batch_id IS NOT NULL",
+                (sid, user['userId']),
+            )
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'not a batch child session', 'code': 'NOT_BATCH_CHILD'}), 404
+    return jsonify({'batchId': row[0]})
+
+
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
 def sse_events(sid):
