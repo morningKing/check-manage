@@ -664,7 +664,7 @@ CREATE TABLE IF NOT EXISTS ai_chat_batches (
   provision_repo TEXT,
   provision_ref  TEXT,
   status      TEXT NOT NULL DEFAULT 'pending'
-              CHECK (status IN ('pending','running','completed','partial','failed')),
+              CHECK (status IN ('pending','running','paused','completed','partial','failed')),
   total       INT  NOT NULL DEFAULT 0,
   done        INT  NOT NULL DEFAULT 0,
   failed      INT  NOT NULL DEFAULT 0,
@@ -685,6 +685,12 @@ ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS provision_ref TEXT;
 -- terminal status. NULL callback_url means "no callback, poll instead".
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS callback_url TEXT;
 ALTER TABLE ai_chat_batches ADD COLUMN IF NOT EXISTS callback_secret TEXT;
+-- 'paused' joined the status vocabulary later (批任务「暂停」，非终态、可
+-- resume)。老库带的是没有它的 CHECK 约束 —— 幂等地替换（与上面 CREATE 里
+-- 的定义保持一致；重复执行只是无谓地重建一次约束）。
+ALTER TABLE ai_chat_batches DROP CONSTRAINT IF EXISTS ai_chat_batches_status_check;
+ALTER TABLE ai_chat_batches ADD CONSTRAINT ai_chat_batches_status_check
+  CHECK (status IN ('pending','running','paused','completed','partial','failed'));
 """
 
 AI_CHAT_SESSIONS_BATCH_COLUMNS_DDL = """
@@ -771,6 +777,11 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS input_files JSONB;
 -- terminal value straight into that column — see utils/batch_engine.py's
 -- claim-time sweep + mid-run _await_finished check.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE;
+-- Cooperative-PAUSE flag (批任务「暂停」): same mechanism as cancel_requested
+-- (set by the route, honored by the claim-time sweep + mid-run poll check in
+-- batch_engine), but the worker lands the child on the NON-terminal 'paused'
+-- status — no failed-counter change, batch shows paused, resume restarts it.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS pause_requested BOOLEAN NOT NULL DEFAULT FALSE;
 -- Admin session list index: covers ORDER BY created_at DESC with optional
 -- status/source_type filters. Partial index on status keeps it small.
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list

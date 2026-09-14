@@ -89,14 +89,16 @@ def list_batches(user_id: str, *, page: int, page_size: int,
     if api_key_id is not None:
         scope += " AND api_key_id = %s"
         base.append(api_key_id)
-    # cancelled 计数：failed 里混着 cancelled（取消也计入 failed 聚合），
-    # UI 需要「继续运行」按钮的显隐判据 —— 只有 cancelled 可被 resume。
+    # cancelled / paused 计数：failed 里混着 cancelled（取消也计入 failed 聚合），
+    # UI 需要「继续运行」按钮的显隐判据 —— cancelled/paused 都可被 resume。
     cancelled_sub = ("(SELECT count(*) FROM ai_chat_sessions s "
                      " WHERE s.batch_id = ai_chat_batches.id AND s.status = 'cancelled')")
+    paused_sub = ("(SELECT count(*) FROM ai_chat_sessions s "
+                  " WHERE s.batch_id = ai_chat_batches.id AND s.status = 'paused')")
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"SELECT *, {cancelled_sub} AS cancelled "
+                f"SELECT *, {cancelled_sub} AS cancelled, {paused_sub} AS paused "
                 f"FROM ai_chat_batches {scope} "
                 "ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 (*base, page_size, offset),
@@ -111,9 +113,14 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                      api_key_id: str | None = None) -> dict | None:
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            sql = "SELECT *, (SELECT count(*) FROM ai_chat_sessions s " \
-                  "WHERE s.batch_id = ai_chat_batches.id AND s.status='cancelled') " \
-                  "AS cancelled FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+            sql = (
+                "SELECT *, "
+                "  (SELECT count(*) FROM ai_chat_sessions s "
+                "   WHERE s.batch_id = ai_chat_batches.id AND s.status='cancelled') AS cancelled, "
+                "  (SELECT count(*) FROM ai_chat_sessions s "
+                "   WHERE s.batch_id = ai_chat_batches.id AND s.status='paused') AS paused "
+                "FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+            )
             params = [batch_id, user_id]
             if api_key_id is not None:
                 sql += " AND api_key_id = %s"
@@ -170,6 +177,8 @@ def cancel_batch(user_id: str, batch_id: str, *,
     Returns updated batch detail, or None if not found / not owned.
 
     取消不是终局：resume_batch 可以把 cancelled 子任务恢复继续执行。
+    对已暂停（paused）的子任务直接落成 cancelled（它们不在 worker 的轮询里，
+    只能在路由层同步翻状态），并计入 failed 聚合。
     """
     sql = "SELECT status FROM ai_chat_batches WHERE id=%s AND user_id=%s"
     params = [batch_id, user_id]
@@ -189,6 +198,63 @@ def cancel_batch(user_id: str, batch_id: str, *,
                 "WHERE batch_id = %s AND status IN ('pending', 'running')",
                 (batch_id,),
             )
+            # 已暂停的子任务不在 worker 的任何扫描路径里（不 claim、不轮询），
+            # 中断要在这里同步落成 cancelled。
+            cur.execute(
+                "UPDATE ai_chat_sessions SET status = 'cancelled', "
+                "  error_message = '已被调用方取消' "
+                "WHERE batch_id = %s AND status = 'paused'",
+                (batch_id,),
+            )
+            paused_n = cur.rowcount
+            if paused_n:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET failed = failed + %s WHERE id = %s",
+                    (paused_n, batch_id),
+                )
+        conn.commit()
+    if paused_n:
+        _recompute_batch_status_for(batch_id)
+    return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
+
+
+def pause_batch(user_id: str, batch_id: str, *,
+                api_key_id: str | None = None) -> dict | None:
+    """暂停整批仍在排队/运行中的子任务（cancel_requested 的姊妹机制）：
+
+    对 pending/running 的子任务置 pause_requested=true；worker 在下一个调度
+    tick（排队的）或轮询周期（运行中的，先 abort OpenCode 回合）把它们落到
+    非终态 'paused' —— 不占 failed 计数。之后 resume_batch 可以从原 OpenCode
+    会话/工作区续跑（与 cancelled 的 resume 共用同一条路）。
+
+    批次状态立即置 'paused'（给界面即时反馈）；子任务逐个翻成 paused 后，
+    _recompute_batch_status 的 paused 计数规则会保持这个状态。
+
+    Raises ValueError if the batch is already terminal or has nothing to pause.
+    Returns updated batch detail, or None if not found / not owned.
+    """
+    sql = "SELECT status FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+    params = [batch_id, user_id]
+    if api_key_id is not None:
+        sql += " AND api_key_id = %s"
+        params.append(api_key_id)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row[0] in ('completed', 'partial', 'failed'):
+                raise ValueError('批任务已结束，无法暂停')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET pause_requested = true "
+                "WHERE batch_id = %s AND status IN ('pending', 'running')",
+                (batch_id,),
+            )
+            if cur.rowcount == 0:
+                raise ValueError('批任务没有排队或运行中的子任务，无需暂停')
+            cur.execute("UPDATE ai_chat_batches SET status = 'paused' WHERE id = %s",
+                        (batch_id,))
         conn.commit()
     return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
 
@@ -203,18 +269,19 @@ RESUME_CONTINUE_PROMPT = (
 
 def resume_batch(user_id: str, batch_id: str, *,
                  api_key_id: str | None = None) -> dict | None:
-    """把已停止（status='cancelled'）的子任务恢复为 pending 继续执行——
+    """把已停止（cancelled）/已暂停（paused）的子任务恢复为 pending 继续执行——
     「停止后在原来的工作上继续」：
 
-      - 停止前已开跑（opencode_session_id 非空）：置 continue_prompt，worker
+      - 停止/暂停前已开跑（opencode_session_id 非空）：置 continue_prompt，worker
         走 continue 模式，在原 OpenCode 会话/原工作区上续跑，保留全部历史；
-      - 排队中被停止（还没开跑）：正常全新执行原任务。
+      - 排队中被停止/暂停（还没开跑）：正常全新执行原任务。
 
-    只动 cancelled 子任务；failed 的仍走 reset_failed_to_pending（重试）。
-    回滚 failed 计数、重算批次状态（terminal → running），调用方负责唤醒 worker。
+    只动 cancelled/paused 子任务；failed 的仍走 reset_failed_to_pending（重试）。
+    计数回滚只针对 cancelled（paused 从未计入 failed）。重算批次状态
+    （paused/terminal → running），调用方负责唤醒 worker。
 
     Returns updated batch detail, or None if not found / not owned.
-    Raises ValueError if the batch has nothing cancelled to resume.
+    Raises ValueError if the batch has nothing resumable.
     """
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -226,23 +293,31 @@ def resume_batch(user_id: str, batch_id: str, *,
             cur.execute(sql, tuple(params))
             if not cur.fetchone():
                 return None
+            # 回滚量要先数：UPDATE 会把行翻成 pending，之后按状态数不到了。
+            cur.execute(
+                "SELECT count(*) FROM ai_chat_sessions "
+                "WHERE batch_id = %s AND status = 'cancelled'",
+                (batch_id,),
+            )
+            cancelled_n = cur.fetchone()[0]
             cur.execute(
                 "UPDATE ai_chat_sessions "
                 "SET status='pending', error_message=NULL, cancel_requested=false, "
+                "    pause_requested=false, "
                 "    continue_prompt = CASE WHEN opencode_session_id IS NOT NULL "
                 "                           THEN %s ELSE NULL END "
-                "WHERE batch_id = %s AND status = 'cancelled'",
+                "WHERE batch_id = %s AND status IN ('cancelled', 'paused')",
                 (RESUME_CONTINUE_PROMPT, batch_id),
             )
             count = cur.rowcount
-            if count:
+            if count and cancelled_n:
                 cur.execute(
                     "UPDATE ai_chat_batches SET failed = failed - %s WHERE id = %s",
-                    (count, batch_id),
+                    (cancelled_n, batch_id),
                 )
         conn.commit()
     if not count:
-        raise ValueError('该批次没有已停止的子任务，无需继续')
+        raise ValueError('该批次没有已暂停或已中断的子任务，无需继续')
     _recompute_batch_status_for(batch_id)
     return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
 
@@ -343,19 +418,34 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
 
 def _recompute_batch_status_for(batch_id: str) -> None:
     """Local SQL equivalent of batch_engine._recompute_batch_status to avoid
-    circular imports (batch_engine imports batch_repo)."""
+    circular imports (batch_engine imports batch_repo).
+
+    与引擎侧同一条 paused 规则：还有 paused 子任务且未全部终态 → 'paused'。"""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT done, failed, total FROM ai_chat_batches WHERE id=%s", (batch_id,))
+            cur.execute(
+                "SELECT done, failed, total, "
+                "       (SELECT count(*) FROM ai_chat_sessions s "
+                "         WHERE s.batch_id = ai_chat_batches.id "
+                "           AND s.status = 'paused') "
+                "FROM ai_chat_batches WHERE id=%s", (batch_id,))
             row = cur.fetchone()
             if not row:
                 return
-            done, failed, total = row
+            done, failed, total, paused = row
             terminal = done + failed
-            status = ('pending' if terminal == 0 else
-                      'running' if terminal < total else
-                      'failed' if failed == total else
-                      'completed' if done == total else 'partial')
+            if terminal == 0 and paused == 0:
+                status = 'pending'
+            elif terminal < total and paused > 0:
+                status = 'paused'
+            elif terminal < total:
+                status = 'running'
+            elif failed == total:
+                status = 'failed'
+            elif done == total:
+                status = 'completed'
+            else:
+                status = 'partial'
             cur.execute("UPDATE ai_chat_batches SET status=%s, "
                         "completed_at = CASE WHEN %s = total THEN now() ELSE NULL END "
                         "WHERE id=%s", (status, terminal, batch_id))

@@ -117,6 +117,13 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     await _applyRunningDetail(id)
   }
 
+  async function pauseBatch(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    await api.pauseBatch(id)
+    await _applyRunningDetail(id)
+  }
+
   async function resumeBatch(batchId?: string) {
     const id = batchId ?? activeBatch.value?.id
     if (!id) return
@@ -202,7 +209,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, clearSelection, retryFailed, reexecuteChild,
-    stopBatch, resumeBatch,
+    stopBatch, pauseBatch, resumeBatch,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
   }
 })

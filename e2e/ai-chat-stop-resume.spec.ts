@@ -52,7 +52,8 @@ async function findBatchByName(page: import('@playwright/test').Page, name: stri
   return found!
 }
 
-async function expandBatchGroup(page: import('@playwright/test').Page, name: string) {
+async function expandBatchGroup(page: import('@playwright/test').Page, name: string,
+                                childCount = 2) {
   const group = page.locator('.batch-group', { hasText: name }).first()
   await group.waitFor({ state: 'visible', timeout: 15_000 })
   // 详情 5s 轮询会重渲染列表，可能吞掉展开点击 —— 重试直到 body 出现。
@@ -61,7 +62,7 @@ async function expandBatchGroup(page: import('@playwright/test').Page, name: str
     await head.click()
     await page.waitForTimeout(500)
   }
-  await expect(group.locator('.bg-child')).toHaveCount(2, { timeout: 10_000 })
+  await expect(group.locator('.bg-child')).toHaveCount(childCount, { timeout: 10_000 })
   return group
 }
 
@@ -99,8 +100,8 @@ test('批任务：停止全部后可继续运行，且续跑保留原有进度',
     sawRunning = true
   } catch { /* 子任务极快完成时停止流程照常验证 */ }
 
-  // --- 停止全部 ---
-  await group.locator('[title^="停止全部"]').click()
+  // --- 中断全部（原「停止」） ---
+  await group.locator('[title^="中断全部"]').click()
   await page.locator('.el-message-box__btns .el-button--primary').click()
   // worker 需要一个 tick 把 pending/running 翻成 cancelled，UI 5s 轮询带回
   await expect(group.locator('[title^="继续运行"]')).toBeVisible({ timeout: 60_000 })
@@ -154,6 +155,144 @@ test('批任务：停止全部后可继续运行，且续跑保留原有进度',
   await group.locator('[title="删除批次"]').click()
   await page.locator('.el-message-box__btns .el-button--primary').click()
   await expect(page.locator('.batch-group', { hasText: BATCH_NAME }))
+    .toHaveCount(0, { timeout: 10_000 })
+})
+
+test('批任务：暂停后可继续运行（paused 不占失败计数）', async ({ page }) => {
+  test.setTimeout(420_000)
+  await login(page)
+  await page.goto('/ai-chat')
+
+  // --- 创建 2 文件批任务（慢 prompt，留出暂停窗口） ---
+  const createBatchBtn = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .getByRole('button', { name: '新建' })
+  await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
+  await createBatchBtn.click()
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  await dialog.locator('input[data-test="name"]').fill(BATCH_NAME)
+  await dialog.locator('textarea[data-test="prompt"]')
+    .fill('请围绕「秋天的山谷」写一段不少于300字的中文散文，只输出散文正文。')
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
+    { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('B') },
+  ])
+  await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+  const createBtn = dialog.locator('button[data-test="create-btn"]')
+  await expect(createBtn).toBeEnabled({ timeout: 8_000 })
+  await createBtn.click()
+
+  const group = await expandBatchGroup(page, BATCH_NAME)
+
+  // --- 等子任务真正开跑再暂停（走"运行中协作式暂停"路径） ---
+  await group.locator('.dot--running').first().waitFor({ state: 'visible', timeout: 60_000 })
+
+  await group.locator('[title^="暂停全部"]').click()
+  await page.locator('.el-message-box__btns .el-button--primary').click()
+  // worker 把运行中的回合 abort 并落成 paused（蓝点），批次徽标变「已暂停」
+  await expect(group.locator('.dot--running')).toHaveCount(0, { timeout: 60_000 })
+  await expect(group.locator('.dot--paused').first()).toBeVisible({ timeout: 60_000 })
+  await expect(group.locator('.badge--paused')).toBeVisible({ timeout: 30_000 })
+
+  // 后端视角：paused 计数 > 0，且暂停不占 failed 计数
+  const batch = await findBatchByName(page, BATCH_NAME)
+  const detail = await apiGet(page, `/api/ai/chat/batches/${batch.id}`)
+  expect(detail.batch.paused).toBeGreaterThan(0)
+  expect(detail.batch.failed).toBe(0)
+  const childIds: string[] = detail.sessions.map((s: { id: string }) => s.id)
+
+  // 暂停期间已有部分消息历史（被中断的回合），记录下来用于续跑对比
+  const preIds: Record<string, string[]> = {}
+  for (const cid of childIds) {
+    const msgs = await apiGet(page, `/api/ai/chat/sessions/${cid}/messages`)
+    preIds[cid] = (msgs.messages as Array<{ id: string }>).map(m => m.id)
+  }
+
+  // --- 继续运行 ---
+  await group.locator('[title^="继续运行"]').click()
+  await page.waitForFunction((name) => {
+    const groups = Array.from(document.querySelectorAll('.batch-group'))
+    const g = groups.find(el => el.querySelector('.bg-name')?.textContent?.includes(name))
+    const badge = g?.querySelector('.badge')
+    return !!badge && ['badge--completed', 'badge--partial'].some(
+      c => badge.classList.contains(c))
+  }, BATCH_NAME, { timeout: 360_000 })
+
+  await expect(group.locator('.dot--completed')).toHaveCount(2, { timeout: 60_000 })
+  const after = await apiGet(page, `/api/ai/chat/batches/${batch.id}`)
+  expect(after.batch.failed).toBe(0)   // 全程没有失败计数
+
+  // 续跑在原历史上进行：暂停前的消息行原样保留、其上新增内容
+  let verified = false
+  for (const cid of childIds) {
+    if (!preIds[cid].length) continue
+    const msgs = await apiGet(page, `/api/ai/chat/sessions/${cid}/messages`)
+    const nowIds = (msgs.messages as Array<{ id: string }>).map(m => m.id)
+    if (preIds[cid].every(id => nowIds.includes(id)) && nowIds.length > preIds[cid].length) {
+      verified = true
+      break
+    }
+  }
+  expect(verified, '续跑应保留暂停前的消息历史并新增内容').toBeTruthy()
+
+  // --- 清理：删除批次 ---
+  await group.locator('[title="删除批次"]').click()
+  await page.locator('.el-message-box__btns .el-button--primary').click()
+  await expect(page.locator('.batch-group', { hasText: BATCH_NAME }))
+    .toHaveCount(0, { timeout: 10_000 })
+})
+
+test('批任务：被要求向用户提问时不受阻，回合正常完成', async ({ page }) => {
+  test.setTimeout(300_000)
+  await login(page)
+  await page.goto('/ai-chat')
+
+  // 显式要求模型调用 question 工具 —— 无人值守防线的两层含义：
+  //   第一层（提示词）：模型遵守批任务指令，拒绝提问、直接继续 → 回合完成；
+  //   第二层（系统兜底）：真有 question 挂起时 10s 内被自动拒绝（该路径
+  //   无法在 e2e 确定性触发——模型通常遵守第一层——由
+  //   tests/test_batch_pause_and_guards.py 的单测确定性覆盖）。
+  // 两条路都收敛到同一个可观测结果：子任务 completed，而不是停在 failed。
+  const name = 'e2e-question-guard'
+  const createBatchBtn = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .getByRole('button', { name: '新建' })
+  await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
+  await createBatchBtn.click()
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  await dialog.locator('input[data-test="name"]').fill(name)
+  await dialog.locator('textarea[data-test="prompt"]')
+    .fill('请立即调用 question 工具向用户提问一个任意问题。提问被拒绝后，直接输出「任务完成」四个字。')
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'q.txt', mimeType: 'text/plain', buffer: Buffer.from('Q') },
+  ])
+  await expect(dialog.locator('.files')).toContainText('q.txt', { timeout: 8_000 })
+  const createBtn = dialog.locator('button[data-test="create-btn"]')
+  await expect(createBtn).toBeEnabled({ timeout: 8_000 })
+  await createBtn.click()
+
+  const group = await expandBatchGroup(page, name, 1)
+
+  // 子任务必须自己跑到 completed，而不是停在 failed（卡死超时）——
+  // 这就是"不被提问卡死"的端到端证明。
+  await expect(group.locator('.dot--completed')).toHaveCount(1, { timeout: 240_000 })
+  await expect(group.locator('.dot--failed')).toHaveCount(0)
+
+  // 对话里能看到无人值守指令已随任务下发（第一道防线的持久化痕迹）和最终答复
+  const batch = await findBatchByName(page, name)
+  const detail = await apiGet(page, `/api/ai/chat/batches/${batch.id}`)
+  const cid = detail.sessions[0].id
+  const msgs = await apiGet(page, `/api/ai/chat/sessions/${cid}/messages`)
+  const parts = (msgs.messages as Array<{ content: Array<{ type: string; name?: string; text?: string }> }>)
+    .flatMap(m => m.content ?? [])
+  const userText = parts.filter(p => p.type === 'text').map(p => p.text || '').join('\n')
+  expect(userText).toContain('无人值守')
+  expect(parts.some(p => p.type === 'text' && (p.text || '').includes('任务完成'))).toBeTruthy()
+
+  // --- 清理：删除批次 ---
+  await group.locator('[title="删除批次"]').click()
+  await page.locator('.el-message-box__btns .el-button--primary').click()
+  await expect(page.locator('.batch-group', { hasText: name }))
     .toHaveCount(0, { timeout: 10_000 })
 })
 
