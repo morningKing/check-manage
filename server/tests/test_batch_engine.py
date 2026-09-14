@@ -753,7 +753,8 @@ def test_real_continue_child_path_exports_a_new_turn_trace(
             exported.append(list(observations))
 
     monkeypatch.setattr(eng, 'get_langfuse_exporter', lambda: Exporter())
-worker = BatchWorker()
+
+    worker = BatchWorker()
     worker._record_workspace_files = lambda *args, **kwargs: None
     worker._run_one(worker._claim_pending_sessions(limit=1)[0])
 
