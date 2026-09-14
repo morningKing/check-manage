@@ -23,6 +23,10 @@ export interface AiChatBatch {
   total: number
   done: number
   failed: number
+  /** status='cancelled' 的子任务数（计入 failed 聚合计数内）。「停止」产生的
+   *  子任务处于该状态，可通过「继续运行」在原工作上恢复 —— 与 failed
+   *  （重试失败，从头重跑）是两个互不重叠的恢复入口。 */
+  cancelled?: number
   created_at: string
   completed_at: string | null
 }

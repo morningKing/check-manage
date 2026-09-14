@@ -9,6 +9,10 @@
       <span class="bg-actions" @click.stop>
         <ElIcon title="编辑 Agent/模型" @click="editOpen = true"><Setting /></ElIcon>
         <ElIcon title="追加文件" @click="appendOpen = true"><Plus /></ElIcon>
+        <ElIcon v-if="['pending', 'running'].includes(batch.status)" title="停止全部（之后可继续）"
+                @click="onStop"><VideoPause /></ElIcon>
+        <ElIcon v-if="batch.cancelled" title="继续运行（从中断处继续）"
+                @click="onResume"><VideoPlay /></ElIcon>
         <ElIcon v-if="batch.failed" title="重试失败" @click="onRetry"><RefreshRight /></ElIcon>
         <ElIcon title="删除批次" @click="onDelete"><Delete /></ElIcon>
       </span>
@@ -40,7 +44,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import { cancelChild } from '@/api/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
@@ -63,6 +67,31 @@ function statusLabel(s: string) {
 }
 function fileName(p?: string | null) { return (p || '').split('/').pop() || '' }
 async function onRetry() { try { await store.retryFailed(props.batch.id) } catch { ElMessage.error('重试失败') } }
+async function onStop() {
+  try {
+    await ElMessageBox.confirm(
+      '停止全部子任务？排队中的不再执行，运行中的将被中断。停止后可点「继续运行」在原工作上恢复。',
+      '停止批任务', { type: 'warning' },
+    )
+    await store.stopBatch(props.batch.id)
+    ElMessage.success('已请求停止')
+    if (expanded.value) await store.selectBatch(props.batch.id)
+  } catch (e: unknown) {
+    if (e === 'cancel') return
+    const err = e as { response?: { data?: { error?: string } } }
+    ElMessage.error(err.response?.data?.error || '停止失败')
+  }
+}
+async function onResume() {
+  try {
+    await store.resumeBatch(props.batch.id)
+    ElMessage.success('已继续运行')
+    if (!expanded.value) await store.selectBatch(props.batch.id)
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { error?: string } } }
+    ElMessage.error(err.response?.data?.error || '继续运行失败')
+  }
+}
 async function onDelete() {
   try {
     await ElMessageBox.confirm('删除该批次及其所有子任务？', '删除', { type: 'warning' })
@@ -78,7 +107,10 @@ async function onReexec(sessionId: string) {
 }
 async function onCancel(sessionId: string) {
   try {
-    await ElMessageBox.confirm('确定中断此任务？中断后不可恢复。', '中断任务', { type: 'warning' })
+    await ElMessageBox.confirm(
+      '确定中断此任务？中断后可在批次上点「继续运行」从中断处恢复。',
+      '中断任务', { type: 'warning' },
+    )
     await cancelChild(props.batch.id, sessionId)
     ElMessage.success('已请求中断')
     if (expanded.value) await store.selectBatch(props.batch.id)

@@ -60,6 +60,7 @@ export type AiContentPart =
   | { type: 'mcp_services'; servers: McpServer[] }
   | { type: 'lsp_formatter'; lsp: LspServerStatus[]; formatters: FormatterStatus[]; error?: string }
   | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
+  | { type: 'error'; text: string }
 
 // OpenCode's built-in interactive multi-choice tool ("question"). Decoupled
 // from AiContentPart/message history on purpose: this is live turn-blocking

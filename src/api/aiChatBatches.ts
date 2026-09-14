@@ -32,6 +32,16 @@ export function retryFailedSessions(id: string) {
   return post<{ retried: number }>(`/ai/chat/batches/${id}/retry-failed`)
 }
 
+/** 停止整个批次：排队中的直接取消，运行中的协作式中断。之后可 resumeBatch 在原工作上继续。 */
+export function stopBatch(id: string) {
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/cancel`, {})
+}
+
+/** 继续执行已停止（cancelled）的子任务：已开跑过的在原 OpenCode 会话/工作区续跑，保留历史。 */
+export function resumeBatch(id: string) {
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/resume`, {})
+}
+
 export function appendBatch(id: string, files: StagedFile[]) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/append`, { files })
 }

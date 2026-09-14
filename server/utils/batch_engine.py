@@ -162,11 +162,14 @@ class _OpenCodeFacade:
                 and finish not in self._CONTINUATION_FINISH
             # `error` 必须透出：出错的一轮往往没有 finish / time.completed / 文本，
             # 不带出来的话上层看到的就是「什么都没发生」，只能等 STALL 超时。
+            # `id` 供 continue 模式做基线快照（_await_finished 跳过派发前已
+            # 存在的旧消息，见 _snapshot_assistant_ids）。
             out.append({'role': 'assistant', 'finished': finished, 'content': content,
                         'finish': finish, 'running_tool': running_tool,
-                        'error': info.get('error')})
+                        'error': info.get('error'), 'id': info.get('id')})
         return out or [{'role': 'assistant', 'finished': False, 'content': [],
-                        'finish': None, 'running_tool': False, 'error': None}]
+                        'finish': None, 'running_tool': False, 'error': None,
+                        'id': None}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
@@ -804,6 +807,11 @@ class BatchWorker:
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt)
+            # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
+            # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
+            # 第一轮轮询就会拿旧消息的终态/错误立刻判定本轮完成或失败。
+            baseline_ids = self._snapshot_assistant_ids(oc_session_id, ws) \
+                if is_continue else None
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
@@ -817,6 +825,7 @@ class BatchWorker:
                 logger.warning('batch send_message dispatch failed sid=%s oc=%s: %s; '
                                'recovering session', sid, oc_session_id, e)
                 oc_session_id = self._recover_session(sid, ws, prompt, agent, model)
+                baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
 
             # Persist the conversation progressively from the worker's own REST
@@ -826,7 +835,8 @@ class BatchWorker:
             def _persist_progress():
                 self._persist_conversation(sid, prompt, oc_session_id, None, directory=ws)
             preview, final_msg = self._await_finished(oc_session_id, sid, directory=ws,
-                                                      on_progress=_persist_progress)
+                                                      on_progress=_persist_progress,
+                                                      baseline_ids=baseline_ids)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
@@ -1088,9 +1098,24 @@ class BatchWorker:
             traceback.print_exc()
 
 
+    @staticmethod
+    def _snapshot_assistant_ids(oc_session_id: str, directory: str) -> set:
+        """continue 模式派发新提示词前的基线：该 OpenCode 会话里已存在的全部
+        assistant 消息 id。_await_finished 只把基线之外的 assistant 消息当作
+        本轮的完成/错误判据。OpenCode 不可达时返回空集（退回旧行为——不跳过），
+        让 send_message 去报真正的连接错误。"""
+        try:
+            raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
+        except Exception:
+            return set()
+        return {info.get('id') for m in raw
+                if (info := m.get('info') or {}).get('role') == 'assistant'
+                and info.get('id')}
+
     def _await_finished(self, oc_session_id: str, sid: str,
                         directory: str = '',
-                        on_progress=None) -> tuple[str | None, dict | None]:
+                        on_progress=None,
+                        baseline_ids: set | None = None) -> tuple[str | None, dict | None]:
         """Poll until the latest assistant message reports finished.
 
         Returns (preview_first_line, full_message_dict). The full message is
@@ -1105,6 +1130,13 @@ class BatchWorker:
         cancel_requested — a caller-triggered cancel. When set, aborts the
         OpenCode session (best-effort) and raises _SessionCancelled so _run_one
         can mark the child 'cancelled' instead of waiting out the full timeout.
+
+        `baseline_ids` (continue mode): assistant message ids that existed
+        BEFORE this turn's prompt was dispatched. The previous turn's last
+        message is still terminal (completed, or aborted-with-error) until the
+        new turn's first message shows up — without the baseline the first poll
+        would read that stale message and instantly "finish" (or _TurnFailed)
+        a turn that just started.
         """
         cap = self.SESSION_TIMEOUT_SEC
         deadline = (time.time() + cap) if cap and cap > 0 else None   # None = no hard cap
@@ -1132,6 +1164,8 @@ class BatchWorker:
             active_tool = False
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
+                    if baseline_ids and m.get('id') in baseline_ids:
+                        continue  # message from before this (continued) turn
                     last_preview = self._preview_from(m)
                     last_message = m
                     # OpenCode 明说这一轮挂了 —— 立刻带着原因失败，不要等 STALL。

@@ -10,7 +10,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
-  ChatDotRound, Tickets, Search, BellFilled, MuteNotification,
+  ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -1124,6 +1124,12 @@ function onKey(e: Event) {
                       :agent="p.agent" :description="p.description" :status="p.status"
                       :depth="1" :fetch-fn="getSubtaskMessages"
                     />
+                    <!-- 回合级失败（session.error / 出错的 assistant 消息）：
+                         持久化为 error part，刷新后仍在，见 chat_persist.py -->
+                    <div v-else-if="p.type === 'error'" class="msg__turn-error">
+                      <ElIcon><WarningFilled /></ElIcon>
+                      <span>{{ p.text }}</span>
+                    </div>
                     <template v-else-if="p.type === 'text' && p.text">
                       <!-- assistant: lift big code/doc blocks into artifact cards -->
                       <template v-if="m.role === 'assistant'">
@@ -1662,6 +1668,21 @@ function onKey(e: Event) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-bottom: 6px;
+}
+/* 回合级失败提示条（error part）：出错也要看得见，而不是悄悄停转 */
+.msg__turn-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--el-color-danger-light-5);
+  border-radius: 8px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 .msg__meta {
   margin-top: 2px;

@@ -89,10 +89,15 @@ def list_batches(user_id: str, *, page: int, page_size: int,
     if api_key_id is not None:
         scope += " AND api_key_id = %s"
         base.append(api_key_id)
+    # cancelled 计数：failed 里混着 cancelled（取消也计入 failed 聚合），
+    # UI 需要「继续运行」按钮的显隐判据 —— 只有 cancelled 可被 resume。
+    cancelled_sub = ("(SELECT count(*) FROM ai_chat_sessions s "
+                     " WHERE s.batch_id = ai_chat_batches.id AND s.status = 'cancelled')")
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                f"SELECT * FROM ai_chat_batches {scope} "
+                f"SELECT *, {cancelled_sub} AS cancelled "
+                f"FROM ai_chat_batches {scope} "
                 "ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 (*base, page_size, offset),
             )
@@ -106,7 +111,9 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                      api_key_id: str | None = None) -> dict | None:
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            sql = "SELECT * FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+            sql = "SELECT *, (SELECT count(*) FROM ai_chat_sessions s " \
+                  "WHERE s.batch_id = ai_chat_batches.id AND s.status='cancelled') " \
+                  "AS cancelled FROM ai_chat_batches WHERE id=%s AND user_id=%s"
             params = [batch_id, user_id]
             if api_key_id is not None:
                 sql += " AND api_key_id = %s"
@@ -161,6 +168,8 @@ def cancel_batch(user_id: str, batch_id: str, *,
 
     Raises ValueError if the batch is already terminal (nothing to cancel).
     Returns updated batch detail, or None if not found / not owned.
+
+    取消不是终局：resume_batch 可以把 cancelled 子任务恢复继续执行。
     """
     sql = "SELECT status FROM ai_chat_batches WHERE id=%s AND user_id=%s"
     params = [batch_id, user_id]
@@ -181,6 +190,60 @@ def cancel_batch(user_id: str, batch_id: str, *,
                 (batch_id,),
             )
         conn.commit()
+    return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
+
+
+# resume_batch 给"停止前已经开跑过"的子任务注入的续跑提示词。措辞要点：
+# 明确这是从中断处继续（不是重新开始），并让它先核对工作区/上下文现状。
+RESUME_CONTINUE_PROMPT = (
+    '上一轮执行被中断。请先查看工作区现状与已有对话上下文，'
+    '从中断处继续完成原任务；已完成的部分不要重做，最终给出完整结果。'
+)
+
+
+def resume_batch(user_id: str, batch_id: str, *,
+                 api_key_id: str | None = None) -> dict | None:
+    """把已停止（status='cancelled'）的子任务恢复为 pending 继续执行——
+    「停止后在原来的工作上继续」：
+
+      - 停止前已开跑（opencode_session_id 非空）：置 continue_prompt，worker
+        走 continue 模式，在原 OpenCode 会话/原工作区上续跑，保留全部历史；
+      - 排队中被停止（还没开跑）：正常全新执行原任务。
+
+    只动 cancelled 子任务；failed 的仍走 reset_failed_to_pending（重试）。
+    回滚 failed 计数、重算批次状态（terminal → running），调用方负责唤醒 worker。
+
+    Returns updated batch detail, or None if not found / not owned.
+    Raises ValueError if the batch has nothing cancelled to resume.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            sql = "SELECT id FROM ai_chat_batches WHERE id=%s AND user_id=%s"
+            params = [batch_id, user_id]
+            if api_key_id is not None:
+                sql += " AND api_key_id = %s"
+                params.append(api_key_id)
+            cur.execute(sql, tuple(params))
+            if not cur.fetchone():
+                return None
+            cur.execute(
+                "UPDATE ai_chat_sessions "
+                "SET status='pending', error_message=NULL, cancel_requested=false, "
+                "    continue_prompt = CASE WHEN opencode_session_id IS NOT NULL "
+                "                           THEN %s ELSE NULL END "
+                "WHERE batch_id = %s AND status = 'cancelled'",
+                (RESUME_CONTINUE_PROMPT, batch_id),
+            )
+            count = cur.rowcount
+            if count:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET failed = failed - %s WHERE id = %s",
+                    (count, batch_id),
+                )
+        conn.commit()
+    if not count:
+        raise ValueError('该批次没有已停止的子任务，无需继续')
+    _recompute_batch_status_for(batch_id)
     return get_batch_detail(user_id, batch_id, api_key_id=api_key_id)
 
 

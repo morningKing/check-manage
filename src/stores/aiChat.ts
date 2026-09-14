@@ -818,10 +818,25 @@ export const useAiChatStore = defineStore('aiChat', {
           // 回合真正结束，补发运行期间排队的插话（若有）。
           this._drainQueue(sid)
           break
-        case 'session.error':
+        case 'session.error': {
+          // 回合失败（provider 超时/鉴权错误等）。data = {sessionID?, error}，
+          // error 与 assistant 消息的 info.error 同构。子代理自己的失败不带
+          // 顶层失败语义（父回合还在继续处理），不渲染成顶层的错误条。
+          const errSid = data?.sessionID as string | undefined
+          const childIds = Object.values(_toolChildByMsg[sid] ?? {})
+          if (!errSid || !childIds.includes(errSid)) {
+            const err = data?.error
+            if (err) {
+              const detail = err?.data?.message || err?.name || '未知错误'
+              this._upsertAssistantPart(sid, `turn_error_${Date.now()}`, {
+                type: 'error', text: `本轮执行失败：${detail}`,
+              })
+            }
+          }
           this.streaming[sid] = false
           this.thinking[sid] = false
           break
+        }
         // OpenCode's built-in interactive multi-choice tool ("question").
         // Verified live (2026-08-21): the turn stays non-idle (streaming/
         // thinking) while a question is pending — the underlying tool call

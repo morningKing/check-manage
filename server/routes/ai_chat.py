@@ -827,12 +827,16 @@ def sse_events(sid):
                 if not relevant:
                     continue
 
-                if sig == 'idle':
+                if sig in ('idle', 'error'):
                     # Don't persist for a batch child — its worker is the sole
                     # writer (REST, keyed on message ids); persisting here (a
                     # merged turn keyed on a mid-stream turn_msg_id) would
                     # duplicate. Otherwise defer to the background listener when
-                    # one owns the session, else persist as a fallback.
+                    # one owns the session, else persist as a fallback. 'error'
+                    # (session.error) must take this path too — after it the
+                    # stream may never see idle, and the turn's error part
+                    # (chat_persist._flatten_scope) is the only trace the turn
+                    # failed at all.
                     if state['turn_msg_id'] and not sess[5] and not has_listener(sid):
                         persist_turn(sid, state)
                     state = new_state()
