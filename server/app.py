@@ -1,6 +1,7 @@
 import logging
 import sys
 import os
+import atexit
 sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask
@@ -127,6 +128,18 @@ app.register_blueprint(kefu_admin_bp)
 app.register_blueprint(kefu_public_bp)
 app.register_blueprint(dynamic_bp)
 
+
+def start_langfuse_exporter(exporter_factory=None, register_shutdown=atexit.register):
+    """Start telemetry through an injectable seam for lifecycle tests."""
+    if exporter_factory is None:
+        from utils.langfuse_exporter import get_langfuse_exporter
+        exporter_factory = get_langfuse_exporter
+    exporter = exporter_factory()
+    exporter.start()
+    register_shutdown(lambda: exporter.stop(2.0))
+    return exporter
+
+
 # Start backup scheduler (only in the reloader child process to avoid double-start).
 # Also skip background workers when pytest is driving the process — otherwise the
 # batch worker steals pending rows the route tests just inserted.
@@ -159,6 +172,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
     from utils.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
+
+    # Start optional Langfuse export worker after the reloader fork. Shutdown is
+    # bounded so telemetry cannot delay process exit.
+    start_langfuse_exporter()
 
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a

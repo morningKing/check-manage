@@ -123,6 +123,168 @@ def test_persist_turn_falls_back_to_generated_id(monkeypatch):
     assert sink[0][1][0].startswith('msg_')   # generated fallback id
 
 
+def test_persist_turn_exports_after_db_commit_with_application_correlation(monkeypatch):
+    from utils import chat_persist
+    from utils.langfuse_config import observation_id, trace_id_for
+
+    events = []
+
+    @contextlib.contextmanager
+    def db():
+        class Conn:
+            def cursor(self):
+                class Cur:
+                    def execute(self, sql, params=None):
+                        events.append(('db', sql, params))
+                return Cur()
+        yield Conn()
+        events.append(('commit',))
+
+    class Exporter:
+        def submit(self, observations):
+            events.append(('export', list(observations)))
+
+    monkeypatch.setattr(chat_persist, 'get_db', db)
+    monkeypatch.setattr(chat_persist, 'get_langfuse_exporter', lambda: Exporter())
+    state = chat_persist.new_state()
+    chat_persist.apply_event(state, _ev('message.updated', {
+        'info': {'role': 'assistant', 'id': 'turn-1', 'sessionID': 'oc-1'},
+    }), 'oc-1')
+    chat_persist.apply_event(state, _ev('message.part.updated', {
+        'part': {'id': 'task-part', 'messageID': 'turn-1', 'type': 'tool',
+                 'tool': 'task', 'state': {'status': 'completed',
+                 'metadata': {'sessionId': 'child-1'}}, 'sessionID': 'oc-1'},
+    }), 'oc-1')
+    chat_persist.apply_event(state, _ev('message.part.updated', {
+        'part': {'id': 'text-part', 'messageID': 'turn-1', 'type': 'text',
+                 'text': 'done', 'sessionID': 'oc-1'},
+    }), 'oc-1')
+
+    chat_persist.persist_turn('app-session-1', state)
+
+    assert events[-2][0] == 'commit'
+    observations = events[-1][1]
+    root = next(item for item in observations if item.name == 'generation')
+    assert root.trace_id == trace_id_for('app-session-1', None, 'turn-1')
+    assert root.session_id == 'app-session-1'
+    task = next(item for item in observations if item.name == 'invoke_agent')
+    assert task.metadata['task_id'] == 'child-1'
+    assert task.id == observation_id('invoke_agent', 'child-1')
+
+
+def test_persist_turn_exporter_failure_does_not_escape_listener_path(monkeypatch):
+    from utils import chat_persist
+
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db([]))
+
+    class BrokenExporter:
+        def submit(self, observations):
+            raise RuntimeError('langfuse unavailable')
+
+    monkeypatch.setattr(chat_persist, 'get_langfuse_exporter', lambda: BrokenExporter())
+    state = chat_persist.new_state()
+    state['turn_msg_id'] = 'turn-1'
+    state['part_order'] = ['p1']
+    state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hello'}}
+
+    chat_persist.persist_turn('app-session-1', state)
+
+
+def test_persist_turn_does_not_export_when_postgres_persistence_fails(monkeypatch):
+    from utils import chat_persist
+
+    @contextlib.contextmanager
+    def broken_db():
+        raise RuntimeError('postgres unavailable')
+        yield
+
+    exported = []
+    monkeypatch.setattr(chat_persist, 'get_db', broken_db)
+    monkeypatch.setattr(chat_persist, 'get_langfuse_exporter',
+                        lambda: type('Exporter', (), {
+                            'submit': lambda _self, items: exported.append(list(items)),
+                        })())
+    state = chat_persist.new_state()
+    state['turn_msg_id'] = 'turn-db-fail'
+    state['part_order'] = ['part-db-fail']
+    state['parts_by_id'] = {'part-db-fail': {'type': 'text', 'text': 'hello'}}
+
+    assert chat_persist.persist_turn('app-session-1', state) is False
+    assert exported == []
+
+
+def test_incremental_task_discovery_persists_subtasks_before_export(monkeypatch):
+    from utils import chat_persist
+
+    calls = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: calls.append('turn') or True)
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda sid, state: calls.append('subtasks') or True)
+    monkeypatch.setattr(chat_persist, '_export_observations',
+                        lambda observations: calls.append('export'))
+    clock = {'t': 0.0}
+    monkeypatch.setattr(chat_persist.time, 'monotonic',
+                        lambda: clock.__setitem__('t', clock['t'] + 2.0) or clock['t'])
+    events = [
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm-task',
+                                         'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {
+            'id': 'task-part', 'messageID': 'm-task', 'type': 'tool', 'tool': 'task',
+            'state': {'status': 'running', 'metadata': {'sessionId': 'child-task'}},
+            'sessionID': 'oc',
+        }}),
+    ]
+
+    chat_persist._run_listener('app-session-1', 'oc', iter(events))
+
+    assert calls == ['turn', 'subtasks', 'export']
+
+
+def test_interactive_snapshot_skips_export_when_subtask_persistence_fails(monkeypatch):
+    from utils import chat_persist
+
+    calls = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: calls.append('turn') or True)
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda sid, state: calls.append('subtasks') or False)
+    monkeypatch.setattr(chat_persist, '_export_observations',
+                        lambda observations: calls.append('export'))
+
+    assert not chat_persist._persist_interactive_snapshot(
+        'app-session-1', chat_persist.new_state())
+    assert calls == ['turn', 'subtasks']
+
+
+def test_manual_continuation_gets_a_new_turn_trace_under_same_session(monkeypatch):
+    from utils import chat_persist
+    from utils.langfuse_config import trace_id_for
+
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db([]))
+    exported = []
+
+    class Exporter:
+        def submit(self, observations):
+            exported.append(list(observations))
+
+    monkeypatch.setattr(chat_persist, 'get_langfuse_exporter', lambda: Exporter())
+    for message_id, text in (('turn-1', 'first'), ('turn-2', 'continued')):
+        state = chat_persist.new_state()
+        state['turn_msg_id'] = message_id
+        state['part_order'] = [message_id + '-part']
+        state['parts_by_id'] = {
+            message_id + '-part': {'type': 'text', 'text': text},
+        }
+        chat_persist.persist_turn('app-session-1', state)
+
+    assert [items[0].trace_id for items in exported] == [
+        trace_id_for('app-session-1', None, 'turn-1'),
+        trace_id_for('app-session-1', None, 'turn-2'),
+    ]
+    assert all(items[0].session_id == 'app-session-1' for items in exported)
+
+
 import threading as _threading
 import time as _time
 

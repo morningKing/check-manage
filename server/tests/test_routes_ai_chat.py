@@ -6,6 +6,7 @@ import os
 import pytest
 from unittest.mock import MagicMock, patch
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -57,8 +58,13 @@ def setup(mock_conn, mock_cursor, tmp_path):
         tmp_path,
     )
 
-    for p in patches:
+    for p in reversed(patches):
         p.stop()
+    # app.py imports chat_persist while db.get_db is patched above; restore its
+    # module-level alias after all patches so later real-DB tests are isolated.
+    import db
+    from utils import chat_persist
+    chat_persist.get_db = db.get_db
 
 
 def test_create_session_201_writes_config_and_binds_directory(setup):
@@ -216,6 +222,141 @@ def test_unknown_session_does_not_touch(setup):
     assert not any('UPDATE ai_chat_sessions' in s and 'token_expires_at' in s for s in sqls)
 
 
+def test_get_messages_returns_trace_metadata_when_langfuse_is_enabled(setup, monkeypatch):
+    client, cursor, _, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    cursor.fetchall.return_value = [
+        ('user-turn', 'user', [{'type': 'text', 'text': 'hi'}], None, None),
+        ('assistant-turn', 'assistant', [{'type': 'text', 'text': 'hey'}], None, None),
+    ]
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(
+            enabled=True,
+            host='https://langfuse.example/',
+            project_id='project/with spaces',
+            public_key='pk',
+            secret_key='sk',
+            sample_rate=1.0,
+        ),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['traceId'] == 'e535af46efe9c85c60b388239895075c'
+    assert body['traceUrl'] == (
+        'https://langfuse.example/project/project%2Fwith%20spaces/traces/'
+        'e535af46efe9c85c60b388239895075c'
+    )
+    assert body['isSampled'] is True
+    assert 'secret' not in response.get_data(as_text=True).lower()
+
+
+def test_get_messages_hides_trace_metadata_when_langfuse_is_disabled(setup, monkeypatch):
+    client, cursor, _, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    cursor.fetchall.return_value = [
+        ('assistant-turn', 'assistant', [{'type': 'text', 'text': 'hey'}], None, None),
+    ]
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(enabled=False, host='https://langfuse.example'),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert 'traceId' not in body
+    assert 'traceUrl' not in body
+
+
+def test_get_messages_hides_trace_metadata_when_credentials_are_missing(setup, monkeypatch):
+    client, cursor, _, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    cursor.fetchall.return_value = [
+        ('assistant-turn', 'assistant', [{'type': 'text', 'text': 'hey'}], None, None),
+    ]
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(enabled=True, host='https://langfuse.example', public_key='', secret_key=''),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert 'traceId' not in body
+    assert 'traceUrl' not in body
+
+
+def test_get_messages_hides_trace_url_without_project_id(setup, monkeypatch):
+    client, cursor, _, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    cursor.fetchall.return_value = [
+        ('assistant-turn', 'assistant', [{'type': 'text', 'text': 'hey'}], None, None),
+    ]
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(
+            enabled=True,
+            host='https://langfuse.example',
+            project_id='',
+            public_key='pk',
+            secret_key='sk',
+            sample_rate=1.0,
+        ),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['traceId']
+    assert 'traceUrl' not in body
+
+
+def test_get_messages_hides_trace_url_when_deterministic_sampling_excludes_trace(setup, monkeypatch):
+    client, cursor, _, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    cursor.fetchall.return_value = [
+        ('assistant-turn', 'assistant', [{'type': 'text', 'text': 'hey'}], None, None),
+    ]
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(
+            enabled=True,
+            host='https://langfuse.example',
+            project_id='project-1',
+            public_key='pk',
+            secret_key='sk',
+            sample_rate=0.0,
+        ),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['isSampled'] is False
+    assert 'traceUrl' not in body
+
+
+def test_get_messages_enforces_trace_metadata_session_ownership(setup, monkeypatch):
+    client, cursor, _, _, guest_h, _ = setup
+    cursor.fetchone.return_value = None
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(enabled=True, host='https://langfuse.example'),
+    )
+
+    response = client.get('/ai/chat/sessions/sess_x/messages', headers=guest_h)
+
+    assert response.status_code == 404
+
+
 def test_sse_events_maps_real_opencode_vocabulary_and_persists_on_idle(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
@@ -277,6 +418,70 @@ def test_sse_events_persists_tool_parts_on_idle(setup):
     tool = next(p for p in persisted if p['type'] == 'tool_use')
     assert tool['name'] == 'query_collection'
     assert tool['result'] == '{"mode":"table","total":2}'
+
+
+def test_sse_fallback_persists_subtasks_before_langfuse_export(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.updated', 'data': {'properties': {
+            'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'message.part.updated', 'data': {'properties': {'part': {
+            'id': 'task-1', 'type': 'tool', 'tool': 'task', 'messageID': 'm1',
+            'sessionID': 'oc_sess_42',
+            'state': {'status': 'completed',
+                      'metadata': {'sessionId': 'child-1'}},
+        }}}},
+        {'event': 'session.idle', 'data': {'properties': {
+            'sessionID': 'oc_sess_42'}}},
+    ])
+    calls = []
+
+    def persist_turn(sid, state):
+        calls.append('messages')
+        return True
+
+    def persist_subtasks(sid, state):
+        assert 'child-1' in state['subtasks']
+        calls.append('subtasks')
+        return True
+
+    with patch('utils.chat_persist.persist_turn', persist_turn), \
+            patch('utils.chat_persist.persist_subtasks', persist_subtasks), \
+            patch('utils.chat_persist._export_observations',
+                  lambda observations: calls.append('export')):
+        resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+        b''.join(resp.response)
+
+    assert calls == ['messages', 'subtasks', 'export']
+
+
+def test_sse_fallback_skips_langfuse_export_when_subtask_persistence_fails(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.updated', 'data': {'properties': {
+            'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42'}}}},
+        {'event': 'message.part.updated', 'data': {'properties': {'part': {
+            'id': 'task-1', 'type': 'tool', 'tool': 'task', 'messageID': 'm1',
+            'sessionID': 'oc_sess_42',
+            'state': {'status': 'completed',
+                      'metadata': {'sessionId': 'child-1'}},
+        }}}},
+        {'event': 'session.idle', 'data': {'properties': {
+            'sessionID': 'oc_sess_42'}}},
+    ])
+    calls = []
+    with patch('utils.chat_persist.persist_turn', lambda sid, state: calls.append('messages') or True), \
+            patch('utils.chat_persist.persist_subtasks', lambda sid, state: calls.append('subtasks') or False), \
+            patch('utils.chat_persist._export_observations',
+                  lambda observations: calls.append('export')):
+        resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+        b''.join(resp.response)
+
+    assert calls == ['messages', 'subtasks']
+
+
 
 
 def test_sse_events_auth_via_query_token(setup):

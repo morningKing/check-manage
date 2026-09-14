@@ -30,6 +30,7 @@ import LspFormatterBlock from '@/components/ai-chat/LspFormatterBlock.vue'
 import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
+import TraceLink from '@/components/ai-chat/TraceLink.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
 import FileDiffView from '@/components/ai-chat/FileDiffView.vue'
 import { findFrontendCommand, parseCommandLine, FRONTEND_COMMANDS } from '@/components/ai-chat/chat-commands'
@@ -51,6 +52,8 @@ import { highlightHtml } from '@/utils/highlight'
 import { useChatScroll } from '@/composables/useChatScroll'
 import { useTurnNotify } from '@/composables/useTurnNotify'
 import { batchStatusLabel, isBatchChildAutomatic } from './batchChildState'
+import { shouldSyncAiChatSession } from './aiChatRoute'
+import { traceLinkFor } from './trace'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
 // 顾虑——避免这些重型库进这个页面的主 chunk。
@@ -582,8 +585,31 @@ const activeBatchInfo = computed(() => {
   const b = batches.activeBatch
   return { batchId: b?.id || '', status: child.status, agent: b?.agent || '', model: b?.model || '' }
 })
+const activeTrace = computed(() => {
+  const childTrace = activeId.value ? traceLinkFor(batches.getChild(activeId.value)) : undefined
+  return childTrace || traceLinkFor(store.activeTrace)
+})
 const batchChildExecuting = computed(() =>
   activeBatchInfo.value ? isBatchChildAutomatic(activeBatchInfo.value.status) : false,
+)
+
+async function openQuerySession(querySessionId?: string) {
+  if (!querySessionId) return
+  const batch = await batches.findBatchForChild(querySessionId)
+  if (batch) {
+    await selectBatchChild(querySessionId)
+  } else if (sessions.value.some((s: any) => s.id === querySessionId)) {
+    await store.openSession(querySessionId)
+    store.hydrateSessionModel(querySessionId)
+    store.hydrateSessionAgent(querySessionId)
+  }
+}
+
+watch(
+  () => route.query.session as string | undefined,
+  (next, previous) => {
+    if (shouldSyncAiChatSession(next, previous)) void openQuerySession(next)
+  },
 )
 
 onMounted(async () => {
@@ -592,14 +618,8 @@ onMounted(async () => {
     await batches.fetchList()
     // Check URL query parameter: /ai-chat?session=xxx
     const querySessionId = route.query.session as string | undefined
-    const batch = querySessionId ? await batches.findBatchForChild(querySessionId) : null
-    if (batch) {
-      await selectBatchChild(querySessionId!)
-    } else if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
-      // Open the specified session from URL
-      await store.openSession(querySessionId)
-      store.hydrateSessionModel(querySessionId)
-      store.hydrateSessionAgent(querySessionId)
+    if (querySessionId) {
+      await openQuerySession(querySessionId)
     } else if (sessions.value.length) {
       await store.openSession(sessions.value[0].id)
       store.hydrateSessionModel(sessions.value[0].id)
@@ -1019,6 +1039,9 @@ function onKey(e: Event) {
 
     <!-- 对话主区 -->
     <section class="ai-chat__main">
+      <div v-if="activeTrace" class="ai-chat__trace-action">
+        <TraceLink :trace="activeTrace" />
+      </div>
       <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>

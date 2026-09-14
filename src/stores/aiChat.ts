@@ -21,6 +21,7 @@ import {
   type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
 } from '@/api/aiChat'
+import type { AiTraceMetadata } from '@/types/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { computeUsage, EMPTY_USAGE, type SessionUsage } from '@/utils/aiUsage'
 import { continueBatchChild as apiContinueBatchChild } from '@/api/aiChatBatches'
@@ -95,6 +96,9 @@ interface State {
    * 会话打开 / 回合结束重算，message.updated 流式中就地刷新 contextTokens。
    */
   usageBySession: Record<string, SessionUsage>
+  traceBySession: Record<string, AiTraceMetadata>
+  reloadEpochBySession: Record<string, number>
+  reloadRequestBySession: Record<string, number>
   _stream: { close(): void } | null
 }
 
@@ -132,6 +136,9 @@ export const useAiChatStore = defineStore('aiChat', {
     pendingQuestion: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
+    traceBySession: {},
+    reloadEpochBySession: {},
+    reloadRequestBySession: {},
     _stream: null,
   }),
 
@@ -168,6 +175,9 @@ export const useAiChatStore = defineStore('aiChat', {
         ? state.usageBySession[state.activeSessionId] ?? { ...EMPTY_USAGE }
         : { ...EMPTY_USAGE }
     },
+    activeTrace(state): AiTraceMetadata | undefined {
+      return state.activeSessionId ? state.traceBySession[state.activeSessionId] : undefined
+    },
   },
 
   actions: {
@@ -187,6 +197,7 @@ export const useAiChatStore = defineStore('aiChat', {
         this._resetStreamState(meta.id)
         const history = await getMessages(meta.id)
         this.messages[meta.id] = history.messages
+        this.traceBySession[meta.id] = { traceId: history.traceId, traceUrl: history.traceUrl }
         this._recomputeUsage(meta.id)
         this.loadPaletteItems(meta.id)
         this._openStream(meta.id)
@@ -207,11 +218,13 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadPaletteItems(id)
       if (this.activeSessionId === id && this.messages[id]) return
       this.activeSessionId = id
+      this.reloadEpochBySession[id] = (this.reloadEpochBySession[id] ?? 0) + 1
       this.attachments[id] = this.attachments[id] ?? []
       this.streaming[id] = this.streaming[id] ?? false
       this._resetStreamState(id)
       const history = await getMessages(id)
       this.messages[id] = history.messages
+      this.traceBySession[id] = { traceId: history.traceId, traceUrl: history.traceUrl }
       this._recomputeUsage(id)
       this.loadFiles(id)
       this.loadChanges(id)
@@ -231,14 +244,22 @@ export const useAiChatStore = defineStore('aiChat', {
     // streaming live (interactive sessions update via SSE, not polling).
     async reloadMessages(id: string) {
       if (this.activeSessionId !== id || this.streaming[id]) return
+      const epoch = this.reloadEpochBySession[id] ?? 0
+      const request = (this.reloadRequestBySession[id] ?? 0) + 1
+      this.reloadRequestBySession[id] = request
       try {
         const history = await getMessages(id)
         // Never let a transient short/empty poll wipe what's already rendered —
         // the conversation only grows server-side (idempotent upsert), so a
         // shorter result is a hiccup, not a real shrink. (This is why the
         // bubbles could momentarily vanish during a live batch run.)
-        if (history.messages.length >= (this.messages[id]?.length ?? 0)) {
+        if (this.activeSessionId === id
+          && epoch === (this.reloadEpochBySession[id] ?? 0)
+          && request === (this.reloadRequestBySession[id] ?? 0)
+          && !this.streaming[id]
+          && history.messages.length >= (this.messages[id]?.length ?? 0)) {
           this.messages[id] = history.messages
+          this.traceBySession[id] = { traceId: history.traceId, traceUrl: history.traceUrl }
           this._recomputeUsage(id)
         }
       } catch { /* non-fatal */ }
@@ -442,6 +463,7 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     _beginTurn(sid: string) {
+      this.reloadEpochBySession[sid] = (this.reloadEpochBySession[sid] ?? 0) + 1
       this.streaming[sid] = true
       this.reasoning[sid] = ''
       this.thinking[sid] = true
@@ -791,11 +813,22 @@ export const useAiChatStore = defineStore('aiChat', {
       //  - skip if a new turn already started (don't clobber a live stream)
       //  - only adopt if it has at least as many messages (a persistence race
       //    could briefly lag behind; never drop the complete in-memory turn)
+      const epoch = this.reloadEpochBySession[sid] ?? 0
+      const request = (this.reloadRequestBySession[sid] ?? 0) + 1
+      this.reloadRequestBySession[sid] = request
       try {
         const history = await getMessages(sid)
+        if (this.activeSessionId !== sid
+          || epoch !== (this.reloadEpochBySession[sid] ?? 0)
+          || request !== (this.reloadRequestBySession[sid] ?? 0)) return
         const current = this.messages[sid]?.length ?? 0
         if (!this.streaming[sid] && history.messages.length >= current) {
           this.messages[sid] = history.messages
+          if (history.traceUrl || history.traceId) {
+            this.traceBySession[sid] = { traceId: history.traceId, traceUrl: history.traceUrl }
+          } else {
+            delete this.traceBySession[sid]
+          }
           this._recomputeUsage(sid)  // 本回合 meta 已落库 → 状态条数值刷新
         }
       } catch { /* non-fatal: keep the in-memory copy */ }

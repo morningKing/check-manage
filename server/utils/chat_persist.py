@@ -20,6 +20,21 @@ from config import OPENCODE_BASE_URL, AI_CHAT_NOTIFY_MIN_SECONDS
 
 logger = logging.getLogger(__name__)
 
+
+def get_langfuse_exporter():
+    from utils.langfuse_exporter import get_langfuse_exporter as factory
+    return factory()
+
+
+def _export_observations(observations):
+    """Submit telemetry only after the caller's local writes succeeded."""
+    if not observations:
+        return
+    try:
+        get_langfuse_exporter().submit(observations)
+    except Exception as e:
+        logger.warning('Langfuse export failed: %s', e)
+
 # Debounce for mid-turn (incremental) persistence: at most one DB upsert this
 # often while a turn streams, so switching sessions mid-stream recovers the
 # partial answer (incl. tool calls) instead of only the on-idle final snapshot.
@@ -59,7 +74,8 @@ def new_state():
     to arrive (or vice versa)."""
     return {'assistant_msg_ids': set(), 'parts_by_id': {}, 'part_order': [],
             'turn_msg_id': None, 'meta_by_msg': {}, 'subtasks': {},
-            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
+            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {},
+            '_raw_parts_by_id': {}, '_message_infos': {}}
 
 
 def _new_subtask_scope(parent_id, depth, agent, description, prompt=None):
@@ -67,7 +83,8 @@ def _new_subtask_scope(parent_id, depth, agent, description, prompt=None):
             'parent_id': parent_id, 'depth': depth, 'agent': agent,
             'description': description, 'status': 'running', 'error': None,
             'prompt': prompt,
-            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {}}
+            '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {},
+            '_raw_parts_by_id': {}, '_message_infos': {}}
 
 
 MAX_SUBTASK_DEPTH = 5
@@ -105,6 +122,7 @@ def apply_event(state, evt, opencode_session_id):
         info = props.get('info') or {}
         if info.get('role') == 'assistant' and info.get('id'):
             scope['assistant_msg_ids'].add(info['id'])
+            scope.setdefault('_message_infos', {})[info['id']] = dict(info)
             if not is_subtask and state['turn_msg_id'] is None:
                 state['turn_msg_id'] = info['id']
             m = meta_from_info(info)
@@ -120,6 +138,7 @@ def apply_event(state, evt, opencode_session_id):
         part = props.get('part') or {}
         pid = part.get('id')
         if pid and part.get('messageID') in scope['assistant_msg_ids']:
+            scope.setdefault('_raw_parts_by_id', {})[pid] = dict(part)
             ptype = part.get('type')
             if ptype in ('text', 'tool', 'reasoning'):
                 # tool:'task' parts carry the real child session ID in
@@ -313,6 +332,78 @@ def build_content(state):
                           subtask_id_map=state.get('_subtask_part_id_map'))
 
 
+def _interactive_message(scope, session_id):
+    infos = scope.get('_message_infos', {})
+    message_id = scope.get('turn_msg_id') or next(iter(infos), None)
+    info = dict(infos.get(message_id) or {
+        'role': 'assistant', 'id': message_id or 'anonymous',
+    })
+    info['sessionID'] = session_id
+    parts = []
+    raw_parts = scope.get('_raw_parts_by_id', {})
+    for part_id in scope.get('part_order', []):
+        part = raw_parts.get(part_id)
+        if part is not None:
+            parts.append(part)
+            continue
+        mapped = scope.get('parts_by_id', {}).get(part_id) or {}
+        if mapped.get('type') == 'text':
+            parts.append({'id': part_id, 'type': 'text', 'text': mapped.get('text', '')})
+        elif mapped.get('type') == 'tool_use':
+            parts.append({'id': part_id, 'type': 'tool', 'tool': mapped.get('name'),
+                          'state': {'status': mapped.get('status'),
+                                    'output': mapped.get('result')}})
+    return {'info': info, 'parts': parts}
+
+
+def _interactive_subtask_records(state, parent_id=None):
+    records = []
+    for sid, sub in state.get('subtasks', {}).items():
+        if sub.get('parent_id') != parent_id:
+            continue
+        records.append({
+            'id': sid,
+            'agent': sub.get('agent'),
+            'description': sub.get('description'),
+            'status': sub.get('status'),
+            'messages': [_interactive_message(sub, sid)],
+            'subtasks': _interactive_subtask_records(state, sid),
+        })
+    return records
+
+
+def _interactive_observations(session_id, state):
+    from utils.langfuse_config import trace_id_for
+    turn_id = state.get('turn_msg_id') or 'anonymous'
+    context = {
+        'session_id': session_id,
+        'trace_id': trace_id_for(session_id, None, turn_id),
+        'task_id': turn_id,
+    }
+    observations = []
+    from utils.langfuse_mapping import (
+        map_open_code_message, map_subtask_tree, normalize_observations)
+    observations.extend(map_open_code_message(_interactive_message(state, session_id), context))
+    observations.extend(map_subtask_tree(_interactive_subtask_records(state), {}, context))
+    return normalize_observations(observations, application_session_id=session_id)
+
+
+def persist_interactive_snapshot(session_id, state):
+    """Commit the root and all discovered subtasks before one export."""
+    state['_defer_langfuse'] = True
+    try:
+        root_persisted = persist_turn(session_id, state)
+        subtasks_persisted = persist_subtasks(session_id, state)
+    finally:
+        state.pop('_defer_langfuse', None)
+    if root_persisted and subtasks_persisted:
+        _export_observations(_interactive_observations(session_id, state))
+    return root_persisted and subtasks_persisted
+
+
+_persist_interactive_snapshot = persist_interactive_snapshot
+
+
 def persist_turn(session_id, state):
     """Idempotent upsert of the accumulated assistant message. No-op if the
     content is empty. Keyed on the turn's OpenCode message id so the browser
@@ -323,6 +414,7 @@ def persist_turn(session_id, state):
     row_id = state.get('turn_msg_id') or ('msg_' + secrets.token_hex(6))
     meta = public_meta(aggregate_metas(list(state.get('meta_by_msg', {}).values())))
     meta_json = json.dumps(meta) if meta else None
+    persisted = False
     try:
         with get_db() as conn:
             cur = conn.cursor()
@@ -333,9 +425,13 @@ def persist_turn(session_id, state):
                 "  meta = COALESCE(EXCLUDED.meta, ai_chat_messages.meta)",
                 (row_id, session_id, json.dumps(content), meta_json),
             )
+        persisted = True
     except Exception as e:
         # Don't break the listener/stream on a DB hiccup — but no longer silent.
         logger.warning('persist_turn DB error session=%s row=%s: %s', session_id, row_id, e)
+    if persisted and not state.get('_defer_langfuse'):
+        _export_observations(_interactive_observations(session_id, state))
+    return persisted
 
 
 def persist_subtasks(root_session_id, state):
@@ -347,6 +443,7 @@ def persist_subtasks(root_session_id, state):
     用当前状态现查现填。Best-effort；不抛异常，不打断调用方的事件循环。"""
     snapshot = _status_snapshot(state)
     subtask_id_map = state.get('_subtask_part_id_map')
+    persisted = True
     for sid, sub in state.get('subtasks', {}).items():
         try:
             content = _flatten_scope(sub, snapshot, subtask_id_map=subtask_id_map)
@@ -381,8 +478,10 @@ def persist_subtasks(root_session_id, state):
                     )
                 conn.commit()
         except Exception as e:
+            persisted = False
             logger.warning('persist_subtasks DB error root=%s subtask=%s: %s',
                            root_session_id, sid, e)
+    return persisted
 
 
 def _synth_message_event(info):
@@ -587,8 +686,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # 发现委托——两种情况都要把顶层重新 flatten 一遍：占位气泡的
             # status 现查现填（_flatten_scope），子代理状态变了但顶层没有
             # "新事件"时，只有重新持久化顶层才会带出刷新后的状态。
-            persist_turn(sid, state)
-            persist_subtasks(sid, state)
+            persist_interactive_snapshot(sid, state)
             continue
         if sig == 'idle':
             try:
@@ -596,8 +694,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                                    opencode_session_id, directory=directory)
             except Exception as e:
                 logger.warning('backfill failed session=%s: %s', sid, e)
-            persist_turn(sid, state)
-            persist_subtasks(sid, state)
+            persist_interactive_snapshot(sid, state)
             _record_workspace_files(sid, directory)
             logger.debug('persist listener idle->persisted+exit session=%s parts=%d',
                          sid, len(state.get('part_order', [])))
@@ -612,7 +709,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()
             if now - last_persist >= INCREMENTAL_PERSIST_INTERVAL:
-                persist_turn(sid, state)
+                persist_interactive_snapshot(sid, state)
                 last_persist = now
 
 

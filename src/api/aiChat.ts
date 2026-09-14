@@ -8,11 +8,14 @@
  */
 
 import { get, post, del, patch, authParam } from '@/utils/request'
+import type { AiTraceMetadata } from '@/types/aiChat'
 
 export interface AiSession {
   id: string
   title: string
   workspacePath: string
+  traceUrl?: string
+  traceId?: string
 }
 
 export interface AiSessionSummary {
@@ -50,6 +53,8 @@ export interface AiMessage {
   /** 运行中插话的排队标记：true = 尚未发送给 OpenCode，等当前回合结束自动发出 */
   queued?: boolean
 }
+
+export type { AiTraceMetadata }
 
 export type AiContentPart =
   | { type: 'text'; text: string }
@@ -149,7 +154,7 @@ export function clearSession(id: string) {
 
 export function getMessages(id: string, since?: string) {
   const q = since ? `?since=${encodeURIComponent(since)}` : ''
-  return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
+  return get<{ messages: AiMessage[] } & AiTraceMetadata>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
 }
 
 export interface SubtaskSummary {

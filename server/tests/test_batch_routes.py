@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import pytest
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -148,6 +149,60 @@ def test_detail_returns_children(setup_app, tmp_path, monkeypatch, db_conn):
         assert [s['batch_seq'] for s in body['sessions']] == [0, 1]
     finally:
         client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+
+
+def test_detail_returns_trace_metadata_only_for_owned_batch(setup_app, monkeypatch):
+    client, admin_headers = setup_app
+    from routes import ai_chat_batches
+
+    monkeypatch.setattr(
+        'config.LANGFUSE_SETTINGS',
+        SimpleNamespace(
+            enabled=True,
+            host='https://langfuse.example',
+            project_id='project-1',
+            public_key='pk',
+            secret_key='sk',
+            sample_rate=1.0,
+        ),
+    )
+    monkeypatch.setattr(
+        ai_chat_batches,
+        'get_batch_detail',
+        lambda user_id, batch_id: {
+            'batch': {'id': batch_id, 'user_id': user_id},
+            'sessions': [{
+                'id': 'child-1', 'batch_id': batch_id,
+                'trace_turn_id': 'child-1:user',
+            }],
+        },
+    )
+
+    response = client.get('/ai/chat/batches/batch-1', headers=admin_headers)
+
+    assert response.status_code == 200
+    session = response.get_json()['sessions'][0]
+    assert session['traceId'] == '26f7194a9f6f5db42d30a1e6c1c63be5'
+    assert session['traceUrl'] == (
+        'https://langfuse.example/project/project-1/traces/'
+        '26f7194a9f6f5db42d30a1e6c1c63be5'
+    )
+    assert 'secret' not in response.get_data(as_text=True).lower()
+
+
+def test_detail_does_not_disclose_unowned_batch_trace(setup_app, monkeypatch):
+    client, admin_headers = setup_app
+    from routes import ai_chat_batches
+
+    monkeypatch.setattr(
+        ai_chat_batches,
+        'get_batch_detail',
+        lambda user_id, batch_id: None,
+    )
+
+    response = client.get('/ai/chat/batches/other-user-batch', headers=admin_headers)
+
+    assert response.status_code == 404
 
 
 def test_delete_cascades_sessions(setup_app, db_conn, tmp_path, monkeypatch):

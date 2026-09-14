@@ -46,6 +46,20 @@ from utils.notifier import create_notification
 logger = logging.getLogger(__name__)
 
 
+def get_langfuse_exporter():
+    from utils.langfuse_exporter import get_langfuse_exporter as factory
+    return factory()
+
+
+def _export_observations(observations):
+    if not observations:
+        return
+    try:
+        get_langfuse_exporter().submit(observations)
+    except Exception as e:
+        logger.warning('Langfuse export failed: %s', e)
+
+
 def _fmt_elapsed(secs: float) -> str:
     """把耗时秒数格式化为「X 分 Y 秒」/「Y 秒」（与交互式长任务通知一致）。"""
     s = max(0, int(secs))
@@ -822,10 +836,18 @@ class BatchWorker:
             # live view works without depending on OpenCode's SSE reaching a
             # background listener. Idempotent (keyed on OpenCode message ids).
             def _persist_progress():
-                self._persist_conversation(sid, prompt, oc_session_id, None, directory=ws)
+                self._persist_conversation(
+                    sid, prompt, oc_session_id, None, directory=ws,
+                    batch_id=batch_id, turn_id=continuation_message_id,
+                    agent=agent, model=model,
+                )
             preview, final_msg = self._await_finished(oc_session_id, sid, directory=ws,
                                                       on_progress=_persist_progress)
-            self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
+            self._persist_conversation(
+                sid, prompt, oc_session_id, final_msg, directory=ws,
+                batch_id=batch_id, turn_id=continuation_message_id,
+                agent=agent, model=model,
+            )
             self._mark_done(sid, batch_id, last_preview=preview,
                             clear_continue=is_continue)
             self._notify_scan(session_row, final_msg, ok=True)
@@ -1327,7 +1349,9 @@ class BatchWorker:
 
     def _persist_conversation(self, session_id: str, prompt: str,
                               oc_session_id: str, assistant_msg: dict | None,
-                              directory: str = ''):
+                              directory: str = '', *, batch_id: str | None = None,
+                              turn_id: str | None = None, agent: str | None = None,
+                              model: str | None = None):
         """Persist the FULL conversation: the user prompt + every assistant
         message (mapped to text + tool_use parts) read from OpenCode's REST
         message list, so the batch child's thread shows tool bubbles like an
@@ -1401,8 +1425,62 @@ class BatchWorker:
                              _json.dumps(meta) if meta else None),
                         )
                 conn.commit()
+            from utils.langfuse_mapping import (
+                map_open_code_message, map_subtask_tree, normalize_observations)
+            from utils.langfuse_config import trace_id_for
+            trace_id = trace_id_for(session_id, batch_id, turn_id)
+            context = {
+                'session_id': session_id,
+                'trace_id': trace_id,
+                'task_id': session_id,
+                'batch_id': batch_id,
+                'agent': agent,
+                'model': model,
+            }
+            telemetry_messages = self._messages_for_telemetry(raw)
+            observations = []
+            for message in telemetry_messages:
+                observations.extend(map_open_code_message(message, context))
+            records = self._subtask_records(known, child_messages)
+            observations.extend(map_subtask_tree(records, {}, context))
+            _export_observations(normalize_observations(
+                observations, application_session_id=session_id))
         except Exception:
             traceback.print_exc()
+
+    @staticmethod
+    def _messages_for_telemetry(messages):
+        """Keep only the latest turn so continuation exports a new turn."""
+        last_user = -1
+        for index, message in enumerate(messages or []):
+            if (message.get('info') or {}).get('role') == 'user':
+                last_user = index
+        if last_user >= 0:
+            return [message for message in messages[last_user + 1:]
+                    if (message.get('info') or {}).get('role') == 'assistant']
+        return [message for message in messages or []
+                if (message.get('info') or {}).get('role') == 'assistant']
+
+    @staticmethod
+    def _subtask_records(known, child_messages):
+        records = {}
+        for sid, info in known.items():
+            records[sid] = {
+                'id': sid,
+                'agent': info.get('agent'),
+                'description': info.get('description'),
+                'status': info.get('status'),
+                'messages': child_messages.get(sid, []),
+                'subtasks': [],
+            }
+        roots = []
+        for sid, info in known.items():
+            parent = info.get('parent_id')
+            if parent in records:
+                records[parent]['subtasks'].append(records[sid])
+            else:
+                roots.append(records[sid])
+        return roots
 
     def _mark_done(self, session_id: str, batch_id: str,
                    last_preview: str | None, clear_continue: bool = False):

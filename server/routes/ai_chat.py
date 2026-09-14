@@ -53,8 +53,8 @@ from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
 from utils.chat_persist import (
-    ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
-    has_listener,
+    ensure_listener, stop_listener, new_state, apply_event, event_session_id,
+    has_listener, persist_interactive_snapshot,
 )
 from utils.session_token import generate_token, revoke_token
 from utils.subtask_repo import get_subtask_messages
@@ -265,6 +265,32 @@ def _session_title(stored_title, batch_id, batch_input_file):
         basename = batch_input_file.rsplit('/', 1)[-1]
         return f'[批] {basename}'
     return '新会话'
+
+
+def _trace_metadata(session_id: str, batch_id: str | None, turn_id: str | None):
+    """Return an owner-scoped, secret-free link to the latest exported trace."""
+    if not turn_id:
+        return {}
+    from config import LANGFUSE_SETTINGS
+    if not getattr(LANGFUSE_SETTINGS, 'enabled', False):
+        return {}
+    if not getattr(LANGFUSE_SETTINGS, 'public_key', '') or not getattr(LANGFUSE_SETTINGS, 'secret_key', ''):
+        return {}
+    host = (getattr(LANGFUSE_SETTINGS, 'host', '') or '').rstrip('/')
+    project_id = (getattr(LANGFUSE_SETTINGS, 'project_id', '') or '').strip()
+    if not host:
+        return {}
+    from utils.langfuse_config import trace_id_for
+    from urllib.parse import quote
+    from utils.langfuse_config import should_sample
+    trace_id = trace_id_for(session_id, batch_id, turn_id)
+    is_sampled = should_sample(LANGFUSE_SETTINGS, trace_id)
+    metadata = {'traceId': trace_id, 'isSampled': is_sampled}
+    if project_id and is_sampled:
+        metadata['traceUrl'] = (
+            f'{host}/project/{quote(project_id, safe="")}/traces/{quote(trace_id, safe="")}'
+        )
+    return metadata
 
 
 def _ilike_pattern(q: str) -> str:
@@ -608,6 +634,7 @@ def get_messages(sid):
             )
         rows = cur.fetchall()
 
+    batch_id = sess[5] if len(sess) > 5 else None
     return jsonify({
         'messages': [
             {'id': r[0], 'role': r[1], 'content': r[2],
@@ -615,6 +642,11 @@ def get_messages(sid):
              'meta': r[4]}
             for r in rows
         ],
+        **_trace_metadata(
+            sid,
+            batch_id,
+            next((r[0] for r in reversed(rows) if r[1] == ('user' if batch_id else 'assistant')), None),
+        ),
     })
 
 
@@ -753,7 +785,7 @@ def sse_events(sid):
                     # duplicate. Otherwise defer to the background listener when
                     # one owns the session, else persist as a fallback.
                     if state['turn_msg_id'] and not sess[5] and not has_listener(sid):
-                        persist_turn(sid, state)
+                        persist_interactive_snapshot(sid, state)
                     state = new_state()
 
                 yield _format_sse(etype, props)

@@ -3,6 +3,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from utils.langfuse_config import load_langfuse_settings
+
 # Load the per-deployment .env that sits next to this file (i.e. `server/.env`).
 # `override=False` keeps real environment variables (set by the shell, CI, or
 # docker-compose) winning over file contents — useful so prod can layer secrets
@@ -100,6 +102,10 @@ AI_CHAT_NOTIFY_MIN_SECONDS = _to_int(os.getenv('AI_CHAT_NOTIFY_MIN_SECONDS'), 30
 # provider's default model — that lets the deployment swap providers without
 # editing this file. Override via OPENCODE_MODEL env var or `server/.env`.
 OPENCODE_MODEL        = os.getenv('OPENCODE_MODEL', '').strip()
+
+# Optional Langfuse export configuration. The helper only parses settings; the
+# SDK is intentionally not imported here, especially when export is disabled.
+LANGFUSE_SETTINGS = load_langfuse_settings()
 
 
 def get_default_chat_model() -> str:

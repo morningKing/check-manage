@@ -9,6 +9,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
 from auth import login_required, write_required
+from routes.ai_chat import _trace_metadata
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                               cleanup_batch_workspaces, WorkspacePathError,
                               safe_resolve)
@@ -29,6 +30,17 @@ from utils.batch_repo import (
 
 ai_chat_batches_bp = Blueprint('ai_chat_batches', __name__,
                                url_prefix='/ai/chat/batches')
+
+
+def _public_detail(body):
+    if not body:
+        return body
+    for session in body.get('sessions', []):
+        session.update(_trace_metadata(
+            session['id'], body['batch']['id'], session.get('trace_turn_id'),
+        ))
+        session.pop('trace_turn_id', None)
+    return body
 
 
 @ai_chat_batches_bp.post('/staging/upload')
@@ -87,7 +99,7 @@ def create():
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
-    return jsonify(result), 201
+    return jsonify(_public_detail(result)), 201
 
 
 @ai_chat_batches_bp.get('')
@@ -105,7 +117,7 @@ def detail(batch_id):
     body = get_batch_detail(g.current_user['userId'], batch_id)
     if not body:
         return jsonify({'error': 'not found'}), 404
-    return jsonify(body)
+    return jsonify(_public_detail(body))
 
 
 @ai_chat_batches_bp.patch('/<batch_id>')
@@ -120,7 +132,7 @@ def update_config(batch_id):
                                  provision_repo=provision_repo, provision_ref=provision_ref)
     if result is None:
         return jsonify({'error': 'not found'}), 404
-    return jsonify(result)
+    return jsonify(_public_detail(result))
 
 
 @ai_chat_batches_bp.delete('/<batch_id>')
@@ -182,7 +194,7 @@ def append(batch_id):
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
     get_worker().notify()
-    return jsonify(result)
+    return jsonify(_public_detail(result))
 
 
 @ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/reexecute')
@@ -196,7 +208,7 @@ def reexecute(batch_id, session_id):
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
     get_worker().notify()
-    return jsonify(result)
+    return jsonify(_public_detail(result))
 
 
 @ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/continue')

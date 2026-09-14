@@ -711,6 +711,64 @@ def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypa
         assert oc_id == 'oc-recovered'
 
 
+def test_real_continue_child_path_exports_a_new_turn_trace(
+        user_id, db_conn, monkeypatch, tmp_path):
+    """Use batch_repo.continue_child, then run the queued row through the worker."""
+    import utils.batch_engine as eng
+    from utils.batch_engine import BatchWorker
+    from utils.batch_repo import continue_child
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    sid = sids[0]
+    initial_raw = [
+        {'info': {'role': 'user', 'id': 'initial-user'},
+         'parts': [{'type': 'text', 'text': 'p'}]},
+        {'info': {'role': 'assistant', 'id': 'initial-assistant', 'finish': 'stop'},
+         'parts': [{'type': 'text', 'id': 'initial-text', 'text': 'first answer'}]},
+    ]
+    continuation_raw = initial_raw + [
+        {'info': {'role': 'user', 'id': 'continuation-user'},
+         'parts': [{'type': 'text', 'text': 'follow up'}]},
+        {'info': {'role': 'assistant', 'id': 'continuation-assistant',
+                  'finish': 'stop'},
+         'parts': [{'type': 'text', 'id': 'continuation-text',
+                    'text': 'continued answer'}]},
+    ]
+    phase = {'continuation': False}
+    fake_oc = MagicMock()
+    fake_oc.create_session.return_value = 'oc-initial'
+    fake_oc.list_messages.return_value = [{
+        'role': 'assistant', 'finished': True,
+        'content': [{'type': 'text', 'text': 'answer'}],
+    }]
+    fake_oc.get_messages.side_effect = lambda oc_id, directory='': (
+        continuation_raw if phase['continuation'] else initial_raw)
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    monkeypatch.setattr(eng, '_prepare_workspace', lambda *args, **kwargs: str(tmp_path))
+    monkeypatch.setattr(eng, 'render_history_block', lambda *args, **kwargs: '')
+    exported = []
+
+    class Exporter:
+        def submit(self, observations):
+            exported.append(list(observations))
+
+    monkeypatch.setattr(eng, 'get_langfuse_exporter', lambda: Exporter())
+worker = BatchWorker()
+    worker._record_workspace_files = lambda *args, **kwargs: None
+    worker._run_one(worker._claim_pending_sessions(limit=1)[0])
+
+    continuation = continue_child(bid, sid, user_id, 'follow up', [], None, None)
+    assert continuation['status'] == 'pending'
+    phase['continuation'] = True
+    worker._run_one(worker._claim_pending_sessions(limit=1)[0])
+
+    traces = [items[0].trace_id for items in exported if items]
+    assert len(set(traces)) == 2
+    assert all(item.session_id == sid for items in exported for item in items)
+    from utils.langfuse_config import trace_id_for
+    assert traces[-1] == trace_id_for(sid, bid, continuation['message_id'])
+
+
 def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_conn, monkeypatch, tmp_path):
     """恢复本身也失败（新 session 建出来了，但重发也炸了）：应该落 failed，
     错误信息反映的是恢复失败的原因，且只重试一次（不会死循环）。"""
@@ -1593,6 +1651,118 @@ def test_persist_conversation_child_trace_includes_user_reasoning_and_tools(monk
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
             conn.commit()
+
+
+def test_persist_conversation_exports_correlated_snapshot_after_commit(
+        user_id, db_conn, monkeypatch):
+    import utils.batch_engine as eng
+    from utils.langfuse_config import observation_id, trace_id_for
+
+    sid = 's-be-lf-' + uuid.uuid4().hex[:6]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+            "session_token, token_expires_at) VALUES "
+            "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+            (sid, user_id, 'tok-' + uuid.uuid4().hex),
+        )
+    db_conn.commit()
+
+    top_msgs = [{
+        'info': {'role': 'assistant', 'id': 'm-lf-root', 'finish': 'stop'},
+        'parts': [
+            {'type': 'tool', 'id': 'tool-lf', 'tool': 'task',
+             'state': {'status': 'completed',
+                       'metadata': {'sessionId': 'child-lf'}}},
+            {'type': 'text', 'id': 'text-lf', 'text': 'done'},
+        ],
+    }]
+    child_msgs = [{
+        'info': {'role': 'assistant', 'id': 'child-msg-lf', 'finish': 'stop'},
+        'parts': [{
+            'type': 'tool', 'id': 'child-tool-lf', 'tool': 'task',
+            'state': {'status': 'pending',
+                      'metadata': {'sessionId': 'grandchild-lf'}},
+        }],
+    }]
+    grandchild_msgs = [{
+        'info': {'role': 'assistant', 'id': 'grandchild-msg-lf',
+                 'error': {'name': 'ProviderAuthError', 'message': 'bad key'}},
+        'parts': [],
+    }]
+    fake_oc = MagicMock()
+    fake_oc.get_messages.side_effect = lambda oc_id, directory='': (
+        top_msgs if oc_id == 'oc-lf-root' else
+        child_msgs if oc_id == 'child-lf' else grandchild_msgs)
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+    exported = []
+
+    class Exporter:
+        def submit(self, observations):
+            exported.append(list(observations))
+
+    monkeypatch.setattr(eng, 'get_langfuse_exporter', lambda: Exporter())
+    worker = eng.BatchWorker()
+    worker._persist_conversation(
+        sid, 'prompt', 'oc-lf-root', None, directory='/tmp/x',
+        batch_id='batch-lf', turn_id='turn-lf',
+)
+
+    assert len(exported) == 1
+    observations = exported[0]
+    assert all(item.trace_id == trace_id_for(sid, 'batch-lf', 'turn-lf')
+               for item in observations)
+    assert all(item.session_id == sid for item in observations)
+    assert any(item.metadata.get('batch_id') == 'batch-lf' for item in observations)
+    assert any(item.metadata.get('task_id') == 'child-lf' for item in observations)
+    task_observations = [item for item in observations if item.name == 'invoke_agent']
+    child_task_id = observation_id('invoke_agent', 'child-lf')
+    grandchild_task_id = observation_id('invoke_agent', 'grandchild-lf')
+    assert [item.id for item in task_observations].count(child_task_id) == 1
+    assert [item.id for item in task_observations].count(grandchild_task_id) == 1
+    child_task = next(item for item in task_observations if item.id == child_task_id)
+    assert child_task.parent_id is None
+    nested = next(item for item in observations if item.id == grandchild_task_id)
+    assert nested.parent_id == child_task_id
+    assert nested.status == 'failed'
+    first_ids = [item.id for item in observations]
+
+    worker._persist_conversation(
+        sid, 'prompt', 'oc-lf-root', None, directory='/tmp/x',
+        batch_id='batch-lf', turn_id='turn-lf',
+    )
+    assert [item.id for item in exported[1]] == first_ids
+
+
+def test_persist_conversation_exporter_failure_does_not_fail_worker(
+        user_id, db_conn, monkeypatch):
+    import utils.batch_engine as eng
+
+    sid = 's-be-lf-fail-' + uuid.uuid4().hex[:6]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+            "session_token, token_expires_at) VALUES "
+            "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+            (sid, user_id, 'tok-' + uuid.uuid4().hex),
+        )
+    db_conn.commit()
+    fake_oc = MagicMock()
+    fake_oc.get_messages.return_value = [{
+        'info': {'role': 'assistant', 'id': 'm-lf-fail', 'finish': 'stop'},
+        'parts': [{'type': 'text', 'id': 'p-lf-fail', 'text': 'done'}],
+    }]
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+
+    class BrokenExporter:
+        def submit(self, observations):
+            raise RuntimeError('langfuse unavailable')
+
+    monkeypatch.setattr(eng, 'get_langfuse_exporter', lambda: BrokenExporter())
+    eng.BatchWorker()._persist_conversation(
+        sid, 'prompt', 'oc-lf-fail', None, directory='/tmp/x',
+        batch_id='batch-lf', turn_id='turn-lf',
+    )
 
 
 # ---------------------------------------------------------------------------

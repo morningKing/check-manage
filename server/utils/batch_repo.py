@@ -118,7 +118,11 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                 return None
             cur.execute(
                 "SELECT id, status, batch_seq, batch_input_file, workspace_path, "
-                "       opencode_session_id, error_message, last_message_preview "
+                "       opencode_session_id, error_message, last_message_preview, "
+                "       (SELECT m.id FROM ai_chat_messages m "
+                "          WHERE m.session_id = ai_chat_sessions.id "
+                "            AND m.role = 'user' "
+                "          ORDER BY m.created_at DESC LIMIT 1) AS trace_turn_id "
                 "FROM ai_chat_sessions WHERE batch_id=%s ORDER BY batch_seq",
                 (batch_id,),
             )

@@ -4,6 +4,7 @@ export type BatchStatus = 'pending' | 'running' | 'completed' | 'partial' | 'fai
 // 调用方取消后，这条子会话状态会经同一个 batch worker 落回这张表，UI 侧的批
 // 任务详情/管理页也会看到它，所以类型和展示分支都要能处理它。
 export type BatchSessionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+import type { AiTraceMetadata } from './aiChat'
 
 export interface AiChatBatch {
   id: string
@@ -35,6 +36,8 @@ export interface AiChatBatchSession {
   opencode_session_id: string | null
   error_message: string | null
   last_message_preview: string | null
+  traceUrl?: AiTraceMetadata['traceUrl']
+  traceId?: AiTraceMetadata['traceId']
 }
 
 export interface AiChatBatchDetail {

@@ -33,6 +33,124 @@ beforeEach(() => {
 })
 
 describe('useAiChatStore', () => {
+  it('_reloadPersisted refreshes trace metadata after a manual continuation', async () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 'sess_1'
+    store.messages['sess_1'] = [{
+      id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'old' }],
+    }]
+    store.streaming['sess_1'] = false
+    store.traceBySession['sess_1'] = {
+      traceId: 'sess_1:turn:old', traceUrl: 'https://langfuse.example/trace/sess_1:turn:old',
+    }
+    vi.mocked(api.getMessages).mockResolvedValue({
+      messages: [{ id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'new' }] }],
+      traceId: 'sess_1:turn:continuation',
+      traceUrl: 'https://langfuse.example/trace/sess_1:turn:continuation',
+    })
+
+    await store._reloadPersisted('sess_1')
+
+    expect(store.traceBySession['sess_1']).toStrictEqual({
+      traceId: 'sess_1:turn:continuation',
+      traceUrl: 'https://langfuse.example/trace/sess_1:turn:continuation',
+    })
+  })
+
+  it('_reloadPersisted ignores an out-of-order response from an older turn', async () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 'sess_1'
+    store.messages['sess_1'] = [{
+      id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'old' }],
+    }]
+    store.streaming['sess_1'] = false
+    store.traceBySession['sess_1'] = {
+      traceId: 'sess_1:turn:initial', traceUrl: 'https://langfuse.example/trace/sess_1:turn:initial',
+    }
+    let resolveOld!: (history: any) => void
+    let resolveNew!: (history: any) => void
+    vi.mocked(api.getMessages)
+      .mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveNew = resolve }))
+
+    const oldReload = store._reloadPersisted('sess_1')
+    store._beginTurn('sess_1')
+    store.streaming['sess_1'] = false
+    const newReload = store._reloadPersisted('sess_1')
+
+    resolveNew({
+      messages: [{ id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'new' }] }],
+      traceId: 'sess_1:turn:new', traceUrl: 'https://langfuse.example/trace/sess_1:turn:new',
+    })
+    await newReload
+    resolveOld({
+      messages: [{ id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'old' }] }],
+      traceId: 'sess_1:turn:old', traceUrl: 'https://langfuse.example/trace/sess_1:turn:old',
+    })
+    await oldReload
+
+    expect(store.traceBySession['sess_1']).toStrictEqual({
+      traceId: 'sess_1:turn:new', traceUrl: 'https://langfuse.example/trace/sess_1:turn:new',
+    })
+    expect(store.messages['sess_1'][0].id).toBe('msg_2')
+  })
+
+  it('_reloadPersisted ignores an older response from the same turn epoch', async () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 'sess_1'
+    store.messages['sess_1'] = [{
+      id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'current' }],
+    }]
+    store.streaming['sess_1'] = false
+    let resolveOlder!: (history: any) => void
+    let resolveLatest!: (history: any) => void
+    vi.mocked(api.getMessages)
+      .mockReturnValueOnce(new Promise(resolve => { resolveOlder = resolve }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveLatest = resolve }))
+
+    const olderReload = store._reloadPersisted('sess_1')
+    const latestReload = store._reloadPersisted('sess_1')
+    resolveLatest({
+      messages: [{ id: 'msg_latest', role: 'assistant', content: [{ type: 'text', text: 'latest' }] }],
+      traceId: 'sess_1:turn:latest', traceUrl: 'https://langfuse.example/trace/sess_1:turn:latest',
+    })
+    await latestReload
+    resolveOlder({
+      messages: [{ id: 'msg_older', role: 'assistant', content: [{ type: 'text', text: 'older' }] }],
+      traceId: 'sess_1:turn:older', traceUrl: 'https://langfuse.example/trace/sess_1:turn:older',
+    })
+    await olderReload
+
+    expect(store.traceBySession['sess_1']).toStrictEqual({
+      traceId: 'sess_1:turn:latest', traceUrl: 'https://langfuse.example/trace/sess_1:turn:latest',
+    })
+    expect(store.messages['sess_1'][0].id).toBe('msg_latest')
+  })
+
+  it('_reloadPersisted keeps current trace metadata when persisted messages are shorter', async () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 'sess_1'
+    store.messages['sess_1'] = [
+      { id: 'msg_1', role: 'user', content: [{ type: 'text', text: 'question' }] },
+      { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+    ]
+    store.streaming['sess_1'] = false
+    store.traceBySession['sess_1'] = {
+      traceId: 'sess_1:turn:current', traceUrl: 'https://langfuse.example/trace/sess_1:turn:current',
+    }
+    vi.mocked(api.getMessages).mockResolvedValue({
+      messages: [{ id: 'msg_1', role: 'user', content: [{ type: 'text', text: 'question' }] }],
+      traceId: 'sess_1:turn:stale', traceUrl: 'https://langfuse.example/trace/sess_1:turn:stale',
+    })
+
+    await store._reloadPersisted('sess_1')
+
+    expect(store.traceBySession['sess_1']).toStrictEqual({
+      traceId: 'sess_1:turn:current', traceUrl: 'https://langfuse.example/trace/sess_1:turn:current',
+    })
+    expect(store.messages['sess_1']).toHaveLength(2)
+  })
+
   it('createSession populates activeSession and opens stream', async () => {
     vi.mocked(api.createSession).mockResolvedValue({
       id: 'sess_1', title: '新会话', workspacePath: '/ws',
