@@ -65,6 +65,7 @@ export type AiContentPart =
   | { type: 'mcp_services'; servers: McpServer[] }
   | { type: 'lsp_formatter'; lsp: LspServerStatus[]; formatters: FormatterStatus[]; error?: string }
   | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
+  | { type: 'error'; text: string }
 
 // OpenCode's built-in interactive multi-choice tool ("question"). Decoupled
 // from AiContentPart/message history on purpose: this is live turn-blocking
@@ -244,6 +245,12 @@ export function listFiles(id: string) {
   )
 }
 
+/** 批任务子会话 → 所属批次 id(404 = 非批子会话)。通知/URL 直开批子会话用。 */
+export function getBatchOfSession(sessionId: string) {
+  return get<{ batchId: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(sessionId)}/batch`, undefined, { silent: true })
+}
+
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean; ok: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },
@@ -408,9 +415,13 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
         h.onEvent({ event: 'message', data: e.data })
       }
     }
-    // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy
+    // Real OpenCode event names (spec §12.4), re-emitted by the Flask SSE proxy.
+    // OpenCode ≥1.15 streams token deltas as `message.part.delta` (part creation
+    // still arrives as a `message.part.updated` snapshot); without this listener
+    // every turn renders all at once after session.idle instead of streaming.
     for (const name of [
-      'message.updated', 'message.part.updated', 'session.idle', 'session.error',
+      'message.updated', 'message.part.updated', 'message.part.delta',
+      'session.idle', 'session.error',
       'question.asked', 'question.replied', 'question.rejected',
     ]) {
       es.addEventListener(name, (e: MessageEvent) => {

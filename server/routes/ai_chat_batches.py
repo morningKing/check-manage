@@ -16,14 +16,17 @@ from utils.workspace import (batch_staging_dir, batch_workspace_root,
 from utils.batch_repo import (
     MAX_FILES_PER_BATCH,
     append_to_batch,
+    cancel_batch,
     cancel_child,
     create_batch,
     delete_batch,
     get_batch_detail,
     list_batches,
+    pause_batch,
     reexecute_child,
     reset_failed_to_pending,
     continue_child,
+    resume_batch,
     update_batch_config,
 )
 
@@ -148,6 +151,57 @@ def remove(batch_id):
     cleanup_batch_workspaces(workspace_root, g.current_user['userId'], body['sessions'])
     delete_batch(g.current_user['userId'], batch_id)
     return '', 204
+
+
+@ai_chat_batches_bp.post('/<batch_id>/cancel')
+@login_required
+def cancel(batch_id):
+    """中断整个批次：排队中的子任务直接取消，运行中的协作式中断，已暂停的
+    同步落成 cancelled。中断不是终局 —— /resume 可把 cancelled 子任务在原
+    工作上继续执行。"""
+    try:
+        result = cancel_batch(g.current_user['userId'], batch_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/pause')
+@login_required
+def pause(batch_id):
+    """暂停整批排队/运行中的子任务：运行中的回合被协作式 abort 后落在非终态
+    'paused'（不占 failed 计数）。之后 /resume 从原 OpenCode 会话续跑。与
+    /cancel（中断）的区别：暂停是"温和的停"，语义上是执行中的歇脚。"""
+    try:
+        result = pause_batch(g.current_user['userId'], batch_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/resume')
+@login_required
+def resume(batch_id):
+    """继续执行已暂停/已中断的批任务：paused/cancelled 子任务恢复为 pending——
+    已开跑过的在原 OpenCode 会话/工作区上续跑（保留历史），排队中被停的正常
+    执行。与 retry-failed（重试 failed）互补，各自动各自的状态集合。"""
+    try:
+        result = resume_batch(g.current_user['userId'], batch_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
 
 
 @ai_chat_batches_bp.post('/<batch_id>/retry-failed')

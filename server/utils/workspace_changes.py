@@ -13,6 +13,9 @@ auto-committed — its untracked files are the agent's real outputs we want show
 """
 import os
 import subprocess
+import sys
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 
 MAX_CHANGES = 500
 MAX_DIFF_LINES = 2000      # cap added-file content & diff text by lines
@@ -192,7 +195,8 @@ def _run_git(args, timeout=20):
     Chinese filenames) *inside subprocess's reader thread*. That error doesn't
     propagate, so subprocess.run returns rc=0 with stdout=None — the cause of
     "'NoneType' object has no attribute 'split'" when refreshing 变更文件."""
-    out = subprocess.run(args, capture_output=True, timeout=timeout)
+    out = subprocess.run(args, capture_output=True, timeout=timeout,
+                         creationflags=_NO_WINDOW)
     text = out.stdout.decode('utf-8', 'replace') if out.stdout else ''
     return out.returncode, text
 

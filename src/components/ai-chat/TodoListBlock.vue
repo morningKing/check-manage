@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElIcon } from 'element-plus'
-import { Loading, CircleCheck, Clock, CircleClose } from '@element-plus/icons-vue'
-import { todoProgress, type TodoItem } from '@/utils/todos'
+import { Loading, CircleCheck, Clock, CircleClose, Aim } from '@element-plus/icons-vue'
+import { todoProgress, todoDurationText, type TodoItem } from '@/utils/todos'
 
+// `todos` 既接受纯快照(TodoItem[],消息流内 todowrite part 的渲染),也接受
+// 带执行锚点的轨迹条目(TodoTraceItem[],右侧执行计划面板)。有锚点的条目
+// 额外渲染「定位」按钮与步骤耗时;点击 emit locate(msgIdx) 由调用方滚动
+// 消息流到该步骤开始执行的位置并高亮。
 const props = defineProps<{ todos: TodoItem[] }>()
+const emit = defineEmits<{ locate: [msgIdx: number] }>()
+
+function anchorOf(t: TodoItem): { msgIdx: number; duration: string } | null {
+  const tr = t as TodoItem & { startMsgIdx?: number | null }
+  return typeof tr.startMsgIdx === 'number'
+    ? { msgIdx: tr.startMsgIdx, duration: todoDurationText(t as never) }
+    : null
+}
 
 const progress = computed(() => todoProgress(props.todos))
 const allDone = computed(() => progress.value.total > 0 && progress.value.done === progress.value.total)
@@ -30,6 +42,16 @@ const allDone = computed(() => progress.value.total > 0 && progress.value.done =
           <Clock v-else />
         </ElIcon>
         <span class="todo-item__text">{{ t.content }}</span>
+        <span v-if="anchorOf(t)?.duration" class="todo-item__duration">
+          {{ anchorOf(t)!.duration }}
+        </span>
+        <button
+          v-if="anchorOf(t)"
+          class="todo-item__locate" title="跳转到该步骤的执行位置"
+          @click="emit('locate', anchorOf(t)!.msgIdx)"
+        >
+          <ElIcon><Aim /></ElIcon>
+        </button>
       </li>
     </ul>
   </div>
@@ -62,6 +84,18 @@ const allDone = computed(() => progress.value.total > 0 && progress.value.done =
 }
 .todo-item__icon { flex-shrink: 0; margin-top: 2px; }
 .todo-item__text { word-break: break-word; }
+.todo-item__duration {
+  flex: none; margin-left: auto; font-size: 11.5px;
+  color: var(--el-text-color-secondary);
+  font-family: var(--el-font-family-mono, monospace);
+}
+.todo-item__locate {
+  flex: none; display: inline-flex; align-items: center;
+  border: none; background: none; cursor: pointer;
+  padding: 2px; border-radius: 4px;
+  color: var(--el-color-primary); opacity: 0.55;
+  &:hover { opacity: 1; background: var(--el-fill-color); }
+}
 
 .todo-item--completed { color: var(--el-text-color-secondary); }
 .todo-item--completed .todo-item__icon { color: var(--el-color-success); }

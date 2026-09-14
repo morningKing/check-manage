@@ -118,3 +118,27 @@ def test_await_finished_stalls_fast_not_session_timeout(monkeypatch):
     assert raised is not None
     assert raised.reason == 'stalled (no progress)'
     assert elapsed < 10            # failed via stall, not the 30s session timeout
+
+
+def test_question_rejected_dead_turn_is_finished(monkeypatch):
+    """question 被自动拒绝后的真实形状（verified live on 1.2.26）：消息已
+    completed、finish 留在 'tool-calls'、question tool part 处于 error。
+    这是一条**死回合** —— finished 必须为 True，否则批任务子任务永远挂在
+    running（e2e: 批任务被要求提问时不受阻）。"""
+    msg = {
+        'info': {'role': 'assistant', 'finish': 'tool-calls',
+                 'time': {'created': 1, 'completed': 2}},
+        'parts': [
+            {'type': 'step-start'},
+            {'type': 'reasoning', 'text': 'asking...'},
+            {'type': 'tool', 'tool': 'question',
+             'state': {'status': 'error', 'input': {'questions': []},
+                       'error': 'Error: The user dismissed this question',
+                       'time': {'start': 3, 'end': 4}}},
+            {'type': 'step-finish'},
+        ],
+    }
+    f = _facade([msg], monkeypatch)
+    out = f.list_messages('s')
+    assert out[-1]['finished'] is True
+    assert out[-1]['running_tool'] is False

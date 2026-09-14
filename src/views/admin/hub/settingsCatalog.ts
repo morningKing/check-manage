@@ -67,6 +67,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiSessionAdmin.vue') },
     { id: 'ai-skills', label: 'AI 技能管理', perm: 'admin.ai_settings', icon: 'MagicStick',
       component: () => import('@/views/admin/AiSkillManager.vue') },
+    { id: 'ai-opencode', label: 'OpenCode 运行时', perm: 'admin.ai_settings', icon: 'Cpu',
+      component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
     { id: 'query', label: '数据查询', perm: 'admin.query', icon: 'Search',

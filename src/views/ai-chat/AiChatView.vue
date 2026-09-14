@@ -10,7 +10,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
-  ChatDotRound, Tickets, Search, BellFilled, MuteNotification,
+  ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -20,7 +20,8 @@ import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
 import QuestionResultCard from '@/components/ai-chat/QuestionResultCard.vue'
 import ContextStatusBar from '@/components/ai-chat/ContextStatusBar.vue'
-import { parseTodos } from '@/utils/todos'
+import { parseTodos, buildTodoTrace, type TodoTraceItem } from '@/utils/todos'
+import type { SubtaskTodoGroup } from '@/stores/aiChat'
 import { parseQuestionPart } from '@/utils/questionPart'
 import ArtifactCard from '@/components/ai-chat/ArtifactCard.vue'
 import ArtifactPreview, { type ArtifactVersion } from '@/components/ai-chat/ArtifactPreview.vue'
@@ -46,7 +47,7 @@ import BatchGroup from '@/components/ai-chat/BatchGroup.vue'
 import CreateBatchDialog from '@/components/ai-chat/CreateBatchDialog.vue'
 import PromptTemplateManager from '@/components/ai-chat/PromptTemplateManager.vue'
 import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
-import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile } from '@/api/aiChat'
+import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile } from '@/api/aiChat'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
 import { useChatScroll } from '@/composables/useChatScroll'
@@ -351,6 +352,35 @@ const activeTodos = computed(() => {
   }
   return []
 })
+
+// 执行轨迹:全量扫描消息流里的 todowrite 快照并做状态 diff,给每个步骤锚定
+// 「开始执行/完成」的消息位置与耗时——todo 面板由此可跳转到上下文。锚点完全
+// 由已持久化的消息流重算,刷新页面/换会话回来仍然有效。
+const todoTrace = computed<TodoTraceItem[]>(() => buildTodoTrace(messages.value))
+// 当前被「定位」高亮的消息下标(短暂脉冲后自动清除)。
+const locatedMsgIdx = ref<number | null>(null)
+let locatedTimer: ReturnType<typeof setTimeout> | null = null
+
+// 子代理的执行计划(轮询自子会话消息,每个有 todo 的委托一个分组)
+const subtaskTodoGroups = computed<SubtaskTodoGroup[]>(() => {
+  const g = store.subtaskTodoGroups[activeId.value ?? ''] ?? {}
+  return Object.values(g).filter(grp => grp.todos && grp.todos.length)
+})
+
+function locateSubtaskDelegate(grp: SubtaskTodoGroup) {
+  locateTodoStep(grp.delegateMsgIdx)
+}
+
+function locateTodoStep(msgIdx: number) {
+  locatedMsgIdx.value = null
+  void nextTick(() => {
+    const el = document.querySelector(`[data-msg-idx="${msgIdx}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    locatedMsgIdx.value = msgIdx
+    if (locatedTimer) clearTimeout(locatedTimer)
+    locatedTimer = setTimeout(() => { locatedMsgIdx.value = null }, 2400)
+  })
+}
 // 产出文件按目录分组，每个目录一个可折叠分组（默认展开）。
 const groupedOutputs = computed(() => groupFilesByDir(outputs.value))
 const outputsCollapsed = reactive<Record<string, boolean>>({})
@@ -554,7 +584,8 @@ watch(activeId, () => { void pinToBottom() })
 let liveTimer: ReturnType<typeof setInterval> | null = null
 function stopLivePoll() { if (liveTimer) { clearInterval(liveTimer); liveTimer = null } }
 watch(
-  [activeId, () => batches.activeSessions.map((s) => `${s.id}:${s.status}`).join('|')],
+  [activeId, () => batches.activeSessions.map((s) => `${s.id}:${s.status}`).join('|'),
+   () => store.streamSid, () => store.streamStatus[activeId.value ?? '']],
   () => {
     stopLivePoll()
     const id = activeId.value
@@ -562,6 +593,9 @@ watch(
     const child = batches.getChild(id)
     if (!child) return                       // not a child of the selected batch
     store.reloadMessages(id)                  // reflect latest (covers completion)
+    // SSE 已订阅该子会话:token 级实时渲染由事件流负责,不轮询;
+    // 重连期间(streamStatus==='reconnecting')保留轮询兜底,避免完全停滞。
+    if (store.streamSid === id && store.streamStatus[id] !== 'reconnecting') return
     if (child.status === 'running') {
       liveTimer = setInterval(() => store.reloadMessages(id), 2500)
     } else {
@@ -647,11 +681,14 @@ async function selectSession(id: string) {
   store.hydrateSessionModel(id)
   store.hydrateSessionAgent(id)
 }
-// Batch children are worker-driven and viewed via polling until a user sends a
-// continuation. The continuation action safely hands the child over to the
-// ordinary SSE lifecycle.
+// Batch children are worker-driven, but since OpenCode ≥1.15 streams token
+// deltas we open them WITH the SSE stream: token-level live rendering, same as
+// interactive sessions. The worker remains the sole persistence writer — the
+// SSE proxy never persists batch children, and session.idle converges the view
+// via _reloadPersisted. A user continuation hands the child over to the
+// ordinary SSE lifecycle for good.
 async function selectBatchChild(id: string) {
-  if (id !== activeId.value) await store.openSession(id, { stream: false })
+  if (id !== activeId.value) await store.openSession(id)
 }
 async function renameSession(id: string, current: string) {
   try {
@@ -1056,8 +1093,9 @@ function onKey(e: Event) {
         <template v-else>
           <div class="ai-thread">
             <div
-              v-for="m in messages" :key="m.id"
-              class="msg" :class="`msg--${m.role}`"
+              v-for="(m, mi) in messages" :key="m.id"
+              class="msg" :class="[`msg--${m.role}`, { 'msg--located': locatedMsgIdx === mi }]"
+              :data-msg-idx="mi"
             >
               <div class="msg__role" v-if="m.role !== 'user' && !isRunResultOnly(m)">AI 助手</div>
               <Bubble
@@ -1116,6 +1154,12 @@ function onKey(e: Event) {
                       :agent="p.agent" :description="p.description" :status="p.status"
                       :depth="1" :fetch-fn="getSubtaskMessages"
                     />
+                    <!-- 回合级失败（session.error / 出错的 assistant 消息）：
+                         持久化为 error part，刷新后仍在，见 chat_persist.py -->
+                    <div v-else-if="p.type === 'error'" class="msg__turn-error">
+                      <ElIcon><WarningFilled /></ElIcon>
+                      <span>{{ p.text }}</span>
+                    </div>
                     <template v-else-if="p.type === 'text' && p.text">
                       <!-- assistant: lift big code/doc blocks into artifact cards -->
                       <template v-if="m.role === 'assistant'">
@@ -1199,7 +1243,18 @@ function onKey(e: Event) {
                  对齐 OpenCode TUI 把 todo 挂在侧栏持续可见的做法；会话里没有
                  todo 时整块不渲染，不占空间） -->
             <div v-if="activeTodos.length" class="ai-todos">
-              <TodoListBlock :todos="activeTodos" />
+              <TodoListBlock :todos="todoTrace.length ? todoTrace : activeTodos"
+                             @locate="locateTodoStep" />
+            </div>
+            <div v-for="grp in subtaskTodoGroups" :key="grp.childSid" class="ai-todos">
+              <div class="ai-todos__subagent-head">
+                <span class="ai-todos__subagent-name">
+                  {{ grp.agent || '子代理' }}{{ grp.description ? ' · ' + grp.description : '' }}
+                </span>
+                <button class="ai-todos__subagent-locate" title="跳转到委托位置"
+                        @click="locateSubtaskDelegate(grp)">⤓</button>
+              </div>
+              <TodoListBlock :todos="grp.todos!" @locate="locateSubtaskDelegate(grp)" />
             </div>
 
             <!-- 文件抽屉：上传文件（uploads/）与 agent 产出（根目录、outputs/ 等）
@@ -1608,6 +1663,33 @@ function onKey(e: Event) {
 }
 /* User: a single gray rounded block on the right (no inner box) */
 .msg--user { display: flex; flex-direction: column; align-items: flex-end; }
+
+/* 子代理执行计划分组头 */
+.ai-todos__subagent-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px 0;
+}
+.ai-todos__subagent-name {
+  flex: 1; min-width: 0;
+  font-size: 12px; font-weight: 600;
+  color: var(--el-color-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-todos__subagent-locate {
+  flex: none; border: none; background: none; cursor: pointer;
+  color: var(--el-color-primary); opacity: 0.6; padding: 0 4px;
+  &:hover { opacity: 1; }
+}
+
+/* todo 面板「定位」跳转后的目标消息高亮(短脉冲后自动清除) */
+@keyframes msg-locate-pulse {
+  0%, 100% { background: transparent; box-shadow: none; }
+  30% { background: var(--el-color-primary-light-9); box-shadow: -3px 0 0 0 var(--el-color-primary); }
+}
+.msg--located {
+  border-radius: 8px;
+  animation: msg-locate-pulse 0.8s ease-in-out 3;
+}
 /* 运行中插话的排队标记（气泡内顶部一行小字，发送后随 queued 标记消失） */
 .msg__queued-tag {
   display: flex;
@@ -1616,6 +1698,21 @@ function onKey(e: Event) {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-bottom: 6px;
+}
+/* 回合级失败提示条（error part）：出错也要看得见，而不是悄悄停转 */
+.msg__turn-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--el-color-danger-light-5);
+  border-radius: 8px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 .msg__meta {
   margin-top: 2px;

@@ -1064,3 +1064,70 @@ def test_run_listener_idle_runs_backfill_and_persists_subtasks(monkeypatch):
     ]
     chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws')
     assert calls == ['backfill', 'turn', 'subtasks']
+
+
+def test_apply_event_session_error_marks_turn_error():
+    """session.error（回合失败，properties: {sessionID?, error}）要能被接住：
+    记进 scope['error'] 并返回 'error' 信号 —— 否则出错回合的内容一个字
+    都不落库，监听线程干等到读超时。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'partial', 'sessionID': 'oc'}}), 'oc')
+    sig = apply_event(s, _ev('session.error',
+        {'sessionID': 'oc',
+         'error': {'name': 'APIError', 'data': {'message': 'timeout'}}}), 'oc')
+    assert sig == 'error'
+    content = build_content(s)
+    assert content[-1]['type'] == 'error'
+    assert 'APIError' in content[-1]['text']
+    assert 'timeout' in content[-1]['text']
+    # 半截输出也要留下（error part 之前）
+    assert content[0] == {'type': 'text', 'text': 'partial'}
+
+
+def test_apply_event_error_only_turn_yields_error_part():
+    """出错的一轮往往没有任何文本 part —— 只有 error part 时也必须持久化
+    （persist_turn 对空内容是 no-op，所以 error part 是唯一的留痕）。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                  'error': {'name': 'ProviderAuthError',
+                            'data': {'message': 'bad key'}}}}), 'oc')
+    content = build_content(s)
+    assert len(content) == 1
+    assert content[0]['type'] == 'error'
+    assert 'ProviderAuthError' in content[0]['text']
+
+
+def test_apply_event_session_error_without_error_field_ignored():
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    assert apply_event(s, _ev('session.error', {'sessionID': 'oc'}), 'oc') is None
+
+
+def test_run_listener_error_signal_persists_and_exits(monkeypatch):
+    """session.error 到达时监听器要走 idle 同款的收尾（持久化 + 退出），
+    不再做记忆提取/完成通知（那是成功路径的事）。"""
+    import utils.chat_persist as chat_persist
+    calls = []
+    monkeypatch.setattr(chat_persist, 'backfill_from_rest',
+                        lambda *a, **k: calls.append('backfill') or False)
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda *a, **k: calls.append('turn'))
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda *a, **k: calls.append('subtasks'))
+    monkeypatch.setattr(chat_persist, '_record_workspace_files',
+                        lambda *a, **k: calls.append('files'))
+    events = [
+        _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('session.error', {'sessionID': 'oc',
+                              'error': {'name': 'APIError'}}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws')
+    assert calls == ['backfill', 'turn', 'subtasks', 'files']

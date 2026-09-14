@@ -1852,3 +1852,98 @@ def test_notify_child_swallows_notifier_error(monkeypatch):
 
     monkeypatch.setattr(eng, 'create_notification', _boom)
     eng.BatchWorker()._notify_child_done(_child_row(), True, elapsed=10)
+
+
+# ---------------------------------------------------------------------------
+# continue 模式基线快照：续跑回合不能拿派发前的旧 assistant 消息判完成/失败
+# ---------------------------------------------------------------------------
+
+class _BaselineFakeOC:
+    """send_message 派发前旧消息就在（上一轮 terminal/error），派发后新回合
+    才产生新消息 —— 模拟 continue/resume 的真实时序。"""
+
+    def __init__(self):
+        self.dispatched = False
+        self.calls = 0
+
+    def _messages(self):
+        msgs = [{'info': {'role': 'assistant', 'id': 'old_1', 'sessionID': 'oc',
+                          'finish': 'stop',
+                          'time': {'created': 1, 'completed': 2},
+                          'error': {'name': 'MessageAbortedError'}},
+                 'parts': [{'id': 'op1', 'type': 'text', 'text': 'old turn'}]}]
+        if self.dispatched and self.calls >= 1:
+            # 新回合的首条 assistant 消息（派发 + 至少一次轮询之后出现）
+            msgs.append({'info': {'role': 'assistant', 'id': 'new_1',
+                                  'sessionID': 'oc', 'finish': 'stop',
+                                  'time': {'created': 10, 'completed': 20}},
+                         'parts': [{'id': 'np1', 'type': 'text',
+                                    'text': 'resumed answer'}]})
+        return msgs
+
+    def get_messages(self, oc_session_id, directory=''):
+        return self._messages()
+
+    def list_messages(self, oc_session_id, directory=''):
+        from utils.batch_engine import opencode_client as _facade
+        # 复用真实 façade 的映射逻辑（含 id 字段）——不走 MagicMock 简化
+        raw = self._messages()
+        out = []
+        for m in raw:
+            info = m['info']
+            content = [{'type': 'text', 'text': p['text']}
+                       for p in m['parts'] if p.get('type') == 'text']
+            finished = bool((info.get('time') or {}).get('completed')) \
+                and info.get('finish') not in (None, '', 'tool-calls', 'tool_use')
+            out.append({'role': 'assistant', 'finished': finished,
+                        'content': content, 'finish': info.get('finish'),
+                        'running_tool': False, 'error': info.get('error'),
+                        'id': info.get('id')})
+        self.calls += 1
+        return out
+
+
+def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
+                                                         monkeypatch, tmp_path):
+    """resume/continue 后旧回合的 terminal+error 消息必须被基线跳过：
+    旧的写法在第一轮轮询就 _TurnFailed（旧消息带 MessageAbortedError）。"""
+    import utils.batch_engine as eng
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    sid = sids[0]
+    with db_conn.cursor() as cur:
+        # 已开跑过（stopped mid-run）：有 oc 会话 + 工作区，resume 置 continue_prompt
+        cur.execute(
+            "UPDATE ai_chat_sessions SET status='cancelled', "
+            "  opencode_session_id='oc', workspace_path=%s, "
+            "  continue_prompt='请继续完成原任务' WHERE id = %s",
+            (str(tmp_path), sid),
+        )
+    db_conn.commit()
+
+    fake = _BaselineFakeOC()
+
+    def _send(oc, prompt, directory='', agent='', model=''):
+        fake.dispatched = True
+
+    monkeypatch.setattr(eng, 'opencode_client',
+                        type('F', (), {
+                            'get_messages': staticmethod(fake.get_messages),
+                            'list_messages': staticmethod(fake.list_messages),
+                            'send_message': staticmethod(_send),
+                        })())
+    worker = eng.BatchWorker()
+    worker.POLL_INTERVAL_SEC = 0
+    worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
+                     'batch_input_file': 'x.csv', 'input_files': None,
+                     'scan_task_id': None, 'opencode_session_id': 'oc',
+                     'workspace_path': str(tmp_path),
+                     'continue_prompt': '请继续完成原任务',
+                     'agent': '', 'model': ''})
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, last_message_preview, error_message "
+                    "FROM ai_chat_sessions WHERE id = %s", (sid,))
+        status, preview, error = cur.fetchone()
+    assert status == 'completed'
+    assert preview == 'resumed answer'
+    assert error is None

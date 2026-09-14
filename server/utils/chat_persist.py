@@ -129,11 +129,16 @@ def apply_event(state, evt, opencode_session_id):
             if m:
                 scope['meta_by_msg'] = scope.get('meta_by_msg') or {}
                 scope['meta_by_msg'][info['id']] = m
-            if is_subtask and info.get('error'):
+            if info.get('error'):
+                # 出错的 assistant 消息（provider 超时/鉴权失败等）。顶层原先
+                # 只有 subtask 分支记录 error —— 顶层出错时本轮既不持久化也
+                # 不结束，用户界面上就只是"思考中"消失，什么都没有。现在顶层
+                # 也记进 scope['error']，由 _flatten_scope 落成 error part。
                 from utils.opencode_parts import format_opencode_error
-                scope['status'] = 'failed'
                 scope['error'] = format_opencode_error(info['error'])
-                return 'subtask'
+                if is_subtask:
+                    scope['status'] = 'failed'
+                    return 'subtask'
     elif etype == 'message.part.updated':
         part = props.get('part') or {}
         pid = part.get('id')
@@ -191,6 +196,20 @@ def apply_event(state, evt, opencode_session_id):
                 scope['status'] = 'completed'
             return 'subtask'
         return 'idle'
+    elif etype == 'session.error':
+        # OpenCode 的回合级错误（properties: {sessionID?, error}，error 与
+        # AssistantMessage.error 同构，verified: opencode 1.2.26 二进制内的
+        # zod 定义）。之前这个事件类型没有任何分支接住 —— 出错后 session.idle
+        # 不一定再来，监听线程就干等到读超时，本轮内容一个字都不落库。
+        err = props.get('error')
+        if not err:
+            return None
+        from utils.opencode_parts import format_opencode_error
+        scope['error'] = format_opencode_error(err)
+        if is_subtask:
+            scope['status'] = 'failed'
+            return 'subtask'
+        return 'error'
     return None
 
 
@@ -320,6 +339,10 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
             if mapped['subtaskId'] not in seen_subtask_ids:
                 seen_subtask_ids.add(mapped['subtaskId'])
                 content.append(mapped)
+    if scope.get('error'):
+        # 出错的回合也要留痕：没有它，半截输出（或空输出）就是这条消息的
+        # 全部历史，用户无法分辨"完成了"还是"挂了"。
+        content.append({'type': 'error', 'text': scope['error']})
     return content
 
 
@@ -688,7 +711,11 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # "新事件"时，只有重新持久化顶层才会带出刷新后的状态。
             persist_interactive_snapshot(sid, state)
             continue
-        if sig == 'idle':
+        if sig in ('idle', 'error'):
+            # error = session.error（回合失败）。idle 之后不一定还有事件，error
+            # 之后 OpenCode 也可能不再发 idle —— 两条终止信号都走同一段收尾：
+            # REST 回填、持久化（含 error part）、释放订阅。幂等（按消息 id
+            # upsert），即使两个信号都到也只会写同一行。
             try:
                 backfill_from_rest(state, OpenCodeClient(OPENCODE_BASE_URL),
                                    opencode_session_id, directory=directory)
@@ -696,15 +723,16 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                 logger.warning('backfill failed session=%s: %s', sid, e)
             persist_interactive_snapshot(sid, state)
             _record_workspace_files(sid, directory)
-            logger.debug('persist listener idle->persisted+exit session=%s parts=%d',
-                         sid, len(state.get('part_order', [])))
-            try:
-                from utils.memory import extract_from_turn
-                extract_from_turn(sid, state)
-            except Exception as e:
-                logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
-            # F9 长任务完成通知：达到阈值的交互回合，给会话所有者发站内通知。
-            _maybe_notify_turn_done(sid, turn_start)
+            logger.debug('persist listener %s->persisted+exit session=%s parts=%d',
+                         sig, sid, len(state.get('part_order', [])))
+            if sig == 'idle':
+                try:
+                    from utils.memory import extract_from_turn
+                    extract_from_turn(sid, state)
+                except Exception as e:
+                    logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
+                # F9 长任务完成通知：达到阈值的交互回合，给会话所有者发站内通知。
+                _maybe_notify_turn_done(sid, turn_start)
             return
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()
