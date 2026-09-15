@@ -5,7 +5,8 @@ import type {
   AiChatBatch, AiChatBatchDetail, AiChatBatchSession,
 } from '@/types/aiChatBatch'
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed'])
+// partial（部分失败）也是终态：全部子任务已到终态，轮询可以停止
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'partial'])
 const DETAIL_POLL_MS = 5000
 const LIST_POLL_MS = 10000
 

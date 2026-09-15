@@ -782,6 +782,10 @@ ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN N
 -- batch_engine), but the worker lands the child on the NON-terminal 'paused'
 -- status — no failed-counter change, batch shows paused, resume restarts it.
 ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS pause_requested BOOLEAN NOT NULL DEFAULT FALSE;
+-- Automatic-retry budget for failed batch/api children (批任务自动重试).
+-- Incremented by batch_engine when a retryable failure (stall / stuck tool /
+-- network) re-enqueues the child; ProviderAuth-style errors never retry.
+ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS retry_count INT NOT NULL DEFAULT 0;
 -- Admin session list index: covers ORDER BY created_at DESC with optional
 -- status/source_type filters. Partial index on status keeps it small.
 CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_admin_list

@@ -19,6 +19,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
 @pytest.fixture
+def claim_guard():
+    """持有测试行的 FOR KEY SHARE 行锁（独立连接、跨提交不释放），防止共享库
+    上正在运行的 dev 后端用 SKIP LOCKED 认领抢走 pending 的测试数据。KEY SHARE
+    与 FOR UPDATE 冲突（claim 被跳过）但与测试自身的非键 UPDATE 兼容。"""
+    import psycopg2
+    from config import DB_CONFIG
+    conn = psycopg2.connect(**DB_CONFIG)
+    conn.autocommit = False
+    try:
+        def hold(*sids):
+            if not sids:
+                return
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM ai_chat_sessions "
+                            "WHERE id = ANY(%s) FOR KEY SHARE", (list(sids),))
+        yield hold
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+
+@pytest.fixture
 def user_id(db_conn):
     uid = str(uuid.uuid4())
     with db_conn.cursor() as cur:
@@ -36,7 +59,7 @@ def user_id(db_conn):
     db_conn.commit()
 
 
-def _seed_batch(db_conn, user_id, n=2):
+def _seed_batch(db_conn, user_id, claim_guard=None, n=2):
     bid = str(uuid.uuid4())
     sids = []
     with db_conn.cursor() as cur:
@@ -55,6 +78,8 @@ def _seed_batch(db_conn, user_id, n=2):
             )
             sids.append(sid)
     db_conn.commit()
+    if claim_guard is not None:
+        claim_guard(*sids)
     return bid, sids
 
 
@@ -76,9 +101,9 @@ def _batch(db_conn, bid):
 # 暂停 / 继续 / 中断
 # ---------------------------------------------------------------------------
 
-def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id):
+def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch
-    bid, sids = _seed_batch(db_conn, user_id, n=2)
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     result = pause_batch(user_id, bid)
     assert result['batch']['status'] == 'paused'   # 即时反馈
     with db_conn.cursor() as cur:
@@ -88,10 +113,10 @@ def test_pause_batch_flags_children_and_marks_batch(db_conn, user_id):
     assert all(r[0] is True and r[1] == 'pending' for r in rows)  # 等 worker 落 paused
 
 
-def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id):
+def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch
     from utils.batch_engine import get_worker
-    bid, sids = _seed_batch(db_conn, user_id, n=2)
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)
     worker = get_worker()
     worker._cancel_pending_requests()
@@ -102,10 +127,10 @@ def test_worker_sweep_lands_paused_without_failed_count(db_conn, user_id):
     assert (done, failed, total) == (0, 0, 2)      # 暂停不占 failed
 
 
-def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id):
+def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch, resume_batch
     from utils.batch_engine import get_worker
-    bid, sids = _seed_batch(db_conn, user_id, n=2)
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     # 一个暂停前已开跑（有 oc 会话 → resume 应置 continue_prompt）
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET opencode_session_id='oc_1' "
@@ -124,10 +149,10 @@ def test_resume_batch_resumes_paused_without_counter_change(db_conn, user_id):
     assert (status, done, failed, total) == ('pending', 0, 0, 2)
 
 
-def test_cancel_batch_converts_paused_children(db_conn, user_id):
+def test_cancel_batch_converts_paused_children(db_conn, user_id, claim_guard):
     from utils.batch_repo import pause_batch, cancel_batch
     from utils.batch_engine import get_worker
-    bid, sids = _seed_batch(db_conn, user_id, n=2)
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
     pause_batch(user_id, bid)
     get_worker()._cancel_pending_requests()        # → paused
     result = cancel_batch(user_id, bid)
@@ -276,12 +301,12 @@ def test_tool_stall_kills_dead_subagent(monkeypatch):
 # 无人值守指令
 # ---------------------------------------------------------------------------
 
-def test_batch_directive_prepended_for_fresh_children(user_id, db_conn,
+def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_guard,
                                                        monkeypatch, tmp_path):
     """非 continue 的批任务子任务：进发给模型的 prompt 必须带无人值守指令
     （禁提问/禁放弃），且记忆存档记的是不含指令的原文。"""
     import utils.batch_engine as eng
-    bid, sids = _seed_batch(db_conn, user_id, n=1)
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
     sid = sids[0]
     captured = {}
 

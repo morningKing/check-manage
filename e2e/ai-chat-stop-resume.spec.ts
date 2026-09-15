@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
  *    这里验证可见性这一环。
  */
 
-const BATCH_NAME = 'e2e-stop-resume'
+const BATCH_NAME = `e2e-stop-resume-${Date.now()}`
 const INJECT = path.join(path.dirname(fileURLToPath(import.meta.url)),
                          'helpers', 'inject_error.py')
 
@@ -253,7 +253,7 @@ test('批任务：被要求向用户提问时不受阻，回合正常完成', as
   //   无法在 e2e 确定性触发——模型通常遵守第一层——由
   //   tests/test_batch_pause_and_guards.py 的单测确定性覆盖）。
   // 两条路都收敛到同一个可观测结果：子任务 completed，而不是停在 failed。
-  const name = 'e2e-question-guard'
+  const name = `e2e-question-guard-${Date.now()}`
   const createBatchBtn = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
     .getByRole('button', { name: '新建' })
   await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })

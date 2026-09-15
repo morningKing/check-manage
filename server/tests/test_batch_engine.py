@@ -668,8 +668,9 @@ def test_run_one_continue_mode_recovers_stale_session(user_id, db_conn, monkeypa
 
 
 def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_conn, monkeypatch, tmp_path):
-    """恢复本身也失败（新 session 建出来了，但重发也炸了）：应该落 failed，
-    错误信息反映的是恢复失败的原因，且只重试一次（不会死循环）。"""
+    """恢复本身也失败（新 session 建出来了，但重发也炸了）：网络类失败先自动
+    重新排队（retry_count+1）；预算用尽后再跑，恢复失败落 failed，错误信息
+    反映恢复失败的原因，且只重试一次（不会死循环）。"""
     import requests
     from utils.batch_engine import BatchWorker
     import utils.batch_engine as eng
@@ -677,7 +678,8 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
 
     fake_oc = MagicMock()
-    fake_oc.create_session.side_effect = ['oc-stale', 'oc-recovered']
+    fake_oc.create_session.side_effect = ['oc-stale', 'oc-recovered',
+                                          'oc-retry', 'oc-retry-2']
 
     def _send(oc_sid, content, **kw):
         raise requests.exceptions.ConnectionError(f'still broken for {oc_sid}')
@@ -693,6 +695,26 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
 
     assert fake_oc.create_session.call_count == 2, 'exactly one recovery attempt, no retry loop'
 
+    # 网络类失败 → 自动重排队（pending + retry_count=1），不占批次计数
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, retry_count, continue_prompt FROM ai_chat_sessions WHERE id = %s",
+            (sids[0],))
+        status, retry_count, cp = cur.fetchone()
+    assert status == 'pending'
+    assert retry_count == 1
+    assert cp and '继续' in cp
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT done, failed FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone() == (0, 0)
+
+    # 预算用尽：同样恢复失败 → failed，错误反映恢复失败原因
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running', retry_count=2 "
+                    "WHERE id = %s", (sids[0],))
+    db_conn.commit()
+    w._run_one(dict(claimed[0], status='running', retry_count=2))
+
     with db_conn.cursor() as cur:
         cur.execute(
             "SELECT status, error_message, opencode_session_id FROM ai_chat_sessions WHERE id = %s",
@@ -700,13 +722,13 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
         )
         status, err, oc_id = cur.fetchone()
         assert status == 'failed'
-        assert 'oc-recovered' in (err or ''), \
+        assert 'oc-retry-2' in (err or ''), \
             'error should reflect the recovery attempt failing, not the original dispatch failure'
         # _set_opencode_id already ran before the resend failed, so the DB
         # binding is left pointing at the (also-broken) recovered session —
         # a subsequent manual retry will try that one next, not loop back to
         # the original stale id.
-        assert oc_id == 'oc-recovered'
+        assert oc_id == 'oc-retry-2'
 
 
 # ---------------------------------------------------------------------------

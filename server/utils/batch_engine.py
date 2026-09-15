@@ -563,6 +563,19 @@ class BatchWorker:
     # 此限：只要子代理自己的消息还在推进，看门狗就一直顺延 —— 见
     # _subagent_progressing。0 = 关闭（不建议）。
     TOOL_STALL_TIMEOUT_SEC = int(os.getenv('AI_BATCH_TOOL_STALL_SEC', '900'))
+    # 自动重试预算（批任务无人值守的"失败不终局"）：可重试类失败（停滞/
+    # 工具卡死/网络异常）把子任务重新排队，预算用尽才落 failed。0 = 关闭。
+    MAX_AUTO_RETRY = int(os.getenv('AI_BATCH_MAX_AUTO_RETRY', '2'))
+    # _TurnFailed.name 白名单：只有这些 provider 错误值得重试。
+    # ProviderAuthError（密钥错，重试必然再炸）、MessageAbortedError（用户
+    # 主动中断）、ContextOverflowError（上下文超限，续跑只会更大）不在列。
+    RETRYABLE_TURN_FAILED = {'APIError', 'UnknownError',
+                             'MessageOutputLengthError', 'StructuredOutputError'}
+    # 自动续跑时注入的提示词：与 resume 同语义——从原会话上下文继续。
+    AUTO_RETRY_CONTINUE_PROMPT = (
+        '上一轮执行因异常中断（系统已自动重试）。请先查看工作区现状与已有'
+        '对话上下文，从中断处继续完成原任务；已完成的部分不要重做，最终给出'
+        '完整结果。')
     # How often (seconds) the poll loop checks for & auto-rejects pending
     # question-tool requests. OpenCode parks the turn on an unanswered question
     # indefinitely; the reject resolves the tool call and the model continues.
@@ -610,14 +623,26 @@ class BatchWorker:
 
     # --- dispatcher ---
 
+    # 运行中对账器节流：每分钟最多跑一轮（与 dispatcher 同线程，无竞态）。
+    RECONCILE_INTERVAL_SEC = float(os.getenv('AI_BATCH_RECONCILE_SEC', '60'))
+
     def _dispatcher_loop(self):
         logger.info('batch dispatcher started')
+        last_reconcile = 0.0
         try:
             while not self._stop.is_set():
                 self._wake.wait(timeout=10)
                 self._wake.clear()
                 if self._stop.is_set():
                     break
+                now = time.time()
+                if now - last_reconcile >= self.RECONCILE_INTERVAL_SEC:
+                    last_reconcile = now
+                    # 对账器在 claim 之前跑（同线程），避开 claim→入账窗口
+                    try:
+                        self._reconcile_stale_running()
+                    except Exception:
+                        logger.exception('batch reconcile failed; will retry')
                 if not self._dispatch_tick():
                     # The tick hit an error (DB hiccup, pool exhaustion). Back off
                     # briefly to avoid hot-looping, but KEEP the loop alive.
@@ -942,6 +967,10 @@ class BatchWorker:
             # 结果（暂停的子任务之后会被 resume 继续跑完）、不发通知。
             self._mark_paused(sid, batch_id)
         except (_SessionTimeout, _TurnFailed) as e:
+            # 可重试类失败（停滞/工具卡死/部分 provider 错误）先自动重新排队；
+            # 预算用尽或不属于白名单才落 failed。
+            if self._is_retryable(e) and self._maybe_auto_retry(sid):
+                return
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             err = str(e)[:500]
             self._mark_failed(sid, batch_id, error=err)
@@ -949,6 +978,9 @@ class BatchWorker:
             self._notify_child_done(
                 session_row, False, elapsed=time.monotonic() - turn_start, error=err)
         except Exception as e:
+            # 网络类异常（OpenCode 不可达等）可自动重试；其余直接失败。
+            if isinstance(e, requests.exceptions.RequestException)                     and self._maybe_auto_retry(sid):
+                return
             err = f'{type(e).__name__}: {e}'[:500]
             self._mark_failed(sid, batch_id, error=err)
             self._notify_scan(session_row, None, ok=False)
@@ -1628,6 +1660,138 @@ class BatchWorker:
             conn.commit()
         if batch_id is not None:
             _recompute_batch_status(batch_id)
+
+    @staticmethod
+    def _is_retryable(exc: BaseException) -> bool:
+        """失败分类：是否值得自动重试。
+
+        可重试：停滞/工具卡死（_SessionTimeout 的两个 watchdog 原因）、
+        provider 瞬时错误（RETRYABLE_TURN_FAILED 白名单）、网络异常。
+        不可重试：硬超时上限（长任务被时钟杀掉，续跑只会更大）、
+        ProviderAuthError（密钥错，重试必然再炸）、用户中断、上下文超限，
+        以及一切白名单之外的未知失败（保守不重试）。
+        """
+        if isinstance(exc, _SessionTimeout):
+            return exc.reason in ('stalled (no progress)', 'tool stuck')
+        if isinstance(exc, _TurnFailed):
+            return exc.name in BatchWorker.RETRYABLE_TURN_FAILED
+        if isinstance(exc, requests.exceptions.RequestException):
+            return True
+        return False
+
+    def _maybe_auto_retry(self, session_id: str) -> bool:
+        """可重试失败时把子任务重新排队（状态回 pending，不占批次计数）。
+
+        已开跑过的（有 OpenCode 会话）置 continue_prompt 走 continue 模式，
+        在原会话/原工作区上续跑；从未开跑的原样重排。预算（MAX_AUTO_RETRY）
+        从 DB 现读——claim 行里的快照在本轮已过期。预算用尽返回 False，由
+        调用方走既有 failed 路径。"""
+        if self.MAX_AUTO_RETRY <= 0:
+            return False
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT retry_count, opencode_session_id FROM ai_chat_sessions "
+                    "WHERE id = %s", (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    return False
+                retry_count, oc = row
+                if retry_count >= self.MAX_AUTO_RETRY:
+                    return False
+                cur.execute(
+                    "UPDATE ai_chat_sessions "
+                    "SET status='pending', retry_count = retry_count + 1, "
+                    "    error_message=NULL, cancel_requested=false, pause_requested=false, "
+                    "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s ELSE NULL END "
+                    "WHERE id = %s",
+                    (oc, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
+        logger.warning('batch auto-retry sid=%s attempt=%d/%d (re-queued as pending%s)',
+                       session_id, retry_count + 1, self.MAX_AUTO_RETRY,
+                       ', continue on same opencode session' if oc else '')
+        self.notify()  # 立刻唤醒调度器接续
+        return True
+
+    def _reconcile_stale_running(self) -> None:
+        """运行中对账器：抽查状态仍为 running、但已不属于本进程任何工作线程
+        的子任务行（线程硬死/丢失的残账），与 OpenCode 实际会话对齐：
+
+          - OpenCode 会话 404（服务重启/清理导致丢失）→ 带准确原因失败，
+            不再显示误导性的"没有任何新进展"；
+          - OpenCode 整体不可达（连接拒绝/超时）→ 跳过本轮，不批量误杀；
+          - 会话还活着但无人轮询 → 原地续跑重新排队（retry_count 预算内）。
+
+        与 dispatcher 同线程执行，天然避开 claim→入账窗口的竞态；任何异常
+        只记日志，绝不影响调度主循环。"""
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, batch_id, opencode_session_id, workspace_path "
+                        "FROM ai_chat_sessions "
+                        "WHERE status = 'running' "
+                        "  AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL)")
+                    rows = cur.fetchall()
+        except Exception:
+            logger.exception('reconcile query failed')
+            return
+        with self._lock:
+            tracked = set(self._running_session_ids)
+        for sid, batch_id, oc, ws in rows:
+            if sid in tracked:
+                continue  # 本进程正在跑，轮询循环自己负责
+            try:
+                if not oc:
+                    # 丢失发生在 create_session 之前：原样重排（全新执行）
+                    self._requeue_lost(sid, continue_on_same=False,
+                                       batch_id=batch_id)
+                    continue
+                try:
+                    opencode_client.get_messages(oc, directory=ws or '')
+                except requests.exceptions.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else None
+                    if status == 404:
+                        self._mark_failed(
+                            sid, batch_id,
+                            error='对账器发现 OpenCode 会话已失效'
+                                  '（服务端可能重启或清理过该会话），请重试或继续执行')
+                    continue  # 其余 HTTP 状态：本轮跳过
+                except requests.exceptions.RequestException:
+                    continue  # OpenCode 整体不可达：不批量误杀
+                self._requeue_lost(sid, continue_on_same=True, batch_id=batch_id)
+            except Exception:
+                logger.exception('reconcile row failed sid=%s', sid)
+
+    def _requeue_lost(self, session_id: str, *, continue_on_same: bool,
+                      batch_id: str | None):
+        """对账器把丢失的 running 行重新排队（retry_count 预算内，超限则失败）。"""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT retry_count FROM ai_chat_sessions WHERE id=%s",
+                            (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    return
+                if row[0] >= self.MAX_AUTO_RETRY:
+                    self._mark_failed(
+                        session_id, batch_id,
+                        error='对账器发现子任务的工作线程丢失，且自动重试预算已用尽')
+                    return
+                cur.execute(
+                    "UPDATE ai_chat_sessions "
+                    "SET status='pending', retry_count = retry_count + 1, "
+                    "    error_message=NULL, cancel_requested=false, pause_requested=false, "
+                    "    continue_prompt = CASE WHEN %s THEN %s ELSE NULL END "
+                    "WHERE id = %s AND status = 'running'",
+                    (continue_on_same, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
+                requeued = cur.rowcount > 0
+            conn.commit()
+        if requeued:
+            logger.warning('reconcile re-queued lost running session sid=%s '
+                           '(continue_on_same=%s)', session_id, continue_on_same)
+            if batch_id is not None:
+                _recompute_batch_status(batch_id)
+            self.notify()
 
     @staticmethod
     def _stop_requested(session_id: str) -> str | None:
