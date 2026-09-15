@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import { ElIcon, ElAlert, ElEmpty, ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading, Brush } from '@element-plus/icons-vue'
 import { Thinking } from 'vue-element-plus-x'
@@ -82,16 +82,56 @@ const open = ref(false)
 const loading = ref(false)
 const result = ref<SubtaskMessagesResult | null>(null)
 
+// 子代理运行中，展开的气泡要能看到轨迹实时推进：服务端后台监听器会把
+// 子代理消息增量写进 ai_chat_subtask_messages（REST 端点现查现新），
+// 这里在「展开 + running」期间轮询刷新；到终态拉一次完整数据后停止。
+// 修复"必须跳走再跳回来才能看到子代理新消息"的问题。
+const POLL_MS = 2500
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopPolling() {
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
+}
+
+async function refresh(withLoading = false) {
+  if (withLoading) loading.value = true
+  try {
+    result.value = await props.fetchFn(props.sessionId, props.subtaskId)
+  } catch { /* 保留上次快照，下一轮轮询重试 */ }
+  finally {
+    if (withLoading) loading.value = false
+  }
+}
+
+function schedulePoll() {
+  stopPolling()
+  pollTimer = setTimeout(async () => {
+    if (!open.value || props.status !== 'running') return
+    await refresh()
+    // REST 返回的子任务状态优先于父级 part 的快照：已终态就收尾
+    if (result.value && result.value.subtask.status === 'running') schedulePoll()
+    else stopPolling()
+  }, POLL_MS)
+}
+
+watch(
+  () => [open.value, props.status] as const,
+  ([o, st]) => {
+    if (!o) { stopPolling(); return }
+    if (st === 'running') {
+      void refresh(!result.value)   // 首次展开带 loading，其后静默刷新
+      schedulePoll()
+    } else {
+      // 刚到终态（running → completed/failed）：拉最终完整轨迹后停
+      void refresh(true)
+      stopPolling()
+    }
+  },
+)
+onUnmounted(stopPolling)
+
 async function toggle() {
   open.value = !open.value
-  if (open.value && !result.value) {
-    loading.value = true
-    try {
-      result.value = await props.fetchFn(props.sessionId, props.subtaskId)
-    } finally {
-      loading.value = false
-    }
-  }
 }
 
 // 压缩此子代理会话：清掉已缓存的轨迹，压缩完成后重拉即可看到总结

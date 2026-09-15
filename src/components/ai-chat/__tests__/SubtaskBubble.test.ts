@@ -35,7 +35,7 @@ describe('SubtaskBubble', () => {
     expect(getSubtaskMessages).toHaveBeenCalledTimes(1)
   })
 
-  it('再次展开不重复发请求', async () => {
+  it('再次展开会重新拉取（子代理可能已有新轨迹）', async () => {
     vi.mocked(getSubtaskMessages).mockResolvedValue({
       subtask: { id: 'ses_x', agent: 'build', description: 'do x', status: 'completed', error: null },
       messages: [], truncated: false, total: 0,
@@ -48,9 +48,70 @@ describe('SubtaskBubble', () => {
     await head.trigger('click')
     await wrapper.vm.$nextTick()
     await head.trigger('click')   // 收起
-    await head.trigger('click')   // 再展开
+    await head.trigger('click')   // 再展开 → 刷新
     await wrapper.vm.$nextTick()
-    expect(getSubtaskMessages).toHaveBeenCalledTimes(1)
+    expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
+  })
+
+  it('展开态 running 时轮询刷新；到终态拉一次最终数据后停止', async () => {
+    vi.useFakeTimers()
+    try {
+      const mk = (status: 'running' | 'completed' | 'failed') => ({
+        subtask: { id: 'ses_x', agent: 'build', description: 'do x', status, error: null },
+        messages: [], truncated: false, total: 0,
+      })
+      vi.mocked(getSubtaskMessages).mockImplementation(async () => mk('running'))
+      const wrapper = mount(SubtaskBubble, {
+        props: { subtaskId: 'ses_x', sessionId: 's-1', agent: 'build',
+                 description: 'do x', status: 'running', depth: 1, fetchFn: getSubtaskMessages },
+        attachTo: document.body,
+      })
+      await wrapper.find('.subtask-bubble__head').trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2500)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(2500)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(3)
+
+      // 状态翻转 completed：立即终态刷新，之后不再轮询
+      vi.mocked(getSubtaskMessages).mockImplementation(async () => mk('completed'))
+      await wrapper.setProps({ status: 'completed' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(4)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(4)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('REST 返回的子任务已终态时轮询自动停止（父级状态滞后场景）', async () => {
+    vi.useFakeTimers()
+    try {
+      // 父级 part 仍标 running，但服务端子任务已完成
+      vi.mocked(getSubtaskMessages).mockResolvedValue({
+        subtask: { id: 'ses_x', agent: 'build', description: 'do x', status: 'completed', error: null },
+        messages: [], truncated: false, total: 0,
+      })
+      const wrapper = mount(SubtaskBubble, {
+        props: { subtaskId: 'ses_x', sessionId: 's-1', agent: 'build',
+                 description: 'do x', status: 'running', depth: 1, fetchFn: getSubtaskMessages },
+        attachTo: document.body,
+      })
+      await wrapper.find('.subtask-bubble__head').trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2500)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(2)   // 已终态：停止
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('超过深度上限不渲染可展开内容', () => {

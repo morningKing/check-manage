@@ -119,10 +119,12 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   // the completed state never shows, reload once and check the persisted render.
   const completed = page.locator('.subtask-bubble--completed').first()
   try {
-    await completed.waitFor({ state: 'visible', timeout: 120_000 })
+    // 委托回合（父+子代理两次模型调用）在慢网络下可达 2-3 分钟，窗口放宽
+    await completed.waitFor({ state: 'visible', timeout: 240_000 })
   } catch {
+    // 回合结束的持久化与 reload 可能竞态：刷新后再等持久化渲染收敛
     await page.reload()
-    await completed.waitFor({ state: 'visible', timeout: 30_000 })
+    await completed.waitFor({ state: 'visible', timeout: 90_000 })
   }
 
   // Expand and verify the trace content fetched from the REST endpoint
@@ -141,6 +143,66 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   expect(toolCalls > 0 || bodyText.length > 200).toBeTruthy()
 
   await page.screenshot({ path: 'e2e-screenshots/subtask-trace-expanded.png', fullPage: true })
+})
+
+test('batch child delegation shows the subagent conversation in chat', async ({ page }) => {
+  test.setTimeout(420_000)
+  const batchName = `batch-subtask-${Date.now()}`
+
+  await page.goto('/')
+  await page.fill('input[placeholder*="用户名"]', 'admin')
+  await page.fill('input[placeholder*="密码"]', 'admin123')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
+  await page.getByRole('button', { name: /登\s*录/ }).waitFor({ state: 'hidden', timeout: 10_000 })
+  await page.goto('/ai-chat')
+
+  const createBatch = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .locator('button', { hasText: '新建' })
+  await createBatch.waitFor({ state: 'visible', timeout: 15_000 })
+  await createBatch.click()
+
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  await dialog.locator('input[data-test="name"]').fill(batchName)
+  await dialog.locator('textarea[data-test="prompt"]').fill(
+    '你必须使用 task 工具委托一个 general 子代理去完成：统计当前工作区 AGENTS.md 文件的行数。'
+    + '不要自己读取或统计，必须由子代理执行并返回结果。',
+  )
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'subtask-probe.txt', mimeType: 'text/plain', buffer: (globalThis as any).Buffer.from('probe') },
+  ])
+  await expect(dialog.locator('.files')).toContainText('subtask-probe.txt', { timeout: 8_000 })
+  await dialog.locator('button[data-test="create-btn"]').click()
+
+  const group = page.locator('.batch-group', { hasText: batchName }).first()
+  await group.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.waitForFunction((name) => {
+    const group = Array.from(document.querySelectorAll('.batch-group'))
+      .find(el => el.querySelector('.bg-name')?.textContent?.includes(name))
+    const badge = group?.querySelector('.badge')
+    return !!badge && ['completed', 'failed', 'partial'].some(s => badge.classList.contains(`badge--${s}`))
+  }, batchName, { timeout: 360_000 })
+
+  const head = group.locator('.batch-group__head')
+  for (let i = 0; i < 5 && (await group.locator('.bg-child').count()) === 0; i++) {
+    await head.click()
+    await page.waitForTimeout(500)
+  }
+  await expect(group.locator('.bg-child')).toHaveCount(1, { timeout: 10_000 })
+  await group.locator('.bg-child').first().click()
+
+  const bubble = page.locator('.subtask-bubble').first()
+  await bubble.waitFor({ state: 'visible', timeout: 120_000 })
+  await expect(bubble.locator('.subtask-bubble__agent')).toContainText('general')
+  // 注：__task-id/__copy 是 feat/batch-session-parity 分支的 UI，main 上没有
+  await expect(page.locator('.subtask-bubble--completed').first()).toBeVisible({ timeout: 120_000 })
+
+  await bubble.locator('.subtask-bubble__head').click()
+  const body = bubble.locator('.subtask-bubble__body')
+  await expect(body).toBeVisible({ timeout: 10_000 })
+  await expect(body.locator('.subtask-bubble__role').first()).toContainText('委托输入')
+  await expect(body.locator('.subtask-bubble__msg').first()).toBeVisible()
+  await page.screenshot({ path: '.playwright-mcp/batch-subtask-trace-expanded.png', fullPage: true })
 })
 
 /**
