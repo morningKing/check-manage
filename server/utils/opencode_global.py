@@ -792,7 +792,9 @@ def restart_serve() -> dict:
     creationflags = 0
     if sys.platform == 'win32':
         creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    # 与 proxy.py 同一编码策略：UTF-8 执行环境（见 opencode_launch.child_env）
     subprocess.Popen(target, shell=use_shell, cwd=opencode_launch.serve_cwd(),
+                     env=opencode_launch.child_env(),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=creationflags,
                      start_new_session=(sys.platform != 'win32'))

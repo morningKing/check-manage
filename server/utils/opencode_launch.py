@@ -53,3 +53,35 @@ def serve_cmd_display() -> str:
 
 def autostart_enabled() -> bool:
     return (os.environ.get('OPENCODE_AUTOSTART', '1') or '1').strip() not in ('0', 'false', 'no')
+
+
+_UTF8_MARKERS = ('utf-8', 'utf8')
+
+
+def _is_utf8_locale(value: str) -> bool:
+    return any(marker in value.lower() for marker in _UTF8_MARKERS)
+
+
+def child_env(base: dict | None = None) -> dict:
+    """Child-process environment with encoding pinned to UTF-8.
+
+    Windows 中文环境下子进程默认继承 GBK/cp936：OpenCode（bun）自己输出
+    UTF-8，但它拉起的 bash/git 等工具按控制台代码页输出 GBK，中文路径/内容
+    到 OpenCode 手里就成了乱码；Python 子进程（backend/MCP）的 open() 与
+    管道也默认跟随 locale。统一在启动前钉死：
+
+      PYTHONUTF8=1 / PYTHONIOENCODING=utf-8   Python 子进程全量 UTF-8 模式
+      LANG / LC_ALL = en_US.UTF-8             msys/git-bash 子进程输出编码
+                                              （已有 UTF-8 值则尊重不覆盖）
+
+    proxy.py 与 opencode_global.restart_serve 共用，保证无论谁拉起 serve，
+    执行环境编码一致。
+    """
+    env = dict(base if base is not None else os.environ)
+    env['PYTHONUTF8'] = '1'
+    env['PYTHONIOENCODING'] = 'utf-8'
+    for var in ('LANG', 'LC_ALL'):
+        value = (env.get(var) or '').strip()
+        if not _is_utf8_locale(value):
+            env[var] = 'en_US.UTF-8'
+    return env

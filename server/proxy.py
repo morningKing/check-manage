@@ -340,7 +340,7 @@ def start_backend():
     requests can't exhaust DB connections.
     """
     server_dir = os.path.dirname(__file__)
-    env = os.environ.copy()
+    env = opencode_launch.child_env()
     env['FLASK_DEBUG'] = '0'
     threads = max(1, int(os.environ.get('BACKEND_THREADS', '8')))
     # Send stdout+stderr to a log file, NOT DEVNULL: a failed start (missing
@@ -431,7 +431,7 @@ def start_mcp():
     proc = subprocess.Popen(
         [_mcp_python(), 'main.py'],
         cwd=mcp_dir,
-        env=os.environ.copy(),
+        env=opencode_launch.child_env(),
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=_NO_WINDOW,
@@ -482,11 +482,13 @@ def start_opencode():
         print('       [HINT] OPENCODE_BIN 是裸命令名，Windows 下无法直接以 argv 拉起，'
               '建议在 server/.env 配置 opencode.exe 的完整路径', flush=True)
     log = open(OPENCODE_LOG, 'w', encoding='utf-8', errors='replace')
+    # 执行环境编码钉死 UTF-8（Windows 中文环境默认 GBK，会让 serve 拉起的
+    # bash/git 工具输出乱码）——见 utils/opencode_launch.child_env。
     return subprocess.Popen(
         target,
         shell=use_shell,
         cwd=opencode_launch.serve_cwd(),
-        env=os.environ.copy(),
+        env=opencode_launch.child_env(),
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=_NO_WINDOW,
