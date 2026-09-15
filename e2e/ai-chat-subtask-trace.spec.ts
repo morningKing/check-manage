@@ -119,10 +119,12 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   // the completed state never shows, reload once and check the persisted render.
   const completed = page.locator('.subtask-bubble--completed').first()
   try {
-    await completed.waitFor({ state: 'visible', timeout: 120_000 })
+    // 委托回合（父+子代理两次模型调用）在慢网络下可达 2-3 分钟，窗口放宽
+    await completed.waitFor({ state: 'visible', timeout: 240_000 })
   } catch {
+    // 回合结束的持久化与 reload 可能竞态：刷新后再等持久化渲染收敛
     await page.reload()
-    await completed.waitFor({ state: 'visible', timeout: 30_000 })
+    await completed.waitFor({ state: 'visible', timeout: 90_000 })
   }
 
   // Expand and verify the trace content fetched from the REST endpoint

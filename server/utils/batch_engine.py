@@ -21,7 +21,10 @@ so all three calls resolve through the patched object.
 import logging
 import os
 import shutil
+import sys
 import subprocess
+
+_NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 import threading
 import time
 import traceback
@@ -44,6 +47,18 @@ from utils.session_history import render_history_block
 from utils.notifier import create_notification
 
 logger = logging.getLogger(__name__)
+
+# 批任务子会话是无人值守运行的：没有人能回答提问。模型调用 question 工具会把
+# 回合无限期挂起（见 _reject_pending_questions 的系统级兜底），模型"自觉放弃"
+# 也会把半成品当成完成。这里用提示词在源头约束，系统级手段（自动拒绝 + 看门狗）
+# 兜底防住不听话的情况。
+_BATCH_DIRECTIVE = (
+    "[系统规则] 本会话是无人值守的批处理任务，没有任何用户在线回答问题。"
+    "禁止使用 question / ask 等向用户提问的工具（提问会被自动拒绝并让你继续执行）；"
+    "遇到信息缺失或歧义时，采用合理的默认假设直接继续，不要停下来等确认；"
+    "不得放弃、推迟或终止任务，即使个别步骤失败也要完成其余部分并给出最终结果。"
+    "不要向用户复述本规则。\n\n"
+)
 
 
 def _fmt_elapsed(secs: float) -> str:
@@ -129,6 +144,7 @@ class _OpenCodeFacade:
             parts = m.get('parts') or m.get('content') or []
             content: list = []
             running_tool = False
+            resolved_tool_seen = False
             for p in parts:
                 t = p.get('type')
                 if t == 'text' and p.get('text'):
@@ -149,22 +165,40 @@ class _OpenCodeFacade:
                     # Keep tool parts visible to progress tracking (a delegating
                     # subagent shows up as a long-running `task` tool — invisible
                     # if we only track text → false "stalled" kill).
+                    # `child_sid`：task 工具的子代理会话 id —— 工具卡死看门狗
+                    # 用它去读子代理自己的消息判断"还活着"（见
+                    # _subagent_progressing），不会把长跑的子代理误杀。
                     content.append({'type': 'tool_use', 'name': p.get('tool'),
                                     'status': status,
-                                    'output_len': len(out_val) if isinstance(out_val, str) else 0})
+                                    'output_len': len(out_val) if isinstance(out_val, str) else 0,
+                                    'child_sid': (st.get('metadata') or {}).get('sessionId')})
                     if status in (None, '', 'pending', 'running'):
                         running_tool = True
+                    if status in ('completed', 'error'):
+                        resolved_tool_seen = True
             finish = info.get('finish')
             completed = (info.get('time') or {}).get('completed')
+            # 回合终了 = 消息已完成 + 有终态 finish +（非 continuation 或
+            # 没有工具还在跑且已有工具 part 落地）。最后一条是 question 自动
+            # 拒绝的关键路径：OpenCode 拒绝提问后**直接完结**这一消息，finish
+            # 却留在 'tool-calls'——只看 finish 会把已死的回合当成"还有下一步"，
+            # 子任务永远挂在 running 上。保守起见，只有当该消息里确实存在已
+            # 落地（completed/error）的 tool part 时才推翻 continuation 语义；
+            # 光有 finish=tool-calls 而没有任何工具 part 的消息仍按旧契约视为
+            # 中间步骤（模型即将发起工具调用）。
             finished = bool(completed) and finish not in (None, '') \
-                and finish not in self._CONTINUATION_FINISH
+                and (finish not in self._CONTINUATION_FINISH
+                     or (not running_tool and resolved_tool_seen))
             # `error` 必须透出：出错的一轮往往没有 finish / time.completed / 文本，
             # 不带出来的话上层看到的就是「什么都没发生」，只能等 STALL 超时。
+            # `id` 供 continue 模式做基线快照（_await_finished 跳过派发前已
+            # 存在的旧消息，见 _snapshot_assistant_ids）。
             out.append({'role': 'assistant', 'finished': finished, 'content': content,
                         'finish': finish, 'running_tool': running_tool,
-                        'error': info.get('error')})
+                        'error': info.get('error'), 'id': info.get('id')})
         return out or [{'role': 'assistant', 'finished': False, 'content': [],
-                        'finish': None, 'running_tool': False, 'error': None}]
+                        'finish': None, 'running_tool': False, 'error': None,
+                        'id': None}]
 
     def get_messages(self, oc_session_id: str, directory: str = '') -> list:
         """Raw OpenCode message list (each {'info':..., 'parts':[...]}). Used by
@@ -181,6 +215,17 @@ class _OpenCodeFacade:
         cooperative-cancel check in _await_finished. Same underlying call as
         routes/ai_chat.py's interactive abort endpoint."""
         self._client().abort_session(oc_session_id, directory=directory)
+
+    def list_questions(self, directory: str = '') -> list:
+        """Pending QuestionRequest objects (OpenCode's interactive question
+        tool) scoped to `directory` — used by the batch worker to auto-reject
+        questions the unattended run can never get answered."""
+        return self._client().list_questions(directory=directory)
+
+    def reject_question(self, request_id: str, directory: str = '') -> None:
+        """Reject a pending QuestionRequest: OpenCode resolves the underlying
+        tool call as rejected and the model continues without an answer."""
+        self._client().reject_question(request_id, directory=directory)
 
 
 # The module-level name that tests monkeypatch.
@@ -254,21 +299,29 @@ def _recompute_batch_status(batch_id: str) -> None:
 
     Called from _mark_done and _mark_failed — always within a committed state.
     Exported at module level so tests can call it directly.
+
+    paused 子任务不是终态：只要还有 paused 子任务、且未全部终态，批次整体
+    显示为 'paused'（暂停可以 resume 回 running，不需要动 done/failed 计数）。
     """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT done, failed, total, callback_url, callback_secret "
+                "SELECT done, failed, total, callback_url, callback_secret, "
+                "       (SELECT count(*) FROM ai_chat_sessions s "
+                "         WHERE s.batch_id = ai_chat_batches.id "
+                "           AND s.status = 'paused') AS paused "
                 "FROM ai_chat_batches WHERE id = %s",
                 (batch_id,),
             )
             row = cur.fetchone()
             if not row:
                 return
-            done, failed, total, callback_url, callback_secret = row
+            done, failed, total, callback_url, callback_secret, paused = row
             terminal = done + failed
-            if terminal == 0:
+            if terminal == 0 and paused == 0:
                 new_status = 'pending'
+            elif terminal < total and paused > 0:
+                new_status = 'paused'
             elif terminal < total:
                 new_status = 'running'
             elif failed == total:
@@ -327,14 +380,19 @@ def _notify_callback(batch_id, status, callback_url, callback_secret,
 # ---------------------------------------------------------------------------
 
 class _SessionTimeout(Exception):
-    """会话超时/停滞。区分两种情况给出可读的中文原因（而不是原始英文短语，那对
+    """会话超时/停滞。区分几种情况给出可读的中文原因（而不是原始英文短语，那对
     管理员是噪音）：`stalled (no progress)` 是「STALL_TIMEOUT_SEC 内既无新文本
-    也无工具在跑」的停滞检测；其余情况是达到 SESSION_TIMEOUT_SEC 硬上限。"""
+    也无工具在跑」的停滞检测；`tool stuck` 是「工具调用长时间无任何进展」的
+    卡死检测（question 挂起、MCP 服务无响应等都落在这里）；其余情况是达到
+    SESSION_TIMEOUT_SEC 硬上限。"""
 
     def __init__(self, seconds: int, reason: str = 'timeout'):
         if reason == 'stalled (no progress)':
             msg = (f'AI 会话已 {seconds} 秒没有任何新进展（既无新文本输出，也没有工具调用在执行），'
                    f'可能是模型响应卡住、上游服务异常或网络问题，请重试该会话')
+        elif reason == 'tool stuck':
+            msg = (f'AI 会话的工具调用已持续 {seconds} 秒没有任何进展'
+                   f'（可能是提问被挂起、工具或 MCP 服务卡死），已自动中断该回合，请重试该会话')
         else:
             msg = (f'AI 会话执行时间超过 {seconds} 秒仍未完成，已达到系统设置的最长执行时间上限，'
                    f'请重试或联系管理员调整超时设置')
@@ -371,6 +429,16 @@ class _SessionCancelled(Exception):
 
     def __init__(self):
         super().__init__('已被调用方取消')
+
+
+class _SessionPaused(Exception):
+    """协作式暂停：与 _SessionCancelled 同一机制（pause_requested 置真 →
+    轮询发现 → abort OpenCode → 提前退出），区别是落库为 'paused' 而非
+    'cancelled'：暂停不占 failed 计数（不是失败），且批次整体显示已暂停，
+    resume 可从原 OpenCode 会话续跑。"""
+
+    def __init__(self):
+        super().__init__('已被用户暂停')
 
 
 MAX_SUBTASK_DEPTH = 5
@@ -466,6 +534,17 @@ class BatchWorker:
     # _progress_signature / the active_tool reset in _await_finished), so a
     # working turn never trips this; only a genuinely dead one does.
     STALL_TIMEOUT_SEC = 180
+    # Tool-stuck watchdog: a tool call whose (name, status, output) signature
+    # stays frozen this long is hung — question 挂起、MCP 服务无响应、bash 死循环
+    # 都会被它接住（running tool 会让上面的 STALL 永远不触发，没有这道闸一个
+    # 卡死的工具调用就能把子任务挂到天荒地老）。子代理委托（task 工具）不受
+    # 此限：只要子代理自己的消息还在推进，看门狗就一直顺延 —— 见
+    # _subagent_progressing。0 = 关闭（不建议）。
+    TOOL_STALL_TIMEOUT_SEC = int(os.getenv('AI_BATCH_TOOL_STALL_SEC', '900'))
+    # How often (seconds) the poll loop checks for & auto-rejects pending
+    # question-tool requests. OpenCode parks the turn on an unanswered question
+    # indefinitely; the reject resolves the tool call and the model continues.
+    QUESTION_CHECK_INTERVAL = 10
 
     def __init__(self):
         self._wake = threading.Event()
@@ -596,16 +675,17 @@ class BatchWorker:
         return rows
 
     def _cancel_pending_requests(self):
-        """Convert every still-pending child with cancel_requested=true straight
-        to 'cancelled', before the claim CTE below ever sees them — so a
-        cancelled-while-queued child never occupies a worker slot. Mirrors
+        """Convert still-pending children with cancel_requested / pause_requested
+        to their terminal (cancelled) or rest-state (paused) before the claim CTE
+        below ever sees them — so a stopped-while-queued child never occupies a
+        worker slot, and a paused one stays parked until resumed. Mirrors
         etl_scheduler.py's cancel_requested pattern, but checked pre-claim
         instead of mid-run (the mid-run check lives in _await_finished).
 
         Cancelled children count toward the batch's `failed` counter (same
-        aggregate bucket _mark_failed uses) — _recompute_batch_status only
-        looks at done/failed/total, so no changes needed there; the
-        distinguishing 'cancelled' vs 'failed' literal lives on the child row
+        aggregate bucket _mark_failed uses); paused children change no counter
+        (they're not terminal — resume puts them back to pending). The
+        distinguishing 'cancelled' vs 'paused' literal lives on the child row
         itself for callers who want to tell the two apart.
         """
         with get_db() as conn:
@@ -623,8 +703,20 @@ class BatchWorker:
                         "UPDATE ai_chat_batches SET failed = failed + %s WHERE id = %s",
                         (n, bid),
                     )
+                # NOT cancel_requested：同一名义请求不会两个标志并存（pause 与
+                # cancel 是互斥的用户动作），但万一同时置位，取消优先于暂停。
+                cur.execute(
+                    "UPDATE ai_chat_sessions SET status = 'paused' "
+                    "WHERE status = 'pending' AND pause_requested "
+                    "  AND NOT cancel_requested "
+                    "RETURNING id, batch_id"
+                )
+                paused_rows = cur.fetchall()
+                paused_batch_ids = {r[1] for r in paused_rows if r[1]}
             conn.commit()
         for bid in counts:
+            _recompute_batch_status(bid)
+        for bid in paused_batch_ids:
             _recompute_batch_status(bid)
 
     def _restart_audit(self):
@@ -738,7 +830,10 @@ class BatchWorker:
             user_prompt_for_memory = prompt
             from utils.memory import search_memory, render_memory_block
             mem_block = render_memory_block(search_memory(user_id, prompt, limit=5))
-            prompt = mem_block + prompt
+            # 无人值守指令只进发给模型的 prompt（最前、最显眼的位置）：记忆检索
+            # 与存档仍围绕用户原文 —— 指令是每条子任务都一样的样板，混进长期
+            # 记忆是噪音。
+            prompt = _BATCH_DIRECTIVE + mem_block + prompt
 
         ws = None
         try:
@@ -796,11 +891,17 @@ class BatchWorker:
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
 
+
             # The internal continuation route already stored the raw user message
             # atomically with the state transition. Standalone legacy rows do not,
             # so retain the deterministic fallback for those rows.
             if not (is_continue and continuation_message_id != f'{sid}:user'):
                 self._persist_user_prompt(sid, prompt)
+
+            # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
+            # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
+            # 第一轮轮询就会拿旧消息的终态/错误立刻判定本轮完成或失败。
+            baseline_ids = self._snapshot_assistant_ids(oc_session_id, ws)                 if is_continue else None
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
@@ -813,8 +914,10 @@ class BatchWorker:
                 # 整体不可达，重建 session 大概率立刻复现同样的错误。
                 logger.warning('batch send_message dispatch failed sid=%s oc=%s: %s; '
                                'recovering session', sid, oc_session_id, e)
+
                 oc_session_id = self._recover_session(
                     sid, ws, prompt, agent, model, current_message_id=continuation_message_id)
+                baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
 
             # Persist the conversation progressively from the worker's own REST
@@ -824,7 +927,8 @@ class BatchWorker:
             def _persist_progress():
                 self._persist_conversation(sid, prompt, oc_session_id, None, directory=ws)
             preview, final_msg = self._await_finished(oc_session_id, sid, directory=ws,
-                                                      on_progress=_persist_progress)
+                                                      on_progress=_persist_progress,
+                                                      baseline_ids=baseline_ids)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             self._mark_done(sid, batch_id, last_preview=preview,
                             clear_continue=is_continue)
@@ -837,6 +941,10 @@ class BatchWorker:
             # 用户主动取消，不发完成通知
             self._mark_cancelled(sid, batch_id)
             self._notify_scan(session_row, None, ok=False)
+        except _SessionPaused:
+            # 用户主动暂停：不是失败也不算完成 —— 不占批次计数、不回写扫描
+            # 结果（暂停的子任务之后会被 resume 继续跑完）、不发通知。
+            self._mark_paused(sid, batch_id)
         except (_SessionTimeout, _TurnFailed) as e:
             # 两者都已自带可读原因，直接落库；不要加 `{type}: ` 前缀，那对用户是噪音。
             err = str(e)[:500]
@@ -1007,7 +1115,8 @@ class BatchWorker:
             args += ['--branch', ref]
         args += [repo, dest]
         try:
-            out = subprocess.run(args, capture_output=True, timeout=180)
+            out = subprocess.run(args, capture_output=True, timeout=180,
+                                 creationflags=_NO_WINDOW)
             if out.returncode != 0:
                 err = (out.stderr or b'').decode('utf-8', 'replace').strip()
                 return f'预置仓库克隆失败 (rc={out.returncode}): {err[:300]}'
@@ -1093,9 +1202,24 @@ class BatchWorker:
             traceback.print_exc()
 
 
+    @staticmethod
+    def _snapshot_assistant_ids(oc_session_id: str, directory: str) -> set:
+        """continue 模式派发新提示词前的基线：该 OpenCode 会话里已存在的全部
+        assistant 消息 id。_await_finished 只把基线之外的 assistant 消息当作
+        本轮的完成/错误判据。OpenCode 不可达时返回空集（退回旧行为——不跳过），
+        让 send_message 去报真正的连接错误。"""
+        try:
+            raw = opencode_client.get_messages(oc_session_id, directory=directory) or []
+        except Exception:
+            return set()
+        return {info.get('id') for m in raw
+                if (info := m.get('info') or {}).get('role') == 'assistant'
+                and info.get('id')}
+
     def _await_finished(self, oc_session_id: str, sid: str,
                         directory: str = '',
-                        on_progress=None) -> tuple[str | None, dict | None]:
+                        on_progress=None,
+                        baseline_ids: set | None = None) -> tuple[str | None, dict | None]:
         """Poll until the latest assistant message reports finished.
 
         Returns (preview_first_line, full_message_dict). The full message is
@@ -1110,6 +1234,20 @@ class BatchWorker:
         cancel_requested — a caller-triggered cancel. When set, aborts the
         OpenCode session (best-effort) and raises _SessionCancelled so _run_one
         can mark the child 'cancelled' instead of waiting out the full timeout.
+
+        `baseline_ids` (continue mode): assistant message ids that existed
+        BEFORE this turn's prompt was dispatched. The previous turn's last
+        message is still terminal (completed, or aborted-with-error) until the
+        new turn's first message shows up — without the baseline the first poll
+        would read that stale message and instantly "finish" (or _TurnFailed)
+        a turn that just started.
+
+        卡死防线（无人值守三件套，见类常量注释）：
+        - question 自动拒绝：模型用 question 工具提问会挂起回合，周期性检查并
+          自动拒绝（_reject_pending_questions）；
+        - 工具卡死看门狗：工具调用的签名冻结超过 TOOL_STALL_TIMEOUT_SEC 且
+          没有活跃子代理作保 → abort + 失败（reason='tool stuck'）；
+        - 原有 STALL 看门狗不变：工具在跑就算进展，只有真冻结才触发。
         """
         cap = self.SESSION_TIMEOUT_SEC
         deadline = (time.time() + cap) if cap and cap > 0 else None   # None = no hard cap
@@ -1118,17 +1256,25 @@ class BatchWorker:
         last_sig = None
         last_progress_at = time.time()
         last_persist_at = 0.0
+        last_q_check = 0.0
+        tool_stall_start: float | None = None
+        child_sigs: dict = {}
         first = True
         while deadline is None or time.time() < deadline:
-            if self._is_cancel_requested(sid):
+            stop = self._stop_requested(sid)
+            if stop:
                 try:
                     opencode_client.abort_session(oc_session_id, directory=directory)
                 except Exception:
                     traceback.print_exc()
-                raise _SessionCancelled()
+                raise _SessionCancelled() if stop == 'cancel' else _SessionPaused()
             msgs = opencode_client.list_messages(oc_session_id,
                                                  directory=directory) or []
-            if on_progress and time.time() - last_persist_at >= self.PROGRESS_PERSIST_SEC:
+            now = time.time()
+            if now - last_q_check >= self.QUESTION_CHECK_INTERVAL:
+                last_q_check = now
+                self._reject_pending_questions(oc_session_id, directory=directory)
+            if on_progress and now - last_persist_at >= self.PROGRESS_PERSIST_SEC:
                 try:
                     on_progress()
                 except Exception:
@@ -1137,6 +1283,8 @@ class BatchWorker:
             active_tool = False
             for m in reversed(msgs):
                 if m.get('role') == 'assistant':
+                    if baseline_ids and m.get('id') in baseline_ids:
+                        continue  # message from before this (continued) turn
                     last_preview = self._preview_from(m)
                     last_message = m
                     # OpenCode 明说这一轮挂了 —— 立刻带着原因失败，不要等 STALL。
@@ -1151,18 +1299,34 @@ class BatchWorker:
                     if m.get('running_tool') or m.get('finish') in ('tool-calls', 'tool_use'):
                         active_tool = True
                     break
-            # No-progress watchdog: the signature changes whenever the turn emits
-            # a new message, more text, or any tool activity. If it stays frozen
-            # past STALL_TIMEOUT_SEC AND nothing is in flight, the turn is half-open
-            # on OpenCode's side — fail rather than hang. A running tool/subagent is
-            # NOT a stall (only the 30-min SESSION_TIMEOUT bounds those).
+            # Watchdogs. 签名变化 = 有进展：重置两个计时器。工具在跑但父级输出
+            # 冻结时，no-progress 看门狗保持安静（既有限制），同时给这个纹丝
+            # 不动的工具调用单独计时（tool-stuck 看门狗）。
             sig = self._progress_signature(msgs)
-            if first or sig != last_sig or active_tool:
+            if first or sig != last_sig:
                 first = False
                 last_sig = sig
-                last_progress_at = time.time()
-            elif time.time() - last_progress_at > self.STALL_TIMEOUT_SEC:
-                raise _SessionTimeout(int(time.time() - last_progress_at),
+                last_progress_at = now
+                tool_stall_start = now if active_tool else None
+            elif active_tool:
+                last_progress_at = now
+                if (self.TOOL_STALL_TIMEOUT_SEC > 0
+                        and tool_stall_start is not None
+                        and now - tool_stall_start > self.TOOL_STALL_TIMEOUT_SEC):
+                    if self._subagent_progressing(msgs, baseline_ids, directory,
+                                                  child_sigs):
+                        tool_stall_start = now   # 子代理还活着：顺延等待
+                    else:
+                        # 卡死的工具调用：先 abort（别让 OpenCode 继续空转烧
+                        # token）再失败，带着可读原因。
+                        try:
+                            opencode_client.abort_session(oc_session_id, directory=directory)
+                        except Exception:
+                            traceback.print_exc()
+                        raise _SessionTimeout(int(now - tool_stall_start),
+                                              reason='tool stuck')
+            elif now - last_progress_at > self.STALL_TIMEOUT_SEC:
+                raise _SessionTimeout(int(now - last_progress_at),
                                       reason='stalled (no progress)')
             time.sleep(self.POLL_INTERVAL_SEC)
         raise _SessionTimeout(self.SESSION_TIMEOUT_SEC)
@@ -1445,9 +1609,9 @@ class BatchWorker:
 
     def _mark_cancelled(self, session_id: str, batch_id: str | None):
         """Same shape as _mark_failed (cancelled counts toward the batch's
-        `failed` aggregate — see _cancel_pending_requests), but writes the
-        literal 'cancelled' status so callers can tell a deliberate cancel
-        apart from a genuine error."""
+        `failed` aggregate — see batch_repo.cancel_batch / _mark_paused for the
+        contrast), but writes the literal 'cancelled' status so callers can tell
+        a deliberate cancel apart from a genuine error."""
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1466,13 +1630,129 @@ class BatchWorker:
         if batch_id is not None:
             _recompute_batch_status(batch_id)
 
-    @staticmethod
-    def _is_cancel_requested(session_id: str) -> bool:
+    def _mark_paused(self, session_id: str, batch_id: str | None):
+        """协作式暂停的落库：status='paused'。与 _mark_cancelled 的区别是**不占
+        failed 计数**（暂停不是失败，批次还能整体 resume），error_message 留空
+        （子任务行列表用状态点而不是红字表达暂停）。批次状态经
+        _recompute_batch_status 的 paused 计数规则落到 'paused'。"""
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT cancel_requested FROM ai_chat_sessions WHERE id = %s",
+                    "UPDATE ai_chat_sessions SET status = 'paused' "
+                    "WHERE id = %s",
+                    (session_id,),
+                )
+            conn.commit()
+        if batch_id is not None:
+            _recompute_batch_status(batch_id)
+
+    @staticmethod
+    def _stop_requested(session_id: str) -> str | None:
+        """一次查询同时取两个协作式停止标志：'cancel'（中断，落 cancelled/
+        failed 计数）或 'pause'（暂停，落 paused/不占计数），都没有则 None。
+        取消优先：两个标志理论上互斥（pause 与 cancel 是互斥的用户动作），
+        万一同时置位按取消处理。"""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT cancel_requested, pause_requested "
+                    "FROM ai_chat_sessions WHERE id = %s",
                     (session_id,),
                 )
                 row = cur.fetchone()
-                return bool(row and row[0])
+        if not row:
+            return None
+        if row[0]:
+            return 'cancel'
+        if row[1]:
+            return 'pause'
+        return None
+
+    def _reject_pending_questions(self, oc_session_id: str, directory: str = ''):
+        """无人值守兜底：模型调用 question 工具向用户提问会把回合无限期挂起
+        （批任务没有用户能回答）。发现本会话的 pending 问题就自动拒绝 ——
+        OpenCode 把该工具调用标记为 rejected 并让模型继续（与交互聊天里用户
+        点「拒绝」是同一条机制）。全部防御式包装：OpenCode 不可达或返回畸形
+        数据都直接跳过，绝不因这个辅助检查打断主轮询。"""
+        try:
+            pending = opencode_client.list_questions(directory=directory)
+            items = [q for q in (pending or []) if isinstance(q, dict)]
+        except Exception:
+            return
+        for q in items:
+            if q.get('sessionID') != oc_session_id or not q.get('id'):
+                continue
+            try:
+                opencode_client.reject_question(q['id'], directory=directory)
+                logger.info('batch auto-rejected question oc=%s qid=%s',
+                            oc_session_id, q['id'])
+            except Exception:
+                traceback.print_exc()
+
+    @staticmethod
+    def _running_task_children(msgs: list, baseline_ids: set | None) -> list:
+        """最新（非基线）assistant 消息里仍在运行、且带子代理会话 id 的 task
+        工具列表 —— 工具卡死看门狗的"子代理作保"候选。"""
+        for m in reversed(msgs):
+            if m.get('role') != 'assistant':
+                continue
+            if baseline_ids and m.get('id') in baseline_ids:
+                continue
+            return [p.get('child_sid') for p in (m.get('content') or [])
+                    if p.get('type') == 'tool_use' and p.get('name') == 'task'
+                    and p.get('status') in (None, '', 'pending', 'running')
+                    and p.get('child_sid')]
+        return []
+
+    def _subagent_progressing(self, msgs: list, baseline_ids: set | None,
+                              directory: str, state: dict) -> bool:
+        """冻结窗口内，在跑的 task 工具背后的子代理是否仍有产出。
+
+        父会话的消息签名在子代理工作期间是不变的（子代理的输出要等工具返回
+        才进父级消息），所以用子代理**自己的**消息列表签名判断存活：签名变了
+        = 活着 → 看门狗顺延；没有任何在跑的 task 工具 → False（让卡死的普通
+        工具调用被杀）。查不到子代理消息时按"无法判断"处理（宁可多等一个
+        窗口），绝不因辅助检查的抖动误杀长跑子代理。
+        `state` 跨轮询持有每个子代理上一次的签名（调用方传同一个 dict）。
+        """
+        children = self._running_task_children(msgs, baseline_ids)
+        if not children:
+            return False
+        progressing = False
+        for csid in children:
+            try:
+                raw = opencode_client.get_messages(csid, directory=directory) or []
+                sig = self._raw_progress_signature(raw)
+            except Exception:
+                progressing = True   # 查不到 ≠ 死了
+                continue
+            if state.get(csid) is None:
+                state[csid] = sig
+                progressing = True   # 首次观测：先算活着，下个窗口做对比
+            elif sig != state[csid]:
+                state[csid] = sig
+                progressing = True
+        return progressing
+
+    @staticmethod
+    def _raw_progress_signature(msgs: list) -> tuple:
+        """_progress_signature 的 raw 形态：直接吃 OpenCode REST 消息列表
+        ([{'info','parts'}])，供子代理存活检测用（那边不做 facade 映射）。"""
+        count = 0
+        total_text = 0
+        tool_sig: list = []
+        for m in msgs:
+            info = m.get('info') or {}
+            if info.get('role') != 'assistant':
+                continue
+            count += 1
+            for p in (m.get('parts') or []):
+                t = p.get('type')
+                if t in ('text', 'reasoning'):
+                    total_text += len(p.get('text') or '')
+                elif t == 'tool':
+                    st = p.get('state') or {}
+                    out = st.get('output')
+                    tool_sig.append((p.get('tool'), st.get('status'),
+                                     len(out) if isinstance(out, str) else 0))
+        return (count, total_text, tuple(tool_sig))

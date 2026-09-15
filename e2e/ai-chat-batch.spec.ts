@@ -19,7 +19,8 @@ test('batch task: create, run, retry, delete', async ({ page }) => {
   await page.goto('/ai-chat')
 
   // The batch section lives directly in the sidebar (no tabs anymore)
-  const createBatchBtn = page.locator('.ai-sidebar__batches-head button', { hasText: '新建' })
+  const createBatchBtn = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .getByRole('button', { name: '新建' })
   await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
   await createBatchBtn.click()
 

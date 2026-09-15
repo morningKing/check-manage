@@ -39,7 +39,11 @@ class OpenCodeClient:
                 self._url("/session"),
                 params={"directory": directory},
                 json={"title": title},
-                timeout=self.timeout,
+                # 目录首次初始化可能触发 OpenCode 的后台依赖安装（插件等），
+                # 冷目录的 bootstrap 可达 60-90s —— 30s 默认超时会把好端端的
+                # 创建打成 ReadTimeout（批任务子任务全挂）。宽松上限只用于
+                # 创建；其余调用保持默认。
+                timeout=max(self.timeout, 120),
             )
             resp.raise_for_status()
         except Exception as e:

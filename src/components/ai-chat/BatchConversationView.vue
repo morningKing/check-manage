@@ -23,6 +23,9 @@
             :agent="p.agent" :description="p.description" :status="p.status"
             :depth="1" :fetch-fn="fetchSubtaskFn"
           />
+          <!-- 回合级失败（error part，由 chat_persist 持久化 / 批任务的
+               _persist_conversation 透传）——只读视图里也要能看出这轮挂了 -->
+          <div v-else-if="p.type === 'error'" class="msg__turn-error">{{ p.text }}</div>
         </template>
       </div>
     </div>
@@ -52,4 +55,15 @@ defineProps<{
 .msg { padding: 12px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .msg__role { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
 .msg__tool pre { font-size: 12px; overflow-x: auto; }
+.msg__turn-error {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--el-color-danger-light-5);
+  border-radius: 8px;
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
 </style>

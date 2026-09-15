@@ -37,7 +37,7 @@
       <pre v-else-if="kind === 'text' && !errorMsg" class="fp-text">{{ textContent }}</pre>
       <!-- 图片 -->
       <div v-else-if="kind === 'image' && !errorMsg" class="fp-image">
-        <img :src="authedUrl" :alt="file?.name || ''" />
+        <img :src="imageObjectUrl || authedUrl" :alt="file?.name || ''" @error="onImageError" />
       </div>
       <!-- 兜底 / 错误 -->
       <div v-else class="fp-fallback">
@@ -105,6 +105,48 @@ function onOfficeError(e: any) {
   loading.value = false
 }
 
+// 图片经 Blob objectURL 渲染,而不是直接 <img src=下载链接>:下载接口对文件
+// 统一带 Content-Disposition: attachment(供"下载"按钮),而浏览器会拒绝把带
+// attachment 头的资源放进 <img> 渲染(onerror),SVG/图片预览于是必然失败。
+// fetch + objectURL 不受该头影响,且 blob URL 下 SVG 内嵌脚本不会执行,不引入
+// 后端改 inline 的 XSS 面。
+const imageObjectUrl = ref('')
+let lastImageObjectUrl = ''
+
+function onImageError() {
+  if (imageObjectUrl.value) return  // blob 加载失败时避免递归触发兜底 src
+  errorMsg.value = '图片加载失败'
+  loading.value = false
+}
+
+// SVG 必须是严格 XML 才能被 <img> 渲染,但 LLM 生成的 SVG 常带未转义的裸 `&`
+// (如 "Add & Layer Norm")——HTML 解析器(会话内制品卡的 iframe)容忍它,严格
+// XML 解析(img/blob)直接 broken。这里把不构成实体引用的裸 `&` 转义成 `&amp;`
+// (已是 &amp;/&#123;/&#x1F; 形式的不动),与 HTML5 解析器的容错行为一致。
+function repairSvgText(text: string): string {
+  return text.replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#x[0-9a-fA-F]+);)/g, '&amp;')
+}
+
+async function loadImage() {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    const resp = await fetch(authedUrl.value)
+    if (!resp.ok) throw new Error('HTTP ' + resp.status)
+    let blob = await resp.blob()
+    if (kind.value === 'image' && (props.file?.name || '').toLowerCase().endsWith('.svg')) {
+      blob = new Blob([repairSvgText(await blob.text())], { type: 'image/svg+xml' })
+    }
+    if (lastImageObjectUrl) URL.revokeObjectURL(lastImageObjectUrl)
+    lastImageObjectUrl = URL.createObjectURL(blob)
+    imageObjectUrl.value = lastImageObjectUrl
+  } catch (e: any) {
+    errorMsg.value = e?.message || '图片加载失败'
+  } finally {
+    loading.value = false
+  }
+}
+
 function downloadFile() {
   if (authedUrl.value) window.open(authedUrl.value, '_blank')
 }
@@ -131,6 +173,8 @@ watch(
     textContent.value = ''
     if (kind.value === 'markdown' || kind.value === 'text') {
       loadText()
+    } else if (kind.value === 'image') {
+      loadImage()
     } else if (officeComponent.value) {
       loading.value = true // office 组件渲染完成会触发 @rendered 置为 false
     } else {

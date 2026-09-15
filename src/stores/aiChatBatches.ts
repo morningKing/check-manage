@@ -127,6 +127,40 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     }
   }
 
+  // _applyRunningDetail: 停止/继续都把批次推回运行态，统一走「刷新列表行 +
+  // 详情 + 恢复轮询」的收尾，避免两处各写一份。
+  async function _applyRunningDetail(batchId: string) {
+    const detail = await api.getBatch(batchId)
+    const idx = items.value.findIndex(b => b.id === batchId)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === batchId) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(batchId)
+    }
+    return detail
+  }
+
+  async function stopBatch(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    await api.stopBatch(id)
+    await _applyRunningDetail(id)
+  }
+
+  async function pauseBatch(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    await api.pauseBatch(id)
+    await _applyRunningDetail(id)
+  }
+
+  async function resumeBatch(batchId?: string) {
+    const id = batchId ?? activeBatch.value?.id
+    if (!id) return
+    await api.resumeBatch(id)
+    await _applyRunningDetail(id)
+  }
+
   async function createAndSelect(body: Parameters<typeof api.createBatch>[0]) {
     const detail = await api.createBatch(body)
     applyDetail(detail)
@@ -205,6 +239,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, findBatchForChild, clearSelection, retryFailed, reexecuteChild,
+    stopBatch, pauseBatch, resumeBatch,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
     getChild, isBatchChild, markChildContinuing,
   }
