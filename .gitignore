@@ -80,3 +80,10 @@ SKILLS.md
 # Playwright artifacts
 test-results/
 e2e-screenshots/
+e2e/screenshots/
+.playwright-cli/
+
+# Local tooling caches & one-off personal scratch (not part of the project)
+.clawhub/
+/joinquant_strategy_v2.py
+/test_api.py
