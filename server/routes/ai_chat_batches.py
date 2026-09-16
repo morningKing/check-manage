@@ -12,8 +12,8 @@ from auth import login_required
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, WorkspacePathError)
 from utils.batch_repo import (
-    MAX_FILES_PER_BATCH,
     append_to_batch,
+    get_max_files_per_batch,
     cancel_batch,
     cancel_child,
     create_batch,
@@ -70,8 +70,9 @@ def create():
         return jsonify({'error': 'name and prompt required'}), 400
     if not isinstance(files, list) or not files:
         return jsonify({'error': 'at least one file required'}), 400
-    if len(files) > MAX_FILES_PER_BATCH:
-        return jsonify({'error': f'max {MAX_FILES_PER_BATCH} files'}), 400
+    max_files = get_max_files_per_batch()
+    if len(files) > max_files:
+        return jsonify({'error': f'每个批任务最多 {max_files} 个子会话（文件）'}), 400
     for f in files:
         if not isinstance(f, dict) or not f.get('path') or not f.get('name'):
             return jsonify({'error': 'each file must have {name, path}'}), 400
@@ -96,8 +97,12 @@ def create():
 def list_():
     page = int(request.args.get('page', 1))
     page_size = min(int(request.args.get('pageSize', 20)), 100)
-    return jsonify(list_batches(g.current_user['userId'],
-                                page=page, page_size=page_size))
+    result = list_batches(g.current_user['userId'],
+                          page=page, page_size=page_size)
+    # 可配置的子会话个数上限随列表下发：新建/追加对话框的客户端预检用
+    # （/ai/settings 是管理员接口，普通用户读不到自己的可用上限）
+    result['maxSessions'] = get_max_files_per_batch()
+    return jsonify(result)
 
 
 @ai_chat_batches_bp.get('/<batch_id>')

@@ -23,9 +23,21 @@ import os
 
 DEFAULT_BIN = 'opencode'
 
+# Mirrors config.OPENCODE_GLOBAL_DIR's fallback (duplicated here because this
+# module is deliberately zero-dependency — proxy.py and the Flask side must
+# agree on the serve's global dir without importing config.py). Pinned
+# explicitly into the child env (Spec P0: 自定义 OPENCODE_GLOBAL_DIR 必须与
+# serve 实际读取目录一致，两侧永不靠默认值推断对齐).
+DEFAULT_GLOBAL_DIR = os.path.join(os.path.expanduser('~'), '.config', 'opencode')
+
 
 def opencode_bin() -> str:
     return (os.environ.get('OPENCODE_BIN', '') or '').strip() or DEFAULT_BIN
+
+
+def global_dir() -> str:
+    """The global config dir the spawned serve must read."""
+    return (os.environ.get('OPENCODE_GLOBAL_DIR', '') or '').strip() or DEFAULT_GLOBAL_DIR
 
 
 def serve_cwd() -> str:
@@ -84,4 +96,15 @@ def child_env(base: dict | None = None) -> dict:
         value = (env.get(var) or '').strip()
         if not _is_utf8_locale(value):
             env[var] = 'en_US.UTF-8'
+    return env
+
+
+def serve_env(base: dict | None = None) -> dict:
+    """child_env + explicitly pinned OPENCODE_GLOBAL_DIR.
+
+    serve 子进程的 OPENCODE_GLOBAL_DIR 一律显式传入（继承值不可靠：.env 只被
+    Python 侧 load_dotenv 读入、不会自动出现在真实进程环境里），保证 serve
+    读取的全局目录与管理界面操作的目录永远相同。"""
+    env = child_env(base)
+    env['OPENCODE_GLOBAL_DIR'] = global_dir()
     return env

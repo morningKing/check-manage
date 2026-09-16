@@ -11,6 +11,24 @@ from db import get_db
 MAX_FILES_PER_BATCH = 50
 
 
+def get_max_files_per_batch() -> int:
+    """批任务子会话个数上限（可配置）。
+
+    每个输入文件对应一个子会话，上限存于 ai_settings.max_batch_sessions，
+    管理员在 AI 配置页调整。读取失败、未配置或非法值回落到默认
+    MAX_FILES_PER_BATCH；最小 1。
+    """
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute('SELECT max_batch_sessions FROM ai_settings WHERE id = 1')
+            row = cur.fetchone()
+        val = int(row[0]) if row and row[0] is not None else MAX_FILES_PER_BATCH
+    except Exception:
+        return MAX_FILES_PER_BATCH
+    return max(1, val)
+
+
 def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
@@ -42,8 +60,9 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     """
     if not files:
         raise ValueError("at least one file required")
-    if len(files) > MAX_FILES_PER_BATCH:
-        raise ValueError(f"max {MAX_FILES_PER_BATCH} files per batch")
+    max_files = get_max_files_per_batch()
+    if len(files) > max_files:
+        raise ValueError(f"max {max_files} files per batch")
 
     batch_id = str(uuid.uuid4())
     with get_db() as conn:
@@ -394,8 +413,9 @@ def append_to_batch(user_id: str, batch_id: str, files: list[dict], *,
             row = cur.fetchone()
             if not row:
                 return None
-            if row['total'] + len(files) > MAX_FILES_PER_BATCH:
-                raise ValueError(f"max {MAX_FILES_PER_BATCH} files per batch")
+            max_files = get_max_files_per_batch()
+            if row['total'] + len(files) > max_files:
+                raise ValueError(f"max {max_files} files per batch")
             cur.execute("SELECT COALESCE(MAX(batch_seq), -1) AS m "
                         "FROM ai_chat_sessions WHERE batch_id=%s", (batch_id,))
             start = cur.fetchone()['m'] + 1

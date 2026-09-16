@@ -15,6 +15,18 @@ PERMISSION_CATALOG = [
     {'key': 'admin.page_configs',       'label': '页面配置',   'group': '平台管理'},
     {'key': 'admin.api_keys',           'label': 'Open API',  'group': '平台管理'},
     {'key': 'admin.ai_settings',        'label': 'AI 配置',   'group': '平台管理'},
+    # OpenCode 运行时治理权限拆分（Spec §12）：原 admin.ai_settings 一把抓的
+    # 粗粒度权限细分为查看/技能编辑/Agent 编辑/发布/应用/回滚/重启/强制重启，
+    # 由 routes/ai_opencode_admin.py 按操作风险逐个把关。历史角色授权由
+    # migrations/2026_09_15_split_ai_runtime_permissions.py 平移，行为不回退。
+    {'key': 'admin.ai_runtime_read',    'label': 'OpenCode 运行时查看', 'group': '平台管理'},
+    {'key': 'admin.ai_skill_write',     'label': 'OpenCode 技能编辑',   'group': '平台管理'},
+    {'key': 'admin.ai_agent_write',     'label': 'OpenCode Agent 编辑', 'group': '平台管理'},
+    {'key': 'admin.ai_runtime_publish', 'label': 'OpenCode 配置发布',   'group': '平台管理'},
+    {'key': 'admin.ai_runtime_apply',   'label': 'OpenCode 配置应用',   'group': '平台管理'},
+    {'key': 'admin.ai_runtime_rollback','label': 'OpenCode 配置回滚',   'group': '平台管理'},
+    {'key': 'admin.ai_runtime_restart', 'label': 'OpenCode 运行时重启', 'group': '平台管理'},
+    {'key': 'admin.ai_runtime_force',   'label': 'OpenCode 强制重启',   'group': '平台管理'},
     {'key': 'admin.workflows',          'label': '工作流',     'group': '平台管理'},
     {'key': 'admin.export_scripts',     'label': '导出脚本',   'group': '数据工具'},
     {'key': 'admin.validation_scripts', 'label': '校验脚本',   'group': '数据工具'},

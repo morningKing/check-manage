@@ -64,7 +64,8 @@ def get_ai_settings():
         cur = conn.cursor()
         cur.execute(
             'SELECT enabled, api_key, endpoint, model, timeout, max_tokens, updated_at, '
-            'mem0_enabled, embedding_model, default_chat_model FROM ai_settings WHERE id = 1'
+            'mem0_enabled, embedding_model, default_chat_model, max_batch_sessions '
+            'FROM ai_settings WHERE id = 1'
         )
         row = cur.fetchone()
 
@@ -80,6 +81,7 @@ def get_ai_settings():
             'mem0Enabled': False,
             'embeddingModel': 'text-embedding-v3',
             'defaultChatModel': '',
+            'maxBatchSessions': 50,
         }
 
     return {
@@ -93,12 +95,13 @@ def get_ai_settings():
         'mem0Enabled': bool(row[7]) if len(row) > 7 else False,
         'embeddingModel': (row[8] if len(row) > 8 else None) or 'text-embedding-v3',
         'defaultChatModel': (row[9] if len(row) > 9 else None) or '',
+        'maxBatchSessions': (row[10] if len(row) > 10 and row[10] is not None else 50),
     }
 
 
 def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
                        mem0_enabled=False, embedding_model='text-embedding-v3',
-                       default_chat_model=''):
+                       default_chat_model='', max_batch_sessions=50):
     """Persist AI settings and return updated dict."""
     now = datetime.now(timezone.utc)
     with get_db() as conn:
@@ -106,9 +109,10 @@ def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
         cur.execute(
             'UPDATE ai_settings SET enabled = %s, api_key = %s, endpoint = %s, '
             'model = %s, timeout = %s, max_tokens = %s, mem0_enabled = %s, '
-            'embedding_model = %s, default_chat_model = %s, updated_at = %s WHERE id = 1',
+            'embedding_model = %s, default_chat_model = %s, max_batch_sessions = %s, '
+            'updated_at = %s WHERE id = 1',
             (enabled, api_key, endpoint, model, timeout, max_tokens,
-             mem0_enabled, embedding_model, default_chat_model, now),
+             mem0_enabled, embedding_model, default_chat_model, max_batch_sessions, now),
         )
     return get_ai_settings()
 

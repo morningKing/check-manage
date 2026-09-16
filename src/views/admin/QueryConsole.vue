@@ -709,7 +709,7 @@ function handleExport() {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-bottom: 2px solid var(--el-border-color, #dcdfe6);
+  border-bottom: 2px solid var(--el-border-color, var(--el-border-color));
 }
 
 .editor-toolbar {
@@ -717,8 +717,8 @@ function handleExport() {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  background: var(--el-bg-color, #fff);
-  border-bottom: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  background: var(--el-bg-color, var(--el-bg-color));
+  border-bottom: 1px solid var(--el-border-color-lighter, var(--el-border-color-light));
 
   .toolbar-right {
     margin-left: auto;
@@ -755,7 +755,7 @@ function handleExport() {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border-left: 1px solid var(--el-border-color-lighter, var(--el-border-color-light));
   background: var(--el-fill-color-lighter, #fafafa);
   overflow: hidden;
 }
@@ -803,7 +803,7 @@ function handleExport() {
   transition: background 0.15s;
 
   &:hover {
-    background: var(--el-fill-color, #f5f7fa);
+    background: var(--el-fill-color, var(--el-fill-color-light));
   }
 
   .field-label {
@@ -841,11 +841,11 @@ function handleExport() {
   border-radius: 3px;
 
   &:hover {
-    background: var(--el-fill-color, #f5f7fa);
+    background: var(--el-fill-color, var(--el-fill-color-light));
   }
 
   code {
-    color: #409eff;
+    color: var(--el-color-primary);
     font-family: monospace;
     white-space: nowrap;
   }
@@ -910,7 +910,7 @@ function handleExport() {
   display: flex;
   flex-direction: column;
   padding: 12px;
-  border-left: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border-left: 1px solid var(--el-border-color-lighter, var(--el-border-color-light));
   background: var(--el-fill-color-lighter, #fafafa);
   overflow: hidden;
 
@@ -932,7 +932,7 @@ function handleExport() {
 .ai-disabled-hint {
   margin-top: 12px;
   padding: 8px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
+  background: var(--el-color-warning-light-9, var(--el-color-warning-light-9));
   border-radius: 4px;
   font-size: 12px;
   color: var(--el-color-warning-dark-2, #b88230);
@@ -959,7 +959,7 @@ function handleExport() {
   }
 
   .filter-content {
-    background: var(--el-fill-color-lighter, #f5f7fa);
+    background: var(--el-fill-color-lighter, var(--el-fill-color-light));
     padding: 12px;
     border-radius: 4px;
     font-size: 13px;

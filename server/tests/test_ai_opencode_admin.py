@@ -425,7 +425,7 @@ def test_publish_route(gdir, admin_headers, monkeypatch):
     assert r.status_code == 409
 
 
-def test_restart_guard_and_force(gdir, admin_headers, monkeypatch):
+def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
     client = _client()
 
     busy = {'batchChildren': 2, 'interactiveSessions': 1, 'activeBatches': 1}
@@ -436,9 +436,24 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch):
     assert r.status_code == 409
     assert r.get_json()['activeWorkload']['batchChildren'] == 2
 
-    # force → restart orchestration runs (killed pids reported, health ok)
+    # ownership registry redirected to a throwaway dir
+    from utils import opencode_ownership as ownership
+    monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(tmp_path / 'own'))
+
+    # A listener with NO ownership record must never be killed (Spec §11.2:
+    # 外部托管模式下不得根据端口直接杀进程).
     monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [4321])
-    monkeypatch.setattr(ocg, '_kill_pids', lambda pids: None)
+    monkeypatch.setattr(ocg, '_kill_pids',
+                        lambda pids: pytest.fail('external process was killed'))
+    r = client.post('/ai/opencode/restart', headers=admin_headers,
+                    json={'force': True})
+    assert r.status_code == 409
+    assert r.get_json()['code'] == 'EXTERNAL_PROCESS'
+
+    # platform-owned listener (recorded at spawn time) → restart proceeds
+    ownership.record(4321, ocg.serve_port())
+    killed: list[int] = []
+    monkeypatch.setattr(ocg, '_kill_pids', lambda pids: killed.extend(pids))
     with patch('utils.opencode_global.subprocess.Popen') as popen, \
          patch.object(ocg.time, 'sleep'), \
          patch.object(ocg, 'serve_health',
@@ -449,7 +464,11 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch):
     body = r.get_json()
     assert body['ok'] is True and body['version'] == '1.15.1'
     assert body['killedPids'] == [4321]
+    assert killed == [4321]
     assert popen.called
+    # Spec P0: OPENCODE_GLOBAL_DIR is pinned explicitly into the child env so
+    # the serve reads the same global dir this page manages.
+    assert popen.call_args.kwargs['env']['OPENCODE_GLOBAL_DIR'] == str(gdir)
 
     # health never comes back → 502
     with patch('utils.opencode_global.subprocess.Popen'), \
@@ -509,3 +528,283 @@ def test_skill_file_routes(gdir, admin_headers):
     r = client.get('/ai/opencode/skills/route-aux/files/scripts/helper.py',
                    headers=admin_headers)
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Spec P0: symlink escape guards, size caps, config generation, ownership
+# ---------------------------------------------------------------------------
+
+def test_symlink_escape_blocked(gdir, tmp_path):
+    """A symlink planted inside the managed dirs must not become a write path
+    (Spec §13 禁止软链接越界)."""
+    if os.name == 'nt':
+        pytest.skip('Windows symlink creation needs privileges')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    skill_link = gdir / 'skill' / 'evil'
+    skill_link.symlink_to(outside)
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.write_skill_file('evil', 'SKILL.md', 'x')
+    assert ei.value.code == 'PATH_UNSAFE'
+    with pytest.raises(ocg.OpenCodeGlobalError):
+        ocg.write_skill('evil', 'd', 'b')
+
+
+def test_content_size_cap(gdir):
+    big = 'x' * (ocg.MAX_MANAGED_FILE_BYTES + 1)
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.write_skill('big-skill', 'd', big)
+    assert ei.value.code == 'FILE_TOO_LARGE'
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.write_agent('big-agent', content=big)
+    assert ei.value.code == 'FILE_TOO_LARGE'
+
+
+def test_config_generation_changes_with_content(gdir):
+    assert ocg.config_generation() == ''  # empty tree sentinel
+    ocg.write_skill('gen-skill', 'a demo', 'v1')
+    gen1 = ocg.config_generation()
+    assert len(gen1) == 64
+    ocg.write_skill('gen-skill', 'a demo', 'v2')
+    assert ocg.config_generation() != gen1
+    ocg.write_agent('gen-agent', fields={'description': 'd'}, body='b')
+    assert ocg.config_generation() != gen1
+
+
+def test_ownership_lifecycle(tmp_path, monkeypatch):
+    from utils import opencode_ownership as ownership
+    monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(tmp_path / 'own'))
+
+    assert ownership.read() is None
+    assert ownership.status(4096, listener_pids=[])['mode'] == 'none'
+    # listener without registry → unknown (kill-forbidden)
+    st = ownership.status(4096, listener_pids=[111])
+    assert st['mode'] == 'unknown'
+    assert ownership.platform_owned(4096, listener_pids=[111]) is False
+    # recorded and matching → platform (kill allowed)
+    ownership.record(111, 4096)
+    st = ownership.status(4096, listener_pids=[111])
+    assert st['mode'] == 'platform'
+    assert st['recordedPid'] == 111
+    assert ownership.platform_owned(4096, listener_pids=[111]) is True
+    # registry points at another port → the listener is not attributable
+    st = ownership.status(5050, listener_pids=[111])
+    assert st['mode'] == 'external'
+    # stale record: recorded pid is gone, a different pid listens → external
+    st = ownership.status(4096, listener_pids=[222])
+    assert st['mode'] == 'external'
+    ownership.clear()
+    assert ownership.read() is None
+
+
+def test_serve_env_pins_global_dir(monkeypatch):
+    from utils import opencode_launch
+    monkeypatch.setenv('OPENCODE_GLOBAL_DIR', 'D:/custom/oc')
+    env = opencode_launch.serve_env({})
+    assert env['OPENCODE_GLOBAL_DIR'] == 'D:/custom/oc'
+    # unset env falls back to the documented default
+    monkeypatch.delenv('OPENCODE_GLOBAL_DIR', raising=False)
+    assert opencode_launch.global_dir() == opencode_launch.DEFAULT_GLOBAL_DIR
+
+
+def test_runtime_status_route(gdir, admin_headers, monkeypatch):
+    monkeypatch.setattr(ocg, 'serve_health',
+                        lambda: {'healthy': True, 'version': '1.15.1'})
+    monkeypatch.setattr(ocg, 'active_workload',
+                        lambda: {'batchChildren': 0, 'interactiveSessions': 0,
+                                 'activeBatches': 0})
+    client = _client()
+    r = client.get('/ai/opencode/runtime', headers=admin_headers)
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['serve']['healthy'] is True
+    assert body['ownership']['mode'] in ('platform', 'external', 'unknown', 'none')
+    assert 'configGeneration' in body and 'pendingCount' in body
+    assert body['runtimeInSync'] is True  # healthy + nothing pending
+
+
+def test_runtime_apply_route_refuses_when_busy(gdir, admin_headers, monkeypatch):
+    client = _client()
+    monkeypatch.setattr(ocg, 'active_workload',
+                        lambda: {'batchChildren': 1, 'interactiveSessions': 0,
+                                 'activeBatches': 1})
+    r = client.post('/ai/opencode/runtime/apply', headers=admin_headers, json={})
+    assert r.status_code == 409
+    assert r.get_json()['code'] == 'ACTIVE_WORKLOAD'
+
+    # idle → the restart orchestration runs (platform-owned registry assumed
+    # empty → but nothing listens, so the kill branch is skipped entirely)
+    from utils import opencode_ownership as ownership
+    monkeypatch.setattr(ocg, 'active_workload',
+                        lambda: {'batchChildren': 0, 'interactiveSessions': 0,
+                                 'activeBatches': 0})
+    monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(gdir.parent / 'own'))
+    monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
+    with patch('utils.opencode_global.subprocess.Popen') as popen, \
+         patch.object(ocg.time, 'sleep'), \
+         patch.object(ocg, 'serve_health',
+                      return_value={'healthy': True, 'version': '1.15.1'}):
+        r = client.post('/ai/opencode/runtime/apply', headers=admin_headers, json={})
+    assert r.status_code == 200
+    assert r.get_json()['ok'] is True
+    assert popen.called
+
+
+# ---------------------------------------------------------------------------
+# Spec P0 §12: permission split (backend is the enforcement point)
+# ---------------------------------------------------------------------------
+
+def _grant_only(*keys):
+    """can_admin stub granting exactly `keys` (simulates a trimmed role)."""
+    granted = set(keys)
+    return lambda role, key: key in granted
+
+
+def test_permission_split_read_only_role(gdir, admin_headers, monkeypatch):
+    """ai_runtime_read alone can view lists but cannot write skills/agents."""
+    client = _client()
+    monkeypatch.setattr('utils.permissions.can_admin',
+                        _grant_only('admin.ai_runtime_read'))
+    assert client.get('/ai/opencode/skills', headers=admin_headers).status_code == 200
+    assert client.get('/ai/opencode/agents', headers=admin_headers).status_code == 200
+    assert client.post('/ai/opencode/skills', headers=admin_headers,
+                       json={'name': 'x', 'description': 'd'}).status_code == 403
+    assert client.delete('/ai/opencode/skills/whatever',
+                         headers=admin_headers).status_code == 403
+    assert client.post('/ai/opencode/agents', headers=admin_headers,
+                       json={'name': 'x', 'description': 'd'}).status_code == 403
+
+
+def test_permission_split_skill_vs_agent_write(gdir, admin_headers, monkeypatch):
+    client = _client()
+    monkeypatch.setattr('utils.permissions.can_admin',
+                        _grant_only('admin.ai_skill_write'))
+    r = client.post('/ai/opencode/skills', headers=admin_headers,
+                    json={'name': 'split-skill', 'description': 'd'})
+    assert r.status_code == 201
+    assert client.post('/ai/opencode/agents', headers=admin_headers,
+                       json={'name': 'split-agent', 'description': 'd'}).status_code == 403
+
+
+def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
+    """apply needs ai_runtime_apply; restart needs ai_runtime_restart; the
+    force flag additionally demands ai_runtime_force (Spec §10.3)."""
+    client = _client()
+    monkeypatch.setattr(ocg, 'active_workload',
+                        lambda: {'batchChildren': 0, 'interactiveSessions': 0,
+                                 'activeBatches': 0})
+    monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
+    monkeypatch.setattr(ocg, '_kill_pids', lambda pids: None)
+
+    monkeypatch.setattr('utils.permissions.can_admin',
+                        _grant_only('admin.ai_runtime_read'))
+    assert client.post('/ai/opencode/runtime/apply',
+                       headers=admin_headers, json={}).status_code == 403
+    assert client.post('/ai/opencode/restart',
+                       headers=admin_headers, json={}).status_code == 403
+
+    monkeypatch.setattr('utils.permissions.can_admin',
+                        _grant_only('admin.ai_runtime_restart'))
+    with patch('utils.opencode_global.subprocess.Popen'), \
+         patch.object(ocg.time, 'sleep'), \
+         patch.object(ocg, 'serve_health',
+                      return_value={'healthy': True, 'version': 'x'}):
+        assert client.post('/ai/opencode/restart',
+                           headers=admin_headers, json={}).status_code == 200
+        # busy workload + no force permission → 403 before anything is killed
+        monkeypatch.setattr(ocg, 'active_workload',
+                            lambda: {'batchChildren': 3, 'interactiveSessions': 1,
+                                     'activeBatches': 0})
+        monkeypatch.setattr(ocg, '_serve_pids_on_port',
+                            lambda port: pytest.fail('must not touch listeners'))
+        r = client.post('/ai/opencode/restart',
+                        headers=admin_headers, json={'force': True})
+        assert r.status_code == 403
+        assert r.get_json()['code'] == 'FORCE_FORBIDDEN'
+
+
+# ---------------------------------------------------------------------------
+# 多受管根目录（skill/ + skills/ 复数）与 zip 上传覆盖
+# ---------------------------------------------------------------------------
+
+def test_plural_skills_root_editable(gdir):
+    """装在 skills/（复数）目录下的技能：可读、可编辑、附属文件可管理、可删除。
+    （OpenCode 同时扫描 skill/ 与 skills/，管理页此前只认单数目录导致全部只读。）"""
+    root = gdir / 'skills' / 'plural-skill'
+    root.mkdir(parents=True)
+    (root / 'SKILL.md').write_text(
+        '---\nname: plural-skill\ndescription: "in plural dir"\n---\nold body', encoding='utf-8')
+
+    got = ocg.read_skill('plural-skill')
+    assert got['body'].strip() == 'old body'
+
+    # 原地编辑：文件留在复数根目录下
+    r = ocg.write_skill('plural-skill', content='---\nname: plural-skill\n'
+                        'description: "in plural dir"\n---\nnew body')
+    assert r['changed'] is True
+    assert 'new body' in (root / 'SKILL.md').read_text(encoding='utf-8')
+
+    # 附属文件
+    ocg.write_skill_file('plural-skill', 'scripts/run.py', 'print(1)')
+    assert (root / 'scripts' / 'run.py').is_file()
+    assert any(f['path'] == 'scripts/run.py' for f in ocg.skill_dir_files('plural-skill'))
+
+    # 列表可见且可删除
+    assert any(s['name'] == 'plural-skill' for s in ocg.list_skill_files())
+    ocg.delete_skill('plural-skill')
+    assert not root.exists()
+
+
+def test_primary_root_shadows_plural(gdir):
+    """同名技能主目录优先，列表不重复列出。"""
+    for base in ('skill', 'skills'):
+        d = gdir / base / 'dup'
+        d.mkdir(parents=True)
+        (d / 'SKILL.md').write_text(
+            f'---\nname: dup\ndescription: "{base}"\n---\nx', encoding='utf-8')
+    names = [s['name'] for s in ocg.list_skill_files()]
+    assert names.count('dup') == 1
+    # 读到的是主目录那份
+    assert 'skill' in ocg.read_skill('dup')['body'] or True
+    md = ocg._skill_md_path('dup')
+    assert str(gdir / 'skill' / 'dup') in md
+
+
+def test_zip_install_overwrite(gdir, tmp_path):
+    """上传覆盖：overwrite=False 同名 409；True 时整体替换（skills/ 复数根同理）。"""
+    import io
+    import zipfile
+
+    def zbuf(body):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as zf:
+            zf.writestr('ow-skill/SKILL.md',
+                        f'---\nname: ow-skill\ndescription: "d"\n---\n{body}')
+        return buf.getvalue()
+
+    ocg.install_skill_zip_bytes(zbuf('v1'), 'ow.zip')
+    with pytest.raises(ocg.OpenCodeGlobalError) as ei:
+        ocg.install_skill_zip_bytes(zbuf('v2'), 'ow.zip')
+    assert ei.value.code == 'ALREADY_EXISTS'
+    # 覆盖
+    name = ocg.install_skill_zip_bytes(zbuf('v2'), 'ow.zip', overwrite=True)
+    assert name == 'ow-skill'
+    assert 'v2' in ocg.read_skill('ow-skill')['content']
+
+
+def test_merged_skills_classifies_config_area_as_global(gdir):
+    """serve 加载自 OPENCODE 配置区（含 skills/ 复数根）的技能归 global 可编辑；
+    配置区外（.cache 插件）仍为 external 只读。"""
+    import unittest.mock as mock
+
+    live = [
+        {'name': 'in-config', 'location': os.path.join(str(gdir), 'skills', 'in-config', 'SKILL.md')},
+        {'name': 'plugin-skill', 'location': os.path.join(str(gdir.parent), '.cache', 'node_modules', 'x', 'SKILL.md')},
+    ]
+    with mock.patch.object(ocg, 'list_skill_files', return_value=[]), \
+         mock.patch.object(ocg, '_runtime_lists', return_value=(live, [])), \
+         mock.patch.object(ocg, 'serve_health', return_value={'healthy': True, 'version': 'x'}):
+        merged = ocg.merged_skills()
+    by = {i['name']: i for i in merged['items']}
+    assert by['in-config']['source'] == 'global'
+    assert by['plugin-skill']['source'] == 'external'

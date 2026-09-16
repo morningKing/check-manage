@@ -102,6 +102,10 @@ def put_settings():
     embedding_model = (body.get('embeddingModel') or 'text-embedding-v3').strip()
     default_chat_model = (body.get('defaultChatModel') or '').strip()
 
+    max_batch_sessions = body.get('maxBatchSessions', 50)
+    if not isinstance(max_batch_sessions, int) or isinstance(max_batch_sessions, bool)             or not (1 <= max_batch_sessions <= 10000):
+        return jsonify({'error': '批任务子会话个数上限必须是 1-10000 的整数'}), 400
+
     # If api_key is all-masked (unchanged from frontend), keep the old value
     current = get_ai_settings()
     if api_key and set(api_key[:-4]) == {'*'}:
@@ -109,7 +113,8 @@ def put_settings():
 
     settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
                                   mem0_enabled=mem0_enabled, embedding_model=embedding_model,
-                                  default_chat_model=default_chat_model)
+                                  default_chat_model=default_chat_model,
+                                  max_batch_sessions=max_batch_sessions)
     reset_memory_singleton()
     # Mask before returning
     key = settings.get('apiKey', '')

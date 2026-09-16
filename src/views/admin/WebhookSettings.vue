@@ -451,7 +451,7 @@ onMounted(() => {
 }
 
 .url-text {
-  color: #606266;
+  color: var(--el-text-color-regular);
   font-size: 13px;
 }
 
@@ -460,22 +460,22 @@ onMounted(() => {
 }
 
 .more-text {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
 .form-tip {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-top: 4px;
 }
 
 .unit {
   margin-left: 8px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .error-text {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 </style>

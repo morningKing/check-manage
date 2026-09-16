@@ -35,7 +35,8 @@
             <Thinking
               v-else-if="p.type === 'reasoning' && p.text"
               class="subtask-bubble__thinking"
-              :content="p.text" status="end" :auto-collapse="true"
+              :content="p.text" status="end"
+              :model-value="false"
             />
             <ToolCallBubble
               v-else-if="p.type === 'tool_use'"
@@ -89,6 +90,30 @@ const result = ref<SubtaskMessagesResult | null>(null)
 const POLL_MS = 2500
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 
+// 终态但轨迹还没有落库的兜底：子代理的消息由服务端在**父回合 idle 时**
+// 统一落库，而「已完成」状态经 SSE 先到——用户此刻展开会拿到空消息列表
+// 并永远停在「还没有对话记录」。对空结果做有限次静默重拉，直到轨迹可见。
+const EMPTY_RETRY_MS = 5000
+const EMPTY_RETRY_MAX = 24 // 约 2 分钟后放弃，等待手动收起/展开触发重取
+let emptyRetryTimer: ReturnType<typeof setTimeout> | null = null
+let emptyRetries = 0
+
+function stopEmptyRetry() {
+  if (emptyRetryTimer) { clearTimeout(emptyRetryTimer); emptyRetryTimer = null }
+}
+
+function scheduleEmptyRetry() {
+  stopEmptyRetry()
+  if (!open.value) return
+  // 取到消息即收敛；取数失败（result 仍为 null）与空结果同样需要重试——
+  // 终态下没有轮询兜底，一次瞬时失败就会让气泡永远空着。
+  if (result.value && result.value.messages.length > 0) { emptyRetries = 0; return }
+  if (props.status === 'running') return // running 分支已有轮询覆盖
+  if (emptyRetries >= EMPTY_RETRY_MAX) return
+  emptyRetries += 1
+  emptyRetryTimer = setTimeout(() => { void refresh() }, EMPTY_RETRY_MS)
+}
+
 function stopPolling() {
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
 }
@@ -97,6 +122,7 @@ async function refresh(withLoading = false) {
   if (withLoading) loading.value = true
   try {
     result.value = await props.fetchFn(props.sessionId, props.subtaskId)
+    scheduleEmptyRetry()
   } catch { /* 保留上次快照，下一轮轮询重试 */ }
   finally {
     if (withLoading) loading.value = false
@@ -117,8 +143,9 @@ function schedulePoll() {
 watch(
   () => [open.value, props.status] as const,
   ([o, st]) => {
-    if (!o) { stopPolling(); return }
+    if (!o) { stopPolling(); stopEmptyRetry(); emptyRetries = 0; return }
     if (st === 'running') {
+      stopEmptyRetry()
       void refresh(!result.value)   // 首次展开带 loading，其后静默刷新
       schedulePoll()
     } else {
@@ -128,7 +155,7 @@ watch(
     }
   },
 )
-onUnmounted(stopPolling)
+onUnmounted(() => { stopPolling(); stopEmptyRetry() })
 
 async function toggle() {
   open.value = !open.value
@@ -210,6 +237,11 @@ async function onCompact() {
   margin-bottom: 4px;
 }
 .subtask-bubble__thinking { margin: 4px 0; }
+/* 展开态限高内滚（同 .ai-thinking 的理由）：子代理长推理不淹没页面 */
+.subtask-bubble__thinking :deep(.elx-thinking__content pre) {
+  max-height: 280px;
+  overflow-y: auto;
+}
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>

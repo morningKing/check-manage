@@ -10,7 +10,9 @@
           <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
           <Thinking
             v-else-if="p.type === 'reasoning' && p.text"
-            :content="p.text" status="end" :auto-collapse="true"
+            class="msg__thinking"
+            :content="p.text" status="end"
+            :model-value="false"
           />
           <el-collapse v-else-if="p.type === 'tool_use'" class="msg__tool">
             <el-collapse-item :title="`工具调用：${p.name || '未知'}`">
@@ -55,6 +57,10 @@ defineProps<{
 .msg { padding: 12px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .msg__role { font-size: 12px; color: var(--el-text-color-secondary); margin-bottom: 6px; }
 .msg__tool pre { font-size: 12px; overflow-x: auto; }
+.msg__thinking :deep(.elx-thinking__content pre) {
+  max-height: 280px;
+  overflow-y: auto;
+}
 .msg__turn-error {
   margin: 8px 0;
   padding: 8px 12px;

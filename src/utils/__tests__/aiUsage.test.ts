@@ -6,8 +6,8 @@ function msg(id: string, meta?: AiMessage['meta']): AiMessage {
   return { id, role: 'assistant', content: [], meta: meta ?? null }
 }
 
-const turn = (input: number, output: number, cost = 0) => ({
-  tokensInput: input, tokensOutput: output, cost,
+const turn = (input: number, output: number, cost = 0, durationMs = 0) => ({
+  tokensInput: input, tokensOutput: output, cost, durationMs,
 })
 
 describe('computeUsage', () => {
@@ -76,15 +76,52 @@ describe('usageLevel', () => {
   })
 })
 
+describe('computeUsage token speed', () => {
+  it('reports the LAST turn speed and the session average', () => {
+    const u = computeUsage([
+      msg('a1', turn(1000, 200, 0, 4000)),   // 50 tok/s
+      msg('a2', turn(5000, 800, 0.02, 8000)), // 100 tok/s
+    ])
+    expect(u.lastTokPerSec).toBe(100)                 // 最近回合
+    expect(u.avgTokPerSec).toBeCloseTo((1000 / 12000) * 1000, 6) // Σout/Σdur
+  })
+
+  it('turns without duration still count usage but yield no speed sample', () => {
+    const u = computeUsage([
+      msg('a1', turn(1000, 200)),              // 无时长（旧数据）
+      msg('a2', turn(5000, 800, 0, 8000)),
+    ])
+    expect(u.totalTokens).toBe(7000)
+    expect(u.lastTokPerSec).toBe(100)
+    expect(u.avgTokPerSec).toBe(100)
+  })
+
+  it('zero-duration / zero-output samples are excluded', () => {
+    const u = computeUsage([
+      msg('a1', turn(1000, 0, 0, 5000)),   // 无输出 → 无速度意义
+      msg('a2', turn(1000, 100, 0, 0)),    // 无时长 → 除零
+    ])
+    expect(u.lastTokPerSec).toBeNull()
+    expect(u.avgTokPerSec).toBeNull()
+    expect(u.totalTokens).toBe(2100)       // 用量不受影响
+  })
+
+  it('empty usage carries null speeds', () => {
+    const u = computeUsage([msg('a1')])
+    expect(u.lastTokPerSec).toBeNull()
+    expect(u.avgTokPerSec).toBeNull()
+  })
+})
+
 describe('contextPercent', () => {
   it('computes pct against the model context limit', () => {
-    const u = { contextTokens: 10_000, totalTokens: 50_000, cost: 0 }
+    const u = { contextTokens: 10_000, totalTokens: 50_000, cost: 0, lastTokPerSec: null, avgTokPerSec: null }
     expect(contextPercent(u, 200_000)).toBe(5)
   })
 
   it('returns null without tokens or without a declared limit', () => {
     expect(contextPercent({ ...EMPTY_USAGE }, 200_000)).toBeNull()
-    expect(contextPercent({ contextTokens: 1000, totalTokens: 1, cost: 0 }, null)).toBeNull()
-    expect(contextPercent({ contextTokens: 1000, totalTokens: 1, cost: 0 }, 0)).toBeNull()
+    expect(contextPercent({ contextTokens: 1000, totalTokens: 1, cost: 0, lastTokPerSec: null, avgTokPerSec: null }, null)).toBeNull()
+    expect(contextPercent({ contextTokens: 1000, totalTokens: 1, cost: 0, lastTokPerSec: null, avgTokPerSec: null }, 0)).toBeNull()
   })
 })

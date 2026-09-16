@@ -22,16 +22,23 @@ export interface AiSessionSummary {
   lastActiveAt?: string
 }
 
-/** 会话搜索命中：在标题或消息文本中匹配到关键词的会话。 */
+/** 会话搜索命中：在标题、输入文件名或消息文本中匹配到关键词的会话。 */
 export interface AiSessionSearchHit {
   id: string
   title: string
   status?: string
   lastActiveAt?: string
-  /** 命中字段：标题命中为 'title'，消息内容命中为 'content' */
-  matchField: 'title' | 'content'
-  /** 内容命中时的一行摘要（围绕关键词，已折叠换行）；标题命中时为空串 */
+  /** 命中字段：标题='title'、消息内容='content'；
+   *  批任务范围搜索另有输入文件='file'、最近预览='preview' */
+  matchField: 'title' | 'content' | 'file' | 'preview'
+  /** 内容/预览命中时的一行摘要（围绕关键词，已折叠换行）；标题/文件命中为空串 */
   snippet?: string
+  /** 批任务范围搜索（batchId 参数）时命中子会话的批次上下文 */
+  batchId?: string
+  batchName?: string
+  batchSeq?: number | null
+  inputFileName?: string | null
+  isBatchChild?: boolean
 }
 
 export interface AiMessageMeta {
@@ -124,9 +131,13 @@ export function listSessions() {
   return get<{ sessions: AiSessionSummary[] }>('/ai/chat/sessions')
 }
 
-/** 搜索当前用户的会话：按标题或消息文本匹配（见后端 search_sessions）。 */
-export function searchSessions(q: string) {
-  return get<{ sessions: AiSessionSearchHit[] }>('/ai/chat/sessions/search', { q })
+/** 搜索当前用户的会话：按标题、输入文件名或消息文本匹配（见后端 search_sessions）。
+ *  传 opts.batchId 时仅搜索该批任务下的子会话（全部运行状态），否则保持普通
+ *  会话搜索（active/closed）。 */
+export function searchSessions(q: string, opts?: { batchId?: string }) {
+  const params: Record<string, string> = { q }
+  if (opts?.batchId) params.batchId = opts.batchId
+  return get<{ sessions: AiSessionSearchHit[] }>('/ai/chat/sessions/search', params)
 }
 
 export function renameSession(id: string, title: string) {

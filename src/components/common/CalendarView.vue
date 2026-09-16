@@ -216,12 +216,12 @@ defineExpose({
 .calendar-view :deep(.fc-button-primary) {
   background-color: var(--el-color-primary);
   border-color: var(--el-color-primary);
-  color: #fff;
+  color: var(--app-primary-contrast);
 }
 
 .calendar-view :deep(.fc-button-active) {
   background: var(--el-color-primary);
-  color: #fff;
+  color: var(--app-primary-contrast);
 }
 
 .calendar-view :deep(.fc-daygrid-day) {

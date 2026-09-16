@@ -479,7 +479,7 @@ defineExpose({
 .toolbar {
   flex-shrink: 0;
   padding-bottom: 8px;
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--el-fill-color);
   margin-bottom: 8px;
 
   .toolbar-row {
@@ -530,8 +530,8 @@ defineExpose({
   :deep(.el-collapse-item__header) {
     padding-left: 4px;
     font-size: 13px;
-    color: #606266;
-    border-bottom: 1px solid #f0f2f5;
+    color: var(--el-text-color-regular);
+    border-bottom: 1px solid var(--el-fill-color);
     height: 36px;
     line-height: 36px;
   }
@@ -551,12 +551,12 @@ defineExpose({
     font-weight: 500;
 
     .orphan-icon {
-      color: #e6a23c;
+      color: var(--el-color-warning);
     }
   }
 
   .group-count {
-    color: #909399;
+    color: var(--el-text-color-secondary);
     font-weight: normal;
     font-size: 12px;
   }
@@ -576,7 +576,7 @@ defineExpose({
   align-items: center;
   padding: 10px 12px;
   margin-top: 8px;
-  background-color: #fdf6ec;
+  background-color: var(--el-color-warning-light-9);
   border: 1px solid #f5dab1;
   border-radius: 4px;
 

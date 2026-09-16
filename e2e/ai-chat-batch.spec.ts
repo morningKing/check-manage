@@ -18,8 +18,12 @@ test('batch task: create, run, retry, delete', async ({ page }) => {
   // stream open, so the network never settles; wait for real elements instead.
   await page.goto('/ai-chat')
 
-  // The batch section lives directly in the sidebar (no tabs anymore)
-  const createBatchBtn = page.locator('.ai-sidebar__batches-head button', { hasText: '新建' })
+  // The batch section lives directly in the sidebar (no tabs anymore).
+  // 侧栏分组头是 .ai-sidebar__section-head（会话/批任务/AI定时任务 三个），
+  // 用「批任务」文本过滤出目标分组的「新建」按钮。
+  const createBatchBtn = page
+    .locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .locator('button', { hasText: '新建' })
   await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
   await createBatchBtn.click()
 

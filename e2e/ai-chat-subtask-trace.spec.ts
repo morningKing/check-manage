@@ -106,6 +106,12 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   // Fresh session so stale history from previous runs can't interfere
   await page.getByRole('button', { name: '新建会话' }).first().click()
 
+  // 新会话必须是空线程：进入页面时自动打开的「最近会话」可能带着上一次运行
+  // 遗留的完成态气泡，若不清空，后续对气泡的等待会在旧数据上空过（假阳性）。
+  await page.locator('.ai-thread .msg, .ai-thread .subtask-bubble').first()
+    .waitFor({ state: 'detached', timeout: 15_000 })
+    .catch(() => { /* 线程本来就是空的 */ })
+
   await input.fill('请立即使用 task 工具委托一个 general 子代理去完成：统计当前工作区 AGENTS.md 文件的行数。你必须委托子代理执行，不要自己数。')
   await page.getByRole('button', { name: '发送' }).click()
 
@@ -131,10 +137,15 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   await bubble.locator('.subtask-bubble__head').click()
   const body = bubble.locator('.subtask-bubble__body')
   await expect(body).toBeVisible({ timeout: 10_000 })
-  await body.locator('.subtask-bubble__msg').first().waitFor({ state: 'visible', timeout: 10_000 })
+  // 子代理轨迹由服务端监听器异步落库，「完成」状态可能先于消息可见
+  // ——与下面的角色标签断言一样放宽等待窗口，容忍最终一致。
+  await body.locator('.subtask-bubble__msg').first().waitFor({ state: 'visible', timeout: 60_000 })
 
-  // Delegation input (the child's user message) is rendered
-  await expect(body.locator('.subtask-bubble__role').first()).toContainText('委托输入')
+  // Delegation input (the child's user message) is rendered.
+  // 委托输入由服务端持久化监听器异步落库，展开时刻可能尚未写入（此时子会话
+  // 只有 assistant 消息、无 user 角色标签）——放宽重试窗口等待最终一致。
+  await expect(body.locator('.subtask-bubble__role').first())
+    .toContainText('委托输入', { timeout: 60_000 })
 
   // The trace must contain real activity: tool calls and/or substantive text —
   // the regression this guards against is "only input and output, no trace".

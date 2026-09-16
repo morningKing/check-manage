@@ -1,7 +1,7 @@
 <template>
   <div class="skill-manager">
     <div class="skill-manager__header">
-      <span class="skill-manager__title">AI 全局技能管理</span>
+      <span class="skill-manager__title">AI 全局技能与 MCP 服务管理</span>
       <el-button type="primary" @click="showUpload = true">上传技能</el-button>
     </div>
     <p class="skill-manager__desc">
@@ -39,6 +39,9 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <!-- ==================== MCP 服务管理（自 AI 配置页迁入） ==================== -->
+    <McpServersCard />
 
     <!-- Upload dialog -->
     <el-dialog v-model="showUpload" title="上传全局技能" width="480px" destroy-on-close>
@@ -111,6 +114,7 @@ import {
   listSkillFiles, readSkillFile, uploadGlobalSkill,
   type GlobalSkill, type GlobalSkillFile,
 } from '@/api/aiSkills'
+import McpServersCard from '@/components/admin/McpServersCard.vue'
 
 const skills = ref<GlobalSkill[]>([])
 const loading = ref(false)

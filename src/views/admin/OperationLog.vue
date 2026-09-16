@@ -417,7 +417,7 @@ onMounted(() => {
     margin: 0;
     font-size: 18px;
     font-weight: 600;
-    color: #303133;
+    color: var(--el-text-color-primary);
   }
 }
 
@@ -439,7 +439,7 @@ onMounted(() => {
   align-items: center;
   gap: 6px;
   font-weight: 600;
-  color: #409eff;
+  color: var(--el-color-primary);
 
   .batch-icon {
     font-size: 16px;
@@ -454,12 +454,12 @@ onMounted(() => {
   background-color: #f0f7ff !important;
 
   td:first-child {
-    border-left: 3px solid #409eff;
+    border-left: 3px solid var(--el-color-primary);
   }
 }
 
 .main-branch {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 </style>

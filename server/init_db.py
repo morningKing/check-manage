@@ -184,6 +184,9 @@ ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS default_chat_model VARCHAR(200)
 -- 平台内置 MCP（check-manage）启用开关：FALSE 时新建/清空的会话 opencode.json
 -- 不再写入内部 MCP 条目（外部 MCP 照常）。默认开启。
 ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS mcp_internal_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+-- 批任务子会话个数上限：每个输入文件对应一个子会话，管理员可在 AI 配置页
+-- 调整（utils/batch_repo.get_max_files_per_batch 读取，缺省/非法回落 50）。
+ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS max_batch_sessions INTEGER NOT NULL DEFAULT 50;
 
 -- External MCP servers registered by an admin and merged into every AI-chat
 -- session's opencode.json (alongside the platform's own MCP). `name` is the key

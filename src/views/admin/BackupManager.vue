@@ -148,7 +148,7 @@
         style="margin-bottom: 16px"
       />
       <p>确定要从备份 <strong>{{ restoreTarget?.name }}</strong> 全量还原吗？</p>
-      <p style="color: #909399; font-size: 13px; margin-top: 12px">还原后页面将自动刷新。</p>
+      <p style="color: var(--el-text-color-secondary); font-size: 13px; margin-top: 12px">还原后页面将自动刷新。</p>
       <template #footer>
         <el-button @click="restoreDialogVisible = false">取消</el-button>
         <el-button type="warning" @click="doRestore" :loading="restoring">
@@ -167,7 +167,7 @@
         style="margin-bottom: 16px"
       />
       <p>确定要从上传的文件 <strong>{{ uploadFile?.name }}</strong> 还原吗？</p>
-      <p style="color: #909399; font-size: 13px">还原后页面将自动刷新。</p>
+      <p style="color: var(--el-text-color-secondary); font-size: 13px">还原后页面将自动刷新。</p>
       <template #footer>
         <el-button @click="uploadRestoreDialogVisible = false">取消</el-button>
         <el-button type="warning" @click="doUploadRestore" :loading="restoring">
@@ -418,18 +418,18 @@ onMounted(() => {
   height: 100%;
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+	.card-header {
+	  display: flex;
+	  justify-content: space-between;
+	  align-items: center;
 
-  h2 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: #303133;
-  }
-}
+	  h2 {
+	    margin: 0;
+	    font-size: 18px;
+	    font-weight: 600;
+	    color: var(--el-text-color-primary);
+	  }
+	}
 
 .header-actions {
   display: flex;
@@ -445,7 +445,7 @@ onMounted(() => {
 
 .last-backup-info {
   margin-top: 8px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
 }
 </style>

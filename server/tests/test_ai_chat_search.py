@@ -39,11 +39,22 @@ def _db(fetchall_rows):
     return fake, cur
 
 
-# Row shape returned by the search query:
+# Row shape returned by the regular-search query:
 # (id, title, last_active_at, status, batch_id, batch_input_file, title_match, hit_content)
 def _row(sid='s1', title='会话标题', status='active', title_match=False,
          hit_content=None, ts=None, batch_id=None, batch_input_file=None):
     return (sid, title, ts, status, batch_id, batch_input_file, title_match, hit_content)
+
+
+# Row shape returned by the batch-scoped query (13 cols):
+# (id, title, last_active_at, status, batch_id, batch_input_file, batch_seq,
+#  batch_name, last_message_preview, title_match, file_match, preview_match, hit_content)
+def _batch_row(sid='b1', title=None, status='completed', batch_seq=1,
+               batch_name='季度报告分析', input_file='uploads/report-001.pdf',
+               preview=None, title_match=False, file_match=False,
+               preview_match=False, hit_content=None, ts=None):
+    return (sid, title, ts, status, 'batch-123', input_file, batch_seq,
+            batch_name, preview, title_match, file_match, preview_match, hit_content)
 
 
 # ---------------------------------------------------------------------------
@@ -190,3 +201,128 @@ def test_snippet_helper_empty():
     assert _content_snippet(None, 'x') == ''
     assert _content_snippet([], 'x') == ''
     assert _content_snippet([{'type': 'file'}], 'x') == ''
+
+
+# ---------------------------------------------------------------------------
+# Batch-scoped search (Spec §6): GET /sessions/search?batchId=...
+# ---------------------------------------------------------------------------
+
+def test_batch_search_scopes_to_own_batch_and_status_whitelist():
+    """The batch branch must narrow by (user, batchId) BEFORE message JSONB
+    parsing, join the batch's owner, and use the centralized status whitelist."""
+    from routes.ai_chat import BATCH_CHILD_SEARCH_STATUSES
+    fake, cur = _db([])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=风险&batchId=batch-123',
+                      headers=_h('user-42'))
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert 'JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id' in sql
+    assert 's.batch_id = %(bid)s' in sql
+    assert 's.status IN %(statuses)s' in sql
+    # Whitelist is a positive set: deleted/archived can never sneak in.
+    assert 'deleted' not in BATCH_CHILD_SEARCH_STATUSES
+    assert 'archived' not in BATCH_CHILD_SEARCH_STATUSES
+    for st in ('pending', 'running', 'completed', 'failed'):
+        assert st in BATCH_CHILD_SEARCH_STATUSES
+    params = cur.execute.call_args.args[1]
+    assert params['bid'] == 'batch-123'
+    assert params['uid'] == 'user-42'
+    assert params['statuses'] == BATCH_CHILD_SEARCH_STATUSES
+
+
+def test_batch_search_matches_title_file_preview_and_content():
+    fake, cur = _db([])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=风险&batchId=batch-123', headers=_h())
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert 's.title ILIKE' in sql
+    assert 's.batch_input_file ILIKE' in sql
+    assert 's.last_message_preview ILIKE' in sql
+    assert 'jsonb_array_elements' in sql
+    assert "->>'text'" in sql
+
+
+def test_batch_search_default_mode_unchanged():
+    """Without batchId the legacy single-shape query (active/closed only) runs."""
+    fake, cur = _db([])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=jwt', headers=_h())
+    sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
+    assert "status IN ('active', 'closed')" in sql
+    assert 'JOIN ai_chat_batches' not in sql
+
+
+def test_batch_search_title_hit_response():
+    rows = [_batch_row(sid='b1', title='report-001.pdf', status='running',
+                       batch_seq=3, title_match=True,
+                       input_file='uploads/report-001.pdf')]
+    fake, _ = _db(rows)
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=report&batchId=batch-123',
+                          headers=_h())
+    assert r.status_code == 200
+    hit = r.get_json()['sessions'][0]
+    assert hit['id'] == 'b1'
+    assert hit['matchField'] == 'title'
+    assert hit['snippet'] == ''
+    assert hit['isBatchChild'] is True
+    assert hit['batchId'] == 'batch-123'
+    assert hit['batchName'] == '季度报告分析'
+    assert hit['batchSeq'] == 3
+    assert hit['inputFileName'] == 'report-001.pdf'
+    assert hit['status'] == 'running'
+
+
+def test_batch_search_file_hit_skips_snippet():
+    rows = [_batch_row(sid='b2', file_match=True, hit_content=None,
+                       input_file='uploads/quarterly-风险报告.pdf')]
+    fake, _ = _db(rows)
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=风险&batchId=batch-123',
+                          headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'file'
+    assert hit['snippet'] == ''
+    assert hit['inputFileName'] == 'quarterly-风险报告.pdf'
+
+
+def test_batch_search_content_hit_builds_snippet():
+    content = [{'type': 'text', 'text': '报告中存在供应链风险，需要评估影响面。'}]
+    rows = [_batch_row(sid='b3', title='report-003.pdf', hit_content=content)]
+    fake, _ = _db(rows)
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=风险&batchId=batch-123',
+                          headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'content'
+    assert '风险' in hit['snippet']
+    assert '\n' not in hit['snippet']
+
+
+def test_batch_search_preview_hit_uses_preview_as_snippet():
+    rows = [_batch_row(sid='b4', title='report-004.pdf', preview='结论：存在风险',
+                       preview_match=True)]
+    fake, _ = _db(rows)
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=风险&batchId=batch-123',
+                          headers=_h())
+    hit = r.get_json()['sessions'][0]
+    assert hit['matchField'] == 'preview'
+    assert hit['snippet'] == '结论：存在风险'
+
+
+def test_batch_search_empty_query_returns_empty_without_sql():
+    fake, cur = _db([])
+    with patch('routes.ai_chat.get_db', fake):
+        r = _client().get('/ai/chat/sessions/search?q=&batchId=batch-123', headers=_h())
+    assert r.get_json() == {'sessions': []}
+    cur.execute.assert_not_called()
+
+
+def test_batch_search_limit_capped_at_50():
+    fake, cur = _db([])
+    with patch('routes.ai_chat.get_db', fake):
+        _client().get('/ai/chat/sessions/search?q=x&batchId=batch-123&limit=999',
+                      headers=_h())
+    params = cur.execute.call_args.args[1]
+    assert params['limit'] <= 50

@@ -7,6 +7,7 @@
       <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
       <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
       <span class="bg-actions" @click.stop>
+        <ElIcon title="搜索本批任务" @click="emit('searchInBatch')"><Search /></ElIcon>
         <ElIcon title="编辑 Agent/模型" @click="editOpen = true"><Setting /></ElIcon>
         <ElIcon title="追加文件" @click="appendOpen = true"><Plus /></ElIcon>
         <ElIcon v-if="['pending', 'running'].includes(batch.status)" title="暂停全部（可继续）"
@@ -46,7 +47,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause, VideoPlay, CircleClose } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause, VideoPlay, CircleClose, Search } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import { cancelChild } from '@/api/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
@@ -54,7 +55,7 @@ import EditBatchConfigDialog from './EditBatchConfigDialog.vue'
 import type { AiChatBatch } from '@/types/aiChatBatch'
 
 const props = defineProps<{ batch: AiChatBatch; activeSessionId: string | null }>()
-defineEmits<{ (e: 'selectChild', id: string): void }>()
+const emit = defineEmits<{ (e: 'selectChild', id: string): void; (e: 'searchInBatch'): void }>()
 const store = useAiChatBatchesStore()
 const appendOpen = ref(false)
 const editOpen = ref(false)

@@ -6,8 +6,14 @@ import { CopyDocument, Download } from '@element-plus/icons-vue'
 import 'md-editor-v3/lib/preview.css'
 import './md-editor-setup' // register bundled mermaid/echarts (side effect)
 import { copyText } from '@/utils/clipboard'
+import { useDarkMode } from '@/composables/useDarkMode'
 
 const props = defineProps<{ text: string }>()
+
+// md-editor 的 theme 决定正文/代码高亮整套配色（.md-editor-dark 类）。
+// 不传时恒为 light：深色模式下深灰正文打在深色背景上几乎不可读。
+const isDark = useDarkMode()
+const mdTheme = computed(() => (isDark.value ? 'dark' : 'light'))
 
 // We render ```svg``` fences as inline <img> ourselves rather than letting
 // markdown-it do it, because md-editor's default validateLink only accepts
@@ -89,7 +95,7 @@ async function copySvg(raw: string) {
           </a>
         </div>
       </div>
-      <MdPreview v-else :modelValue="seg.text" :code-foldable="false" />
+      <MdPreview v-else :modelValue="seg.text" :theme="mdTheme" :code-foldable="false" />
     </template>
   </div>
 </template>
@@ -103,6 +109,17 @@ async function copySvg(raw: string) {
 }
 .markdown-view :deep(.md-editor-preview) {
   font-size: 14px;
+}
+/* 深色模式：md-editor dark 自带调色板正文只有 #999，打在深色背景上对比度
+   不足（用户反馈"颜色太浅看不清"）。覆盖为 Element Plus 深色主题的主/
+   常规文本色，背景保持透明继承气泡底色。 */
+html.dark .markdown-view :deep(.md-editor-dark) {
+  --md-color: var(--el-text-color-primary);
+  --md-hover-color: var(--el-text-color-regular);
+  --md-bk-color: transparent;
+  --md-bk-color-outstand: var(--el-fill-color);
+  --md-border-color: var(--el-border-color);
+  --md-bk-hover-color: var(--el-fill-color-light);
 }
 /* echarts default container is a small 4:3 box; give it a proper chat-width
    landscape size (echarts reads this at init, so it renders full size). */

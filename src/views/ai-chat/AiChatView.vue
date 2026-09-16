@@ -213,27 +213,63 @@ async function onToggleBrowserNotify() {
   }
 }
 
-// ---- 会话搜索（F6）：按标题 + 消息内容全文检索，debounce 300ms ----
+// ---- 会话搜索（F6）：按标题/文件名/消息内容全文检索，debounce 300ms ----
+// 搜索范围（批任务搜索 Spec §4.2）：空 = 全部普通会话（现有行为不变）；
+// 设置 batchId 后仅搜索该批任务下的子会话（全部运行状态）。
 const sessionQuery = ref('')
+const sessionSearchBatchId = ref('')
+const sessionSearchBatchName = ref('')
 const sessionHits = ref<AiSessionSearchHit[]>([])
 const sessionSearching = ref(false)
 const sessionSearchEl = ref<InstanceType<typeof ElInput> | null>(null)
 let _sessionSearchTimer: ReturnType<typeof setTimeout> | null = null
 
 const sessionSearchMode = computed(() => sessionQuery.value.trim().length > 0)
+const sessionSearchPlaceholder = computed(() => (sessionSearchBatchId.value
+  ? `在“${sessionSearchBatchName.value || '批任务'}”中搜索会话标题、文件名或内容`
+  : '搜索会话标题或内容…'))
+
+function setSearchScope(batchId: string, batchName: string) {
+  sessionSearchBatchId.value = batchId
+  sessionSearchBatchName.value = batchName
+  // 范围变化立即重搜（关键词已有时），避免展示与新范围不符的旧结果
+  if (sessionQuery.value.trim()) runSessionSearch()
+}
+
+function clearSearchScope() {
+  if (!sessionSearchBatchId.value) return
+  sessionSearchBatchId.value = ''
+  sessionSearchBatchName.value = ''
+  if (sessionQuery.value.trim()) runSessionSearch()
+}
+
+/** BatchGroup 的「搜索本批任务」入口：设置范围 + 聚焦搜索框（Spec §4.1） */
+function searchInBatch(batchId: string, batchName: string) {
+  setSearchScope(batchId, batchName)
+  sessionSearchEl.value?.focus()
+}
 
 async function runSessionSearch() {
   const q = sessionQuery.value.trim()
   if (!q) { sessionHits.value = []; sessionSearching.value = false; return }
+  const scopeId = sessionSearchBatchId.value
   sessionSearching.value = true
   try {
-    const { sessions: hits } = await searchSessions(q)
-    // 请求返回时若查询已被清空/改变则丢弃，避免旧结果覆盖新查询
-    if (sessionQuery.value.trim() === q) sessionHits.value = hits
+    const { sessions: hits } = await searchSessions(q, {
+      batchId: scopeId || undefined,
+    })
+    // 请求返回时若查询/范围已被清空/改变则丢弃，避免旧结果覆盖新查询
+    if (sessionQuery.value.trim() === q && sessionSearchBatchId.value === scopeId) {
+      sessionHits.value = hits
+    }
   } catch {
-    if (sessionQuery.value.trim() === q) sessionHits.value = []
+    if (sessionQuery.value.trim() === q && sessionSearchBatchId.value === scopeId) {
+      sessionHits.value = []
+    }
   } finally {
-    if (sessionQuery.value.trim() === q) sessionSearching.value = false
+    if (sessionQuery.value.trim() === q && sessionSearchBatchId.value === scopeId) {
+      sessionSearching.value = false
+    }
   }
 }
 
@@ -246,11 +282,32 @@ function clearSessionSearch() {
   sessionQuery.value = ''
   sessionHits.value = []
   sessionSearching.value = false
+  sessionSearchBatchId.value = ''
+  sessionSearchBatchName.value = ''
 }
 
-async function selectSearchHit(id: string) {
+const BATCH_MATCH_FIELD_LABEL: Record<string, string> = {
+  title: '标题', file: '输入文件', preview: '最近消息', content: '消息内容',
+}
+const BATCH_CHILD_STATUS_LABEL: Record<string, string> = {
+  pending: '待运行', running: '正在运行', paused: '已暂停',
+  completed: '已完成', failed: '失败', cancelled: '已中断',
+  active: '进行中', closed: '已关闭',
+}
+
+async function selectSearchHit(h: AiSessionSearchHit) {
+  // 批任务子会话：加载所属批次 → 展开分组 → 打开子会话（Spec §4.4）。
+  // 保留搜索条件，允许返回结果继续查看其余命中。
+  if (h.isBatchChild && h.batchId) {
+    try {
+      await batches.ensureBatchInList(h.batchId)
+      await batches.selectBatch(h.batchId)
+      await selectBatchChild(h.id)
+    } catch { ElMessage.error('打开批任务子会话失败') }
+    return
+  }
   clearSessionSearch()
-  await selectSession(id)
+  await selectSession(h.id)
 }
 
 // 关键词高亮（先转义再包 <mark>，XSS 安全）
@@ -463,6 +520,17 @@ async function previewOutput(f: { name: string; path: string }) {
   }
 }
 const reasoning = computed(() => (activeId.value ? store.reasoning[activeId.value] || '' : ''))
+// 思考中（live）块限高内滚后，推理文本在块内增长：流式期间把内滚区钉在
+// 底部，用户始终看到最新推理（等价于此前整页跟随的行为）。回合结束
+// autoCollapse 收起，无需再滚。
+const liveThinkingRef = ref<{ rootEl?: HTMLElement } | null>(null)
+watch(reasoning, async () => {
+  if (!thinking.value) return
+  await nextTick()
+  const pre = liveThinkingRef.value?.rootEl?.querySelector<HTMLElement>(
+    '.elx-thinking__content pre')
+  if (pre) pre.scrollTop = pre.scrollHeight
+})
 const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 const pendingQuestion = computed(() => store.activePendingQuestion)
@@ -961,14 +1029,20 @@ function onKey(e: Event) {
           v-model="sessionQuery"
           class="ai-sidebar__search"
           size="small"
-          placeholder="搜索会话标题或内容…"
+          :placeholder="sessionSearchPlaceholder"
           clearable
           :prefix-icon="Search"
           @input="onSessionSearchInput"
           @clear="clearSessionSearch"
         />
+        <!-- 批任务搜索范围标签（Spec §4.2）：清除后恢复普通会话搜索 -->
+        <div v-if="sessionSearchBatchId" class="ai-sidebar__search-scope">
+          <ElIcon><Tickets /></ElIcon>
+          <span class="ai-sidebar__search-scope-name">{{ sessionSearchBatchName || '批任务' }}</span>
+          <ElIcon class="ai-sidebar__search-scope-x" title="清除范围，恢复全部会话搜索" @click="clearSearchScope"><Close /></ElIcon>
+        </div>
         <ElScrollbar class="ai-chat__sessions">
-          <!-- 搜索态：标题/消息内容命中结果（关键词高亮） -->
+          <!-- 搜索态：标题/文件名/消息内容命中结果（关键词高亮） -->
           <template v-if="sessionSearchMode">
             <div v-if="sessionSearching" class="ai-sidebar__search-hint">
               <ElIcon class="is-loading"><Loading /></ElIcon> 搜索中…
@@ -978,14 +1052,30 @@ function onKey(e: Event) {
                 v-for="h in sessionHits" :key="h.id"
                 class="session-item session-item--hit"
                 :class="{ active: h.id === activeId, 'is-closed': h.status === 'closed' }"
-                @click="selectSearchHit(h.id)"
+                @click="selectSearchHit(h)"
               >
                 <span class="session-item__body">
                   <span class="session-item__title" v-html="hl(h.title)"></span>
+                  <!-- 批任务子会话命中：批次/文件/状态/命中字段上下文（Spec §4.3） -->
+                  <span v-if="h.isBatchChild" class="session-item__batchctx">
+                    <span class="session-item__batchline">
+                      批任务：{{ h.batchName || '未命名批任务' }}
+                      <template v-if="h.batchSeq != null"> · #{{ h.batchSeq }}</template>
+                    </span>
+                    <span v-if="h.inputFileName" class="session-item__batchline">文件：{{ h.inputFileName }}</span>
+                    <span class="session-item__batchline">
+                      状态：{{ BATCH_CHILD_STATUS_LABEL[h.status || ''] || h.status }}
+                      · 命中：{{ BATCH_MATCH_FIELD_LABEL[h.matchField] || h.matchField }}
+                    </span>
+                  </span>
                   <span v-if="h.snippet" class="session-item__snippet" v-html="hl(h.snippet)"></span>
                 </span>
               </div>
-              <ElEmpty v-if="!sessionHits.length" description="未找到匹配会话" :image-size="48" />
+              <ElEmpty
+                v-if="!sessionHits.length"
+                :description="sessionSearchBatchId ? '本批任务中未找到匹配子会话' : '未找到匹配会话'"
+                :image-size="48"
+              />
             </template>
           </template>
 
@@ -1025,6 +1115,7 @@ function onKey(e: Event) {
               v-for="b in regularBatches" :key="b.id"
               :batch="b" :active-session-id="activeId"
               @select-child="selectBatchChild"
+              @search-in-batch="searchInBatch(b.id, b.name)"
             />
             <ElEmpty v-if="!regularBatches.length" description="暂无批任务" :image-size="48" />
           </div>
@@ -1039,6 +1130,7 @@ function onKey(e: Event) {
               v-for="b in scanBatches" :key="b.id"
               :batch="b" :active-session-id="activeId"
               @select-child="selectBatchChild"
+              @search-in-batch="searchInBatch(b.id, b.name)"
             />
             <ElEmpty v-if="!scanBatches.length" description="暂无 AI 定时任务" :image-size="48" />
           </div>
@@ -1116,7 +1208,8 @@ function onKey(e: Event) {
                     <Thinking
                       v-else-if="p.type === 'reasoning' && p.text"
                       class="ai-thinking"
-                      :content="p.text" status="end" :auto-collapse="true"
+                      :content="p.text" status="end"
+                      :model-value="false"
                     />
                     <SubtaskBubble
                       v-else-if="p.type === 'subtask_use'"
@@ -1185,6 +1278,7 @@ function onKey(e: Event) {
             <!-- 思考过程：完成后自动收起 -->
             <Thinking
               v-if="reasoning"
+              ref="liveThinkingRef"
               class="ai-thinking"
               :content="reasoning"
               :status="thinking ? 'thinking' : 'end'"
@@ -1558,6 +1652,17 @@ function onKey(e: Event) {
   display: flex; align-items: center; gap: 6px; justify-content: center;
   padding: 16px 8px; font-size: 13px; color: var(--el-text-color-secondary);
 }
+// 批任务搜索范围标签（Spec §4.2）：标注当前搜索被限定在某个批任务内
+.ai-sidebar__search-scope {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--el-color-primary-light-9); color: var(--el-color-primary);
+  font-size: 12px; width: fit-content; max-width: 100%;
+  .ai-sidebar__search-scope-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;
+  }
+  .ai-sidebar__search-scope-x { cursor: pointer; &:hover { color: var(--el-color-danger); } }
+}
 .session-item {
   display: flex;
   align-items: center;
@@ -1585,6 +1690,14 @@ function onKey(e: Event) {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     mark { background: var(--el-color-warning-light-7); color: inherit; padding: 0 1px; border-radius: 2px; }
   }
+  // 批任务子会话命中上下文：批任务名 / 输入文件 / 状态·命中字段（Spec §4.3）
+  &__batchctx {
+    display: flex; flex-direction: column; gap: 1px;
+    font-size: 11.5px; color: var(--el-text-color-secondary);
+  }
+  &__batchline {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   mark { background: var(--el-color-warning-light-7); color: inherit; padding: 0 1px; border-radius: 2px; }
 }
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -1596,7 +1709,9 @@ function onKey(e: Event) {
   position: absolute; right: 20px; bottom: 16px; z-index: 20;
   display: inline-flex; align-items: center; gap: 6px;
   padding: 7px 14px; border: none; border-radius: 999px;
-  background: var(--el-color-primary); color: #fff; font-size: 13px; line-height: 1;
+  background: var(--el-color-primary);
+  color: var(--app-primary-contrast);  /* 暗色下主色近白 → 深字（白字不可读） */
+  font-size: 13px; line-height: 1;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18); cursor: pointer;
   transition: background 0.15s ease, transform 0.15s ease;
   &:hover { background: var(--el-color-primary-light-3); transform: translateY(-1px); }
@@ -1737,6 +1852,12 @@ function onKey(e: Event) {
 }
 .ai-bubble--assistant :deep(.md-editor-preview) { font-size: 15px; line-height: 1.7; }
 .ai-thinking { max-width: 780px; margin: 0 auto 24px; }
+/* 展开态限高内滚：数千行推理会把会话撑到几千像素高，收起按钮（块头部）
+   也被顶出视野。限高后头部始终近在眼前，内容在块内滚动。 */
+.ai-thinking :deep(.elx-thinking__content pre) {
+  max-height: 320px;
+  overflow-y: auto;
+}
 /* 执行计划面板：与产出/变更面板同一行节奏，卡片本身由 TodoListBlock 自带 */
 .ai-todos { margin: 4px 0 24px; }
 .ai-outputs {

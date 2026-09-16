@@ -92,8 +92,10 @@ def test_create_rejects_non_list_files(client, mock_conn, mock_cursor):
 
 
 def test_create_rejects_too_many_files(client, mock_conn, mock_cursor):
-    from routes.open_api_ai_sessions import MAX_FILES_PER_BATCH
+    from utils.batch_repo import MAX_FILES_PER_BATCH
     _auth_passes(mock_cursor)
+    patch('routes.open_api_ai_sessions.get_max_files_per_batch',
+          return_value=MAX_FILES_PER_BATCH).start()
     files = [{'name': f'f{i}.txt', 'path': f'batch-staging/user-42/x/f{i}.txt'}
              for i in range(MAX_FILES_PER_BATCH + 1)]
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \

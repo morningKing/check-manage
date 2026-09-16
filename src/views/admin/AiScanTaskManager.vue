@@ -62,7 +62,7 @@
           <el-select v-model="form.agent" placeholder="使用 OpenCode 默认 Agent" clearable style="width:300px">
             <el-option v-for="a in agents" :key="a.name" :label="a.name" :value="a.name">
               <span>{{ a.name }}</span>
-              <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
+              <span v-if="a.description" style="color:var(--el-text-color-secondary);font-size:11px;margin-left:6px">{{ a.description }}</span>
             </el-option>
           </el-select>
           <div class="hint">选择后，该任务的所有 AI 会话将使用指定 Agent 执行</div>
@@ -82,7 +82,7 @@
         </el-form-item>
         <el-form-item label="运行信息" v-if="form.id">
           <div class="hint">上次运行：{{ form.lastRunAt || '从未' }}；本次处理：{{ form.lastScanCount ?? 0 }} 条
-            <span v-if="form.lastError" style="color:#f56c6c">；错误：{{ form.lastError }}</span></div>
+            <span v-if="form.lastError" style="color:var(--el-color-danger)">；错误：{{ form.lastError }}</span></div>
         </el-form-item>
       </el-form>
     </el-card>
@@ -210,6 +210,6 @@ onMounted(async () => {
 .editor-card { flex: 1; overflow: auto; }
 .hd { display: flex; justify-content: space-between; align-items: center; }
 .map-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.contract { background: #f5f7fa; padding: 8px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
-.hint { color: #909399; font-size: 12px; }
+.contract { background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+.hint { color: var(--el-text-color-secondary); font-size: 12px; }
 </style>

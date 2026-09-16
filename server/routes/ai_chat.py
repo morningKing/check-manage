@@ -301,8 +301,23 @@ def _content_snippet(content, query: str, width: int = 40) -> str:
     return f'{prefix}{seg}{suffix}'
 
 
+def _single_line(text: str, width: int = 160) -> str:
+    """Collapse a stored preview into the one-line form the sidebar renders."""
+    return ' '.join((text or '').split())[:width]
+
+
 # Max search hits returned per query (keeps the sidebar responsive).
 _SEARCH_LIMIT = 50
+
+# 批任务子会话的可搜索状态白名单（批任务搜索 Spec §6.2）。普通会话搜索维持
+# active/closed 不变；指定 batchId 时子会话的运行状态跨越 pending/running/
+# completed/failed，其中 paused/cancelled 是批任务暂停/中断产生的真实状态
+# （可「继续运行」恢复，历史消息同样值得搜索），一并纳入白名单。
+# 集中定义正向白名单，排除只靠「不在名单里」，避免宽泛的 NOT IN 漏拦新状态。
+BATCH_CHILD_SEARCH_STATUSES = (
+    'active', 'closed', 'pending', 'running', 'paused', 'cancelled',
+    'completed', 'failed',
+)
 
 
 @ai_chat_bp.route('/sessions', methods=['GET'])
@@ -342,69 +357,154 @@ def list_sessions():
 @ai_chat_bp.route('/sessions/search', methods=['GET'])
 @login_required
 def search_sessions():
-    """Search the current user's regular sessions by title or message content.
+    """Search the current user's sessions by title, file name or message content.
 
-    Matches a session when its title matches ILIKE `q`, OR when one of its
-    messages has a `text` content-part matching ILIKE `q`. Title hits sort
-    first; within each group, newest activity first. Batch-child sessions
-    (status='pending') are excluded by the same status filter as list_sessions.
+    Two modes (批任务搜索 Spec §5):
 
-    Returns each hit with `matchField` ('title'|'content') and a one-line
-    `snippet` (content hits only, centred on the keyword) for the sidebar.
+    - Default (no `batchId`): regular interactive sessions only, matched on
+      title OR message text parts, status filtered to active/closed — same
+      scope as `list_sessions`. Batch children stay out of the default results
+      so a large batch can't flood the sidebar search.
+    - `batchId` given: only that batch's child sessions, across ALL their live
+      statuses (see BATCH_CHILD_SEARCH_STATUSES), matched on title, input file
+      path/name, last_message_preview OR full message text. The batch must
+      belong to the caller — a foreign/unknown batchId yields an EMPTY result
+      (not 404) so the endpoint can't be used to enumerate other users' batches.
+
+    Hits carry `matchField` — 'title' | 'file' | 'preview' | 'content' — and a
+    one-line `snippet` centred on the keyword (content hits; preview hits show
+    the preview itself; title/file hits skip the snippet per Spec §7.3).
     """
     user = flask_g.current_user
     q = (request.args.get('q') or '').strip()
+    batch_id = (request.args.get('batchId') or '').strip()
     if not q:
         return jsonify({'sessions': []})
 
     pat = _ilike_pattern(q)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT s.id, s.title, s.last_active_at, s.status, "
-            "       s.batch_id, s.batch_input_file, "
-            "       COALESCE(s.title ILIKE %s ESCAPE '\\', false) AS title_match, "
-            "       ( "
-            "         SELECT m.content FROM ai_chat_messages m "
-            "         WHERE m.session_id = s.id "
-            "           AND EXISTS ( "
-            "             SELECT 1 FROM jsonb_array_elements(m.content) p "
-            "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %s ESCAPE '\\' "
-            "           ) "
-            "         ORDER BY m.created_at DESC LIMIT 1 "
-            "       ) AS hit_content "
-            "FROM ai_chat_sessions s "
-            "WHERE s.user_id = %s "
-            "  AND s.status IN ('active', 'closed') "
-            "  AND ( "
-            "    COALESCE(s.title ILIKE %s ESCAPE '\\', false) "
-            "    OR EXISTS ( "
-            "      SELECT 1 FROM ai_chat_messages m2 "
-            "      CROSS JOIN jsonb_array_elements(m2.content) p "
-            "      WHERE m2.session_id = s.id "
-            "        AND p->>'type' = 'text' "
-            "        AND p->>'text' ILIKE %s ESCAPE '\\' "
-            "    ) "
-            "  ) "
-            "ORDER BY title_match DESC, s.last_active_at DESC NULLS LAST "
-            "LIMIT %s",
-            (pat, pat, user['userId'], pat, pat, _SEARCH_LIMIT),
-        )
-        rows = cur.fetchall()
+        if batch_id:
+            # Batch-scoped search: narrow by (user_id, batch_id) FIRST, then
+            # match fields / parse message JSONB (Spec §10.1 — the batch index
+            # keeps the message scan bounded to one batch's children).
+            cur.execute(
+                "SELECT s.id, s.title, s.last_active_at, s.status, "
+                "       s.batch_id, s.batch_input_file, s.batch_seq, b.name AS batch_name, "
+                "       s.last_message_preview, "
+                "       COALESCE(s.title ILIKE %(pat)s ESCAPE '\\', false) AS title_match, "
+                "       COALESCE(s.batch_input_file ILIKE %(pat)s ESCAPE '\\', false) AS file_match, "
+                "       COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) AS preview_match, "
+                "       ( "
+                "         SELECT m.content FROM ai_chat_messages m "
+                "         WHERE m.session_id = s.id "
+                "           AND EXISTS ( "
+                "             SELECT 1 FROM jsonb_array_elements(m.content) p "
+                "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %(pat)s ESCAPE '\\' "
+                "           ) "
+                "         ORDER BY m.created_at DESC LIMIT 1 "
+                "       ) AS hit_content "
+                "FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id = %(uid)s "
+                "WHERE s.user_id = %(uid)s "
+                "  AND s.batch_id = %(bid)s "
+                "  AND s.status IN %(statuses)s "
+                "  AND ( "
+                "    COALESCE(s.title ILIKE %(pat)s ESCAPE '\\', false) "
+                "    OR COALESCE(s.batch_input_file ILIKE %(pat)s ESCAPE '\\', false) "
+                "    OR COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) "
+                "    OR EXISTS ( "
+                "      SELECT 1 FROM ai_chat_messages m2 "
+                "      CROSS JOIN jsonb_array_elements(m2.content) p "
+                "      WHERE m2.session_id = s.id "
+                "        AND p->>'type' = 'text' "
+                "        AND p->>'text' ILIKE %(pat)s ESCAPE '\\' "
+                "    ) "
+                "  ) "
+                # 排序（Spec §7.2）：标题 > 文件名 > 预览 > 内容命中，再按最近
+                # 活跃倒序、批内序号正序，保证确定性。
+                "ORDER BY title_match DESC, file_match DESC, preview_match DESC, "
+                "         s.last_active_at DESC NULLS LAST, s.batch_seq ASC NULLS LAST "
+                "LIMIT %(limit)s",
+                {'pat': pat, 'uid': user['userId'], 'bid': batch_id,
+                 'statuses': tuple(BATCH_CHILD_SEARCH_STATUSES),
+                 'limit': _SEARCH_LIMIT},
+            )
+            rows = cur.fetchall()
+        else:
+            cur.execute(
+                "SELECT s.id, s.title, s.last_active_at, s.status, "
+                "       s.batch_id, s.batch_input_file, "
+                "       COALESCE(s.title ILIKE %s ESCAPE '\\', false) AS title_match, "
+                "       ( "
+                "         SELECT m.content FROM ai_chat_messages m "
+                "         WHERE m.session_id = s.id "
+                "           AND EXISTS ( "
+                "             SELECT 1 FROM jsonb_array_elements(m.content) p "
+                "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %s ESCAPE '\\' "
+                "           ) "
+                "         ORDER BY m.created_at DESC LIMIT 1 "
+                "       ) AS hit_content "
+                "FROM ai_chat_sessions s "
+                "WHERE s.user_id = %s "
+                "  AND s.status IN ('active', 'closed') "
+                "  AND ( "
+                "    COALESCE(s.title ILIKE %s ESCAPE '\\', false) "
+                "    OR EXISTS ( "
+                "      SELECT 1 FROM ai_chat_messages m2 "
+                "      CROSS JOIN jsonb_array_elements(m2.content) p "
+                "      WHERE m2.session_id = s.id "
+                "        AND p->>'type' = 'text' "
+                "        AND p->>'text' ILIKE %s ESCAPE '\\' "
+                "    ) "
+                "  ) "
+                "ORDER BY title_match DESC, s.last_active_at DESC NULLS LAST "
+                "LIMIT %s",
+                (pat, pat, user['userId'], pat, pat, _SEARCH_LIMIT),
+            )
+            rows = cur.fetchall()
 
-    return jsonify({
-        'sessions': [
-            {
-                'id': r[0],
-                'title': _session_title(r[1], r[4], r[5]),
-                'lastActiveAt': r[2].isoformat() if r[2] else None,
-                'status': r[3],
-                'matchField': 'title' if r[6] else 'content',
-                'snippet': '' if r[6] else _content_snippet(r[7], q),
-            }
-            for r in rows
-        ],
-    })
+    sessions = []
+    for r in rows:
+        if batch_id:
+            (sid, title, ts, status, _bid, input_file, batch_seq, batch_name,
+             preview, title_match, file_match, preview_match, hit_content) = r
+            # 命中字段优先级（Spec §7.2）：标题 > 文件名 > 预览 > 消息内容。
+            # 标题/文件名命中不展示消息摘要（Spec §7.3）；预览命中直接以预览
+            # 文本为摘要（它本身就是命中内容）；内容命中围绕关键词截取。
+            if title_match:
+                match_field, snippet = 'title', ''
+            elif file_match:
+                match_field, snippet = 'file', ''
+            elif preview_match:
+                match_field, snippet = 'preview', _single_line(preview or '')
+            else:
+                match_field, snippet = 'content', _content_snippet(hit_content, q)
+            sessions.append({
+                'id': sid,
+                'title': _session_title(title, batch_id, input_file),
+                'lastActiveAt': ts.isoformat() if ts else None,
+                'status': status,
+                'matchField': match_field,
+                'snippet': snippet,
+                'batchId': batch_id,
+                'batchName': batch_name,
+                'batchSeq': batch_seq,
+                'inputFileName': (input_file or '').rsplit('/', 1)[-1] or None,
+                'isBatchChild': True,
+            })
+        else:
+            (sid, title, ts, status, _bid, input_file, title_match, hit_content) = r
+            sessions.append({
+                'id': sid,
+                'title': _session_title(title, _bid, input_file),
+                'lastActiveAt': ts.isoformat() if ts else None,
+                'status': status,
+                'matchField': 'title' if title_match else 'content',
+                'snippet': '' if title_match else _content_snippet(hit_content, q),
+            })
+
+    return jsonify({'sessions': sessions})
 
 
 @ai_chat_bp.route('/sessions/<sid>', methods=['PATCH'])

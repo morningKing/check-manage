@@ -19,8 +19,9 @@ from utils.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FO
                               PAYLOAD_TOO_LARGE, UPSTREAM_UNAVAILABLE, err,
                               register_error_handlers)
 from utils.batch_engine import get_worker
-from utils.batch_repo import (MAX_FILES_PER_BATCH, append_to_batch, cancel_batch,
+from utils.batch_repo import (append_to_batch, cancel_batch,
                               create_batch, delete_batch, get_batch_detail,
+                              get_max_files_per_batch,
                               get_batch_results, get_batch_usage, get_session_usage,
                               list_batches, reset_failed_to_pending)
 from utils.filename import safe_filename
@@ -349,8 +350,9 @@ def create():
         return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
     if not isinstance(files, list) or not files:
         return err('请至少提供一个文件', INVALID_ARGUMENT, 400)
-    if len(files) > MAX_FILES_PER_BATCH:
-        return err(f'单批最多 {MAX_FILES_PER_BATCH} 个文件', INVALID_ARGUMENT, 400)
+    max_files = get_max_files_per_batch()
+    if len(files) > max_files:
+        return err(f'单批最多 {max_files} 个文件', INVALID_ARGUMENT, 400)
     url_err = _validate_callback_url(callback_url)
     if url_err:
         return url_err
@@ -561,8 +563,9 @@ def append(batch_id):
 
     if not isinstance(files, list) or not files:
         return err('请至少提供一个文件', INVALID_ARGUMENT, 400)
-    if len(files) > MAX_FILES_PER_BATCH:
-        return err(f'单次最多追加 {MAX_FILES_PER_BATCH} 个文件', INVALID_ARGUMENT, 400)
+    max_files = get_max_files_per_batch()
+    if len(files) > max_files:
+        return err(f'单次最多追加 {max_files} 个文件', INVALID_ARGUMENT, 400)
 
     file_err = _validate_files(files, owner)
     if file_err:

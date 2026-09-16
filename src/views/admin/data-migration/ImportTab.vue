@@ -263,5 +263,5 @@ loadMenus()
 .import-tab { padding: 8px; }
 .bulk-upload { margin-bottom: 16px; }
 .actions { margin-top: 16px; }
-.file-name { margin-left: 8px; font-size: 12px; color: #909399; }
+.file-name { margin-left: 8px; font-size: 12px; color: var(--el-text-color-secondary); }
 </style>

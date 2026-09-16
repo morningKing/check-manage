@@ -748,7 +748,7 @@
                       :value="String(opt.value)"
                     />
                   </el-select>
-                  <span style="margin: 0 4px; color: #909399">&rarr;</span>
+                  <span style="margin: 0 4px; color: var(--el-text-color-secondary)">&rarr;</span>
                   <el-select v-model="t.to" placeholder="目标状态" style="width: 100px" size="small">
                     <el-option
                       v-for="opt in fieldFormData.options"
@@ -1491,7 +1491,7 @@ watch(
 .default-value-tip {
   margin-top: 4px;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.4;
 }
 
@@ -1511,9 +1511,9 @@ watch(
   display: flex;
   align-items: center;
   padding: 12px;
-  background-color: #f5f7fa;
+  background-color: var(--el-fill-color-light);
   border-radius: 4px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color-light);
 
   &:hover {
     border-color: #c0c4cc;
@@ -1522,10 +1522,10 @@ watch(
   .drag-handle {
     cursor: move;
     padding: 0 8px;
-    color: #909399;
+    color: var(--el-text-color-secondary);
 
     &:hover {
-      color: #409eff;
+      color: var(--el-color-primary);
     }
   }
 
@@ -1540,13 +1540,13 @@ watch(
 
       .field-label {
         font-weight: 500;
-        color: #303133;
+        color: var(--el-text-color-primary);
       }
     }
 
     .field-meta {
       font-size: 12px;
-      color: #909399;
+      color: var(--el-text-color-secondary);
       margin-top: 4px;
     }
   }
@@ -1580,10 +1580,10 @@ watch(
     .batch-hint {
       margin: 0 0 12px;
       font-size: 13px;
-      color: #909399;
+      color: var(--el-text-color-secondary);
 
       code {
-        background: #f5f7fa;
+        background: var(--el-fill-color-light);
         padding: 1px 4px;
         border-radius: 3px;
         font-size: 12px;
@@ -1603,10 +1603,10 @@ watch(
 .sequence-preview {
   margin-top: 8px;
   padding: 8px 12px;
-  background-color: #f5f7fa;
+  background-color: var(--el-fill-color-light);
   border-radius: 4px;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .file-config {
@@ -1615,7 +1615,7 @@ watch(
   .file-config-tip {
     margin-top: 6px;
     font-size: 12px;
-    color: #909399;
+    color: var(--el-text-color-secondary);
   }
 }
 
@@ -1668,12 +1668,12 @@ watch(
 
 .indexed-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .indexed-error {
   margin-top: 4px;
   font-size: 12px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 </style>

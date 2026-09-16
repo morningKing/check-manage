@@ -327,6 +327,6 @@ onMounted(() => {
 }
 
 .error-text {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 </style>

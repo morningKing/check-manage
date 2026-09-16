@@ -253,5 +253,5 @@ onMounted(async () => {
 .role-editor-card { flex: 1; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .perm-group { margin-bottom: 16px; h4 { margin: 8px 0; } }
-.hint { color: #909399; font-size: 12px; margin-top: 8px; }
+.hint { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 8px; }
 </style>

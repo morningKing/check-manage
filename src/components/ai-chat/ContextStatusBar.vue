@@ -1,5 +1,5 @@
 <!-- 输入框上方的常驻用量状态条（AI-Chat 优化 F1）：模型 ｜ 上下文水位线 ｜ 累计
-     token/费用。水位 <70% 默认色、70%~90% 警告色、≥90% 危险色并弹出压缩建议
+     token/费用 ｜ token 速度。水位 <70% 默认色、70%~90% 警告色、≥90% 危险色并弹出压缩建议
      气泡（「立即压缩」交给父组件已有的 onCompact 流程）。数据来自会话消息
      meta（见 utils/aiUsage.ts），父组件用 :key="activeId" 挂载以在切换会话时
      重置「稍后」的静音状态。 -->
@@ -24,6 +24,23 @@ const pctIntText = computed(() => (pct.value == null ? '' : pct.value.toFixed(0)
 const hasContext = computed(() => props.usage.contextTokens != null)
 const hasTotal = computed(() => props.usage.totalTokens > 0 || props.usage.cost > 0)
 
+// token 生成速度（tok/s）：优先展示最近一个回合（最贴近"当前速度"），
+// 无最近样本但有历史样本时退回会话平均；title 里给出两个口径的完整说明。
+const hasSpeed = computed(() =>
+  props.usage.lastTokPerSec != null || props.usage.avgTokPerSec != null)
+const speedText = computed(() => {
+  const v = props.usage.lastTokPerSec ?? props.usage.avgTokPerSec
+  return v == null ? '' : String(Math.round(v))
+})
+const speedTitle = computed(() => {
+  const parts: string[] = []
+  if (props.usage.lastTokPerSec != null)
+    parts.push(`最近回合 ${Math.round(props.usage.lastTokPerSec)} tok/s`)
+  if (props.usage.avgTokPerSec != null)
+    parts.push(`会话平均 ${Math.round(props.usage.avgTokPerSec)} tok/s`)
+  return parts.join('，')
+})
+
 // 「稍后」只压住本轮危险提示；水位回落到 90% 以下后重新武装，再次越线仍会
 // 提醒（一次 dismiss 不做永久静音——静音的判定依据是水位本身）。
 const dismissed = ref(false)
@@ -46,6 +63,9 @@ watch(pct, (v) => { if (v != null && v < 90) dismissed.value = false })
       </span>
       <span v-if="hasTotal" class="ctx-bar__seg">
         累计: {{ formatTokens(usage.totalTokens) }}<template v-if="usage.cost"> · {{ formatCost(usage.cost) }}</template>
+      </span>
+      <span v-if="hasSpeed" class="ctx-bar__seg" :title="speedTitle">
+        速度: {{ speedText }} tok/s
       </span>
     </div>
   </div>

@@ -49,6 +49,15 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     }
   }
 
+  // 搜索结果直开（批任务搜索 Spec §8.2）：命中的子会话所属批次可能不在当前
+  // 列表分页里，先按 id 拉详情把批次补进列表（分组头可见、可展开），再走
+  // 常规 selectBatch。不依赖批次已存在于 items。
+  async function ensureBatchInList(id: string) {
+    if (items.value.some(b => b.id === id)) return
+    const detail = await api.getBatch(id)
+    items.value = [detail.batch, ...items.value.filter(b => b.id !== id)]
+  }
+
   function applyDetail(detail: AiChatBatchDetail) {
     activeBatch.value = detail.batch
     activeSessions.value = detail.sessions
@@ -209,7 +218,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   return {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
-    selectBatch, clearSelection, retryFailed, reexecuteChild,
+    selectBatch, ensureBatchInList, clearSelection, retryFailed, reexecuteChild,
     stopBatch, pauseBatch, resumeBatch,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
   }

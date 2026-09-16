@@ -22,9 +22,16 @@ export interface SessionUsage {
   totalTokens: number
   /** 累计费用（USD） */
   cost: number
+  /** 最近一个回合的生成速度（output tokens / 秒）；null = 无有效样本 */
+  lastTokPerSec: number | null
+  /** 会话平均生成速度（Σoutput / Σduration）；null = 无有效样本 */
+  avgTokPerSec: number | null
 }
 
-export const EMPTY_USAGE: SessionUsage = { contextTokens: null, totalTokens: 0, cost: 0 }
+export const EMPTY_USAGE: SessionUsage = {
+  contextTokens: null, totalTokens: 0, cost: 0,
+  lastTokPerSec: null, avgTokPerSec: null,
+}
 
 /** 从会话消息（含持久化 meta）计算用量。纯函数，幂等。 */
 export function computeUsage(messages: AiMessage[] | undefined | null): SessionUsage {
@@ -32,6 +39,9 @@ export function computeUsage(messages: AiMessage[] | undefined | null): SessionU
   let total = 0
   let cost = 0
   let context: number | null = null
+  let lastTokPerSec: number | null = null
+  let sumOutput = 0
+  let sumDurationMs = 0
   for (const m of messages) {
     if (!m || m.role !== 'assistant' || !m.meta) continue
     const tin = m.meta.tokensInput ?? 0
@@ -40,8 +50,18 @@ export function computeUsage(messages: AiMessage[] | undefined | null): SessionU
     total += tin + tout
     cost += m.meta.cost ?? 0
     context = tin + tout
+    // 生成速度样本：output tokens / 回合时长。duration 缺失或为 0 的样本
+    // 不参与（除零/无意义），但不影响上面用量的累计。
+    const dur = m.meta.durationMs ?? 0
+    if (dur > 0 && tout > 0) {
+      lastTokPerSec = (tout / dur) * 1000
+      sumOutput += tout
+      sumDurationMs += dur
+    }
   }
-  return { contextTokens: context, totalTokens: total, cost }
+  const avgTokPerSec = sumDurationMs > 0 ? (sumOutput / sumDurationMs) * 1000 : null
+  return { contextTokens: context, totalTokens: total, cost,
+           lastTokPerSec, avgTokPerSec }
 }
 
 export type UsageLevel = 'ok' | 'warn' | 'danger'

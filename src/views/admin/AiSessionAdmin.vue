@@ -81,10 +81,10 @@
               <el-dropdown-menu>
                 <el-dropdown-item command="detail">详情</el-dropdown-item>
                 <el-dropdown-item command="analyze">
-                  <span style="color: #67c23a">轨迹分析</span>
+                  <span style="color: var(--el-color-success)">轨迹分析</span>
                 </el-dropdown-item>
                 <el-dropdown-item v-if="row.status === 'active'" command="archive">
-                  <span style="color: #e6a23c">归档</span>
+                  <span style="color: var(--el-color-warning)">归档</span>
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>

@@ -65,9 +65,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiBatchAdmin.vue') },
     { id: 'ai-sessions', label: 'AI 会话管理', perm: 'admin.ai_chat_admin', icon: 'ChatDotRound',
       component: () => import('@/views/admin/AiSessionAdmin.vue') },
-    { id: 'ai-skills', label: 'AI 技能管理', perm: 'admin.ai_settings', icon: 'MagicStick',
+    { id: 'ai-skills', label: 'AI 技能 / MCP', perm: 'admin.ai_settings', icon: 'MagicStick',
       component: () => import('@/views/admin/AiSkillManager.vue') },
-    { id: 'ai-opencode', label: 'OpenCode 运行时', perm: 'admin.ai_settings', icon: 'Cpu',
+    { id: 'ai-opencode', label: 'OpenCode 运行时', perm: 'admin.ai_runtime_read', icon: 'Cpu',
       component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [

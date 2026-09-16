@@ -129,23 +129,21 @@ a {
 // ==================== Element Plus 样式覆盖 ====================
 
 // 表格样式优化
+// 背景色一律走 EP 变量（--el-table-header-bg-color / --el-table-row-hover-bg-color），
+// 由 theme.scss 浅色赋值、html.dark 块覆盖深色值——不要在这里写死色值或用
+// !important（旧写法的 $color-bg-page !important 把深色模式的表头钉死成浅色）。
+// 行悬浮无需覆盖：EP 原生规则消费 --el-table-row-hover-bg-color，同样随主题。
 .el-table {
-  // 表头背景色
   th.el-table__cell {
-    background-color: $color-bg-page !important;
-    color: $color-text-primary;
+    background-color: var(--el-table-header-bg-color);
+    color: var(--el-table-header-text-color);
     font-weight: 600;
-  }
-
-  // 行悬浮效果
-  .el-table__row:hover > td {
-    background-color: $color-primary-light !important;
   }
 }
 
 // 表单样式优化
 .el-form-item__label {
-  color: $color-text-primary;
+  color: var(--el-text-color-regular);  // 主题变量：深色下自动切换为浅色文字
   font-weight: 500;
 }
 

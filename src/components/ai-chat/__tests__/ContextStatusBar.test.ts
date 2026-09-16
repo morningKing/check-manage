@@ -15,6 +15,8 @@ const usage = (over: Partial<SessionUsage> = {}): SessionUsage => ({
   contextTokens: 12_300,
   totalTokens: 45_600,
   cost: 0.12,
+  lastTokPerSec: null,
+  avgTokPerSec: null,
   ...over,
 })
 
@@ -83,5 +85,39 @@ describe('ContextStatusBar', () => {
     expect(w.text()).not.toContain('上下文')
     expect(w.text()).not.toContain('累计')
     expect(w.text()).toContain('模型: m')
+  })
+})
+
+describe('ContextStatusBar token speed', () => {
+  it('shows the last-turn speed segment with a title explaining both figures', async () => {
+    const w = mount(ContextStatusBar, {
+      props: {
+        usage: usage({ lastTokPerSec: 96.4, avgTokPerSec: 51.2 }),
+        modelLabel: 'm', contextLimit: 200_000,
+      },
+      global: { stubs },
+    })
+    const text = w.text()
+    expect(text).toContain('速度: 96 tok/s')
+    const seg = w.find('.ctx-bar__seg[title]')
+    expect(seg.exists()).toBe(true)
+    expect(seg.attributes('title')).toContain('最近回合 96 tok/s')
+    expect(seg.attributes('title')).toContain('会话平均 51 tok/s')
+  })
+
+  it('falls back to the session average when there is no last-turn sample', () => {
+    const w = mount(ContextStatusBar, {
+      props: { usage: usage({ avgTokPerSec: 42.6 }), modelLabel: 'm', contextLimit: 200_000 },
+      global: { stubs },
+    })
+    expect(w.text()).toContain('速度: 43 tok/s')
+  })
+
+  it('hides the speed segment without any speed sample', () => {
+    const w = mount(ContextStatusBar, {
+      props: { usage: usage(), modelLabel: 'm', contextLimit: 200_000 },
+      global: { stubs },
+    })
+    expect(w.text()).not.toContain('tok/s')
   })
 })

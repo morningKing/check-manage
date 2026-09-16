@@ -50,11 +50,20 @@ def _build_where(status, source_type, owner, keyword, batch_id):
         where.append("u.username ILIKE %s")
         params.append(f'%{owner}%')
     if keyword:
+        # 关键词命中标题/输入文件/最近消息预览之外，还要命中完整历史消息
+        # （批任务搜索 Spec §9 管理员一致性：不再仅依赖 last_message_preview，
+        # 运行中/失败会话的历史消息同样可搜）。jsonb 只在命中其余过滤条件
+        # 的行上展开，批量场景先靠 batch_id/owner 等条件收窄。
         where.append(
             "(s.title ILIKE %s OR s.batch_input_file ILIKE %s "
-            "OR s.last_message_preview ILIKE %s)")
+            "OR s.last_message_preview ILIKE %s "
+            "OR EXISTS ( "
+            "  SELECT 1 FROM ai_chat_messages m2 "
+            "  CROSS JOIN jsonb_array_elements(m2.content) p "
+            "  WHERE m2.session_id = s.id "
+            "    AND p->>'type' = 'text' AND p->>'text' ILIKE %s))")
         kw = f'%{keyword}%'
-        params.extend([kw, kw, kw])
+        params.extend([kw, kw, kw, kw])
     if batch_id:
         where.append("s.batch_id = %s")
         params.append(batch_id)

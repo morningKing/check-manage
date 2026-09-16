@@ -483,16 +483,44 @@ def start_opencode():
               '建议在 server/.env 配置 opencode.exe 的完整路径', flush=True)
     log = open(OPENCODE_LOG, 'w', encoding='utf-8', errors='replace')
     # 执行环境编码钉死 UTF-8（Windows 中文环境默认 GBK，会让 serve 拉起的
-    # bash/git 工具输出乱码）——见 utils/opencode_launch.child_env。
+    # bash/git 工具输出乱码）+ 显式钉死 OPENCODE_GLOBAL_DIR（serve 必须读取
+    # 管理界面操作的同一全局目录）——见 utils/opencode_launch.serve_env。
     return subprocess.Popen(
         target,
         shell=use_shell,
         cwd=opencode_launch.serve_cwd(),
-        env=opencode_launch.child_env(),
+        env=opencode_launch.serve_env(),
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=_NO_WINDOW,
     )
+
+
+def record_serve_ownership(timeout=25):
+    """发现平台刚拉起的 serve 的监听 PID 并写入 ownership 登记。
+
+    登记之后，OpenCode 管理页的重启才被允许 kill 该进程（外部启动的 serve
+    永远不会被按端口误杀，见 utils/opencode_ownership）。best-effort：发现
+    失败只影响下次重启的 ownership 判定（走 unknown 拒杀的安全侧路径），
+    不阻断启动流程。"""
+    try:
+        from urllib.parse import urlparse
+        from utils.opencode_global import serve_listener_pids
+        from utils import opencode_ownership
+        port = urlparse(OPENCODE_BASE_URL).port or 4096
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            pids = serve_listener_pids(port)
+            if pids:
+                opencode_ownership.record(pids[0], port)
+                print(f'       OpenCode serve ownership recorded '
+                      f'(pid={pids[0]}, port={port})', flush=True)
+                return
+            time.sleep(1.0)
+        print('       [WARN] could not discover serve PID for ownership registry',
+              flush=True)
+    except Exception as e:  # ownership is a safety net, never a launch blocker
+        print(f'       [WARN] ownership record failed: {e}', flush=True)
 
 
 def wait_for_opencode(base_url, timeout=20):
@@ -565,6 +593,7 @@ def main():
             procs.append(oc_proc)
             print(f'       OpenCode started ({OPENCODE_BASE_URL}, '
                   f'cmd: {opencode_launch.serve_cmd_display()})', flush=True)
+            record_serve_ownership()
         elif _report_dead_subprocess('OpenCode', oc_proc, OPENCODE_LOG):
             # AI chat only; the rest of the app still serves.
             print('       [WARN] OpenCode failed to start; AI chat disabled '

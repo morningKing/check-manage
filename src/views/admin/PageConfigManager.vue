@@ -129,7 +129,7 @@
                       active-text="允许"
                       inactive-text="只读"
                     />
-                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                    <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                       开启后外部系统可通过 Open API 新增和修改数据
                     </div>
                   </el-form-item>
@@ -198,7 +198,7 @@
                           :value="f.fieldName"
                         />
                       </el-select>
-                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                         选择一个下拉选择类型的字段作为看板列的分组依据
                       </div>
                     </el-form-item>
@@ -252,7 +252,7 @@
                           :value="f.fieldName"
                         />
                       </el-select>
-                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                         选择日期字段作为日历视图的时间轴，必须有日期字段才能启用日历视图
                       </div>
                     </el-form-item>
@@ -267,7 +267,7 @@
                             :value="f.fieldName"
                           />
                         </el-select>
-                        <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                           选择结束日期字段可支持多天事件，用户可拖拽边缘调整时长
                         </div>
                       </el-form-item>
@@ -316,7 +316,7 @@
                           :value="f.fieldName"
                         />
                       </el-select>
-                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                         选择开始日期字段，必须有开始和结束日期才能启用甘特图
                       </div>
                     </el-form-item>
@@ -375,7 +375,7 @@
                             :value="f.fieldName"
                           />
                         </el-select>
-                        <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                        <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                           选择多选字段存储依赖任务ID，用于显示依赖连线
                         </div>
                       </el-form-item>
@@ -414,7 +414,7 @@
                       active-text="启用"
                       inactive-text="关闭"
                     />
-                    <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                    <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                       启用后，删除数据时会弹出表单让用户填写信息，保存后再执行删除
                     </div>
                   </el-form-item>
@@ -433,7 +433,7 @@
                           :value="c.id"
                         />
                       </el-select>
-                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                         删除记录时，表单数据将保存到此集合
                       </div>
                     </el-form-item>
@@ -460,7 +460,7 @@
                         active-text="操作者信息"
                         inactive-text="关闭"
                       />
-                      <div style="color: #909399; font-size: 12px; margin-top: 4px">
+                      <div style="color: var(--el-text-color-secondary); font-size: 12px; margin-top: 4px">
                         自动填充操作者用户名、删除时间、源记录ID等信息
                       </div>
                     </el-form-item>
@@ -1630,7 +1630,7 @@ onActivated(async () => {
   }
 
   .desc {
-    color: #606266;
+    color: var(--el-text-color-regular);
     font-size: 13px;
     margin: 0 0 16px;
   }
@@ -1644,8 +1644,8 @@ onActivated(async () => {
 
 .code-example {
   font-size: 12px;
-  color: #409eff;
-  background: #f5f7fa;
+  color: var(--el-color-primary);
+  background: var(--el-fill-color-light);
   padding: 2px 6px;
   border-radius: 3px;
   word-break: break-all;
@@ -1665,11 +1665,11 @@ onActivated(async () => {
     gap: 8px;
     margin-bottom: 8px;
     padding: 8px;
-    background-color: #f5f7fa;
+    background-color: var(--el-fill-color-light);
     border-radius: 4px;
 
     .arrow-icon {
-      color: #909399;
+      color: var(--el-text-color-secondary);
     }
   }
 }

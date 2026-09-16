@@ -126,5 +126,5 @@ loadMenus()
 <style scoped lang="scss">
 .clear-tab { padding: 8px; }
 .actions { margin-top: 16px; display: flex; align-items: center; gap: 12px; }
-.summary { color: #e6a23c; }
+.summary { color: var(--el-color-warning); }
 </style>

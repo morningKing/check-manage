@@ -1,20 +1,27 @@
 <template>
   <div class="oc-runtime">
-    <!-- ── 状态条：serve 健康 / 全局目录 / 待生效 / 重启 ── -->
+    <!-- ── 状态条：生效状态 / serve 健康 / 进程归属 / 应用·重启 ── -->
     <div class="oc-runtime__header">
       <span class="oc-runtime__title">OpenCode 运行时管理</span>
       <div class="oc-runtime__status">
-        <el-tag v-if="overview" :type="overview.serve.healthy ? 'success' : 'danger'" size="small">
-          {{ overview.serve.healthy ? `服务正常${overview.serve.version ? ' · v' + overview.serve.version : ''}` : '服务不可达' }}
+        <!-- 保存成功 ≠ 运行时生效：runtimeInSync 才代表 serve 已加载当前配置 -->
+        <el-tag v-if="runtimeInfo" :type="runtimeInfo.runtimeInSync ? 'success' : 'warning'" size="small">
+          {{ runtimeInfo.runtimeInSync ? '运行时已生效' : `${runtimeInfo.pendingCount} 项已保存待应用` }}
         </el-tag>
-        <el-badge v-if="pendingCount > 0" :value="`${pendingCount} 项待重启生效`" type="warning"
-                  class="oc-runtime__pending-badge" />
+        <el-tag v-if="runtimeInfo" size="small" :type="OWNERSHIP_TAG[runtimeInfo.ownership.mode]?.type ?? 'info'">
+          {{ OWNERSHIP_TAG[runtimeInfo.ownership.mode]?.label ?? runtimeInfo.ownership.mode }}
+        </el-tag>
+        <el-tag v-if="runtimeInfo" :type="runtimeInfo.serve.healthy ? 'success' : 'danger'" size="small">
+          {{ runtimeInfo.serve.healthy ? `服务正常${runtimeInfo.serve.version ? ' · v' + runtimeInfo.serve.version : ''}` : '服务不可达' }}
+        </el-tag>
         <el-tooltip content="修改 skill/agent 文件后必须重启 opencode serve 才生效（OpenCode 启动时一次性加载配置，无热加载）">
           <el-icon class="oc-runtime__help"><QuestionFilled /></el-icon>
         </el-tooltip>
-        <el-button type="warning" plain size="small" :loading="restarting" @click="onRestart">
-          重启 OpenCode
-        </el-button>
+        <el-button v-if="canPerm('admin.ai_runtime_apply')" type="warning" plain size="small"
+                   :loading="applying" :disabled="pendingCount === 0"
+                   @click="onApply">应用配置</el-button>
+        <el-button v-if="canPerm('admin.ai_runtime_restart')" type="danger" plain size="small"
+                   :loading="restarting" @click="onRestart">重启 OpenCode</el-button>
         <el-button size="small" @click="refreshAll">刷新</el-button>
       </div>
     </div>
@@ -27,9 +34,9 @@
       <!-- ─────────────── Skill 页签 ─────────────── -->
       <el-tab-pane label="技能 (Skill)" name="skills">
         <div class="oc-runtime__toolbar">
-          <el-button type="primary" size="small" @click="openSkillCreate">新建技能</el-button>
-          <el-button size="small" @click="showZipUpload = true">上传 zip</el-button>
-          <el-button size="small" @click="openPublish">从平台技能库发布</el-button>
+          <el-button v-if="canPerm('admin.ai_skill_write')" type="primary" size="small" @click="openSkillCreate">新建技能</el-button>
+          <el-button v-if="canPerm('admin.ai_skill_write')" size="small" @click="showZipUpload = true">上传 zip</el-button>
+          <el-button v-if="canPerm('admin.ai_runtime_publish')" size="small" @click="openPublish">从平台技能库发布</el-button>
         </div>
         <el-table :data="skillItems" v-loading="loadingSkills" size="small">
           <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
@@ -53,7 +60,7 @@
           </el-table-column>
           <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <template v-if="row.source === 'global'">
+              <template v-if="row.source === 'global' && canPerm('admin.ai_skill_write')">
                 <el-button link type="primary" @click="openSkillEdit(row)">编辑</el-button>
                 <el-button link type="primary" @click="openFiles(row)">文件</el-button>
                 <el-button link type="danger" @click="onDeleteSkill(row)">删除</el-button>
@@ -67,7 +74,7 @@
       <!-- ─────────────── Agent 页签 ─────────────── -->
       <el-tab-pane label="智能体 (Agent)" name="agents">
         <div class="oc-runtime__toolbar">
-          <el-button type="primary" size="small" @click="openAgentCreate">新建 Agent</el-button>
+          <el-button v-if="canPerm('admin.ai_agent_write')" type="primary" size="small" @click="openAgentCreate">新建 Agent</el-button>
         </div>
         <el-table :data="agentItems" v-loading="loadingAgents" size="small">
           <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
@@ -96,15 +103,18 @@
           </el-table-column>
           <el-table-column label="操作" width="170" fixed="right">
             <template #default="{ row }">
-              <el-button v-if="row.source === 'builtin'" link type="warning"
-                         @click="onToggleAgent(row, true)">禁用</el-button>
-              <template v-else-if="row.source === 'file'">
-                <el-button v-if="row.runtime === 'disabled'" link type="success"
-                           @click="onToggleAgent(row, false)">启用</el-button>
-                <el-button v-else link type="primary" @click="openAgentEdit(row)">编辑</el-button>
-                <el-button link type="danger" @click="onDeleteAgent(row)">删除</el-button>
+              <template v-if="canPerm('admin.ai_agent_write')">
+                <el-button v-if="row.source === 'builtin'" link type="warning"
+                           @click="onToggleAgent(row, true)">禁用</el-button>
+                <template v-else-if="row.source === 'file'">
+                  <el-button v-if="row.runtime === 'disabled'" link type="success"
+                             @click="onToggleAgent(row, false)">启用</el-button>
+                  <el-button v-else link type="primary" @click="openAgentEdit(row)">编辑</el-button>
+                  <el-button link type="danger" @click="onDeleteAgent(row)">删除</el-button>
+                </template>
+                <span v-else class="oc-runtime__readonly-hint">只读（插件）</span>
               </template>
-              <span v-else class="oc-runtime__readonly-hint">只读（插件）</span>
+              <span v-else class="oc-runtime__readonly-hint">只读</span>
             </template>
           </el-table-column>
         </el-table>
@@ -153,9 +163,13 @@
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
         <div class="el-upload__text">拖拽或点击选择 zip 文件</div>
         <template #tip>
-          <div class="el-upload__tip">需包含 SKILL.md（frontmatter name 与目录一致），最大 5 MB；同名技能需先删除</div>
+          <div class="el-upload__tip">需包含 SKILL.md（frontmatter name 与目录一致），最大 5 MB</div>
         </template>
       </el-upload>
+      <div class="oc-runtime__overwrite-row">
+        <el-checkbox v-model="zipOverwrite">覆盖同名技能</el-checkbox>
+        <span class="oc-runtime__hint">勾选后，同名技能（含 skills/ 复数目录下的）会被整体替换</span>
+      </div>
       <template #footer>
         <el-button @click="showZipUpload = false">取消</el-button>
         <el-button type="primary" :loading="saving" :disabled="!zipFile" @click="doZipUpload">上传</el-button>
@@ -292,13 +306,14 @@ import type {
 } from '@/api/aiOpencodeAdmin'
 import { listPlatformSkills } from '@/api/aiOpencodeAdmin'
 import type { GlobalSkill } from '@/api/aiSkills'
+import { useAuthStore } from '@/stores/auth'
 
 const SOURCE_TAG: Record<string, { label: string; type: 'primary' | 'success' | 'warning' | 'info' }> = {
   global: { label: '全局目录', type: 'primary' },
   file: { label: '全局目录', type: 'primary' },
   builtin: { label: '内置', type: 'success' },
   plugin: { label: '插件', type: 'warning' },
-  external: { label: '外部目录', type: 'info' },
+  external: { label: '外部/插件', type: 'info' },
 }
 const RUNTIME_TAG: Record<string, { label: string; type: 'success' | 'warning' | 'info' | 'danger' }> = {
   loaded: { label: '已生效', type: 'success' },
@@ -306,8 +321,23 @@ const RUNTIME_TAG: Record<string, { label: string; type: 'success' | 'warning' |
   disabled: { label: '已禁用', type: 'info' },
   serveOffline: { label: '服务离线', type: 'danger' },
 }
+// serve 进程归属（Spec §11）：platform 才允许平台重启；external/unknown 提示
+// 需手动处理，避免误杀外部实例。
+const OWNERSHIP_TAG: Record<string, { label: string; type: 'success' | 'warning' | 'info' | 'danger' }> = {
+  platform: { label: '平台托管', type: 'success' },
+  external: { label: '外部进程', type: 'danger' },
+  unknown: { label: '归属未知', type: 'warning' },
+  none: { label: '无监听', type: 'info' },
+}
+
+const auth = useAuthStore()
+/** 后端为真正的权限判定方；这里只控制界面入口（Spec §12）。 */
+function canPerm(key: string): boolean {
+  return auth.can(key)
+}
 
 const overview = ref<OpencodeOverview | null>(null)
+const runtimeInfo = ref<api.RuntimeStatusInfo | null>(null)
 const activeTab = ref<'skills' | 'agents'>('skills')
 const skillItems = ref<GlobalSkillItem[]>([])
 const agentItems = ref<GlobalAgentItem[]>([])
@@ -315,13 +345,18 @@ const loadingSkills = ref(false)
 const loadingAgents = ref(false)
 const saving = ref(false)
 const restarting = ref(false)
+const applying = ref(false)
 
-const pendingCount = computed(() => overview.value?.pendingChanges ?? 0)
+const pendingCount = computed(() => runtimeInfo.value?.pendingCount
+  ?? overview.value?.pendingChanges ?? 0)
 
 async function refreshOverview() {
   try {
     overview.value = await api.getOpencodeOverview()
   } catch { /* 表格区已有独立报错 */ }
+  try {
+    runtimeInfo.value = await api.getRuntimeStatus()
+  } catch { /* 状态标签保留上次值 */ }
 }
 async function refreshSkills() {
   loadingSkills.value = true
@@ -407,15 +442,17 @@ async function onDeleteSkill(row: GlobalSkillItem) {
 // ── zip 上传 ──
 const showZipUpload = ref(false)
 const zipFile = ref<File | null>(null)
+const zipOverwrite = ref(false)
 function onZipChange(file: { raw?: File }) { zipFile.value = file.raw ?? null }
 async function doZipUpload() {
   if (!zipFile.value) return
   saving.value = true
   try {
-    const r = await api.uploadGlobalOpencodeSkillZip(zipFile.value)
+    const r = await api.uploadGlobalOpencodeSkillZip(zipFile.value, zipOverwrite.value)
     ElMessage.success(`已安装「${r.name}」，需重启 OpenCode 后生效`)
     showZipUpload.value = false
     zipFile.value = null
+    zipOverwrite.value = false
     refreshSkills()
     refreshOverview()
   } catch (e: unknown) { ElMessage.error(errText(e)) } finally { saving.value = false }
@@ -595,20 +632,49 @@ async function onToggleAgent(row: GlobalAgentItem, disable: boolean) {
   } catch (e: unknown) { ElMessage.error(errText(e)) }
 }
 
-// ── 重启 ──
+// ── 应用 / 重启 ──
+// 外部进程（非平台托管）不允许平台重启，按钮点了也会被后端拒绝——提前提示。
+const ownershipBlocked = computed(() =>
+  ['external', 'unknown'].includes(runtimeInfo.value?.ownership.mode || ''))
+
+async function onApply() {
+  if (ownershipBlocked.value) {
+    ElMessage.warning('当前 serve 不是平台托管进程，请先手动停止后由平台拉起，再应用配置')
+    return
+  }
+  applying.value = true
+  try {
+    const r = await api.applyRuntimeConfig()
+    ElMessage.success(`配置已应用（v${r.version ?? '?'}），运行时已加载最新内容`)
+    refreshAll()
+  } catch (e: unknown) { ElMessage.error(errText(e)) } finally { applying.value = false }
+}
+
 async function onRestart() {
   restarting.value = true
   try {
-    const ov = overview.value ?? await api.getOpencodeOverview()
-    const w = ov.activeWorkload
+    const rt = runtimeInfo.value ?? await api.getRuntimeStatus()
+    if (['external', 'unknown'].includes(rt.ownership.mode)) {
+      ElMessage.error(`端口上的 OpenCode 进程（PID ${rt.ownership.pid ?? '?'}）不是平台启动的，平台不会自动重启它；请手动停止后再试`)
+      return
+    }
+    const w = rt.activeWorkload
     const busy = w.batchChildren + w.interactiveSessions
-    const msg = busy > 0
-      ? `当前有 ${busy} 个运行中的 AI 会话/批任务（含 ${w.batchChildren} 个批任务子任务），重启会立即中断它们。确定重启 opencode serve？`
+    // 空闲 → 普通重启；有运行中负载 → 只有持 admin.ai_runtime_force 的管理员
+    // 走强制路径（Spec §10.3 强制模式：默认禁止，需高危权限 + 明确二次确认）。
+    const force = busy > 0
+    if (force && !canPerm('admin.ai_runtime_force')) {
+      ElMessage.warning('当前有正在运行的 AI 会话/批任务，普通重启会被拒绝；强制中断需要「OpenCode 强制重启」权限（可用「应用配置」在空闲时生效）')
+      return
+    }
+    const msg = force
+      ? `当前有 ${busy} 个运行中的 AI 会话/批任务（含 ${w.batchChildren} 个批任务子任务），强制重启会立即中断它们，相关会话将被标记为中断。确定强制重启？`
       : '重启 opencode serve 以加载最新的 skill/agent 变更？'
     try {
-      await ElMessageBox.confirm(msg, '重启 OpenCode', { type: 'warning', confirmButtonText: '重启' })
+      await ElMessageBox.confirm(msg, force ? '强制重启 OpenCode' : '重启 OpenCode',
+                                 { type: 'warning', confirmButtonText: force ? '强制重启' : '重启' })
     } catch { return }
-    const r = await api.restartOpencodeServe(true)
+    const r = await api.restartOpencodeServe(force)
     ElMessage.success(`OpenCode 已重启（v${r.version ?? '?'}），变更已生效`)
     refreshAll()
   } catch (e: unknown) { ElMessage.error(errText(e)) } finally { restarting.value = false }
@@ -680,5 +746,11 @@ function errText(e: unknown): string {
 }
 .oc-runtime__alert {
   margin-bottom: 12px;
+}
+.oc-runtime__overwrite-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 </style>

@@ -13,12 +13,13 @@ docs/user-guide/integration/ai-session-api.md「范围」一节。agent/model �
 `POST /v1/ai-batches/uploads`，不新建专属上传端点——文件落在哪个用户的暂存
 目录下才是校验的边界，跟消费方是批任务还是单会话无关。所有随附文件进入
 **同一个** AI 会话的 uploads/（不像批任务按文件拆分子任务），校验复用
-open_api_batches.py 的 `_validate_files`/`MAX_FILES_PER_BATCH`，一处实现两处调用。
+open_api_batches.py 的 `_validate_files`，一处实现两处调用。
 """
 from flask import Blueprint, g, jsonify, request
 
 from auth import api_key_required, require_bound_key
-from routes.open_api_batches import MAX_FILES_PER_BATCH, MAX_PROMPT_CHARS, _validate_files
+from routes.open_api_batches import MAX_PROMPT_CHARS, _validate_files
+from utils.batch_repo import get_max_files_per_batch
 from utils.ai_session_repo import cancel_session, create_session, get_session_for_owner
 from utils.api_errors import CONFLICT, INVALID_ARGUMENT, NOT_FOUND, err, register_error_handlers
 from utils.batch_engine import get_worker
@@ -69,8 +70,9 @@ def create():
     files = body.get('files') or []
     if not isinstance(files, list):
         return err('files 必须是数组', INVALID_ARGUMENT, 400)
-    if len(files) > MAX_FILES_PER_BATCH:
-        return err(f'files 最多 {MAX_FILES_PER_BATCH} 个', INVALID_ARGUMENT, 400)
+    max_files = get_max_files_per_batch()
+    if len(files) > max_files:
+        return err(f'files 最多 {max_files} 个', INVALID_ARGUMENT, 400)
     if files:
         file_err = _validate_files(files, key['ownerUserId'])
         if file_err:

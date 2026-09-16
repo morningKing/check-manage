@@ -4,7 +4,8 @@ import type {
 } from '@/types/aiChatBatch'
 
 export function listBatches(page = 1, pageSize = 20) {
-  return get<{ items: AiChatBatch[]; total: number }>('/ai/chat/batches', { page, pageSize })
+  return get<{ items: AiChatBatch[]; total: number; maxSessions?: number }>(
+    '/ai/chat/batches', { page, pageSize })
 }
 
 export function getBatch(id: string) {

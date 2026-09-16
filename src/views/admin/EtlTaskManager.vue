@@ -242,7 +242,7 @@
                   class="step-result-item"
                 >
                   <div class="step-result-row">
-                    <el-icon :color="sr.status === 'success' ? '#67c23a' : '#f56c6c'">
+                    <el-icon :color="sr.status === 'success' ? 'var(--el-color-success)' : 'var(--el-color-danger)'">
                       <CircleCheckFilled v-if="sr.status === 'success'" />
                       <CircleCloseFilled v-else />
                     </el-icon>
@@ -1092,25 +1092,25 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
 
   &:hover {
-    border-color: #409eff;
-    background-color: #f5f7fa;
+    border-color: var(--el-color-primary);
+    background-color: var(--el-fill-color-light);
   }
 
   &.active {
-    border-color: #409eff;
-    background-color: #ecf5ff;
+    border-color: var(--el-color-primary);
+    background-color: var(--el-color-primary-light-9);
   }
 
   .task-info {
     .task-name {
       font-weight: 500;
-      color: #303133;
+      color: var(--el-text-color-primary);
     }
 
     .task-meta {
@@ -1153,7 +1153,7 @@ onMounted(async () => {
   .section-title {
     font-size: 15px;
     font-weight: 500;
-    color: #303133;
+    color: var(--el-text-color-primary);
   }
 }
 
@@ -1166,14 +1166,14 @@ onMounted(async () => {
 .step-card {
   width: 100%;
   max-width: 600px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--el-border-color);
   border-radius: 8px;
   padding: 12px 16px;
-  background: #fff;
+  background: var(--el-bg-color);
   transition: border-color 0.2s;
 
   &:hover {
-    border-color: #409eff;
+    border-color: var(--el-color-primary);
   }
 
   .step-header {
@@ -1187,8 +1187,8 @@ onMounted(async () => {
 
     .step-type-label {
       font-size: 12px;
-      color: #909399;
-      background: #f0f2f5;
+      color: var(--el-text-color-secondary);
+      background: var(--el-fill-color);
       padding: 2px 8px;
       border-radius: 3px;
     }
@@ -1196,7 +1196,7 @@ onMounted(async () => {
     .step-name {
       flex: 1;
       font-weight: 500;
-      color: #303133;
+      color: var(--el-text-color-primary);
     }
 
     .step-actions {
@@ -1214,7 +1214,7 @@ onMounted(async () => {
   .step-summary {
     margin-top: 8px;
     font-size: 12px;
-    color: #909399;
+    color: var(--el-text-color-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1231,19 +1231,19 @@ onMounted(async () => {
   .connector-line {
     width: 2px;
     height: 12px;
-    background: #dcdfe6;
+    background: var(--el-border-color);
   }
 
   .insert-btn {
     width: 22px;
     height: 22px;
     font-size: 10px;
-    color: #c0c4cc;
-    border-color: #dcdfe6;
+    color: var(--el-text-color-placeholder);
+    border-color: var(--el-border-color);
 
     &:hover {
-      color: #409eff;
-      border-color: #409eff;
+      color: var(--el-color-primary);
+      border-color: var(--el-color-primary);
     }
   }
 }
@@ -1279,26 +1279,26 @@ onMounted(async () => {
 
     .sr-name {
       font-weight: 500;
-      color: #303133;
+      color: var(--el-text-color-primary);
     }
 
     .sr-count {
-      color: #909399;
+      color: var(--el-text-color-secondary);
     }
 
     .sr-error {
-      color: #f56c6c;
+      color: var(--el-color-danger);
       font-size: 12px;
     }
   }
 
   .error-detail {
     margin-top: 12px;
-    background: #fef0f0;
+    background: var(--el-color-danger-light-9);
     border-radius: 4px;
     padding: 12px;
     font-size: 12px;
-    color: #f56c6c;
+    color: var(--el-color-danger);
 
     .error-line {
       margin-bottom: 4px;
@@ -1343,16 +1343,16 @@ onMounted(async () => {
     border-radius: 4px;
 
     .log-time {
-      color: #909399;
+      color: var(--el-text-color-secondary);
       font-family: monospace;
     }
 
     .log-stat {
-      color: #606266;
+      color: var(--el-text-color-regular);
     }
 
     .log-errors {
-      color: #f56c6c;
+      color: var(--el-color-danger);
     }
   }
 }
@@ -1372,22 +1372,22 @@ onMounted(async () => {
 }
 
 .arrow-icon {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 16px;
 }
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 
   code {
-    background: #f0f2f5;
+    background: var(--el-fill-color);
     padding: 1px 4px;
     border-radius: 2px;
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 11px;
-    color: #e6a23c;
+    color: var(--el-color-warning);
   }
 }
 
@@ -1399,7 +1399,7 @@ onMounted(async () => {
 
 .code-editor-wrapper {
   width: 100%;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--el-border-color);
   border-radius: 4px;
   overflow: hidden;
 

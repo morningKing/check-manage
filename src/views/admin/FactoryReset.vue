@@ -14,8 +14,8 @@
     <el-card>
       <template #header>
         <div class="card-header">
-          <el-icon :size="24" color="#f56c6c"><WarningFilled /></el-icon>
-          <h2 style="margin-left: 8px; color: #f56c6c">恢复出厂设置</h2>
+          <el-icon :size="24" color="var(--el-color-danger)"><WarningFilled /></el-icon>
+          <h2 style="margin-left: 8px; color: var(--el-color-danger)">恢复出厂设置</h2>
         </div>
       </template>
 
@@ -37,7 +37,7 @@
           <li>动态创建的页面配置（page_configs）</li>
         </ul>
 
-        <h3 style="color: #409eff; margin-top: 16px">保留的系统配置：</h3>
+        <h3 style="color: var(--el-color-primary); margin-top: 16px">保留的系统配置：</h3>
         <ul class="keep-list">
           <li>系统默认菜单（首页、巡检管理、系统配置等）</li>
           <li>系统默认页面配置（巡检用例、巡检计划等）</li>
@@ -80,7 +80,7 @@
       </el-alert>
 
       <p style="margin-bottom: 16px">
-        请输入 <strong style="color: #f56c6c">RESET</strong> 以确认此操作：
+        请输入 <strong style="color: var(--el-color-danger)">RESET</strong> 以确认此操作：
       </p>
 
       <el-input v-model="confirmText" placeholder="请输入 RESET" style="width: 200px" />
@@ -111,7 +111,7 @@
             {{ table }}: {{ result?.deletedRecords[table] || 0 }} 条记录
           </li>
         </ul>
-        <p style="margin-top: 16px; color: #409eff">
+        <p style="margin-top: 16px; color: var(--el-color-primary)">
           自动备份ID：{{ result?.backupId }}
         </p>
       </div>
@@ -195,14 +195,14 @@ function handleRefresh() {
 
 .delete-list {
   li {
-    color: #f56c6c;
+    color: var(--el-color-danger);
     margin-bottom: 4px;
   }
 }
 
 .keep-list {
   li {
-    color: #409eff;
+    color: var(--el-color-primary);
     margin-bottom: 4px;
   }
 }

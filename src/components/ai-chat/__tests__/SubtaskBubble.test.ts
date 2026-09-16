@@ -53,7 +53,7 @@ describe('SubtaskBubble', () => {
     expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
   })
 
-  it('展开态 running 时轮询刷新；到终态拉一次最终数据后停止', async () => {
+  it('展开态 running 时轮询刷新；到终态拉最终数据，空结果限次重试等落库', async () => {
     vi.useFakeTimers()
     try {
       const mk = (status: 'running' | 'completed' | 'failed') => ({
@@ -75,13 +75,22 @@ describe('SubtaskBubble', () => {
       await vi.advanceTimersByTimeAsync(2500)
       expect(getSubtaskMessages).toHaveBeenCalledTimes(3)
 
-      // 状态翻转 completed：立即终态刷新，之后不再轮询
+      // 状态翻转 completed：立即终态刷新，不再按 running 节奏轮询
       vi.mocked(getSubtaskMessages).mockImplementation(async () => mk('completed'))
       await wrapper.setProps({ status: 'completed' })
       await vi.advanceTimersByTimeAsync(0)
       expect(getSubtaskMessages).toHaveBeenCalledTimes(4)
-      await vi.advanceTimersByTimeAsync(10_000)
-      expect(getSubtaskMessages).toHaveBeenCalledTimes(4)
+
+      // 但空结果会触发限次静默重试（每 5s 一次）：终态先于服务端落库到达时，
+      // 气泡不该永远停在「还没有对话记录」
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(5)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(6)
+
+      // 重试有上限（EMPTY_RETRY_MAX=24）：推进 2 分钟后不再增长
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(4 + 24)
       wrapper.unmount()
     } finally {
       vi.useRealTimers()

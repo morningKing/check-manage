@@ -116,7 +116,7 @@
                   :disabled="opt.disabled"
                 >
                   <span>{{ opt.label }}</span>
-                  <span style="color: #909399; font-size: 12px; margin-left: 8px">{{ opt.description }}</span>
+                  <span style="color: var(--el-text-color-secondary); font-size: 12px; margin-left: 8px">{{ opt.description }}</span>
                 </el-option>
               </el-select>
               <div class="form-tip">
@@ -849,7 +849,7 @@ onMounted(async () => {
 
   .node-icon {
     margin-right: 8px;
-    color: #409eff;
+    color: var(--el-color-primary);
   }
 
   .node-label {
@@ -858,7 +858,7 @@ onMounted(async () => {
 
   .system-lock {
     margin-left: 6px;
-    color: #909399;
+    color: var(--el-text-color-secondary);
     font-size: 14px;
   }
 
@@ -874,7 +874,7 @@ onMounted(async () => {
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 </style>

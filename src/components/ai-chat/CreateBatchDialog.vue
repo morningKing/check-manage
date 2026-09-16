@@ -102,7 +102,7 @@ import {
   ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
   ElMessage,
 } from 'element-plus'
-import { stagingUpload, createBatch } from '@/api/aiChatBatches'
+import { stagingUpload, createBatch, listBatches } from '@/api/aiChatBatches'
 import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
@@ -128,6 +128,9 @@ const agents = ref<AgentInfo[]>([])
 const selectedModel = ref<string>('')
 const models = ref<ModelInfo[]>([])
 const provisionRepo = ref<string>('')
+// 批任务子会话个数上限：后端可配置（AI 设置页），随批任务列表接口下发；
+// 拉取失败回落 50 —— 仅作客户端预检，服务端才是准绳
+const maxSessions = ref(50)
 const provisionRef = ref<string>('')
 const uploadSessionId = ref<string>(crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2))
 
@@ -159,6 +162,9 @@ onMounted(async () => {
   try {
     models.value = (await listModels()).models
   } catch { /* non-fatal */ }
+  try {
+    maxSessions.value = (await listBatches()).maxSessions ?? 50
+  } catch { /* 回落默认值 */ }
 })
 
 // 每次对话框打开时重新加载模板（确保「管理模板」里新建的内容能立即选到）
@@ -177,8 +183,8 @@ function handleManageTemplates() {
 
 async function onPick(file: any) {
   const rawFile = file.raw as File
-  if (stagedFiles.value.length + uploading.value.length >= 50) {
-    ElMessage.warning('已达到 50 个文件上限'); return
+  if (stagedFiles.value.length + uploading.value.length >= maxSessions.value) {
+    ElMessage.warning(`已达到 ${maxSessions.value} 个文件上限`); return
   }
   const id = ++counter
   uploading.value.push({ id, name: rawFile.name, progress: 0 })

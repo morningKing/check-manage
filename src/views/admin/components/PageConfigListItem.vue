@@ -96,15 +96,15 @@ function formatTime(value: string): string {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--el-border-color-light);
   border-radius: 4px;
   cursor: pointer;
   transition: all 0.2s;
-  background: #fff;
+  background: var(--el-bg-color);
 
   &:hover {
-    border-color: #409eff;
-    background-color: #f5f7fa;
+    border-color: var(--el-color-primary);
+    background-color: var(--el-fill-color-light);
 
     .page-actions {
       opacity: 1;
@@ -112,18 +112,18 @@ function formatTime(value: string): string {
   }
 
   &.active {
-    border-color: #409eff;
-    background-color: #ecf5ff;
+    border-color: var(--el-color-primary);
+    background-color: var(--el-color-primary-light-9);
   }
 
   &.selected {
-    border-color: #67c23a;
-    background-color: #f0f9eb;
+    border-color: var(--el-color-success);
+    background-color: var(--el-color-success-light-9);
   }
 
   &.selected.active {
-    border-color: #409eff;
-    background-color: #ecf5ff;
+    border-color: var(--el-color-primary);
+    background-color: var(--el-color-primary-light-9);
   }
 }
 
@@ -144,7 +144,7 @@ function formatTime(value: string): string {
 
   .page-name {
     font-weight: 500;
-    color: #303133;
+    color: var(--el-text-color-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -170,10 +170,10 @@ function formatTime(value: string): string {
     align-items: center;
     gap: 4px;
     font-size: 12px;
-    color: #909399;
+    color: var(--el-text-color-secondary);
 
     .meta-sep {
-      color: #c0c4cc;
+      color: var(--el-text-color-placeholder);
     }
   }
 }

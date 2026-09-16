@@ -54,6 +54,7 @@
   --el-component-size-large: 36px;
 
   /* —— 自定义令牌（本主题内部用） —— */
+  --app-primary-contrast: #ffffff;  /* 主色作底时的文字色：浅色主色近黑→白字 */
   --app-shell-bg: #f7f8fa;          /* 侧栏底 */
   --app-shell-border: #ebecf0;
   --app-shell-active-bg: #eceef5;   /* 菜单激活底 */
@@ -123,6 +124,9 @@ html.dark {
   --el-fill-color-light: #1f222a;
   --el-fill-color-lighter: #1c1f26;
 
+  /* 主色在暗色被反转为近白 #e6e8eb：主色作底的元素文字必须换深色，
+     否则白底白字不可读（回到底部按钮/新建会话按钮的"灰白色"问题） */
+  --app-primary-contrast: #141414;
   --app-shell-bg: #1a1d23;
   --app-shell-border: #282c34;
   --app-shell-active-bg: #2a2e36;
@@ -131,6 +135,19 @@ html.dark {
     --el-table-header-bg-color: #1f222a;
     --el-table-row-hover-bg-color: #21242c;
     --el-table-border-color: #23262e;
+  }
+
+  /* 主色按钮在暗色下主色被反转为近白（--el-color-primary），但 EP 按钮文字
+     固定 var(--el-color-white)=白 → 白底白字不可读，观感即"白亮色按钮"。
+     与浅色模式「近黑底白字」互为反转：暗色用「近白底深字」。悬停底为
+     primary-light-3 中灰，深字同样可读。plain/文字/链接按钮不走主色实底，
+     不在覆盖范围。 */
+  .el-button--primary:not(.is-link):not(.is-text):not(.is-plain):not(.is-disabled) {
+    color: #141414;
+    &:hover,
+    &:focus-visible {
+      color: #141414;
+    }
   }
 }
 

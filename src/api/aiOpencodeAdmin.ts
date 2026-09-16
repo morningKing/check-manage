@@ -110,9 +110,11 @@ export function deleteGlobalOpencodeSkill(name: string) {
   return del<void>(`${BASE}/skills/${encodeURIComponent(name)}`)
 }
 
-export function uploadGlobalOpencodeSkillZip(file: File) {
+/** 上传技能 zip。overwrite=true 时覆盖任一受管根目录下的同名技能（上传即替换） */
+export function uploadGlobalOpencodeSkillZip(file: File, overwrite = false) {
   const form = new FormData()
   form.append('file', file)
+  if (overwrite) form.append('overwrite', 'true')
   return post<{ name: string; changed: boolean }>(`${BASE}/skills`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
@@ -222,9 +224,45 @@ export function getEffectStatus() {
   return get<EffectStatus>(`${BASE}/effect-status`)
 }
 
-/** 重启 opencode serve。有运行中会话且非 force 时后端返回 409 + activeWorkload */
+/** serve 进程归属（Spec §11 进程治理）：
+ *  platform=平台托管（可安全重启）external=外部进程（禁止平台杀掉）
+ *  unknown=有监听但无托管记录（升级后首次，安全侧拒杀）none=无监听 */
+export interface ServeOwnership {
+  mode: 'platform' | 'external' | 'unknown' | 'none'
+  pid: number | null
+  listenerPids: number[]
+  recordedPid?: number | null
+  recordedAt?: number | null
+}
+
+/** 运行时总状态（GET /ai/opencode/runtime）。
+ *  保存成功 ≠ 发布成功 ≠ 运行时生效：runtimeInSync 才是「已生效」。 */
+export interface RuntimeStatusInfo {
+  serve: ServeHealth
+  ownership: ServeOwnership
+  /** 受控配置树内容哈希；空串 = 目录为空/不存在 */
+  configGeneration: string
+  pendingCount: number
+  runtimeInSync: boolean
+  restartPolicy: 'manual' | 'auto'
+  activeWorkload: ActiveWorkload
+}
+
+export function getRuntimeStatus() {
+  return get<RuntimeStatusInfo>(`${BASE}/runtime`)
+}
+
+/** 应用已保存的配置（受控重启 serve；manual 模式下的「应用」动作）。
+ *  有运行中负载时后端返回 409 ACTIVE_WORKLOAD，不提供 force。 */
+export function applyRuntimeConfig() {
+  return post<{ ok: boolean; version: string | null; pid: number | null }>(
+    `${BASE}/runtime/apply`, {})
+}
+
+/** 重启 opencode serve。有运行中会话且非 force 时后端返回 409 + activeWorkload。
+ *  force=true 需要 admin.ai_runtime_force 权限，会中断运行中的任务。 */
 export function restartOpencodeServe(force = false) {
-  return post<{ ok: boolean; version: string | null; killedPids: number[] }>(
+  return post<{ ok: boolean; version: string | null; killedPids: number[]; pid?: number | null }>(
     `${BASE}/restart`, { force })
 }
 
