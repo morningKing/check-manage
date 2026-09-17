@@ -29,7 +29,17 @@ def test_add_forwards_messages():
                            headers={'X-Internal-Token': 'secret'},
                            json={'userId': 'alice', 'messages': [{'role': 'user', 'content': '记住X'}]})
     assert r.status_code == 200
-    a.assert_called_once_with('alice', [{'role': 'user', 'content': '记住X'}])
+    a.assert_called_once_with('alice', [{'role': 'user', 'content': '记住X'}], source='batch')
+
+def test_add_forwards_explicit_source():
+    with patch('routes.ai_memory_internal.MCP_INTERNAL_TOKEN', 'secret'), \
+         patch('routes.ai_memory_internal.add_memory') as a:
+        r = _client().post('/ai/memory/internal/add',
+                           headers={'X-Internal-Token': 'secret'},
+                           json={'userId': 'alice', 'source': 'conversation',
+                                 'messages': [{'role': 'user', 'content': '记住X'}]})
+    assert r.status_code == 200
+    a.assert_called_once_with('alice', [{'role': 'user', 'content': '记住X'}], source='conversation')
 
 def test_delete_forwards():
     with patch('routes.ai_memory_internal.MCP_INTERNAL_TOKEN', 'secret'), \

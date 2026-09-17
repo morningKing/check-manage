@@ -695,10 +695,25 @@ def send_message(sid):
     except _requests.RequestException as e:
         logger.warning('send_message OpenCode dispatch failed session=%s oc=%s: %s; '
                        'recovering session', sid, oc_sid, e)
-        oc_sid = _recover_session_and_resend(
-            client, sid, sess[4], msg_id, prompt.strip(),
-            effective_model, requested_agent, agent_mentions,
-        )
+        try:
+            oc_sid = _recover_session_and_resend(
+                client, sid, sess[4], msg_id, prompt.strip(),
+                effective_model, requested_agent, agent_mentions,
+            )
+        except _requests.RequestException as e2:
+            # P0 spec §8.1: a dispatch failure must converge the turn to a
+            # structured, retryable error — never a plain 500 that the FE would
+            # show as an endless "正在回复". The persisted user message id is
+            # returned so the FE retry can clean it up before re-sending.
+            logger.error('send_message recovery failed session=%s: %s', sid, e2)
+            stop_listener(sid)
+            return jsonify({'error': {
+                'code': 'OPENCODE_UNAVAILABLE',
+                'message': 'AI 运行时暂时不可用，本轮发送未完成，可点击重试',
+                'retryable': True,
+                'operation': 'send_message',
+                'messageId': msg_id,
+            }}), 502
         logger.info('send_message recovered session=%s new_oc=%s', sid, oc_sid)
         stop_listener(sid)
         ensure_listener(sid, oc_sid, sess[4])
@@ -1255,13 +1270,56 @@ def run_session_command(sid):
 @write_required
 def abort_session(sid):
     """Abort the in-flight turn (prompt or command). OpenCode then emits
-    session.idle on the SSE so the UI clears its 'thinking' state."""
+    session.idle on the SSE so the UI clears its 'thinking' state.
+
+    P0 spec §10.1: idempotent — a repeated call, or one racing the turn's
+    natural completion, must succeed (no error, no double abort), and an
+    unreachable OpenCode is reported as a no-op rather than a 500."""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
-        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
-    OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
-    return jsonify({'ok': True}), 200
+        return jsonify({'error': {
+            'code': 'SESSION_NOT_FOUND', 'message': 'session not found',
+            'retryable': False, 'operation': 'abort',
+        }}), 404
+    stopped = False
+    if sess[2]:
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+            stopped = True
+        except requests.RequestException as e:
+            logger.warning('abort_session no-op session=%s: %s', sid, e)
+    return jsonify({'ok': True, 'stopped': stopped}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/runtime-state', methods=['GET'])
+@login_required
+def runtime_state(sid):
+    """Server-side turn state for reconnect recovery (P0 spec §9.3): after an
+    SSE reconnect the FE queries this to decide whether to keep waiting for the
+    running turn (resync via message reload) or converge to idle."""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': {
+            'code': 'SESSION_NOT_FOUND', 'message': 'session not found',
+            'retryable': False, 'operation': 'runtime_state',
+        }}), 404
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM ai_chat_messages WHERE session_id = %s "
+            "ORDER BY created_at DESC LIMIT 1", (sid,))
+        row = cur.fetchone()
+    running = bool(sess[2]) and sess[3] == 'active' and has_listener(sid)
+    return jsonify({
+        'sessionId': sid,
+        'sessionStatus': sess[3],
+        'turnStatus': 'running' if running else 'idle',
+        'opencodeSessionId': sess[2],
+        'lastMessageId': row[0] if row else None,
+        'error': None,
+    })
 
 
 @ai_chat_bp.route('/sessions/<sid>/pending-question', methods=['GET'])
@@ -1423,6 +1481,17 @@ def close_session(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     if sess[3] in ('archived', 'deleted'):
         return jsonify({'error': '该状态会话不可关闭', 'code': 'INVALID_STATUS'}), 409
+    # P0 spec §10.2: 关闭 ≠ 停止回合，但关闭运行中的会话必须先停掉在跑的回合，
+    # 否则会留下继续执行、却没人持久化的"孤儿回合"。abort 放在 stop_listener
+    # 之前，让监听器还能把被中止回合的尾部事件落库。
+    stopped_turn = False
+    if sess[2] and has_listener(sid):
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).abort_session(sess[2], directory=sess[4])
+            stopped_turn = True
+        except requests.RequestException:
+            logger.warning('close_session: abort in-flight turn failed session=%s', sid,
+                           exc_info=True)
     # close 是软关闭、可 reopen：仅改 status + 停 listener；
     # 保留 token / workspace / OpenCode session，使 reopen 能续上（失效则 M3 重建）。
     stop_listener(sid)
@@ -1431,7 +1500,7 @@ def close_session(sid):
         cur.execute("UPDATE ai_chat_sessions SET status='closed' WHERE id=%s AND user_id=%s",
                     (sid, user['userId']))
     log_operation('update', 'ai_chat_session', sid, sid, '关闭会话')
-    return jsonify({'ok': True, 'status': 'closed'})
+    return jsonify({'ok': True, 'status': 'closed', 'stoppedTurn': stopped_turn})
 
 
 @ai_chat_bp.route('/sessions/<sid>/reopen', methods=['POST'])
@@ -1514,6 +1583,14 @@ def delete_session(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     opencode_session_id = sess[2]
+    # P0 spec §10.3: 删除存在运行中回合的会话时先发起停止，避免 OpenCode 继续
+    # 往一个已删除的会话里执行（abort 幂等、best-effort）。
+    if opencode_session_id:
+        try:
+            OpenCodeClient(OPENCODE_BASE_URL).abort_session(
+                opencode_session_id, directory=sess[4])
+        except Exception:
+            pass
     stop_listener(sid)
     if opencode_session_id:
         try:

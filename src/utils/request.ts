@@ -91,13 +91,17 @@ service.interceptors.response.use(
     // purpose (otherwise a transient backend blip fires a toast storm and a
     // single mistimed 401 wipes the user out to /login).
     const silent = (error.config as AxiosRequestConfig | undefined)?.silent === true
-    const message = error.response?.data?.error || error.response?.data?.message || error.message || '请求失败'
+    // Structured errors (P0 spec §11) nest the payload: {error: {code, message}}.
+    // Legacy endpoints return a plain string. Support both here.
+    const rawError = error.response?.data?.error
+    const message = (typeof rawError === 'string' ? rawError : rawError?.message)
+      || error.response?.data?.message || error.message || '请求失败'
 
     if (!silent) {
       if (error.response) {
         switch (error.response.status) {
           case 400:
-            ElMessage.error('请求参数错误')
+            ElMessage.error(message === '请求失败' ? '请求参数错误' : message)
             break
           case 401:
             ElMessage.error('未授权，请重新登录')
@@ -114,7 +118,8 @@ service.interceptors.response.use(
             break
           case 409:
             // VERSION_CONFLICT is handled by the caller, skip duplicate message
-            if (error.response?.data?.code !== 'VERSION_CONFLICT') {
+            if (error.response?.data?.code !== 'VERSION_CONFLICT'
+                && error.response?.data?.error?.code !== 'VERSION_CONFLICT') {
               ElMessage.error(message)
             }
             break

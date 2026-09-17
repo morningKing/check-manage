@@ -21,7 +21,7 @@
       </span>
     </div>
     <div v-if="expanded" class="batch-group__body">
-      <div v-for="s in store.activeSessions" :key="s.id"
+      <div v-for="s in sortedSessions" :key="s.id"
            class="bg-child" :class="{ active: s.id === activeSessionId }"
            @click="$emit('selectChild', s.id)">
         <span :class="`dot dot--${s.status}`" />
@@ -34,6 +34,9 @@
         <ElIcon v-if="['pending', 'running'].includes(s.status)"
                 class="bg-child__cancel" title="中断此任务"
                 @click.stop="onCancel(s.id)"><VideoPause /></ElIcon>
+        <ElIcon v-if="s.status === 'paused'"
+                class="bg-child__resume" title="继续此任务（从中断处续跑，不影响其他任务）"
+                @click.stop="onResumeChild(s.id)"><VideoPlay /></ElIcon>
         <ElIcon v-if="['completed', 'failed', 'cancelled'].includes(s.status)"
                 class="bg-child__reexec" title="重新执行（清空上下文）"
                 @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
@@ -60,6 +63,10 @@ const store = useAiChatBatchesStore()
 const appendOpen = ref(false)
 const editOpen = ref(false)
 const expanded = computed(() => store.activeBatch?.id === props.batch.id)
+
+// 子任务会话按 batch_seq 降序展示：最新创建/追加的排最上面（旧会话沉底）。
+const sortedSessions = computed(() =>
+  [...store.activeSessions].sort((a, b) => (b.batch_seq ?? 0) - (a.batch_seq ?? 0)))
 
 function toggle() {
   if (expanded.value) store.clearSelection()
@@ -111,16 +118,48 @@ async function onResume() {
   }
 }
 async function onDelete() {
+  // P0 §10.4：运行中/待运行/暂停的批次不能直接删除——先停止再删除。
+  const nonTerminal = ['pending', 'running', 'paused'].includes(props.batch.status)
   try {
-    await ElMessageBox.confirm('删除该批次及其所有子任务？', '删除', { type: 'warning' })
-    await store.removeBatch(props.batch.id)
-  } catch { /* cancelled */ }
+    if (nonTerminal) {
+      await ElMessageBox.confirm(
+        '运行中的批任务不能直接删除。是否先停止任务并删除？运行中的子任务将被中断。',
+        '停止并删除', { type: 'warning', confirmButtonText: '停止并删除' },
+      )
+      await store.removeBatch(props.batch.id, { stop: true })
+    } else {
+      await ElMessageBox.confirm('删除该批次及其所有子任务？', '删除', { type: 'warning' })
+      await store.removeBatch(props.batch.id)
+    }
+    ElMessage.success('已删除')
+  } catch (e: unknown) {
+    if (e === 'cancel') return
+    const err = e as { response?: { data?: { error?: { message?: string } | string } } }
+    const raw = err?.response?.data?.error
+    const msg = (typeof raw === 'string' ? raw : raw?.message) || '删除失败'
+    ElMessage.error(msg)
+  }
 }
 async function onReexec(sessionId: string) {
   try { await store.reexecuteChild(props.batch.id, sessionId) }
   catch (e: unknown) {
     const err = e as { response?: { data?: { error?: string } } }
     ElMessage.error(err.response?.data?.error || '重新执行失败')
+  }
+}
+async function onResumeChild(sessionId: string) {
+  try {
+    await ElMessageBox.confirm(
+      '继续此任务？将从中断处续跑（保留已有上下文），不影响其他已暂停的任务。',
+      '继续任务', { type: 'info', confirmButtonText: '继续' },
+    )
+  } catch { return }
+  try {
+    await store.resumeChild(props.batch.id, sessionId)
+    ElMessage.success('已继续运行')
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { error?: string } } }
+    ElMessage.error(err.response?.data?.error || '继续失败')
   }
 }
 async function onCancel(sessionId: string) {
@@ -165,6 +204,8 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .dot--cancelled { background: var(--el-text-color-secondary); }
 .bg-child__cancel { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__cancel:hover { color: var(--el-color-danger); }
+.bg-child__resume { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
+.bg-child__resume:hover { color: var(--el-color-success); }
 .bg-child__reexec { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__reexec:hover { color: var(--el-color-primary); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }

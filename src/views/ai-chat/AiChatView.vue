@@ -49,6 +49,7 @@ import MemoryManager from '@/components/ai-chat/MemoryManager.vue'
 import { downloadFileUrl, runScript, listModels, listAgents, getFileDiff, getFilePreview, expandChangeDir, getSubtaskMessages, searchSessions, getBatchOfSession, type AiMessage, type ChangedFile, type ModelInfo, type AgentInfo, type FileDiff, type AiSessionSearchHit, type AiFile } from '@/api/aiChat'
 import { previewKind } from '@/utils/filePreview'
 import { highlightHtml } from '@/utils/highlight'
+import type { AiChatPromptTemplate } from '@/types/aiChatBatch'
 import { useChatScroll } from '@/composables/useChatScroll'
 import { useTurnNotify } from '@/composables/useTurnNotify'
 
@@ -372,6 +373,8 @@ watch(mentionToken, (tok) => {
 })
 const messages = computed(() => store.activeMessages)
 const streaming = computed(() => store.isStreaming)
+// P0 §8.2：发送失败错误卡（保留原始输入，一键重试）。
+const turnFailure = computed(() => store.activeTurnFailure)
 const attachments = computed(() => store.activeAttachments)
 const outputs = computed(() => store.activeOutputs)
 // 用户上传到 uploads/ 的文件（上传后实时刷新可见）。
@@ -876,6 +879,22 @@ async function copyMessage(m: AiMessage) {
   else ElMessage.error('复制失败')
 }
 
+/** P0 §8.2：复制失败错误卡的详情，便于反馈/存档。 */
+async function copyFailureDetail() {
+  const f = turnFailure.value
+  if (!f) return
+  const detail = `本轮执行失败\n错误原因：${f.message}\n原始输入：${f.content || '（无）'}`
+  if (await copyText(detail)) ElMessage.success('已复制错误详情')
+  else ElMessage.error('复制失败')
+}
+
+/** P2 §6.3：模板「插入」→ 写入输入框，保留用户编辑/确认，绝不直接发送。 */
+function onApplyTemplate(t: AiChatPromptTemplate) {
+  input.value = t.content
+  showTemplateManager.value = false
+  ElMessage.success('模板已插入输入框，可继续编辑后发送')
+}
+
 async function editMessage(m: AiMessage) {
   const text = messageText(m)
   if (!activeId.value) return
@@ -1303,6 +1322,23 @@ function onKey(e: Event) {
               @reject="() => store.rejectPendingQuestion(activeId!)"
             />
 
+            <!-- P0 §8.2 发送失败错误卡：保留原始输入，提供明确的重试入口 -->
+            <div v-if="turnFailure" class="ai-chat__turn-failure" role="alert" data-test="turn-failure">
+              <div class="ai-chat__turn-failure__head">
+                <ElIcon><WarningFilled /></ElIcon>
+                <span>本轮执行失败</span>
+              </div>
+              <div class="ai-chat__turn-failure__reason">错误原因：{{ turnFailure.message }}</div>
+              <div v-if="turnFailure.content" class="ai-chat__turn-failure__content">
+                {{ turnFailure.content }}
+              </div>
+              <div class="ai-chat__turn-failure__actions">
+                <ElButton size="small" type="primary" data-test="retry-turn"
+                          :disabled="streaming" @click="store.retryFailedTurn()">重试本轮</ElButton>
+                <ElButton size="small" data-test="copy-error" @click="copyFailureDetail">复制错误详情</ElButton>
+              </div>
+            </div>
+
             <!-- 执行计划面板（agent 的最新 todo 快照，随 todowrite 实时刷新，
                  对齐 OpenCode TUI 把 todo 挂在侧栏持续可见的做法；会话里没有
                  todo 时整块不渲染，不占空间） -->
@@ -1605,7 +1641,7 @@ function onKey(e: Event) {
       v-model="showCreateBatch"
       @manageTemplates="showTemplateManager = true"
       @created="async (d) => { await batches.fetchList(); batches.selectBatch(d.batch.id) }" />
-    <PromptTemplateManager v-model="showTemplateManager" />
+    <PromptTemplateManager v-model="showTemplateManager" @apply="onApplyTemplate" />
     <MemoryManager v-model="showMemoryManager" />
   </div>
 </template>
@@ -1732,6 +1768,30 @@ function onKey(e: Event) {
   border-bottom: 1px solid var(--el-color-warning-light-7);
   .spin { animation: spin 1s linear infinite; }
 }
+
+/* P0 §8.2 发送失败错误卡 */
+.ai-chat__turn-failure {
+  max-width: 780px; margin: 8px auto; padding: 10px 14px;
+  border: 1px solid var(--el-color-danger-light-7);
+  border-left: 3px solid var(--el-color-danger);
+  border-radius: 8px;
+  background: var(--el-color-danger-light-9);
+  font-size: 13px;
+}
+.ai-chat__turn-failure__head {
+  display: flex; align-items: center; gap: 6px;
+  font-weight: 600; color: var(--el-color-danger);
+}
+.ai-chat__turn-failure__reason { margin: 6px 0 0; color: var(--el-text-color-regular); }
+.ai-chat__turn-failure__content {
+  margin: 6px 0 0; padding: 6px 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  color: var(--el-text-color-secondary);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 96px; overflow: auto;
+}
+.ai-chat__turn-failure__actions { margin-top: 8px; display: flex; gap: 8px; }
 
 /* Claude-like document column: centered, generous whitespace */
 .ai-thread {

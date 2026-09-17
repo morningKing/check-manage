@@ -17,6 +17,7 @@ import {
   getSubtaskMessages,
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
+  getRuntimeState,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type LspServerStatus, type FormatterStatus,
@@ -41,6 +42,18 @@ interface PendingAttachment {
 interface QueuedMessage {
   localId: string
   content: string
+  paths: string[]
+}
+
+/** P0 §8：发送/执行失败后可恢复的回合状态——保留原始输入供一键重试。 */
+export interface TurnFailure {
+  /** 服务端已落库的 user 消息 id（重试前先删掉，避免历史重复） */
+  messageId?: string
+  /** 结构化错误信息（面向用户展示） */
+  message: string
+  /** 原始输入文本 */
+  content: string
+  /** 原始附件路径（重试时一并重发） */
   paths: string[]
 }
 
@@ -101,6 +114,15 @@ interface State {
    * 会话打开 / 回合结束重算，message.updated 流式中就地刷新 contextTokens。
    */
   usageBySession: Record<string, SessionUsage>
+  /**
+   * P0 §8.2：发送失败后的可恢复失败态（错误卡 + 一键重试）。置非空时前端
+   * 必须已清除 streaming/thinking；重试成功或开始新回合时清空。
+   */
+  turnFailure: Record<string, TurnFailure | null>
+  /** P0 §12.3：停止生成请求进行中的会话（防重复点击/重复 abort）。 */
+  aborting: Record<string, boolean>
+  /** P0 §12.3：会话级操作进行中标记（close/delete 等防重复触发）。 */
+  sessionOpBusy: Record<string, string | null>
   _stream: { close(): void } | null
   /** 当前 SSE 订阅所属的会话 id(批子会话 live-poll 的让位依据) */
   streamSid: string | null
@@ -154,6 +176,9 @@ export const useAiChatStore = defineStore('aiChat', {
     pendingQuestion: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
+    turnFailure: {} as Record<string, TurnFailure | null>,
+    aborting: {} as Record<string, boolean>,
+    sessionOpBusy: {} as Record<string, string | null>,
     _stream: null,
     streamSid: null,
   }),
@@ -190,6 +215,12 @@ export const useAiChatStore = defineStore('aiChat', {
       return state.activeSessionId
         ? state.usageBySession[state.activeSessionId] ?? { ...EMPTY_USAGE }
         : { ...EMPTY_USAGE }
+    },
+    activeTurnFailure(state): TurnFailure | null {
+      return state.activeSessionId ? state.turnFailure[state.activeSessionId] ?? null : null
+    },
+    activeAborting(state): boolean {
+      return state.activeSessionId ? !!state.aborting[state.activeSessionId] : false
     },
   },
 
@@ -314,7 +345,12 @@ export const useAiChatStore = defineStore('aiChat', {
     async abortStreaming() {
       const sid = this.activeSessionId
       if (!sid || !this.streaming[sid]) return
+      // P0 §12.3 防重复：停止请求进行中禁止再次触发（重复 abort 无害但会让
+      // 按钮闪烁/产生多余请求）。
+      if (this.aborting[sid]) return
+      this.aborting[sid] = true
       try { await abortSession(sid) } catch { /* SSE.idle clears state regardless */ }
+      finally { this.aborting[sid] = false }
       // optimistic UI: clear locally; session.idle event will re-affirm
       this.streaming[sid] = false
       this.thinking[sid] = false
@@ -415,8 +451,50 @@ export const useAiChatStore = defineStore('aiChat', {
         return
       }
       this.messages[sid].push({ id: localId, role: 'user', content: parts })
+      this.turnFailure[sid] = null  // 新回合开始：上一次失败卡随之收起
       this._beginTurn(sid)
-      await this._transmitUserMessage(sid, content, paths, localId)
+      try {
+        await this._transmitUserMessage(sid, content, paths, localId)
+      } catch (e: unknown) {
+        // P0 §8.2：发送失败必须收敛——清除 streaming/thinking（输入区不能
+        // 长期显示"正在回复"）、移除未确认的本地气泡、保留原始输入供一键重试。
+        // 不自动重复提交。
+        this._failTurn(sid, e, content, paths, localId)
+      }
+    },
+
+    /** 记录发送失败并收敛回合状态（P0 §8.2）。 */
+    _failTurn(sid: string, err: unknown, content: string, paths: string[], localId?: string) {
+      this.streaming[sid] = false
+      this.thinking[sid] = false
+      // 移除本地乐观气泡（服务端若已落库，重试时会按 messageId 清理）
+      if (localId) {
+        const arr = this.messages[sid] ?? []
+        const idx = arr.findIndex(m => m.id === localId)
+        if (idx >= 0) this.messages[sid].splice(idx, 1)
+      }
+      const ax = err as { response?: { data?: { error?: { code?: string; message?: string; messageId?: string } | string } }; message?: string }
+      const raw = ax?.response?.data?.error
+      const message = (typeof raw === 'string' ? raw : raw?.message)
+        || ax?.message || '本轮发送失败'
+      const messageId = typeof raw === 'object' ? raw?.messageId : undefined
+      this.turnFailure[sid] = { messageId, message, content, paths }
+    },
+
+    /** 一键重试上一轮失败的发送（P0 §8.2）：先清理服务端已落库的孤儿 user
+     *  消息，再按原内容重新发送。不产生重复回合。 */
+    async retryFailedTurn() {
+      const sid = this.activeSessionId
+      const failure = sid ? this.turnFailure[sid] : null
+      if (!sid || !failure) return
+      this.turnFailure[sid] = null
+      if (failure.messageId) {
+        try { await deleteFromMessage(sid, failure.messageId) } catch { /* best-effort */ }
+        const arr = this.messages[sid] ?? []
+        const idx = arr.findIndex(m => m.id === failure.messageId)
+        if (idx >= 0) this.messages[sid] = arr.slice(0, idx)
+      }
+      await this.sendUserMessage(failure.content)
     },
 
     _beginTurn(sid: string) {
@@ -451,7 +529,10 @@ export const useAiChatStore = defineStore('aiChat', {
       if (msg) delete msg.queued
       this._beginTurn(sid)
       this._transmitUserMessage(sid, item.content, item.paths, item.localId)
-        .catch(() => { /* 发送失败：错误由 interceptor 提示，气泡保留为普通消息 */ })
+        .catch((e: unknown) => {
+          // P0 §8.2：补发失败同样收敛为可重试失败态，而不是永远"正在回复"。
+          this._failTurn(sid, e, item.content, item.paths, item.localId)
+        })
     },
 
     async deleteFromMessage(id: string, msgId: string) {
@@ -561,7 +642,12 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async closeSession(id: string) {
-      await apiCloseSession(id)
+      // P0 §12.3 防重复：关闭请求进行中忽略重复触发。
+      if (this.sessionOpBusy[id]) return
+      this.sessionOpBusy[id] = 'close'
+      try {
+        await apiCloseSession(id)
+      } finally { this.sessionOpBusy[id] = null }
       if (this.activeSessionId === id) {
         this._closeStream()
         this.activeSessionId = null
@@ -569,6 +655,7 @@ export const useAiChatStore = defineStore('aiChat', {
       const s = this.sessions.find(x => x.id === id)
       if (s) s.status = 'closed'
       this.streaming[id] = false
+      this.thinking[id] = false
     },
 
     async reopenSession(id: string) {
@@ -579,7 +666,12 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async deleteSession(id: string) {
-      await apiDeleteSession(id)
+      // P0 §12.3 防重复：删除请求进行中忽略重复触发。
+      if (this.sessionOpBusy[id]) return
+      this.sessionOpBusy[id] = 'delete'
+      try {
+        await apiDeleteSession(id)
+      } finally { this.sessionOpBusy[id] = null }
       if (this.activeSessionId === id) {
         this._closeStream()
         this.activeSessionId = null
@@ -589,6 +681,7 @@ export const useAiChatStore = defineStore('aiChat', {
       delete this.streaming[id]
       delete this.queuedBySession[id]
       delete this.usageBySession[id]
+      delete this.turnFailure[id]
     },
 
     async clearSession(id: string) {
@@ -629,12 +722,37 @@ export const useAiChatStore = defineStore('aiChat', {
         onEvent: ({ event, data }) => this._handleEvent(sid, event, data as any),
         onError: () => { /* api layer handles reconnect */ },
         onStatus: (s) => {
+          const wasReconnecting = this.streamStatus[sid] === 'reconnecting'
           this.streamStatus[sid] = s
           // 断线期间可能错过 session.idle；SSE（重）连上时补一发 drain，
           // 否则运行中排的队会一直挂着不发送。
-          if (s === 'open') this._drainQueue(sid)
+          if (s === 'open') {
+            this._drainQueue(sid)
+            // P0 §9.2：重连成功（而非首次连接）后先向服务端要回合状态，
+            // 再决定是收敛到完成态还是继续等流。
+            if (wasReconnecting) void this._syncAfterReconnect(sid)
+          }
         },
       })
+    },
+
+    /** P0 §9.2：SSE 断线重连后的服务端状态同步。回合仍在跑 → 保留 streaming
+     *  等实时流续传；服务端已收敛（错过 idle）→ 清掉本地"正在回复"并按持久化
+     *  消息收敛；状态接口失败 → 不阻塞（下一条事件/再次重连仍会收敛）。 */
+    async _syncAfterReconnect(sid: string) {
+      try {
+        const st = await getRuntimeState(sid)
+        if (st.turnStatus !== 'running' && this.streaming[sid]) {
+          this.streaming[sid] = false
+          this.thinking[sid] = false
+          this._resetStreamState(sid)
+        }
+        if (st.turnStatus !== 'running') {
+          this.loadFiles(sid)
+          this.loadChanges(sid)
+          await this._reloadPersisted(sid)
+        }
+      } catch { /* non-fatal */ }
     },
 
     /**

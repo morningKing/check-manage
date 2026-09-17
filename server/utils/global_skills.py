@@ -16,6 +16,7 @@ import zipfile
 from psycopg2.extras import RealDictCursor
 
 from db import get_db
+from utils.zip_unicode import safe_extract_decoded
 
 SKILL_NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 MAX_SKILL_ZIP_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -123,7 +124,7 @@ def install_skill_from_zip(zip_path: str, description: str,
     tmp_dir = tempfile.mkdtemp(dir=root, prefix='.tmp-')
     try:
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(tmp_dir)
+            safe_extract_decoded(zf, tmp_dir)
 
         # Find the extracted content — may be in a subdirectory
         # e.g. zip contains test-skill/SKILL.md → extractall gives tmp/test-skill/SKILL.md

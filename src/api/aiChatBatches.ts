@@ -25,8 +25,10 @@ export function createBatch(body: {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
 }
 
-export function deleteBatch(id: string) {
-  return del<void>(`/ai/chat/batches/${id}`)
+/** P0 §10.4：非终态（pending/running/paused）批次不允许直接删除——stop=true
+ *  走「停止并删除」：先取消全部子任务并等待运行中的落地，再清理删除。 */
+export function deleteBatch(id: string, stop = false) {
+  return del<void>(`/ai/chat/batches/${id}${stop ? '?stop=1' : ''}`)
 }
 
 export function retryFailedSessions(id: string) {
@@ -60,6 +62,12 @@ export function reexecuteChild(batchId: string, sessionId: string) {
 
 export function cancelChild(batchId: string, sessionId: string) {
   return post<{ id: string; status: string }>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/cancel`, {})
+}
+
+/** 单独继续一个已暂停（paused）的子任务：已开跑过的在原 OpenCode 会话/工作区
+ *  从中断处续跑；其余已暂停/已中断的子任务保持不动。 */
+export function resumeChild(batchId: string, sessionId: string) {
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/resume`, {})
 }
 
 export function updateBatchConfig(id: string, body: {

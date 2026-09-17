@@ -32,7 +32,9 @@ def internal_add():
     if not _authorized():
         return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(force=True) or {}
-    add_memory(body.get('userId', ''), body.get('messages') or [])
+    # 来源标记（P2 §7.4）：batch 路径显式传 source='batch'，默认对话提取
+    add_memory(body.get('userId', ''), body.get('messages') or [],
+               source=str(body.get('source') or 'batch'))
     return jsonify({'ok': True})
 
 

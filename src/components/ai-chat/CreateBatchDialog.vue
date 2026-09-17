@@ -14,14 +14,19 @@
         <label>模板</label>
         <div class="row__inline">
           <ElSelect v-model="selectedTemplateId"
-                    placeholder="可选: 从已保存模板填充"
-                    clearable
+                    placeholder="可选: 从已保存模板填充（可输入关键词筛选）"
+                    clearable filterable
                     @change="onPickTemplate"
                     @visible-change="(v: boolean) => v && loadTemplates()">
-            <ElOption v-for="t in templates" :key="t.id" :label="t.name" :value="t.id" />
+            <ElOption v-for="t in sortedTemplates" :key="t.id" :label="t.name" :value="t.id">
+              <span>{{ t.name }}</span>
+              <span v-if="lastUsedAt(t.id)" class="tpl-recent">最近使用</span>
+            </ElOption>
           </ElSelect>
           <ElButton link @click="handleManageTemplates">管理模板</ElButton>
         </div>
+        <!-- P2 §6.3：应用前可预览模板内容；填入 Prompt 后仍可编辑 -->
+        <div v-if="selectedTemplate" class="tpl-preview" data-test="tpl-preview">{{ selectedTemplate.content }}</div>
       </div>
 
       <div class="row">
@@ -107,6 +112,7 @@ import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
 import type { AiChatBatchDetail, AiChatPromptTemplate, StagedFile } from '@/types/aiChatBatch'
+import { lastUsedAt, recordTemplateUse } from '@/utils/templatePrefs'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{
@@ -172,9 +178,23 @@ watch(() => props.modelValue, async (visible) => {
   if (visible) await loadTemplates()
 })
 
+// P2 §6.2：下拉按「最近使用 → 创建时间」排序，最近用过的排前面
+const sortedTemplates = computed(() => [...templates.value].sort((a, b) => {
+  const ru = lastUsedAt(b.id) ?? 0
+  const rl = lastUsedAt(a.id) ?? 0
+  if (ru !== rl) return ru - rl
+  return (b.created_at || '').localeCompare(a.created_at || '')
+}))
+
+const selectedTemplate = computed(() =>
+  templates.value.find(x => x.id === selectedTemplateId.value) ?? null)
+
 function onPickTemplate(id: string | null) {
   const t = templates.value.find(x => x.id === id)
-  if (t) prompt.value = t.content
+  if (t) {
+    prompt.value = t.content
+    recordTemplateUse(t.id)  // P2 §6.3：提交前先记录使用（本地），用户仍可继续编辑
+  }
 }
 
 function handleManageTemplates() {
@@ -264,4 +284,11 @@ function reset() {
 .files__uploading { color: var(--el-text-color-secondary); }
 .files__failed { color: var(--el-color-danger); }
 .upload :deep(.el-upload-list) { display: none; }
+.tpl-preview {
+  margin-top: 4px; padding: 8px 10px; font-size: 12px; color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light); border-radius: 6px;
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 120px; overflow: auto;
+}
+.tpl-recent { color: var(--el-color-success); font-size: 11px; margin-left: 6px; }
 </style>

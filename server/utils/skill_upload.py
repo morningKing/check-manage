@@ -14,6 +14,8 @@ import zipfile
 
 from werkzeug.datastructures import FileStorage
 
+from utils.zip_unicode import decoded_zip_name
+
 MAX_ZIP_BYTES = 5 * 1024 * 1024
 MAX_ZIP_ENTRIES = 200
 SKILLS_SUBDIR = ".opencode/skills"
@@ -74,7 +76,7 @@ def extract_skill_zip(workspace_path: str, file_storage: FileStorage) -> dict:
         if len(members) > MAX_ZIP_ENTRIES:
             raise SkillUploadError("SKILL_ZIP_TOO_MANY_FILES", "too many entries")
 
-        norm_names = [m.filename.replace("\\", "/") for m in members]
+        norm_names = [decoded_zip_name(m).replace("\\", "/") for m in members]
         skill_at_root = any(n.lower() == "skill.md" for n in norm_names)
         strip_prefix = ""
         if not skill_at_root:
@@ -91,7 +93,8 @@ def extract_skill_zip(workspace_path: str, file_storage: FileStorage) -> dict:
 
         target_md = (strip_prefix + "SKILL.md").lower()
         md_member = next(
-            (m for m in members if m.filename.replace("\\", "/").lower() == target_md),
+            (m for m in members
+             if decoded_zip_name(m).replace("\\", "/").lower() == target_md),
             None,
         )
         if md_member is None:  # pragma: no cover - guarded above
@@ -112,7 +115,7 @@ def extract_skill_zip(workspace_path: str, file_storage: FileStorage) -> dict:
         os.makedirs(tmp_dir, exist_ok=True)
         try:
             for m in members:
-                rel = m.filename.replace("\\", "/")
+                rel = decoded_zip_name(m).replace("\\", "/")
                 if strip_prefix and rel.startswith(strip_prefix):
                     rel = rel[len(strip_prefix):]
                 if not rel:

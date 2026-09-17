@@ -174,3 +174,75 @@ def test_resume_batch_detail_carries_cancelled_count(db_conn, user_id, claim_gua
                if b['id'] == bid)
     resume_batch(user_id, bid)
     assert get_batch_detail(user_id, bid)['batch']['cancelled'] == 0
+
+
+# ---- resume_child：单个 paused 子任务的原地继续（UI「继续此任务」） ----
+
+def test_resume_child_continues_started_paused_child(db_conn, user_id, claim_guard):
+    """已开跑过的 paused 子任务 → pending + 续跑提示词，保留原 OpenCode 会话；
+    其余 paused 子任务保持不动；批次按 paused 规则保持 'paused'。"""
+    from utils.batch_repo import resume_child
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=2)
+    started, other = sids
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='paused', "
+                    "opencode_session_id='oc_1', pause_requested=true, "
+                    "error_message=NULL WHERE id=%s", (started,))
+        cur.execute("UPDATE ai_chat_sessions SET status='paused' WHERE id=%s",
+                    (other,))
+        cur.execute("UPDATE ai_chat_batches SET status='paused' WHERE id=%s",
+                    (bid,))
+    db_conn.commit()
+
+    result = resume_child(user_id, bid, started)
+    assert result is not None
+
+    st, cp, oc, err, cr = _child(db_conn, started)
+    assert st == 'pending'
+    assert oc == 'oc_1'
+    assert cp and '继续' in cp
+    assert err is None and cr is False
+
+    st, *_ = _child(db_conn, other)
+    assert st == 'paused'          # 其他暂停任务不被拉起
+
+    status, *_ = _batch(db_conn, bid)
+    assert status == 'paused'      # 还有 paused 子任务 → 批次仍为 paused
+
+
+def test_resume_child_queued_paused_gets_fresh_run(db_conn, user_id, claim_guard):
+    """从未开跑（无 oc 会话）的 paused 子任务 → pending、不置 continue_prompt。"""
+    from utils.batch_repo import resume_child
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='paused' WHERE id=%s",
+                    (sids[0],))
+    db_conn.commit()
+    resume_child(user_id, bid, sids[0])
+    st, cp, oc, _, _ = _child(db_conn, sids[0])
+    assert st == 'pending'
+    assert cp is None and oc is None
+
+
+def test_resume_child_rejects_non_paused(db_conn, user_id, claim_guard):
+    from utils.batch_repo import resume_child
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
+                    (sids[0],))
+        cur.execute("UPDATE ai_chat_batches SET done=1, status='completed' "
+                    "WHERE id=%s", (bid,))
+    db_conn.commit()
+    with pytest.raises(ValueError):
+        resume_child(user_id, bid, sids[0])
+    assert _child(db_conn, sids[0])[0] == 'completed'
+
+
+def test_resume_child_wrong_owner_returns_none(db_conn, user_id, claim_guard):
+    from utils.batch_repo import resume_child
+    bid, sids = _seed_batch(db_conn, user_id, claim_guard, n=1)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='paused' WHERE id=%s",
+                    (sids[0],))
+    db_conn.commit()
+    assert resume_child(str(uuid.uuid4()), bid, sids[0]) is None

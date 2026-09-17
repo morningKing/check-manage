@@ -310,6 +310,20 @@ export function abortSession(id: string) {
   return post<{ ok: boolean }>(`/ai/chat/sessions/${encodeURIComponent(id)}/abort`)
 }
 
+/** P0 §9.3 服务端回合状态：SSE 重连后查询，决定继续等流还是收敛到完成态。 */
+export function getRuntimeState(id: string) {
+  return get<{
+    sessionId: string
+    sessionStatus: string
+    turnStatus: 'running' | 'idle'
+    opencodeSessionId: string | null
+    lastMessageId: string | null
+    error: string | null
+  }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/runtime-state`, undefined, { silent: true },
+  )
+}
+
 export function getPendingQuestion(id: string) {
   return get<{ data: QuestionRequest | null }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/pending-question`, undefined, { silent: true },
@@ -377,7 +391,16 @@ export function downloadFileUrl(id: string, path: string): string {
   return `/api/ai/chat/sessions/${encodeURIComponent(id)}/files/download?path=${encodeURIComponent(path)}${authParam('&')}`
 }
 
-export interface AiMemory { id: string; memory: string }
+export interface AiMemory {
+  id: string
+  memory: string
+  /** mem0 返回的时间（可能缺省） */
+  created_at?: string
+  updated_at?: string
+  /** P2 §7.4 来源标记（老条目缺省 → 系统记忆） */
+  source?: string
+  metadata?: { source?: string } | null
+}
 
 export function listMemories() {
   return get<{ memories: AiMemory[] }>('/ai/memories')

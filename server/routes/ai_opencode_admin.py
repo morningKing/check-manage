@@ -165,8 +165,9 @@ def publish_platform_skill():
     if not row:
         return jsonify({'error': '平台技能不存在'}), 404
     name = row[0]
+    from config import AI_WORKSPACE_ROOT
     from utils.global_skills import global_skills_root
-    src = os.path.join(global_skills_root(), name)
+    src = os.path.join(global_skills_root(AI_WORKSPACE_ROOT), name)
     try:
         installed = ocg.publish_platform_skill(src, name, overwrite=overwrite)
     except ocg.OpenCodeGlobalError as e:

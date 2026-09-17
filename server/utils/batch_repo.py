@@ -552,6 +552,42 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
     return get_batch_detail(user_id, batch_id)
 
 
+def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
+    """Resume a single PAUSED batch child in place ("continue this one"):
+    back to pending, and if it had already started (opencode_session_id set)
+    inject RESUME_CONTINUE_PROMPT so the worker continues the existing
+    OpenCode session/workspace instead of restarting from scratch.
+
+    Other paused/cancelled children stay parked — unlike resume_batch, this
+    never touches them. Paused children occupy no done/failed counter, so no
+    counter rollback is needed. Raises ValueError if the child isn't paused.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.status FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, user_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row[0] != 'paused':
+                raise ValueError('只有已暂停的子任务可以单独继续')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET status='pending', error_message=NULL, "
+                "  cancel_requested=false, pause_requested=false, "
+                "  continue_prompt = CASE WHEN opencode_session_id IS NOT NULL "
+                "                        THEN %s ELSE NULL END "
+                "WHERE id = %s",
+                (RESUME_CONTINUE_PROMPT, session_id),
+            )
+        conn.commit()
+    _recompute_batch_status_for(batch_id)
+    return get_batch_detail(user_id, batch_id)
+
+
 def update_batch_config(user_id: str, batch_id: str, *,
                         agent: str | None, model: str | None,
                         provision_repo: str | None = None,

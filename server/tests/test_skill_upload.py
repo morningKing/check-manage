@@ -114,3 +114,72 @@ def test_corrupted_zip_rejected(tmp_path):
     with pytest.raises(SkillUploadError) as ei:
         extract_skill_zip(str(tmp_path), fs)
     assert ei.value.code == 'SKILL_ZIP_INVALID'
+
+
+class _LegacyNameInfo(zipfile.ZipInfo):
+    """ZipInfo whose stored name is raw non-UTF8 bytes (no 0x800 flag),
+    mimicking zips produced by Chinese Windows tools (GBK filenames)."""
+
+    def __init__(self, raw: bytes, date_time=(2026, 1, 1, 0, 0, 0)):
+        super().__init__(date_time=date_time)
+        self._raw = raw
+        self.filename = raw.decode('cp437')
+        self.flag_bits = 0
+        self.compress_type = zipfile.ZIP_DEFLATED
+        self.external_attr = 0o600 << 16
+
+    def _encodeFilenameFlags(self):
+        return self._raw, self.flag_bits
+
+
+def _make_gbk_zip(entries: dict) -> FileStorage:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for path, data in entries.items():
+            zf.writestr(_LegacyNameInfo(path.encode('gbk')), data)
+    buf.seek(0)
+    return FileStorage(stream=buf, filename='foo.zip', content_type='application/zip')
+
+
+def test_decoded_zip_name_utf8_flag_passthrough():
+    from utils.zip_unicode import decoded_zip_name
+    info = zipfile.ZipInfo('数据.txt')
+    info.flag_bits |= 0x800
+    assert decoded_zip_name(info) == '数据.txt'
+
+
+def test_decoded_zip_name_gbk_recovery():
+    from utils.zip_unicode import decoded_zip_name
+    info = _LegacyNameInfo('数据/工具.txt'.encode('gbk'))
+    assert decoded_zip_name(info) == '数据/工具.txt'
+
+
+def test_gbk_chinese_filenames_survive_skill_upload(tmp_path):
+    from utils.skill_upload import extract_skill_zip
+    z = _make_gbk_zip({
+        'SKILL.md': '---\nname: cn-skill\n---\n'.encode('utf-8'),
+        '脚本/工具.py': b'x=1',
+        '数据.txt': '你好'.encode('utf-8'),
+    })
+    res = extract_skill_zip(str(tmp_path), z)
+    assert res['name'] == 'cn-skill'
+    base = tmp_path / '.opencode' / 'skills' / 'cn-skill'
+    assert (base / 'SKILL.md').exists()
+    assert (base / '脚本' / '工具.py').read_bytes() == b'x=1'
+    assert (base / '数据.txt').read_bytes() == '你好'.encode('utf-8')
+
+
+def test_safe_extract_decoded_handles_gbk(tmp_path):
+    from utils.zip_unicode import safe_extract_decoded
+    z = _make_gbk_zip({'目录/文件.txt': '内容'.encode('utf-8'), 'top.txt': b'ok'})
+    with zipfile.ZipFile(z.stream) as zf:
+        safe_extract_decoded(zf, str(tmp_path))
+    assert (tmp_path / '目录' / '文件.txt').read_bytes() == '内容'.encode('utf-8')
+    assert (tmp_path / 'top.txt').read_bytes() == b'ok'
+
+
+def test_safe_extract_decoded_blocks_traversal(tmp_path):
+    from utils.zip_unicode import safe_extract_decoded
+    z = _make_gbk_zip({'../evil.txt': b'pwn', 'SKILL.md': b'---\nname: ok\n---\n'})
+    with zipfile.ZipFile(z.stream) as zf, pytest.raises(ValueError):
+        safe_extract_decoded(zf, str(tmp_path))

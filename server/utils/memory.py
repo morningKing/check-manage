@@ -110,17 +110,26 @@ def _unwrap(res):
     return res or []
 
 
-def add_memory(user_id, messages):
+def add_memory(user_id, messages, source='conversation'):
+    """写入记忆并标记来源（P2 §7.4）：metadata.source ∈ {manual, conversation,
+    batch, ...}。mem0 不支持 metadata 时仅丢失来源标记，不影响记忆本身。"""
     m = get_memory()
     if m is None or not user_id or not messages:
         return
     try:
-        _on_mem_thread(lambda: m.add(messages, user_id=user_id))
+        _on_mem_thread(lambda: m.add(messages, user_id=user_id,
+                                     metadata={'source': source}))
+    except TypeError:
+        # 旧版 mem0 无 metadata 参数：退化为不带来源写入
+        try:
+            _on_mem_thread(lambda: m.add(messages, user_id=user_id))
+        except Exception as e:
+            logger.warning('mem0 add failed: %s', e)
     except Exception as e:
         logger.warning('mem0 add failed: %s', e)
 
 
-def add_memory_text(user_id, text, infer=True):
+def add_memory_text(user_id, text, infer=True, source='manual'):
     """手动补写一条记忆。infer=False 为 verbatim（原样、不提炼，仍嵌入）。
     返回是否写入（mem0 不可用/降级时 False）。"""
     m = get_memory()
@@ -128,7 +137,8 @@ def add_memory_text(user_id, text, infer=True):
         return False
     try:
         _on_mem_thread(lambda: m.add([{'role': 'user', 'content': text}],
-                                     user_id=user_id, infer=infer))
+                                     user_id=user_id, infer=infer,
+                                     metadata={'source': source}))
         return True
     except Exception as e:
         logger.warning('mem0 manual add failed: %s', e)

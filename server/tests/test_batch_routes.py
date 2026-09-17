@@ -158,7 +158,12 @@ def test_delete_cascades_sessions(setup_app, db_conn, tmp_path, monkeypatch):
         'name': 'gone', 'prompt': 'p', 'files': [f1],
     }, headers=admin_headers)
     bid = r.get_json()['batch']['id']
-    r2 = client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+    # P0 10.4: non-terminal batches refuse a bare delete...
+    r409 = client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
+    assert r409.status_code == 409
+    assert r409.get_json()['error']['code'] == 'BATCH_NOT_TERMINAL'
+    # ...and accept "stop then delete" (children cascade away)
+    r2 = client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=admin_headers)
     assert r2.status_code == 204
     with db_conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE batch_id = %s", (bid,))

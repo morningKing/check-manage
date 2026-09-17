@@ -34,11 +34,14 @@
       <!-- ─────────────── Skill 页签 ─────────────── -->
       <el-tab-pane label="技能 (Skill)" name="skills">
         <div class="oc-runtime__toolbar">
+          <el-input v-model="skillSearch" size="small" clearable placeholder="按名称/描述检索技能…"
+                    class="oc-runtime__search" data-test="skill-search" :prefix-icon="Search" />
           <el-button v-if="canPerm('admin.ai_skill_write')" type="primary" size="small" @click="openSkillCreate">新建技能</el-button>
           <el-button v-if="canPerm('admin.ai_skill_write')" size="small" @click="showZipUpload = true">上传 zip</el-button>
           <el-button v-if="canPerm('admin.ai_runtime_publish')" size="small" @click="openPublish">从平台技能库发布</el-button>
         </div>
-        <el-table :data="skillItems" v-loading="loadingSkills" size="small">
+        <el-table :data="filteredSkills" v-loading="loadingSkills" size="small"
+                  :empty-text="skillSearch ? '没有匹配的技能' : '暂无技能'">
           <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
           <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
           <el-table-column label="来源" width="100">
@@ -74,9 +77,12 @@
       <!-- ─────────────── Agent 页签 ─────────────── -->
       <el-tab-pane label="智能体 (Agent)" name="agents">
         <div class="oc-runtime__toolbar">
+          <el-input v-model="agentSearch" size="small" clearable placeholder="按名称/描述检索 Agent…"
+                    class="oc-runtime__search" data-test="agent-search" :prefix-icon="Search" />
           <el-button v-if="canPerm('admin.ai_agent_write')" type="primary" size="small" @click="openAgentCreate">新建 Agent</el-button>
         </div>
-        <el-table :data="agentItems" v-loading="loadingAgents" size="small">
+        <el-table :data="filteredAgents" v-loading="loadingAgents" size="small"
+                  :empty-text="agentSearch ? '没有匹配的 Agent' : '暂无 Agent'">
           <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
           <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
           <el-table-column label="模式" width="95">
@@ -299,7 +305,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { QuestionFilled, UploadFilled } from '@element-plus/icons-vue'
+import { QuestionFilled, Search, UploadFilled } from '@element-plus/icons-vue'
 import * as api from '@/api/aiOpencodeAdmin'
 import type {
   OpencodeOverview, GlobalSkillItem, GlobalAgentItem,
@@ -349,6 +355,21 @@ const applying = ref(false)
 
 const pendingCount = computed(() => runtimeInfo.value?.pendingCount
   ?? overview.value?.pendingChanges ?? 0)
+
+// ── 技能/Agent 检索（名称 + 描述，大小写不敏感） ──
+const skillSearch = ref('')
+const agentSearch = ref('')
+
+function matchSearch(keyword: string, ...fields: Array<string | null | undefined>): boolean {
+  const q = keyword.trim().toLowerCase()
+  if (!q) return true
+  return fields.some(f => (f || '').toLowerCase().includes(q))
+}
+
+const filteredSkills = computed(() =>
+  skillItems.value.filter(s => matchSearch(skillSearch.value, s.name, s.description)))
+const filteredAgents = computed(() =>
+  agentItems.value.filter(a => matchSearch(agentSearch.value, a.name, a.description)))
 
 async function refreshOverview() {
   try {
@@ -729,6 +750,10 @@ function errText(e: unknown): string {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+.oc-runtime__search {
+  width: 240px;
+  margin-right: 8px;
 }
 .oc-runtime__readonly-hint {
   color: var(--el-text-color-placeholder);

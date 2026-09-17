@@ -87,3 +87,6 @@ e2e/screenshots/
 .clawhub/
 /joinquant_strategy_v2.py
 /test_api.py
+
+# playwright 共享登录态（本地生成）
+e2e/.auth/

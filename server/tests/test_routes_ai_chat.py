@@ -840,10 +840,21 @@ def test_abort_session_calls_opencode(setup):
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
     resp = client.post('/ai/chat/sessions/sess_x/abort', headers=dev_h)
     assert resp.status_code == 200
-    assert resp.get_json() == {'ok': True}
+    assert resp.get_json() == {'ok': True, 'stopped': True}
     a, k = oc.abort_session.call_args
     assert a[0] == 'oc_sess'
     assert k.get('directory') == '/tmp/ws'
+
+
+def test_abort_session_idempotent_when_opencode_fails(setup):
+    """P0 10.1: OpenCode unreachable -> abort stays 200 (idempotent no-op)."""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    import requests as _rq
+    oc.abort_session.side_effect = _rq.ConnectionError('boom')
+    resp = client.post('/ai/chat/sessions/sess_x/abort', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'ok': True, 'stopped': False}
 
 
 def test_abort_session_guest_403(setup):

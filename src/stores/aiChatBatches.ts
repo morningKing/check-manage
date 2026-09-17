@@ -151,8 +151,8 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     return detail
   }
 
-  async function removeBatch(id: string) {
-    await api.deleteBatch(id)
+  async function removeBatch(id: string, opts: { stop?: boolean } = {}) {
+    await api.deleteBatch(id, opts.stop === true)
     items.value = items.value.filter(b => b.id !== id)
     if (activeBatch.value?.id === id) clearSelection()
   }
@@ -207,6 +207,18 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     return detail
   }
 
+  // 单任务继续：只把目标 paused 子任务推回 pending，其余暂停/中断任务不动。
+  async function resumeChild(batchId: string, sessionId: string) {
+    const detail = await api.resumeChild(batchId, sessionId)
+    const idx = items.value.findIndex(b => b.id === batchId)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === batchId) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(batchId)
+    }
+    return detail
+  }
+
   async function updateBatchConfig(id: string, body: { agent: string | null; model: string | null; provision_repo?: string | null; provision_ref?: string | null }) {
     const detail = await api.updateBatchConfig(id, body)
     const idx = items.value.findIndex(b => b.id === id)
@@ -219,7 +231,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, ensureBatchInList, clearSelection, retryFailed, reexecuteChild,
-    stopBatch, pauseBatch, resumeBatch,
+    resumeChild, stopBatch, pauseBatch, resumeBatch,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
   }
 })

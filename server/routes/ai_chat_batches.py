@@ -24,6 +24,7 @@ from utils.batch_repo import (
     reexecute_child,
     reset_failed_to_pending,
     resume_batch,
+    resume_child,
     update_batch_config,
 )
 
@@ -132,15 +133,48 @@ def update_config(batch_id):
 @ai_chat_batches_bp.delete('/<batch_id>')
 @login_required
 def remove(batch_id):
-    # Tear down per-child workspaces before DB cascade
-    body = get_batch_detail(g.current_user['userId'], batch_id)
+    """Delete a batch. P0 spec 10.4: a non-terminal batch (pending/running/
+    paused) cannot be deleted directly — the caller must pass stop=1 to run
+    "stop then delete", which cancels every child first and waits (bounded)
+    for running children to land before tearing workspaces down."""
+    user_id = g.current_user['userId']
+    body = get_batch_detail(user_id, batch_id)
     if not body:
         return jsonify({'error': 'not found'}), 404
+    status = body['batch']['status']
+    stop_first = request.args.get('stop', '').lower() in ('1', 'true') \
+        or bool((request.get_json(silent=True) or {}).get('stop'))
+    if status not in ('completed', 'partial', 'failed'):
+        if not stop_first:
+            return jsonify({'error': {
+                'code': 'BATCH_NOT_TERMINAL',
+                'message': '运行中的批任务不能直接删除，请先停止任务',
+                'retryable': False,
+                'operation': 'delete_batch',
+            }}), 409
+        try:
+            cancel_batch(user_id, batch_id)
+        except ValueError:
+            pass  # became terminal concurrently
+        from utils.batch_engine import get_worker
+        get_worker().notify()
+        # Bounded wait so running children actually stop before their
+        # workspaces/DB rows vanish; workers' post-delete write-backs are
+        # guarded (0-row updates / warning-logged), so a timeout is not fatal.
+        import time as _time
+        deadline = _time.time() + 10
+        while _time.time() < deadline:
+            d = get_batch_detail(user_id, batch_id)
+            if not d or not any(s['status'] == 'running' for s in d['sessions']):
+                break
+            _time.sleep(0.3)
+        body = get_batch_detail(user_id, batch_id) or body
+    # Tear down per-child workspaces before DB cascade
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
         or batch_workspace_root()
     # cleanup_batch_workspaces sweeps both the unified and the legacy root
-    cleanup_batch_workspaces(workspace_root, g.current_user['userId'], body['sessions'])
-    delete_batch(g.current_user['userId'], batch_id)
+    cleanup_batch_workspaces(workspace_root, user_id, body['sessions'])
+    delete_batch(user_id, batch_id)
     return '', 204
 
 
@@ -235,6 +269,22 @@ def append(batch_id):
         result = append_to_batch(g.current_user['userId'], batch_id, files)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/resume')
+@login_required
+def resume_single_child(batch_id, session_id):
+    """Continue one PAUSED child in place (from where it stopped). Unlike the
+    batch-level /resume, other paused/cancelled children stay untouched."""
+    try:
+        result = resume_child(g.current_user['userId'], batch_id, session_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
