@@ -145,6 +145,11 @@ def handle(input: dict, ctx: ToolContext) -> dict:
         conditions.append("s.created_at <= %s")
         params.append(created_before)
 
+    # ── 数据隔离（execution-audit Spec §16.1）：非 admin 只能查自己的会话 ──
+    if ctx is not None and (getattr(ctx, 'role', '') or '') != 'admin':
+        conditions.append("s.user_id = %s")
+        params.append(getattr(ctx, 'user_id', None))
+
     # ── 只返回有消息的终态会话 ────────────────────────────────────────
     if not status:
         conditions.append("s.status IN ('completed', 'failed', 'cancelled')")

@@ -2515,6 +2515,20 @@ def init_db():
         conn.commit()
         print("Seeded built-in roles (admin/developer/guest).")
 
+        # 执行审计/SkillOpt 数据模型（execution-audit Spec §8）：幂等 DDL，
+        # 全新库直接带表，已有库重复执行无副作用。
+        try:
+            import importlib.util as _ilu
+            _mp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'migrations',
+                               '2026_09_17_execution_audit_tables.py')
+            _spec = _ilu.spec_from_file_location('_exec_audit_migration', _mp)
+            _mod = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _mod.run()
+        except Exception as _e:
+            print(f"[warn] execution audit migration failed (non-fatal): {_e}")
+
         conn.commit()
         print("Seed data inserted successfully.")
     finally:

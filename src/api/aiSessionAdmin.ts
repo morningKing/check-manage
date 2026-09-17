@@ -95,7 +95,143 @@ export function sessionFileDownloadUrl(sessionId: string, path: string): string 
  * with the trace-analyzer skill and returns its ID.
  */
 export function analyzeSession(sessionId: string) {
-  return post<{ analysisSessionId: string; message: string }>(
+  return post<{ analysisId: string; analysisSessionId: string; message: string }>(
     `${BASE}/${sessionId}/analyze`,
   )
+}
+
+// ── 执行合规审计（execution-audit Spec §15） ────────────────────────────
+
+const EXEC_BASE = '/ai/chat/admin'
+
+export interface ExecutionAttempt {
+  id: string
+  sessionId: string
+  sourceType: string
+  sourceId: string | null
+  parentAttemptId: string | null
+  attemptNo: number
+  operation: string
+  requestedAgent: string | null
+  effectiveAgent: string | null
+  agentResolution: string
+  requestedModel: string | null
+  effectiveModel: string | null
+  modelResolution: string
+  rawPromptHash: string | null
+  effectivePromptHash: string | null
+  effectivePromptLen: number | null
+  status: string
+  errorCode: string | null
+  errorMessage: string | null
+  startedAt: string | null
+  finishedAt: string | null
+}
+
+export interface ExecutionManifest {
+  kind: string
+  name: string
+  source: string
+  path: string | null
+  contentHash: string | null
+  injected: boolean
+  injectionStatus: string
+  runtimeLoaded: string
+  selected: string
+  invoked: string
+}
+
+export interface ExecutionStep {
+  step_id: string
+  expected: boolean
+  declared_by_agent: boolean
+  observed: boolean
+  status: string
+  evidence_level: string
+  evidence_refs: string[]
+  reason?: string
+  duration_ms?: number | null
+}
+
+export interface ToolFailure {
+  tool: string
+  failure_type: string
+  input_preview?: string
+  result_preview?: string
+  duration_ms?: number
+  evidence_refs: string[]
+  recovery?: {
+    attempted: boolean
+    same_input_retry: boolean
+    strategy_changed: boolean
+    recovered: boolean
+  }
+}
+
+export interface ExecutionReport {
+  schema_version?: string
+  status?: string
+  diagnosis_id?: string
+  execution?: {
+    attempt_id?: string
+    agent?: { requested?: string; effective?: string; resolution?: string }
+    model?: { requested?: string; effective?: string; resolution?: string }
+    prompt?: { raw_hash?: string; effective_hash?: string; effective_len?: number }
+    skills?: ExecutionManifest[]
+  }
+  contract?: {
+    status: string
+    reason?: string
+    skill?: string
+    steps?: ExecutionStep[]
+    violations?: Array<{ type: string; step_id: string; severity: string; reason?: string }>
+  }
+  declared_plan?: {
+    declared_steps?: Array<{ id?: string; content: string; status: string; status_changes?: number }>
+    snapshot_count?: number
+    completed_count?: number
+    total_count?: number
+  }
+  tool_failures?: ToolFailure[]
+  step_completion?: { required_total: number; required_completed_confirmed: number; rate: number | null }
+  data_completeness?: { score: number; limitations: string[] }
+}
+
+export interface ExecutionAuditPayload {
+  attempts: ExecutionAttempt[]
+  currentAttempt: ExecutionAttempt | null
+  manifests: ExecutionManifest[]
+  events: Array<{ event_seq: number; event_type: string; occurred_at: string | null; status: string | null }>
+  report: ExecutionReport | null
+}
+
+export function getExecutionAudit(sessionId: string) {
+  return get<ExecutionAuditPayload>(`${EXEC_BASE}/sessions/${sessionId}/execution-audit`)
+}
+
+export function getExecutionPrompt(sessionId: string, attemptId?: string) {
+  return get<{
+    attemptId: string
+    rawUserContent: string | null
+    effectivePrompt: string | null
+    rawHash: string | null
+    effectiveHash: string | null
+    effectiveLen: number | null
+    augmentations: Record<string, unknown>
+    plaintextAvailable: boolean
+  }>(`${EXEC_BASE}/sessions/${sessionId}/execution-prompt`,
+     attemptId ? { attemptId } : undefined)
+}
+
+export function getAnalysisStatus(analysisId: string) {
+  return get<{
+    analysisId: string
+    targetSessionId: string
+    analysisSessionId: string
+    status: string
+    dataCompleteness: number | null
+    error: string | null
+    createdAt: string | null
+    completedAt: string | null
+  }>(`${EXEC_BASE}/analyses/${analysisId}`)
 }

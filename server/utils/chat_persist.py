@@ -603,8 +603,46 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         state['subtasks'][child_sid] = scope
     last_persist = time.monotonic()
     turn_start = time.monotonic()  # F9: 回合起始时刻，用于长任务完成通知阈值
+    # Execution audit (Spec §9.2): capture immutable event summaries for the
+    # session's running attempt. The attempt id is looked up lazily once —
+    # audit writes are best-effort and must never break persistence.
+    _audit_attempt = None
+    _audit_checked = False
+
+    def _audit_capture(evt):
+        nonlocal _audit_attempt, _audit_checked
+        try:
+            if not _audit_checked:
+                _audit_checked = True
+                from utils import execution_audit as _ea
+                rows = _ea.get_attempts(sid, limit=1)
+                _audit_attempt = rows[0]['id'] if rows and rows[0].get(
+                    'status') in ('running', 'accepted', 'recovering') else None
+            if not _audit_attempt:
+                return
+            from utils import execution_audit as _ea
+            props = ((evt.get('data') or {}).get('properties')) \
+                if isinstance(evt, dict) else {}
+            info = (props or {}).get('info') or {}
+            part = (props or {}).get('part') or {}
+            if part and part.get('type') == 'tool':
+                st = part.get('state') or {}
+                _ea.record_event(
+                    _audit_attempt, 'tool.state', session_id=sid,
+                    parent_session_id=opencode_session_id,
+                    message_id=part.get('messageID'), part_id=part.get('id'),
+                    status=st.get('status'),
+                    payload={'tool': part.get('tool'), 'title': st.get('title')})
+            elif info and info.get('role') == 'assistant' and info.get('id'):
+                _ea.record_event(
+                    _audit_attempt, 'message.updated', session_id=sid,
+                    message_id=info.get('id'))
+        except Exception:
+            pass  # audit must never break persistence
+
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
+        _audit_capture(evt)
         if sig == 'subtask':
             # 子代理相关信号可能只改了它自己的内容/状态，也可能是顶层第一次
             # 发现委托——两种情况都要把顶层重新 flatten 一遍：占位气泡的
@@ -636,6 +674,20 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                     logger.warning('memory extract_from_turn failed session=%s: %s', sid, e)
                 # F9 长任务完成通知：达到阈值的交互回合，给会话所有者发站内通知。
                 _maybe_notify_turn_done(sid, turn_start)
+            # Execution audit: the turn converged — close its attempt.
+            try:
+                from utils import execution_audit as _ea
+                if _audit_attempt:
+                    _ea.record_event(
+                        _audit_attempt, 'session.idle' if sig == 'idle'
+                        else 'session.error', session_id=sid,
+                        parent_session_id=opencode_session_id,
+                        status='completed' if sig == 'idle' else 'error')
+                _ea.finish_latest_running(
+                    sid, 'completed' if sig == 'idle' else 'failed',
+                    error_code='TURN_ERROR' if sig == 'error' else None)
+            except Exception:
+                pass
             return
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()

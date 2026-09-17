@@ -681,6 +681,46 @@ def send_message(sid):
     logger.info('send_message session=%s oc=%s user=%s model=%s agent=%s attachments=%d',
                 sid, oc_sid, user['userId'], effective_model or 'default',
                 requested_agent or 'default', len(attachments))
+
+    # Execution audit (execution-audit Spec §9.1): record the attempt at the
+    # dispatch boundary — requested vs effective agent/model, prompt hashes,
+    # and which augmentations were folded into the effective prompt.
+    from utils import execution_audit
+    _mentions = _agent_mention_names
+    audit_attempt_id = execution_audit.create_attempt(
+        session_id=sid, source_type='interactive', operation='send',
+        requested_agent=requested_agent or None,
+        effective_agent=requested_agent or None,
+        agent_resolution='requested' if requested_agent else 'runtime_default',
+        requested_model=requested_model or None,
+        effective_model=effective_model or None,
+        model_resolution='requested' if requested_model
+                         else ('session_default' if effective_model
+                               else 'runtime_default'),
+        raw_user_content=content or '',
+        effective_prompt=prompt.strip(),
+        prompt_version='chat-v1',
+        augmentations={
+            'agent_directive': bool(content),
+            'memory_injected': bool(mem_block),
+            'attachments': [
+                {'name': os.path.basename(a), 'path': a,
+                 'content_inlined': _read_text_attachment(workspace_path, a) is not None}
+                for a in attachments
+            ],
+            'mentioned_agents': _mentions,
+            'export_fallback': bool(is_export_intent(content)),
+        },
+        workspace_path=sess[4],
+    )
+    if audit_attempt_id:
+        execution_audit.save_manifests(audit_attempt_id, execution_audit
+            .scan_workspace_manifests(sess[4]))
+        if requested_agent:
+            execution_audit.save_manifests(audit_attempt_id, [{
+                'kind': 'agent', 'name': requested_agent, 'source': 'runtime_global',
+                'injected': False, 'selected': 'requested',
+            }])
     # Attach the persistence listener BEFORE dispatching the prompt: OpenCode
     # starts emitting the turn's events (incl. the first assistant message and
     # its tool:'task' part) immediately, and a subscription established after
@@ -692,7 +732,15 @@ def send_message(sid):
             oc_sid, prompt.strip(), model=effective_model, directory=sess[4],
             agent=requested_agent, agent_parts=agent_mentions,
         )
+        if audit_attempt_id:
+            execution_audit.record_event(
+                audit_attempt_id, 'dispatch.ok', session_id=sid,
+                payload={'model': effective_model, 'agent': requested_agent})
     except _requests.RequestException as e:
+        if audit_attempt_id:
+            execution_audit.record_event(
+                audit_attempt_id, 'dispatch.failed', session_id=sid,
+                status='error', payload={'error': str(e)[:500]})
         logger.warning('send_message OpenCode dispatch failed session=%s oc=%s: %s; '
                        'recovering session', sid, oc_sid, e)
         try:
@@ -706,6 +754,10 @@ def send_message(sid):
             # show as an endless "正在回复". The persisted user message id is
             # returned so the FE retry can clean it up before re-sending.
             logger.error('send_message recovery failed session=%s: %s', sid, e2)
+            if audit_attempt_id:
+                execution_audit.finish_latest_running(
+                    sid, 'failed', error_code='OPENCODE_UNAVAILABLE',
+                    error_message=str(e2)[:500])
             stop_listener(sid)
             return jsonify({'error': {
                 'code': 'OPENCODE_UNAVAILABLE',
@@ -715,6 +767,10 @@ def send_message(sid):
                 'messageId': msg_id,
             }}), 502
         logger.info('send_message recovered session=%s new_oc=%s', sid, oc_sid)
+        if audit_attempt_id:
+            execution_audit.record_event(
+                audit_attempt_id, 'dispatch.recovered', session_id=sid,
+                payload={'new_opencode_session_id': oc_sid})
         stop_listener(sid)
         ensure_listener(sid, oc_sid, sess[4])
     return jsonify({

@@ -339,3 +339,34 @@ def inject_global_skills(workspace_path: str,
             except Exception:
                 pass
     return injected
+
+
+def inject_single_skill(workspace_path: str, skill_name: str,
+                        workspace_root: str | None = None) -> str:
+    """Inject exactly ONE platform global skill into a workspace — used by the
+    trace-analysis route (execution-audit Spec §7.1: the analysis session must
+    not blanket-inject every enabled skill, and a missing/injected-failed
+    trace-analyzer must FAIL the analysis instead of degrading silently).
+
+    Returns the skill's source directory. Raises FileNotFoundError when the
+    skill does not exist in platform storage; OSError when injection fails.
+    """
+    if workspace_root is None:
+        parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
+        if len(parts) < 3:
+            raise FileNotFoundError(f'无法从 {workspace_path} 推导技能库根目录')
+        workspace_root = '/'.join(parts[:-2])
+    workspace_root = os.path.abspath(workspace_root)
+    src = os.path.join(global_skills_root(workspace_root), skill_name)
+    if not os.path.isdir(src):
+        raise FileNotFoundError(f'平台技能 {skill_name} 不存在: {src}')
+    skills_dir = os.path.join(workspace_path, '.opencode', 'skills')
+    os.makedirs(skills_dir, exist_ok=True)
+    dst = os.path.join(skills_dir, skill_name)
+    if os.path.exists(dst):
+        return src  # already present (per-session skill wins) — treat as ok
+    try:
+        os.symlink(src, dst)
+    except OSError:
+        shutil.copytree(src, dst)
+    return src

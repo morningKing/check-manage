@@ -15,8 +15,10 @@ import pytest
 
 
 def _ctx(role="developer"):
+    # user_id matches the seeded session owner ("user1") so the ownership
+    # scope check (execution-audit Spec §16.1) passes for the common case.
     from context import ToolContext
-    return ToolContext(session_id="s1", user_id="u1", role=role)
+    return ToolContext(session_id="s1", user_id="user1", role=role)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,14 +46,15 @@ def _session_row(
         batch_id, scan_task_id, source_record_id,                 # 5-7
         agent, model, created, last_active,                       # 8-11
         batch_name, batch_agent, scan_task_name,                  # 12-14
+        None,                                                     # 15 api_key_id
     )
 
 
-def _msg_row(msg_id, role, content, meta=None, created=None):
+def _msg_row(msg_id, role, content, meta=None, created=None, seq=0):
     """Return a tuple matching the analyze_trace message SELECT."""
     if created is None:
         created = datetime(2026, 9, 2, 10, 0, 10, tzinfo=timezone.utc)
-    return (msg_id, role, content, meta, created)
+    return (msg_id, role, content, meta, created, seq)
 
 
 def _subtask_row(
@@ -743,3 +746,80 @@ class TestCombinedFlow:
         assert at_result["tool_calls"][0]["status"] == "error"
         assert at_result["tool_calls"][0]["duration_ms"] == 30000
         assert at_result["performance"]["total_cost"] == 0.005
+
+
+# ── execution-audit additions: scope + declared plan ─────────────────────
+
+class TestTraceScope:
+    def test_other_user_developer_forbidden(self, fake_db, mock_cursor):
+        from tools.analyze_trace import handle, AnalyzeTraceError
+        mock_cursor.fetchone.return_value = _session_row()
+        with patch("tools.analyze_trace.get_db", fake_db):
+            ctx = ToolContext(session_id="s1", user_id="someone-else", role="developer") \
+                if False else _ctx()
+            from context import ToolContext as _TC
+            ctx = _TC(session_id="s1", user_id="intruder", role="developer")
+            with pytest.raises(AnalyzeTraceError, match="无权读取"):
+                handle({"session_id": "sess_abc"}, ctx)
+
+    def test_other_user_admin_allowed(self, fake_db, mock_cursor):
+        from tools.analyze_trace import handle
+        mock_cursor.fetchone.return_value = _session_row()
+        mock_cursor.fetchall.return_value = []
+        with patch("tools.analyze_trace.get_db", fake_db):
+            from context import ToolContext as _TC
+            ctx = _TC(session_id="s1", user_id="admin-x", role="admin")
+            raw = handle({"session_id": "sess_abc"}, ctx)
+        assert json.loads(raw)["session"]["id"] == "sess_abc"
+
+    def test_owner_allowed(self, fake_db, mock_cursor):
+        from tools.analyze_trace import handle
+        mock_cursor.fetchone.return_value = _session_row()
+        mock_cursor.fetchall.return_value = []
+        with patch("tools.analyze_trace.get_db", fake_db):
+            raw = handle({"session_id": "sess_abc"}, _ctx())
+        assert json.loads(raw)["session"]["id"] == "sess_abc"
+
+    def test_scores_marked_partial(self, fake_db, mock_cursor):
+        from tools.analyze_trace import handle
+        mock_cursor.fetchone.return_value = _session_row()
+        mock_cursor.fetchall.return_value = []
+        with patch("tools.analyze_trace.get_db", fake_db):
+            result = self._call(fake_db, mock_cursor) if False else None
+        # _call already applies _ctx(); redo properly:
+        with patch("tools.analyze_trace.get_db", fake_db):
+            from tools.analyze_trace import handle as _h
+            result = json.loads(_h({"session_id": "sess_abc"}, _ctx()))
+        assert result["scores"]["status"] == "partial"
+        assert result["scores"]["pending_dimensions"] == [
+            "instruction_adherence", "reasoning_quality"]
+
+
+class TestTodoPlan:
+    def test_extracts_declared_plan(self, fake_db, mock_cursor):
+        from tools.analyze_trace import handle
+        mock_cursor.fetchone.return_value = _session_row()
+        messages = [
+            _msg_row("m1", "assistant", [
+                {"type": "tool_use", "name": "todowrite",
+                 "input": {"todos": [
+                     {"id": "1", "content": "读取文件", "status": "completed"},
+                     {"id": "2", "content": "校验字段", "status": "in_progress"},
+                 ]}},
+            ]),
+            _msg_row("m2", "assistant", [
+                {"type": "tool_use", "name": "todowrite",
+                 "input": {"todos": [
+                     {"id": "1", "content": "读取文件", "status": "completed"},
+                     {"id": "2", "content": "校验字段", "status": "completed"},
+                 ]}},
+            ]),
+        ]
+        mock_cursor.fetchall.side_effect = [messages, [], []]
+        with patch("tools.analyze_trace.get_db", fake_db):
+            result = json.loads(handle({"session_id": "sess_abc"}, _ctx()))
+        plan = result["todo_plan"]
+        assert plan["snapshot_count"] == 2
+        assert plan["source"] == "todowrite"
+        assert plan["declared_steps"][-1]["status"] == "completed"
+        assert plan["declared_steps"][1]["content"] == "校验字段"

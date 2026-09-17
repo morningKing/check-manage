@@ -83,6 +83,9 @@
                 <el-dropdown-item command="analyze">
                   <span style="color: var(--el-color-success)">轨迹分析</span>
                 </el-dropdown-item>
+                <el-dropdown-item command="audit">
+                  <span style="color: var(--el-color-primary)">执行审计</span>
+                </el-dropdown-item>
                 <el-dropdown-item v-if="row.status === 'active'" command="archive">
                   <span style="color: var(--el-color-warning)">归档</span>
                 </el-dropdown-item>
@@ -146,6 +149,7 @@
               <el-button type="primary" :loading="analyzing" @click="onAnalyze(store.detail!.id)">
                 轨迹分析
               </el-button>
+              <el-button @click="openAudit(store.detail!.id)">执行审计</el-button>
             </div>
           </div>
         </el-tab-pane>
@@ -184,6 +188,8 @@
         </el-tab-pane>
       </el-tabs>
     </el-drawer>
+
+    <ExecutionAuditDrawer v-model="auditOpen" :session-id="auditSessionId" />
   </div>
 </template>
 
@@ -194,9 +200,17 @@ import { ArrowDown } from '@element-plus/icons-vue'
 import { useAiSessionAdminStore } from '@/stores/aiSessionAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import { getSessionMessages, sessionFileDownloadUrl, analyzeSession } from '@/api/aiSessionAdmin'
+import ExecutionAuditDrawer from '@/components/admin/ExecutionAuditDrawer.vue'
 
 const store = useAiSessionAdminStore()
 const analyzing = ref(false)
+const auditOpen = ref(false)
+const auditSessionId = ref<string | null>(null)
+
+function openAudit(sessionId: string) {
+  auditSessionId.value = sessionId
+  auditOpen.value = true
+}
 
 // Filter local state
 const sourceType = ref('')
@@ -313,6 +327,7 @@ async function onAnalyze(sessionId: string) {
 function onRowAction(command: string, row: any) {
   if (command === 'detail') openDetail(row.id)
   else if (command === 'analyze') onAnalyze(row.id)
+  else if (command === 'audit') openAudit(row.id)
   else if (command === 'archive') onArchive(row.id)
 }
 

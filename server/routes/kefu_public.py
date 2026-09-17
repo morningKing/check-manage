@@ -255,9 +255,33 @@ def send_message(sid):
     oc_sid = sess[2]
     model = inst.get('model') or get_default_chat_model()
     agent = inst.get('agent') or ''
+    # Execution audit (execution-audit Spec §7): kefu uses the instance's
+    # agent/model — snapshot it per send so history isn't lost on config edits.
+    from utils import execution_audit
+    audit_attempt_id = execution_audit.create_attempt(
+        session_id=sid, source_type='kefu', source_id=sess[5],
+        operation='send',
+        requested_agent=agent or None, effective_agent=agent or None,
+        agent_resolution='requested' if agent else 'runtime_default',
+        requested_model=None, effective_model=model or None,
+        model_resolution='session_default' if model else 'runtime_default',
+        raw_user_content=content,
+        effective_prompt=prompt.strip(),
+        prompt_version='kefu-v1',
+        augmentations={'attachment_inlined': bool(stored_parts)},
+        context_snapshot={'kefu_instance_id': sess[5]},
+        workspace_path=workspace_path,
+    )
+    if audit_attempt_id:
+        execution_audit.save_manifests(
+            audit_attempt_id, execution_audit.scan_workspace_manifests(workspace_path))
     ensure_listener(sid, oc_sid, workspace_path)
     client.send_prompt_async(oc_sid, prompt.strip(), model=model,
                              directory=workspace_path, agent=agent, agent_parts=[])
+    if audit_attempt_id:
+        execution_audit.record_event(audit_attempt_id, 'dispatch.ok',
+                                     session_id=sid, parent_session_id=oc_sid,
+                                     payload={'model': model, 'agent': agent})
     return jsonify({'messageId': msg_id}), 202
 
 

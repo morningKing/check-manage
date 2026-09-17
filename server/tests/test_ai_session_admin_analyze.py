@@ -57,6 +57,13 @@ def test_analyze_success(client, admin_headers, mock_conn):
          patch('utils.session_token.generate_token', return_value='tok123'), \
          patch('config.get_default_chat_model', return_value={'provider': 'p', 'model': 'm'}), \
          patch('utils.global_skills.inject_global_skills'), \
+         patch('utils.global_skills.inject_single_skill', return_value='/tmp/skill-src'), \
+         patch('utils.execution_audit.create_attempt', return_value=None), \
+         patch('utils.execution_audit.save_manifests'), \
+         patch('utils.execution_audit.record_event'), \
+         patch('utils.execution_audit.finish_latest_running'), \
+         patch('utils.execution_audit.scan_workspace_manifests', return_value=[]), \
+         patch('utils.execution_audit.sha256_file', return_value='h'), \
          patch('utils.opencode_client.OpenCodeClient', return_value=oc_client), \
          patch('utils.chat_persist.ensure_listener') as ensure_listener:
         resp = client.post('/ai/chat/admin/sessions/v2/sess_target/analyze',

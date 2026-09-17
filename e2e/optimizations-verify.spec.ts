@@ -165,7 +165,9 @@ test('AI Chat：工具调用气泡显示可读摘要与状态文字', async ({ p
   await expect(head).toBeVisible({ timeout: 120_000 })
   const headText = await head.innerText()
   expect(headText).toMatch(/写入文件|执行命令|调用工具|读取文件|查找|搜索/)
-  expect(headText).not.toContain('"')
+  // 折叠态是自然语言摘要（可能引用含转义引号的结果文本），但不允许是裸 JSON 输入
+  const summaryText = await head.locator('.tool-call__summary').innerText()
+  expect(summaryText.trim()).not.toMatch(/^[{\[]/)
   // 状态不能只有图标：任何工具气泡都有文字状态；模型重试后最终应有已完成
   await expect(head.locator('.tool-call__status-text')).toHaveText(/已完成|正在执行|等待执行|执行失败|已取消|等待确认|状态未知/)
   const done = page.locator('.tool-call__head', { hasText: '已完成' }).first()

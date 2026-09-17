@@ -918,6 +918,46 @@ class BatchWorker:
                 oc_session_id = opencode_client.create_session(directory=ws)
                 self._set_opencode_id(sid, oc_session_id, ws)
 
+            # Execution audit (execution-audit Spec §9.3): one attempt per
+            # child run, covering retry/continue/reexecute — the batch/session
+            # config alone is not an execution fact.
+            from utils import execution_audit
+            if session_row.get('scan_task_id'):
+                _src_type = 'scan'
+            elif session_row.get('api_key_id'):
+                _src_type = 'open_api'
+            else:
+                _src_type = 'batch'
+            audit_attempt_id = execution_audit.create_attempt(
+                session_id=sid, source_type=_src_type, source_id=batch_id,
+                operation='continue' if is_continue else 'send',
+                requested_agent=agent, effective_agent=agent,
+                agent_resolution=('batch_default' if agent else 'unknown'),
+                requested_model=model, effective_model=model,
+                model_resolution=('batch_default' if model else 'unknown'),
+                raw_user_content=session_row.get('batch_input_file') or '',
+                effective_prompt=prompt,
+                prompt_version='batch-v1',
+                augmentations={
+                    'batch_directive': not is_continue,
+                    'input_hint': not is_continue,
+                    'memory_injected': user_prompt_for_memory is not None,
+                    'continue_prompt': is_continue,
+                    'provision_repo': provision_repo,
+                    'provision_ref': provision_ref,
+                },
+                workspace_path=ws,
+            )
+            if audit_attempt_id:
+                execution_audit.save_manifests(
+                    audit_attempt_id, execution_audit.scan_workspace_manifests(ws))
+                if agent:
+                    execution_audit.save_manifests(audit_attempt_id, [{
+                        'kind': 'agent', 'name': agent,
+                        'source': 'project' if provision_repo else 'batch_config',
+                        'injected': False, 'selected': 'requested',
+                    }])
+
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
             self._persist_user_prompt(sid, prompt)
@@ -929,7 +969,17 @@ class BatchWorker:
             try:
                 opencode_client.send_message(oc_session_id, prompt, directory=ws,
                                              agent=agent, model=model)
+                if audit_attempt_id:
+                    execution_audit.record_event(
+                        audit_attempt_id, 'dispatch.ok', session_id=sid,
+                        parent_session_id=oc_session_id,
+                        payload={'model': model, 'agent': agent,
+                                 'continue': is_continue})
             except requests.exceptions.RequestException as e:
+                if audit_attempt_id:
+                    execution_audit.record_event(
+                        audit_attempt_id, 'dispatch.failed', session_id=sid,
+                        status='error', payload={'error': str(e)[:500]})
                 # oc_session_id 对 OpenCode 已经不可用了（比如工作区 .git 被
                 # 改动过导致 project 身份变了，或 OpenCode 自己的库被清理/
                 # 迁移过）——continue 模式尤其容易撞上这个，因为它盲目复用
@@ -1600,10 +1650,15 @@ class BatchWorker:
                         (batch_id,),
                     )
             conn.commit()
+        from utils import execution_audit
+        execution_audit.finish_latest_running(session_id, 'completed')
         if batch_id is not None:
             _recompute_batch_status(batch_id)
 
     def _mark_failed(self, session_id: str, batch_id: str, error: str):
+        from utils import execution_audit
+        execution_audit.finish_latest_running(
+            session_id, 'failed', error_code='CHILD_FAILED', error_message=error)
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1627,6 +1682,9 @@ class BatchWorker:
         `failed` aggregate — see batch_repo.cancel_batch / _mark_paused for the
         contrast), but writes the literal 'cancelled' status so callers can tell
         a deliberate cancel apart from a genuine error."""
+        from utils import execution_audit
+        execution_audit.finish_latest_running(
+            session_id, 'stopped', error_code='CANCELLED')
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1650,6 +1708,9 @@ class BatchWorker:
         failed 计数**（暂停不是失败，批次还能整体 resume），error_message 留空
         （子任务行列表用状态点而不是红字表达暂停）。批次状态经
         _recompute_batch_status 的 paused 计数规则落到 'paused'。"""
+        from utils import execution_audit
+        execution_audit.finish_latest_running(session_id, 'stopped',
+                                              error_code='PAUSED')
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(

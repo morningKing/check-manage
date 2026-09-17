@@ -49,7 +49,25 @@ TOOL = types.Tool(
 
 
 class AnalyzeTraceError(Exception):
-    pass
+    def __init__(self, message: str, code: str = 'ANALYZE_TRACE_ERROR'):
+        super().__init__(message)
+        self.code = code
+
+
+def _check_trace_permission(session: dict, ctx) -> None:
+    """Data isolation (Spec §16.1): a trace is readable by its owner or by an
+    admin. ToolContext is optional (None = internal/tests) — when present it
+    MUST scope the read; otherwise any token holder could walk other users'
+    sessions by id."""
+    if ctx is None:
+        return
+    role = getattr(ctx, 'role', '') or ''
+    if role == 'admin':
+        return
+    owner = session.get('user_id')
+    if owner and getattr(ctx, 'user_id', None) == owner:
+        return
+    raise AnalyzeTraceError('无权读取该会话轨迹', code='TRACE_FORBIDDEN')
 
 
 def _json_serial(obj):
@@ -311,7 +329,91 @@ def _compute_scores(
         "total": round(total, 1),
         "computed_dimensions": 4,
         "pending_llm_dimensions": 2,
+        # Spec §13.4: never dress a 4-dimension normalization up as the full
+        # six-dimension score — the caller must see this is partial.
+        "status": "partial",
+        "pending_dimensions": ["instruction_adherence", "reasoning_quality"],
     }
+
+
+def _extract_todo_plan(msg_rows: list) -> dict:
+    """Declared Plan projection (Spec §11/§15): rebuild the agent's own
+    declared steps from persisted todowrite/todoread tool snapshots. This is
+    the agent's SELF-declared plan — never proof that work happened."""
+    latest: list[dict] = []
+    source = None
+    snapshots = 0
+    for mr in msg_rows:
+        content = mr[2] or []
+        for part in content:
+            if part.get("type") != "tool_use":
+                continue
+            name = (part.get("name") or "").lower()
+            if name not in ("todowrite", "todoread"):
+                continue
+            raw = None
+            inp = part.get("input")
+            if isinstance(inp, dict) and isinstance(inp.get("todos"), list):
+                raw = inp["todos"]
+            if raw is None:
+                res = part.get("result") or part.get("output")
+                if isinstance(res, str):
+                    try:
+                        res = json.loads(res)
+                    except (ValueError, TypeError):
+                        res = None
+                if isinstance(res, dict) and isinstance(res.get("todos"), list):
+                    raw = res["todos"]
+                elif isinstance(res, list):
+                    raw = res
+            if not raw:
+                continue
+            snapshots += 1
+            source = name
+            latest = [
+                {
+                    "id": t.get("id"),
+                    "content": t.get("content") or t.get("text") or "",
+                    "status": t.get("status") or "pending",
+                }
+                for t in raw
+                if isinstance(t, dict)
+            ]
+    return {
+        "declared_steps": latest,
+        "snapshot_count": snapshots,
+        "source": source,
+        "evidence_level": "declared_plan",
+    }
+
+
+def _load_attempts_summary(cur, session_id: str) -> list:
+    """Execution attempt facts recorded at the dispatch boundary (Spec §8.1),
+    if the audit tables exist (older deployments may not have them)."""
+    try:
+        cur.execute(
+            """
+            SELECT id, attempt_no, operation, source_type, requested_agent,
+                   effective_agent, agent_resolution, requested_model,
+                   effective_model, model_resolution, status, error_code,
+                   started_at, finished_at
+            FROM ai_execution_attempts
+            WHERE session_id = %s
+            ORDER BY attempt_no DESC
+            LIMIT 10
+            """,
+            (session_id,))
+        cols = [d[0] for d in cur.description]
+        out = []
+        for r in cur.fetchall():
+            d = dict(zip(cols, r))
+            for k in ("started_at", "finished_at"):
+                if isinstance(d.get(k), datetime):
+                    d[k] = d[k].isoformat()
+            out.append(d)
+        return out
+    except Exception:
+        return []
 
 
 def handle(input: dict, ctx: ToolContext) -> dict:
@@ -334,7 +436,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
                    s.batch_id, s.scan_task_id, s.source_record_id,
                    s.agent, s.model, s.created_at, s.last_active_at,
                    b.name   AS batch_name,   b.agent AS batch_agent,
-                   st.name  AS scan_task_name
+                   st.name  AS scan_task_name, s.api_key_id
             FROM ai_chat_sessions s
             LEFT JOIN ai_chat_batches  b  ON b.id  = s.batch_id
             LEFT JOIN ai_scan_tasks    st ON st.id = s.scan_task_id
@@ -350,9 +452,10 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             "id", "user_id", "title", "status", "error_message",
             "batch_id", "scan_task_id", "source_record_id",
             "agent", "model", "created_at", "last_active_at",
-            "batch_name", "batch_agent", "scan_task_name",
+            "batch_name", "batch_agent", "scan_task_name", "api_key_id",
         ]
         session = {k: row[i] for i, k in enumerate(cols)}
+        _check_trace_permission(session, ctx)
 
         # ── 2. 触发来源 ────────────────────────────────────────────────
         source = _resolve_source(session)
@@ -360,10 +463,10 @@ def handle(input: dict, ctx: ToolContext) -> dict:
         # ── 3. 消息解析（工具调用 + 性能指标）─────────────────────────
         cur.execute(
             """
-            SELECT id, role, content, meta, created_at
+            SELECT id, role, content, meta, created_at, seq
             FROM ai_chat_messages
             WHERE session_id = %s
-            ORDER BY created_at
+            ORDER BY COALESCE(seq, 0) ASC, created_at ASC
             """,
             (session_id,),
         )
@@ -382,9 +485,10 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             meta = msg["meta"] or {}
 
             if msg["role"] == "assistant":
-                tool_calls.extend(
-                    _extract_tool_calls_from_content(content, include_reasoning)
-                )
+                _tc = _extract_tool_calls_from_content(content, include_reasoning)
+                for _t in _tc:
+                    _t["message_id"] = mr[0]  # evidence ref back to the row
+                tool_calls.extend(_tc)
                 total_duration += meta.get("durationMs", 0)
                 total_tokens_in += meta.get("tokensInput", 0)
                 total_tokens_out += meta.get("tokensOutput", 0)
@@ -406,6 +510,7 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
         # ── 4. 子代理轨迹 ──────────────────────────────────────────────
         subtasks = []
+        child_anomalies: list = []
         if include_subtasks:
             cur.execute(
                 """
@@ -475,6 +580,14 @@ def handle(input: dict, ctx: ToolContext) -> dict:
                         })
                     st["tool_calls"] = st_tool_calls
                     st["messages_summary"] = st_summary
+                    # Spec §12/§16: child failures must surface without the
+                    # Skill remembering to look — run the same deterministic
+                    # detectors over the child's own tool sequence.
+                    for _a in _detect_anomalies(st_tool_calls, [], st_summary):
+                        _a["scope"] = "subtask"
+                        _a["subtask_id"] = st["id"]
+                        _a["subtask_agent"] = st.get("agent", "")
+                        child_anomalies.append(_a)
 
                 subtasks.append(st)
 
@@ -492,6 +605,9 @@ def handle(input: dict, ctx: ToolContext) -> dict:
 
     # ── 6. 异常检测与打分 ──────────────────────────────────────────────
     anomalies = _detect_anomalies(tool_calls, subtasks, messages_summary)
+    anomalies.extend(child_anomalies)
+    todo_plan = _extract_todo_plan(msg_rows)
+    attempts_summary = _load_attempts_summary(cur, session_id)
     performance = {
         "total_duration_ms": total_duration,
         "total_tokens_input": total_tokens_in,
@@ -522,6 +638,8 @@ def handle(input: dict, ctx: ToolContext) -> dict:
             "files_changed": files_changed,
             "anomalies": anomalies,
             "scores": scores,
+            "todo_plan": todo_plan,
+            "execution_attempts": attempts_summary,
         },
         ensure_ascii=False,
         default=_json_serial,
