@@ -132,6 +132,17 @@ try:
     _m.run()
 except Exception as _e:
     logging.warning('execution audit migration on boot failed: %s', _e)
+
+# 会话自定义分组表（2026-09-18）：同样随启动幂等执行
+try:
+    _mp2 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_18_session_groups.py')
+    _spec2 = _ilu.spec_from_file_location('_session_groups_migration_boot', _mp2)
+    _m2 = _ilu.module_from_spec(_spec2)
+    _spec2.loader.exec_module(_m2)
+    _m2.run()
+except Exception as _e:
+    logging.warning('session groups migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)

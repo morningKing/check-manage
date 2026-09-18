@@ -11,7 +11,7 @@ import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
-  DataAnalysis,
+  DataAnalysis, FolderAdd,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -375,6 +375,87 @@ watch(mentionToken, (tok) => {
 const messages = computed(() => store.activeMessages)
 // 轨迹分析会话分组（侧栏「会话」下独立折叠组，默认收起）
 const analysisSessions = computed(() => store.analysisSessions)
+// 自定义分组：未分组会话 = group_id 为空的普通会话
+const ungroupedSessions = computed(() => store.groupedSessions(null))
+const customGroupCollapsed = ref<Record<string, boolean>>(
+  getStorage('check-manage:ai-chat:cgroup-collapsed', {}))
+watch(customGroupCollapsed, v =>
+  setStorage('check-manage:ai-chat:cgroup-collapsed', v), { deep: true })
+function isCustomGroupCollapsed(gid: string) {
+  return customGroupCollapsed.value[gid] ?? false  // 自定义分组默认展开
+}
+function toggleCustomGroup(gid: string) {
+  customGroupCollapsed.value[gid] = !isCustomGroupCollapsed(gid)
+}
+async function createGroup() {
+  try {
+    const res = await ElMessageBox.prompt('分组名称（不超过 50 字）', '新建会话分组', {
+      confirmButtonText: '创建', cancelButtonText: '取消',
+      inputPattern: /^.{1,50}$/, inputErrorMessage: '名称必填且不超过 50 字',
+    })
+    const value = (res as { value?: string }).value || ''
+    await store.createGroup(value.trim())
+    ElMessage.success('分组已创建，可通过会话行「移动到分组」归档')
+  } catch { /* cancelled */ }
+}
+async function renameGroup(g: { id: string; name: string }) {
+  try {
+    const res = await ElMessageBox.prompt('新的分组名称', '重命名分组', {
+      confirmButtonText: '保存', cancelButtonText: '取消',
+      inputValue: g.name, inputPattern: /^.{1,50}$/,
+      inputErrorMessage: '名称必填且不超过 50 字',
+    })
+    const value = (res as { value?: string }).value || ''
+    await store.renameGroup(g.id, value.trim())
+    ElMessage.success('分组已重命名')
+  } catch { /* cancelled */ }
+}
+async function deleteGroup(g: { id: string; name: string }) {
+  try {
+    await ElMessageBox.confirm(
+      `删除分组「${g.name}」？组内会话会回到未分组，会话本身不会被删除。`,
+      '删除分组', { type: 'warning', confirmButtonText: '删除' })
+  } catch { return }
+  try {
+    await store.deleteGroup(g.id)
+    ElMessage.success('分组已删除')
+  } catch { ElMessage.error('删除失败') }
+}
+async function openMoveMenu(s: { id: string; title?: string }) {
+  // 轻量下拉：用 MessageBox 的单选列表（分组通常少，避免引 Dropdown 定位复杂度）
+  const options = [
+    ...store.groups.map(g => `${g.name}（${store.groupedSessions(g.id).length}）`),
+    '未分组',
+    '＋ 新建分组…',
+  ]
+  try {
+    const res = await ElMessageBox.prompt(
+      `移动会话「${s.title || '新会话'}」到：` +
+      options.map((o, i) => `
+${i + 1}. ${o}`).join(''),
+      '移动到分组',
+      { confirmButtonText: '移动', cancelButtonText: '取消',
+        inputPattern: /^\d+$/, inputErrorMessage: '请输入序号' })
+    const value = (res as { value?: string }).value || ''
+    const idx = parseInt(value, 10) - 1
+    if (idx < 0 || idx >= options.length) { ElMessage.warning('序号无效'); return }
+    if (idx === options.length - 1) {
+      const res2 = await ElMessageBox.prompt('新分组名称', '新建会话分组', {
+        confirmButtonText: '创建并移入', cancelButtonText: '取消',
+        inputPattern: /^.{1,50}$/, inputErrorMessage: '名称必填且不超过 50 字',
+      })
+      const name = (res2 as { value?: string }).value || ''
+      const g = await store.createGroup(name.trim())
+      await store.moveSession(s.id, g.id)
+    } else if (options[idx] === '未分组') {
+      await store.moveSession(s.id, null)
+    } else {
+      const g = store.groups[idx]
+      await store.moveSession(s.id, g.id)
+    }
+    ElMessage.success('已移动')
+  } catch { /* cancelled */ }
+}
 const analysisCollapsed = ref(
   getStorage('check-manage:ai-chat:analysis-collapsed', true))
 watch(analysisCollapsed, v => setStorage('check-manage:ai-chat:analysis-collapsed', v))
@@ -1125,21 +1206,58 @@ function onKey(e: Event) {
             <ElIcon class="caret"><ArrowRight v-if="collapsedSections.sessions" /><ArrowDown v-else /></ElIcon>
             <ElIcon class="section-icon"><ChatDotRound /></ElIcon>
             会话
+            <ElButton link size="small" :icon="FolderAdd" data-test="new-group-btn"
+                      @click.stop="createGroup">分组</ElButton>
           </div>
           <div v-show="!collapsedSections.sessions">
-            <div
-              v-for="s in sessions" :key="s.id"
-              class="session-item" :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
-              @click="selectSession(s.id)"
-            >
-              <span class="session-item__title">{{ s.title || '新会话' }}</span>
-              <span class="session-item__actions" @click.stop>
-                <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-                <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
-                <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
-                <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
-                <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
-              </span>
+            <!-- 未分组会话（group_id 为空） -->
+            <template v-for="s in ungroupedSessions" :key="s.id">
+              <div
+                class="session-item" :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
+                @click="selectSession(s.id)"
+              >
+                <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                <span class="session-item__actions" @click.stop>
+                  <ElIcon title="移动到分组" @click="openMoveMenu(s)"><FolderAdd /></ElIcon>
+                  <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+                  <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
+                  <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
+                  <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
+                  <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
+                </span>
+              </div>
+            </template>
+
+            <!-- 自定义分组（可折叠 / 重命名 / 删除；组内会话可移出） -->
+            <div v-for="g in store.groups" :key="g.id" class="cgroup">
+              <div class="cgroup__head" data-test="custom-group-head"
+                   @click="toggleCustomGroup(g.id)">
+                <ElIcon class="caret" :class="{ open: !isCustomGroupCollapsed(g.id) }"><ArrowRight /></ElIcon>
+                <span class="cgroup__name" :title="g.name">{{ g.name }}</span>
+                <span class="cgroup__count">{{ store.groupedSessions(g.id).length }}</span>
+                <span class="cgroup__actions" @click.stop>
+                  <ElIcon title="重命名分组" @click="renameGroup(g)"><EditPen /></ElIcon>
+                  <ElIcon title="删除分组（会话回到未分组）" @click="deleteGroup(g)"><Delete /></ElIcon>
+                </span>
+              </div>
+              <div v-show="!isCustomGroupCollapsed(g.id)" class="cgroup__body">
+                <div
+                  v-for="s in store.groupedSessions(g.id)" :key="s.id"
+                  class="session-item cgroup__item"
+                  :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
+                  @click="selectSession(s.id)"
+                >
+                  <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                  <span class="session-item__actions" @click.stop>
+                    <ElIcon title="移动到分组" @click="openMoveMenu(s)"><FolderAdd /></ElIcon>
+                    <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+                    <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
+                    <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
+                    <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
+                    <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
+                  </span>
+                </div>
+              </div>
             </div>
             <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="48" />
 
@@ -1817,6 +1935,23 @@ function onKey(e: Event) {
 }
 
 /* execution-audit：轨迹分析会话与原会话的关联横幅 */
+/* 自定义会话分组 */
+.cgroup__head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px;
+  cursor: pointer; font-size: 12.5px; color: var(--el-text-color-regular);
+  border-radius: 6px; user-select: none;
+  &:hover { background: var(--el-fill-color-light); }
+  .caret { transition: transform .15s; color: var(--el-text-color-secondary);
+           &.open { transform: rotate(90deg); } }
+}
+.cgroup__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; max-width: 55%; }
+.cgroup__count { font-size: 11px; padding: 0 6px; border-radius: 8px;
+  background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+.cgroup__actions { margin-left: auto; display: none; gap: 6px; }
+.cgroup__head:hover .cgroup__actions { display: inline-flex; }
+.cgroup__item { padding-left: 22px; }
+
 /* 轨迹分析会话子分组（侧栏「会话」内，与普通会话分组展示） */
 .analysis-group__head {
   display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px;

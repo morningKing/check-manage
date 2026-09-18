@@ -191,7 +191,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElDrawer, ElTable, ElTableColumn, ElTag, ElAlert, ElProgress,
          ElLink, ElDialog } from 'element-plus'
 import {
@@ -217,6 +217,27 @@ const analyses = ref<SessionAnalysis[]>([])
 const promptVisible = ref(false)
 const promptInfo = ref<Awaited<ReturnType<typeof getExecutionPrompt>> | null>(null)
 
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleRefreshIfNeeded() {
+  // 存在未收敛的执行尝试时轮询刷新（回合结束 → completed/failed 自动呈现）
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
+  const active = attempts.value.some(
+    a => a.status === 'running' || a.status === 'accepted' || a.status === 'recovering')
+  if (active && visible.value) {
+    refreshTimer = setTimeout(async () => {
+      if (!visible.value) return
+      try {
+        const res = await getExecutionAudit(props.sessionId!)
+        attempts.value = res.attempts || []
+        manifests.value = res.manifests || []
+        report.value = res.report || null
+      } catch { /* 下轮再试 */ }
+      scheduleRefreshIfNeeded()
+    }, 5000)
+  }
+}
+onUnmounted(() => { if (refreshTimer) clearTimeout(refreshTimer) })
+
 async function load() {
   if (!props.sessionId) return
   loading.value = true
@@ -226,6 +247,7 @@ async function load() {
     attempts.value = res.attempts || []
     manifests.value = res.manifests || []
     report.value = res.report || null
+    scheduleRefreshIfNeeded()
     try {
       analyses.value = (await getSessionAnalyses(props.sessionId)).analyses || []
     } catch { /* 分析历史非关键，失败不阻塞 */ }
@@ -279,6 +301,7 @@ function stepLabel(s: string) {
 }
 
 watch(() => props.sessionId, () => {
+  if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null }
   attempts.value = []
   manifests.value = []
   report.value = null

@@ -320,6 +320,140 @@ BATCH_CHILD_SEARCH_STATUSES = (
 )
 
 
+# ── 会话自定义分组（sidebar grouping） ──────────────────────────────────
+# 轨迹分析（kind=trace_analysis）是系统分组，不入表、不可移动/删除。
+
+_LEGACY_BUCKET_MIN = 15  # 存量未分组普通会话达到该数才自动收纳（小库不武断）
+
+
+def _maybe_bucket_legacy_sessions(cur, user_id):
+    """惰性初始化：用户从未建过分组 && 存量未分组普通会话较多时，
+    自动建「历史会话」分组并全部收纳——存量会话即刻有归属，可重命名/
+    删除/再移动。幂等：一旦用户存在任意分组即不再触发。"""
+    cur.execute("SELECT 1 FROM ai_chat_session_groups WHERE user_id = %s LIMIT 1",
+                (user_id,))
+    if cur.fetchone():
+        return
+    cur.execute(
+        "SELECT count(*) FROM ai_chat_sessions "
+        "WHERE user_id = %s AND COALESCE(kind, 'chat') = 'chat' "
+        "  AND status IN ('active', 'closed') AND group_id IS NULL",
+        (user_id,))
+    if (cur.fetchone()[0] or 0) < _LEGACY_BUCKET_MIN:
+        return
+    gid = 'sg_' + secrets.token_hex(6)
+    cur.execute(
+        "INSERT INTO ai_chat_session_groups (id, user_id, name) "
+        "VALUES (%s, %s, %s)",
+        (gid, user_id, '历史会话'))
+    cur.execute(
+        "UPDATE ai_chat_sessions SET group_id = %s "
+        "WHERE user_id = %s AND COALESCE(kind, 'chat') = 'chat' "
+        "  AND status IN ('active', 'closed') AND group_id IS NULL",
+        (gid, user_id))
+
+
+@ai_chat_bp.route('/session-groups', methods=['GET'])
+@login_required
+def list_session_groups():
+    """本人的自定义分组 + 各组会话计数。"""
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT g.id, g.name, g.created_at, "
+            "  (SELECT count(*) FROM ai_chat_sessions s "
+            "   WHERE s.group_id = g.id AND s.status IN ('active','closed')) "
+            "FROM ai_chat_session_groups g WHERE g.user_id = %s "
+            "ORDER BY g.created_at", (user['userId'],))
+        rows = cur.fetchall()
+    return jsonify({'groups': [
+        {'id': r[0], 'name': r[1],
+         'createdAt': r[2].isoformat() if r[2] else None,
+         'count': r[3]} for r in rows]})
+
+
+@ai_chat_bp.route('/session-groups', methods=['POST'])
+@write_required
+def create_session_group():
+    name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
+    if not name or len(name) > 50:
+        return jsonify({'error': '分组名必填且不超过 50 字'}), 400
+    user = flask_g.current_user
+    gid = 'sg_' + secrets.token_hex(6)
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO ai_chat_session_groups (id, user_id, name) "
+                "VALUES (%s, %s, %s)", (gid, user['userId'], name))
+        except Exception:
+            return jsonify({'error': '已存在同名分组'}), 409
+    return jsonify({'id': gid, 'name': name}), 201
+
+
+@ai_chat_bp.route('/session-groups/<gid>', methods=['PATCH'])
+@write_required
+def rename_session_group(gid):
+    name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
+    if not name or len(name) > 50:
+        return jsonify({'error': '分组名必填且不超过 50 字'}), 400
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_session_groups SET name = %s "
+            "WHERE id = %s AND user_id = %s RETURNING id",
+            (name, gid, user['userId']))
+        if not cur.fetchone():
+            return jsonify({'error': '分组不存在'}), 404
+    return jsonify({'ok': True})
+
+
+@ai_chat_bp.route('/session-groups/<gid>', methods=['DELETE'])
+@write_required
+def delete_session_group(gid):
+    """删组不删会话：组内会话回到未分组。"""
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM ai_chat_session_groups WHERE id = %s AND user_id = %s "
+            "RETURNING id", (gid, user['userId']))
+        if not cur.fetchone():
+            return jsonify({'error': '分组不存在'}), 404
+    return jsonify({'ok': True})
+
+
+@ai_chat_bp.route('/sessions/<sid>/group', methods=['POST'])
+@write_required
+def move_session_to_group(sid):
+    """会话移入/移出分组（groupId=null → 未分组）。仅本人普通会话。"""
+    gid = (request.get_json(silent=True) or {}).get('groupId') or None
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT batch_id, COALESCE(kind, 'chat') FROM ai_chat_sessions "
+            "WHERE id = %s AND user_id = %s", (sid, user['userId']))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'session not found',
+                            'code': 'SESSION_NOT_FOUND'}), 404
+        if row[0] is not None or row[1] == 'trace_analysis':
+            return jsonify({'error': '系统分组/批任务子会话不可移动'}), 400
+        if gid:
+            cur.execute(
+                "SELECT 1 FROM ai_chat_session_groups "
+                "WHERE id = %s AND user_id = %s", (gid, user['userId']))
+            if not cur.fetchone():
+                return jsonify({'error': '分组不存在'}), 404
+        cur.execute(
+            "UPDATE ai_chat_sessions SET group_id = %s "
+            "WHERE id = %s AND user_id = %s", (gid, sid, user['userId']))
+    return jsonify({'ok': True, 'groupId': gid})
+
+
 @ai_chat_bp.route('/sessions', methods=['GET'])
 @login_required
 def list_sessions():
@@ -333,8 +467,10 @@ def list_sessions():
     user = flask_g.current_user
     with get_db() as conn:
         cur = conn.cursor()
+        _maybe_bucket_legacy_sessions(cur, user['userId'])
         cur.execute(
-            "SELECT id, title, last_active_at, batch_id, batch_input_file, status "
+            "SELECT id, title, last_active_at, batch_id, batch_input_file, "
+            "       status, group_id "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
             "  AND status IN ('active', 'closed') "
@@ -355,16 +491,30 @@ def list_sessions():
             (user['userId'],),
         )
         analysis_rows = cur.fetchall()
+        cur.execute(
+            "SELECT g.id, g.name, g.created_at, "
+            "  (SELECT count(*) FROM ai_chat_sessions s "
+            "   WHERE s.group_id = g.id AND s.status IN ('active','closed')) "
+            "FROM ai_chat_session_groups g WHERE g.user_id = %s "
+            "ORDER BY g.created_at", (user['userId'],))
+        group_rows = cur.fetchall()
 
     import re as _re
+    groups = [{'id': r[0], 'name': r[1],
+               'createdAt': r[2].isoformat() if r[2] else None,
+               'count': r[3]} for r in group_rows]
+    gname = {g['id']: g['name'] for g in groups}
     return jsonify({
         'sessions': [
             {'id': r[0],
              'title': _session_title(r[1], r[3], r[4]),
              'lastActiveAt': r[2].isoformat() if r[2] else None,
-             'status': r[5]}
+             'status': r[5],
+             'groupId': r[6],
+             'groupName': gname.get(r[6])}
             for r in rows
         ],
+        'groups': groups,
         'analysisSessions': [
             {'id': r[0],
              'title': r[1] or '轨迹分析',

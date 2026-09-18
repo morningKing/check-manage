@@ -132,9 +132,43 @@ export interface AiAnalysisSessionSummary extends AiSessionSummary {
   targetSessionId?: string | null
 }
 
+export interface AiSessionGroup {
+  id: string
+  name: string
+  createdAt?: string | null
+  count?: number
+}
+
+export interface AiGroupedSessionSummary extends AiSessionSummary {
+  groupId?: string | null
+  groupName?: string | null
+}
+
 export function listSessions() {
-  return get<{ sessions: AiSessionSummary[]; analysisSessions: AiAnalysisSessionSummary[] }>(
-    '/ai/chat/sessions')
+  return get<{
+    sessions: AiGroupedSessionSummary[]
+    groups: AiSessionGroup[]
+    analysisSessions: AiAnalysisSessionSummary[]
+  }>('/ai/chat/sessions')
+}
+
+// ── 会话自定义分组（轨迹分析为系统分组，不在此列） ─────────────────────
+export function listSessionGroups() {
+  return get<{ groups: AiSessionGroup[] }>('/ai/chat/session-groups')
+}
+export function createSessionGroup(name: string) {
+  return post<AiSessionGroup>('/ai/chat/session-groups', { name })
+}
+export function renameSessionGroup(gid: string, name: string) {
+  return patch<{ ok: boolean }>(`/ai/chat/session-groups/${gid}`, { name })
+}
+export function deleteSessionGroup(gid: string) {
+  return del<{ ok: boolean }>(`/ai/chat/session-groups/${gid}`)
+}
+/** 会话移入分组（groupId=null 移回未分组） */
+export function moveSessionToGroup(sid: string, groupId: string | null) {
+  return post<{ ok: boolean; groupId: string | null }>(
+    `/ai/chat/sessions/${sid}/group`, { groupId })
 }
 
 /** 搜索当前用户的会话：按标题、输入文件名或消息文本匹配（见后端 search_sessions）。

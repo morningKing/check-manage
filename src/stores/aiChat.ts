@@ -10,6 +10,10 @@
 import { defineStore } from 'pinia'
 import {
   createSession, listSessions, renameSession as apiRenameSession,
+  createSessionGroup, renameSessionGroup as apiRenameSessionGroup,
+  deleteSessionGroup as apiDeleteSessionGroup,
+  moveSessionToGroup as apiMoveSessionToGroup,
+  type AiSessionGroup,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
   getMessages, sendMessage, uploadFile, uploadSkill, listFiles, getChanges, getMcpServices,
@@ -61,6 +65,10 @@ interface State {
   sessions: SessionMeta[]
   /** 轨迹分析会话（kind=trace_analysis，侧栏独立折叠分组，不与普通会话混排） */
   analysisSessions: Array<SessionMeta & { targetSessionId?: string | null }>
+  /** 用户自定义分组（轨迹分析是系统分组，不在此列） */
+  groups: AiSessionGroup[]
+  /** sessionId → groupId（渲染分组归属；null/缺失 = 未分组） */
+  sessionGroupId: Record<string, string | null>
   activeSessionId: string | null
   messages: Record<string, AiMessage[]>
   streaming: Record<string, boolean>
@@ -160,6 +168,8 @@ export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
     sessions: [],
     analysisSessions: [],
+    groups: [],
+    sessionGroupId: {},
     activeSessionId: null,
     messages: {},
     streaming: {},
@@ -229,12 +239,39 @@ export const useAiChatStore = defineStore('aiChat', {
 
   actions: {
     async loadSessions() {
-      const { sessions, analysisSessions } = await listSessions()
+      const { sessions, groups, analysisSessions } = await listSessions()
       this.sessions = sessions.map(s => ({ id: s.id, title: s.title, status: s.status }))
+      this.sessionGroupId = Object.fromEntries(
+        sessions.map(s => [s.id, s.groupId ?? null]))
+      this.groups = groups || []
       this.analysisSessions = (analysisSessions || []).map(s => ({
         id: s.id, title: s.title, status: s.status,
         targetSessionId: s.targetSessionId ?? null,
       }))
+    },
+
+    // ── 自定义分组 ───────────────────────────────────────────────────────
+    groupedSessions(groupId: string | null) {
+      return this.sessions.filter(
+        s => (this.sessionGroupId[s.id] ?? null) === groupId)
+    },
+    async createGroup(name: string) {
+      const g = await createSessionGroup(name)
+      await this.loadSessions()
+      return g
+    },
+    async renameGroup(gid: string, name: string) {
+      await apiRenameSessionGroup(gid, name)
+      await this.loadSessions()
+    },
+    async deleteGroup(gid: string) {
+      await apiDeleteSessionGroup(gid)
+      await this.loadSessions()
+    },
+    async moveSession(sid: string, groupId: string | null) {
+      await apiMoveSessionToGroup(sid, groupId)
+      this.sessionGroupId[sid] = groupId
+      await this.loadSessions()
     },
 
     async startNewSession(projectMenuId?: string) {

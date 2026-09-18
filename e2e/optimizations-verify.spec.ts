@@ -212,14 +212,21 @@ test('批任务：最新会话在上、单任务独立继续、停止并删除',
   await dialog.locator('textarea[data-test="prompt"]').fill('回复收到即可，无需其他操作')
   // 串行上传：ElUpload 并发完成顺序不定，staged 顺序决定 batch_seq，
   // 必须保证 a 先 b 后，"最新会话在最上"的断言才确定。
+  // 注意：必须等「已入列」（带“移除”按钮）的行——.files 里 uploading 行
+  // （“a.txt (0%)”）也会命中纯文本断言，那时文件尚未 push 进 stagedFiles，
+  // 顺序仍可能被后完成者抢占。
   await dialog.locator('input[type="file"]').setInputFiles([
     { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
   ])
-  await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+  await expect(dialog.locator('.files li:has-text("a.txt")')
+    .filter({ has: page.getByRole('button', { name: '移除' }) }))
+    .toBeVisible({ timeout: 8_000 })
   await dialog.locator('input[type="file"]').setInputFiles([
     { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('B') },
   ])
-  await expect(dialog.locator('.files')).toContainText('b.txt', { timeout: 8_000 })
+  await expect(dialog.locator('.files li:has-text("b.txt")')
+    .filter({ has: page.getByRole('button', { name: '移除' }) }))
+    .toBeVisible({ timeout: 8_000 })
   const createBtn = dialog.locator('button[data-test="create-btn"]')
   await expect(createBtn).toBeEnabled({ timeout: 8_000 })
   await createBtn.click()
