@@ -45,3 +45,21 @@ def internal_delete():
     body = request.get_json(force=True) or {}
     delete_memory(body.get('memoryId', ''))
     return jsonify({'ok': True})
+
+
+@ai_memory_internal_bp.route('/runtime-events', methods=['POST'])
+def runtime_events():
+    """OpenCode 插件（baize-trace.js）上报 skill load/invoke 与会话收敛事件。
+    internal token 鉴权（与记忆内部通道同一信任边界）。"""
+    if not _authorized():
+        return jsonify({'error': 'forbidden'}), 403
+    body = request.get_json(force=True) or {}
+    kind = body.get('kind') or 'skill'
+    from utils import skillopt
+    if kind == 'skill':
+        result = skillopt.record_runtime_skill_event(body)
+        return jsonify(result)
+    if kind == 'session.idle':
+        skillopt.mark_session_idle(body.get('sessionID') or '')
+        return jsonify({'ok': True})
+    return jsonify({'error': 'unknown kind'}), 400

@@ -53,8 +53,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/ApiKeyManager.vue') },
     { id: 'webhook', label: 'Webhook', perm: 'admin.webhooks', icon: 'Link',
       component: () => import('@/views/admin/WebhookSettings.vue') },
-    { id: 'kefu', label: '智能客服', perm: 'admin.kefu', icon: 'Service',
-      component: () => import('@/views/admin/KefuManager.vue') },
+    // 【客服已裁剪】原智能客服设置入口（Live2D 数字人方案规划中，见 feature/baize-live2d-service）：
+    //     { id: 'kefu', label: '智能客服', perm: 'admin.kefu', icon: 'Service',
+    //   component: () => import('@/views/admin/KefuManager.vue') },
   ] },
   { id: 'ai', label: 'AI 能力', icon: 'MagicStick', items: [
     { id: 'ai-settings', label: 'AI 配置', perm: 'admin.ai_settings', icon: 'Setting',
@@ -69,6 +70,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiSkillManager.vue') },
     { id: 'ai-opencode', label: 'OpenCode 运行时', perm: 'admin.ai_runtime_read', icon: 'Cpu',
       component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
+    { id: 'ai-skillopt', label: 'SkillOpt 技能优化', perm: 'admin.ai_chat_admin', icon: 'Opportunity',
+      component: () => import('@/views/admin/AiSkillOpt.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
     { id: 'query', label: '数据查询', perm: 'admin.query', icon: 'Search',

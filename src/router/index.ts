@@ -202,7 +202,7 @@ router.beforeEach(async (to) => {
 
   // 6. 设置页面标题
   const title = to.meta.title as string
-  document.title = title ? `${title} - 巡检用例管理系统` : '巡检用例管理系统'
+  document.title = title ? `${title} - 白泽 · 数据智能平台` : '白泽 · 数据智能平台'
 })
 
 /**

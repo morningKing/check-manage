@@ -40,7 +40,7 @@
           <el-button v-if="canPerm('admin.ai_skill_write')" size="small" @click="showZipUpload = true">上传 zip</el-button>
           <el-button v-if="canPerm('admin.ai_runtime_publish')" size="small" @click="openPublish">从平台技能库发布</el-button>
         </div>
-        <el-table :data="filteredSkills" v-loading="loadingSkills" size="small"
+        <el-table :data="pagedSkills" v-loading="loadingSkills" size="small"
                   :empty-text="skillSearch ? '没有匹配的技能' : '暂无技能'">
           <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
           <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
@@ -72,6 +72,9 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination v-model:current-page="skillPage" :page-size="skillPageSize"
+                       :total="filteredSkills.length" layout="total, prev, pager, next"
+                       size="small" class="oc-runtime__pager" />
       </el-tab-pane>
 
       <!-- ─────────────── Agent 页签 ─────────────── -->
@@ -81,7 +84,7 @@
                     class="oc-runtime__search" data-test="agent-search" :prefix-icon="Search" />
           <el-button v-if="canPerm('admin.ai_agent_write')" type="primary" size="small" @click="openAgentCreate">新建 Agent</el-button>
         </div>
-        <el-table :data="filteredAgents" v-loading="loadingAgents" size="small"
+        <el-table :data="pagedAgents" v-loading="loadingAgents" size="small"
                   :empty-text="agentSearch ? '没有匹配的 Agent' : '暂无 Agent'">
           <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
           <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip />
@@ -124,6 +127,9 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination v-model:current-page="agentPage" :page-size="agentPageSize"
+                       :total="filteredAgents.length" layout="total, prev, pager, next"
+                       size="small" class="oc-runtime__pager" />
       </el-tab-pane>
     </el-tabs>
 
@@ -303,7 +309,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, watch, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { QuestionFilled, Search, UploadFilled } from '@element-plus/icons-vue'
 import * as api from '@/api/aiOpencodeAdmin'
@@ -370,6 +376,22 @@ const filteredSkills = computed(() =>
   skillItems.value.filter(s => matchSearch(skillSearch.value, s.name, s.description)))
 const filteredAgents = computed(() =>
   agentItems.value.filter(a => matchSearch(agentSearch.value, a.name, a.description)))
+
+// 客户端分页（运行时目录可能包含大量内置/插件条目）
+const skillPage = ref(1)
+const skillPageSize = ref(10)
+const pagedSkills = computed(() => {
+  const start = (skillPage.value - 1) * skillPageSize.value
+  return filteredSkills.value.slice(start, start + skillPageSize.value)
+})
+const agentPage = ref(1)
+const agentPageSize = ref(10)
+const pagedAgents = computed(() => {
+  const start = (agentPage.value - 1) * agentPageSize.value
+  return filteredAgents.value.slice(start, start + agentPageSize.value)
+})
+watch([skillSearch, filteredSkills], () => { skillPage.value = 1 })
+watch([agentSearch, filteredAgents], () => { agentPage.value = 1 })
 
 async function refreshOverview() {
   try {
@@ -751,6 +773,7 @@ function errText(e: unknown): string {
   gap: 8px;
   margin-bottom: 10px;
 }
+.oc-runtime__pager { margin-top: 8px; justify-content: flex-end; }
 .oc-runtime__search {
   width: 240px;
   margin-right: 8px;
