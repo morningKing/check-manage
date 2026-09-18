@@ -11,6 +11,7 @@ import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
+  DataAnalysis,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -372,6 +373,11 @@ watch(mentionToken, (tok) => {
   }
 })
 const messages = computed(() => store.activeMessages)
+// 轨迹分析会话分组（侧栏「会话」下独立折叠组，默认收起）
+const analysisSessions = computed(() => store.analysisSessions)
+const analysisCollapsed = ref(
+  getStorage('check-manage:ai-chat:analysis-collapsed', true))
+watch(analysisCollapsed, v => setStorage('check-manage:ai-chat:analysis-collapsed', v))
 // execution-audit：轨迹分析会话 → 原会话关联（从分析 Prompt 中提取目标 id）
 const analysisTargetSid = computed(() => {
   if (!activeId.value) return null
@@ -1136,6 +1142,25 @@ function onKey(e: Event) {
               </span>
             </div>
             <ElEmpty v-if="!sessions.length" description="暂无会话" :image-size="48" />
+
+            <!-- 轨迹分析会话子分组（默认折叠，与普通会话分组展示） -->
+            <div v-if="analysisSessions.length" class="analysis-group__head"
+                 data-test="analysis-group-head" @click="analysisCollapsed = !analysisCollapsed">
+              <ElIcon class="caret" :class="{ open: !analysisCollapsed }"><ArrowRight /></ElIcon>
+              <ElIcon class="section-icon"><DataAnalysis /></ElIcon>
+              轨迹分析
+              <span class="analysis-group__count">{{ analysisSessions.length }}</span>
+            </div>
+            <div v-show="!analysisCollapsed" class="analysis-group__body">
+              <div
+                v-for="a in analysisSessions" :key="a.id"
+                class="session-item analysis-item" :class="{ active: a.id === activeId }"
+                :title="a.targetSessionId ? `分析目标：${a.targetSessionId}` : ''"
+                @click="selectSession(a.id)"
+              >
+                <span class="session-item__title">{{ a.title || '轨迹分析' }}</span>
+              </div>
+            </div>
           </div>
 
           <div class="ai-sidebar__section-head" @click="toggleSection('batches')">
@@ -1792,6 +1817,26 @@ function onKey(e: Event) {
 }
 
 /* execution-audit：轨迹分析会话与原会话的关联横幅 */
+/* 轨迹分析会话子分组（侧栏「会话」内，与普通会话分组展示） */
+.analysis-group__head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px;
+  cursor: pointer; font-size: 12.5px; color: var(--el-text-color-secondary);
+  border-radius: 6px; user-select: none;
+  &:hover { background: var(--el-fill-color-light); }
+  .caret { transition: transform .15s; color: var(--el-text-color-secondary);
+           &.open { transform: rotate(90deg); } }
+  .section-icon { color: var(--el-color-warning); }
+}
+.analysis-group__count {
+  font-size: 11px; padding: 0 6px; border-radius: 8px;
+  background: var(--el-fill-color); color: var(--el-text-color-secondary);
+}
+.analysis-item {
+  padding-left: 26px;
+  .session-item__title { color: var(--el-text-color-secondary); font-size: 12.5px; }
+  &.active .session-item__title { color: var(--el-color-primary); font-weight: 600; }
+}
+
 .ai-chat__analysis-banner {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 16px; font-size: 13px;

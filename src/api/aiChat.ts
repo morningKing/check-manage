@@ -127,8 +127,14 @@ export function createSession(projectMenuId?: string) {
   return post<AiSession>('/ai/chat/sessions', { projectMenuId })
 }
 
+export interface AiAnalysisSessionSummary extends AiSessionSummary {
+  /** 分析的目标会话 id（标题「轨迹分析: sess_xxx」提取） */
+  targetSessionId?: string | null
+}
+
 export function listSessions() {
-  return get<{ sessions: AiSessionSummary[] }>('/ai/chat/sessions')
+  return get<{ sessions: AiSessionSummary[]; analysisSessions: AiAnalysisSessionSummary[] }>(
+    '/ai/chat/sessions')
 }
 
 /** 搜索当前用户的会话：按标题、输入文件名或消息文本匹配（见后端 search_sessions）。

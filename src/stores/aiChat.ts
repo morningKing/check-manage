@@ -59,6 +59,8 @@ export interface TurnFailure {
 
 interface State {
   sessions: SessionMeta[]
+  /** 轨迹分析会话（kind=trace_analysis，侧栏独立折叠分组，不与普通会话混排） */
+  analysisSessions: Array<SessionMeta & { targetSessionId?: string | null }>
   activeSessionId: string | null
   messages: Record<string, AiMessage[]>
   streaming: Record<string, boolean>
@@ -157,6 +159,7 @@ export interface SubtaskTodoGroup {
 export const useAiChatStore = defineStore('aiChat', {
   state: (): State => ({
     sessions: [],
+    analysisSessions: [],
     activeSessionId: null,
     messages: {},
     streaming: {},
@@ -226,8 +229,12 @@ export const useAiChatStore = defineStore('aiChat', {
 
   actions: {
     async loadSessions() {
-      const { sessions } = await listSessions()
+      const { sessions, analysisSessions } = await listSessions()
       this.sessions = sessions.map(s => ({ id: s.id, title: s.title, status: s.status }))
+      this.analysisSessions = (analysisSessions || []).map(s => ({
+        id: s.id, title: s.title, status: s.status,
+        targetSessionId: s.targetSessionId ?? null,
+      }))
     },
 
     async startNewSession(projectMenuId?: string) {

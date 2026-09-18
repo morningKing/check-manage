@@ -343,7 +343,20 @@ def list_sessions():
             (user['userId'],),
         )
         rows = cur.fetchall()
+        # 轨迹分析会话单独分组返回（默认折叠展示，不与普通会话混排）
+        cur.execute(
+            "SELECT id, title, last_active_at, status "
+            "FROM ai_chat_sessions "
+            "WHERE user_id = %s "
+            "  AND status IN ('active', 'closed') "
+            "  AND COALESCE(kind, 'chat') = 'trace_analysis' "
+            "ORDER BY last_active_at DESC NULLS LAST, id DESC "
+            "LIMIT 50",
+            (user['userId'],),
+        )
+        analysis_rows = cur.fetchall()
 
+    import re as _re
     return jsonify({
         'sessions': [
             {'id': r[0],
@@ -351,6 +364,17 @@ def list_sessions():
              'lastActiveAt': r[2].isoformat() if r[2] else None,
              'status': r[5]}
             for r in rows
+        ],
+        'analysisSessions': [
+            {'id': r[0],
+             'title': r[1] or '轨迹分析',
+             'lastActiveAt': r[2].isoformat() if r[2] else None,
+             'status': r[3],
+             # 标题形如「轨迹分析: sess_xxx」→ 提取目标会话 id 供前端展示关联
+             'targetSessionId': (m.group(1) if
+                                 (m := _re.search(r'(sess_[0-9a-zA-Z]+)', r[1] or ''))
+                                 else None)}
+            for r in analysis_rows
         ],
     })
 

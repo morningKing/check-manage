@@ -200,11 +200,20 @@ test('轨迹分析触发 + 会话关联与隐藏', async ({ page }) => {
     await page.getByRole('button', { name: '查询' }).click()
     await page.waitForTimeout(1000)
 
-    // ④ 交互侧栏不再出现分析会话
+    // ④ 侧栏分组：普通会话不混排，分析会话独立折叠分组
     const input = await gotoAiChat(page)
-    await page.waitForTimeout(1200)
-    await expect(page.locator('.ai-sidebar', { hasText: '轨迹分析: ' }))
-      .toHaveCount(0, { timeout: 15_000 })
+    const groupHead = page.locator('[data-test="analysis-group-head"]')
+    await expect(groupHead).toBeVisible({ timeout: 15_000 })
+    await expect(groupHead).toContainText('轨迹分析')
+    await expect(groupHead.locator('.analysis-group__count')).not.toHaveText('0')
+    // 折叠态：普通会话区不出现分析会话条目（排除折叠体内的 .analysis-item）
+    await expect(page.locator('.session-item:not(.analysis-item)', { hasText: '轨迹分析: ' }))
+      .toHaveCount(0, { timeout: 10_000 })
+    // 展开子分组：分析会话可见且带关联目标
+    await groupHead.click()
+    const analysisItem = page.locator('.analysis-item', { hasText: '轨迹分析: ' }).first()
+    await expect(analysisItem).toBeVisible({ timeout: 10_000 })
+    await expect(analysisItem).toHaveAttribute('title', /分析目标：sess_/)
 
     // ⑤ 关联：目标会话的审计抽屉显示分析历史，可打开分析会话
     await openAdminSessions(page)
