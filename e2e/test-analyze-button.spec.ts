@@ -21,6 +21,8 @@ test.describe('AI Session Admin - 轨迹分析按钮', () => {
     // SSE/轮询使 networkidle 永不出现，等真实元素
     await page.waitForSelector('.el-table', { timeout: 20_000 })
     const row = page.locator('.el-table__row').first()
+    // 行数据由接口异步填充，等行真正出现再判空，避免加载空窗误判 skip
+    await row.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {})
     if ((await row.count()) === 0) return null
     await row.locator('button:has-text("操作")').click()
     // dropdown popper 挂在 body 下

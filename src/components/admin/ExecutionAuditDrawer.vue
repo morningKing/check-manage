@@ -60,6 +60,19 @@
           </ElTable>
         </section>
 
+        <!-- ── 轨迹分析历史（与原会话的关联） ── -->
+        <section v-if="analyses.length" class="sec">
+          <h4>轨迹分析历史 ({{ analyses.length }})</h4>
+          <p class="muted">以下分析会话由本会话触发，可随时打开回看。</p>
+          <div v-for="a in analyses" :key="a.id" class="analysis-row">
+            <ElTag size="small" :type="a.status === 'completed' ? 'success'
+              : a.status === 'failed' ? 'danger' : 'warning'">{{ a.status }}</ElTag>
+            <span class="mono">{{ a.analysis_session_id }}</span>
+            <span class="muted">{{ fmtTime(a.created_at) }}</span>
+            <ElLink type="primary" @click="openAnalysis(a.analysis_session_id)">打开会话</ElLink>
+          </div>
+        </section>
+
         <!-- ── 结构化诊断报告 ── -->
         <template v-if="report">
           <section class="sec">
@@ -182,8 +195,9 @@ import { ref, computed, watch } from 'vue'
 import { ElDrawer, ElTable, ElTableColumn, ElTag, ElAlert, ElProgress,
          ElLink, ElDialog } from 'element-plus'
 import {
-  getExecutionAudit, getExecutionPrompt,
+  getExecutionAudit, getExecutionPrompt, getSessionAnalyses,
   type ExecutionAttempt, type ExecutionManifest, type ExecutionReport,
+  type SessionAnalysis,
 } from '@/api/aiSessionAdmin'
 
 const props = defineProps<{ modelValue: boolean; sessionId: string | null }>()
@@ -199,6 +213,7 @@ const error = ref('')
 const attempts = ref<ExecutionAttempt[]>([])
 const manifests = ref<ExecutionManifest[]>([])
 const report = ref<ExecutionReport | null>(null)
+const analyses = ref<SessionAnalysis[]>([])
 const promptVisible = ref(false)
 const promptInfo = ref<Awaited<ReturnType<typeof getExecutionPrompt>> | null>(null)
 
@@ -211,6 +226,9 @@ async function load() {
     attempts.value = res.attempts || []
     manifests.value = res.manifests || []
     report.value = res.report || null
+    try {
+      analyses.value = (await getSessionAnalyses(props.sessionId)).analyses || []
+    } catch { /* 分析历史非关键，失败不阻塞 */ }
   } catch (e: unknown) {
     const ax = e as { response?: { data?: { error?: string } }; message?: string }
     error.value = ax?.response?.data?.error || ax?.message || '加载失败'
@@ -231,6 +249,12 @@ async function showPrompt(attemptId: string) {
 
 function shortHash(h?: string | null) {
   return h ? h.slice(0, 10) + '…' : '—'
+}
+function fmtTime(v?: string | null) {
+  return v ? new Date(v).toLocaleString() : '—'
+}
+function openAnalysis(analysisSessionId: string) {
+  window.open(`/ai-chat?session=${analysisSessionId}`, '_blank')
 }
 function statusTagType(s: string) {
   return s === 'completed' ? 'success' : s === 'failed' ? 'danger'
@@ -258,6 +282,7 @@ watch(() => props.sessionId, () => {
   attempts.value = []
   manifests.value = []
   report.value = null
+  analyses.value = []
 })
 </script>
 
@@ -278,6 +303,8 @@ watch(() => props.sessionId, () => {
 .failure-recovery { margin-top: 4px; color: var(--el-text-color-regular); }
 .plan-list { padding-left: 18px; font-size: 13px; }
 .plan-list li { margin-bottom: 4px; }
+.analysis-row { display: flex; align-items: center; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter); font-size: 12px; }
 .prompt-pre { background: var(--el-fill-color-light); padding: 10px; border-radius: 6px;
   white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow: auto;
   font-size: 12px; font-family: monospace; }

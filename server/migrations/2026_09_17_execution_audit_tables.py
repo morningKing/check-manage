@@ -219,6 +219,17 @@ DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS ai_execution_diagnosis_target_idx "
     "ON ai_execution_diagnoses(target_session_id, created_at DESC)",
+    # 8. 会话类别（execution-audit UX：轨迹分析会话从普通列表隐藏）
+    "ALTER TABLE ai_chat_sessions ADD COLUMN IF NOT EXISTS "
+    "kind VARCHAR(30) NOT NULL DEFAULT 'chat'",
+    "CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_kind "
+    "ON ai_chat_sessions(kind)",
+    # 一次性回填：把既有分析会话（标题前缀）标记为 trace_analysis。
+    # 幂等：仅当仍为 'chat' 时更新，不覆盖人工改过的值。
+    """
+    UPDATE ai_chat_sessions SET kind = 'trace_analysis'
+    WHERE kind = 'chat' AND title LIKE '轨迹分析: %'
+    """,
 ]
 
 

@@ -5,7 +5,16 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { test, expect } from '@playwright/test'
+
+// python 解析（Playwright 进程 PATH 可能缺 python，按候选探测）
+const PYTHON = [
+  process.env.PYTHON,
+  'F:/llvm/anaconda3/python.exe',
+  'C:/Python312/python.exe',
+  'python',
+].find((c) => c && (c === 'python' || fs.existsSync(c))) || 'python'
 
 const BATCH_NAME = `e2e-opt-batch-${Date.now()}`
 
@@ -154,29 +163,37 @@ test('AI Chat：发送失败出现错误卡，重试后成功收到回复', asyn
   await expect(card).toHaveCount(0)
 })
 
-test('AI Chat：工具调用气泡显示可读摘要与状态文字', async ({ page }) => {
-  test.setTimeout(180_000)
-  const input = await gotoAiChat(page)
-  await input.fill('请调用 write 工具，把文本 hello-e2e 写入文件 e2e-tool.txt，完成后简要回复即可。')
-  await page.getByRole('button', { name: '发送' }).click()
+test('AI Chat：工具调用气泡显示可读摘要与状态文字（注入，确定性）', async ({ page }) => {
+  test.setTimeout(120_000)
+  const title = `tool-bubble-${Date.now()}`
+  const sid = execFileSync(PYTHON,
+    [path.join(process.cwd(), 'e2e', 'helpers', 'inject_toolmsg.py'), 'seed', title],
+    { encoding: 'utf-8' }).trim()
+  try {
+    // 打开注入会话：气泡来自持久化 normalized content，渲染确定性
+    await page.goto(`/ai-chat?session=${sid}`)
+    const head = page.locator('.tool-call__head').first()
+    await head.waitFor({ state: 'visible', timeout: 30_000 })
 
-  // 工具气泡：折叠态就是自然语言摘要（不是裸 JSON），状态永远带文字
-  const head = page.locator('.tool-call__head').first()
-  await expect(head).toBeVisible({ timeout: 120_000 })
-  const headText = await head.innerText()
-  expect(headText).toMatch(/写入文件|执行命令|调用工具|读取文件|查找|搜索/)
-  // 折叠态是自然语言摘要（可能引用含转义引号的结果文本），但不允许是裸 JSON 输入
-  const summaryText = await head.locator('.tool-call__summary').innerText()
-  expect(summaryText.trim()).not.toMatch(/^[{\[]/)
-  // 状态不能只有图标：任何工具气泡都有文字状态；模型重试后最终应有已完成
-  await expect(head.locator('.tool-call__status-text')).toHaveText(/已完成|正在执行|等待执行|执行失败|已取消|等待确认|状态未知/)
-  const done = page.locator('.tool-call__head', { hasText: '已完成' }).first()
-  await expect(done).toBeVisible({ timeout: 120_000 })
-  // 展开后可见原始输入 JSON（a11y：aria-expanded）
-  await expect(head).toHaveAttribute('aria-expanded', 'false')
-  await head.click()
-  await expect(head).toHaveAttribute('aria-expanded', 'true')
-  await expect(head.locator('..').locator('.tool-call__body')).toBeVisible()
+    const headText = await head.innerText()
+    expect(headText).toMatch(/写入文件/)
+    expect(headText).toContain('e2e-tool.txt')
+    expect(headText).toContain('Wrote file e2e-tool.txt')
+    expect(headText).toContain('已完成')
+    // 折叠态是自然语言摘要，不允许是裸 JSON 输入
+    const summaryText = await head.locator('.tool-call__summary').innerText()
+    expect(summaryText.trim()).not.toMatch(/^[{\[]/)
+    // a11y：aria-expanded 切换 + 展开后可见原始输入
+    await expect(head).toHaveAttribute('aria-expanded', 'false')
+    await head.click()
+    await expect(head).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.locator('.tool-call__body').first()).toBeVisible()
+    await expect(page.locator('.tool-call__body').first()).toContainText('file_path')
+  } finally {
+    execFileSync('python',
+      [path.join(process.cwd(), 'e2e', 'helpers', 'inject_toolmsg.py'), 'cleanup', title],
+      { encoding: 'utf-8' })
+  }
 })
 
 test('批任务：最新会话在上、单任务独立继续、停止并删除', async ({ page }) => {
@@ -193,11 +210,15 @@ test('批任务：最新会话在上、单任务独立继续、停止并删除',
   await dialog.waitFor({ state: 'visible', timeout: 5_000 })
   await dialog.locator('input[data-test="name"]').fill(BATCH_NAME)
   await dialog.locator('textarea[data-test="prompt"]').fill('回复收到即可，无需其他操作')
+  // 串行上传：ElUpload 并发完成顺序不定，staged 顺序决定 batch_seq，
+  // 必须保证 a 先 b 后，"最新会话在最上"的断言才确定。
   await dialog.locator('input[type="file"]').setInputFiles([
     { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
-    { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('B') },
   ])
   await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('B') },
+  ])
   await expect(dialog.locator('.files')).toContainText('b.txt', { timeout: 8_000 })
   const createBtn = dialog.locator('button[data-test="create-btn"]')
   await expect(createBtn).toBeEnabled({ timeout: 8_000 })

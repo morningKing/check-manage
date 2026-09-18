@@ -16,6 +16,10 @@
                 @change="onFilterChange('keyword', $event)" />
       <el-input v-model="batchId" placeholder="批任务 ID" clearable style="width: 200px"
                 @change="onFilterChange('batchId', $event)" />
+      <el-checkbox v-model="showAnalysis" style="margin-left:4px"
+                   @change="onFilterChange('kind', $event ? 'all' : '')">
+        显示轨迹分析会话
+      </el-checkbox>
       <el-button type="primary" @click="reload">查询</el-button>
       <el-button @click="clearAndReload">重置</el-button>
     </div>
@@ -37,8 +41,8 @@
       <el-table-column prop="username" label="用户" width="120" />
       <el-table-column label="来源" width="100">
         <template #default="{ row }">
-          <el-tag size="small" :type="sourceTagType(row.sourceType)">
-            {{ sourceLabel(row.sourceType) }}
+          <el-tag size="small" :type="row.kind === 'trace_analysis' ? 'primary' : sourceTagType(row.sourceType)">
+            {{ row.kind === 'trace_analysis' ? '轨迹分析' : sourceLabel(row.sourceType) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -112,8 +116,8 @@
               </el-descriptions-item>
               <el-descriptions-item label="用户">{{ store.detail.username }}</el-descriptions-item>
               <el-descriptions-item label="来源">
-                <el-tag size="small" :type="sourceTagType(store.detail.sourceType)">
-                  {{ sourceLabel(store.detail.sourceType) }}
+                <el-tag size="small" :type="store.detail.kind === 'trace_analysis' ? 'primary' : sourceTagType(store.detail.sourceType)">
+                  {{ store.detail.kind === 'trace_analysis' ? '轨迹分析' : sourceLabel(store.detail.sourceType) }}
                 </el-tag>
               </el-descriptions-item>
               <el-descriptions-item label="状态">
@@ -204,6 +208,7 @@ import ExecutionAuditDrawer from '@/components/admin/ExecutionAuditDrawer.vue'
 
 const store = useAiSessionAdminStore()
 const analyzing = ref(false)
+const showAnalysis = ref(false)
 const auditOpen = ref(false)
 const auditSessionId = ref<string | null>(null)
 

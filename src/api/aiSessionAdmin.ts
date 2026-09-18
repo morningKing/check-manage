@@ -4,6 +4,8 @@ const BASE = '/ai/chat/admin/sessions/v2'
 
 export interface AdminSession {
   id: string
+  /** chat | trace_analysis（轨迹分析会话，默认列表隐藏） */
+  kind?: string
   userId: string
   username: string
   title: string | null
@@ -40,6 +42,8 @@ export interface AdminSessionFilters {
   owner?: string
   keyword?: string
   batchId?: string
+  /** all=包含轨迹分析会话；trace_analysis=只看分析会话；缺省=排除 */
+  kind?: string
 }
 
 export interface AdminSessionFile {
@@ -221,6 +225,22 @@ export function getExecutionPrompt(sessionId: string, attemptId?: string) {
     plaintextAvailable: boolean
   }>(`${EXEC_BASE}/sessions/${sessionId}/execution-prompt`,
      attemptId ? { attemptId } : undefined)
+}
+
+export interface SessionAnalysis {
+  id: string
+  analysis_session_id: string
+  status: string
+  data_completeness: number | null
+  error_message: string | null
+  created_at: string | null
+  completed_at: string | null
+}
+
+/** 某会话的轨迹分析历史（execution-audit：分析与原会话的关联入口） */
+export function getSessionAnalyses(sessionId: string) {
+  return get<{ analyses: SessionAnalysis[] }>(
+    `${BASE}/${sessionId}/analyses`)
 }
 
 export function getAnalysisStatus(analysisId: string) {

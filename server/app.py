@@ -119,6 +119,19 @@ app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(ai_batch_admin_bp)
 app.register_blueprint(ai_session_admin_bp)
 app.register_blueprint(ai_execution_admin_bp)
+
+# 执行审计表/回填随启动幂等执行（execution-audit §17）：旧分析会话
+# （标题前缀）自动补 kind=trace_analysis，无需手动跑迁移。
+try:
+    import importlib.util as _ilu
+    _mp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'migrations', '2026_09_17_execution_audit_tables.py')
+    _spec = _ilu.spec_from_file_location('_exec_audit_migration_boot', _mp)
+    _m = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_m)
+    _m.run()
+except Exception as _e:
+    logging.warning('execution audit migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)

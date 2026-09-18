@@ -7,6 +7,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+
+// Playwright 进程的 PATH 不保证含 python（shell 环境差异），按候选路径探测
+const PYTHON = [
+  process.env.PYTHON,
+  'F:/llvm/anaconda3/python.exe',
+  'C:/Python312/python.exe',
+  'python',
+].find((c) => c && (c === 'python' || fs.existsSync(c))) || 'python'
+
+function runPy(script: string, args: string[]): string {
+  return execFileSync(PYTHON,
+    [path.join(process.cwd(), 'e2e', 'helpers', script), ...args],
+    { encoding: 'utf-8' }).trim()
+}
 import { test, expect } from '@playwright/test'
 
 const AUTH_DIR = path.join(process.cwd(), 'e2e', '.auth')
@@ -52,9 +66,7 @@ test.beforeEach(async ({ context }) => {
 })
 
 function seedAudit(args: string[]): string {
-  return execFileSync('python',
-    [path.join(process.cwd(), 'e2e', 'helpers', 'seed_audit.py'), ...args],
-    { encoding: 'utf-8' }).trim()
+  return runPy('seed_audit.py', args)
 }
 
 /** 从首页经顶栏按钮进入全屏 AI 助手（规避整页直达 /ai-chat 的初始化竞态） */
@@ -158,17 +170,51 @@ test('种子契约审计：已完成（有证据）/ 遗漏 / 声称完成', asy
   }
 })
 
-test('轨迹分析触发：返回 analysisId 并提示成功', async ({ page }) => {
-  test.setTimeout(120_000)
+test('轨迹分析触发 + 会话关联与隐藏', async ({ page }) => {
+  test.setTimeout(180_000)
   const title = `audit-seed-${Date.now()}`
-  seedAudit(['seed', title])
+  const targetSid = seedAudit(['seed', title])
   try {
     await openAdminSessions(page)
+
+    // ① 触发分析
     const row = page.locator('.el-table__row', { hasText: title }).first()
     await row.locator('.el-dropdown').first().click()
     await page.locator('.el-dropdown-menu__item', { hasText: '轨迹分析' }).first().click()
     await expect(page.locator('.el-message', { hasText: '已触发轨迹分析' }))
       .toBeVisible({ timeout: 30_000 })
+
+    // ② 默认管理列表隐藏本次触发的轨迹分析会话
+    const analysisTitle = `轨迹分析: ${targetSid}`
+    await page.waitForTimeout(1500)
+    await expect(page.locator('.el-table__row', { hasText: analysisTitle }))
+      .toHaveCount(0, { timeout: 15_000 })
+
+    // ③ 勾选后可见，且带「轨迹分析」来源标签
+    await page.getByText('显示轨迹分析会话').click()
+    await page.getByRole('button', { name: '查询' }).click()
+    const analysisRow = page.locator('.el-table__row', { hasText: analysisTitle }).first()
+    await expect(analysisRow).toBeVisible({ timeout: 15_000 })
+    await expect(analysisRow.getByText('轨迹分析', { exact: true })).toBeVisible()
+    await page.getByText('显示轨迹分析会话').click()
+    await page.getByRole('button', { name: '查询' }).click()
+    await page.waitForTimeout(1000)
+
+    // ④ 交互侧栏不再出现分析会话
+    const input = await gotoAiChat(page)
+    await page.waitForTimeout(1200)
+    await expect(page.locator('.ai-sidebar', { hasText: '轨迹分析: ' }))
+      .toHaveCount(0, { timeout: 15_000 })
+
+    // ⑤ 关联：目标会话的审计抽屉显示分析历史，可打开分析会话
+    await openAdminSessions(page)
+    await openAuditDrawerFor(page, title)
+    const drawer = page.locator('.el-drawer', { hasText: '执行合规审计' })
+    await expect(drawer.locator('h4', { hasText: '轨迹分析历史' }))
+      .toBeVisible({ timeout: 20_000 })
+    await expect(drawer.locator('.analysis-row').first()).toBeVisible()
+    await expect(drawer.getByText('打开会话').first()).toBeVisible()
+    void input
   } finally {
     seedAudit(['cleanup', title])
   }

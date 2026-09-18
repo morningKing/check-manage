@@ -32,6 +32,7 @@ def _row_to_session(r: dict) -> dict:
     """Convert a DB row (snake_case) to the API contract (camelCase)."""
     return {
         'id': r['id'],
+        'kind': r.get('kind') or 'chat',
         'userId': r.get('user_id'),
         'username': r.get('username'),
         'title': r.get('title'),
@@ -83,7 +84,7 @@ def list_sessions():
         page=page, page_size=page_size,
         status=status, source_type=source_type,
         owner=owner, keyword=keyword, batch_id=batch_id,
-    )
+        kind=(request.args.get('kind') or None))
     result['items'] = [_row_to_session(r) for r in result['items']]
     return jsonify(result)
 
@@ -262,9 +263,11 @@ def analyze_session(session_id):
         cur.execute(
             "INSERT INTO ai_chat_sessions "
             "(id, user_id, title, workspace_path, session_token, "
-            " token_expires_at, status) "
-            "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', 'active')",
-            (analysis_sid, user_id, f'轨迹分析: {session_id}', workspace_path, '_pending_'),
+            " token_expires_at, status, kind) "
+            "VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '1 hour', 'active', "
+            " 'trace_analysis')",
+            (analysis_sid, user_id, f'轨迹分析: {session_id}', workspace_path,
+             '_pending_'),
         )
         cur.execute(
             "INSERT INTO ai_execution_diagnoses "
@@ -404,6 +407,34 @@ def analyze_session(session_id):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+
+@ai_session_admin_bp.get('/<sid>/analyses')
+@require_permission('admin.ai_chat_admin')
+def list_session_analyses(sid):
+    """该会话的轨迹分析历史（execution-audit：分析与原会话关联入口）。
+    每行含 analysis_session_id，可直开分析会话。"""
+    from utils.session_admin_repo import admin_get_session_detail
+    if not admin_get_session_detail(sid):
+        return jsonify({'error': '会话不存在'}), 404
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, analysis_session_id, status, data_completeness,
+                       error_message, created_at, completed_at
+                FROM ai_execution_diagnoses
+                WHERE target_session_id = %s
+                ORDER BY created_at DESC
+                LIMIT 20
+                """, (sid,))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        for k in ('created_at', 'completed_at'):
+            r[k] = r[k].isoformat() if r[k] else None
+    return jsonify({'analyses': rows})
+
+
 # Execution audit APIs (execution-audit Spec §15/§16).
 # Separate blueprint so the paths match the Spec (/ai/chat/admin/...) while
 # keeping the session v2 routes untouched.

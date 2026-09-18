@@ -338,6 +338,7 @@ def list_sessions():
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
             "  AND status IN ('active', 'closed') "
+            "  AND COALESCE(kind, 'chat') <> 'trace_analysis' "
             "ORDER BY last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )
@@ -406,7 +407,7 @@ def search_sessions():
                 "       ) AS hit_content "
                 "FROM ai_chat_sessions s "
                 "JOIN ai_chat_batches b ON b.id = s.batch_id AND b.user_id = %(uid)s "
-                "WHERE s.user_id = %(uid)s "
+                "WHERE s.user_id = %(uid)s AND COALESCE(s.kind, 'chat') <> 'trace_analysis' "
                 "  AND s.batch_id = %(bid)s "
                 "  AND s.status IN %(statuses)s "
                 "  AND ( "

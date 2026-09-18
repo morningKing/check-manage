@@ -37,9 +37,21 @@ _FROM_CLAUSE = """
     LEFT JOIN ai_chat_batches b ON b.id = s.batch_id"""
 
 
-def _build_where(status, source_type, owner, keyword, batch_id):
-    """Build (where_sql, params) from optional filters."""
+def _build_where(status, source_type, owner, keyword, batch_id,
+                 kind: str | None = None):
+    """Build (where_sql, params) from optional filters.
+
+    kind（execution-audit UX）：轨迹分析会话默认从管理列表隐藏；
+      kind='trace_analysis' 只看分析会话，kind='all' 不过滤，缺省排除。"""
     where, params = [], []
+    if kind == 'trace_analysis':
+        where.append("COALESCE(s.kind, 'chat') = 'trace_analysis'")
+    elif kind == 'all':
+        pass
+    elif kind == 'chat':
+        where.append("COALESCE(s.kind, 'chat') = 'chat'")
+    else:
+        where.append("COALESCE(s.kind, 'chat') <> 'trace_analysis'")
     if status:
         where.append("s.status = %s")
         params.append(status)
@@ -76,21 +88,23 @@ def admin_list_sessions_v2(*, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE,
                            source_type: str | None = None,
                            owner: str | None = None,
                            keyword: str | None = None,
-                           batch_id: str | None = None) -> dict:
+                           batch_id: str | None = None,
+                           kind: str | None = None) -> dict:
     """Unified paginated session list with optional filters.
 
     Returns {items: [dict], total: int, page: int, pageSize: int}.
     """
     page = max(1, page)
     page_size = min(max(1, page_size), MAX_PAGE_SIZE)
-    where_sql, params = _build_where(status, source_type, owner, keyword, batch_id)
+    where_sql, params = _build_where(status, source_type, owner, keyword,
+                                     batch_id, kind)
     offset = (page - 1) * page_size
 
     select_cols = """
         s.id, s.user_id, s.title, s.status, s.created_at, s.last_active_at,
         s.batch_id, s.batch_seq, s.batch_input_file,
         s.error_message, s.last_message_preview,
-        s.scan_task_id, s.opencode_session_id,
+        s.scan_task_id, s.opencode_session_id, s.kind,
         u.username,
         b.name AS batch_name"""
 

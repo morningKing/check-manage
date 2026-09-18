@@ -10,7 +10,7 @@ import {
 import {
   Plus, Top, EditPen, Close, Document, Loading,
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
-  ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled,
+  ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -372,6 +372,14 @@ watch(mentionToken, (tok) => {
   }
 })
 const messages = computed(() => store.activeMessages)
+// execution-audit：轨迹分析会话 → 原会话关联（从分析 Prompt 中提取目标 id）
+const analysisTargetSid = computed(() => {
+  if (!activeId.value) return null
+  const firstUser = store.activeMessages.find((m) => m.role === 'user')
+  const text = firstUser?.content?.find((p) => p.type === 'text')?.text ?? ''
+  const m = text.match(/分析会话\s*(sess_[0-9a-f]+)/)
+  return m ? m[1] : null
+})
 const streaming = computed(() => store.isStreaming)
 // P0 §8.2：发送失败错误卡（保留原始输入，一键重试）。
 const turnFailure = computed(() => store.activeTurnFailure)
@@ -698,17 +706,24 @@ onMounted(async () => {
       store.hydrateSessionAgent(querySessionId)
     } else if (querySessionId) {
       // 不在会话列表里 → 可能是批任务子会话(列表接口不含它们;批任务完成
-      // 通知的点击就落在这里)。找到所属批次、选中之,再以轮询方式打开子会话。
+      // 通知的点击就落在这里),也可能是轨迹分析会话(kind=trace_analysis,
+      // 同样不进列表)。批子会话找到所属批次、选中之;否则按 id 直开会话。
       try {
         const { batchId } = await getBatchOfSession(querySessionId)
         await batches.fetchList()
         await batches.selectBatch(batchId)
         await selectBatchChild(querySessionId)
       } catch {
-        if (sessions.value.length) {
-          await store.openSession(sessions.value[0].id)
-          store.hydrateSessionModel(sessions.value[0].id)
-          store.hydrateSessionAgent(sessions.value[0].id)
+        try {
+          await store.openSession(querySessionId)
+          store.hydrateSessionModel(querySessionId)
+          store.hydrateSessionAgent(querySessionId)
+        } catch {
+          if (sessions.value.length) {
+            await store.openSession(sessions.value[0].id)
+            store.hydrateSessionModel(sessions.value[0].id)
+            store.hydrateSessionAgent(sessions.value[0].id)
+          }
         }
       }
     } else if (sessions.value.length) {
@@ -1160,6 +1175,13 @@ function onKey(e: Event) {
 
     <!-- 对话主区 -->
     <section class="ai-chat__main">
+      <div v-if="analysisTargetSid" class="ai-chat__analysis-banner" data-test="analysis-banner">
+        <ElIcon><Link /></ElIcon>
+        轨迹分析会话 · 原会话
+        <span class="mono">{{ analysisTargetSid }}</span>
+        <ElLink type="primary" @click="copyText(analysisTargetSid).then(() => ElMessage.success('已复制原会话 ID'))">复制</ElLink>
+        <ElLink type="primary" href="/admin/ai-sessions" target="_blank">在会话管理中查看</ElLink>
+      </div>
       <div v-if="activeId && store.activeStreamStatus === 'reconnecting'" class="ai-chat__reconnect">
         <ElIcon class="spin"><Loading /></ElIcon> 与服务端连接断开，正在重连…
       </div>
@@ -1767,6 +1789,16 @@ function onKey(e: Event) {
   color: var(--el-color-warning-dark-2);
   border-bottom: 1px solid var(--el-color-warning-light-7);
   .spin { animation: spin 1s linear infinite; }
+}
+
+/* execution-audit：轨迹分析会话与原会话的关联横幅 */
+.ai-chat__analysis-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 16px; font-size: 13px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary-dark-2);
+  border-bottom: 1px solid var(--el-color-primary-light-7);
+  .mono { font-family: monospace; }
 }
 
 /* P0 §8.2 发送失败错误卡 */
