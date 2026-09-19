@@ -142,8 +142,10 @@ except Exception:
     _OGD = None
 try:
     from utils import skillopt as _sk
-    # 插件运行在 OpenCode 宿主进程内，直连 Flask 网关最短路径
-    _ep = 'http://127.0.0.1:3002/ai/chat/internal/runtime-events'
+    # 插件运行在 OpenCode 宿主进程内，直连 Flask 网关最短路径；端口跟随
+    # FLASK_PORT，路径必须与 routes/ai_memory_internal.py 的实际路由一致。
+    from config import FLASK_PORT as _FPORT
+    _ep = f'http://127.0.0.1:{_FPORT}/ai/memory/internal/runtime-events'
     _sk.ensure_runtime_plugin(_OGD, _ep,
                               _os.getenv('MCP_INTERNAL_TOKEN', ''))
     _ret = _sk.apply_retention()

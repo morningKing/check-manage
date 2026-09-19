@@ -80,14 +80,38 @@ def upsert_invocation(session_id: str, attempt_id: str | None, skill: str,
 
 # ── 运行时事件上报（插件回调） ───────────────────────────────────────────
 
+def _platform_session_id(session_id: str) -> str:
+    """OpenCode 内部会话 id（ses_…）→ 平台会话 id（sess_…）。
+
+    插件在 OpenCode 宿主进程内只能看到 OpenCode 自己的 sessionID；库里
+    ai_skill_invocations / ai_execution_attempts 的 session_id 外键指向
+    ai_chat_sessions(id)，必须先映射，否则所有上报都撞外键约束。
+    传进来的若已是平台 id（sess_ 前缀）则原样返回。"""
+    if not session_id or session_id.startswith('sess_'):
+        return session_id
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM ai_chat_sessions "
+                    "WHERE opencode_session_id = %s "
+                    "ORDER BY last_active_at DESC NULLS LAST LIMIT 1",
+                    (session_id,))
+                row = cur.fetchone()
+                return row[0] if row else ''
+    except Exception as e:
+        logger.warning('platform session lookup failed %s: %s', session_id, e)
+        return ''
+
+
 def record_runtime_skill_event(payload: dict) -> dict:
     """OpenCode 插件上报 skill 工具调用（Spec P2：invoked → confirmed）。
 
     payload: {skillName, sessionID, messageID, partID, status, title}
     """
-    session_id = payload.get('sessionID') or ''
     skill = payload.get('skillName') or ''
     status = payload.get('status') or ''
+    session_id = _platform_session_id(payload.get('sessionID') or '')
     if not session_id or not skill:
         return {'ok': False, 'reason': 'missing fields'}
 
@@ -114,8 +138,13 @@ def record_runtime_skill_event(payload: dict) -> dict:
 
 
 def mark_session_idle(session_id: str) -> None:
-    """会话收敛：把该会话 running 的 invocations 收口为 completed（尽力）。"""
+    """会话收敛：把该会话 running 的 invocations 收口为 completed（尽力）。
+
+    插件上报的 sessionID 是 OpenCode 内部 id，先映射回平台会话 id。"""
     try:
+        session_id = _platform_session_id(session_id)
+        if not session_id:
+            return
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -167,8 +196,9 @@ def _existing_invocations(attempt_id: str) -> set:
 PLUGIN_JS = """// Baize runtime trace plugin (auto-installed by Baize server).
 // Reports skill load/invoke lifecycle so SkillOpt can prove actual skill
 // usage (invoked=confirmed) instead of heuristic inference.
+// Endpoint 与上报 token 由服务端安装时嵌入；同名 env 变量存在时优先。
 const ENDPOINT = process.env.BAIZE_RUNTIME_EVENT_URL || '__ENDPOINT__'
-const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || ''
+const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 
 async function report(body) {
   if (!ENDPOINT) return
@@ -213,7 +243,11 @@ export const BaizeTracePlugin = async () => {
 
 
 def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '') -> str | None:
-    """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-trace.js（幂等）。"""
+    """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-trace.js（幂等）。
+
+    endpoint 与 internal token 都直接嵌入插件文件（serve 子进程环境不可靠，
+    内嵌值保证开箱即用；BAIZE_RUNTIME_EVENT_URL / BAIZE_INTERNAL_TOKEN env
+    优先级更高，便于部署侧覆写）。"""
     import os
     if not global_dir:
         return None
@@ -221,7 +255,8 @@ def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '') -> st
         pdir = os.path.join(global_dir, 'plugin')
         os.makedirs(pdir, exist_ok=True)
         path = os.path.join(pdir, RUNTIME_PLUGIN_NAME)
-        js = PLUGIN_JS.replace('__ENDPOINT__', endpoint or '')
+        js = PLUGIN_JS.replace('__ENDPOINT__', endpoint or '') \
+                      .replace('__TOKEN__', token or '')
         current = open(path, encoding='utf-8').read() if os.path.exists(path) else ''
         if current != js:
             with open(path, 'w', encoding='utf-8') as f:

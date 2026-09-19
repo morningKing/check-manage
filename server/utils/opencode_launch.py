@@ -104,7 +104,10 @@ def serve_env(base: dict | None = None) -> dict:
 
     serve 子进程的 OPENCODE_GLOBAL_DIR 一律显式传入（继承值不可靠：.env 只被
     Python 侧 load_dotenv 读入、不会自动出现在真实进程环境里），保证 serve
-    读取的全局目录与管理界面操作的目录永远相同。"""
+    读取的全局目录与管理界面操作的目录永远相同。BAIZE_INTERNAL_TOKEN 同理：
+    SkillOpt 运行时插件（baize-trace.js）优先读该 env 作为 x-internal-token，
+    未配置时回落到插件文件里嵌入的 token（ensure_runtime_plugin 安装时写入）。"""
     env = child_env(base)
     env['OPENCODE_GLOBAL_DIR'] = global_dir()
+    env['BAIZE_INTERNAL_TOKEN'] = (os.environ.get('MCP_INTERNAL_TOKEN', '') or '').strip()
     return env
