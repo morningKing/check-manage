@@ -460,35 +460,20 @@ async function deleteGroup(g: { id: string; name: string }) {
     ElMessage.success('分组已删除')
   } catch { ElMessage.error('删除失败') }
 }
-async function openMoveMenu(s: { id: string; title?: string }) {
-  // 轻量下拉：用 MessageBox 的单选列表（分组通常少，避免引 Dropdown 定位复杂度）
-  const options = [
-    ...store.groups.map(g => `${g.name}（${store.groupedSessions(g.id).length}）`),
-    '未分组',
-    '＋ 新建分组…',
-  ]
-  try {
-    const res = await ElMessageBox.prompt(
-      `移动会话「${s.title || '新会话'}」到：` +
-      options.map((o, i) => `
-${i + 1}. ${o}`).join(''),
-      '移动到分组',
-      { confirmButtonText: '移动', cancelButtonText: '取消',
-        inputPattern: /^\d+$/, inputErrorMessage: '请输入序号' })
-    const value = (res as { value?: string }).value || ''
-    const idx = parseInt(value, 10) - 1
-    if (idx < 0 || idx >= options.length) { ElMessage.warning('序号无效'); return }
-    if (idx === options.length - 1) {
-      openCreateGroup(s.id)
-      return
-    } else if (options[idx] === '未分组') {
-      await store.moveSession(s.id, null)
-    } else {
-      const g = store.groups[idx]
-      await store.moveSession(s.id, g.id)
-    }
-    ElMessage.success('已移动')
-  } catch { /* cancelled */ }
+// 会话移动到分组：下拉菜单点选（分组/未分组/新建），不再用输入序号的方式。
+// command='__new' 时带上传入会话 id，建组成功后自动移入（见 groupDialog.moveSessionId）。
+async function onMoveCommand(cmd: string | number | object, s: { id: string; title?: string }) {
+  const key = String(cmd)
+  if (key === '__new') { openCreateGroup(s.id); return }
+  if (key === '__ungrouped') {
+    await store.moveSession(s.id, null)
+    ElMessage.success('已移回未分组')
+    return
+  }
+  const g = store.groups.find(x => x.id === key)
+  if (!g) return
+  await store.moveSession(s.id, g.id)
+  ElMessage.success(`已移动到「${g.name}」`)
 }
 const analysisCollapsed = ref(
   getStorage('check-manage:ai-chat:analysis-collapsed', true))
@@ -1250,7 +1235,25 @@ function onKey(e: Event) {
               >
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
                 <span class="session-item__actions" @click.stop>
-                  <ElIcon title="移动到分组" @click="openMoveMenu(s)"><FolderAdd /></ElIcon>
+                  <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
+                    <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
+                    <template #dropdown>
+                      <ElDropdownMenu data-test="move-group-menu">
+                        <ElDropdownItem
+                          v-for="grp in store.groups" :key="grp.id" :command="grp.id"
+                          :disabled="grp.id === (store.sessionGroupId[s.id] ?? null)"
+                        >
+                          <ElIcon class="move-menu__icon" :data-icon="grp.icon || 'Folder'"><component :is="groupIconComp(grp.icon)" /></ElIcon>
+                          {{ grp.name }}（{{ store.groupedSessions(grp.id).length }}）
+                        </ElDropdownItem>
+                        <ElDropdownItem command="__ungrouped" divided
+                          :disabled="!(store.sessionGroupId[s.id] ?? null)">
+                          未分组
+                        </ElDropdownItem>
+                        <ElDropdownItem command="__new">＋ 新建分组…</ElDropdownItem>
+                      </ElDropdownMenu>
+                    </template>
+                  </ElDropdown>
                   <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
                   <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
                   <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
@@ -1282,7 +1285,25 @@ function onKey(e: Event) {
                 >
                   <span class="session-item__title">{{ s.title || '新会话' }}</span>
                   <span class="session-item__actions" @click.stop>
-                    <ElIcon title="移动到分组" @click="openMoveMenu(s)"><FolderAdd /></ElIcon>
+                    <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
+                      <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
+                      <template #dropdown>
+                        <ElDropdownMenu data-test="move-group-menu">
+                          <ElDropdownItem
+                            v-for="grp in store.groups" :key="grp.id" :command="grp.id"
+                            :disabled="grp.id === (store.sessionGroupId[s.id] ?? null)"
+                          >
+                            <ElIcon class="move-menu__icon" :data-icon="grp.icon || 'Folder'"><component :is="groupIconComp(grp.icon)" /></ElIcon>
+                            {{ grp.name }}（{{ store.groupedSessions(grp.id).length }}）
+                          </ElDropdownItem>
+                          <ElDropdownItem command="__ungrouped" divided
+                            :disabled="!(store.sessionGroupId[s.id] ?? null)">
+                            未分组
+                          </ElDropdownItem>
+                          <ElDropdownItem command="__new">＋ 新建分组…</ElDropdownItem>
+                        </ElDropdownMenu>
+                      </template>
+                    </ElDropdown>
                     <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
                     <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
                     <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
@@ -2011,8 +2032,9 @@ function onKey(e: Event) {
            &.open { transform: rotate(90deg); } }
   .cgroup__icon { color: var(--el-text-color-secondary); flex: none; }
 }
-/* 分组图标选择器（新建/编辑分组对话框） */
-.group-icon-picker {
+/* 移动到分组下拉菜单里的分组图标（菜单 teleport 到 body，靠 scoped 属性命中） */
+.move-menu__icon { margin-right: 6px; color: var(--el-text-color-secondary); }
+/* 分组图标选择器（新建/编辑分组对话框） */.group-icon-picker {
   display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 12px;
   &__item {
     display: flex; align-items: center; justify-content: center;

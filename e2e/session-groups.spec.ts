@@ -97,10 +97,9 @@ test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回�
   await firstUngrouped.waitFor({ state: 'visible', timeout: 15_000 })
   await firstUngrouped.hover()
   await firstUngrouped.locator('[title="移动到分组"]').click()
-  // 移动菜单列出分组序号，「归档测试组」排最后（按创建时间）
-  const idx = await page.locator('[data-test="custom-group-head"]').count()
-  await page.locator('.el-message-box__input input').fill(String(idx))
-  await page.locator('.el-message-box__btns .el-button--primary').click()
+  // 移动菜单为下拉点选：直接点目标分组项（每行都有各自的隐藏菜单 DOM，限定可见的那个）
+  await page.locator('[data-test="move-group-menu"] .el-dropdown-menu__item:visible',
+    { hasText: groupName }).click()
   await page.waitForTimeout(1500)
 
   // ④ 组内出现 ≥1 会话（cgroup__item）
