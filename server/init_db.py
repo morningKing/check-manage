@@ -208,8 +208,8 @@ CREATE TABLE IF NOT EXISTS ai_mcp_servers (
 -- ==================== system_config 表 ====================
 CREATE TABLE IF NOT EXISTS system_config (
     id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    system_name     VARCHAR(200) NOT NULL DEFAULT '白泽 · 数据智能平台',
-    system_short_name VARCHAR(50) NOT NULL DEFAULT '白泽',
+    system_name     VARCHAR(200) NOT NULL DEFAULT 'BKB · 数据智能平台',
+    system_short_name VARCHAR(50) NOT NULL DEFAULT 'BKB',
     logo_url        VARCHAR(500),
     login_title     VARCHAR(200),
     login_subtitle  VARCHAR(300),
@@ -1452,8 +1452,8 @@ def init_db():
             cur.execute("""
                 CREATE TABLE system_config (
                     id              INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-                    system_name     VARCHAR(200) NOT NULL DEFAULT '白泽 · 数据智能平台',
-                    system_short_name VARCHAR(50) NOT NULL DEFAULT '白泽',
+                    system_name     VARCHAR(200) NOT NULL DEFAULT 'BKB · 数据智能平台',
+                    system_short_name VARCHAR(50) NOT NULL DEFAULT 'BKB',
                     logo_url        VARCHAR(500),
                     updated_at      TIMESTAMPTZ DEFAULT NOW(),
                     updated_by      VARCHAR(100)
@@ -1499,7 +1499,7 @@ def init_db():
             cur.execute("""
                 INSERT INTO home_widgets (id, widget_type, title, content, enabled, "order", layout_y) VALUES
                 ('welcome', 'welcome', '欢迎',
-                 '{"heading": "欢迎使用白泽 · 数据智能平台", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
+                 '{"heading": "欢迎使用BKB · 数据智能平台", "description": "本系统支持动态配置菜单和页面，实现灵活的数据管理。"}',
                  true, 1, 0),
                 ('stats', 'stats', '系统概览',
                  '{"items": [{"type": "menuCount", "label": "菜单数量", "icon": "Document"}, {"type": "pageCount", "label": "页面配置", "icon": "Files"}, {"type": "fieldCount", "label": "字段配置", "icon": "Setting"}]}',
@@ -2529,14 +2529,15 @@ def init_db():
         except Exception as _e:
             print(f"[warn] execution audit migration failed (non-fatal): {_e}")
 
-        # 品牌更名（白泽 · 数据智能平台）：既有库幂等更新，仅当仍为旧名
+        # 品牌更名（BKB · 数据智能平台）：既有库幂等更新，覆盖旧名和中间态
         cur.execute(
-            "UPDATE system_config SET system_name = '白泽 · 数据智能平台', "
-            " system_short_name = '白泽' "
-            "WHERE system_name LIKE '巡检%' OR system_short_name IN ('巡检管理')")
+            "UPDATE system_config SET system_name = 'BKB · 数据智能平台', "
+            " system_short_name = 'BKB' "
+            "WHERE system_name LIKE '巡检%' OR system_name LIKE '%白泽%' "
+            "   OR system_short_name IN ('巡检管理', '白泽')")
         cur.execute(
             "UPDATE home_widgets SET config = replace(config, "
-            "'巡检用例管理系统', '白泽 · 数据智能平台') "
+            "'巡检用例管理系统', 'BKB · 数据智能平台') "
             "WHERE config LIKE '%巡检用例管理系统%'")
 
         conn.commit()
