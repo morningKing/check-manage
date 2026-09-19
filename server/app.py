@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from config import (FLASK_PORT, FLASK_DEBUG, CORS_ALLOWED_ORIGINS,
                     JWT_SECRET_IS_DEFAULT)
@@ -119,6 +119,33 @@ app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(ai_batch_admin_bp)
 app.register_blueprint(ai_session_admin_bp)
 app.register_blueprint(ai_execution_admin_bp)
+
+
+@app.before_request
+def _ai_open_api_body_limit():
+    """AI 对外 JSON 端点的请求体门（utils/upload_limits.body_limit_for_path 的
+    Flask 侧执行点之二）。
+
+    open_api_batches 蓝图有自己的 before_request（语义相同）；这里补上其余
+    AI 对外家族（/v1/ai-sessions、/v1/memories、/v1/prompt-templates、
+    /v1/ai-scan-tasks、行操作 run）——此前这些端点只有生产代理 proxy.py 会
+    拦，直连后端 / 经 Vite 开发代理的超大 JSON 会完整进入 Flask。函数对
+    限度之外的路径（含备份还原、/v1/collections 数据接口）一律放行，详见
+    upload_limits 模块注释。"""
+    from utils.upload_limits import body_limit_for_path
+    limit = body_limit_for_path(request.path)
+    if limit is None:
+        return None
+    length = request.content_length
+    if length is None:
+        if 'chunked' in (request.headers.get('Transfer-Encoding') or '').lower():
+            return jsonify({'error': '请求必须携带 Content-Length，不支持分块传输',
+                            'code': 'INVALID_ARGUMENT'}), 411
+        return None
+    if length > limit:
+        return jsonify({'error': f'请求体超过 {limit // 1024 // 1024} MB 的上限',
+                        'code': 'PAYLOAD_TOO_LARGE'}), 413
+    return None
 
 # 执行审计表/回填随启动幂等执行（execution-audit §17）：旧分析会话
 # （标题前缀）自动补 kind=trace_analysis，无需手动跑迁移。

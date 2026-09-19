@@ -4,6 +4,16 @@
 
 import { vi } from 'vitest'
 
+// jsdom 缺失的 ResizeObserver：统一在 setup 注入一次。
+// 新组件测试不必再复制 per-file polyfill（存量文件里的副本无害，会逐步清理）。
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  ;(globalThis as any).ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+}
+
 // 为 jsdom 环境设置 localStorage mock
 const localStorageMock = (() => {
   let store: Record<string, string> = {}

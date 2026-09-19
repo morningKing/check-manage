@@ -23,7 +23,13 @@ def internal_search():
     body = request.get_json(force=True) or {}
     user_id = body.get('userId', '')
     query = body.get('query', '')
-    limit = int(body.get('limit', 5))
+    try:
+        raw_limit = body.get('limit', 5)
+        limit = 5 if raw_limit is None else int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'limit 必须是整数'}), 400
+    if limit < 1:
+        limit = 5
     return jsonify({'results': search_memory(user_id, query, limit)})
 
 

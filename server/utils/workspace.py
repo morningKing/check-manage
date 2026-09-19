@@ -281,3 +281,34 @@ def batch_staging_dir(workspace_root: str, user_id: str,
     p = Path(workspace_root) / "batch-staging" / user_id / safe
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def validate_staged_files(files, user_id: str) -> str | None:
+    """Internal (JWT) counterpart of open_api_batches._validate_staged_path.
+
+    The UI create/append endpoints used to accept any files[].path — an
+    absolute path or one under batch-staging/<someone-else>/ let a logged-in
+    user have the worker copy arbitrary readable files into their own
+    workspace, where the AI (and the file panels) would expose them. Every
+    path must be relative, `..`-free, and land inside
+    batch-staging/<this user>/ under one of the batch roots; the file must
+    also currently exist (TTL sweep may have removed it).
+
+    Returns a Chinese error message, or None when every file is acceptable.
+    """
+    from pathlib import PurePosixPath
+    if not files:
+        return None
+    for f in files:
+        path = str((f or {}).get('path') or '').replace('\\', '/')
+        if not path or path.startswith('/') or os.path.isabs(path):
+            return '文件路径无效'
+        parts = PurePosixPath(path).parts
+        if any(p == '..' for p in parts):
+            return '文件路径无效'
+        if len(parts) < 3 or parts[0] != 'batch-staging' \
+                or parts[1] != user_id:
+            return '文件路径无效'
+        if not any(os.path.isfile(os.path.join(r, path)) for r in batch_roots()):
+            return f'文件「{(f or {}).get("name") or path}」已过期或不存在，请重新上传'
+    return None

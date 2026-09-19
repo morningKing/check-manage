@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 表单验证工具函数 - 单元测试
  */

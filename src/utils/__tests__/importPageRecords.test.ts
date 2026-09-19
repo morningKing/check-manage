@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
 import { importPageRecords, retryImportFailures, diffRetryResult } from '../importPageRecords'
 import { makeStableImportId } from '../importId'

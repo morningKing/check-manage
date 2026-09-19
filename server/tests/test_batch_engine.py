@@ -302,7 +302,11 @@ def test_claim_picks_up_standalone_session(user_id, db_conn):
 
 def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tmp_path):
     """无父批任务的独立会话：prompt 从 continue_prompt 取、agent/model 从会话
-    行取、跑完 continue_prompt 被清空、_mark_done 不会因为 batch_id=None 报错。"""
+    行取、_mark_done 不会因为 batch_id=None 报错。
+
+    D4 修复后契约：continue_prompt 在认领时**保留**——重试/重执行需要取回
+    原始请求（standalone 行没有父批任务行可回读）；终态行不会再被 dispatcher
+    认领，残留无副作用。"""
     from utils.batch_engine import BatchWorker
     import utils.batch_engine as eng
 
@@ -336,7 +340,7 @@ def test_run_one_standalone_session_happy_path(user_id, db_conn, monkeypatch, tm
             assert status == 'completed'
             assert oc_id == 'oc-standalone-1'
             assert preview is not None
-            assert remaining_prompt is None  # cleared, not left dangling for a future claim
+            assert remaining_prompt == '帮我写一句问候语'  # 保留原始 prompt（D4：重试可复用）
 
         # send_message got the sourced agent/model (not None from a missing batch row)
         assert fake_oc.send_message.call_args.kwargs['agent'] == 'build'

@@ -29,19 +29,34 @@ MAX_JSON_BODY_BYTES = 1024 * 1024
 AI_BATCH_PUBLIC_PREFIX = '/api/v1/ai-batches'
 AI_BATCH_BACKEND_PREFIX = '/v1/ai-batches'
 
-_PREFIXES = (AI_BATCH_PUBLIC_PREFIX, AI_BATCH_BACKEND_PREFIX)
+# 其余 AI 对外家族的 JSON 端点同样按 1 MB 卡（请求体都只是 prompt/枚举/id，
+# 没有上传通道）。/v1/collections 是通用数据接口（可能批量导入大 JSON），
+# 刻意不整段限制，只精确匹配行操作 run 端点。
+_JSON_PREFIXES = (
+    (AI_BATCH_PUBLIC_PREFIX, AI_BATCH_BACKEND_PREFIX),
+    ('/api/v1/ai-sessions', '/v1/ai-sessions'),
+    ('/api/v1/memories', '/v1/memories'),
+    ('/api/v1/prompt-templates', '/v1/prompt-templates'),
+    ('/api/v1/ai-scan-tasks', '/v1/ai-scan-tasks'),
+)
 
 
 def body_limit_for_path(path):
-    """返回该路径允许的请求体字节上限；不属于 AI 批任务对外接口则返回 None。
+    """返回该路径允许的请求体字节上限；不属于 AI 对外接口则返回 None。
 
     `path` 可以是公网路径（`/api/v1/ai-batches/uploads`）或后端路径
     （`/v1/ai-batches/uploads`），可带查询串。None 表示**不限制** —— 其余端点
-    （尤其是备份还原）必须保持无上限。
+    （尤其是备份还原与 `/v1/collections` 数据接口）必须保持无上限。
     """
     p = (path or '').split('?', 1)[0].split('#', 1)[0]
-    for prefix in _PREFIXES:
-        if p == prefix or p.startswith(prefix + '/'):
-            rel = p[len(prefix):].rstrip('/')
-            return MAX_UPLOAD_REQUEST_BYTES if rel == '/uploads' else MAX_JSON_BODY_BYTES
+    for public, backend in _JSON_PREFIXES:
+        for prefix in (public, backend):
+            if p == prefix or p.startswith(prefix + '/'):
+                rel = p[len(prefix):].rstrip('/')
+                if prefix == AI_BATCH_PUBLIC_PREFIX or prefix == AI_BATCH_BACKEND_PREFIX:
+                    return MAX_UPLOAD_REQUEST_BYTES if rel == '/uploads' \
+                        else MAX_JSON_BODY_BYTES
+                return MAX_JSON_BODY_BYTES
+    if '/row-actions/' in p and p.rstrip('/').endswith('/run'):
+        return MAX_JSON_BODY_BYTES
     return None

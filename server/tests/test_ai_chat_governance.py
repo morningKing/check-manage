@@ -217,9 +217,11 @@ def test_list_excludes_batch_children():
 def test_list_includes_closed():
     import routes.ai_chat as ac
     conn = MagicMock(); cur = MagicMock()
+    # 8-tuple: (id, title, last_active_at, batch_id, batch_input_file,
+    #           status, group_id, pinned_at) — matches list_sessions SELECT
     cur.fetchall.return_value = [
-        ('s1', '会话1', None, None, None, 'active'),
-        ('s2', '会话2', None, None, None, 'closed'),
+        ('s1', '会话1', None, None, None, 'active', None, None),
+        ('s2', '会话2', None, None, None, 'closed', None, None),
     ]
     conn.cursor.return_value = cur
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { computeUsage, usageLevel, contextPercent, EMPTY_USAGE } from '../aiUsage'
 import type { AiMessage } from '@/api/aiChat'

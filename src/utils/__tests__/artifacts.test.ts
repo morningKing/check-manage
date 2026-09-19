@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { splitArtifacts, artifactFilename, isMarkdownLang, sniffLang, isRenderableLang, isRunnableLang, isInlineRenderLang, isImageFile, groupFilesByDir, mergeReasoningParts } from '../artifacts'
 import type { AiContentPart } from '@/api/aiChat'

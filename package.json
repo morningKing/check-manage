@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:server": "cd server && set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest -v",
+    "test:server:fast": "cd server && set PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 && python -m pytest -q -p xdist -n 4 --dist loadfile",
     "test:all": "npm run test:server && npm run test",
     "test:e2e": "playwright test",
     "start": "bash start.sh",

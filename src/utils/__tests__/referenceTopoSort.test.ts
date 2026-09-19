@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { buildReferenceOrder } from '../referenceTopoSort'
 import type { PageConfig } from '@/types'

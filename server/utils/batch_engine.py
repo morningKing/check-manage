@@ -816,18 +816,22 @@ class BatchWorker:
             # Standalone /v1/ai-sessions child (open_api_ai_sessions.py) —
             # no parent ai_chat_batches row to source prompt/agent/model from.
             # The initial prompt was stashed in continue_prompt at creation
-            # time (create_session()); read it here and clear it immediately
-            # so it's never mistaken for a real "continue" on some future
-            # claim of this same row.
+            # time (create_session()); read it here and KEEP it: every
+            # re-claim of a standalone row actually wants the original
+            # prompt back —
+            #   * fresh claim: is_continue requires opencode_session_id,
+            #     which is NULL here, so the prompt is sent as a fresh turn;
+            #   * auto-retry/reconcile re-queue before the first OpenCode
+            #     session existed (oc NULL): _maybe_auto_retry leaves
+            #     continue_prompt untouched, so the retry re-sends the real
+            #     prompt instead of an empty one (the standalone row has no
+            #     parent batch to re-read it from);
+            #   * continue-after-failure / re-execute paths overwrite it
+            #     deliberately (continue_child / AUTO_RETRY_CONTINUE_PROMPT).
             prompt = session_row.get('continue_prompt') or ''
             agent = session_row.get('agent')
             model = session_row.get('model')
             provision_repo = provision_ref = None
-            with get_db() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE ai_chat_sessions SET continue_prompt = NULL "
-                                "WHERE id = %s", (sid,))
-                conn.commit()
         else:
             ctx = self._fetch_batch_context(batch_id)
             if ctx is None:
@@ -1764,7 +1768,8 @@ class BatchWorker:
                     "UPDATE ai_chat_sessions "
                     "SET status='pending', retry_count = retry_count + 1, "
                     "    error_message=NULL, cancel_requested=false, pause_requested=false, "
-                    "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s ELSE NULL END "
+                    "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s "
+                    "                      ELSE continue_prompt END "
                     "WHERE id = %s",
                     (oc, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
         logger.warning('batch auto-retry sid=%s attempt=%d/%d (re-queued as pending%s)',
@@ -1842,7 +1847,7 @@ class BatchWorker:
                     "UPDATE ai_chat_sessions "
                     "SET status='pending', retry_count = retry_count + 1, "
                     "    error_message=NULL, cancel_requested=false, pause_requested=false, "
-                    "    continue_prompt = CASE WHEN %s THEN %s ELSE NULL END "
+                    "    continue_prompt = CASE WHEN %s THEN %s ELSE continue_prompt END "
                     "WHERE id = %s AND status = 'running'",
                     (continue_on_same, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
                 requeued = cur.rowcount > 0

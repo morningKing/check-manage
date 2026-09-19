@@ -10,7 +10,8 @@ from utils.filename import safe_filename
 
 from auth import login_required
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
-                             cleanup_batch_workspaces, WorkspacePathError)
+                             cleanup_batch_workspaces, validate_staged_files,
+                             WorkspacePathError)
 from utils.batch_repo import (
     append_to_batch,
     get_max_files_per_batch,
@@ -77,6 +78,12 @@ def create():
     for f in files:
         if not isinstance(f, dict) or not f.get('path') or not f.get('name'):
             return jsonify({'error': 'each file must have {name, path}'}), 400
+    # Path containment: a hostile client used to be able to hand the worker an
+    # absolute path or batch-staging/<other-user>/... and have it copied into
+    # its own workspace (same check the external API always had).
+    path_err = validate_staged_files(files, g.current_user['userId'])
+    if path_err:
+        return jsonify({'error': path_err}), 400
 
     agent = (body.get('agent') or '').strip() or None
     model = (body.get('model') or '').strip() or None
@@ -265,6 +272,9 @@ def append(batch_id):
     for f in files:
         if not isinstance(f, dict) or not f.get('path') or not f.get('name'):
             return jsonify({'error': 'each file must have {name, path}'}), 400
+    path_err = validate_staged_files(files, g.current_user['userId'])
+    if path_err:
+        return jsonify({'error': path_err}), 400
     try:
         result = append_to_batch(g.current_user['userId'], batch_id, files)
     except ValueError as e:

@@ -339,7 +339,8 @@ def _maybe_bucket_legacy_sessions(cur, user_id):
         "WHERE user_id = %s AND COALESCE(kind, 'chat') = 'chat' "
         "  AND status IN ('active', 'closed') AND group_id IS NULL",
         (user_id,))
-    if (cur.fetchone()[0] or 0) < _LEGACY_BUCKET_MIN:
+    row = cur.fetchone()
+    if ((row[0] if row else 0) or 0) < _LEGACY_BUCKET_MIN:
         return
     gid = 'sg_' + secrets.token_hex(6)
     cur.execute(

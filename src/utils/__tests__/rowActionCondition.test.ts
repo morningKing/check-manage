@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import { evaluateRowActionCondition } from '../rowActionCondition'
 import type { RowActionCondition } from '@/types/rowAction'

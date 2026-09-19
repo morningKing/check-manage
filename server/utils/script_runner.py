@@ -2,6 +2,7 @@
 
 import collections
 import csv
+import logging
 import io
 import json
 import math
@@ -174,90 +175,151 @@ def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, time
     return namespace
 
 
-def _subprocess_exec_worker(queue, profile, script_code, script_locals):
-    # 单一命名空间（原因见 _thread_exec）：合并 globals 与注入的 locals，使自定义函数 / 推导式
-    # 能引用 data/fields 等注入变量与脚本自定义名字，而不报 NameError。
-    namespace = _build_safe_globals(profile)
-    namespace.update(script_locals)
-    try:
-        exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（同时作 globals/locals）
-        if profile in ('export', 'menu'):
-            queue.put({
-                'ok': True,
-                'result': namespace.get('result'),
-                'filename': namespace.get('filename'),
-                'content_type': namespace.get('content_type'),
-            })
-        elif profile == 'etl':
-            queue.put({
-                'ok': True,
-                'result': namespace.get('result'),
-            })
-        else:
-            queue.put({'ok': True})
-    except Exception as exc:  # pragma: no cover
-        queue.put({
-            'ok': False,
-            'error_type': exc.__class__.__name__,
-            'error_message': str(exc),
-        })
-
-
 def _process_exec(profile, script_code, script_locals, timeout_seconds, timeout_message):
+    """在隔离子进程里执行脚本。
+
+    Windows 的 spawn 启动一个新解释器并把 pandas/numpy 全量重新 import 一遍
+    （~5s）；脚本跑得越碎这份冷启动越贵。因此用一个**常驻** worker 进程顺序
+    执行脚本，每个脚本仍然是全新命名空间（_build_safe_globals + script_locals
+    每次重建，沙箱禁 import/setattr，跨脚本无法污染共享模块对象），只有进程
+    冷启动成本被摊平。脚本超时/ worker 死亡时杀掉并重建，语义与旧的
+    「一次性 Process」一致：失控脚本永远不会毒化下一次执行。
+
+    任何「环境不允许子进程 IPC」的信号（PermissionError/OSError）都按旧约定
+    落线程兜底。
+    """
     try:
-        queue = multiprocessing.Queue()
-        proc = multiprocessing.Process(
-            target=_subprocess_exec_worker,
-            args=(queue, profile, script_code, script_locals),
-            daemon=True,
-        )
-        proc.start()
-
-        # Drain the result queue BEFORE joining. A child that put a large item
-        # on a multiprocessing.Queue cannot terminate until its feeder thread
-        # has flushed that item to the underlying pipe; if we join before
-        # reading, the feeder blocks on a full pipe (results > the OS pipe
-        # buffer) and the child never exits — so proc.join() stalls for the
-        # entire timeout. (Python docs warn about exactly this ordering.)
-        # queue.get(timeout=) both drains the result and enforces the timeout:
-        # a runaway/hung script never puts a result, so get() raises Empty.
-        try:
-            payload = queue.get(timeout=timeout_seconds)
-        except _queue.Empty:
-            proc.terminate()
-            proc.join(timeout=1)
-            raise TimeoutError(timeout_message)
-
-        # Result drained → the child can now exit promptly.
-        proc.join(timeout=5)
-        if proc.is_alive():
-            proc.terminate()
-
-        if not payload.get('ok'):
-            raise RuntimeError(f"{payload.get('error_type', 'ScriptError')}: {payload.get('error_message', '')}")
-        return payload
+        return _subprocess_exec_guarded(profile, script_code, script_locals,
+                                        timeout_seconds, timeout_message)
     except (PermissionError, OSError):
-        # Some restricted environments disallow multiprocessing IPC handles.
-        local_ctx = _thread_exec(
-            script_code=script_code,
-            safe_globals=_build_safe_globals(profile),
-            script_locals=dict(script_locals),
-            timeout_seconds=timeout_seconds,
-            timeout_message=timeout_message,
-        )
-        if profile in ('export', 'menu'):
-            return {
-                'ok': True,
-                'result': local_ctx.get('result'),
-                'filename': local_ctx.get('filename'),
-                'content_type': local_ctx.get('content_type'),
+        return _thread_exec_fallback(profile, script_code, script_locals,
+                                     timeout_seconds, timeout_message)
+
+
+def _subprocess_exec_guarded(profile, script_code, script_locals,
+                             timeout_seconds, timeout_message):
+    for _attempt in (0, 1):  # worker 意外死亡（queue 断裂）允许重建重试一次
+        state = _acquire_script_worker()
+        if state is None:
+            raise PermissionError('multiprocessing IPC unavailable')
+        try:
+            state['jobs'].put({
+                'profile': profile,
+                'script_code': script_code,
+                'script_locals': script_locals,
+            })
+            payload = state['results'].get(timeout=timeout_seconds)
+        except _queue.Empty:
+            # 与旧实现同一语义：拿不到结果 = 超时；杀掉 worker，保证下一次
+            # 执行拿到的是全新进程（失控脚本不毒化后续脚本）。
+            _kill_script_worker(state, reason='script timeout')
+            raise TimeoutError(timeout_message)
+        except (OSError, ValueError):
+            _kill_script_worker(state, reason='worker died')
+            continue
+        if not payload.get('ok'):
+            raise RuntimeError(
+                f"{payload.get('error_type', 'ScriptError')}: "
+                f"{payload.get('error_message', '')}")
+        return payload
+    raise PermissionError('script worker unavailable')  # → 线程兜底
+
+
+def _thread_exec_fallback(profile, script_code, script_locals,
+                          timeout_seconds, timeout_message):
+    # Some restricted environments disallow multiprocessing IPC handles.
+    local_ctx = _thread_exec(
+        script_code=script_code,
+        safe_globals=_build_safe_globals(profile),
+        script_locals=dict(script_locals),
+        timeout_seconds=timeout_seconds,
+        timeout_message=timeout_message,
+    )
+    if profile in ('export', 'menu'):
+        return {
+            'ok': True,
+            'result': local_ctx.get('result'),
+            'filename': local_ctx.get('filename'),
+            'content_type': local_ctx.get('content_type'),
+        }
+    if profile == 'etl':
+        return {
+            'ok': True,
+            'result': local_ctx.get('result'),
+        }
+    return {'ok': True}
+
+
+# ── 常驻 worker（进程池大小=1；见 _process_exec docstring） ──────────────
+
+_worker_lock = threading.Lock()
+_worker_state = {'proc': None, 'jobs': None, 'results': None}
+
+
+def _acquire_script_worker():
+    """返回可用的 worker state；环境禁 IPC 时返回 None（线程兜底）。"""
+    if _worker_state['proc'] is not None and _worker_state['proc'].is_alive():
+        return _worker_state
+    try:
+        jobs = multiprocessing.Queue()
+        results = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_script_worker_main, args=(jobs, results), daemon=True)
+        proc.start()
+    except (PermissionError, OSError):
+        return None
+    _worker_state['proc'] = proc
+    _worker_state['jobs'] = jobs
+    _worker_state['results'] = results
+    return _worker_state
+
+
+def _kill_script_worker(state, reason: str):
+    proc = state.get('proc')
+    state['proc'] = None
+    state['jobs'] = None
+    state['results'] = None
+    if proc is None:
+        return
+    if proc.is_alive():
+        proc.terminate()
+    proc.join(timeout=2)
+    logging.getLogger(__name__).info('script worker replaced (%s)', reason)
+
+
+def _script_worker_main(jobs, results):
+    """常驻循环：收一个脚本执行一个。每个脚本全新命名空间；进程内只共享
+    已 import 的库实例（沙箱禁 import/setattr，脚本无法改写它们）。"""
+    while True:
+        job = jobs.get()
+        profile = job['profile']
+        script_code = job['script_code']
+        script_locals = job['script_locals']
+        try:
+            namespace = _build_safe_globals(profile)
+            namespace.update(script_locals)
+            exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（globals=locals）
+            if profile in ('export', 'menu'):
+                payload = {
+                    'ok': True,
+                    'result': namespace.get('result'),
+                    'filename': namespace.get('filename'),
+                    'content_type': namespace.get('content_type'),
+                }
+            elif profile == 'etl':
+                payload = {
+                    'ok': True,
+                    'result': namespace.get('result'),
+                }
+            else:
+                payload = {'ok': True}
+        except Exception as exc:  # pragma: no cover
+            payload = {
+                'ok': False,
+                'error_type': exc.__class__.__name__,
+                'error_message': str(exc),
             }
-        if profile == 'etl':
-            return {
-                'ok': True,
-                'result': local_ctx.get('result'),
-            }
-        return {'ok': True}
+        results.put(payload)
 
 
 def run_export_script(script_code, data, fields, page_name, output_format='json', references=None):

@@ -364,13 +364,21 @@ def test_delete_session_cleans_everything(setup):
 
 
 def test_list_sessions_returns_user_sessions(setup):
-    """SQL selects (id, title, last_active_at, batch_id, batch_input_file, status) so
-    that batch-children get synthesized "[批] <file>" titles. The mock row
-    must match that 6-tuple shape."""
+    """SQL selects (id, title, last_active_at, batch_id, batch_input_file,
+    status, group_id, pinned_at) so that batch-children get synthesized
+    "[批] <file>" titles. The mock row must match that 8-tuple shape (the
+    group query returns (id, name, icon, created_at, count) rows)."""
+    from datetime import datetime
     client, cursor, oc, dev_h, _, _ = setup
-    cursor.fetchall.return_value = [
-        ('sess_a', '会话A', None, None, None, 'active'),                # regular session
-        ('sess_b', None, None, 'batch-1', 'uploads/req-A.txt', 'active'),  # batch child → synthesized title
+    cursor.fetchall.side_effect = [
+        # sessions: (id, title, last_active_at, batch_id, batch_input_file,
+        #            status, group_id, pinned_at)
+        [('sess_a', '会话A', datetime(2026, 9, 1, 10, 0, 0), None, None,
+          'active', None, None),                                # regular session
+         ('sess_b', None, datetime(2026, 9, 1, 9, 0, 0), 'batch-1',
+          'uploads/req-A.txt', 'active', None, None)],          # batch child → synthesized title
+        [],  # trace_analysis sessions
+        [('g1', '历史会话', 'Folder', datetime(2026, 8, 1, 0, 0, 0), 0)],  # groups
     ]
     resp = client.get('/ai/chat/sessions', headers=dev_h)
     assert resp.status_code == 200
@@ -379,6 +387,8 @@ def test_list_sessions_returns_user_sessions(setup):
     assert body['sessions'][0]['title'] == '会话A'
     assert body['sessions'][1]['title'] == '[批] req-A.txt'
     assert body['sessions'][0]['status'] == 'active'
+    assert body['sessions'][0]['lastActiveAt'] == '2026-09-01T10:00:00'
+    assert body['groups'][0]['name'] == '历史会话'
 
 
 def test_rename_session_updates_title(setup):

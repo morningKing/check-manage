@@ -32,7 +32,8 @@ from utils.upload_limits import (MAX_JSON_BODY_BYTES, MAX_UPLOAD_REQUEST_BYTES,
                                  MAX_UPLOAD_TOTAL_BYTES, body_limit_for_path)
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              legacy_batch_workspace_root,
-                             cleanup_batch_workspaces, WorkspacePathError)
+                             cleanup_batch_workspaces, safe_resolve,
+                             WorkspacePathError)
 
 open_api_batches_bp = Blueprint('open_api_batches', __name__,
                                 url_prefix='/v1/ai-batches')
@@ -681,13 +682,11 @@ def session_file_download(batch_id, child_id):
     rel_path = request.args.get('path', '').strip()
     if not rel_path:
         return err('path 参数必填', INVALID_ARGUMENT, 400)
-    # 安全校验：禁止 .. 穿越
-    normalized = os.path.normpath(rel_path)
-    if '..' in normalized.split(os.sep):
-        return err('路径非法', INVALID_ARGUMENT, 400)
-    abs_path = os.path.join(ws, normalized)
-    # 确保路径落在工作区内
-    if not os.path.commonpath([ws, abs_path]).startswith(ws):
+    # 安全校验：resolve 后必须仍落在工作区内（原 normpath+commonpath 判定不解析
+    # 符号链接，工作区内指向外部的 symlink 可被读出）。
+    try:
+        abs_path = safe_resolve(ws, rel_path)
+    except WorkspacePathError:
         return err('路径非法', INVALID_ARGUMENT, 400)
     if not os.path.isfile(abs_path):
         return err('文件不存在', NOT_FOUND, 404)
@@ -730,12 +729,10 @@ def session_files_download_all(batch_id, child_id):
             rel_path = rec.get('path', '')
             if not rel_path:
                 continue
-            # 安全校验
-            normalized = os.path.normpath(rel_path)
-            if '..' in normalized.split(os.sep):
-                continue
-            abs_path = os.path.join(ws, normalized)
-            if not os.path.commonpath([ws, abs_path]).startswith(ws):
+            # 安全校验：与单文件下载一致，resolve 后必须仍落在工作区内
+            try:
+                abs_path = safe_resolve(ws, rel_path)
+            except WorkspacePathError:
                 continue
             if not os.path.isfile(abs_path):
                 skipped.append(rel_path)

@@ -55,7 +55,7 @@ TASK = {'id': 't1', 'collection': 'orders', 'branch_id': 'main',
 
 def test_writeback_success_sets_mapped_columns_and_done():
     fake, cur = _patch_db()
-    row = {'scan_task_id': 't1', 'source_record_id': 'rec-1'}
+    row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
     msg = {'content': [{'type': 'text', 'text': '```json\n{"结论":"通过"}\n```'}]}
     with patch('utils.ai_scan_engine.get_db', fake), \
          patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
@@ -68,7 +68,7 @@ def test_writeback_success_sets_mapped_columns_and_done():
 
 def test_writeback_missing_required_marks_failed():
     fake, cur = _patch_db()
-    row = {'scan_task_id': 't1', 'source_record_id': 'rec-1'}
+    row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
     msg = {'content': [{'type': 'text', 'text': '没有 JSON'}]}
     with patch('utils.ai_scan_engine.get_db', fake), \
          patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
@@ -79,7 +79,7 @@ def test_writeback_missing_required_marks_failed():
 
 def test_writeback_child_failed_marks_failed():
     fake, cur = _patch_db()
-    row = {'scan_task_id': 't1', 'source_record_id': 'rec-1'}
+    row = {'id': 'sess-1', 'scan_task_id': 't1', 'source_record_id': 'rec-1'}
     with patch('utils.ai_scan_engine.get_db', fake), \
          patch('utils.ai_scan_engine._load_task', lambda tid: TASK):
         se.on_child_finished(row, None, ok=False)

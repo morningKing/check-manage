@@ -33,4 +33,5 @@ xlrd>=2.0.0               # .xls (legacy Excel) read support for pandas.read_exc
 
 # --- Testing ---
 pytest>=7.4.0
+pytest-xdist>=3.5.0
 pytest-cov>=5.0.0

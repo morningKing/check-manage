@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * 字段导入工具函数单元测试
  *
