@@ -1,7 +1,8 @@
 /**
- * 变更文件 Markdown 预览渲染 E2E：
- * 变更文件面板里的 .md 点「预览」应打开 FilePreviewDialog 的排版渲染
- * （标题/表格/代码块成为 HTML），而不是把 md 源码当文本/diff 展示。
+ * 变更文件 Markdown 预览 E2E：
+ * 变更文件面板里的 .md 点「预览」打开 diff 抽屉，默认「渲染预览」模式
+ * （标题/表格/代码块成为 HTML），抽屉头可切「diff 对照」看源码 diff，
+ * 再切回渲染。双模式切换由 [data-test="diff-mode-toggle"] 承载。
  *
  * 前置 seed（由脚本写入，测试内不重复创建）：
  *   会话 audit-chat-1789743325271（sess_cebf68ce157e）workspace 根下有
@@ -79,14 +80,24 @@ test('变更文件 md 预览走富渲染（标题/表格成为 HTML 而非源码
     await row.waitFor({ state: 'visible', timeout: 15_000 })
   }
 
-  // ③ 点「预览」→ FilePreviewDialog 打开且 Markdown 排版渲染
+  // ③ 点「预览」→ diff 抽屉打开，默认「渲染预览」模式且 Markdown 排版渲染
   await row.getByRole('button', { name: '预览' }).click()
-  const dialog = page.locator('.file-preview-dialog')
-  await dialog.waitFor({ state: 'visible', timeout: 15_000 })
+  const drawer = page.locator('.el-drawer').filter({ hasText: MD_NAME })
+  await drawer.waitFor({ state: 'visible', timeout: 15_000 })
+  const body = drawer.locator('.preview-body')
   // 渲染断言：md 标题成为 h1、表格成为 <table>（源码态不会有这两个元素）
-  await expect(dialog.locator('h1', { hasText: '变更文件渲染验证' }))
+  await expect(body.locator('h1', { hasText: '变更文件渲染验证' }))
     .toBeVisible({ timeout: 15_000 })
-  await expect(dialog.locator('table')).toBeVisible()
-  // 兜底断言：不是纯文本 <pre>（源码态走 fp-text/代码块）
-  await expect(dialog.locator('pre.fp-text')).toHaveCount(0)
+  await expect(body.locator('table')).toBeVisible()
+
+  // ④ 切到「diff 对照」→ FileDiffView 源码态（渲染的 h1 消失）
+  await drawer.locator('[data-test="diff-mode-toggle"]').getByText('diff 对照').click()
+  await expect(body.locator('.file-diff')).toBeVisible({ timeout: 10_000 })
+  await expect(body.locator('h1', { hasText: '变更文件渲染验证' })).toHaveCount(0)
+
+  // ⑤ 切回「渲染预览」→ 排版恢复
+  await drawer.locator('[data-test="diff-mode-toggle"]').getByText('渲染预览').click()
+  await expect(body.locator('h1', { hasText: '变更文件渲染验证' }))
+    .toBeVisible({ timeout: 10_000 })
+  await expect(body.locator('table')).toBeVisible()
 })

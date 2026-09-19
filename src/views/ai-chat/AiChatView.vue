@@ -5,7 +5,7 @@ import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag, ElDialog,
   ElDropdown, ElDropdownMenu, ElDropdownItem,
-  ElSelect, ElOption,
+  ElSelect, ElOption, ElRadioGroup, ElRadioButton,
 } from 'element-plus'
 import {
   Plus, Top, EditPen, Close, Document, Loading,
@@ -592,20 +592,31 @@ function openRichPreview(name: string, path: string): boolean {
 
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
-  // 变更文件里图片/Office/Markdown 无法做有意义的文本 diff，直接走富渲染预览。
-  if (openRichPreview(c.path.split('/').pop() || c.path, c.path)) return
+  // 图片/Office 无法做文本 diff，直接富渲染；Markdown 不走 FilePreviewDialog，
+  // 打开 diff 抽屉默认「渲染预览」模式，抽屉头可切「diff 对照」看改动。
+  const name = c.path.split('/').pop() || c.path
+  if (previewKind(name) !== 'markdown' && openRichPreview(name, c.path)) return
   diffFile.value = c.path
   diffData.value = null
+  diffRenderContent.value = ''
+  diffRenderMode.value = 'rendered'
   diffOpen.value = true
   diffLoading.value = true
+  const isMd = previewKind(c.path.split(/[\\/]/).pop() || '') === 'markdown'
   try {
-    const res = await getFileDiff(activeId.value, c.path)
+    const [res, preview] = await Promise.all([
+      getFileDiff(activeId.value, c.path),
+      isMd
+        ? getFilePreview(activeId.value, c.path).catch(() => null)
+        : Promise.resolve(null),
+    ])
     diffData.value = res
     // status null = this path is no longer a current change (the panel list
     // drifted out of sync with the workspace — e.g. the file was reverted or
     // removed since the last scan). Re-scan so the stale row disappears; the
     // drawer shows a clear "no diff" message instead of dead-ending.
     if (res.status === null) store.loadChanges(activeId.value)
+    diffRenderContent.value = preview && !preview.binary ? preview.content : ''
   } catch {
     ElMessage.error('预览失败')
     diffOpen.value = false
@@ -690,6 +701,11 @@ const diffOpen = ref(false)
 const diffData = ref<FileDiff | null>(null)
 const diffFile = ref('')
 const diffLoading = ref(false)
+// Markdown 变更文件的双模式：渲染预览（排版读内容）/ diff 对照（看改动）。
+const diffRenderMode = ref<'rendered' | 'diff'>('rendered')
+const diffRenderContent = ref('')
+const diffIsMd = computed(() =>
+  previewKind((diffFile.value || '').split(/[\\/]/).pop() || '') === 'markdown')
 function openPreview(seg: CodeSegment, idx: number) {
   preview.value = { filename: fileNameOf(seg, idx), versions: versionsForSeg(seg, idx) }
   previewOpen.value = true
@@ -1832,10 +1848,29 @@ function onKey(e: Event) {
       </div>
     </ElDrawer>
 
-    <!-- 变更文件 diff 预览面板 -->
-    <ElDrawer v-model="diffOpen" :title="diffFile || '差异'" direction="rtl" size="60%">
+    <!-- 变更文件 diff 预览面板（Markdown 支持渲染预览 / diff 对照双模式） -->
+    <ElDrawer v-model="diffOpen" direction="rtl" size="60%">
+      <template #header>
+        <div class="diff-drawer__head">
+          <span class="diff-drawer__title" :title="diffFile">{{ diffFile || '差异' }}</span>
+          <ElRadioGroup
+            v-if="diffIsMd" v-model="diffRenderMode" size="small"
+            data-test="diff-mode-toggle"
+          >
+            <ElRadioButton value="rendered">渲染预览</ElRadioButton>
+            <ElRadioButton value="diff">diff 对照</ElRadioButton>
+          </ElRadioGroup>
+        </div>
+      </template>
       <div class="preview-body">
         <div v-if="diffLoading" class="ai-chat__pending"><ElIcon class="spin"><Loading /></ElIcon> 加载中…</div>
+        <template v-else-if="diffIsMd && diffRenderMode === 'rendered'">
+          <MarkdownView v-if="diffRenderContent" :text="diffRenderContent" />
+          <div v-else class="diff-drawer__empty">无法加载文件内容</div>
+          <div v-if="diffData?.truncated" class="diff-drawer__truncated">
+            内容过大，已截断；请下载查看完整内容。
+          </div>
+        </template>
         <FileDiffView
           v-else-if="diffData"
           :status="diffData.status"
@@ -2034,6 +2069,22 @@ function onKey(e: Event) {
 }
 /* 移动到分组下拉菜单里的分组图标（菜单 teleport 到 body，靠 scoped 属性命中） */
 .move-menu__icon { margin-right: 6px; color: var(--el-text-color-secondary); }
+
+/* diff 抽屉头：文件名 + Markdown 渲染/diff 双模式切换 */
+.diff-drawer__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-width: 0;
+}
+.diff-drawer__title {
+  font-size: 15px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.diff-drawer__empty { color: var(--el-text-color-secondary); padding: 8px 0; }
+.diff-drawer__truncated {
+  margin-top: 10px; padding: 6px 10px; font-size: 12px;
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9); border-radius: 6px;
+}
 /* 分组图标选择器（新建/编辑分组对话框） */.group-icon-picker {
   display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 12px;
   &__item {
