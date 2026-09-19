@@ -135,6 +135,8 @@ export interface AiAnalysisSessionSummary extends AiSessionSummary {
 export interface AiSessionGroup {
   id: string
   name: string
+  /** Element Plus 图标组件名，默认 Folder */
+  icon?: string
   createdAt?: string | null
   count?: number
 }
@@ -156,11 +158,11 @@ export function listSessions() {
 export function listSessionGroups() {
   return get<{ groups: AiSessionGroup[] }>('/ai/chat/session-groups')
 }
-export function createSessionGroup(name: string) {
-  return post<AiSessionGroup>('/ai/chat/session-groups', { name })
+export function createSessionGroup(name: string, icon?: string) {
+  return post<AiSessionGroup>('/ai/chat/session-groups', { name, icon })
 }
-export function renameSessionGroup(gid: string, name: string) {
-  return patch<{ ok: boolean }>(`/ai/chat/session-groups/${gid}`, { name })
+export function renameSessionGroup(gid: string, name: string, icon?: string) {
+  return patch<{ ok: boolean }>(`/ai/chat/session-groups/${gid}`, { name, icon })
 }
 export function deleteSessionGroup(gid: string) {
   return del<{ ok: boolean }>(`/ai/chat/session-groups/${gid}`)

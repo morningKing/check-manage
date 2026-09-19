@@ -74,12 +74,19 @@ test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回�
   const hasLegacy = await legacy.count()
   if (hasLegacy) await expect(legacy).toBeVisible()
 
-  // ② 新建分组
+  // ② 新建分组（含图标选择：选第 2 个图标 FolderOpened）。
+  //    名称带时间戳，避免失败重跑时撞同名分组（同名会 409）。
+  const groupName = `归档测试组${Date.now() % 100000}`
   await page.locator('[data-test="new-group-btn"]').click()
-  await page.locator('.el-message-box__input input').fill('归档测试组')
-  await page.locator('.el-message-box__btns .el-button--primary').click()
-  const newHead = page.locator('[data-test="custom-group-head"]', { hasText: '归档测试组' })
+  const dialog = page.locator('[data-test="group-dialog"]')
+  await dialog.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.locator('[data-test="group-name-input"]').fill(groupName)
+  await page.locator('[data-test="group-icon-picker"] button').nth(1).click()
+  await page.locator('[data-test="group-submit"]').click()
+  const newHead = page.locator('[data-test="custom-group-head"]', { hasText: groupName })
   await expect(newHead).toBeVisible({ timeout: 10_000 })
+  // 组头渲染所选图标（data-icon 标记）
+  await expect(newHead.locator('.cgroup__icon[data-icon="FolderOpened"]')).toBeVisible()
 
   // ③ 移动一个未分组会话入组：新建一个会话保证未分组非空
   const input2 = page.getByPlaceholder(/给 AI 助手发消息/)
@@ -101,12 +108,20 @@ test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回�
   await expect(groupedItem.first()).toBeVisible({ timeout: 10_000 })
   void input; void input2
 
-  // ⑤ 删除分组 → 会话回到未分组，组头消失
+  // ⑤ 编辑分组：换图标（第 5 个 Timer）+ 保留名称
+  await newHead.hover()
+  await newHead.locator('[title="重命名分组"]').click()
+  await dialog.waitFor({ state: 'visible', timeout: 10_000 })
+  await page.locator('[data-test="group-icon-picker"] button').nth(4).click()
+  await page.locator('[data-test="group-submit"]').click()
+  await expect(newHead.locator('.cgroup__icon[data-icon="Timer"]')).toBeVisible({ timeout: 10_000 })
+
+  // ⑥ 删除分组 → 会话回到未分组，组头消失
   await newHead.hover()
   await newHead.locator('[title^="删除分组"]').click()
   await page.locator('.el-message-box__btns .el-button--primary').click()
   await expect(page.locator('[data-test="custom-group-head"]',
-    { hasText: '归档测试组' })).toHaveCount(0, { timeout: 10_000 })
+    { hasText: groupName })).toHaveCount(0, { timeout: 10_000 })
   await page.waitForTimeout(1000)
   await expect(page.locator('.session-item:not(.analysis-item):not(.cgroup__item)')
     .first()).toBeVisible()

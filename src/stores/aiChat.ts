@@ -255,13 +255,13 @@ export const useAiChatStore = defineStore('aiChat', {
       return this.sessions.filter(
         s => (this.sessionGroupId[s.id] ?? null) === groupId)
     },
-    async createGroup(name: string) {
-      const g = await createSessionGroup(name)
+    async createGroup(name: string, icon?: string) {
+      const g = await createSessionGroup(name, icon)
       await this.loadSessions()
       return g
     },
-    async renameGroup(gid: string, name: string) {
-      await apiRenameSessionGroup(gid, name)
+    async renameGroup(gid: string, name: string, icon?: string) {
+      await apiRenameSessionGroup(gid, name, icon)
       await this.loadSessions()
     },
     async deleteGroup(gid: string) {

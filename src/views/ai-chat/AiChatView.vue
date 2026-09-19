@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, defin
 import { useRoute } from 'vue-router'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
-  ElDrawer, ElTag,
+  ElDrawer, ElTag, ElDialog,
   ElDropdown, ElDropdownMenu, ElDropdownItem,
   ElSelect, ElOption,
 } from 'element-plus'
@@ -12,6 +12,7 @@ import {
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
   DataAnalysis, FolderAdd,
+  Folder, FolderOpened, Collection, Timer, Monitor, DataLine, Files, Aim,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -387,28 +388,66 @@ function isCustomGroupCollapsed(gid: string) {
 function toggleCustomGroup(gid: string) {
   customGroupCollapsed.value[gid] = !isCustomGroupCollapsed(gid)
 }
-async function createGroup() {
-  try {
-    const res = await ElMessageBox.prompt('分组名称（不超过 50 字）', '新建会话分组', {
-      confirmButtonText: '创建', cancelButtonText: '取消',
-      inputPattern: /^.{1,50}$/, inputErrorMessage: '名称必填且不超过 50 字',
-    })
-    const value = (res as { value?: string }).value || ''
-    await store.createGroup(value.trim())
-    ElMessage.success('分组已创建，可通过会话行「移动到分组」归档')
-  } catch { /* cancelled */ }
+// ── 分组新建/重命名对话框（含图标选择） ─────────────────────────────────
+const GROUP_ICON_CHOICES: Array<{ name: string; comp: typeof Folder }> = [
+  { name: 'Folder', comp: Folder },
+  { name: 'FolderOpened', comp: FolderOpened },
+  { name: 'Collection', comp: Collection },
+  { name: 'Tickets', comp: Tickets },
+  { name: 'Timer', comp: Timer },
+  { name: 'Monitor', comp: Monitor },
+  { name: 'DataLine', comp: DataLine },
+  { name: 'Files', comp: Files },
+  { name: 'Aim', comp: Aim },
+  { name: 'ChatDotRound', comp: ChatDotRound },
+]
+const groupDialog = reactive({
+  visible: false,
+  mode: 'create' as 'create' | 'rename',
+  id: '',
+  name: '',
+  icon: 'Folder',
+  /** create 模式下若带值，创建成功后把该会话移入新分组（移动流程的「＋ 新建分组…」） */
+  moveSessionId: '' as string,
+})
+function groupIconComp(name?: string): typeof Folder {
+  return GROUP_ICON_CHOICES.find(c => c.name === (name || 'Folder'))?.comp || Folder
 }
-async function renameGroup(g: { id: string; name: string }) {
+function openCreateGroup(moveSessionId = '') {
+  groupDialog.mode = 'create'
+  groupDialog.id = ''
+  groupDialog.name = ''
+  groupDialog.icon = 'Folder'
+  groupDialog.moveSessionId = moveSessionId
+  groupDialog.visible = true
+}
+function openRenameGroup(g: { id: string; name: string; icon?: string }) {
+  groupDialog.mode = 'rename'
+  groupDialog.id = g.id
+  groupDialog.name = g.name
+  groupDialog.icon = g.icon || 'Folder'
+  groupDialog.moveSessionId = ''
+  groupDialog.visible = true
+}
+async function submitGroupDialog() {
+  const name = groupDialog.name.trim()
+  if (!name || name.length > 50) {
+    ElMessage.warning('名称必填且不超过 50 字')
+    return
+  }
   try {
-    const res = await ElMessageBox.prompt('新的分组名称', '重命名分组', {
-      confirmButtonText: '保存', cancelButtonText: '取消',
-      inputValue: g.name, inputPattern: /^.{1,50}$/,
-      inputErrorMessage: '名称必填且不超过 50 字',
-    })
-    const value = (res as { value?: string }).value || ''
-    await store.renameGroup(g.id, value.trim())
-    ElMessage.success('分组已重命名')
-  } catch { /* cancelled */ }
+    if (groupDialog.mode === 'create') {
+      const g = await store.createGroup(name, groupDialog.icon)
+      if (groupDialog.moveSessionId) await store.moveSession(groupDialog.moveSessionId, g.id)
+      ElMessage.success(groupDialog.moveSessionId ? '分组已创建并移入' : '分组已创建，可通过会话行「移动到分组」归档')
+    } else {
+      await store.renameGroup(groupDialog.id, name, groupDialog.icon)
+      ElMessage.success('分组已更新')
+    }
+    groupDialog.visible = false
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '保存失败')
+  }
 }
 async function deleteGroup(g: { id: string; name: string }) {
   try {
@@ -440,13 +479,8 @@ ${i + 1}. ${o}`).join(''),
     const idx = parseInt(value, 10) - 1
     if (idx < 0 || idx >= options.length) { ElMessage.warning('序号无效'); return }
     if (idx === options.length - 1) {
-      const res2 = await ElMessageBox.prompt('新分组名称', '新建会话分组', {
-        confirmButtonText: '创建并移入', cancelButtonText: '取消',
-        inputPattern: /^.{1,50}$/, inputErrorMessage: '名称必填且不超过 50 字',
-      })
-      const name = (res2 as { value?: string }).value || ''
-      const g = await store.createGroup(name.trim())
-      await store.moveSession(s.id, g.id)
+      openCreateGroup(s.id)
+      return
     } else if (options[idx] === '未分组') {
       await store.moveSession(s.id, null)
     } else {
@@ -1207,7 +1241,7 @@ function onKey(e: Event) {
             <ElIcon class="section-icon"><ChatDotRound /></ElIcon>
             会话
             <ElButton link size="small" :icon="FolderAdd" data-test="new-group-btn"
-                      @click.stop="createGroup">分组</ElButton>
+                      @click.stop="openCreateGroup()">分组</ElButton>
           </div>
           <div v-show="!collapsedSections.sessions">
             <!-- 未分组会话（group_id 为空） -->
@@ -1233,10 +1267,11 @@ function onKey(e: Event) {
               <div class="cgroup__head" data-test="custom-group-head"
                    @click="toggleCustomGroup(g.id)">
                 <ElIcon class="caret" :class="{ open: !isCustomGroupCollapsed(g.id) }"><ArrowRight /></ElIcon>
+                <ElIcon class="cgroup__icon" :data-icon="g.icon || 'Folder'"><component :is="groupIconComp(g.icon)" /></ElIcon>
                 <span class="cgroup__name" :title="g.name">{{ g.name }}</span>
                 <span class="cgroup__count">{{ store.groupedSessions(g.id).length }}</span>
                 <span class="cgroup__actions" @click.stop>
-                  <ElIcon title="重命名分组" @click="renameGroup(g)"><EditPen /></ElIcon>
+                  <ElIcon title="重命名分组" @click="openRenameGroup(g)"><EditPen /></ElIcon>
                   <ElIcon title="删除分组（会话回到未分组）" @click="deleteGroup(g)"><Delete /></ElIcon>
                 </span>
               </div>
@@ -1808,6 +1843,39 @@ function onKey(e: Event) {
       @created="async (d) => { await batches.fetchList(); batches.selectBatch(d.batch.id) }" />
     <PromptTemplateManager v-model="showTemplateManager" @apply="onApplyTemplate" />
     <MemoryManager v-model="showMemoryManager" />
+
+    <!-- 分组新建/重命名（含图标选择） -->
+    <ElDialog
+      v-model="groupDialog.visible"
+      :title="groupDialog.mode === 'create' ? '新建会话分组' : '编辑分组'"
+      width="360px"
+      data-test="group-dialog"
+      @keyup.enter="submitGroupDialog"
+    >
+      <ElInput
+        v-model="groupDialog.name"
+        :maxlength="50"
+        placeholder="分组名称（不超过 50 字）"
+        data-test="group-name-input"
+      />
+      <div class="group-icon-picker" data-test="group-icon-picker">
+        <button
+          v-for="c in GROUP_ICON_CHOICES" :key="c.name"
+          type="button" class="group-icon-picker__item"
+          :class="{ active: groupDialog.icon === c.name }"
+          :title="c.name"
+          @click="groupDialog.icon = c.name"
+        >
+          <ElIcon><component :is="c.comp" /></ElIcon>
+        </button>
+      </div>
+      <template #footer>
+        <ElButton @click="groupDialog.visible = false">取消</ElButton>
+        <ElButton type="primary" data-test="group-submit" @click="submitGroupDialog">
+          {{ groupDialog.mode === 'create' ? '创建' : '保存' }}
+        </ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -1943,6 +2011,22 @@ function onKey(e: Event) {
   &:hover { background: var(--el-fill-color-light); }
   .caret { transition: transform .15s; color: var(--el-text-color-secondary);
            &.open { transform: rotate(90deg); } }
+  .cgroup__icon { color: var(--el-text-color-secondary); flex: none; }
+}
+/* 分组图标选择器（新建/编辑分组对话框） */
+.group-icon-picker {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 12px;
+  &__item {
+    display: flex; align-items: center; justify-content: center;
+    height: 38px; border: 1px solid var(--el-border-color-lighter);
+    border-radius: 6px; background: transparent; cursor: pointer;
+    color: var(--el-text-color-regular);
+    &:hover { border-color: var(--el-color-primary-light-5); color: var(--el-color-primary); }
+    &.active {
+      border-color: var(--el-color-primary); color: var(--el-color-primary);
+      background: var(--el-color-primary-light-9);
+    }
+  }
 }
 .cgroup__name { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
                 white-space: nowrap; max-width: 55%; }

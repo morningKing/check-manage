@@ -180,6 +180,17 @@ try:
 except Exception as _e:
     logging.warning('session groups migration on boot failed: %s', _e)
 
+# 分组图标列（2026-09-18）：随启动幂等执行
+try:
+    _mp4 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_18_session_group_icon.py')
+    _spec4 = _ilu.spec_from_file_location('_session_group_icon_boot', _mp4)
+    _m4 = _ilu.module_from_spec(_spec4)
+    _spec4.loader.exec_module(_m4)
+    _m4.run()
+except Exception as _e:
+    logging.warning('session group icon migration on boot failed: %s', _e)
+
 # 扫描任务产出文件字段（2026-09-18）：随启动幂等执行
 try:
     _mp3 = os.path.join(os.path.dirname(os.path.abspath(__file__)),

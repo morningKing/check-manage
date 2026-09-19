@@ -361,50 +361,69 @@ def list_session_groups():
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT g.id, g.name, g.created_at, "
+            "SELECT g.id, g.name, g.icon, g.created_at, "
             "  (SELECT count(*) FROM ai_chat_sessions s "
             "   WHERE s.group_id = g.id AND s.status IN ('active','closed')) "
             "FROM ai_chat_session_groups g WHERE g.user_id = %s "
             "ORDER BY g.created_at", (user['userId'],))
         rows = cur.fetchall()
     return jsonify({'groups': [
-        {'id': r[0], 'name': r[1],
-         'createdAt': r[2].isoformat() if r[2] else None,
-         'count': r[3]} for r in rows]})
+        {'id': r[0], 'name': r[1], 'icon': r[2] or 'Folder',
+         'createdAt': r[3].isoformat() if r[3] else None,
+         'count': r[4]} for r in rows]})
 
 
 @ai_chat_bp.route('/session-groups', methods=['POST'])
 @write_required
 def create_session_group():
-    name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
     if not name or len(name) > 50:
         return jsonify({'error': '分组名必填且不超过 50 字'}), 400
+    icon = (body.get('icon') or 'Folder').strip() or 'Folder'
+    if len(icon) > 60:
+        return jsonify({'error': '图标名不合法'}), 400
     user = flask_g.current_user
     gid = 'sg_' + secrets.token_hex(6)
     with get_db() as conn:
         cur = conn.cursor()
         try:
             cur.execute(
-                "INSERT INTO ai_chat_session_groups (id, user_id, name) "
-                "VALUES (%s, %s, %s)", (gid, user['userId'], name))
+                "INSERT INTO ai_chat_session_groups (id, user_id, name, icon) "
+                "VALUES (%s, %s, %s, %s)", (gid, user['userId'], name, icon))
         except Exception:
             return jsonify({'error': '已存在同名分组'}), 409
-    return jsonify({'id': gid, 'name': name}), 201
+    return jsonify({'id': gid, 'name': name, 'icon': icon}), 201
 
 
 @ai_chat_bp.route('/session-groups/<gid>', methods=['PATCH'])
 @write_required
 def rename_session_group(gid):
-    name = ((request.get_json(silent=True) or {}).get('name') or '').strip()
-    if not name or len(name) > 50:
+    """PATCH：改名和/或换图标。"""
+    body = request.get_json(silent=True) or {}
+    name = (body.get('name') or '').strip()
+    icon = (body.get('icon') or '').strip()
+    if icon and len(icon) > 60:
+        return jsonify({'error': '图标名不合法'}), 400
+    if not name and not icon:
         return jsonify({'error': '分组名必填且不超过 50 字'}), 400
     user = flask_g.current_user
+    sets, params = [], []
+    if name:
+        if len(name) > 50:
+            return jsonify({'error': '分组名必填且不超过 50 字'}), 400
+        sets.append('name = %s')
+        params.append(name)
+    if icon:
+        sets.append('icon = %s')
+        params.append(icon)
+    params += [gid, user['userId']]
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE ai_chat_session_groups SET name = %s "
+            "UPDATE ai_chat_session_groups SET " + ', '.join(sets) + " "
             "WHERE id = %s AND user_id = %s RETURNING id",
-            (name, gid, user['userId']))
+            params)
         if not cur.fetchone():
             return jsonify({'error': '分组不存在'}), 404
     return jsonify({'ok': True})
@@ -492,7 +511,7 @@ def list_sessions():
         )
         analysis_rows = cur.fetchall()
         cur.execute(
-            "SELECT g.id, g.name, g.created_at, "
+            "SELECT g.id, g.name, g.icon, g.created_at, "
             "  (SELECT count(*) FROM ai_chat_sessions s "
             "   WHERE s.group_id = g.id AND s.status IN ('active','closed')) "
             "FROM ai_chat_session_groups g WHERE g.user_id = %s "
@@ -500,9 +519,9 @@ def list_sessions():
         group_rows = cur.fetchall()
 
     import re as _re
-    groups = [{'id': r[0], 'name': r[1],
-               'createdAt': r[2].isoformat() if r[2] else None,
-               'count': r[3]} for r in group_rows]
+    groups = [{'id': r[0], 'name': r[1], 'icon': r[2] or 'Folder',
+               'createdAt': r[3].isoformat() if r[3] else None,
+               'count': r[4]} for r in group_rows]
     gname = {g['id']: g['name'] for g in groups}
     return jsonify({
         'sessions': [
