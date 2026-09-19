@@ -61,6 +61,24 @@ async function gotoAiChat(page: import('@playwright/test').Page) {
   return input
 }
 
+/** hover 显出的操作图标点击：列表会因 last_active_at 变化重排导致节点被替换、
+ *  hover 丢失，单击可能永远等不到可见，这里 hover+短超时点击重试。 */
+async function hoverClick(
+  page: import('@playwright/test').Page,
+  row: import('@playwright/test').Locator,
+  icon: import('@playwright/test').Locator,
+) {
+  for (let i = 0; i < 6; i++) {
+    await row.hover()
+    try {
+      await icon.click({ timeout: 2500 })
+      return
+    } catch { /* rerender race: re-hover and retry */ }
+    await page.waitForTimeout(800)
+  }
+  await icon.click({ timeout: 5_000 })
+}
+
 test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回收', async ({ page }) => {
   test.setTimeout(180_000)
   const input = await gotoAiChat(page)
@@ -95,8 +113,8 @@ test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回�
   const firstUngrouped = page.locator('.session-item:not(.analysis-item):not(.cgroup__item)')
     .first()
   await firstUngrouped.waitFor({ state: 'visible', timeout: 15_000 })
-  await firstUngrouped.hover()
-  await firstUngrouped.locator('[title="移动到分组"]').click()
+  await hoverClick(page, firstUngrouped,
+    firstUngrouped.locator('[title="移动到分组"]'))
   // 移动菜单为下拉点选：直接点目标分组项（每行都有各自的隐藏菜单 DOM，限定可见的那个）
   await page.locator('[data-test="move-group-menu"] .el-dropdown-menu__item:visible',
     { hasText: groupName }).click()
@@ -108,16 +126,14 @@ test('会话自定义分组：新建 → 移动 → 组内渲染 → 删除回�
   void input; void input2
 
   // ⑤ 编辑分组：换图标（第 5 个 Timer）+ 保留名称
-  await newHead.hover()
-  await newHead.locator('[title="重命名分组"]').click()
+  await hoverClick(page, newHead, newHead.locator('[title="重命名分组"]'))
   await dialog.waitFor({ state: 'visible', timeout: 10_000 })
   await page.locator('[data-test="group-icon-picker"] button').nth(4).click()
   await page.locator('[data-test="group-submit"]').click()
   await expect(newHead.locator('.cgroup__icon[data-icon="Timer"]')).toBeVisible({ timeout: 10_000 })
 
   // ⑥ 删除分组 → 会话回到未分组，组头消失
-  await newHead.hover()
-  await newHead.locator('[title^="删除分组"]').click()
+  await hoverClick(page, newHead, newHead.locator('[title^="删除分组"]'))
   await page.locator('.el-message-box__btns .el-button--primary').click()
   await expect(page.locator('[data-test="custom-group-head"]',
     { hasText: groupName })).toHaveCount(0, { timeout: 10_000 })

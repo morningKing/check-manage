@@ -191,6 +191,17 @@ try:
 except Exception as _e:
     logging.warning('session group icon migration on boot failed: %s', _e)
 
+# 会话置顶列（2026-09-19）：随启动幂等执行
+try:
+    _mp5 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_19_session_pin.py')
+    _spec5 = _ilu.spec_from_file_location('_session_pin_boot', _mp5)
+    _m5 = _ilu.module_from_spec(_spec5)
+    _spec5.loader.exec_module(_m5)
+    _m5.run()
+except Exception as _e:
+    logging.warning('session pin migration on boot failed: %s', _e)
+
 # 扫描任务产出文件字段（2026-09-18）：随启动幂等执行
 try:
     _mp3 = os.path.join(os.path.dirname(os.path.abspath(__file__)),

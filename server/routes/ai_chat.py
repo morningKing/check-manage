@@ -473,6 +473,33 @@ def move_session_to_group(sid):
     return jsonify({'ok': True, 'groupId': gid})
 
 
+@ai_chat_bp.route('/sessions/<sid>/pin', methods=['POST'])
+@write_required
+def pin_session(sid):
+    """置顶/取消置顶（pinned=false 取消）。批任务子会话与轨迹分析会话不可置顶。
+
+    置顶只影响侧栏排序（前端置顶区展示），不改 group_id——取消置顶后回到
+    原分组/未分组。"""
+    pinned = bool((request.get_json(silent=True) or {}).get('pinned'))
+    user = flask_g.current_user
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT batch_id, COALESCE(kind, 'chat') FROM ai_chat_sessions "
+            "WHERE id = %s AND user_id = %s", (sid, user['userId']))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({'error': 'session not found',
+                            'code': 'SESSION_NOT_FOUND'}), 404
+        if row[0] is not None or row[1] == 'trace_analysis':
+            return jsonify({'error': '系统分组/批任务子会话不可置顶'}), 400
+        cur.execute(
+            "UPDATE ai_chat_sessions "
+            "SET pinned_at = CASE WHEN %s THEN now() ELSE NULL END "
+            "WHERE id = %s AND user_id = %s", (pinned, sid, user['userId']))
+    return jsonify({'ok': True, 'pinned': pinned})
+
+
 @ai_chat_bp.route('/sessions', methods=['GET'])
 @login_required
 def list_sessions():
@@ -489,12 +516,12 @@ def list_sessions():
         _maybe_bucket_legacy_sessions(cur, user['userId'])
         cur.execute(
             "SELECT id, title, last_active_at, batch_id, batch_input_file, "
-            "       status, group_id "
+            "       status, group_id, pinned_at "
             "FROM ai_chat_sessions "
             "WHERE user_id = %s "
             "  AND status IN ('active', 'closed') "
             "  AND COALESCE(kind, 'chat') <> 'trace_analysis' "
-            "ORDER BY last_active_at DESC NULLS LAST, id DESC",
+            "ORDER BY pinned_at DESC NULLS LAST, last_active_at DESC NULLS LAST, id DESC",
             (user['userId'],),
         )
         rows = cur.fetchall()
@@ -530,7 +557,8 @@ def list_sessions():
              'lastActiveAt': r[2].isoformat() if r[2] else None,
              'status': r[5],
              'groupId': r[6],
-             'groupName': gname.get(r[6])}
+             'groupName': gname.get(r[6]),
+             'pinnedAt': r[7].isoformat() if r[7] else None}
             for r in rows
         ],
         'groups': groups,

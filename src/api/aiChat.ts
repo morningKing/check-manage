@@ -144,6 +144,8 @@ export interface AiSessionGroup {
 export interface AiGroupedSessionSummary extends AiSessionSummary {
   groupId?: string | null
   groupName?: string | null
+  /** 置顶时间（ISO）；null/缺省=未置顶 */
+  pinnedAt?: string | null
 }
 
 export function listSessions() {
@@ -171,6 +173,11 @@ export function deleteSessionGroup(gid: string) {
 export function moveSessionToGroup(sid: string, groupId: string | null) {
   return post<{ ok: boolean; groupId: string | null }>(
     `/ai/chat/sessions/${sid}/group`, { groupId })
+}
+/** 置顶/取消置顶会话（pinned=false 取消；不改分组归属） */
+export function pinSession(sid: string, pinned: boolean) {
+  return post<{ ok: boolean; pinned: boolean }>(
+    `/ai/chat/sessions/${sid}/pin`, { pinned })
 }
 
 /** 搜索当前用户的会话：按标题、输入文件名或消息文本匹配（见后端 search_sessions）。

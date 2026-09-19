@@ -13,6 +13,7 @@ import {
   createSessionGroup, renameSessionGroup as apiRenameSessionGroup,
   deleteSessionGroup as apiDeleteSessionGroup,
   moveSessionToGroup as apiMoveSessionToGroup,
+  pinSession as apiPinSession,
   type AiSessionGroup,
   closeSession as apiCloseSession, reopenSession as apiReopenSession,
   deleteSession as apiDeleteSession, clearSession as apiClearSession,
@@ -69,6 +70,8 @@ interface State {
   groups: AiSessionGroup[]
   /** sessionId → groupId（渲染分组归属；null/缺失 = 未分组） */
   sessionGroupId: Record<string, string | null>
+  /** 会话置顶时间（ISO）；null/缺省=未置顶 */
+  sessionPinnedAt: Record<string, string | null>
   activeSessionId: string | null
   messages: Record<string, AiMessage[]>
   streaming: Record<string, boolean>
@@ -170,6 +173,7 @@ export const useAiChatStore = defineStore('aiChat', {
     analysisSessions: [],
     groups: [],
     sessionGroupId: {},
+    sessionPinnedAt: {},
     activeSessionId: null,
     messages: {},
     streaming: {},
@@ -235,6 +239,13 @@ export const useAiChatStore = defineStore('aiChat', {
     activeAborting(state): boolean {
       return state.activeSessionId ? !!state.aborting[state.activeSessionId] : false
     },
+    /** 置顶会话（按置顶时间倒序）；置顶的会话不进未分组/分组列表 */
+    pinnedSessions(state) {
+      return state.sessions
+        .filter(s => state.sessionPinnedAt[s.id])
+        .sort((a, b) =>
+          (state.sessionPinnedAt[b.id] || '').localeCompare(state.sessionPinnedAt[a.id] || ''))
+    },
   },
 
   actions: {
@@ -243,6 +254,8 @@ export const useAiChatStore = defineStore('aiChat', {
       this.sessions = sessions.map(s => ({ id: s.id, title: s.title, status: s.status }))
       this.sessionGroupId = Object.fromEntries(
         sessions.map(s => [s.id, s.groupId ?? null]))
+      this.sessionPinnedAt = Object.fromEntries(
+        sessions.map(s => [s.id, s.pinnedAt ?? null]))
       this.groups = groups || []
       this.analysisSessions = (analysisSessions || []).map(s => ({
         id: s.id, title: s.title, status: s.status,
@@ -251,9 +264,10 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     // ── 自定义分组 ───────────────────────────────────────────────────────
+    // 置顶会话不进未分组/分组列表（它们单独展示在侧栏置顶区）
     groupedSessions(groupId: string | null) {
       return this.sessions.filter(
-        s => (this.sessionGroupId[s.id] ?? null) === groupId)
+        s => (this.sessionGroupId[s.id] ?? null) === groupId && !this.sessionPinnedAt[s.id])
     },
     async createGroup(name: string, icon?: string) {
       const g = await createSessionGroup(name, icon)
@@ -271,6 +285,10 @@ export const useAiChatStore = defineStore('aiChat', {
     async moveSession(sid: string, groupId: string | null) {
       await apiMoveSessionToGroup(sid, groupId)
       this.sessionGroupId[sid] = groupId
+      await this.loadSessions()
+    },
+    async pinSession(sid: string, pinned: boolean) {
+      await apiPinSession(sid, pinned)
       await this.loadSessions()
     },
 

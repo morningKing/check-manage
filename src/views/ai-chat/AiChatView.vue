@@ -475,6 +475,16 @@ async function onMoveCommand(cmd: string | number | object, s: { id: string; tit
   await store.moveSession(s.id, g.id)
   ElMessage.success(`已移动到「${g.name}」`)
 }
+// 置顶/取消置顶：只影响侧栏排序（置顶区展示），不改分组归属
+async function togglePin(s: { id: string }) {
+  const pinnedNow = !!store.sessionPinnedAt[s.id]
+  try {
+    await store.pinSession(s.id, !pinnedNow)
+    ElMessage.success(pinnedNow ? '已取消置顶' : '已置顶')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '操作失败')
+  }
+}
 const analysisCollapsed = ref(
   getStorage('check-manage:ai-chat:analysis-collapsed', true))
 watch(analysisCollapsed, v => setStorage('check-manage:ai-chat:analysis-collapsed', v))
@@ -1243,7 +1253,32 @@ function onKey(e: Event) {
                       @click.stop="openCreateGroup()">分组</ElButton>
           </div>
           <div v-show="!collapsedSections.sessions">
-            <!-- 未分组会话（group_id 为空） -->
+            <!-- 置顶会话：钉在列表最上方（不改分组归属，取消后回原位） -->
+            <template v-if="store.pinnedSessions.length">
+              <div class="pin-group__head" data-test="pinned-group-head">
+                <ElIcon class="section-icon"><Top /></ElIcon>
+                置顶
+                <span class="pin-group__count">{{ store.pinnedSessions.length }}</span>
+              </div>
+              <div
+                v-for="s in store.pinnedSessions" :key="s.id"
+                class="session-item pinned-item"
+                :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
+                @click="selectSession(s.id)"
+              >
+                <ElIcon class="pinned-item__pin"><Top /></ElIcon>
+                <span class="session-item__title">{{ s.title || '新会话' }}</span>
+                <span class="session-item__actions" @click.stop>
+                  <ElIcon class="pin-on" title="取消置顶" @click="togglePin(s)"><Top /></ElIcon>
+                  <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+                  <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
+                  <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
+                  <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
+                  <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
+                </span>
+              </div>
+            </template>
+            <!-- 未分组会话（group_id 为空；已置顶的在上方置顶区） -->
             <template v-for="s in ungroupedSessions" :key="s.id">
               <div
                 class="session-item" :class="{ active: s.id === activeId, 'is-closed': s.status === 'closed' }"
@@ -1251,6 +1286,7 @@ function onKey(e: Event) {
               >
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
                 <span class="session-item__actions" @click.stop>
+                  <ElIcon title="置顶" @click="togglePin(s)"><Top /></ElIcon>
                   <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
                     <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
                     <template #dropdown>
@@ -1270,7 +1306,7 @@ function onKey(e: Event) {
                       </ElDropdownMenu>
                     </template>
                   </ElDropdown>
-                  <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+                  <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
                   <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
                   <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
                   <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
@@ -1301,6 +1337,7 @@ function onKey(e: Event) {
                 >
                   <span class="session-item__title">{{ s.title || '新会话' }}</span>
                   <span class="session-item__actions" @click.stop>
+                    <ElIcon title="置顶" @click="togglePin(s)"><Top /></ElIcon>
                     <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
                       <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
                       <template #dropdown>
@@ -1320,7 +1357,7 @@ function onKey(e: Event) {
                         </ElDropdownMenu>
                       </template>
                     </ElDropdown>
-                    <ElIcon @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
+                    <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
                     <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
                     <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
                     <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
@@ -2117,6 +2154,17 @@ function onKey(e: Event) {
            &.open { transform: rotate(90deg); } }
   .section-icon { color: var(--el-color-warning); }
 }
+
+/* 置顶会话区：标题行 + 会话行（行内常驻 ↑ 标记，hover 才亮出取消置顶） */
+.pin-group__head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px;
+  font-size: 12.5px; color: var(--el-text-color-secondary); user-select: none;
+  .section-icon { color: var(--el-color-warning); }
+}
+.pin-group__count { font-size: 11px; padding: 0 6px; border-radius: 8px;
+  background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+.pinned-item__pin { color: var(--el-color-warning); flex: none; }
+.pin-on { color: var(--el-color-warning); }
 .analysis-group__count {
   font-size: 11px; padding: 0 6px; border-radius: 8px;
   background: var(--el-fill-color); color: var(--el-text-color-secondary);
