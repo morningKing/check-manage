@@ -678,6 +678,12 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             try:
                 from utils import execution_audit as _ea
                 if _audit_attempt:
+                    # SkillOpt P2：启发式 Skill 调用采集（runtime confirmed 行优先）
+                    from utils import skillopt as _sk
+                    from utils.execution_audit import get_manifests as _gm
+                    _sk.collect_skill_invocations(
+                        _audit_attempt, sid, _gm(_audit_attempt),
+                        state.get('messages') or [])
                     _ea.record_event(
                         _audit_attempt, 'session.idle' if sig == 'idle'
                         else 'session.error', session_id=sid,

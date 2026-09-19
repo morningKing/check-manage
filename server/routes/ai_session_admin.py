@@ -636,6 +636,138 @@ def analysis_report(analysis_id):
                     'report': report})
 
 
+@ai_execution_admin_bp.get('/suggestion-feedbacks')
+@require_permission('admin.ai_chat_admin')
+def list_suggestion_feedbacks():
+    """全部建议反馈（SkillOpt 效果追踪列表）。"""
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, diagnosis_id, suggestion_id, action, applied_value, "
+                "       applied_by, applied_at, created_at "
+                "FROM ai_suggestion_feedback ORDER BY created_at DESC LIMIT 100")
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        for k in ('applied_at', 'created_at'):
+            r[k] = r[k].isoformat() if r[k] else None
+    return jsonify({'feedbacks': rows})
+
+
+@ai_execution_admin_bp.get('/skill-analytics/versions')
+@require_permission('admin.ai_chat_admin')
+def skill_analytics_versions():
+    """SkillOpt 版本 delta：同一 skill 不同 content_hash 的指标对比（P2）。"""
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT skill_name, skill_hash,
+                       count(DISTINCT attempt_id)                                  AS invocations,
+                       count(*) FILTER (WHERE outcome = 'completed')               AS completed,
+                       count(*) FILTER (WHERE outcome = 'failed')                  AS failed,
+                       count(*) FILTER (WHERE source = 'runtime')                  AS runtime_confirmed,
+                       count(*) FILTER (WHERE source = 'heuristic')                AS heuristic
+                FROM ai_skill_invocations
+                GROUP BY skill_name, skill_hash
+                ORDER BY skill_name, invocations DESC
+                """)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    # 组装同 skill 的版本序列并计算相邻 delta
+    by_skill = {}
+    for r in rows:
+        r['completion_rate'] = round(r['completed'] / r['invocations'], 2) if r['invocations'] else None
+        by_skill.setdefault(r['skill_name'], []).append(r)
+    versions = []
+    for name, vs in by_skill.items():
+        vs.sort(key=lambda x: x['invocations'], reverse=True)
+        prev = None
+        for v in vs:
+            delta = None
+            if prev is not None and prev['completion_rate'] is not None                     and v['completion_rate'] is not None:
+                delta = round(v['completion_rate'] - prev['completion_rate'], 2)
+            v['completion_rate_delta'] = delta
+            prev = v
+        versions.append({'skill': name, 'versions': vs})
+    return jsonify({'versions': versions})
+
+
+@ai_execution_admin_bp.post('/analyses/<diagnosis_id>/suggestions/<suggestion_id>/feedback')
+@require_permission('admin.ai_chat_admin')
+def suggestion_feedback(diagnosis_id, suggestion_id):
+    """建议反馈/应用（SkillOpt P2 效果追踪）：accepted/rejected/applied/rolled_back，
+    applied 时快照当前技能指标作为 before_metrics。"""
+    body = request.get_json(silent=True) or {}
+    action = body.get('action')
+    if action not in ('accepted', 'rejected', 'modified', 'applied', 'rolled_back'):
+        return jsonify({'error': '无效 action'}), 400
+    from db import get_db
+    import secrets as _sec
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM ai_execution_diagnoses WHERE id = %s",
+                        (diagnosis_id,))
+            if not cur.fetchone():
+                return jsonify({'error': '诊断不存在'}), 404
+            cur.execute(
+                "INSERT INTO ai_suggestion_feedback "
+                "(id, diagnosis_id, suggestion_id, action, applied_value, applied_by) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id, action,
+                 body.get('appliedValue'), flask_g.current_user['userId']))
+        conn.commit()
+    return jsonify({'ok': True})
+
+
+@ai_execution_admin_bp.get('/skill-suggestions/<suggestion_id>/effect')
+@require_permission('admin.ai_chat_admin')
+def suggestion_effect(suggestion_id):
+    """应用后的效果追踪：applied_at 前后 7 天窗口的调用成功率对比。"""
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT applied_at, before_metrics FROM ai_suggestion_feedback "
+                "WHERE suggestion_id = %s AND action = 'applied' "
+                "ORDER BY created_at DESC LIMIT 1", (suggestion_id,))
+            row = cur.fetchone()
+    if not row or not row[0]:
+        return jsonify({'suggestionId': suggestion_id, 'status': 'not_applied'})
+    applied_at, before = row[0], (row[1] if isinstance(row[1], dict) else {})
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for tag, op, span in (('before', '<', 7), ('after', '>=', 7)):
+                pass
+            cur.execute(
+                """
+                SELECT count(*) AS inv,
+                       count(*) FILTER (WHERE outcome='completed') AS completed
+                FROM ai_skill_invocations
+                WHERE skill_name = coalesce(%s, skill_name)
+                  AND invoked_at >= %s - interval '7 days'
+                  AND invoked_at < %s
+                """, (before.get('skillName'), applied_at, applied_at))
+            b = cur.fetchone()
+            cur.execute(
+                """
+                SELECT count(*) AS inv,
+                       count(*) FILTER (WHERE outcome='completed') AS completed
+                FROM ai_skill_invocations
+                WHERE skill_name = coalesce(%s, skill_name)
+                  AND invoked_at >= %s
+                  AND invoked_at < %s + interval '7 days'
+                """, (before.get('skillName'), applied_at, applied_at))
+            a = cur.fetchone()
+    def rate(x):
+        return round(x[1] / x[0], 2) if x[0] else None
+    return jsonify({'suggestionId': suggestion_id, 'status': 'tracked',
+                    'before': {'invocations': b[0], 'completionRate': rate(b)},
+                    'after': {'invocations': a[0], 'completionRate': rate(a)}})
+
+
 @ai_execution_admin_bp.get('/skill-analytics')
 @require_permission('admin.ai_chat_admin')
 def skill_analytics():

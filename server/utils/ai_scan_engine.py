@@ -128,12 +128,41 @@ def on_child_finished(session_row, final_msg, ok):
     parsed = extract_json(message_text(final_msg))
     required = [m['jsonKey'] for m in task['field_mapping'] if m.get('required')]
     if parsed is None or any(parsed.get(k) in (None, '') for k in required):
+        # TV-04 结果不完整：必需字段缺失/为空
+        from utils.scan_writeback_validator import record_violations_to_audit
+        record_violations_to_audit(session_row['id'], [{
+            'type': 'TV-04', 'severity': 'high',
+            'message': '必需结果字段缺失或解析失败（parsed=%s）' % (parsed is None),
+            'evidence_refs': [f'record:{rid}']}])
         _set_record_status(task, rid, task['failed_value'])
         return
     n = _write_back(task, rid, parsed)
     if n == 0:
+        # TV-03 回写失败：匹配 0 行
+        from utils.scan_writeback_validator import (
+            record_violations_to_audit, validate_writeback)
+        v = validate_writeback(task, rid, parsed or {}, 0, None)
+        record_violations_to_audit(session_row['id'], v['violations'])
         print(f"[ai_scan] write-back matched 0 rows for record {rid}")
         return
+    # 写后读校验（TV-03 确定性覆盖）：回读比对映射字段与状态字段
+    from utils.scan_writeback_validator import (
+        validate_writeback, record_violations_to_audit)
+    def _recheck():
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT data FROM dynamic_data "
+                    "WHERE id = %s AND collection = %s AND branch_id = %s",
+                    (rid, task['collection'], task['branch_id']))
+                r = cur.fetchone()
+        return {'data': r[0]} if r else {}
+    v = validate_writeback(task, rid, parsed or {}, n, _recheck)
+    if not v['ok']:
+        record_violations_to_audit(session_row['id'], v['violations'])
+        _set_record_status(task, rid, task['failed_value'])
+        for item in v['violations']:
+            print(f"[ai_scan] {item['type']}: {item['message']}")
 
 
 def _workspace_root():

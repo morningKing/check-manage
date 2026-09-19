@@ -133,6 +133,42 @@ try:
 except Exception as _e:
     logging.warning('execution audit migration on boot failed: %s', _e)
 
+# SkillOpt P2：运行时插件自动安装（skill load/invoke 事件上报 → invoked
+# confirmed）与审计事件保留策略（明文 30 天/行 180 天）
+try:
+    import os as _os
+    from utils.opencode_global import OPENCODE_GLOBAL_DIR as _OGD  # noqa
+except Exception:
+    _OGD = None
+try:
+    from utils import skillopt as _sk
+    # 插件运行在 OpenCode 宿主进程内，直连 Flask 网关最短路径
+    _ep = 'http://127.0.0.1:3002/ai/chat/internal/runtime-events'
+    _sk.ensure_runtime_plugin(_OGD, _ep,
+                              _os.getenv('MCP_INTERNAL_TOKEN', ''))
+    _ret = _sk.apply_retention()
+    logging.info('SkillOpt: runtime plugin ensured at %s; retention %s',
+                 _OGD, _ret)
+
+    def _audit_retention_daily():
+        try:
+            r = _sk.apply_retention()
+            logging.info('SkillOpt retention: %s', r)
+        except Exception as e2:
+            logging.warning('SkillOpt retention failed: %s', e2)
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        _sched = BackgroundScheduler(timezone='Asia/Shanghai')
+        _sched.add_job(_audit_retention_daily, 'cron', hour=3, minute=17,
+                       id='execution-audit-retention', replace_existing=True)
+        _sched.start()
+        logging.info('SkillOpt retention scheduler started (03:17 daily)')
+    except Exception as e2:
+        logging.warning('SkillOpt retention scheduler failed: %s', e2)
+except Exception as _e:
+    logging.warning('SkillOpt boot failed (non-fatal): %s', _e)
+
 # 会话自定义分组表（2026-09-18）：同样随启动幂等执行
 try:
     _mp2 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -186,6 +222,21 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
     from utils.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
+
+def _start_audit_retention_job():
+    """每日 03:17 执行审计事件分层保留（SkillOpt P2）。"""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        sched = BackgroundScheduler(timezone='Asia/Shanghai')
+        sched.add_job(lambda: _sk.apply_retention(), 'cron', hour=3, minute=17,
+                      id='execution-audit-retention', replace_existing=True)
+        sched.start()
+        logging.info('execution audit retention scheduler started (03:17 daily)')
+    except Exception as e:
+        logging.warning('audit retention scheduler failed: %s', e)
+
+
+_start_audit_retention_job()
 
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a

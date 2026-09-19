@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1780" height="1500" viewBox="0 0 1780 1500" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#37474f"/>
+    </marker>
+  </defs>
+  <style>
+    .t{font-size:13px;fill:#263238}
+    .m{font-size:11px;fill:#546e7a}
+  </style>
+<rect x="0" y="0" width="1780" height="1500" rx="0" fill="#fafafa" stroke="none" stroke-width="1.5"/>
+<text x="40" y="40" font-size="24" font-weight="700" fill="#0d47a1">巡检用例管理系统 — AI 能力架构图</text>
+<text x="40" y="64" font-size="13" fill="#546e7a">上层 AI 应用 · AI 编排与运行时 · 数据管理支撑上层 AI 引用 · 底层引擎调度与长任务稳定性</text>
+<rect x="40" y="92" width="1700" height="58" rx="14" fill="#ffffff" stroke="#b0bec5" stroke-width="2"/>
+<text x="56" y="116" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">参与者 / 外部依赖</text>
+<rect x="56" y="112" width="400" height="30" rx="10" fill="#f5f5f5" stroke="#cfd8dc" stroke-width="1.5"/>
+<text x="68" y="134" font-size="12" font-weight="700" fill="#1a237e">浏览器用户　—　管理员 / 开发 / 访客</text>
+<rect x="472" y="112" width="400" height="30" rx="10" fill="#f5f5f5" stroke="#cfd8dc" stroke-width="1.5"/>
+<text x="484" y="134" font-size="12" font-weight="700" fill="#1a237e">外部系统（Open API）　—　API Key 驱动全部 AI 形态</text>
+<rect x="888" y="112" width="400" height="30" rx="10" fill="#f5f5f5" stroke="#cfd8dc" stroke-width="1.5"/>
+<text x="900" y="134" font-size="12" font-weight="700" fill="#1a237e">LLM Provider　—　Claude / DeepSeek / MiMo…</text>
+<rect x="1304" y="112" width="400" height="30" rx="10" fill="#f5f5f5" stroke="#cfd8dc" stroke-width="1.5"/>
+<text x="1316" y="134" font-size="12" font-weight="700" fill="#1a237e">定时触发　—　APScheduler（backup/dependency/ai_scan）</text>
+<rect x="40" y="182" width="1700" height="158" rx="14" fill="#e3f2fd" stroke="#1e88e5" stroke-width="2"/>
+<text x="56" y="206" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L1 · 上层 AI 应用</text>
+<rect x="52" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="64" y="238" font-size="13" font-weight="700" fill="#1a237e">AI 对话助手</text>
+<text x="64" y="252" font-size="11" fill="#455a64">SSE 流式 · 模型/Agent 选择</text>
+<text x="64" y="261" font-size="11" fill="#455a64">@子智能体 · 插话队列</text>
+<text x="64" y="270" font-size="11" fill="#455a64">记忆注入 · 模板 · 命令面板</text>
+<text x="64" y="279" font-size="11" fill="#455a64">失败错误卡 + 一键重试</text>
+<rect x="292" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="304" y="238" font-size="13" font-weight="700" fill="#1a237e">AI 批任务</text>
+<text x="304" y="252" font-size="11" fill="#455a64">N 文件并发（池 3 限流）</text>
+<text x="304" y="261" font-size="11" fill="#455a64">暂停/中断/继续/重试</text>
+<text x="304" y="270" font-size="11" fill="#455a64">预置仓库（项目 Agent/Skill）</text>
+<text x="304" y="279" font-size="11" fill="#455a64">实时轨迹 · 完成通知</text>
+<rect x="532" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="544" y="238" font-size="13" font-weight="700" fill="#1a237e">AI 定时任务</text>
+<text x="544" y="252" font-size="11" fill="#455a64">定时扫描数据页</text>
+<text x="544" y="261" font-size="11" fill="#455a64">AI 结构化输出</text>
+<text x="544" y="270" font-size="11" fill="#455a64">jsonb_set 回写业务字段</text>
+<text x="544" y="279" font-size="11" fill="#455a64">结果校验 · 通知</text>
+<rect x="772" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="784" y="238" font-size="13" font-weight="700" fill="#1a237e">智能客服</text>
+<text x="784" y="252" font-size="11" fill="#455a64">实例级人设/Agent/模型</text>
+<text x="784" y="261" font-size="11" fill="#455a64">访客 SSE 实时回复</text>
+<text x="784" y="270" font-size="11" fill="#455a64">人工接管 · 护栏</text>
+<text x="784" y="279" font-size="11" fill="#455a64">实例/访客/IP 限流</text>
+<rect x="1012" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="1024" y="238" font-size="13" font-weight="700" fill="#1a237e">Open API AI</text>
+<text x="1024" y="252" font-size="11" fill="#455a64">API Key 驱动</text>
+<text x="1024" y="261" font-size="11" fill="#455a64">批/会话/扫描/记忆/模板</text>
+<text x="1024" y="270" font-size="11" fill="#455a64">幂等键 + 状态机</text>
+<text x="1024" y="279" font-size="11" fill="#455a64">对外 REST 契约</text>
+<rect x="1252" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="1264" y="238" font-size="13" font-weight="700" fill="#1a237e">执行轨迹分析</text>
+<text x="1264" y="252" font-size="11" fill="#455a64">trace-analyzer Skill</text>
+<text x="1264" y="261" font-size="11" fill="#455a64">确定性审计（契约/失败）</text>
+<text x="1264" y="270" font-size="11" fill="#455a64">SkillOpt 聚合与建议</text>
+<text x="1264" y="279" font-size="11" fill="#455a64">分析历史 ↔ 原会话</text>
+<rect x="1492" y="216" width="232" height="112" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="1504" y="238" font-size="13" font-weight="700" fill="#1a237e">智能体/技能管理</text>
+<text x="1504" y="252" font-size="11" fill="#455a64">平台技能库（zip）</text>
+<text x="1504" y="261" font-size="11" fill="#455a64">运行时 Skill/Agent CRUD</text>
+<text x="1504" y="270" font-size="11" fill="#455a64">发布 · 应用 · 回滚</text>
+<text x="1504" y="279" font-size="11" fill="#455a64">重启守卫 + 归属识别</text>
+<rect x="40" y="372" width="1700" height="128" rx="14" fill="#ede7f6" stroke="#5e35b1" stroke-width="2"/>
+<text x="56" y="396" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L2 · AI 会话与编排服务层（Flask ai_* 域 · 19 蓝图）</text>
+<rect x="52" y="408" width="325" height="82" rx="10" fill="#ffffff" stroke="#9575cd" stroke-width="1.5"/>
+<text x="64" y="430" font-size="12.5" font-weight="700" fill="#1a237e">对话与 SSE 代理</text>
+<text x="64" y="442" font-size="10.5" fill="#455a64">发送/abort/压缩 · runtime-state</text>
+<text x="64" y="450.5" font-size="10.5" fill="#455a64">消息/子代理/变更/产物</text>
+<text x="64" y="459.0" font-size="10.5" fill="#455a64">listener-before-dispatch</text>
+<rect x="389" y="408" width="325" height="82" rx="10" fill="#ffffff" stroke="#9575cd" stroke-width="1.5"/>
+<text x="401" y="430" font-size="12.5" font-weight="700" fill="#1a237e">批任务 API</text>
+<text x="401" y="442" font-size="10.5" fill="#455a64">CRUD · staging · 追加</text>
+<text x="401" y="450.5" font-size="10.5" fill="#455a64">pause/resume/retry</text>
+<text x="401" y="459.0" font-size="10.5" fill="#455a64">单任务继续 · reexecute</text>
+<rect x="726" y="408" width="325" height="82" rx="10" fill="#ffffff" stroke="#9575cd" stroke-width="1.5"/>
+<text x="738" y="430" font-size="12.5" font-weight="700" fill="#1a237e">记忆 / 模板 / 搜索</text>
+<text x="738" y="442" font-size="10.5" fill="#455a64">长期记忆 API（mem0）</text>
+<text x="738" y="450.5" font-size="10.5" fill="#455a64">Prompt 模板 CRUD</text>
+<text x="738" y="459.0" font-size="10.5" fill="#455a64">会话搜索（含消息全文）</text>
+<rect x="1063" y="408" width="325" height="82" rx="10" fill="#ffffff" stroke="#9575cd" stroke-width="1.5"/>
+<text x="1075" y="430" font-size="12.5" font-weight="700" fill="#1a237e">会话与运行时治理</text>
+<text x="1075" y="442" font-size="10.5" fill="#455a64">会话治理（跨用户）</text>
+<text x="1075" y="450.5" font-size="10.5" fill="#455a64">技能库 · 运行时管理</text>
+<text x="1075" y="459.0" font-size="10.5" fill="#455a64">应用/回滚/重启守卫</text>
+<rect x="1400" y="408" width="325" height="82" rx="10" fill="#ffffff" stroke="#9575cd" stroke-width="1.5"/>
+<text x="1412" y="430" font-size="12.5" font-weight="700" fill="#1a237e">执行审计与诊断</text>
+<text x="1412" y="442" font-size="10.5" fill="#455a64">attempts / events / manifests</text>
+<text x="1412" y="450.5" font-size="10.5" fill="#455a64">契约步骤审计 · 工具失败分类</text>
+<text x="1412" y="459.0" font-size="10.5" fill="#455a64">diagnoses · data_completeness</text>
+<rect x="40" y="534" width="1700" height="148" rx="14" fill="#fff3e0" stroke="#ef6c00" stroke-width="2"/>
+<text x="56" y="558" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L3 · AI 运行时子系统（独立进程）</text>
+<rect x="52" y="570" width="545" height="100" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
+<text x="64" y="592" font-size="13" font-weight="700" fill="#1a237e">OpenCode serve（HTTP :4096）</text>
+<text x="64" y="605" font-size="10.5" fill="#455a64">Agent 编排 · primary/subagent 多智能体</text>
+<text x="64" y="613.5" font-size="10.5" fill="#455a64">工具调用 · Todo · question 交互</text>
+<text x="64" y="622.0" font-size="10.5" fill="#455a64">SSE 事件流 · 会话级隔离工作区</text>
+<text x="64" y="630.5" font-size="10.5" fill="#455a64">调用 LLM Provider 完成推理（外部）</text>
+<rect x="617" y="570" width="545" height="100" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
+<text x="629" y="592" font-size="13" font-weight="700" fill="#1a237e">MCP Server（:3003 · FastAPI）</text>
+<text x="629" y="605" font-size="10.5" fill="#455a64">12 个平台能力工具（Streamable-HTTP）</text>
+<text x="629" y="613.5" font-size="10.5" fill="#455a64">query_collection · read_upload</text>
+<text x="629" y="622.0" font-size="10.5" fill="#455a64">save_artifact · run_python · memory_*</text>
+<text x="629" y="630.5" font-size="10.5" fill="#455a64">analyze_trace · query_sessions</text>
+<rect x="1182" y="570" width="545" height="100" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
+<text x="1194" y="592" font-size="13" font-weight="700" fill="#1a237e">长期记忆（mem0 + Chroma）</text>
+<text x="1194" y="605" font-size="10.5" fill="#455a64">按 user_id 隔离 · 随备份</text>
+<text x="1194" y="613.5" font-size="10.5" fill="#455a64">被动逐轮抽取 + 主动补写</text>
+<text x="1194" y="622.0" font-size="10.5" fill="#455a64">原生调用钉单线程（防 SIGSEGV）</text>
+<text x="1194" y="630.5" font-size="10.5" fill="#455a64">DashScope 嵌入/提炼</text>
+<rect x="40" y="716" width="1700" height="196" rx="14" fill="#e8f5e9" stroke="#43a047" stroke-width="2"/>
+<text x="56" y="740" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L4 · 数据管理平台（支撑上层 AI 引用 —— AI 经 MCP 工具读写业务数据）</text>
+<rect x="52" y="752" width="1676" height="34" rx="8" fill="#c8e6c9" stroke="#43a047" stroke-width="1.5"/>
+<text x="64" y="774" font-size="12" font-weight="700" fill="#1b5e20">MCP 数据工具：</text>
+<text x="170" y="774" font-size="11.5" fill="#1b5e20">query_collection · list_collections · read_upload · read_data_file · save_artifact · run_python · export_collection_excel · list/run_export_script · memory_*</text>
+<rect x="52" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="64" y="822" font-size="12.5" font-weight="700" fill="#1a237e">动态数据核心</text>
+<text x="64" y="834" font-size="10.5" fill="#455a64">单表 JSONB 万能 CRUD</text>
+<text x="64" y="842.5" font-size="10.5" fill="#455a64">relations · comments</text>
+<text x="64" y="851.0" font-size="10.5" fill="#455a64">query · timeline</text>
+<rect x="333" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="345" y="822" font-size="12.5" font-weight="700" fill="#1a237e">配置中心</text>
+<text x="345" y="834" font-size="10.5" fill="#455a64">menus · page_configs</text>
+<text x="345" y="842.5" font-size="10.5" fill="#455a64">column_views 字段 schema</text>
+<text x="345" y="851.0" font-size="10.5" fill="#455a64">schema 驱动 UI/API/AI</text>
+<rect x="614" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="626" y="822" font-size="12.5" font-weight="700" fill="#1a237e">关系与工作流</text>
+<text x="626" y="834" font-size="10.5" fill="#455a64">data_relations</text>
+<text x="626" y="842.5" font-size="10.5" fill="#455a64">workflow 引擎/实例</text>
+<text x="626" y="851.0" font-size="10.5" fill="#455a64">跨项目依赖</text>
+<rect x="895" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="907" y="822" font-size="12.5" font-weight="700" fill="#1a237e">脚本扩展</text>
+<text x="907" y="834" font-size="10.5" fill="#455a64">导出/校验脚本</text>
+<text x="907" y="842.5" font-size="10.5" fill="#455a64">沙箱执行（禁危险）</text>
+<text x="907" y="851.0" font-size="10.5" fill="#455a64">MCP 可发现复用</text>
+<rect x="1176" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="1188" y="822" font-size="12.5" font-weight="700" fill="#1a237e">数据流转</text>
+<text x="1188" y="834" font-size="10.5" fill="#455a64">etl_tasks · menu_export</text>
+<text x="1188" y="842.5" font-size="10.5" fill="#455a64">data_files 文件/图片</text>
+<text x="1188" y="851.0" font-size="10.5" fill="#455a64">AI 上传/产物</text>
+<rect x="1457" y="800" width="269" height="96" rx="10" fill="#ffffff" stroke="#66bb6a" stroke-width="1.5"/>
+<text x="1469" y="822" font-size="12.5" font-weight="700" fill="#1a237e">开放集成</text>
+<text x="1469" y="834" font-size="10.5" fill="#455a64">api_keys · open_api</text>
+<text x="1469" y="842.5" font-size="10.5" fill="#455a64">webhook + HMAC</text>
+<text x="1469" y="851.0" font-size="10.5" fill="#455a64">trigger_rules 联动</text>
+<rect x="40" y="946" width="1700" height="160" rx="14" fill="#eceff1" stroke="#546e7a" stroke-width="2"/>
+<text x="56" y="970" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L5 · 引擎与后台调度（Flask 进程内常驻 · WERKZEUG_RUN_MAIN 守卫）</text>
+<rect x="52" y="980" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="64" y="1002" font-size="12.5" font-weight="700" fill="#1a237e">batch_engine</text>
+<text x="64" y="1013" font-size="10.5" fill="#455a64">守护线程 + 工作池(3)</text>
+<text x="64" y="1021.5" font-size="10.5" fill="#455a64">SKIP LOCKED 认领</text>
+<rect x="474" y="980" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="486" y="1002" font-size="12.5" font-weight="700" fill="#1a237e">ai_scan_engine</text>
+<text x="486" y="1013" font-size="10.5" fill="#455a64">认领记录 → 处理中</text>
+<text x="486" y="1021.5" font-size="10.5" fill="#455a64">AI 处理 → jsonb_set 回写</text>
+<rect x="896" y="980" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="908" y="1002" font-size="12.5" font-weight="700" fill="#1a237e">APScheduler ×3</text>
+<text x="908" y="1013" font-size="10.5" fill="#455a64">backup 调度</text>
+<text x="908" y="1021.5" font-size="10.5" fill="#455a64">dependency 调度</text>
+<rect x="1318" y="980" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="1330" y="1002" font-size="12.5" font-weight="700" fill="#1a237e">webhook / trigger</text>
+<text x="1330" y="1013" font-size="10.5" fill="#455a64">事件触发 + HMAC</text>
+<text x="1330" y="1021.5" font-size="10.5" fill="#455a64">重试队列</text>
+<rect x="52" y="1050" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="64" y="1072" font-size="12.5" font-weight="700" fill="#1a237e">workflow_engine</text>
+<text x="64" y="1083" font-size="10.5" fill="#455a64">状态转换→阶段推进</text>
+<text x="64" y="1091.5" font-size="10.5" fill="#455a64">原子 spawn 下游</text>
+<rect x="474" y="1050" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="486" y="1072" font-size="12.5" font-weight="700" fill="#1a237e">etl_engine</text>
+<text x="486" y="1083" font-size="10.5" fill="#455a64">抽取/转换/映射</text>
+<text x="486" y="1091.5" font-size="10.5" fill="#455a64">HTTP 抽取</text>
+<rect x="896" y="1050" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="908" y="1072" font-size="12.5" font-weight="700" fill="#1a237e">script_runner</text>
+<text x="908" y="1083" font-size="10.5" fill="#455a64">导出/校验沙箱</text>
+<text x="908" y="1091.5" font-size="10.5" fill="#455a64">禁 import/eval/open</text>
+<rect x="1318" y="1050" width="410" height="62" rx="10" fill="#ffffff" stroke="#90a4ae" stroke-width="1.5"/>
+<text x="1330" y="1072" font-size="12.5" font-weight="700" fill="#1a237e">执行审计采集器</text>
+<text x="1330" y="1083" font-size="10.5" fill="#455a64">attempts/events/manifests</text>
+<text x="1330" y="1091.5" font-size="10.5" fill="#455a64">best-effort 不阻塞</text>
+<rect x="40" y="1140" width="1700" height="158" rx="14" fill="#fffde7" stroke="#f9a825" stroke-width="2"/>
+<text x="56" y="1164" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">L6 · 数据与存储</text>
+<rect x="52" y="1176" width="407" height="108" rx="10" fill="#ffffff" stroke="#ffd54f" stroke-width="1.5"/>
+<text x="64" y="1198" font-size="12.5" font-weight="700" fill="#1a237e">PostgreSQL — AI 执行</text>
+<text x="64" y="1210" font-size="10.5" fill="#455a64">ai_execution_attempts/events</text>
+<text x="64" y="1218.5" font-size="10.5" fill="#455a64">…_prompt_snapshots</text>
+<text x="64" y="1227.0" font-size="10.5" fill="#455a64">…_manifests · contracts</text>
+<text x="64" y="1235.5" font-size="10.5" fill="#455a64">…_step_results · diagnoses</text>
+<rect x="475" y="1176" width="407" height="108" rx="10" fill="#ffffff" stroke="#ffd54f" stroke-width="1.5"/>
+<text x="487" y="1198" font-size="12.5" font-weight="700" fill="#1a237e">PostgreSQL — AI 会话</text>
+<text x="487" y="1210" font-size="10.5" fill="#455a64">ai_chat_sessions/messages</text>
+<text x="487" y="1218.5" font-size="10.5" fill="#455a64">ai_chat_subtasks(+messages)</text>
+<text x="487" y="1227.0" font-size="10.5" fill="#455a64">ai_chat_batches · ai_scan_tasks</text>
+<text x="487" y="1235.5" font-size="10.5" fill="#455a64">→ 供 L2 读写：重连恢复 · 审计追溯</text>
+<rect x="898" y="1176" width="407" height="108" rx="10" fill="#ffffff" stroke="#ffd54f" stroke-width="1.5"/>
+<text x="910" y="1198" font-size="12.5" font-weight="700" fill="#1a237e">PostgreSQL — 业务/集成</text>
+<text x="910" y="1210" font-size="10.5" fill="#455a64">dynamic_data · menus</text>
+<text x="910" y="1218.5" font-size="10.5" fill="#455a64">page_configs · relations</text>
+<text x="910" y="1227.0" font-size="10.5" fill="#455a64">workflows · api_keys</text>
+<text x="910" y="1235.5" font-size="10.5" fill="#455a64">webhook_logs · backups …</text>
+<rect x="1321" y="1176" width="407" height="108" rx="10" fill="#ffffff" stroke="#ffd54f" stroke-width="1.5"/>
+<text x="1333" y="1198" font-size="12.5" font-weight="700" fill="#1a237e">文件存储</text>
+<text x="1333" y="1210" font-size="10.5" fill="#455a64">AI_WORKSPACE_ROOT</text>
+<text x="1333" y="1218.5" font-size="10.5" fill="#455a64">每会话隔离工作区</text>
+<text x="1333" y="1227.0" font-size="10.5" fill="#455a64">batch-staging 暂存</text>
+<text x="1333" y="1235.5" font-size="10.5" fill="#455a64">DATA_FILES_ROOT · outputs</text>
+<rect x="40" y="1332" width="1700" height="128" rx="14" fill="#fce4ec" stroke="#d81b60" stroke-width="2"/>
+<text x="56" y="1356" font-size="13" font-weight="700" fill="#607d8b" letter-spacing="2">长任务稳定性保障（贯穿 L1–L6）</text>
+<rect x="52" y="1364" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="62" y="1383" font-size="12" font-weight="700" fill="#ad1457">调度互斥</text>
+<text x="62" y="1401" font-size="10.5" fill="#546e7a">SKIP LOCKED 认领 · 池(3) 限流 · notify 派发</text>
+<rect x="474" y="1364" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="484" y="1383" font-size="12" font-weight="700" fill="#ad1457">生命周期可恢复</text>
+<text x="484" y="1401" font-size="10.5" fill="#546e7a">暂停/中断/继续/重执行 · 单任务独立续跑</text>
+<rect x="896" y="1364" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="906" y="1383" font-size="12" font-weight="700" fill="#ad1457">失败自动恢复</text>
+<text x="906" y="1401" font-size="10.5" fill="#546e7a">可重试白名单 · 停滞看门狗 180s · 会话失效自愈</text>
+<rect x="1318" y="1364" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="1328" y="1383" font-size="12" font-weight="700" fill="#ad1457">崩溃自愈</text>
+<text x="1328" y="1401" font-size="10.5" fill="#546e7a">重启 running→pending · 孤儿清扫 · 陈旧对账</text>
+<rect x="52" y="1416" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="62" y="1435" font-size="12" font-weight="700" fill="#ad1457">断线韧性</text>
+<text x="62" y="1453" font-size="10.5" fill="#546e7a">双通道持久化 · SSE 退避重连 · runtime-state 收敛</text>
+<rect x="474" y="1416" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="484" y="1435" font-size="12" font-weight="700" fill="#ad1457">执行审计</text>
+<text x="484" y="1453" font-size="10.5" fill="#546e7a">Attempt/Prompt hash/Skill manifest · 契约七态 · 失败九类</text>
+<rect x="896" y="1416" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="906" y="1435" font-size="12" font-weight="700" fill="#ad1457">运行时治理</text>
+<text x="906" y="1453" font-size="10.5" fill="#546e7a">重启 workload 守卫 · 进程归属识别 · 强制权限</text>
+<rect x="1318" y="1416" width="410" height="46" rx="8" fill="#ffffff" stroke="#f48fb1" stroke-width="1.5"/>
+<text x="1328" y="1435" font-size="12" font-weight="700" fill="#ad1457">安全边界</text>
+<text x="1328" y="1453" font-size="10.5" fill="#546e7a">Prompt 默认脱敏 · MCP RBAC · TRACE_FORBIDDEN</text>
+<text x="40" y="1472" font-size="11" font-weight="700" fill="#546e7a">图例：</text>
+<text x="90" y="1472" font-size="11" fill="#546e7a">层带自上而下 = 调用与数据流方向；L4 数据管理经 MCP 工具向上支撑 L1–L3 的 AI 引用；L5 扫描回写（jsonb_set）把 AI 结果落回业务字段，形成数据↔AI 双向闭环。</text>
+<text x="40" y="1490" font-size="11" fill="#78909c">注：浏览器仅与 Flask 通信（Flask 即 SSE 代理）；OpenCode/MCP 为独立进程；引擎调度常驻 Flask 进程内；执行审计随启动幂等迁移。</text>
+<line x1="690" y1="170" x2="690" y2="180" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="700" y="172" font-size="11" fill="#37474f" text-anchor="start">浏览器 / API Key</text>
+<line x1="770" y1="340" x2="770" y2="370" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="780" y="352" font-size="11" fill="#37474f" text-anchor="start">REST /api · SSE（AI 形态调用编排服务）</text>
+<line x1="1220" y1="500" x2="1220" y2="532" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1230" y="513" font-size="11" fill="#37474f" text-anchor="start">启动会话 · prompt_async · MCP token · 审计采集</text>
+<line x1="1010" y1="532" x2="1010" y2="500" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="1020" y="529" font-size="11" fill="#37474f" text-anchor="start">SSE 事件回传（流式回复/工具/子代理）</text>
+<line x1="520" y1="682" x2="520" y2="714" stroke="#2e7d32" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="534" y="697" font-size="11" fill="#2e7d32" text-anchor="start">AI 经 MCP 工具读写业务数据（读：集合/文件/记忆；写：产物）</text>
+<line x1="1120" y1="714" x2="1120" y2="682" stroke="#2e7d32" stroke-width="2.4" marker-end="url(#arrow)"/>
+<text x="1134" y="713" font-size="11" fill="#2e7d32" text-anchor="start">数据管理供给上下文：schema 决定集合语义 · 新数据页 AI 即刻可用</text>
+<line x1="420" y1="944" x2="420" y2="912" stroke="#37474f" stroke-width="1.8" marker-end="url(#arrow)"/>
+<text x="432" y="926" font-size="11" fill="#37474f" text-anchor="start">引擎读写业务数据</text>
+<line x1="1240" y1="912" x2="1240" y2="944" stroke="#2e7d32" stroke-width="2.2" marker-end="url(#arrow)"/>
+<text x="1252" y="926" font-size="11" fill="#2e7d32" text-anchor="start">扫描回写 jsonb_set（AI 结果落回业务字段，闭环）</text>
+<line x1="890" y1="1106" x2="890" y2="1138" stroke="#37474f" stroke-width="1.6" marker-end="url(#arrow)"/>
+<text x="902" y="1121" font-size="11" fill="#37474f" text-anchor="start">SQL · 连接池 (1-10) · 文件读写</text>
+</svg>
