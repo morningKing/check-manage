@@ -47,6 +47,9 @@ def upsert_invocation(session_id: str, attempt_id: str | None, skill: str,
             outcome = 'completed' if status == 'completed' else None
         elif status == 'error':
             outcome = 'failed'
+    # skill_hash 归一为 ''（非 NULL）：UNIQUE (attempt_id, skill_name, skill_hash)
+    # 对 NULL 视为互异，NULL 会造成 runtime 上报（无 hash）每次一行、永不冲突。
+    skill_hash = skill_hash or ''
     iid = 'inv_' + secrets.token_hex(6)
     try:
         with get_db() as conn:
@@ -163,7 +166,7 @@ def collect_skill_invocations(attempt_id: str, session_id: str,
     """从 manifests + 工具证据推断调用（inferred）；runtime 已确认的行跳过。"""
     if not manifests:
         return 0
-    existing = _existing_invocations(attempt_id)
+    existing_pairs, runtime_names = _existing_invocations(attempt_id)
     tool_count = sum(
         1 for m in messages if m.get('role') == 'assistant'
         for p in (m.get('content') or [])
@@ -173,7 +176,8 @@ def collect_skill_invocations(attempt_id: str, session_id: str,
         if m.get('kind') != 'skill':
             continue
         name, h = m.get('name') or '', m.get('content_hash')
-        if not name or not h or (name, h) in existing:
+        # runtime 行（skill_hash=''）优先：同 skill 已确证就不再写 inferred 行
+        if not name or not h or (name, h) in existing_pairs or name in runtime_names:
             continue
         upsert_invocation(session_id, attempt_id, name, skill_hash=h,
                           source='heuristic', evidence_level='inferred',
@@ -183,12 +187,15 @@ def collect_skill_invocations(attempt_id: str, session_id: str,
     return n
 
 
-def _existing_invocations(attempt_id: str) -> set:
+def _existing_invocations(attempt_id: str) -> tuple[set, set]:
+    """返回 ((skill_name, skill_hash) 对集合, 已有 runtime 行的 skill_name 集合）。"""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT skill_name, skill_hash FROM ai_skill_invocations "
+            cur.execute("SELECT skill_name, skill_hash, source FROM ai_skill_invocations "
                         "WHERE attempt_id = %s", (attempt_id,))
-            return {(r[0], r[1]) for r in cur.fetchall()}
+            rows = cur.fetchall()
+            return ({(r[0], r[1]) for r in rows},
+                    {r[0] for r in rows if r[2] == 'runtime'})
 
 
 # ── 运行时插件自动安装 ───────────────────────────────────────────────────

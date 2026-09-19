@@ -684,6 +684,11 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                     _sk.collect_skill_invocations(
                         _audit_attempt, sid, _gm(_audit_attempt),
                         state.get('messages') or [])
+                    if sig == 'idle':
+                        # 采集后立即收口：插件的 session.idle 上报与本地收敛是
+                        # 并发路径，不能依赖它先到（否则本轮 heuristic 行留在
+                        # outcome NULL，要等下一轮才闭合）。
+                        _sk.mark_session_idle(sid)
                     _ea.record_event(
                         _audit_attempt, 'session.idle' if sig == 'idle'
                         else 'session.error', session_id=sid,
