@@ -30,9 +30,6 @@
         :default-active="activeMenu"
         :collapse="sidebarCollapsed"
         :collapse-transition="false"
-        background-color="#f7f8fa"
-        text-color="#5c606b"
-        active-text-color="#1a1d21"
         router
         class="side-menu-list"
         @open="handleMenuOpen"
@@ -194,7 +191,14 @@ const activeMenu = computed(() => {
   }
 }
 
-/* 覆盖 Element Plus 菜单样式 */
+/* 覆盖 Element Plus 菜单样式：浅色/暗色统一走 CSS 变量 */
+:deep(.side-menu-list) {
+  background-color: var(--app-shell-bg);
+}
+:deep(.el-menu-item), :deep(.el-sub-menu__title) {
+  color: var(--el-text-color-regular);
+}
+
 :deep(.el-menu-item) {
   height: 40px;
   line-height: 40px;
