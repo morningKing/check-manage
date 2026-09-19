@@ -664,7 +664,7 @@ def skill_analytics_versions():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT skill_name, skill_hash,
+                SELECT skill_name AS name, skill_hash,
                        count(DISTINCT attempt_id)                                  AS invocations,
                        count(*) FILTER (WHERE outcome = 'completed')               AS completed,
                        count(*) FILTER (WHERE outcome = 'failed')                  AS failed,
@@ -680,7 +680,7 @@ def skill_analytics_versions():
     by_skill = {}
     for r in rows:
         r['completion_rate'] = round(r['completed'] / r['invocations'], 2) if r['invocations'] else None
-        by_skill.setdefault(r['skill_name'], []).append(r)
+        by_skill.setdefault(r['name'], []).append(r)
     versions = []
     for name, vs in by_skill.items():
         vs.sort(key=lambda x: x['invocations'], reverse=True)
@@ -771,26 +771,42 @@ def suggestion_effect(suggestion_id):
 @ai_execution_admin_bp.get('/skill-analytics')
 @require_permission('admin.ai_chat_admin')
 def skill_analytics():
-    """SkillOpt aggregation v0 (Spec §14): per skill name+version over the
-    attempts that carried it. Sample-starved buckets surface as-is — the
-    caller decides confidence, this endpoint never inflates it."""
+    """SkillOpt aggregation v2 — sourced from ai_skill_invocations (P2):
+    runtime plugin rows are confirmed evidence; heuristic rows are flagged so
+    the UI never presents inferred usage as proven."""
     from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT m.name, m.content_hash,
-                       COUNT(DISTINCT a.id)                                          AS invocations,
-                       COUNT(DISTINCT CASE WHEN a.status = 'completed'
-                                           THEN a.id END)                            AS completed,
-                       COUNT(DISTINCT CASE WHEN a.status = 'failed'
-                                           THEN a.id END)                            AS failed,
-                       ROUND(AVG(EXTRACT(EPOCH FROM (a.finished_at - a.started_at))
-                                 * 1000))                                            AS avg_duration_ms
-                FROM ai_execution_manifests m
-                JOIN ai_execution_attempts a ON a.id = m.attempt_id
-                WHERE m.kind = 'skill' AND m.content_hash IS NOT NULL
-                GROUP BY m.name, m.content_hash
+                SELECT name, hash,
+                       count(*)                                                              AS invocations,
+                       count(*) FILTER (WHERE outcome = 'completed')                         AS completed,
+                       count(*) FILTER (WHERE outcome = 'failed')                            AS failed,
+                       count(*) FILTER (WHERE source = 'runtime')                            AS runtime_confirmed,
+                       count(*) FILTER (WHERE source = 'heuristic')                          AS heuristic,
+                       round(avg(duration_ms))::bigint                                       AS avg_duration_ms
+                FROM (
+                  -- P2 精确采集（runtime/heuristic）
+                  SELECT i.skill_name AS name, i.skill_hash AS hash, i.attempt_id,
+                         i.outcome AS outcome, i.source AS source,
+                         EXTRACT(EPOCH FROM (i.completed_at - i.invoked_at)) * 1000 AS duration_ms
+                  FROM ai_skill_invocations i
+                  UNION ALL
+                  -- 存量兜底：清单 × Attempt（无 invocations 记录的历史数据）
+                  SELECT m.name, m.content_hash AS hash, a.id AS attempt_id,
+                         CASE a.status WHEN 'completed' THEN 'completed'
+                                       WHEN 'failed' THEN 'failed' ELSE NULL END AS outcome,
+                         'heuristic' AS source,
+                         EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000 AS duration_ms
+                  FROM ai_execution_manifests m
+                  JOIN ai_execution_attempts a ON a.id = m.attempt_id
+                  WHERE m.kind = 'skill' AND m.content_hash IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1 FROM ai_skill_invocations i2
+                      WHERE i2.attempt_id = a.id AND i2.skill_name = m.name)
+                ) t
+                GROUP BY name, hash
                 ORDER BY invocations DESC
                 LIMIT 50
                 """)
@@ -798,18 +814,18 @@ def skill_analytics():
             items = [dict(zip(cols, r)) for r in cur.fetchall()]
             for it in items:
                 inv = it['invocations'] or 0
-                it['completion_rate'] = round((it['completed'] or 0) / inv, 2) if inv else None
-                it['failure_rate'] = round((it['failed'] or 0) / inv, 2) if inv else None
+                it['completion_rate'] = round(it['completed'] / inv, 2) if inv else None
+                it['failure_rate'] = round(it['failed'] / inv, 2) if inv else None
                 it['sample_size'] = inv
             cur.execute(
                 """
-                SELECT s.step_id,
-                       COUNT(*)                                              AS total,
-                       COUNT(*) FILTER (WHERE s.status = 'completed_confirmed') AS confirmed,
-                       COUNT(*) FILTER (WHERE s.status = 'missing')             AS missing,
-                       COUNT(*) FILTER (WHERE s.status = 'failed')              AS failed
-                FROM ai_execution_step_results s
-                GROUP BY s.step_id
+                SELECT step_id,
+                       count(*)                                                 AS total,
+                       count(*) FILTER (WHERE status = 'completed_confirmed')   AS confirmed,
+                       count(*) FILTER (WHERE status = 'missing')               AS missing,
+                       count(*) FILTER (WHERE status = 'failed')                AS failed
+                FROM ai_execution_step_results
+                GROUP BY step_id
                 ORDER BY total DESC
                 LIMIT 20
                 """)

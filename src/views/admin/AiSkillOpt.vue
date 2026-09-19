@@ -18,7 +18,7 @@
         <h4 class="skillopt__sec">技能调用聚合</h4>
         <ElTable :data="skills" size="small" highlight-current-row
                  @current-change="onSelectSkill">
-          <ElTableColumn prop="skill" label="技能" min-width="180" />
+          <ElTableColumn prop="name" label="技能" min-width="180" />
           <ElTableColumn label="版本 hash" width="120">
             <template #default="{ row }">
               <span class="mono">{{ shortHash(row.skill_hash) }}</span>
@@ -40,9 +40,9 @@
         </ElTable>
 
         <template v-if="selectedSkill">
-          <h4 class="skillopt__sec">版本对比 — {{ selectedSkill.skill }}</h4>
-          <p v-if="!versionsFor(selectedSkill.skill).length" class="muted">该技能只有一个版本或无数据。</p>
-          <ElTable v-else :data="versionsFor(selectedSkill.skill)" size="small">
+          <h4 class="skillopt__sec">版本对比 — {{ selectedSkill.name }}</h4>
+          <p v-if="!versionsFor(selectedSkill.name).length" class="muted">该技能只有一个版本或无数据。</p>
+          <ElTable v-else :data="versionsFor(selectedSkill.name)" size="small">
             <ElTableColumn label="版本 hash" width="120">
               <template #default="{ row }">
                 <span class="mono">{{ shortHash(row.skill_hash) }}</span>
@@ -104,7 +104,7 @@ import { ElTable, ElTableColumn, ElTag, ElAlert, ElButton } from 'element-plus'
 import { get } from '@/utils/request'
 
 interface SkillRow {
-  skill: string
+  name: string
   skill_hash: string
   invocations: number
   completed: number
@@ -132,7 +132,7 @@ function versionsFor(skill: string) {
 }
 function onSelectSkill(row: SkillRow | null) {
   selectedSkill.value = row
-  if (row) loadVersions(row.skill)
+  if (row) loadVersions(row.name)
 }
 async function loadVersions(skill: string) {
   try {
