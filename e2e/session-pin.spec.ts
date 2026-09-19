@@ -86,7 +86,9 @@ async function newNamedSession(page: import('@playwright/test').Page, name: stri
   await page.waitForTimeout(2000)
   const item = page.locator('.session-item:not(.pinned-item)').first()
   await item.waitFor({ state: 'visible', timeout: 15_000 })
-  await hoverClick(page, item, item.locator('[title="重命名"]').first())
+  await hoverClick(page, item, item.locator('[data-test="session-more-btn"]'))
+  await page.locator('[data-test="session-more-menu"] .el-dropdown-menu__item:visible',
+    { hasText: '重命名' }).click()
   await page.locator('.el-message-box__input input').fill(name)
   await page.locator('.el-message-box__btns .el-button--primary').click()
   await expect(page.locator('.session-item', { hasText: name }).first())
@@ -138,8 +140,8 @@ test('置顶与分组：分组会话置顶进置顶区，取消后回分组', as
   const groupHead = page.locator('[data-test="custom-group-head"]', { hasText: groupName })
   await expect(groupHead).toBeVisible({ timeout: 10_000 })
   const row = page.locator('.session-item:not(.pinned-item)', { hasText: name }).first()
-  await hoverClick(page, row, row.locator('[title="移动到分组"]'))
-  await page.locator('[data-test="move-group-menu"] .el-dropdown-menu__item:visible',
+  await hoverClick(page, row, row.locator('[data-test="session-more-btn"]'))
+  await page.locator('[data-test="session-more-menu"] .el-dropdown-menu__item:visible',
     { hasText: groupName }).click()
   await expect(groupHead.locator('..').locator('.cgroup__item').first())
     .toBeVisible({ timeout: 10_000 })

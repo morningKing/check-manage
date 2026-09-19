@@ -31,6 +31,7 @@ import RunResultBlock from '@/components/ai-chat/RunResultBlock.vue'
 import McpServicesBlock from '@/components/ai-chat/McpServicesBlock.vue'
 import LspFormatterBlock from '@/components/ai-chat/LspFormatterBlock.vue'
 import SubtaskBubble from '@/components/ai-chat/SubtaskBubble.vue'
+import SessionRowActions from '@/components/ai-chat/SessionRowActions.vue'
 import ChatFile from '@/components/ai-chat/ChatFile.vue'
 import QueryResultBlock from '@/components/ai-chat/QueryResultBlock.vue'
 import CommandPalette, { type PaletteItem } from '@/components/ai-chat/CommandPalette.vue'
@@ -1268,14 +1269,13 @@ function onKey(e: Event) {
               >
                 <ElIcon class="pinned-item__pin"><Top /></ElIcon>
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
-                <span class="session-item__actions" @click.stop>
-                  <ElIcon class="pin-on" title="取消置顶" @click="togglePin(s)"><Top /></ElIcon>
-                  <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-                  <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
-                  <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
-                  <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
-                  <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
-                </span>
+                <SessionRowActions
+                  :s="{ id: s.id, title: s.title, status: s.status, pinned: true }"
+                  @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
+                  @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
+                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                  @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
+                />
               </div>
             </template>
             <!-- 未分组会话（group_id 为空；已置顶的在上方置顶区） -->
@@ -1285,33 +1285,13 @@ function onKey(e: Event) {
                 @click="selectSession(s.id)"
               >
                 <span class="session-item__title">{{ s.title || '新会话' }}</span>
-                <span class="session-item__actions" @click.stop>
-                  <ElIcon title="置顶" @click="togglePin(s)"><Top /></ElIcon>
-                  <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
-                    <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
-                    <template #dropdown>
-                      <ElDropdownMenu data-test="move-group-menu">
-                        <ElDropdownItem
-                          v-for="grp in store.groups" :key="grp.id" :command="grp.id"
-                          :disabled="grp.id === (store.sessionGroupId[s.id] ?? null)"
-                        >
-                          <ElIcon class="move-menu__icon" :data-icon="grp.icon || 'Folder'"><component :is="groupIconComp(grp.icon)" /></ElIcon>
-                          {{ grp.name }}（{{ store.groupedSessions(grp.id).length }}）
-                        </ElDropdownItem>
-                        <ElDropdownItem command="__ungrouped" divided
-                          :disabled="!(store.sessionGroupId[s.id] ?? null)">
-                          未分组
-                        </ElDropdownItem>
-                        <ElDropdownItem command="__new">＋ 新建分组…</ElDropdownItem>
-                      </ElDropdownMenu>
-                    </template>
-                  </ElDropdown>
-                  <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-                  <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
-                  <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
-                  <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
-                  <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
-                </span>
+                <SessionRowActions
+                  :s="{ id: s.id, title: s.title, status: s.status }"
+                  @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
+                  @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
+                  @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                  @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
+                />
               </div>
             </template>
 
@@ -1336,33 +1316,13 @@ function onKey(e: Event) {
                   @click="selectSession(s.id)"
                 >
                   <span class="session-item__title">{{ s.title || '新会话' }}</span>
-                  <span class="session-item__actions" @click.stop>
-                    <ElIcon title="置顶" @click="togglePin(s)"><Top /></ElIcon>
-                    <ElDropdown trigger="click" @command="(cmd: any) => onMoveCommand(cmd, s)">
-                      <ElIcon title="移动到分组"><FolderAdd /></ElIcon>
-                      <template #dropdown>
-                        <ElDropdownMenu data-test="move-group-menu">
-                          <ElDropdownItem
-                            v-for="grp in store.groups" :key="grp.id" :command="grp.id"
-                            :disabled="grp.id === (store.sessionGroupId[s.id] ?? null)"
-                          >
-                            <ElIcon class="move-menu__icon" :data-icon="grp.icon || 'Folder'"><component :is="groupIconComp(grp.icon)" /></ElIcon>
-                            {{ grp.name }}（{{ store.groupedSessions(grp.id).length }}）
-                          </ElDropdownItem>
-                          <ElDropdownItem command="__ungrouped" divided
-                            :disabled="!(store.sessionGroupId[s.id] ?? null)">
-                            未分组
-                          </ElDropdownItem>
-                          <ElDropdownItem command="__new">＋ 新建分组…</ElDropdownItem>
-                        </ElDropdownMenu>
-                      </template>
-                    </ElDropdown>
-                    <ElIcon title="重命名" @click="renameSession(s.id, s.title)"><EditPen /></ElIcon>
-                    <ElIcon v-if="s.status === 'closed'" title="重开会话" @click="reopenSessionItem(s.id)"><RefreshRight /></ElIcon>
-                    <ElIcon v-else title="关闭会话" @click="closeSessionItem(s.id)"><Close /></ElIcon>
-                    <ElIcon title="清空会话（清空历史和工作区文件）" @click="clearSessionItem(s.id)"><Brush /></ElIcon>
-                    <ElIcon title="删除会话" @click="deleteSessionItem(s.id)"><Delete /></ElIcon>
-                  </span>
+                  <SessionRowActions
+                    :s="{ id: s.id, title: s.title, status: s.status }"
+                    @pin="togglePin(s)" @rename="renameSession(s.id, s.title)"
+                    @close="closeSessionItem(s.id)" @reopen="reopenSessionItem(s.id)"
+                    @clear="clearSessionItem(s.id)" @delete="deleteSessionItem(s.id)"
+                    @move="(t: string) => onMoveCommand(t, s)" @createmove="openCreateGroup(s.id)"
+                  />
                 </div>
               </div>
             </div>

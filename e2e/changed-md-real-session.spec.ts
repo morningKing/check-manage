@@ -25,6 +25,10 @@ test('真实会话：AI 写出 md → 变更文件面板 → 渲染/diff 双模�
   const input = page.getByPlaceholder(/给 AI 助手发消息/)
   await input.waitFor({ state: 'visible', timeout: 30_000 })
   await page.waitForTimeout(1200)
+  // 侧栏视觉留证（行内只保留 置顶 / 更多⋯ 两个操作）
+  await page.locator('.session-item').first().hover()
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: 'e2e/screenshots/session-sidebar-actions.png' })
 
   // ② 新建会话并发任务
   await page.locator('button', { hasText: '新建会话' }).first().click()
