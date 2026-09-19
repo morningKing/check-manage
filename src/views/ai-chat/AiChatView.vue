@@ -596,10 +596,8 @@ const GROUP_META: { key: 'added' | 'modified'; label: string; type: any }[] = [
 const RICH_PREVIEW_KINDS = ['docx', 'excel', 'pptx', 'pdf', 'image', 'markdown'] as const
 const officePreviewVisible = ref(false)
 const officePreviewFile = ref<{ name: string; url: string } | null>(null)
-function openRichPreview(name: string, path: string, opts: { markdown?: boolean } = {}): boolean {
+function openRichPreview(name: string, path: string): boolean {
   const kind = previewKind(name)
-  // 变更文件审阅时 Markdown 走 diff 更有意义；文件抽屉里 Markdown 直接渲染排版。
-  if (kind === 'markdown' && opts.markdown === false) return false
   if (!RICH_PREVIEW_KINDS.includes(kind as (typeof RICH_PREVIEW_KINDS)[number])) return false
   if (!activeId.value) return false
   officePreviewFile.value = { name, url: fileUrl(path) }
@@ -609,8 +607,8 @@ function openRichPreview(name: string, path: string, opts: { markdown?: boolean 
 
 async function previewChange(c: ChangedFile) {
   if (c.status === 'deleted' || !activeId.value) return
-  // 变更文件里图片/Office 无法做文本 diff，走富预览；Markdown 保留 diff（审阅改动）。
-  if (openRichPreview(c.path.split('/').pop() || c.path, c.path, { markdown: false })) return
+  // 变更文件里图片/Office/Markdown 无法做有意义的文本 diff，直接走富渲染预览。
+  if (openRichPreview(c.path.split('/').pop() || c.path, c.path)) return
   diffFile.value = c.path
   diffData.value = null
   diffOpen.value = true
