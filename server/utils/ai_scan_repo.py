@@ -78,8 +78,8 @@ def create_task(body, owner_user_id):
             "INSERT INTO ai_scan_tasks (id, name, enabled, owner_user_id, collection, "
             "branch_id, status_field, pending_value, running_value, done_value, failed_value, "
             "extra_filter, context_fields, prompt_template, field_mapping, "
-            "schedule_interval_minutes, max_records_per_scan, agent) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "schedule_interval_minutes, max_records_per_scan, agent, output_file_field) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (tid, body['name'], body.get('enabled', True), owner_user_id, body['collection'],
              body.get('branchId', 'main'), body['statusField'], body.get('pendingValue', ''),
              body.get('runningValue', '处理中'), body.get('doneValue', '已处理'),
@@ -88,7 +88,7 @@ def create_task(body, owner_user_id):
              psycopg2.extras.Json(body.get('contextFields') or {}),
              body['promptTemplate'], psycopg2.extras.Json(body.get('fieldMapping') or []),
              int(body.get('scheduleIntervalMinutes', 15)), int(body.get('maxRecordsPerScan', 20)),
-             body.get('agent') or None),
+             body.get('agent') or None, body.get('outputFileField') or None),
         )
     return get_task(tid)
 
@@ -97,6 +97,7 @@ _UPDATABLE = {
     'name': 'name', 'enabled': 'enabled', 'collection': 'collection', 'branchId': 'branch_id',
     'statusField': 'status_field', 'pendingValue': 'pending_value', 'runningValue': 'running_value',
     'doneValue': 'done_value', 'failedValue': 'failed_value', 'promptTemplate': 'prompt_template',
+    'outputFileField': 'output_file_field',
     'scheduleIntervalMinutes': 'schedule_interval_minutes', 'maxRecordsPerScan': 'max_records_per_scan',
     'agent': 'agent',
 }

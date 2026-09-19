@@ -69,7 +69,8 @@ def _load_task(task_id):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, collection, branch_id, status_field, done_value, "
-                "failed_value, field_mapping, agent FROM ai_scan_tasks WHERE id = %s",
+                "failed_value, field_mapping, agent, output_file_field "
+                "FROM ai_scan_tasks WHERE id = %s",
                 (task_id,),
             )
             r = cur.fetchone()
@@ -77,7 +78,8 @@ def _load_task(task_id):
                 return None
             return {'id': r[0], 'collection': r[1], 'branch_id': r[2],
                     'status_field': r[3], 'done_value': r[4], 'failed_value': r[5],
-                    'field_mapping': r[6] or [], 'agent': r[7] or ''}
+                    'field_mapping': r[6] or [], 'agent': r[7] or '',
+                    'output_file_field': r[8] or None}
 
 
 def _set_record_status(task, record_id, value):
@@ -163,6 +165,75 @@ def on_child_finished(session_row, final_msg, ok):
         _set_record_status(task, rid, task['failed_value'])
         for item in v['violations']:
             print(f"[ai_scan] {item['type']}: {item['message']}")
+
+    # AI 产出文件 → 数据行（output_file_field）：把子会话 outputs/ 的产物
+    # 导入 data_files 并挂到记录文件字段，像手工上传一样呈现/下载。
+    if task.get('output_file_field'):
+        try:
+            _import_child_outputs_to_record(task, rid, session_row,
+                                            task['output_file_field'])
+        except Exception as e:
+            print(f"[ai_scan] import outputs failed record {rid}: {e}")
+
+
+def _import_child_outputs_to_record(task, record_id, session_row, file_field):
+    """把子会话工作区 outputs/ 下的产物导入 data_files 并追加到记录的
+    file/image 字段（{uid,name} 列表，与手工上传同构——数据行内直接
+    预览/下载，execution-audit Spec「AI 产出文件→数据行呈现」）。"""
+    import uuid
+    ws = session_row.get('workspace_path')
+    out_dir = os.path.join(ws, 'outputs') if ws else ''
+    if not out_dir or not os.path.isdir(out_dir):
+        return 0
+    storage_root = os.environ.get('DATA_FILES_ROOT') or os.path.join(
+        os.path.expanduser('~'), '.check-manage', 'data_files')
+    imported = []
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM dynamic_data WHERE id = %s", (record_id,))
+            row = cur.fetchone()
+            data = row[0] if row else {}
+            if isinstance(data, str):
+                data = json.loads(data)
+            existing = data.get(file_field) or []
+            if not isinstance(existing, list):
+                existing = []
+            have = {x.get('uid') for x in existing if isinstance(x, dict)}
+            for fn in sorted(os.listdir(out_dir)):
+                src = os.path.join(out_dir, fn)
+                if not os.path.isfile(src) or fn.startswith('.'):
+                    continue
+                fid = str(uuid.uuid4())
+                sdir = os.path.join(storage_root, fid[:2])
+                os.makedirs(sdir, exist_ok=True)
+                dst = os.path.join(sdir, fn)
+                shutil.copy2(src, dst)
+                size = os.path.getsize(dst)
+                cur.execute(
+                    "INSERT INTO data_files (id, original_name, mime_type, "
+                    "size_bytes, storage_path, uploaded_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (fid, fn, 'application/octet-stream', size, dst,
+                     session_row.get('user_id') or 'ai-scan'))
+                imported.append({'uid': fid, 'name': fn})
+    if not imported:
+        return 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE dynamic_data SET data = jsonb_set( "
+                "  COALESCE(data, '{}'::jsonb), ARRAY[%s], "
+                "  COALESCE(data->%s, '[]'::jsonb) || %s::jsonb), "
+                "  updated_at = now(), version = version + 1 "
+                "WHERE id = %s AND collection = %s AND branch_id = %s",
+                (file_field, file_field,
+                 json.dumps([{'uid': x['uid'], 'name': x['name']}
+                             for x in imported], ensure_ascii=False),
+                 record_id, task['collection'], task.get('branchId')))
+        conn.commit()
+    print(f"[ai_scan] imported {len(imported)} artifact(s) into record {record_id}"
+          f" field {file_field}")
+    return len(imported)
 
 
 def _workspace_root():

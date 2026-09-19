@@ -179,6 +179,17 @@ try:
     _m2.run()
 except Exception as _e:
     logging.warning('session groups migration on boot failed: %s', _e)
+
+# 扫描任务产出文件字段（2026-09-18）：随启动幂等执行
+try:
+    _mp3 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_18_scan_output_field.py')
+    _spec3 = _ilu.spec_from_file_location('_scan_output_field_boot', _mp3)
+    _m3 = _ilu.module_from_spec(_spec3)
+    _spec3.loader.exec_module(_m3)
+    _m3.run()
+except Exception as _e:
+    logging.warning('scan output field migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
