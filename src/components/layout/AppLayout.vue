@@ -144,6 +144,9 @@
     <!-- 命令面板 -->
     <CommandPalette v-model:visible="showCommandPalette" />
   </el-container>
+
+    <!-- 白泽数字人助手（半透明悬浮，承载使用指导与对话） -->
+    <BaizeCompanion v-if="authStore.isLoggedIn && !authStore.isGuest" />
 </template>
 
 <script setup lang="ts">
@@ -157,6 +160,7 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import BaizeCompanion from '@/components/baize/BaizeCompanion.vue'
 import { Loading, ArrowDown, User as UserIcon, Setting, ChatDotRound, List } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore, useMenuStore, useAuthStore, useTabStore, useSystemConfigStore } from '@/stores'
