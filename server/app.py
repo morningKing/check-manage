@@ -241,6 +241,17 @@ try:
     _m3.run()
 except Exception as _e:
     logging.warning('scan output field migration on boot failed: %s', _e)
+
+# Agent 动作账本与到位门禁（2026-09-20）：随启动幂等执行
+try:
+    _mp6 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_20_agent_action_gate.py')
+    _spec6 = _ilu.spec_from_file_location('_agent_action_gate_boot', _mp6)
+    _m6 = _ilu.module_from_spec(_spec6)
+    _spec6.loader.exec_module(_m6)
+    _m6.run()
+except Exception as _e:
+    logging.warning('agent action gate migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)

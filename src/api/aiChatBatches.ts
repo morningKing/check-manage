@@ -20,6 +20,14 @@ export function createBatch(body: {
   model?: string | null
   provision_repo?: string | null
   provision_ref?: string | null
+  /** 动作门禁期望(设计 §5.2 入口 A):子任务终态逐条核对账本,不过门落 failed */
+  action_checks?: Array<{
+    name: string
+    tool: string
+    args_pattern: string
+    min_count?: number
+    scope?: 'session' | 'tree'
+  }> | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)

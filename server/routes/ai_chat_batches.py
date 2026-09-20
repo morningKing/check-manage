@@ -12,6 +12,7 @@ from auth import login_required
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, validate_staged_files,
                              WorkspacePathError)
+from utils import agent_ledger
 from utils.batch_repo import (
     append_to_batch,
     get_max_files_per_batch,
@@ -89,11 +90,18 @@ def create():
     model = (body.get('model') or '').strip() or None
     provision_repo = (body.get('provision_repo') or '').strip() or None
     provision_ref = (body.get('provision_ref') or '').strip() or None
+    # 入口 A(设计 §5.2):批定义上的动作门禁期望;正则可编译性等在此校验,
+    # 非法直接 400,不带病入库。
+    try:
+        action_checks = agent_ledger.validate_checks(body.get('action_checks'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
                           agent=agent, model=model,
-                          provision_repo=provision_repo, provision_ref=provision_ref)
+                          provision_repo=provision_repo, provision_ref=provision_ref,
+                          action_checks=action_checks or None)
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -120,6 +128,80 @@ def detail(batch_id):
     if not body:
         return jsonify({'error': 'not found'}), 404
     return jsonify(body)
+
+
+def _authorize_child(batch_id: str, sid: str) -> str | None:
+    """批任务归属 + 子会话归属校验;通过返回子会话的 oc_session_id,否则 None。"""
+    from db import get_db as _get_db
+    user_id = g.current_user['userId']
+    if not get_batch_detail(user_id, batch_id):
+        return None
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT opencode_session_id FROM ai_chat_sessions "
+                "WHERE id = %s AND batch_id = %s",
+                (sid, batch_id),
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
+@ai_chat_batches_bp.get('/<batch_id>/children/<sid>/tool-calls')
+@login_required
+def child_tool_calls(batch_id, sid):
+    """动作账本查询(设计 §5.2 编写辅助):该子会话及其子代理树实际发生的
+    工具调用,按时间序;写正则时从这里取材。"""
+    oc_sid = _authorize_child(batch_id, sid)
+    if oc_sid is None:
+        return jsonify({'error': 'not found'}), 404
+    from db import get_db as _get_db
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s",
+                (sid,),
+            )
+            ids = [oc_sid] + [r[0] for r in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT oc_session_id, subtask_id, tool, args_text, state, occurred_at
+                FROM agent_tool_calls
+                WHERE oc_session_id = ANY(%s)
+                ORDER BY occurred_at, id
+                """,
+                (ids,),
+            )
+            calls = [
+                {'ocSessionId': r[0], 'subtaskId': r[1], 'tool': r[2],
+                 'args': (r[3] or '')[:2000], 'state': r[4],
+                 'occurredAt': r[5].isoformat() if r[5] else None}
+                for r in cur.fetchall()
+            ]
+    return jsonify({'calls': calls})
+
+
+@ai_chat_batches_bp.post('/<batch_id>/children/<sid>/gate/dry-run')
+@login_required
+def gate_dry_run(batch_id, sid):
+    """试跑核对(设计 §5.2 编写辅助):保存期望前按 tree 作用域对现有账本
+    跑一次匹配,返回命中数与样例,验证正则写得对不对。"""
+    oc_sid = _authorize_child(batch_id, sid)
+    if oc_sid is None:
+        return jsonify({'error': 'not found'}), 404
+    body = request.get_json(silent=True) or {}
+    tool = (body.get('tool') or '').strip()
+    pattern = (body.get('args_pattern') or '').strip()
+    require_state = (body.get('require_state') or 'completed').strip()
+    if not tool or not pattern:
+        return jsonify({'error': 'tool and args_pattern required'}), 400
+    import re as _re
+    try:
+        _re.compile(pattern)
+    except _re.error as e:
+        return jsonify({'error': f'args_pattern 不是合法正则: {e}'}), 400
+    return jsonify(agent_ledger.count_tree_tool_calls(
+        sid, tool, pattern, require_state))
 
 
 @ai_chat_batches_bp.patch('/<batch_id>')

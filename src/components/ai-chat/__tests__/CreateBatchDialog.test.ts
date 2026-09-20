@@ -40,6 +40,7 @@ const stubs = {
     emits: ['update:modelValue'],
   },
   'el-button': { template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>', props: ['disabled'], emits: ['click'] },
+  'el-input-number': true,
   'el-upload': true,
 }
 
@@ -105,5 +106,51 @@ describe('CreateBatchDialog', () => {
     await w.find('button[data-test="create-btn"]').trigger('click')
     await flushPromises()
     expect(tplApi.createTemplate).toHaveBeenCalledWith('My T', 'hello')
+  })
+
+  it('sends action_checks when 动作门禁 is enabled with a complete check', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [
+      { name: '克隆目标仓库', tool: 'bash', args_pattern: 'git clone\\s+\\S*acme/inspector', min_count: 1 },
+      { name: '', tool: 'bash', args_pattern: '', min_count: 1 },  // 不完整的行被过滤
+    ]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      action_checks: [
+        { name: '克隆目标仓库', tool: 'bash', args_pattern: 'git clone\\s+\\S*acme/inspector', min_count: 1 },
+      ],
+    }))
+  })
+
+  it('blocks submit when 动作门禁 is enabled but no complete check', async () => {
+    vi.mocked(batchApi.createBatch).mockClear()
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [{ name: '', tool: 'bash', args_pattern: '', min_count: 1 }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).not.toHaveBeenCalled()
   })
 })

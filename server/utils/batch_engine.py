@@ -37,6 +37,7 @@ from psycopg2.extras import RealDictCursor
 
 from db import get_db
 from config import AI_WORKSPACE_ROOT
+from utils import agent_ledger
 from utils.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
@@ -586,6 +587,9 @@ class BatchWorker:
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT)
         self._running_session_ids: set = set()
+        # 动作账本健康标记(设计 §5.1):_persist_conversation 每次落账后更新,
+        # 门禁核对据此区分 failed 与 inconclusive;核对后清除。
+        self._ledger_health: dict = {}
         self._lock = threading.Lock()
         self._dispatcher: threading.Thread | None = None
 
@@ -842,6 +846,9 @@ class BatchWorker:
                 # no live session get reset to pending).
                 return
             prompt, agent, model, provision_repo, provision_ref = ctx
+            # 入口 A/B(设计 §5.2):派发前把批定义/模板的 action_checks 登记为
+            # 期望;重试/续跑重复登记按名字幂等覆盖,不产生重复行。
+            self._register_action_expectations(sid, batch_id)
 
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
@@ -1006,6 +1013,17 @@ class BatchWorker:
                                                       on_progress=_persist_progress,
                                                       baseline_ids=baseline_ids)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
+            # 到位门禁(设计 §5.3):最终一轮落账已含完整动作,先核对后写终态。
+            gate = self._check_action_gate(sid)
+            if gate['status'] == 'failed':
+                err = agent_ledger.gate_failure_message(gate)
+                logger.warning('action gate failed sid=%s: %s', sid, err)
+                self._mark_failed(sid, batch_id, error=err)
+                self._notify_scan(session_row, None, ok=False)
+                self._notify_child_done(
+                    session_row, False, elapsed=time.monotonic() - turn_start,
+                    error=err)
+                return
             self._mark_done(sid, batch_id, last_preview=preview)
             self._notify_scan(session_row, final_msg, ok=True)
             self._notify_child_done(
@@ -1045,6 +1063,57 @@ class BatchWorker:
             # （best-effort，失败不影响子任务本身的状态落库）。
             if ws:
                 self._record_workspace_files(sid, ws)
+
+    # --- 动作账本与到位门禁（设计:docs/design/AI子任务动作账本与到位门禁设计.md）---
+
+    def _fetch_action_checks(self, batch_id: str):
+        """入口 A/B:批任务自身的 action_checks,未配则回退引用模板上的值。"""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT action_checks, template_id FROM ai_chat_batches "
+                    "WHERE id = %s",
+                    (batch_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                checks, template_id = row[0], row[1]
+                if not checks and template_id:
+                    cur.execute(
+                        "SELECT action_checks FROM ai_chat_prompt_templates "
+                        "WHERE id = %s",
+                        (template_id,),
+                    )
+                    trow = cur.fetchone()
+                    checks = trow[0] if trow else None
+                return checks or None
+
+    def _register_action_expectations(self, sid: str, batch_id: str):
+        """派发前把批定义/模板的 action_checks 登记为期望行。登记失败不阻断
+        派发(与账本 best-effort 同策略):门禁核对不到期望时按 passed 处理,
+        但告警日志保留现场。"""
+        try:
+            checks = self._fetch_action_checks(batch_id)
+            if not checks:
+                return
+            agent_ledger.register_session_expectations(sid, checks,
+                                                       source='batch',
+                                                       get_db=get_db)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('action expectation registration failed sid=%s: %s',
+                           sid, e)
+
+    def _check_action_gate(self, sid: str) -> dict:
+        """终态核对。inconclusive(账本不健康/查询异常)不算失败:任务照常
+        完成,但期望行与日志留痕,不静默放行。"""
+        healthy = self._ledger_health.pop(sid, True)
+        result = agent_ledger.check_session_gate(sid, ledger_healthy=healthy,
+                                                 get_db=get_db)
+        if result['status'] == 'inconclusive':
+            logger.warning('action gate inconclusive sid=%s: %s',
+                           sid, result.get('error') or healthy is False)
+        return result
 
     def _record_workspace_files(self, session_id: str, ws: str):
         try:
@@ -1590,6 +1659,18 @@ class BatchWorker:
             child_messages: dict = {}
             self._collect_subtasks(raw, known, child_messages, parent_depth=0,
                                    parent_sid=None, directory=directory)
+            # 动作账本（设计 §5.1）：根会话与每个子代理的 tool part 落账。
+            # best-effort：失败置健康标记，终态门禁按 inconclusive 处理，
+            # 不算未到位也不静默放行。
+            ledger_ok = agent_ledger.record_messages(
+                oc_session_id, raw, root_session_id=session_id,
+                get_db=get_db)
+            for child_sid, child_msgs in child_messages.items():
+                if not agent_ledger.record_messages(
+                        child_sid, child_msgs, root_session_id=session_id,
+                        subtask_id=child_sid, get_db=get_db):
+                    ledger_ok = False
+            self._ledger_health[session_id] = ledger_ok
             subtask_status = {sid: info['status'] for sid, info in known.items()}
             # subtask part 的 id -> 正确的子会话 sessionID（修复 SubtaskPart.sessionID
             # 实际是父会话的 bug）：发现阶段已经把 _part_id 记进了 info。

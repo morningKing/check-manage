@@ -63,6 +63,31 @@
         </div>
       </div>
 
+      <div class="row">
+        <label>动作门禁 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 子任务结束时逐条核对账本：脚本执行过没有、仓库克隆了没有、知识文件读了没有）</span></label>
+        <ElCheckbox v-model="gateEnabled" data-test="gate-enabled">启用动作门禁</ElCheckbox>
+        <template v-if="gateEnabled">
+          <div v-for="(c, i) in gateChecks" :key="i" class="gate-row" :data-test="`gate-row-${i}`">
+            <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:0 0 150px" />
+            <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
+                      filterable allow-create default-first-option>
+              <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
+            </ElSelect>
+            <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
+            <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
+                           style="flex:0 0 110px" />
+            <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
+                      :disabled="gateChecks.length <= 1">删除</ElButton>
+          </div>
+          <div class="row__inline">
+            <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
+            <span style="color:var(--el-text-color-placeholder);font-size:11px">
+              核对不过门的子任务将标记失败并写明缺失项;tree 作用域含其全部子代理的动作。
+            </span>
+          </div>
+        </template>
+      </div>
+
       <div class="row row--inline">
         <ElCheckbox v-model="saveAsTemplate">保存为新模板</ElCheckbox>
         <ElInput v-if="saveAsTemplate"
@@ -105,7 +130,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import {
   ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
-  ElMessage,
+  ElInputNumber, ElMessage,
 } from 'element-plus'
 import { stagingUpload, createBatch, listBatches } from '@/api/aiChatBatches'
 import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
@@ -134,6 +159,14 @@ const agents = ref<AgentInfo[]>([])
 const selectedModel = ref<string>('')
 const models = ref<ModelInfo[]>([])
 const provisionRepo = ref<string>('')
+// 动作门禁(设计 §5.2 入口 A):开启后随创建请求下发 action_checks,
+// 子任务终态由服务端按账本核对。scope 固定 tree(覆盖子代理),界面不暴露。
+const gateEnabled = ref(false)
+const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number }>>([])
+const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
+function emptyCheck() {
+  return { name: '', tool: 'bash', args_pattern: '', min_count: 1 }
+}
 // 批任务子会话个数上限：后端可配置（AI 设置页），随批任务列表接口下发；
 // 拉取失败回落 50 —— 仅作客户端预检，服务端才是准绳
 const maxSessions = ref(50)
@@ -227,6 +260,18 @@ function removeFailed(f: { id: number }) {
 
 async function submit() {
   if (!canCreate.value) return
+  // 动作门禁:至少要有一条"名称+正则"齐全的期望才随请求下发
+  let action_checks: Array<{ name: string; tool: string; args_pattern: string; min_count: number }> | null = null
+  if (gateEnabled.value) {
+    action_checks = gateChecks.value
+      .filter(c => c.name.trim() && c.args_pattern.trim())
+      .map(c => ({ name: c.name.trim(), tool: c.tool || 'bash',
+                   args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }))
+    if (action_checks.length === 0) {
+      ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则)')
+      return
+    }
+  }
   submitting.value = true
   try {
     const detail = await createBatch({
@@ -237,6 +282,7 @@ async function submit() {
       model: selectedModel.value || null,
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
+      action_checks,
       files: stagedFiles.value,
     })
     if (saveAsTemplate.value && templateName.value.trim()) {
@@ -264,6 +310,8 @@ function reset() {
   selectedModel.value = ''
   provisionRepo.value = ''
   provisionRef.value = ''
+  gateEnabled.value = false
+  gateChecks.value = []
   stagedFiles.value = []
   saveAsTemplate.value = false
   templateName.value = ''
@@ -279,6 +327,7 @@ function reset() {
 .row label { font-size: 13px; color: var(--el-text-color-secondary); }
 .row__inline { display: flex; gap: 8px; align-items: center; }
 .row--inline { display: flex; flex-direction: row; gap: 12px; align-items: center; }
+.gate-row { display: flex; gap: 6px; align-items: center; }
 .files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 200px; overflow: auto; }
 .files li { display: flex; justify-content: space-between; padding: 4px 8px; }
 .files__uploading { color: var(--el-text-color-secondary); }

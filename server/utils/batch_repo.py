@@ -3,7 +3,7 @@
 Routes are thin; this module owns the SQL.
 """
 import uuid
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from db import get_db
 
@@ -36,6 +36,7 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  model: str | None = None,
                  provision_repo: str | None = None,
                  provision_ref: str | None = None,
+                 action_checks: list | None = None,
                  api_key_id: str | None = None,
                  callback_url: str | None = None,
                  callback_secret: str | None = None) -> dict:
@@ -71,11 +72,12 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
                 "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
-                "   scan_task_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   scan_task_id, action_checks) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
                  provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
-                 scan_task_id),
+                 scan_task_id,
+                 Json(action_checks) if action_checks else None),
             )
             batch = dict(cur.fetchone())
 
