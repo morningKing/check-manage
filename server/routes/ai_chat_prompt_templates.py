@@ -2,6 +2,7 @@
 from flask import Blueprint, g, jsonify, request
 
 from auth import login_required
+from utils.agent_ledger import validate_checks
 from utils.prompt_template import (
     DuplicateTemplateName,
     create_template,
@@ -25,7 +26,12 @@ def _payload():
         return None, ('name and content required', 400)
     if len(name) > 200:
         return None, ('name too long', 400)
-    return (name, content), None
+    # 入口 B(设计 §5.2):模板可携带动作门禁期望,从模板创建的批任务自动继承
+    try:
+        checks = validate_checks(body.get('action_checks'))
+    except ValueError as e:
+        return None, (str(e), 400)
+    return (name, content, checks or None), None
 
 
 @ai_chat_prompt_templates_bp.get('')
@@ -41,9 +47,10 @@ def create():
     if err:
         msg, code = err
         return jsonify({'error': msg}), code
-    name, content = parsed
+    name, content, checks = parsed
     try:
-        row = create_template(g.current_user['userId'], name=name, content=content)
+        row = create_template(g.current_user['userId'], name=name,
+                              content=content, action_checks=checks)
     except DuplicateTemplateName:
         return jsonify({'error': 'name already in use'}), 409
     return jsonify(row), 201
@@ -65,10 +72,10 @@ def update(template_id):
     if err:
         msg, code = err
         return jsonify({'error': msg}), code
-    name, content = parsed
+    name, content, checks = parsed
     try:
         row = update_template(g.current_user['userId'], template_id,
-                              name=name, content=content)
+                              name=name, content=content, action_checks=checks)
     except DuplicateTemplateName:
         return jsonify({'error': 'name already in use'}), 409
     if not row:

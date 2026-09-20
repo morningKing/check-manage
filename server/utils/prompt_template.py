@@ -5,7 +5,7 @@ re-use by routes/ai_chat_batches.py (which optionally records template_id).
 """
 import uuid
 from psycopg2.errors import UniqueViolation
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 from db import get_db
 
@@ -20,15 +20,17 @@ def _row(cur):
     return dict(r) if r else None
 
 
-def create_template(user_id: str, *, name: str, content: str) -> dict:
+def create_template(user_id: str, *, name: str, content: str,
+                    action_checks: list | None = None) -> dict:
     new_id = str(uuid.uuid4())
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             try:
                 cur.execute(
-                    "INSERT INTO ai_chat_prompt_templates (id, user_id, name, content) "
-                    "VALUES (%s, %s, %s, %s) RETURNING *",
-                    (new_id, user_id, name, content),
+                    "INSERT INTO ai_chat_prompt_templates (id, user_id, name, content, action_checks) "
+                    "VALUES (%s, %s, %s, %s, %s) RETURNING *",
+                    (new_id, user_id, name, content,
+                     Json(action_checks) if action_checks else None),
                 )
                 row = _row(cur)
                 conn.commit()
@@ -61,16 +63,19 @@ def get_template(user_id: str, template_id: str) -> dict | None:
 
 
 def update_template(user_id: str, template_id: str, *,
-                    name: str, content: str) -> dict | None:
+                    name: str, content: str,
+                    action_checks: list | None = None) -> dict | None:
     """Returns the updated row, or None if the template isn't this user's."""
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             try:
                 cur.execute(
                     "UPDATE ai_chat_prompt_templates "
-                    "SET name = %s, content = %s, updated_at = now() "
+                    "SET name = %s, content = %s, action_checks = %s, updated_at = now() "
                     "WHERE id = %s AND user_id = %s RETURNING *",
-                    (name, content, template_id, user_id),
+                    (name, content,
+                     Json(action_checks) if action_checks else None,
+                     template_id, user_id),
                 )
                 row = _row(cur)
                 conn.commit()

@@ -1018,6 +1018,9 @@ class BatchWorker:
             if gate['status'] == 'failed':
                 err = agent_ledger.gate_failure_message(gate)
                 logger.warning('action gate failed sid=%s: %s', sid, err)
+                # gate_retry(设计 §5.4,默认关闭):预算内带定向修复提示重跑。
+                if self._maybe_gate_retry(sid, gate):
+                    return
                 self._mark_failed(sid, batch_id, error=err)
                 self._notify_scan(session_row, None, ok=False)
                 self._notify_child_done(
@@ -1114,6 +1117,40 @@ class BatchWorker:
             logger.warning('action gate inconclusive sid=%s: %s',
                            sid, result.get('error') or healthy is False)
         return result
+
+    def _maybe_gate_retry(self, session_id: str, gate: dict) -> bool:
+        """gate_retry(AI_BATCH_GATE_RETRY,默认 0=关闭):不过门时带"缺失明细"
+        定向修复提示重新排队。预算与 auto-retry 共用 retry_count 列,cap 独立;
+        开启前须确认任务可幂等重跑,否则保持默认走 failed 人工兜底。"""
+        cap = int(os.getenv('AI_BATCH_GATE_RETRY', '0') or 0)
+        if cap <= 0:
+            return False
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT retry_count, opencode_session_id FROM ai_chat_sessions "
+                    "WHERE id = %s", (session_id,))
+                row = cur.fetchone()
+                if row is None:
+                    return False
+                retry_count, oc = row
+                if retry_count >= cap:
+                    return False
+                repair = ('上一轮任务已完成,但动作门禁核对未通过:'
+                          + agent_ledger.gate_failure_message(gate)
+                          + '。请只补齐上述缺失的动作,不要重做已完成的部分;'
+                          '完成后正常收尾。')
+                cur.execute(
+                    "UPDATE ai_chat_sessions "
+                    "SET status='pending', retry_count = retry_count + 1, "
+                    "    error_message=NULL, cancel_requested=false, pause_requested=false, "
+                    "    continue_prompt = CASE WHEN %s IS NOT NULL THEN %s "
+                    "                      ELSE continue_prompt END "
+                    "WHERE id = %s",
+                    (oc, repair, session_id))
+        logger.warning('action gate retry sid=%s (re-queued with repair prompt)',
+                       session_id)
+        return True
 
     def _record_workspace_files(self, session_id: str, ws: str):
         try:

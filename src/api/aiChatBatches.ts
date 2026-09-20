@@ -12,6 +12,16 @@ export function getBatch(id: string) {
   return get<AiChatBatchDetail>(`/ai/chat/batches/${id}`)
 }
 
+export interface ActionCheck {
+  name: string
+  tool: string
+  args_pattern: string
+  min_count?: number
+  scope?: 'session' | 'tree'
+  check_type?: 'tool' | 'file' | 'db_record'
+  effect_spec?: Record<string, unknown>
+}
+
 export function createBatch(body: {
   name: string
   prompt: string
@@ -21,13 +31,7 @@ export function createBatch(body: {
   provision_repo?: string | null
   provision_ref?: string | null
   /** 动作门禁期望(设计 §5.2 入口 A):子任务终态逐条核对账本,不过门落 failed */
-  action_checks?: Array<{
-    name: string
-    tool: string
-    args_pattern: string
-    min_count?: number
-    scope?: 'session' | 'tree'
-  }> | null
+  action_checks?: ActionCheck[] | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
@@ -41,6 +45,16 @@ export function deleteBatch(id: string, stop = false) {
 
 export function retryFailedSessions(id: string) {
   return post<{ retried: number }>(`/ai/chat/batches/${id}/retry-failed`)
+}
+
+/** M1.5(设计 §5.2):AI 提炼动作门禁期望建议——只产出建议,登记仍走人工确认 */
+export function extractActionChecks(body: {
+  task_text: string
+  agent?: string | null
+  skills?: string[]
+}) {
+  return post<{ checks: ActionCheck[] }>(
+    '/ai/chat/batches/action-checks/extract', body)
 }
 
 /** 中断整个批次：排队中的直接取消，运行中的协作式中断，已暂停的落成取消。

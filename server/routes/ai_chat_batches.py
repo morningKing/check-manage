@@ -204,6 +204,61 @@ def gate_dry_run(batch_id, sid):
         sid, tool, pattern, require_state))
 
 
+@ai_chat_batches_bp.post('/action-checks/extract')
+@login_required
+def extract_action_checks():
+    """AI 自动提炼(设计 §5.2,入口 A/B 的预填器):分析任务文本 + Agent +
+    Skill 步骤,产出门禁期望建议。只产出建议,登记仍走创建/模板保存的人工确认。"""
+    body = request.get_json(silent=True) or {}
+    task_text = (body.get('task_text') or '').strip()
+    if not task_text:
+        return jsonify({'error': 'task_text required'}), 400
+    from utils.action_check_extractor import extract_action_checks
+    try:
+        checks = extract_action_checks(task_text,
+                                       agent=body.get('agent'),
+                                       skills=body.get('skills'))
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 502
+    except ValueError as e:
+        return jsonify({'error': f'提炼结果未通过校验: {e}'}), 502
+    return jsonify({'checks': checks})
+
+
+@ai_chat_batches_bp.post('/<batch_id>/action-checks/attach')
+@login_required
+def attach_action_checks(batch_id):
+    """入口 D(设计 §5.2):对批任务下指定子会话补挂期望(运行中/排队中均可,
+    终态核对时生效)。管理员专用;批量补挂逐会话登记,幂等。"""
+    user_id = g.current_user['userId']
+    if g.current_user.get('role') != 'admin':
+        return jsonify({'error': 'admin only'}), 403
+    if not get_batch_detail(user_id, batch_id):
+        return jsonify({'error': 'not found'}), 404
+    body = request.get_json(silent=True) or {}
+    session_ids = body.get('session_ids') or []
+    try:
+        checks = agent_ledger.validate_checks(body.get('checks'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not session_ids or not checks:
+        return jsonify({'error': 'session_ids and checks required'}), 400
+    from db import get_db as _get_db
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ai_chat_sessions "
+                "WHERE batch_id = %s AND id = ANY(%s)",
+                (batch_id, session_ids),
+            )
+            valid = [r[0] for r in cur.fetchall()]
+    registered = 0
+    for sid in valid:
+        registered += agent_ledger.register_session_expectations(
+            sid, checks, source='batch')
+    return jsonify({'registered': registered, 'sessions': len(valid)})
+
+
 @ai_chat_batches_bp.patch('/<batch_id>')
 @login_required
 def update_config(batch_id):

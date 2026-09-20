@@ -31,6 +31,10 @@
               :title="(['failed', 'cancelled'].includes(s.status) && s.error_message) || s.last_message_preview || ''">
           {{ (['failed', 'cancelled'].includes(s.status) && s.error_message) ? s.error_message : (s.last_message_preview || '') }}
         </span>
+        <span v-if="(s.gate_failed ?? 0) > 0" class="gate-badge gate-badge--fail"
+              title="动作门禁未通过:缺失项见子任务 error_message">门禁 ×{{ s.gate_failed }}</span>
+        <span v-else-if="(s.gate_passed ?? 0) > 0" class="gate-badge gate-badge--pass"
+              title="动作门禁核对全部通过">门禁 ✓</span>
         <ElIcon v-if="['pending', 'running'].includes(s.status)"
                 class="bg-child__cancel" title="中断此任务"
                 @click.stop="onCancel(s.id)"><VideoPause /></ElIcon>
@@ -217,4 +221,7 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .badge--failed { background: var(--el-color-danger-light-8); color: var(--el-color-danger); }
 .badge--partial { background: var(--el-color-warning-light-8); color: var(--el-color-warning); }
 .badge--pending { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+.gate-badge { flex: 0 0 auto; font-size: 10px; padding: 1px 6px; border-radius: 8px; }
+.gate-badge--fail { background: var(--el-color-danger-light-8); color: var(--el-color-danger); }
+.gate-badge--pass { background: var(--el-color-success-light-8); color: var(--el-color-success); }
 </style>

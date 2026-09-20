@@ -66,6 +66,11 @@
       <div class="row">
         <label>动作门禁 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 子任务结束时逐条核对账本：脚本执行过没有、仓库克隆了没有、知识文件读了没有）</span></label>
         <ElCheckbox v-model="gateEnabled" data-test="gate-enabled">启用动作门禁</ElCheckbox>
+        <div class="row__inline">
+          <ElButton link data-test="gate-extract" :loading="extracting"
+                    :disabled="!prompt.trim()"
+                    @click="onExtract">AI 提炼（按 Prompt 与 Skill 步骤生成建议）</ElButton>
+        </div>
         <template v-if="gateEnabled">
           <div v-for="(c, i) in gateChecks" :key="i" class="gate-row" :data-test="`gate-row-${i}`">
             <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:0 0 150px" />
@@ -132,7 +137,7 @@ import {
   ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
   ElInputNumber, ElMessage,
 } from 'element-plus'
-import { stagingUpload, createBatch, listBatches } from '@/api/aiChatBatches'
+import { stagingUpload, createBatch, listBatches, extractActionChecks } from '@/api/aiChatBatches'
 import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
@@ -164,8 +169,31 @@ const provisionRepo = ref<string>('')
 const gateEnabled = ref(false)
 const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number }>>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
+const extracting = ref(false)
 function emptyCheck() {
   return { name: '', tool: 'bash', args_pattern: '', min_count: 1 }
+}
+
+/** M1.5:AI 提炼——只产出建议并预填表单,登记仍由用户点「创建」确认 */
+async function onExtract() {
+  if (!prompt.value.trim() || extracting.value) return
+  gateEnabled.value = true
+  extracting.value = true
+  try {
+    const { checks } = await extractActionChecks({
+      task_text: prompt.value.trim(),
+      agent: selectedAgent.value || null,
+    })
+    gateChecks.value = checks.map(c => ({
+      name: c.name, tool: c.tool || 'bash',
+      args_pattern: c.args_pattern, min_count: c.min_count ?? 1,
+    }))
+    if (!gateChecks.value.length) ElMessage.warning('AI 未提炼出必经动作,请手动添加')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || 'AI 提炼失败')
+  } finally {
+    extracting.value = false
+  }
 }
 // 批任务子会话个数上限：后端可配置（AI 设置页），随批任务列表接口下发；
 // 拉取失败回落 50 —— 仅作客户端预检，服务端才是准绳

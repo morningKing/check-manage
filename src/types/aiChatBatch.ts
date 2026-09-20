@@ -43,6 +43,9 @@ export interface AiChatBatchSession {
   opencode_session_id: string | null
   error_message: string | null
   last_message_preview: string | null
+  /** 动作门禁(设计 §5.4):最近一次终态核对的结果计数 */
+  gate_failed?: number
+  gate_passed?: number
 }
 
 export interface AiChatBatchDetail {
@@ -55,6 +58,15 @@ export interface AiChatPromptTemplate {
   user_id: string
   name: string
   content: string
+  action_checks?: Array<{
+    name: string
+    tool: string
+    args_pattern: string
+    min_count?: number
+    scope?: 'session' | 'tree'
+    check_type?: 'tool' | 'file' | 'db_record'
+    effect_spec?: Record<string, unknown>
+  }> | null
   created_at: string
   updated_at: string
 }

@@ -13,8 +13,10 @@
 3. check_session_gate —— 终态核对:对某子任务会话的全部期望逐一在账本计数,
    tree 作用域覆盖根会话 + 该根下全部子代理(skill 步骤常由子代理执行)。
 """
+import glob as _glob
 import json
 import logging
+import os
 import re
 
 import psycopg2.extras
@@ -22,6 +24,7 @@ import psycopg2.extras
 from db import get_db as _default_get_db
 
 MAX_ARGS_LEN = 8192
+MAX_FILE_EVIDENCE = 1000
 
 log = logging.getLogger(__name__)
 
@@ -54,25 +57,31 @@ def args_to_text(inp) -> str:
         return str(inp)
 
 
-def extract_tool_parts(messages) -> list:
-    """从一批 OpenCode 消息抽出 tool part 记录,按 part_id 去重(同 part 取
-    最后一次出现的状态——轮询/快照重复投递时,后到的状态更新)。
-
-    返回 [(part_id, tool, args_text, state)]。"""
+def extract_from_parts(parts) -> list:
+    """从 part 字典集合抽取 tool part 记录(REST 消息 parts 与交互态
+    parts_by_id 的值同构)。返回 [(part_id, tool, args_text, state)]。"""
     out: dict = {}
-    for m in messages or []:
-        for p in (m.get('parts') or []):
-            if not isinstance(p, dict) or p.get('type') != 'tool':
-                continue
-            pid = p.get('id')
-            tool = p.get('tool')
-            if not pid or not tool:
-                continue
-            state_obj = p.get('state') or {}
-            state = (state_obj.get('status') or 'pending')
-            args_text = args_to_text(state_obj.get('input'))[:MAX_ARGS_LEN]
-            out[pid] = (str(pid), str(tool), args_text, str(state)[:20])
+    for p in parts or []:
+        if not isinstance(p, dict) or p.get('type') != 'tool':
+            continue
+        pid = p.get('id')
+        tool = p.get('tool')
+        if not pid or not tool:
+            continue
+        state_obj = p.get('state') or {}
+        state = (state_obj.get('status') or 'pending')
+        args_text = args_to_text(state_obj.get('input'))[:MAX_ARGS_LEN]
+        out[pid] = (str(pid), str(tool), args_text, str(state)[:20])
     return list(out.values())
+
+
+def extract_tool_parts(messages) -> list:
+    """从一批 OpenCode 消息抽取 tool part 记录,按 part_id 去重(同 part 取
+    最后一次出现的状态——轮询/快照重复投递时,后到的状态更新)。"""
+    parts = []
+    for m in messages or []:
+        parts.extend(m.get('parts') or [])
+    return extract_from_parts(parts)
 
 
 def record_messages(oc_session_id: str, messages, *,
@@ -112,11 +121,100 @@ def record_messages(oc_session_id: str, messages, *,
         return False
 
 
+def record_state(session_id: str, oc_session_id: str, state, *,
+                 get_db=None) -> bool:
+    """交互侧(M2):把 chat_persist 累积态(root 的 parts_by_id + state['subtasks']
+    里每个子代理自己的累积态)落账。幂等与批任务路径共用同一张账本。"""
+    db_ctx = get_db or _default_get_db
+    ok = True
+    all_ok = True
+    scopes = [(oc_session_id, None)]
+    for child_sid, child_scope in (state.get('subtasks') or {}).items():
+        scopes.append((child_sid, child_scope))
+    for child_sid, scope in scopes:
+        if scope is None:
+            part_map = state.get('parts_by_id')
+        else:
+            part_map = scope.get('parts_by_id')
+        part_rows = extract_from_parts((part_map or {}).values())
+        if not part_rows:
+            continue
+        try:
+            with db_ctx() as conn:
+                with conn.cursor() as cur:
+                    psycopg2.extras.execute_values(
+                        cur,
+                        """
+                        INSERT INTO agent_tool_calls
+                            (oc_session_id, root_session_id, subtask_id,
+                             part_id, tool, args_text, state)
+                        VALUES %s
+                        ON CONFLICT (oc_session_id, part_id) DO UPDATE
+                        SET state = EXCLUDED.state,
+                            args_text = EXCLUDED.args_text
+                        WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
+                           OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
+                        """,
+                        [(child_sid, session_id,
+                          None if scope is None else child_sid,
+                          pid, tool, args, st)
+                         for (pid, tool, args, st) in part_rows],
+                    )
+        except Exception as e:  # noqa: BLE001
+            log.warning('agent ledger record_state failed oc=%s: %s', child_sid, e)
+            ok = False
+            all_ok = False
+    return ok and all_ok
+
+
+def finalize_interactive_turn(session_id: str, oc_session_id: str, state,
+                              get_db=None) -> dict:
+    """交互回合收敛(idle/error)时的统一收口(设计 M2):先落账,再核对该会话
+    的期望。不阻断回合——结果只写期望行与日志,由调用方告警/展示。"""
+    record_ok = record_state(session_id, oc_session_id, state, get_db=get_db)
+    gate = check_session_gate(session_id, ledger_healthy=record_ok,
+                              get_db=get_db)
+    if gate['status'] == 'failed':
+        log.warning('interactive action gate failed session=%s: %s',
+                    session_id, gate_failure_message(gate))
+    elif gate['status'] == 'inconclusive':
+        log.warning('interactive action gate inconclusive session=%s: %s',
+                    session_id, gate.get('error'))
+    return gate
+
+
 # ---------------------------------------------------------------------------
 # 2. 期望登记
 # ---------------------------------------------------------------------------
 
 VALID_SCOPES = ('session', 'tree')
+VALID_CHECK_TYPES = ('tool', 'file', 'db_record')
+
+
+def _validate_effect_spec(check_type, spec, idx):
+    """效果断言的参数校验(M3):file=工作区相对 glob;db_record=集合+Mongo 过滤。"""
+    if not isinstance(spec, dict):
+        raise ValueError(f'action_checks[{idx}].effect_spec 必须是对象')
+    if check_type == 'file':
+        path = (spec.get('path') or '').strip()
+        if not path:
+            raise ValueError(f'action_checks[{idx}].effect_spec.path 必填')
+        if os.path.isabs(path) or '..' in path.replace('\\', '/').split('/'):
+            raise ValueError(f'action_checks[{idx}].effect_spec.path '
+                             '必须是会话工作区内的相对路径')
+        return {'path': path}
+    if check_type == 'db_record':
+        collection = (spec.get('collection') or '').strip()
+        filt = spec.get('filter')
+        if not collection:
+            raise ValueError(f'action_checks[{idx}].effect_spec.collection 必填')
+        from utils.mongo_query import translate as mongo_translate, MongoQueryError
+        try:
+            mongo_translate(filt or {})
+        except MongoQueryError as e:
+            raise ValueError(f'action_checks[{idx}].effect_spec.filter 非法: {e}')
+        return {'collection': collection, 'filter': filt or {}}
+    raise ValueError(f'action_checks[{idx}].check_type 不支持: {check_type}')
 
 
 def validate_checks(checks) -> list:
@@ -130,18 +228,25 @@ def validate_checks(checks) -> list:
         if not isinstance(c, dict):
             raise ValueError(f'action_checks[{i}] 必须是对象')
         name = (c.get('name') or '').strip()
-        tool = (c.get('tool') or '').strip()
-        pattern = (c.get('args_pattern') or '').strip()
         if not name or len(name) > 100:
             raise ValueError(f'action_checks[{i}].name 必填且不超过 100 字')
-        if not tool or len(tool) > 50:
-            raise ValueError(f'action_checks[{i}].tool 必填且不超过 50 字')
-        if not pattern:
-            raise ValueError(f'action_checks[{i}].args_pattern 必填')
-        try:
-            re.compile(pattern)
-        except re.error as e:
-            raise ValueError(f'action_checks[{i}].args_pattern 不是合法正则: {e}')
+        check_type = (c.get('check_type') or 'tool').strip()
+        if check_type not in VALID_CHECK_TYPES:
+            raise ValueError(f'action_checks[{i}].check_type 只支持 '
+                             f'{VALID_CHECK_TYPES}')
+        tool = (c.get('tool') or '').strip()
+        pattern = (c.get('args_pattern') or '').strip()
+        if check_type == 'tool':
+            if not tool or len(tool) > 50:
+                raise ValueError(f'action_checks[{i}].tool 必填且不超过 50 字')
+            if not pattern:
+                raise ValueError(f'action_checks[{i}].args_pattern 必填')
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise ValueError(f'action_checks[{i}].args_pattern 不是合法正则: {e}')
+        else:
+            tool = tool or check_type
         scope = (c.get('scope') or 'tree').strip()
         if scope not in VALID_SCOPES:
             raise ValueError(f'action_checks[{i}].scope 只支持 {VALID_SCOPES}')
@@ -152,10 +257,14 @@ def validate_checks(checks) -> list:
         if min_count < 1:
             raise ValueError(f'action_checks[{i}].min_count 至少为 1')
         require_state = (c.get('require_state') or 'completed').strip()
+        effect_spec = None
+        if check_type in ('file', 'db_record'):
+            effect_spec = _validate_effect_spec(check_type, c.get('effect_spec'), i)
         normalized.append({
             'name': name, 'tool': tool, 'args_pattern': pattern,
             'require_state': require_state, 'min_count': min_count,
-            'scope': scope,
+            'scope': scope, 'check_type': check_type,
+            'effect_spec': effect_spec,
         })
     names = [c['name'] for c in normalized]
     if len(names) != len(set(names)):
@@ -179,21 +288,26 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                     """
                     INSERT INTO action_expectations
                         (scope_type, scope_id, name, tool, args_pattern,
-                         require_state, min_count, source, last_status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
+                         require_state, min_count, source, last_status,
+                         check_type, effect_spec)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)
                     ON CONFLICT (scope_type, scope_id, name) DO UPDATE SET
                         tool = EXCLUDED.tool,
                         args_pattern = EXCLUDED.args_pattern,
                         require_state = EXCLUDED.require_state,
                         min_count = EXCLUDED.min_count,
                         source = EXCLUDED.source,
+                        check_type = EXCLUDED.check_type,
+                        effect_spec = EXCLUDED.effect_spec,
                         last_status = 'pending',
                         last_checked_at = NULL,
                         last_evidence = NULL
                     """,
                     (c['scope'], session_id, c['name'], c['tool'],
                      c['args_pattern'], c['require_state'], c['min_count'],
-                     source),
+                     source, c['check_type'],
+                     psycopg2.extras.Json(c['effect_spec'])
+                     if c['effect_spec'] else None),
                 )
     return len(normalized)
 
@@ -219,6 +333,32 @@ def _subtree_oc_ids(cur, session_id: str, root_oc_id) -> list:
             seen.add(i)
             out.append(i)
     return out
+
+
+def _count_file_evidence(cur, session_id: str, spec) -> int:
+    """file 原语:会话工作区内相对 glob 的命中文件数(封顶防误配大目录)。"""
+    cur.execute("SELECT workspace_path FROM ai_chat_sessions WHERE id = %s",
+                (session_id,))
+    row = cur.fetchone()
+    ws = row[0] if row else None
+    if not ws or not os.path.isdir(ws):
+        return 0
+    pattern = os.path.join(ws, (spec or {}).get('path') or '')
+    hits = _glob.glob(pattern, recursive=True) if pattern else []
+    return min(len(hits), MAX_FILE_EVIDENCE)
+
+
+def _count_db_record_evidence(cur, spec) -> int:
+    """db_record 原语:dynamic_data 中按集合 + Mongo 过滤的命中记录数。"""
+    from utils.mongo_query import translate as mongo_translate
+    collection = (spec or {}).get('collection') or ''
+    filt = (spec or {}).get('filter') or {}
+    where, params = mongo_translate(filt)
+    cur.execute(
+        'SELECT COUNT(*) FROM dynamic_data WHERE collection = %s AND (' + where + ')',
+        [collection] + params,
+    )
+    return cur.fetchone()[0]
 
 
 def check_session_gate(session_id: str, ledger_healthy: bool = True,
@@ -250,7 +390,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 cur.execute(
                     """
                     SELECT id, name, tool, args_pattern, require_state,
-                           min_count, scope_type
+                           min_count, scope_type, check_type, effect_spec
                     FROM action_expectations
                     WHERE scope_id = %s AND scope_type IN ('session','tree')
                     ORDER BY id
@@ -263,25 +403,32 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 tree_ids = None
                 results = []
                 for (eid, name, tool, pattern, req_state, min_count,
-                     scope) in exps:
-                    if scope == 'tree':
-                        if tree_ids is None:
-                            tree_ids = _subtree_oc_ids(cur, session_id, oc_sid)
-                        ids = tree_ids
+                     scope, check_type, effect_spec) in exps:
+                    if check_type == 'file':
+                        evidence = _count_file_evidence(cur, session_id,
+                                                        effect_spec)
+                    elif check_type == 'db_record':
+                        evidence = _count_db_record_evidence(cur, effect_spec)
                     else:
-                        ids = [oc_sid]
-                    evidence = 0
-                    if ids:
-                        cur.execute(
-                            """
-                            SELECT COUNT(*) FROM agent_tool_calls
-                            WHERE oc_session_id = ANY(%s)
-                              AND tool = %s AND state = %s
-                              AND args_text ~ %s
-                            """,
-                            (ids, tool, req_state, pattern),
-                        )
-                        evidence = cur.fetchone()[0]
+                        if scope == 'tree':
+                            if tree_ids is None:
+                                tree_ids = _subtree_oc_ids(cur, session_id,
+                                                           oc_sid)
+                            ids = tree_ids
+                        else:
+                            ids = [oc_sid]
+                        evidence = 0
+                        if ids:
+                            cur.execute(
+                                """
+                                SELECT COUNT(*) FROM agent_tool_calls
+                                WHERE oc_session_id = ANY(%s)
+                                  AND tool = %s AND state = %s
+                                  AND args_text ~ %s
+                                """,
+                                (ids, tool, req_state, pattern),
+                            )
+                            evidence = cur.fetchone()[0]
                     status = 'passed' if evidence >= min_count else 'failed'
                     cur.execute(
                         """
@@ -296,6 +443,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         'name': name, 'tool': tool, 'args_pattern': pattern,
                         'require_state': req_state, 'min_count': min_count,
                         'scope': scope, 'evidence': evidence, 'status': status,
+                        'check_type': check_type or 'tool',
                     })
         overall = 'failed' if any(r['status'] == 'failed' for r in results) \
             else 'passed'

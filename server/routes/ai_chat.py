@@ -1233,6 +1233,14 @@ def sse_events(sid):
                     # failed at all.
                     if state['turn_msg_id'] and not sess[5] and not has_listener(sid):
                         persist_turn(sid, state)
+                    # 动作账本与到位门禁（设计 M2）：与后台监听器的收口互为备份，
+                    # 幂等键 (oc_session_id, part_id) 去重，双路径只落一份账。
+                    try:
+                        from utils import agent_ledger as _al
+                        _al.finalize_interactive_turn(sid, opencode_session_id,
+                                                      state)
+                    except Exception:
+                        pass
                     state = new_state()
 
                 yield _format_sse(etype, props)

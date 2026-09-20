@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from db import get_db                                    # noqa: E402
 from utils import agent_ledger                           # noqa: E402
+from utils import action_check_extractor                 # noqa: E402
 
 # migrations 目录下文件名以数字开头,不能直接 import;走 app.py boot 同款动态加载。
 import importlib.util                                    # noqa: E402
@@ -107,7 +108,8 @@ def test_validate_checks_normalizes():
         {'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone'},
     ])
     assert out == [{'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone',
-                    'require_state': 'completed', 'min_count': 1, 'scope': 'tree'}]
+                    'require_state': 'completed', 'min_count': 1, 'scope': 'tree',
+                    'check_type': 'tool', 'effect_spec': None}]
 
 
 def test_gate_failure_message_lists_missing_items():
@@ -271,3 +273,136 @@ def test_dry_run_counts_and_samples(gate_fixture):
     out = agent_ledger.count_tree_tool_calls(f['sid'], 'bash', 'git clone')
     assert out['evidence'] == 1
     assert 'git clone' in out['samples'][0]['args']
+
+
+# ---------------------------------------------------------------------------
+# M2 交互态采集(record_state)与 M3 效果断言原语
+# ---------------------------------------------------------------------------
+
+def test_record_state_walks_root_and_subtasks(gate_fixture):
+    """交互态:root 的 parts_by_id + 每个子代理自己的 parts_by_id 各落一账。"""
+    f = gate_fixture
+    state = {
+        'parts_by_id': {'r1': _tool_part('r1', 'read', 'path=docs/k.md')},
+        'subtasks': {
+            f['child1']: {'parts_by_id': {'c1': _tool_part('c1', 'bash', 'npm test')}},
+        },
+    }
+    assert agent_ledger.record_state(f['sid'], f['oc_sid'], state)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM agent_tool_calls WHERE root_session_id=%s",
+                        (f['sid'],))
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT COUNT(*) FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND subtask_id=%s",
+                        (f['child1'], f['child1']))
+            assert cur.fetchone()[0] == 1
+
+
+def test_file_effect_check_counts_workspace_glob(gate_fixture, tmp_path):
+    """file 原语:会话工作区内 glob 命中 → passed;缺失 → failed。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET workspace_path=%s WHERE id=%s",
+                        (str(tmp_path), f['sid']))
+        conn.commit()
+    (tmp_path / 'outputs').mkdir()
+    (tmp_path / 'outputs' / 'summary.xlsx').write_text('x', encoding='utf-8')
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': '产出汇总表', 'check_type': 'file',
+         'effect_spec': {'path': 'outputs/*.xlsx'}},
+    ])
+    res = agent_ledger.check_session_gate(f['sid'])
+    assert res['status'] == 'passed'
+    assert res['results'][0]['evidence'] == 1
+    # 删掉产物 → failed
+    (tmp_path / 'outputs' / 'summary.xlsx').unlink()
+    res = agent_ledger.check_session_gate(f['sid'])
+    assert res['status'] == 'failed'
+
+
+def test_db_record_effect_check(gate_fixture):
+    """db_record 原语:dynamic_data 按集合+Mongo 过滤命中 → passed。"""
+    f = gate_fixture
+    col = 'gate-test-' + f['sid'][:8]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO dynamic_data (id, collection, data) "
+                        "VALUES (%s, %s, %s)",
+                        ('dd-' + f['sid'][:8], col, '{"status": "done"}'))
+        conn.commit()
+    try:
+        agent_ledger.register_session_expectations(f['sid'], [
+            {'name': '回写扫描结果', 'check_type': 'db_record',
+             'effect_spec': {'collection': col, 'filter': {'status': 'done'}}},
+        ])
+        res = agent_ledger.check_session_gate(f['sid'])
+        assert res['status'] == 'passed'
+        assert res['results'][0]['evidence'] == 1
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM dynamic_data WHERE collection=%s", (col,))
+            conn.commit()
+
+
+def test_validate_checks_rejects_bad_effect_path():
+    with pytest.raises(ValueError, match='相对路径'):
+        agent_ledger.validate_checks([
+            {'name': 'x', 'check_type': 'file',
+             'effect_spec': {'path': '../../etc/passwd'}}])
+
+
+def test_finalize_interactive_turn_records_and_checks(gate_fixture):
+    f = gate_fixture
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': '执行对账脚本', 'tool': 'bash',
+         'args_pattern': 'scripts/reconcile\\.py'},
+    ])
+    state = {'parts_by_id': {
+        'r1': _tool_part('r1', 'bash', 'python scripts/reconcile.py'),
+    }, 'subtasks': {}}
+    gate = agent_ledger.finalize_interactive_turn(f['sid'], f['oc_sid'], state)
+    assert gate['status'] == 'passed'
+    assert gate['results'][0]['evidence'] == 1
+
+
+# ---------------------------------------------------------------------------
+# M1.5 提炼器(LLM mock,不发真实请求)
+# ---------------------------------------------------------------------------
+
+def _patch_llm(monkeypatch, content):
+    import utils.action_check_extractor as ex
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {'choices': [{'message': {'content': content}}]}
+    monkeypatch.setattr(ex, 'get_ai_settings', lambda: {
+        'enabled': True, 'apiKey': 'k', 'endpoint': 'http://x',
+        'model': 'm', 'timeout': 5, 'maxTokens': 1024})
+    monkeypatch.setattr(ex, 'get_http_session', lambda: type('S', (), {
+        'post': staticmethod(lambda *a, **k: _Resp())})())
+
+
+def test_extractor_parses_fenced_array(monkeypatch):
+    content = '```json\n[{"name": "克隆目标仓库", "tool": "bash", "args_pattern": "git clone\\\\s+\\\\S*y"}]\n```'
+    _patch_llm(monkeypatch, content)
+    checks = action_check_extractor.extract_action_checks('克隆 acme/y 并跑测试')
+    assert checks[0]['name'] == '克隆目标仓库'
+    assert checks[0]['min_count'] == 1
+
+
+def test_extractor_rejects_invalid_regex(monkeypatch):
+    _patch_llm(monkeypatch, '[{"name": "x", "tool": "bash", "args_pattern": "([bad"}]')
+    with pytest.raises(ValueError):
+        action_check_extractor.extract_action_checks('task')
+
+
+def test_extractor_requires_ai_enabled(monkeypatch):
+    monkeypatch.setattr(action_check_extractor, 'get_ai_settings', lambda: {
+        'enabled': False, 'apiKey': '', 'endpoint': '', 'model': '',
+        'timeout': 5, 'maxTokens': 1024})
+    with pytest.raises(RuntimeError, match='未启用'):
+        action_check_extractor.extract_action_checks('task')

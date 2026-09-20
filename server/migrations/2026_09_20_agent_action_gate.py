@@ -55,6 +55,13 @@ def run():
                     "ADD COLUMN IF NOT EXISTS action_checks JSONB")
         cur.execute("ALTER TABLE ai_chat_prompt_templates "
                     "ADD COLUMN IF NOT EXISTS action_checks JSONB")
+        # M3 效果断言原语:check_type='tool'(默认,账本匹配)|'file'(工作区文件存在)
+        # |'db_record'(dynamic_data 记录存在);effect_spec 承载 file/db 的参数。
+        cur.execute("ALTER TABLE action_expectations "
+                    "ADD COLUMN IF NOT EXISTS check_type VARCHAR(20) "
+                    "NOT NULL DEFAULT 'tool'")
+        cur.execute("ALTER TABLE action_expectations "
+                    "ADD COLUMN IF NOT EXISTS effect_spec JSONB")
         conn.commit()
     print("agent action gate tables ready.")
 
