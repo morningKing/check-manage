@@ -11,7 +11,7 @@ from tools import (
     list_collections, save_artifact, read_upload, export_collection_excel, run_python,
     query_collection, read_data_file, list_export_scripts, run_export_script,
     memory,
-    analyze_trace, query_sessions,
+    analyze_trace, query_sessions, download_field_files,
 )
 
 _TOOLS = {
@@ -29,6 +29,7 @@ _TOOLS = {
     memory.DELETE.name: (memory.DELETE, memory.handle_delete),
     analyze_trace.NAME: (analyze_trace.TOOL, analyze_trace.handle),
     query_sessions.NAME: (query_sessions.TOOL, query_sessions.handle),
+    download_field_files.NAME: (download_field_files.TOOL, download_field_files.handle),
 }
 
 

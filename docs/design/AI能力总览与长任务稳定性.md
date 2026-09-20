@@ -22,7 +22,7 @@ flowchart TB
         B4[会话与技能治理] ; B5[执行审计 attempts/events/diagnoses]
     end
     subgraph RT["AI 运行时子系统（独立进程）"]
-        C1[OpenCode serve<br/>Agent 编排·工具调用·SSE] ; C2[MCP Server<br/>12 个平台能力工具]
+        C1[OpenCode serve<br/>Agent 编排·工具调用·SSE] ; C2[MCP Server<br/>15 个平台能力工具]
         C3[长期记忆 mem0+Chroma]
     end
     subgraph DATA["数据管理平台（支撑上层 AI 引用）"]
@@ -126,12 +126,13 @@ Agent 编排内核：primary/subagent 多智能体、工具调用、Todo、交�
 
 ### 4.2 MCP Server（:3003，FastAPI + Streamable-HTTP）
 
-向 Agent 暴露 **12 个平台能力工具**（opaque token → DB 校验 → user/RBAC 推导）：
+向 Agent 暴露 **15 个平台能力工具**（opaque token → DB 校验 → user/RBAC 推导）：
 
 | 工具 | 能力 | 数据来源（数据管理支撑点） |
 |---|---|---|
 | `list_collections` / `query_collection` | 发现/查询业务数据页 | menus + dynamic_data（单表 JSONB） |
 | `read_data_file` | 读取数据页文件字段 | data_files |
+| `download_field_files` | 按条件查询数据页并把文件/图片字段的文件批量下载到会话当前目录 | dynamic_data + data_files |
 | `read_upload` | 读取会话上传文件 | workspace/uploads |
 | `save_artifact` | 产出文件到 outputs/ | workspace |
 | `run_python` | 沙箱执行 Python（可查 DB） | 只读连接 |
