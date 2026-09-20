@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">AI Trace 审计链与诊断证据</title>
+  <desc id="desc">Attempt、Prompt、Manifest、Event 组成确定性审计链，串联消息与子代理轨迹，经 trace-analyzer 生成包含 confirmed、inferred、unknown 的诊断报告。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6ea0ff"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#a48bff"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#ffad5c"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6c7898"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#0a1020"/>
+  <rect x="28" y="28" width="1544" height="844" rx="24" fill="#0e1730" stroke="#24345e" stroke-width="2"/>
+  <path d="M58 142 H1542" stroke="#263863" stroke-width="2"/>
+  <rect x="58" y="58" width="10" height="54" rx="5" fill="#ff9d4d"/>
+  <text x="88" y="86" fill="#f4f7ff" font-size="30" font-weight="700">AI Trace 审计链与诊断证据</text>
+  <text x="88" y="116" fill="#9eacd0" font-size="16">每一步都有来源、顺序和置信度：审计链 → 消息 / 子代理轨迹 → trace-analyzer → 诊断报告</text>
+
+  <g aria-label="确定性审计链">
+    <rect x="70" y="188" width="1460" height="206" rx="20" fill="#111a35" stroke="#6559a8" stroke-width="2"/>
+    <text x="98" y="226" fill="#c3bdf0" font-size="15" font-weight="700">DETERMINISTIC AUDIT / 确定性审计</text>
+    <text x="1468" y="226" text-anchor="end" fill="#7f8dad" font-size="12">same input → same trace shape</text>
+
+    <rect x="100" y="252" width="268" height="104" rx="16" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <circle cx="130" cy="282" r="15" fill="#6ea0ff"/>
+    <text x="130" y="288" text-anchor="middle" fill="#0e1730" font-size="14" font-weight="700">01</text>
+    <text x="158" y="286" fill="#6ea0ff" font-size="18" font-weight="700">Attempt</text>
+    <text x="126" y="318" fill="#dbe3fb" font-size="13">attempt_id · actor · time</text>
+    <text x="126" y="340" fill="#8f9cbb" font-size="12">一次可定位的执行边界</text>
+
+    <rect x="408" y="252" width="268" height="104" rx="16" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <circle cx="438" cy="282" r="15" fill="#a48bff"/>
+    <text x="438" y="288" text-anchor="middle" fill="#0e1730" font-size="14" font-weight="700">02</text>
+    <text x="466" y="286" fill="#a48bff" font-size="18" font-weight="700">Prompt</text>
+    <text x="434" y="318" fill="#e5e0fa" font-size="13">system · user · context hash</text>
+    <text x="434" y="340" fill="#aba3d5" font-size="12">输入可复现，不只看结果</text>
+
+    <rect x="716" y="252" width="268" height="104" rx="16" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <circle cx="746" cy="282" r="15" fill="#a48bff"/>
+    <text x="746" y="288" text-anchor="middle" fill="#0e1730" font-size="14" font-weight="700">03</text>
+    <text x="774" y="286" fill="#a48bff" font-size="18" font-weight="700">Manifest</text>
+    <text x="742" y="318" fill="#e5e0fa" font-size="13">tools · files · agent graph</text>
+    <text x="742" y="340" fill="#aba3d5" font-size="12">执行计划的静态快照</text>
+
+    <rect x="1024" y="252" width="268" height="104" rx="16" fill="#33233b" stroke="#ca774a" stroke-width="2"/>
+    <circle cx="1054" cy="282" r="15" fill="#ffad5c"/>
+    <text x="1054" y="288" text-anchor="middle" fill="#24150b" font-size="14" font-weight="700">04</text>
+    <text x="1082" y="286" fill="#ffad5c" font-size="18" font-weight="700">Event</text>
+    <text x="1050" y="318" fill="#f4d8c6" font-size="13">message · tool_call · status</text>
+    <text x="1050" y="340" fill="#c59f89" font-size="12">按序追加，不覆盖证据</text>
+
+    <path d="M368 304 H408" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <path d="M676 304 H716" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <path d="M984 304 H1024" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <path d="M1292 304 C1190 350 950 390 700 428" stroke="#6ea0ff" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+    <text x="1002" y="382" text-anchor="middle" fill="#8192b7" font-size="12">hash + sequence → 消息 / 子代理轨迹</text>
+  </g>
+
+  <g aria-label="轨迹与分析">
+    <rect x="70" y="428" width="690" height="282" rx="20" fill="#121e3b" stroke="#40598b" stroke-width="2"/>
+    <text x="100" y="468" fill="#f4f7ff" font-size="20" font-weight="700">消息 / 子代理轨迹</text>
+    <text x="100" y="494" fill="#9eacd0" font-size="13">同一 Attempt 下的可观测事件时间线</text>
+    <path d="M126 540 H712" stroke="#344a78" stroke-width="2"/>
+    <circle cx="160" cy="540" r="10" fill="#6ea0ff"/>
+    <circle cx="326" cy="540" r="10" fill="#a48bff"/>
+    <circle cx="492" cy="540" r="10" fill="#ffad5c"/>
+    <circle cx="658" cy="540" r="10" fill="#6ea0ff"/>
+    <path d="M160 540 V594" stroke="#5277be" stroke-width="2"/>
+    <path d="M326 540 V594" stroke="#786bd0" stroke-width="2"/>
+    <path d="M492 540 V594" stroke="#ca774a" stroke-width="2"/>
+    <path d="M658 540 V594" stroke="#5277be" stroke-width="2"/>
+    <text x="160" y="618" text-anchor="middle" fill="#dbe3fb" font-size="13">message</text>
+    <text x="160" y="640" text-anchor="middle" fill="#8f9cbb" font-size="12">user_input</text>
+    <text x="326" y="618" text-anchor="middle" fill="#e5e0fa" font-size="13">subagent-1</text>
+    <text x="326" y="640" text-anchor="middle" fill="#aba3d5" font-size="12">tool_call</text>
+    <text x="492" y="618" text-anchor="middle" fill="#f4d8c6" font-size="13">subagent-2</text>
+    <text x="492" y="640" text-anchor="middle" fill="#c59f89" font-size="12">handoff</text>
+    <text x="658" y="618" text-anchor="middle" fill="#dbe3fb" font-size="13">message</text>
+    <text x="658" y="640" text-anchor="middle" fill="#8f9cbb" font-size="12">final_delta</text>
+    <rect x="100" y="668" width="606" height="24" rx="12" fill="#18284c"/>
+    <text x="403" y="685" text-anchor="middle" fill="#8fa9e3" font-size="12">trace_id: tr_7f2a · parent: attempt_42 · cursor: 18</text>
+
+    <rect x="800" y="428" width="730" height="282" rx="20" fill="#111a35" stroke="#6559a8" stroke-width="2"/>
+    <rect x="830" y="458" width="250" height="92" rx="14" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <text x="854" y="493" fill="#a48bff" font-size="18" font-weight="700">trace-analyzer</text>
+    <text x="854" y="520" fill="#e5e0fa" font-size="13">读取链、比对顺序、找断点</text>
+    <path d="M760 570 C790 570 800 520 830 504" stroke="#6ea0ff" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
+    <text x="792" y="554" text-anchor="middle" fill="#8192b7" font-size="12">轨迹输入</text>
+    <path d="M1080 504 H1118" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <rect x="1118" y="458" width="382" height="92" rx="14" fill="#172d4b" stroke="#5277be" stroke-width="2"/>
+    <text x="1144" y="493" fill="#6ea0ff" font-size="18" font-weight="700">诊断报告 Diagnostic Report</text>
+    <text x="1144" y="520" fill="#dbe3fb" font-size="13">证据、影响、建议与缺口</text>
+
+    <path d="M1240 550 V578" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <text x="1260" y="568" fill="#8192b7" font-size="12">证据分类</text>
+    <rect x="830" y="578" width="202" height="88" rx="14" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <circle cx="862" cy="610" r="9" fill="#6ea0ff"/>
+    <text x="884" y="616" fill="#dbe3fb" font-size="16" font-weight="700">confirmed</text>
+    <text x="854" y="644" fill="#8fa9e3" font-size="12">有直接事件证据</text>
+    <rect x="1050" y="578" width="202" height="88" rx="14" fill="#33233b" stroke="#ca774a" stroke-width="2"/>
+    <circle cx="1082" cy="610" r="9" fill="#ffad5c"/>
+    <text x="1104" y="616" fill="#f4d8c6" font-size="16" font-weight="700">inferred</text>
+    <text x="1074" y="644" fill="#c59f89" font-size="12">由相邻证据推断</text>
+    <rect x="1270" y="578" width="202" height="88" rx="14" fill="#202a43" stroke="#56627f" stroke-width="2"/>
+    <circle cx="1302" cy="610" r="9" fill="#8b95ad"/>
+    <text x="1324" y="616" fill="#d0d6e4" font-size="16" font-weight="700">unknown</text>
+    <text x="1294" y="644" fill="#8f9cbb" font-size="12">链路缺口待补证</text>
+  </g>
+
+  <g aria-label="图例">
+    <rect x="70" y="790" width="1460" height="50" rx="14" fill="#111b34" stroke="#263863"/>
+    <text x="100" y="821" fill="#b8c5e3" font-size="13">审计原则</text>
+    <path d="M180 815 H250" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <text x="266" y="821" fill="#b8c5e3" font-size="13">可定位</text>
+    <path d="M350 815 H420" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <text x="436" y="821" fill="#b8c5e3" font-size="13">可复现</text>
+    <path d="M520 815 H590" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <text x="606" y="821" fill="#b8c5e3" font-size="13">可解释</text>
+    <text x="1450" y="821" text-anchor="end" fill="#7080a5" font-size="13">不把推断写成事实</text>
+  </g>
+</svg>

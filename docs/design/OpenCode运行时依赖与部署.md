@@ -1,5 +1,7 @@
 # OpenCode 运行时依赖与部署指南
 
+> **迁移说明**：专题细节已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)；本文保留专题背景/实施细节；实现状态、表结构、接口以 09 和当前代码为准。
+
 > 适用范围：BKB（check-manage）服务端与 OpenCode Agent 运行时（`opencode serve`）的
 > 集成部署。事实核验基线：OpenCode **v1.15.1**（Windows / Linux 均已验证）。
 >

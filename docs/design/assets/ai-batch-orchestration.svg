@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">AI 批处理编排与状态同步</title>
+  <desc id="desc">BatchWorker 依据 priority、paused、concurrency 参与 pending claim predicate，通过 DB version 与 SSE generator 同步前端 store，并支持轮询降级。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6ea0ff"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#a48bff"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#ffad5c"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6c7898"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#0a1020"/>
+  <rect x="28" y="28" width="1544" height="844" rx="24" fill="#0e1730" stroke="#24345e" stroke-width="2"/>
+  <path d="M58 142 H1542" stroke="#263863" stroke-width="2"/>
+  <rect x="58" y="58" width="10" height="54" rx="5" fill="#ff9d4d"/>
+  <text x="88" y="86" fill="#f4f7ff" font-size="30" font-weight="700">AI 批处理编排与状态同步</text>
+  <text x="88" y="116" fill="#9eacd0" font-size="16">BatchWorker 负责执行，DB version 负责秩序，SSE 优先、轮询降级保证前端可见</text>
+
+  <g aria-label="批处理控制与执行">
+    <rect x="70" y="188" width="414" height="548" rx="20" fill="#121e3b" stroke="#40598b" stroke-width="2"/>
+    <rect x="70" y="188" width="414" height="58" rx="20" fill="#1b2c55"/>
+    <rect x="70" y="224" width="414" height="22" fill="#1b2c55"/>
+    <circle cx="102" cy="217" r="12" fill="#6ea0ff"/>
+    <path d="M95 222 L101 211 L107 222 Z" fill="#0e1730"/>
+    <text x="128" y="224" fill="#f4f7ff" font-size="20" font-weight="700">BatchWorker</text>
+    <text x="96" y="278" fill="#aeb9d6" font-size="14">队列消费、任务调度与状态写入</text>
+
+    <rect x="96" y="306" width="362" height="94" rx="14" fill="#18284c" stroke="#5277be" stroke-width="2"/>
+    <text x="120" y="337" fill="#6ea0ff" font-size="16" font-weight="700">调度控制 Controls</text>
+    <rect x="120" y="353" width="92" height="28" rx="14" fill="#263e72"/>
+    <text x="166" y="372" text-anchor="middle" fill="#dbe3fb" font-size="13">并发 4</text>
+    <rect x="224" y="353" width="102" height="28" rx="14" fill="#302866"/>
+    <text x="275" y="372" text-anchor="middle" fill="#e3dcfa" font-size="13">优先级 P1</text>
+    <rect x="338" y="353" width="96" height="28" rx="14" fill="#3a2a31" stroke="#c77b52"/>
+    <text x="386" y="372" text-anchor="middle" fill="#ffd9c1" font-size="13">暂停 / 恢复</text>
+
+    <rect x="96" y="426" width="362" height="252" rx="14" fill="#151f3b" stroke="#344a78" stroke-width="2"/>
+    <text x="120" y="458" fill="#ffad5c" font-size="16" font-weight="700">Worker pool / 运行槽</text>
+    <rect x="120" y="468" width="314" height="46" rx="12" fill="#33233b" stroke="#ca774a" stroke-width="2"/>
+    <text x="277" y="488" text-anchor="middle" fill="#ffad5c" font-size="13" font-weight="700">pending claim predicate</text>
+    <text x="277" y="505" text-anchor="middle" fill="#f4d8c6" font-size="11">paused = false ∧ slots &lt; concurrency ∧ max priority</text>
+    <rect x="120" y="524" width="152" height="58" rx="12" fill="#1e3560"/>
+    <text x="140" y="550" fill="#dbe3fb" font-size="14">slot-01</text>
+    <text x="140" y="571" fill="#7fa6f0" font-size="12">running · P1</text>
+    <rect x="282" y="524" width="152" height="58" rx="12" fill="#28245a"/>
+    <text x="302" y="550" fill="#e3dcfa" font-size="14">slot-02</text>
+    <text x="302" y="571" fill="#b9aef0" font-size="12">running · P2</text>
+    <rect x="120" y="594" width="152" height="58" rx="12" fill="#202b48"/>
+    <text x="140" y="620" fill="#dbe3fb" font-size="14">slot-03</text>
+    <text x="140" y="641" fill="#8f9cbb" font-size="12">queued · P3</text>
+    <rect x="282" y="594" width="152" height="58" rx="12" fill="#33283b"/>
+    <text x="302" y="620" fill="#f4d8c6" font-size="14">slot-04</text>
+    <text x="302" y="641" fill="#d39a79" font-size="12">paused · manual</text>
+    <text x="120" y="672" fill="#7080a5" font-size="12">公平队列 · 可控背压 · 可暂停</text>
+
+    <path d="M484 358 C510 358 510 358 538 358" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <path d="M484 554 C510 554 510 516 538 516" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  </g>
+
+  <g aria-label="数据库账本">
+    <rect x="538" y="188" width="470" height="548" rx="20" fill="#111a35" stroke="#6559a8" stroke-width="2"/>
+    <rect x="538" y="188" width="470" height="58" rx="20" fill="#2a245d"/>
+    <rect x="538" y="224" width="470" height="22" fill="#2a245d"/>
+    <circle cx="570" cy="217" r="12" fill="#a48bff"/>
+    <path d="M563 212 H577 V222 H563 Z" fill="#0e1730"/>
+    <text x="596" y="224" fill="#f4f7ff" font-size="20" font-weight="700">DB version</text>
+    <text x="564" y="278" fill="#c3bdf0" font-size="14">单调递增的状态账本与事件游标</text>
+
+    <rect x="564" y="306" width="418" height="116" rx="14" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <text x="588" y="340" fill="#a48bff" font-size="16" font-weight="700">Batch ledger</text>
+    <text x="588" y="369" fill="#e5e0fa" font-size="15">version: 0042 → 0043 → 0044</text>
+    <text x="588" y="395" fill="#aba3d5" font-size="13">queued → running → succeeded</text>
+
+    <rect x="564" y="448" width="198" height="184" rx="14" fill="#172640" stroke="#40598b" stroke-width="2"/>
+    <text x="588" y="482" fill="#6ea0ff" font-size="15" font-weight="700">写入原则</text>
+    <text x="588" y="514" fill="#dbe3fb" font-size="13">先更新版本</text>
+    <text x="588" y="542" fill="#dbe3fb" font-size="13">再写事件</text>
+    <text x="588" y="570" fill="#dbe3fb" font-size="13">最后广播</text>
+    <path d="M588 588 H724" stroke="#385383" stroke-width="1"/>
+    <text x="588" y="611" fill="#8f9cbb" font-size="12">幂等、可重放</text>
+
+    <rect x="784" y="448" width="198" height="184" rx="14" fill="#172640" stroke="#40598b" stroke-width="2"/>
+    <text x="808" y="482" fill="#ffad5c" font-size="15" font-weight="700">事件样例</text>
+    <text x="808" y="514" fill="#dbe3fb" font-size="13">item_started</text>
+    <text x="808" y="542" fill="#dbe3fb" font-size="13">item_progress</text>
+    <text x="808" y="570" fill="#dbe3fb" font-size="13">item_finished</text>
+    <path d="M808 588 H944" stroke="#6b4d41" stroke-width="1"/>
+    <text x="808" y="611" fill="#b68c72" font-size="12">cursor 可恢复</text>
+
+    <path d="M1008 358 C1034 358 1034 358 1062 358" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <path d="M1008 554 C1034 554 1034 516 1062 516" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  </g>
+
+  <g aria-label="前端同步">
+    <rect x="1062" y="188" width="468" height="548" rx="20" fill="#121e3b" stroke="#40598b" stroke-width="2"/>
+    <rect x="1088" y="226" width="416" height="122" rx="16" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="1114" y="263" fill="#6ea0ff" font-size="18" font-weight="700">SSE generator · 首选实时通道</text>
+    <text x="1114" y="293" fill="#dbe3fb" font-size="14">yield version / event / progress</text>
+    <path d="M1114 316 H1478" stroke="#385383" stroke-width="1"/>
+    <text x="1114" y="338" fill="#8f9cbb" font-size="12">generator 持续 yield，客户端按版本去重</text>
+
+    <rect x="1088" y="378" width="416" height="122" rx="16" fill="#33233b" stroke="#ca774a" stroke-width="2"/>
+    <text x="1114" y="415" fill="#ffad5c" font-size="18" font-weight="700">轮询降级 Fallback</text>
+    <text x="1114" y="445" fill="#f4d8c6" font-size="14">SSE 断开 → GET /status?version=</text>
+    <text x="1114" y="474" fill="#c59f89" font-size="12">退避轮询，连接恢复后自动切回 SSE</text>
+
+    <rect x="1088" y="530" width="416" height="146" rx="16" fill="#18284c" stroke="#5277be" stroke-width="2"/>
+    <text x="1114" y="568" fill="#f4f7ff" font-size="18" font-weight="700">前端 store</text>
+    <text x="1114" y="598" fill="#c4d1ed" font-size="14">jobsById · activeVersion · connection</text>
+    <rect x="1114" y="616" width="94" height="28" rx="14" fill="#263e72"/>
+    <text x="1161" y="635" text-anchor="middle" fill="#dbe3fb" font-size="12">fresh</text>
+    <rect x="1220" y="616" width="94" height="28" rx="14" fill="#3a2a31"/>
+    <text x="1267" y="635" text-anchor="middle" fill="#ffd9c1" font-size="12">degraded</text>
+    <rect x="1326" y="616" width="94" height="28" rx="14" fill="#302866"/>
+    <text x="1373" y="635" text-anchor="middle" fill="#e3dcfa" font-size="12">paused</text>
+    <path d="M1300 348 V378" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <path d="M1300 500 V530" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  </g>
+
+  <g aria-label="图例">
+    <rect x="70" y="790" width="1460" height="50" rx="14" fill="#111b34" stroke="#263863"/>
+    <circle cx="102" cy="815" r="7" fill="#6ea0ff"/>
+    <text x="118" y="821" fill="#b8c5e3" font-size="13">执行与实时同步</text>
+    <circle cx="294" cy="815" r="7" fill="#a48bff"/>
+    <text x="310" y="821" fill="#b8c5e3" font-size="13">版本账本</text>
+    <circle cx="410" cy="815" r="7" fill="#ffad5c"/>
+    <text x="426" y="821" fill="#b8c5e3" font-size="13">降级与控制</text>
+    <text x="1450" y="821" text-anchor="end" fill="#7080a5" font-size="13">事件按 version 单调前进</text>
+  </g>
+</svg>

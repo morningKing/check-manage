@@ -1,5 +1,7 @@
 # 设计文档索引
 
+> AI 设计权威入口：[`09-AI智能助手.md`](./09-AI智能助手.md)。各 AI 专题文档的细节已吸收到 09；实际实现状态、表结构、接口以 09 和当前代码为准。
+
 本目录按 [`功能架构图.svg`](./功能架构图.svg) 的 **9 个业务域**组织系统设计文档，并补充 1 篇**横切关注点**文档（数据并发控制）。总览见 [`功能架构说明.md`](./功能架构说明.md)。
 
 ## 架构总览
@@ -28,10 +30,10 @@
 | 文档 | 说明 |
 |------|------|
 | [10-数据并发控制.md](./10-数据并发控制.md) | 跨所有写入路径的并发一致性权威设计：乐观锁、序号原子分配、手填主键 advisory 锁、序号计数器全局不变式、工作流推进并发与分支隔离、关系一致性、分支锁定、触发器/Webhook 最终一致。配 4 张 SVG 场景图（`assets/concurrency-*.svg`）。 |
-| [11-AI执行轨迹分析.md](./11-AI执行轨迹分析.md) | 域⑨扩展：Skill 调用/MCP 工具/Agent 委托的统一轨迹采集、成本归因、性能分析、执行链路追溯、**主动跑偏检测（MAST 分类法）+ 根因分析（Agent-as-a-Judge）+ 优化建议引擎**。 |
-| [13-AI批任务实时进度与编排设计.md](./13-AI批任务实时进度与编排设计.md) | 域⑨扩展：批任务 SSE 实时进度推送（DB 版本号条件推送）、并发度运行时可配、批级优先级插队、暂停/恢复编排语义。 |
-| [AI批任务容灾与恢复机制.md](./AI批任务容灾与恢复机制.md) | 域⑨扩展：OpenCode 重启/系统崩溃后的自动恢复——运行中对账器、派发期会话重建、失败分类自动重试、扫描记录孤儿清扫；含环境变量调优与自检步骤。 |
-| [OpenCode运行时依赖与部署.md](./OpenCode运行时依赖与部署.md) | 域⑨部署指南：OpenCode 本体安装、全局配置目录、SkillOpt 运行时插件（自动/手动安装与验证）、skill·agent 生效语义、环境变量总表与故障排查。 |
+| [13-AI批任务实时进度与编排设计.md](./13-AI批任务实时进度与编排设计.md) | 域⑨专题迁移入口：批任务 SSE 实时进度推送、并发度运行时可配、批级优先级插队、暂停/恢复编排语义；细节已迁移到 [`09-AI智能助手.md`](./09-AI智能助手.md)。 |
+| [AI执行审计能力说明.md](./AI执行审计能力说明.md) | 域⑨专题迁移入口：执行 Attempt、不可变事件、契约步骤审计、工具失败与恢复分析、诊断报告；细节已迁移到 [`09-AI智能助手.md`](./09-AI智能助手.md)。 |
+| [AI批任务容灾与恢复机制.md](./AI批任务容灾与恢复机制.md) | 域⑨专题迁移入口：OpenCode 重启/系统崩溃后的自动恢复、运行中对账、会话重建、失败分类重试、扫描记录孤儿清扫；细节已迁移到 [`09-AI智能助手.md`](./09-AI智能助手.md)。 |
+| [OpenCode运行时依赖与部署.md](./OpenCode运行时依赖与部署.md) | 域⑨专题迁移入口：OpenCode 本体、全局配置、SkillOpt 运行时插件、skill/agent 生效语义、环境变量与故障排查；细节已迁移到 [`09-AI智能助手.md`](./09-AI智能助手.md)。 |
 
 > 跨页**工作流引擎**（`workflow_definitions` / `workflow_instances` / 收件箱 / 设计器）是横切③数据写入 + ⑧通知的编排能力：状态字段转换驱动阶段推进、原子分配下游记录、分支隔离与「推进失败即回滚」一致性。并发与一致性见 [10-数据并发控制.md](./10-数据并发控制.md) §7，使用说明见 [工作流引擎使用指南](../user-guide/data/workflow.md)。
 
@@ -59,6 +61,6 @@
 | [concurrency-control-design.md](./archive/concurrency-control-design.md) | → ⑩ 数据并发控制（已被完全取代，仅存重定向 + 历史背景） |
 | [project-management-design.md](./archive/project-management-design.md) | → ③看板/工作流（+ 跨页工作流引擎）· ⑥联动 · ⑧通知/仪表盘 |
 | [cross-project-dependency-design.md](./archive/cross-project-dependency-design.md) | → ⑦ 版本协作 |
-| [ai-chat-design.md](./archive/ai-chat-design.md) | → ⑨ AI 智能助手（已更新多 agent/批任务/定时） |
-| [inspection-skill-design.md](./archive/inspection-skill-design.md) | AI 应用示例（保留备查） |
+| [ai-chat-design.md](./archive/ai-chat-design.md) | → ⑨ AI 智能助手（内容已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)，本文保留早期背景与验证记录） |
+| [inspection-skill-design.md](./archive/inspection-skill-design.md) | AI 应用示例（内容已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)，本文保留备查） |
 | [advantages-analysis.md](./archive/advantages-analysis.md) | 非设计文档（保留备查） |

@@ -1,5 +1,7 @@
 # AI 批任务容灾与恢复机制
 
+> **迁移说明**：专题细节已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)；本文保留专题背景/实施细节；实现状态、表结构、接口以 09 和当前代码为准。
+
 > 适用范围：AI 批任务（`ai_chat_batches`）、AI 扫描任务（`ai_scan_tasks`）与开放
 > API 子会话在 **OpenCode serve 重启**或**服务端进程/整机崩溃**后的自动恢复。
 > 代码基线：`server/utils/batch_engine.py`、`server/utils/ai_scan_engine.py`、

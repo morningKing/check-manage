@@ -1,5 +1,7 @@
 # AI 能力总览与长任务稳定性
 
+> **迁移说明**：专题细节已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)；本文保留专题背景/实施细节；实现状态、表结构、接口以 09 和当前代码为准。
+
 **版本**：v1.0
 **日期**：2026-09-18
 **范围**：巡检用例管理系统全部 AI 能力——上层应用、编排服务、运行时子系统、数据支撑、底层调度
@@ -260,5 +262,5 @@ Agent 编排内核：primary/subagent 多智能体、工具调用、Todo、交�
 
 - 架构图：[功能架构图.svg](./功能架构图.svg)
 - 执行审计与 SkillOpt 规格：[../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md](../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md)
-- 轨迹分析设计：[11-AI执行轨迹分析.md](./11-AI执行轨迹分析.md)
+- AI 权威设计入口：[`09-AI智能助手.md`](./09-AI智能助手.md)（轨迹分析与 SkillOpt 细节已迁移至该文档）
 - 用户指南：[../user-guide/ai/assistant.md](../user-guide/ai/assistant.md) 等

@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">OpenCode Runtime 运行时拓扑</title>
+  <desc id="desc">Flask 与 workspace 读取 opencode.json，通过 OpenCode serve 连接 global/project Skill/Agent、MCP Server、LLM Provider，并使用 RBAC token 做权限边界。</desc>
+  <defs>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6ea0ff"/>
+    </marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#a48bff"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#ffad5c"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M1 1 L11 6 L1 11 Z" fill="#6c7898"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#0a1020"/>
+  <rect x="28" y="28" width="1544" height="844" rx="24" fill="#0e1730" stroke="#24345e" stroke-width="2"/>
+  <path d="M58 142 H1542" stroke="#263863" stroke-width="2"/>
+  <rect x="58" y="58" width="10" height="54" rx="5" fill="#ff9d4d"/>
+  <text x="88" y="86" fill="#f4f7ff" font-size="30" font-weight="700">OpenCode Runtime 运行时拓扑</text>
+  <text x="88" y="116" fill="#9eacd0" font-size="16">Flask 负责边界，workspace 提供项目语境，OpenCode serve 统一编排能力与模型</text>
+
+  <g aria-label="入口与配置">
+    <rect x="70" y="188" width="350" height="210" rx="20" fill="#121e3b" stroke="#40598b" stroke-width="2"/>
+    <text x="100" y="230" fill="#6ea0ff" font-size="20" font-weight="700">Flask</text>
+    <text x="100" y="259" fill="#dbe3fb" font-size="14">HTTP / SSE / auth boundary</text>
+    <rect x="100" y="286" width="124" height="64" rx="14" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="162" y="313" text-anchor="middle" fill="#8fa9e3" font-size="13">route</text>
+    <text x="162" y="337" text-anchor="middle" fill="#dbe3fb" font-size="13">/chat</text>
+    <rect x="244" y="286" width="144" height="64" rx="14" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="316" y="313" text-anchor="middle" fill="#8fa9e3" font-size="13">stream</text>
+    <text x="316" y="337" text-anchor="middle" fill="#dbe3fb" font-size="13">/events</text>
+
+    <rect x="70" y="432" width="350" height="230" rx="20" fill="#111a35" stroke="#6559a8" stroke-width="2"/>
+    <text x="100" y="474" fill="#a48bff" font-size="20" font-weight="700">workspace</text>
+    <text x="100" y="502" fill="#e5e0fa" font-size="14">项目文件、代码与运行上下文</text>
+    <rect x="100" y="532" width="290" height="58" rx="12" fill="#201d4c" stroke="#786bd0"/>
+    <text x="124" y="567" fill="#c3bdf0" font-size="16" font-weight="700">opencode.json</text>
+    <text x="100" y="620" fill="#aba3d5" font-size="13">project root · config · mounts</text>
+
+    <path d="M420 292 C460 292 480 292 522 292" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+    <path d="M420 548 C470 548 480 416 522 416" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+  </g>
+
+  <g aria-label="OpenCode serve 核心">
+    <rect x="522" y="188" width="520" height="474" rx="24" fill="#172d4b" stroke="#5277be" stroke-width="3"/>
+    <rect x="552" y="218" width="460" height="86" rx="16" fill="#1e3560" stroke="#6ea0ff" stroke-width="2"/>
+    <circle cx="588" cy="261" r="18" fill="#6ea0ff"/>
+    <path d="M580 261 L588 247 L596 261 L588 275 Z" fill="#0e1730"/>
+    <text x="622" y="262" fill="#f4f7ff" font-size="25" font-weight="700">OpenCode serve</text>
+    <text x="622" y="288" fill="#b9cdf6" font-size="13">runtime gateway · sessions · execution</text>
+
+    <rect x="552" y="334" width="214" height="122" rx="16" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="578" y="372" fill="#6ea0ff" font-size="17" font-weight="700">Session</text>
+    <text x="578" y="401" fill="#dbe3fb" font-size="13">context · trace · events</text>
+    <text x="578" y="427" fill="#8f9cbb" font-size="12">stateful, resumable</text>
+
+    <rect x="798" y="334" width="214" height="122" rx="16" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <text x="824" y="372" fill="#a48bff" font-size="17" font-weight="700">Dispatcher</text>
+    <text x="824" y="401" fill="#e5e0fa" font-size="13">tools · agents · provider</text>
+    <text x="824" y="427" fill="#aba3d5" font-size="12">policy-aware routing</text>
+
+    <rect x="552" y="486" width="460" height="132" rx="16" fill="#111a35" stroke="#40598b" stroke-width="2"/>
+    <text x="578" y="524" fill="#ffad5c" font-size="17" font-weight="700">Runtime contract</text>
+    <text x="578" y="552" fill="#f4d8c6" font-size="13">request → authorize → resolve → serve → persist</text>
+    <text x="578" y="580" fill="#c59f89" font-size="12">每个边界都留下可审计事件</text>
+
+    <path d="M766 395 H798" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  </g>
+
+  <g aria-label="能力与外部依赖">
+    <rect x="1100" y="188" width="430" height="210" rx="20" fill="#111a35" stroke="#6559a8" stroke-width="2"/>
+    <text x="1130" y="230" fill="#a48bff" font-size="20" font-weight="700">Skills / Agents</text>
+    <text x="1130" y="258" fill="#c3bdf0" font-size="14">能力清单与角色编排</text>
+    <rect x="1130" y="286" width="168" height="72" rx="14" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <text x="1214" y="316" text-anchor="middle" fill="#e5e0fa" font-size="15" font-weight="700">global</text>
+    <text x="1214" y="341" text-anchor="middle" fill="#aba3d5" font-size="12">Skill / Agent</text>
+    <rect x="1320" y="286" width="168" height="72" rx="14" fill="#201d4c" stroke="#786bd0" stroke-width="2"/>
+    <text x="1404" y="316" text-anchor="middle" fill="#e5e0fa" font-size="15" font-weight="700">project</text>
+    <text x="1404" y="341" text-anchor="middle" fill="#aba3d5" font-size="12">Skill / Agent</text>
+
+    <rect x="1100" y="432" width="430" height="230" rx="20" fill="#121e3b" stroke="#40598b" stroke-width="2"/>
+    <text x="1130" y="474" fill="#6ea0ff" font-size="20" font-weight="700">MCP Server + LLM Provider</text>
+    <rect x="1130" y="508" width="168" height="92" rx="14" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="1214" y="546" text-anchor="middle" fill="#8fa9e3" font-size="16" font-weight="700">MCP Server</text>
+    <text x="1214" y="574" text-anchor="middle" fill="#dbe3fb" font-size="12">tools / resources</text>
+    <rect x="1320" y="508" width="168" height="92" rx="14" fill="#1b2d50" stroke="#5277be" stroke-width="2"/>
+    <text x="1404" y="546" text-anchor="middle" fill="#8fa9e3" font-size="16" font-weight="700">LLM Provider</text>
+    <text x="1404" y="574" text-anchor="middle" fill="#dbe3fb" font-size="12">model / quota / key</text>
+    <text x="1130" y="630" fill="#8f9cbb" font-size="12">受 OpenCode serve 统一调度</text>
+
+    <path d="M1042 292 C1070 292 1070 292 1100 292" stroke="#a48bff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+    <path d="M1042 510 C1070 510 1070 510 1100 510" stroke="#6ea0ff" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  </g>
+
+  <g aria-label="权限边界">
+    <rect x="522" y="704" width="1008" height="92" rx="20" fill="#33233b" stroke="#ca774a" stroke-width="2"/>
+    <rect x="552" y="728" width="206" height="44" rx="22" fill="#ff9d4d"/>
+    <text x="655" y="756" text-anchor="middle" fill="#24150b" font-size="16" font-weight="700">RBAC token</text>
+    <text x="790" y="752" fill="#f4d8c6" font-size="14">认证身份 · 角色 · scope · workspace</text>
+    <path d="M758 750 H774" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+    <text x="790" y="775" fill="#c59f89" font-size="12">未授权请求在 Flask / runtime boundary 被拒绝</text>
+    <path d="M655 704 V662" stroke="#ffad5c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  </g>
+
+  <g aria-label="图例">
+    <rect x="70" y="820" width="1460" height="24" rx="12" fill="#111b34"/>
+    <circle cx="100" cy="832" r="6" fill="#6ea0ff"/>
+    <text x="114" y="837" fill="#b8c5e3" font-size="12">请求与模型</text>
+    <circle cx="232" cy="832" r="6" fill="#a48bff"/>
+    <text x="246" y="837" fill="#b8c5e3" font-size="12">配置与能力</text>
+    <circle cx="364" cy="832" r="6" fill="#ffad5c"/>
+    <text x="378" y="837" fill="#b8c5e3" font-size="12">权限边界</text>
+    <text x="1448" y="837" text-anchor="end" fill="#7080a5" font-size="12">Flask → serve → capability → provider</text>
+  </g>
+</svg>

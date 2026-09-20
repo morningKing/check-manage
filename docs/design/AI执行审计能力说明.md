@@ -1,9 +1,11 @@
 # AI 执行审计能力说明（Execution Audit）
 
+> **迁移说明**：专题细节已吸收到 [`09-AI智能助手.md`](./09-AI智能助手.md)；本文保留专题背景/实施细节；实现状态、表结构、接口以 09 和当前代码为准。
+
 **版本**：v1.0
 **日期**：2026-09-18
 **范围**：AI 执行审计的审计对象、采集范围、确定性判定规则、能力边界、输出与查看方式
-**关联**：规格 [../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md](../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md) · 轨迹分析设计 [11-AI执行轨迹分析.md](./11-AI执行轨迹分析.md) · 架构图 [功能架构图.svg](./功能架构图.svg)
+**关联**：规格 [../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md](../superpowers/specs/2026-09-17-ai-execution-audit-skillopt-spec.md) · AI 权威设计 [`09-AI智能助手.md`](./09-AI智能助手.md) · 架构图 [功能架构图.svg](./功能架构图.svg)
 
 ---
 
