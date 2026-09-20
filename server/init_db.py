@@ -2535,10 +2535,14 @@ def init_db():
             " system_short_name = 'BKB' "
             "WHERE system_name LIKE '巡检%' OR system_name LIKE '%白泽%' "
             "   OR system_short_name IN ('巡检管理', '白泽')")
+        # home_widgets 的配置列是 content（JSONB，见上方建表迁移与
+        # routes/home_widgets.py）；这里曾误写成不存在的 config 列，任何
+        # 重跑 init_db.py 都会以 UndefinedColumn 崩溃。JSONB 不能直接
+        # replace，需 text 化替换后转回。
         cur.execute(
-            "UPDATE home_widgets SET config = replace(config, "
-            "'巡检用例管理系统', 'BKB · 数据智能平台') "
-            "WHERE config LIKE '%巡检用例管理系统%'")
+            "UPDATE home_widgets SET content = "
+            "replace(content::text, '巡检用例管理系统', 'BKB · 数据智能平台')::jsonb "
+            "WHERE content::text LIKE '%巡检用例管理系统%'")
 
         conn.commit()
         print("Seed data inserted successfully.")
