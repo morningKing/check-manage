@@ -25,9 +25,9 @@ export interface ToolRenderer {
   /** Human-facing display name; falls back to the raw tool name. */
   displayName?: string
   /** Deterministic action summary derived from the input arguments. */
-  inputSummary?: (input: Record<string, unknown>, ctx: ToolRenderContext) => string | undefined
+  inputSummary?: (input: Record<string, unknown>, ctx?: ToolRenderContext) => string | undefined
   /** Deterministic result summary (counts / file names / first line / error). */
-  resultSummary?: (result: unknown, ctx: ToolRenderContext) => string | undefined
+  resultSummary?: (result: unknown, ctx?: ToolRenderContext) => string | undefined
   /** Extra sensitive keys masked in raw details (beyond the global list). */
   sensitiveKeys?: string[]
   /** Set false to hide the raw input section entirely. */

@@ -21,12 +21,15 @@ const mem = (over: Record<string, unknown>) =>
   ({ id: 'm1', memory: '负责 PostgreSQL 运维', ...over }) as any
 
 // 让 ElDrawer 桩挂载时触发 open → 组件 load()
-const drawerStub = {
+import { defineComponent } from 'vue'
+const drawerStub = defineComponent({
   template: '<div><slot /></div>',
-  props: ['modelValue', 'title', 'size'],
+  props: { modelValue: { type: Boolean, default: false },
+           title: { type: String, default: '' },
+           size: { type: String, default: '' } },
   emits: ['open', 'update:modelValue'],
   mounted() { this.$emit('open') },
-}
+})
 
 const stubs = {
   'el-drawer': drawerStub,

@@ -71,11 +71,11 @@ describe('aiSessionAdmin store', () => {
     vi.mocked(api.listSessions).mockResolvedValue({ items: [], total: 0 } as any)
     const s = useAiSessionAdminStore()
     s.page = 5
-    s.setFilter('username', 'admin')
-    expect(s.filters.username).toBe('admin')
+    s.setFilter('owner', 'admin')
+    expect(s.filters.owner).toBe('admin')
     expect(s.page).toBe(1)
-    s.setFilter('username', '')
-    expect(s.filters.username).toBeUndefined()
+    s.setFilter('owner', '')
+    expect(s.filters.owner).toBeUndefined()
   })
 
   it('doArchive archives then refreshes list', async () => {
