@@ -1238,7 +1238,7 @@ def sse_events(sid):
                     try:
                         from utils import agent_ledger as _al
                         _al.finalize_interactive_turn(sid, opencode_session_id,
-                                                      state)
+                                                      state, get_db=get_db)
                     except Exception:
                         pass
                     state = new_state()

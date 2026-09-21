@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import psycopg2.extras
 
@@ -25,6 +26,11 @@ from db import get_db as _default_get_db
 
 MAX_ARGS_LEN = 8192
 MAX_FILE_EVIDENCE = 1000
+# 终态门禁前置的子代理收敛等待(生产观察:模型可能先于子代理结束回合,
+# 子代理脱离父回合继续执行——此刻核对会得到"中途快照"的通过/失败)。
+SUBTASK_DRAIN_TIMEOUT_SEC = 120
+SUBTASK_DRAIN_POLL_SEC = 2.0
+INTERACTIVE_SUBTASK_DRAIN_TIMEOUT_SEC = 30
 
 log = logging.getLogger(__name__)
 
@@ -169,10 +175,14 @@ def record_state(session_id: str, oc_session_id: str, state, *,
 
 def finalize_interactive_turn(session_id: str, oc_session_id: str, state,
                               get_db=None) -> dict:
-    """交互回合收敛(idle/error)时的统一收口(设计 M2):先落账,再核对该会话
-    的期望。不阻断回合——结果只写期望行与日志,由调用方告警/展示。"""
+    """交互回合收敛(idle/error)时的统一收口(设计 M2):先落账,等子代理收敛,
+    再核对该会话的期望。不阻断回合——结果只写期望行与日志,由调用方告警/展示。"""
     record_ok = record_state(session_id, oc_session_id, state, get_db=get_db)
-    gate = check_session_gate(session_id, ledger_healthy=record_ok,
+    drained = wait_subtasks_drained(
+        session_id,
+        timeout_sec=INTERACTIVE_SUBTASK_DRAIN_TIMEOUT_SEC,
+        poll_sec=SUBTASK_DRAIN_POLL_SEC, get_db=get_db)
+    gate = check_session_gate(session_id, ledger_healthy=record_ok and drained,
                               get_db=get_db)
     if gate['status'] == 'failed':
         log.warning('interactive action gate failed session=%s: %s',
@@ -359,6 +369,40 @@ def _count_db_record_evidence(cur, spec) -> int:
         [collection] + params,
     )
     return cur.fetchone()[0]
+
+
+def wait_subtasks_drained(session_id: str, timeout_sec: int = SUBTASK_DRAIN_TIMEOUT_SEC,
+                          poll_sec: float = SUBTASK_DRAIN_POLL_SEC,
+                          get_db=None) -> bool:
+    """终态门禁前置:等待该会话的全部子代理收敛。
+
+    模型可能先于子代理结束自己的回合,子代理脱离父回合继续执行——此刻核对
+    得到的是"中途快照"。轮询 ai_chat_subtasks 直到无 running 子代理或超时。
+    返回 True=已收敛/本就无子代理;False=超时仍有 running(照常核对,但结果
+    可能偏乐观,调用方日志留痕)。"""
+    db_ctx = get_db or _default_get_db
+    deadline = time.time() + timeout_sec
+    while True:
+        try:
+            with db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM ai_chat_subtasks "
+                        "WHERE root_session_id = %s AND status = 'running'",
+                        (session_id,),
+                    )
+                    running = cur.fetchone()[0]
+        except Exception as e:  # noqa: BLE001 —— 探测失败不阻塞核对
+            log.warning('subtask drain probe failed sid=%s: %s', session_id, e)
+            return True
+        if not isinstance(running, int) or running == 0:
+            # 非整数计数只在打桩/异常环境出现——视为已收敛,绝不空转真实 sleep
+            return True
+        if time.time() >= deadline:
+            log.warning('subtask drain timeout sid=%s: %d still running',
+                        session_id, running)
+            return False
+        time.sleep(poll_sec)
 
 
 def check_session_gate(session_id: str, ledger_healthy: bool = True,

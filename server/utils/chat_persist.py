@@ -668,7 +668,8 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # best-effort 不阻断收尾；不过门只记期望行与日志（交互不阻断回合）。
             try:
                 from utils import agent_ledger as _al
-                _al.finalize_interactive_turn(sid, opencode_session_id, state)
+                _al.finalize_interactive_turn(sid, opencode_session_id, state,
+                                              get_db=get_db)
             except Exception as _e:
                 logger.warning('agent ledger finalize failed session=%s: %s',
                                sid, _e)

@@ -369,6 +369,41 @@ def test_finalize_interactive_turn_records_and_checks(gate_fixture):
     assert gate['results'][0]['evidence'] == 1
 
 
+def test_wait_subtasks_drained_polls_until_converged(gate_fixture, monkeypatch):
+    """有 running 子代理时轮询等待,收敛后返回 True。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_subtasks SET status='running' "
+                        "WHERE id=%s", (f['child1'],))
+    conn.commit()
+    calls = {'n': 0}
+
+    def flip_when_polled(seconds):
+        calls['n'] += 1
+        if calls['n'] >= 1:  # 第一次 sleep 后把子代理翻转为已完成
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE ai_chat_subtasks SET status='completed' "
+                                "WHERE id=%s", (f['child1'],))
+            conn.commit()
+
+    monkeypatch.setattr('utils.agent_ledger.time.sleep', flip_when_polled)
+    assert agent_ledger.wait_subtasks_drained(f['sid'], timeout_sec=10,
+                                              poll_sec=0.01) is True
+
+
+def test_wait_subtasks_drained_times_out(gate_fixture, monkeypatch):
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_subtasks SET status='running' "
+                        "WHERE id=%s", (f['child2'],))
+    conn.commit()
+    monkeypatch.setattr('utils.agent_ledger.time.sleep', lambda s: None)
+    assert agent_ledger.wait_subtasks_drained(f['sid'], timeout_sec=0) is False
+
+
 # ---------------------------------------------------------------------------
 # M1.5 提炼器(LLM mock,不发真实请求)
 # ---------------------------------------------------------------------------

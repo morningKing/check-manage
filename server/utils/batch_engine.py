@@ -1014,6 +1014,9 @@ class BatchWorker:
                                                       baseline_ids=baseline_ids)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg, directory=ws)
             # 到位门禁(设计 §5.3):最终一轮落账已含完整动作,先核对后写终态。
+            # 核对前先等子代理收敛——模型可能先于子代理结束回合,否则核对的是
+            # "中途快照"(生产观察:首个子任务提前判完成,其余仍在执行)。
+            agent_ledger.wait_subtasks_drained(sid)
             gate = self._check_action_gate(sid)
             if gate['status'] == 'failed':
                 err = agent_ledger.gate_failure_message(gate)
