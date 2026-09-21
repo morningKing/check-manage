@@ -808,6 +808,53 @@ CREATE TABLE IF NOT EXISTS global_skills (
 );
 """
 
+# ==================== Agent 动作账本与到位门禁 ====================
+# 设计:docs/design/AI子任务动作账本与到位门禁设计.md;与
+# migrations/2026_09_20_agent_action_gate.py 同内容双写——本文件保证全新环境
+# 一次建全,迁移保证存量环境随启动幂等补齐。须在主 DDL(建 ai_chat_subtasks)
+# 之后执行(subtask_id 外键引用)。
+AGENT_ACTION_GATE_DDL = """
+CREATE TABLE IF NOT EXISTS agent_tool_calls (
+    id              BIGSERIAL PRIMARY KEY,
+    oc_session_id   VARCHAR(100) NOT NULL,
+    root_session_id VARCHAR(100),
+    subtask_id      VARCHAR(100)
+                    REFERENCES ai_chat_subtasks(id) ON DELETE CASCADE,
+    message_id      VARCHAR(100),
+    part_id         VARCHAR(100) NOT NULL,
+    tool            VARCHAR(50)  NOT NULL,
+    args_text       TEXT,
+    state           VARCHAR(20),
+    occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_tool_call_part
+    ON agent_tool_calls(oc_session_id, part_id);
+CREATE INDEX IF NOT EXISTS idx_agent_tool_call_q
+    ON agent_tool_calls(oc_session_id, tool, state);
+
+CREATE TABLE IF NOT EXISTS action_expectations (
+    id              BIGSERIAL PRIMARY KEY,
+    scope_type      VARCHAR(20)  NOT NULL,
+    scope_id        VARCHAR(100) NOT NULL,
+    name            VARCHAR(100) NOT NULL,
+    tool            VARCHAR(50)  NOT NULL,
+    args_pattern    TEXT         NOT NULL,
+    require_state   VARCHAR(20)  NOT NULL DEFAULT 'completed',
+    min_count       INT          NOT NULL DEFAULT 1,
+    source          VARCHAR(30)  NOT NULL DEFAULT 'batch',
+    check_type      VARCHAR(20)  NOT NULL DEFAULT 'tool',
+    effect_spec     JSONB,
+    last_status     VARCHAR(20),
+    last_checked_at TIMESTAMPTZ,
+    last_evidence   INT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope_type, scope_id, name)
+);
+
+ALTER TABLE ai_chat_batches        ADD COLUMN IF NOT EXISTS action_checks JSONB;
+ALTER TABLE ai_chat_prompt_templates ADD COLUMN IF NOT EXISTS action_checks JSONB;
+"""
+
 
 RBAC_DDL = """
 CREATE TABLE IF NOT EXISTS roles (
@@ -985,6 +1032,11 @@ def init_db():
         cur.execute(GLOBAL_SKILLS_DDL)
         conn.commit()
         print("global_skills table created.")
+
+        # Agent 动作账本与到位门禁（须在主 DDL 建 ai_chat_subtasks 之后）
+        cur.execute(AGENT_ACTION_GATE_DDL)
+        conn.commit()
+        print("agent action gate tables (agent_tool_calls, action_expectations) created.")
 
         # RBAC custom roles (Phase 0)
         cur.execute(RBAC_DDL)
