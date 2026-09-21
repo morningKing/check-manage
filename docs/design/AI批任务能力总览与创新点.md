@@ -117,15 +117,28 @@ tree 作用域保证 Skill 步骤常由子代理执行时依然可核对。
 
 *锚点:`action_check_extractor.extract_action_checks` / 对话框「AI 提炼」。*
 
-### 2.8 平台化外延——从产品功能到开放能力
+### 2.8 平台化外延——别人系统也能用,业务数据也能驱动
 
-对外 Open API 让批任务可被第三方系统编排:API Key 隔离(列表严格按密钥过滤)、
-暂存上传同款通道、**HMAC 签名的完成回调**免去轮询;AI 定时扫描任务按调度对
-业务数据批量跑 AI,并把结果**回写业务字段**(jsonb_set),孤儿记录自动回滚
-重试——AI 批处理成为数据流水线的一等公民。
+**开放 API:让第三方系统批量使用 AI 批任务,全程不需要人打开网页。**
+场景:业务系统有一批文件要 AI 处理(比如每天新增的巡检报告),由它的后端
+自动完成。用法三步:管理员发放一把 API Key → 第三方系统拿 Key 调接口
+(上传文件、创建批任务)→ 批任务跑完后,平台**主动回调通知**第三方系统
+"做完了",通知带 HMAC 签名可验证来源,第三方不用反复来查询。隔离:每把
+Key 只能看到自己创建的任务,多家接入互不可见。
 
-*锚点:`routes/open_api_batches.py`(callback_url/secret)、
-`ai_scan_tasks` 调度 + `jsonb_set` 回写 + `sweep_orphans`。*
+**AI 定时扫描任务:让业务数据自动驱动 AI 处理,结果直接写回业务表。**
+场景:数据页里持续产生需要 AI 处理的记录(新巡检记录要生成用例、新工单要
+分类)。配置一次即可:选定数据页、筛选条件(如"状态 = 待处理")、提示词、
+结果回写的目标字段——到点自动挑出待处理记录批量执行,完成后把记录状态改为
+"已处理"、AI 结果写入业务字段。中断留下的记录会被自动恢复重试,不丢也不
+卡死。
+
+两者合起来:AI 批处理从"人在网页上点出来的功能",变成第三方系统可编排、
+业务数据可驱动的平台能力。
+
+*锚点:`routes/open_api_batches.py`(API Key 隔离、callback_url/secret 回
+调签名)、`ai_scan_tasks` 调度与 `jsonb_set` 字段回写、`sweep_orphans` 孤儿
+恢复。*
 
 ### 2.9 Skill 治理闭环(SkillOpt)——技能从"写了就行"到可度量
 
@@ -159,7 +172,7 @@ user_id 隔离)。记忆围绕用户原文组织,批任务样板指令不混入�
 | 5 | 实时观测 | 三通路收敛持久化,无 SSE 也看直播;子代理气泡 | `_persist_conversation` |
 | 6 | 工作区与预置环境 | 每子会话隔离,预置仓库使项目 Agent/Skill 就绪 | `create_session_workspace` |
 | 7 | AI 提炼期望 | AI 分析任务/Skill 自动生成门禁建议,三道机械校验 | `action_check_extractor` |
-| 8 | 平台化开放 | Open API + HMAC 回调 + 定时扫描回写业务数据 | `open_api_batches` / `ai_scan_tasks` |
+| 8 | 开放与定时流水线 | 第三方系统可编排批任务(完成后主动回调通知);AI 定时扫描自动处理业务数据并回写结果 | `open_api_batches` / `ai_scan_tasks` |
 | 9 | SkillOpt 闭环 | 双源采集 + 建议效果追踪,技能可度量可优化 | `skillopt` |
 | 10 | 长期记忆流动 | 子任务带记忆执行,结果沉淀回记忆 | `search_memory` / `extract_from_turn` |
 
