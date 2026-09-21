@@ -147,6 +147,60 @@ test('真实批任务 gate fail:哨兵动作无命中 → failed + action_gate �
   expect([200, 204]).toContain(del.status)
 })
 
+test('真实多子代理会话:tree 作用域计入子代理动作 → completed + 门禁✓徽标', async ({ page, request }) => {
+  const name = tag('gate-subagent')
+  const agents = await api(request, 'GET', '/ai/chat/agents')
+  const subs = (agents.json?.subagents || []).map((s: any) => s.name)
+  test.skip(subs.length < 2, '环境需要至少两个子代理')
+
+  const staged = await stagingUpload(request, `e2e-${Date.now()}`, [
+    { name: 'one.txt', body: `GATE-SUBAGENT-MARK-${Date.now()}` },
+  ])
+  // 双子代理委托:让两个子代理都实际动工具(读同一个输入文件),门禁用 tree
+  // 作用域在根会话上核对——子代理的动作必须被计入,这正是 tree 的设计目的
+  const created = await api(request, 'POST', '/ai/chat/batches', {
+    name,
+    prompt: (
+      '请分别委托两个子代理完成任务,不要自己动手:\n'
+      + `1. @${subs[0]} 读取工作区 uploads/one.txt,原样回复文件内容;\n`
+      + `2. @${subs[1]} 查看工作区 uploads/ 目录下有哪些文件,回复文件名列表。\n`
+      + '两个子代理都完成后,汇总它们的结果回复。'
+    ),
+    files: staged,
+    action_checks: [
+      { name: '子代理读取输入文件', tool: 'read',
+        args_pattern: 'one\\.txt', scope: 'tree', min_count: 1 },
+    ],
+  })
+  expect(created.status, JSON.stringify(created.json)).toBe(201)
+  const batchId = created.json.batchId || created.json.batch?.id
+
+  const final = await waitBatchTerminal(request, batchId)
+  expect(final.status).toBe('completed')
+  const child = final.sessions[0]
+  expect(child.status).toBe('completed')
+  expect(child.gate_passed).toBeGreaterThanOrEqual(1)
+
+  // tree 作用域的实锤:账本里必须有子代理(非根会话)自己的工具调用
+  const calls = await api(request, 'GET',
+    `/ai/chat/batches/${batchId}/children/${child.id}/tool-calls`)
+  expect(calls.status).toBe(200)
+  const subCalls = (calls.json?.calls || []).filter((c: any) => c.subtaskId)
+  expect(subCalls.length, '应有子代理会话的工具调用入账').toBeGreaterThan(0)
+
+  // UI:门禁 ✓ 徽标出现在子会话行
+  await gotoChat(page)
+  const group = page.locator('.batch-group', { hasText: name }).first()
+  await group.waitFor({ state: 'visible', timeout: 30_000 })
+  await expandGroup(page, group)
+  await expect(group.locator('.gate-badge--pass')).toContainText('门禁 ✓',
+    { timeout: 60_000 })
+  await screenshot(page, 'action-gate-multi-subagent-pass')
+
+  const del = await api(request, 'DELETE', `/ai/chat/batches/${batchId}`)
+  expect([200, 204]).toContain(del.status)
+})
+
 test('真实批任务 gate pass:db_record 效果断言(确定性) → completed + 门禁✓徽标', async ({ page, request }) => {
   const name = tag('gate-pass')
   const staged = await stagingUpload(request, `e2e-${Date.now()}`, [
