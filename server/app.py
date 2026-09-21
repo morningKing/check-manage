@@ -252,6 +252,20 @@ try:
     _m6.run()
 except Exception as _e:
     logging.warning('agent action gate migration on boot failed: %s', _e)
+
+# SkillOpt P2：ai_skill_invocations / ai_suggestion_feedback（2026-09-18）。
+# 此前该迁移从未注册进启动钩子——依赖它的表在生产等只靠部署启动建表的环境
+# 永远不会创建，AI 技能优化页直接报"关系 ai_skill_invocations 不存在"。
+# 依赖执行审计表（09_17 钩子在前），顺序不可提前。
+try:
+    _mp7 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_18_skillopt_p2.py')
+    _spec7 = _ilu.spec_from_file_location('_skillopt_p2_boot', _mp7)
+    _m7 = _ilu.module_from_spec(_spec7)
+    _spec7.loader.exec_module(_m7)
+    _m7.run()
+except Exception as _e:
+    logging.warning('skillopt p2 migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)

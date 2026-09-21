@@ -808,52 +808,33 @@ CREATE TABLE IF NOT EXISTS global_skills (
 );
 """
 
-# ==================== Agent 动作账本与到位门禁 ====================
-# 设计:docs/design/AI子任务动作账本与到位门禁设计.md;与
-# migrations/2026_09_20_agent_action_gate.py 同内容双写——本文件保证全新环境
-# 一次建全,迁移保证存量环境随启动幂等补齐。须在主 DDL(建 ai_chat_subtasks)
-# 之后执行(subtask_id 外键引用)。
-AGENT_ACTION_GATE_DDL = """
-CREATE TABLE IF NOT EXISTS agent_tool_calls (
-    id              BIGSERIAL PRIMARY KEY,
-    oc_session_id   VARCHAR(100) NOT NULL,
-    root_session_id VARCHAR(100),
-    subtask_id      VARCHAR(100)
-                    REFERENCES ai_chat_subtasks(id) ON DELETE CASCADE,
-    message_id      VARCHAR(100),
-    part_id         VARCHAR(100) NOT NULL,
-    tool            VARCHAR(50)  NOT NULL,
-    args_text       TEXT,
-    state           VARCHAR(20),
-    occurred_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_tool_call_part
-    ON agent_tool_calls(oc_session_id, part_id);
-CREATE INDEX IF NOT EXISTS idx_agent_tool_call_q
-    ON agent_tool_calls(oc_session_id, tool, state);
+def _run_dated_migrations():
+    """执行 migrations/ 下按日期命名的 schema 迁移(20*.py,均暴露幂等 run())。
 
-CREATE TABLE IF NOT EXISTS action_expectations (
-    id              BIGSERIAL PRIMARY KEY,
-    scope_type      VARCHAR(20)  NOT NULL,
-    scope_id        VARCHAR(100) NOT NULL,
-    name            VARCHAR(100) NOT NULL,
-    tool            VARCHAR(50)  NOT NULL,
-    args_pattern    TEXT         NOT NULL,
-    require_state   VARCHAR(20)  NOT NULL DEFAULT 'completed',
-    min_count       INT          NOT NULL DEFAULT 1,
-    source          VARCHAR(30)  NOT NULL DEFAULT 'batch',
-    check_type      VARCHAR(20)  NOT NULL DEFAULT 'tool',
-    effect_spec     JSONB,
-    last_status     VARCHAR(20),
-    last_checked_at TIMESTAMPTZ,
-    last_evidence   INT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (scope_type, scope_id, name)
-);
-
-ALTER TABLE ai_chat_batches        ADD COLUMN IF NOT EXISTS action_checks JSONB;
-ALTER TABLE ai_chat_prompt_templates ADD COLUMN IF NOT EXISTS action_checks JSONB;
-"""
+    init_db 与 app.py 启动钩子共用这批迁移文件作为唯一事实来源——此前"迁移
+    建表、init_db 遗漏"导致全新环境缺表(生产 ai_skill_invocations 事故即此)。
+    按文件名日期序执行,保证外键依赖(如 skillopt 依赖先建的执行审计表)。
+    任一迁移失败即非零退出,避免静默半初始化。须在主 DDL 与各业务 DDL 之后
+    调用(迁移可能引用基础表)。"""
+    import importlib.util
+    mig_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'migrations')
+    files = sorted(f for f in os.listdir(mig_dir)
+                   if f.startswith('20') and f.endswith('.py'))
+    failures = []
+    for fname in files:
+        spec = importlib.util.spec_from_file_location(
+            f'_initdb_mig_{fname[:-3]}', os.path.join(mig_dir, fname))
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+            mod.run()
+            print(f"migration {fname}: ok")
+        except Exception as e:
+            failures.append(fname)
+            print(f"migration {fname}: FAILED — {e}")
+    if failures:
+        raise SystemExit(f"{len(failures)} migration(s) failed: "
+                         + ', '.join(failures))
 
 
 RBAC_DDL = """
@@ -1032,11 +1013,6 @@ def init_db():
         cur.execute(GLOBAL_SKILLS_DDL)
         conn.commit()
         print("global_skills table created.")
-
-        # Agent 动作账本与到位门禁（须在主 DDL 建 ai_chat_subtasks 之后）
-        cur.execute(AGENT_ACTION_GATE_DDL)
-        conn.commit()
-        print("agent action gate tables (agent_tool_calls, action_expectations) created.")
 
         # RBAC custom roles (Phase 0)
         cur.execute(RBAC_DDL)
@@ -2614,6 +2590,10 @@ def init_db():
             print("kefu_instances 非空，跳过演示客服播种（不是全新库）。")
     except Exception as e:
         print(f"[warn] seed 演示客服失败（非致命）：{e}")
+
+    # 迁移作为唯一事实来源：补齐所有按日期命名的 schema 迁移
+    # （执行审计/会话分组/置顶/SkillOpt/动作门禁等），须在基础表之后。
+    _run_dated_migrations()
 
 
 if __name__ == "__main__":
