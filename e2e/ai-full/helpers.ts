@@ -152,7 +152,11 @@ export async function gotoWithAuth(page: Page, path: string): Promise<void> {
     for (const [k, v] of Object.entries(entries)) localStorage.setItem(k, v)
   }, auth)
   await page.goto(path)
-  await page.waitForLoadState('networkidle')
+  // /ai-chat 有常驻 SSE 连接,networkidle 永不收敛(见 memory:e2e flakiness)。
+  // 只做 8s 尽力等待:普通页面足以稳定,SSE 页面不再把整个用例拖到超时。
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 8_000 })
+  } catch { /* SSE 页面视为已就绪 */ }
 }
 
 export function tag(prefix: string): string {
