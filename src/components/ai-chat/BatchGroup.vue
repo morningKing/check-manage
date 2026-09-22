@@ -3,6 +3,8 @@
     <div class="batch-group__head" :class="{ open: expanded }" @click="toggle">
       <ElIcon class="caret"><ArrowRight v-if="!expanded" /><ArrowDown v-else /></ElIcon>
       <span class="bg-name">{{ batch.name }}</span>
+      <ElIcon class="bg-id-copy" title="复制批任务 ID"
+              @click.stop="copyId(batch.id, '批任务')"><DocumentCopy /></ElIcon>
       <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
       <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
       <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
@@ -41,6 +43,8 @@
         <ElIcon v-if="s.status === 'paused'"
                 class="bg-child__resume" title="继续此任务（从中断处续跑，不影响其他任务）"
                 @click.stop="onResumeChild(s.id)"><VideoPlay /></ElIcon>
+        <ElIcon class="bg-child__copy" title="复制子任务 ID"
+                @click.stop="copyId(s.id, '子任务')"><DocumentCopy /></ElIcon>
         <ElIcon v-if="['completed', 'failed', 'cancelled'].includes(s.status)"
                 class="bg-child__reexec" title="重新执行（清空上下文）"
                 @click.stop="onReexec(s.id)"><RefreshLeft /></ElIcon>
@@ -54,7 +58,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElIcon, ElMessageBox, ElMessage } from 'element-plus'
-import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause, VideoPlay, CircleClose, Search } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowDown, Plus, RefreshRight, RefreshLeft, Delete, Setting, VideoPause, VideoPlay, CircleClose, Search, DocumentCopy } from '@element-plus/icons-vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import { cancelChild } from '@/api/aiChatBatches'
 import AppendFilesDialog from './AppendFilesDialog.vue'
@@ -62,6 +66,16 @@ import EditBatchConfigDialog from './EditBatchConfigDialog.vue'
 import type { AiChatBatch } from '@/types/aiChatBatch'
 
 const props = defineProps<{ batch: AiChatBatch; activeSessionId: string | null }>()
+
+/** 批任务/子任务 ID 复制(Open API 调用、工单排查都需要);剪贴板不可用时兜底展示 */
+async function copyId(id: string, kind: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    ElMessage.success(`${kind} ID 已复制：${id}`)
+  } catch {
+    ElMessage({ message: `${kind} ID：${id}`, type: 'info', duration: 10000, showClose: true })
+  }
+}
 const emit = defineEmits<{ (e: 'selectChild', id: string): void; (e: 'searchInBatch'): void }>()
 const store = useAiChatBatchesStore()
 const appendOpen = ref(false)
@@ -210,6 +224,8 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .bg-child__cancel:hover { color: var(--el-color-danger); }
 .bg-child__resume { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__resume:hover { color: var(--el-color-success); }
+.bg-child__copy, .bg-id-copy { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
+.bg-child__copy:hover, .bg-id-copy:hover { color: var(--el-color-primary); }
 .bg-child__reexec { cursor: pointer; flex: 0 0 auto; color: var(--el-text-color-secondary); }
 .bg-child__reexec:hover { color: var(--el-color-primary); }
 .bg-empty { padding: 6px 8px; color: var(--el-text-color-secondary); font-size: 12px; }

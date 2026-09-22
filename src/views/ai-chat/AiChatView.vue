@@ -819,8 +819,18 @@ const activeBatchInfo = computed(() => {
   const child = batches.activeSessions.find((s) => s.id === id)
   if (!child) return null
   const b = batches.activeBatch
-  return { status: child.status, agent: b?.agent || '', model: b?.model || '' }
+  return { status: child.status, agent: b?.agent || '', model: b?.model || '',
+           batchId: b?.id || '', childId: child.id }
 })
+function shortId(id: string) { return (id || '').slice(0, 8) }
+async function copyId(id: string, kind: string) {
+  try {
+    await navigator.clipboard.writeText(id)
+    ElMessage.success(`${kind} ID 已复制：${id}`)
+  } catch {
+    ElMessage({ message: `${kind} ID：${id}`, type: 'info', duration: 10000, showClose: true })
+  }
+}
 function batchStatusLabel(s: string) {
   return ({ pending: '待运行', running: '正在运行', completed: '已完成', failed: '失败' } as Record<string, string>)[s] || s
 }
@@ -1698,6 +1708,14 @@ function onKey(e: Event) {
           {{ batchStatusLabel(activeBatchInfo.status) }}
         </span>
         <span class="batch-bar__cfg">Agent：{{ activeBatchInfo.agent || '默认' }} · 模型：{{ activeBatchInfo.model || '默认' }}</span>
+        <span v-if="activeBatchInfo.childId" class="batch-bar__id" title="点击复制子任务 ID"
+              @click="copyId(activeBatchInfo.childId, '子任务')">
+          子任务 ID：{{ shortId(activeBatchInfo.childId) }}
+        </span>
+        <span v-if="activeBatchInfo.batchId" class="batch-bar__id" title="点击复制批任务 ID"
+              @click="copyId(activeBatchInfo.batchId, '批任务')">
+          批任务 ID：{{ shortId(activeBatchInfo.batchId) }}
+        </span>
       </div>
 
       <!-- 用量状态条（F1）：模型 ｜ 上下文水位线 ｜ 累计 token/费用；:key 让切换
@@ -2348,6 +2366,9 @@ function onKey(e: Event) {
   color: var(--el-text-color-secondary);
 }
 .batch-bar__status { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.batch-bar__id { cursor: pointer; font-family: monospace; font-size: 11px;
+  color: var(--el-text-color-secondary); text-decoration: underline dotted; }
+.batch-bar__id:hover { color: var(--el-color-primary); }
 .batch-bar__cfg { font-family: var(--el-font-family-mono, monospace); }
 .batch-bar--running { background: var(--el-color-danger-light-9); }
 .batch-bar--running .batch-bar__status { color: var(--el-color-danger); }

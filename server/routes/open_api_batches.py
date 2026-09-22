@@ -585,7 +585,11 @@ def append(batch_id):
     log_api_operation('update', 'ai_chat_batch', batch_id, b.get('name'),
                       f'通过 API Key 向批任务「{b.get("name")}」追加 {len(files)} 个文件')
     return jsonify({'batchId': b['id'], 'status': b['status'],
-                    'total': b['total'], 'appended': len(files)})
+                    'total': b['total'], 'appended': len(files),
+                    # 追加建的子任务 id 一并返回,调用方无需再查详情
+                    'sessions': [{'id': s['id'], 'batchSeq': s.get('batch_seq'),
+                                  'file': s.get('batch_input_file')}
+                                 for s in (d.get('sessions') or [])]})
 
 
 # ---------------------------------------------------------------------------
