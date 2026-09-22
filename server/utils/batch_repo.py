@@ -630,6 +630,16 @@ def update_batch_config(user_id: str, batch_id: str, *,
                      batch_id, user_id),
                 )
             conn.commit()
+    if gate_retry is not _UNSET:
+        # 修正开关(设计 §5.4):批级覆盖;None=清除覆盖,跟随全局环境变量
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET gate_retry = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (gate_retry, batch_id, user_id),
+                )
+            conn.commit()
 
     sql = ("UPDATE ai_chat_batches SET agent = %s, model = %s, "
            "  provision_repo = %s, provision_ref = %s, "

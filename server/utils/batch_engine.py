@@ -1024,7 +1024,7 @@ class BatchWorker:
                 err = agent_ledger.gate_failure_message(gate)
                 logger.warning('action gate failed sid=%s: %s', sid, err)
                 # gate_retry(设计 §5.4,默认关闭):预算内带定向修复提示重跑。
-                if self._maybe_gate_retry(sid, gate):
+                if self._maybe_gate_retry(sid, gate, batch_id=batch_id):
                     return
                 self._mark_failed(sid, batch_id, error=err)
                 self._notify_scan(session_row, None, ok=False)
@@ -1131,11 +1131,28 @@ class BatchWorker:
                            sid, result.get('error') or healthy is False)
         return result
 
-    def _maybe_gate_retry(self, session_id: str, gate: dict) -> bool:
-        """gate_retry(AI_BATCH_GATE_RETRY,默认 0=关闭):不过门时带"缺失明细"
-        定向修复提示重新排队。预算与 auto-retry 共用 retry_count 列,cap 独立;
-        开启前须确认任务可幂等重跑,否则保持默认走 failed 人工兜底。"""
+    def _batch_gate_retry_flag(self, batch_id: str):
+        """批级修正开关(NULL=未设置,跟随全局环境变量)。"""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT gate_retry FROM ai_chat_batches WHERE id = %s",
+                            (batch_id,))
+                row = cur.fetchone()
+        return row[0] if row else None
+
+    def _maybe_gate_retry(self, session_id: str, gate: dict,
+                          batch_id: str | None = None) -> bool:
+        """gate_retry:不过门时带"缺失明细"定向修复提示,在原会话上 continue
+        续跑(原 agent、上下文保留,不重做已完成部分)。开关优先级:批级
+        gate_retry 列 > 全局环境变量 AI_BATCH_GATE_RETRY(默认 0=关闭);
+        批级开启时预算至少 1 次,与 auto-retry 共用 retry_count。"""
         cap = int(os.getenv('AI_BATCH_GATE_RETRY', '0') or 0)
+        if batch_id is not None:
+            flag = self._batch_gate_retry_flag(batch_id)
+            if flag is True:
+                cap = max(cap, 1)
+            elif flag is False:
+                return False
         if cap <= 0:
             return False
         with get_db() as conn:
