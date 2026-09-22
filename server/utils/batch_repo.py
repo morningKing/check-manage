@@ -596,10 +596,14 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
     return get_batch_detail(user_id, batch_id)
 
 
+_UNSET = object()
+
+
 def update_batch_config(user_id: str, batch_id: str, *,
                         agent: str | None, model: str | None,
                         provision_repo: str | None = None,
                         provision_ref: str | None = None,
+                        action_checks= _UNSET,
                         api_key_id: str | None = None,
                         callback_url: str | None = None,
                         callback_secret: str | None = None) -> dict | None:
@@ -613,6 +617,19 @@ def update_batch_config(user_id: str, batch_id: str, *,
 
     `api_key_id` non-None additionally scopes the update to that source key.
     """
+    if action_checks is not _UNSET:
+        # 动作门禁期望(编辑入口,设计 §5.2 入口 A):显式传入才更新,
+        # 未传保持原值——既有调用方(旧 UI/开放 API)不受影响。
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET action_checks = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (Json(action_checks) if action_checks else None,
+                     batch_id, user_id),
+                )
+            conn.commit()
+
     sql = ("UPDATE ai_chat_batches SET agent = %s, model = %s, "
            "  provision_repo = %s, provision_ref = %s, "
            "  callback_url = %s, callback_secret = %s "

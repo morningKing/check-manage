@@ -33,6 +33,8 @@ export interface AiChatBatch {
   paused?: number
   created_at: string
   completed_at: string | null
+  /** 动作门禁期望(创建/编辑时保存) */
+  action_checks?: Array<Record<string, unknown>> | null
 }
 
 export interface AiChatBatchSession {

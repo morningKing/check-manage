@@ -104,6 +104,8 @@ export function updateBatchConfig(id: string, body: {
   model: string | null
   provision_repo?: string | null
   provision_ref?: string | null
+  /** 动作门禁期望(编辑入口,设计 §5.2):显式传入才更新,未终态子任务同步 */
+  action_checks?: ActionCheck[] | null
 }) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${id}`, body)
 }

@@ -295,6 +295,40 @@ def validate_checks(checks) -> list:
     return normalized
 
 
+def sync_session_expectations(session_id: str, checks, source: str = 'batch',
+                              get_db=None) -> int:
+    """全量替换该会话上 source 来源的期望(删旧插新)——批任务编辑后,
+    未终态子任务用新 checks 同步;checks 须已经过 validate_checks。"""
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM action_expectations WHERE scope_id = %s AND source = %s",
+                (session_id, source),
+            )
+    register_session_expectations(session_id, checks, source=source, get_db=get_db)
+    return len(checks or [])
+
+
+def sync_batch_expectations(batch_id: str, checks, source: str = 'batch',
+                            get_db=None) -> int:
+    """批任务编辑后的期望同步:非终态子任务(pending/running/paused)替换为
+    新 checks;已终态子任务的历史核对结果保持原样(审计不重写)。
+    返回同步的子任务数。"""
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ai_chat_sessions WHERE batch_id = %s "
+                "AND status IN ('pending','running','paused')",
+                (batch_id,),
+            )
+            sids = [r[0] for r in cur.fetchall()]
+    for sid in sids:
+        sync_session_expectations(sid, checks, source=source, get_db=get_db)
+    return len(sids)
+
+
 def check_applies_to_child(check: dict, batch_seq, input_file: str | None) -> bool:
     """条件登记(设计 §5.2 定向能力):批任务级检查可声明 apply_to,只对匹配的
     子任务生效——不匹配的子任务不登记该期望,从源头消除不相关动作的误报。

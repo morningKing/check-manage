@@ -506,3 +506,39 @@ def test_record_messages_stores_agent_name(gate_fixture):
             cur.execute("SELECT agent FROM agent_tool_calls WHERE oc_session_id=%s",
                         (f['child1'],))
             assert cur.fetchone()[0] == 'general'
+
+
+def test_sync_batch_expectations_replaces_running_keeps_terminal(gate_fixture):
+    """编辑批任务门禁后同步:running 子任务替换为新期望;
+    已完成子任务的历史核对结果保持原样(审计不重写)。"""
+    f = gate_fixture
+    sid2 = f['sid'] + '-done'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO ai_chat_sessions "
+                        "(id,user_id,status,batch_id,batch_seq,batch_input_file) "
+                        "VALUES (%s,%s,'completed',%s,1,'x.txt')", (sid2, f['uid'], f['bid']))
+            cur.execute("INSERT INTO action_expectations "
+                        "(scope_type,scope_id,name,tool,args_pattern,source,last_status) "
+                        "VALUES ('session',%s,'老检查','bash','old','batch','failed')", (sid2,))
+        conn.commit()
+    try:
+        agent_ledger.register_session_expectations(f['sid'], [
+            {'name': '旧期望', 'tool': 'bash', 'args_pattern': 'old\.sh'}])
+        n = agent_ledger.sync_batch_expectations(f['bid'], [
+            {'name': '新期望', 'tool': 'read', 'args_pattern': 'new\.md'}])
+        assert n == 1  # 仅 running 子任务被同步
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name FROM action_expectations "
+                            "WHERE scope_id=%s AND source='batch'", (f['sid'],))
+                assert [r[0] for r in cur.fetchall()] == ['新期望']
+                cur.execute("SELECT name, last_status FROM action_expectations "
+                            "WHERE scope_id=%s", (sid2,))
+                old = cur.fetchone()
+                assert old[0] == '老检查' and old[1] == 'failed'
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM action_expectations WHERE scope_id=%s", (sid2,))
+            conn.commit()

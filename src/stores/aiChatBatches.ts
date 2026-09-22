@@ -219,7 +219,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     return detail
   }
 
-  async function updateBatchConfig(id: string, body: { agent: string | null; model: string | null; provision_repo?: string | null; provision_ref?: string | null }) {
+  async function updateBatchConfig(id: string, body: Parameters<typeof import('@/api/aiChatBatches').updateBatchConfig>[1]) {
     const detail = await api.updateBatchConfig(id, body)
     const idx = items.value.findIndex(b => b.id === id)
     if (idx >= 0) items.value[idx] = detail.batch

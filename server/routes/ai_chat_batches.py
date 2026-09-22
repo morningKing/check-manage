@@ -271,6 +271,14 @@ def update_config(batch_id):
                                  provision_repo=provision_repo, provision_ref=provision_ref)
     if result is None:
         return jsonify({'error': 'not found'}), 404
+    # 编辑动作门禁(设计 §5.2 入口 A):显式传入 action_checks 才更新;
+    # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
+    if 'action_checks' in body:
+        try:
+            checks = agent_ledger.validate_checks(body.get('action_checks'))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        agent_ledger.sync_batch_expectations(batch_id, checks or None)
     return jsonify(result)
 
 
