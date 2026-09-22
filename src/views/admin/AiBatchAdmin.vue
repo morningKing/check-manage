@@ -88,6 +88,8 @@
               <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
               <el-button link type="warning" :disabled="!isTerminal(row.status)"
                          @click="onReexecute(row)">重跑</el-button>
+              <el-button link type="danger" :disabled="!isTerminal(row.status)"
+                         @click="onSoftDelete(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -130,13 +132,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
 import { previewKind } from '@/utils/filePreview'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
+  softDeleteAdminChild,
   getAdminSubtaskMessages,
   listAdminChildFiles, importAdminChildFiles, getAdminChildFilePreview,
   adminChildFileDownloadUrl,
@@ -224,6 +227,19 @@ async function onRetryAll() {
   } finally {
     retrying.value = false
   }
+}
+
+async function onSoftDelete(row: AdminChild) {
+  const cur = detail.value
+  if (!cur) return
+  try {
+    await ElMessageBox.confirm(
+      '软删除后前台(侧栏/详情)不再显示该子任务,数据保留。确定删除?',
+      '删除子任务', { type: 'warning' })
+  } catch { return }
+  const res = await softDeleteAdminChild(cur.batch.batchId, row.sessionId)
+  ElMessage.success(`已软删除(原状态:${res.status});前台不可见,数据保留`)
+  detail.value = await getAdminBatch(cur.batch.batchId)
 }
 
 async function onReexecute(row: AdminChild) {

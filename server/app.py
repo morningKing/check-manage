@@ -266,6 +266,17 @@ try:
     _m7.run()
 except Exception as _e:
     logging.warning('skillopt p2 migration on boot failed: %s', _e)
+
+# 批子任务软删除列（2026-09-21）：随启动幂等执行
+try:
+    _mp8 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_21_batch_child_soft_delete.py')
+    _spec8 = _ilu.spec_from_file_location('_batch_child_soft_delete_boot', _mp8)
+    _m8 = _ilu.module_from_spec(_spec8)
+    _spec8.loader.exec_module(_m8)
+    _m8.run()
+except Exception as _e:
+    logging.warning('batch child soft-delete migration on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)

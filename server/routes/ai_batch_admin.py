@@ -18,7 +18,8 @@ from utils.batch_engine import get_worker
 from utils.batch_repo import (MAX_ADMIN_MESSAGES, admin_get_batch_detail,
                               admin_get_batch_owner, admin_get_child_messages,
                               admin_get_child_session, admin_list_batches,
-                              reexecute_child, reset_failed_to_pending)
+                              admin_soft_delete_child, reexecute_child,
+                              reset_failed_to_pending)
 from utils.operation_log import log_operation
 from utils.session_file_import import MAX_IMPORT_PATHS, import_recorded_files
 from utils.subtask_repo import get_subtask_messages
@@ -167,6 +168,23 @@ def reexecute(batch_id, sid):
     log_operation('update', 'ai_chat_batch', batch_id, batch_id,
                   f'管理员重跑批任务 {batch_id} 的子任务 {sid}')
     return jsonify({'reexecuted': True})
+
+
+@ai_batch_admin_bp.delete('/<batch_id>/sessions/<sid>')
+@require_permission('admin.ai_chat_admin')
+def soft_delete_child(batch_id, sid):
+    """软删除子任务(管理员):置 deleted_at,前台批次详情/侧栏不再显示,
+    数据保留;计数(total/done/failed)按未删除子任务重算。仅终态可删。"""
+    try:
+        r = admin_soft_delete_child(batch_id, sid)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if r is None:
+        return jsonify({'error': '子任务不存在'}), 404
+    log_operation('delete', 'ai_chat_batch', batch_id, batch_id,
+                  f'管理员软删除批任务 {batch_id} 的子任务 {sid}'
+                  f'（前台不可见,数据保留,原状态 {r["status"]}）')
+    return jsonify({'deleted': True, **r})
 
 
 @ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/subtasks/<subtask_id>/messages')

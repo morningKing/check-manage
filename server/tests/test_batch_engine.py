@@ -71,6 +71,13 @@ def test_claim_marks_batch_running(user_id, db_conn):
     so the sidebar shows 运行中 while children run (not 待运行 until one finishes)."""
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=2)   # batch defaults to 'pending'
+    # 认领是全局的(共享开发库):清掉其他用例遗留的 pending 行,保证本用例
+    # 种子被确定性地认领,不与残留互相抢
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_chat_sessions "
+                    "WHERE status='pending' AND batch_id IS NOT NULL "
+                    "  AND batch_id <> %s", (bid,))
+    db_conn.commit()
     BatchWorker()._claim_pending_sessions(limit=1)
     db_conn.rollback()   # drop our snapshot so we see the worker's committed update
     with db_conn.cursor() as cur:
@@ -82,6 +89,11 @@ def test_claim_pending_respects_limit(user_id, db_conn):
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=5)
     w = BatchWorker()
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_chat_sessions "
+                    "WHERE status='pending' AND batch_id IS NOT NULL "
+                    "  AND batch_id <> %s", (bid,))
+    db_conn.commit()
     claimed = w._claim_pending_sessions(limit=2)
     assert len(claimed) == 2
     # Claimed rows are now status='running' in DB

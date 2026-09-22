@@ -159,7 +159,8 @@ def get_batch_detail(user_id: str, batch_id: str, *,
                 "       (SELECT count(*) FROM action_expectations e "
                 "        WHERE e.scope_id = ai_chat_sessions.id "
                 "          AND e.last_status = 'passed') AS gate_passed "
-                "FROM ai_chat_sessions WHERE batch_id=%s ORDER BY batch_seq",
+                "FROM ai_chat_sessions "
+                "WHERE batch_id=%s AND deleted_at IS NULL ORDER BY batch_seq",
                 (batch_id,),
             )
             sessions = [dict(r) for r in cur.fetchall()]
@@ -903,10 +904,62 @@ def admin_get_batch_detail(batch_id: str) -> dict | None:
             cur.execute(
                 "SELECT id, status, batch_seq, batch_input_file, error_message, "
                 "       last_message_preview "
-                "  FROM ai_chat_sessions WHERE batch_id = %s ORDER BY batch_seq",
+                "  FROM ai_chat_sessions "
+                "  WHERE batch_id = %s AND deleted_at IS NULL ORDER BY batch_seq",
                 (batch_id,))
             sessions = [dict(r) for r in cur.fetchall()]
     return {'batch': dict(batch), 'sessions': sessions}
+
+
+def admin_soft_delete_child(batch_id: str, sid: str) -> dict | None:
+    """管理员软删除子任务:置 deleted_at(数据保留),前台批次详情/侧栏不再
+    显示;同步按未删除子任务重算 total/done/failed 并刷新批次状态。
+
+    仅终态(completed/failed/cancelled)子任务可删——运行/待运行与 worker
+    冲突,需先取消。返回 {'seq','status','deletedAt'};
+    子任务不存在返回 None;非终态/已删除抛 ValueError。"""
+    with get_db() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT status, batch_seq, deleted_at FROM ai_chat_sessions "
+                "WHERE id = %s AND batch_id = %s",
+                (sid, batch_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            if row['deleted_at'] is not None:
+                raise ValueError('该子任务已删除')
+            if row['status'] not in ('completed', 'failed', 'cancelled'):
+                raise ValueError('仅已完成/失败/已取消的子任务可删除;'
+                                 '运行中或待运行的请先取消')
+            cur.execute(
+                "UPDATE ai_chat_sessions SET deleted_at = now() "
+                "WHERE id = %s AND batch_id = %s RETURNING deleted_at",
+                (sid, batch_id),
+            )
+            deleted_at = cur.fetchone()['deleted_at']
+            # 计数以“未删除”子任务为准重算,避免侧栏计数与可见行数不一致;
+            # cancelled 与既有聚合约定一致计入 failed 侧(见 _mark_cancelled)
+            cur.execute(
+                "SELECT count(*) AS total, "
+                "       count(*) FILTER (WHERE status = 'completed') AS done, "
+                "       count(*) FILTER (WHERE status IN ('failed','cancelled')) AS failed "
+                "  FROM ai_chat_sessions "
+                " WHERE batch_id = %s AND deleted_at IS NULL",
+                (batch_id,),
+            )
+            counts = cur.fetchone()
+            cur.execute(
+                "UPDATE ai_chat_batches SET total = %s, done = %s, failed = %s "
+                "WHERE id = %s",
+                (counts['total'], counts['done'], counts['failed'], batch_id),
+            )
+        conn.commit()
+    from utils.batch_engine import _recompute_batch_status
+    _recompute_batch_status(batch_id)
+    return {'seq': row['batch_seq'], 'status': row['status'],
+            'deletedAt': deleted_at.isoformat() if deleted_at else None}
 
 
 def admin_get_batch_owner(batch_id: str) -> str | None:

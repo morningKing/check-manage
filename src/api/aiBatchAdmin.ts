@@ -1,4 +1,4 @@
-import { get, post, authParam } from '@/utils/request'
+import { get, post, del, authParam } from '@/utils/request'
 import type { SubtaskMessagesResult } from './aiChat'
 
 export interface AdminBatch {
@@ -69,6 +69,12 @@ export function retryAdminBatch(batchId: string) {
 
 export function reexecuteAdminChild(batchId: string, sessionId: string) {
   return post<{ reexecuted: boolean }>(`${BASE}/${batchId}/sessions/${sessionId}/reexecute`)
+}
+
+/** 软删除子任务:置 deleted_at,前台不可见,数据保留(仅终态子任务) */
+export function softDeleteAdminChild(batchId: string, sessionId: string) {
+  return del<{ deleted: boolean; seq: number; status: string }>(
+    `${BASE}/${batchId}/sessions/${sessionId}`)
 }
 
 export interface AdminChildFile {

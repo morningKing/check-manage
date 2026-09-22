@@ -702,6 +702,7 @@ class BatchWorker:
                     "WITH picked AS ( "
                     "  SELECT id FROM ai_chat_sessions "
                     "   WHERE status = 'pending' "
+                    "     AND deleted_at IS NULL "
                     "     AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL) "
                     "   ORDER BY created_at, batch_seq "
                     "   FOR UPDATE SKIP LOCKED LIMIT %s "
