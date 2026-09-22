@@ -170,7 +170,7 @@ def create_home_widget():
 
     allowed_types = (
         'custom-markdown', 'data-card', 'quick-form',
-        'chart', 'todo', 'activity', 'announcement',
+        'chart', 'todo', 'activity', 'announcement', 'image',
     )
     if widget_type not in allowed_types:
         return jsonify({"error": f"Widget type must be one of: {', '.join(allowed_types)}"}), 400

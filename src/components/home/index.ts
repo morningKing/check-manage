@@ -13,6 +13,7 @@ export { default as ChartWidget } from './ChartWidget.vue'
 export { default as TodoWidget } from './TodoWidget.vue'
 export { default as ActivityWidget } from './ActivityWidget.vue'
 export { default as AnnouncementWidget } from './AnnouncementWidget.vue'
+export { default as ImageWidget } from './ImageWidget.vue'
 
 import type { WidgetType } from '@/types'
 import WelcomeWidget from './WelcomeWidget.vue'
@@ -26,6 +27,7 @@ import ChartWidget from './ChartWidget.vue'
 import TodoWidget from './TodoWidget.vue'
 import ActivityWidget from './ActivityWidget.vue'
 import AnnouncementWidget from './AnnouncementWidget.vue'
+import ImageWidget from './ImageWidget.vue'
 
 /**
  * Widget 类型到组件的映射
@@ -42,4 +44,5 @@ export const widgetComponentMap: Record<WidgetType, any> = {
   todo: TodoWidget,
   activity: ActivityWidget,
   announcement: AnnouncementWidget,
+  image: ImageWidget,
 }

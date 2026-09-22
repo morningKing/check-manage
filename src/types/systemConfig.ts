@@ -15,6 +15,7 @@ export type WidgetType =
   | 'todo'
   | 'activity'
   | 'announcement'
+  | 'image'
 
 /** 统计项类型 */
 export interface StatsItem {
@@ -111,6 +112,18 @@ export interface WidgetContentMap {
   todo: TodoContent
   activity: ActivityContent
   announcement: AnnouncementContent
+  image: ImageContent
+}
+
+/** 图片区块内容配置 */
+export interface ImageContent {
+  /** 图片地址(支持 data-files 上传地址 /api/data-files/<id>/download 或任意 URL) */
+  imageUrl: string
+  alt?: string
+  /** 点击跳转地址(可选) */
+  link?: string
+  /** 填充模式,默认 contain */
+  fit?: 'contain' | 'cover' | 'fill' | 'none'
 }
 
 /** 区块网格布局坐标（12 列网格，行高固定） */
@@ -176,3 +189,4 @@ export type CreatableWidgetType =
   | 'todo'
   | 'activity'
   | 'announcement'
+  | 'image'

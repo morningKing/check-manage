@@ -571,3 +571,41 @@ class TestBatchUpdateHomeWidgets:
             headers=dev_h
         )
         assert resp.status_code == 403
+
+    def test_create_image_widget(self, setup):
+        """测试新增的 image 类型区块(图片区块)"""
+        client, mock_cursor, admin_h, _ = setup
+        content = {'imageUrl': '/api/data-files/abc/download',
+                   'alt': '截图', 'fit': 'contain'}
+        mock_cursor.fetchone.side_effect = [
+            {'max_order': 9},
+            {'max_bottom': 30},
+            {
+                'id': 'custom-image-abc12345',
+                'widget_type': 'image',
+                'title': '图片',
+                'content': content,
+                'enabled': True,
+                'order': 10,
+                'visible_roles': ['admin', 'developer', 'guest'],
+                'created_at': now,
+                'updated_at': now,
+            }
+        ]
+        resp = client.post('/home-widgets',
+            data=json.dumps({'widgetType': 'image', 'title': '图片', 'content': content}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 201
+        assert resp.get_json()['widgetType'] == 'image'
+
+    def test_reject_unknown_widget_type(self, setup):
+        """未知类型仍被白名单拒绝"""
+        client, mock_cursor, admin_h, _ = setup
+        resp = client.post('/home-widgets',
+            data=json.dumps({'widgetType': 'video', 'title': 'x', 'content': {}}),
+            content_type='application/json',
+            headers=admin_h
+        )
+        assert resp.status_code == 400

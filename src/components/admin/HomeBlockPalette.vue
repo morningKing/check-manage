@@ -26,7 +26,7 @@
  * 拖拽卡片到网格=由 HomeLayoutEditor 的 drop 处理接收并计算落点坐标。
  */
 import type { Component } from 'vue'
-import { Document, Files, EditPen, PieChart, List, Clock, Bell } from '@element-plus/icons-vue'
+import { Document, Files, EditPen, PieChart, List, Clock, Bell, Picture } from '@element-plus/icons-vue'
 import type { CreatableWidgetType } from '@/types'
 
 const emit = defineEmits<{
@@ -34,7 +34,7 @@ const emit = defineEmits<{
 }>()
 
 const PALETTE_TYPES: CreatableWidgetType[] = [
-  'custom-markdown', 'data-card', 'quick-form', 'chart', 'todo', 'activity', 'announcement',
+  'custom-markdown', 'data-card', 'quick-form', 'chart', 'todo', 'activity', 'announcement', 'image',
 ]
 
 const PALETTE_LABELS: Record<CreatableWidgetType, string> = {
@@ -45,6 +45,7 @@ const PALETTE_LABELS: Record<CreatableWidgetType, string> = {
   todo: '我的待办',
   activity: '最近动态',
   announcement: '公告',
+  image: '图片区块',
 }
 
 const PALETTE_ICONS: Record<CreatableWidgetType, Component> = {
@@ -55,6 +56,7 @@ const PALETTE_ICONS: Record<CreatableWidgetType, Component> = {
   todo: List,
   activity: Clock,
   announcement: Bell,
+  image: Picture,
 }
 
 function handleDragStart(event: DragEvent, type: CreatableWidgetType) {

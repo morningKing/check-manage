@@ -345,6 +345,33 @@
       </el-form-item>
     </el-form>
 
+    <el-form v-if="widget?.widgetType === 'image'" label-width="90px">
+      <el-form-item label="图片">
+        <el-upload
+          :show-file-list="false"
+          accept="image/*"
+          :http-request="onImageUpload"
+        >
+          <el-button type="primary" link>上传图片（存入系统文件库）</el-button>
+        </el-upload>
+        <el-input v-model="form.content.imageUrl" placeholder="或直接填写图片地址(data-files 地址或外链)" />
+        <div class="form-hint">上传后自动填入地址;渲染时自动附带访问令牌。</div>
+      </el-form-item>
+      <el-form-item label="替代文本">
+        <el-input v-model="form.content.alt" placeholder="alt 文本(可选,无障碍/加载失败时显示)" />
+      </el-form-item>
+      <el-form-item label="点击跳转">
+        <el-input v-model="form.content.link" placeholder="点击图片跳转的地址(可选)" />
+      </el-form-item>
+      <el-form-item label="填充模式">
+        <el-radio-group v-model="form.content.fit">
+          <el-radio value="contain">contain（完整显示）</el-radio>
+          <el-radio value="cover">cover（填满裁剪）</el-radio>
+          <el-radio value="fill">fill（拉伸）</el-radio>
+        </el-radio-group>
+      </el-form-item>
+    </el-form>
+
     <!-- 通用配置 -->
     <el-divider content-position="left">显示配置</el-divider>
     <el-form label-width="80px">
@@ -368,6 +395,8 @@
 </template>
 
 <script setup lang="ts">
+import { uploadDataFile } from '@/api/dataFiles'
+import { ElMessage } from 'element-plus'
 /**
  * WidgetEditDialog 组件
  *
@@ -409,7 +438,8 @@ const dialogTitle = computed(() => {
     chart: '图表',
     todo: '我的待办',
     activity: '最近动态',
-    announcement: '公告'
+    announcement: '公告',
+    image: '图片区块'
   }
   return `编辑${typeLabels[props.widget.widgetType] || '区块'}`
 })
@@ -558,6 +588,13 @@ watch(
       if (w.widgetType === 'data-card' && !content.dataSource) {
         content.dataSource = { collection: '', branchId: 'main' }
       }
+      // 确保 image 有基础结构
+      if (w.widgetType === 'image') {
+        content.imageUrl = content.imageUrl || ''
+        content.alt = content.alt || ''
+        content.link = content.link || ''
+        content.fit = content.fit || 'contain'
+      }
       // 确保 quick-form 有基础结构
       if (w.widgetType === 'quick-form') {
         content.buttonLabel = content.buttonLabel || ''
@@ -600,6 +637,12 @@ function addStatsItem() {
 function addLinkItem() {
   if (!form.value.content.links) form.value.content.links = []
   form.value.content.links.push({ name: '', path: '', icon: 'Menu' })
+}
+
+async function onImageUpload(options: any) {
+  const res = await uploadDataFile(options.file as File)
+  form.value.content.imageUrl = res.url
+  ElMessage.success('图片已上传')
 }
 
 function handleSave() {
