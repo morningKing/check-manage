@@ -253,18 +253,28 @@ const activeMenu = computed(() => {
   transition: all 0.1s ease !important;
 }
 
-:global(html.dark) {
-  .menu-logo {
-    background-color: #1a1d23;
-    border-bottom-color: #282c34;
-    .logo-icon, .logo-text { color: #e6e8eb; }
-  }
-  :deep(.el-menu) { background-color: #1a1d23 !important; }
-  :deep(.el-menu-item), :deep(.el-sub-menu__title) { color: #c2c6cd !important; }
-  :deep(.el-menu-item):hover, :deep(.el-sub-menu__title):hover {
-    background-color: #23262e !important; color: #fff !important;
-  }
-  :deep(.el-menu-item.is-active) { background-color: #2a2e36 !important; color: #fff !important; }
-  :deep(.el-sub-menu .el-menu-item) { background-color: #1a1d23 !important; }
+</style>
+
+<style lang="scss">
+/* 深色模式:全局块(非 scoped)。此前用 :global(html.dark){:deep(...)} 嵌套,
+   scoped 编译后整块不生效——浅色 #f7f8fa !important 规则继续压制,导致
+   深色下 Logo 区与项目分组子菜单(数据页菜单)保持白底。 */
+html.dark .side-menu .menu-logo {
+  background-color: #1a1d23;
+  border-bottom-color: #282c34;
 }
+html.dark .side-menu .menu-logo .logo-icon,
+html.dark .side-menu .menu-logo .logo-text { color: #e6e8eb; }
+html.dark .side-menu .side-menu-list.el-menu { background-color: #1a1d23 !important; }
+html.dark .side-menu .el-menu-item,
+html.dark .side-menu .el-sub-menu__title { color: #c2c6cd !important; }
+html.dark .side-menu .el-menu-item:hover,
+html.dark .side-menu .el-sub-menu__title:hover {
+  background-color: #23262e !important; color: #fff !important;
+}
+html.dark .side-menu .el-menu-item.is-active {
+  background-color: #2a2e36 !important; color: #fff !important;
+  .el-icon { color: #fff !important; }
+}
+html.dark .side-menu .el-sub-menu .el-menu-item { background-color: #1a1d23 !important; }
 </style>
