@@ -66,6 +66,8 @@
       <div class="row">
         <label>动作门禁 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 子任务结束时逐条核对账本：脚本执行过没有、仓库克隆了没有、知识文件读了没有）</span></label>
         <ElCheckbox v-model="gateEnabled" data-test="gate-enabled">启用动作门禁</ElCheckbox>
+        <ElCheckbox v-model="gateRetry" data-test="gate-retry"
+                    :disabled="!gateEnabled">门禁不过时自动修正（原会话继续执行，补齐缺失动作后重新核对）</ElCheckbox>
         <div class="row__inline">
           <ElButton link data-test="gate-extract" :loading="extracting"
                     :disabled="!prompt.trim()"
@@ -171,6 +173,8 @@ const provisionRepo = ref<string>('')
 // 动作门禁(设计 §5.2 入口 A):开启后随创建请求下发 action_checks,
 // 子任务终态由服务端按账本核对。scope 固定 tree(覆盖子代理),界面不暴露。
 const gateEnabled = ref(false)
+// 修正开关(设计 §5.4):门禁不过时原会话 continue 修正(默认关)
+const gateRetry = ref(false)
 const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents: string }>>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
 const extracting = ref(false)
@@ -320,6 +324,7 @@ async function submit() {
       model: selectedModel.value || null,
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
+      gate_retry: gateEnabled.value ? gateRetry.value : false,
       action_checks,
       files: stagedFiles.value,
     })
@@ -349,6 +354,7 @@ function reset() {
   provisionRepo.value = ''
   provisionRef.value = ''
   gateEnabled.value = false
+  gateRetry.value = false
   gateChecks.value = []
   stagedFiles.value = []
   saveAsTemplate.value = false

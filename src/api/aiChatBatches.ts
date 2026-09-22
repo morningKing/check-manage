@@ -39,6 +39,8 @@ export function createBatch(body: {
   provision_ref?: string | null
   /** 动作门禁期望(设计 §5.2 入口 A):子任务终态逐条核对账本,不过门落 failed */
   action_checks?: ActionCheck[] | null
+  /** 门禁不过时自动修正(原会话 continue 补齐缺失动作,设计 §5.4) */
+  gate_retry?: boolean
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)

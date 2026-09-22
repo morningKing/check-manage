@@ -542,3 +542,62 @@ def test_sync_batch_expectations_replaces_running_keeps_terminal(gate_fixture):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM action_expectations WHERE scope_id=%s", (sid2,))
             conn.commit()
+
+
+def test_gate_retry_batch_flag_overrides_env(gate_fixture, monkeypatch):
+    """批级 gate_retry 开关优先于全局 env:批开启时即使 env=0 也会修正一次;
+    批显式关闭时即使 env 开启也不修正。"""
+    import os
+    from utils.batch_engine import BatchWorker
+    f = gate_fixture
+    monkeypatch.setenv('AI_BATCH_GATE_RETRY', '0')
+    # 给 running 子任务补 oc 会话与期望
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s "
+                        "WHERE id=%s", (f['oc_sid'], f['sid']))
+    conn.commit()
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': '读输入文件', 'tool': 'read', 'args_pattern': 'one\.txt'}])
+    gate = {'status': 'failed', 'results': [
+        {'name': '读输入文件', 'tool': 'read', 'args_pattern': 'one\.txt',
+         'evidence': 0, 'min_count': 1, 'status': 'failed'}]}
+
+    w = BatchWorker()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_batches SET gate_retry=TRUE WHERE id=%s", (f['bid'],))
+    conn.commit()
+    assert w._maybe_gate_retry(f['sid'], gate, batch_id=f['bid']) is True
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status, continue_prompt FROM ai_chat_sessions WHERE id=%s",
+                        (f['sid'],))
+            st, prompt = cur.fetchone()
+    assert st == 'pending' and 'action_gate' in prompt
+
+    # 预算(1)已用掉 → 第二次不再修正
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (f['sid'],))
+    conn.commit()
+    assert w._maybe_gate_retry(f['sid'], gate, batch_id=f['bid']) is False
+
+
+def test_gate_retry_batch_flag_off_blocks_env(gate_fixture, monkeypatch):
+    import os
+    from utils.batch_engine import BatchWorker
+    f = gate_fixture
+    monkeypatch.setenv('AI_BATCH_GATE_RETRY', '3')
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_batches SET gate_retry=FALSE "
+                        "WHERE id=%s", (f['bid'],))
+            cur.execute("UPDATE ai_chat_sessions SET batch_id=%s, status='running' "
+                        "WHERE id=%s", (f['sid'], f['bid']))
+    conn.commit()
+    gate = {'status': 'failed', 'results': [
+        {'name': 'x', 'tool': 'read', 'args_pattern': 'a',
+         'evidence': 0, 'min_count': 1, 'status': 'failed'}]}
+    w = BatchWorker()
+    assert w._maybe_gate_retry(f['sid'], gate, batch_id=f['bid']) is False

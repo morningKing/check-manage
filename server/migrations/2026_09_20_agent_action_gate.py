@@ -70,6 +70,10 @@ def run():
                     "ON agent_tool_calls(agent)")
         cur.execute("ALTER TABLE action_expectations "
                     "ADD COLUMN IF NOT EXISTS subagents JSONB")
+        # 修正开关:批级控制门禁不过时是否自动 continue 修正
+        # (NULL=跟随全局环境变量 AI_BATCH_GATE_RETRY;TRUE/FALSE=批级覆盖)
+        cur.execute("ALTER TABLE ai_chat_batches "
+                    "ADD COLUMN IF NOT EXISTS gate_retry BOOLEAN")
         conn.commit()
     print("agent action gate tables ready.")
 

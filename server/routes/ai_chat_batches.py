@@ -101,7 +101,8 @@ def create():
                           template_id=template_id, files=files,
                           agent=agent, model=model,
                           provision_repo=provision_repo, provision_ref=provision_ref,
-                          action_checks=action_checks or None)
+                          action_checks=action_checks or None,
+                          gate_retry=bool(body.get('gate_retry')))
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -279,6 +280,11 @@ def update_config(batch_id):
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         agent_ledger.sync_batch_expectations(batch_id, checks or None)
+    # 修正开关(设计 §5.4):显式传入 gate_retry 才更新(批级覆盖全局)
+    if 'gate_retry' in body:
+        update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
+                            provision_repo=provision_repo, provision_ref=provision_ref,
+                            gate_retry=bool(body.get('gate_retry')))
     return jsonify(result)
 
 
