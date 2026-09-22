@@ -109,7 +109,30 @@ def test_validate_checks_normalizes():
     ])
     assert out == [{'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone',
                     'require_state': 'completed', 'min_count': 1, 'scope': 'tree',
-                    'check_type': 'tool', 'effect_spec': None}]
+                    'check_type': 'tool', 'effect_spec': None,
+                    'subagents': None}]
+
+
+def test_validate_checks_normalizes_subagents():
+    out = agent_ledger.validate_checks([
+        {'name': '读取知识库', 'tool': 'read', 'args_pattern': 'k\.md',
+         'subagents': ['general', 'explore']},
+    ])
+    assert out[0]['subagents'] == ['general', 'explore']
+    with pytest.raises(ValueError, match='subagents'):
+        agent_ledger.validate_checks([
+            {'name': 'x', 'tool': 'read', 'args_pattern': 'a', 'subagents': 'general'}])
+
+
+def test_check_applies_to_child_conditions():
+    from utils.agent_ledger import check_applies_to_child as applies
+    assert applies({}, 0, 'a.txt') is True                      # 无条件 → 全部生效
+    check = {'apply_to': {'batch_seq': [0, 2]}}
+    assert applies(check, 0, 'a.txt') is True
+    assert applies(check, 1, 'a.txt') is False
+    check = {'apply_to': {'input_file_glob': 'report-*.docx'}}
+    assert applies(check, 0, 'batch-staging/x/report-3.docx') is True
+    assert applies(check, 0, 'batch-staging/x/other.docx') is False
 
 
 def test_gate_failure_message_lists_missing_items():
@@ -441,3 +464,45 @@ def test_extractor_requires_ai_enabled(monkeypatch):
         'timeout': 5, 'maxTokens': 1024})
     with pytest.raises(RuntimeError, match='未启用'):
         action_check_extractor.extract_action_checks('task')
+
+
+def test_gate_subagent_filter_only_counts_target_agent(gate_fixture):
+    """subagents 定向:只有指定子代理的动作参与核对,不相关子代理不误报。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_subtasks SET agent='general' WHERE id=%s",
+                        (f['child1'],))
+            cur.execute("UPDATE ai_chat_subtasks SET agent='explore' WHERE id=%s",
+                        (f['child2'],))
+    conn.commit()
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': 'general 读取输入文件', 'tool': 'read',
+         'args_pattern': 'one\.txt', 'subagents': ['general']},
+    ])
+    # explore 读同文件 + general 没读 → 不满足(general 未参与)
+    assert agent_ledger.record_messages(
+        f['child2'], [_msg([_tool_part('c2', 'read', 'path=x/one.txt')])],
+        root_session_id=f['sid'], subtask_id=f['child2'], agent_name='explore')
+    res = agent_ledger.check_session_gate(f['sid'])
+    assert res['status'] == 'failed'
+    assert res['results'][0]['evidence'] == 0
+    # general 也读了 → 满足
+    assert agent_ledger.record_messages(
+        f['child1'], [_msg([_tool_part('c1', 'read', 'path=x/one.txt')])],
+        root_session_id=f['sid'], subtask_id=f['child1'], agent_name='general')
+    res = agent_ledger.check_session_gate(f['sid'])
+    assert res['status'] == 'passed'
+    assert res['results'][0]['evidence'] == 1
+
+
+def test_record_messages_stores_agent_name(gate_fixture):
+    f = gate_fixture
+    agent_ledger.record_messages(
+        f['child1'], [_msg([_tool_part('c1', 'bash', 'ls')])],
+        root_session_id=f['sid'], subtask_id=f['child1'], agent_name='general')
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT agent FROM agent_tool_calls WHERE oc_session_id=%s",
+                        (f['child1'],))
+            assert cur.fetchone()[0] == 'general'

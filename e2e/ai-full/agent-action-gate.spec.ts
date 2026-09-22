@@ -169,7 +169,10 @@ test('真实多子代理会话:tree 作用域计入子代理动作 → completed
     files: staged,
     action_checks: [
       { name: '子代理读取输入文件', tool: 'read',
-        args_pattern: 'one\\.txt', scope: 'tree', min_count: 1 },
+        args_pattern: 'one\\.txt', scope: 'tree', min_count: 1,
+        // 子代理定向:只有被委托读文件的子代理(general)的动作参与核对,
+        // explore 的动作不误伤
+        subagents: [subs[0]] },
     ],
   })
   expect(created.status, JSON.stringify(created.json)).toBe(201)

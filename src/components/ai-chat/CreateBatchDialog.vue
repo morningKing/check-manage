@@ -79,6 +79,7 @@
               <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
             </ElSelect>
             <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
+            <ElInput v-model="c.subagents" placeholder="适用子代理(可选,逗号分隔)" style="flex:0 0 170px" />
             <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
                            style="flex:0 0 110px" />
             <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
@@ -167,11 +168,11 @@ const provisionRepo = ref<string>('')
 // 动作门禁(设计 §5.2 入口 A):开启后随创建请求下发 action_checks,
 // 子任务终态由服务端按账本核对。scope 固定 tree(覆盖子代理),界面不暴露。
 const gateEnabled = ref(false)
-const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number }>>([])
+const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents: string }>>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
 const extracting = ref(false)
 function emptyCheck() {
-  return { name: '', tool: 'bash', args_pattern: '', min_count: 1 }
+  return { name: '', tool: 'bash', args_pattern: '', min_count: 1, subagents: '' }
 }
 
 /** M1.5:AI 提炼——只产出建议并预填表单,登记仍由用户点「创建」确认 */
@@ -187,6 +188,7 @@ async function onExtract() {
     gateChecks.value = checks.map(c => ({
       name: c.name, tool: c.tool || 'bash',
       args_pattern: c.args_pattern, min_count: c.min_count ?? 1,
+      subagents: (c.subagents || []).join(', '),
     }))
     if (!gateChecks.value.length) ElMessage.warning('AI 未提炼出必经动作,请手动添加')
   } catch (e: any) {
@@ -293,8 +295,13 @@ async function submit() {
   if (gateEnabled.value) {
     action_checks = gateChecks.value
       .filter(c => c.name.trim() && c.args_pattern.trim())
-      .map(c => ({ name: c.name.trim(), tool: c.tool || 'bash',
-                   args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }))
+      .map(c => {
+        const row: any = { name: c.name.trim(), tool: c.tool || 'bash',
+          args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
+        const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
+        if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
+        return row
+      })
     if (action_checks.length === 0) {
       ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则)')
       return

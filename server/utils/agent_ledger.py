@@ -92,7 +92,7 @@ def extract_tool_parts(messages) -> list:
 
 def record_messages(oc_session_id: str, messages, *,
                     root_session_id=None, subtask_id=None,
-                    get_db=None) -> bool:
+                    agent_name=None, get_db=None) -> bool:
     """把一批消息里的 tool part 落账。best-effort:失败记日志返回 False。
 
     `get_db` 参数:调用方(batch_engine)传入自己的模块级 get_db,使其在单测里
@@ -108,7 +108,7 @@ def record_messages(oc_session_id: str, messages, *,
                     cur,
                     """
                     INSERT INTO agent_tool_calls
-                        (oc_session_id, root_session_id, subtask_id,
+                        (oc_session_id, root_session_id, subtask_id, agent,
                          part_id, tool, args_text, state)
                     VALUES %s
                     ON CONFLICT (oc_session_id, part_id) DO UPDATE
@@ -117,7 +117,7 @@ def record_messages(oc_session_id: str, messages, *,
                     WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
                        OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
                     """,
-                    [(oc_session_id, root_session_id, subtask_id,
+                    [(oc_session_id, root_session_id, subtask_id, agent_name,
                       pid, tool, args, state)
                      for (pid, tool, args, state) in part_rows],
                 )
@@ -134,10 +134,11 @@ def record_state(session_id: str, oc_session_id: str, state, *,
     db_ctx = get_db or _default_get_db
     ok = True
     all_ok = True
-    scopes = [(oc_session_id, None)]
+    scopes = [(oc_session_id, None, None)]
     for child_sid, child_scope in (state.get('subtasks') or {}).items():
-        scopes.append((child_sid, child_scope))
-    for child_sid, scope in scopes:
+        scopes.append((child_sid, child_scope,
+                       (child_scope or {}).get('agent')))
+    for child_sid, scope, agent_name in scopes:
         if scope is None:
             part_map = state.get('parts_by_id')
         else:
@@ -152,7 +153,7 @@ def record_state(session_id: str, oc_session_id: str, state, *,
                         cur,
                         """
                         INSERT INTO agent_tool_calls
-                            (oc_session_id, root_session_id, subtask_id,
+                            (oc_session_id, root_session_id, subtask_id, agent,
                              part_id, tool, args_text, state)
                         VALUES %s
                         ON CONFLICT (oc_session_id, part_id) DO UPDATE
@@ -162,7 +163,7 @@ def record_state(session_id: str, oc_session_id: str, state, *,
                            OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
                         """,
                         [(child_sid, session_id,
-                          None if scope is None else child_sid,
+                          None if scope is None else child_sid, agent_name,
                           pid, tool, args, st)
                          for (pid, tool, args, st) in part_rows],
                     )
@@ -275,11 +276,49 @@ def validate_checks(checks) -> list:
             'require_state': require_state, 'min_count': min_count,
             'scope': scope, 'check_type': check_type,
             'effect_spec': effect_spec,
+            'subagents': c.get('subagents'),
         })
+    for c in normalized:
+        subs = c.get('subagents')
+        if subs is not None:
+            if (not isinstance(subs, list)
+                    or not all(isinstance(x, str) and x.strip() for x in subs)
+                    or len(subs) > 10):
+                raise ValueError(f"{c['name']}: subagents 必须是不超过 10 个"
+                                 "子代理名称的字符串数组")
+            c['subagents'] = [x.strip() for x in subs]
+        else:
+            c['subagents'] = None
     names = [c['name'] for c in normalized]
     if len(names) != len(set(names)):
         raise ValueError('action_checks 内 name 重复')
     return normalized
+
+
+def check_applies_to_child(check: dict, batch_seq, input_file: str | None) -> bool:
+    """条件登记(设计 §5.2 定向能力):批任务级检查可声明 apply_to,只对匹配的
+    子任务生效——不匹配的子任务不登记该期望,从源头消除不相关动作的误报。
+
+    - apply_to.batch_seq: 子任务序号数组(如 [0,2])
+    - apply_to.input_file_glob: 输入文件名 glob(如 "report-*.docx",fnmatch)
+    未声明 apply_to 的检查对所有子任务生效。"""
+    apply_to = (check or {}).get('apply_to')
+    if not apply_to:
+        return True
+    seqs = apply_to.get('batch_seq')
+    if seqs and batch_seq is not None:
+        try:
+            if int(batch_seq) in [int(x) for x in seqs]:
+                return True
+        except (TypeError, ValueError):
+            pass
+    glob_pat = apply_to.get('input_file_glob')
+    if glob_pat and input_file:
+        import fnmatch
+        name = str(input_file).replace(chr(92), '/').rsplit('/', 1)[-1]
+        if fnmatch.fnmatch(name, glob_pat):
+            return True
+    return False
 
 
 def register_session_expectations(session_id: str, checks, source: str = 'batch',
@@ -299,8 +338,8 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                     INSERT INTO action_expectations
                         (scope_type, scope_id, name, tool, args_pattern,
                          require_state, min_count, source, last_status,
-                         check_type, effect_spec)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s)
+                         check_type, effect_spec, subagents)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)
                     ON CONFLICT (scope_type, scope_id, name) DO UPDATE SET
                         tool = EXCLUDED.tool,
                         args_pattern = EXCLUDED.args_pattern,
@@ -309,6 +348,7 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                         source = EXCLUDED.source,
                         check_type = EXCLUDED.check_type,
                         effect_spec = EXCLUDED.effect_spec,
+                        subagents = EXCLUDED.subagents,
                         last_status = 'pending',
                         last_checked_at = NULL,
                         last_evidence = NULL
@@ -317,7 +357,9 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                      c['args_pattern'], c['require_state'], c['min_count'],
                      source, c['check_type'],
                      psycopg2.extras.Json(c['effect_spec'])
-                     if c['effect_spec'] else None),
+                     if c['effect_spec'] else None,
+                     psycopg2.extras.Json(c['subagents'])
+                     if c.get('subagents') else None),
                 )
     return len(normalized)
 
@@ -434,7 +476,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 cur.execute(
                     """
                     SELECT id, name, tool, args_pattern, require_state,
-                           min_count, scope_type, check_type, effect_spec
+                           min_count, scope_type, check_type, effect_spec,
+                           subagents
                     FROM action_expectations
                     WHERE scope_id = %s AND scope_type IN ('session','tree')
                     ORDER BY id
@@ -447,7 +490,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 tree_ids = None
                 results = []
                 for (eid, name, tool, pattern, req_state, min_count,
-                     scope, check_type, effect_spec) in exps:
+                     scope, check_type, effect_spec, subagents) in exps:
                     if check_type == 'file':
                         evidence = _count_file_evidence(cur, session_id,
                                                         effect_spec)
@@ -463,15 +506,30 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                             ids = [oc_sid]
                         evidence = 0
                         if ids:
-                            cur.execute(
-                                """
-                                SELECT COUNT(*) FROM agent_tool_calls
-                                WHERE oc_session_id = ANY(%s)
-                                  AND tool = %s AND state = %s
-                                  AND args_text ~ %s
-                                """,
-                                (ids, tool, req_state, pattern),
-                            )
+                            if subagents:
+                                # 子代理定向:只统计指定名称子代理(subtask)的调用,
+                                # 根会话与不相关子代理的动作不参与核对
+                                cur.execute(
+                                    """
+                                    SELECT COUNT(*) FROM agent_tool_calls t
+                                    JOIN ai_chat_subtasks st ON st.id = t.subtask_id
+                                    WHERE t.oc_session_id = ANY(%s)
+                                      AND t.tool = %s AND t.state = %s
+                                      AND t.args_text ~ %s
+                                      AND st.agent = ANY(%s)
+                                    """,
+                                    (ids, tool, req_state, pattern, subagents),
+                                )
+                            else:
+                                cur.execute(
+                                    """
+                                    SELECT COUNT(*) FROM agent_tool_calls
+                                    WHERE oc_session_id = ANY(%s)
+                                      AND tool = %s AND state = %s
+                                      AND args_text ~ %s
+                                    """,
+                                    (ids, tool, req_state, pattern),
+                                )
                             evidence = cur.fetchone()[0]
                     status = 'passed' if evidence >= min_count else 'failed'
                     cur.execute(
@@ -488,6 +546,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         'require_state': req_state, 'min_count': min_count,
                         'scope': scope, 'evidence': evidence, 'status': status,
                         'check_type': check_type or 'tool',
+                        'subagents': subagents,
                     })
         overall = 'failed' if any(r['status'] == 'failed' for r in results) \
             else 'passed'

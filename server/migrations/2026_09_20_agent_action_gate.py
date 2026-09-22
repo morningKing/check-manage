@@ -62,6 +62,14 @@ def run():
                     "NOT NULL DEFAULT 'tool'")
         cur.execute("ALTER TABLE action_expectations "
                     "ADD COLUMN IF NOT EXISTS effect_spec JSONB")
+        # 定向能力:子代理级(subagents 过滤,按 ai_chat_subtasks.agent 核对)
+        # 与账本的 agent 名记录(子代理动作归属)
+        cur.execute("ALTER TABLE agent_tool_calls "
+                    "ADD COLUMN IF NOT EXISTS agent VARCHAR(100)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_agent_tool_call_agent "
+                    "ON agent_tool_calls(agent)")
+        cur.execute("ALTER TABLE action_expectations "
+                    "ADD COLUMN IF NOT EXISTS subagents JSONB")
         conn.commit()
     print("agent action gate tables ready.")
 

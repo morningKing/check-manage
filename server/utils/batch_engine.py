@@ -848,7 +848,8 @@ class BatchWorker:
             prompt, agent, model, provision_repo, provision_ref = ctx
             # 入口 A/B(设计 §5.2):派发前把批定义/模板的 action_checks 登记为
             # 期望;重试/续跑重复登记按名字幂等覆盖,不产生重复行。
-            self._register_action_expectations(sid, batch_id)
+            # apply_to 条件不匹配的子任务直接跳过登记(定向能力,消除误报)。
+            self._register_action_expectations(sid, batch_id, session_row)
 
         # Detect "continue" mode: opencode_session_id already set + continue_prompt
         is_continue = bool(session_row.get('opencode_session_id')
@@ -1095,12 +1096,20 @@ class BatchWorker:
                     checks = trow[0] if trow else None
                 return checks or None
 
-    def _register_action_expectations(self, sid: str, batch_id: str):
-        """派发前把批定义/模板的 action_checks 登记为期望行。登记失败不阻断
-        派发(与账本 best-effort 同策略):门禁核对不到期望时按 passed 处理,
-        但告警日志保留现场。"""
+    def _register_action_expectations(self, sid: str, batch_id: str,
+                                      session_row: dict | None = None):
+        """派发前把批定义/模板的 action_checks 登记为期望行。带 apply_to
+        条件的检查按子任务属性(batch_seq/输入文件名)过滤——不匹配的子任务
+        不登记,避免不相关动作的门禁误报。登记失败不阻断派发(与账本
+        best-effort 同策略)。"""
         try:
             checks = self._fetch_action_checks(batch_id)
+            if not checks:
+                return
+            seq = (session_row or {}).get('batch_seq')
+            infile = (session_row or {}).get('batch_input_file')
+            checks = [c for c in checks
+                      if agent_ledger.check_applies_to_child(c, seq, infile)]
             if not checks:
                 return
             agent_ledger.register_session_expectations(sid, checks,
@@ -1706,9 +1715,11 @@ class BatchWorker:
                 oc_session_id, raw, root_session_id=session_id,
                 get_db=get_db)
             for child_sid, child_msgs in child_messages.items():
+                child_agent = (known.get(child_sid) or {}).get('agent')
                 if not agent_ledger.record_messages(
                         child_sid, child_msgs, root_session_id=session_id,
-                        subtask_id=child_sid, get_db=get_db):
+                        subtask_id=child_sid, agent_name=child_agent,
+                        get_db=get_db):
                     ledger_ok = False
             self._ledger_health[session_id] = ledger_ok
             subtask_status = {sid: info['status'] for sid, info in known.items()}

@@ -20,6 +20,13 @@ export interface ActionCheck {
   scope?: 'session' | 'tree'
   check_type?: 'tool' | 'file' | 'db_record'
   effect_spec?: Record<string, unknown>
+  /** 子代理定向:只考察这些名称的子代理的工具调用(设计 §5.2) */
+  subagents?: string[] | null
+  /** 子任务级定向:仅对匹配的子任务登记(设计 §5.2 apply_to) */
+  apply_to?: {
+    batch_seq?: number[]
+    input_file_glob?: string
+  }
 }
 
 export function createBatch(body: {
