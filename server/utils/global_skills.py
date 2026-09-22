@@ -370,3 +370,59 @@ def inject_single_skill(workspace_path: str, skill_name: str,
     except OSError:
         shutil.copytree(src, dst)
     return src
+
+
+def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
+    """把仓库 skills/ 目录下的内置技能同步进全局技能(应用启动时调用)。
+
+    只插入缺失的技能(按 name 判断),绝不覆盖已安装/被管理员修改过的版本;
+    global-skills 目录已有文件而缺 DB 行时,就地复用目录只补建行。
+    返回本次新装的名字列表。仓库 skills/ 是内置技能的唯一事实来源:
+    部署拉代码后重启,即自带这批技能,无需手工上传。"""
+    from config import AI_WORKSPACE_ROOT
+
+    repo_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', 'skills'))
+    if not os.path.isdir(repo_dir):
+        return []
+
+    root = global_skills_root(workspace_root or AI_WORKSPACE_ROOT)
+    os.makedirs(root, exist_ok=True)
+
+    known = {s['name'] for s in list_global_skills()}
+    installed = []
+    for entry in sorted(os.listdir(repo_dir)):
+        skill_md = os.path.join(repo_dir, entry, 'SKILL.md')
+        if not os.path.isfile(skill_md):
+            continue
+        try:
+            with open(skill_md, encoding='utf-8', errors='replace') as f:
+                head = f.read(4096)
+        except OSError:
+            continue
+        m_name = re.search(r'^name:\s*(.+)$', head, re.M)
+        m_desc = re.search(r'^description:\s*(.+)$', head, re.M)
+        name = (m_name.group(1).strip() if m_name else entry)
+        if name in known:
+            continue
+        description = (m_desc.group(1).strip() if m_desc else '')[:200]
+
+        dest_dir = os.path.join(root, name)
+        if not os.path.isdir(dest_dir):
+            shutil.copytree(os.path.join(repo_dir, entry), dest_dir)
+
+        total_size = sum(
+            os.path.getsize(os.path.join(dirpath, fn))
+            for dirpath, _, fns in os.walk(dest_dir) for fn in fns)
+        with get_db() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "INSERT INTO global_skills (id, name, description, enabled, "
+                    "  file_size, created_at, updated_at) "
+                    "VALUES (%s, %s, %s, TRUE, %s, now(), now()) "
+                    "ON CONFLICT (name) DO NOTHING RETURNING name",
+                    (str(uuid.uuid4()), name, description, total_size),
+                )
+                if cur.fetchone():
+                    installed.append(name)
+    return installed

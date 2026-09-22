@@ -277,6 +277,15 @@ try:
     _m8.run()
 except Exception as _e:
     logging.warning('batch child soft-delete migration on boot failed: %s', _e)
+
+# 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
+try:
+    from utils.global_skills import ensure_builtin_skills
+    _builtin = ensure_builtin_skills()
+    if _builtin:
+        logging.info('builtin skills installed: %s', ', '.join(_builtin))
+except Exception as _e:
+    logging.warning('builtin skills seed on boot failed: %s', _e)
 app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
