@@ -12,6 +12,7 @@ from tools import (
     query_collection, read_data_file, list_export_scripts, run_export_script,
     memory,
     analyze_trace, query_sessions, download_field_files, register_action_check,
+    ai_create_data_page,
 )
 
 _TOOLS = {
@@ -31,6 +32,7 @@ _TOOLS = {
     query_sessions.NAME: (query_sessions.TOOL, query_sessions.handle),
     download_field_files.NAME: (download_field_files.TOOL, download_field_files.handle),
     register_action_check.NAME: (register_action_check.TOOL, register_action_check.handle),
+    ai_create_data_page.NAME: (ai_create_data_page.TOOL, ai_create_data_page.handle),
 }
 
 
