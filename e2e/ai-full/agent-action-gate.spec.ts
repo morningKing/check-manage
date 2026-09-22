@@ -90,7 +90,11 @@ test('对话框动作门禁区块:不完整期望阻断提交(纯 UI)', async ({
   await dialog.locator('label[data-test="gate-enabled"] .el-checkbox__inner').click()
   await expect(dialog.locator('[data-test="gate-extract"]')).toBeVisible()
   await dialog.locator('[data-test="gate-add"]').click()
-  await expect(dialog.locator('.gate-row')).toHaveCount(1)
+  await expect(dialog.locator('.gate-card')).toHaveCount(1)
+  // 子代理定向输入可见可填(页面上直接指定该期望只对哪些子代理生效)
+  const subInput = dialog.locator('.gate-card input[placeholder*="适用子代理"]')
+  await expect(subInput).toBeVisible()
+  await subInput.fill('general, explore')
 
   // 不完整的期望(空名称/空正则)必须阻断提交,且不产生批任务
   await dialog.locator('button[data-test="create-btn"]').click()

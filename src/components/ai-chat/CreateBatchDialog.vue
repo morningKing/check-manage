@@ -2,7 +2,7 @@
   <ElDialog
     :model-value="modelValue"
     @update:model-value="$emit('update:modelValue', $event)"
-    title="新建批任务" width="640px"
+    title="新建批任务" width="760px"
   >
     <div class="batch-create">
       <div class="row">
@@ -72,23 +72,26 @@
                     @click="onExtract">AI 提炼（按 Prompt 与 Skill 步骤生成建议）</ElButton>
         </div>
         <template v-if="gateEnabled">
-          <div v-for="(c, i) in gateChecks" :key="i" class="gate-row" :data-test="`gate-row-${i}`">
-            <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:0 0 150px" />
-            <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
-                      filterable allow-create default-first-option>
-              <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
-            </ElSelect>
+          <div v-for="(c, i) in gateChecks" :key="i" class="gate-card" :data-test="`gate-row-${i}`">
+            <div class="gate-card__line">
+              <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:1" />
+              <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
+                        filterable allow-create default-first-option>
+                <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
+              </ElSelect>
+              <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
+                             style="flex:0 0 100px" />
+              <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
+                        :disabled="gateChecks.length <= 1">删除</ElButton>
+            </div>
             <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
-            <ElInput v-model="c.subagents" placeholder="适用子代理(可选,逗号分隔)" style="flex:0 0 170px" />
-            <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
-                           style="flex:0 0 110px" />
-            <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
-                      :disabled="gateChecks.length <= 1">删除</ElButton>
+            <ElInput v-model="c.subagents"
+                     placeholder="适用子代理(可选,逗号分隔,如: general, explore;留空=对所有子代理生效)" />
           </div>
           <div class="row__inline">
             <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
             <span style="color:var(--el-text-color-placeholder);font-size:11px">
-              核对不过门的子任务将标记失败并写明缺失项;tree 作用域含其全部子代理的动作。
+              核对不过门的子任务将标记失败并写明缺失项;指定子代理时只核对它们的动作,留空则对所有子代理生效。
             </span>
           </div>
         </template>
@@ -362,7 +365,12 @@ function reset() {
 .row label { font-size: 13px; color: var(--el-text-color-secondary); }
 .row__inline { display: flex; gap: 8px; align-items: center; }
 .row--inline { display: flex; flex-direction: row; gap: 12px; align-items: center; }
-.gate-row { display: flex; gap: 6px; align-items: center; }
+.gate-card {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px; background: var(--el-fill-color-lighter);
+}
+.gate-card__line { display: flex; gap: 6px; align-items: center; }
 .files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 200px; overflow: auto; }
 .files li { display: flex; justify-content: space-between; padding: 4px 8px; }
 .files__uploading { color: var(--el-text-color-secondary); }
