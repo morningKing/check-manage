@@ -22,7 +22,7 @@
 /**
  * 首页区块面板
  *
- * 展示现有 7 种可新增区块类型；点击卡片=加到网格底部（emit add-at-bottom），
+ * 展示现有 8 种可新增区块类型；点击卡片=加到网格底部（emit add-at-bottom），
  * 拖拽卡片到网格=由 HomeLayoutEditor 的 drop 处理接收并计算落点坐标。
  */
 import type { Component } from 'vue'
