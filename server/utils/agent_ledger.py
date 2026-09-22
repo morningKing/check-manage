@@ -580,6 +580,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         'require_state': req_state, 'min_count': min_count,
                         'scope': scope, 'evidence': evidence, 'status': status,
                         'check_type': check_type or 'tool',
+                        'effect_spec': effect_spec,
                         'subagents': subagents,
                     })
         overall = 'failed' if any(r['status'] == 'failed' for r in results) \
@@ -590,13 +591,24 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
         return {'status': 'inconclusive', 'results': [], 'error': str(e)[:300]}
 
 
+def _expectation_desc(r: dict) -> str:
+    """单条期望的人类可读描述(按 check_type 分形)。"""
+    ct = r.get('check_type') or 'tool'
+    if ct == 'file':
+        return f"存在文件 {r.get('args_pattern') or (r.get('effect_spec') or {}).get('path', '?')}"
+    if ct == 'db_record':
+        spec = r.get('effect_spec') or {}
+        return f"存在 {spec.get('collection', '?')} 记录({spec.get('filter') or '任意'})"
+    return f"{r.get('tool')} ~ {r.get('args_pattern')}"
+
+
 def gate_failure_message(gate_result: dict) -> str:
     """把 failed 的核对结果压成子任务 error_message(action_gate: 前缀 +
     逐条缺失项),沿用对账器"带准确原因失败"的风格。"""
     missed = [r for r in gate_result.get('results', [])
               if r.get('status') == 'failed']
-    parts = [f"{r['name']}(期望 {r['tool']} ~ {r['args_pattern']},"
-             f"账本命中 {r['evidence']}/{r['min_count']})"
+    parts = [f"{r['name']}(需 {_expectation_desc(r)},"
+             f"实际命中 {r['evidence']}/{r['min_count']})"
              for r in missed]
     return 'action_gate: ' + '; '.join(parts)[:400]
 
