@@ -37,6 +37,7 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  provision_repo: str | None = None,
                  provision_ref: str | None = None,
                  action_checks: list | None = None,
+                 gate_retry: bool | None = None,
                  api_key_id: str | None = None,
                  callback_url: str | None = None,
                  callback_secret: str | None = None) -> dict:
@@ -72,12 +73,13 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
                 "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
-                "   scan_task_id, action_checks) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   scan_task_id, action_checks, gate_retry) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
                  provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
                  scan_task_id,
-                 Json(action_checks) if action_checks else None),
+                 Json(action_checks) if action_checks else None,
+                 gate_retry),
             )
             batch = dict(cur.fetchone())
 
@@ -605,6 +607,7 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         provision_repo: str | None = None,
                         provision_ref: str | None = None,
                         action_checks= _UNSET,
+                        gate_retry= _UNSET,
                         api_key_id: str | None = None,
                         callback_url: str | None = None,
                         callback_secret: str | None = None) -> dict | None:
