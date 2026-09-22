@@ -82,14 +82,16 @@
             </template>
           </el-table-column>
           <el-table-column prop="error" label="错误信息" min-width="220" show-overflow-tooltip />
-          <el-table-column label="操作" width="230" fixed="right">
+          <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
-              <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
-              <el-button link type="warning" :disabled="!isTerminal(row.status)"
-                         @click="onReexecute(row)">重跑</el-button>
-              <el-button link type="danger" :disabled="!isTerminal(row.status)"
-                         @click="onSoftDelete(row)">删除</el-button>
+              <div class="child-actions">
+                <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
+                <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
+                <el-button link type="warning" :disabled="!isTerminal(row.status)"
+                           @click="onReexecute(row)">重跑</el-button>
+                <el-button link type="danger" :disabled="!isTerminal(row.status)"
+                           @click="onSoftDelete(row)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -379,4 +381,6 @@ onUnmounted(() => store.stopPolling())
   margin: 0 0 8px;
 }
 .admin-preview__hint { color: var(--el-text-color-secondary); padding: 12px 0; }
+.child-actions { display: flex; align-items: center; white-space: nowrap; }
+.child-actions .el-button + .el-button { margin-left: 8px; }
 </style>
