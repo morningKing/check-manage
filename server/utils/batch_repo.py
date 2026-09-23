@@ -60,8 +60,7 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     batch reaches a terminal status, instead of requiring the caller to poll.
     Returns {batch, sessions}.
     """
-    if not files:
-        raise ValueError("at least one file required")
+    # 0 文件合法:空批壳,后续 append 填充
     max_files = get_max_files_per_batch()
     if len(files) > max_files:
         raise ValueError(f"max {max_files} files per batch")

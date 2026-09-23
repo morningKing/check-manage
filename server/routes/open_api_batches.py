@@ -367,6 +367,7 @@ def create():
         name=name, prompt=prompt, template_id=None, files=files,
         agent=(body.get('agent') or '').strip() or None,
         model=(body.get('model') or '').strip() or None,
+        action_checks=body.get('actionChecks') or None,
         api_key_id=key['id'],
         callback_url=callback_url,
         callback_secret=callback_secret,
