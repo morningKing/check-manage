@@ -102,7 +102,7 @@
 <text x="64" y="630.5" font-size="10.5" fill="#455a64">调用 LLM Provider 完成推理（外部）</text>
 <rect x="617" y="570" width="545" height="100" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
 <text x="629" y="592" font-size="13" font-weight="700" fill="#1a237e">MCP Server（:3003 · FastAPI）</text>
-<text x="629" y="605" font-size="10.5" fill="#455a64">15 个平台能力工具（Streamable-HTTP）</text>
+<text x="629" y="605" font-size="10.5" fill="#455a64">19 个平台能力工具（Streamable-HTTP）</text>
 <text x="629" y="613.5" font-size="10.5" fill="#455a64">query_collection · read_upload</text>
 <text x="629" y="622.0" font-size="10.5" fill="#455a64">save_artifact · run_python · memory_*</text>
 <text x="629" y="630.5" font-size="10.5" fill="#455a64">analyze_trace · query_sessions</text>
