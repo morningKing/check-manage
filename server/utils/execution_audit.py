@@ -97,8 +97,8 @@ def create_attempt(session_id: str, *, source_type: str, operation: str = 'send'
     def _impl() -> str | None:
         from db import get_db
         attempt_id = 'att_' + secrets.token_hex(6)
-        raw_hash = sha256_text(raw_user_content)
-        eff_hash = sha256_text(effective_prompt)
+        raw_hash = sha256_text(raw_user_content) or sha256_text('')
+        eff_hash = sha256_text(effective_prompt) or sha256_text('')
         eff_len = len(effective_prompt) if isinstance(effective_prompt, str) else None
         a_res = agent_resolution
         m_res = model_resolution
@@ -231,6 +231,14 @@ def record_event(attempt_id: str, event_type: str, *, occurred_at=None,
             occ = datetime.fromtimestamp(occ, tz=timezone.utc)
         with get_db() as conn:
             with conn.cursor() as cur:
+                # P1-5 修复：MAX+1 曾无锁，并发写同一 attempt 会撞
+                # UNIQUE(attempt_id, event_seq) 且被 _safe 吞掉（事件静默丢失）。
+                # 先 FOR UPDATE 锁 attempt 行串行化同一 attempt 的事件追加。
+                cur.execute(
+                    "SELECT id FROM ai_execution_attempts WHERE id=%s FOR UPDATE",
+                    (attempt_id,))
+                if cur.fetchone() is None:
+                    return None  # attempt 不存在（测试桩/已清理），无从挂事件
                 cur.execute(
                     "SELECT COALESCE(MAX(event_seq), 0) + 1 "
                     "FROM ai_execution_events WHERE attempt_id=%s", (attempt_id,))

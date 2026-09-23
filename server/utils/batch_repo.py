@@ -18,9 +18,12 @@ _PREVIEW_UNSET = object()
 BATCH_TERMINAL_STATUSES = ('completed', 'partial', 'failed')
 
 
-def recompute_batch_status_tx(cur, batch_id: str) -> dict:
+def recompute_batch_status_tx(cur, batch_id: str, conn=None) -> dict:
     """在同一事务/游标里重算批次状态并取回（status + 回调字段）。
-    transition_child 用；引擎的 _recompute_batch_status（带回调通知）保持独立。"""
+    transition_child 用；引擎的 _recompute_batch_status（带回调通知）保持独立。
+
+    P1：批次落终态时在同一事务里追加 batch.status 事件并把回调投入
+    delivery outbox（spec §7.1/§7.4）——进程崩溃也不会丢回调。"""
     cur.execute("SELECT done, failed, total FROM ai_chat_batches WHERE id=%s",
                 (batch_id,))
     row = cur.fetchone()
@@ -49,8 +52,26 @@ def recompute_batch_status_tx(cur, batch_id: str) -> dict:
         "WHERE id=%s RETURNING status, done, failed, total, "
         "callback_url, callback_secret",
         (status, done + failed, batch_id))
-    return dict(zip(('status', 'done', 'failed', 'total',
-                     'callback_url', 'callback_secret'), cur.fetchone()))
+    out = dict(zip(('status', 'done', 'failed', 'total',
+                    'callback_url', 'callback_secret'), cur.fetchone()))
+    if out.get('status') in BATCH_TERMINAL_STATUSES and conn is not None:
+        from utils import batch_events as _be
+        from utils import delivery_outbox as _outbox
+        eid = _be.append_event(
+            batch_id, 'batch.status', aggregate_type='batch',
+            aggregate_id=batch_id,
+            payload={'status': out['status'], 'done': out['done'],
+                     'failed': out['failed'], 'total': out['total']},
+            conn=conn)
+        if out.get('callback_url') and _outbox.outbox_enabled():
+            _outbox.enqueue(
+                batch_id, target_url=out['callback_url'],
+                payload={'event': 'ai_batch_completed', 'batchId': batch_id,
+                         'status': out['status'], 'total': out['total'],
+                         'done': out['done'], 'failed': out['failed']},
+                secret=out.get('callback_secret') or '', event_id=eid,
+                conn=conn)
+    return out
 
 
 def transition_child(session_id: str, new_status: str, *, generation: int,
@@ -61,7 +82,8 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                      expect_cancel: bool | None = False,
                      expect_pause: bool | None = False,
                      count: str | None = None,
-                     turn_status: str | None = None) -> dict | None:
+                     turn_status: str | None = None,
+                     fencing_token: int | None = None) -> dict | None:
     """P0 CAS 终态转移（ai-harness-p0 spec §6.1）——终态写入的唯一入口。
 
     WHERE 带 status='running' + execution_generation + cancel/pause 标志期望；
@@ -97,12 +119,14 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                    AND execution_generation = %s
                    AND (%s IS NULL OR cancel_requested = %s)
                    AND (%s IS NULL OR pause_requested = %s)
+                   AND (%s IS NULL OR fencing_token = %s)
                 RETURNING id, batch_id
                 """,
                 (new_status, error_message, preview, gate_status, gate_error,
                  gate_status, session_id, generation,
                  expect_cancel, bool(expect_cancel),
-                 expect_pause, bool(expect_pause)),
+                 expect_pause, bool(expect_pause),
+                 fencing_token, fencing_token),
             )
             row = cur.fetchone()
             if not row:
@@ -115,7 +139,17 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
             elif batch_id and count == 'failed':
                 cur.execute("UPDATE ai_chat_batches SET failed = failed + 1 "
                             "WHERE id = %s", (batch_id,))
-            batch = recompute_batch_status_tx(cur, batch_id) if batch_id else {}
+            batch = recompute_batch_status_tx(cur, batch_id, conn=conn) \
+                if batch_id else {}
+            # P1：child.status 事件与状态写入同事务（spec §7.1）
+            if batch_id:
+                from utils import batch_events as _be
+                _be.append_event(batch_id, 'child.status',
+                                 aggregate_type='child', aggregate_id=sid,
+                                 execution_generation=generation,
+                                 payload={'status': new_status,
+                                          'gateStatus': gate_status},
+                                 conn=conn)
             if turn_status:
                 cur.execute(
                     "UPDATE ai_chat_turns SET status = %s, finished_at = NOW(), "

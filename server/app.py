@@ -291,6 +291,19 @@ try:
 except Exception as _e:
     logging.warning('harness p0 migration on boot failed: %s', _e)
 
+# AI Harness P1 持久化执行（2026-09-23）：执行租约列 / attempt 列与唯一索引 /
+# checkpoints / effects / commands / batch_events / delivery_outbox / budgets /
+# usage。随启动幂等执行。
+try:
+    _mp10 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_23_harness_p1_durable_execution.py')
+    _spec10 = _ilu.spec_from_file_location('_harness_p1_boot', _mp10)
+    _m10 = _ilu.module_from_spec(_spec10)
+    _spec10.loader.exec_module(_m10)
+    _m10.run()
+except Exception as _e:
+    logging.warning('harness p1 migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -343,6 +356,11 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
     from utils.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
+
+    # P1：outbox 投递器（持 delivery 租约；AI_DELIVERY_OUTBOX_ENABLED=0 时回退
+    # 旧直接 POST 回调路径，见 utils/delivery_outbox.py）
+    from utils.delivery_outbox import start_delivery_loop
+    start_delivery_loop()
 
 # F12（ai-harness-p0 spec §9）：审计 retention 任务此前注册了两次（SkillOpt
 # 启动块内一个 scheduler + 下面 _start_audit_retention_job 又一个 scheduler），

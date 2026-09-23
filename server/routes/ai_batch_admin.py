@@ -368,3 +368,21 @@ def child_file_diff(batch_id, sid):
     except WorkspacePathError:
         return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
     return jsonify(file_diff(sess['workspace_path'], rel))
+
+@ai_batch_admin_bp.get('/batches/<batch_id>/deliveries')
+@require_permission('admin.ai_chat_admin')
+def deliveries(batch_id):
+    """outbox 投递状态（P1 §10 管理面）。"""
+    from utils.delivery_outbox import list_outbox
+    return jsonify({'batchId': batch_id, 'deliveries': list_outbox(batch_id)})
+
+
+@ai_batch_admin_bp.post('/deliveries/<oid>/replay')
+@require_permission('admin.ai_chat_admin')
+def delivery_replay(oid):
+    """人工重放：dead_letter/failed → pending。"""
+    from utils.delivery_outbox import replay_dead_letter, list_outbox_by_id
+    if not replay_dead_letter(oid):
+        return jsonify({'error': 'deliveries 不存在或状态不允许重放'}), 404
+    return jsonify({'id': oid, 'status': 'pending',
+                    'row': list_outbox_by_id(oid)})

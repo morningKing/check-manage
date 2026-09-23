@@ -494,3 +494,122 @@ def reexecute(batch_id, session_id):
     from utils.batch_engine import get_worker
     get_worker().notify()
     return jsonify(result)
+
+# ---------------------------------------------------------------------------
+# P1 事件流 / attempt 链（spec §7.2/§8.1）
+# ---------------------------------------------------------------------------
+
+@ai_chat_batches_bp.get('/<batch_id>/events')
+@login_required
+def batch_events_page(batch_id):
+    """事件分页（管理/排障用）：与对外 /v1/ai-batches/<id>/events 同一事实源。"""
+    from utils import batch_events
+    body = get_batch_detail(g.current_user['userId'], batch_id)
+    if not body:
+        return jsonify({'error': 'not found'}), 404
+    try:
+        after_seq = max(0, int(request.args.get('afterSeq', 0)))
+        limit = min(max(1, int(request.args.get('limit', 100))), 500)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'afterSeq 与 limit 必须是整数'}), 400
+    rows = batch_events.read_events(batch_id, after_seq=after_seq, limit=limit)
+    return jsonify({'batchId': batch_id, 'events': rows,
+                    'nextAfterSeq': rows[-1]['event_seq'] if rows else after_seq,
+                    'hasMore': len(rows) >= limit})
+
+
+@ai_chat_batches_bp.get('/<batch_id>/attempts')
+@login_required
+def batch_attempts(batch_id):
+    """attempt 链（P1 §8.1）：批下全部子任务的执行尝试 + 租约/心跳/恢复原因。"""
+    from db import get_db as _get_db
+    if not get_batch_detail(g.current_user['userId'], batch_id):
+        return jsonify({'error': 'not found'}), 404
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.id, a.session_id, a.attempt_no, a.parent_attempt_id, "
+                "a.operation, a.status, a.error_code, a.recovery_reason, "
+                "a.lease_owner, a.lease_until, a.heartbeat_at, a.fencing_token, "
+                "a.started_at, a.finished_at "
+                "FROM ai_execution_attempts a "
+                "JOIN ai_chat_sessions s ON s.id = a.session_id "
+                "WHERE s.batch_id = %s "
+                "ORDER BY s.batch_seq, a.attempt_no", (batch_id,))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        for k in ('lease_until', 'heartbeat_at', 'started_at', 'finished_at'):
+            if r.get(k) is not None:
+                r[k] = r[k].isoformat()
+    return jsonify({'batchId': batch_id, 'attempts': rows})
+
+
+@ai_chat_batches_bp.get('/events')
+@login_required
+def batch_events_sse():
+    """批次事件流 SSE（P1 spec §7.2）。
+
+    - 帧类型：batch_event（带 eventId/eventSeq）/ batch_done / : ping（15s）；
+    - 断线重连：Last-Event-ID（或 ?afterSeq=）从该位置补发；
+    - 30 分钟硬上限关流；非归属批次静默剔除（login_required_sse + 逐 id 过滤）。
+    """
+    import json as _json
+    import time as _time
+    from flask import Response, stream_with_context
+    ids = [i.strip() for i in (request.args.get('ids') or '').split(',') if i.strip()][:20]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    user_id = g.current_user['userId']
+    owned = []
+    for bid in ids:
+        if get_batch_detail(user_id, bid):
+            owned.append(bid)
+    try:
+        after = {bid: max(0, int(request.args.get('afterSeq', 0))) for bid in owned}
+    except (TypeError, ValueError):
+        after = {bid: 0 for bid in owned}
+    last_event_id = request.headers.get('Last-Event-ID') or ''
+
+    def generate():
+        from utils import batch_events
+        yield ': connected\n\n'
+        # Last-Event-ID 形如 "<batchId>:<seq>"——重连时按批次恢复游标
+        if last_event_id and ':' in last_event_id:
+            lbid, _, lseq = last_event_id.rpartition(':')
+            if lbid in after:
+                try:
+                    after[lbid] = max(after[lbid], int(lseq))
+                except ValueError:
+                    pass
+        deadline = _time.time() + 30 * 60
+        while _time.time() < deadline:
+            for bid in owned:
+                rows = batch_events.read_events(bid, after_seq=after[bid],
+                                                limit=200)
+                for r in rows:
+                    after[bid] = r['event_seq']
+                    frame = {'eventId': f"{bid}:{r['event_seq']}",
+                             'eventSeq': r['event_seq'],
+                             'type': r['event_type'],
+                             'data': r.get('payload') or {}}
+                    yield (f"event: batch_event\n"
+                           f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
+            # 终态检查：全部批次终态 → batch_done 收流
+            statuses = []
+            for bid in owned:
+                d = get_batch_detail(user_id, bid)
+                statuses.append(d['batch']['status'] if d else 'completed')
+            if statuses and all(st in ('completed', 'partial', 'failed')
+                                for st in statuses):
+                done_frame = _json.dumps({'statuses': dict(zip(owned, statuses))})
+                yield f"event: batch_done\ndata: {done_frame}\n\n"
+                return
+            yield ': ping\n\n'
+            _time.sleep(3)
+
+    resp = Response(stream_with_context(generate()),
+                    mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp
