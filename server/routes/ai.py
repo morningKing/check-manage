@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
 from utils.ai_query import nl_to_mongo_filter, get_ai_settings, update_ai_settings
+from utils.operation_log import log_operation
 from utils.memory import (
     reset_memory_singleton, list_memories, delete_memory, add_memory_text, get_memory,
 )
@@ -120,6 +121,9 @@ def put_settings():
     key = settings.get('apiKey', '')
     if len(key) > 4:
         settings['apiKey'] = '*' * (len(key) - 4) + key[-4:]
+    log_operation('update', 'ai_settings', 'ai-settings', 'AI 配置',
+                  f'更新 AI 配置(enabled={enabled}, model={model}, endpoint={endpoint}, '
+                  f'mem0={mem0_enabled}, 批任务上限={max_batch_sessions};API Key 明文不记录)')
     return jsonify(settings)
 
 
@@ -157,6 +161,8 @@ def delete_my_memory(memory_id):
     if memory_id not in owned:
         return jsonify({'error': 'not found'}), 404
     delete_memory(memory_id)
+    log_operation('delete', 'ai_memory', memory_id, memory_id,
+                  f'删除用户长期记忆(user={user["userId"]})')
     return jsonify({'ok': True})
 
 
@@ -221,6 +227,9 @@ def update_internal_mcp():
     body = request.get_json(silent=True) or {}
     enabled = set_internal_mcp_enabled(bool(body.get('enabled', True)))
     from config import MCP_SERVER_URL
+    state_text = '启用' if enabled else '停用'
+    log_operation('update', 'ai_mcp_internal', 'check-manage', '内置 MCP',
+                  f'{state_text}内置 MCP Server(check-manage)')
     return jsonify({'enabled': enabled, 'name': 'check-manage', 'url': MCP_SERVER_URL})
 
 
@@ -229,9 +238,12 @@ def update_internal_mcp():
 def create_mcp_server():
     body = request.get_json(silent=True) or {}
     try:
-        return jsonify(create_server(**_mcp_payload(body))), 201
+        row = create_server(**_mcp_payload(body))
     except McpServerError as e:
         return jsonify({'error': str(e)}), 400
+    log_operation('create', 'ai_mcp_server', row.get('id'), row.get('name'),
+                  f'新增外部 MCP Server「{row.get("name")}」')
+    return jsonify(row), 201
 
 
 @ai_bp.route('/mcp-servers/<server_id>', methods=['PUT'])
@@ -244,12 +256,18 @@ def update_mcp_server(server_id):
         return jsonify({'error': str(e)}), 400
     if row is None:
         return jsonify({'error': 'not found'}), 404
+    log_operation('update', 'ai_mcp_server', server_id, row.get('name'),
+                  f'更新外部 MCP Server「{row.get("name")}」')
     return jsonify(row)
 
 
 @ai_bp.route('/mcp-servers/<server_id>', methods=['DELETE'])
 @require_permission('admin.ai_settings')
 def delete_mcp_server(server_id):
+    row = get_server(server_id)
     if not delete_server(server_id):
         return jsonify({'error': 'not found'}), 404
+    log_operation('delete', 'ai_mcp_server', server_id,
+                  (row or {}).get('name') if isinstance(row, dict) else server_id,
+                  f'删除外部 MCP Server {server_id}')
     return jsonify({'ok': True})

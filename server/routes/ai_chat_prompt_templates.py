@@ -3,6 +3,7 @@ from flask import Blueprint, g, jsonify, request
 
 from auth import login_required
 from utils.agent_ledger import validate_checks
+from utils.operation_log import log_operation
 from utils.prompt_template import (
     DuplicateTemplateName,
     create_template,
@@ -53,6 +54,8 @@ def create():
                               content=content, action_checks=checks)
     except DuplicateTemplateName:
         return jsonify({'error': 'name already in use'}), 409
+    log_operation('create', 'ai_prompt_template', row.get('id'), name,
+                  '新建提示词模板')
     return jsonify(row), 201
 
 
@@ -80,6 +83,8 @@ def update(template_id):
         return jsonify({'error': 'name already in use'}), 409
     if not row:
         return jsonify({'error': 'not found'}), 404
+    log_operation('update', 'ai_prompt_template', template_id, name,
+                  '更新提示词模板')
     return jsonify(row)
 
 
@@ -88,4 +93,6 @@ def update(template_id):
 def delete(template_id):
     if not delete_template(g.current_user['userId'], template_id):
         return jsonify({'error': 'not found'}), 404
+    log_operation('delete', 'ai_prompt_template', template_id, template_id,
+                  '删除提示词模板')
     return '', 204

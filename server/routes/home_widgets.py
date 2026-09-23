@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from db import get_db
 from auth import login_required, require_permission
+from utils.operation_log import log_operation
 from utils.permissions import can_admin
 import psycopg2.extras
 import json
@@ -111,6 +112,10 @@ def batch_update_home_widgets():
     if not widgets:
         return jsonify({"error": "widgets array is required"}), 400
 
+    log_operation('update', 'home_widget', ','.join(w.get('id', '') for w in widgets) or '-',
+                  f'批量更新 {len(widgets)} 个首页区块',
+                  f'批量更新首页区块配置(共 {len(widgets)} 个)')
+
     with get_db() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
@@ -174,6 +179,9 @@ def create_home_widget():
     )
     if widget_type not in allowed_types:
         return jsonify({"error": f"Widget type must be one of: {', '.join(allowed_types)}"}), 400
+
+    log_operation('create', 'home_widget', widget_type, body.get('title') or widget_type,
+                  f'新增首页区块(widgetType={widget_type})')
 
     layout = body.get('layout')
     if layout is not None:
@@ -255,6 +263,8 @@ def delete_home_widget(widget_id):
             return jsonify({"error": "Widget not found"}), 404
         conn.commit()
 
+    log_operation('delete', 'home_widget', widget_id, widget_id,
+                  f'删除首页区块 {widget_id}')
     return jsonify({"success": True})
 
 
@@ -272,6 +282,9 @@ def update_home_widgets_layout():
 
     if not layout:
         return jsonify({"error": "layout array is required"}), 400
+
+    log_operation('update', 'home_widget_layout', '-',
+                  f'调整 {len(layout)} 个区块的网格布局', '-')
 
     for item in layout:
         widget_id = item.get('id')

@@ -15,6 +15,7 @@ import logging
 from flask import Blueprint, g as flask_g, jsonify, request
 from db import get_db
 from auth import require_permission, require_permission_sse
+from utils.operation_log import log_operation
 from utils.session_admin_repo import (
     admin_get_session_detail,
     admin_get_session_messages,
@@ -159,6 +160,8 @@ def analyze_session(session_id):
     Creates a new analysis session with the trace-analyzer skill injected,
     sends an analysis prompt, and returns the new session ID.
     """
+    log_operation('run', 'ai_trace_analysis', session_id, session_id,
+                  '管理员触发 AI 会话执行轨迹分析（产生 LLM 调用成本）')
     from config import AI_WORKSPACE_ROOT, OPENCODE_BASE_URL, MCP_SERVER_URL, get_default_chat_model
     from utils.opencode_client import OpenCodeClient
     from utils.workspace import create_session_workspace, write_opencode_config
@@ -704,6 +707,8 @@ def suggestion_feedback(diagnosis_id, suggestion_id):
     action = body.get('action')
     if action not in ('accepted', 'rejected', 'modified', 'applied', 'rolled_back'):
         return jsonify({'error': '无效 action'}), 400
+    log_operation('update', 'ai_suggestion_feedback', suggestion_id,
+                  f'SkillOpt 建议反馈 {action}（诊断 {diagnosis_id}）')
     from db import get_db
     import secrets as _sec
     with get_db() as conn:

@@ -14,6 +14,7 @@ import os
 from flask import Blueprint, g, jsonify, request
 from auth import require_permission
 from config import AI_WORKSPACE_ROOT
+from utils.operation_log import log_operation
 from utils.global_skills import (
     delete_global_skill,
     get_global_skill,
@@ -77,6 +78,8 @@ def create_skill():
         tmp.close()
         user_id = g.current_user.get('userId') or g.current_user.get('id')
         skill = install_skill_from_zip(tmp.name, description, user_id, AI_WORKSPACE_ROOT)
+        log_operation('create', 'ai_skill', skill['id'], skill['name'],
+                      f'上传全局技能「{skill["name"]}」({skill.get("file_size", 0)} 字节)')
         return jsonify(_row_out(skill)), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -100,15 +103,23 @@ def update_skill(skill_id):
     skill = update_global_skill(skill_id, description=description, enabled=enabled)
     if not skill:
         return jsonify({'error': '技能不存在'}), 404
+    log_operation('update', 'ai_skill', skill_id, skill.get('name'),
+                  f'更新全局技能「{skill.get("name")}」'
+                  f'(description={description is not None}, enabled={enabled})')
     return jsonify(_row_out(skill))
 
 
 @ai_skills_bp.delete('/<skill_id>')
 @require_permission('admin.ai_settings')
 def delete_skill(skill_id):
+    skill = get_global_skill(skill_id)
+    if not skill:
+        return jsonify({'error': '技能不存在'}), 404
     ws = AI_WORKSPACE_ROOT
     if not delete_global_skill(skill_id, ws):
         return jsonify({'error': '技能不存在'}), 404
+    log_operation('delete', 'ai_skill', skill_id, skill.get('name'),
+                  f'删除全局技能「{skill.get("name")}」')
     return jsonify({'deleted': True})
 
 
