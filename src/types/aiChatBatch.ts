@@ -20,6 +20,10 @@ export interface AiChatBatch {
    *  (ai_scan_engine.run_task), not a user via 新建批任务/对外 API.
    *  Drives the "AI定时任务" sidebar section in AiChatView.vue. */
   scan_task_id?: string | null
+  /** 动作门禁期望(创建/编辑时保存,设计 §5.2 入口 A/B) */
+  action_checks?: Array<Record<string, unknown>> | null
+  /** 门禁不过时自动修正开关(设计 §5.4) */
+  gate_retry?: boolean | null
   status: BatchStatus
   total: number
   done: number
@@ -33,8 +37,6 @@ export interface AiChatBatch {
   paused?: number
   created_at: string
   completed_at: string | null
-  /** 动作门禁期望(创建/编辑时保存) */
-  action_checks?: Array<Record<string, unknown>> | null
 }
 
 export interface AiChatBatchSession {
