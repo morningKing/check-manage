@@ -349,8 +349,7 @@ def create():
         return err('name 与 prompt 均为必填', INVALID_ARGUMENT, 400)
     if len(prompt) > MAX_PROMPT_CHARS:
         return err(f'prompt 超过 {MAX_PROMPT_CHARS} 字符的上限', INVALID_ARGUMENT, 400)
-    if not isinstance(files, list) or not files:
-        return err('请至少提供一个文件', INVALID_ARGUMENT, 400)
+    # 0 文件合法:空批壳(后续 append 填充),不再强制至少 1 文件
     max_files = get_max_files_per_batch()
     if len(files) > max_files:
         return err(f'单批最多 {max_files} 个文件', INVALID_ARGUMENT, 400)
