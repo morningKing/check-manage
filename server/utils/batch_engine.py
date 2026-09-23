@@ -768,7 +768,8 @@ class BatchWorker:
                     "  SELECT id FROM ai_chat_sessions "
                     "   WHERE status = 'pending' "
                     "     AND deleted_at IS NULL "
-                    "     AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL) "
+                    "     AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL "
+                    "          OR orchestration_run_id IS NOT NULL) "
                     "     AND NOT EXISTS ( "
                     "       SELECT 1 FROM ai_execution_budgets b "
                     "        WHERE b.scope_type = 'batch' AND b.scope_id = ai_chat_sessions.batch_id "
@@ -1256,6 +1257,16 @@ class BatchWorker:
             # （best-effort，失败不影响子任务本身的状态落库）。
             if ws:
                 self._record_workspace_files(sid, ws)
+            # P2：编排子会话终态 → 通知编排引擎推进 DAG（best-effort）。
+            if session_row.get('orchestration_run_id'):
+                try:
+                    from utils import orchestration_engine
+                    orchestration_engine.on_child_terminal(
+                        session_row['orchestration_run_id'],
+                        session_row.get('orchestration_step_id') or sid, sid)
+                except Exception:
+                    logger.warning('orchestration advance failed sid=%s', sid,
+                                   exc_info=True)
             # P1：usage 累计 + 预算判定 + turn_complete checkpoint（全 best-effort，
             # 失败只记日志——观测/预算绝不反过来打断执行收口）。
             try:

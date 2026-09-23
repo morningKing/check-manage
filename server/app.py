@@ -51,6 +51,9 @@ from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.ai_data_internal import ai_data_internal_bp
+from routes.ai_orchestrations import ai_orchestrations_bp
+from routes.ai_approvals import ai_approvals_bp
+from routes.artifacts import artifacts_bp
 from routes.data_files import data_files_bp
 from routes.roles import roles_bp
 from routes.workflows import workflows_bp
@@ -304,6 +307,18 @@ try:
 except Exception as _e:
     logging.warning('harness p1 migration on boot failed: %s', _e)
 
+# AI Harness P2 编排（2026-09-23）：orchestration 定义/run/step、审批、产物、
+# runtime manifest、会话关联列。随启动幂等执行。
+try:
+    _mp11 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_23_harness_p2_orchestration.py')
+    _spec11 = _ilu.spec_from_file_location('_harness_p2_boot', _mp11)
+    _m11 = _ilu.module_from_spec(_spec11)
+    _spec11.loader.exec_module(_m11)
+    _m11.run()
+except Exception as _e:
+    logging.warning('harness p2 migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -317,6 +332,9 @@ app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
 app.register_blueprint(ai_data_internal_bp)
+app.register_blueprint(ai_orchestrations_bp)
+app.register_blueprint(ai_approvals_bp)
+app.register_blueprint(artifacts_bp)
 app.register_blueprint(data_files_bp)
 app.register_blueprint(roles_bp)
 app.register_blueprint(workflows_bp)
@@ -361,6 +379,10 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     # 旧直接 POST 回调路径，见 utils/delivery_outbox.py）
     from utils.delivery_outbox import start_delivery_loop
     start_delivery_loop()
+
+    # P2：编排调度器（持 scheduler 租约：DAG 推进 + 审批超时）
+    from utils.orchestration_engine import start_scheduler
+    start_scheduler()
 
 # F12（ai-harness-p0 spec §9）：审计 retention 任务此前注册了两次（SkillOpt
 # 启动块内一个 scheduler + 下面 _start_audit_retention_job 又一个 scheduler），
