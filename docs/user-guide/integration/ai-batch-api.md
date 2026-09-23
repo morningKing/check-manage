@@ -136,6 +136,12 @@ curl -s -X POST \
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download?path=...` | 下载子会话工作区中的单个文件 |
 | GET | `/api/v1/ai-batches/{batchId}/sessions/{childId}/files/download-all` | 打包下载子会话所有新增/修改文件（ZIP） |
 | POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/continue` | 在已完成/失败的子会话上继续对话（保留历史） |
+| POST | `/api/v1/ai-batches/{batchId}/pause` | 暂停整批排队/运行中的子任务（**2026-09-23 新增**） |
+| POST | `/api/v1/ai-batches/{batchId}/resume` | 继续执行已暂停/已中断的批任务（**2026-09-23 新增**） |
+| POST | `/api/v1/ai-batches/{batchId}/sessions/{childId}/cancel` | 取消单个子会话（**2026-09-23 新增**） |
+| POST | `/api/v1/ai-batches/{batchId}/commands` | 通用命令入口，要求 `Idempotency-Key`（**2026-09-23 新增**） |
+| GET | `/api/v1/ai-batches/{batchId}/commands/{commandId}` | 查询命令状态（**2026-09-23 新增**） |
+| GET | `/api/v1/ai-batches/{batchId}/events` | 批任务事件增量读取（`afterSeq`，**2026-09-23 新增**） |
 
 以上全部接口都要求请求头携带 `X-API-Key`，且密钥必须已绑定用户（见第 2 节），否则返回 401/403。
 
@@ -144,7 +150,7 @@ curl -s -X POST \
 | 参数 | 说明 | 如何获取 |
 |------|------|---------|
 | `batchId` | 批任务 ID | 创建批任务时（4.2）响应中的 `batchId` 字段，或列出批任务（4.3）响应中每个条目的 `batchId` |
-| `childId` | 子会话标识 | 通过 `/results`（4.5）或 `/file-records`（4.9）响应中的 `name`（文件名）或 `seq`（序号）获取。两种方式等价：`childId` 为纯数字时按序号匹配，否则按文件名匹配。例如 `/results` 返回 `"name": "report1.pdf"`，则 `/sessions/report1.pdf/messages` 和 `/sessions/1/messages` 定位的是同一个子会话 |
+| `childId` | 子会话标识 | 三种寻址等价（**2026-09-23 起新增第三种**）：`/results`（4.5）与 `/file-records`（4.9）响应中的 `childId`（不透明子会话 ID，推荐——同名文件不再有歧义）、`name`（文件名）、`seq`（序号，`childId` 为纯数字时按序号匹配）。例如 `/results` 返回 `"childId": "99e…", "name": "report1.pdf"`，则 `/sessions/99e…/messages`、`/sessions/report1.pdf/messages`、`/sessions/1/messages` 定位同一个子会话 |
 
 ---
 
@@ -496,8 +502,16 @@ GET /api/v1/ai-batches/{batchId}/results
 ### 4.6 删除批任务
 
 ```
-DELETE /api/v1/ai-batches/{batchId}
+DELETE /api/v1/ai-batches/{batchId}?stop=true|false
 ```
+
+**⚠️ 2026-09-23 起为破坏性变更（stop-first 语义）**：非终态批任务不再允许直接删除——此前直接删除会让运行中的 AI 回合继续执行并把结果写向已删除的任务（幽灵执行）。
+
+| 场景 | 行为 |
+|------|------|
+| 终态批次（`completed`/`partial`/`failed`） | 直接清理工作区并删除，`200 {"deleted": true}` |
+| 非终态、未带 `stop=true` | `409`，错误 `code: BATCH_NOT_TERMINAL`，**不产生任何副作用** |
+| 非终态、`stop=true` | 先取消整批 → 有界等待（10 秒）运行中子任务收敛 → 收敛后清理删除，`200 {"deleted": true}`；等待超时则 `409`，错误 `code: BATCH_DRAIN_TIMEOUT`（可重试），**任务与工作区保留** |
 
 **响应 — 200**
 
@@ -505,9 +519,15 @@ DELETE /api/v1/ai-batches/{batchId}
 { "deleted": true }
 ```
 
-**⚠️ 不可逆**：会清理该批任务下每个子任务的 AI 会话工作区，并删除数据库记录（含全部处理结果）。删除前如果还需要结果，请先调用 4.5 取回。
+**⚠️ 不可逆**：删除会清理该批任务下每个子任务的 AI 会话工作区，并删除数据库记录（含全部处理结果）。删除前如果还需要结果，请先调用 4.5 取回。
 
-**错误响应**：与 4.4 相同（404）。
+**错误响应**
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 404 | `batchId` 不存在或不属于本密钥 |
+| 409（`BATCH_NOT_TERMINAL`） | 非终态批次未带 `stop=true` |
+| 409（`BATCH_DRAIN_TIMEOUT`，可重试） | `stop=true` 等待运行中子任务停止超时（任务保留） |
 
 ---
 
@@ -1297,3 +1317,98 @@ curl -s -X POST \
 **Q: `continue` 后原来的 prompt 还在吗？**
 
 在。`continue` 不会修改或删除原始 prompt，新 prompt 作为新的一轮用户消息追加到对话末尾。AI 能看到完整的对话历史（包括原始 prompt 和所有回复），然后根据新 prompt 继续工作。
+
+---
+
+## 11. 控制面与事件流（2026-09-23 新增）
+
+本节为 AI Harness P1 交付的增量能力：暂停/恢复、单子任务取消、统一命令入口与事件流。
+全部沿用既有鉴权（`X-API-Key`）与密钥隔离语义。
+
+### 11.1 暂停 / 恢复
+
+```
+POST /api/v1/ai-batches/{batchId}/pause
+POST /api/v1/ai-batches/{batchId}/resume
+```
+
+- `pause`：排队/运行中的子任务协作式暂停（运行中的回合被中止后落在非终态 `paused`，不占 `failed` 计数）；
+- `resume`：`paused`/`cancelled` 子任务恢复为待执行——已开跑过的在原 OpenCode 会话/工作区续跑（保留全部历史）；
+- 每次调用在服务端登记一条命令记录（幂等键为「命令类型+批次+调用方」），重复提交不会重复执行。
+
+**响应**：字段同 4.4。错误：404（批次不存在/不属于本密钥）、409（终态批次无可暂停/恢复对象）。
+
+### 11.2 取消单个子会话
+
+```
+POST /api/v1/ai-batches/{batchId}/sessions/{childId}/cancel
+```
+
+- `pending` → 直接取消；`running` → 协作式中断；`paused` → 同步落为 `cancelled`；
+- 取消的子任务计入 `failed` 聚合（与整批 cancel 一致），自身 `status` 忠实记录 `cancelled`。
+
+**响应 — 200**
+
+```json
+{ "batchId": "…", "childId": "…", "name": "report1.pdf", "seq": 0, "status": "cancelled" }
+```
+
+### 11.3 通用命令入口（幂等）
+
+```
+POST /api/v1/ai-batches/{batchId}/commands
+Idempotency-Key: <调用方生成的唯一键（必填）>
+```
+
+```json
+{ "type": "pause" }
+```
+
+`type` 支持：`pause` / `resume` / `cancel` / `retry`（等价 retry-failed）。
+
+- **幂等**：相同 `Idempotency-Key` 重复提交返回既有命令（HTTP 200，不重复执行）；
+  首次提交返回 202。
+- **响应**：
+
+```json
+{ "commandId": "cmd_…", "duplicate": false, "status": "applied", "result": "paused" }
+```
+
+- **命令状态查询**：`GET /api/v1/ai-batches/{batchId}/commands/{commandId}`，
+  返回命令全生命周期（`accepted → applied/rejected` + 结果快照/错误码）。
+
+| HTTP 状态码 | 触发条件 |
+|-------------|---------|
+| 400（`COMMAND_REJECTED`） | 缺 `type` 或缺 `Idempotency-Key` |
+| 404 | 批次/命令不存在或不属于本密钥 |
+| 409 | 命令前置状态不允许（如终态批次 `pause`） |
+
+### 11.4 事件流
+
+```
+GET /api/v1/ai-batches/{batchId}/events?afterSeq=<n>&limit=<n>
+```
+
+批次与子任务状态变化都会追加为事件（与状态写入同一事务，不丢事件）：
+
+```json
+{
+  "batchId": "…",
+  "events": [
+    { "eventId": "bevt_…", "eventSeq": 12, "type": "child.status",
+      "at": "2026-09-23T10:12:00", "data": { "status": "completed" } }
+  ],
+  "nextAfterSeq": 12,
+  "hasMore": false
+}
+```
+
+- `afterSeq` 语义：返回 `event_seq > afterSeq` 的事件（升序）；客户端按 `eventId` 幂等合并，断线后携带上次最大 `eventSeq` 续读即可无漏回放；
+- 事件类型包括 `batch.status` / `child.status` / `child.recovered` / `budget.exceeded` / `command.applied` / `delivery.sent|failed` 等；
+- 事件不外泄内部实现字段（OpenCode 会话 id、工作区路径等）。
+
+### 11.5 创建/修改时的 actionChecks 校验
+
+创建（4.2）与修改（4.2a）批任务时，`actionChecks` 现在与内部接口同一道校验
+（名称/正则可编译性/`apply_to` 形状等），非法直接 `400`，错误码
+`ACTION_CHECK_INVALID`——不再"带病入库后门禁形同虚设"。
