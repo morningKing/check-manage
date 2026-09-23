@@ -827,7 +827,9 @@ def send_message(sid):
     # 否则同一 OpenCode 会话并发两个 turn：消息顺序错乱、完成判定竞态、
     # pause/cancel 失效、门禁核对时机不确定。终态子会话放行（人工在原会话上
     # 继续），前端会改走批任务 continue 端点，这里保留兼容。
-    if sess[5] and sess[3] in ('pending', 'running', 'paused'):
+    _sess_batch_id = sess[5] if len(sess) > 5 else None
+    _sess_status = sess[3] if len(sess) > 3 else None
+    if _sess_batch_id and _sess_status in ('pending', 'running', 'paused'):
         return jsonify({'error': {
             'code': 'BATCH_SESSION_CONTROLLED',
             'message': '批任务子会话正在由后台执行器控制，'

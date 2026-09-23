@@ -153,11 +153,17 @@ def test_requeued_standalone_reruns_with_original_prompt(db_conn, user_id,
               list_messages=staticmethod(lambda oc, directory='': [_DONE_MSG]))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
 
+    # P0 CAS：终态写回要求 status='running'（真实 claim 后的状态）
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid,))
+    db_conn.commit()
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': None,
                      'batch_input_file': None, 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path),
-                     'continue_prompt': PROMPT, 'agent': '', 'model': ''})
+                     'continue_prompt': PROMPT, 'agent': '', 'model': '',
+                     'execution_generation': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'completed'
