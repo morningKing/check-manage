@@ -779,7 +779,11 @@ watch(() => messages.value.length, () => onChatNewMessage())
 watch(() => messages.value.map(m => m.content.map(c => (c as any).text || '').join()).join('|'), () => onChatStreamDelta())
 watch(reasoning, () => onChatStreamDelta())
 // 切换会话：恢复贴底并滚到最新（消息异步加载后由长度 watch 再次跟随）
-watch(activeId, () => { void pinToBottom() })
+watch(activeId, () => {
+  void pinToBottom()
+  // 切换会话时清空输入框——输入草稿不跨会话共享
+  input.value = ''
+})
 
 // Live view for a running batch child: its work is persisted incrementally on
 // the server but not pushed over SSE, so poll its messages while it runs. The
