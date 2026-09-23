@@ -729,7 +729,14 @@ def test_run_one_recovery_failure_marks_failed_with_recovery_error(user_id, db_c
         cur.execute("UPDATE ai_chat_sessions SET status='running', retry_count=2 "
                     "WHERE id = %s", (sids[0],))
     db_conn.commit()
-    w._run_one(dict(claimed[0], status='running', retry_count=2))
+    # P0 generation：重排队已换代，第二次 run 必须带当前代数（旧代数写回会被
+    # CAS 拒绝——这正是 stale-write 防线的语义）。
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT execution_generation FROM ai_chat_sessions WHERE id = %s",
+                    (sids[0],))
+        _gen = cur.fetchone()[0]
+    w._run_one(dict(claimed[0], status='running', retry_count=2,
+                    execution_generation=_gen))
 
     with db_conn.cursor() as cur:
         cur.execute(
@@ -1736,8 +1743,10 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
     sid = sids[0]
     with db_conn.cursor() as cur:
         # 已开跑过（stopped mid-run）：有 oc 会话 + 工作区，resume 置 continue_prompt
+        # P0 CAS：终态写回要求 status='running'（claim 后的真实状态）——
+        # 旧写法种 cancelled 会让 _mark_done 被 CAS 拒绝而留在原状态。
         cur.execute(
-            "UPDATE ai_chat_sessions SET status='cancelled', "
+            "UPDATE ai_chat_sessions SET status='running', "
             "  opencode_session_id='oc', workspace_path=%s, "
             "  continue_prompt='请继续完成原任务' WHERE id = %s",
             (str(tmp_path), sid),

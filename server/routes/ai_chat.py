@@ -822,6 +822,22 @@ def send_message(sid):
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
+    # P0 执行所有权（ai-harness-p0 spec §4.1 规则3）：非终态批子会话由后台
+    # worker 独家驱动——普通发送入口直接 409，不写消息、不挂监听、不 dispatch。
+    # 否则同一 OpenCode 会话并发两个 turn：消息顺序错乱、完成判定竞态、
+    # pause/cancel 失效、门禁核对时机不确定。终态子会话放行（人工在原会话上
+    # 继续），前端会改走批任务 continue 端点，这里保留兼容。
+    if sess[5] and sess[3] in ('pending', 'running', 'paused'):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，'
+                       '请在任务结束后使用批任务继续接口',
+            'retryable': False,
+            'operation': 'send_message',
+            'requestId': None,
+            'turnId': None,
+        }}), 409
+
     body = request.get_json(force=True)
     content = (body.get('content') or '').strip()
     attachments = body.get('attachments') or []  # relative paths under the workspace

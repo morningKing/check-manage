@@ -203,6 +203,19 @@ def set_manifest_result(attempt_id: str, name: str, *, invoked=None,
 
 # ── Events ───────────────────────────────────────────────────────────────
 
+def attach_attempt_to_turn(turn_id: str, attempt_id: str) -> None:
+    """把 attempt id 记到 ai_chat_turns.attempt_id（P0 ownership：审计关联，
+    非并发闸门）。best-effort。"""
+    def _impl() -> None:
+        from db import get_db
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE ai_chat_turns SET attempt_id = %s "
+                            "WHERE id = %s", (attempt_id, turn_id))
+            conn.commit()
+    _safe(_impl)
+
+
 def record_event(attempt_id: str, event_type: str, *, occurred_at=None,
                  session_id=None, parent_session_id=None, message_id=None,
                  part_id=None, tool_call_id=None, parent_part_id=None,

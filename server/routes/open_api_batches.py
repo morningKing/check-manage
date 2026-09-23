@@ -361,12 +361,24 @@ def create():
     if file_err:
         return file_err
 
+    # P0 F4（spec §7.2）：actionChecks 与内部创建接口同一道校验——此前原样
+    # 透传入库，非法正则会在登记期望时才炸且被吞，产生"零期望 → passed"的
+    # 假门禁。校验失败 400，不带病入库。
+    from utils import agent_ledger
+    try:
+        action_checks = agent_ledger.validate_checks(body.get('actionChecks'))
+    except ValueError as e:
+        return err({'code': 'ACTION_CHECK_INVALID',
+                    'message': f'actionChecks 校验失败: {e}',
+                    'retryable': False,
+                    'operation': 'create_batch'}, INVALID_ARGUMENT, 400)
+
     result = create_batch(
         owner,
         name=name, prompt=prompt, template_id=None, files=files,
         agent=(body.get('agent') or '').strip() or None,
         model=(body.get('model') or '').strip() or None,
-        action_checks=body.get('actionChecks') or None,
+        action_checks=action_checks or None,
         api_key_id=key['id'],
         callback_url=callback_url,
         callback_secret=callback_secret,
@@ -491,15 +503,53 @@ def import_files(batch_id):
 @api_key_required
 @require_bound_key
 def remove(batch_id):
+    """删除批任务（P0 spec §7.2 stop-first 收紧，与内部 DELETE 同语义）：
+
+    - 终态批次：直接清理工作区并删除；
+    - 非终态、未带 stop=true：409 BATCH_NOT_TERMINAL，不产生任何副作用；
+    - 非终态、stop=true：先取消整批，bounded drain（10s）等 running 子任务
+      收敛后清理删除；超时 409 BATCH_DRAIN_TIMEOUT，任务与工作区**保留**
+      （不删库不拆工作区，调用方可重试或继续观察）。
+
+    这是对外破坏性变更：此前非终态批次可被直接删除，运行中的 OpenCode turn
+    继续执行、写回命中已删行（幽灵执行）。
+    """
     key = _current_key()
     owner = key['ownerUserId']
-    # Best-effort workspace teardown before the DB delete — same shared helper
-    # routes/ai_chat_batches.py::remove uses, see utils/workspace.py::
-    # cleanup_batch_workspaces. Skipped (not fatal) if the batch can't be found
-    # under this key: delete_batch below is the actual 404 authority.
     d = get_batch_detail(owner, batch_id, api_key_id=key['id'])
-    if d:
-        cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    status = d['batch']['status']
+    stop_first = request.args.get('stop', '').lower() in ('1', 'true') \
+        or bool((request.get_json(silent=True) or {}).get('stop'))
+    if status not in TERMINAL_STATUSES:
+        if not stop_first:
+            return err({'code': 'BATCH_NOT_TERMINAL',
+                        'message': '运行中的批任务不能直接删除，'
+                                   '请先取消或使用 stop=true 先停止',
+                        'retryable': False,
+                        'operation': 'delete_batch'}, CONFLICT, 409)
+        try:
+            cancel_batch(owner, batch_id, api_key_id=key['id'])
+        except ValueError:
+            pass  # became terminal concurrently
+        get_worker().notify()
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            d = get_batch_detail(owner, batch_id, api_key_id=key['id'])
+            if not d or not any(s['status'] == 'running' for s in d['sessions']):
+                break
+            time.sleep(0.3)
+        else:
+            return err({'code': 'BATCH_DRAIN_TIMEOUT',
+                        'message': '等待运行中子任务停止超时，'
+                                   '批任务与工作区已保留，请稍后重试',
+                        'retryable': True,
+                        'operation': 'delete_batch'}, CONFLICT, 409)
+        d = get_batch_detail(owner, batch_id, api_key_id=key['id']) or d
+    # Tear down per-child workspaces before the DB delete — same shared helper
+    # routes/ai_chat_batches.py::remove uses.
+    cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
     ok = delete_batch(owner, batch_id, api_key_id=key['id'])
     if not ok:
         return err('批任务不存在', NOT_FOUND, 404)
@@ -846,15 +896,33 @@ def update_config(batch_id):
     url_err = _validate_callback_url(callback_url)
     if url_err:
         return url_err
+    # P0 spec §7.2：actionChecks 显式传入才更新（语义对齐内部 PATCH），
+    # 同样先校验再落库。gateRetry 同理（可选）。
+    from utils import agent_ledger
+    patch_kwargs = {}
+    if 'actionChecks' in body:
+        try:
+            checks = agent_ledger.validate_checks(body.get('actionChecks'))
+        except ValueError as e:
+            return err({'code': 'ACTION_CHECK_INVALID',
+                        'message': f'actionChecks 校验失败: {e}',
+                        'retryable': False,
+                        'operation': 'update_batch'}, INVALID_ARGUMENT, 400)
+        patch_kwargs['action_checks'] = checks or None
+    if 'gateRetry' in body:
+        patch_kwargs['gate_retry'] = bool(body.get('gateRetry'))
     result = update_batch_config(
         key['ownerUserId'], batch_id,
         agent=agent, model=model,
         api_key_id=key['id'],
         callback_url=callback_url,
         callback_secret=callback_secret,
+        **patch_kwargs,
     )
     if result is None:
         return err('批任务不存在', NOT_FOUND, 404)
+    if 'actionChecks' in body:
+        agent_ledger.sync_batch_expectations(batch_id, checks or None)
     log_api_operation('update', 'ai_chat_batch', batch_id, result['batch'].get('name'),
                       f'通过 API Key 修改批任务「{result["batch"].get("name")}」配置')
     return jsonify(_batch_out(result['batch']))

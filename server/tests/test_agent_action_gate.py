@@ -107,10 +107,12 @@ def test_validate_checks_normalizes():
     out = agent_ledger.validate_checks([
         {'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone'},
     ])
+    # F2：规范化输出保留 apply_to（未声明为 None）——此前被剥离导致
+    # 定向门禁在内部路径整体失效。
     assert out == [{'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone',
                     'require_state': 'completed', 'min_count': 1, 'scope': 'tree',
                     'check_type': 'tool', 'effect_spec': None,
-                    'subagents': None}]
+                    'subagents': None, 'apply_to': None}]
 
 
 def test_validate_checks_normalizes_subagents():

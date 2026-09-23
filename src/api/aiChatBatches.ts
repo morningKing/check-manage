@@ -101,6 +101,14 @@ export function resumeChild(batchId: string, sessionId: string) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/resume`, {})
 }
 
+/** 人工 continuation（P0 §7.1）：在终态（completed/failed/cancelled）批子会话上
+ *  追加一轮对话。非终态 409（worker 独家驱动）；成功 202。前端对终态批子会话
+ *  的发送经由此端点，而不是普通聊天发送接口。 */
+export function continueChild(batchId: string, sessionId: string, prompt: string) {
+  return post<AiChatBatchDetail>(
+    `/ai/chat/batches/${batchId}/sessions/${sessionId}/continue`, { prompt })
+}
+
 export function updateBatchConfig(id: string, body: {
   agent: string | null
   model: string | null

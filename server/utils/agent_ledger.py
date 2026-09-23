@@ -277,6 +277,10 @@ def validate_checks(checks) -> list:
             'scope': scope, 'check_type': check_type,
             'effect_spec': effect_spec,
             'subagents': c.get('subagents'),
+            # F2（ai-harness-p0 spec §8.2）：保留 apply_to——此前规范化时被
+            # 剥离，内部创建/编辑/模板路径落库前就丢了定向条件，引擎侧
+            # check_applies_to_child 的过滤恒真，期望被登记到全部子任务。
+            'apply_to': c.get('apply_to'),
         })
     for c in normalized:
         subs = c.get('subagents')
@@ -289,6 +293,27 @@ def validate_checks(checks) -> list:
             c['subagents'] = [x.strip() for x in subs]
         else:
             c['subagents'] = None
+        # apply_to 校验（F2）：batch_seq 必须是整数数组，input_file_glob 必须
+        # 是字符串；非法直接 400，不带病入库（与 subagents 同策略）。
+        apply_to = c.get('apply_to')
+        if apply_to is not None:
+            if not isinstance(apply_to, dict):
+                raise ValueError(f"{c['name']}: apply_to 必须是对象")
+            seqs = apply_to.get('batch_seq')
+            if seqs is not None:
+                if (not isinstance(seqs, list) or not seqs
+                        or not all(isinstance(x, int) and not isinstance(x, bool)
+                                   for x in seqs)):
+                    raise ValueError(f"{c['name']}: apply_to.batch_seq 必须是"
+                                     "非空整数数组")
+            glob_pat = apply_to.get('input_file_glob')
+            if glob_pat is not None and (not isinstance(glob_pat, str)
+                                         or not glob_pat.strip()):
+                raise ValueError(f"{c['name']}: apply_to.input_file_glob 必须是"
+                                 "非空字符串")
+            if seqs is None and glob_pat is None:
+                raise ValueError(f"{c['name']}: apply_to 至少要有 batch_seq 或 "
+                                 "input_file_glob 之一")
     names = [c['name'] for c in normalized]
     if len(names) != len(set(names)):
         raise ValueError('action_checks 内 name 重复')

@@ -18,6 +18,7 @@ from utils.batch_repo import (
     get_max_files_per_batch,
     cancel_batch,
     cancel_child,
+    continue_child,
     create_batch,
     delete_batch,
     get_batch_detail,
@@ -456,6 +457,29 @@ def resume_single_child(batch_id, session_id):
     from utils.batch_engine import get_worker
     get_worker().notify()
     return jsonify(result)
+
+
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/continue')
+@login_required
+def continue_single_child(batch_id, session_id):
+    """人工 continuation（P0 spec §7.1）：在终态（completed/failed/cancelled）
+    批子会话上追加一轮对话。非终态 409（worker 独家驱动）；成功 202，worker
+    按 continue_prompt 在原 OpenCode 会话上串行续跑。普通发送入口对非终态
+    批子会话已收紧为 409 BATCH_SESSION_CONTROLLED，这是它的人工替代通道。"""
+    body = request.get_json(silent=True) or {}
+    prompt = (body.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt required'}), 400
+    try:
+        result = continue_child(g.current_user['userId'], batch_id, session_id,
+                                prompt)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result), 202
 
 
 @ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/reexecute')
