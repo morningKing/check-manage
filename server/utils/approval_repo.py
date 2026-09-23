@@ -151,6 +151,7 @@ def get_pending_for_inbox(user: dict, limit: int = 50) -> list[dict]:
 
 
 def list_all(status: str | None = None, limit: int = 100) -> list[dict]:
+    """审批列表（camelCase，供 /v1/ai-approvals 与管理面）。"""
     with get_db() as conn:
         with conn.cursor() as cur:
             if status:
@@ -168,8 +169,17 @@ def list_all(status: str | None = None, limit: int = 100) -> list[dict]:
                     "ORDER BY requested_at DESC LIMIT %s", (limit,))
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    mapping = {'run_id': 'runId', 'step_id': 'stepId', 'risk_level': 'riskLevel',
+               'effect_summary': 'effectSummary', 'decided_by': 'decidedBy',
+               'decision_comment': 'decisionComment',
+               'requested_at': 'requestedAt', 'resolved_at': 'resolvedAt'}
+    out = []
     for r in rows:
-        for k in ('requested_at', 'resolved_at'):
-            if r.get(k) is not None:
-                r[k] = r[k].isoformat()
-    return rows
+        item = {}
+        for k, v in r.items():
+            item[mapping.get(k, k)] = v
+        for k in ('requestedAt', 'resolvedAt'):
+            if item.get(k) is not None:
+                item[k] = item[k].isoformat()
+        out.append(item)
+    return out
