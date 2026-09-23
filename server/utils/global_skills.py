@@ -372,10 +372,70 @@ def inject_single_skill(workspace_path: str, skill_name: str,
     return src
 
 
+BUILTIN_HASH_MARKER = '.builtin-hash'
+
+
+def _dir_hash(dirpath: str) -> str:
+    """目录内容哈希;跳过 .builtin-hash marker 本身,否则 marker 内容会改变
+    目录哈希,导致"存下的哈希永远对不上"。"""
+    import hashlib
+    h = hashlib.sha1()
+    for root, _, fns in sorted(os.walk(dirpath)):
+        for fn in sorted(fns):
+            if fn == BUILTIN_HASH_MARKER:
+                continue
+            fp = os.path.join(root, fn)
+            h.update(os.path.relpath(fp, dirpath).encode('utf-8'))
+            with open(fp, 'rb') as f:
+                h.update(f.read())
+    return h.hexdigest()[:16]
+
+
+def _refresh_builtin(dest_dir: str, description: str,
+                     repo_skills_dir: str | None = None) -> bool:
+    """内置技能内容刷新:仓库版本变化且安装副本未被改动时,替换目录并更新
+    DB 描述。安装副本被管理员改过(marker 记录的哈希对不上当前内容)则保持
+    原样;仓库与安装一致时是幂等 no-op。返回是否发生了刷新。
+    无 marker 的存量安装(早期版本装的)一律采纳刷新——这些版本只能出自
+    仓库,不存在 marker 之前的"管理员定制"记录;此后管理员改动会得到保护。
+    repo_skills_dir 供测试注入,缺省为仓库 skills/ 下同名技能目录。"""
+    marker = os.path.join(dest_dir, BUILTIN_HASH_MARKER)
+    repo_dir = repo_skills_dir or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), '..', '..', 'skills',
+        os.path.basename(dest_dir))
+    if not os.path.isdir(repo_dir):
+        return False
+    installed_hash = None
+    if os.path.isfile(marker):
+        with open(marker, encoding='utf-8') as f:
+            installed_hash = f.read().strip()
+        current = _dir_hash(dest_dir)
+        if current != installed_hash:
+            return False  # 管理员改过,不动
+        if current == _dir_hash(repo_dir):
+            return False  # 仓库无更新,幂等跳过
+    shutil.rmtree(dest_dir)
+    shutil.copytree(repo_dir, dest_dir)
+    with open(marker, 'w', encoding='utf-8') as f:
+        f.write(_dir_hash(dest_dir))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            total_size = sum(
+                os.path.getsize(os.path.join(dp, fn))
+                for dp, _, fns in os.walk(dest_dir) for fn in fns)
+            cur.execute(
+                "UPDATE global_skills SET description=%s, file_size=%s, "
+                "  updated_at=now() WHERE name=%s",
+                (description, total_size, os.path.basename(dest_dir)))
+        conn.commit()
+    return True
+
+
 def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
     """把仓库 skills/ 目录下的内置技能同步进全局技能(应用启动时调用)。
 
-    只插入缺失的技能(按 name 判断),绝不覆盖已安装/被管理员修改过的版本;
+    只插入缺失的技能(按 name 判断),绝不覆盖被管理员修改过的版本(见
+    _refresh_builtin);仓库内容有更新且安装副本未被改动时会地刷新。
     global-skills 目录已有文件而缺 DB 行时,就地复用目录只补建行。
     返回本次新装的名字列表。仓库 skills/ 是内置技能的唯一事实来源:
     部署拉代码后重启,即自带这批技能,无需手工上传。"""
@@ -391,6 +451,7 @@ def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
 
     known = {s['name'] for s in list_global_skills()}
     installed = []
+    refreshed = []
     for entry in sorted(os.listdir(repo_dir)):
         skill_md = os.path.join(repo_dir, entry, 'SKILL.md')
         if not os.path.isfile(skill_md):
@@ -403,13 +464,22 @@ def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
         m_name = re.search(r'^name:\s*(.+)$', head, re.M)
         m_desc = re.search(r'^description:\s*(.+)$', head, re.M)
         name = (m_name.group(1).strip() if m_name else entry)
-        if name in known:
-            continue
         description = (m_desc.group(1).strip() if m_desc else '')[:200]
-
+        db_known = name in known
         dest_dir = os.path.join(root, name)
-        if not os.path.isdir(dest_dir):
+
+        if os.path.isdir(dest_dir):
+            # 目录在:未被管理员改动时随仓库刷新(内置技能唯一事实来源是仓库);
+            # DB 行缺失时继续走下面的补建行
+            if _refresh_builtin(dest_dir, description):
+                refreshed.append(name)
+        elif not db_known:
             shutil.copytree(os.path.join(repo_dir, entry), dest_dir)
+            with open(os.path.join(dest_dir, BUILTIN_HASH_MARKER), 'w',
+                      encoding='utf-8') as f:
+                f.write(_dir_hash(dest_dir))
+        if db_known:
+            continue
 
         total_size = sum(
             os.path.getsize(os.path.join(dirpath, fn))
@@ -425,4 +495,6 @@ def ensure_builtin_skills(workspace_root: str | None = None) -> list[str]:
                 )
                 if cur.fetchone():
                     installed.append(name)
+    if refreshed:
+        print(f'builtin skills refreshed from repo: {", ".join(refreshed)}')
     return installed

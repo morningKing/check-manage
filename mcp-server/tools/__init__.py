@@ -13,6 +13,7 @@ from tools import (
     memory,
     analyze_trace, query_sessions, download_field_files, register_action_check,
     ai_create_data_page, graph_neighbors, graph_traverse, batch_tool_audit,
+    data_create_records, data_update_record, data_delete_record, data_attach_menu,
 )
 
 _TOOLS = {
@@ -36,6 +37,10 @@ _TOOLS = {
     graph_neighbors.NAME: (graph_neighbors.TOOL, graph_neighbors.handle),
     graph_traverse.NAME: (graph_traverse.TOOL, graph_traverse.handle),
     batch_tool_audit.NAME: (batch_tool_audit.TOOL, batch_tool_audit.handle),
+    data_create_records.NAME: (data_create_records.TOOL, data_create_records.handle),
+    data_update_record.NAME: (data_update_record.TOOL, data_update_record.handle),
+    data_delete_record.NAME: (data_delete_record.TOOL, data_delete_record.handle),
+    data_attach_menu.NAME: (data_attach_menu.TOOL, data_attach_menu.handle),
 }
 
 
