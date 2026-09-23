@@ -268,23 +268,28 @@ def update_config(batch_id):
     model = (body.get('model') or '').strip() or None
     provision_repo = (body.get('provision_repo') or '').strip() or None
     provision_ref = (body.get('provision_ref') or '').strip() or None
-    result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
-                                 provision_repo=provision_repo, provision_ref=provision_ref)
-    if result is None:
-        return jsonify({'error': 'not found'}), 404
-    # 编辑动作门禁(设计 §5.2 入口 A):显式传入 action_checks 才更新;
-    # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
+    # 编辑动作门禁(设计 §5.2 入口 A)/修正开关(设计 §5.4):显式传入才更新,
+    # 未传保持原值。action_checks 必须落 ai_chat_batches.action_checks 列——
+    # 编辑对话框重开时的预填就读这一列;只写 action_expectations 行而不落列,
+    # 保存后再打开设置门禁就"消失"了。先校验再落库,校验失败不半更新。
+    checks = None
+    patch_kwargs = {}
     if 'action_checks' in body:
         try:
             checks = agent_ledger.validate_checks(body.get('action_checks'))
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
-        agent_ledger.sync_batch_expectations(batch_id, checks or None)
-    # 修正开关(设计 §5.4):显式传入 gate_retry 才更新(批级覆盖全局)
+        patch_kwargs['action_checks'] = checks or None
     if 'gate_retry' in body:
-        update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
-                            provision_repo=provision_repo, provision_ref=provision_ref,
-                            gate_retry=bool(body.get('gate_retry')))
+        patch_kwargs['gate_retry'] = bool(body.get('gate_retry'))
+    result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
+                                 provision_repo=provision_repo, provision_ref=provision_ref,
+                                 **patch_kwargs)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
+    if 'action_checks' in body:
+        agent_ledger.sync_batch_expectations(batch_id, checks or None)
     return jsonify(result)
 
 

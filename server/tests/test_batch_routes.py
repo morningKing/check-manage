@@ -378,3 +378,80 @@ def test_patch_missing_batch_404(setup_app):
     client, admin_headers = setup_app
     r = client.patch('/ai/chat/batches/nope', json={'model': 'x'}, headers=admin_headers)
     assert r.status_code == 404
+
+
+def test_patch_persists_action_checks_and_syncs_children(setup_app, db_conn):
+    """编辑动作门禁回归:PATCH 显式传 action_checks 必须同时落
+    ai_chat_batches.action_checks 列(编辑对话框重开时的预填来源)并同步
+    非终态子任务期望;只写 action_expectations 行而不落列,保存后再打开
+    设置门禁就"消失"了。空数组=清除门禁,列也要回到 NULL。"""
+    client, admin_headers = setup_app
+    f = _stage_one(client, admin_headers, name='g.txt', upload_session_id='u-gate-1')
+    bid = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f]},
+                      headers=admin_headers).get_json()['batch']['id']
+    checks = [{'name': '执行脚本', 'tool': 'bash',
+               'args_pattern': 'run\.sh', 'min_count': 1}]
+    try:
+        r = client.patch(f'/ai/chat/batches/{bid}',
+                         json={'action_checks': checks}, headers=admin_headers)
+        assert r.status_code == 200, r.get_data(as_text=True)
+        # validate_checks 归一化后落库(补 scope/check_type/require_state 等默认),
+        # 用户显式设置的字段必须原样回读
+        saved = r.get_json()['batch']['action_checks']
+        assert len(saved) == 1
+        assert {k: saved[0][k] for k in ('name', 'tool', 'args_pattern', 'min_count')} == checks[0]
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT action_checks FROM ai_chat_batches WHERE id=%s", (bid,))
+            row = cur.fetchone()[0]
+            assert {k: row[0][k] for k in ('name', 'tool', 'args_pattern', 'min_count')} == checks[0]
+            # 创建即播种 pending 子会话 → 期望应同步登记到子会话上
+            cur.execute(
+                "SELECT DISTINCT e.name FROM action_expectations e "
+                "JOIN ai_chat_sessions s ON e.scope_id = s.id "
+                "WHERE s.batch_id = %s AND e.source = 'batch'", (bid,))
+            assert [row[0] for row in cur.fetchall()] == ['执行脚本']
+
+        # 再次保存为空数组 = 关闭门禁:列清 NULL,子任务期望同步删除
+        r = client.patch(f'/ai/chat/batches/{bid}',
+                         json={'action_checks': []}, headers=admin_headers)
+        assert r.status_code == 200
+        assert r.get_json()['batch']['action_checks'] is None
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT action_checks FROM ai_chat_batches WHERE id=%s", (bid,))
+            assert cur.fetchone()[0] is None
+            cur.execute(
+                "SELECT count(*) FROM action_expectations e "
+                "JOIN ai_chat_sessions s ON e.scope_id = s.id "
+                "WHERE s.batch_id = %s AND e.source = 'batch'", (bid,))
+            assert cur.fetchone()[0] == 0
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM action_expectations e USING ai_chat_sessions s "
+                        "WHERE e.scope_id = s.id AND s.batch_id = %s", (bid,))
+        db_conn.commit()
+
+
+def test_patch_invalid_action_checks_400_keeps_old_value(setup_app, db_conn):
+    """校验失败(坏正则)必须 400 且不半更新:列保持原值,期望也不动。"""
+    client, admin_headers = setup_app
+    f = _stage_one(client, admin_headers, name='g2.txt', upload_session_id='u-gate-2')
+    bid = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f]},
+                      headers=admin_headers).get_json()['batch']['id']
+    good = [{'name': '读知识', 'tool': 'read', 'args_pattern': 'spec\.md'}]
+    try:
+        assert client.patch(f'/ai/chat/batches/{bid}', json={'action_checks': good},
+                            headers=admin_headers).status_code == 200
+        r = client.patch(f'/ai/chat/batches/{bid}',
+                         json={'action_checks': [{'name': '坏', 'tool': 'bash',
+                                                  'args_pattern': '([bad'}]},
+                         headers=admin_headers)
+        assert r.status_code == 400
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT action_checks FROM ai_chat_batches WHERE id=%s", (bid,))
+            row = cur.fetchone()[0]
+            assert {k: row[0][k] for k in ('name', 'tool', 'args_pattern')} == good[0]
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM action_expectations e USING ai_chat_sessions s "
+                        "WHERE e.scope_id = s.id AND s.batch_id = %s", (bid,))
+        db_conn.commit()

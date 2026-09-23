@@ -56,12 +56,19 @@ def test_create_requires_name_and_prompt(client, mock_conn, mock_cursor):
     assert resp.status_code == 400
 
 
-def test_create_rejects_empty_files(client, mock_conn, mock_cursor):
+def test_create_allows_empty_files_shell(client, mock_conn, mock_cursor):
+    """0 文件合法(空批壳,后续 append 填充):不再 400,照常建批并登记审计日志。"""
     _auth_passes(mock_cursor)
+    fake = {'batch': {'id': 'b-shell-1', 'status': 'pending', 'total': 0},
+            'sessions': []}
     with patch('auth.get_db', lambda: _fake_auth_db(mock_conn)), \
-         patch('routes.open_api_batches._current_key', return_value=_key()):
+         patch('routes.open_api_batches._current_key', return_value=_key()), \
+         patch('routes.open_api_batches.create_batch', return_value=fake) as mk:
         resp = client.post(BASE, headers=HDR, json={'name': 'n', 'prompt': 'p', 'files': []})
-    assert resp.status_code == 400
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    assert resp.get_json() == {'batchId': 'b-shell-1', 'status': 'pending', 'total': 0}
+    assert mk.call_args.kwargs['files'] == []
+    assert mk.call_args.kwargs['api_key_id'] == 'ak-1'
 
 
 def test_create_rejects_foreign_path(client, mock_conn, mock_cursor):
