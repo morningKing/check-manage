@@ -12,7 +12,7 @@ from tools import (
     query_collection, read_data_file, list_export_scripts, run_export_script,
     memory,
     analyze_trace, query_sessions, download_field_files, register_action_check,
-    ai_create_data_page, graph_neighbors, graph_traverse,
+    ai_create_data_page, graph_neighbors, graph_traverse, batch_tool_audit,
 )
 
 _TOOLS = {
@@ -35,6 +35,7 @@ _TOOLS = {
     ai_create_data_page.NAME: (ai_create_data_page.TOOL, ai_create_data_page.handle),
     graph_neighbors.NAME: (graph_neighbors.TOOL, graph_neighbors.handle),
     graph_traverse.NAME: (graph_traverse.TOOL, graph_traverse.handle),
+    batch_tool_audit.NAME: (batch_tool_audit.TOOL, batch_tool_audit.handle),
 }
 
 
