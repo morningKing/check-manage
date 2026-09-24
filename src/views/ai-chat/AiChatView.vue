@@ -1504,7 +1504,7 @@ function onKey(e: Event) {
                       v-else-if="p.type === 'subtask_use'"
                       :subtask-id="p.subtaskId" :session-id="activeId!"
                       :agent="p.agent" :description="p.description" :status="p.status"
-                      :depth="1" :fetch-fn="getSubtaskMessages"
+                      :depth="1" :segment-count="p.segmentCount" :fetch-fn="getSubtaskMessages"
                     />
                     <!-- 回合级失败（session.error / 出错的 assistant 消息）：
                          持久化为 error part，刷新后仍在，见 chat_persist.py -->

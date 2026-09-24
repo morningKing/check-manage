@@ -51,6 +51,7 @@ from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.ai_data_internal import ai_data_internal_bp
+from routes.ai_subagent_internal import ai_subagent_internal_bp
 from routes.ai_orchestrations import ai_orchestrations_bp
 from routes.ai_approvals import ai_approvals_bp
 from routes.artifacts import artifacts_bp
@@ -182,6 +183,16 @@ try:
     _ret = _sk.apply_retention()
     logging.info('SkillOpt: runtime plugin ensured at %s; retention %s',
                  _OGD, _ret)
+
+    # 子代理会话复用插件（tool.execute.before 强制注入 task_id）：与 SkillOpt
+    # 插件同目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
+    try:
+        from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin
+        _sru_ep = f'http://127.0.0.1:{_FPORT}/ai/subagent-internal'
+        ensure_subagent_reuse_plugin(_OGD, _sru_ep,
+                                     _os.getenv('MCP_INTERNAL_TOKEN', ''))
+    except Exception as e3:
+        logging.warning('subagent reuse plugin deploy failed: %s', e3)
 
     def _audit_retention_daily():
         try:
@@ -319,6 +330,18 @@ try:
 except Exception as _e:
     logging.warning('harness p2 migration on boot failed: %s', _e)
 
+# 子代理会话复用（2026-09-24）：批级 subagent_reuse 配置列 / 复用锚定表
+# ai_subagent_pins / 子代理任务段 turn_segments。随启动幂等执行。
+try:
+    _mp12 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_24_subagent_session_reuse.py')
+    _spec12 = _ilu.spec_from_file_location('_subagent_reuse_boot', _mp12)
+    _m12 = _ilu.module_from_spec(_spec12)
+    _spec12.loader.exec_module(_m12)
+    _m12.run()
+except Exception as _e:
+    logging.warning('subagent reuse migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -331,6 +354,7 @@ app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
+app.register_blueprint(ai_subagent_internal_bp)
 app.register_blueprint(ai_data_internal_bp)
 app.register_blueprint(ai_orchestrations_bp)
 app.register_blueprint(ai_approvals_bp)

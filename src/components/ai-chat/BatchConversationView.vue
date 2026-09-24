@@ -23,7 +23,7 @@
             v-else-if="p.type === 'subtask_use'"
             :subtask-id="p.subtaskId" :session-id="sessionId"
             :agent="p.agent" :description="p.description" :status="p.status"
-            :depth="1" :fetch-fn="fetchSubtaskFn"
+            :depth="1" :segment-count="p.segmentCount" :fetch-fn="fetchSubtaskFn"
           />
           <!-- 回合级失败（error part，由 chat_persist 持久化 / 批任务的
                _persist_conversation 透传）——只读视图里也要能看出这轮挂了 -->

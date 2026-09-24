@@ -7,6 +7,13 @@
       <ElIcon class="subtask-bubble__chev" :class="{ open }"><ArrowRight /></ElIcon>
       <ElIcon class="subtask-bubble__icon"><MagicStick /></ElIcon>
       <span class="subtask-bubble__agent">{{ agent || '子代理' }}</span>
+      <span
+        v-if="shortTaskId" class="subtask-bubble__taskid" :title="`子会话 task_id：${subtaskId}（点击复制）`"
+        @click.stop="copyTaskId"
+      >{{ shortTaskId }}</span>
+      <span v-if="reuseCount > 1" class="subtask-bubble__reuse" title="该子代理会话被多个任务段复用（展开可分段查看）">
+        已复用·{{ reuseCount }} 段
+      </span>
       <span v-if="description" class="subtask-bubble__desc" :title="description">{{ description }}</span>
       <span class="subtask-bubble__status">
         <ElIcon v-if="status === 'completed'" class="ok"><CircleCheck /></ElIcon>
@@ -28,8 +35,22 @@
         <el-alert v-if="result.truncated" type="info" :closable="false" show-icon
                   :title="`仅显示最近 ${result.messages.length} 条，共 ${result.total} 条`" />
         <el-empty v-if="!result.messages.length" description="子代理还没有对话记录" />
-        <div v-for="m in result.messages" :key="m.id" class="subtask-bubble__msg">
-          <div v-if="m.role === 'user'" class="subtask-bubble__role">委托输入</div>
+        <div
+          v-for="m in result.messages" :key="m.id"
+          class="subtask-bubble__msg"
+          :class="{ 'subtask-bubble__msg--boundary': boundaryOf(m) }"
+        >
+          <!-- 会话复用：每条 user 消息 = 一次委派任务的起点，渲染任务段边界 -->
+          <div v-if="boundaryOf(m)" class="subtask-bubble__segment">
+            <span class="subtask-bubble__segment-line" />
+            <span class="subtask-bubble__segment-tag">
+              任务段 {{ boundaryOf(m)!.ord + 1 }}
+              <template v-if="boundaryOf(m)!.turn != null"> · 第 {{ boundaryOf(m)!.turn + 1 }} 轮派发</template>
+            </span>
+            <span class="subtask-bubble__segment-label" :title="boundaryOf(m)!.label">{{ boundaryOf(m)!.label }}</span>
+            <span class="subtask-bubble__segment-line" />
+          </div>
+          <div v-if="m.role === 'user'" class="subtask-bubble__role">{{ boundaryOf(m) ? '本段任务输入' : '委托输入' }}</div>
           <template v-for="(p, i) in mergeReasoningParts(m.content)" :key="i">
             <MarkdownView v-if="p.type === 'text' && p.text" :text="p.text" />
             <Thinking
@@ -47,7 +68,7 @@
               v-else-if="p.type === 'subtask_use'"
               :subtask-id="p.subtaskId" :session-id="sessionId"
               :agent="p.agent" :description="p.description" :status="p.status"
-              :depth="depth + 1" :fetch-fn="fetchFn"
+              :depth="depth + 1" :segment-count="p.segmentCount" :fetch-fn="fetchFn"
             />
           </template>
         </div>
@@ -57,14 +78,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { ElIcon, ElAlert, ElEmpty, ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowRight, MagicStick, CircleCheck, CircleClose, Loading, Brush } from '@element-plus/icons-vue'
 import { Thinking } from 'vue-element-plus-x'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import { mergeReasoningParts } from '@/utils/artifacts'
-import { compactSubtask, type SubtaskMessagesResult } from '@/api/aiChat'
+import { compactSubtask, type SubtaskMessagesResult, type SubtaskSegment } from '@/api/aiChat'
 
 // 递归组件需要显式声明 name 才能在自己的模板里引用自己。
 defineOptions({ name: 'SubtaskBubble' })
@@ -76,12 +97,44 @@ const props = defineProps<{
   description: string | null
   status: 'running' | 'completed' | 'failed'
   depth: number
+  /** 持久化内容里的任务段数（来自 subtask_use part；未拉取时也能显示徽标） */
+  segmentCount?: number
   fetchFn: (sessionId: string, subtaskId: string) => Promise<SubtaskMessagesResult>
 }>()
 
 const open = ref(false)
 const loading = ref(false)
 const result = ref<SubtaskMessagesResult | null>(null)
+
+// ── 会话复用标识（需求：subagent 必须有 session_id/task_id 标识 + 任务段边界）──
+const shortTaskId = computed(() => {
+  const id = props.subtaskId || ''
+  return id.length > 14 ? `${id.slice(0, 12)}…` : id
+})
+const segments = computed<SubtaskSegment[]>(
+  () => result.value?.subtask?.segments || [])
+const reuseCount = computed(() => {
+  const fromFetch = segments.value.length
+  const fromPart = props.segmentCount || 0
+  return Math.max(fromFetch, fromPart, 0)
+})
+// 消息 → 任务段：user 消息按 id 匹配段首；无 segments 数据时（旧数据/单段）
+// 保持原「委托输入」形态不加边界。
+function boundaryOf(m: { id: string; role: string }): SubtaskSegment | null {
+  if (!segments.value.length) return null
+  if (m.role === 'user') {
+    return segments.value.find((s) => s.firstMsgId === m.id) || null
+  }
+  return null
+}
+async function copyTaskId() {
+  try {
+    await navigator.clipboard.writeText(props.subtaskId)
+    ElMessage.success(`子会话 task_id 已复制：${props.subtaskId}`)
+  } catch {
+    ElMessage({ message: `task_id：${props.subtaskId}`, type: 'info', duration: 10000, showClose: true })
+  }
+}
 
 // 子代理运行中，展开的气泡要能看到轨迹实时推进：服务端后台监听器会把
 // 子代理消息增量写进 ai_chat_subtask_messages（REST 端点现查现新），
@@ -224,6 +277,33 @@ async function onCompact() {
 .subtask-bubble__chev { transition: transform 0.15s; color: var(--el-text-color-secondary); &.open { transform: rotate(90deg); } }
 .subtask-bubble__icon { color: var(--el-color-primary); flex-shrink: 0; }
 .subtask-bubble__agent { font-weight: 600; color: var(--el-text-color-primary); flex-shrink: 0; }
+.subtask-bubble__taskid {
+  font-family: var(--el-font-family-mono, monospace);
+  font-size: 11px; color: var(--el-text-color-secondary);
+  background: var(--el-fill-color); border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px; padding: 0 4px; cursor: pointer; flex-shrink: 0;
+  &:hover { color: var(--el-color-primary); border-color: var(--el-color-primary-light-5); }
+}
+.subtask-bubble__reuse {
+  font-size: 11px; color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  border: 1px solid var(--el-color-warning-light-5);
+  border-radius: 4px; padding: 0 4px; flex-shrink: 0; white-space: nowrap;
+}
+.subtask-bubble__segment {
+  display: flex; align-items: center; gap: 6px;
+  margin: 10px 0 2px; color: var(--el-text-color-secondary); font-size: 11px;
+}
+.subtask-bubble__segment-line { flex: 1; height: 1px; background: var(--el-border-color-lighter); }
+.subtask-bubble__segment-tag {
+  font-weight: 600; color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  border-radius: 4px; padding: 0 6px; white-space: nowrap;
+}
+.subtask-bubble__segment-label {
+  max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.subtask-bubble__msg--boundary { border-top: 1px dashed var(--el-border-color-lighter); margin-top: 4px; }
 .subtask-bubble__desc {
   color: var(--el-text-color-secondary); font-size: 12px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1;

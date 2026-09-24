@@ -20,6 +20,7 @@ from utils.batch_repo import (
     cancel_child,
     continue_child,
     create_batch,
+    validate_subagent_reuse,
     delete_batch,
     get_batch_detail,
     list_batches,
@@ -97,13 +98,19 @@ def create():
         action_checks = agent_ledger.validate_checks(body.get('action_checks'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 子代理会话复用名单（空/未传 = 不启用）
+    try:
+        subagent_reuse = validate_subagent_reuse(body.get('subagent_reuse'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
                           agent=agent, model=model,
                           provision_repo=provision_repo, provision_ref=provision_ref,
                           action_checks=action_checks or None,
-                          gate_retry=bool(body.get('gate_retry')))
+                          gate_retry=bool(body.get('gate_retry')),
+                          subagent_reuse=subagent_reuse or None)
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -283,6 +290,12 @@ def update_config(batch_id):
         patch_kwargs['action_checks'] = checks or None
     if 'gate_retry' in body:
         patch_kwargs['gate_retry'] = bool(body.get('gate_retry'))
+    if 'subagent_reuse' in body:
+        try:
+            patch_kwargs['subagent_reuse'] = validate_subagent_reuse(
+                body.get('subagent_reuse'))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
     result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
                                  provision_repo=provision_repo, provision_ref=provision_ref,
                                  **patch_kwargs)

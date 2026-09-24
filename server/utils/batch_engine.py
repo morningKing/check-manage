@@ -62,6 +62,11 @@ _BATCH_DIRECTIVE = (
 )
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _fmt_elapsed(secs: float) -> str:
     """把耗时秒数格式化为「X 分 Y 秒」/「Y 秒」（与交互式长任务通知一致）。"""
     s = max(0, int(secs))
@@ -558,6 +563,8 @@ def subtask_status_from_messages(messages: list) -> tuple[str, str | None]:
 
 class BatchWorker:
     MAX_CONCURRENT = 3
+    # 租约 key 可注入（测试隔离/多部署共存）；生产默认 'batch'
+    LEASE_KEY = os.getenv('AI_BATCH_LEASE_KEY', 'batch')
     POLL_INTERVAL_SEC = 2
     # Hard per-child cap. Default 0 = NO cap: a batch child runs as long as it
     # keeps making progress (legit long tasks / subagent delegations shouldn't be
@@ -614,8 +621,16 @@ class BatchWorker:
         self._lease_owner: str | None = None
         self._holds_lease = False
         self._lease_thread: threading.Thread | None = None
+        # 租约被占时的后台重试（快速重启的 TTL 窗口内不永久放弃 dispatcher）
+        self._acquire_retry_thread: threading.Thread | None = None
+        # 租约 key 可注入（测试隔离/多部署共存）；生产默认 'batch'
+        self._lease_key = self.LEASE_KEY
 
     # --- lifecycle ---
+
+    # 抢占失败后的重试间隔（旧实例 lease 过期即自动接管）
+    ACQUIRE_RETRY_SEC = float(os.getenv('AI_BATCH_LEASE_RETRY_SEC', '5'))
+    LEASE_KEY = os.getenv('AI_BATCH_LEASE_KEY', 'batch')
 
     def start(self):
         if self._dispatcher and self._dispatcher.is_alive():
@@ -624,13 +639,42 @@ class BatchWorker:
         # 多进程部署（gunicorn 多 worker 等）只有一个实例真正执行批任务。
         from utils import execution_lease
         self._lease_owner = execution_lease.owner_id()
-        acquired, _token = execution_lease.acquire('batch', self._lease_owner)
+        acquired, _token = execution_lease.acquire(self._lease_key, self._lease_owner)
         if not acquired:
+            # 运维关键：快速重启（上一个实例的 lease 尚在 TTL 内）不能永久
+            # 放弃 dispatcher——进入后台重试，旧租约一过期即自动接管。
             logger.warning(
-                'batch worker lease NOT acquired; dispatcher disabled '
-                '(another instance owns the batch lease)')
+                'batch worker lease NOT acquired; retrying every %ss until '
+                'the lease becomes available', self.ACQUIRE_RETRY_SEC)
             self._holds_lease = False
+            self._acquire_retry_thread = threading.Thread(
+                target=self._acquire_retry_loop, daemon=True,
+                name='batch-worker-lease-retry')
+            self._acquire_retry_thread.start()
             return
+        self._start_with_lease()
+
+    def _acquire_retry_loop(self):
+        from utils import execution_lease
+        while not self._stop.is_set():
+            if self._stop.wait(self.ACQUIRE_RETRY_SEC):
+                return
+            ok, _token = execution_lease.acquire(self._lease_key, self._lease_owner)
+            if not ok:
+                continue
+            logger.info('batch worker lease acquired after retry; '
+                        'starting dispatcher')
+            self._holds_lease = True
+            self._restart_audit()
+            self._dispatcher = threading.Thread(
+                target=self._dispatcher_loop, daemon=True, name='batch-worker')
+            self._dispatcher.start()
+            self._lease_thread = threading.Thread(
+                target=self._lease_loop, daemon=True, name='batch-worker-lease')
+            self._lease_thread.start()
+            return
+
+    def _start_with_lease(self):
         self._holds_lease = True
         self._restart_audit()
         self._dispatcher = threading.Thread(
@@ -643,12 +687,12 @@ class BatchWorker:
     def _lease_loop(self):
         """租约心跳：续租失败连续超过 3 次（租约丢失或 DB 持续不可用）时
         停止本实例的 dispatcher——宁可整实例让位，不可与接管者双跑。"""
+        from utils import execution_lease
         misses = 0
         while not self._stop.is_set():
             if self._stop.wait(execution_lease.DEFAULT_HEARTBEAT_SEC):
                 break
-            from utils import execution_lease
-            if execution_lease.heartbeat('batch', self._lease_owner):
+            if execution_lease.heartbeat(self._lease_key, self._lease_owner):
                 misses = 0
             else:
                 misses += 1
@@ -678,9 +722,11 @@ class BatchWorker:
         self._executor.shutdown(wait=True, cancel_futures=True)
         # Allow a follow-on start() to spin up a fresh executor.
         self._executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT)
+        if self._acquire_retry_thread and self._acquire_retry_thread.is_alive():
+            self._acquire_retry_thread.join(timeout=2)
         if self._holds_lease:
             from utils import execution_lease
-            execution_lease.release('batch', self._lease_owner)
+            execution_lease.release(self._lease_key, self._lease_owner)
             self._holds_lease = False
 
     def notify(self):
@@ -719,7 +765,7 @@ class BatchWorker:
             logger.info('batch dispatcher exited (stop=%s)', self._stop.is_set())
             if self._holds_lease:
                 from utils import execution_lease
-                execution_lease.release('batch', self._lease_owner)
+                execution_lease.release(self._lease_key, self._lease_owner)
                 self._holds_lease = False
 
     def _dispatch_tick(self) -> bool:
@@ -979,6 +1025,7 @@ class BatchWorker:
         user_prompt_for_memory = None
         if is_continue:
             prompt = session_row['continue_prompt']
+            turn_label = prompt[:80]
             # Clear continue_prompt immediately so it's not re-sent on retry
             with get_db() as conn:
                 with conn.cursor() as cur:
@@ -987,6 +1034,7 @@ class BatchWorker:
                 conn.commit()
         else:
             prompt = self._with_input_hint(prompt, session_row)
+            turn_label = prompt[:80]
             user_prompt_for_memory = prompt
             from utils.memory import search_memory, render_memory_block
             mem_block = render_memory_block(search_memory(user_id, prompt, limit=5))
@@ -994,6 +1042,14 @@ class BatchWorker:
             # 与存档仍围绕用户原文 —— 指令是每条子任务都一样的样板，混进长期
             # 记忆是噪音。
             prompt = _BATCH_DIRECTIVE + mem_block + prompt
+
+        # 子代理会话复用（引导层）：派发前注入 per-agent task_id 指令——
+        # 新建与 continue 轮次都要带（continue 轮的委派同样必须续跑）。
+        reuse_agents = self._fetch_subagent_reuse(batch_id) if batch_id else []
+        if reuse_agents:
+            reuse_directive = self._build_reuse_directive(sid, reuse_agents)
+            if reuse_directive:
+                prompt = reuse_directive + prompt
 
         ws = None
         try:
@@ -1141,14 +1197,18 @@ class BatchWorker:
             # background listener. Idempotent (keyed on OpenCode message ids).
             def _persist_progress():
                 self._persist_conversation(sid, prompt, oc_session_id, None,
-                                           directory=ws, generation=generation)
+                                           directory=ws, generation=generation,
+                                           turn_label=turn_label,
+                                           reuse_agents=reuse_agents)
             preview, final_msg = self._await_finished(
                 oc_session_id, sid, directory=ws,
                 on_progress=_persist_progress,
                 baseline_ids=baseline_ids,
                 lease_owner=self._lease_owner, fencing_token=fencing_token)
             self._persist_conversation(sid, prompt, oc_session_id, final_msg,
-                                       directory=ws, generation=generation)
+                                       directory=ws, generation=generation,
+                                       turn_label=turn_label,
+                                       reuse_agents=reuse_agents)
             # 到位门禁(设计 §5.3):最终一轮落账已含完整动作,先核对后写终态。
             # 核对前先等子代理收敛——模型可能先于子代理结束回合,否则核对的是
             # "中途快照"(生产观察:首个子任务提前判完成,其余仍在执行)。
@@ -1257,6 +1317,9 @@ class BatchWorker:
             # （best-effort，失败不影响子任务本身的状态落库）。
             if ws:
                 self._record_workspace_files(sid, ws)
+            # 子代理会话复用事后校验（可观测；插件是强制层）
+            if reuse_agents:
+                self._audit_reuse_violations(sid, batch_id, reuse_agents)
             # P2：编排子会话终态 → 通知编排引擎推进 DAG（best-effort）。
             if session_row.get('orchestration_run_id'):
                 try:
@@ -1530,6 +1593,82 @@ class BatchWorker:
             threading.Thread(target=add_memory, args=(user_id, messages), daemon=True).start()
         except Exception:
             traceback.print_exc()
+
+    def _fetch_subagent_reuse(self, batch_id: str) -> list:
+        """批级子代理会话复用名单（agent 名数组；未配置返回空）。"""
+        if not batch_id:
+            return []
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT subagent_reuse FROM ai_chat_batches WHERE id = %s",
+                        (batch_id,),
+                    )
+                    row = cur.fetchone()
+            return [a for a in (row[0] or []) if a] if row else []
+        except Exception:  # noqa: BLE001 —— 配置读取失败按不启用处理
+            return []
+
+    def _build_reuse_directive(self, root_session_id: str,
+                               agents: list) -> str:
+        """复用指令（引导层；强制层是 OC 插件的 task_id 注入）。
+
+        已有钉住会话的 agent 要求模型显式携带 task_id；未钉住的说明首次
+        委派，无需携带（插件 after 回调会登记锚点）。"""
+        if not agents:
+            return ''
+        pins = {}
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT agent, task_id FROM ai_subagent_pins "
+                        "WHERE root_session_id = %s AND agent = ANY(%s)",
+                        (root_session_id, list(agents)),
+                    )
+                    for a, t in cur.fetchall():
+                        pins[a] = t
+        except Exception:  # noqa: BLE001
+            return ''
+        if not pins:
+            return ''
+        lines = [f'- {a}: task_id: {t}' for a, t in pins.items()]
+        header = ('[子代理会话复用规则] 本任务启用了子代理会话复用。用 task 工具委派'
+                  '以下 agent 时，必须在调用参数中携带对应的 task_id（续跑同一子会话，'
+                  '保留其历史上下文），除非该 agent 尚无记录：\n')
+        footer = ('\n不要为这些 agent 新建全新会话重复已完成的工作。\n\n')
+        return header + '\n'.join(lines) + footer
+
+    def _audit_reuse_violations(self, session_id: str, batch_id: str | None,
+                                agents: list):
+        """事后校验（可观测层）：复用名单内的 agent 若在父会话下出现多个
+        子会话（插件未生效/静默分叉），记 warning + 批事件，不改变任务状态。"""
+        if not agents:
+            return
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT agent, count(*) FROM ai_chat_subtasks "
+                        "WHERE root_session_id = %s AND agent = ANY(%s) "
+                        "GROUP BY agent HAVING count(*) > 1",
+                        (session_id, list(agents)),
+                    )
+                    viol = cur.fetchall()
+            for agent, n in viol:
+                logger.warning(
+                    'subagent session reuse violated sid=%s agent=%s sessions=%d '
+                    '(plugin enforcement may be inactive — OC serve restart needed '
+                    'after first deploy)', session_id, agent, n)
+                if batch_id:
+                    from utils import batch_events
+                    batch_events.append_event(
+                        batch_id, 'child.reuse.violation',
+                        aggregate_type='child', aggregate_id=session_id,
+                        payload={'agent': agent, 'sessions': n})
+        except Exception:  # noqa: BLE001
+            logger.debug('reuse audit failed sid=%s', session_id, exc_info=True)
 
     @staticmethod
     def _check_agent(agent, directory):
@@ -1822,7 +1961,8 @@ class BatchWorker:
 
     @staticmethod
     def _content_from_parts(parts, subtask_status: dict | None = None,
-                            subtask_id_map: dict | None = None) -> list:
+                            subtask_id_map: dict | None = None,
+                            subtask_segments: dict | None = None) -> list:
         """Map one OpenCode message's parts to persisted typed content: text +
         tool_use + subtask_use (matches interactive build_content + the
         AiContentPart schema). Drops reasoning/step markers. 委托给
@@ -1842,7 +1982,8 @@ class BatchWorker:
         for p in (parts or []):
             if p.get('type') == 'subtask':
                 mapped = map_part(p, subtask_status=subtask_status,
-                                  subtask_id_map=subtask_id_map)
+                                  subtask_id_map=subtask_id_map,
+                                  subtask_segments=subtask_segments)
                 if mapped:
                     subtask_by_child[mapped['subtaskId']] = mapped
         out = []
@@ -1851,7 +1992,8 @@ class BatchWorker:
             if p.get('type') not in ('text', 'tool', 'subtask', 'reasoning'):
                 continue
             mapped = map_part(p, subtask_status=subtask_status,
-                              subtask_id_map=subtask_id_map)
+                              subtask_id_map=subtask_id_map,
+                              subtask_segments=subtask_segments)
             if mapped is None:
                 continue
             if mapped['type'] in ('text', 'reasoning') and not mapped['text'].strip():
@@ -1904,15 +2046,30 @@ class BatchWorker:
 
     def _write_subtask(self, root_session_id: str, subtask_id: str, info: dict,
                        subtask_status: dict, child_messages: list,
-                       subtask_id_map: dict | None = None):
+                       subtask_id_map: dict | None = None,
+                       turn_no: int = 0, turn_label: str = '',
+                       reuse_agents: list | None = None):
         """阶段二：把一个子代理的摘要行 + 它当前拉到的全部消息 upsert 进库。
         `subtask_status` 是整棵树的完整状态快照（阶段一算好的），传给
         `_content_from_parts` 让这个子代理自己内容里（如果有）更深一层的
         占位气泡也能用上最新状态——跟顶层的处理方式统一。`subtask_id_map` 把
-        subtask part 的 id 映射到正确的子会话 sessionID。"""
+        subtask part 的 id 映射到正确的子会话 sessionID。
+
+        会话复用（subagent_reuse）相关：
+        - turn_segments：子会话里每条 user 消息 = 一次委派任务（边界）。按
+          user 消息序号（跨拉取稳定）合并任务段 {ord, turn, label, firstMsgId}；
+        - ai_subagent_pins：复用名单内的 agent，把最新子会话 id 登记为锚点
+          （与服务端持久化双保险；OC 插件 after 回调是主登记路径）。"""
         import json as _json
         with get_db() as conn:
             cur = conn.cursor()
+            # 既有任务段提前读出：assistant 消息里的嵌套 subtask_use 需要
+            # segmentCount（气泡头徽标），段合并也复用这一份
+            cur.execute("SELECT turn_segments FROM ai_chat_subtasks WHERE id = %s",
+                        (subtask_id,))
+            row = cur.fetchone()
+            segments = (row and row[0]) or []
+            subtask_segments = {subtask_id: segments}
             cur.execute(
                 "INSERT INTO ai_chat_subtasks "
                 "  (id, root_session_id, parent_subtask_id, agent, description, status, "
@@ -1925,6 +2082,8 @@ class BatchWorker:
                 (subtask_id, root_session_id, info.get('parent_id'), info.get('agent'),
                  info.get('description'), info['status'], info.get('error'), info['status']),
             )
+            user_ords = []   # (ordinal, mid, label) —— 任务段边界
+            ordinal = 0
             for m in child_messages:
                 minfo = m.get('info') or {}
                 role = minfo.get('role')
@@ -1934,18 +2093,20 @@ class BatchWorker:
                     if not texts:
                         continue
                     content = [{'type': 'text', 'text': t} for t in texts]
-                    mid = minfo.get('id') or f'{subtask_id}:u:{id(m)}'
+                    mid = minfo.get('id') or f'{subtask_id}:u:{ordinal}'
                     cur.execute(
                         "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
                         "VALUES (%s, %s, 'user', %s) "
                         "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
                         (mid, subtask_id, _json.dumps(content)),
                     )
+                    user_ords.append((ordinal, mid, (texts[0] or '')[:80]))
+                    ordinal += 1
                     continue
                 if role != 'assistant':
                     continue
                 content = self._content_from_parts(m.get('parts'), subtask_status,
-                                                   subtask_id_map)
+                                                   subtask_id_map, subtask_segments)
                 if not content:
                     continue
                 mid = minfo.get('id') or f'{subtask_id}:a:{id(m)}'
@@ -1955,12 +2116,45 @@ class BatchWorker:
                     "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
                     (mid, subtask_id, _json.dumps(content)),
                 )
+            # 任务段合并：子会话内新增的 user 消息（按序号判新）→ 追加任务段
+            if user_ords:
+                covered = {seg.get('ord') for seg in segments}
+                for ord_i, mid, label in user_ords:
+                    if ord_i in covered:
+                        continue
+                    segments.append({
+                        'ord': ord_i,
+                        'turn': turn_no,
+                        'label': label or (turn_label or '')[:80],
+                        'firstMsgId': mid,
+                        'startedAt': _now_iso(),
+                    })
+                cur.execute("UPDATE ai_chat_subtasks SET turn_segments = %s::jsonb "
+                            "WHERE id = %s",
+                            (_json.dumps(segments, ensure_ascii=False), subtask_id))
+            # 复用锚点登记（双保险；OC 插件 after 回调是主路径）
+            agent_name = info.get('agent')
+            if agent_name and reuse_agents and agent_name in reuse_agents:
+                cur.execute(
+                    "INSERT INTO ai_subagent_pins "
+                    "  (id, root_session_id, batch_id, agent, task_id) "
+                    "VALUES (%s, %s, (SELECT batch_id FROM ai_chat_sessions "
+                    "          WHERE id = %s), %s, %s) "
+                    "ON CONFLICT (root_session_id, agent) DO UPDATE SET "
+                    "  task_id = EXCLUDED.task_id, updated_at = NOW()",
+                    # 主键用随机值：真正的幂等键是 (root_session_id, agent)
+                    # 唯一索引——OC 子会话 id 前 8 字符跨批次常相同，不能入主键
+                    ('spin_' + uuid.uuid4().hex,
+                     root_session_id, root_session_id, agent_name, subtask_id),
+                )
             conn.commit()
 
     def _persist_conversation(self, session_id: str, prompt: str,
                               oc_session_id: str, assistant_msg: dict | None,
                               directory: str = '',
-                              generation: int | None = None):
+                              generation: int | None = None,
+                              turn_label: str = '',
+                              reuse_agents: list | None = None):
         """Persist the FULL conversation: the user prompt + every assistant
         message (mapped to text + tool_use parts) read from OpenCode's REST
         message list, so the batch child's thread shows tool bubbles like an
@@ -2010,7 +2204,25 @@ class BatchWorker:
             # 消息再落顶层，占位气泡不会有哪一层状态落后。
             for sid, info in known.items():
                 self._write_subtask(session_id, sid, info, subtask_status,
-                                    child_messages.get(sid, []), subtask_id_map)
+                                    child_messages.get(sid, []), subtask_id_map,
+                                    turn_no=generation or 0,
+                                    turn_label=turn_label,
+                                    reuse_agents=reuse_agents)
+            # 顶层内容里的嵌套 subtask_use 带 segmentCount（气泡徽标）——
+            # 必须在 _write_subtask 合并任务段之后读，才是本次持久化的最新值
+            subtask_segments: dict = {}
+            if known:
+                try:
+                    with get_db() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT id, turn_segments FROM ai_chat_subtasks "
+                                "WHERE id = ANY(%s)", (list(known.keys()),))
+                            for rid, segs in cur.fetchall():
+                                if segs:
+                                    subtask_segments[rid] = segs
+                except Exception:  # noqa: BLE001
+                    pass
 
             # 动作账本（设计 §5.1）：根会话与每个子代理的 tool part 落账。
             # best-effort：失败置健康标记，终态门禁按 inconclusive 处理，
@@ -2033,7 +2245,7 @@ class BatchWorker:
                 if info.get('role') != 'assistant':
                     continue
                 content = self._content_from_parts(m.get('parts'), subtask_status,
-                                                   subtask_id_map)
+                                                   subtask_id_map, subtask_segments)
                 if content:
                     meta = public_meta(meta_from_info(info))
                     assistant_rows.append((info.get('id') or f'{session_id}:a:{len(assistant_rows)}',

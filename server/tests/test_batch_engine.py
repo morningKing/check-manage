@@ -1486,7 +1486,7 @@ def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_s
                 stubs = [p for p in top_content if p['type'] == 'subtask_use']
                 assert stubs == [{'type': 'subtask_use', 'subtaskId': 'ses_child_be',
                                   'agent': 'build', 'description': 'do y',
-                                  'status': 'completed'}]
+                                  'status': 'completed', 'segmentCount': 0}]
     finally:
         with get_db() as conn:
             with conn.cursor() as cur:

@@ -743,16 +743,46 @@ def test_lease_single_owner(db_conn):
 
 
 def test_worker_start_without_lease_disables_dispatcher(db_conn):
-    """抢占不到租约 → dispatcher 不启动（多进程只有一个实例跑 worker）。"""
+    """抢占不到租约 → dispatcher 不启动（多进程只有一个实例跑 worker）。
+    用独立租约 key 隔离（dev 后端长期持有 'batch' 租约）。"""
     from utils.batch_engine import BatchWorker
     from utils import execution_lease
+    key = 'batch-test-' + uuid.uuid4().hex[:8]
     owner = execution_lease.owner_id()
-    ok, _ = execution_lease.acquire('batch', owner, ttl_sec=300)
+    ok, _ = execution_lease.acquire(key, owner, ttl_sec=300)
     assert ok
     try:
         w = BatchWorker()
+        w._lease_key = key
         w.start()
         assert w._holds_lease is False
         assert w._dispatcher is None
     finally:
-        execution_lease.release('batch', owner)
+        execution_lease.release(key, owner)
+
+
+def test_worker_start_lease_loop_survives(db_conn):
+    """P1 回归补漏：start() 后租约心跳线程必须存活。此前 _lease_loop 在
+    import 前引用 execution_lease（UnboundLocalError），心跳线程一启动就
+    退出、续租从未真正运行——start() 全流程此前无测试覆盖。"""
+    import time as _time
+    from utils.batch_engine import BatchWorker
+    from utils import execution_lease
+    key = 'batch-test-' + uuid.uuid4().hex[:8]
+    w = BatchWorker()
+    w._lease_key = key
+    owner = execution_lease.owner_id()
+    ok, _ = execution_lease.acquire(key, owner, ttl_sec=300)
+    assert ok
+    try:
+        execution_lease.release(key, owner)       # 让本实例正常抢占
+        w = BatchWorker()
+        w._lease_key = key
+        w.start()
+        assert w._holds_lease is True
+        assert w._lease_thread is not None and w._lease_thread.is_alive()
+        _time.sleep(0.5)                          # 让心跳线程跑过第一轮
+        assert w._lease_thread.is_alive()
+        w.stop()
+    finally:
+        execution_lease.release(key, owner)

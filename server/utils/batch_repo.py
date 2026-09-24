@@ -199,6 +199,34 @@ def get_max_files_per_batch() -> int:
     return max(1, val)
 
 
+MAX_SUBAGENT_REUSE = 10
+
+
+def validate_subagent_reuse(value) -> list:
+    """校验批级子代理会话复用名单：agent 名字符串数组（去重、剥空白）。
+
+    空/None 合法（= 不启用）。接受逗号分隔字符串容错。非法抛 ValueError
+    （路由回 400）。"""
+    if value in (None, []):
+        return []
+    if isinstance(value, str):
+        value = value.split(',')
+    if not isinstance(value, list):
+        raise ValueError('subagent_reuse 必须是 agent 名数组')
+    names = []
+    for v in value:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError('subagent_reuse 的每项必须是非空 agent 名')
+        name = v.strip()
+        if len(name) > 200:
+            raise ValueError('subagent_reuse 的 agent 名过长（>200）')
+        if name not in names:
+            names.append(name)
+    if len(names) > MAX_SUBAGENT_REUSE:
+        raise ValueError(f'subagent_reuse 最多 {MAX_SUBAGENT_REUSE} 个 agent')
+    return names
+
+
 def create_batch(user_id: str, *, name: str, prompt: str,
                  template_id: str | None, files: list[dict],
                  scan_task_id: str | None = None,
@@ -210,7 +238,8 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  gate_retry: bool | None = None,
                  api_key_id: str | None = None,
                  callback_url: str | None = None,
-                 callback_secret: str | None = None) -> dict:
+                 callback_secret: str | None = None,
+                 subagent_reuse: list | None = None) -> dict:
     """Atomically insert a batch + N child sessions.
 
     `files` is a list of {name, path} dicts where `path` is workspace-relative
@@ -242,13 +271,14 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
                 "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
-                "   scan_task_id, action_checks, gate_retry) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   scan_task_id, action_checks, gate_retry, subagent_reuse) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
                  provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
                  scan_task_id,
                  Json(action_checks) if action_checks else None,
-                 gate_retry),
+                 gate_retry,
+                 Json(subagent_reuse) if subagent_reuse else None),
             )
             batch = dict(cur.fetchone())
 
@@ -817,6 +847,7 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         provision_ref: str | None = None,
                         action_checks= _UNSET,
                         gate_retry= _UNSET,
+                        subagent_reuse= _UNSET,
                         api_key_id: str | None = None,
                         callback_url: str | None = None,
                         callback_secret: str | None = None) -> dict | None:
@@ -862,6 +893,17 @@ def update_batch_config(user_id: str, batch_id: str, *,
                     "UPDATE ai_chat_batches SET gate_retry = %s "
                     "WHERE id = %s AND user_id = %s",
                     (gate_retry, batch_id, user_id),
+                )
+            conn.commit()
+    if subagent_reuse is not _UNSET:
+        # 子代理会话复用名单:显式传入才更新,未传保持原值(与 action_checks 同语义)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET subagent_reuse = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (Json(subagent_reuse) if subagent_reuse else None,
+                     batch_id, user_id),
                 )
             conn.commit()
 

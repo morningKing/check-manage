@@ -200,6 +200,7 @@ def child_subtask_messages(batch_id, sid, subtask_id):
         'subtask': {
             'id': st['id'], 'agent': st.get('agent'), 'description': st.get('description'),
             'status': st['status'], 'error': st.get('error_message'),
+            'segments': st.get('turn_segments') or [],
         },
         'messages': [
             {'id': m['id'], 'role': m['role'], 'content': m['content'],
