@@ -736,8 +736,8 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
             if not row:
                 return None
             status = row[0]
-            if status not in ('completed', 'failed', 'cancelled'):
-                raise ValueError('only completed/failed/cancelled children can be re-executed')
+            if status not in ('completed', 'failed', 'cancelled', 'needs_review'):
+                raise ValueError('only completed/failed/cancelled/needs_review children can be re-executed')
             cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (session_id,))
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
@@ -782,16 +782,24 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
             if not row:
                 return None
             status = row[0]
-            if status not in ('completed', 'failed', 'cancelled'):
-                raise ValueError('only completed/failed/cancelled children can be continued')
+            if status not in ('completed', 'failed', 'cancelled', 'needs_review'):
+                raise ValueError('only completed/failed/cancelled/needs_review children can be continued')
+            # M1：条件 UPDATE——仅当行仍处于读到的终态时才转移（并发下的
+            # reexecute/continue 双击只生效一次），以 rowcount 驱动计数回滚
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', "
                 "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
                 "  pause_requested=false, execution_generation = execution_generation + 1 "
-                "WHERE id = %s",
+                "WHERE id = %s AND status IN ('completed','failed','cancelled','needs_review') "
+                "RETURNING status",
                 (prompt, session_id),
             )
-            if status == 'completed':
+            landed = cur.fetchone()
+            if not landed:
+                conn.rollback()
+                raise ValueError('子任务状态已变化，请刷新后重试')
+            prev_status = landed[0]
+            if prev_status == 'completed':
                 cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
             else:
                 # 'failed' 与 'cancelled' 都记在 failed 计数里。
@@ -945,7 +953,7 @@ def reset_failed_to_pending(user_id: str, batch_id: str, *,
                 "SET status='pending', error_message=NULL, "
                 "    cancel_requested=false, pause_requested=false, "
                 "    execution_generation = execution_generation + 1 "
-                "WHERE batch_id=%s AND status='failed' "
+                "WHERE batch_id=%s AND status IN ('failed','needs_review') "
                 f"  AND batch_id IN ({owner_scope})",
                 tuple(owner_params),
             )

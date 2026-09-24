@@ -72,11 +72,15 @@ def test_claim_marks_batch_running(user_id, db_conn):
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=2)   # batch defaults to 'pending'
     # 认领是全局的(共享开发库):清掉其他用例遗留的 pending 行,保证本用例
-    # 种子被确定性地认领,不与残留互相抢
+    # 种子被确定性地认领,不与残留互相抢。
+    # M8 治理：仅清理「测试命名」批次（AITEST-*/e2e*/*-test 等），
+    # 不再无差别删除共享库里真实用户的 pending 数据。
     with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions "
-                    "WHERE status='pending' AND batch_id IS NOT NULL "
-                    "  AND batch_id <> %s", (bid,))
+        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                    "WHERE s.batch_id = b.id AND s.status='pending' "
+                    "  AND b.id <> %s "
+                    "  AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
+                    "       OR b.name LIKE '%%-test')", (bid,))
     db_conn.commit()
     BatchWorker()._claim_pending_sessions(limit=1)
     db_conn.rollback()   # drop our snapshot so we see the worker's committed update
@@ -90,9 +94,11 @@ def test_claim_pending_respects_limit(user_id, db_conn):
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=5)
     w = BatchWorker()
     with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions "
-                    "WHERE status='pending' AND batch_id IS NOT NULL "
-                    "  AND batch_id <> %s", (bid,))
+        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                    "WHERE s.batch_id = b.id AND s.status='pending' "
+                    "  AND b.id <> %s "
+                    "  AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
+                    "       OR b.name LIKE '%%-test')", (bid,))
     db_conn.commit()
     claimed = w._claim_pending_sessions(limit=2)
     assert len(claimed) == 2
@@ -795,10 +801,15 @@ def test_batch_status_partial_when_mix(user_id, db_conn):
 # ---------------------------------------------------------------------------
 
 def test_recompute_batch_status_fires_callback_on_terminal(user_id, db_conn, monkeypatch):
-    """批任务收敛为终态且配置了 callback_url 时，应通过 webhook_engine 异步通知。"""
+    """批任务收敛为终态且配置了 callback_url 时，应通过 webhook_engine 异步通知。
+
+    M4 之后默认走 outbox 投递；本测试用 AI_DELIVERY_OUTBOX_ENABLED=0 锁定
+    旧直发路径（该路径仍需保持可用，作为 outbox 的降级通道）。"""
     import threading
     import utils.webhook_engine as wh
     from utils.batch_engine import _recompute_batch_status
+
+    monkeypatch.setenv('AI_DELIVERY_OUTBOX_ENABLED', '0')
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     with db_conn.cursor() as cur:
@@ -913,28 +924,44 @@ def test_concurrency_cap_3(user_id, db_conn, monkeypatch, tmp_path):
 # Test 7: restart audit resets orphaned 'running' batch sessions
 # ---------------------------------------------------------------------------
 
-def test_restart_audit_resets_orphaned_running(user_id, db_conn):
-    """A 'running' batch session left over from a previous Flask process should
-    be reset to 'pending' when the worker starts."""
+def test_restart_audit_resets_orphaned_running(user_id, db_conn, monkeypatch):
+    """H8 后遗留 running 行不再无条件重放，由恢复决策表接管：
+    OpenCode 会话丢失（404）→ 带准确原因失败。"""
+    from unittest.mock import MagicMock
+    import requests as _requests
     from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
 
     bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
     with db_conn.cursor() as cur:
         cur.execute(
-            "UPDATE ai_chat_sessions SET status = 'running' WHERE id = %s",
+            "UPDATE ai_chat_sessions SET status = 'running', lease_owner='dead', "
+            "  lease_until = NOW() - interval '10 minutes', "
+            "  opencode_session_id = 'ses_dead404' WHERE id = %s",
             (sids[0],),
         )
     db_conn.commit()
 
+    def _raise_404(oc, directory=''):
+        resp = MagicMock()
+        resp.status_code = 404
+        raise _requests.HTTPError('404', response=resp)
+
+    fake = MagicMock()
+    fake.get_messages.side_effect = _raise_404
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+
     w = BatchWorker()
-    w._restart_audit()
+    w._reconcile_stale_running()
 
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT status FROM ai_chat_sessions WHERE id = %s",
+            "SELECT status, error_message FROM ai_chat_sessions WHERE id = %s",
             (sids[0],),
         )
-        assert cur.fetchone()[0] == 'pending'
+        status, err = cur.fetchone()
+    assert status == 'failed'
+    assert 'OpenCode 会话已失效' in err
 
 
 def test_create_batch_stores_provision_and_context_returns_it(user_id, db_conn):
@@ -1779,3 +1806,35 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
     assert status == 'completed'
     assert preview == 'resumed answer'
     assert error is None
+
+
+def test_recompute_batch_status_enqueues_outbox_when_enabled(user_id, db_conn):
+    """M4：outbox 启用（默认）时终态回调入队 ai_delivery_outbox 且不直发。"""
+    import utils.webhook_engine as wh
+    from utils.batch_engine import _recompute_batch_status
+
+    bid, sids = _seed_batch(db_conn, user_id, n_sessions=1)
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_chat_batches SET done = 1, callback_url = %s, callback_secret = %s "
+            "WHERE id = %s",
+            ('https://example.com/hook', 'sec', bid),
+        )
+    db_conn.commit()
+
+    fired = []
+    monkey_wh = lambda **kw: fired.append(kw) or {'success': True}
+    import utils.webhook_engine as wh_mod
+    orig = wh_mod._fire_single_webhook
+    wh_mod._fire_single_webhook = monkey_wh
+    try:
+        _recompute_batch_status(bid)
+    finally:
+        wh_mod._fire_single_webhook = orig
+
+    assert not fired, 'outbox 启用时不得直发'
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_delivery_outbox WHERE batch_id = %s", (bid,))
+        assert cur.fetchone()[0] == 1
+        cur.execute("DELETE FROM ai_delivery_outbox WHERE batch_id = %s", (bid,))
+

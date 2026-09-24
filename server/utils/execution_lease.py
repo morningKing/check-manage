@@ -29,7 +29,8 @@ def owner_id() -> str:
 
 
 def acquire(lease_key: str, owner: str, *,
-            ttl_sec: int = DEFAULT_LEASE_TTL_SEC) -> tuple[bool, int]:
+            ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
+            lease_kind: str | None = None) -> tuple[bool, int]:
     """原子抢占租约。返回 (ok, fencing_token)。
 
     冲突规则：仅当现有租约已过期（lease_until < NOW()）或本就属于自己时
@@ -43,11 +44,13 @@ def acquire(lease_key: str, owner: str, *,
                 cur.execute(
                     """
                     INSERT INTO ai_batch_worker_leases
-                        (lease_key, owner_id, fencing_token, acquired_at,
-                         heartbeat_at, lease_until)
-                    VALUES (%s, %s, 1, NOW(), NOW(), NOW() + (%s || ' seconds')::interval)
+                        (lease_key, lease_kind, owner_id, fencing_token,
+                         acquired_at, heartbeat_at, lease_until)
+                    VALUES (%s, %s, %s, 1, NOW(), NOW(),
+                            NOW() + (%s || ' seconds')::interval)
                     ON CONFLICT (lease_key) DO UPDATE SET
                         owner_id = EXCLUDED.owner_id,
+                        lease_kind = EXCLUDED.lease_kind,
                         fencing_token = ai_batch_worker_leases.fencing_token + 1,
                         acquired_at = NOW(),
                         heartbeat_at = NOW(),
@@ -56,7 +59,7 @@ def acquire(lease_key: str, owner: str, *,
                          OR ai_batch_worker_leases.owner_id = EXCLUDED.owner_id
                     RETURNING fencing_token
                     """,
-                    (lease_key, owner, ttl_sec),
+                    (lease_key, lease_kind or lease_key, owner, ttl_sec),
                 )
                 row = cur.fetchone()
         if row:

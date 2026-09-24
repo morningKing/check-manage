@@ -371,10 +371,30 @@ def _recompute_batch_status(batch_id: str) -> None:
                 "WHERE id = %s",
                 (new_status, terminal, batch_id),
             )
+            # P1 M4：终态时同一事务内入队 outbox（outbox 关闭时回退直发，
+            # 见 _notify_callback 内的判断）
+            if new_status in ('completed', 'partial', 'failed'):
+                if callback_url:
+                    from utils import batch_events, delivery_outbox
+                    eid = batch_events.append_event(
+                        batch_id, 'batch.status', aggregate_type='batch',
+                        aggregate_id=batch_id,
+                        payload={'status': new_status, 'done': done,
+                                 'failed': failed, 'total': total},
+                        conn=conn)
+                    if delivery_outbox.outbox_enabled():
+                        delivery_outbox.enqueue(
+                            batch_id, target_url=callback_url,
+                            payload={'event': 'ai_batch_completed',
+                                     'batchId': batch_id, 'status': new_status,
+                                     'total': total, 'done': done, 'failed': failed},
+                            secret=callback_secret or '', event_id=eid, conn=conn)
         conn.commit()
-    if new_status in ('completed', 'partial', 'failed'):
-        _notify_callback(batch_id, new_status, callback_url, callback_secret,
-                         done, failed, total)
+    if new_status in ('completed', 'partial', 'failed') and callback_url:
+        from utils.delivery_outbox import outbox_enabled
+        if not outbox_enabled():
+            _notify_callback(batch_id, new_status, callback_url, callback_secret,
+                             done, failed, total)
 
 
 def _notify_callback(batch_id, status, callback_url, callback_secret,
@@ -393,6 +413,13 @@ def _notify_callback(batch_id, status, callback_url, callback_secret,
     """
     if not callback_url:
         return
+    # P1 M4：outbox 启用时回调已入队由投递器负责，直发会造成重复投递
+    try:
+        from utils.delivery_outbox import outbox_enabled
+        if outbox_enabled():
+            return
+    except Exception:
+        pass
     def _fire():
         try:
             from utils.webhook_engine import _fire_single_webhook
@@ -665,7 +692,9 @@ class BatchWorker:
             logger.info('batch worker lease acquired after retry; '
                         'starting dispatcher')
             self._holds_lease = True
-            self._restart_audit()
+            # H8：不再无条件重放（旧实现 running→pending + 重发原始 prompt，
+            # 重做已产生的外部副作用）。遗留 running 行由恢复决策表接管：
+            # _reconcile_stale_running 按 lease/checkpoint/oc 会话状态分流。
             self._dispatcher = threading.Thread(
                 target=self._dispatcher_loop, daemon=True, name='batch-worker')
             self._dispatcher.start()
@@ -676,7 +705,9 @@ class BatchWorker:
 
     def _start_with_lease(self):
         self._holds_lease = True
-        self._restart_audit()
+        # H8：同上，重启后遗留 running 行交给 _reconcile_stale_running 决策
+        # （lease 未过期等待 / 404 失败 / unknown effect → needs_review /
+        # 会话活着 → 原地续跑），不做无条件重放。
         self._dispatcher = threading.Thread(
             target=self._dispatcher_loop, daemon=True, name='batch-worker')
         self._dispatcher.start()
@@ -927,16 +958,10 @@ class BatchWorker:
             _recompute_batch_status(bid)
 
     def _restart_audit(self):
-        """Reset any 'running' batch session left over from a previous Flask
-        process back to 'pending'.  Idempotent."""
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE ai_chat_sessions SET status = 'pending' "
-                    "WHERE status = 'running' "
-                    "  AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL)"
-                )
-            conn.commit()
+        """H8 修复后不再使用：无条件 running→pending 重放与 P1 恢复决策表
+        冲突（重启即重做副作用）。遗留行为由 _reconcile_stale_running 的
+        恢复决策接管。方法保留为空操作以兼容潜在外部引用。"""
+        return None
 
     # --- per-session run ---
 
@@ -1153,7 +1178,7 @@ class BatchWorker:
 
             # Persist the prompt up front so opening this child mid-run shows the
             # question immediately.
-            self._persist_user_prompt(sid, prompt)
+            self._persist_user_prompt(sid, prompt, generation=generation)
             # continue 模式先拍基线：旧 assistant 消息（上一轮完成/中断的）在
             # 新回合产生首条消息之前仍是"最新一条"，不跳过的话 _await_finished
             # 第一轮轮询就会拿旧消息的终态/错误立刻判定本轮完成或失败。
@@ -1218,14 +1243,19 @@ class BatchWorker:
             # （异常/不完整）或核对不可证实（inconclusive）一律不得 completed。
             gate_status = None
             fail_closed = None
+            # H3 修复：生效信号不能只看批级配置——入口 D（attach）与管理员
+            # 补挂只写 per-session 期望行，这些期望同样必须核对并拦截
+            # （恢复与 main 一致的「任何 failed 都阻断」语义）。
+            evaluated = len(gate.get('results') or [])
+            applicable = (gate_reg.get('applicable') or 0)
             if gate_reg.get('error'):
                 fail_closed = (f'动作门禁无法证实：期望登记失败'
                                f'（{gate_reg["error"]}），请人工复核')
-            elif (gate_reg.get('applicable') or 0) > 0:
-                if gate_reg.get('registered', 0) != gate_reg.get('applicable'):
+            elif evaluated > 0 or applicable > 0:
+                if applicable > 0 and gate_reg.get('registered', 0) != applicable:
                     fail_closed = (f'动作门禁无法证实：期望登记不完整'
                                    f'（{gate_reg.get("registered")}/'
-                                   f'{gate_reg.get("applicable")}），请人工复核')
+                                   f'{applicable}），请人工复核')
                 elif gate['status'] == 'failed':
                     gate_status = 'failed'
                 elif gate['status'] == 'inconclusive':
@@ -1776,17 +1806,22 @@ class BatchWorker:
                                      directory=ws, agent=agent, model=model)
         return new_oc
 
-    def _persist_user_prompt(self, session_id: str, prompt: str):
-        """Persist the child's prompt as a user message (deterministic id, write
-        once) so the thread shows the question while the turn runs."""
+    def _persist_user_prompt(self, session_id: str, prompt: str,
+                             generation: int | None = None):
+        """Persist the child's prompt as a user message so the thread shows the
+        question while the turn runs.
+
+        M2 修复：id 以 generation 区分轮次——固定 id + ON CONFLICT DO NOTHING
+        会让续跑/重试轮次的用户消息永不落库（模型收到但历史看不到）。"""
         import json as _json
+        suffix = f':g{generation}' if generation is not None else ''
         try:
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO ai_chat_messages (id, session_id, role, content) "
                         "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
-                        (f'{session_id}:user', session_id,
+                        (f'{session_id}:user{suffix}', session_id,
                          _json.dumps([{'type': 'text', 'text': prompt}])),
                     )
                 conn.commit()
@@ -2481,7 +2516,8 @@ class BatchWorker:
         return ok
 
     def _mark_needs_review(self, session_id: str, batch_id: str | None,
-                           reason: str, generation: int | None = None):
+                           reason: str, generation: int | None = None,
+                           fencing_token: int | None = None):
         """needs_review 终态（P1 spec §4.2）：无法自动安全继续，需人工判断，
         不得自动重放。计入 failed 聚合（与 cancelled 同桶），子任务行保留
         字面 'needs_review' 状态供管理面展示。"""
@@ -2493,7 +2529,7 @@ class BatchWorker:
             session_id, 'needs_review',
             generation=self._resolve_generation(session_id, generation),
             error_message=reason, count='failed',
-            turn_status='cancelled')
+            turn_status='cancelled', fencing_token=fencing_token)
         if res is None:
             self._on_transition_miss(session_id, batch_id, generation,
                                      'needs_review', redirect=False)

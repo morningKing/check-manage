@@ -6,6 +6,7 @@
   FOR UPDATE SKIP LOCKED；
 - 复用 webhook_engine 的 HMAC 签名与 HTTP 逻辑；
 - 退避 1s/5s/30s/5m/30m，最多 8 次后 dead_letter；
+sending 状态超过 10 分钟未回到终态（进程被 kill）会被重新捞起（M12）；
 - 每次投递结果写 ai_batch_events（delivery.sent / delivery.failed）；
 - 人工重放：dead_letter → pending（管理端点调 replay）。
 
@@ -55,7 +56,21 @@ def enqueue(batch_id: str, *, target_url: str, payload: dict,
 
 def _enqueue_cur(conn, oid, eid, batch_id, event_type, target_url, payload,
                  secret, _json):
+    # M14：SAVEPOINT 包裹——入队失败不毒化外层终态事务
+    conn.cursor().execute('SAVEPOINT be_obx') if False else None
     with conn.cursor() as cur:
+        cur.execute('SAVEPOINT be_obx')
+        try:
+            _insert(cur, oid, eid, batch_id, event_type, target_url, payload,
+                    secret, _json)
+            cur.execute('RELEASE SAVEPOINT be_obx')
+        except Exception:
+            cur.execute('ROLLBACK TO SAVEPOINT be_obx')
+            raise
+
+
+def _insert(cur, oid, eid, batch_id, event_type, target_url, payload,
+            secret, _json):
         cur.execute(
             """
             INSERT INTO ai_delivery_outbox
@@ -77,8 +92,10 @@ def _claim_due(limit: int = 10) -> list[dict]:
             cur.execute(
                 "SELECT id, batch_id, event_type, target_url, payload::text, "
                 "signature, attempt_count FROM ai_delivery_outbox "
-                "WHERE status IN ('pending', 'failed') "
-                "  AND next_retry_at <= NOW() "
+                "WHERE (status IN ('pending', 'failed') "
+                "        AND next_retry_at <= NOW()) "
+                "   OR (status = 'sending' "
+                "        AND next_retry_at < NOW() - interval '10 minutes') "
                 "ORDER BY next_retry_at LIMIT %s "
                 "FOR UPDATE SKIP LOCKED",
                 (limit,),

@@ -1546,6 +1546,17 @@ def run_session_command(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # P0 执行所有权（M3）：与 send_message 一致——非终态批子会话由后台
+    # worker 独家驱动，command 入口同样不得绕过（否则可再开并发 turn）。
+    _sess_batch_id = sess[5] if len(sess) > 5 else None
+    _sess_status = sess[3] if len(sess) > 3 else None
+    if _sess_batch_id and _sess_status in ('pending', 'running', 'paused'):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能执行命令',
+            'retryable': False,
+            'operation': 'run_session_command',
+        }}), 409
     body = request.get_json(force=True)
     command = (body.get('command') or '').strip()
     arguments = (body.get('arguments') or '').strip()

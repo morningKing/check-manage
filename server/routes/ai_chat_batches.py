@@ -8,7 +8,7 @@ from pathlib import Path
 from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
-from auth import login_required
+from auth import login_required, login_required_sse
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, validate_staged_files,
                              WorkspacePathError)
@@ -335,16 +335,24 @@ def remove(batch_id):
             pass  # became terminal concurrently
         from utils.batch_engine import get_worker
         get_worker().notify()
-        # Bounded wait so running children actually stop before their
-        # workspaces/DB rows vanish; workers' post-delete write-backs are
-        # guarded (0-row updates / warning-logged), so a timeout is not fatal.
+        # Bounded drain（P0 spec §7.2 / H2 修复）：超时不得继续删除——与对外
+        # API 语义一致，返回 409 并保留任务与工作区（消灭幽灵执行）。
         import time as _time
         deadline = _time.time() + 10
+        drained = False
         while _time.time() < deadline:
             d = get_batch_detail(user_id, batch_id)
             if not d or not any(s['status'] == 'running' for s in d['sessions']):
+                drained = True
                 break
             _time.sleep(0.3)
+        if not drained:
+            return jsonify({'error': {
+                'code': 'BATCH_DRAIN_TIMEOUT',
+                'message': '等待运行中子任务停止超时，批任务与工作区已保留，请稍后重试',
+                'retryable': True,
+                'operation': 'delete_batch',
+            }}), 409
         body = get_batch_detail(user_id, batch_id) or body
     # Tear down per-child workspaces before DB cascade
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
@@ -559,7 +567,7 @@ def batch_attempts(batch_id):
 
 
 @ai_chat_batches_bp.get('/events')
-@login_required
+@login_required_sse
 def batch_events_sse():
     """批次事件流 SSE（P1 spec §7.2）。
 
@@ -606,7 +614,8 @@ def batch_events_sse():
                              'eventSeq': r['event_seq'],
                              'type': r['event_type'],
                              'data': r.get('payload') or {}}
-                    yield (f"event: batch_event\n"
+                    yield (f"id: {bid}:{r['event_seq']}\n"
+                           f"event: batch_event\n"
                            f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
             # 终态检查：全部批次终态 → batch_done 收流
             statuses = []
@@ -619,7 +628,7 @@ def batch_events_sse():
                 yield f"event: batch_done\ndata: {done_frame}\n\n"
                 return
             yield ': ping\n\n'
-            _time.sleep(3)
+            _time.sleep(15)
 
     resp = Response(stream_with_context(generate()),
                     mimetype='text/event-stream')

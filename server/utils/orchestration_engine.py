@@ -170,7 +170,15 @@ def _render_prompt(template: str, run: dict, steps_by_node: dict) -> str:
 
 def _advance_run(run_id: str) -> None:
     """scheduler 的一步：可达性计算 → runnable 推进 → run 状态派生。
-    由持租约的调度线程串行调用；Approval/Join 在这里落地。"""
+    由持租约的调度线程串行调用；Approval/Join 在这里落地。
+
+    H4 修复说明：并发安全不依赖全局锁（advisory lock 在客户端崩溃时会以
+    idle-in-transaction 形式毒化后续所有推进），而是靠每处 step 转移的
+    状态谓词 CAS——重复推进时输者 0 行生效，效果等价且无死锁面。"""
+    return _advance_run_locked(run_id)
+
+
+def _advance_run_locked(run_id: str) -> None:
     from db import get_db
     from utils import batch_events
     run = get_run(run_id)
@@ -213,12 +221,15 @@ def _advance_run(run_id: str) -> None:
             for s in steps:
                 if s['status'] != 'blocked':
                     continue
-                # 不可达（分支未命中）或依赖已失败（拒绝/失败传播）→ skipped
+                # 不可达（分支未命中）、依赖已失败/被跳过（失败与跳过均向
+                # 下游传播，H6：否则菱形 DAG 一侧 skipped 会让 join 永久
+                # blocked、run 卡 running）→ skipped
                 deps = by_node  # node_id -> step
-                dep_failed = any(
-                    (deps.get(d) or {}).get('status') in ('failed', 'needs_review')
+                dep_dead = any(
+                    (deps.get(d) or {}).get('status') in ('failed', 'needs_review',
+                                                          'skipped')
                     for d in (s.get('depends_on') or []))
-                if s['node_id'] not in reached or dep_failed:
+                if s['node_id'] not in reached or dep_dead:
                     cur.execute(
                         "UPDATE ai_orchestration_steps SET status='skipped', "
                         "  finished_at=NOW(), updated_at=NOW() WHERE id=%s",
@@ -298,7 +309,11 @@ def _run_edges(run: dict) -> list[dict]:
 
 
 def _launch_agent_step(run: dict, step: dict, by_node: dict):
-    """agent step → 创建子会话（pending），由批 worker 认领执行。"""
+    """agent step → 创建子会话（pending），由批 worker 认领执行。
+
+    H4：step 的 runnable→running 转移用状态谓词 CAS——并发推进时只有
+    一个线程能赢得转移，输者直接返回，不再重复创建子会话（审查实测
+    单节点 run 并发创建 6 个子会话即此缺陷）。"""
     import uuid as _uuid
     from db import get_db
     node = step.get('node_def') or {}
@@ -317,30 +332,37 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
                 cur.execute(
                     "UPDATE ai_orchestration_steps SET status='running', "
                     "  attempt_count = attempt_count + 1, updated_at=NOW() "
-                    "WHERE id=%s", (step['id'],))
+                    "WHERE id=%s AND status='running'", (step['id'],))
             conn.commit()
         return
     sid = str(_uuid.uuid4())
     prompt = _render_prompt(node.get('prompt_template') or '', run, by_node)
-    from utils.workspace import batch_workspace_root
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO ai_chat_sessions "
-                "  (id, user_id, title, status, workspace_path, session_token, "
-                "   token_expires_at, continue_prompt, agent, model, "
-                "   orchestration_run_id, orchestration_step_id) "
-                "VALUES (%s, %s, %s, 'pending', '', %s, NOW() + interval "
-                "  '24 hours', %s, %s, %s, %s, %s)",
-                (sid, run['requested_by'],
-                 f"[编排] {run['id'][:8]} · {step.get('name') or step['node_id']}",
-                 secrets.token_hex(32), prompt, node.get('agent'),
-                 node.get('model'), run['id'], step['id']))
+            # CAS：仅当 step 仍为 runnable 候选（blocked/failed-重试）时赢得
+            # 派发权；输者放弃创建，杜绝重复派发
             cur.execute(
                 "UPDATE ai_orchestration_steps SET status='running', "
                 "  session_id=%s, attempt_count = 1, started_at=NOW(), "
-                "  updated_at=NOW() WHERE id=%s", (sid, step['id']))
+                "  updated_at=NOW() "
+                "WHERE id=%s AND status IN ('blocked','failed') RETURNING id",
+                (sid, step['id']))
+            won = cur.fetchone() is not None
+            if won:
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions "
+                    "  (id, user_id, title, status, workspace_path, session_token, "
+                    "   token_expires_at, continue_prompt, agent, model, "
+                    "   orchestration_run_id, orchestration_step_id) "
+                    "VALUES (%s, %s, %s, 'pending', '', %s, NOW() + interval "
+                    "  '24 hours', %s, %s, %s, %s, %s)",
+                    (sid, run['requested_by'],
+                     f"[编排] {run['id'][:8]} · {step.get('name') or step['node_id']}",
+                     secrets.token_hex(32), prompt, node.get('agent'),
+                     node.get('model'), run['id'], step['id']))
         conn.commit()
+    if not won:
+        return
     from utils import batch_events
     batch_events.append_event(run['id'], 'step.launched',
                               aggregate_type='step', aggregate_id=step['id'],
@@ -388,6 +410,11 @@ def _open_approval(run: dict, step: dict):
 # ---------------------------------------------------------------------------
 # step 终态回调（批 worker 驱动）
 # ---------------------------------------------------------------------------
+
+def _run_owner(run_id: str):
+    run = get_run(run_id)
+    return (run or {}).get('requested_by')
+
 
 def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     """批 worker 在编排子会话到终态后调用：按子会话事实推进 step。
@@ -455,20 +482,48 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
             return
         new_status, err = 'failed', child_err or f'子会话终态 {child_status}'
 
+    # H5 修复：成功时提取子会话最终 assistant 文本写入 step.output——
+    # 条件边判定与 {{steps.x}} 提示词渲染的数据来源（此前全仓无写入点，
+    # 条件分支恒不命中、下游渲染恒为空）
+    step_output = None
+    if new_status == 'succeeded':
+        try:
+            from utils.ai_scan_engine import message_text
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT content FROM ai_chat_messages "
+                        " WHERE session_id = %s AND role = 'assistant' "
+                        " ORDER BY seq DESC LIMIT 1", (session_id,))
+                    row = cur.fetchone()
+            texts = [p.get('text', '') for p in ((row[0] or []) if row else [])
+                     if isinstance(p, dict) and p.get('type') == 'text']
+            if texts:
+                step_output = {'text': '\n'.join(texts)[:4000]}
+        except Exception:
+            logger.debug('step output extract failed sid=%s', session_id,
+                         exc_info=True)
+
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE ai_orchestration_steps SET status=%s, "
+                "  output=COALESCE(%s::jsonb, output), "
                 "  error_message=%s, finished_at=NOW(), updated_at=NOW() "
-                "WHERE id=%s", (new_status, err, step_id))
+                "WHERE id=%s",
+                (new_status,
+                 json.dumps(step_output, ensure_ascii=False) if step_output else None,
+                 err, step_id))
         conn.commit()
     # 产物收集（Phase D：workspace outputs → artifact store）
     if new_status == 'succeeded' and ws:
         try:
             from utils import artifact_store
+            # M9：带 owner 归属，否则创建者本人下载 403
             artifact_store.ingest_session_outputs(session_id, ws,
                                                   run_id=run_id,
-                                                  step_id=step_id)
+                                                  step_id=step_id,
+                                                  owner_user_id=_run_owner(run_id))
         except Exception:
             logger.warning('artifact ingest failed step=%s', step_id,
                            exc_info=True)
