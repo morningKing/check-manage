@@ -135,3 +135,62 @@ test('子代理会话复用：两次委派同会话 + 任务段边界 + 气泡�
     method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
   })
 })
+
+test('创建对话框：子代理会话复用配置可保存（UI 链路）', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  await login(page)
+  await page.goto('/ai-chat')
+
+  const createBatchBtn = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+    .getByRole('button', { name: '新建' })
+  await createBatchBtn.waitFor({ state: 'visible', timeout: 30_000 })
+  await createBatchBtn.click()
+  const dialog = page.getByRole('dialog', { name: '新建批任务' })
+  await dialog.waitFor({ state: 'visible', timeout: 15_000 })
+
+  const name = `AITEST-sru-ui-${Date.now()}`
+  await dialog.locator('input[data-test="name"]').fill(name)
+  await dialog.locator('textarea[data-test="prompt"]').fill('自验证：复用配置保存')
+
+  // 多选下拉：展开 → 勾选 general
+  const select = dialog.locator('[data-test="reuse-select"]')
+  await select.click()
+  const option = page.locator('.el-select-dropdown__item', { hasText: 'general' }).first()
+  await option.waitFor({ state: 'visible', timeout: 10_000 })
+  await option.click()
+  await page.keyboard.press('Escape')
+
+  // 需要至少一个文件（内部创建约束）
+  await dialog.locator('input[type="file"]').setInputFiles([
+    { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('A') },
+  ])
+  await expect(dialog.locator('.files')).toContainText('a.txt', { timeout: 8_000 })
+
+  const createBtn = dialog.locator('button[data-test="create-btn"]')
+  await expect(createBtn).toBeEnabled({ timeout: 8_000 })
+  await createBtn.click()
+
+  // API 断言：批次 subagent_reuse 已保存
+  const token = await adminToken(request)
+  const deadline = Date.now() + 15_000
+  let saved: string[] | null = null
+  while (Date.now() < deadline) {
+    const listRes = await request.fetch('/api/ai/chat/batches?page=1&pageSize=5', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const hit = ((await listRes.json()).items ?? []).find((b: any) => b.name === name)
+    if (hit) {
+      const d = await request.fetch(`/api/ai/chat/batches/${hit.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      saved = (await d.json()).batch.subagent_reuse ?? null
+      // 清理
+      await request.fetch(`/api/ai/chat/batches/${hit.id}?stop=1`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      })
+      break
+    }
+    await new Promise(rr => setTimeout(rr, 1000))
+  }
+  expect(saved, '复用配置应随创建保存').toEqual(['general'])
+})
