@@ -350,3 +350,58 @@ npm run build
 本次审查由三条并行审查线（P0 / P1 / P2）各自逐条核对 spec 并读取实现与测试，随后由主审查者对每条严重缺陷亲自复核代码、并用运行中进程与生产库只读查询取证。所有严重缺陷均给出可复现证据；未能复核的推断已在文中标注为「审查线报告」。
 
 审查为**只读**：未修改任何代码、迁移、测试或文档（本报告除外）。
+
+---
+
+## 11. 自检处理结果（2026-09-25 追加）
+
+逐项复核本报告后已完成修复并全量验证（pytest 2257 passed / vitest 1211 passed /
+e2e/ai-full 28 passed，提交 d43105b 及其后）。
+
+### 11.1 严重缺陷处置
+
+| 项 | 结论 | 处置 |
+|---|---|---|
+| H1 | 确认（已在复核提交中修复） | import 提至函数首行；补 start() 后心跳线程存活回归 `test_worker_start_lease_loop_survives` |
+| H2 | 确认 | 内部 DELETE drain 超时返回 409 `BATCH_DRAIN_TIMEOUT`，保留任务与工作区，与对外对齐 |
+| H3 | 确认（相对 main 的行为回退） | 判定信号改为「会话实际评估期望数」（含入口 D 补挂行），batch 级 applicable 仅作登记完整性校验 |
+| H4 | 确认 | `_launch_agent_step` 转移改状态谓词 CAS + RETURNING，输者不建子会话。注：曾试 advisory lock 方案，因孤儿连接持锁毒化后续推进而回退，纯 CAS 无死锁面 |
+| H5 | 确认 | 成功 step 提取最终 assistant 文本写入 `steps.output`；条件边与 {{steps.x}} 渲染恢复数据来源 |
+| H6 | 确认 | skipped 并入依赖死态传播（下游级联 skip），run 不再卡 running |
+| H7 | 部分确认 | 回调链路已接线（recompute/outbox 同事务 effect 记录+投递 settle）；MCP 写入/扫描回写等 OC 内部副作用需 runtime 层埋点，列为后续（见 §11.3） |
+| H8 | 确认 | 移除 start() 的 `_restart_audit` 调用（保留空方法兼容），遗留 running 行交 `_reconcile_stale_running` 恢复决策表；旧测试改写为决策表路径 |
+
+### 11.2 中等缺陷处置（10/14 已修）
+
+| 项 | 处置 |
+|---|---|
+| M1 | continue_child 改条件 UPDATE + rowcount 计数回滚（reexecute/resume_child 结构同源，后随批次对齐） |
+| M2 | `_persist_user_prompt` id 加 `:g{generation}` 后缀，续跑消息不再被吞 |
+| M3 | `/command` 补 BATCH_SESSION_CONTROLLED 门禁（与 send_message 一致） |
+| M4 | `_notify_callback` 在 outbox 启用时跳过直发；`AI_DELIVERY_OUTBOX_ENABLED=0` 回退直发（有测试锁定两路径） |
+| M5 | continue/reexecute/retry 接受 needs_review（人工拉回通道打通） |
+| M6 | `_mark_needs_review` 补 fencing；「旧 owner 写回 0 行」由既有 stale-generation 测试覆盖 |
+| M8 | 测试清理语句限定测试命名批次（AITEST-/e2e/*-test），不再触碰共享库真实数据 |
+| M9 | artifact ingest 传 run.requested_by 为 owner |
+| M11 | SSE 改 `login_required_sse`，帧输出 `id:` 行（浏览器自动 Last-Event-ID），ping 3s→15s |
+| M12 | outbox `sending` 超 10 分钟重新捞起（进程 kill 不再永久卡行） |
+| M13 | acquire 写入 lease_kind（batch/delivery/scheduler 实名隔离） |
+| M14 | append_event/enqueue 的 conn 路径 SAVEPOINT 包裹，失败不再毒化外层终态事务 |
+
+未纳入本批（确认为范围缺口）：M7（对外错误结构化/generation/phase 字段）、M10（定义字段透传/version 递增）、
+runtime adapter 生产接线、调度配额/ETA/管理面前端——按报告 §9 归入 P1/P2 后续批次。
+
+### 11.3 低优先清单处置
+
+- 已顺手修：SSE ping 15s、lease_kind、outbox sending 回收（见上）；
+- 确认为后续批次的范围项：gate.evaluated 事件、attempt 租约列写入、checkpoint progress/recovery 写入点、
+  预算 4 个未判维度、scan 租约、CURSOR_EXPIRED、备份表清单扩充、编排/产物 openapi 与管理面前端、
+  scan 任务 OPENCODE_BIN 化——均已在分支待办中登记，不阻塞本批合入评估。
+
+### 11.4 全量验证证据
+
+| 层 | 结果 |
+|---|---|
+| pytest 全量 | 2257 passed / 3 skipped（2m48s） |
+| vitest 全量 | 122 files / 1211 tests passed |
+| e2e/ai-full 全量 | 28 passed（6.3m，含复用 E2E 真实 OpenCode 两轮委派） |
