@@ -57,10 +57,14 @@ def _seed_batch(db_conn, user_id, n=1, *, status='pending'):
 
 
 def _clear_other_pending(db_conn, keep_bid):
+    """M8 治理：仅清理「测试命名」批次的 pending 残留行，不碰真实用户数据。"""
     with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions "
-                    "WHERE status='pending' AND batch_id IS NOT NULL "
-                    "  AND batch_id <> %s", (keep_bid,))
+        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                    "WHERE s.batch_id = b.id AND s.status='pending' "
+                    "  AND b.id <> %s "
+                    "  AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
+                    "       OR b.name LIKE '%%-test' OR b.name IN ('engine-test', 'pause-test'))",
+                    (keep_bid,))
     db_conn.commit()
 
 
