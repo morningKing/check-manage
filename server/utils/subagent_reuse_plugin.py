@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = 'baize-subagent-reuse.js'
 
-_PLUGIN_TEMPLATE = """// Baize subagent session reuse plugin (auto-installed by Baize server).
+_PLUGIN_TEMPLATE = r"""// Baize subagent session reuse plugin (auto-installed by Baize server).
 // Forces task-tool delegation to REUSE the pinned subagent session per
 // (parent session, subagent_type): injects task_id before execution and
 // registers the session id from the tool output after execution.
@@ -27,27 +27,19 @@ const ENDPOINT = process.env.BAIZE_SUBAGENT_REUSE_URL || '__ENDPOINT__'
 const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
 
-async function lookup(sessionID, agent) {
+async function lookup(sessionID, agent, callID) {
   const res = await fetch(
-    `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}`,
+    `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`,
     { headers: HEADERS })
   if (!res.ok) return null
   return res.json()
 }
 
-async function resolveAgent(sessionID, taskId) {
-  const res = await fetch(
-    `${ENDPOINT}/resolve-agent?session=${encodeURIComponent(sessionID)}&taskId=${encodeURIComponent(taskId)}`,
-    { headers: HEADERS })
-  if (!res.ok) return null
-  return res.json()
-}
-
-async function pin(sessionID, agent, taskId) {
+async function pinByCall(sessionID, callID, taskId) {
   await fetch(`${ENDPOINT}/pins`, {
     method: 'POST',
     headers: HEADERS,
-    body: JSON.stringify({ session: sessionID, agent, taskId }),
+    body: JSON.stringify({ session: sessionID, callId: callID, taskId }),
   })
 }
 
@@ -59,21 +51,20 @@ export const BaizeSubagentReusePlugin = async () => ({
       if (!args) return
       const agent = args.subagent_type || args.subagentType || ''
       if (!agent || args.task_id) return  // 模型已显式指定 task_id 则不覆盖
-      const data = await lookup(input.sessionID, agent)
+      // callId 随 lookup 上报：平台登记意图（callID → agent），使 after
+      // 阶段的 pin 不依赖子代理行的持久化时序（复核竞态修复）
+      const data = await lookup(input.sessionID, agent, input.callID || '')
       if (data && data.enabled && data.taskId) args.task_id = data.taskId
     } catch { /* 平台不可达 → 放行新建，不阻断委派 */ }
   },
   async 'tool.execute.after'(input, output) {
     try {
-      if (!input || input.tool !== 'task') return
+      if (!input || input.tool !== 'task' || !input.sessionID) return
       const out = output && output.output != null ? output.output : ''
       const text = typeof out === 'string' ? out : (out && out.text) || ''
-      const m = /task_id:\\s*(\\S+)/.exec(String(text))
-      if (!m || !input.sessionID) return
-      const data = await resolveAgent(input.sessionID, m[1])
-      if (data && data.enabled && data.agent) {
-        await pin(input.sessionID, data.agent, m[1])
-      }
+      const m = /task_id:\s*(\S+)/.exec(String(text))
+      if (!m) return
+      await pinByCall(input.sessionID, input.callID || '', m[1])
     } catch { /* 登记失败不影响委派 */ }
   },
 })

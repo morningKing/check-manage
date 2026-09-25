@@ -18,7 +18,8 @@ _PREVIEW_UNSET = object()
 BATCH_TERMINAL_STATUSES = ('completed', 'partial', 'failed')
 
 
-def recompute_batch_status_tx(cur, batch_id: str, conn=None) -> dict:
+def recompute_batch_status_tx(cur, batch_id: str, conn=None,
+                              session_id: str | None = None) -> dict:
     """在同一事务/游标里重算批次状态并取回（status + 回调字段）。
     transition_child 用；引擎的 _recompute_batch_status（带回调通知）保持独立。
 
@@ -71,6 +72,13 @@ def recompute_batch_status_tx(cur, batch_id: str, conn=None) -> dict:
                          'done': out['done'], 'failed': out['failed']},
                 secret=out.get('callback_secret') or '', event_id=eid,
                 conn=conn)
+            # H7 回修：回调入队即登记 effect（planned）——投递器 settle 时
+            # 按 'outbox:<event_id>' 键置 committed/failed，effect 账本从此
+            # 有真实生产数据（此前全仓零写入）
+            if session_id:
+                from utils import execution_effect as _eff
+                _eff.record_effect(session_id, 'callback', f'outbox:{eid}',
+                                   batch_id=batch_id, request=eid)
     return out
 
 
@@ -103,6 +111,14 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
         else last_message_preview
     with get_db() as conn:
         with conn.cursor() as cur:
+            # M6 回修（复核报告 §3）：fencing 校验无条件生效——调用方未传时
+            # 现读当前 token 参与校验（自洽写回），而非跳过校验。任何持旧
+            # token 的执行体写回都会 0 行，纵深防御闭合。
+            if fencing_token is None:
+                cur.execute("SELECT fencing_token FROM ai_chat_sessions "
+                            "WHERE id = %s", (session_id,))
+                frow = cur.fetchone()
+                fencing_token = frow[0] if frow else 0
             cur.execute(
                 """
                 UPDATE ai_chat_sessions
@@ -139,7 +155,8 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
             elif batch_id and count == 'failed':
                 cur.execute("UPDATE ai_chat_batches SET failed = failed + 1 "
                             "WHERE id = %s", (batch_id,))
-            batch = recompute_batch_status_tx(cur, batch_id, conn=conn) \
+            batch = recompute_batch_status_tx(cur, batch_id, conn=conn,
+                                              session_id=sid) \
                 if batch_id else {}
             # P1：child.status 事件与状态写入同事务（spec §7.1）
             if batch_id:
@@ -726,6 +743,8 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
     child is not in a terminal state."""
     with get_db() as conn:
         with conn.cursor() as cur:
+            # M1（复核报告 §3）：与 continue_child 同款 FOR UPDATE + 条件
+            # UPDATE + 预读状态计数回滚，消灭 check-then-act 窗口
             cur.execute(
                 "SELECT s.status FROM ai_chat_sessions s "
                 "JOIN ai_chat_batches b ON s.batch_id = b.id "
@@ -735,8 +754,8 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
             row = cur.fetchone()
             if not row:
                 return None
-            status = row[0]
-            if status not in ('completed', 'failed', 'cancelled', 'needs_review'):
+            prev_status = row[0]
+            if prev_status not in ('completed', 'failed', 'cancelled', 'needs_review'):
                 raise ValueError('only completed/failed/cancelled/needs_review children can be re-executed')
             cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (session_id,))
             cur.execute(
@@ -744,10 +763,13 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
                 "  last_message_preview=NULL, error_message=NULL, cancel_requested=false, "
                 "  pause_requested=false, gate_status=NULL, gate_error=NULL, "
                 "  execution_generation = execution_generation + 1 "
-                "WHERE id = %s",
-                (session_id,),
+                "WHERE id = %s AND status = %s",
+                (session_id, prev_status),
             )
-            if status == 'completed':
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise ValueError('子任务状态已变化，请刷新后重试')
+            if prev_status == 'completed':
                 cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
             else:
                 # 'failed' 与 'cancelled' 都记在 failed 计数里（见
@@ -781,24 +803,27 @@ def continue_child(user_id: str, batch_id: str, session_id: str,
             row = cur.fetchone()
             if not row:
                 return None
-            status = row[0]
-            if status not in ('completed', 'failed', 'cancelled', 'needs_review'):
+            # N1 修复（复核报告 §4.1）：计数回滚必须用「更新前」状态——
+            # UPDATE RETURNING 返回的是更新后的 'pending'，用它判定会把
+            # completed 子任务的 done-1 错做成 failed-1（failed 静默变负、
+            # 批次终态算成 partial）。
+            # 并发安全不用 FOR UPDATE（会与 claim_guard 的 FOR KEY SHARE
+            # 测试基建互锁死等），靠 UPDATE 谓词 CAS 兜底：预读与 UPDATE
+            # 之间状态若被并发改变，UPDATE 0 行 → 回滚报 409，计数绝不
+            # 拿错状态回滚。
+            prev_status = row[0]
+            if prev_status not in ('completed', 'failed', 'cancelled', 'needs_review'):
                 raise ValueError('only completed/failed/cancelled/needs_review children can be continued')
-            # M1：条件 UPDATE——仅当行仍处于读到的终态时才转移（并发下的
-            # reexecute/continue 双击只生效一次），以 rowcount 驱动计数回滚
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', "
                 "  continue_prompt=%s, error_message=NULL, cancel_requested=false, "
                 "  pause_requested=false, execution_generation = execution_generation + 1 "
-                "WHERE id = %s AND status IN ('completed','failed','cancelled','needs_review') "
-                "RETURNING status",
-                (prompt, session_id),
+                "WHERE id = %s AND status = %s",
+                (prompt, session_id, prev_status),
             )
-            landed = cur.fetchone()
-            if not landed:
+            if cur.rowcount != 1:
                 conn.rollback()
                 raise ValueError('子任务状态已变化，请刷新后重试')
-            prev_status = landed[0]
             if prev_status == 'completed':
                 cur.execute("UPDATE ai_chat_batches SET done = done - 1 WHERE id = %s", (batch_id,))
             else:
@@ -821,6 +846,7 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
     """
     with get_db() as conn:
         with conn.cursor() as cur:
+            # M1（复核报告 §3）：FOR UPDATE + 条件 UPDATE，消灭 check-then-act 窗口
             cur.execute(
                 "SELECT s.status FROM ai_chat_sessions s "
                 "JOIN ai_chat_batches b ON s.batch_id = b.id "
@@ -838,9 +864,12 @@ def resume_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
                 "  execution_generation = execution_generation + 1, "
                 "  continue_prompt = CASE WHEN opencode_session_id IS NOT NULL "
                 "                        THEN %s ELSE NULL END "
-                "WHERE id = %s",
+                "WHERE id = %s AND status = 'paused'",
                 (RESUME_CONTINUE_PROMPT, session_id),
             )
+            if cur.rowcount != 1:
+                conn.rollback()
+                raise ValueError('子任务状态已变化，请刷新后重试')
         conn.commit()
     _recompute_batch_status_for(batch_id)
     return get_batch_detail(user_id, batch_id)

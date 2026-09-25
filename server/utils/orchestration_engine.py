@@ -120,12 +120,24 @@ def list_runs(limit: int = 50) -> list[dict]:
 
 def _edge_matches(edge, source_step: dict) -> bool:
     """条件边判定：source 输出 JSON 的 field 与 op/value 比较。
-    无 condition 的边恒命中（默认边）。"""
+    无 condition 的边恒命中（默认边）。field='text' 读 output['text']
+    （H5 残留修复：生产路径 output 形状即 {'text': …}）。"""
     cond = edge.get('condition')
     if not cond:
         return True
     out = source_step.get('output') or {}
     if not isinstance(out, dict):
+        return False
+    if cond.get('field') == 'text':
+        actual = out.get('text')
+        op = cond.get('op', 'contains')
+        value = cond.get('value')
+        if op == 'contains':
+            return actual is not None and str(value) in str(actual)
+        if op == 'not_contains':
+            return actual is None or str(value) not in str(actual)
+        if op == '==':
+            return actual == value
         return False
     actual = out.get(cond.get('field'))
     op = cond.get('op', '==')
@@ -201,7 +213,14 @@ def _advance_run_locked(run_id: str) -> None:
         out_edges = [e for e in edges if e['source'] == src]
         conditional = [e for e in out_edges if e.get('condition')]
         if conditional:
-            hits = [e for e in conditional if _edge_matches(e, by_node.get(src) or {})]
+            src_step = by_node.get(src) or {}
+            # H5 残留修复：源节点尚未收敛（无 output 可读）时不做条件取舍——
+            # 把全部出边目标都视为候选。此前"无 output → 条件全不命中 →
+            # 回落默认边"会让条件目标在本轮被不可逆 skip，源节点收敛后
+            # 也永不可达。真正的分支取舍推迟到源节点 succeeded。
+            if src_step.get('status') != 'succeeded':
+                return [e['target'] for e in out_edges]
+            hits = [e for e in conditional if _edge_matches(e, src_step)]
             return [e['target'] for e in (hits if hits else
                                           [e for e in out_edges
                                            if not e.get('condition')])]
@@ -428,7 +447,11 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     if not row:
         return
     child_status, child_err, ws = row
-    if child_status == 'running':
+    # 复核报告 §4.3：非终态一律返回——worker 的自动重试会把子会话改回
+    # pending 后 return（自愈流程），此刻若把 pending 判成 failed，一次
+    # 本可自愈的重试就会杀死 step / 下游 / 整个 run。paused 同理（用户
+    # 主动暂停，等待 resume）。
+    if child_status in ('running', 'pending', 'paused'):
         return
     contract_ok = True
     contract_err = None
@@ -555,20 +578,45 @@ class OrchestrationScheduler:
         self._owner: str | None = None
         self._holds_lease = False
 
+    # 复核报告 §4.4：抢占失败进入后台重试（同 N2 模式）
+    RETRY_SEC = 5.0
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
         from utils import execution_lease
         self._owner = execution_lease.owner_id()
-        ok, _ = execution_lease.acquire('scheduler', self._owner)
+        ok, _ = execution_lease.acquire('scheduler', self._owner,
+                                        lease_kind='scheduler')
         if not ok:
             logger.warning('orchestration scheduler lease NOT acquired; '
-                           'disabled in this process')
+                           'retrying every %ss until the lease becomes '
+                           'available', self.RETRY_SEC)
+            retry = threading.Thread(target=self._acquire_retry, daemon=True,
+                                     name='orchestration-scheduler-retry')
+            retry.start()
             return
         self._holds_lease = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name='orchestration-scheduler')
         self._thread.start()
+
+    def _acquire_retry(self):
+        from utils import execution_lease
+        while not self._stop.is_set():
+            if self._stop.wait(self.RETRY_SEC):
+                return
+            ok, _ = execution_lease.acquire('scheduler', self._owner,
+                                            lease_kind='scheduler')
+            if not ok:
+                continue
+            logger.info('orchestration scheduler lease acquired after retry; '
+                        'starting scheduler loop')
+            self._holds_lease = True
+            self._thread = threading.Thread(target=self._loop, daemon=True,
+                                            name='orchestration-scheduler')
+            self._thread.start()
+            return
 
     def _loop(self):
         from utils import execution_lease

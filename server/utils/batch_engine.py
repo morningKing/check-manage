@@ -389,6 +389,17 @@ def _recompute_batch_status(batch_id: str) -> None:
                                      'batchId': batch_id, 'status': new_status,
                                      'total': total, 'done': done, 'failed': failed},
                             secret=callback_secret or '', event_id=eid, conn=conn)
+                        # H7 回修：effect 登记锚在批内最近子会话（effect 表
+                        # 以 session_id 为 scope 键）
+                        cur.execute(
+                            "SELECT id FROM ai_chat_sessions WHERE batch_id = %s "
+                            "ORDER BY created_at DESC LIMIT 1", (batch_id,))
+                        anchor = cur.fetchone()
+                        if anchor:
+                            from utils import execution_effect as _eff
+                            _eff.record_effect(anchor[0], 'callback',
+                                               f'outbox:{eid}', batch_id=batch_id,
+                                               request=eid)
         conn.commit()
     if new_status in ('completed', 'partial', 'failed') and callback_url:
         from utils.delivery_outbox import outbox_enabled
@@ -666,7 +677,8 @@ class BatchWorker:
         # 多进程部署（gunicorn 多 worker 等）只有一个实例真正执行批任务。
         from utils import execution_lease
         self._lease_owner = execution_lease.owner_id()
-        acquired, _token = execution_lease.acquire(self._lease_key, self._lease_owner)
+        acquired, _token = execution_lease.acquire(self._lease_key, self._lease_owner,
+                                                   lease_kind='dispatcher')
         if not acquired:
             # 运维关键：快速重启（上一个实例的 lease 尚在 TTL 内）不能永久
             # 放弃 dispatcher——进入后台重试，旧租约一过期即自动接管。
@@ -686,7 +698,8 @@ class BatchWorker:
         while not self._stop.is_set():
             if self._stop.wait(self.ACQUIRE_RETRY_SEC):
                 return
-            ok, _token = execution_lease.acquire(self._lease_key, self._lease_owner)
+            ok, _token = execution_lease.acquire(self._lease_key, self._lease_owner,
+                                                     lease_kind='dispatcher')
             if not ok:
                 continue
             logger.info('batch worker lease acquired after retry; '
@@ -1212,7 +1225,8 @@ class BatchWorker:
                 # 整体不可达，重建 session 大概率立刻复现同样的错误。
                 logger.warning('batch send_message dispatch failed sid=%s oc=%s: %s; '
                                'recovering session', sid, oc_session_id, e)
-                oc_session_id = self._recover_session(sid, ws, prompt, agent, model)
+                oc_session_id = self._recover_session(sid, ws, prompt, agent,
+                                                      model, generation=generation)
                 baseline_ids = None  # 全新 session，没有旧消息需要跳过
                 logger.info('batch session recovered sid=%s new_oc=%s', sid, oc_session_id)
 
@@ -1248,10 +1262,14 @@ class BatchWorker:
             # （恢复与 main 一致的「任何 failed 都阻断」语义）。
             evaluated = len(gate.get('results') or [])
             applicable = (gate_reg.get('applicable') or 0)
+            # H3 残留：账本不健康时 inconclusive 携带 expected 条数——
+            # 入口 D 补挂的期望（批级 applicable 看不到）在账本写失败时
+            # 同样 fail-closed，不再被误判成 skipped 放行
+            expected = (gate.get('expected') or 0)
             if gate_reg.get('error'):
                 fail_closed = (f'动作门禁无法证实：期望登记失败'
                                f'（{gate_reg["error"]}），请人工复核')
-            elif evaluated > 0 or applicable > 0:
+            elif evaluated > 0 or applicable > 0 or expected > 0:
                 if applicable > 0 and gate_reg.get('registered', 0) != applicable:
                     fail_closed = (f'动作门禁无法证实：期望登记不完整'
                                    f'（{gate_reg.get("registered")}/'
@@ -1788,7 +1806,8 @@ class BatchWorker:
             conn.commit()
 
     def _recover_session(self, session_id: str, ws: str, prompt: str,
-                         agent: str, model: str) -> str:
+                         agent: str, model: str,
+                         generation: int | None = None) -> str:
         """OpenCode session 失效时（send_message 派发失败）的恢复：新建
         session + 注入历史摘要 + 更新绑定 + 重发。返回新的 opencode_session_id。
 
@@ -1801,7 +1820,11 @@ class BatchWorker:
         """
         new_oc = opencode_client.create_session(directory=ws)
         self._set_opencode_id(session_id, new_oc, ws)
-        history = render_history_block(session_id, exclude_msg_id=f'{session_id}:user')
+        # M2 回修：排除键与 g 后缀 id 对齐——排除本轮提示词本身（它由
+        # prompt 参数单独携带），否则当前问题既进摘要又追加一次
+        suffix = f':g{generation}' if generation is not None else ''
+        history = render_history_block(session_id,
+                                       exclude_msg_id=f'{session_id}:user{suffix}')
         opencode_client.send_message(new_oc, (history + prompt).strip(),
                                      directory=ws, agent=agent, model=model)
         return new_oc
@@ -2291,10 +2314,13 @@ class BatchWorker:
                                        parts if parts else [{'type': 'text', 'text': ''}], None))
             with get_db() as conn:
                 with conn.cursor() as cur:
+                    # M2 回修：与 _persist_user_prompt 同一 id（g 后缀）——
+                    # 固定 id 会与 g0 行内容重复，首轮出现两条相同 user 气泡
+                    suffix = f':g{generation}' if generation is not None else ''
                     cur.execute(
                         "INSERT INTO ai_chat_messages (id, session_id, role, content) "
                         "VALUES (%s, %s, 'user', %s::jsonb) ON CONFLICT (id) DO NOTHING",
-                        (f'{session_id}:user', session_id,
+                        (f'{session_id}:user{suffix}', session_id,
                          _json.dumps([{'type': 'text', 'text': prompt}])),
                     )
                     for mid, content, meta in assistant_rows:

@@ -14,6 +14,8 @@ OpenCode 插件 baize-subagent-reuse.js（由 utils.subagent_reuse_plugin 随启
 鉴权：X-Internal-Token（与 ai_memory_internal 同一把 MCP_INTERNAL_TOKEN）。
 """
 import secrets
+import threading
+import time
 
 from flask import Blueprint, request, jsonify
 
@@ -22,6 +24,29 @@ from db import get_db
 
 ai_subagent_internal_bp = Blueprint('ai_subagent_internal', __name__,
                                     url_prefix='/ai/subagent-internal')
+
+# 复用竞态修复（复核 e2e 实测）：委派 after 回调登记 pin 时依赖
+# ai_chat_subtasks 行已被周期持久化——第二次委派可能先于持久化发生，
+# resolve-agent 查不到行 → pin 缺失 → 复用落空。改为 before 钩子登记
+# 意图（callID → root+agent，进程内存、10 分钟 TTL），after 直接按
+# callID 取 agent 写 pin，不再依赖持久化时序。
+_INTENT: dict = {}
+_INTENT_LOCK = threading.Lock()
+_INTENT_TTL_SEC = 600
+
+
+def _intent_remember(call_id: str, root_session_id: str, agent: str):
+    with _INTENT_LOCK:
+        _INTENT[call_id] = (root_session_id, agent, time.time())
+        stale = [k for k, (_, _, ts) in _INTENT.items()
+                 if time.time() - ts > _INTENT_TTL_SEC]
+        for k in stale:
+            _INTENT.pop(k, None)
+
+
+def _intent_take(call_id: str):
+    with _INTENT_LOCK:
+        return _INTENT.pop(call_id, None)
 
 
 def _authorized():
@@ -76,6 +101,9 @@ def lookup_reuse():
                 (root_session_id, agent),
             )
             hit = cur.fetchone()
+    call_id = (request.args.get('callId') or '').strip()
+    if call_id:
+        _intent_remember(call_id, root_session_id, agent)
     return jsonify({'enabled': True, 'taskId': hit[0] if hit else None})
 
 
@@ -115,6 +143,29 @@ def upsert_pin():
     session_oc_id = (body.get('session') or '').strip()
     agent = (body.get('agent') or '').strip()[:200]
     task_id = (body.get('taskId') or '').strip()[:100]
+    call_id = (body.get('callId') or '').strip()
+    # callId 路径（复核竞态修复）：agent 来自 before 登记的 intent，
+    # 不依赖 ai_chat_subtasks 行是否已持久化
+    if call_id:
+        intent = _intent_take(call_id)
+        if intent:
+            root_session_id, agent = intent[0], intent[1]
+            if task_id:
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO ai_subagent_pins "
+                            "  (id, root_session_id, batch_id, agent, task_id) "
+                            "VALUES (%s, %s, (SELECT batch_id FROM ai_chat_sessions "
+                            "          WHERE id = %s), %s, %s) "
+                            "ON CONFLICT (root_session_id, agent) DO UPDATE SET "
+                            "  task_id = EXCLUDED.task_id, updated_at = NOW()",
+                            ('spin_' + secrets.token_hex(8), root_session_id,
+                             root_session_id, agent, task_id),
+                        )
+                    conn.commit()
+                return jsonify({'enabled': True, 'pinned': True})
+            return jsonify({'enabled': False, 'pinned': False})
     row = _resolve_root(session_oc_id)
     if not row or not agent or not task_id:
         return jsonify({'enabled': False, 'pinned': False})

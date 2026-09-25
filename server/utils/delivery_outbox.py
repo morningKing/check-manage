@@ -57,7 +57,6 @@ def enqueue(batch_id: str, *, target_url: str, payload: dict,
 def _enqueue_cur(conn, oid, eid, batch_id, event_type, target_url, payload,
                  secret, _json):
     # M14：SAVEPOINT 包裹——入队失败不毒化外层终态事务
-    conn.cursor().execute('SAVEPOINT be_obx') if False else None
     with conn.cursor() as cur:
         cur.execute('SAVEPOINT be_obx')
         try:
@@ -90,8 +89,8 @@ def _claim_due(limit: int = 10) -> list[dict]:
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, batch_id, event_type, target_url, payload::text, "
-                "signature, attempt_count FROM ai_delivery_outbox "
+                "SELECT id, batch_id, event_type, event_id, target_url, "
+                "payload::text, signature, attempt_count FROM ai_delivery_outbox "
                 "WHERE (status IN ('pending', 'failed') "
                 "        AND next_retry_at <= NOW()) "
                 "   OR (status = 'sending' "
@@ -100,11 +99,15 @@ def _claim_due(limit: int = 10) -> list[dict]:
                 "FOR UPDATE SKIP LOCKED",
                 (limit,),
             )
-            rows = [dict(zip(('id', 'batch_id', 'event_type', 'target_url',
-                              'payload', 'signature', 'attempt_count'), r))
+            rows = [dict(zip(('id', 'batch_id', 'event_type', 'event_id',
+                              'target_url', 'payload', 'signature',
+                              'attempt_count'), r))
                     for r in cur.fetchall()]
             for r in rows:
-                cur.execute("UPDATE ai_delivery_outbox SET status = 'sending' "
+                # M12 回修：claim 时把 next_retry_at 锚到 NOW()+10min——
+                # sending 回收窗口从 claim 起算，而非上次到期时间
+                cur.execute("UPDATE ai_delivery_outbox SET status = 'sending', "
+                            "  next_retry_at = NOW() + interval '10 minutes' "
                             "WHERE id = %s", (r['id'],))
         conn.commit()
     return rows
@@ -133,6 +136,17 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
                      (error or '')[:500], str(backoff), oid),
                 )
         conn.commit()
+    # H7 回修：投递终态同步 settle callback effect（committed/failed）——
+    # event_ref 传的是 outbox 行的 event_id，effect 幂等键即 'outbox:<eid>'
+    try:
+        from utils import execution_effect
+        if event_ref:
+            execution_effect.settle_effect_by_key(
+                'callback', f'outbox:{event_ref}',
+                'committed' if ok else 'failed',
+                external_ref=oid)
+    except Exception:  # noqa: BLE001
+        pass
     # 投递结果进事件流（管理面可观测；失败时也写，外部可感知）
     from utils import batch_events
     batch_events.append_event(
@@ -173,7 +187,7 @@ def drain_due_once() -> int:
         ok = deliver_one(r)
         ok_count += 1 if ok else 0
         _settle(r['id'], r['batch_id'], ok, r['attempt_count'] + 1,
-                None if ok else 'delivery failed', r['event_type'])
+                None if ok else 'delivery failed', r['event_id'])
     return ok_count
 
 
@@ -242,21 +256,47 @@ class OutboxDeliveryLoop:
         self._owner: str | None = None
         self._holds_lease = False
 
+    # 复核报告 §4.4：抢占失败进入后台重试（旧租约过期即接管），
+    # 快速重启 TTL 窗口内不再永久放弃投递器
+    RETRY_SEC = 5.0
+
     def start(self):
         if self._thread and self._thread.is_alive():
             return
         from utils import execution_lease
         self._owner = execution_lease.owner_id()
-        ok, _ = execution_lease.acquire('delivery', self._owner)
+        ok, _ = execution_lease.acquire('delivery', self._owner,
+                                        lease_kind='delivery')
         if not ok:
-            logger.warning('outbox delivery lease NOT acquired; '
-                           'delivery loop disabled in this process')
+            logger.warning('outbox delivery lease NOT acquired; retrying '
+                           'every %ss until the lease becomes available',
+                           self.RETRY_SEC)
             self._holds_lease = False
+            retry = threading.Thread(target=self._acquire_retry, daemon=True,
+                                     name='outbox-delivery-lease-retry')
+            retry.start()
             return
         self._holds_lease = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name='outbox-delivery')
         self._thread.start()
+
+    def _acquire_retry(self):
+        from utils import execution_lease
+        while not self._stop.is_set():
+            if self._stop.wait(self.RETRY_SEC):
+                return
+            ok, _ = execution_lease.acquire('delivery', self._owner,
+                                            lease_kind='delivery')
+            if not ok:
+                continue
+            logger.info('outbox delivery lease acquired after retry; '
+                        'starting delivery loop')
+            self._holds_lease = True
+            self._thread = threading.Thread(target=self._loop, daemon=True,
+                                            name='outbox-delivery')
+            self._thread.start()
+            return
 
     def _loop(self):
         from utils import execution_lease

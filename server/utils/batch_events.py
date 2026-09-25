@@ -48,17 +48,21 @@ def append_event(batch_id: str, event_type: str, *,
         return eid
 
     if conn is not None:
-        # M14：SAVEPOINT 包裹——失败只回滚事件本身，不毒化外层状态事务
+        # M14：SAVEPOINT 包裹——失败只回滚事件本身，不毒化外层状态事务。
+        # SAVEPOINT 也在 try 内：外层事务已处错误态时，保存点语句的异常
+        # 同样被吞（"事件绝不打断业务"契约）
         cur = conn.cursor()
-        cur.execute('SAVEPOINT be_evt')
         try:
+            cur.execute('SAVEPOINT be_evt')
             out = _run(cur)
             cur.execute('RELEASE SAVEPOINT be_evt')
             return out
         except Exception as e:  # noqa: BLE001
-            cur.execute('ROLLBACK TO SAVEPOINT be_evt')
+            try:
+                cur.execute('ROLLBACK TO SAVEPOINT be_evt')
+            except Exception:  # noqa: BLE001
+                pass
             logger.warning('batch event append failed batch=%s: %s', batch_id, e)
-            return None
             return None
     from db import get_db
     try:

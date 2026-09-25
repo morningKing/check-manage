@@ -83,6 +83,28 @@ def settle_effect(effect_id: str, status: str, *,
         return False
 
 
+def settle_effect_by_key(effect_type: str, idempotency_key: str, status: str, *,
+                         external_ref: str | None = None) -> bool:
+    """按 (effect_type, idempotency_key) 定位并 settle（H7：投递器无 effect id
+    场景）。找不到行（effect 未登记，如旧数据）返回 False。"""
+    try:
+        from db import get_db
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM ai_execution_effects "
+                    "WHERE effect_type = %s AND idempotency_key = %s",
+                    (effect_type, idempotency_key[:200]),
+                )
+                row = cur.fetchone()
+        if not row:
+            return False
+        return settle_effect(row[0], status, external_ref=external_ref)
+    except Exception as e:  # noqa: BLE001
+        logger.warning('effect settle_by_key failed key=%s: %s', idempotency_key, e)
+        return False
+
+
 def has_unknown_effects(session_id: str) -> bool:
     """恢复决策用：存在 unknown 结局的副作用时禁止自动重放（spec §4.2）。"""
     from db import get_db

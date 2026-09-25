@@ -516,6 +516,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
 
     - 无期望 → passed(门禁只约束登记过的事项)
     - 会话映射不到 OpenCode 会话 / 账本不健康 / 查询异常 → inconclusive
+      （inconclusive 携带 expected=已登记期望条数，供调用方区分
+      "真的无期望"与"有期望但无法核对"——后者必须 fail-closed）
     `get_db` 语义同 record_messages——跟随调用方打桩。
     """
     db_ctx = get_db or _default_get_db
@@ -530,7 +532,18 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 row = cur.fetchone()
                 oc_sid = row[0] if row else None
                 if not ledger_healthy or not oc_sid:
+                    # H3 残留修复：inconclusive 时也带回「已登记期望条数」——
+                    # 入口 D 补挂的期望只存在于 per-session 行（批级 applicable
+                    # 计数看不到），不带这个信号时引擎会把"有期望但无法核对"
+                    # 误判成 skipped 而静默放行
+                    cur.execute(
+                        "SELECT count(*) FROM action_expectations "
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree')",
+                        (session_id,),
+                    )
+                    expected_n = cur.fetchone()[0]
                     return {'status': 'inconclusive', 'results': [],
+                            'expected': expected_n,
                             'error': None if ledger_healthy else 'ledger unhealthy'}
                 cur.execute(
                     """

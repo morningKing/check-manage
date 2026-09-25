@@ -790,3 +790,89 @@ def test_worker_start_lease_loop_survives(db_conn):
         w.stop()
     finally:
         execution_lease.release(key, owner)
+
+
+def test_stale_fencing_token_write_rejected(db_conn, user_id):
+    """M6 回修（复核报告 M6/§7-11）：持旧 fencing token 的执行体写回必须
+    0 行——状态、计数、消息都不变。"""
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    _clear_other_pending(db_conn, bid)
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    sid = claimed[0]['id']
+    old_token = claimed[0]['fencing_token']
+    # 模拟接管：fencing +1（重排后旧执行体持有的 token 过期）
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET fencing_token = fencing_token + 1 "
+                    "WHERE id = %s", (sid,))
+    db_conn.commit()
+    # 旧 token 写回 → CAS 0 行
+    w._mark_done(sid, bid, last_preview='stale-token', generation=0,
+                 fencing_token=old_token)
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_chat_sessions WHERE id = %s", (sid,))
+        assert cur.fetchone()[0] == 'running'
+        cur.execute("SELECT done FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone()[0] == 0
+    # fencing_token 未传时现读现校验（自洽写回）→ 命中
+    w._mark_done(sid, bid, last_preview='fresh', generation=0)
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_chat_sessions WHERE id = %s", (sid,))
+        assert cur.fetchone()[0] == 'completed'
+        cur.execute("SELECT done FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_continue_completed_child_keeps_counters(db_conn, user_id):
+    """复核报告 §4.1（N1 严重缺陷）回归：对 **completed** 子任务执行 continue
+    时计数回滚必须走 done-1（此前 RETURNING 取到更新后的 'pending'，错做
+    failed-1 → failed 静默变负、批次终态算成 partial）。"""
+    from utils.batch_repo import continue_child
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    _set_child(db_conn, sid, status='completed')
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_batches SET done=1 WHERE id=%s", (bid,))
+    db_conn.commit()
+    continue_child(user_id, bid, sid, '继续补充')
+    status, done, failed, total = _batch(db_conn, bid)
+    assert done == 0 and failed == 0          # done-1，failed 不动（此前 failed=-1）
+    row = _child(db_conn, sid)
+    assert row['status'] == 'pending'
+    assert row['generation'] == 1
+
+
+def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
+    """复核报告 H3 残留回归：入口 D 补挂的期望（批级 applicable=0）在账本
+    不健康时不得被静默放行——inconclusive 携带 expected 条数 → fail-closed。"""
+    from utils import agent_ledger
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, 1)   # 批级无 action_checks
+    sid = sids[0]
+    _set_child(db_conn, sid, status='running', opencode_session_id='oc-attach-x')
+    # 入口 D 补挂 per-session 期望
+    from db import get_db
+    agent_ledger.register_session_expectations(
+        sid, [{'name': 'must-clone', 'tool': 'bash', 'args_pattern': 'git clone'}],
+        source='attach', get_db=get_db)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM action_expectations WHERE scope_id=%s",
+                    (sid,))
+        assert cur.fetchone()[0] == 1
+    # 账本不健康 → inconclusive 且 expected=1
+    gate = agent_ledger.check_session_gate(sid, ledger_healthy=False,
+                                           get_db=get_db)
+    assert gate['status'] == 'inconclusive'
+    assert gate.get('expected') == 1
+    # 引擎判定：evaluated=0 / applicable=0 / expected=1 → fail-closed
+    w = BatchWorker()
+    gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
+    evaluated = len(gate.get('results') or [])
+    expected = (gate.get('expected') or 0)
+    fail_closed = (gate_reg.get('error')
+                   or not (evaluated > 0
+                           or (gate_reg.get('applicable') or 0) > 0
+                           or expected > 0))
+    assert fail_closed is False  # expected>0 → 进入核对分支 → inconclusive 落 failed

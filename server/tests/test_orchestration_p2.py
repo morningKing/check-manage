@@ -38,8 +38,11 @@ def _clear_other_pending(db_conn, keep_run_id=None):
     """清掉残留 pending 行（共享库确定性认领）：批任务/独立会话遗留 + 其它
     run 的编排子会话。"""
     with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions "
-                    "WHERE status='pending' AND batch_id IS NOT NULL")
+        # M8 治理（复核报告 §3）：仅清理「测试命名」批次，不碰真实用户数据
+        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                    "WHERE s.batch_id = b.id AND s.status='pending' "
+                    "  AND (b.name LIKE 'AITEST-%' OR b.name LIKE 'e2e%' "
+                    "       OR b.name LIKE '%-test' OR b.name IN ('engine-test', 'pause-test'))")
         if keep_run_id:
             cur.execute("DELETE FROM ai_chat_sessions "
                         "WHERE status='pending' AND batch_id IS NULL "
