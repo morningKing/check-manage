@@ -795,6 +795,50 @@ def test_drain_heartbeat_per_row(db_conn, user_id, monkeypatch):
     db_conn.commit()
 
 
+def test_settle_skips_event_for_deleted_batch(db_conn, user_id, monkeypatch):
+    """16 号 §2 问题 2：批次已删后 outbox 重投递（dev-server 侧，不在任何
+    pytest 会话内）不再产生孤儿 ai_batch_events——_settle 查批次存活才写事件。
+    批次存活的对照组照常写。"""
+    from utils import delivery_outbox
+    bid_alive, sids = _seed_batch(db_conn, user_id, 1)
+    bid_gone = str(uuid.uuid4())                    # 批次行不存在
+    rows = []
+    for bid, tag in ((bid_alive, 'alive'), (bid_gone, 'gone')):
+        oid = f'obx-del-{tag}-' + uuid.uuid4().hex[:8]
+        eid = f'evt-del-{tag}-' + uuid.uuid4().hex[:8]
+        rows.append((oid, eid, bid))
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_delivery_outbox (id, event_id, batch_id, "
+                "  event_type, target_url, payload, signature, idempotency_key, "
+                "  status, next_retry_at, attempt_count) "
+                "VALUES (%s, %s, %s, 't', 'http://cb/x', '{}', '', %s, "
+                "  'pending', NOW(), 0)", (oid, eid, bid, f'k-{eid}'))
+    db_conn.commit()
+    monkeypatch.setattr(delivery_outbox, 'BACKOFF_SECONDS', [0, 0, 0, 0, 0])
+    monkeypatch.setattr(delivery_outbox, 'deliver_one', lambda row: True)
+    delivery_outbox.drain_due_once()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                for oid, eid, bid in rows:
+                    cur.execute(
+                        "SELECT count(*) FROM ai_batch_events "
+                        "WHERE batch_id=%s AND aggregate_id=%s", (bid, oid))
+                    n = cur.fetchone()[0]
+                    if bid == bid_alive:
+                        assert n == 1               # 存活批次照常写
+                    else:
+                        assert n == 0               # 已删批次不再写（修复前 1）
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_delivery_outbox WHERE id = ANY(%s)",
+                        ([r[0] for r in rows],))
+            cur.execute("DELETE FROM ai_batch_events WHERE batch_id=%s",
+                        (bid_alive,))
+        db_conn.commit()
+
+
 def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
                                                         monkeypatch):
     """M14 outbox 侧（12 号 §2.2-8：代码对齐但零测试）：入队失败只回滚

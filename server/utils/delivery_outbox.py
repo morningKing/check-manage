@@ -154,14 +154,26 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
                 external_ref=oid)
     except Exception:  # noqa: BLE001
         pass
-    # 投递结果进事件流（管理面可观测；失败时也写，外部可感知）
-    from utils import batch_events
-    batch_events.append_event(
-        batch_id, 'delivery.sent' if ok else 'delivery.failed',
-        aggregate_type='delivery', aggregate_id=oid,
-        payload={'targetUrl': _redact(None), 'attempt': attempt_count,
-                 'error': (error or '')[:200], 'eventId': event_ref,
-                 'uncertain': uncertain})
+    # 投递结果进事件流（管理面可观测；失败时也写，外部可感知）。
+    # 批次已删（open-api 停止并删除后 outbox 仍会退避重投递）时不再写事件——
+    # ai_batch_events 无 FK，否则孤儿事件永久累积（16 号 §2 问题 2）。
+    try:
+        from db import get_db as _gdb
+        with _gdb() as _conn:
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT 1 FROM ai_chat_batches WHERE id = %s",
+                             (batch_id,))
+                _batch_alive = _cur.fetchone() is not None
+        if _batch_alive:
+            from utils import batch_events
+            batch_events.append_event(
+                batch_id, 'delivery.sent' if ok else 'delivery.failed',
+                aggregate_type='delivery', aggregate_id=oid,
+                payload={'targetUrl': _redact(None), 'attempt': attempt_count,
+                         'error': (error or '')[:200], 'eventId': event_ref,
+                         'uncertain': uncertain})
+    except Exception:  # noqa: BLE001 —— 事件流 best-effort，不反向影响投递收口
+        pass
 
 
 def _redact(url):
