@@ -57,11 +57,13 @@ def _clear_other_pending(db_conn, keep_run_id=None):
     like = ' OR '.join("u.username LIKE %s" for _ in TEST_USER_PREFIXES)
     with db_conn.cursor() as cur:
         # 批次臂：保留 AITEST-/具名保留批（e2e/openapi 测试经 admin API 创建，
-        # 用户是真实 admin，只能按批次保留前缀识别）；不再含宽匹配 e2e%/%-test
+        # 用户是真实 admin，只能按批次保留前缀识别）；保留名清单与
+        # test_batch_engine / test_batch_execution_safety_p0 / test_harness_p1_durable 一致
         cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
                     "WHERE s.batch_id = b.id AND s.status='pending' "
                     "  AND (b.name LIKE 'AITEST-%' "
-                    "       OR b.name IN ('engine-test', 'pause-test', 'gap-test'))")
+                    "       OR b.name IN ('p0-test', 'p1-test', 'engine-test', "
+                    "                    'pause-test', 'gap-test'))")
         if keep_run_id:
             cur.execute(
                 "DELETE FROM ai_chat_sessions s "

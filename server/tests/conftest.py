@@ -147,13 +147,28 @@ def _reset_and_prime_permission_cache():
     _perms.invalidate_cache()
 
 
+_SESSION_STARTED_AT = None
+
+
+def pytest_sessionstart(session):
+    """记录会话起点（14-12 §2.1：GC 限定本会话创建的行，不触碰并行
+    进程/会话的孤儿——跨会话删除是全局副作用）。"""
+    global _SESSION_STARTED_AT
+    import datetime
+    _SESSION_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
+
+
 def pytest_sessionfinish(session, exitstatus):
-    """会话结束统一回收孤儿 ai_batch_events（12 号 §4.2 兜底）。
+    """会话结束回收**本会话期间**产生的孤儿 ai_batch_events（12 号 §4.2
+    兜底；14-12 §2.1 收紧：加 created_at 会话起点下限，不再删除并行
+    进程/更早历史的孤儿——那类行由其所属会话自己的 GC 负责）。
 
     ai_batch_events 无 FK，个别用例/夹具删除批次或 run 行后会遗留事件。
     各文件夹具已按各自维度回收；此钩子按「batch_id 已脱离 batches ∪ runs」
-    收掉全部残余，防历史再积累。只清测试遗留形态，不触碰任何存活归属。
+    收掉本会话残余，防历史再积累。只清测试遗留形态，不触碰任何存活归属。
     """
+    if _SESSION_STARTED_AT is None:
+        return
     try:
         import psycopg2
         from config import DB_CONFIG
@@ -162,10 +177,12 @@ def pytest_sessionfinish(session, exitstatus):
             with conn.cursor() as cur:
                 cur.execute(
                     "DELETE FROM ai_batch_events e WHERE "
-                    "NOT EXISTS (SELECT 1 FROM ai_chat_batches b "
+                    "e.created_at >= %s "
+                    "AND NOT EXISTS (SELECT 1 FROM ai_chat_batches b "
                     "            WHERE b.id = e.batch_id) "
                     "AND NOT EXISTS (SELECT 1 FROM ai_orchestration_runs r "
-                    "                WHERE r.id = e.batch_id)")
+                    "                WHERE r.id = e.batch_id)",
+                    (_SESSION_STARTED_AT,))
                 deleted = cur.rowcount
             conn.commit()
             if deleted:
