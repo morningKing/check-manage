@@ -36,6 +36,9 @@ from utils.batch_repo import (
 ai_chat_batches_bp = Blueprint('ai_chat_batches', __name__,
                                url_prefix='/ai/chat/batches')
 
+# stop=1 的 drain 等待上限（H2：超时必须 409 保留任务，不得继续删除）
+DRAIN_TIMEOUT_SEC = 10
+
 
 @ai_chat_batches_bp.post('/staging/upload')
 @login_required
@@ -338,7 +341,7 @@ def remove(batch_id):
         # Bounded drain（P0 spec §7.2 / H2 修复）：超时不得继续删除——与对外
         # API 语义一致，返回 409 并保留任务与工作区（消灭幽灵执行）。
         import time as _time
-        deadline = _time.time() + 10
+        deadline = _time.time() + DRAIN_TIMEOUT_SEC
         drained = False
         while _time.time() < deadline:
             d = get_batch_detail(user_id, batch_id)

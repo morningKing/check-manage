@@ -342,6 +342,18 @@ try:
 except Exception as _e:
     logging.warning('subagent reuse migration on boot failed: %s', _e)
 
+# M9/M12 回修（2026-09-25）：artifact 去重按 owner 隔离 + outbox sending
+# 回收索引。随启动幂等执行。
+try:
+    _mp13 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_25_artifact_owner_scope.py')
+    _spec13 = _ilu.spec_from_file_location('_artifact_owner_boot', _mp13)
+    _m13 = _ilu.module_from_spec(_spec13)
+    _spec13.loader.exec_module(_m13)
+    _m13.run()
+except Exception as _e:
+    logging.warning('artifact owner scope migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills

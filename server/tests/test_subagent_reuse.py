@@ -314,7 +314,10 @@ def test_plugin_deploy_idempotent(tmp_path):
     assert p1 and os.path.isfile(p1)
     src1 = open(p1, encoding='utf-8').read()
     assert ep in src1
-    assert '/reuse' in src1 and '/resolve-agent' in src1 and '/pins' in src1
+    assert '/reuse' in src1 and '/pins' in src1
+    # callID intent 流程：/reuse 带 callId 登记、/pins 按 callId 直写 pin
+    # （取代旧 /resolve-agent 两跳解析，消除 pin 登记与持久化的时序竞态 R1）
+    assert 'callId' in src1 and 'callID' in src1
     assert 'task_id' in src1 and 'tool.execute.before' in src1
     p2 = ensure_subagent_reuse_plugin(gd, ep, 'tok-1')
     assert p1 == p2

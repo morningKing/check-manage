@@ -49,9 +49,13 @@ def put_file(path: str, *, owner_user_id: str | None, name: str | None = None,
     from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:
-            # (sha256, name) 去重：同内容同名复用既有行
-            cur.execute("SELECT id FROM artifacts WHERE sha256=%s AND name=%s",
-                        (sha, name))
+            # M9 回修：去重按 (sha256, name, owner) 隔离——同用户同内容同名
+            # 复用既有行；跨用户不复用（否则复用他人 owner 的行 → 本人下载
+            # 403、列表不可见）。物理文件仍按 sha 共享（内容寻址不浪费空间）。
+            cur.execute(
+                "SELECT id FROM artifacts WHERE sha256=%s AND name=%s "
+                "  AND owner_user_id IS NOT DISTINCT FROM %s",
+                (sha, name, owner_user_id))
             row = cur.fetchone()
             if row:
                 aid = row[0]

@@ -786,6 +786,16 @@ def compact_session(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 同类残留：compact 也会开新 turn，同样不得绕过执行所有权门禁
+    _c_batch = sess[5] if len(sess) > 5 else None
+    _c_status = sess[3] if len(sess) > 3 else None
+    if _c_batch and _c_status in ('pending', 'running', 'paused'):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能压缩上下文',
+            'retryable': False,
+            'operation': 'compact_session',
+        }}), 409
     if not sess[2]:
         return jsonify({'error': '会话尚未关联 OpenCode，无法压缩', 'code': 'NO_OPENCODE_SESSION'}), 400
 
