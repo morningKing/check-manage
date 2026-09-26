@@ -39,8 +39,11 @@ export function createBatch(body: {
   provision_ref?: string | null
   /** 动作门禁期望(设计 §5.2 入口 A):子任务终态逐条核对账本,不过门落 failed */
   action_checks?: ActionCheck[] | null
-  /** 门禁不过时自动修正(原会话 continue 补齐缺失动作,设计 §5.4) */
+  /** 门禁不过时自动修正(原会话继续执行,补齐缺失动作后重新核对,设计 §5.4) */
   gate_retry?: boolean
+  /** 子代理会话复用名单(2026-09-24):这些 agent 在本任务内跨轮次强制续跑
+   *  同一子会话(OC 插件注入 task_id + 派发指令双保险);空/未传 = 不启用 */
+  subagent_reuse?: string[] | null
   files: StagedFile[]
 }) {
   return post<AiChatBatchDetail>('/ai/chat/batches', body)
@@ -101,6 +104,14 @@ export function resumeChild(batchId: string, sessionId: string) {
   return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/resume`, {})
 }
 
+/** 人工 continuation（P0 §7.1）：在终态（completed/failed/cancelled）批子会话上
+ *  追加一轮对话。非终态 409（worker 独家驱动）；成功 202。前端对终态批子会话
+ *  的发送经由此端点，而不是普通聊天发送接口。 */
+export function continueChild(batchId: string, sessionId: string, prompt: string) {
+  return post<AiChatBatchDetail>(
+    `/ai/chat/batches/${batchId}/sessions/${sessionId}/continue`, { prompt })
+}
+
 export function updateBatchConfig(id: string, body: {
   agent: string | null
   model: string | null
@@ -108,6 +119,8 @@ export function updateBatchConfig(id: string, body: {
   provision_ref?: string | null
   /** 动作门禁期望(编辑入口,设计 §5.2):显式传入才更新,未终态子任务同步 */
   action_checks?: ActionCheck[] | null
+  /** 子代理会话复用名单:显式传入才更新(2026-09-24) */
+  subagent_reuse?: string[] | null
 }) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${id}`, body)
 }

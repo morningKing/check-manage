@@ -22,6 +22,14 @@
     </div>
 
     <div class="row">
+      <label>子代理会话复用 <span class="hint">（可选 · 勾选的子代理在本任务内跨轮次续跑同一子会话，保留历史上下文；气泡展开可分段查看）</span></label>
+      <ElSelect v-model="reuseAgents" multiple filterable clearable
+                placeholder="选择需要复用会话的子代理（留空=不启用）" style="width:100%">
+        <ElOption v-for="a in subagentList" :key="a.name" :label="a.name" :value="a.name" />
+      </ElSelect>
+    </div>
+
+    <div class="row">
       <label>动作门禁 <span class="hint">（可选 · 子任务终态逐条核对账本；只对未完成子任务生效，已完成子任务的历史核对结果不变）</span></label>
       <ElCheckbox v-model="gateEnabled" data-test="gate-enabled">启用动作门禁</ElCheckbox>
       <template v-if="gateEnabled">
@@ -75,6 +83,8 @@ const model = ref<string>('')
 const provisionRepo = ref<string>('')
 const provisionRef = ref<string>('')
 const saving = ref(false)
+const reuseAgents = ref<string[]>([])
+const subagentList = ref<AgentInfo[]>([])
 
 // 动作门禁(设计 §5.2 入口 A 的编辑面):预填批任务上已保存的期望
 const gateEnabled = ref(false)
@@ -89,6 +99,8 @@ function prefill() {
   model.value = props.batch.model || ''
   provisionRepo.value = props.batch.provision_repo || ''
   provisionRef.value = props.batch.provision_ref || ''
+  reuseAgents.value = Array.isArray((props.batch as any).subagent_reuse)
+    ? ((props.batch as any).subagent_reuse as string[]) : []
   // 门禁预填:批定义上的 action_checks(创建时或编辑时保存的)
   const checks = (props.batch as any).action_checks as
     Array<{ name: string; tool: string; args_pattern: string; min_count?: number; subagents?: string[] }> | null
@@ -104,7 +116,11 @@ function prefill() {
 onMounted(async () => {
   // Only PRIMARY agents can be a session's agent (a subagent makes OpenCode
   // silently produce nothing → batch hangs). Use @mention to delegate instead.
-  try { const r = await listAgents(); agents.value = r.agents } catch { /* non-fatal */ }
+  try {
+    const r = await listAgents()
+    agents.value = r.agents
+    subagentList.value = r.subagents || []
+  } catch { /* non-fatal */ }
   try { models.value = (await listModels()).models } catch { /* non-fatal */ }
   prefill()
 })
@@ -133,6 +149,7 @@ async function save() {
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
       action_checks: gateEnabled.value ? action_checks : [],
+      subagent_reuse: reuseAgents.value,
     })
     ElMessage.success('已保存')
     emit('saved'); emit('update:modelValue', false)

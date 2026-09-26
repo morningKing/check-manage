@@ -51,6 +51,10 @@ from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.ai_data_internal import ai_data_internal_bp
+from routes.ai_subagent_internal import ai_subagent_internal_bp
+from routes.ai_orchestrations import ai_orchestrations_bp
+from routes.ai_approvals import ai_approvals_bp
+from routes.artifacts import artifacts_bp
 from routes.data_files import data_files_bp
 from routes.roles import roles_bp
 from routes.workflows import workflows_bp
@@ -180,6 +184,16 @@ try:
     logging.info('SkillOpt: runtime plugin ensured at %s; retention %s',
                  _OGD, _ret)
 
+    # 子代理会话复用插件（tool.execute.before 强制注入 task_id）：与 SkillOpt
+    # 插件同目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
+    try:
+        from utils.subagent_reuse_plugin import ensure_subagent_reuse_plugin
+        _sru_ep = f'http://127.0.0.1:{_FPORT}/ai/subagent-internal'
+        ensure_subagent_reuse_plugin(_OGD, _sru_ep,
+                                     _os.getenv('MCP_INTERNAL_TOKEN', ''))
+    except Exception as e3:
+        logging.warning('subagent reuse plugin deploy failed: %s', e3)
+
     def _audit_retention_daily():
         try:
             r = _sk.apply_retention()
@@ -279,6 +293,67 @@ try:
 except Exception as _e:
     logging.warning('batch child soft-delete migration on boot failed: %s', _e)
 
+# AI Harness P0 执行安全基线（2026-09-23）：ai_chat_turns / execution_generation /
+# gate 列 / worker 租约表 / batch_seq 唯一约束。随启动幂等执行。
+try:
+    _mp9 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'migrations', '2026_09_23_harness_p0_execution_safety.py')
+    _spec9 = _ilu.spec_from_file_location('_harness_p0_boot', _mp9)
+    _m9 = _ilu.module_from_spec(_spec9)
+    _spec9.loader.exec_module(_m9)
+    _m9.run()
+except Exception as _e:
+    logging.warning('harness p0 migration on boot failed: %s', _e)
+
+# AI Harness P1 持久化执行（2026-09-23）：执行租约列 / attempt 列与唯一索引 /
+# checkpoints / effects / commands / batch_events / delivery_outbox / budgets /
+# usage。随启动幂等执行。
+try:
+    _mp10 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_23_harness_p1_durable_execution.py')
+    _spec10 = _ilu.spec_from_file_location('_harness_p1_boot', _mp10)
+    _m10 = _ilu.module_from_spec(_spec10)
+    _spec10.loader.exec_module(_m10)
+    _m10.run()
+except Exception as _e:
+    logging.warning('harness p1 migration on boot failed: %s', _e)
+
+# AI Harness P2 编排（2026-09-23）：orchestration 定义/run/step、审批、产物、
+# runtime manifest、会话关联列。随启动幂等执行。
+try:
+    _mp11 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_23_harness_p2_orchestration.py')
+    _spec11 = _ilu.spec_from_file_location('_harness_p2_boot', _mp11)
+    _m11 = _ilu.module_from_spec(_spec11)
+    _spec11.loader.exec_module(_m11)
+    _m11.run()
+except Exception as _e:
+    logging.warning('harness p2 migration on boot failed: %s', _e)
+
+# 子代理会话复用（2026-09-24）：批级 subagent_reuse 配置列 / 复用锚定表
+# ai_subagent_pins / 子代理任务段 turn_segments。随启动幂等执行。
+try:
+    _mp12 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_24_subagent_session_reuse.py')
+    _spec12 = _ilu.spec_from_file_location('_subagent_reuse_boot', _mp12)
+    _m12 = _ilu.module_from_spec(_spec12)
+    _spec12.loader.exec_module(_m12)
+    _m12.run()
+except Exception as _e:
+    logging.warning('subagent reuse migration on boot failed: %s', _e)
+
+# M9/M12 回修（2026-09-25）：artifact 去重按 owner 隔离 + outbox sending
+# 回收索引。随启动幂等执行。
+try:
+    _mp13 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_25_artifact_owner_scope.py')
+    _spec13 = _ilu.spec_from_file_location('_artifact_owner_boot', _mp13)
+    _m13 = _ilu.module_from_spec(_spec13)
+    _spec13.loader.exec_module(_m13)
+    _m13.run()
+except Exception as _e:
+    logging.warning('artifact owner scope migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -291,7 +366,11 @@ app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
+app.register_blueprint(ai_subagent_internal_bp)
 app.register_blueprint(ai_data_internal_bp)
+app.register_blueprint(ai_orchestrations_bp)
+app.register_blueprint(ai_approvals_bp)
+app.register_blueprint(artifacts_bp)
 app.register_blueprint(data_files_bp)
 app.register_blueprint(roles_bp)
 app.register_blueprint(workflows_bp)
@@ -332,20 +411,19 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
 
-def _start_audit_retention_job():
-    """每日 03:17 执行审计事件分层保留（SkillOpt P2）。"""
-    try:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        sched = BackgroundScheduler(timezone='Asia/Shanghai')
-        sched.add_job(lambda: _sk.apply_retention(), 'cron', hour=3, minute=17,
-                      id='execution-audit-retention', replace_existing=True)
-        sched.start()
-        logging.info('execution audit retention scheduler started (03:17 daily)')
-    except Exception as e:
-        logging.warning('audit retention scheduler failed: %s', e)
+    # P1：outbox 投递器（持 delivery 租约；AI_DELIVERY_OUTBOX_ENABLED=0 时回退
+    # 旧直接 POST 回调路径，见 utils/delivery_outbox.py）
+    from utils.delivery_outbox import start_delivery_loop
+    start_delivery_loop()
 
+    # P2：编排调度器（持 scheduler 租约：DAG 推进 + 审批超时）
+    from utils.orchestration_engine import start_scheduler
+    start_scheduler()
 
-_start_audit_retention_job()
+# F12（ai-harness-p0 spec §9）：审计 retention 任务此前注册了两次（SkillOpt
+# 启动块内一个 scheduler + 下面 _start_audit_retention_job 又一个 scheduler），
+# replace_existing 只在同一 scheduler 内去重，两个实例互不可见——apply_retention
+# 每天 03:17 跑两遍。只保留 SkillOpt 块内那一处注册，这里不再重复建。
 
 if __name__ == '__main__':
     # threaded=True: serve requests concurrently (one thread per request) so a

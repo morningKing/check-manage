@@ -66,7 +66,7 @@ export type AiContentPart =
   | { type: 'run_result'; filename: string; exitCode: number; timedOut: boolean; stdout: string; stderr: string; outputFiles: string[] }
   | { type: 'mcp_services'; servers: McpServer[] }
   | { type: 'lsp_formatter'; lsp: LspServerStatus[]; formatters: FormatterStatus[]; error?: string }
-  | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed' }
+  | { type: 'subtask_use'; subtaskId: string; agent: string | null; description: string | null; status: 'running' | 'completed' | 'failed'; segmentCount?: number }
   | { type: 'error'; text: string }
 
 // OpenCode's built-in interactive multi-choice tool ("question"). Decoupled
@@ -213,12 +213,24 @@ export function getMessages(id: string, since?: string) {
   return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
 }
 
+/** 会话复用任务段：子会话里每条 user 消息 = 一次委派任务（边界）。
+ *  ord 是该 user 消息在子会话全部 user 消息中的序号（跨拉取稳定）。 */
+export interface SubtaskSegment {
+  ord: number
+  turn: number
+  label: string
+  firstMsgId: string
+  startedAt: string
+}
+
 export interface SubtaskSummary {
   id: string
   agent: string | null
   description: string | null
   status: 'running' | 'completed' | 'failed'
   error: string | null
+  /** 会话复用时的任务段（单次委派的会话只有 1 段；复用会话 ≥2 段） */
+  segments?: SubtaskSegment[]
 }
 
 export interface SubtaskMessagesResult {

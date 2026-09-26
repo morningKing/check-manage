@@ -752,6 +752,132 @@ paths:
                   ok: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /v1/ai-batches/{batchId}/pause:
+    post:
+      tags: [ai-batches]
+      summary: 暂停批任务（2026-09-23 新增）
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200': { $ref: '#/components/responses/BatchDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/resume:
+    post:
+      tags: [ai-batches]
+      summary: 恢复已暂停/已中断的批任务（2026-09-23 新增）
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+      responses:
+        '200': { $ref: '#/components/responses/BatchDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/sessions/{childId}/cancel:
+    post:
+      tags: [ai-batches]
+      summary: 取消单个子会话（2026-09-23 新增）
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - $ref: '#/components/parameters/ChildId'
+      responses:
+        '200':
+          description: 已请求取消（pending/running 异步生效，paused 同步落 cancelled）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId: { type: string }
+                  childId: { type: string }
+                  name: { type: string }
+                  seq: { type: integer }
+                  status: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/commands:
+    post:
+      tags: [ai-batches]
+      summary: 通用命令入口（2026-09-23 新增，要求 Idempotency-Key）
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [pause, resume, cancel, retry]
+      responses:
+        '200':
+          description: 幂等命中（返回既有命令，不重复执行）
+        '202':
+          description: 命令已接受并应用
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommandResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /v1/ai-batches/{batchId}/commands/{commandId}:
+    get:
+      tags: [ai-batches]
+      summary: 查询命令状态（2026-09-23 新增）
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - name: commandId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 命令全生命周期
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Command' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/ai-batches/{batchId}/events:
+    get:
+      tags: [ai-batches]
+      summary: 批任务事件增量读取（2026-09-23 新增）
+      description: |
+        afterSeq 语义：返回 event_seq > afterSeq 的事件（升序）。
+        客户端按 eventId 幂等合并；断线后携带上次最大 eventSeq 续读即无漏回放。
+      parameters:
+        - $ref: '#/components/parameters/BatchId'
+        - name: afterSeq
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: 事件分页
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchId: { type: string }
+                  events:
+                    type: array
+                    items: { $ref: '#/components/schemas/BatchEvent' }
+                  nextAfterSeq: { type: integer }
+                  hasMore: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -944,3 +1070,48 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+
+  parameters:
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema: { type: string }
+    ChildId:
+      name: childId
+      in: path
+      required: true
+      description: 子会话标识——childId（不透明 ID，2026-09-23 起随 /results 下发）、文件名或纯数字序号
+      schema: { type: string }
+
+  schemas:
+    CommandResult:
+      type: object
+      properties:
+        commandId: { type: string }
+        duplicate: { type: boolean }
+        status: { type: string, enum: [applied, rejected] }
+        result: {}
+    Command:
+      type: object
+      properties:
+        id: { type: string }
+        idempotencyKey: { type: string }
+        batchId: { type: string }
+        commandType: { type: string }
+        requestedBy: { type: string }
+        requestedByKind: { type: string, enum: [user, api_key, system] }
+        status: { type: string, enum: [accepted, applied, rejected, expired, failed] }
+        resultSnapshot: {}
+        errorCode: { type: string }
+        createdAt: { type: string, format: date-time }
+        appliedAt: { type: string, format: date-time, nullable: true }
+    BatchEvent:
+      type: object
+      properties:
+        eventId: { type: string }
+        eventSeq: { type: integer }
+        type: { type: string }
+        at: { type: string, format: date-time }
+        data: { type: object }
+

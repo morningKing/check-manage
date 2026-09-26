@@ -99,6 +99,17 @@
         </template>
       </div>
 
+      <div class="row">
+        <label>子代理会话复用 <span style="color:var(--el-text-color-placeholder);font-size:11px">（可选 · 勾选的子代理在本任务内跨轮次续跑同一会话，保留历史上下文；气泡展开可分段查看）</span></label>
+        <ElSelect v-model="reuseAgents" multiple filterable clearable data-test="reuse-select"
+                  placeholder="选择需要复用会话的子代理（留空=不启用）" style="width:100%">
+          <ElOption v-for="a in subagentOptions" :key="a.name" :label="a.name" :value="a.name">
+            <span>{{ a.name }}</span>
+            <span v-if="a.description" style="color:#909399;font-size:11px;margin-left:6px">{{ a.description }}</span>
+          </ElOption>
+        </ElSelect>
+      </div>
+
       <div class="row row--inline">
         <ElCheckbox v-model="saveAsTemplate">保存为新模板</ElCheckbox>
         <ElInput v-if="saveAsTemplate"
@@ -178,6 +189,11 @@ const gateRetry = ref(false)
 const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents: string }>>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
 const extracting = ref(false)
+// 子代理会话复用（2026-09-24）：勾选的 agent 在本任务内由系统强制续跑同一
+// 子会话（OC 插件注入 task_id + 派发指令双保险）。
+const reuseAgents = ref<string[]>([])
+const subagentList = ref<AgentInfo[]>([])
+const subagentOptions = computed(() => subagentList.value)
 function emptyCheck() {
   return { name: '', tool: 'bash', args_pattern: '', min_count: 1, subagents: '' }
 }
@@ -234,6 +250,7 @@ onMounted(async () => {
     // OpenCode silently produce nothing (batch hangs). Use @mention in the prompt
     // to delegate to a subagent instead.
     agents.value = r.agents
+    subagentList.value = r.subagents || []
   } catch { /* non-fatal */ }
   try {
     models.value = (await listModels()).models
@@ -326,6 +343,7 @@ async function submit() {
       provision_ref: provisionRef.value.trim() || null,
       gate_retry: gateEnabled.value ? gateRetry.value : false,
       action_checks,
+      subagent_reuse: reuseAgents.value.length ? reuseAgents.value : null,
       files: stagedFiles.value,
     })
     if (saveAsTemplate.value && templateName.value.trim()) {
@@ -356,6 +374,7 @@ function reset() {
   gateEnabled.value = false
   gateRetry.value = false
   gateChecks.value = []
+  reuseAgents.value = []
   stagedFiles.value = []
   saveAsTemplate.value = false
   templateName.value = ''

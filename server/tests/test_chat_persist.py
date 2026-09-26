@@ -232,7 +232,8 @@ def test_apply_event_subtask_part_appears_in_parent_content():
     content = build_content(s)
     stubs = [p for p in content if p['type'] == 'subtask_use']
     assert stubs == [{'type': 'subtask_use', 'subtaskId': 'ses_child1',
-                      'agent': 'build', 'description': 'x', 'status': 'running'}]
+                      'agent': 'build', 'description': 'x', 'status': 'running',
+                      'segmentCount': 0}]
 
 
 def test_apply_event_discovers_subtask_with_depth_and_parent():

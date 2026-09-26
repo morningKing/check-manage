@@ -22,9 +22,20 @@
           {{ formatTime(row.enteredAt) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" fixed="right">
+      <el-table-column label="类型" width="90">
         <template #default="{ row }">
+          <el-tag v-if="row.kind === 'ai_approval'" type="warning" size="small">AI 审批</el-tag>
+          <el-tag v-else type="info" size="small">工作流</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="200" fixed="right">
+        <template #default="{ row }">
+          <template v-if="row.kind === 'ai_approval'">
+            <el-button type="primary" link size="small" @click="decide(row, 'approved')">通过</el-button>
+            <el-button type="danger" link size="small" @click="decide(row, 'rejected')">拒绝</el-button>
+          </template>
           <el-button
+            v-else
             type="primary"
             link
             size="small"
@@ -48,6 +59,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useMenuStore } from '@/stores/menu'
 import { useJumpNavigationStore } from '@/stores/jumpNavigation'
+import { post } from '@/utils/request'
 import type { WorkflowInboxItem } from '@/types/workflow'
 
 const router = useRouter()
@@ -65,6 +77,17 @@ async function refresh(): Promise<void> {
     await workflowStore.loadInbox()
   } catch {
     ElMessage.error('加载待办失败')
+  }
+}
+
+/** AI 审批决策（P2 §7）：approve/reject 后刷新收件箱。 */
+async function decide(row: any, decision: 'approved' | 'rejected'): Promise<void> {
+  try {
+    await post(`/v1/ai-approvals/${row.approvalId}/${decision === 'approved' ? 'approve' : 'reject'}`, {})
+    ElMessage.success(decision === 'approved' ? '已通过' : '已拒绝')
+    await refresh()
+  } catch {
+    ElMessage.error('操作失败')
   }
 }
 

@@ -55,7 +55,20 @@ describe('aiChatBatches store', () => {
     expect(s.polling).toBe(false)
   })
 
-  it('retryFailed optimistically clears failed count and refetches', async () => {
+// P0 §7.1：人工 continuation——终态批子会话的"发送"走批通道
+  it('continueChild routes through the batch channel and restarts polling', async () => {
+    vi.mocked(api.continueChild).mockResolvedValue({
+      batch: { ...mockBatch, status: 'running' as const }, sessions: [],
+    })
+    const s = useAiChatBatchesStore()
+    s.items = [mockBatch]
+    s.activeBatch = mockBatch
+    await s.continueChild('b1', 's-1', '补充一下结论')
+    expect(api.continueChild).toHaveBeenCalledWith('b1', 's-1', '补充一下结论')
+    expect(s.polling).toBe(true)  // 重回运行态 → 恢复轮询
+  })
+
+    it('retryFailed optimistically clears failed count and refetches', async () => {
     vi.mocked(api.getBatch).mockResolvedValue({
       batch: { ...mockBatch, failed: 2, status: 'partial' as const }, sessions: [],
     })

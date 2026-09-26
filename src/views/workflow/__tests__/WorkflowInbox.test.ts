@@ -66,6 +66,8 @@ vi.mock('@/stores/jumpNavigation', () => ({
   useJumpNavigationStore: () => ({ setJump: vi.fn() }),
 }))
 
+vi.mock('@/utils/request', () => ({ post: vi.fn().mockResolvedValue({}) }))
+
 import WorkflowInbox from '../WorkflowInbox.vue'
 
 const stubs = {
@@ -111,5 +113,33 @@ describe('WorkflowInbox', () => {
       .findAll('button')
       .filter((b) => b.text().includes('去处理'))
     expect(goButtons.length).toBe(2)
+  })
+})
+
+// P2 Phase B：AI 审批项投影到收件箱（kind='ai_approval'）→ 渲染类型标签 + 通过/拒绝
+describe('WorkflowInbox with AI approvals', () => {
+  it('renders ai_approval kind tag with approve/reject actions', async () => {
+    inboxRef.value = [
+      {
+        kind: 'ai_approval',
+        approvalId: 'apr-1',
+        instanceId: 'run-1',
+        workflowName: 'AI 编排审批',
+        stageName: '发布前审批',
+        collection: 'ai_orchestration_runs',
+        recordId: 'run-1',
+        enteredAt: '2026-09-23T10:00:00Z',
+      },
+    ] as any
+    const wrapper = mount(WorkflowInbox, {
+      global: { stubs, directives: { loading: {} } },
+    })
+    await flushPromises()
+    const text = wrapper.text()
+    expect(text).toContain('AI 审批')
+    expect(text).toContain('通过')
+    expect(text).toContain('拒绝')
+    wrapper.unmount()
+    inboxRef.value = inboxItems
   })
 })

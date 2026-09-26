@@ -43,6 +43,7 @@ def test_map_part_subtask_maps_agent_and_description():
     assert map_part(part) == {
         'type': 'subtask_use', 'subtaskId': 'ses_child1',
         'agent': 'build', 'description': '重构模块 X', 'status': 'running',
+        'segmentCount': 0,
     }
 
 

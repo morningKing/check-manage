@@ -15,7 +15,8 @@ from utils.ai_message_meta import tool_duration_ms
 
 
 def map_part(part: dict, *, subtask_status: dict | None = None,
-             subtask_id_map: dict | None = None) -> dict | None:
+             subtask_id_map: dict | None = None,
+             subtask_segments: dict | None = None) -> dict | None:
     """把一个 OpenCode message part 映射成持久化内容的形状。
 
     返回 None 表示这个 part 不需要持久化（未知类型，或 subtask 缺 sessionID
@@ -53,6 +54,9 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
                     'agent': inp.get('subagent_type'),
                     'description': inp.get('description'),
                     'status': (subtask_status or {}).get(child_sid, fallback),
+                    # 会话复用任务段数（2026-09-24）：>1 表示该子会话被多个
+                    # 任务段复用，气泡头显示「已复用·N 段」徽标
+                    'segmentCount': len((subtask_segments or {}).get(child_sid) or []),
                 }
         return {
             'type': 'tool_use',
@@ -73,6 +77,7 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
             'agent': part.get('agent'),
             'description': part.get('description'),
             'status': (subtask_status or {}).get(sid, 'running'),
+            'segmentCount': len((subtask_segments or {}).get(sid) or []),
         }
     return None
 

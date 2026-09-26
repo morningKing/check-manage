@@ -331,6 +331,6 @@ def test_batch_directive_prepended_for_fresh_children(user_id, db_conn, claim_gu
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'fencing_token': 0})
     assert captured['prompt'].startswith('[系统规则]')
     assert '禁止使用 question' in captured['prompt']

@@ -46,6 +46,8 @@ PERMISSION_CATALOG = [
     {'key': 'admin.home_widgets',       'label': '首页区块',   'group': '系统运维'},
     {'key': 'admin.ai_chat_admin',     'label': 'AI 会话治理', 'group': '平台管理'},
     {'key': 'admin.ai_execution_prompt_read', 'label': 'AI 执行 Prompt 查看', 'group': '平台管理'},
+    {'key': 'admin.ai_orchestration_admin', 'label': 'AI 编排定义管理', 'group': '平台管理'},
+    {'key': 'admin.ai_approval',       'label': 'AI 执行前审批', 'group': '平台管理'},
     {'key': 'admin.kefu',              'label': '智能客服',     'group': '平台管理'},
 ]
 

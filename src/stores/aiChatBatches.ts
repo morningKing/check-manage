@@ -207,6 +207,19 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     return detail
   }
 
+  // 人工 continuation（P0 §7.1）：终态批子会话的"发送"走批通道，worker 串行
+  // 消费；非终态由后端 409 拦截（composer 对非终态已禁用，这里是兜底）。
+  async function continueChild(batchId: string, sessionId: string, prompt: string) {
+    const detail = await api.continueChild(batchId, sessionId, prompt)
+    const idx = items.value.findIndex(b => b.id === batchId)
+    if (idx >= 0) items.value[idx] = detail.batch
+    if (activeBatch.value?.id === batchId) {
+      applyDetail(detail)
+      if (!TERMINAL_STATUSES.has(detail.batch.status)) startDetailPolling(batchId)
+    }
+    return detail
+  }
+
   // 单任务继续：只把目标 paused 子任务推回 pending，其余暂停/中断任务不动。
   async function resumeChild(batchId: string, sessionId: string) {
     const detail = await api.resumeChild(batchId, sessionId)
@@ -231,7 +244,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     items, activeBatch, activeSessions, polling, listPolling,
     fetchList, startListPolling, stopListPolling,
     selectBatch, ensureBatchInList, clearSelection, retryFailed, reexecuteChild,
-    resumeChild, stopBatch, pauseBatch, resumeBatch,
+    resumeChild, continueChild, stopBatch, pauseBatch, resumeBatch,
     createAndSelect, removeBatch, appendToBatch, updateBatchConfig,
   }
 })

@@ -746,7 +746,8 @@ def rename_session(sid):
 
 
 def _load_session_for_user(session_id: str, user_id: str):
-    """Return (id, user_id, opencode_session_id, status, workspace_path, batch_id) or None.
+    """Return (id, user_id, opencode_session_id, status, workspace_path,
+    batch_id, orchestration_run_id) or None.
 
     On a successful load, also bump `last_active_at` and extend `token_expires_at`
     by `AI_SESSION_TTL_HOURS` — every user action keeps the session's MCP token
@@ -756,7 +757,8 @@ def _load_session_for_user(session_id: str, user_id: str):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, user_id, opencode_session_id, status, workspace_path, batch_id "
+            "SELECT id, user_id, opencode_session_id, status, workspace_path, "
+            "       batch_id, orchestration_run_id "
             "FROM ai_chat_sessions "
             "WHERE id = %s AND user_id = %s",
             (session_id, user_id),
@@ -773,6 +775,16 @@ def _load_session_for_user(session_id: str, user_id: str):
         return row
 
 
+def _execution_controlled(sess) -> bool:
+    """P0 执行所有权（spec §4.1；M3，10 号 §3.5）：批任务 **或编排 run**
+    的非终态子会话由后台 worker 独家驱动——普通发送/命令/压缩不得绕过
+    （编排子会话 batch_id 为空但同样被 claim，此前三处入口只查 batch_id）。"""
+    _batch = sess[5] if len(sess) > 5 else None
+    _orch = sess[6] if len(sess) > 6 else None
+    _status = sess[3] if len(sess) > 3 else None
+    return bool(_batch or _orch) and _status in ('pending', 'running', 'paused')
+
+
 @ai_chat_bp.route('/sessions/<sid>/compact', methods=['POST'])
 @write_required
 def compact_session(sid):
@@ -786,6 +798,15 @@ def compact_session(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 同类残留：compact 也会开新 turn，同样不得绕过执行所有权门禁
+    # （10 号 §3.5：编排子会话一并覆盖）
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能压缩上下文',
+            'retryable': False,
+            'operation': 'compact_session',
+        }}), 409
     if not sess[2]:
         return jsonify({'error': '会话尚未关联 OpenCode，无法压缩', 'code': 'NO_OPENCODE_SESSION'}), 400
 
@@ -821,6 +842,23 @@ def send_message(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+
+    # P0 执行所有权（ai-harness-p0 spec §4.1 规则3）：非终态批子会话由后台
+    # worker 独家驱动——普通发送入口直接 409，不写消息、不挂监听、不 dispatch。
+    # 否则同一 OpenCode 会话并发两个 turn：消息顺序错乱、完成判定竞态、
+    # pause/cancel 失效、门禁核对时机不确定。终态子会话放行（人工在原会话上
+    # 继续），前端会改走批任务 continue 端点，这里保留兼容。
+    _sess_status = sess[3] if len(sess) > 3 else None
+    if _execution_controlled(sess):  # 批/编排子会话统一判定（10 号 §3.5）
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，'
+                       '请在任务结束后使用批任务继续接口',
+            'retryable': False,
+            'operation': 'send_message',
+            'requestId': None,
+            'turnId': None,
+        }}), 409
 
     body = request.get_json(force=True)
     content = (body.get('content') or '').strip()
@@ -1089,6 +1127,7 @@ def get_subtask_messages_route(sid, subtask_id):
         'subtask': {
             'id': st['id'], 'agent': st.get('agent'), 'description': st.get('description'),
             'status': st['status'], 'error': st.get('error_message'),
+            'segments': st.get('turn_segments') or [],
         },
         'messages': [
             {'id': m['id'], 'role': m['role'], 'content': m['content'],
@@ -1113,11 +1152,24 @@ def compact_subtask(sid, subtask_id):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3（10 号 §3.5）：父会话为批/编排受控子会话时，其子代理会话可能正被
+    # 运行中的父回合驱动（子代理复用），压缩与在跑回合冲突——同样 409
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '父会话正在由后台执行器控制，暂不能压缩其子代理会话',
+            'retryable': False,
+            'operation': 'compact_subtask',
+        }}), 409
     if not sess[2] or not sess[4]:
         return jsonify({'error': '会话尚未关联 OpenCode 工作区', 'code': 'NO_OPENCODE_SESSION'}), 400
 
     data = get_subtask_messages(subtask_id, owner_user_id=user['userId'])
     if data is None:
+        return jsonify({'error': 'subtask not found', 'code': 'SUBTASK_NOT_FOUND'}), 404
+    # 归属校验（10 号 §3.5 附带）：子任务必须真属于 URL 中的父会话，
+    # 不能仅凭 owner 枚举他人（同 owner 其他会话）的子任务
+    if data['subtask'].get('root_session_id') not in (None, sid):
         return jsonify({'error': 'subtask not found', 'code': 'SUBTASK_NOT_FOUND'}), 404
     if data['subtask'].get('status') == 'running':
         return jsonify({'error': '子代理仍在运行中，结束后才能压缩', 'code': 'SUBTASK_RUNNING'}), 409
@@ -1527,6 +1579,15 @@ def run_session_command(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # P0 执行所有权（M3）：与 send_message 一致——非终态批/编排子会话由
+    # 后台 worker 独家驱动，command 入口同样不得绕过（否则可再开并发 turn）。
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能执行命令',
+            'retryable': False,
+            'operation': 'run_session_command',
+        }}), 409
     body = request.get_json(force=True)
     command = (body.get('command') or '').strip()
     arguments = (body.get('arguments') or '').strip()

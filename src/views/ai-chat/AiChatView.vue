@@ -672,8 +672,27 @@ const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 const pendingQuestion = computed(() => store.activePendingQuestion)
 
+// P0 执行所有权（ai-harness-p0 spec §7.1 前端配合）：非终态批子会话由后台
+// 执行器独家驱动——composer 禁用并提示；终态批子会话可发送（经 continue 通道）。
+const activeBatchInfo = computed(() => {
+  const id = activeId.value
+  if (!id) return null
+  const child = batches.activeSessions.find((s) => s.id === id)
+  if (!child) return null
+  const b = batches.activeBatch
+  return { status: child.status, agent: b?.agent || '', model: b?.model || '',
+           batchId: b?.id || '', childId: child.id }
+})
+// 后端权威；前端只是 UX——非终态批子会话禁发。
+const batchControlled = computed(() =>
+  !!activeBatchInfo.value && ['pending', 'running', 'paused'].includes(activeBatchInfo.value.status))
+// 终态批子会话：发送改走批任务 continue 端点（worker 串行消费）。
+const batchTerminal = computed(() =>
+  !!activeBatchInfo.value && ['completed', 'failed', 'cancelled', 'partial'].includes(activeBatchInfo.value.status))
+
 // 运行中也允许发送（进插话队列，回合结束后自动发出），只要求有内容或附件。
-const canSend = computed(() => !!(input.value.trim() || attachments.value.length))
+const canSend = computed(() =>
+  !batchControlled.value && !!(input.value.trim() || attachments.value.length))
 
 // ---- Artifacts (Claude-style file preview + version history) ----
 // Group artifacts by filename across the whole session. Named files (the fence
@@ -814,18 +833,6 @@ watch(
 )
 onUnmounted(stopLivePoll)
 
-// When viewing a batch child, surface the batch's Agent/model + run status
-// (the bottom composer selectors are per-interactive-session and stay blank for
-// batch children, which is why they didn't show before).
-const activeBatchInfo = computed(() => {
-  const id = activeId.value
-  if (!id) return null
-  const child = batches.activeSessions.find((s) => s.id === id)
-  if (!child) return null
-  const b = batches.activeBatch
-  return { status: child.status, agent: b?.agent || '', model: b?.model || '',
-           batchId: b?.id || '', childId: child.id }
-})
 function shortId(id: string) { return (id || '').slice(0, 8) }
 async function copyId(id: string, kind: string) {
   try {
@@ -836,7 +843,9 @@ async function copyId(id: string, kind: string) {
   }
 }
 function batchStatusLabel(s: string) {
-  return ({ pending: '待运行', running: '正在运行', completed: '已完成', failed: '失败' } as Record<string, string>)[s] || s
+  return ({ pending: '待运行', running: '正在运行', completed: '已完成',
+            failed: '失败', paused: '已暂停', cancelled: '已取消',
+            partial: '部分完成' } as Record<string, string>)[s] || s
 }
 
 onMounted(async () => {
@@ -1162,6 +1171,21 @@ async function send() {
     }
     // unknown /xxx → fall through to a normal message
   }
+  // P0：批子会话的发送收敛到批通道——终态走 continue 端点（worker 串行消费），
+  // 非终态理论上进不来（canSend 已禁用 + 后端 409 兜底）。
+  if (batchControlled.value) {
+    ElMessage.warning('该任务正在由后台执行器控制，请等待完成或使用暂停/停止')
+    input.value = text  // 还给用户，避免误删草稿
+    return
+  }
+  if (batchTerminal.value && activeBatchInfo.value?.batchId && activeBatchInfo.value?.childId) {
+    try {
+      input.value = ''
+      await batches.continueChild(activeBatchInfo.value.batchId, activeBatchInfo.value.childId, text)
+      void pinToBottom()
+    } catch { ElMessage.error('继续执行失败'); input.value = text }
+    return
+  }
   try { await store.sendUserMessage(text); void pinToBottom() } catch { ElMessage.error('发送失败') }
 }
 
@@ -1480,7 +1504,7 @@ function onKey(e: Event) {
                       v-else-if="p.type === 'subtask_use'"
                       :subtask-id="p.subtaskId" :session-id="activeId!"
                       :agent="p.agent" :description="p.description" :status="p.status"
-                      :depth="1" :fetch-fn="getSubtaskMessages"
+                      :depth="1" :segment-count="p.segmentCount" :fetch-fn="getSubtaskMessages"
                     />
                     <!-- 回合级失败（session.error / 出错的 assistant 消息）：
                          持久化为 error part，刷新后仍在，见 chat_persist.py -->
@@ -1748,7 +1772,9 @@ function onKey(e: Event) {
               ref="composerInputEl"
               v-model="input" type="textarea" :autosize="{ minRows: 1, maxRows: 8 }"
               class="composer-input"
-              :placeholder="streaming
+              :placeholder="batchControlled
+                ? '该任务正在由后台执行器控制，暂不能发送消息'
+                : streaming
                 ? 'AI 正在回复…此时发送的消息将排队，回合结束后自动发出（Enter 排队）'
                 : '给 AI 助手发消息…（Enter 发送，Shift+Enter 换行）'"
               @keydown="onKey"

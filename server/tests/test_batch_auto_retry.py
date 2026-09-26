@@ -136,7 +136,7 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'pending'                    # 重新排队而非 failed
@@ -149,13 +149,15 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
     # 预算用尽：同样失败这次落 failed
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET status='running', retry_count=2 "
-                    "WHERE id=%s", (sid,))
+                    "WHERE id=%s RETURNING execution_generation", (sid,))
+        _gen = cur.fetchone()[0]
     db_conn.commit()
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': 'oc-stall',
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'execution_generation': _gen,
+                     'fencing_token': 0})
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'failed'
     assert '没有任何新进展' in err
@@ -178,12 +180,17 @@ def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
               send_message=staticmethod(lambda *a, **k: None),
               list_messages=staticmethod(lambda oc, directory='': auth_err))
     monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
+    # P0 CAS：终态写回要求 status='running'（真实 claim 后的状态）
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s", (sid,))
+    db_conn.commit()
 
     worker._run_one({'id': sid, 'user_id': user_id, 'batch_id': bid,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'execution_generation': 0,
+                     'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'failed'                     # 密钥错：重试必然再炸
@@ -208,7 +215,7 @@ def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_pat
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'pending'

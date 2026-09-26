@@ -361,12 +361,24 @@ def create():
     if file_err:
         return file_err
 
+    # P0 F4（spec §7.2）：actionChecks 与内部创建接口同一道校验——此前原样
+    # 透传入库，非法正则会在登记期望时才炸且被吞，产生"零期望 → passed"的
+    # 假门禁。校验失败 400，不带病入库。
+    from utils import agent_ledger
+    try:
+        action_checks = agent_ledger.validate_checks(body.get('actionChecks'))
+    except ValueError as e:
+        return err({'code': 'ACTION_CHECK_INVALID',
+                    'message': f'actionChecks 校验失败: {e}',
+                    'retryable': False,
+                    'operation': 'create_batch'}, INVALID_ARGUMENT, 400)
+
     result = create_batch(
         owner,
         name=name, prompt=prompt, template_id=None, files=files,
         agent=(body.get('agent') or '').strip() or None,
         model=(body.get('model') or '').strip() or None,
-        action_checks=body.get('actionChecks') or None,
+        action_checks=action_checks or None,
         api_key_id=key['id'],
         callback_url=callback_url,
         callback_secret=callback_secret,
@@ -414,10 +426,15 @@ def results(batch_id):
     d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
     if not d:
         return err('批任务不存在', NOT_FOUND, 404)
+    results = get_batch_results(batch_id)
+    # P1 §8.2：增量返回 opaque childId（seq 仍可用，双轨兼容）
+    by_seq = {s.get('batch_seq'): s['id'] for s in (d.get('sessions') or [])}
+    for i, r in enumerate(results):
+        r['childId'] = by_seq.get(i)
     return jsonify({
         'batchId': batch_id,
         'status': d['batch']['status'],
-        'results': get_batch_results(batch_id),
+        'results': results,
     })
 
 
@@ -491,15 +508,53 @@ def import_files(batch_id):
 @api_key_required
 @require_bound_key
 def remove(batch_id):
+    """删除批任务（P0 spec §7.2 stop-first 收紧，与内部 DELETE 同语义）：
+
+    - 终态批次：直接清理工作区并删除；
+    - 非终态、未带 stop=true：409 BATCH_NOT_TERMINAL，不产生任何副作用；
+    - 非终态、stop=true：先取消整批，bounded drain（10s）等 running 子任务
+      收敛后清理删除；超时 409 BATCH_DRAIN_TIMEOUT，任务与工作区**保留**
+      （不删库不拆工作区，调用方可重试或继续观察）。
+
+    这是对外破坏性变更：此前非终态批次可被直接删除，运行中的 OpenCode turn
+    继续执行、写回命中已删行（幽灵执行）。
+    """
     key = _current_key()
     owner = key['ownerUserId']
-    # Best-effort workspace teardown before the DB delete — same shared helper
-    # routes/ai_chat_batches.py::remove uses, see utils/workspace.py::
-    # cleanup_batch_workspaces. Skipped (not fatal) if the batch can't be found
-    # under this key: delete_batch below is the actual 404 authority.
     d = get_batch_detail(owner, batch_id, api_key_id=key['id'])
-    if d:
-        cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    status = d['batch']['status']
+    stop_first = request.args.get('stop', '').lower() in ('1', 'true') \
+        or bool((request.get_json(silent=True) or {}).get('stop'))
+    if status not in TERMINAL_STATUSES:
+        if not stop_first:
+            return err({'code': 'BATCH_NOT_TERMINAL',
+                        'message': '运行中的批任务不能直接删除，'
+                                   '请先取消或使用 stop=true 先停止',
+                        'retryable': False,
+                        'operation': 'delete_batch'}, CONFLICT, 409)
+        try:
+            cancel_batch(owner, batch_id, api_key_id=key['id'])
+        except ValueError:
+            pass  # became terminal concurrently
+        get_worker().notify()
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            d = get_batch_detail(owner, batch_id, api_key_id=key['id'])
+            if not d or not any(s['status'] == 'running' for s in d['sessions']):
+                break
+            time.sleep(0.3)
+        else:
+            return err({'code': 'BATCH_DRAIN_TIMEOUT',
+                        'message': '等待运行中子任务停止超时，'
+                                   '批任务与工作区已保留，请稍后重试',
+                        'retryable': True,
+                        'operation': 'delete_batch'}, CONFLICT, 409)
+        d = get_batch_detail(owner, batch_id, api_key_id=key['id']) or d
+    # Tear down per-child workspaces before the DB delete — same shared helper
+    # routes/ai_chat_batches.py::remove uses.
+    cleanup_batch_workspaces(_workspace_root(), owner, d['sessions'])
     ok = delete_batch(owner, batch_id, api_key_id=key['id'])
     if not ok:
         return err('批任务不存在', NOT_FOUND, 404)
@@ -595,15 +650,20 @@ def append(batch_id):
 def _resolve_child(d: dict, child_id: str):
     """从批任务详情中定位子会话。
 
-    child_id 为纯数字时按 batch_seq 匹配，否则按 batch_input_file 的 basename 匹配。
+    child_id 依次尝试（P1 §8.2 的 opaque childId 兼容）：
+      1. 纯数字 → batch_seq；
+      2. batch_input_file 的 basename（既有约定）；
+      3. 子会话 id 本身（opaque childId，避免同名文件歧义）。
     返回 (child_dict, error_response) 二元组——找到时 error_response 为 None。
     """
     sessions = d.get('sessions') or []
     child = None
     if child_id.isdigit():
         child = next((s for s in sessions if s.get('batch_seq') == int(child_id)), None)
-    else:
+    if child is None:
         child = next((s for s in sessions if _child_name(s) == child_id), None)
+    if child is None:
+        child = next((s for s in sessions if s.get('id') == child_id), None)
     if child is None:
         return None, err('子会话不存在', NOT_FOUND, 404)
     return child, None
@@ -846,15 +906,33 @@ def update_config(batch_id):
     url_err = _validate_callback_url(callback_url)
     if url_err:
         return url_err
+    # P0 spec §7.2：actionChecks 显式传入才更新（语义对齐内部 PATCH），
+    # 同样先校验再落库。gateRetry 同理（可选）。
+    from utils import agent_ledger
+    patch_kwargs = {}
+    if 'actionChecks' in body:
+        try:
+            checks = agent_ledger.validate_checks(body.get('actionChecks'))
+        except ValueError as e:
+            return err({'code': 'ACTION_CHECK_INVALID',
+                        'message': f'actionChecks 校验失败: {e}',
+                        'retryable': False,
+                        'operation': 'update_batch'}, INVALID_ARGUMENT, 400)
+        patch_kwargs['action_checks'] = checks or None
+    if 'gateRetry' in body:
+        patch_kwargs['gate_retry'] = bool(body.get('gateRetry'))
     result = update_batch_config(
         key['ownerUserId'], batch_id,
         agent=agent, model=model,
         api_key_id=key['id'],
         callback_url=callback_url,
         callback_secret=callback_secret,
+        **patch_kwargs,
     )
     if result is None:
         return err('批任务不存在', NOT_FOUND, 404)
+    if 'actionChecks' in body:
+        agent_ledger.sync_batch_expectations(batch_id, checks or None)
     log_api_operation('update', 'ai_chat_batch', batch_id, result['batch'].get('name'),
                       f'通过 API Key 修改批任务「{result["batch"].get("name")}」配置')
     return jsonify(_batch_out(result['batch']))
@@ -912,3 +990,213 @@ def ai_query():
         }), 422
 
     return jsonify({'filter': safe_filter})
+
+# ---------------------------------------------------------------------------
+# P1 控制面（spec §8.2）：pause / resume / child cancel / commands / events
+# ---------------------------------------------------------------------------
+
+@open_api_batches_bp.post('/<batch_id>/pause')
+@api_key_required
+@require_bound_key
+def pause(batch_id):
+    """暂停整批排队/运行中的子任务（与内部语义一致，按密钥隔离）。"""
+    from utils.batch_repo import pause_batch
+    from utils import execution_commands
+    key = _current_key()
+    cmd = execution_commands.submit_command(
+        'pause', batch_id=batch_id, requested_by=key['id'],
+        requested_by_kind='api_key')
+    try:
+        d = pause_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    except ValueError as e:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='COMMAND_REJECTED')
+        return err(str(e), CONFLICT, 409)
+    if d is None:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='NOT_FOUND')
+        return err('批任务不存在', NOT_FOUND, 404)
+    execution_commands.finish_command(cmd['id'], 'applied',
+                                      result_snapshot={'status': d['batch']['status']})
+    get_worker().notify()
+    log_api_operation('pause', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 暂停批任务「{d["batch"].get("name")}」')
+    return jsonify(_batch_out(d['batch']))
+
+
+@open_api_batches_bp.post('/<batch_id>/resume')
+@api_key_required
+@require_bound_key
+def resume(batch_id):
+    """继续执行已暂停/已中断的批任务（与内部语义一致，按密钥隔离）。"""
+    from utils.batch_repo import resume_batch
+    from utils import execution_commands
+    key = _current_key()
+    cmd = execution_commands.submit_command(
+        'resume', batch_id=batch_id, requested_by=key['id'],
+        requested_by_kind='api_key')
+    try:
+        d = resume_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    except ValueError as e:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='COMMAND_REJECTED')
+        return err(str(e), CONFLICT, 409)
+    if d is None:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='NOT_FOUND')
+        return err('批任务不存在', NOT_FOUND, 404)
+    execution_commands.finish_command(cmd['id'], 'applied',
+                                      result_snapshot={'status': d['batch']['status']})
+    get_worker().notify()
+    log_api_operation('resume', 'ai_chat_batch', batch_id, d['batch'].get('name'),
+                      f'通过 API Key 恢复批任务「{d["batch"].get("name")}」')
+    return jsonify(_batch_out(d['batch']))
+
+
+@open_api_batches_bp.post('/<batch_id>/sessions/<child_id>/cancel')
+@api_key_required
+@require_bound_key
+def session_cancel(batch_id, child_id):
+    """取消单个子会话：pending 直接取消、running 协作式中断、paused 同步落
+    cancelled（P0 F5 语义）。"""
+    from utils.batch_repo import cancel_child
+    from utils import execution_commands
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    child, resolve_err = _resolve_child(d, child_id)
+    if resolve_err:
+        return resolve_err
+    cmd = execution_commands.submit_command(
+        'cancel', batch_id=batch_id, session_id=child['id'],
+        requested_by=key['id'], requested_by_kind='api_key')
+    try:
+        result = cancel_child(key['ownerUserId'], batch_id, child['id'])
+    except ValueError as e:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='COMMAND_REJECTED')
+        return err(str(e), CONFLICT, 409)
+    if result is None:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='NOT_FOUND')
+        return err('子会话不存在', NOT_FOUND, 404)
+    execution_commands.finish_command(cmd['id'], 'applied',
+                                      result_snapshot={'status': result['status']})
+    get_worker().notify()
+    return jsonify({'batchId': batch_id, 'childId': child['id'],
+                    'name': _child_name(child), 'seq': child.get('batch_seq'),
+                    'status': result['status']})
+
+
+@open_api_batches_bp.post('/<batch_id>/commands')
+@api_key_required
+@require_bound_key
+def submit_command(batch_id):
+    """通用命令入口（spec §8.2）：要求 Idempotency-Key 头。
+    支持 pause / resume / cancel / retry-failed（retry）。
+    命令行落 ai_execution_commands（幂等，重复键返回既有命令 200）。"""
+    from utils import execution_commands
+    key = _current_key()
+    body = request.get_json(silent=True) or {}
+    command_type = (body.get('type') or body.get('commandType') or '').strip()
+    idem = (request.headers.get('Idempotency-Key') or '').strip()
+    if not command_type:
+        return err({'code': 'COMMAND_REJECTED',
+                    'message': 'type 必填（pause/resume/cancel/retry）',
+                    'retryable': False,
+                    'operation': 'submit_command'}, INVALID_ARGUMENT, 400)
+    if not idem:
+        return err({'code': 'COMMAND_REJECTED',
+                    'message': '需要 Idempotency-Key 请求头',
+                    'retryable': False,
+                    'operation': 'submit_command'}, INVALID_ARGUMENT, 400)
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    try:
+        cmd = execution_commands.submit_command(
+            command_type, batch_id=batch_id, requested_by=key['id'],
+            requested_by_kind='api_key', payload=body,
+            idempotency_key=idem)
+    except ValueError:
+        return err({'code': 'COMMAND_REJECTED',
+                    'message': f'不支持的命令类型: {command_type}',
+                    'retryable': False,
+                    'operation': 'submit_command'}, INVALID_ARGUMENT, 400)
+    applied = True
+    snapshot = None
+    try:
+        if command_type == 'pause':
+            from utils.batch_repo import pause_batch
+            dd = pause_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+            snapshot = dd['batch']['status'] if dd else None
+        elif command_type == 'resume':
+            from utils.batch_repo import resume_batch
+            dd = resume_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+            snapshot = dd['batch']['status'] if dd else None
+        elif command_type == 'cancel':
+            from utils.batch_repo import cancel_batch
+            cancel_batch(key['ownerUserId'], batch_id, api_key_id=key['id'])
+            snapshot = 'cancel_requested'
+        elif command_type in ('retry', 'retry-failed'):
+            from utils.batch_repo import reset_failed_to_pending
+            snapshot = {'retried': reset_failed_to_pending(
+                key['ownerUserId'], batch_id, api_key_id=key['id'])}
+        else:
+            applied = False
+    except ValueError as e:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='COMMAND_REJECTED')
+        return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                        'status': 'rejected', 'error': str(e)}), 409
+    if applied:
+        execution_commands.finish_command(cmd['id'], 'applied',
+                                          result_snapshot={'result': snapshot})
+        get_worker().notify()
+    else:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='UNSUPPORTED')
+    return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                    'status': 'applied' if applied else 'rejected',
+                    'result': snapshot}), (200 if cmd['duplicate'] else 202)
+
+
+@open_api_batches_bp.get('/<batch_id>/commands/<command_id>')
+@api_key_required
+@require_bound_key
+def get_command(batch_id, command_id):
+    from utils import execution_commands
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    cmd = execution_commands.get_command(command_id)
+    if not cmd or cmd.get('batchId') != batch_id:
+        return err('命令不存在', NOT_FOUND, 404)
+    return jsonify(cmd)
+
+
+@open_api_batches_bp.get('/<batch_id>/events')
+@api_key_required
+@require_bound_key
+def events(batch_id):
+    """事件增量读取（spec §7.3）：afterSeq 语义（返回 event_seq > afterSeq），
+    客户端按 eventId 幂等合并。只暴露白名单字段。"""
+    from utils import batch_events
+    key = _current_key()
+    d = get_batch_detail(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    if not d:
+        return err('批任务不存在', NOT_FOUND, 404)
+    try:
+        after_seq = max(0, int(request.args.get('afterSeq', 0)))
+        limit = min(max(1, int(request.args.get('limit', 100))), 500)
+    except (TypeError, ValueError):
+        return err('afterSeq 与 limit 必须是整数', INVALID_ARGUMENT, 400)
+    rows = batch_events.read_events(batch_id, after_seq=after_seq, limit=limit)
+    out = [{'eventId': r['event_id'], 'eventSeq': r['event_seq'],
+            'type': r['event_type'], 'at': r.get('createdAt'),
+            'data': r.get('payload') or {}} for r in rows]
+    return jsonify({'batchId': batch_id, 'events': out,
+                    'nextAfterSeq': rows[-1]['event_seq'] if rows else after_seq,
+                    'hasMore': len(rows) >= limit})

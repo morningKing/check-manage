@@ -8,7 +8,7 @@ from pathlib import Path
 from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
-from auth import login_required
+from auth import login_required, login_required_sse
 from utils.workspace import (batch_staging_dir, batch_workspace_root,
                              cleanup_batch_workspaces, validate_staged_files,
                              WorkspacePathError)
@@ -18,7 +18,9 @@ from utils.batch_repo import (
     get_max_files_per_batch,
     cancel_batch,
     cancel_child,
+    continue_child,
     create_batch,
+    validate_subagent_reuse,
     delete_batch,
     get_batch_detail,
     list_batches,
@@ -33,6 +35,9 @@ from utils.batch_repo import (
 
 ai_chat_batches_bp = Blueprint('ai_chat_batches', __name__,
                                url_prefix='/ai/chat/batches')
+
+# stop=1 的 drain 等待上限（H2：超时必须 409 保留任务，不得继续删除）
+DRAIN_TIMEOUT_SEC = 10
 
 
 @ai_chat_batches_bp.post('/staging/upload')
@@ -96,13 +101,19 @@ def create():
         action_checks = agent_ledger.validate_checks(body.get('action_checks'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 子代理会话复用名单（空/未传 = 不启用）
+    try:
+        subagent_reuse = validate_subagent_reuse(body.get('subagent_reuse'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
                           agent=agent, model=model,
                           provision_repo=provision_repo, provision_ref=provision_ref,
                           action_checks=action_checks or None,
-                          gate_retry=bool(body.get('gate_retry')))
+                          gate_retry=bool(body.get('gate_retry')),
+                          subagent_reuse=subagent_reuse or None)
     # Wake the worker so it picks up the new pending sessions immediately.
     from utils.batch_engine import get_worker
     get_worker().notify()
@@ -196,11 +207,12 @@ def gate_dry_run(batch_id, sid):
     require_state = (body.get('require_state') or 'completed').strip()
     if not tool or not pattern:
         return jsonify({'error': 'tool and args_pattern required'}), 400
-    import re as _re
+    # 12 号 §7-5：dry-run 与登记/核对同一 PG 口径——Python re 放行但 PG 拒绝
+    # 的方言此前会在这里过审、执行时 `args_text ~ %s` 抛 InvalidRegularExpression → 500
     try:
-        _re.compile(pattern)
-    except _re.error as e:
-        return jsonify({'error': f'args_pattern 不是合法正则: {e}'}), 400
+        agent_ledger.validate_pg_regex(pattern)
+    except ValueError as e:
+        return jsonify({'error': f'args_pattern {e}'}), 400
     return jsonify(agent_ledger.count_tree_tool_calls(
         sid, tool, pattern, require_state))
 
@@ -282,6 +294,12 @@ def update_config(batch_id):
         patch_kwargs['action_checks'] = checks or None
     if 'gate_retry' in body:
         patch_kwargs['gate_retry'] = bool(body.get('gate_retry'))
+    if 'subagent_reuse' in body:
+        try:
+            patch_kwargs['subagent_reuse'] = validate_subagent_reuse(
+                body.get('subagent_reuse'))
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
     result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
                                  provision_repo=provision_repo, provision_ref=provision_ref,
                                  **patch_kwargs)
@@ -321,16 +339,24 @@ def remove(batch_id):
             pass  # became terminal concurrently
         from utils.batch_engine import get_worker
         get_worker().notify()
-        # Bounded wait so running children actually stop before their
-        # workspaces/DB rows vanish; workers' post-delete write-backs are
-        # guarded (0-row updates / warning-logged), so a timeout is not fatal.
+        # Bounded drain（P0 spec §7.2 / H2 修复）：超时不得继续删除——与对外
+        # API 语义一致，返回 409 并保留任务与工作区（消灭幽灵执行）。
         import time as _time
-        deadline = _time.time() + 10
+        deadline = _time.time() + DRAIN_TIMEOUT_SEC
+        drained = False
         while _time.time() < deadline:
             d = get_batch_detail(user_id, batch_id)
             if not d or not any(s['status'] == 'running' for s in d['sessions']):
+                drained = True
                 break
             _time.sleep(0.3)
+        if not drained:
+            return jsonify({'error': {
+                'code': 'BATCH_DRAIN_TIMEOUT',
+                'message': '等待运行中子任务停止超时，批任务与工作区已保留，请稍后重试',
+                'retryable': True,
+                'operation': 'delete_batch',
+            }}), 409
         body = get_batch_detail(user_id, batch_id) or body
     # Tear down per-child workspaces before DB cascade
     workspace_root = current_app.config.get('AI_CHAT_WORKSPACE_ROOT') \
@@ -458,6 +484,29 @@ def resume_single_child(batch_id, session_id):
     return jsonify(result)
 
 
+@ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/continue')
+@login_required
+def continue_single_child(batch_id, session_id):
+    """人工 continuation（P0 spec §7.1）：在终态（completed/failed/cancelled）
+    批子会话上追加一轮对话。非终态 409（worker 独家驱动）；成功 202，worker
+    按 continue_prompt 在原 OpenCode 会话上串行续跑。普通发送入口对非终态
+    批子会话已收紧为 409 BATCH_SESSION_CONTROLLED，这是它的人工替代通道。"""
+    body = request.get_json(silent=True) or {}
+    prompt = (body.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt required'}), 400
+    try:
+        result = continue_child(g.current_user['userId'], batch_id, session_id,
+                                prompt)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify(result), 202
+
+
 @ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/reexecute')
 @login_required
 def reexecute(batch_id, session_id):
@@ -470,3 +519,123 @@ def reexecute(batch_id, session_id):
     from utils.batch_engine import get_worker
     get_worker().notify()
     return jsonify(result)
+
+# ---------------------------------------------------------------------------
+# P1 事件流 / attempt 链（spec §7.2/§8.1）
+# ---------------------------------------------------------------------------
+
+@ai_chat_batches_bp.get('/<batch_id>/events')
+@login_required
+def batch_events_page(batch_id):
+    """事件分页（管理/排障用）：与对外 /v1/ai-batches/<id>/events 同一事实源。"""
+    from utils import batch_events
+    body = get_batch_detail(g.current_user['userId'], batch_id)
+    if not body:
+        return jsonify({'error': 'not found'}), 404
+    try:
+        after_seq = max(0, int(request.args.get('afterSeq', 0)))
+        limit = min(max(1, int(request.args.get('limit', 100))), 500)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'afterSeq 与 limit 必须是整数'}), 400
+    rows = batch_events.read_events(batch_id, after_seq=after_seq, limit=limit)
+    return jsonify({'batchId': batch_id, 'events': rows,
+                    'nextAfterSeq': rows[-1]['event_seq'] if rows else after_seq,
+                    'hasMore': len(rows) >= limit})
+
+
+@ai_chat_batches_bp.get('/<batch_id>/attempts')
+@login_required
+def batch_attempts(batch_id):
+    """attempt 链（P1 §8.1）：批下全部子任务的执行尝试 + 租约/心跳/恢复原因。"""
+    from db import get_db as _get_db
+    if not get_batch_detail(g.current_user['userId'], batch_id):
+        return jsonify({'error': 'not found'}), 404
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.id, a.session_id, a.attempt_no, a.parent_attempt_id, "
+                "a.operation, a.status, a.error_code, a.recovery_reason, "
+                "a.lease_owner, a.lease_until, a.heartbeat_at, a.fencing_token, "
+                "a.started_at, a.finished_at "
+                "FROM ai_execution_attempts a "
+                "JOIN ai_chat_sessions s ON s.id = a.session_id "
+                "WHERE s.batch_id = %s "
+                "ORDER BY s.batch_seq, a.attempt_no", (batch_id,))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        for k in ('lease_until', 'heartbeat_at', 'started_at', 'finished_at'):
+            if r.get(k) is not None:
+                r[k] = r[k].isoformat()
+    return jsonify({'batchId': batch_id, 'attempts': rows})
+
+
+@ai_chat_batches_bp.get('/events')
+@login_required_sse
+def batch_events_sse():
+    """批次事件流 SSE（P1 spec §7.2）。
+
+    - 帧类型：batch_event（带 eventId/eventSeq）/ batch_done / : ping（15s）；
+    - 断线重连：Last-Event-ID（或 ?afterSeq=）从该位置补发；
+    - 30 分钟硬上限关流；非归属批次静默剔除（login_required_sse + 逐 id 过滤）。
+    """
+    import json as _json
+    import time as _time
+    from flask import Response, stream_with_context
+    ids = [i.strip() for i in (request.args.get('ids') or '').split(',') if i.strip()][:20]
+    if not ids:
+        return jsonify({'error': 'ids required'}), 400
+    user_id = g.current_user['userId']
+    owned = []
+    for bid in ids:
+        if get_batch_detail(user_id, bid):
+            owned.append(bid)
+    try:
+        after = {bid: max(0, int(request.args.get('afterSeq', 0))) for bid in owned}
+    except (TypeError, ValueError):
+        after = {bid: 0 for bid in owned}
+    last_event_id = request.headers.get('Last-Event-ID') or ''
+
+    def generate():
+        from utils import batch_events
+        yield ': connected\n\n'
+        # Last-Event-ID 形如 "<batchId>:<seq>"——重连时按批次恢复游标
+        if last_event_id and ':' in last_event_id:
+            lbid, _, lseq = last_event_id.rpartition(':')
+            if lbid in after:
+                try:
+                    after[lbid] = max(after[lbid], int(lseq))
+                except ValueError:
+                    pass
+        deadline = _time.time() + 30 * 60
+        while _time.time() < deadline:
+            for bid in owned:
+                rows = batch_events.read_events(bid, after_seq=after[bid],
+                                                limit=200)
+                for r in rows:
+                    after[bid] = r['event_seq']
+                    frame = {'eventId': f"{bid}:{r['event_seq']}",
+                             'eventSeq': r['event_seq'],
+                             'type': r['event_type'],
+                             'data': r.get('payload') or {}}
+                    yield (f"id: {bid}:{r['event_seq']}\n"
+                           f"event: batch_event\n"
+                           f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
+            # 终态检查：全部批次终态 → batch_done 收流
+            statuses = []
+            for bid in owned:
+                d = get_batch_detail(user_id, bid)
+                statuses.append(d['batch']['status'] if d else 'completed')
+            if statuses and all(st in ('completed', 'partial', 'failed')
+                                for st in statuses):
+                done_frame = _json.dumps({'statuses': dict(zip(owned, statuses))})
+                yield f"event: batch_done\ndata: {done_frame}\n\n"
+                return
+            yield ': ping\n\n'
+            _time.sleep(15)
+
+    resp = Response(stream_with_context(generate()),
+                    mimetype='text/event-stream')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['X-Accel-Buffering'] = 'no'
+    return resp

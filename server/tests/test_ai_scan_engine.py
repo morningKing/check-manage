@@ -53,7 +53,7 @@ def test_run_one_marks_child_failed_when_staged_input_missing(monkeypatch):
                             FileNotFoundError('输入文件不存在或已被清理: x')))
     marked = {}
     monkeypatch.setattr(w, '_mark_failed',
-                        lambda sid, bid, error: marked.update(sid=sid, error=error))
+                        lambda sid, bid, error, **kw: marked.update(sid=sid, error=error))
     notified = {}
     monkeypatch.setattr(w, '_notify_scan',
                         lambda row, msg, ok: notified.update(ok=ok))

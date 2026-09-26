@@ -109,7 +109,15 @@ def inbox():
                     continue
                 entry = next((e for e in reversed(chain or [])
                               if e.get('stageId') == b.get('stageId') and e.get('recordId') == b.get('recordId')), None)
-                items.append({'instanceId': iid, 'workflowName': wname, 'stageName': stage.get('name'),
+                items.append({'kind': 'workflow', 'instanceId': iid, 'workflowName': wname, 'stageName': stage.get('name'),
                               'collection': b.get('collection'), 'recordId': b.get('recordId'),
                               'enteredAt': entry and entry.get('enteredAt')})
+    # P2 Phase B（ai-harness-p2 spec §3）：AI 审批请求投影到同一收件箱——
+    # 既有项统一补 kind='workflow'（前端判别用），AI 审批项 kind='ai_approval'。
+    try:
+        from utils import approval_repo
+        items.extend(approval_repo.get_pending_for_inbox(
+            {'username': user.get('username'), 'role': role}, limit=20))
+    except Exception:
+        pass  # 审批投影失败不影响业务工作流收件箱
     return jsonify(items)

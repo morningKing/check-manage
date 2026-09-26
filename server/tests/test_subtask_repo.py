@@ -20,7 +20,7 @@ def test_tables_exist_with_expected_columns():
             cols = {r[0] for r in cur.fetchall()}
     assert cols == {'id', 'root_session_id', 'parent_subtask_id', 'parent_part_id',
                     'agent', 'prompt', 'description', 'status', 'error_message',
-                    'created_at', 'completed_at'}
+                    'created_at', 'completed_at', 'turn_segments'}
 
 
 def test_subtask_messages_table_has_seq_bigserial():

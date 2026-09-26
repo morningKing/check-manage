@@ -47,7 +47,7 @@ def test_content_from_parts_maps_subtask_parts():
     stub = [p for p in out if p.get('type') == 'subtask_use']
     assert stub == [{'type': 'subtask_use', 'subtaskId': 'ses_child_abc',
                      'agent': 'build', 'description': '重构模块 X',
-                     'status': 'running'}]
+                     'status': 'running', 'segmentCount': 0}]
 
     out2 = eng.BatchWorker._content_from_parts(
         parts, subtask_status={'ses_child_abc': 'completed'})

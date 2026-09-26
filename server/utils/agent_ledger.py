@@ -228,6 +228,18 @@ def _validate_effect_spec(check_type, spec, idx):
     raise ValueError(f'action_checks[{idx}].check_type 不支持: {check_type}')
 
 
+def validate_pg_regex(pattern: str) -> None:
+    """以 PG `~` 口径校验正则（12 号 §7-5：核对执行与 dry-run 与登记三处
+    同一口径）。非法抛 ValueError——调用方据此返回 400。"""
+    try:
+        from db import get_db as _gdb
+        with _gdb() as _conn:
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT '' ~ %s", (pattern,))
+    except Exception as e:
+        raise ValueError(f'不是合法的 PostgreSQL 正则: {e}')
+
+
 def validate_checks(checks) -> list:
     """规范化并校验 action_checks 数组;非法抛 ValueError(创建接口回 400)。"""
     if checks in (None, []):
@@ -256,6 +268,13 @@ def validate_checks(checks) -> list:
                 re.compile(pattern)
             except re.error as e:
                 raise ValueError(f'action_checks[{i}].args_pattern 不是合法正则: {e}')
+            # 口径统一（10 号 §3.1）：核对执行用 PG `~`，Python re 接受但 PG
+            # 拒绝的方言（如 `(?P<x>a)` embedded flag 命名组）会登记成"永远
+            # 无法核对"的期望——登记时就以 PG 口径拒绝
+            try:
+                validate_pg_regex(pattern)
+            except ValueError as e:
+                raise ValueError(f'action_checks[{i}].args_pattern {e}')
         else:
             tool = tool or check_type
         scope = (c.get('scope') or 'tree').strip()
@@ -277,6 +296,10 @@ def validate_checks(checks) -> list:
             'scope': scope, 'check_type': check_type,
             'effect_spec': effect_spec,
             'subagents': c.get('subagents'),
+            # F2（ai-harness-p0 spec §8.2）：保留 apply_to——此前规范化时被
+            # 剥离，内部创建/编辑/模板路径落库前就丢了定向条件，引擎侧
+            # check_applies_to_child 的过滤恒真，期望被登记到全部子任务。
+            'apply_to': c.get('apply_to'),
         })
     for c in normalized:
         subs = c.get('subagents')
@@ -289,6 +312,27 @@ def validate_checks(checks) -> list:
             c['subagents'] = [x.strip() for x in subs]
         else:
             c['subagents'] = None
+        # apply_to 校验（F2）：batch_seq 必须是整数数组，input_file_glob 必须
+        # 是字符串；非法直接 400，不带病入库（与 subagents 同策略）。
+        apply_to = c.get('apply_to')
+        if apply_to is not None:
+            if not isinstance(apply_to, dict):
+                raise ValueError(f"{c['name']}: apply_to 必须是对象")
+            seqs = apply_to.get('batch_seq')
+            if seqs is not None:
+                if (not isinstance(seqs, list) or not seqs
+                        or not all(isinstance(x, int) and not isinstance(x, bool)
+                                   for x in seqs)):
+                    raise ValueError(f"{c['name']}: apply_to.batch_seq 必须是"
+                                     "非空整数数组")
+            glob_pat = apply_to.get('input_file_glob')
+            if glob_pat is not None and (not isinstance(glob_pat, str)
+                                         or not glob_pat.strip()):
+                raise ValueError(f"{c['name']}: apply_to.input_file_glob 必须是"
+                                 "非空字符串")
+            if seqs is None and glob_pat is None:
+                raise ValueError(f"{c['name']}: apply_to 至少要有 batch_seq 或 "
+                                 "input_file_glob 之一")
     names = [c['name'] for c in normalized]
     if len(names) != len(set(names)):
         raise ValueError('action_checks 内 name 重复')
@@ -491,6 +535,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
 
     - 无期望 → passed(门禁只约束登记过的事项)
     - 会话映射不到 OpenCode 会话 / 账本不健康 / 查询异常 → inconclusive
+      （inconclusive 携带 expected=已登记期望条数，供调用方区分
+      "真的无期望"与"有期望但无法核对"——后者必须 fail-closed）
     `get_db` 语义同 record_messages——跟随调用方打桩。
     """
     db_ctx = get_db or _default_get_db
@@ -505,7 +551,18 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 row = cur.fetchone()
                 oc_sid = row[0] if row else None
                 if not ledger_healthy or not oc_sid:
+                    # H3 残留修复：inconclusive 时也带回「已登记期望条数」——
+                    # 入口 D 补挂的期望只存在于 per-session 行（批级 applicable
+                    # 计数看不到），不带这个信号时引擎会把"有期望但无法核对"
+                    # 误判成 skipped 而静默放行
+                    cur.execute(
+                        "SELECT count(*) FROM action_expectations "
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree')",
+                        (session_id,),
+                    )
+                    expected_n = cur.fetchone()[0]
                     return {'status': 'inconclusive', 'results': [],
+                            'expected': expected_n,
                             'error': None if ledger_healthy else 'ledger unhealthy'}
                 cur.execute(
                     """
@@ -588,7 +645,22 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
         return {'status': overall, 'results': results}
     except Exception as e:  # noqa: BLE001 —— 核对自身异常按 inconclusive 处理
         log.warning('action gate check failed sid=%s: %s', session_id, e)
-        return {'status': 'inconclusive', 'results': [], 'error': str(e)[:300]}
+        # H3（10 号 §3.1）：异常兜底同样携带 expected——"有期望但核对异常"
+        # 与"真的无期望"必须可区分，否则引擎把前者当 skipped 静默放行
+        expected_n = 0
+        try:
+            with db_ctx() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT count(*) FROM action_expectations "
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree')",
+                        (session_id,),
+                    )
+                    expected_n = cur.fetchone()[0]
+        except Exception:  # noqa: BLE001
+            pass
+        return {'status': 'inconclusive', 'results': [],
+                'expected': expected_n, 'error': str(e)[:300]}
 
 
 def _expectation_desc(r: dict) -> str:
