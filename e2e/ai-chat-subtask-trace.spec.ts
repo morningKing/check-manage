@@ -238,7 +238,10 @@ test('batch child delegation shows the subagent conversation in chat', async ({ 
   await bubble.locator('.subtask-bubble__head').click()
   const body = bubble.locator('.subtask-bubble__body')
   await expect(body).toBeVisible({ timeout: 10_000 })
-  await expect(body.locator('.subtask-bubble__role').first()).toContainText('委托输入')
+  // 会话复用引入任务段边界：段首用户消息标注「本段任务输入」，段内为「委托输入」
+  // （SubtaskBubble boundaryOf）——两种都是合法的用户输入标注
+  await expect(body.locator('.subtask-bubble__role').first())
+    .toContainText(/委托输入|本段任务输入/)
   await expect(body.locator('.subtask-bubble__msg').first()).toBeVisible()
   await page.screenshot({ path: '.playwright-mcp/batch-subtask-trace-expanded.png', fullPage: true })
 })

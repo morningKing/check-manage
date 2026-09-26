@@ -568,7 +568,7 @@ def _maybe_notify_turn_done(sid, turn_start):
 
 
 def _run_listener(sid, opencode_session_id, event_source, directory='',
-                  known_subtasks=None):
+                  known_subtasks=None, owner_thread=None):
     """Consume events, persisting the assistant message on session.idle and
     incrementally (time-debounced) while the turn streams, so switching sessions
     mid-stream recovers the partial answer. Returns after the turn's idle (or
@@ -640,6 +640,19 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         except Exception:
             pass  # audit must never break persistence
 
+    def _persist_owned():
+        # 所有权检查（15 号回修）：stop_listener 摘除注册表后，仍在途的
+        # 过期监听线程不得再持久化——否则 clear/delete 删掉的消息会被
+        # 删前已入队的最后一个事件复活（e2e ai-session-core clear 实测）。
+        # 直连调用（测试）无 owner_thread，不启用该检查。
+        if owner_thread is not None:
+            with _lock:
+                if _listeners.get(sid) is not owner_thread:
+                    logger.info('stale persist listener skipped session=%s', sid)
+                    return
+        persist_turn(sid, state)
+        persist_subtasks(sid, state)
+
     for evt in event_source:
         sig = apply_event(state, evt, opencode_session_id)
         _audit_capture(evt)
@@ -648,8 +661,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # 发现委托——两种情况都要把顶层重新 flatten 一遍：占位气泡的
             # status 现查现填（_flatten_scope），子代理状态变了但顶层没有
             # "新事件"时，只有重新持久化顶层才会带出刷新后的状态。
-            persist_turn(sid, state)
-            persist_subtasks(sid, state)
+            _persist_owned()
             continue
         if sig in ('idle', 'error'):
             # error = session.error（回合失败）。idle 之后不一定还有事件，error
@@ -661,8 +673,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
                                    opencode_session_id, directory=directory)
             except Exception as e:
                 logger.warning('backfill failed session=%s: %s', sid, e)
-            persist_turn(sid, state)
-            persist_subtasks(sid, state)
+            _persist_owned()
             _record_workspace_files(sid, directory)
             # 动作账本与到位门禁（设计 M2）：回合收敛即落账并核对该会话期望。
             # best-effort 不阻断收尾；不过门只记期望行与日志（交互不阻断回合）。
@@ -712,7 +723,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
         elif sig == 'changed' and state['turn_msg_id']:
             now = time.monotonic()
             if now - last_persist >= INCREMENTAL_PERSIST_INTERVAL:
-                persist_turn(sid, state)
+                _persist_owned()
                 last_persist = now
 
 
@@ -726,7 +737,8 @@ def _listener_thread(sid, opencode_session_id, directory, known_subtasks=None):
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
         _run_listener(sid, opencode_session_id, source, directory=directory,
-                      known_subtasks=known_subtasks)
+                      known_subtasks=known_subtasks,
+                      owner_thread=threading.current_thread())
         logger.info('persist listener stream ended session=%s', sid)
     except Exception:
         # Previously swallowed — the #1 reason a "stuck" session left no trace.

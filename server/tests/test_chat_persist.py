@@ -970,3 +970,33 @@ def test_run_listener_error_signal_persists_and_exits(monkeypatch):
     ]
     chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws')
     assert calls == ['backfill', 'turn', 'subtasks', 'files']
+
+
+def test_run_listener_superseded_owner_skips_persist(monkeypatch):
+    """15 号回修：stop_listener 摘除注册表后，在途过期监听线程不得再持久化
+    （否则 clear/delete 删掉的消息会被删前已入队的最后一个事件复活）。
+    owner_thread 指向一个未注册的线程 → 每次 persist 都被跳过。"""
+    import threading as _th
+    import utils.chat_persist as chat_persist
+    calls = []
+    monkeypatch.setattr(chat_persist, 'backfill_from_rest',
+                        lambda *a, **k: calls.append('backfill'))
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda *a, **k: calls.append('turn'))
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda *a, **k: calls.append('subtasks'))
+    monkeypatch.setattr(chat_persist, '_record_workspace_files',
+                        lambda *a, **k: calls.append('files'))
+    events = [
+        _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('session.error', {'sessionID': 'oc',
+                              'error': {'name': 'APIError'}}),
+    ]
+    stale = _th.Thread(target=lambda: None)
+    stale.start()
+    stale.join()
+    chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws',
+                               owner_thread=stale)
+    # backfill/files 照旧（观测类），但 turn/subtasks 持久化被所有权检查拦下
+    assert 'turn' not in calls and 'subtasks' not in calls

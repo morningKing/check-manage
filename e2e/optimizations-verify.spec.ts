@@ -207,7 +207,8 @@ test('批任务：最新会话在上、单任务独立继续、停止并删除',
   await createBatchBtn.click()
 
   const dialog = page.getByRole('dialog', { name: '新建批任务' })
-  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  // 冷加载时对话框实际已弹出但渲染晚于 5s（memory: e2e flakiness ⑥ 同源）——放宽到 15s
+  await dialog.waitFor({ state: 'visible', timeout: 15_000 })
   await dialog.locator('input[data-test="name"]').fill(BATCH_NAME)
   await dialog.locator('textarea[data-test="prompt"]').fill('回复收到即可，无需其他操作')
   // 串行上传：ElUpload 并发完成顺序不定，staged 顺序决定 batch_seq，
@@ -312,7 +313,8 @@ test('Prompt 模板：新建、检索、收藏、插入到输入框', async ({ p
   await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
   await createBatchBtn.click()
   const dialog = page.getByRole('dialog', { name: '新建批任务' })
-  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  // 冷加载时对话框实际已弹出但渲染晚于 5s（memory: e2e flakiness ⑥ 同源）——放宽到 15s
+  await dialog.waitFor({ state: 'visible', timeout: 15_000 })
   await dialog.getByRole('button', { name: '管理模板' }).click()
 
   const drawer = page.locator('.el-drawer', { hasText: '管理模板' })
