@@ -97,8 +97,19 @@ test('批任务删除治理：非终态删除必须 409，stop=1 才可停止并
   const nowStatus = detailNow.json?.batch?.status
   if (!['completed', 'partial', 'failed'].includes(nowStatus)) {
     expect(early.status, `非终态(${nowStatus})删除应 409`).toBe(409)
-    // stop=1：停止并删除
-    const stopDel = await api(request, 'DELETE', `/ai/chat/batches/${batchId}?stop=1`)
+    // stop=1：停止并删除。H2 有界 drain（10s）内子任务未收口时契约返回
+    // 409 BATCH_DRAIN_TIMEOUT（retryable:true）——长任务（数到 200）模型
+    // 慢时一次 DELETE 收不干净，按契约重试直至 204/200
+    const stopDeadline = Date.now() + 60_000
+    let stopDel
+    do {
+      stopDel = await api(request, 'DELETE', `/ai/chat/batches/${batchId}?stop=1`)
+      if (![204, 200].includes(stopDel.status)) {
+        expect(stopDel.status, '非 409 的失败不应重试').toBe(409)
+        expect(stopDel.json?.error?.code).toBe('BATCH_DRAIN_TIMEOUT')
+        await new Promise(r => setTimeout(r, 3_000))
+      }
+    } while (![204, 200].includes(stopDel.status) && Date.now() < stopDeadline)
     expect([204, 200]).toContain(stopDel.status)
   } else {
     expect([204, 200]).toContain(early.status)
