@@ -298,7 +298,8 @@ def test_mark_done_closes_turn(db_conn, user_id):
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
     w._mark_done(claimed[0]['id'], bid, last_preview='ok',
-                 generation=claimed[0]['execution_generation'])
+                 generation=claimed[0]['execution_generation'],
+                 fencing_token=claimed[0]['fencing_token'])
     row = _child(db_conn, claimed[0]['id'])
     assert row['status'] == 'completed'
     assert row['active_turn_id'] is None
@@ -320,8 +321,10 @@ def test_mark_done_counted_exactly_once(db_conn, user_id):
     claimed = w._claim_pending_sessions(limit=1)
     gen = claimed[0]['execution_generation']
     sid = claimed[0]['id']
-    w._mark_done(sid, bid, last_preview='ok', generation=gen)
-    w._mark_done(sid, bid, last_preview='ok', generation=gen)  # 并发重复收口
+    w._mark_done(sid, bid, last_preview='ok', generation=gen,
+                 fencing_token=claimed[0]['fencing_token'])
+    w._mark_done(sid, bid, last_preview='ok', generation=gen,  # 并发重复收口
+                 fencing_token=claimed[0]['fencing_token'])
     assert _batch(db_conn, bid)[1] == 1  # done 只 +1
     assert _child(db_conn, sid)['status'] == 'completed'
 
@@ -337,12 +340,14 @@ def test_stale_generation_write_rejected(db_conn, user_id):
     _set_child(db_conn, sid, status='pending', execution_generation=old_gen + 1)
     _set_child(db_conn, sid, status='running')
     # 旧 generation 的写回必须 0 行：状态/计数都不变
-    w._mark_done(sid, bid, last_preview='stale', generation=old_gen)
+    w._mark_done(sid, bid, last_preview='stale', generation=old_gen,
+                 fencing_token=claimed[0]['fencing_token'])
     row = _child(db_conn, sid)
     assert row['status'] == 'running'
     assert row['generation'] == old_gen + 1
     assert _batch(db_conn, bid)[1] == 0
-    w._mark_done(sid, bid, last_preview='fresh', generation=old_gen + 1)
+    w._mark_done(sid, bid, last_preview='fresh', generation=old_gen + 1,
+                 fencing_token=claimed[0]['fencing_token'])
     assert _batch(db_conn, bid)[1] == 1
 
 
@@ -356,9 +361,11 @@ def test_pause_write_blocked_when_cancel_flag_set(db_conn, user_id):
     sid = claimed[0]['id']
     gen = claimed[0]['execution_generation']
     _set_child(db_conn, sid, cancel_requested=True, pause_requested=True)
-    w._mark_paused(sid, bid, generation=gen)
+    w._mark_paused(sid, bid, generation=gen,
+                   fencing_token=claimed[0]['fencing_token'])
     assert _child(db_conn, sid)['status'] == 'running'
-    w._mark_cancelled(sid, bid, generation=gen)
+    w._mark_cancelled(sid, bid, generation=gen,
+                      fencing_token=claimed[0]['fencing_token'])
     row = _child(db_conn, sid)
     assert row['status'] == 'cancelled'
     assert _batch(db_conn, bid)[2] == 1  # cancelled 计入 failed
@@ -374,7 +381,8 @@ def test_mark_done_redirects_to_pause_flag(db_conn, user_id):
     sid = claimed[0]['id']
     gen = claimed[0]['execution_generation']
     _set_child(db_conn, sid, pause_requested=True)
-    w._mark_done(sid, bid, last_preview='late', generation=gen)
+    w._mark_done(sid, bid, last_preview='late', generation=gen,
+                 fencing_token=claimed[0]['fencing_token'])
     assert _child(db_conn, sid)['status'] == 'paused'
     assert _batch(db_conn, bid)[1] == 0  # 不计 done
 
@@ -793,15 +801,16 @@ def test_worker_start_lease_loop_survives(db_conn):
 
 
 def test_stale_fencing_token_write_rejected(db_conn, user_id):
-    """M6 回修（复核报告 M6/§7-11）：持旧 fencing token 的执行体写回必须
-    0 行——状态、计数、消息都不变。"""
+    """M6 回修（10 号 §3.3）：fencing_token 必填 + 旧 token 写回 0 行。
+    持旧 fencing token 的执行体写回必须被拒——状态、计数都不变；
+    未传 token 直接 TypeError（不再有"现读自比"恒真兜底）。"""
     from utils.batch_engine import BatchWorker
     bid, sids = _seed_batch(db_conn, user_id, 1)
     _clear_other_pending(db_conn, bid)
     w = BatchWorker()
     claimed = w._claim_pending_sessions(limit=1)
     sid = claimed[0]['id']
-    old_token = claimed[0]['fencing_token']
+    held_token = claimed[0]['fencing_token']
     # 模拟接管：fencing +1（重排后旧执行体持有的 token 过期）
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET fencing_token = fencing_token + 1 "
@@ -809,14 +818,22 @@ def test_stale_fencing_token_write_rejected(db_conn, user_id):
     db_conn.commit()
     # 旧 token 写回 → CAS 0 行
     w._mark_done(sid, bid, last_preview='stale-token', generation=0,
-                 fencing_token=old_token)
+                 fencing_token=held_token)
     with db_conn.cursor() as cur:
         cur.execute("SELECT status FROM ai_chat_sessions WHERE id = %s", (sid,))
         assert cur.fetchone()[0] == 'running'
         cur.execute("SELECT done FROM ai_chat_batches WHERE id = %s", (bid,))
         assert cur.fetchone()[0] == 0
-    # fencing_token 未传时现读现校验（自洽写回）→ 命中
-    w._mark_done(sid, bid, last_preview='fresh', generation=0)
+    # 未传 token：transition_child 契约为必填（TypeError），无恒真兜底
+    with pytest.raises(TypeError):
+        w._mark_done(sid, bid, last_preview='omit-token', generation=0)
+    # 当前 token 写回 → 命中
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT fencing_token FROM ai_chat_sessions WHERE id = %s",
+                    (sid,))
+        current_token = cur.fetchone()[0]
+    w._mark_done(sid, bid, last_preview='fresh', generation=0,
+                 fencing_token=current_token)
     with db_conn.cursor() as cur:
         cur.execute("SELECT status FROM ai_chat_sessions WHERE id = %s", (sid,))
         assert cur.fetchone()[0] == 'completed'
@@ -867,12 +884,9 @@ def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
     assert gate['status'] == 'inconclusive'
     assert gate.get('expected') == 1
     # 引擎判定：evaluated=0 / applicable=0 / expected=1 → fail-closed
-    w = BatchWorker()
+    # （10 号 §7-2：不再内联复写引擎布尔式——直接调用引擎的
+    # gate_participates 单一事实来源；删掉引擎里的 expected>0 分支
+    # 本断言即失败，有判别力）
+    from utils.batch_engine import gate_participates
     gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
-    evaluated = len(gate.get('results') or [])
-    expected = (gate.get('expected') or 0)
-    fail_closed = (gate_reg.get('error')
-                   or not (evaluated > 0
-                           or (gate_reg.get('applicable') or 0) > 0
-                           or expected > 0))
-    assert fail_closed is False  # expected>0 → 进入核对分支 → inconclusive 落 failed
+    assert gate_participates(gate, gate_reg['applicable']) is True

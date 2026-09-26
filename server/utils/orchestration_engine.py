@@ -358,13 +358,16 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
     prompt = _render_prompt(node.get('prompt_template') or '', run, by_node)
     with get_db() as conn:
         with conn.cursor() as cur:
-            # CAS：仅当 step 仍为 runnable 候选（blocked/failed-重试）时赢得
-            # 派发权；输者放弃创建，杜绝重复派发
+            # CAS：仅当 step 仍为首派候选 blocked 时赢得派发权；输者放弃
+            # 创建，杜绝重复派发。10 号 §4：不收容 failed——failed 且有
+            # attempt_count/session_id 的重试走上方复用分支（CAS 'running'），
+            # 其余 failed 形态（blocked 快照后并发转 failed）不再复位
+            # attempt_count、不再弃用原会话新建
             cur.execute(
                 "UPDATE ai_orchestration_steps SET status='running', "
                 "  session_id=%s, attempt_count = 1, started_at=NOW(), "
                 "  updated_at=NOW() "
-                "WHERE id=%s AND status IN ('blocked','failed') RETURNING id",
+                "WHERE id=%s AND status='blocked' RETURNING id",
                 (sid, step['id']))
             won = cur.fetchone() is not None
             if won:
@@ -576,14 +579,15 @@ class OrchestrationScheduler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._owner: str | None = None
+        self._retry_thread: threading.Thread | None = None
         self._holds_lease = False
 
     # 复核报告 §4.4：抢占失败进入后台重试（同 N2 模式）
     RETRY_SEC = 5.0
 
     def start(self):
-        if self._thread and self._thread.is_alive():
-            return
+        if (self._thread and self._thread.is_alive()) or                 (self._retry_thread and self._retry_thread.is_alive()):
+            return  # 已在调度或正在等待租约：不重复起线程
         from utils import execution_lease
         self._owner = execution_lease.owner_id()
         ok, _ = execution_lease.acquire('scheduler', self._owner,
@@ -592,9 +596,10 @@ class OrchestrationScheduler:
             logger.warning('orchestration scheduler lease NOT acquired; '
                            'retrying every %ss until the lease becomes '
                            'available', self.RETRY_SEC)
-            retry = threading.Thread(target=self._acquire_retry, daemon=True,
-                                     name='orchestration-scheduler-retry')
-            retry.start()
+            self._retry_thread = threading.Thread(
+                target=self._acquire_retry, daemon=True,
+                name='orchestration-scheduler-retry')
+            self._retry_thread.start()
             return
         self._holds_lease = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
@@ -652,8 +657,10 @@ class OrchestrationScheduler:
 
     def stop(self):
         self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3)
+        # retry 线程同样收口（10 号 §3.7：句柄保存 + join）
+        for t_ in (self._thread, self._retry_thread):
+            if t_ and t_.is_alive():
+                t_.join(timeout=3)
         if self._holds_lease:
             from utils import execution_lease
             execution_lease.release('scheduler', self._owner)

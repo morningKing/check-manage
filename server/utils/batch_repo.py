@@ -72,13 +72,13 @@ def recompute_batch_status_tx(cur, batch_id: str, conn=None,
                          'done': out['done'], 'failed': out['failed']},
                 secret=out.get('callback_secret') or '', event_id=eid,
                 conn=conn)
-            # H7 回修：回调入队即登记 effect（planned）——投递器 settle 时
-            # 按 'outbox:<event_id>' 键置 committed/failed，effect 账本从此
-            # 有真实生产数据（此前全仓零写入）
+            # H7 回修（10 号 §3.2）：effect 与 outbox 入队同事务登记——
+            # conn 传入时 SAVEPOINT 隔离、随外层一起提交/回滚，外层回滚
+            # 不再留下孤儿 planned effect
             if session_id:
                 from utils import execution_effect as _eff
                 _eff.record_effect(session_id, 'callback', f'outbox:{eid}',
-                                   batch_id=batch_id, request=eid)
+                                   batch_id=batch_id, request=eid, conn=conn)
     return out
 
 
@@ -91,19 +91,22 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                      expect_pause: bool | None = False,
                      count: str | None = None,
                      turn_status: str | None = None,
-                     fencing_token: int | None = None) -> dict | None:
+                     fencing_token: int) -> dict | None:
     """P0 CAS 终态转移（ai-harness-p0 spec §6.1）——终态写入的唯一入口。
 
     WHERE 带 status='running' + execution_generation + cancel/pause 标志期望；
     rowcount=0 即写回过期（stale worker / 已被并发收口），返回 None，调用方
     不得改状态、计数或消息。rowcount=1 时在同一事务内完成三件事再提交：
     批次计数 +1（count='done'/'failed'）→ 批次状态重算 → active turn 收口，
-    消灭「计数已加、状态未算」的中间态。
+    消灭「计数已加、状态未写」的中间态。
 
     `generation` 是 claim 时捕获的 execution_generation；不匹配即 0 行。
     expect_cancel/expect_pause 三态：False=要求未置位（done/failed/paused）、
     True=要求已置位（cancelled）、None=不关心（cancel 优先语义下，取消收口
     不应再被并存的 pause 标志挡住）。
+    `fencing_token` **必填**（M6，10 号 §3.3）：worker 路径传 claim 时捕获
+    的 token（旧 token 写 0 行）；对账/重定向等"无 claim 权威"路径传决策
+    查询里刚读出的当前值（自洽）。不再提供"未传则现读自比"的恒真兜底。
     返回 {'id','batch_id','batch_status','done','failed','total',
     'callback_url','callback_secret'}（batch 字段在 batch_id 为空时缺省）。
     """
@@ -111,14 +114,6 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
         else last_message_preview
     with get_db() as conn:
         with conn.cursor() as cur:
-            # M6 回修（复核报告 §3）：fencing 校验无条件生效——调用方未传时
-            # 现读当前 token 参与校验（自洽写回），而非跳过校验。任何持旧
-            # token 的执行体写回都会 0 行，纵深防御闭合。
-            if fencing_token is None:
-                cur.execute("SELECT fencing_token FROM ai_chat_sessions "
-                            "WHERE id = %s", (session_id,))
-                frow = cur.fetchone()
-                fencing_token = frow[0] if frow else 0
             cur.execute(
                 """
                 UPDATE ai_chat_sessions
@@ -135,14 +130,14 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
                    AND execution_generation = %s
                    AND (%s IS NULL OR cancel_requested = %s)
                    AND (%s IS NULL OR pause_requested = %s)
-                   AND (%s IS NULL OR fencing_token = %s)
+                   AND fencing_token = %s
                 RETURNING id, batch_id
                 """,
                 (new_status, error_message, preview, gate_status, gate_error,
                  gate_status, session_id, generation,
                  expect_cancel, bool(expect_cancel),
                  expect_pause, bool(expect_pause),
-                 fencing_token, fencing_token),
+                 int(fencing_token)),
             )
             row = cur.fetchone()
             if not row:
@@ -182,20 +177,23 @@ def transition_child(session_id: str, new_status: str, *, generation: int,
 
 
 def read_child_control_state(session_id: str) -> dict | None:
-    """读子会话当前控制态（status/两标志/generation）。transition 返回 None 时
-    由调用方据此决定按 cancel/pause 落终态还是忽略（spec §6.1 表）。"""
+    """读子会话当前控制态（status/两标志/generation/fencing_token）。transition
+    返回 None 时由调用方据此决定按 cancel/pause 落终态还是忽略（spec §6.1 表）。
+    fencing_token 一并带出：重定向落终态时原样回传（自洽写回，M6）。"""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT status, cancel_requested, pause_requested, "
-                "execution_generation FROM ai_chat_sessions WHERE id = %s",
+                "execution_generation, fencing_token FROM ai_chat_sessions "
+                "WHERE id = %s",
                 (session_id,),
             )
             row = cur.fetchone()
     if not row:
         return None
     return {'status': row[0], 'cancel_requested': row[1],
-            'pause_requested': row[2], 'execution_generation': row[3]}
+            'pause_requested': row[2], 'execution_generation': row[3],
+            'fencing_token': row[4]}
 
 
 def get_max_files_per_batch() -> int:
@@ -597,7 +595,9 @@ def cancel_child(user_id: str, batch_id: str, session_id: str) -> dict | None:
             if landed:
                 cur.execute("UPDATE ai_chat_batches SET failed = failed + 1 "
                             "WHERE id = %s", (batch_id,))
-                recompute_batch_status_tx(cur, batch_id)
+                # conn+sid 入参：终态事件/outbox/effect 与取消同事务（H7）
+                recompute_batch_status_tx(cur, batch_id, conn=conn,
+                                          session_id=session_id)
             else:
                 cur.execute(
                     "UPDATE ai_chat_sessions s SET cancel_requested = true "
@@ -993,7 +993,7 @@ def reset_failed_to_pending(user_id: str, batch_id: str, *,
             if count:
                 cur.execute("UPDATE ai_chat_batches SET failed = failed - %s "
                             "WHERE id = %s", (count, batch_id))
-                recompute_batch_status_tx(cur, batch_id)
+                recompute_batch_status_tx(cur, batch_id, conn=conn)
             conn.commit()
     return count
 

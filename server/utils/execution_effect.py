@@ -23,32 +23,57 @@ def record_effect(session_id: str, effect_type: str, idempotency_key: str, *,
                   batch_id: str | None = None,
                   attempt_id: str | None = None,
                   step_key: str | None = None,
-                  request: str | None = None) -> dict | None:
-    """登记（或复用）一个 effect。返回行 dict（含当前 status）或 None（失败）。"""
+                  request: str | None = None,
+                  conn=None) -> dict | None:
+    """登记（或复用）一个 effect。返回行 dict（含当前 status）或 None（失败）。
+
+    `conn` 传入时在调用方事务内登记（SAVEPOINT 隔离，失败只回滚 effect
+    本身）——effect 与 outbox 入队同生共死，不留孤儿 planned（10 号 §3.2）；
+    不传时自开短事务（兼容旧调用方）。"""
     eid = 'eff_' + secrets.token_hex(6)
     request_hash = hashlib.sha256(request.encode('utf-8', 'replace')).hexdigest() \
         if request else None
-    try:
-        from db import get_db
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO ai_execution_effects
-                        (id, session_id, attempt_id, batch_id, step_key,
-                         effect_type, idempotency_key, request_hash, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'planned')
-                    ON CONFLICT (session_id, effect_type, idempotency_key)
-                    DO UPDATE SET id = ai_execution_effects.id
-                    RETURNING id, status, external_ref, result_hash
-                    """,
-                    (eid, session_id, attempt_id, batch_id, step_key,
-                     effect_type, idempotency_key[:200], request_hash),
-                )
-                row = cur.fetchone()
-            conn.commit()
+
+    def _run(cur):
+        cur.execute(
+            """
+            INSERT INTO ai_execution_effects
+                (id, session_id, attempt_id, batch_id, step_key,
+                 effect_type, idempotency_key, request_hash, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'planned')
+            ON CONFLICT (session_id, effect_type, idempotency_key)
+            DO UPDATE SET id = ai_execution_effects.id
+            RETURNING id, status, external_ref, result_hash
+            """,
+            (eid, session_id, attempt_id, batch_id, step_key,
+             effect_type, idempotency_key[:200], request_hash),
+        )
+        row = cur.fetchone()
         return {'id': row[0], 'status': row[1], 'external_ref': row[2],
                 'result_hash': row[3]}
+
+    if conn is not None:
+        cur = conn.cursor()
+        try:
+            cur.execute('SAVEPOINT eff_rec')
+            out = _run(cur)
+            cur.execute('RELEASE SAVEPOINT eff_rec')
+            return out
+        except Exception as e:  # noqa: BLE001
+            try:
+                cur.execute('ROLLBACK TO SAVEPOINT eff_rec')
+            except Exception:  # noqa: BLE001
+                pass
+            logger.warning('effect record failed sid=%s key=%s: %s',
+                           session_id, idempotency_key, e)
+            return None
+    try:
+        from db import get_db
+        with get_db() as conn2:
+            with conn2.cursor() as cur:
+                out = _run(cur)
+            conn2.commit()
+        return out
     except Exception as e:  # noqa: BLE001
         logger.warning('effect record failed sid=%s key=%s: %s',
                        session_id, idempotency_key, e)
@@ -58,7 +83,8 @@ def record_effect(session_id: str, effect_type: str, idempotency_key: str, *,
 def settle_effect(effect_id: str, status: str, *,
                   external_ref: str | None = None,
                   result_hash: str | None = None) -> bool:
-    """planned/started → committed | failed | unknown。幂等：终态后不再改。"""
+    """planned/started → 终态；failed/unknown → committed（后续退避重试
+    成功或人工重放成功的正向收口，10 号 §3.2）。幂等：committed 后不再改。"""
     if status not in ('committed', 'failed', 'unknown', 'compensated'):
         raise ValueError(f'invalid effect status: {status}')
     try:
@@ -72,8 +98,11 @@ def settle_effect(effect_id: str, status: str, *,
                     "  committed_at = CASE WHEN %s = 'committed' "
                     "                      THEN now() ELSE committed_at END "
                     "WHERE id = %s "
-                    "  AND status IN ('planned', 'started')",
-                    (status, external_ref, result_hash, status, effect_id),
+                    "  AND (status IN ('planned', 'started') "
+                    "       OR (status IN ('failed', 'unknown') "
+                    "           AND %s = 'committed'))",
+                    (status, external_ref, result_hash, status, effect_id,
+                     status),
                 )
                 ok = cur.rowcount > 0
             conn.commit()

@@ -1798,7 +1798,8 @@ def test_run_one_continue_skips_stale_terminal_messages(user_id, db_conn,
                      'scan_task_id': None, 'opencode_session_id': 'oc',
                      'workspace_path': str(tmp_path),
                      'continue_prompt': '请继续完成原任务',
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '',
+                     'fencing_token': 0})  # M6：终态写必须携带 claim 时的 token
     with db_conn.cursor() as cur:
         cur.execute("SELECT status, last_message_preview, error_message "
                     "FROM ai_chat_sessions WHERE id = %s", (sid,))

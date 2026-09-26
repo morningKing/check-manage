@@ -136,7 +136,7 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'pending'                    # 重新排队而非 failed
@@ -156,7 +156,8 @@ def test_stall_failure_auto_retries_with_continue_then_fails(db_conn, user_id,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': 'oc-stall',
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': '', 'execution_generation': _gen})
+                     'agent': '', 'model': '', 'execution_generation': _gen,
+                     'fencing_token': 0})
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'failed'
     assert '没有任何新进展' in err
@@ -188,7 +189,8 @@ def test_provider_auth_never_retries(db_conn, user_id, claim_guard,
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': '', 'execution_generation': 0})
+                     'agent': '', 'model': '', 'execution_generation': 0,
+                     'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'failed'                     # 密钥错：重试必然再炸
@@ -213,7 +215,7 @@ def test_network_exception_requeues_fresh(db_conn, user_id, monkeypatch, tmp_pat
                      'batch_input_file': 'x.csv', 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path), 'continue_prompt': None,
-                     'agent': '', 'model': ''})
+                     'agent': '', 'model': '', 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'pending'

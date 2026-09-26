@@ -56,15 +56,19 @@ def enqueue(batch_id: str, *, target_url: str, payload: dict,
 
 def _enqueue_cur(conn, oid, eid, batch_id, event_type, target_url, payload,
                  secret, _json):
-    # M14：SAVEPOINT 包裹——入队失败不毒化外层终态事务
+    # M14（10 号 §3.4）：SAVEPOINT 也在 try 内——外层事务已处错误态时，
+    # 保存点语句的异常同样不逃出（"入队绝不打断业务"契约与 batch_events 对齐）
     with conn.cursor() as cur:
-        cur.execute('SAVEPOINT be_obx')
         try:
+            cur.execute('SAVEPOINT be_obx')
             _insert(cur, oid, eid, batch_id, event_type, target_url, payload,
                     secret, _json)
             cur.execute('RELEASE SAVEPOINT be_obx')
         except Exception:
-            cur.execute('ROLLBACK TO SAVEPOINT be_obx')
+            try:
+                cur.execute('ROLLBACK TO SAVEPOINT be_obx')
+            except Exception:  # noqa: BLE001
+                pass
             raise
 
 
@@ -114,7 +118,8 @@ def _claim_due(limit: int = 10) -> list[dict]:
 
 
 def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
-            error: str | None, event_ref: str | None):
+            error: str | None, event_ref: str | None,
+            uncertain: bool = False):
     from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -136,14 +141,16 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
                      (error or '')[:500], str(backoff), oid),
                 )
         conn.commit()
-    # H7 回修：投递终态同步 settle callback effect（committed/failed）——
-    # event_ref 传的是 outbox 行的 event_id，effect 幂等键即 'outbox:<eid>'
+    # H7 回修：投递终态同步 settle callback effect——committed（成功或最终
+    # 成功）/ failed（确定性拒绝）/ unknown（超时/连接类不确定结局——恢复
+    # 决策表据此禁自动重放，转 needs_review 人工复核，10 号 §3.2）
     try:
         from utils import execution_effect
         if event_ref:
+            effect_status = 'committed' if ok else (
+                'unknown' if uncertain else 'failed')
             execution_effect.settle_effect_by_key(
-                'callback', f'outbox:{event_ref}',
-                'committed' if ok else 'failed',
+                'callback', f'outbox:{event_ref}', effect_status,
                 external_ref=oid)
     except Exception:  # noqa: BLE001
         pass
@@ -153,16 +160,22 @@ def _settle(oid: str, batch_id: str, ok: bool, attempt_count: int,
         batch_id, 'delivery.sent' if ok else 'delivery.failed',
         aggregate_type='delivery', aggregate_id=oid,
         payload={'targetUrl': _redact(None), 'attempt': attempt_count,
-                 'error': (error or '')[:200], 'eventId': event_ref})
+                 'error': (error or '')[:200], 'eventId': event_ref,
+                 'uncertain': uncertain})
 
 
 def _redact(url):
     return None  # 事件里不回显完整目标 URL（避免签名/凭据类信息入事件流）
 
 
-def deliver_one(row: dict) -> bool:
-    """投递单行（复用 webhook_engine 的 HMAC 与 HTTP）。"""
+def deliver_one(row: dict) -> bool | str:
+    """投递单行（复用 webhook_engine 的 HMAC 与 HTTP）。
+
+    返回 True（成功）/ False（确定性失败，如 4xx）/ 'uncertain'（超时或
+    连接类异常——结局未知，effect 落 unknown 触发 fail-safe）。兼容旧
+    bool 消费方。"""
     import json as _json
+    import requests as _requests
     from utils.webhook_engine import _fire_single_webhook
     try:
         _fire_single_webhook(
@@ -174,20 +187,37 @@ def deliver_one(row: dict) -> bool:
             timeout=30, retries=0,  # 重试由 outbox 自己的退避管理
         )
         return True
+    except (_requests.exceptions.Timeout,
+            _requests.exceptions.ConnectionError) as e:
+        logger.warning('outbox deliver uncertain id=%s: %s', row['id'], e)
+        return 'uncertain'
     except Exception as e:  # noqa: BLE001 —— 投递失败进退避
         logger.warning('outbox deliver failed id=%s: %s', row['id'], e)
         return False
 
 
-def drain_due_once() -> int:
-    """投递一轮到期任务，返回投递成功的条数（测试与投递线程共用）。"""
+def drain_due_once(heartbeat_fn=None) -> int:
+    """投递一轮到期任务，返回投递成功的条数（测试与投递线程共用）。
+
+    heartbeat_fn：投递线程传入租约续租回调（每行投递后调用）——最坏
+    10×30s 的 drain 期间心跳不再停顿，杜绝"租约过期被重试线程接管 →
+    同进程双投递器"窗口（10 号 §3.7）。"""
     rows = _claim_due()
     ok_count = 0
     for r in rows:
-        ok = deliver_one(r)
+        res = deliver_one(r)
+        ok = res is True
+        # 'uncertain'（超时/连接类）不算成功，effect 落 unknown 触发 fail-safe
+        uncertain = (res == 'uncertain')
         ok_count += 1 if ok else 0
+        if heartbeat_fn:
+            try:
+                heartbeat_fn()   # 长投递循环内续租，防 300s 级 drain 拖垮心跳
+            except Exception:  # noqa: BLE001
+                pass
         _settle(r['id'], r['batch_id'], ok, r['attempt_count'] + 1,
-                None if ok else 'delivery failed', r['event_id'])
+                None if ok else 'delivery failed', r['event_id'],
+                uncertain=uncertain)
     return ok_count
 
 
@@ -253,6 +283,7 @@ class OutboxDeliveryLoop:
     def __init__(self):
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._retry_thread: threading.Thread | None = None
         self._owner: str | None = None
         self._holds_lease = False
 
@@ -261,8 +292,9 @@ class OutboxDeliveryLoop:
     RETRY_SEC = 5.0
 
     def start(self):
-        if self._thread and self._thread.is_alive():
-            return
+        if (self._thread and self._thread.is_alive()) or \
+                (self._retry_thread and self._retry_thread.is_alive()):
+            return  # 已在投递或正在等待租约：不重复起线程
         from utils import execution_lease
         self._owner = execution_lease.owner_id()
         ok, _ = execution_lease.acquire('delivery', self._owner,
@@ -272,9 +304,10 @@ class OutboxDeliveryLoop:
                            'every %ss until the lease becomes available',
                            self.RETRY_SEC)
             self._holds_lease = False
-            retry = threading.Thread(target=self._acquire_retry, daemon=True,
-                                     name='outbox-delivery-lease-retry')
-            retry.start()
+            self._retry_thread = threading.Thread(
+                target=self._acquire_retry, daemon=True,
+                name='outbox-delivery-lease-retry')
+            self._retry_thread.start()
             return
         self._holds_lease = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
@@ -301,9 +334,13 @@ class OutboxDeliveryLoop:
     def _loop(self):
         from utils import execution_lease
         logger.info('outbox delivery loop started')
+
+        def _hb():
+            execution_lease.heartbeat('delivery', self._owner)
+
         while not self._stop.is_set():
             try:
-                drain_due_once()
+                drain_due_once(heartbeat_fn=_hb)
             except Exception:  # noqa: BLE001
                 logger.exception('outbox delivery tick failed')
             if not execution_lease.heartbeat('delivery', self._owner):
@@ -315,8 +352,10 @@ class OutboxDeliveryLoop:
 
     def stop(self):
         self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3)
+        # retry 线程同样收口（10 号 §3.7：句柄保存 + join）
+        for t in (self._thread, self._retry_thread):
+            if t and t.is_alive():
+                t.join(timeout=3)
         if self._holds_lease:
             from utils import execution_lease
             execution_lease.release('delivery', self._owner)

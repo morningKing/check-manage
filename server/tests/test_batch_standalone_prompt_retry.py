@@ -122,7 +122,7 @@ def test_early_failure_keeps_original_prompt_for_retry(db_conn, user_id,
                      'batch_input_file': None, 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path),
-                     'continue_prompt': PROMPT, 'agent': '', 'model': ''})
+                     'continue_prompt': PROMPT, 'agent': '', 'model': '', 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'pending'                    # 自动重排
@@ -163,7 +163,7 @@ def test_requeued_standalone_reruns_with_original_prompt(db_conn, user_id,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path),
                      'continue_prompt': PROMPT, 'agent': '', 'model': '',
-                     'execution_generation': 0})
+                     'execution_generation': 0, 'fencing_token': 0})
 
     status, retry_count, cp, err, oc = _row(db_conn, sid)
     assert status == 'completed'
@@ -198,7 +198,7 @@ def test_fresh_standalone_claim_does_not_use_continue_mode(db_conn, user_id,
                      'batch_input_file': None, 'input_files': None,
                      'scan_task_id': None, 'opencode_session_id': None,
                      'workspace_path': str(tmp_path),
-                     'continue_prompt': PROMPT, 'agent': '', 'model': ''})
+                     'continue_prompt': PROMPT, 'agent': '', 'model': '', 'fencing_token': 0})
 
     assert seen['directory'] == str(tmp_path)     # 新建了工作区绑定的 oc 会话
     assert PROMPT in seen['prompt']
