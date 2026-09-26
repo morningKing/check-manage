@@ -147,6 +147,35 @@ def _reset_and_prime_permission_cache():
     _perms.invalidate_cache()
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """会话结束统一回收孤儿 ai_batch_events（12 号 §4.2 兜底）。
+
+    ai_batch_events 无 FK，个别用例/夹具删除批次或 run 行后会遗留事件。
+    各文件夹具已按各自维度回收；此钩子按「batch_id 已脱离 batches ∪ runs」
+    收掉全部残余，防历史再积累。只清测试遗留形态，不触碰任何存活归属。
+    """
+    try:
+        import psycopg2
+        from config import DB_CONFIG
+        conn = psycopg2.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ai_batch_events e WHERE "
+                    "NOT EXISTS (SELECT 1 FROM ai_chat_batches b "
+                    "            WHERE b.id = e.batch_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM ai_orchestration_runs r "
+                    "                WHERE r.id = e.batch_id)")
+                deleted = cur.rowcount
+            conn.commit()
+            if deleted:
+                print(f'\n[conftest] reclaimed {deleted} orphan ai_batch_events')
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _rebind_module_get_db_to_real():
     """Heal `from db import get_db` bindings polluted by earlier tests.
