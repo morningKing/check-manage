@@ -31,10 +31,11 @@ test('MCP 数据工具：Agent 真实调用 list_collections 并渲染工具气�
             (s.includes('个集合') || s.includes('共 '))) ? true : null
   }, { timeoutMs: 480_000, intervalMs: 5000 })
 
-  // UI：打开会话，工具气泡应出现（tool-call 节点），并截图留证
+  // UI：打开会话，工具气泡应出现（tool-call 节点），并截图留证。
+  // 全量串行尾段真实 LLM 延迟可达 30s+（2026-09-26 实测 flake），放宽到 60s
   await openChatSession(page, sid)
   const bubble = page.locator('.tool-call').first()
-  await expect(bubble).toBeVisible({ timeout: 30_000 })
+  await expect(bubble).toBeVisible({ timeout: 60_000 })
   const summary = await page.locator('.tool-call__summary').first().textContent()
   console.log('tool bubble summary:', summary)
   await screenshot(page, 'mcp-list-collections-bubble')
