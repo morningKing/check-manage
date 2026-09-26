@@ -79,8 +79,8 @@ def test_claim_marks_batch_running(user_id, db_conn):
         cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
                     "WHERE s.batch_id = b.id AND s.status='pending' "
                     "  AND b.id <> %s "
-                    "  AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
-                    "       OR b.name LIKE '%%-test')", (bid,))
+                    "  AND (b.name LIKE 'AITEST-%%' OR b.name IN ('p0-test', "
+                    "       'p1-test', 'engine-test', 'pause-test', 'gap-test'))", (bid,))
     db_conn.commit()
     BatchWorker()._claim_pending_sessions(limit=1)
     db_conn.rollback()   # drop our snapshot so we see the worker's committed update
@@ -97,8 +97,8 @@ def test_claim_pending_respects_limit(user_id, db_conn):
         cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
                     "WHERE s.batch_id = b.id AND s.status='pending' "
                     "  AND b.id <> %s "
-                    "  AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
-                    "       OR b.name LIKE '%%-test')", (bid,))
+                    "  AND (b.name LIKE 'AITEST-%%' OR b.name IN ('p0-test', "
+                    "       'p1-test', 'engine-test', 'pause-test', 'gap-test'))", (bid,))
     db_conn.commit()
     claimed = w._claim_pending_sessions(limit=2)
     assert len(claimed) == 2

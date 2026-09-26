@@ -207,11 +207,12 @@ def gate_dry_run(batch_id, sid):
     require_state = (body.get('require_state') or 'completed').strip()
     if not tool or not pattern:
         return jsonify({'error': 'tool and args_pattern required'}), 400
-    import re as _re
+    # 12 号 §7-5：dry-run 与登记/核对同一 PG 口径——Python re 放行但 PG 拒绝
+    # 的方言此前会在这里过审、执行时 `args_text ~ %s` 抛 InvalidRegularExpression → 500
     try:
-        _re.compile(pattern)
-    except _re.error as e:
-        return jsonify({'error': f'args_pattern 不是合法正则: {e}'}), 400
+        agent_ledger.validate_pg_regex(pattern)
+    except ValueError as e:
+        return jsonify({'error': f'args_pattern {e}'}), 400
     return jsonify(agent_ledger.count_tree_tool_calls(
         sid, tool, pattern, require_state))
 

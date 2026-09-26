@@ -28,28 +28,40 @@ def user_id(db_conn):
     yield uid
     with db_conn.cursor() as cur:
         cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = %s", (uid,))
+        # 12 号 §4.2：ai_batch_events 无 FK 且挂在 run id 上，必须先于
+        # run 删除回收（该 fixture 此前无任何事件回收 → 每轮泄漏）
+        cur.execute(
+            "DELETE FROM ai_batch_events WHERE batch_id IN "
+            "(SELECT id FROM ai_orchestration_runs WHERE requested_by = %s)",
+            (uid,))
         cur.execute("DELETE FROM ai_orchestration_runs WHERE requested_by = %s",
                     (uid,))
         cur.execute("DELETE FROM users WHERE id = %s", (uid,))
     db_conn.commit()
 
 
-# 显式测试前缀约定（M8，10 号 §3.6）：编排臂只清理「测试命名用户」的 run
-# 的遗留 pending 子会话，绝不触碰真实用户数据的形态（真实子会话同样满足
-# batch_id/api_key_id 为 NULL + run 非空，不能按行形态过滤）
-TEST_USER_PREFIXES = ('p2_user_%', 'gap_user_%', 'AITEST-%', 'e2e%', '%-test')
+# M8（12 号 §4.1）：清理判定改为「归属用户已消失 / requested_by IS NULL」
+# （见 _clear_other_pending docstring），无需名称前缀约定。
+
+
+# 显式保留模式（M8，12 号 §4.1）：不再用宽 LIKE（e2e%/%-test 会误删真实
+# 用户）——编排臂只认 fixture 生成的用户名模式（含 uuid 片段，真实用户
+# 不会命中）与 requested_by IS NULL 的 run（create_run 恒有请求者，NULL
+# 只可能来自测试直插 SQL）。
+TEST_USER_PREFIXES = ('p2_user_%', 'gap_user_%')
 
 
 def _clear_other_pending(db_conn, keep_run_id=None):
-    """清掉残留 pending 行（共享库确定性认领）：批任务/独立会话遗留 + 其它
-    run 的编排子会话。两条臂都只认「测试命名」，不碰真实用户数据。"""
+    """清掉残留 pending 行（共享库确定性认领）。编排臂按 TEST_USER_PREFIXES
+    （fixture 保留模式）+ NULL requested_by run 收敛，不触碰真实用户数据。"""
     like = ' OR '.join("u.username LIKE %s" for _ in TEST_USER_PREFIXES)
     with db_conn.cursor() as cur:
-        # M8 治理（复核报告 §3）：仅清理「测试命名」批次，不碰真实用户数据
+        # 批次臂：保留 AITEST-/具名保留批（e2e/openapi 测试经 admin API 创建，
+        # 用户是真实 admin，只能按批次保留前缀识别）；不再含宽匹配 e2e%/%-test
         cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
                     "WHERE s.batch_id = b.id AND s.status='pending' "
-                    "  AND (b.name LIKE 'AITEST-%' OR b.name LIKE 'e2e%' "
-                    "       OR b.name LIKE '%-test' OR b.name IN ('engine-test', 'pause-test'))")
+                    "  AND (b.name LIKE 'AITEST-%' "
+                    "       OR b.name IN ('engine-test', 'pause-test', 'gap-test'))")
         if keep_run_id:
             cur.execute(
                 "DELETE FROM ai_chat_sessions s "
@@ -58,8 +70,8 @@ def _clear_other_pending(db_conn, keep_run_id=None):
                 "  AND s.orchestration_run_id <> %s "
                 "  AND s.orchestration_run_id IN ("
                 "      SELECT r.id FROM ai_orchestration_runs r "
-                "      JOIN users u ON u.id = r.requested_by "
-                f"      WHERE ({like}))",
+                "      LEFT JOIN users u ON u.id = r.requested_by "
+                f"      WHERE r.requested_by IS NULL OR ({like}))",
                 (keep_run_id, *TEST_USER_PREFIXES))
         else:
             cur.execute(
@@ -68,8 +80,8 @@ def _clear_other_pending(db_conn, keep_run_id=None):
                 "  AND s.api_key_id IS NULL AND s.orchestration_run_id IS NOT NULL "
                 "  AND s.orchestration_run_id IN ("
                 "      SELECT r.id FROM ai_orchestration_runs r "
-                "      JOIN users u ON u.id = r.requested_by "
-                f"      WHERE ({like}))",
+                "      LEFT JOIN users u ON u.id = r.requested_by "
+                f"      WHERE r.requested_by IS NULL OR ({like}))",
                 (*TEST_USER_PREFIXES,))
     db_conn.commit()
 

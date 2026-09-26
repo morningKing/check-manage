@@ -981,6 +981,12 @@ class BatchWorker:
                 )
                 rows = cur.fetchall()
                 counts = Counter(r[1] for r in rows if r[1])
+                # H7④（12 号 §4.1）：同批多行取消时锚定本批最后一个
+                # 刚转移的子会话（effect 落账不用 tiebreaker 兜底）
+                anchor_by_batch = {}
+                for rid_, bid_ in rows:
+                    if bid_:
+                        anchor_by_batch[bid_] = rid_
                 for bid, n in counts.items():
                     cur.execute(
                         "UPDATE ai_chat_batches SET failed = failed + %s WHERE id = %s",
@@ -998,7 +1004,7 @@ class BatchWorker:
                 paused_batch_ids = {r[1] for r in paused_rows if r[1]}
             conn.commit()
         for bid in counts:
-            _recompute_batch_status(bid)
+            _recompute_batch_status(bid, anchor_sid=anchor_by_batch.get(bid))
         for bid in paused_batch_ids:
             _recompute_batch_status(bid)
 
@@ -2413,9 +2419,9 @@ class BatchWorker:
                    gate_status: str | None = None,
                    gate_error: str | None = None,
                    fencing_token: int | None = None):
-        _require_fencing(fencing_token)
         """完成落库。CAS（running+generation+无控制标志）命中时同一事务完成
         计数与批次状态重算；未命中按控制标志重定向或忽略，**不**重复计数。"""
+        _require_fencing(fencing_token)
         from utils import batch_repo
         res = batch_repo.transition_child(
             session_id, 'completed',
@@ -2463,12 +2469,12 @@ class BatchWorker:
     def _mark_cancelled(self, session_id: str, batch_id: str | None,
                         generation: int | None = None,
                         fencing_token: int | None = None):
-        _require_fencing(fencing_token)
         """Same shape as _mark_failed (cancelled counts toward the batch's
         `failed` aggregate — see batch_repo.cancel_batch / _mark_paused for the
         contrast), but writes the literal 'cancelled' status so callers can tell
         a deliberate cancel apart from a genuine error. CAS 带
         cancel_requested=true 期望（spec §6.1：取消按取消条件收口）。"""
+        _require_fencing(fencing_token)
         from utils import batch_repo, execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='CANCELLED')
@@ -2486,10 +2492,10 @@ class BatchWorker:
     def _mark_paused(self, session_id: str, batch_id: str | None,
                      generation: int | None = None,
                      fencing_token: int | None = None):
-        _require_fencing(fencing_token)
         """协作式暂停的落库：status='paused'。与 _mark_cancelled 的区别是**不占
         failed 计数**（暂停不是失败，批次还能整体 resume），error_message 留空。
         CAS 带 pause_requested=true 且 cancel 优先（spec §4.2：cancel > pause）。"""
+        _require_fencing(fencing_token)
         from utils import batch_repo, execution_audit
         execution_audit.finish_latest_running(session_id, 'stopped',
                                               error_code='PAUSED')
@@ -2580,10 +2586,10 @@ class BatchWorker:
     def _mark_needs_review(self, session_id: str, batch_id: str | None,
                            reason: str, generation: int | None = None,
                            fencing_token: int | None = None):
-        _require_fencing(fencing_token)
         """needs_review 终态（P1 spec §4.2）：无法自动安全继续，需人工判断，
         不得自动重放。计入 failed 聚合（与 cancelled 同桶），子任务行保留
         字面 'needs_review' 状态供管理面展示。"""
+        _require_fencing(fencing_token)
         from utils import batch_repo, execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='NEEDS_REVIEW',
@@ -2693,7 +2699,7 @@ class BatchWorker:
         """对账器把丢失的 running 行重新排队（retry_count 预算内，超限则失败）。"""
         with get_db() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT retry_count, fencing_token, status "
+                cur.execute("SELECT retry_count, fencing_token "
                             "FROM ai_chat_sessions WHERE id=%s",
                             (session_id,))
                 row = cur.fetchone()

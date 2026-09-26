@@ -1273,7 +1273,9 @@ def admin_soft_delete_child(batch_id: str, sid: str) -> dict | None:
             )
         conn.commit()
     from utils.batch_engine import _recompute_batch_status
-    _recompute_batch_status(batch_id)
+    # H7④（12 号 §4.1）：admin 软删重算有刚转移的 sid 可锚定——真触发
+    # 终态回调时 effect 落在该子会话上，不靠 tiebreaker 兜底
+    _recompute_batch_status(batch_id, anchor_sid=sid)
     return {'seq': row['batch_seq'], 'status': row['status'],
             'deletedAt': deleted_at.isoformat() if deleted_at else None}
 

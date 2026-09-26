@@ -175,12 +175,8 @@ def test_h4_concurrent_advance_dispatches_once(db_conn, user_id, monkeypatch,
                     "WHERE run_id=%s", (run['id'],))
         assert cur.fetchone()[0] == 1
 
-    # 清理
-    with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions WHERE user_id=%s", (user_id,))
-        cur.execute("DELETE FROM ai_orchestration_runs WHERE requested_by=%s", (user_id,))
-        cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
-    db_conn.commit()
+    # 清理交给 user_id fixture（12 号 §4.2：函数内先删 run 会让 teardown
+    # 的「按 run 回收事件」子查询落空 → 每轮泄漏 8 条编排事件）
 
 
 # ---------------------------------------------------------------------------
@@ -556,15 +552,21 @@ def test_m9_artifact_dedup_scoped_by_owner(db_conn, user_id, monkeypatch,
 # ---------------------------------------------------------------------------
 
 def test_m8_orchestration_cleanup_spares_real_form(db_conn):
+    """12 号 §4.1：清理判定收紧——只认 fixture 生成模式（p2_user_/gap_user_）
+    与测试直插 SQL 的 NULL requested_by run；测试风名字的存活用户
+    （e2e_zhang 等）不被删。base（宽 LIKE e2e%/%-test）上第一断言失败。"""
     from tests.test_orchestration_p2 import _clear_other_pending
     uid = str(uuid.uuid4())
+    gone_uid = str(uuid.uuid4())
     run_id = str(uuid.uuid4())
+    gone_run_id = str(uuid.uuid4())
     sid = str(uuid.uuid4())
+    gone_sid = str(uuid.uuid4())
     with db_conn.cursor() as cur:
         cur.execute(
             "INSERT INTO users (id, username, password_hash, display_name, role) "
             "VALUES (%s, %s, 'x', %s, 'developer')",
-            (uid, f'realform_{uid[:8]}', f'REAL {uid[:8]}'))
+            (uid, f'e2e_zhang_{uid[:8]}', f'REAL {uid[:8]}'))  # 测试风名字的存活用户
         cur.execute(
             "INSERT INTO ai_orchestration_runs (id, definition_id, "
             "  definition_version, status, requested_by, run_input_snapshot) "
@@ -573,19 +575,38 @@ def test_m8_orchestration_cleanup_spares_real_form(db_conn):
             "INSERT INTO ai_chat_sessions (id, user_id, status, "
             "  orchestration_run_id, orchestration_step_id) "
             "VALUES (%s, %s, 'pending', %s, 'step-x')", (sid, uid, run_id))
+        # 崩溃残留形态：fixture 模式命名的用户 + 其 run 与 pending 子会话
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, display_name, role) "
+            "VALUES (%s, %s, 'x', %s, 'developer')",
+            (gone_uid, f'p2_user_{gone_uid[:8]}', f'GONE {gone_uid[:8]}'))
+        cur.execute(
+            "INSERT INTO ai_orchestration_runs (id, definition_id, "
+            "  definition_version, status, requested_by, run_input_snapshot) "
+            "VALUES (%s, 'def-x', 1, 'running', %s, '{}')",
+            (gone_run_id, gone_uid))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, "
+            "  orchestration_run_id, orchestration_step_id) "
+            "VALUES (%s, %s, 'pending', %s, 'step-x')",
+            (gone_sid, gone_uid, gone_run_id))
     db_conn.commit()
     try:
         _clear_other_pending(db_conn)
         with db_conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE id=%s",
                         (sid,))
-            assert cur.fetchone()[0] == 1        # 真实形态不被删（base: 0）
+            assert cur.fetchone()[0] == 1        # 测试风名字的存活用户不被删
+            cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE id=%s",
+                        (gone_sid,))
+            assert cur.fetchone()[0] == 0        # fixture 模式用户的残留被回收
     finally:
         with db_conn.cursor() as cur:
-            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
-            cur.execute("DELETE FROM ai_orchestration_runs WHERE id=%s",
-                        (run_id,))
-            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id IN (%s, %s)",
+                        (sid, gone_sid))
+            cur.execute("DELETE FROM ai_orchestration_runs WHERE id IN (%s, %s)",
+                        (run_id, gone_run_id))
+            cur.execute("DELETE FROM users WHERE id IN (%s, %s)", (uid, gone_uid))
         db_conn.commit()
 
 
@@ -632,3 +653,168 @@ def test_m3_orchestration_child_gates(db_conn, user_id, gap_internal_client):
             cur.execute("DELETE FROM ai_orchestration_runs WHERE id=%s",
                         (run_id,))
         db_conn.commit()
+
+
+def test_m3_subtask_compact_ownership_404(db_conn, user_id, gap_internal_client,
+                                          tmp_path):
+    """12 号 §6-3：子任务 compact 的归属 404 路径——子任务属于同 owner 的
+    其他会话（root 不匹配 URL sid）→ 404，不能凭 owner 枚举。"""
+    uid = 'user-admin'
+    sid = str(uuid.uuid4())
+    other_root = str(uuid.uuid4())
+    stid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, "
+            "  opencode_session_id, workspace_path) "
+            "VALUES (%s, %s, 'completed', 'oc-x', %s)", (sid, uid, str(tmp_path)))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status) "
+            "VALUES (%s, %s, 'completed')", (other_root, uid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, "
+            "  status) VALUES (%s, %s, 'build', 'completed')",
+            (stid, other_root))
+    db_conn.commit()
+    client, hdrs = gap_internal_client
+    try:
+        r = client.post(f'/ai/chat/sessions/{sid}/subtasks/{stid}/compact',
+                        headers=hdrs)
+        assert r.status_code == 404
+        assert r.get_json()['code'] == 'SUBTASK_NOT_FOUND'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_subtasks WHERE id=%s", (stid,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id IN (%s, %s)",
+                        (sid, other_root))
+        db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# H7③（12 号 §3 必修）：真实 deliver_one 读 _fire_single_webhook 返回值——
+# HTTP 2xx/4xx/超时三分分类，unknown 生产可达
+# ---------------------------------------------------------------------------
+
+def _seed_outbox_and_effect(db_conn, bid, sid):
+    oid = 'obx-cls-' + uuid.uuid4().hex[:8]
+    eid = 'evt-cls-' + uuid.uuid4().hex[:8]
+    key = f'outbox:{eid}'
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_delivery_outbox (id, event_id, batch_id, event_type, "
+            "  target_url, payload, signature, idempotency_key, status, "
+            "  next_retry_at, attempt_count) "
+            "VALUES (%s, %s, %s, 't', 'http://cb/x', '{}', '', %s, 'pending', "
+            "  NOW(), 0)", (oid, eid, bid, key))
+    db_conn.commit()
+    from utils.execution_effect import record_effect
+    record_effect(sid, 'callback', key, batch_id=bid)
+    return oid, key
+
+
+def test_deliver_one_real_classification(db_conn, user_id, monkeypatch):
+    """网络层打桩（requests.post），走**真实** _fire_single_webhook +
+    deliver_one（12 号 §6-2：monkeypatch deliver_one 不构成生产证据）。"""
+    import requests as _rq
+    import utils.webhook_engine as wh
+    from utils import delivery_outbox
+
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+
+    def _run(fake_post, expect_outbox, expect_effect):
+        oid, key = _seed_outbox_and_effect(db_conn, bid, sid)
+        monkeypatch.setattr(wh.requests, 'post', fake_post)
+        monkeypatch.setattr(delivery_outbox, 'BACKOFF_SECONDS', [0, 0, 0, 0, 0])
+        delivery_outbox.drain_due_once()
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM ai_delivery_outbox WHERE id=%s",
+                            (oid,))
+                assert cur.fetchone()[0] == expect_outbox, expect_outbox
+                cur.execute("SELECT status FROM ai_execution_effects "
+                            "WHERE idempotency_key=%s", (key,))
+                assert cur.fetchone()[0] == expect_effect, expect_effect
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_delivery_outbox WHERE id=%s", (oid,))
+            cur.execute("DELETE FROM ai_execution_effects WHERE idempotency_key=%s",
+                        (key,))
+        db_conn.commit()
+
+    ok = type('R', (), {'status_code': 200, 'text': 'ok', 'raise_for_status': lambda s: None})()
+    # 2xx → delivered + committed
+    _run(lambda *a, **k: ok, 'delivered', 'committed')
+    # 500（确定性否定）→ failed/退避 + effect failed（修复前记 delivered+committed）
+    err500 = type('R', (), {'status_code': 500, 'text': 'boom',
+                            'raise_for_status': lambda s: None})()
+    _run(lambda *a, **k: err500, 'failed', 'failed')
+    # 超时（无响应）→ 退避 + effect unknown（修复前记 delivered+committed）
+    _run(lambda *a, **k: (_ for _ in ()).throw(_rq.exceptions.Timeout('t')),
+         'failed', 'unknown')
+
+
+def test_settle_unknown_can_fail_later(db_conn, user_id):
+    """12 号 §4.3：unknown 粘滞缓解——后续拿到确定性否定（dead_letter 时
+    4xx）允许 unknown → failed；committed 仍粘性。"""
+    from utils.execution_effect import record_effect, settle_effect_by_key
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    key = f'obx-uf-{uuid.uuid4().hex[:8]}'
+    record_effect(sid, 'callback', key, batch_id=bid)
+    assert settle_effect_by_key('callback', key, 'unknown') is True
+    assert settle_effect_by_key('callback', key, 'failed') is True   # 12 号新增
+    assert settle_effect_by_key('callback', key, 'committed') is True
+    assert settle_effect_by_key('callback', key, 'unknown') is False  # 粘性
+
+
+def test_drain_heartbeat_per_row(db_conn, user_id, monkeypatch):
+    """12 号 §6-4：drain 逐行续租回调真实被调用（TTL 窗口关闭的可测面）。"""
+    from utils import delivery_outbox
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    oids = []
+    for i in range(2):
+        oid = f'obx-hb{i}-' + uuid.uuid4().hex[:8]
+        eid = f'evt-hb{i}-' + uuid.uuid4().hex[:8]
+        oids.append(oid)
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_delivery_outbox (id, event_id, batch_id, "
+                "  event_type, target_url, payload, signature, idempotency_key, "
+                "  status, next_retry_at, attempt_count) "
+                "VALUES (%s, %s, %s, 't', 'http://cb/x', '{}', '', %s, "
+                "  'pending', NOW(), 0)", (oid, eid, bid, f'k-{eid}'))
+    db_conn.commit()
+    beats = {'n': 0}
+    monkeypatch.setattr(delivery_outbox, 'BACKOFF_SECONDS', [0, 0, 0, 0, 0])
+    monkeypatch.setattr(delivery_outbox, 'deliver_one', lambda row: True)
+    delivery_outbox.drain_due_once(heartbeat_fn=lambda: beats.__setitem__(
+        'n', beats['n'] + 1))
+    assert beats['n'] == 2                          # 每行一次
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_delivery_outbox WHERE id = ANY(%s)", (oids,))
+    db_conn.commit()
+
+
+def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
+                                                        monkeypatch):
+    """M14 outbox 侧（12 号 §2.2-8：代码对齐但零测试）：入队失败只回滚
+    入队本身，外层终态事务写入存活。"""
+    from utils import delivery_outbox
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    monkeypatch.setattr(delivery_outbox, '_insert',
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            RuntimeError('boom')))
+    with get_db() as conn:
+        cur = conn.cursor()
+        out = delivery_outbox.enqueue(bid, target_url='http://cb/x',
+                                      payload={'e': 1}, secret='',
+                                      event_id='evt-x', conn=conn)
+        assert out is None                          # 入队失败返回 None
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' "
+                    "WHERE id=%s", (sid,))
+        conn.commit()                               # 外层提交不被毒化
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sid,))
+            assert cur.fetchone()[0] == 'completed'

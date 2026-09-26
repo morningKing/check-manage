@@ -53,20 +53,20 @@ def record_effect(session_id: str, effect_type: str, idempotency_key: str, *,
                 'result_hash': row[3]}
 
     if conn is not None:
-        cur = conn.cursor()
-        try:
-            cur.execute('SAVEPOINT eff_rec')
-            out = _run(cur)
-            cur.execute('RELEASE SAVEPOINT eff_rec')
-            return out
-        except Exception as e:  # noqa: BLE001
+        with conn.cursor() as cur:
             try:
-                cur.execute('ROLLBACK TO SAVEPOINT eff_rec')
-            except Exception:  # noqa: BLE001
-                pass
-            logger.warning('effect record failed sid=%s key=%s: %s',
-                           session_id, idempotency_key, e)
-            return None
+                cur.execute('SAVEPOINT eff_rec')
+                out = _run(cur)
+                cur.execute('RELEASE SAVEPOINT eff_rec')
+                return out
+            except Exception as e:  # noqa: BLE001
+                try:
+                    cur.execute('ROLLBACK TO SAVEPOINT eff_rec')
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning('effect record failed sid=%s key=%s: %s',
+                               session_id, idempotency_key, e)
+                return None
     try:
         from db import get_db
         with get_db() as conn2:
@@ -84,7 +84,9 @@ def settle_effect(effect_id: str, status: str, *,
                   external_ref: str | None = None,
                   result_hash: str | None = None) -> bool:
     """planned/started → 终态；failed/unknown → committed（后续退避重试
-    成功或人工重放成功的正向收口，10 号 §3.2）。幂等：committed 后不再改。"""
+    或人工重放成功的正向收口）；unknown → failed（后续拿到确定性否定，
+    12 号 §4.3：避免首次超时即粘滞 unknown、永久阻断自动恢复）。
+    committed 粘性：终态不可再改。"""
     if status not in ('committed', 'failed', 'unknown', 'compensated'):
         raise ValueError(f'invalid effect status: {status}')
     try:
@@ -100,9 +102,10 @@ def settle_effect(effect_id: str, status: str, *,
                     "WHERE id = %s "
                     "  AND (status IN ('planned', 'started') "
                     "       OR (status IN ('failed', 'unknown') "
-                    "           AND %s = 'committed'))",
+                    "           AND %s = 'committed') "
+                    "       OR (status = 'unknown' AND %s = 'failed'))",
                     (status, external_ref, result_hash, status, effect_id,
-                     status),
+                     status, status),
                 )
                 ok = cur.rowcount > 0
             conn.commit()

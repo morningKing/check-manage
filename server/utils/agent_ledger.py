@@ -228,6 +228,18 @@ def _validate_effect_spec(check_type, spec, idx):
     raise ValueError(f'action_checks[{idx}].check_type 不支持: {check_type}')
 
 
+def validate_pg_regex(pattern: str) -> None:
+    """以 PG `~` 口径校验正则（12 号 §7-5：核对执行与 dry-run 与登记三处
+    同一口径）。非法抛 ValueError——调用方据此返回 400。"""
+    try:
+        from db import get_db as _gdb
+        with _gdb() as _conn:
+            with _conn.cursor() as _cur:
+                _cur.execute("SELECT '' ~ %s", (pattern,))
+    except Exception as e:
+        raise ValueError(f'不是合法的 PostgreSQL 正则: {e}')
+
+
 def validate_checks(checks) -> list:
     """规范化并校验 action_checks 数组;非法抛 ValueError(创建接口回 400)。"""
     if checks in (None, []):
@@ -260,15 +272,9 @@ def validate_checks(checks) -> list:
             # 拒绝的方言（如 `(?P<x>a)` embedded flag 命名组）会登记成"永远
             # 无法核对"的期望——登记时就以 PG 口径拒绝
             try:
-                from db import get_db as _gdb
-                with _gdb() as _conn:
-                    with _conn.cursor() as _cur:
-                        _cur.execute("SELECT '' ~ %s", (pattern,))
-            except ValueError:
-                raise
-            except Exception as e:
-                raise ValueError(
-                    f'action_checks[{i}].args_pattern 不是合法的 PostgreSQL 正则: {e}')
+                validate_pg_regex(pattern)
+            except ValueError as e:
+                raise ValueError(f'action_checks[{i}].args_pattern {e}')
         else:
             tool = tool or check_type
         scope = (c.get('scope') or 'tree').strip()

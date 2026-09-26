@@ -54,8 +54,8 @@ def _clear_other_pending(db_conn, keep_bid):
         cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
                     " WHERE s.batch_id = b.id AND s.status='pending' "
                     "   AND b.id <> %s "
-                    "   AND (b.name LIKE 'AITEST-%%' OR b.name LIKE 'e2e%%' "
-                    "        OR b.name LIKE '%%-test' OR b.name IN ('engine-test', 'pause-test'))",
+                    "   AND (b.name LIKE 'AITEST-%%' OR b.name IN ('p0-test', "
+                    "        'p1-test', 'engine-test', 'pause-test', 'gap-test'))",
                     (keep_bid,))
     db_conn.commit()
 

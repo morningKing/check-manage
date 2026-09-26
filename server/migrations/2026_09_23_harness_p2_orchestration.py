@@ -122,7 +122,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   expires_at  TIMESTAMPTZ
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_artifact_sha ON artifacts(sha256, name);
+-- 唯一索引由 2026_09_25_artifact_owner_scope.py 统一创建（owner 隔离口径）。
+-- 此处不得再建全局 uniq_artifact_sha：boot 重放会在 M9 DROP 之后复活全局
+-- 去重索引，与 owner 隔离冲突（12 号 §4.3）。
 
 CREATE TABLE IF NOT EXISTS artifact_refs (
   id          VARCHAR(100) PRIMARY KEY,

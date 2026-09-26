@@ -171,27 +171,34 @@ def _redact(url):
 def deliver_one(row: dict) -> bool | str:
     """投递单行（复用 webhook_engine 的 HMAC 与 HTTP）。
 
-    返回 True（成功）/ False（确定性失败，如 4xx）/ 'uncertain'（超时或
-    连接类异常——结局未知，effect 落 unknown 触发 fail-safe）。兼容旧
-    bool 消费方。"""
+    `_fire_single_webhook` 内部自捕获 requests 异常并返回结果 dict
+    （12 号 §3.1：此前无条件 return True，HTTP 失败被记成投递成功）——
+    必须读返回值分类：
+      True        2xx；
+      False       确定性失败（有 HTTP 状态码的 4xx/5xx）→ 退避重试/最终 dead_letter；
+      'uncertain' 无响应（超时/连接拒绝/DNS）→ 结局未知，effect 落 unknown 触发 fail-safe。
+    兼容旧 bool 消费方（drain_due_once 以 `is True` 判成功）。"""
     import json as _json
-    import requests as _requests
     from utils.webhook_engine import _fire_single_webhook
     try:
-        _fire_single_webhook(
+        res = _fire_single_webhook(
             rule_id=f'outbox-{row["id"]}', rule_name='AI批任务完成回调(outbox)',
             webhook_url=row['target_url'], secret=row['signature'] or '',
             event_type=row['event_type'],
             payload=_json.loads(row['payload']) if isinstance(row['payload'], str)
             else row['payload'],
             timeout=30, retries=0,  # 重试由 outbox 自己的退避管理
-        )
-        return True
-    except (_requests.exceptions.Timeout,
-            _requests.exceptions.ConnectionError) as e:
-        logger.warning('outbox deliver uncertain id=%s: %s', row['id'], e)
+        ) or {}
+        if res.get('success'):
+            return True
+        if res.get('responseStatus') is not None:
+            logger.warning('outbox deliver failed id=%s: HTTP %s', row['id'],
+                           res.get('responseStatus'))
+            return False
+        logger.warning('outbox deliver uncertain id=%s: %s', row['id'],
+                       res.get('errorMessage'))
         return 'uncertain'
-    except Exception as e:  # noqa: BLE001 —— 投递失败进退避
+    except Exception as e:  # noqa: BLE001 —— 兜底（_fire 正常不抛）；非 HTTP 异常按失败进退避
         logger.warning('outbox deliver failed id=%s: %s', row['id'], e)
         return False
 
