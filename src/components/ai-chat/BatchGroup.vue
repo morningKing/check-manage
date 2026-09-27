@@ -2,7 +2,7 @@
   <div class="batch-group">
     <div class="batch-group__head" :class="{ open: expanded }" @click="toggle">
       <ElIcon class="caret"><ArrowRight v-if="!expanded" /><ArrowDown v-else /></ElIcon>
-      <span class="bg-name">{{ batch.name }}</span>
+      <span class="bg-name" :title="batch.name">{{ batch.name }}</span>
       <ElIcon class="bg-id-copy" title="复制批任务 ID"
               @click.stop="copyId(batch.id, '批任务')"><DocumentCopy /></ElIcon>
       <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
@@ -202,7 +202,11 @@ async function onConfigSaved() { if (expanded.value) await store.selectBatch(pro
 .batch-group__head { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
   cursor: pointer; border-radius: 6px; font-size: 13px; flex-wrap: wrap; }
 .batch-group__head:hover { background: var(--el-fill-color-light); }
-.bg-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 标题独占整行自由折行（不限行数），任意长度的任务名都完整可读；
+   状态/进度/操作等元素自然换行到标题下方；悬浮 title 可看全文；
+   word-break 兜底无空格长串（如 AITEST-<时间戳>）也能折行 */
+.bg-name { font-weight: 600; flex: 1 1 auto; min-width: 0;
+  overflow-wrap: anywhere; line-height: 1.3; }
 .bg-meta, .bg-am { color: var(--el-text-color-secondary); font-size: 11px; }
 .bg-am { flex-basis: 100%; padding-left: 22px; }
 .bg-actions { display: flex; gap: 6px; }
