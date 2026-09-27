@@ -11,6 +11,7 @@ Guarded by the shared MCP_INTERNAL_TOKEN (同 ai_memory_internal)。转发范围
 白名单收紧——只有动态数据单条写与数据菜单创建，其它任何路径/方法一律 403；
 不提供 GET（MCP 侧读取走 query_collection 直连 DB 的既有通道）。
 """
+import json
 import re
 
 from flask import Blueprint, current_app, jsonify, request
@@ -88,10 +89,38 @@ def internal_execute():
     # 进程内 WSGI 转发（非回环网络请求）：动态数据路由是 Flask 视图函数内联
     # 逻辑（request/g 耦合），test_client 是复用它们的唯一不动现有代码的方式。
     # 每次调用独立请求上下文，与并发请求互不干扰。
+    # P1 §4.3 effect 账本：MCP 数据写副作用按 (session, method, path,
+    # payload_hash) 幂等登记——planned → committed/failed（unknown 交给
+    # needs_review 禁自动重放）。sessionId 由 MCP 侧随 token 上下文透传，
+    # 旧调用方不带时跳过登记（向后兼容）。
+    session_id = (payload.get('sessionId') or '').strip() or None
+    effect_key = None
+    if session_id:
+        try:
+            import hashlib as _hashlib
+            _body_json = json.dumps(body or {}, ensure_ascii=False,
+                                    default=str, sort_keys=True)
+            _body_hash = _hashlib.sha256(
+                _body_json.encode('utf-8')).hexdigest()[:16]
+            effect_key = f'{session_id}:{method}:{path}:{_body_hash}'
+            from utils.execution_effect import record_effect
+            record_effect(session_id, 'mcp_write', effect_key)
+        except Exception:
+            effect_key = None  # 登记失败不阻断写路径（副作用照常执行）
+
     resp = current_app._get_current_object().test_client().open(
         path, method=method, json=body if body is not None else None,
         headers={'Authorization': f'Bearer {token}'})
     parsed = resp.get_json(silent=True)
+    if effect_key:
+        try:
+            from utils.execution_effect import settle_effect_by_key
+            ok2 = resp.status_code < 400
+            settle_effect_by_key('mcp_write', effect_key,
+                                 'committed' if ok2 else 'failed',
+                                 external_ref=f'{method} {path}')
+        except Exception:
+            pass
     return jsonify({'status': resp.status_code,
                     'body': parsed if parsed is not None
                     else resp.get_data(as_text=True)[:2000]})

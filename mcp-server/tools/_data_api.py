@@ -65,7 +65,8 @@ def execute(ctx: ToolContext, method: str, path: str, body=None) -> dict:
     """转发一次写请求，返回路由的 JSON 响应；非 2xx 抛 DataApiError。"""
     resp = requests.post(
         _backend_base() + '/ai/data-internal/execute',
-        json={'userId': ctx.user_id, 'method': method, 'path': path, 'body': body},
+        json={'userId': ctx.user_id, 'sessionId': getattr(ctx, 'session_id', None),
+              'method': method, 'path': path, 'body': body},
         headers={'X-Internal-Token': _internal_token(), 'Content-Type': 'application/json'},
         timeout=120,
     )

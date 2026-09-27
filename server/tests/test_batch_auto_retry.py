@@ -264,6 +264,13 @@ def test_reconcile_404_marks_failed_with_accurate_reason(db_conn, user_id,
 def test_reconcile_alive_session_requeues(db_conn, user_id, claim_guard, monkeypatch):
     import utils.batch_engine as eng
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-alive')
+    # 有进度证据（消息）→ 走原地续跑（批次 2 起裸场景改 failed(retryable)）
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'assistant', %s)",
+            (f'{sid}:asst1', sid, '[{"type":"text","text":"进行中"}]'))
+    db_conn.commit()
     worker = eng.BatchWorker()
     _patch_oc(monkeypatch, get_messages=staticmethod(lambda oc, directory='': []))
 
@@ -306,6 +313,12 @@ def test_reconcile_budget_exhausted_fails(db_conn, user_id, claim_guard, monkeyp
     bid, sid = _seed_running(db_conn, user_id, claim_guard, oc='oc-alive')
     with db_conn.cursor() as cur:
         cur.execute("UPDATE ai_chat_sessions SET retry_count=2 WHERE id=%s", (sid,))
+        # 有进度证据（消息）→ 不走「无进度证据」分支，落到预算路径
+        # （批次 2 起：裸场景改走 failed(retryable) 无进度证据分支）
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'assistant', %s)",
+            (f'{sid}:asst1', sid, '[{"type":"text","text":"进行中"}]'))
     db_conn.commit()
     worker = eng.BatchWorker()
     _patch_oc(monkeypatch, get_messages=staticmethod(lambda oc, directory='': []))

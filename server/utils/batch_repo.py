@@ -554,6 +554,17 @@ def resume_batch(user_id: str, batch_id: str, *,
                 (RESUME_CONTINUE_PROMPT, batch_id),
             )
             count = cur.rowcount
+            # 竞态矩阵（P0 §12）：cancel_batch 只对 pending 行置标志，worker
+            # 未及 pre-claim 时会留下「pending 且 cancel_requested=true」——
+            # resume 必须一并清除，否则该行被 claim 后立即取消（僵死组合）。
+            # 放在 count 捕获之后：rowcount 属于上一条 UPDATE
+            cur.execute(
+                "UPDATE ai_chat_sessions SET cancel_requested = false, "
+                "    pause_requested = false "
+                "WHERE batch_id = %s AND status = 'pending' "
+                "  AND (cancel_requested OR pause_requested)",
+                (batch_id,),
+            )
             if count and cancelled_n:
                 cur.execute(
                     "UPDATE ai_chat_batches SET failed = failed - %s WHERE id = %s",
@@ -1341,3 +1352,44 @@ def admin_get_child_messages(batch_id: str, session_id: str,
             rows = [dict(r) for r in cur.fetchall()]
     rows.reverse()
     return {'messages': rows, 'truncated': total > len(rows), 'total': total}
+
+
+def get_batch_progress_ext(batch_id: str) -> dict:
+    """P1 §8.3 对外状态扩展字段：generation / queueWaitMs / runningMs /
+    lastProgressAt。全部 best-effort——任一失败返回空 dict，不进对外主契约。"""
+    import datetime as _dt
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT max(execution_generation), max(last_active_at) "
+                    "FROM ai_chat_sessions WHERE batch_id = %s", (batch_id,))
+                gen, last_progress = cur.fetchone()
+                cur.execute(
+                    "SELECT b.created_at, "
+                    "       min(s.created_at) FILTER (WHERE s.status IN "
+                    "         ('running','completed','failed','cancelled','partial')) "
+                    "FROM ai_chat_batches b LEFT JOIN ai_chat_sessions s "
+                    "  ON s.batch_id = b.id "
+                    "WHERE b.id = %s GROUP BY b.created_at", (batch_id,))
+                created_at, first_started = cur.fetchone()
+                cur.execute("SELECT completed_at FROM ai_chat_batches "
+                            "WHERE id = %s", (batch_id,))
+                completed_at = (cur.fetchone() or [None])[0]
+        out = {'generation': gen}
+        if created_at and first_started:
+            out['queueWaitMs'] = int(
+                (first_started - created_at).total_seconds() * 1000)
+        if first_started:
+            end_at = completed_at or _dt.datetime.now(_dt.timezone.utc)
+            if completed_at is None and first_started.tzinfo is None:
+                end_at = _dt.datetime.now()
+            out['runningMs'] = int(abs(
+                (end_at - first_started).total_seconds() * 1000))
+        if last_progress is not None:
+            out['lastProgressAt'] = (last_progress.isoformat()
+                                     if hasattr(last_progress, 'isoformat')
+                                     else str(last_progress))
+        return out
+    except Exception:
+        return {}

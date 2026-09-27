@@ -77,5 +77,18 @@ def import_recorded_files(session_id, workspace_path, paths, uploaded_by=None,
                             'code': 'TOO_LARGE' if too_large else 'IMPORT_FAILED'})
             continue
         set_data_file_id(session_id, p, meta['id'])
+        # P1 §4.3 effect 账本：文件导入副作用 key=(session, path, 内容 hash)
+        try:
+            import hashlib as _hashlib
+            with open(abs_path, 'rb') as _f:
+                _ch = _hashlib.sha256(_f.read()).hexdigest()[:16]
+            from utils.execution_effect import record_effect, settle_effect
+            _eff = record_effect(session_id, 'file_import',
+                                 f'{session_id}:{p}:{_ch}')
+            if _eff:
+                settle_effect(_eff['id'], 'committed',
+                              external_ref=str(meta.get('id')))
+        except Exception:
+            pass  # 账本 best-effort，不反向影响导入
         results.append({'path': p, 'status': 'imported', 'file': meta})
     return results

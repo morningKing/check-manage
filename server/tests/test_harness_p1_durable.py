@@ -164,7 +164,9 @@ def test_reconcile_unknown_effect_needs_review(db_conn, user_id, monkeypatch):
 
 
 def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch):
-    """lease 过期 + oc 会话活着 → 原地续跑（pending + continue_prompt）。"""
+    """lease 过期 + oc 会话活着 + 有进度证据（消息）→ 原地续跑。
+    （批次 2 起：无 checkpoint/消息/副作用的裸场景改走 failed(retryable)，
+    见 test_reconcile_no_progress_evidence_fails。）"""
     from unittest.mock import MagicMock
     import utils.batch_engine as eng
     from utils.batch_engine import BatchWorker
@@ -172,6 +174,13 @@ def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch
     _set_child(db_conn, sids[0], status='running', lease_owner='gone',
                lease_until=datetime.now() - timedelta(seconds=60),
                opencode_session_id='oc-alive', execution_generation=1)
+    # 进度证据：至少一条已持久化消息（对账器据此选择续跑而非失败）
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+            "VALUES (%s, %s, 'assistant', %s)",
+            (f'{sids[0]}:asst1', sids[0], '[{"type":"text","text":"进行中"}]'))
+    db_conn.commit()
     fake = MagicMock()
     fake.get_messages.return_value = [{'info': {'role': 'assistant'}}]
     monkeypatch.setattr(eng, 'opencode_client', fake)
@@ -184,6 +193,125 @@ def test_reconcile_alive_session_requeues_continue(db_conn, user_id, monkeypatch
     assert status == 'pending'
     assert cp and '继续' in cp
     assert gen == 2  # 重排换代（写回校验用），continue 语义不变
+
+
+def test_reconcile_no_progress_evidence_fails(db_conn, user_id, monkeypatch):
+    """批次 2（P1 §4.2 末行）：lease 过期 + oc 存活 + 无 checkpoint/消息/
+    副作用 → failed(retryable)，不再盲目原地续跑（无进度证据的静默重放
+    是 spec 明确禁止的）。"""
+    from unittest.mock import MagicMock
+    import utils.batch_engine as eng
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    _set_child(db_conn, sids[0], status='running', lease_owner='gone',
+               lease_until=datetime.now() - timedelta(seconds=60),
+               opencode_session_id='oc-noproof', execution_generation=1)
+    fake = MagicMock()
+    fake.get_messages.return_value = [{'info': {'role': 'assistant'}}]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    BatchWorker()._reconcile_stale_running()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, error_message FROM ai_chat_sessions "
+                    "WHERE id=%s", (sids[0],))
+        status, err = cur.fetchone()
+    assert status == 'failed'
+    assert '无任何进度证据' in (err or '')
+
+
+# ---------------------------------------------------------------------------
+# 2.5 故障注入（P1 §12.2）：send 后 kill / 投递中 kill / reconcile OC 不可达
+# ---------------------------------------------------------------------------
+
+def test_fi_send_crash_after_delivery_requeues_with_continue(
+        db_conn, user_id, monkeypatch, tmp_path):
+    """send_message 成功后 executor 崩溃（轮询阶段抛 _TurnFailed/异常）→
+    自动重试换代续跑，不是静默丢失（spec §12.2「请求已送达但客户端超时」）。"""
+    from unittest.mock import MagicMock
+    import utils.batch_engine as eng
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    root = tmp_path
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    # 真实落暂存文件（p1 的 _seed_batch 不带 root 参数）
+    import os as _os
+    _rel = f'batch-staging/{user_id}/u1/f0.csv'
+    _dest = _os.path.join(str(root), _rel)
+    _os.makedirs(_os.path.dirname(_dest), exist_ok=True)
+    with open(_dest, 'w', encoding='utf-8') as _fh:
+        _fh.write('content-0')
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET batch_input_file=%s WHERE id=%s",
+                    (_rel, sids[0]))
+    _set_child(db_conn, sids[0], status='pending')
+    _clear_other_pending(db_conn, bid)
+    fake = MagicMock()
+    fake.create_session.return_value = 'oc-fi-1'
+    # dispatch 成功；轮询阶段连接断掉（模拟「请求已送达但客户端超时/崩溃」，
+    # spec §12.2）——RequestException 属可重试类 → auto-retry 换代续跑
+    fake.send_message.return_value = {'id': 'm1'}
+    fake.list_messages.return_value = [{'info': {'role': 'assistant'}}]
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    w = BatchWorker()
+    monkeypatch.setattr(w, 'MAX_AUTO_RETRY', 3)
+    monkeypatch.setattr(
+        w, '_await_finished',
+        lambda *a, **k: (_ for _ in ()).throw(
+            __import__('requests').exceptions.ConnectionError('client died')))
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])   # 不应向外抛：auto-retry 吸收
+    # auto-retry 已换代重排（pending + retry_count≥1）
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status, retry_count FROM ai_chat_sessions "
+                    "WHERE id=%s", (sids[0],))
+        row = cur.fetchone()
+    assert row[0] in ('pending', 'running'), row
+    assert row[1] >= 1
+
+
+def test_fi_delivery_crash_leaves_sending_row_reclaimed(db_conn, user_id,
+                                                        monkeypatch):
+    """投递中 kill 进程 → 行停留 sending；重投递循环按 M12 回收语义收敛
+    （最终 delivered），不永久卡死。"""
+    from utils import delivery_outbox
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    oid = 'obx-fi-' + uuid.uuid4().hex[:8]
+    eid = 'evt-fi-' + uuid.uuid4().hex[:8]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_delivery_outbox (id, event_id, batch_id, event_type, "
+            "  target_url, payload, signature, idempotency_key, status, "
+            "  next_retry_at, attempt_count) "
+            "VALUES (%s, %s, %s, 't', 'http://cb/x', '{}', '', %s, 'sending', "
+            "  NOW() - interval '20 minutes', 3)", (oid, eid, bid, f'k-{eid}'))
+    db_conn.commit()
+    monkeypatch.setattr(delivery_outbox, 'BACKOFF_SECONDS', [0, 0, 0, 0, 0])
+    monkeypatch.setattr(delivery_outbox, 'deliver_one', lambda row: True)
+    delivery_outbox.drain_due_once()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_delivery_outbox WHERE id=%s", (oid,))
+        assert cur.fetchone()[0] == 'delivered'
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_delivery_outbox WHERE id=%s", (oid,))
+    db_conn.commit()
+
+
+def test_fi_reconcile_skips_when_opencode_down(db_conn, user_id, monkeypatch):
+    """对账期间 OpenCode 整体不可达 → 跳过本轮（不批量误杀），下一轮再收口。"""
+    import requests as _rq
+    from unittest.mock import MagicMock
+    import utils.batch_engine as eng
+    from utils.batch_engine import BatchWorker
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    _set_child(db_conn, sids[0], status='running', lease_owner='gone',
+               lease_until=datetime.now() - timedelta(seconds=60),
+               opencode_session_id='oc-down', execution_generation=1)
+    fake = MagicMock()
+    fake.get_messages.side_effect = _rq.exceptions.ConnectionError('down')
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    BatchWorker()._reconcile_stale_running()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sids[0],))
+        assert cur.fetchone()[0] == 'running'   # 未被误杀
 
 
 # ---------------------------------------------------------------------------

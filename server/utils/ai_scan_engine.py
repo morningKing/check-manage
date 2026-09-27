@@ -139,6 +139,22 @@ def on_child_finished(session_row, final_msg, ok):
         _set_record_status(task, rid, task['failed_value'])
         return
     n = _write_back(task, rid, parsed)
+    # P1 §4.3 effect 账本：扫描回写副作用 key=(scan_task, record, 列值摘要)，
+    # 锚定执行回写的会话（session_row['id']）——恢复决策按会话判定
+    try:
+        import hashlib as _hashlib
+        _vals = {m['column']: parsed.get(m['jsonKey'])
+                 for m in task['field_mapping']}
+        _vh = _hashlib.sha256(
+            str(sorted(_vals.items())).encode('utf-8')).hexdigest()[:16]
+        from utils.execution_effect import record_effect, settle_effect
+        _eff = record_effect(session_row['id'], 'scan_writeback',
+                             f"{task['id']}:{rid}:{_vh}")
+        if _eff:
+            settle_effect(_eff['id'], 'committed' if n else 'failed',
+                          external_ref=f'record:{rid}')
+    except Exception:
+        pass  # 账本 best-effort，不影响回写本身
     if n == 0:
         # TV-03 回写失败：匹配 0 行
         from utils.scan_writeback_validator import (

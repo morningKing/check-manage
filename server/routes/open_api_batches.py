@@ -220,6 +220,11 @@ def _batch_out(b: dict) -> dict:
     `callbackSecret` 刻意不回显——调用方自己设置的密钥没必要在每次
     list/detail 轮询里明文回传；只回 `callbackUrl` 供确认当前配置。
     """
+    # P1 §8.3 状态扩展字段（增量，不破坏既有字段）：generation 取子会话
+    # 最大执行代数；queueWaitMs = 首个 running 起点距创建的等待；
+    # runningMs = 首个 running 起点至今/至终态；lastProgressAt = 最新子会话
+    # 活动时间。子会话行另有 generation/phase（见 _session_out）。
+    ext = _batch_progress_ext(b['id'])
     return {
         'batchId': b['id'],
         'name': b.get('name'),
@@ -233,7 +238,20 @@ def _batch_out(b: dict) -> dict:
         'createdAt': b['created_at'].isoformat() if b.get('created_at') else None,
         'completedAt': b['completed_at'].isoformat() if b.get('completed_at') else None,
         'usage': get_batch_usage(b['id']),
+        'generation': ext.get('generation'),
+        'queueWaitMs': ext.get('queueWaitMs'),
+        'runningMs': ext.get('runningMs'),
+        'lastProgressAt': ext.get('lastProgressAt'),
     }
+
+
+def _batch_progress_ext(batch_id: str) -> dict:
+    """扩展字段计算（best-effort，任何失败返回空 dict 不影响主契约）。"""
+    try:
+        from utils.batch_repo import get_batch_progress_ext
+        return get_batch_progress_ext(batch_id) or {}
+    except Exception:
+        return {}
 
 
 def _validate_callback_url(url: str | None):
@@ -1193,6 +1211,18 @@ def events(batch_id):
         limit = min(max(1, int(request.args.get('limit', 100))), 500)
     except (TypeError, ValueError):
         return err('afterSeq 与 limit 必须是整数', INVALID_ARGUMENT, 400)
+    # P1 §7.3：保留期裁剪后游标过旧 → CURSOR_EXPIRED（ earliest 存留 seq
+    # 已越过 afterSeq，中间的帧已按保留策略删除，无法补发）
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT min(event_seq) FROM ai_batch_events "
+                        "WHERE batch_id = %s", (batch_id,))
+            _row = cur.fetchone()
+    min_seq = _row[0] if _row and _row[0] is not None else None
+    if after_seq > 0 and min_seq is not None and after_seq < min_seq - 1:
+        return err(f'afterSeq 过旧：保留期内的最早事件为 {min_seq}，'
+                   '请从该位置重新拉取（earliestSeq=' + str(min_seq) + '）',
+                   'CURSOR_EXPIRED', 410)
     rows = batch_events.read_events(batch_id, after_seq=after_seq, limit=limit)
     out = [{'eventId': r['event_id'], 'eventSeq': r['event_seq'],
             'type': r['event_type'], 'at': r.get('createdAt'),

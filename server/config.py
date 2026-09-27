@@ -88,6 +88,9 @@ OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
 AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
+# P1 §9.3：终态批次工作区保留天数（scheduler 每日回收）；ai_batch_events 保留天数
+AI_WORKSPACE_RETENTION_DAYS = _to_int(os.getenv('AI_WORKSPACE_RETENTION_DAYS'), 30)
+AI_BATCH_EVENT_RETENTION_DAYS = _to_int(os.getenv('AI_BATCH_EVENT_RETENTION_DAYS'), 180)
 # Long-turn in-app notification (F9): when an interactive agent turn runs at
 # least this many seconds, the session owner gets a notification-center entry
 # on completion (even if the tab was closed). 0 disables.

@@ -67,7 +67,32 @@ def session_path(workspace_root: str, user_id: str, session_id: str) -> Path:
     return Path(workspace_root) / user_id / session_id
 
 
+def _tree_size_mb(path: Path) -> float:
+    """目录树占用（MB，best-effort——并发删除/权限错误按 0 计）。"""
+    total = 0
+    try:
+        for f in path.rglob('*'):
+            if f.is_file():
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total / (1024 * 1024)
+
+
 def create_session_workspace(workspace_root: str, user_id: str, session_id: str) -> str:
+    # P1 §9.3：`AI_WORKSPACE_QUOTA_MB` 落地——用户目录累计占用超配额时拒绝
+    # 新建 workspace（此前配置定义但从未消费）。超限抛 WorkspacePathError
+    # 子类语义的 ValueError，调用方（send/clear/claim 准备）返回明确错误。
+    from config import AI_WORKSPACE_QUOTA_MB
+    if AI_WORKSPACE_QUOTA_MB and AI_WORKSPACE_QUOTA_MB > 0:
+        user_dir = Path(workspace_root) / user_id
+        if user_dir.is_dir() and _tree_size_mb(user_dir) > AI_WORKSPACE_QUOTA_MB:
+            raise ValueError(
+                f'工作区配额已用尽（>{AI_WORKSPACE_QUOTA_MB}MB），'
+                '请清理旧会话文件或联系管理员调整配额')
     p = session_path(workspace_root, user_id, session_id)
     (p / "uploads").mkdir(parents=True, exist_ok=True)
     (p / "outputs").mkdir(parents=True, exist_ok=True)
@@ -312,3 +337,54 @@ def validate_staged_files(files, user_id: str) -> str | None:
         if not any(os.path.isfile(os.path.join(r, path)) for r in batch_roots()):
             return f'文件「{(f or {}).get("name") or path}」已过期或不存在，请重新上传'
     return None
+
+
+def reclaim_expired_workspaces(now=None) -> int:
+    """P1 §9.3：回收超过保留期的**终态批次**子会话工作区（默认 30 天）。
+
+    只清目录、不动 DB 行（审计与 results 契约不受影响）；mtime 以目录自身
+    时间戳近似（批次终态后不再有写入）。返回回收个数。best-effort。"""
+    import datetime as _dt
+    import os as _os
+    from config import AI_WORKSPACE_RETENTION_DAYS
+    if not AI_WORKSPACE_RETENTION_DAYS or AI_WORKSPACE_RETENTION_DAYS <= 0:
+        return 0
+    now = now or _dt.datetime.now()
+    cutoff = now - _dt.timedelta(days=AI_WORKSPACE_RETENTION_DAYS)
+    reclaimed = 0
+    root = _workspace_root_global()
+    if not root or not _os.path.isdir(root):
+        return 0
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.id, s.workspace_path FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON b.id = s.batch_id "
+                "WHERE s.workspace_path IS NOT NULL "
+                "  AND b.status IN ('completed','failed','partial') "
+                "  AND b.completed_at < %s LIMIT 500",
+                (cutoff,))
+            rows = cur.fetchall()
+    for sid, ws in rows:
+        try:
+            if not ws or not _os.path.isdir(ws):
+                continue
+            mtime = _dt.datetime.fromtimestamp(_os.path.getmtime(ws))
+            if mtime > cutoff:
+                continue
+            import shutil as _shutil
+            _shutil.rmtree(ws, ignore_errors=True)
+            if not _os.path.isdir(ws):
+                reclaimed += 1
+        except Exception:
+            continue
+    return reclaimed
+
+
+def _workspace_root_global():
+    try:
+        from config import AI_WORKSPACE_ROOT
+        return AI_WORKSPACE_ROOT
+    except Exception:
+        return None

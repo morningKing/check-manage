@@ -206,6 +206,33 @@ try:
         _sched = BackgroundScheduler(timezone='Asia/Shanghai')
         _sched.add_job(_audit_retention_daily, 'cron', hour=3, minute=17,
                        id='execution-audit-retention', replace_existing=True)
+        # P1 §9.3/§7.3：workspace 回收 + ai_batch_events 保留（同一每日作业）
+        def _workspace_and_events_retention_daily():
+            try:
+                from utils.workspace import reclaim_expired_workspaces
+                logging.info('workspace retention: reclaimed %s',
+                             reclaim_expired_workspaces())
+            except Exception as e3:
+                logging.warning('workspace retention failed: %s', e3)
+            try:
+                from config import AI_BATCH_EVENT_RETENTION_DAYS as _d
+                from db import get_db as _gdb
+                with _gdb() as _conn:
+                    with _conn.cursor() as _cur:
+                        _cur.execute(
+                            "DELETE FROM ai_batch_events "
+                            "WHERE created_at < NOW() - (%s || ' days')::interval",
+                            (str(_d),))
+                        _n = _cur.rowcount
+                    _conn.commit()
+                if _n:
+                    logging.info('batch events retention: pruned %s', _n)
+            except Exception as e3:
+                logging.warning('batch events retention failed: %s', e3)
+
+        _sched.add_job(_workspace_and_events_retention_daily, 'cron',
+                       hour=3, minute=41,
+                       id='workspace-events-retention', replace_existing=True)
         _sched.start()
         logging.info('SkillOpt retention scheduler started (03:17 daily)')
     except Exception as e2:

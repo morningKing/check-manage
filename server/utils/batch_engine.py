@@ -1279,6 +1279,17 @@ class BatchWorker:
                                            directory=ws, generation=generation,
                                            turn_label=turn_label,
                                            reuse_agents=reuse_agents)
+                # P1 §5.3 checkpoint 写入时机：progress（每进度去抖一次，
+                # 记录最新 oc 会话与代数——崩溃后恢复决策可证明「进行到哪」）
+                try:
+                    from utils import execution_checkpoint
+                    execution_checkpoint.write_checkpoint(
+                        sid, checkpoint_type='progress',
+                        attempt_id=audit_attempt_id,
+                        execution_generation=generation,
+                        opencode_session_id=oc_session_id)
+                except Exception:
+                    pass
             preview, final_msg = self._await_finished(
                 oc_session_id, sid, directory=ws,
                 on_progress=_persist_progress,
@@ -1322,6 +1333,23 @@ class BatchWorker:
             if fail_closed is not None:
                 gate_status = 'inconclusive'
                 err = fail_closed
+            # P0 §8.3：gate.evaluated 审计事件——门禁核对完成的确定性时间线
+            # （结论 + 缺失明细），best-effort 不阻断收口
+            if audit_attempt_id:
+                try:
+                    execution_audit.record_event(
+                        audit_attempt_id, 'gate.evaluated', session_id=sid,
+                        parent_session_id=oc_session_id,
+                        payload={
+                            'gateStatus': gate_status,
+                            'evaluated': len(gate.get('results') or []),
+                            'expected': (gate.get('expected') or 0),
+                            'failClosed': fail_closed is not None,
+                            'error': (fail_closed or '')[:200] or None,
+                        })
+                except Exception:
+                    pass
+            if fail_closed is not None:
                 logger.warning('action gate inconclusive -> fail-closed sid=%s: %s',
                                sid, err)
                 self._mark_failed(sid, batch_id, error=err, generation=generation,
@@ -2682,6 +2710,33 @@ class BatchWorker:
                     continue  # 其余 HTTP 状态：本轮跳过
                 except requests.exceptions.RequestException:
                     continue  # OpenCode 整体不可达：不批量误杀
+                # P1 §4.2 恢复决策消费 checkpoint：oc 存活但「无 checkpoint
+                # 且无副作用且无消息」→ 无进度证据，failed(retryable) 优于
+                # 静默重放（spec 末行）；其余维持原地续跑（docstring 取舍）
+                try:
+                    from utils import execution_checkpoint as _ckpt
+                    _has_ckpt = _ckpt.latest_checkpoint(sid) is not None
+                except Exception:
+                    _has_ckpt = True  # 判定基建异常 → 保守续跑
+                if not _has_ckpt:
+                    with get_db() as _c2:
+                        with _c2.cursor() as _cu:
+                            _cu.execute(
+                                "SELECT count(*) FROM ai_chat_messages "
+                                "WHERE session_id = %s", (sid,))
+                            _n_msgs = _cu.fetchone()[0]
+                            _cu.execute(
+                                "SELECT 1 FROM ai_execution_effects "
+                                "WHERE session_id = %s LIMIT 1", (sid,))
+                            _n_effects = 0 if _cu.fetchone() is None else 1
+                    if _n_msgs == 0 and _n_effects == 0:
+                        self._mark_failed(
+                            sid, batch_id,
+                            error='对账器发现执行线程丢失，且无任何进度证据'
+                                  '（checkpoint/消息/副作用均为空），已按可重试失败收口',
+                            fencing_token=fencing_token)
+                        self._emit_recovered(batch_id, sid, 'failed_no_progress')
+                        continue
                 self._requeue_lost(sid, continue_on_same=True, batch_id=batch_id)
                 self._emit_recovered(batch_id, sid, 'requeue_continue')
             except Exception:
@@ -2721,6 +2776,18 @@ class BatchWorker:
                     "WHERE id = %s AND status = 'running'",
                     (continue_on_same, self.AUTO_RETRY_CONTINUE_PROMPT, session_id))
                 requeued = cur.rowcount > 0
+                # P1 §5.3 checkpoint 写入时机：recovery（重排换代前的最后快照）
+                if requeued:
+                    try:
+                        from utils import execution_checkpoint
+                        execution_checkpoint.write_checkpoint(
+                            session_id, checkpoint_type='recovery',
+                            execution_generation=None,
+                            context_snapshot={
+                                'continueOnSame': continue_on_same,
+                                'retryCount': row[0] + 1})
+                    except Exception:
+                        pass
             conn.commit()
         if requeued:
             self._close_attempt_for_requeue(session_id, 'RECONCILE_REQUEUE')

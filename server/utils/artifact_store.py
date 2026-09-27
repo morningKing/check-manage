@@ -98,6 +98,22 @@ def ingest_session_outputs(session_id: str, workspace_path: str, *,
                            relation='output')
             if aid:
                 ids.append(aid)
+                # P1 §4.3 effect 账本：产物写盘副作用
+                # key=(session, 相对路径, sha256)——恢复时按 committed 幂等复用
+                if session_id:
+                    try:
+                        import hashlib as _hashlib
+                        _h2 = _hashlib.sha256()
+                        with open(p, 'rb') as _f:
+                            for _chunk in iter(lambda: _f.read(1 << 20), b''):
+                                _h2.update(_chunk)
+                        from utils.execution_effect import record_effect
+                        record_effect(session_id, 'artifact',
+                                      f'{session_id}:outputs/{fn}:'
+                                      f"{_h2.hexdigest()[:16]}",
+                                      batch_id=batch_id)
+                    except Exception:
+                        pass  # 账本 best-effort，不影响产物登记
     return ids
 
 

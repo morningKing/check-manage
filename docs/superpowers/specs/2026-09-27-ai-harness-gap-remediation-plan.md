@@ -21,14 +21,14 @@
 
 | # | 项 | 来源 | 内容 | 状态 |
 |---|---|---|---|---|
-| 2.1 | checkpoint 写入时机补全 | P1 §5.3 | worker 轮询循环写 `progress` checkpoint（去抖）；requeue 前写 `recovery` checkpoint | ⬜ |
-| 2.2 | 恢复决策消费 checkpoint | P1 §4.2 | reconcile 新增 spec 分支：oc 存活 + 无 checkpoint + 无副作用 + 无消息 → `failed(retryable)`（原盲目 requeue 收敛）；有 checkpoint/有消息维持原地续跑 | ⬜ |
-| 2.3 | effect 生产写入方 | P1 §4.3 | `mcp_write`（ai_data_internal）、`file_import`（import_recorded_files）、`scan_writeback`（回写路径）、`artifact`（orchestration ingest）四处按 spec key 登记 planned→committed/failed | ⬜ |
-| 2.4 | `AI_WORKSPACE_QUOTA_MB` 消费 | P1 §9.1/§9.3 | workspace 创建时按配额拒绝超限并告警事件 | ⬜ |
-| 2.5 | workspace retention 回收 | P1 §9.3 | scheduler 每日任务：终态批次工作区超 `AI_WORKSPACE_RETENTION_DAYS`（默认 30）回收 | ⬜ |
-| 2.6 | 事件保留 + `CURSOR_EXPIRED` | P1 §7.3 | `ai_batch_events` 保留期任务（180 天默认）；`afterSeq` 早于最旧保留 seq → `CURSOR_EXPIRED` | ⬜ |
-| 2.7 | 对外状态扩展字段 | P1 §8.3 | `/v1/ai-batches` detail 增 `generation/queueWaitMs/runningMs/lastProgressAt`，子会话增 `phase` | ⬜ |
-| 2.8 | 故障注入测试 | P1 §12.2 | send 后 kill（RequestException 已执行）→ 续跑收敛；投递中 kill → sending 回收；reconcile 期间 OC 不可达跳过 | ⬜ |
+| 2.1 | checkpoint 写入时机补全 | P1 §5.3 | worker 轮询循环写 `progress` checkpoint（去抖）；requeue 前写 `recovery` checkpoint | ✅ |
+| 2.2 | 恢复决策消费 checkpoint | P1 §4.2 | reconcile 新增 spec 分支：oc 存活 + 无 checkpoint + 无副作用 + 无消息 → `failed(retryable)`（原盲目 requeue 收敛）；有 checkpoint/有消息维持原地续跑 | ✅ |
+| 2.3 | effect 生产写入方 | P1 §4.3 | `mcp_write`（ai_data_internal）、`file_import`（import_recorded_files）、`scan_writeback`（回写路径）、`artifact`（orchestration ingest）四处按 spec key 登记 planned→committed/failed | ✅ |
+| 2.4 | `AI_WORKSPACE_QUOTA_MB` 消费 | P1 §9.1/§9.3 | workspace 创建时按配额拒绝超限并告警事件 | ✅ |
+| 2.5 | workspace retention 回收 | P1 §9.3 | scheduler 每日任务：终态批次工作区超 `AI_WORKSPACE_RETENTION_DAYS`（默认 30）回收 | ✅ |
+| 2.6 | 事件保留 + `CURSOR_EXPIRED` | P1 §7.3 | `ai_batch_events` 保留期任务（180 天默认）；`afterSeq` 早于最旧保留 seq → `CURSOR_EXPIRED` | ✅ |
+| 2.7 | 对外状态扩展字段 | P1 §8.3 | `/v1/ai-batches` detail 增 `generation/queueWaitMs/runningMs/lastProgressAt`，子会话增 `phase` | ✅ |
+| 2.8 | 故障注入测试 | P1 §12.2 | send 后 kill（RequestException 已执行）→ 续跑收敛；投递中 kill → sending 回收；reconcile 期间 OC 不可达跳过 | ✅ |
 
 ## 批次 3：P2 编排补齐
 
