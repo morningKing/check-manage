@@ -38,6 +38,9 @@ def validate_definition(nodes, edges) -> tuple[list, list]:
                 'output_contract': n.get('output_contract') or None,
                 'retry': n.get('retry') or {},
                 'approval': n.get('approval') or {},
+                # 策略拦截（P2 §7.1，缺口补齐 3）：声明后 step 派发前先进审批
+                'approval_policy': n.get('approval_policy') or None,
+                'priority': int(n.get('priority') or 0),
                 'condition': n.get('condition') or None}
         if kind == 'agent' and not node['prompt_template']:
             raise ValueError(f'agent 节点 {nid} 必须有 prompt_template')

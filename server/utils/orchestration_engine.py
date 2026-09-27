@@ -279,8 +279,14 @@ def _advance_run_locked(run_id: str) -> None:
                         (s['id'],))
                     changed = True
 
-    # 2) runnable：可达 + 全部依赖 succeeded
-    for s in steps:
+    # 2) runnable：可达 + 全部依赖 succeeded。
+    # 调度（P2 §10 最小集，缺口补齐）：按节点声明的 priority 降序处理
+    # （同一轮内高优先级 step 先占启动名额）。
+    import os as _os
+    launch_budget = int(_os.getenv('AI_ORCH_MAX_LAUNCH_PER_TICK', '8'))
+    steps_sorted = sorted(
+        steps, key=lambda s: -int((s.get('node_def') or {}).get('priority') or 0))
+    for s in steps_sorted:
         if s['status'] != 'blocked' or s['node_id'] not in reached:
             continue
         deps_ok = all(
@@ -304,7 +310,27 @@ def _advance_run_locked(run_id: str) -> None:
             changed = True
             continue
         if s['kind'] == 'agent':
+            # 策略拦截（缺口补齐：P2 §7.1 策略拦截最小集）：节点声明
+            # approval_policy → 派发前先建审批；该 step 已存在 approved
+            # 请求时豁免（审批放行后不再重复拦截）
+            node_appr = (s.get('node_def') or {}).get('approval_policy')
+            if node_appr:
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT 1 FROM ai_approval_requests "
+                            "WHERE step_id = %s AND status = 'approved' "
+                            "LIMIT 1", (s['id'],))
+                        released = cur.fetchone() is not None
+                if not released:
+                    _open_policy_approval(run, s, node_appr)
+                    changed = True
+                    continue
+            # 背压（P2 §10）：每轮 _advance_run 的 agent 派发数有上限
+            if launch_budget <= 0:
+                continue
             _launch_agent_step(run, s, by_node)
+            launch_budget -= 1
             changed = True
 
     # 3) run 状态派生（spec §6.1 第 8 步）
@@ -413,6 +439,40 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
     batch_events.append_event(run['id'], 'step.launched',
                               aggregate_type='step', aggregate_id=step['id'],
                               payload={'sessionId': sid})
+
+
+def _open_policy_approval(run: dict, step: dict, policy: dict):
+    """策略拦截（P2 §7.1 策略拦截最小集）：节点声明 approval_policy 的
+    agent step 在派发前进入 waiting_approval；approve 后正常派发
+    （decide 落 step succeeded 的结构性语义不适用——这里 step 回 blocked，
+    由下轮 advance 重新派发）。幂等：uniq pending per step 天然防重。"""
+    import uuid as _uuid
+    from db import get_db
+    aid = 'apr_' + secrets.token_hex(6)
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ai_approval_requests "
+                    "  (id, run_id, step_id, risk_level, effect_summary, "
+                    "   requested_roles, requested_users, expires_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, NULL)",
+                    (aid, run['id'], step['id'],
+                     policy.get('risk_level') or 'medium',
+                     f"策略拦截: {step.get('name') or step['node_id']}",
+                     json.dumps(policy.get('requested_roles') or []),
+                     json.dumps(policy.get('requested_users') or [])))
+                cur.execute(
+                    "UPDATE ai_orchestration_steps SET status='waiting_approval', "
+                    "  updated_at=NOW() WHERE id=%s", (step['id'],))
+            conn.commit()
+        from utils import batch_events
+        batch_events.append_event(run['id'], 'approval.requested',
+                                  aggregate_type='step',
+                                  aggregate_id=step['id'],
+                                  payload={'policy': True})
+    except Exception:
+        logger.exception('policy approval open failed step=%s', step['id'])
 
 
 def _open_approval(run: dict, step: dict):
@@ -770,3 +830,67 @@ def start_scheduler():
         _SCHEDULER = OrchestrationScheduler()
     _SCHEDULER.start()
     return _SCHEDULER
+
+
+def run_graph(run_id: str) -> dict | None:
+    """run graph（P2 §10/§13，缺口补齐）：节点状态 + 耗时 + 聚合可观测，
+    一次返回管理面渲染 DAG 所需的全部数据。"""
+    run = get_run(run_id)
+    if not run:
+        return None
+    import datetime as _dt
+    nodes = []
+    median_done = []
+    for s in run['steps']:
+        dur_ms = None
+        if s.get('started_at') and s.get('finished_at'):
+            try:
+                dur_ms = int((s['finished_at'] - s['started_at']).total_seconds() * 1000)
+                if dur_ms > 0:
+                    median_done.append(dur_ms)
+            except Exception:
+                pass
+        nodes.append({
+            'nodeId': s['node_id'], 'stepId': s['id'], 'name': s.get('name'),
+            'kind': s.get('kind'), 'status': s['status'],
+            'attemptCount': s.get('attempt_count'),
+            'startedAt': s['started_at'].isoformat() if s.get('started_at') else None,
+            'finishedAt': s['finished_at'].isoformat() if s.get('finished_at') else None,
+            'durationMs': dur_ms,
+            'error': (s.get('error_message') or None),
+            'outputPreview': ((s.get('output') or {}).get('text') or '')[:160],
+        })
+    edges = [{'source': e['source'], 'target': e['target'],
+              'condition': e.get('condition')} for e in _run_edges(run)]
+    median_done.sort()
+    remaining = sum(1 for s in run['steps'] if s['status'] in ('blocked', 'running', 'pending'))
+    median_ms = median_done[len(median_done) // 2] if median_done else None
+    eta = median_ms * remaining if (median_ms and remaining) else None
+    failed = sum(1 for s in run['steps'] if s['status'] == 'failed')
+    # 成本：编排子会话共享 P1 usage 表（session_id 键）
+    cost = 0.0
+    try:
+        from db import get_db as _g
+        with _g() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(SUM(u.cost), 0) FROM ai_execution_usage u "
+                    "WHERE u.session_id IN (SELECT id FROM ai_chat_sessions "
+                    "WHERE orchestration_run_id = %s)", (run_id,))
+                cost = float(cur.fetchone()[0])
+    except Exception:
+        pass
+    return {'run': _out_run(run), 'nodes': nodes, 'edges': edges,
+            'observability': {
+                'failedSteps': failed, 'remainingSteps': remaining,
+                'medianDurationMs': median_ms,
+                'estimatedRemainingMs': eta, 'cost': cost}}
+
+
+def _out_run(run: dict) -> dict:
+    return {'runId': run['id'], 'definitionId': run.get('definition_id'),
+            'definitionVersion': run.get('definition_version'),
+            'status': run['status'],
+            'createdAt': run['created_at'].isoformat() if run.get('created_at') else None,
+            'finishedAt': run['finished_at'].isoformat() if run.get('finished_at') else None,
+            'error': run.get('error_message')}

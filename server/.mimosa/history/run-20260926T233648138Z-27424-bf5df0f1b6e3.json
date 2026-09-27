@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20260926T233648138Z-27424-bf5df0f1b6e3",
+  "runStatus": "inconclusive",
+  "errors": [
+    "baseline-enumerate:backups/tmpyhvaffxd: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpyhvaffxd'",
+    "baseline-enumerate:backups/tmpx5exv6_f: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpx5exv6_f'",
+    "baseline-enumerate:backups/tmpwlxcz6en: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpwlxcz6en'",
+    "baseline-enumerate:backups/tmpumgqwoq_: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpumgqwoq_'",
+    "baseline-enumerate:backups/tmpsjheq0xj: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpsjheq0xj'",
+    "baseline-enumerate:backups/tmppxubxypk: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmppxubxypk'",
+    "baseline-enumerate:backups/tmpel88atym: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpel88atym'",
+    "baseline-enumerate:backups/tmpdohlz1p3: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpdohlz1p3'",
+    "baseline-enumerate:backups/tmpayl6h710: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpayl6h710'",
+    "baseline-enumerate:backups/tmpaas_paxj: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpaas_paxj'",
+    "baseline-enumerate:backups/tmp9pv_7ky0: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp9pv_7ky0'",
+    "baseline-enumerate:backups/tmp8qw48fs1: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp8qw48fs1'",
+    "baseline-enumerate:backups/tmp6mr29yur: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp6mr29yur'",
+    "baseline-enumerate:backups/tmp5fhmr3dy: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp5fhmr3dy'",
+    "baseline-enumerate:backups/tmp25nwjt5z: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp25nwjt5z'",
+    "baseline-enumerate:backups/tmp0ylpls1m: bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp0ylpls1m'",
+    "baseline:.: baseline_partial: baseline capture had enumeration or snapshot errors"
+  ],
+  "target": ".",
+  "revision": "229ffc45d3100c7df6dfa58a0a15449793474c20",
+  "diffHash": "1ce60fb78d2a919221d49e75eaf174ecc0560d436d4e67e42ef47d1dd98b6ec7",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-09-26T23:36:48.138Z",
+  "timing": {
+    "startedAt": "2026-09-26T23:36:45.613Z",
+    "completedAt": "2026-09-26T23:36:48.138Z",
+    "durationMs": 2525
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "bash_discovery_incomplete": 16,
+      "baseline_partial": 1,
+      "project_check_failed": 17
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_ca187634-a6d9-419f-a52d-a7932e1a5c2a-20260926T233648138Z-27424-bf5df0f1b6e3.json"
+}

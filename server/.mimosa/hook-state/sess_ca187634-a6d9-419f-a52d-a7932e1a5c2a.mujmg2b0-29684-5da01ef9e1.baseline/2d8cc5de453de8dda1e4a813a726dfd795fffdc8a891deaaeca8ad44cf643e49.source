@@ -1,0 +1,655 @@
+﻿"""Script sandbox execution helpers."""
+
+import collections
+import csv
+import logging
+import io
+import json
+import math
+import multiprocessing
+import queue as _queue
+import re
+import sys
+import threading
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from xml.dom import minidom
+
+# Optional data libs
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover
+    pd = None
+
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
+
+FORMAT_CONTENT_TYPES = {
+    'json': 'application/json',
+    'xml': 'application/xml',
+    'csv': 'text/csv',
+    'txt': 'text/plain',
+    'html': 'text/html',
+}
+
+FORMAT_EXTENSIONS = {
+    'json': '.json',
+    'xml': '.xml',
+    'csv': '.csv',
+    'txt': '.txt',
+    'html': '.html',
+}
+
+FORBIDDEN_NAMES = {
+    'open', 'exec', 'eval', 'compile', '__import__', 'getattr', 'setattr',
+    'delattr', 'globals', 'locals', 'vars', 'dir', 'type', 'super',
+    'breakpoint', 'exit', 'quit', 'input', 'print',
+}
+
+SCRIPT_TIMEOUT = 60
+MENU_SCRIPT_TIMEOUT = 300
+DATA_LIBS_HINT = (
+    'Pre-injected data libraries: pd (pandas), np (numpy). '
+    'Install with: pip install pandas numpy'
+)
+
+
+def _safe_builtins(include_any_all=False):
+    allowed = {
+        'len': len,
+        'str': str,
+        'int': int,
+        'float': float,
+        'bool': bool,
+        'list': list,
+        'dict': dict,
+        'tuple': tuple,
+        'set': set,
+        'sorted': sorted,
+        'reversed': reversed,
+        'enumerate': enumerate,
+        'zip': zip,
+        'map': map,
+        'filter': filter,
+        'range': range,
+        'min': min,
+        'max': max,
+        'sum': sum,
+        'abs': abs,
+        'round': round,
+        'isinstance': isinstance,
+        'hasattr': hasattr,
+        '__import__': __import__,
+        'None': None,
+        'True': True,
+        'False': False,
+    }
+    if include_any_all:
+        allowed['any'] = any
+        allowed['all'] = all
+    return allowed
+
+
+def _build_safe_globals(profile):
+    globals_map = {
+        '__builtins__': _safe_builtins(include_any_all=(profile == 'etl')),
+        'json': json,
+        're': re,
+        'math': math,
+        'collections': collections,
+        'datetime': datetime,
+        'timedelta': timedelta,
+        'pd': pd,
+        'np': np,
+    }
+    if profile in ('export', 'menu'):
+        globals_map.update({
+            'csv': csv,
+            'io': io,
+            'ET': ET,
+            'minidom': minidom,
+        })
+    return globals_map
+
+
+def _validate_script(script_code):
+    """Reject unsafe script patterns before execution."""
+    if re.search(r'^\s*import\s+', script_code, re.MULTILINE):
+        raise ValueError('import statements are not allowed')
+    if re.search(r'^\s*from\s+\S+\s+import', script_code, re.MULTILINE):
+        raise ValueError('from...import statements are not allowed')
+
+    for name in FORBIDDEN_NAMES:
+        if re.search(r'\b' + re.escape(name) + r'\s*\(', script_code):
+            raise ValueError(f'{name}() is not allowed')
+
+    if re.search(r'__\w+__', script_code):
+        raise ValueError('double underscore (双下划线) attributes are not allowed')
+
+
+def validate_export_script_scope(scope, script_code):
+    """Ensure an export script's body matches its declared scope.
+
+    Menu-scope scripts run via ``run_menu_export_script``, whose sandbox injects
+    only ``menu_data`` / ``menu_name`` / ``total_records`` — NOT the page-level
+    ``data`` / ``fields`` / ``page_name``. Saving page-style code under
+    ``scope='menu'`` therefore blows up at export time with an opaque
+    ``NameError: name 'fields' is not defined``. Catch the mismatch at save
+    time with an actionable message. Page/row scopes are unconstrained (they
+    share the same injected variables).
+    """
+    if scope == 'menu' and not re.search(r'\bmenu_data\b', script_code or ''):
+        raise ValueError(
+            '菜单级(scope=menu)导出脚本必须遍历 menu_data 变量；当前脚本未引用 menu_data，'
+            '看起来是页面级写法（使用了 data/fields/page_name），运行时会报 '
+            "NameError: name 'fields' is not defined。请改用菜单级脚手架（for table in menu_data: ...，"
+            "用 table['fields']/table['records']），或将「导出维度」改为「整页(page)」。"
+        )
+
+
+def _thread_exec(script_code, safe_globals, script_locals, timeout_seconds, timeout_message):
+    # 单一命名空间：globals 与 locals 必须是同一个 dict。若传成两个不同的 dict，脚本会以
+    # 「类体作用域」运行——自定义函数 / 列表推导式 / 生成器表达式 / lambda 等嵌套作用域只能经
+    # LOAD_GLOBAL 取自由变量，看不到注入到 locals 的 data/fields 及脚本自定义的函数/变量，
+    # 表现为「不支持自定义函数/推导式」的 NameError。合并后顶层名字进同一命名空间即可被嵌套作用域看到。
+    namespace = dict(safe_globals)
+    namespace.update(script_locals)
+    error_holder = [None]
+
+    def _execute():
+        try:
+            exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（同时作 globals/locals）
+        except Exception as exc:  # pragma: no cover
+            error_holder[0] = exc
+
+    thread = threading.Thread(target=_execute)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+
+    if thread.is_alive():
+        raise TimeoutError(timeout_message)
+    if error_holder[0]:
+        raise error_holder[0]
+    return namespace
+
+
+def _process_exec(profile, script_code, script_locals, timeout_seconds, timeout_message):
+    """在隔离子进程里执行脚本。
+
+    Windows 的 spawn 启动一个新解释器并把 pandas/numpy 全量重新 import 一遍
+    （~5s）；脚本跑得越碎这份冷启动越贵。因此用一个**常驻** worker 进程顺序
+    执行脚本，每个脚本仍然是全新命名空间（_build_safe_globals + script_locals
+    每次重建，沙箱禁 import/setattr，跨脚本无法污染共享模块对象），只有进程
+    冷启动成本被摊平。脚本超时/ worker 死亡时杀掉并重建，语义与旧的
+    「一次性 Process」一致：失控脚本永远不会毒化下一次执行。
+
+    任何「环境不允许子进程 IPC」的信号（PermissionError/OSError）都按旧约定
+    落线程兜底。
+    """
+    try:
+        return _subprocess_exec_guarded(profile, script_code, script_locals,
+                                        timeout_seconds, timeout_message)
+    except (PermissionError, OSError):
+        return _thread_exec_fallback(profile, script_code, script_locals,
+                                     timeout_seconds, timeout_message)
+
+
+def _subprocess_exec_guarded(profile, script_code, script_locals,
+                             timeout_seconds, timeout_message):
+    for _attempt in (0, 1):  # worker 意外死亡（queue 断裂）允许重建重试一次
+        state = _acquire_script_worker()
+        if state is None:
+            raise PermissionError('multiprocessing IPC unavailable')
+        try:
+            state['jobs'].put({
+                'profile': profile,
+                'script_code': script_code,
+                'script_locals': script_locals,
+            })
+            payload = state['results'].get(timeout=timeout_seconds)
+        except _queue.Empty:
+            # 与旧实现同一语义：拿不到结果 = 超时；杀掉 worker，保证下一次
+            # 执行拿到的是全新进程（失控脚本不毒化后续脚本）。
+            _kill_script_worker(state, reason='script timeout')
+            raise TimeoutError(timeout_message)
+        except (OSError, ValueError):
+            _kill_script_worker(state, reason='worker died')
+            continue
+        if not payload.get('ok'):
+            raise RuntimeError(
+                f"{payload.get('error_type', 'ScriptError')}: "
+                f"{payload.get('error_message', '')}")
+        return payload
+    raise PermissionError('script worker unavailable')  # → 线程兜底
+
+
+def _thread_exec_fallback(profile, script_code, script_locals,
+                          timeout_seconds, timeout_message):
+    # Some restricted environments disallow multiprocessing IPC handles.
+    local_ctx = _thread_exec(
+        script_code=script_code,
+        safe_globals=_build_safe_globals(profile),
+        script_locals=dict(script_locals),
+        timeout_seconds=timeout_seconds,
+        timeout_message=timeout_message,
+    )
+    if profile in ('export', 'menu'):
+        return {
+            'ok': True,
+            'result': local_ctx.get('result'),
+            'filename': local_ctx.get('filename'),
+            'content_type': local_ctx.get('content_type'),
+        }
+    if profile == 'etl':
+        return {
+            'ok': True,
+            'result': local_ctx.get('result'),
+        }
+    return {'ok': True}
+
+
+# ── 常驻 worker（进程池大小=1；见 _process_exec docstring） ──────────────
+
+_worker_lock = threading.Lock()
+_worker_state = {'proc': None, 'jobs': None, 'results': None}
+
+
+def _acquire_script_worker():
+    """返回可用的 worker state；环境禁 IPC 时返回 None（线程兜底）。"""
+    if _worker_state['proc'] is not None and _worker_state['proc'].is_alive():
+        return _worker_state
+    try:
+        jobs = multiprocessing.Queue()
+        results = multiprocessing.Queue()
+        proc = multiprocessing.Process(
+            target=_script_worker_main, args=(jobs, results), daemon=True)
+        proc.start()
+    except (PermissionError, OSError):
+        return None
+    _worker_state['proc'] = proc
+    _worker_state['jobs'] = jobs
+    _worker_state['results'] = results
+    return _worker_state
+
+
+def _kill_script_worker(state, reason: str):
+    proc = state.get('proc')
+    state['proc'] = None
+    state['jobs'] = None
+    state['results'] = None
+    if proc is None:
+        return
+    if proc.is_alive():
+        proc.terminate()
+    proc.join(timeout=2)
+    logging.getLogger(__name__).info('script worker replaced (%s)', reason)
+
+
+def _script_worker_main(jobs, results):
+    """常驻循环：收一个脚本执行一个。每个脚本全新命名空间；进程内只共享
+    已 import 的库实例（沙箱禁 import/setattr，脚本无法改写它们）。"""
+    while True:
+        job = jobs.get()
+        profile = job['profile']
+        script_code = job['script_code']
+        script_locals = job['script_locals']
+        try:
+            namespace = _build_safe_globals(profile)
+            namespace.update(script_locals)
+            exec(script_code, namespace)  # noqa: S102 — 只传一个 dict（globals=locals）
+            if profile in ('export', 'menu'):
+                payload = {
+                    'ok': True,
+                    'result': namespace.get('result'),
+                    'filename': namespace.get('filename'),
+                    'content_type': namespace.get('content_type'),
+                }
+            elif profile == 'etl':
+                payload = {
+                    'ok': True,
+                    'result': namespace.get('result'),
+                }
+            else:
+                payload = {'ok': True}
+        except Exception as exc:  # pragma: no cover
+            payload = {
+                'ok': False,
+                'error_type': exc.__class__.__name__,
+                'error_message': str(exc),
+            }
+        results.put(payload)
+
+
+def run_export_script(script_code, data, fields, page_name, output_format='json', references=None):
+    _validate_script(script_code)
+
+    payload = _process_exec(
+        profile='export',
+        script_code=script_code,
+        script_locals={
+            'data': data,
+            'fields': fields,
+            'page_name': page_name,
+            # 被引用记录的查找表 {collection: {id: record}}，供跨页/跨项目引用 join
+            'references': references or {},
+            'result': None,
+            'filename': None,
+            'content_type': None,
+        },
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'script execution timeout (>{SCRIPT_TIMEOUT}s)',
+    )
+
+    result = payload.get('result')
+    if result is None:
+        raise ValueError('result must be assigned in script')
+
+    if isinstance(result, str):
+        result_bytes = result.encode('utf-8')
+    elif isinstance(result, bytes):
+        result_bytes = result
+    else:
+        raise ValueError(f'result must be str 或 bytes, got {type(result).__name__}')
+
+    filename = payload.get('filename') or f'{page_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
+    content_type = payload.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
+
+    return result_bytes, filename, content_type
+
+
+def run_validation_script(script_code, record, action, old_data, fields, collection, conn):
+    _validate_script(script_code)
+
+    errors = []
+    warnings = []
+    pending_relations = []
+
+    def add_error(msg):
+        errors.append(str(msg))
+
+    def add_warning(msg):
+        warnings.append(str(msg))
+
+    def _row_to_record(row):
+        rec = {'id': row[0]}
+        if row[1]:
+            rec.update(row[1])
+        return rec
+
+    def query(collection_name):
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, data FROM dynamic_data WHERE collection = %s ORDER BY created_at',
+            (collection_name,),
+        )
+        return [_row_to_record(r) for r in cur.fetchall()]
+
+    def query_one(collection_name, record_id):
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, data FROM dynamic_data WHERE collection = %s AND id = %s',
+            (collection_name, record_id),
+        )
+        row = cur.fetchone()
+        return _row_to_record(row) if row else None
+
+    def find_by(collection_name, field_name, value):
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT id, data FROM dynamic_data WHERE collection = %s AND data->>%s = %s',
+            (collection_name, field_name, str(value)),
+        )
+        return [_row_to_record(r) for r in cur.fetchall()]
+
+    def get_relations(collection_name, record_id):
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT field_name, related_id FROM data_relations '
+            'WHERE collection = %s AND record_id = %s ORDER BY field_name',
+            (collection_name, record_id),
+        )
+        result = {}
+        for field_name, related_id in cur.fetchall():
+            result.setdefault(field_name, []).append(related_id)
+        return result
+
+    def set_relations(field_name, target_collection, target_field, ids):
+        pending_relations.append({
+            'fieldName': field_name,
+            'targetCollection': target_collection,
+            'targetField': target_field,
+            'ids': list(ids) if not isinstance(ids, list) else ids,
+        })
+
+    _thread_exec(
+        script_code=script_code,
+        safe_globals=_build_safe_globals('validation'),
+        script_locals={
+            'record': record,
+            'action': action,
+            'old_data': old_data,
+            'fields': fields,
+            'collection': collection,
+            'add_error': add_error,
+            'add_warning': add_warning,
+            'query': query,
+            'query_one': query_one,
+            'find_by': find_by,
+            'get_relations': get_relations,
+            'set_relations': set_relations,
+        },
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'validation script timeout (>{SCRIPT_TIMEOUT}s)',
+    )
+
+    return errors, warnings, pending_relations
+
+
+def run_etl_script(script_code, records):
+    _validate_script(script_code)
+
+    payload = _process_exec(
+        profile='etl',
+        script_code=script_code,
+        script_locals={
+            'records': records,
+            'result': None,
+        },
+        timeout_seconds=SCRIPT_TIMEOUT,
+        timeout_message=f'ETL script timeout (>{SCRIPT_TIMEOUT}s)',
+    )
+
+    result = payload.get('result')
+    if result is None:
+        raise ValueError('result must be assigned in script')
+    return result
+
+
+def run_menu_export_script(script_code, menu_data, menu_name, output_format='json', references=None):
+    _validate_script(script_code)
+
+    total_records = sum(table.get('recordCount', 0) for table in menu_data)
+    payload = _process_exec(
+        profile='menu',
+        script_code=script_code,
+        script_locals={
+            'menu_data': menu_data,
+            'menu_name': menu_name,
+            'total_records': total_records,
+            # 被引用记录的查找表 {collection: {id: record}}，供跨页/跨项目引用 join
+            'references': references or {},
+            'result': None,
+            'filename': None,
+            'content_type': None,
+        },
+        timeout_seconds=MENU_SCRIPT_TIMEOUT,
+        timeout_message=f'menu export script timeout (>{MENU_SCRIPT_TIMEOUT}s)',
+    )
+
+    result = payload.get('result')
+    if result is None:
+        raise ValueError('result must be assigned in script')
+
+    files = []
+
+    if isinstance(result, list):
+        for item in result:
+            if not isinstance(item, dict):
+                raise ValueError('each item in result list 必须是 dict')
+            if 'filename' not in item or 'content' not in item:
+                raise ValueError('each result list item must include filename 和 content')
+
+            content = item['content']
+            filename = item['filename']
+            content_type = item.get('content_type') or guess_content_type(filename)
+
+            if isinstance(content, str):
+                content_bytes = content.encode('utf-8')
+            elif isinstance(content, bytes):
+                content_bytes = content
+            else:
+                raise ValueError(f'content must be str 或 bytes, got {type(content).__name__}')
+
+            files.append((content_bytes, filename, content_type))
+
+    elif isinstance(result, (str, bytes)):
+        if isinstance(result, str):
+            result_bytes = result.encode('utf-8')
+        else:
+            result_bytes = result
+
+        filename = payload.get('filename') or f'{menu_name}{FORMAT_EXTENSIONS.get(output_format, ".dat")}'
+        content_type = payload.get('content_type') or FORMAT_CONTENT_TYPES.get(output_format, 'application/octet-stream')
+        files.append((result_bytes, filename, content_type))
+
+    else:
+        raise ValueError(f'result must be str、bytes 或 list, got {type(result).__name__}')
+
+    return files
+
+
+def guess_content_type(filename):
+    ext = filename.rpartition('.')[2].lower() if '.' in filename else ''
+    return FORMAT_CONTENT_TYPES.get(ext, 'application/octet-stream')
+
+
+# ---------------------------------------------------------------------------
+# 追踪式断点调试：在脚本行上下断点，跑一次，回传每次命中该行时的局部变量快照 +
+# 整体行执行次数（执行轨迹）。用 sys.settrace 在工作线程内记录，单一命名空间执行
+# （与沙箱一致）。非实时单步——一次跑完看快照。
+# ---------------------------------------------------------------------------
+_DEBUG_FILENAME = '<debug-script>'
+_DBG_MAX_SNAPSHOTS = 500
+_DBG_MAX_STR = 500
+_DBG_MAX_ITEMS = 50
+
+
+def _dbg_safe_val(v, depth=0):
+    """把局部变量序列化为 JSON 安全值；复杂对象用截断 repr。"""
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= _DBG_MAX_STR else v[:_DBG_MAX_STR] + '…'
+    if depth >= 3:
+        r = repr(v)
+        return r if len(r) <= _DBG_MAX_STR else r[:_DBG_MAX_STR] + '…'
+    if isinstance(v, (list, tuple)):
+        out = [_dbg_safe_val(x, depth + 1) for x in list(v)[:_DBG_MAX_ITEMS]]
+        if len(v) > _DBG_MAX_ITEMS:
+            out.append(f'…(+{len(v) - _DBG_MAX_ITEMS})')
+        return out
+    if isinstance(v, dict):
+        out = {}
+        for i, (k, x) in enumerate(v.items()):
+            if i >= _DBG_MAX_ITEMS:
+                out['…'] = f'(+{len(v) - _DBG_MAX_ITEMS})'
+                break
+            out[str(k)] = _dbg_safe_val(x, depth + 1)
+        return out
+    r = repr(v)
+    return r if len(r) <= _DBG_MAX_STR else r[:_DBG_MAX_STR] + '…'
+
+
+def _dbg_safe_locals(loc):
+    # 跳过 dunder、函数/可调用、以及注入的模块（json/re/math/...），只留脚本相关变量
+    out = {}
+    for k, v in loc.items():
+        if k.startswith('__') or callable(v) or type(v).__name__ == 'module':
+            continue
+        out[k] = _dbg_safe_val(v)
+    return out
+
+
+def debug_export_script(script_code, profile, script_locals, breakpoints=None,
+                        timeout_seconds=SCRIPT_TIMEOUT):
+    """在断点行运行脚本并采集变量快照 + 行执行轨迹。
+    返回 {success, error, errorLine, breakpointHits:[{line,vars}], lineHits:{line:count}, result?}。"""
+    _validate_script(script_code)
+    bps = set()
+    for b in (breakpoints or []):
+        try:
+            bps.add(int(b))
+        except (TypeError, ValueError):
+            pass
+
+    namespace = _build_safe_globals(profile)
+    namespace.update(script_locals)
+    line_hits = {}
+    snapshots = []
+    holder = {'error': None, 'error_line': None}
+
+    def tracer(frame, event, arg):
+        # 只追踪脚本自身的帧（含脚本内定义的函数），跳过库内部
+        if frame.f_code.co_filename != _DEBUG_FILENAME:
+            return None
+        if event == 'line':
+            ln = frame.f_lineno
+            line_hits[ln] = line_hits.get(ln, 0) + 1
+            if ln in bps and len(snapshots) < _DBG_MAX_SNAPSHOTS:
+                snapshots.append({'line': ln, 'vars': _dbg_safe_locals(frame.f_locals)})
+        return tracer
+
+    try:
+        code = compile(script_code, _DEBUG_FILENAME, 'exec')
+    except SyntaxError as exc:
+        return {'success': False, 'error': f'SyntaxError: {exc.msg}',
+                'errorLine': exc.lineno, 'breakpointHits': [], 'lineHits': {}}
+
+    def _run():
+        sys.settrace(tracer)
+        try:
+            exec(code, namespace)  # noqa: S102 — 单一命名空间
+        except Exception as exc:  # pragma: no cover
+            holder['error'] = f'{type(exc).__name__}: {exc}'
+            tb = exc.__traceback__
+            while tb:
+                if tb.tb_frame.f_code.co_filename == _DEBUG_FILENAME:
+                    holder['error_line'] = tb.tb_lineno
+                tb = tb.tb_next
+        finally:
+            sys.settrace(None)
+
+    thread = threading.Thread(target=_run)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    if thread.is_alive():
+        return {'success': False, 'error': f'调试执行超时(>{timeout_seconds}s)', 'errorLine': None,
+                'breakpointHits': snapshots, 'lineHits': line_hits, 'timedOut': True}
+
+    result = {
+        'success': holder['error'] is None,
+        'error': holder['error'],
+        'errorLine': holder['error_line'],
+        'breakpointHits': snapshots,
+        'lineHits': line_hits,
+    }
+    if holder['error'] is None:
+        out = namespace.get('result')
+        if isinstance(out, (str, bytes)):
+            preview = out[:2000] if isinstance(out, str) else out[:2000].decode('utf-8', errors='replace')
+            result['resultPreview'] = preview
+        elif isinstance(out, list):
+            result['resultPreview'] = f'(menu 多文件，{len(out)} 个)'
+    return result

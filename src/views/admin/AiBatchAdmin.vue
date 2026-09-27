@@ -108,6 +108,14 @@
               <el-table-column prop="recoveryReason" label="恢复原因" min-width="140" show-overflow-tooltip />
             </el-table>
           </el-tab-pane>
+          <el-tab-pane label="命令历史" name="commands">
+            <el-table :data="commands" size="small" style="width: 100%">
+              <el-table-column prop="type" label="命令" width="110" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="requestedBy" label="发起人" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="createdAt" label="时间" min-width="150" show-overflow-tooltip />
+            </el-table>
+          </el-tab-pane>
           <el-tab-pane label="回调投递" name="deliveries">
             <el-table :data="deliveries" size="small" style="width: 100%">
               <el-table-column prop="eventType" label="事件" width="150" />
@@ -176,8 +184,8 @@ import {
   adminChildFileDownloadUrl,
   type AdminBatch, type AdminChild, type AdminMessage,
   type AdminChildFile, type AdminImportResult,
-  getBatchAttempts, listBatchDeliveries, replayDelivery,
-  type AdminAttempt, type AdminDelivery,
+  getBatchAttempts, listBatchDeliveries, replayDelivery, listBatchCommands,
+  type AdminAttempt, type AdminDelivery, type AdminCommand,
 } from '@/api/aiBatchAdmin'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
@@ -237,6 +245,7 @@ async function onPage(p: number) {
 
 const attempts = ref<AdminAttempt[]>([])
 const deliveries = ref<AdminDelivery[]>([])
+const commands = ref<AdminCommand[]>([])
 
 async function openDetail(row: AdminBatch) {
   try {
@@ -245,8 +254,10 @@ async function openDetail(row: AdminBatch) {
     // P1 §10 管理面（缺口补齐 4.2）：attempt 链 + 投递状态并行加载（best-effort）
     attempts.value = []
     deliveries.value = []
+    commands.value = []
     void getBatchAttempts(row.batchId).then(r => { attempts.value = r.attempts || [] }).catch(() => {})
     void listBatchDeliveries(row.batchId).then(r => { deliveries.value = r.deliveries || [] }).catch(() => {})
+    void listBatchCommands(row.batchId).then(r => { commands.value = r.commands || [] }).catch(() => {})
   } catch (e: any) {
     // 所有者在列表渲染与点击之间删掉了该批任务：全局拦截器已弹出「请求资源不存在」，
     // 这里只需把陈旧行从列表里清掉，不然它会一直留在表格里，再点还是 404。

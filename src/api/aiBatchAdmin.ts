@@ -154,3 +154,20 @@ export function replayDelivery(oid: string) {
   return post<{ ok: boolean; status: string }>(
     `/ai/chat/admin/deliveries/${encodeURIComponent(oid)}/replay`)
 }
+
+export interface AdminCommand {
+  commandId: string
+  type: string
+  requestedBy: string
+  requestedByKind: string
+  status: string
+  errorCode: string | null
+  result: Record<string, unknown> | null
+  createdAt: string
+  appliedAt: string | null
+}
+
+export function listBatchCommands(batchId: string) {
+  return get<{ commands: AdminCommand[] }>(
+    `/ai/chat/batches/${encodeURIComponent(batchId)}/commands`)
+}

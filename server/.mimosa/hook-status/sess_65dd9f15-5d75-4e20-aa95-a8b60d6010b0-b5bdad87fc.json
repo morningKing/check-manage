@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-09-26T15:28:11.217Z",
+  "sessionId": "sess_65dd9f15-5d75-4e20-aa95-a8b60d6010b0",
+  "event": "PostToolUse",
+  "toolName": "Write",
+  "file": "E:\\wsl\\check\\check-manage\\docs\\ai-testing\\14-12号回修复核报告.md",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 9,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}
