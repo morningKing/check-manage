@@ -10,12 +10,12 @@
 
 | # | 项 | 来源 | 内容 | 状态 |
 |---|---|---|---|---|
-| 1.1 | `gate.evaluated` 事件 | P0 §8.3 | 门禁核对完成处经 `execution_audit.record_event` 落 `gate.evaluated`（payload 含结论与缺失明细），best-effort | ⬜ |
-| 1.2 | 错误码表补齐 | P0 §7.3 | `OPENCODE_UNAVAILABLE`（502）、`WORKSPACE_CLEANUP_FAILED`（207/500）、`TURN_ALREADY_RUNNING`（409）、`VERSION_CONFLICT`（命令 generation 失配 409）；`ACTION_GATE_INCONCLUSIVE` 按 spec 属任务态（error_message 承载），不新增 HTTP 码 | ⬜ |
-| 1.3 | scan scheduler 单实例租约 | P1 §5.8 | `ai_scan_scheduler` 接入 `execution_lease`（key=`scan_scheduler`，acquire-retry 同款），与既有锁并存为 DB 级互斥 | ⬜ |
-| 1.4 | F1 回归测试 | P0 §9 | `_persist_conversation` 中 `_write_subtask` 先于 `record_messages` 的顺序断言（monkeypatch 调用序） | ⬜ |
-| 1.5 | F10 回归测试 | P0 §9/§11.2 | vitest：`batchStatusLabel` 含 paused/cancelled 映射 | ⬜ |
-| 1.6 | 竞态矩阵 cancel↔resume | P0 §12 | 并发 cancel/resume 无「pending 且 cancel_requested=true」僵死组合 | ⬜ |
+| 1.1 | `gate.evaluated` 事件 | P0 §8.3 | 门禁核对完成处经 `execution_audit.record_event` 落 `gate.evaluated`（payload 含结论与缺失明细），best-effort | ✅ |
+| 1.2 | 错误码表补齐 | P0 §7.3 | `OPENCODE_UNAVAILABLE`（502）、`WORKSPACE_CLEANUP_FAILED`（207/500）、`TURN_ALREADY_RUNNING`（409）、`VERSION_CONFLICT`（命令 generation 失配 409）；`ACTION_GATE_INCONCLUSIVE` 按 spec 属任务态（error_message 承载），不新增 HTTP 码 | ✅ |
+| 1.3 | scan scheduler 单实例租约 | P1 §5.8 | `ai_scan_scheduler` 接入 `execution_lease`（key=`scan_scheduler`，acquire-retry 同款），与既有锁并存为 DB 级互斥 | ✅ |
+| 1.4 | F1 回归测试 | P0 §9 | `_persist_conversation` 中 `_write_subtask` 先于 `record_messages` 的顺序断言（monkeypatch 调用序） | ✅ |
+| 1.5 | F10 回归测试 | P0 §9/§11.2 | vitest：`batchStatusLabel` 含 paused/cancelled 映射 | ✅ |
+| 1.6 | 竞态矩阵 cancel↔resume | P0 §12 | 并发 cancel/resume 无「pending 且 cancel_requested=true」僵死组合 | ✅ |
 
 ## 批次 2：P1 持久化执行收口
 

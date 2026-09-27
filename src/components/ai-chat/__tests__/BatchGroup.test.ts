@@ -63,6 +63,15 @@ describe('BatchGroup', () => {
     expect(w.find('.bg-name').text()).toBe('AITEST-批')
     expect(w.find('.badge').text()).toBe('运行中')
     expect(w.find('.bg-meta').text()).toBe('1/3')
+  })
+
+  // F10（P0 spec §9 / 缺口补齐计划 1.5）：终态文案映射锁定——paused/cancelled
+  // 必须渲染中文文案而非原始状态键（曾有映射缺失，重建列表时直接露键名）
+  it('F10: paused/cancelled badges render Chinese labels', async () => {
+    const w = await mountGroup(batch({ status: 'paused', paused: 1 }), [])
+    expect(w.find('.badge').text()).toBe('已暂停')
+    const w2 = await mountGroup(batch({ status: 'cancelled' as any, cancelled: 2 }), [])
+    expect(w2.find('.badge').text()).toBe('已取消')
     expect(w.find('.bg-am').text()).toBe('默认 · 默认')
   })
 
