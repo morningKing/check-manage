@@ -1,4 +1,4 @@
-"""AI 编排 REST 端点（/v1/ai-orchestrations，JWT；ai-harness-p2 spec §6.3）。
+"""AI 编排 REST 端点（/ai/orchestrations 内部域，JWT；ai-harness-p2 spec §6.3；/v1/ai-orchestrations 为对外 API Key 契约——前缀冲突修复）。
 
 对外契约独立于 /v1/ai-batches；批任务继续独立使用（不强制升级为 DAG）。
 定义发布与管理需要 admin；run 创建任何登录用户可用（归属 requested_by）。
@@ -10,7 +10,7 @@ from auth import login_required, require_permission
 from utils import orchestration_defs, orchestration_engine
 
 ai_orchestrations_bp = Blueprint('ai_orchestrations', __name__,
-                                 url_prefix='/v1/ai-orchestrations')
+                                 url_prefix='/ai/orchestrations')
 
 
 @ai_orchestrations_bp.get('/definitions')
