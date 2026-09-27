@@ -95,6 +95,35 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <!-- P1 §10 管理面（缺口补齐 4.2）：Attempt 链 + 投递状态/重放 -->
+        <el-tabs model-value="attempts" class="batch-admin__tabs">
+          <el-tab-pane label="Attempt 链" name="attempts">
+            <el-table :data="attempts" size="small" style="width: 100%">
+              <el-table-column prop="attemptNo" label="#" width="60" />
+              <el-table-column prop="operation" label="操作" width="110" />
+              <el-table-column prop="status" label="状态" width="110" />
+              <el-table-column prop="startedAt" label="开始" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="finishedAt" label="结束" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="recoveryReason" label="恢复原因" min-width="140" show-overflow-tooltip />
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane label="回调投递" name="deliveries">
+            <el-table :data="deliveries" size="small" style="width: 100%">
+              <el-table-column prop="eventType" label="事件" width="150" />
+              <el-table-column prop="status" label="状态" width="110" />
+              <el-table-column prop="attemptCount" label="次数" width="70" />
+              <el-table-column prop="lastError" label="错误" min-width="180" show-overflow-tooltip />
+              <el-table-column label="操作" width="100" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary"
+                             :disabled="!['dead_letter', 'failed'].includes(row.status)"
+                             @click="onReplayDelivery(row)">重放</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
       </div>
     </el-drawer>
 
@@ -147,6 +176,8 @@ import {
   adminChildFileDownloadUrl,
   type AdminBatch, type AdminChild, type AdminMessage,
   type AdminChildFile, type AdminImportResult,
+  getBatchAttempts, listBatchDeliveries, replayDelivery,
+  type AdminAttempt, type AdminDelivery,
 } from '@/api/aiBatchAdmin'
 
 // 懒加载：Word/Excel/PPT/PDF 预览用 @vue-office/*，跟 DynamicPage.vue 同样的
@@ -204,16 +235,37 @@ async function onPage(p: number) {
   store.startPolling()
 }
 
+const attempts = ref<AdminAttempt[]>([])
+const deliveries = ref<AdminDelivery[]>([])
+
 async function openDetail(row: AdminBatch) {
   try {
     detail.value = await getAdminBatch(row.batchId)
     detailOpen.value = true
+    // P1 §10 管理面（缺口补齐 4.2）：attempt 链 + 投递状态并行加载（best-effort）
+    attempts.value = []
+    deliveries.value = []
+    void getBatchAttempts(row.batchId).then(r => { attempts.value = r.attempts || [] }).catch(() => {})
+    void listBatchDeliveries(row.batchId).then(r => { deliveries.value = r.deliveries || [] }).catch(() => {})
   } catch (e: any) {
     // 所有者在列表渲染与点击之间删掉了该批任务：全局拦截器已弹出「请求资源不存在」，
     // 这里只需把陈旧行从列表里清掉，不然它会一直留在表格里，再点还是 404。
     if (e?.response?.status === 404) {
       await store.fetchList()
     }
+  }
+}
+
+async function onReplayDelivery(row: AdminDelivery) {
+  try {
+    await replayDelivery(row.id)
+    ElMessage.success('已重置为待投递')
+    if (detail.value) {
+      void listBatchDeliveries(detail.value.batch.batchId)
+        .then(r => { deliveries.value = r.deliveries || [] })
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '重放失败')
   }
 }
 

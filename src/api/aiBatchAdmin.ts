@@ -115,3 +115,42 @@ export function adminChildFileDownloadUrl(batchId: string, sessionId: string, pa
   const p = encodeURIComponent(path)
   return `/api${BASE}/${bid}/sessions/${sid}/files/download?path=${p}${authParam('&')}`
 }
+
+// ── P1 §10 管理面（缺口补齐 4.2）：attempt 链 + 投递状态/重放 ──
+
+export interface AdminAttempt {
+  id: string
+  attemptNo: number
+  parentAttemptId: string | null
+  operation: string
+  status: string
+  startedAt: string | null
+  finishedAt: string | null
+  recoveryReason?: string | null
+}
+
+export interface AdminDelivery {
+  id: string
+  eventType: string
+  status: string
+  attemptCount: number
+  lastError: string | null
+  nextRetryAt: string | null
+  deliveredAt: string | null
+  targetUrl: string
+}
+
+export function getBatchAttempts(batchId: string) {
+  return get<{ attempts: AdminAttempt[] }>(
+    `/ai/chat/batches/${encodeURIComponent(batchId)}/attempts`)
+}
+
+export function listBatchDeliveries(batchId: string) {
+  return get<{ deliveries: AdminDelivery[] }>(
+    `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/deliveries`)
+}
+
+export function replayDelivery(oid: string) {
+  return post<{ ok: boolean; status: string }>(
+    `/ai/chat/admin/deliveries/${encodeURIComponent(oid)}/replay`)
+}

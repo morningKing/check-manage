@@ -862,3 +862,39 @@ def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
         with conn.cursor() as cur:
             cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sid,))
             assert cur.fetchone()[0] == 'completed'
+
+
+def test_internal_commands_endpoint(db_conn, gap_internal_client):
+    """缺口补齐 4.3（P1 §8.1）：内部 commands 端点——幂等（重复键 200 +
+    duplicate=True）、状态查询、expectedGeneration 冲突 409 VERSION_CONFLICT。
+    gap_internal_client 的身份是 user-admin，批次须归属同一用户。"""
+    bid, sids = _seed_batch(db_conn, 'user-admin', 1)
+    client, hdrs = gap_internal_client
+    idem = f'idem-{uuid.uuid4().hex[:8]}'
+    r1 = client.post(f'/ai/chat/batches/{bid}/commands',
+                     headers={**hdrs, 'Idempotency-Key': idem},
+                     json={'type': 'pause'})
+    assert r1.status_code == 202
+    body1 = r1.get_json()
+    assert body1['status'] == 'applied'
+    # 幂等重放：同一键 → 200 + duplicate=True + 同一 commandId
+    r2 = client.post(f'/ai/chat/batches/{bid}/commands',
+                     headers={**hdrs, 'Idempotency-Key': idem},
+                     json={'type': 'pause'})
+    assert r2.status_code == 200
+    body2 = r2.get_json()
+    assert body2['duplicate'] is True and body2['commandId'] == body1['commandId']
+    # 状态查询
+    r3 = client.get(f"/ai/chat/batches/{bid}/commands/{body1['commandId']}",
+                    headers=hdrs)
+    assert r3.status_code == 200
+    assert r3.get_json()['status'] == 'applied'
+    # expectedGeneration 冲突 → 409 VERSION_CONFLICT（结构化错误码）
+    r4 = client.post(f'/ai/chat/batches/{bid}/commands',
+                     headers={**hdrs,
+                              'Idempotency-Key': f'idem-{uuid.uuid4().hex[:8]}'},
+                     json={'type': 'resume', 'expectedGeneration': 999})
+    assert r4.status_code == 409
+    assert r4.get_json()['error']['code'] == 'VERSION_CONFLICT'
+    # 清理（user-admin 不经 fixture）
+    client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=hdrs)

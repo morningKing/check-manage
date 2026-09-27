@@ -36,6 +36,29 @@ from utils.batch_repo import (
 ai_chat_batches_bp = Blueprint('ai_chat_batches', __name__,
                                url_prefix='/ai/chat/batches')
 
+
+def _child_state_error(e: ValueError):
+    """P0 §7.3：子任务 CAS-miss（持旧 generation 写回 0 行）→ 结构化
+    VERSION_CONFLICT；其余（非终态等前置校验）保留纯文本 409 兼容旧消费方。"""
+    if '状态已变化' in str(e):
+        return {'error': {'code': 'VERSION_CONFLICT', 'message': str(e),
+                          'retryable': True, 'operation': 'child_transition'}}
+    return {'error': str(e)}
+
+
+def _active_turn_exists(session_id: str) -> bool:
+    try:
+        from db import get_db as _gdb
+        with _gdb() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM ai_chat_turns WHERE session_id = %s "
+                    "  AND status IN ('accepted','running','recovering') LIMIT 1",
+                    (session_id,))
+                return cur.fetchone() is not None
+    except Exception:
+        return False
+
 # stop=1 的 drain 等待上限（H2：超时必须 409 保留任务，不得继续删除）
 DRAIN_TIMEOUT_SEC = 10
 
@@ -476,7 +499,7 @@ def resume_single_child(batch_id, session_id):
     try:
         result = resume_child(g.current_user['userId'], batch_id, session_id)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 409
+        return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
@@ -495,11 +518,16 @@ def continue_single_child(batch_id, session_id):
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
         return jsonify({'error': 'prompt required'}), 400
+    # P0 §7.3：持旧 generation 的 CAS-miss → 结构化 VERSION_CONFLICT（可重试）
+    if _active_turn_exists(session_id):
+        return jsonify({'error': {
+            'code': 'TURN_ALREADY_RUNNING', 'message': '该子会话已有执行中的回合',
+            'retryable': False, 'operation': 'continue_child'}}), 409
     try:
         result = continue_child(g.current_user['userId'], batch_id, session_id,
                                 prompt)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 409
+        return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
@@ -513,7 +541,7 @@ def reexecute(batch_id, session_id):
     try:
         result = reexecute_child(g.current_user['userId'], batch_id, session_id)
     except ValueError as e:
-        return jsonify({'error': str(e)}), 409
+        return jsonify(_child_state_error(e)), 409
     if result is None:
         return jsonify({'error': 'not found'}), 404
     from utils.batch_engine import get_worker
@@ -521,8 +549,86 @@ def reexecute(batch_id, session_id):
     return jsonify(result)
 
 # ---------------------------------------------------------------------------
-# P1 事件流 / attempt 链（spec §7.2/§8.1）
+# P1 事件流 / attempt 链 / 命令平面（spec §7.2/§8.1）
 # ---------------------------------------------------------------------------
+
+@ai_chat_batches_bp.post('/<batch_id>/commands')
+@login_required
+def submit_batch_command(batch_id):
+    """统一命令入口（P1 §8.1，缺口补齐 4.3）：内部 UI/脚本经命令表落意图，
+    幂等键缺省由 (type, batch, requester) 派生；同步应用（既有 HTTP 语义，
+    pause 立即生效——实现取舍见 utils/execution_commands.py docstring）。"""
+    from utils import execution_commands
+    from utils.batch_repo import (pause_batch, resume_batch, cancel_batch,
+                                  reset_failed_to_pending)
+    body = request.get_json(silent=True) or {}
+    command_type = (body.get('type') or body.get('commandType') or '').strip()
+    idem = (request.headers.get('Idempotency-Key') or '').strip()
+    if not command_type:
+        return jsonify({'error': {'code': 'COMMAND_REJECTED',
+                                  'message': 'type 必填（pause/resume/cancel/retry）',
+                                  'retryable': False,
+                                  'operation': 'submit_command'}}), 400
+    user = g.current_user
+    if not get_batch_detail(user['userId'], batch_id):
+        return jsonify({'error': 'not found'}), 404
+    try:
+        cmd = execution_commands.submit_command(
+            command_type, batch_id=batch_id, requested_by=user['userId'],
+            requested_by_kind='user', payload=body,
+            expected_generation=body.get('expectedGeneration'),
+            idempotency_key=idem or None)
+    except ValueError as e:
+        return jsonify({'error': {'code': 'COMMAND_REJECTED',
+                                  'message': str(e), 'retryable': False,
+                                  'operation': 'submit_command'}}), 400
+    applied, snapshot = True, None
+    try:
+        if command_type == 'pause':
+            dd = pause_batch(user['userId'], batch_id)
+            snapshot = dd['batch']['status'] if dd else None
+        elif command_type == 'resume':
+            dd = resume_batch(user['userId'], batch_id)
+            snapshot = dd['batch']['status'] if dd else None
+        elif command_type == 'cancel':
+            cancel_batch(user['userId'], batch_id)
+            snapshot = 'cancel_requested'
+        elif command_type in ('retry', 'retry-failed'):
+            snapshot = {'retried': reset_failed_to_pending(
+                user['userId'], batch_id)}
+        else:
+            applied = False
+    except ValueError as e:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='VERSION_CONFLICT')
+        return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                        'status': 'rejected',
+                        'error': {'code': 'VERSION_CONFLICT',
+                                  'message': str(e), 'retryable': True}}), 409
+    if applied:
+        execution_commands.finish_command(cmd['id'], 'applied',
+                                          result_snapshot={'result': snapshot})
+        from utils.batch_engine import get_worker
+        get_worker().notify()
+    else:
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='UNSUPPORTED')
+    return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                    'status': 'applied' if applied else 'rejected',
+                    'result': snapshot}), (200 if cmd['duplicate'] else 202)
+
+
+@ai_chat_batches_bp.get('/<batch_id>/commands/<command_id>')
+@login_required
+def batch_command_status(batch_id, command_id):
+    """命令状态查询（幂等提交后的轮询面）。"""
+    from utils import execution_commands
+    cmd = execution_commands.get_command(command_id)
+    if not cmd or cmd.get('batchId') != batch_id:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'commandId': cmd['id'], 'type': cmd['commandType'],
+                    'status': cmd['status'],
+                    'result': cmd.get('resultSnapshot')})
 
 @ai_chat_batches_bp.get('/<batch_id>/events')
 @login_required

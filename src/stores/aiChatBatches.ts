@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as api from '@/api/aiChatBatches'
+import { BatchEventStream } from '@/api/batchEvents'
 import type {
   AiChatBatch, AiChatBatchDetail, AiChatBatchSession,
 } from '@/types/aiChatBatch'
@@ -46,7 +47,28 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     applyDetail(detail)
     if (!TERMINAL_STATUSES.has(detail.batch.status)) {
       startDetailPolling(id)
+      watchBatchEvents(id)
+    } else {
+      stopBatchEvents()
     }
+  }
+
+  // 批任务事件流（P1 §7.2，缺口补齐 4.1）：SSE 帧到达即拉详情——把"状态
+  // 可见延迟"从轮询间隔降到秒级；detail polling 保留为降级路径。
+  let sseStream: BatchEventStream | null = null
+  function watchBatchEvents(batchId: string) {
+    try {
+      sseStream?.close()
+      sseStream = new BatchEventStream([batchId], {
+        onEvent: (bid) => { void _applyRunningDetail(bid) },
+        onDone: (bid) => { void _applyRunningDetail(bid) },
+      })
+      sseStream.open()
+    } catch { /* SSE 不可用 → 既有轮询兜底 */ }
+  }
+  function stopBatchEvents() {
+    sseStream?.close()
+    sseStream = null
   }
 
   // 搜索结果直开（批任务搜索 Spec §8.2）：命中的子会话所属批次可能不在当前
