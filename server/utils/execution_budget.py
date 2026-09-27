@@ -107,8 +107,25 @@ def batch_usage_total(batch_id: str) -> dict:
                 "COALESCE(SUM(wall_clock_ms), 0) FROM ai_execution_usage "
                 "WHERE batch_id = %s", (batch_id,))
             row = cur.fetchone()
+            # P1 §9.1 扩展维度（缺口补齐 5）：工具调用 / 子代理计数
+            cur.execute(
+                "SELECT COUNT(*) FROM agent_tool_calls t WHERE "
+                "  t.oc_session_id IN (SELECT opencode_session_id "
+                "    FROM ai_chat_sessions WHERE batch_id = %s "
+                "    AND opencode_session_id IS NOT NULL) OR "
+                "  t.subtask_id IN (SELECT id FROM ai_chat_subtasks WHERE "
+                "    root_session_id IN (SELECT id FROM ai_chat_sessions "
+                "    WHERE batch_id = %s))",
+                (batch_id, batch_id))
+            tool_calls = cur.fetchone()[0]
+            cur.execute(
+                "SELECT COUNT(*) FROM ai_chat_subtasks WHERE root_session_id "
+                "IN (SELECT id FROM ai_chat_sessions WHERE batch_id = %s)",
+                (batch_id,))
+            subagents = cur.fetchone()[0]
     return {'tokensInput': int(row[0]), 'tokensOutput': int(row[1]),
-            'cost': float(row[2]), 'wallClockMs': int(row[3])}
+            'cost': float(row[2]), 'wallClockMs': int(row[3]),
+            'toolCalls': int(tool_calls), 'subagents': int(subagents)}
 
 
 def evaluate_batch_budget(batch_id: str) -> dict:
@@ -125,7 +142,9 @@ def evaluate_batch_budget(batch_id: str) -> dict:
             ('tokens', total['tokensInput'] + total['tokensOutput'],
              budget['maxTokens']),
             ('cost', total['cost'], budget['maxCost']),
-            ('wall_clock_ms', total['wallClockMs'], budget['maxWallClockMs'])):
+            ('wall_clock_ms', total['wallClockMs'], budget['maxWallClockMs']),
+            ('tool_calls', total.get('toolCalls', 0), budget.get('maxToolCalls')),
+            ('subagents', total.get('subagents', 0), budget.get('maxSubagents'))):
         if limit is not None and used is not None and used >= float(limit):
             action = budget['onExceed']
             batch_events.append_event(
@@ -173,3 +192,65 @@ def batch_budget_blocks_claim(batch_id: str) -> bool:
                 (batch_id, batch_id, batch_id),
             )
             return cur.fetchone() is not None
+
+
+def scope_usage_total(scope_type: str, scope_id: str) -> dict:
+    """user / api_key scope 的 usage 汇总（缺口补齐 5：scope 扩展）。"""
+    col = {'user': 'user_id', 'api_key': 'api_key_id'}.get(scope_type)
+    if not col:
+        return {'tokensInput': 0, 'tokensOutput': 0, 'cost': 0.0,
+                'wallClockMs': 0}
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(tokens_input), 0), "
+                "COALESCE(SUM(tokens_output), 0), COALESCE(SUM(cost), 0), "
+                "COALESCE(SUM(wall_clock_ms), 0) FROM ai_execution_usage "
+                "WHERE session_id IN (SELECT id FROM ai_chat_sessions "
+                f"WHERE {col} = %s)", (scope_id,))
+            row = cur.fetchone()
+    return {'tokensInput': int(row[0]), 'tokensOutput': int(row[1]),
+            'cost': float(row[2]), 'wallClockMs': int(row[3])}
+
+
+def evaluate_scope_budget(scope_type: str, scope_id: str) -> dict:
+    """user/api_key 维度预算判定（同 batch 口径；超限动作恒为 drain——
+    scope 级不 abort 他批正在跑的子任务，只停止接收新认领）。
+    缺口补齐 5：scope 扩展。"""
+    budget = get_budget(scope_type, scope_id)
+    if not budget:
+        return {'exceeded': False, 'dimension': None, 'action': None,
+                'budget': False}
+    total = scope_usage_total(scope_type, scope_id)
+    for dim, used, limit in (
+            ('tokens', total['tokensInput'] + total['tokensOutput'],
+             budget['maxTokens']),
+            ('cost', total['cost'], budget['maxCost']),
+            ('wall_clock_ms', total['wallClockMs'], budget['maxWallClockMs'])):
+        if limit is not None and used is not None and used >= float(limit):
+            return {'exceeded': True, 'dimension': dim, 'action': 'drain',
+                    'budget': True}
+    return {'exceeded': False, 'dimension': None, 'action': None,
+            'budget': True}
+
+
+def concurrency_blocked_batches() -> dict:
+    """claim 前的 max_concurrency 检查（缺口补齐 5）：返回已达到
+    max_concurrency 上限的 batch_id → running 计数（这些批次的 pending
+    子任务本轮不认领）。"""
+    from db import get_db
+    blocked = {}
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT scope_id, max_concurrency FROM ai_execution_budgets "
+                "WHERE scope_type = 'batch' AND enabled "
+                "  AND max_concurrency IS NOT NULL")
+            for bid, cap in cur.fetchall():
+                cur.execute(
+                    "SELECT count(*) FROM ai_chat_sessions "
+                    "WHERE batch_id = %s AND status = 'running'", (bid,))
+                if cur.fetchone()[0] >= int(cap):
+                    blocked[bid] = True
+    return blocked

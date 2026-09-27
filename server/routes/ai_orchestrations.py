@@ -96,3 +96,39 @@ def run_events(run_id):
     rows = batch_events.read_events(run_id, after_seq=after_seq, limit=200)
     return jsonify({'runId': run_id, 'events': rows,
                     'nextAfterSeq': rows[-1]['event_seq'] if rows else after_seq})
+
+
+@ai_orchestrations_bp.get('/runs/<run_id>/graph')
+@login_required
+@require_permission('admin.ai_orchestration_admin')
+def run_graph(run_id):
+    """run graph（P2 §10/§13，缺口补齐 9）：节点状态/耗时/聚合可观测一次返回。"""
+    g_ = orchestration_engine.run_graph(run_id)
+    if not g_:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(g_)
+
+
+@ai_orchestrations_bp.post('/runs/<run_id>/suspend')
+@login_required
+@require_permission('admin.ai_orchestration_admin')
+def suspend_step(run_id):
+    """人工挂起（P2 §7.1，缺口补齐 3）：运行中的 step 挂起进审批——
+    暂停其子会话（pause_requested）并建人工审批请求；approve 后继续。"""
+    run = orchestration_engine.get_run(run_id)
+    if not run or run['status'] not in ('running', 'waiting_approval'):
+        return jsonify({'error': 'run not active'}), 409
+    body = request.get_json(silent=True) or {}
+    step_id = (body.get('stepId') or '').strip()
+    step = next((s for s in run['steps'] if s['id'] == step_id), None)
+    if not step or step['status'] != 'running':
+        return jsonify({'error': 'step not running'}), 409
+    if not step.get('session_id'):
+        return jsonify({'error': 'step has no child session'}), 409
+    from utils.batch_repo import pause_batch
+    pause_batch(run['requested_by'], step.get('batch_id'))         if step.get('batch_id') else None
+    from utils import approval_repo
+    aid = approval_repo.create_approval(
+        run_id=run_id, step_id=step_id, risk_level='high',
+        effect_summary=f'人工挂起: {step.get("name") or step["node_id"]}')
+    return jsonify({'approvalId': aid}), 201

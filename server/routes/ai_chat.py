@@ -778,7 +778,13 @@ def _load_session_for_user(session_id: str, user_id: str):
 def _execution_controlled(sess) -> bool:
     """P0 执行所有权（spec §4.1；M3，10 号 §3.5）：批任务 **或编排 run**
     的非终态子会话由后台 worker 独家驱动——普通发送/命令/压缩不得绕过
-    （编排子会话 batch_id 为空但同样被 claim，此前三处入口只查 batch_id）。"""
+    （编排子会话 batch_id 为空但同样被 claim，此前三处入口只查 batch_id）。
+
+    AI_BATCH_STRICT_OWNERSHIP=0 时降级放行（P0 §10.3 渐进迁移开关，
+    默认严格）。"""
+    import os as _os
+    if (_os.getenv('AI_BATCH_STRICT_OWNERSHIP', '1') or '1').strip().lower()             in ('0', 'false', 'no'):
+        return False
     _batch = sess[5] if len(sess) > 5 else None
     _orch = sess[6] if len(sess) > 6 else None
     _status = sess[3] if len(sess) > 3 else None

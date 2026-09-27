@@ -618,6 +618,30 @@ def submit_batch_command(batch_id):
                     'result': snapshot}), (200 if cmd['duplicate'] else 202)
 
 
+@ai_chat_batches_bp.get('/<batch_id>/commands')
+@login_required
+def list_batch_commands(batch_id):
+    """命令历史（P1 §10，缺口补齐 4.2 数据源）：该批全部命令按时间倒序。"""
+    if not get_batch_detail(g.current_user['userId'], batch_id):
+        return jsonify({'error': 'not found'}), 404
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, command_type, requested_by, requested_by_kind, "
+                "  status, error_code, result_snapshot, created_at, applied_at "
+                "FROM ai_execution_commands WHERE batch_id = %s "
+                "ORDER BY created_at DESC LIMIT 100", (batch_id,))
+            cols = ['commandId', 'type', 'requestedBy', 'requestedByKind',
+                    'status', 'errorCode', 'result', 'createdAt', 'appliedAt']
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in rows:
+        for k in ('createdAt', 'appliedAt'):
+            if r.get(k) is not None:
+                r[k] = r[k].isoformat()
+    return jsonify({'commands': rows})
+
+
 @ai_chat_batches_bp.get('/<batch_id>/commands/<command_id>')
 @login_required
 def batch_command_status(batch_id, command_id):
@@ -629,6 +653,39 @@ def batch_command_status(batch_id, command_id):
     return jsonify({'commandId': cmd['id'], 'type': cmd['commandType'],
                     'status': cmd['status'],
                     'result': cmd.get('resultSnapshot')})
+
+@ai_chat_batches_bp.post('/<batch_id>/force-stop')
+@login_required
+def force_stop(batch_id):
+    """P1 §6.4 `force_stop`（缺口补齐 4）：drain 超时后的管理员强制通道。
+    立即取消全部非终态子任务（fencing+1 使旧执行体失效），批次落 failed。"""
+    from utils.batch_repo import force_stop_batch
+    from utils import execution_commands
+    user = g.current_user
+    if user.get('role') != 'admin':
+        return jsonify({'error': {'code': 'FORBIDDEN',
+                                  'message': '仅管理员可强制停止',
+                                  'retryable': False,
+                                  'operation': 'force_stop'}}), 403
+    body = request.get_json(silent=True) or {}
+    idem = (request.headers.get('Idempotency-Key') or '').strip()
+    try:
+        cmd = execution_commands.submit_command(
+            'force_stop', batch_id=batch_id, requested_by=user['userId'],
+            requested_by_kind='user', payload=body,
+            idempotency_key=idem or None)
+    except ValueError as e:
+        return jsonify({'error': {'code': 'COMMAND_REJECTED',
+                                  'message': str(e), 'retryable': False,
+                                  'operation': 'force_stop'}}), 400
+    result = force_stop_batch(batch_id, operator=user['userId'])
+    execution_commands.finish_command(cmd['id'], 'applied',
+                                      result_snapshot=result)
+    from utils.batch_engine import get_worker
+    get_worker().notify()
+    return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                    **result})
+
 
 @ai_chat_batches_bp.get('/<batch_id>/events')
 @login_required
@@ -643,6 +700,19 @@ def batch_events_page(batch_id):
         limit = min(max(1, int(request.args.get('limit', 100))), 500)
     except (TypeError, ValueError):
         return jsonify({'error': 'afterSeq 与 limit 必须是整数'}), 400
+    # P1 §7.3（缺口补齐）：游标过旧（保留期裁剪后）→ CURSOR_EXPIRED，与对外一致
+    from db import get_db as _gdb
+    with _gdb() as _conn:
+        with _conn.cursor() as _cur:
+            _cur.execute("SELECT min(event_seq) FROM ai_batch_events "
+                         "WHERE batch_id = %s", (batch_id,))
+            _row = _cur.fetchone()
+    min_seq = _row[0] if _row and _row[0] is not None else None
+    if after_seq > 0 and min_seq is not None and after_seq < min_seq - 1:
+        return jsonify({'error': {
+            'code': 'CURSOR_EXPIRED',
+            'message': f'afterSeq 过旧：保留期内的最早事件为 {min_seq}，请从该位置重新拉取',
+            'retryable': True, 'earliestSeq': min_seq}}), 410
     rows = batch_events.read_events(batch_id, after_seq=after_seq, limit=limit)
     return jsonify({'batchId': batch_id, 'events': rows,
                     'nextAfterSeq': rows[-1]['event_seq'] if rows else after_seq,

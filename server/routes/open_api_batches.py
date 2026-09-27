@@ -1161,6 +1161,11 @@ def submit_command(batch_id):
             from utils.batch_repo import reset_failed_to_pending
             snapshot = {'retried': reset_failed_to_pending(
                 key['ownerUserId'], batch_id, api_key_id=key['id'])}
+        elif command_type == 'force_stop':
+            from utils.batch_repo import force_stop_batch
+            r = force_stop_batch(batch_id, operator=f'api_key:{key["id"]}',
+                                 api_key_id=key['id'])
+            snapshot = r
         else:
             applied = False
     except ValueError as e:

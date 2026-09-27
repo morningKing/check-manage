@@ -864,6 +864,140 @@ def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
             assert cur.fetchone()[0] == 'completed'
 
 
+def test_cursor_expired_returns_410(db_conn, user_id, gap_internal_client):
+    """缺口补齐 V4：保留期裁剪后游标过旧 → 410 CURSOR_EXPIRED。"""
+    bid, sids = _seed_batch(db_conn, 'user-admin', 1)  # client 身份为 admin
+    client, hdrs = gap_internal_client
+    # 造 seq=1..5 的事件并删除 seq<5 的（模拟保留期裁剪），使 min_seq=5
+    with db_conn.cursor() as cur:
+        for seq in range(1, 6):
+            cur.execute(
+                "INSERT INTO ai_batch_events (batch_id, event_seq, event_id, "
+                "  event_type, aggregate_type) "
+                "VALUES (%s, %s, %s, 'x', 'batch')",
+                (bid, seq, f'evt-ce-{bid}-{seq}'))
+        cur.execute("DELETE FROM ai_batch_events WHERE batch_id=%s "
+                    "AND event_seq < 5", (bid,))
+    db_conn.commit()
+    r = client.get(f'/ai/chat/batches/{bid}/events?afterSeq=2', headers=hdrs)
+    assert r.status_code == 410
+    assert 'CURSOR_EXPIRED' in r.get_data(as_text=True)
+    # 正常游标仍可用
+    r2 = client.get(f'/ai/chat/batches/{bid}/events?afterSeq=5', headers=hdrs)
+    assert r2.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_batch_events WHERE batch_id=%s", (bid,))
+    db_conn.commit()
+
+
+def test_scan_scheduler_requires_lease(db_conn, monkeypatch):
+    """缺口补齐 V3：scan scheduler tick 纳入 DB 租约——抢不到租约则本轮
+    不执行任何扫描任务（多进程单实例）；租约可用则正常执行。"""
+    from utils import ai_scan_scheduler as sched
+    ran = []
+    import utils.ai_scan_repo as _repo
+    monkeypatch.setattr(_repo, 'list_tasks', lambda: [
+        {'id': 't1', 'enabled': True}])
+    import utils.ai_scan_engine as _engine
+    monkeypatch.setattr(_engine, 'run_task', lambda task: ran.append(task['id']))
+
+    class _FakeLock:
+        def acquire(self, blocking=False): return True
+        def release(self): pass
+    monkeypatch.setattr(sched, '_task_lock', lambda tid: _FakeLock())
+    import utils.execution_lease as el
+    monkeypatch.setattr(el, 'acquire', lambda key, owner, lease_kind=None:
+                        (False, None))
+    sched._tick()
+    assert ran == []                       # 无租约：不扫描
+    monkeypatch.setattr(el, 'acquire', lambda key, owner, lease_kind=None:
+                        (True, None))
+    sched._tick()
+    assert ran == ['t1']                   # 有租约：执行
+
+
+def test_force_stop_batch_cancels_running(db_conn, user_id, monkeypatch):
+    """缺口补齐 4（P1 §6.4）：force_stop 立即取消全部非终态子任务
+    （fencing+1 使旧执行体失效），批次落 failed，abort 尽力执行。"""
+    from unittest.mock import MagicMock
+    from utils.batch_repo import force_stop_batch
+    bid, sids = _seed_batch(db_conn, user_id, 2)
+    _set_child(db_conn, sids[0], status='running', opencode_session_id='oc-fs-1')
+    _set_child(db_conn, sids[1], status='pending')
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_batches SET status='running' WHERE id=%s",
+                    (bid,))
+    db_conn.commit()
+    aborted = []
+    fake_oc = MagicMock()
+    fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append(oc)
+    import utils.opencode_client as _ocmod
+    monkeypatch.setattr(_ocmod, 'OpenCodeClient', lambda base_url: fake_oc)
+    r = force_stop_batch(bid, operator='test-admin')
+    assert r['cancelled'] == 2
+    assert sorted(aborted) == ['oc-fs-1']
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_chat_sessions WHERE id=%s", (sids[0],))
+        assert cur.fetchone()[0] == 'cancelled'
+        cur.execute("SELECT status FROM ai_chat_batches WHERE id=%s", (bid,))
+        assert cur.fetchone()[0] == 'failed'
+
+
+def test_v1_effect_writers_end_to_end(db_conn, user_id, monkeypatch, tmp_path):
+    """V1（缺口补齐验证）：artifact 与 file_import 两类 effect 生产写入方，
+    经真实代码路径（ingest_session_outputs / import_recorded_files）断言
+    effect 行登记与终态。mcp_write 经内部转发端点的测试见
+    test_internal_commands_endpoint 家族；scan_writeback 的登记见
+    ai_scan_engine（on_child_finished 回写成功路径）。"""
+    import config as cfg
+    from utils import artifact_store
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    monkeypatch.setattr(cfg, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    out_dir = tmp_path / 'outputs'
+    out_dir.mkdir()
+    (out_dir / 'result.txt').write_text('产出内容', encoding='utf-8')
+    ids = artifact_store.ingest_session_outputs(
+        sid, str(tmp_path), run_id=f'run-v1-{uuid.uuid4().hex[:8]}',
+        step_id='st-v1', owner_user_id=user_id, batch_id=bid)
+    assert ids, '产物应登记成功'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM ai_execution_effects "
+                "WHERE session_id=%s AND effect_type='artifact'", (sid,))
+            assert cur.fetchone()[0] >= 1          # artifact effect 已登记
+    # file_import：登记 session_files 记录 → 导入 → effect committed
+    from utils.session_file_import import import_recorded_files
+    src = tmp_path / 'doc.txt'
+    src.write_text('导入内容', encoding='utf-8')
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_session_files (session_id, path, status) "
+            "VALUES (%s, 'doc.txt', 'added') RETURNING id", (sid,))
+        _sfid = cur.fetchone()[0]
+    db_conn.commit()
+    results = import_recorded_files(sid, str(tmp_path), ['doc.txt'],
+                                    uploaded_by=user_id)
+    assert results and results[0]['status'] in ('imported', 'existing')
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT status FROM ai_execution_effects "
+                "WHERE effect_type='file_import' AND session_id=%s "
+                "ORDER BY created_at DESC LIMIT 1", (sid,))
+            row = cur.fetchone()
+            assert row is not None, 'file_import effect 未登记'
+            assert row[0] == 'committed'
+    # 清理
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_execution_effects WHERE session_id=%s", (sid,))
+        cur.execute("DELETE FROM artifacts WHERE id = ANY(%s)", (ids,))
+        cur.execute("DELETE FROM ai_execution_effects "
+                    "WHERE session_id=%s AND effect_type='file_import'", (sid,))
+    db_conn.commit()
+
+
 def test_internal_commands_endpoint(db_conn, gap_internal_client):
     """缺口补齐 4.3（P1 §8.1）：内部 commands 端点——幂等（重复键 200 +
     duplicate=True）、状态查询、expectedGeneration 冲突 409 VERSION_CONFLICT。

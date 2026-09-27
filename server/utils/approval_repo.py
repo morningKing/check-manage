@@ -40,10 +40,15 @@ def can_decide(appr: dict, user: dict) -> bool:
 
 
 def decide(approval_id: str, decision: str, decided_by: str, *,
-           comment: str | None = None) -> dict | None:
-    """approve / reject（幂等：非 pending 返回既有状态，不重复决策）。"""
+           comment: str | None = None,
+           edits: dict | None = None) -> dict | None:
+    """approve / reject（幂等：非 pending 返回既有状态，不重复决策）。
+
+    `edits`（缺口补齐：审批 edit）：批准时可携带对下游输入的修改
+    （dict，与 run_input_snapshot 合并）——"改参数后批准"。"""
     if decision not in ('approved', 'rejected'):
         raise ValueError('decision 只支持 approved/rejected')
+    from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT status, run_id, step_id, requested_at "
@@ -71,8 +76,40 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
     if not landed:
         return {'id': approval_id, 'status': 'pending', 'duplicate': True}
     run_id, step_id = landed
-    # 推进 step / run（approval 是结构性节点：approve → succeeded；reject → failed）
-    from utils import orchestration_engine
+    # 推进 step / run：结构性 approval 节点 approve → succeeded / reject → failed；
+    # 策略拦截的 agent step（kind='agent'）approve → 回 blocked 重新派发。
+    step_kind = None
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT kind FROM ai_orchestration_steps WHERE id = %s",
+                (step_id,))
+            r = cur.fetchone()
+            step_kind = r[0] if r else None
+        conn.commit()
+    from utils import orchestration_engine, batch_events
+    if decision == 'approved' and step_kind == 'agent':
+        # 策略拦截放行：step 回 blocked，下轮 advance 正常派发
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_orchestration_steps SET status='blocked', "
+                    "  updated_at=NOW() WHERE id=%s", (step_id,))
+            conn.commit()
+        batch_events.append_event(run_id, 'command.applied',
+                                  aggregate_type='step', aggregate_id=step_id,
+                                  payload={'approval': 'approved',
+                                           'by': decided_by,
+                                           'policyRelease': True})
+        from utils import batch_events
+        batch_events.append_event(run_id, 'command.applied',
+                                  aggregate_type='step', aggregate_id=step_id,
+                                  payload={'approval': 'approved',
+                                           'by': decided_by,
+                                           'policyRelease': True})
+        orchestration_engine._advance_run(run_id)
+        return {'id': approval_id, 'status': decision, 'duplicate': False,
+                'runId': run_id, 'stepId': step_id}
     new_step_status = 'succeeded' if decision == 'approved' else 'failed'
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -84,11 +121,26 @@ def decide(approval_id: str, decision: str, decided_by: str, *,
                  None if decision == 'approved' else '审批被拒绝',
                  step_id))
         conn.commit()
+    if decision == 'approved' and edits:
+        # 审批 edit（P2 §7.2）：把修改合并进 run 输入快照——下游 step 渲染
+        # {{input.*}} 时使用改后的参数
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE ai_orchestration_runs "
+                        "SET run_input_snapshot = run_input_snapshot || %s::jsonb "
+                        "WHERE id = %s",
+                        (json.dumps(edits, ensure_ascii=False), run_id))
+                conn.commit()
+        except Exception:
+            pass
     from utils import batch_events
     batch_events.append_event(run_id, 'command.applied',
                               aggregate_type='step', aggregate_id=step_id,
                               payload={'approval': decision,
                                        'by': decided_by,
+                                       'edits': edits,
                                        'decisionHash': decision_hash})
     orchestration_engine._advance_run(run_id)
     return {'id': approval_id, 'status': decision, 'duplicate': False,

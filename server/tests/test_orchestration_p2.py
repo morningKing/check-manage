@@ -354,6 +354,81 @@ def test_approval_reject_fails_run(db_conn, user_id):
     assert run['status'] in ('failed', 'partial')
 
 
+def test_policy_interception_blocks_then_releases(db_conn, user_id,
+                                                  monkeypatch, tmp_path):
+    """缺口补齐（P2 §7.1 策略拦截最小集）：节点声明 approval_policy 的
+    agent step 派发前进入 waiting_approval + 建审批请求；approve 后回
+    blocked 重新派发（不直接 succeeded）。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from utils import approval_repo
+    from utils.batch_engine import BatchWorker
+    from unittest.mock import MagicMock
+    d = defs.publish_definition(
+        f'policy-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[{'id': 'solo', 'kind': 'agent', 'prompt_template': '做 {{input.task}}',
+                'approval_policy': {'tools': ['bash']}}],
+        edges=[])
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    eng2._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id, status FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        step_id, status = cur.fetchone()
+        cur.execute("SELECT count(*) FROM ai_approval_requests WHERE run_id=%s",
+                    (run['id'],))
+        assert cur.fetchone()[0] == 1              # 策略审批已建
+    assert status == 'waiting_approval'
+    # 子会话未派发（策略拦截在派发前）
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE orchestration_run_id=%s",
+                    (run['id'],))
+        assert cur.fetchone()[0] == 0
+    # approve → step 回 blocked → 下轮 advance 派发
+    apr_id = db_conn.cursor()
+    db_conn.rollback()
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM ai_approval_requests WHERE run_id=%s "
+                    "ORDER BY id DESC LIMIT 1", (run['id'],))
+        apr_id = cur.fetchone()[0]
+    approval_repo.decide(apr_id, 'approved', user_id, comment='放行')
+    run2 = eng2.get_run(run['id'])
+    step_map = {s['node_id']: s for s in run2['steps']}
+    assert step_map['solo']['status'] in ('pending', 'running', 'blocked')
+    fake = MagicMock()
+    fake.create_session.return_value = 'oc-policy'
+    fake.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done'}]}]
+    fake.send_message.return_value = {'id': 'm'}
+    fake.get_messages.return_value = []
+    from utils import batch_engine as eng
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    eng2._advance_run(run['id'])
+    w = BatchWorker()
+    w._claim_pending_sessions(limit=1)
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE "
+                    "orchestration_run_id=%s", (run['id'],))
+    db_conn.commit()
+    # 完成子会话推进 DAG（approve 后策略不再拦截）
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",
+                    (run['id'],))
+        csid = cur.fetchone()[0]
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
+                    (csid,))
+        cur.execute("SELECT id FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        sid_step = cur.fetchone()[0]
+    db_conn.commit()
+    eng2.on_child_terminal(run['id'], sid_step, csid)
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_orchestration_steps WHERE id=%s",
+                    (sid_step,))
+        assert cur.fetchone()[0] == 'succeeded'    # 放行后正常派发并跑通
+
+
 def test_approval_timeout_expires(db_conn, user_id):
     from utils import orchestration_engine as eng, approval_repo
     did = _approval_def(db_conn, user_id)

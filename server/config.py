@@ -87,6 +87,10 @@ AI_WORKSPACE_ROOT     = os.getenv(
 OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
+# P0 §10.3 执行所有权严格模式的降级开关（默认开启严格模式）：
+# 设为 0/False 时，非终态批子会话的普通发送不再被 409 拒绝（渐进迁移用）。
+AI_BATCH_STRICT_OWNERSHIP = (os.getenv('AI_BATCH_STRICT_OWNERSHIP', '1')
+                            or '1').strip() not in ('0', 'false', 'no')
 # 工作区配额（MB）：0 = 不启用（默认）。仅在显式设置时于新建 workspace 前
 # 做用户目录累计占用检查——默认值不应打断真实使用（2026-09-27 实测教训：
 # 默认 200MB 会直接拒绝存量用户的新任务）。

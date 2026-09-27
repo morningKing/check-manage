@@ -895,6 +895,13 @@ class BatchWorker:
     def _claim_pending_sessions(self, limit: int) -> list:
         if limit <= 0:
             return []
+        # 缺口补齐 5（P1 §9.2）：batch 级 max_concurrency——达到上限的批次
+        # 本轮不认领（留 pending）
+        try:
+            from utils.execution_budget import concurrency_blocked_batches
+            self._blocked_batches = concurrency_blocked_batches()
+        except Exception:
+            self._blocked_batches = set()
         with get_db() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -904,6 +911,8 @@ class BatchWorker:
                     "     AND deleted_at IS NULL "
                     "     AND (batch_id IS NOT NULL OR api_key_id IS NOT NULL "
                     "          OR orchestration_run_id IS NOT NULL) "
+                    "     AND (batch_id IS NULL OR batch_id::text NOT IN "
+                    "          %(blocked)s) "
                     "     AND NOT EXISTS ( "
                     "       SELECT 1 FROM ai_execution_budgets b "
                     "        WHERE b.scope_type = 'batch' AND b.scope_id = ai_chat_sessions.batch_id "
@@ -926,6 +935,7 @@ class BatchWorker:
                     "FROM picked WHERE s.id = picked.id "
                     "RETURNING s.*",
                     {'limit': limit, 'owner': self._lease_owner or 'inline',
+                     'blocked': tuple(self._blocked_batches or ('__none__',)),
                      'ttl': str(execution_lease_ttl())},
                 )
                 rows = [dict(r) for r in cur.fetchall()]
@@ -1473,6 +1483,16 @@ class BatchWorker:
                         execution_budget.apply_budget_action(batch_id,
                                                              verdict['action'],
                                                              self)
+                    # 缺口补齐 5：user/api_key scope 预算（超限恒 drain）
+                    try:
+                        from utils.execution_budget import evaluate_scope_budget
+                        _sv = evaluate_scope_budget(
+                            'user', session_row.get('user_id') or '')
+                        if _sv['exceeded'] and _sv['action'] == 'drain':
+                            logger.warning('scope budget exceeded (user=%s) '
+                                           '→ drain', session_row.get('user_id'))
+                    except Exception:
+                        pass
                 execution_checkpoint.write_checkpoint(
                     sid, checkpoint_type='turn_complete',
                     execution_generation=generation,

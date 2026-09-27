@@ -1291,6 +1291,73 @@ def admin_soft_delete_child(batch_id: str, sid: str) -> dict | None:
             'deletedAt': deleted_at.isoformat() if deleted_at else None}
 
 
+def force_stop_batch(batch_id: str, *, operator: str,
+                     api_key_id: str | None = None) -> dict:
+    """P1 §6.4 `force_stop`（缺口补齐 4）：drain 超时后的管理员强制通道。
+
+    对全部非终态子会话：fencing_token += 1（使旧执行体的写回全部失效）、
+    尽力 abort 其 OpenCode 回合、pending/running → cancelled（计入 failed）、
+    paused → cancelled；attempt 收口为 stopped；批次置 failed。
+    与 cancel_batch 的区别：不等 worker 协作收口，立即落终态。"""
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    stopped = {'cancelled': 0, 'ocAborted': 0}
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_chat_sessions "
+                "   SET fencing_token = fencing_token + 1, "
+                "       status = 'cancelled', cancel_requested = false, "
+                "       pause_requested = false, active_turn_id = NULL, "
+                "       error_message = '已被管理员强制停止' "
+                " WHERE batch_id = %s AND status IN ('pending', 'running', 'paused') "
+                " RETURNING id, opencode_session_id, status",
+                (batch_id,))
+            rows = cur.fetchall()
+            stopped['cancelled'] = len(rows)
+            cur.execute(
+                "UPDATE ai_chat_batches SET failed = failed + %s "
+                "WHERE id = %s", (len(rows), batch_id))
+            # attempt 收口（P1：终态子任务不留 running attempt）
+            for r in rows:
+                cur.execute(
+                    "UPDATE ai_execution_attempts a SET status = 'stopped', "
+                    "  finished_at = NOW() FROM ai_chat_sessions s "
+                    " WHERE a.session_id = s.id AND s.id = %s "
+                    "   AND a.status IN ('running', 'recovering')", (r[0],))
+        conn.commit()
+    # OpenCode abort（best-effort，会话可能已不存在）
+    from utils.opencode_client import OpenCodeClient as _OCClient
+    from config import OPENCODE_BASE_URL as _OC_URL
+    client = _OCClient(_OC_URL)
+    for r in rows:
+        oc = r[1]
+        if oc:
+            try:
+                client.abort_session(oc)
+                stopped['ocAborted'] += 1
+            except Exception:
+                pass
+    from utils.execution_audit import finish_latest_running
+    for r in rows:
+        try:
+            finish_latest_running(r[0], 'stopped', error_code='FORCE_STOPPED')
+        except Exception:
+            pass
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_batches SET status='failed', "
+                    "  completed_at=COALESCE(completed_at, NOW()) "
+                    "WHERE id=%s", (batch_id,))
+        conn.commit()
+    from utils.operation_log import log_operation
+    log_operation('update', 'ai_chat_batch', batch_id, batch_id,
+                  f'管理员强制停止（{operator}）：取消 {stopped["cancelled"]} 个子任务')
+    _log.warning('force_stop batch=%s by=%s cancelled=%s', batch_id, operator,
+                 stopped['cancelled'])
+    return {'cancelled': stopped['cancelled'], **stopped}
+
+
 def admin_get_batch_owner(batch_id: str) -> str | None:
     """该批任务的归属用户 id。写路径专用：拿到它之后复用按归属过滤的写函数，
     这样系统里永远不存在"不按归属过滤的写"。"""
