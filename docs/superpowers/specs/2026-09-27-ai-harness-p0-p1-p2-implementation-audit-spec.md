@@ -99,7 +99,7 @@
 | 6 | step CAS 派发（并发只建一个子会话） | ✅ | ✅ `test_h4_concurrent_advance_dispatches_once` / `test_h4_failed_step_not_redispatched` | ❌ | — |
 | 7 | 审批流（waiting_approval / approve / reject / 超时过期，§7） | ✅ | ✅ `test_approval_flow_approve` / `test_approval_reject_fails_run` / `test_approval_timeout_expires` | ✅ harness-safety P2（真实等待审批） | **edit（改参数后批准）❌；策略拦截（approval_policy 按 tool/effect）❌；运行中人工挂起 step ❌** |
 | 8 | 审批投影到工作流收件箱（Phase B） | ✅ | ❌（前端 vitest 无） | ✅ WorkflowInbox 渲染 AI 审批（e2e DAG 用例路径） | — |
-| 9 | 结果 contract（§6.1-6：schema/文件/DB 校验 step 输出） | ❌ | ❌ | ❌ | 现状输出仅 `{'text': …}`，条件判定支持 `field='text'`（H5 回修）；结构化 schema 校验未做 |
+| 9 | 结果 contract（§6.1-6：schema/文件/DB 校验 step 输出） | 🟡 | ⚠️ 间接（`test_linear_dag_end_to_end` 走 file 校验路径） | ❌ | **【8 号核对勘误】`file` 类型最小集已实现**（`orchestration_engine.py:443-480`：`output_contract.type='file'` 检查产物存在，不过则 step 不 succeeded）；`json_schema/db_record/external_response/action` 未实现。原判「❌ 全部未实现」有误，对照《落地与验证汇总》P2-14 更正 |
 | 10 | compensation 补偿（§6.1-9） | 🟡 | ⚠️ 边类型校验含 compensation（`VALID_EDGE_KINDS`） | ❌ | **补偿执行引擎未实现** |
 | 11 | Artifact Store（内容寻址/去重/引用/权限，§5.5/9） | ✅ | ✅ `test_artifact_put_dedup_and_auth` / `test_ingest_session_outputs` / `test_m9_artifact_dedup_scoped_by_owner` | ❌ 下载/隔离无 e2e | 过期清理（保留策略）❌ |
 | 12 | Runtime Adapter 接口 + OpenCode 本地实现（§8，Phase D） | 🟡 | ✅ `test_runtime_adapter_default_and_capabilities` / `test_opencode_local_wraps_client` | ❌ | **生产执行未切 adapter**（仍走批 worker/OpenCode 直连）——多轮复审登记的残留 |
@@ -110,7 +110,7 @@
 | 17 | 调度/配额/ETA/成本/run graph 管理面（目标 7 / Phase F） | ❌ | ❌ | ❌ | 未启动 |
 | 18 | 「模型不得推进 DAG」+ declared_plan（§6.4） | 🟡 | ✅ 状态仅服务端推进有测试 | ❌ | todo_trace 的 `declared_plan` 记录集成 ❌ |
 
-**P2 小结**：DAG/审批/Artifact/调度器主链路完整且经真实审批 E2E 验证；**缺口** = 结果 contract、补偿执行、runtime manifest 冻结、adapter 生产接线与容器/K8s、管理面与对外 /v1 契约。
+**P2 小结**：DAG/审批/Artifact/调度器主链路完整且经真实审批 E2E 验证；**缺口** = 结果 contract 多类型（`file` 最小集已落地）、补偿执行、runtime manifest 冻结、adapter 生产接线与容器/K8s、管理面与对外 /v1 契约、artifacts 备份/保留期、审批超时升级（【8 号核对增补】后三项源自《落地与验证汇总》）。
 
 ---
 
@@ -150,7 +150,56 @@
 - P1 §13 十条验收：**七条满足**（租约/恢复分流/attempt/事件/outbox/命令/预算核心）；「checkpoint 恢复」「对外错误结构化」「管理面可见」三条未满足；量化指标未测量。
 - P2 §12.4：DAG/审批/artifact 验收满足；runtime 隔离、调度公平、结果 contract 未满足。
 
-## 7. 维护说明
+
+
+---
+
+## 8. 二次核对增补（2026-09-27，对照《2026-09-27-ai-harness-p0-p1-p2-落地与验证汇总.md》）
+
+《落地与验证汇总》（独立核查，基线 `a04b653`）与本审计交叉核对后，发现本审计 **8 处遗漏/偏差**，已逐条 `git grep` 复核属实并收录如下；同时本审计亦有两项为《汇总》未覆盖的补充（见 8.3）。两文档合并后即完整核对集。
+
+### 8.1 本审计遗漏的功能点（已核实，均为 ❌ 未落地）
+
+| # | 功能点 | Spec 章节 | 核实证据 | 应归属 |
+|---|---|---|---|---|
+| A1 | `gate_status` 变更写 `ai_execution_events`（`event_type='gate.evaluated'`） | P0 §8.3 | 全仓仅迁移注释提及，无写入方 | P0 审计表新增 |
+| A2 | `AI_BATCH_STRICT_OWNERSHIP` 降级开关（多进程渐进迁移用） | P0 §10.3 | 全仓零命中 | P0 审计表新增 |
+| A3 | scan scheduler 单实例租约（纳入 `ai_batch_worker_leases` 体系） | P1 §5.8 | `ai_scan_scheduler.py` 仅用进程内/文件锁 `lock.acquire`，非租约表 | P1 审计表新增 |
+| A4 | `force_stop` 命令处理逻辑 | P1 §6.4/§8.2 | 仅列入 `COMMAND_TYPES`（`execution_commands.py:18-19`），无专属处理分支/端点语义 | P1 命令行细化 |
+| A5 | checkpoint 写入时机补全（`progress`/`recovery`） | P1 §5.3 | 仅 `dispatch`（batch_engine:1250）与 `turn_complete`（:1436）两处 | P1 checkpoint 行细化 |
+| A6 | artifacts 纳入备份 | P2 §9.3 | `backup.py` 明确排除 `AI_WORKSPACE_ROOT`（artifacts 在其下）→ 产物不随备份 | P2 审计表新增 |
+| A7 | artifacts 保留期/过期清理 | P2 §9.3 | 未实现（本审计 Artifact 行只提了「过期清理❌」，未单列） | P2 审计表新增 |
+| A8 | 审批超时**升级/通知** | P2 §7.2 | 仅 `expire_overdue` 置 expired（按 reject 处理），代码注释自认「升级语义后续扩展」（approval_repo.py:99） | P2 审批行细化 |
+
+### 8.2 本审计的判断修正
+
+| 项 | 原判断 | 修正后 | 依据 |
+|---|---|---|---|
+| P2 结果 contract | ❌ 全部未实现 | 🟡 `file` 最小集**已实现**（含条件拦截：contract 不过 step 不 succeeded），`json_schema/db_record/external_response/action` 未实现 | `orchestration_engine.py:443-480` 实读 |
+| P1 命令平面 | 「内部统一命令入口路由未做」 | 补充实现取舍：**同步应用**（路由内联 CAS，pause 立即生效）+ 幂等/审计，**无异步 worker 消费**——`execution_commands.py` docstring 已声明该取舍 | 模块 docstring 实读 |
+| P0 F10 前端文案 | 「无 vitest ❌」 | 验证口径放宽：文案映射存在 + e2e 间接断言（stop-resume 流程的暂停/继续文案）；专项 vitest 断言仍缺 | 《汇总》P0-21 |
+
+### 8.3 本审计独有、《汇总》未覆盖的补充项
+
+| 项 | 说明 |
+|---|---|
+| P0 §11.4 生产代理验证（proxy :8080）从未执行 | 两文档合并后才覆盖 |
+| P0 §12 竞态矩阵逐格盘点（cancel↔resume 僵死组合无专项测试） | 同上 |
+| P2 §6.4 `declared_plan`/todo_trace 集成缺失（「模型不得推进 DAG」的状态推进部分 ✅，Todo 记录部分未接） | 同上 |
+| P2 对外 `/v1/ai-orchestrations/*` 契约未暴露 | 同上 |
+| P1 验收量化指标（SSE ≤2s、回调 8 次内 100%）从未测量 | 同上 |
+
+### 8.4 基线差异说明
+
+《汇总》基线 `a04b653`；本审计基线 `229ffc4`（多 5 个提交：15/16 号复审处置 + 14 号文件入库 + `_settle` 批次存活检查），两者对本审计功能点清单均无影响（差异提交只动文档与孤儿事件回收）。
+
+### 8.5 合并后的未落地清单（最终口径，替代本审计 §5 与《汇总》§4 的并集）
+
+**P0**：① `gate.evaluated` 事件（A1）② `AI_BATCH_STRICT_OWNERSHIP`（A2）③ 错误码表补齐（4/10）
+**P1**：④ 前端 SSE 主通道+cursor 客户端 ⑤ 内部 commands 端点（A：`force_stop` 处理、异步消费取舍已声明）⑥ effect 生产写入方（mcp_write/file_import/scan_writeback/artifact）⑦ checkpoint 写入时机补全 + 恢复决策消费（A5 + 本审计 #3/#5）⑧ `workspace_bytes`/`AI_WORKSPACE_QUOTA_MB` ⑨ workspace retention 回收 ⑩ scan scheduler 租约（A3）⑪ 管理面前端面板 ⑫ 对外状态扩展字段（generation/queueWaitMs/runningMs/lastProgressAt/phase）⑬ CURSOR_EXPIRED/事件保留 ⑭ 故障注入测试 ⑮ 对外错误结构化（M7）
+**P2**：⑯ Runtime adapter 生产接线 + `ai_runtime_manifests` 启用 ⑰ 结果 contract 多类型（file 已落地）⑱ 补偿执行 ⑲ 审批 edit/超时升级（A8）/策略拦截/人工挂起 ⑳ artifacts 备份接入 + 保留期清理（A6/A7）㉑ 调度优先级/公平/限流 ㉒ 可观测 ETA/成本 ㉓ 编排管理面 UI + run graph ㉔ `/v1/ai-orchestrations` 对外契约 ㉕ Phase A 投影 ㉖ Docker/Job/K8s adapter（可选）㉗ `declared_plan` 集成
+
+## 9. 维护说明
 
 - 本文档为核对基线，后续每轮补齐应直接更新对应行状态并注明提交号；
 - 已知残留（M7/M10/M11 前端、effect 生产写入方、深链挂载竞态等）已在 09–16 号报告登记，本文不重复展开，仅收录 spec 功能点维度。
