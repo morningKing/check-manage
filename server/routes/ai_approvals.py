@@ -59,7 +59,7 @@ def _decide(approval_id: str, decision: str):
             appr, user_ctx):
         return jsonify({'error': 'forbidden'}), 403
     result = approval_repo.decide(approval_id, decision, user['userId'],
-                                  comment=comment)
+                                  comment=comment, edits=edits)
     if result is None:
         return jsonify({'error': 'not found'}), 404
     try:
