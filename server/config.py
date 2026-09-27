@@ -87,7 +87,10 @@ AI_WORKSPACE_ROOT     = os.getenv(
 OPENCODE_BASE_URL     = os.getenv('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_SERVER_URL        = os.getenv('MCP_SERVER_URL',    'http://127.0.0.1:3003')
 AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
-AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 200)
+# 工作区配额（MB）：0 = 不启用（默认）。仅在显式设置时于新建 workspace 前
+# 做用户目录累计占用检查——默认值不应打断真实使用（2026-09-27 实测教训：
+# 默认 200MB 会直接拒绝存量用户的新任务）。
+AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 0)
 # P1 §9.3：终态批次工作区保留天数（scheduler 每日回收）；ai_batch_events 保留天数
 AI_WORKSPACE_RETENTION_DAYS = _to_int(os.getenv('AI_WORKSPACE_RETENTION_DAYS'), 30)
 AI_BATCH_EVENT_RETENTION_DAYS = _to_int(os.getenv('AI_BATCH_EVENT_RETENTION_DAYS'), 180)
