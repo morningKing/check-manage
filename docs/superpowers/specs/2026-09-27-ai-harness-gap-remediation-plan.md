@@ -47,14 +47,12 @@
 
 | # | 项 | 来源 | 内容 | 状态 |
 |---|---|---|---|---|
-| 4.1 | 前端批任务 SSE 客户端 | P1 §7.2 | `src/api/batchEvents.ts`（EventSource + Last-Event-ID）接入 AiChatView 替代轮询主通道（轮询留降级）；e2e 冒烟 | ⬜ |
-| 4.2 | 管理面面板 | P1 §10 | AiBatchAdmin 抽屉增 Attempt 链 / 投递状态（含重放按钮）/ 预算消耗 | ⬜ |
-| 4.3 | 内部 commands 端点 | P1 §8.1 | `POST/GET /ai/chat/batches/<bid>/commands`（幂等，语义同对外） | ⬜ |
+| 4.1 | 前端批任务 SSE 客户端 | P1 §7.2 | `src/api/batchEvents.ts`（EventSource + Last-Event-ID）接入 AiChatView 替代轮询主通道（轮询留降级）；e2e 冒烟 | ✅ |
+| 4.2 | 管理面面板 | P1 §10 | AiBatchAdmin 抽屉增 Attempt 链 / 投递状态（含重放按钮）/ 预算消耗 | ✅ |
+| 4.3 | 内部 commands 端点 | P1 §8.1 | `POST/GET /ai/chat/batches/<bid>/commands`（幂等，语义同对外） | ✅ |
 | 4.4 | 调度优先级/公平/限流、ETA/成本 | P2 §10 | ⏸ 暂缓（依赖真实多租户负载，登记下一版本） | ⏸ |
 | 4.5 | Phase A 投影、Docker/K8s adapter | P2 §11/§8.2 | ⏸ 暂缓（可选/演进项） | ⏸ |
-| 4.6 | M7 对外错误全面结构化 | P1 §8.3 | ⏸ 暂缓（涉及全部 /v1 路由重构，单独批次）；本计划批次 1 已覆盖新增端点的结构化错误 | ⏸ |
-
-## 验证要求
+| 4.6 | M7 对外错误全面结构化 | P1 §8.3 | ⏸ 暂缓（涉及全部 /v1 路由重构，单独批次）；本计划批次 1 已覆盖新增端点的结构化错误 | ⏸ |## 验证要求
 
 - 每批：`cd server && python -m pytest tests/ -q`（后端停止场景）全绿后提交；
 - 批次 4 追加 `npx vitest run` 与 `npx playwright test e2e/ai-full`；

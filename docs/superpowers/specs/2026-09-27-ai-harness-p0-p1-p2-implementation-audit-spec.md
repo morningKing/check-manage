@@ -199,7 +199,69 @@
 **P1**：④ 前端 SSE 主通道+cursor 客户端 ⑤ 内部 commands 端点（A：`force_stop` 处理、异步消费取舍已声明）⑥ effect 生产写入方（mcp_write/file_import/scan_writeback/artifact）⑦ checkpoint 写入时机补全 + 恢复决策消费（A5 + 本审计 #3/#5）⑧ `workspace_bytes`/`AI_WORKSPACE_QUOTA_MB` ⑨ workspace retention 回收 ⑩ scan scheduler 租约（A3）⑪ 管理面前端面板 ⑫ 对外状态扩展字段（generation/queueWaitMs/runningMs/lastProgressAt/phase）⑬ CURSOR_EXPIRED/事件保留 ⑭ 故障注入测试 ⑮ 对外错误结构化（M7）
 **P2**：⑯ Runtime adapter 生产接线 + `ai_runtime_manifests` 启用 ⑰ 结果 contract 多类型（file 已落地）⑱ 补偿执行 ⑲ 审批 edit/超时升级（A8）/策略拦截/人工挂起 ⑳ artifacts 备份接入 + 保留期清理（A6/A7）㉑ 调度优先级/公平/限流 ㉒ 可观测 ETA/成本 ㉓ 编排管理面 UI + run graph ㉔ `/v1/ai-orchestrations` 对外契约 ㉕ Phase A 投影 ㉖ Docker/Job/K8s adapter（可选）㉗ `declared_plan` 集成
 
-## 9. 维护说明
+---
+
+## 9. 批次 1–4 补齐后状态重算（2026-09-27 最终口径）
+
+对应开发计划：`2026-09-27-ai-harness-gap-remediation-plan.md`（批次 1–4.3 完成，提交 `141e46e`/`fe3330f`/`7837d05`/`c39418a`/`2a7be69`/`0825d48`）。下表为 §8.5 合并清单 27 项处置后的最新状态，**替代 §8.5 作为当前待办口径**。
+
+### 9.1 已由批次 1–4 补齐（22 项，均含判别性测试或生效证据）
+
+| 批次 | 补齐项 |
+|---|---|
+| 批次 1（P0） | `gate.evaluated` 审计事件；错误码补齐（`VERSION_CONFLICT`/`TURN_ALREADY_RUNNING`/`WORKSPACE_CLEANUP_FAILED` 207；`OPENCODE_UNAVAILABLE` 核实已有）；scan scheduler 纳入 DB 租约；F1 账本顺序回归；F10 前端文案回归；竞态矩阵 cancel↔resume |
+| 批次 2（P1） | effect 生产写入方 ×4（mcp_write/file_import/scan_writeback/artifact，spec §4.3 key 口径）；checkpoint `progress`/`recovery` 写入时机；恢复决策消费 checkpoint（无进度证据→failed(retryable)）；`AI_WORKSPACE_QUOTA_MB` 落地（默认关闭，实测教训）；workspace retention 回收；事件保留 + `CURSOR_EXPIRED`；对外状态扩展字段（generation/queueWaitMs/runningMs/lastProgressAt）；故障注入测试 3 例 |
+| 批次 3（P2） | Runtime Adapter 接入执行路径（facade `_client` 经 `get_runtime`，可切换、行为不变）；`ai_runtime_manifests` run 冻结；结果 contract `json_schema`/`db_record`；审批超时升级事件 `approval.expired`；artifacts 纳入备份；artifacts 保留期清理；`declared_plan` 观测字段；`/v1/ai-orchestrations` 对外契约 |
+| 批次 4（前端/管理面） | 前端批任务 SSE 客户端（Last-Event-ID/去重/轮询降级）接入 store；管理面 Attempt 链 + 回调投递/重放面板；内部 commands 端点（幂等 + `VERSION_CONFLICT`） |
+| 附带修复 | 配额默认改为关闭（存量用户实测被 200MB 默认值误拦）；`resume_batch` 清 pending 残留标志；clear/delete 后消息复活（监听所有权检查）；对话框/删除治理等 e2e 稳健化 |
+
+### 9.2 仍待完成（按优先级重排）
+
+**功能实现（真实缺口，10 项）**
+
+| # | 项 | 阶段 | 优先级 |
+|---|---|---|---|
+| 1 | 结果 contract：`external_response` / `action` 两类 | P2 §9.2 | 中 |
+| 2 | 审批 `edit`（改参批准） | P2 §7.2 | 中 |
+| 3 | 策略拦截（approval_policy 按 tool/effect）与运行中人工挂起 | P2 §7.1 | 中 |
+| 4 | `force_stop` 命令处理逻辑 | P1 §6.4 | 中 |
+| 5 | 预算扩展维度（wall_clock/tool_calls/subagents/workspace_bytes）+ user/api_key scope + `max_concurrency` | P1 §9 | 中 |
+| 6 | 预算管理面 UI（面板已做 attempts/deliveries，预算与命令历史未做） | P1 §10 | 低 |
+| 7 | 调度：step 优先级/租户公平/provider 限流/背压 | P2 §10 | 暂缓 |
+| 8 | 可观测：ETA/成本预测/失败聚合 | P2 §10 | 暂缓 |
+| 9 | 编排管理面 UI + run graph | P2 §13 | 暂缓 |
+| 10 | Docker/Windows Job/K8s adapter 与 Phase A 投影、`AI_BATCH_STRICT_OWNERSHIP` 开关 | P2 §8.2/§11、P0 §10.3 | 暂缓/低 |
+
+**验证缺口（已落地、缺测试，5 项）**
+
+| # | 项 | 建议 |
+|---|---|---|
+| V1 | effect 四写入方的专项单测（mcp_write/file_import/scan_writeback/artifact） | 高 |
+| V2 | 内部 SSE 流式 e2e（前端客户端已接，断线补发断言未加） | 中 |
+| V3 | scan scheduler 租约专项测试 | 中 |
+| V4 | `CURSOR_EXPIRED` 专项测试（实现✅） | 低 |
+| V5 | 生产代理验证（proxy :8080） | 低 |
+
+**暂缓/演进（维持登记）**
+- M7 对外错误全面结构化（新增端点已按结构化实现，存量 /v1 路由重构单独批次）
+- 验收量化指标测量（SSE ≤2s、回调 8 次内 100% 等）
+- 备份保留期按引用方状态级联；`render_history_block` 深层语义；深链挂载竞态产品侧排查
+
+### 9.3 完成度统计（合并口径 69 功能点）
+
+| 阶段 | 总点数 | 已完成（落地+验证/可用） | 待完成（功能） | 待完成（验证） | 暂缓 |
+|---|---|---|---|---|---|
+| P0 | 27 | 24 | 2 | 2（proxy 验证 + contract 语义） | — |
+| P1 | 25 | 19 | 3（force_stop、预算维度、管理面预算 UI） | 3（effect 单测、SSE e2e、scan 租约测试） | 2（M7、量化指标） |
+| P2 | 17 | 12 | 5 | — | 若干（可选/演进） |
+| **合计** | **69** | **55（≈80%）** | **10** | **5** | **其余登记** |
+
+> 与 16 号复审时点（批次前）相比：功能类未落地项从 27 降到 10，验证缺口从 8 降到 5。
+> P0/P1/P2 的安全与执行主链路（ownership/CAS/租约/恢复/事件/outbox/effect/预算核心/DAG/审批/产物/contract file+json+db/adapter 接线/manifest/对外契约）全部落地且验证。
+
+---
+
+## 10. 维护说明
 
 - 本文档为核对基线，后续每轮补齐应直接更新对应行状态并注明提交号；
 - 已知残留（M7/M10/M11 前端、effect 生产写入方、深链挂载竞态等）已在 09–16 号报告登记，本文不重复展开，仅收录 spec 功能点维度。
