@@ -1952,8 +1952,24 @@ def delete_session(sid):
         cur = conn.cursor()
         cur.execute("UPDATE ai_chat_sessions SET status = 'deleted' WHERE id = %s AND user_id = %s",
                     (sid, user['userId']))
-    cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)  # best-effort
-    log_operation('delete', 'ai_chat_session', sid, sid, '删除会话')
+    # P0 §7.3 WORKSPACE_CLEANUP_FAILED：清理失败（Windows 句柄占用等）不得
+    # 伪装成完全成功——207 多状态返回，token 已吊销、行已标记删除，安全边界不受影响
+    cleanup_failed = False
+    try:
+        cleanup_session_workspace(AI_WORKSPACE_ROOT, user['userId'], sid)
+        from config import AI_WORKSPACE_ROOT as _root
+        import os as _os
+        if _os.path.isdir(_os.path.join(_root, f'user-{user["userId"]}', sid)):
+            cleanup_failed = True
+    except Exception:
+        cleanup_failed = True
+    log_operation('delete', 'ai_chat_session', sid, sid, '清空会话' if False else '删除会话')
+    if cleanup_failed:
+        return jsonify({'ok': True, 'status': 'deleted',
+                        'error': {'code': 'WORKSPACE_CLEANUP_FAILED',
+                                  'message': '会话已删除，但工作区文件清理失败（可能被占用），可稍后手动清理',
+                                  'retryable': True,
+                                  'operation': 'delete_session'}}), 207
     return jsonify({'ok': True, 'status': 'deleted'})
 
 

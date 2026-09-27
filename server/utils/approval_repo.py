@@ -114,6 +114,17 @@ def expire_overdue() -> int:
                     "  error_message='审批超时', finished_at=NOW(), "
                     "  updated_at=NOW() WHERE id=%s", (step_id,))
             conn.commit()
+        # 批次 3（P2 §7.2）：超时「升级」最小集——`approval.expired` 事件落
+        # run 时间线（管理面/inbox 可感知）；定向通知渠道后续扩展
+        try:
+            from utils import batch_events
+            batch_events.append_event(
+                run_id, 'approval.expired', aggregate_type='approval',
+                aggregate_id=_aid,
+                payload={'approvalId': _aid, 'stepId': step_id,
+                         'escalation': 'treated_as_reject'})
+        except Exception:
+            pass  # 升级事件 best-effort，不影响超时裁决本身
         from utils import orchestration_engine
         orchestration_engine._advance_run(run_id)
     return len(rows)

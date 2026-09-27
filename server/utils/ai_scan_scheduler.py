@@ -26,6 +26,17 @@ def _task_lock(task_id):
 
 
 def _tick():
+    # P1 §5.8：scan scheduler 纳入 DB 租约体系——多进程部署时只有一个实例
+    # 真正执行扫描 tick；抢不到（他实例持有）则静默跳过本轮（下一分钟重试）。
+    try:
+        from utils import execution_lease
+        owner = execution_lease.owner_id()
+        ok, _ = execution_lease.acquire('scan_scheduler', owner,
+                                        lease_kind='scan_scheduler')
+        if not ok:
+            return
+    except Exception:
+        pass  # 租约基建不可用 → 退化为单实例内 APScheduler 互斥，不阻断扫描
     from utils.ai_scan_repo import list_tasks
     from utils.ai_scan_engine import run_task
     now = datetime.now(timezone.utc)

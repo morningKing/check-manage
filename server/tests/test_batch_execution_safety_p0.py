@@ -563,6 +563,38 @@ def test_run_one_fail_closed_on_broken_checks(db_conn, user_id, monkeypatch,
     assert '门禁无法证实' in (row['error_message'] or '')
 
 
+def test_gate_evaluated_audit_event_written(db_conn, user_id, monkeypatch,
+                                            tmp_path):
+    """缺口补齐计划 1.1（P0 §8.3）：门禁核对完成必须落 `gate.evaluated`
+    审计事件（结论 + 缺失明细）——此前 gate_status 只落在子任务行上，
+    审计时间线对「为什么被判失败」不可解释。"""
+    from utils.batch_engine import BatchWorker
+    import utils.batch_engine as eng
+    root = tmp_path
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(root))
+    bad = [{'name': 'c1', 'tool': 'w', 'args_pattern': '('}]
+    bid, sids = _seed_batch(db_conn, user_id, 1, batch_checks=bad, root=tmp_path)
+    _fake_opencode(monkeypatch)
+    _clear_other_pending(db_conn, bid)
+    w = BatchWorker()
+    claimed = w._claim_pending_sessions(limit=1)
+    w._run_one(claimed[0])
+    sid = claimed[0]['id']
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT payload FROM ai_execution_events "
+            "WHERE session_id = %s AND event_type = 'gate.evaluated' "
+            "ORDER BY event_seq DESC LIMIT 1", (sid,))
+        row = cur.fetchone()
+    assert row is not None, 'gate.evaluated 事件未落库'
+    payload = row[0] if not isinstance(row[0], dict) else row[0]
+    if isinstance(payload, str):
+        import json as _json
+        payload = _json.loads(payload)
+    assert payload['gateStatus'] == 'inconclusive'
+    assert payload['failClosed'] is True
+
+
 def test_run_one_completes_without_checks(db_conn, user_id, monkeypatch, tmp_path):
     """无生效 checks → 门禁 skipped，正常 completed。"""
     from utils.batch_engine import BatchWorker
@@ -890,3 +922,82 @@ def test_attach_expectations_fail_closed_on_unhealthy_ledger(db_conn, user_id):
     from utils.batch_engine import gate_participates
     gate_reg = {'applicable': 0, 'registered': 0, 'error': None}
     assert gate_participates(gate, gate_reg['applicable']) is True
+
+
+# ---------------------------------------------------------------------------
+# 批次 1（缺口补齐计划 1.4/1.6）：F1 账本顺序 + 竞态矩阵 cancel↔resume
+# ---------------------------------------------------------------------------
+
+def test_f1_subtask_row_written_before_ledger(monkeypatch):
+    """F1 回归（spec §8.2 / 审计 P0-14）：_persist_conversation 必须
+    先 upsert 子代理行（_write_subtask）再写工具账本（record_messages）——
+    agent_tool_calls.subtask_id 的 FK 指向 ai_chat_subtasks(id)，旧顺序
+    （先账本后建行）让首次出现的子代理 INSERT 违反 FK、账本缺口 → 门禁
+    被误判 inconclusive。"""
+    from unittest.mock import MagicMock
+    from contextlib import contextmanager
+    import utils.batch_engine as eng
+
+    order = []
+    conn = MagicMock(); cur = MagicMock()
+    cur.execute.return_value = None
+    conn.cursor.return_value.__enter__ = lambda s: cur
+    conn.cursor.return_value.__exit__ = lambda *a: False
+
+    @contextmanager
+    def fake_db():
+        yield conn
+
+    raw = [
+        {'info': {'role': 'assistant'},
+         'parts': [{'type': 'tool', 'tool': 'task',
+                    'state': {'status': 'completed', 'input': {},
+                              'output': 'task_id: sub-1', 'title': '',
+                              'metadata': {'sessionId': 'sub-1'}}}]},
+        {'info': {'role': 'assistant'},
+         'parts': [{'type': 'text', 'text': '完成'}]},
+    ]
+    oc = MagicMock(); oc.get_messages.return_value = raw
+    w = eng.BatchWorker()
+
+    def _fake_write_subtask(*a, **k):
+        order.append('subtask_row')
+
+    def _fake_record_messages(*a, **k):
+        order.append('ledger')
+        return True
+
+    monkeypatch.setattr(eng, 'opencode_client', oc)
+    monkeypatch.setattr(eng, 'get_db', fake_db)
+    monkeypatch.setattr(w, '_write_subtask', _fake_write_subtask)
+    monkeypatch.setattr(eng.agent_ledger, 'record_messages',
+                        _fake_record_messages)
+    w._persist_conversation('sess-f1', '问题', 'oc-f1',
+                            {'content': [{'type': 'text', 'text': '完成'}]})
+    assert 'subtask_row' in order and 'ledger' in order
+    # 子代理行必须先于其账本写入（FK 顺序契约）
+    assert order.index('subtask_row') < order.index('ledger')
+
+
+def test_cancel_resume_no_zombie_pending_with_cancel_flag(db_conn, user_id):
+    """竞态矩阵（P0 §12）：cancel ↔ resume 不得出现「pending 且
+    cancel_requested=true」的僵死组合——resume 必须清两个标志（F11 防回退）。"""
+    from utils.batch_repo import cancel_batch, resume_batch
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    # cancel_batch：pending → cancel_requested（worker 未跑时停留在该形态）
+    cancel_batch(user_id, bid)
+    row = _child(db_conn, sid)
+    assert row['status'] == 'pending' and row['cancel_requested'] is True
+    # worker pre-claim：pending+cancel_requested → cancelled（消除僵死窗口）
+    from utils.batch_engine import BatchWorker
+    BatchWorker()._cancel_pending_requests()
+    row = _child(db_conn, sid)
+    assert row['status'] == 'cancelled'
+    # resume：cancelled → pending，清 cancel_requested + pause_requested
+    resume_batch(user_id, bid)
+    row = _child(db_conn, sid)
+    assert not (row['status'] == 'pending' and row['cancel_requested']), \
+        '僵死组合：pending 且 cancel_requested=true'
+    assert row['cancel_requested'] is False
+    assert row['pause_requested'] is False
