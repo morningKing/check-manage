@@ -2,25 +2,29 @@
   <div class="batch-group">
     <div class="batch-group__head" :class="{ open: expanded }" @click="toggle">
       <ElIcon class="caret"><ArrowRight v-if="!expanded" /><ArrowDown v-else /></ElIcon>
-      <span class="bg-name" :title="batch.name">{{ batch.name }}</span>
-      <ElIcon class="bg-id-copy" title="复制批任务 ID"
-              @click.stop="copyId(batch.id, '批任务')"><DocumentCopy /></ElIcon>
-      <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
-      <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
-      <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
-      <span class="bg-actions" @click.stop>
-        <ElIcon title="搜索本批任务" @click="emit('searchInBatch')"><Search /></ElIcon>
-        <ElIcon title="编辑 Agent/模型" @click="editOpen = true"><Setting /></ElIcon>
-        <ElIcon title="追加文件" @click="appendOpen = true"><Plus /></ElIcon>
-        <ElIcon v-if="['pending', 'running'].includes(batch.status)" title="暂停全部（可继续）"
-                @click="onPause"><VideoPause /></ElIcon>
-        <ElIcon v-if="['pending', 'running', 'paused'].includes(batch.status)" title="中断全部（标记取消，之后可继续）"
-                @click="onStop"><CircleClose /></ElIcon>
-        <ElIcon v-if="batch.cancelled || batch.paused" title="继续运行（从暂停/中断处继续）"
-                @click="onResume"><VideoPlay /></ElIcon>
-        <ElIcon v-if="batch.failed" title="重试失败" @click="onRetry"><RefreshRight /></ElIcon>
-        <ElIcon title="删除批次" @click="onDelete"><Delete /></ElIcon>
-      </span>
+      <div class="bg-main">
+        <span class="bg-name" :title="batch.name">{{ batch.name }}</span>
+        <div class="bg-sub">
+          <span :class="`badge badge--${batch.status}`">{{ statusLabel(batch.status) }}</span>
+          <span class="bg-meta">{{ batch.done }}/{{ batch.total }}</span>
+          <span class="bg-am">{{ batch.agent || '默认' }} · {{ batch.model || '默认' }}</span>
+          <ElIcon class="bg-id-copy" title="复制批任务 ID"
+                  @click.stop="copyId(batch.id, '批任务')"><DocumentCopy /></ElIcon>
+          <span class="bg-actions" @click.stop>
+            <ElIcon title="搜索本批任务" @click="emit('searchInBatch')"><Search /></ElIcon>
+            <ElIcon title="编辑 Agent/模型" @click="editOpen = true"><Setting /></ElIcon>
+            <ElIcon title="追加文件" @click="appendOpen = true"><Plus /></ElIcon>
+            <ElIcon v-if="['pending', 'running'].includes(batch.status)" title="暂停全部（可继续）"
+                    @click="onPause"><VideoPause /></ElIcon>
+            <ElIcon v-if="['pending', 'running', 'paused'].includes(batch.status)" title="中断全部（标记取消，之后可继续）"
+                    @click="onStop"><CircleClose /></ElIcon>
+            <ElIcon v-if="batch.cancelled || batch.paused" title="继续运行（从暂停/中断处继续）"
+                    @click="onResume"><VideoPlay /></ElIcon>
+            <ElIcon v-if="batch.failed" title="重试失败" @click="onRetry"><RefreshRight /></ElIcon>
+            <ElIcon title="删除批次" @click="onDelete"><Delete /></ElIcon>
+          </span>
+        </div>
+      </div>
     </div>
     <div v-if="expanded" class="batch-group__body">
       <div v-for="s in sortedSessions" :key="s.id"
@@ -199,17 +203,18 @@ async function onAppended() { if (expanded.value) await store.selectBatch(props.
 async function onConfigSaved() { if (expanded.value) await store.selectBatch(props.batch.id) }
 </script>
 <style scoped>
-.batch-group__head { display: flex; align-items: center; gap: 6px; padding: 6px 8px;
-  cursor: pointer; border-radius: 6px; font-size: 13px; flex-wrap: wrap; }
+.batch-group__head { display: flex; align-items: flex-start; gap: 4px; padding: 6px 8px;
+  cursor: pointer; border-radius: 6px; font-size: 13px; }
 .batch-group__head:hover { background: var(--el-fill-color-light); }
-/* 标题独占整行自由折行（不限行数），任意长度的任务名都完整可读；
-   状态/进度/操作等元素自然换行到标题下方；悬浮 title 可看全文；
-   word-break 兜底无空格长串（如 AITEST-<时间戳>）也能折行 */
-.bg-name { font-weight: 600; flex: 1 1 auto; min-width: 0;
-  overflow-wrap: anywhere; line-height: 1.3; }
+.batch-group__head .caret { flex: 0 0 auto; margin-top: 3px; }
+/* 标题区独占一行自由折行（任务名完整可读），元信息收进标题下方一条紧凑行 */
+.bg-main { flex: 1; min-width: 0; }
+.bg-name { display: block; font-weight: 600; overflow-wrap: anywhere; line-height: 1.35; }
+.bg-sub { display: flex; align-items: center; gap: 6px; margin-top: 3px; min-width: 0; }
 .bg-meta, .bg-am { color: var(--el-text-color-secondary); font-size: 11px; }
-.bg-am { flex-basis: 100%; padding-left: 22px; }
-.bg-actions { display: flex; gap: 6px; }
+.bg-am { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-id-copy { flex: 0 0 auto; color: var(--el-text-color-secondary); cursor: pointer; }
+.bg-actions { display: flex; gap: 6px; margin-left: auto; flex: 0 0 auto; }
 .bg-actions .el-icon { cursor: pointer; }
 .batch-group__body { padding-left: 18px; }
 .bg-child { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer;
