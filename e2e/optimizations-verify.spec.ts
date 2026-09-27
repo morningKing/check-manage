@@ -197,7 +197,7 @@ test('AI Chat：工具调用气泡显示可读摘要与状态文字（注入，�
 })
 
 test('批任务：最新会话在上、单任务独立继续、停止并删除', async ({ page }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(900_000)  // 夜间模型延迟可达平时 3-4 倍，给足全流程预算
   await page.goto('/ai-chat')
 
   const createBatchBtn = page
@@ -266,8 +266,17 @@ test('批任务：最新会话在上、单任务独立继续、停止并删除',
   await expect(aRow.locator('.dot--paused')).toBeVisible()
 
   // ④ 运行中（含 paused）批次不能直接删除 → 「停止并删除」
-  await group.locator('[title="删除批次"]').click()
+  // 删除图标与 10s 列表轮询重渲染存在竞态：点击后若确认框未弹出则重试
+  // （以「框可见」为成功判据，而非点击动作本身）
   const box = page.locator('.el-message-box')
+  for (let i = 0; i < 6; i++) {
+    await group.locator('[title="删除批次"]').click().catch(() => {})
+    try {
+      await box.waitFor({ state: 'visible', timeout: 3_000 })
+      break
+    } catch { await page.waitForTimeout(1_000) }
+  }
+  await expect(box).toBeVisible()
   await expect(box).toContainText('运行中的批任务不能直接删除')
   await expect(box.locator('.el-button--primary')).toContainText('停止并删除')
   await box.locator('.el-button--primary').click()
