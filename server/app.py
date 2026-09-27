@@ -23,6 +23,7 @@ from routes.open_api_row_actions import open_api_row_actions_bp
 from routes.open_api_scan_tasks import open_api_scan_tasks_bp
 from routes.open_api_prompt_templates import open_api_prompt_templates_bp
 from routes.open_api_memories import open_api_memories_bp
+from routes.open_api_orchestrations import open_api_orchestrations_bp
 from routes.open_api_ai_sessions import open_api_ai_sessions_bp
 from routes.validation_scripts import validation_scripts_bp
 from routes.etl_tasks import etl_tasks_bp
@@ -99,6 +100,7 @@ app.register_blueprint(open_api_row_actions_bp)
 app.register_blueprint(open_api_scan_tasks_bp)
 app.register_blueprint(open_api_prompt_templates_bp)
 app.register_blueprint(open_api_memories_bp)
+app.register_blueprint(open_api_orchestrations_bp)
 app.register_blueprint(open_api_ai_sessions_bp)
 app.register_blueprint(validation_scripts_bp)
 app.register_blueprint(etl_tasks_bp)
@@ -214,6 +216,11 @@ try:
                              reclaim_expired_workspaces())
             except Exception as e3:
                 logging.warning('workspace retention failed: %s', e3)
+            try:
+                from utils.artifact_store import purge_expired
+                logging.info('artifact retention: purged %s', purge_expired())
+            except Exception as e3:
+                logging.warning('artifact retention failed: %s', e3)
             try:
                 from config import AI_BATCH_EVENT_RETENTION_DAYS as _d
                 from db import get_db as _gdb

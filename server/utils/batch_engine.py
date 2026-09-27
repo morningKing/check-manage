@@ -89,6 +89,18 @@ class _OpenCodeFacade:
     """
 
     def _client(self):
+        # P2 §8.1 Runtime Adapter 接线（缺口补齐批次 3.1）：OC 访问优先经
+        # AgentRuntime 抽象（OpenCodeLocalRuntime 包装同一 client，行为不变，
+        # AI_AGENT_RUNTIME 可切换实现）；adapter 未覆盖的方法/打桩场景回退
+        # 既有直连。测试对 eng.opencode_client 的整体替换不受影响。
+        try:
+            from utils.runtime import get_runtime
+            rt = get_runtime()
+            inner = getattr(rt, '_client', None)
+            if callable(inner):
+                return inner()
+        except Exception:
+            pass  # runtime 不可用/未启用 → 直连（既有行为）
         from utils.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)

@@ -34,14 +34,14 @@
 
 | # | 项 | 来源 | 内容 | 状态 |
 |---|---|---|---|---|
-| 3.1 | Runtime Adapter 生产接线 | P2 §8.1 | `BatchWorker`/`orchestration_engine` 的 OC 调用改经 `OpenCodeLocalRuntime`（默认实例，行为不变）；删除「死代码」定位 | ⬜ |
-| 3.2 | `ai_runtime_manifests` 启用 | P2 §5.6 | run 创建时冻结 manifest（当前环境 OpenCodeLocal 参数） | ⬜ |
-| 3.3 | 结果 contract 多类型 | P2 §9.2 | `json_schema`（output text JSON 校验）、`db_record`（复用账本 db-record 证据）；`external_response`/`action` 登记后续 | ⬜ |
-| 3.4 | 审批 edit + 超时升级事件 | P2 §7.2 | approve 支持修改输入参（重算 prompt）；`expire_overdue` 落 `approval.expired` 事件 + inbox 可见 | ⬜ |
-| 3.5 | artifacts 备份接入 | P2 §9.3 | `backup.py` 增 artifacts 表 + 文件清单导出 | ⬜ |
-| 3.6 | artifacts 保留期清理 | P2 §9.3 | `expires_at` 过期且无引用 → 清理任务删除 | ⬜ |
-| 3.7 | `declared_plan` 集成 | P2 §6.4 | step 执行的 todo/plan 记录入 `ai_orchestration_steps`（观测字段） | ⬜ |
-| 3.8 | `/v1/ai-orchestrations` 对外契约 | P2 §6.3 | definitions/runs 只读 + create_run（API Key 隔离） | ⬜ |
+| 3.1 | Runtime Adapter 生产接线 | P2 §8.1 | `BatchWorker`/`orchestration_engine` 的 OC 调用改经 `OpenCodeLocalRuntime`（默认实例，行为不变）；删除「死代码」定位 | ✅ |
+| 3.2 | `ai_runtime_manifests` 启用 | P2 §5.6 | run 创建时冻结 manifest（当前环境 OpenCodeLocal 参数） | ✅ |
+| 3.3 | 结果 contract 多类型 | P2 §9.2 | `json_schema`（output text JSON 校验）、`db_record`（复用账本 db-record 证据）；`external_response`/`action` 登记后续 | ✅ |
+| 3.4 | 审批 edit + 超时升级事件 | P2 §7.2 | approve 支持修改输入参（重算 prompt）；`expire_overdue` 落 `approval.expired` 事件 + inbox 可见 | ✅ |
+| 3.5 | artifacts 备份接入 | P2 §9.3 | `backup.py` 增 artifacts 表 + 文件清单导出 | ✅ |
+| 3.6 | artifacts 保留期清理 | P2 §9.3 | `expires_at` 过期且无引用 → 清理任务删除 | ✅ |
+| 3.7 | `declared_plan` 集成 | P2 §6.4 | step 执行的 todo/plan 记录入 `ai_orchestration_steps`（观测字段） | ✅ |
+| 3.8 | `/v1/ai-orchestrations` 对外契约 | P2 §6.3 | definitions/runs 只读 + create_run（API Key 隔离） | ✅ |
 
 ## 批次 4：前端与管理面（体验层）
 

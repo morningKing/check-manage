@@ -435,3 +435,148 @@ def test_opencode_local_wraps_client(monkeypatch):
     fake_client.create_session.return_value = 'oc-rt'
     monkeypatch.setattr(rt, '_client', lambda: fake_client)
     assert rt.create_session('/tmp/x') == 'oc-rt'
+
+
+# ---------------------------------------------------------------------------
+# 批次 3（缺口补齐计划 3.3）：结果 contract 多类型
+# ---------------------------------------------------------------------------
+
+def _mk_contract_def(user_id, contract, tag):
+    from utils import orchestration_defs as defs
+    return defs.publish_definition(
+        f'contract-{tag}-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[{'id': 'solo', 'kind': 'agent', 'prompt_template': 'p',
+                'output_contract': contract}],
+        edges=[])
+
+
+def test_output_contract_db_record(db_conn, user_id, monkeypatch):
+    """contract type=db_record：dynamic_data 命中 ≥ min_count → 通过（确定性，
+    不依赖模型行为）；经 batch_engine 的编排子会话全链路核对。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from utils.batch_engine import BatchWorker
+    from unittest.mock import MagicMock
+    collection = f'contract-db-{uuid.uuid4().hex[:6]}'
+    d = _mk_contract_def(user_id, {'type': 'db_record',
+                                   'effect_spec': {'collection': collection,
+                                                   'filter': {}},
+                                   'min_count': 1}, 'db')
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    fake = MagicMock()
+    fake.create_session.return_value = 'oc-cdb'
+    fake.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done'}]}]
+    fake.send_message.return_value = {'id': 'm'}
+    fake.get_messages.return_value = []
+    from utils import batch_engine as eng
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    # 命中数据：contract 要求 ≥1 条
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO dynamic_data (id, collection, data) "
+            "VALUES (%s, %s, %s)", (str(uuid.uuid4()), collection, '{}'))
+    db_conn.commit()
+    eng2._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",
+                    (run['id'],))
+        sid_row = cur.fetchone()
+    assert sid_row, '子会话应已派发'
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid_row[0],))
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' "
+                    "WHERE id=%s", (sid_row[0],))
+        cur.execute("SELECT id FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        step_id = cur.fetchone()[0]
+    db_conn.commit()
+    # 与 worker finally 一致：终态后触发 contract 核对
+    eng2.on_child_terminal(run['id'], step_id, sid_row[0])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        assert cur.fetchone()[0] == 'succeeded'   # db_record 命中 → 通过
+
+
+def test_output_contract_db_record_insufficient_fails(db_conn, user_id, monkeypatch):
+    """db_record 命中 0/1 → contract 不过 → step failed（而非静默 succeeded）。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from utils.batch_engine import BatchWorker
+    from unittest.mock import MagicMock
+    collection = f'contract-db0-{uuid.uuid4().hex[:6]}'
+    d = _mk_contract_def(user_id, {'type': 'db_record',
+                                   'effect_spec': {'collection': collection,
+                                                   'filter': {}},
+                                   'min_count': 1}, 'db0')
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    fake = MagicMock()
+    fake.create_session.return_value = 'oc-cdb0'
+    fake.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': 'done'}]}]
+    fake.send_message.return_value = {'id': 'm'}
+    fake.get_messages.return_value = []
+    from utils import batch_engine as eng
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    eng2._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",
+                    (run['id'],))
+        sid_row = cur.fetchone()
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET status='running' WHERE id=%s",
+                    (sid_row[0],))
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
+                    (sid_row[0],))
+        cur.execute("SELECT id FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        step_id = cur.fetchone()[0]
+    db_conn.commit()
+    eng2.on_child_terminal(run['id'], step_id, sid_row[0])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        assert cur.fetchone()[0] == 'failed'      # 命中 0 → contract 不过
+
+
+def test_output_contract_json_schema_rejects_invalid(db_conn, user_id, monkeypatch):
+    """contract type=json_schema：最终输出非合法 JSON / 不过 schema → failed。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    from utils.batch_engine import BatchWorker
+    from unittest.mock import MagicMock
+    schema = {'type': 'object', 'required': ['total']}
+    d = _mk_contract_def(user_id, {'type': 'json_schema', 'schema': schema}, 'js')
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    fake = MagicMock()
+    fake.create_session.return_value = 'oc-cjs'
+    fake.list_messages.return_value = [
+        {'role': 'assistant', 'finished': True,
+         'content': [{'type': 'text', 'text': '纯文本回复'}]}]
+    fake.send_message.return_value = {'id': 'm'}
+    fake.get_messages.return_value = []
+    from utils import batch_engine as eng
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    eng2._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT id FROM ai_chat_sessions WHERE orchestration_run_id=%s",
+                    (run['id'],))
+        sid = cur.fetchone()[0]
+        # 最终 assistant 消息（contract 从 ai_chat_messages 取 text）
+        cur.execute(
+            "INSERT INTO ai_chat_messages (id, session_id, role, seq, content) "
+            "VALUES (%s, %s, 'assistant', 1, %s)",
+            (f'{sid}:a1', sid, '[{"type":"text","text":"不是JSON"}]'))
+        cur.execute("UPDATE ai_chat_sessions SET status='completed' WHERE id=%s",
+                    (sid,))
+        cur.execute("SELECT id FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        step_id = cur.fetchone()[0]
+    db_conn.commit()
+    eng2.on_child_terminal(run['id'], step_id, sid)
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ai_orchestration_steps WHERE run_id=%s",
+                    (run['id'],))
+        assert cur.fetchone()[0] == 'failed'      # 非 JSON → contract 不过

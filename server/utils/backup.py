@@ -199,6 +199,15 @@ BACKUP_TABLES = [
     # 会话产出文件的独立记录（新增/修改路径的历史累积）。
     ('ai_chat_session_files', ['id', 'session_id', 'path', 'status',
                                'first_seen_at', 'last_seen_at'], set(), 'AI会话产出文件'),
+    # P2 §9.3 Artifact Store 元数据（物理文件在 AI_WORKSPACE_ROOT/artifacts/
+    # 下，由备份打包流程随 _snapshot_artifacts 单独导出——见 manifest 的
+    # artifacts/ 目录）。
+    ('artifacts', ['id', 'name', 'media_type', 'size_bytes', 'sha256',
+                   'storage_key', 'status', 'retention_days', 'created_at',
+                   'expires_at'], set(), 'AI产物'),
+    ('artifact_refs', ['id', 'artifact_id', 'run_id', 'step_id', 'attempt_id',
+                       'session_id', 'batch_id', 'relation',
+                       'created_at'], set(), 'AI产物引用'),
 ]
 
 # 表名到定义的映射
@@ -259,6 +268,8 @@ RESTORE_ORDER = [
     'ai_chat_messages',             # Depends on ai_chat_sessions
     'ai_chat_subtask_messages',     # Depends on ai_chat_subtasks
     'ai_chat_session_files',        # Depends on ai_chat_sessions
+    'artifacts',
+    'artifact_refs',
 ]
 
 
@@ -600,6 +611,16 @@ def create_backup(backup_type='manual', created_by=None, tables=None,
             _add_vector_store_to_zip(zf)
         if include_data_files:
             _add_tree_to_zip(zf, DATA_FILES_ROOT, _DATA_FILES_PREFIX)
+        # P2 §9.3：Artifact Store 物理文件随备份导出（元数据表已入
+        # BACKUP_TABLES）——workspace 可回收但产物不丢
+        try:
+            from config import AI_WORKSPACE_ROOT as _awr
+            _artifacts_root = os.path.join(_awr, 'artifacts')
+            if os.path.isdir(_artifacts_root):
+                if _add_tree_to_zip(zf, _artifacts_root, 'artifacts/'):
+                    manifest['hasArtifacts'] = True
+        except Exception:
+            pass  # 产物导出失败不阻断备份主体（元数据表已在包内）
 
     file_size = os.path.getsize(zip_path)
 

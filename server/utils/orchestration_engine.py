@@ -36,16 +36,40 @@ def create_run(def_id: str, requested_by: str, *,
         raise ValueError('definition not found')
     run_id = 'run_' + secrets.token_hex(7)
     from db import get_db
+    # P2 §5.6（缺口补齐 3.2）：run 创建即冻结 runtime manifest——当前环境
+    # 为 OpenCodeLocal（默认 runtime）的能力快照 + 模型配置，供恢复/审计
+    # 解释"当时用什么环境跑的"
+    manifest_id = None
+    try:
+        from utils.runtime import get_runtime
+        import hashlib as _hashlib
+        _rt = get_runtime()
+        _caps = _rt.capabilities()
+        manifest_id = 'rtm_' + secrets.token_hex(7)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ai_runtime_manifests "
+                    "  (id, runtime_kind, runtime_version, resource_profile) "
+                    "VALUES (%s, %s, %s, %s::jsonb)",
+                    (manifest_id, _rt.kind,
+                     getattr(_rt, 'version', None) or 'local',
+                     json.dumps({'capabilities': _caps},
+                                ensure_ascii=False, default=str)))
+            conn.commit()
+    except Exception:
+        manifest_id = None  # manifest 失败不阻断 run 创建（观测性数据）
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO ai_orchestration_runs "
                 "  (id, definition_id, definition_version, status, "
-                "   run_input_snapshot, requested_by, requested_by_kind) "
-                "VALUES (%s, %s, %s, 'pending', %s::jsonb, %s, %s)",
+                "   run_input_snapshot, requested_by, requested_by_kind, "
+                "   runtime_manifest_id) "
+                "VALUES (%s, %s, %s, 'pending', %s::jsonb, %s, %s, %s)",
                 (run_id, def_id, d['version'],
                  json.dumps(run_input or {}, ensure_ascii=False),
-                 requested_by, requested_by_kind))
+                 requested_by, requested_by_kind, manifest_id))
             # 展开节点为 step 行；depends_on 由入边推导
             for n in d['nodes']:
                 deps = sorted({e['source'] for e in d['edges']
@@ -465,7 +489,8 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
             srow = cur.fetchone()
     node = (srow[0] or {}) if srow else {}
     contract = node.get('output_contract') or {}
-    if child_status == 'completed' and contract.get('type') == 'file':
+    ctype = contract.get('type')
+    if child_status == 'completed' and ctype == 'file':
         from utils.workspace_outputs import list_session_files
         files = list_session_files(ws) if ws else []
         names = {f['name'] for f in (files[0] if isinstance(files, tuple) else files)}
@@ -473,6 +498,55 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
         import fnmatch
         contract_ok = any(fnmatch.fnmatch(n, pat) for n in names) if pat else bool(names)
         contract_err = None if contract_ok else f'产物未通过合同校验: {pat}'
+    elif child_status == 'completed' and ctype == 'json_schema':
+        # 批次 3：输出 text 须为合法 JSON 且过 jsonschema（缺库则退化为
+        # 「合法 JSON 即通过」，与 spec §9.2 的结构化契约对齐）
+        import json as _json
+        try:
+            _txt = None
+            with get_db() as _c:
+                with _c.cursor() as _cu:
+                    _cu.execute(
+                        "SELECT content FROM ai_chat_messages "
+                        "WHERE session_id = %s AND role = 'assistant' "
+                        "ORDER BY seq DESC LIMIT 1", (session_id,))
+                    _row = _cu.fetchone()
+            if _row:
+                _content = _row[0]
+                _parts = _json.loads(_content) if isinstance(_content, str) else _content
+                _txt = ''.join(p.get('text') or ''
+                               for p in (_parts or []) if isinstance(p, dict)
+                               and p.get('type') == 'text')
+            _doc = _json.loads(_txt) if _txt else None
+        except Exception:
+            _doc = None
+        if _doc is None:
+            contract_ok, contract_err = False, '输出不是合法 JSON，未通过 json_schema 合同'
+        else:
+            try:
+                import jsonschema as _js
+                _js.validate(_doc, contract.get('schema') or {})
+                contract_ok, contract_err = True, None
+            except ImportError:
+                contract_ok, contract_err = True, None
+            except Exception as _e:
+                contract_ok = False
+                contract_err = f'输出未通过 json_schema 合同: {str(_e)[:200]}'
+    elif child_status == 'completed' and ctype == 'db_record':
+        # 复用动作账本的 db-record 证据通道（与动作门禁同一事实源）
+        try:
+            from utils import agent_ledger as _al
+            _eff = (contract.get('effect_spec')
+                    or {'collection': contract.get('collection'),
+                        'filter': contract.get('filter') or {}})
+            with get_db() as _c:
+                with _c.cursor() as _cu:
+                    n = _al._count_db_record_evidence(_cu, _eff)
+            contract_ok = n >= int(contract.get('min_count') or 1)
+            contract_err = None if contract_ok else                 f'db_record 合同未达标: 命中 {n}/{contract.get("min_count") or 1}'
+        except Exception as _e:
+            contract_ok = False
+            contract_err = f'db_record 合同核对异常: {str(_e)[:200]}'
 
     if child_status == 'completed' and contract_ok:
         new_status, err = 'succeeded', None
@@ -512,7 +586,7 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     # 条件边判定与 {{steps.x}} 提示词渲染的数据来源（此前全仓无写入点，
     # 条件分支恒不命中、下游渲染恒为空）
     step_output = None
-    if new_status == 'succeeded':
+    if new_status in ('succeeded', 'failed'):
         try:
             from utils.ai_scan_engine import message_text
             with get_db() as conn:
@@ -528,6 +602,26 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
                 step_output = {'text': '\n'.join(texts)[:4000]}
         except Exception:
             logger.debug('step output extract failed sid=%s', session_id,
+                         exc_info=True)
+        # P2 §6.4 declared_plan：模型自声明的 Todo 计划只进观测字段
+        # （step.output.declaredPlan），永远不参与 DAG 推进
+        try:
+            from utils.todo_trace import build_declared_plan
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, role, content, created_at "
+                        "FROM ai_chat_messages WHERE session_id = %s "
+                        "ORDER BY seq", (session_id,))
+                    _cols = ['id', 'role', 'content', 'created_at']
+                    _msgs = [dict(zip(_cols, r)) for r in cur.fetchall()]
+            _plan = build_declared_plan(_msgs)
+            if _plan and step_output is not None:
+                step_output['declaredPlan'] = {
+                    'latest': _plan.get('latest') or [],
+                    'statusChanges': _plan.get('statusChanges') or {}}
+        except Exception:
+            logger.debug('declared_plan extract failed sid=%s', session_id,
                          exc_info=True)
 
     with get_db() as conn:

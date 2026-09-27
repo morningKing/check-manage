@@ -142,3 +142,38 @@ def artifact_path(artifact: dict) -> str | None:
     from config import AI_WORKSPACE_ROOT
     p = os.path.join(AI_WORKSPACE_ROOT, artifact['storageKey'])
     return p if os.path.isfile(p) else None
+
+
+def purge_expired(now=None) -> int:
+    """P2 §9.3 保留期：删除 `expires_at < now` 且无 artifact_refs 引用的产物
+    （DB 行 + 物理文件；同 sha 仍被其他行引用时 put_file 的 owner 隔离语义
+    保证不受影响，物理文件按 storage_key 独立）。返回清理个数。
+
+    引用检查：任何 artifact_refs 行指向该产物 → 保留（即便其 run/step 已删，
+    引用行仍是有效溯源）；按引用方状态级联的严格策略后续批次。"""
+    import datetime as _dt
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    removed = 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.id, a.storage_key FROM artifacts a "
+                "WHERE a.expires_at IS NOT NULL AND a.expires_at < %s "
+                "  AND NOT EXISTS (SELECT 1 FROM artifact_refs r "
+                "                  WHERE r.artifact_id = a.id)", (now,))
+            rows = cur.fetchall()
+            if rows:
+                cur.execute(
+                    "DELETE FROM artifacts WHERE id IN (%s)"
+                    % ','.join(['%s'] * len(rows)),
+                    [r[0] for r in rows])
+        conn.commit()
+    for _aid, storage_key in rows:
+        try:
+            p = artifact_path({'storageKey': storage_key})
+            if p and os.path.isfile(p):
+                os.remove(p)
+            removed += 1  # 行已删；物理文件缺失按已清理计
+        except OSError:
+            pass
+    return removed
