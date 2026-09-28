@@ -14,6 +14,7 @@ from tools import (
     analyze_trace, query_sessions, download_field_files, register_action_check,
     ai_create_data_page, graph_neighbors, graph_traverse, batch_tool_audit,
     data_create_records, data_update_record, data_delete_record, data_attach_menu,
+    batch_children_status, batch_child_changes,
 )
 
 _TOOLS = {
@@ -41,6 +42,8 @@ _TOOLS = {
     data_update_record.NAME: (data_update_record.TOOL, data_update_record.handle),
     data_delete_record.NAME: (data_delete_record.TOOL, data_delete_record.handle),
     data_attach_menu.NAME: (data_attach_menu.TOOL, data_attach_menu.handle),
+    batch_children_status.NAME: (batch_children_status.TOOL, batch_children_status.handle),
+    batch_child_changes.NAME: (batch_child_changes.TOOL, batch_child_changes.handle),
 }
 
 
