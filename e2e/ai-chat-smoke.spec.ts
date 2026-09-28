@@ -23,7 +23,8 @@ test('AI chat M1 smoke: open drawer, send message, receive streamed reply', asyn
   await expect(page.locator('.msg--user').last()).toContainText('hello')
 
   // Wait for an assistant reply (at least one .msg--assistant with non-empty content)
-  await expect(page.locator('.msg--assistant').first()).toBeVisible({ timeout: 60_000 })
+  // 夜间模型延迟实测 80s+（2026-09-28：hello 回复 12:59:21 发出、13:00:43 落库）
+  await expect(page.locator('.msg--assistant').first()).toBeVisible({ timeout: 180_000 })
   const replyText = await page.locator('.msg--assistant').first().innerText()
   expect(replyText.trim().length).toBeGreaterThan(0)
 })

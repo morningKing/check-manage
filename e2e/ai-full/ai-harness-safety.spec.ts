@@ -240,8 +240,8 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
   const defName = `AITEST-${TAG}-dag`
   const pub = await api(request, 'POST', '/ai/xxx-ignore', undefined).catch(() => null)
   void pub
-  // 通过 /v1/ai-orchestrations 发布（JWT 内部域）
-  const pubRes = await api(request, 'POST', '/v1/ai-orchestrations/definitions', {
+  // 通过 /ai/orchestrations 发布（JWT 内部域；/v1/ai-orchestrations 留给对外 API Key 契约）
+  const pubRes = await api(request, 'POST', '/ai/orchestrations/definitions', {
     name: defName,
     nodes: [
       { id: 'extract', kind: 'agent', prompt_template: '请从这句话抽取数字并以「数字: N」结尾：{{input.text}}' },
@@ -257,7 +257,7 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
   const defId = pubRes.json.id
 
   // 2) 创建 run
-  const runRes = await api(request, 'POST', '/v1/ai-orchestrations/runs', {
+  const runRes = await api(request, 'POST', '/ai/orchestrations/runs', {
     definitionId: defId,
     input: { text: '订单金额是 66 元' },
   })
@@ -269,7 +269,7 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
   let approvalId = ''
   let run: any = null
   while (Date.now() < deadline) {
-    const r = await api(request, 'GET', `/v1/ai-orchestrations/runs/${runId}`)
+    const r = await api(request, 'GET', `/ai/orchestrations/runs/${runId}`)
     run = r.json
     if (run?.status === 'waiting_approval') {
       const aps = await api(request, 'GET', '/v1/ai-approvals')
@@ -280,7 +280,7 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
     await new Promise(r2 => setTimeout(r2, 3000))
   }
   expect(approvalId, 'run 应到达 waiting_approval 且产生审批请求').toBeTruthy()
-  const shotRun = await api(request, 'GET', `/v1/ai-orchestrations/runs/${runId}`)
+  const shotRun = await api(request, 'GET', `/ai/orchestrations/runs/${runId}`)
   console.log('等待审批时 run 状态:', JSON.stringify(shotRun.json?.status))
 
   // 4) 审批通过 → summarize 执行 → run completed
@@ -288,7 +288,7 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
                          `/v1/ai-approvals/${approvalId}/approve`, { comment: 'e2e 通过' })
   expect(appr.status).toBe(200)
   while (Date.now() < deadline) {
-    const r = await api(request, 'GET', `/v1/ai-orchestrations/runs/${runId}`)
+    const r = await api(request, 'GET', `/ai/orchestrations/runs/${runId}`)
     run = r.json
     if (['completed', 'partial', 'failed'].includes(run?.status)) break
     await new Promise(r2 => setTimeout(r2, 3000))
@@ -300,7 +300,7 @@ test('P2：3 节点 DAG（抽取→审批→汇总）真实跑通', async ({ req
   expect(steps.summarize.status).toBe('succeeded')
 
   // 5) run 事件时间线可重建（事实源 ai_batch_events）
-  const evs = await api(request, 'GET', `/v1/ai-orchestrations/runs/${runId}/events`)
+  const evs = await api(request, 'GET', `/ai/orchestrations/runs/${runId}/events`)
   expect(evs.status).toBe(200)
   const types = (evs.json?.events ?? []).map((e: any) => e.event_type)
   expect(types).toContain('run.created')

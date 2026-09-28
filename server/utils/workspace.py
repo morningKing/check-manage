@@ -6,11 +6,11 @@ per-session MCP identity works — OpenCode has no per-session MCP API, only
 per-directory config (see spec §12).
 """
 
+import logging
 import os
 import sys
 import json
 import shutil
-import subprocess
 import subprocess
 import sys
 
@@ -67,8 +67,10 @@ def session_path(workspace_root: str, user_id: str, session_id: str) -> Path:
     return Path(workspace_root) / user_id / session_id
 
 
-def _tree_size_mb(path: Path) -> float:
-    """目录树占用（MB，best-effort——并发删除/权限错误按 0 计）。"""
+def _tree_size_mb(path) -> float:
+    """目录树占用（MB，best-effort——并发删除/权限错误按 0 计）。
+    接受 str 或 Path（refresh_workspace_bytes 传 DB 里的字符串路径）。"""
+    path = Path(path)
     total = 0
     try:
         for f in path.rglob('*'):
@@ -82,36 +84,32 @@ def _tree_size_mb(path: Path) -> float:
     return total / (1024 * 1024)
 
 
-def _usage_total_mb(user_id: str) -> float:
-    """用户工作区累计占用（MB）——读 ai_execution_usage.workspace_bytes
-    （worker 在回合收口时刷新）。DB 查询 O(1)，不做文件系统遍历：
-    请求路径内的整树 rglob 在生产数据量下是分钟级阻塞（2026-09-28
-    生产实测：create/clear 双双客户端超时而操作实际完成）。"""
-    try:
-        from db import get_db
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT COALESCE(SUM(workspace_bytes), 0) "
-                    "FROM ai_execution_usage WHERE session_id IN ("
-                    "  SELECT id FROM ai_chat_sessions WHERE user_id = %s)",
-                    (user_id,))
-                return float(cur.fetchone()[0]) / (1024 * 1024)
-    except Exception:
-        return 0.0  # 用量不可知 → 放行（不阻塞创建）
+def refresh_workspace_bytes(session_id: str, workspace_path: str | None) -> dict:
+    """后台刷新单会话的 workspace_bytes 用量并做**单会话**配额判定。
 
+    配额口径（2026-09-28 语义变更）：`AI_WORKSPACE_QUOTA_MB` 限制的是
+    **单个会话**工作区的大小，而非用户全部会话合计——创建新会话不再被
+    其他会话的占用阻断（用户合计口径曾在生产环境把全部新任务挡在门外）。
 
-def refresh_workspace_bytes(session_id: str, workspace_path: str | None) -> None:
-    """后台刷新单会话的 workspace_bytes 用量（供配额快查）。best-effort、
-    只在 worker 收口/每日任务等后台上下文调用——禁止进请求路径。"""
+    返回 {'bytes': int, 'quotaExceeded': bool}。超限额只落告警日志
+    （跨阈值时一次），不做硬中断——是否终止该会话由管理员决定。
+    best-effort、只在 worker 收口/每日任务等后台上下文调用——禁止进
+    请求路径。"""
     import datetime as _dt
+    from config import AI_WORKSPACE_QUOTA_MB
+    quota_bytes = (AI_WORKSPACE_QUOTA_MB or 0) * 1024 * 1024
     if not workspace_path or not os.path.isdir(workspace_path):
-        return
+        return {'bytes': 0, 'quotaExceeded': False}
     try:
         total = int(_tree_size_mb(workspace_path) * 1024 * 1024)
         from db import get_db
         with get_db() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT workspace_bytes FROM ai_execution_usage "
+                    "WHERE session_id = %s", (session_id,))
+                row = cur.fetchone()
+                prev = row[0] if row else None
                 cur.execute(
                     "INSERT INTO ai_execution_usage "
                     "  (session_id, workspace_bytes, updated_at) "
@@ -122,22 +120,17 @@ def refresh_workspace_bytes(session_id: str, workspace_path: str | None) -> None
                     (session_id, total))
             conn.commit()
     except Exception:
-        pass
+        return {'bytes': 0, 'quotaExceeded': False}
+    exceeded = bool(quota_bytes and total > quota_bytes)
+    # 跨阈值告警一次（prev 未超 且 现超），不逐回合刷屏
+    if exceeded and not (prev is not None and prev > quota_bytes):
+        logging.getLogger(__name__).warning(
+            'session workspace quota exceeded sid=%s: %dMB > %dMB',
+            session_id, total // (1024 * 1024), AI_WORKSPACE_QUOTA_MB)
+    return {'bytes': total, 'quotaExceeded': exceeded}
 
 
 def create_session_workspace(workspace_root: str, user_id: str, session_id: str) -> str:
-    # P1 §9.3：`AI_WORKSPACE_QUOTA_MB` 配额检查——基于 usage 表的累计快照
-    # （O(1) 查询）。**不做文件系统遍历**：同步 rglob 用户整棵工作区树在
-    # 生产数据量下是分钟级阻塞，曾致 create/clear 双双客户端超时而操作
-    # 实际完成（2026-09-28 生产实测）。快照由 worker 回合收口与每日任务
-    # 后台刷新，秒级陈旧度可接受。超限抛 ValueError（调用方返回明确错误）。
-    from config import AI_WORKSPACE_QUOTA_MB
-    if AI_WORKSPACE_QUOTA_MB and AI_WORKSPACE_QUOTA_MB > 0:
-        used_mb = _usage_total_mb(user_id)
-        if used_mb > AI_WORKSPACE_QUOTA_MB:
-            raise ValueError(
-                f'工作区配额已用尽（累计 {used_mb:.0f}MB > '
-                f'{AI_WORKSPACE_QUOTA_MB}MB），请清理旧会话文件或联系管理员调整配额')
     p = session_path(workspace_root, user_id, session_id)
     (p / "uploads").mkdir(parents=True, exist_ok=True)
     (p / "outputs").mkdir(parents=True, exist_ok=True)

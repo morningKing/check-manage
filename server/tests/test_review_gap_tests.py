@@ -864,6 +864,56 @@ def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
             assert cur.fetchone()[0] == 'completed'
 
 
+def test_workspace_quota_per_session_semantics(db_conn, user_id, tmp_path,
+                                               monkeypatch):
+    """配额口径语义变更（2026-09-28，用户决定）：`AI_WORKSPACE_QUOTA_MB`
+    限制**单个会话**工作区大小，而非用户全部会话合计——创建新会话不再被
+    其他会话的占用阻断。refresh 判定本会话大小并跨阈值告警一次。"""
+    import utils.workspace as ws_mod
+    from utils.workspace import refresh_workspace_bytes, create_session_workspace
+    import config as cfg
+    monkeypatch.setattr(cfg, 'AI_WORKSPACE_QUOTA_MB', 1)  # 1MB
+    # ai_execution_usage.session_id 有 FK → 需真实会话行
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, title, status) "
+            "VALUES ('sess-q1', %s, 'q1', 'active'), "
+                    "('sess-q2', %s, 'q2', 'active')", (user_id, user_id))
+    db_conn.commit()
+
+    # 小文件 → 未超限；usage 行已刷新
+    small = tmp_path / 'small'
+    small.mkdir()
+    (small / 'a.txt').write_text('x' * 100, encoding='utf-8')
+    r1 = refresh_workspace_bytes('sess-q1', str(small))
+    assert r1['quotaExceeded'] is False
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT workspace_bytes FROM ai_execution_usage "
+                    "WHERE session_id='sess-q1'")
+        assert cur.fetchone()[0] >= 100
+
+    # 大文件（2MB > 1MB）→ 超限
+    big = tmp_path / 'big'
+    big.mkdir()
+    (big / 'b.bin').write_bytes(b'x' * (2 * 1024 * 1024))
+    r2 = refresh_workspace_bytes('sess-q2', str(big))
+    assert r2['quotaExceeded'] is True
+    r3 = refresh_workspace_bytes('sess-q2', str(big))
+    assert r3['quotaExceeded'] is True   # 持续超限持续返回 True
+
+    # 单会话口径核心断言：另一个会话超限不影响新会话创建（用户合计口径下
+    # 会基于累计值阻断；锁定「创建永不因其他会话占用被拦」）
+    ws = create_session_workspace(str(tmp_path), user_id, 'sess-q-new')
+    assert ws
+
+    # 清理
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_execution_usage WHERE session_id IN "
+                    "('sess-q1','sess-q2')")
+        cur.execute("DELETE FROM ai_chat_sessions WHERE id IN ('sess-q1','sess-q2')")
+    db_conn.commit()
+
+
 def test_cursor_expired_returns_410(db_conn, user_id, gap_internal_client):
     """缺口补齐 V4：保留期裁剪后游标过旧 → 410 CURSOR_EXPIRED。"""
     bid, sids = _seed_batch(db_conn, 'user-admin', 1)  # client 身份为 admin

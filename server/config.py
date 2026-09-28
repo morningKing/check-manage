@@ -91,9 +91,10 @@ AI_SESSION_TTL_HOURS  = _to_int(os.getenv('AI_SESSION_TTL_HOURS'), 24)
 # 设为 0/False 时，非终态批子会话的普通发送不再被 409 拒绝（渐进迁移用）。
 AI_BATCH_STRICT_OWNERSHIP = (os.getenv('AI_BATCH_STRICT_OWNERSHIP', '1')
                             or '1').strip() not in ('0', 'false', 'no')
-# 工作区配额（MB）：0 = 不启用（默认）。仅在显式设置时于新建 workspace 前
-# 做用户目录累计占用检查——默认值不应打断真实使用（2026-09-27 实测教训：
-# 默认 200MB 会直接拒绝存量用户的新任务）。
+# 工作区配额（MB）：0 = 不启用（默认）。**单会话口径**——限制单个会话
+# 工作区的大小，在 worker 回合收口刷新用量时判定（超限告警，不硬中断）；
+# 不影响新会话创建（2026-09-27/28：用户合计口径曾在生产阻断全部新任务，
+# 且 rglob 遍历在请求路径内造成分钟级阻塞——均已移除）。
 AI_WORKSPACE_QUOTA_MB = _to_int(os.getenv('AI_WORKSPACE_QUOTA_MB'), 0)
 # P1 §9.3：终态批次工作区保留天数（scheduler 每日回收）；ai_batch_events 保留天数
 AI_WORKSPACE_RETENTION_DAYS = _to_int(os.getenv('AI_WORKSPACE_RETENTION_DAYS'), 30)
