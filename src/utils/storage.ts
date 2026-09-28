@@ -29,6 +29,7 @@ export const STORAGE_KEYS = {
   FAVORITE_PAGES: 'check-manage:favoritePages',
   /** AI 助手侧边栏三个分区（会话/批任务/AI定时任务）的折叠状态 */
   AI_CHAT_SIDEBAR_SECTIONS: 'check-manage:aiChatSidebarSections',
+  AI_CHAT_SIDEBAR_WIDTH: 'check-manage:aiChatSidebarWidth',
 } as const
 
 /**
