@@ -4,6 +4,7 @@ import {
   buildToolSummary, genericResultSummary, resolveRenderer,
   stringifyRedacted, normalizeToolName,
 } from '@/components/ai-chat/tool-renderers/registry'
+import { TOOL_STATUS_TEXT } from '@/components/ai-chat/tool-renderers/types'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 
 describe('tool-renderers registry', () => {
@@ -36,6 +37,20 @@ describe('tool-renderers registry', () => {
     const s = buildToolSummary({ name: 'mystery_tool', normalizedName: 'mystery_tool', title: 'target-1', status: 'completed' })
     expect(s.actionText).toBe('调用工具“mystery_tool” · target-1')
     expect(s.resultText).toBe('执行完成，无返回结果')
+  })
+
+  it('pending/running tools do not claim 执行完成 (状态矛盾修复)', () => {
+    // 等待执行/正在执行的工具还没有返回——不得显示「执行完成，无返回结果」
+    for (const status of ['pending', 'running', 'permission'] as const) {
+      const s = buildToolSummary({ name: 'write', normalizedName: 'write',
+                                   input: { filePath: 'a.txt' }, status })
+      expect(s.resultText).toBe('')
+      expect(s.statusText).toBe(TOOL_STATUS_TEXT[status])
+    }
+    // 终态：completed 无返回 → 才允许「执行完成，无返回结果」
+    const done = buildToolSummary({ name: 'write', normalizedName: 'write',
+                                    input: { filePath: 'a.txt' }, status: 'completed' })
+    expect(done.resultText).toBe('执行完成，无返回结果')
   })
 
   it('maps every status to text, unknown included', () => {

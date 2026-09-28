@@ -67,8 +67,13 @@ export function buildToolSummary(ctx: ToolRenderContext): ToolSummary {
   }
 
   let resultText = ''
-  const error = findError(ctx.result)
-  if (error) {
+  // 非终态（等待执行/正在执行/等待确认）不产生结果摘要——工具还没有返回，
+  // 显示"执行完成，无返回结果"会与 statusText「等待执行」自相矛盾
+  const nonTerminal = ['pending', 'running', 'permission'].includes(ctx.status ?? '')
+  if (nonTerminal) {
+    resultText = ''
+  } else if (findError(ctx.result)) {
+    const error = findError(ctx.result)
     resultText = `执行失败：${truncate(error)}`
   } else if (renderer?.resultSummary) {
     try { resultText = renderer.resultSummary(parseResult(ctx.result), ctx) ?? '' } catch { /* degrade */ }
