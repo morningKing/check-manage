@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import requests
@@ -42,6 +43,17 @@ import config
 from config import OPENCODE_GLOBAL_DIR
 
 logger = logging.getLogger(__name__)
+
+# 重启互斥锁：管理页手动重启与 oc-watchdog 自动重启共用，保证任一时刻
+# 只有一条 restart_serve 路径在 kill/拉起 serve（否则并发会双重拉起实例）。
+# 不可重入的 Lock：restart_busy() 靠非阻塞探测判断"有人拿着锁"，同线程
+# 重入语义反而会破坏该判断。
+RESTART_LOCK = threading.Lock()
+
+
+def restart_busy() -> bool:
+    """是否已有重启在进行中（看门狗据此跳过本轮，避免双重拉起）。"""
+    return RESTART_LOCK.locked()
 
 # Wide enough for platform-library skill names (which allow uppercase, `_`)
 # yet safe: no path separators, no leading dot, so `..` can never form.
@@ -946,6 +958,12 @@ def _kill_pids(pids: list[int]) -> None:
 
 
 def restart_serve() -> dict:
+    """重启 serve（互斥入口，见 RESTART_LOCK）。实现见 _restart_serve_locked。"""
+    with RESTART_LOCK:
+        return _restart_serve_locked()
+
+
+def _restart_serve_locked() -> dict:
     """Restart `opencode serve` so freshly written skill/agent files load.
 
     Ownership-gated (Spec §11 进程治理): only a listener the platform itself

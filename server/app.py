@@ -453,6 +453,13 @@ if (not FLASK_DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true') \
     from utils.field_index_scheduler import start_field_index_scheduler
     start_field_index_scheduler(app)
 
+    # OpenCode serve 崩溃看门狗（连续不可达自动拉起；多进程租约互斥）
+    try:
+        from utils.oc_watchdog import start as _start_oc_watchdog
+        _start_oc_watchdog(app)
+    except Exception as _e5:
+        logging.warning('oc-watchdog start failed: %s', _e5)
+
     # Start ETL background scheduler (async run of large imports, see utils/etl_scheduler.py)
     from utils.etl_scheduler import start_etl_scheduler
     start_etl_scheduler(app)
