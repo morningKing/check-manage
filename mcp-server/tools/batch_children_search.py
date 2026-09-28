@@ -16,6 +16,8 @@
 
 归属校验：批任务必须属于 MCP token 对应的用户——不能枚举他人批任务。
 """
+from datetime import datetime, time, timedelta
+
 import mcp.types as types
 
 from db import get_db
@@ -33,9 +35,11 @@ TOOL = types.Tool(
     description=(
         "按条件筛选批任务下的子会话:在指定批任务的子任务范围内,按执行状态"
         "(status 多选)、门禁结论(gate_status 多选,含 unchecked=未核对)、"
-        "是否报错(has_error)、序号区间(seq_from/seq_to)、关键词"
+        "是否报错(has_error)、序号区间(seq_from/seq_to)、创建时间窗"
+        "(created_from/created_to,YYYY-MM-DD)、关键词"
         "(匹配文件名/标题/最后消息预览)组合筛选,返回命中总数、状态分布与"
         "命中明细(子任务 ID/序号/文件/状态/门禁/错误/预览摘要)。"
+        "查「某天创建的子会话」传 created_from=created_to=那一天即可。"
         "参数:batch_id(必填),其余条件可选、可组合;limit 默认 100 上限 500,"
         "matched 计数不受 limit 截断。"
         "仅能查询自己(MCP token 归属用户)的批任务。"
@@ -63,6 +67,14 @@ TOOL = types.Tool(
             "keyword": {
                 "type": "string",
                 "description": "子串关键词(不区分大小写),匹配文件名/标题/最后消息预览",
+            },
+            "created_from": {
+                "type": "string",
+                "description": "创建时间下界,YYYY-MM-DD(本地时区当日 0 点起)或 ISO 时间戳",
+            },
+            "created_to": {
+                "type": "string",
+                "description": "创建时间上界,YYYY-MM-DD(含当日全天)或 ISO 时间戳",
             },
             "limit": {"type": "integer",
                       "description": f"返回明细上限,默认 100,最大 {_MAX_LIMIT}"},
@@ -133,6 +145,31 @@ def _build_filters(inp: dict):
     if (seq_from is not None and seq_to is not None
             and int(seq_from) > int(seq_to)):
         raise BatchChildrenSearchError("seq_from 不能大于 seq_to")
+
+    # 创建时间窗：'YYYY-MM-DD'（本地时区）或完整 ISO 时间戳；
+    # created_to 为纯日期时按「该日结束」处理（次日 0 点开区间）。
+    created_from = (inp.get('created_from') or '').strip()
+    created_to = (inp.get('created_to') or '').strip()
+    try:
+        if created_from:
+            dt = datetime.fromisoformat(created_from)
+            if len(created_from) == 10:
+                dt = datetime.combine(dt.date(), time.min)
+            where.append("s.created_at >= %s")
+            params.append(dt.astimezone())
+            norm['created_from'] = created_from
+        if created_to:
+            dt = datetime.fromisoformat(created_to)
+            if len(created_to) == 10:
+                dt = datetime.combine(dt.date() + timedelta(days=1), time.min)
+                where.append("s.created_at < %s")
+            else:
+                where.append("s.created_at <= %s")
+            params.append(dt.astimezone())
+            norm['created_to'] = created_to
+    except ValueError:
+        raise BatchChildrenSearchError(
+            "created_from/created_to 需为 YYYY-MM-DD 或 ISO 时间戳")
 
     keyword = (inp.get('keyword') or '').strip()
     if keyword:

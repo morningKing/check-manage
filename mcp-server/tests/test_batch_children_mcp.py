@@ -243,6 +243,32 @@ def test_search_duration_ms_uses_created_at(db_conn, ctx, seeded_search):
     assert r['children'][0]['durationMs'] >= 100_000
 
 
+def test_search_created_window(db_conn, ctx, seeded_search):
+    """created_from/created_to 日期窗：今天全天命中全部，昨天区间为空。"""
+    from datetime import date, timedelta
+    bid = seeded_search['batchId']
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    r = batch_children_search.handle(
+        {'batch_id': bid, 'created_from': today, 'created_to': today}, ctx)
+    assert r['matched'] == 3          # fixture 子任务都是 NOW() 创建
+    r = batch_children_search.handle(
+        {'batch_id': bid, 'created_from': yesterday,
+         'created_to': yesterday}, ctx)
+    assert r['matched'] == 0
+    # 完整 ISO 时间戳：上界=当前时间 → 全命中
+    from datetime import datetime
+    now_iso = datetime.now().astimezone().isoformat(timespec='seconds')
+    r = batch_children_search.handle(
+        {'batch_id': bid, 'created_from': yesterday, 'created_to': now_iso},
+        ctx)
+    assert r['matched'] == 3
+    # 非法格式 → 领域异常
+    with pytest.raises(batch_children_search.BatchChildrenSearchError):
+        batch_children_search.handle(
+            {'batch_id': bid, 'created_from': 'not-a-date'}, ctx)
+
+
 def test_search_invalid_params_raise(ctx, seeded_search):
     bid = seeded_search['batchId']
     with pytest.raises(batch_children_search.BatchChildrenSearchError):

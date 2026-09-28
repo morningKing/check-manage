@@ -87,7 +87,9 @@ def handle(input: dict, ctx: ToolContext) -> dict:
     ts = datetime.now().strftime('%Y%m%d-%H%M%S')
     for result_bytes, filename, content_type in files:
         raw_name = filename or f"{script_id}-{ts}{_EXT.get(row[3], '.dat')}"
-        safe = os.path.basename(raw_name.replace('\\', '/')) or f"{script_id}-{ts}{_EXT.get(row[3], '.dat')}"
+        safe = os.path.basename(raw_name.replace('\\', '/')).strip()
+        if not safe or safe in ('.', '..'):
+            safe = f"{script_id}-{ts}{_EXT.get(row[3], '.dat')}"
         path = os.path.join(out_dir, safe)
         with open(path, 'wb') as f:
             f.write(result_bytes)
