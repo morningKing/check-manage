@@ -22,6 +22,10 @@ SKILL_NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 MAX_SKILL_ZIP_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_ZIP_ENTRIES = 200
 
+# 平台同步到 OC 全局目录的副本的标记文件（无符号链接权限时的复制兜底），
+# 禁用清理只认这个标记——与用户自装同名目录区分开。
+PLATFORM_SYNC_MARKER = '.platform-synced'
+
 
 def global_skills_root(workspace_root: str) -> str:
     return os.path.join(workspace_root, 'global-skills')
@@ -286,70 +290,121 @@ def read_skill_file(skill_id: str, file_path: str,
     return {'content': content, 'truncated': truncated, 'binary': False}
 
 
+def sync_platform_skills_to_oc_global(oc_global_dir: str, workspace_root: str,
+                                      skills: list[dict] | None = None) -> list[str]:
+    """把启用的平台技能同步为 OC 全局技能链接。
+
+    在 <oc_global_dir>/skills/<name> 建链接 → <workspace_root>/global-skills/<name>；
+    已禁用的平台技能若在 OC 全局目录留有链接则移除（只清指向平台目录的链接，
+    用户自装技能不动）。幂等；返回本次确保可用的技能名列表。
+
+    为什么不往 <workspace>/.opencode/skills 注入（历史实现）：workspace 一旦
+    存在 .opencode 目录，OC 实例引导就会在其中执行 `bun add @opencode-ai/plugin`
+    —— 该安装走用户 .npmrc 配置的网络（本机为慢速 socks 隧道），每次新建
+    会话固定阻塞 70s~数分钟后才失败放行（create_session 慢的根因，2026-09-28
+    实测：目录无 .opencode 时建会话 0.98s，有 .opencode 时 74s+）。改挂 OC
+    全局 skills 目录后 workspace 不再出现 .opencode，OC 对全局 skills 的
+    发现与 workspace 注入等效。
+    """
+    if not oc_global_dir:
+        return []
+    if skills is None:
+        skills = list_global_skills()
+    enabled = [s for s in (skills or []) if s.get('enabled')]
+    gs_root = os.path.abspath(global_skills_root(workspace_root))
+    if enabled and not os.path.isdir(gs_root):
+        return []
+    oc_skills_dir = os.path.join(oc_global_dir, 'skills')
+
+    synced: list[str] = []
+    try:
+        os.makedirs(oc_skills_dir, exist_ok=True)
+        for s in enabled:
+            name = s['name']
+            src = os.path.join(gs_root, name)
+            if not os.path.isdir(src):
+                continue
+            dst = os.path.join(oc_skills_dir, name)
+            try:
+                if os.path.islink(dst) and os.path.realpath(dst) == os.path.realpath(src):
+                    synced.append(name)
+                    continue  # 链接已就位
+                if os.path.islink(dst):
+                    os.remove(dst)  # 旧链接指向变了 → 重建
+                elif os.path.exists(dst):
+                    # 同名实体目录：平台同步副本（带标记）或用户自装 → 视为可用
+                    synced.append(name)
+                    continue
+                os.symlink(src, dst)
+                synced.append(name)
+            except OSError:
+                # Windows 无符号链接权限 → 复制兜底（带标记，便于禁用时清理）
+                try:
+                    if os.path.islink(dst):
+                        os.remove(dst)
+                    if os.path.isdir(dst) and not os.path.exists(
+                            os.path.join(dst, PLATFORM_SYNC_MARKER)):
+                        synced.append(name)  # 用户自装实体目录 → 视为可用
+                        continue
+                    if not os.path.isdir(dst):
+                        shutil.copytree(src, dst)
+                    with open(os.path.join(dst, PLATFORM_SYNC_MARKER), 'w',
+                              encoding='utf-8') as f:
+                        f.write(src)
+                    synced.append(name)
+                except Exception:  # noqa: BLE001
+                    pass
+        # 清理已禁用平台技能的残留：链接（指向平台目录）或带标记的同步副本
+        for s in (skills or []):
+            if s.get('enabled'):
+                continue
+            name = s['name']
+            dst = os.path.join(oc_skills_dir, name)
+            try:
+                if os.path.islink(dst) and os.path.realpath(dst).startswith(
+                        os.path.realpath(gs_root) + os.sep):
+                    os.remove(dst)
+                elif os.path.isdir(dst) and not os.path.islink(dst) and \
+                        os.path.exists(os.path.join(dst, PLATFORM_SYNC_MARKER)):
+                    shutil.rmtree(dst, ignore_errors=True)
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001 —— 同步失败不阻断调用方
+        return synced
+    return synced
+
+
 def inject_global_skills(workspace_path: str,
                          workspace_root: str | None = None) -> list[str]:
-    """Symlink (or copy) all enabled global skills into a session workspace.
+    """保证平台技能对 OC 可用（历史：往 workspace .opencode/skills 注入，
+    现改为同步到 OC 全局 skills 目录——workspace 里出现 .opencode 会触发
+    OC 实例引导的 npm 依赖安装，在慢速网络下把 create_session 拖慢 70s+，
+    见 sync_platform_skills_to_oc_global 的说明）。
 
-    Creates links in <workspace>/.opencode/skills/<name> -> global-skills/<name>.
-    Returns list of injected skill names.
-
-    `workspace_root` is the parent of all user workspace dirs (e.g. ai-workspaces/).
-    If None, derived from workspace_path (assumes <root>/<user>/<session>).
-
-    Best-effort: failures for individual skills are logged but don't stop others.
+    保留原签名：ai_chat.create_session 与 batch_engine._prepare_workspace
+    两个调用点无需改动。workspace_path 参数已不使用（兼容保留）。
     """
-    skills = list_global_skills()
-    enabled = [s for s in skills if s['enabled']]
-    if not enabled:
-        return []
+    from utils.opencode_launch import global_dir as _oc_global_dir
 
     if workspace_root is None:
-        # Derive from workspace_path: <root>/<user_id>/<session_id> -> <root>
         parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
         if len(parts) < 3:
             return []
         workspace_root = '/'.join(parts[:-2])
-
-    # Resolve to absolute path (workspace_root may be relative)
-    workspace_root = os.path.abspath(workspace_root)
-    gs_root = global_skills_root(workspace_root)
-    if not os.path.isdir(gs_root):
-        return []
-
-    skills_dir = os.path.join(workspace_path, '.opencode', 'skills')
-    os.makedirs(skills_dir, exist_ok=True)
-
-    injected = []
-    for s in enabled:
-        name = s['name']
-        src = os.path.join(gs_root, name)
-        dst = os.path.join(skills_dir, name)
-        if not os.path.isdir(src):
-            continue
-        if os.path.exists(dst):
-            continue  # already exists (per-session skill with same name takes priority)
-        try:
-            os.symlink(src, dst)
-            injected.append(name)
-        except OSError:
-            # Windows without symlink permission — fallback to copy
-            try:
-                shutil.copytree(src, dst)
-                injected.append(name)
-            except Exception:
-                pass
-    return injected
+    return sync_platform_skills_to_oc_global(_oc_global_dir(), workspace_root)
 
 
 def inject_single_skill(workspace_path: str, skill_name: str,
                         workspace_root: str | None = None) -> str:
-    """Inject exactly ONE platform global skill into a workspace — used by the
+    """确保单个平台全局技能对 OC 可用 — used by the
     trace-analysis route (execution-audit Spec §7.1: the analysis session must
     not blanket-inject every enabled skill, and a missing/injected-failed
     trace-analyzer must FAIL the analysis instead of degrading silently).
 
     Returns the skill's source directory. Raises FileNotFoundError when the
     skill does not exist in platform storage; OSError when injection fails.
+    同步目标现为 OC 全局 skills 目录（原 workspace .opencode/skills 注入会
+    触发 OC 引导的 npm 安装拖慢建会话，见 sync_platform_skills_to_oc_global）。
     """
     if workspace_root is None:
         parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
@@ -360,15 +415,13 @@ def inject_single_skill(workspace_path: str, skill_name: str,
     src = os.path.join(global_skills_root(workspace_root), skill_name)
     if not os.path.isdir(src):
         raise FileNotFoundError(f'平台技能 {skill_name} 不存在: {src}')
-    skills_dir = os.path.join(workspace_path, '.opencode', 'skills')
-    os.makedirs(skills_dir, exist_ok=True)
-    dst = os.path.join(skills_dir, skill_name)
-    if os.path.exists(dst):
-        return src  # already present (per-session skill wins) — treat as ok
-    try:
-        os.symlink(src, dst)
-    except OSError:
-        shutil.copytree(src, dst)
+    from utils.opencode_launch import global_dir as _oc_global_dir
+
+    synced = sync_platform_skills_to_oc_global(
+        _oc_global_dir(), workspace_root,
+        skills=[{'name': skill_name, 'enabled': True}])
+    if skill_name not in synced:
+        raise OSError(f'技能 {skill_name} 同步到 OC 全局目录失败')
     return src
 
 
