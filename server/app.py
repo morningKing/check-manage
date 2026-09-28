@@ -196,6 +196,18 @@ try:
     except Exception as e3:
         logging.warning('subagent reuse plugin deploy failed: %s', e3)
 
+    # 内置工具超时门限插件（tool.execute.before 挂看门狗，超时 abort 会话）：
+    # 补齐交互侧门限——OC 内置工具仅 bash/webfetch 自带超时，其余无门限。
+    # serve 启动时加载——部署后需重启 serve 生效。
+    try:
+        from utils.tool_timeout_plugin import (ensure_tool_timeout_plugin,
+                                               DEFAULT_EXEMPT, DEFAULT_TIMEOUT_MS)
+        _tt_ms = int(_os.getenv('OPENCODE_TOOL_TIMEOUT_MS', '') or DEFAULT_TIMEOUT_MS)
+        _tt_exempt = (_os.getenv('OPENCODE_TOOL_TIMEOUT_EXEMPT', '') or DEFAULT_EXEMPT)
+        ensure_tool_timeout_plugin(_OGD, _tt_ms, _tt_exempt)
+    except Exception as e4:
+        logging.warning('tool timeout plugin deploy failed: %s', e4)
+
     def _audit_retention_daily():
         try:
             r = _sk.apply_retention()

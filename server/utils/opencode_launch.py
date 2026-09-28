@@ -110,4 +110,12 @@ def serve_env(base: dict | None = None) -> dict:
     env = child_env(base)
     env['OPENCODE_GLOBAL_DIR'] = global_dir()
     env['BAIZE_INTERNAL_TOKEN'] = (os.environ.get('MCP_INTERNAL_TOKEN', '') or '').strip()
+    # 工具超时门限：插件 baize-tool-timeout.js 在 serve 进程内读这两个 env，
+    # .env 只被 Python 侧读入所以必须显式透传（同 OPENCODE_GLOBAL_DIR 道理）。
+    # bash 默认门限走 OC 自身的实验性 env（不设则 OC 默认 120s，上限 600s）。
+    for _var in ('OPENCODE_TOOL_TIMEOUT_MS', 'OPENCODE_TOOL_TIMEOUT_EXEMPT',
+                 'OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS'):
+        _val = (os.environ.get(_var) or '').strip()
+        if _val:
+            env[_var] = _val
     return env
