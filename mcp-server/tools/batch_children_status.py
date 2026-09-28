@@ -60,7 +60,7 @@ def children_overview(batch_id: str) -> dict | None:
             cur.execute(
                 "SELECT s.id, s.batch_seq, s.batch_input_file, s.status, "
                 "  s.gate_status, s.error_message, s.last_message_preview, "
-                "  s.last_active_at AS started_at, s.last_active_at AS finished_at, s.last_active_at, "
+                "  s.created_at AS started_at, s.last_active_at AS finished_at, s.last_active_at, "
                 "  (SELECT count(*) FROM action_expectations e "
                 "   WHERE e.scope_id = s.id AND e.last_status = 'failed') AS gate_failed, "
                 "  (SELECT count(*) FROM action_expectations e "
