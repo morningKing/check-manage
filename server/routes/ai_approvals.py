@@ -42,6 +42,8 @@ def _decide(approval_id: str, decision: str):
     user = flask_g.current_user
     body = request.get_json(silent=True) or {}
     comment = (body.get('comment') or '').strip() or None
+    # 审批 edit（P2 §7.2，缺口补齐 2）：批准时可携带下游输入修改
+    edits = body.get('edits') if isinstance(body.get('edits'), dict) else None
     from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:

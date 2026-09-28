@@ -82,17 +82,62 @@ def _tree_size_mb(path: Path) -> float:
     return total / (1024 * 1024)
 
 
+def _usage_total_mb(user_id: str) -> float:
+    """用户工作区累计占用（MB）——读 ai_execution_usage.workspace_bytes
+    （worker 在回合收口时刷新）。DB 查询 O(1)，不做文件系统遍历：
+    请求路径内的整树 rglob 在生产数据量下是分钟级阻塞（2026-09-28
+    生产实测：create/clear 双双客户端超时而操作实际完成）。"""
+    try:
+        from db import get_db
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(SUM(workspace_bytes), 0) "
+                    "FROM ai_execution_usage WHERE session_id IN ("
+                    "  SELECT id FROM ai_chat_sessions WHERE user_id = %s)",
+                    (user_id,))
+                return float(cur.fetchone()[0]) / (1024 * 1024)
+    except Exception:
+        return 0.0  # 用量不可知 → 放行（不阻塞创建）
+
+
+def refresh_workspace_bytes(session_id: str, workspace_path: str | None) -> None:
+    """后台刷新单会话的 workspace_bytes 用量（供配额快查）。best-effort、
+    只在 worker 收口/每日任务等后台上下文调用——禁止进请求路径。"""
+    import datetime as _dt
+    if not workspace_path or not os.path.isdir(workspace_path):
+        return
+    try:
+        total = int(_tree_size_mb(workspace_path) * 1024 * 1024)
+        from db import get_db
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ai_execution_usage "
+                    "  (session_id, workspace_bytes, updated_at) "
+                    "VALUES (%s, %s, NOW()) "
+                    "ON CONFLICT (session_id) DO UPDATE SET "
+                    "  workspace_bytes = EXCLUDED.workspace_bytes, "
+                    "  updated_at = NOW()",
+                    (session_id, total))
+            conn.commit()
+    except Exception:
+        pass
+
+
 def create_session_workspace(workspace_root: str, user_id: str, session_id: str) -> str:
-    # P1 §9.3：`AI_WORKSPACE_QUOTA_MB` 落地——用户目录累计占用超配额时拒绝
-    # 新建 workspace（此前配置定义但从未消费）。超限抛 WorkspacePathError
-    # 子类语义的 ValueError，调用方（send/clear/claim 准备）返回明确错误。
+    # P1 §9.3：`AI_WORKSPACE_QUOTA_MB` 配额检查——基于 usage 表的累计快照
+    # （O(1) 查询）。**不做文件系统遍历**：同步 rglob 用户整棵工作区树在
+    # 生产数据量下是分钟级阻塞，曾致 create/clear 双双客户端超时而操作
+    # 实际完成（2026-09-28 生产实测）。快照由 worker 回合收口与每日任务
+    # 后台刷新，秒级陈旧度可接受。超限抛 ValueError（调用方返回明确错误）。
     from config import AI_WORKSPACE_QUOTA_MB
     if AI_WORKSPACE_QUOTA_MB and AI_WORKSPACE_QUOTA_MB > 0:
-        user_dir = Path(workspace_root) / user_id
-        if user_dir.is_dir() and _tree_size_mb(user_dir) > AI_WORKSPACE_QUOTA_MB:
+        used_mb = _usage_total_mb(user_id)
+        if used_mb > AI_WORKSPACE_QUOTA_MB:
             raise ValueError(
-                f'工作区配额已用尽（>{AI_WORKSPACE_QUOTA_MB}MB），'
-                '请清理旧会话文件或联系管理员调整配额')
+                f'工作区配额已用尽（累计 {used_mb:.0f}MB > '
+                f'{AI_WORKSPACE_QUOTA_MB}MB），请清理旧会话文件或联系管理员调整配额')
     p = session_path(workspace_root, user_id, session_id)
     (p / "uploads").mkdir(parents=True, exist_ok=True)
     (p / "outputs").mkdir(parents=True, exist_ok=True)

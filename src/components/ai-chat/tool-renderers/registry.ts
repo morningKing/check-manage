@@ -73,8 +73,7 @@ export function buildToolSummary(ctx: ToolRenderContext): ToolSummary {
   if (nonTerminal) {
     resultText = ''
   } else if (findError(ctx.result)) {
-    const error = findError(ctx.result)
-    resultText = `执行失败：${truncate(error)}`
+    resultText = `执行失败：${truncate(findError(ctx.result) ?? '')}`
   } else if (renderer?.resultSummary) {
     try { resultText = renderer.resultSummary(parseResult(ctx.result), ctx) ?? '' } catch { /* degrade */ }
   } else {

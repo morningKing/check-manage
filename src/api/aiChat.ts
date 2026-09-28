@@ -124,7 +124,12 @@ export interface LspServerStatus { name?: string; status?: string; root?: string
 export interface FormatterStatus { name: string; extensions: string[]; enabled: boolean }
 
 export function createSession(projectMenuId?: string) {
-  return post<AiSession>('/ai/chat/sessions', { projectMenuId })
+  // 服务端要建 workspace + 调 OpenCode create_session（冷目录 bootstrap
+  // 可达 60-90s，见 opencode_client 注释）——全局 30s 超时会在生产环境
+  // 把好端端的创建打成前端失败而实际成功（2026-09-28 生产实测）。
+  // 180s 覆盖冷启动上限。
+  return post<AiSession>('/ai/chat/sessions', { projectMenuId },
+    { timeout: 180_000 })
 }
 
 export interface AiAnalysisSessionSummary extends AiSessionSummary {
@@ -205,7 +210,10 @@ export function deleteSession(id: string) {
   return del<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}`)
 }
 export function clearSession(id: string) {
-  return post<{ ok: boolean; status: string }>(`/ai/chat/sessions/${encodeURIComponent(id)}/clear`, {})
+  // 同 createSession：清空要 rmtree 旧工作区 + OC 删/建会话（冷启动 60-90s）
+  return post<{ ok: boolean; status: string }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/clear`, {},
+    { timeout: 180_000 })
 }
 
 export function getMessages(id: string, since?: string) {

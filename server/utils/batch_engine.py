@@ -1497,9 +1497,19 @@ class BatchWorker:
                     sid, checkpoint_type='turn_complete',
                     execution_generation=generation,
                     opencode_session_id=locals().get('oc_session_id'))
+            # 缺口补齐 5：workspace_bytes 用量刷新（后台上下文，供配额快查；
+            # 单会话树通常很小，遍历代价可忽略）
             except Exception:
                 logger.debug('post-terminal P1 bookkeeping failed sid=%s',
                              sid, exc_info=True)
+            # 缺口补齐 5：workspace_bytes 用量刷新（后台上下文，供配额快查；
+            # 单会话树通常很小，遍历代价可忽略）
+            try:
+                from utils.workspace import refresh_workspace_bytes
+                refresh_workspace_bytes(sid, session_row.get('workspace_path'))
+            except Exception:
+                logger.debug('workspace_bytes refresh failed sid=%s', sid,
+                             exc_info=True)
 
     # --- 动作账本与到位门禁（设计:docs/design/AI子任务动作账本与到位门禁设计.md）---
 
