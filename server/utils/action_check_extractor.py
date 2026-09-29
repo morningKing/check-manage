@@ -35,7 +35,9 @@ args_pattern 是 POSIX 正则,匹配工具入参拼接文本(形如 "command=git
 3. 产物落文件的任务可改用 check_type="file"(effect_spec:{"path":"outputs/x.xlsx",\
 工作区相对 glob})或 check_type="db_record"(effect_spec:{"collection":"slug",\
 "filter":{…Mongo 风格}})表达效果级要求;
-4. name 用简短中文;不要虚构任务里不存在的仓库/脚本/文件。"""
+4. 语义/过程类要求(无法穷举为正则——"结论覆盖要点""必须先读后写")可建议 \
+check_type="verifier"(rubric: ≤2000 字中文判定要点,写给判官看),最多 2 条,宁缺勿滥;
+5. name 用简短中文;不要虚构任务里不存在的仓库/脚本/文件。"""
 
 
 def _extract_json_array(text: str) -> list:
@@ -136,7 +138,7 @@ def extract_action_checks(task_text: str, agent: str | None = None,
         c = dict(c)
         for k in list(c.keys()):
             if k not in ('name', 'tool', 'args_pattern', 'min_count',
-                         'scope', 'check_type', 'effect_spec'):
+                         'scope', 'check_type', 'effect_spec', 'rubric'):
                 c.pop(k, None)
         cleaned.append(c)
     checks = validate_checks(cleaned)
