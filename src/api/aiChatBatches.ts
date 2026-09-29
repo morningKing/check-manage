@@ -3,13 +3,23 @@ import type {
   AiChatBatch, AiChatBatchDetail, StagedFile,
 } from '@/types/aiChatBatch'
 
+/** 路径 id 兜底校验：上游传 null/undefined 时就地抛错（带调用栈可定位
+ * 上游），而不是把字面 "null"/"undefined" 拼进 URL 发出脏请求——生产曾
+ * 观测到 GET /ai/chat/batches/null（2026-09-29，上游未定位，此闸兜底）。 */
+function requireId(id: unknown, name = 'id'): string {
+  if (id === null || id === undefined || id === '' || id === 'null') {
+    throw new Error(`[aiChatBatches] ${name} is ${String(id)} — refusing to request /ai/chat/batches/${String(id)}`)
+  }
+  return encodeURIComponent(String(id))
+}
+
 export function listBatches(page = 1, pageSize = 20) {
   return get<{ items: AiChatBatch[]; total: number; maxSessions?: number }>(
     '/ai/chat/batches', { page, pageSize })
 }
 
 export function getBatch(id: string) {
-  return get<AiChatBatchDetail>(`/ai/chat/batches/${id}`)
+  return get<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}`)
 }
 
 export interface ActionCheck {
@@ -52,11 +62,11 @@ export function createBatch(body: {
 /** P0 §10.4：非终态（pending/running/paused）批次不允许直接删除——stop=true
  *  走「停止并删除」：先取消全部子任务并等待运行中的落地，再清理删除。 */
 export function deleteBatch(id: string, stop = false) {
-  return del<void>(`/ai/chat/batches/${id}${stop ? '?stop=1' : ''}`)
+  return del<void>(`/ai/chat/batches/${requireId(id)}${stop ? '?stop=1' : ''}`)
 }
 
 export function retryFailedSessions(id: string) {
-  return post<{ retried: number }>(`/ai/chat/batches/${id}/retry-failed`)
+  return post<{ retried: number }>(`/ai/chat/batches/${requireId(id)}/retry-failed`)
 }
 
 /** M1.5(设计 §5.2):AI 提炼动作门禁期望建议——只产出建议,登记仍走人工确认 */
@@ -72,36 +82,36 @@ export function extractActionChecks(body: {
 /** 中断整个批次：排队中的直接取消，运行中的协作式中断，已暂停的落成取消。
  *  之后可 resumeBatch 在原工作上继续。 */
 export function stopBatch(id: string) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/cancel`, {})
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}/cancel`, {})
 }
 
 /** 暂停整批排队/运行中的子任务：落在非终态 paused（不占 failed 计数），可续跑。 */
 export function pauseBatch(id: string) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/pause`, {})
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}/pause`, {})
 }
 
 /** 继续执行已暂停（paused）/已中断（cancelled）的子任务：已开跑过的在原
  *  OpenCode 会话/工作区续跑，保留历史。 */
 export function resumeBatch(id: string) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/resume`, {})
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}/resume`, {})
 }
 
 export function appendBatch(id: string, files: StagedFile[]) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${id}/append`, { files })
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}/append`, { files })
 }
 
 export function reexecuteChild(batchId: string, sessionId: string) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/reexecute`, {})
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(batchId, 'batchId')}/sessions/${requireId(sessionId, 'sessionId')}/reexecute`, {})
 }
 
 export function cancelChild(batchId: string, sessionId: string) {
-  return post<{ id: string; status: string }>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/cancel`, {})
+  return post<{ id: string; status: string }>(`/ai/chat/batches/${requireId(batchId, 'batchId')}/sessions/${requireId(sessionId, 'sessionId')}/cancel`, {})
 }
 
 /** 单独继续一个已暂停（paused）的子任务：已开跑过的在原 OpenCode 会话/工作区
  *  从中断处续跑；其余已暂停/已中断的子任务保持不动。 */
 export function resumeChild(batchId: string, sessionId: string) {
-  return post<AiChatBatchDetail>(`/ai/chat/batches/${batchId}/sessions/${sessionId}/resume`, {})
+  return post<AiChatBatchDetail>(`/ai/chat/batches/${requireId(batchId, 'batchId')}/sessions/${requireId(sessionId, 'sessionId')}/resume`, {})
 }
 
 /** 人工 continuation（P0 §7.1）：在终态（completed/failed/cancelled）批子会话上
@@ -109,7 +119,7 @@ export function resumeChild(batchId: string, sessionId: string) {
  *  的发送经由此端点，而不是普通聊天发送接口。 */
 export function continueChild(batchId: string, sessionId: string, prompt: string) {
   return post<AiChatBatchDetail>(
-    `/ai/chat/batches/${batchId}/sessions/${sessionId}/continue`, { prompt })
+    `/ai/chat/batches/${requireId(batchId, 'batchId')}/sessions/${requireId(sessionId, 'sessionId')}/continue`, { prompt })
 }
 
 export function updateBatchConfig(id: string, body: {
@@ -122,7 +132,7 @@ export function updateBatchConfig(id: string, body: {
   /** 子代理会话复用名单:显式传入才更新(2026-09-24) */
   subagent_reuse?: string[] | null
 }) {
-  return patch<AiChatBatchDetail>(`/ai/chat/batches/${id}`, body)
+  return patch<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}`, body)
 }
 
 export function stagingUpload(file: File, uploadSessionId: string) {
