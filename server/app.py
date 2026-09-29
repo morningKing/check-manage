@@ -426,6 +426,17 @@ try:
 except Exception as _e:
     logging.warning('message search_text migration on boot failed: %s', _e)
 
+# 存量会话工具调用回填（2026-09-29）：老会话消息里的 tool_use 片段补录进
+# agent_tool_calls 账本（「工具调用」面板数据源）。幂等可重跑，重跑只补增量。
+try:
+    _mp15 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_29_tool_calls_backfill.py')
+    _spec15 = _ilu.spec_from_file_location('_toolcalls_backfill_boot', _mp15)
+    _m15 = _ilu.module_from_spec(_spec15)
+    _m15.run()
+except Exception as _e:
+    logging.warning('tool calls backfill migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
