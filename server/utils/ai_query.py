@@ -64,7 +64,8 @@ def get_ai_settings():
         cur = conn.cursor()
         cur.execute(
             'SELECT enabled, api_key, endpoint, model, timeout, max_tokens, updated_at, '
-            'mem0_enabled, embedding_model, default_chat_model, max_batch_sessions '
+            'mem0_enabled, embedding_model, default_chat_model, max_batch_sessions, '
+            'embedding_provider, embedding_ollama_url, embedding_dims '
             'FROM ai_settings WHERE id = 1'
         )
         row = cur.fetchone()
@@ -82,6 +83,9 @@ def get_ai_settings():
             'embeddingModel': 'text-embedding-v3',
             'defaultChatModel': '',
             'maxBatchSessions': 50,
+            'embeddingProvider': 'api',
+            'embeddingOllamaUrl': 'http://localhost:11434',
+            'embeddingDims': 1024,
         }
 
     return {
@@ -96,12 +100,18 @@ def get_ai_settings():
         'embeddingModel': (row[8] if len(row) > 8 else None) or 'text-embedding-v3',
         'defaultChatModel': (row[9] if len(row) > 9 else None) or '',
         'maxBatchSessions': (row[10] if len(row) > 10 and row[10] is not None else 50),
+        'embeddingProvider': (row[11] if len(row) > 11 else None) or 'api',
+        'embeddingOllamaUrl': (row[12] if len(row) > 12 else None) or 'http://localhost:11434',
+        'embeddingDims': (row[13] if len(row) > 13 and row[13] is not None else 1024),
     }
 
 
 def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
                        mem0_enabled=False, embedding_model='text-embedding-v3',
-                       default_chat_model='', max_batch_sessions=50):
+                       default_chat_model='', max_batch_sessions=50,
+                       embedding_provider='api',
+                       embedding_ollama_url='http://localhost:11434',
+                       embedding_dims=1024):
     """Persist AI settings and return updated dict."""
     now = datetime.now(timezone.utc)
     with get_db() as conn:
@@ -110,9 +120,11 @@ def update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
             'UPDATE ai_settings SET enabled = %s, api_key = %s, endpoint = %s, '
             'model = %s, timeout = %s, max_tokens = %s, mem0_enabled = %s, '
             'embedding_model = %s, default_chat_model = %s, max_batch_sessions = %s, '
+            'embedding_provider = %s, embedding_ollama_url = %s, embedding_dims = %s, '
             'updated_at = %s WHERE id = 1',
             (enabled, api_key, endpoint, model, timeout, max_tokens,
-             mem0_enabled, embedding_model, default_chat_model, max_batch_sessions, now),
+             mem0_enabled, embedding_model, default_chat_model, max_batch_sessions,
+             embedding_provider, embedding_ollama_url, embedding_dims, now),
         )
     return get_ai_settings()
 

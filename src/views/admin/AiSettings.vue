@@ -107,12 +107,42 @@
           <span class="hint">开启后，AI 会话将自动形成并调用按用户的长期记忆</span>
         </el-form-item>
 
-        <el-form-item label="Embedding 模型" v-if="settings.mem0Enabled">
-          <el-input
-            v-model="settings.embeddingModel"
-            placeholder="text-embedding-v3"
-          />
-        </el-form-item>
+        <template v-if="settings.mem0Enabled">
+          <el-form-item label="Embedding 提供方">
+            <el-radio-group v-model="settings.embeddingProvider">
+              <el-radio-button value="api">API 端点</el-radio-button>
+              <el-radio-button value="ollama">本地 Ollama</el-radio-button>
+            </el-radio-group>
+            <span class="hint" style="margin-left:8px">
+              摘要模型始终走上方 API 端点；切换嵌入提供方/模型后，历史记忆向量维度可能不匹配，届时记忆将暂不可用（需清空记忆数据重建）
+            </span>
+          </el-form-item>
+          <el-form-item label="Embedding 模型" v-if="settings.embeddingProvider === 'api'">
+            <el-input
+              v-model="settings.embeddingModel"
+              placeholder="text-embedding-v3"
+            />
+          </el-form-item>
+          <template v-if="settings.embeddingProvider === 'ollama'">
+            <el-form-item label="Ollama 服务地址">
+              <el-input
+                v-model="settings.embeddingOllamaUrl"
+                placeholder="http://localhost:11434"
+              />
+            </el-form-item>
+            <el-form-item label="Ollama 嵌入模型">
+              <el-input
+                v-model="settings.embeddingModel"
+                placeholder="nomic-embed-text"
+              />
+              <span class="hint">需与 Ollama 已有模型一致（如 nomic-embed-text / bge-m3）；向量维度需与下方设置匹配</span>
+            </el-form-item>
+            <el-form-item label="向量维度">
+              <el-input-number v-model="settings.embeddingDims" :min="64" :max="4096" :step="64" />
+              <span class="hint" style="margin-left:8px">需与所选嵌入模型输出维度一致（nomic-embed-text=768、bge-m3=1024）</span>
+            </el-form-item>
+          </template>
+        </template>
 
         <el-form-item>
           <el-button type="primary" @click="handleSave" :loading="saving">
@@ -148,6 +178,9 @@ interface AiSettingsData {
   maxTokens: number
   mem0Enabled?: boolean
   embeddingModel?: string
+  embeddingProvider?: 'api' | 'ollama'
+  embeddingOllamaUrl?: string
+  embeddingDims?: number
   defaultChatModel?: string
   maxBatchSessions?: number
   updatedAt: string | null
@@ -166,6 +199,9 @@ const settings = reactive<AiSettingsData>({
   maxTokens: 1024,
   mem0Enabled: false,
   embeddingModel: 'text-embedding-v3',
+  embeddingProvider: 'api' as 'api' | 'ollama',
+  embeddingOllamaUrl: 'http://localhost:11434',
+  embeddingDims: 1024,
   defaultChatModel: '',
   maxBatchSessions: 50,
   updatedAt: null,
@@ -188,6 +224,9 @@ async function loadSettings() {
     settings.maxTokens = s.maxTokens
     settings.mem0Enabled = !!s.mem0Enabled
     settings.embeddingModel = s.embeddingModel || 'text-embedding-v3'
+    settings.embeddingProvider = (s.embeddingProvider as 'api' | 'ollama') || 'api'
+    settings.embeddingOllamaUrl = s.embeddingOllamaUrl || 'http://localhost:11434'
+    settings.embeddingDims = s.embeddingDims || 1024
     settings.defaultChatModel = s.defaultChatModel || ''
     settings.maxBatchSessions = s.maxBatchSessions || 50
     settings.updatedAt = s.updatedAt
@@ -219,6 +258,9 @@ async function handleSave() {
       maxTokens: settings.maxTokens,
       mem0Enabled: settings.mem0Enabled,
       embeddingModel: settings.embeddingModel,
+      embeddingProvider: settings.embeddingProvider,
+      embeddingOllamaUrl: settings.embeddingOllamaUrl,
+      embeddingDims: settings.embeddingDims,
       defaultChatModel: settings.defaultChatModel,
       maxBatchSessions: settings.maxBatchSessions,
     }) as any

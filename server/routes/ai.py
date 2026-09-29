@@ -107,6 +107,18 @@ def put_settings():
     if not isinstance(max_batch_sessions, int) or isinstance(max_batch_sessions, bool)             or not (1 <= max_batch_sessions <= 10000):
         return jsonify({'error': '批任务子会话个数上限必须是 1-10000 的整数'}), 400
 
+    # 嵌入模型提供方（2026-09-29）：api=原 API 端点 / ollama=本地 Ollama 服务。
+    # 仅影响 mem0 记忆的 embedder；摘要 LLM 始终走原 API 端点。
+    embedding_provider = (body.get('embeddingProvider') or 'api').strip()
+    if embedding_provider not in ('api', 'ollama'):
+        return jsonify({'error': "embeddingProvider 只能是 'api' 或 'ollama'"}), 400
+    embedding_ollama_url = (body.get('embeddingOllamaUrl') or 'http://localhost:11434').strip()
+    if embedding_provider == 'ollama' and not embedding_ollama_url:
+        return jsonify({'error': 'Ollama 服务地址不能为空'}), 400
+    embedding_dims = body.get('embeddingDims', 1024)
+    if not isinstance(embedding_dims, int) or isinstance(embedding_dims, bool)             or not (64 <= embedding_dims <= 4096):
+        return jsonify({'error': '向量维度必须是 64-4096 的整数'}), 400
+
     # If api_key is all-masked (unchanged from frontend), keep the old value
     current = get_ai_settings()
     if api_key and set(api_key[:-4]) == {'*'}:
@@ -115,7 +127,10 @@ def put_settings():
     settings = update_ai_settings(enabled, api_key, endpoint, model, timeout, max_tokens,
                                   mem0_enabled=mem0_enabled, embedding_model=embedding_model,
                                   default_chat_model=default_chat_model,
-                                  max_batch_sessions=max_batch_sessions)
+                                  max_batch_sessions=max_batch_sessions,
+                                  embedding_provider=embedding_provider,
+                                  embedding_ollama_url=embedding_ollama_url,
+                                  embedding_dims=embedding_dims)
     reset_memory_singleton()
     # Mask before returning
     key = settings.get('apiKey', '')

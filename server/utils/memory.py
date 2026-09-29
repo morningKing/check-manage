@@ -60,15 +60,29 @@ def _base_url(endpoint):
 def _build_config(cfg):
     base = _base_url(cfg['endpoint'])
     key = cfg['apiKey']
+    # embedder 按提供方分支（2026-09-29）：api=原 API 端点（openai 兼容），
+    # ollama=本地 Ollama 服务。llm（摘要）不受影响，始终走原 API 端点。
+    provider = (cfg.get('embeddingProvider') or 'api').strip()
+    if provider == 'ollama':
+        embedder = {
+            'provider': 'ollama',
+            'config': {'model': cfg.get('embeddingModel') or 'nomic-embed-text',
+                       'ollama_base_url': cfg.get('embeddingOllamaUrl') or 'http://localhost:11434',
+                       'embedding_dims': int(cfg.get('embeddingDims') or 1024)},
+        }
+    else:
+        embedder = {
+            'provider': 'openai',
+            'config': {'model': cfg.get('embeddingModel') or 'text-embedding-v3',
+                       'openai_base_url': base, 'api_key': key, 'embedding_dims': 1024},
+        }
     return {
         'vector_store': {'provider': 'chroma',
                          'config': {'collection_name': 'memories', 'path': MEM0_STORE_ROOT}},
         'llm': {'provider': 'openai',
                 'config': {'model': cfg['model'], 'openai_base_url': base,
                            'api_key': key, 'temperature': 0.1}},
-        'embedder': {'provider': 'openai',
-                     'config': {'model': cfg.get('embeddingModel') or 'text-embedding-v3',
-                                'openai_base_url': base, 'api_key': key, 'embedding_dims': 1024}},
+        'embedder': embedder,
     }
 
 
