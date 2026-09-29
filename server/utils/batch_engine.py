@@ -2288,7 +2288,11 @@ class BatchWorker:
                         continue
                     segments.append({
                         'ord': ord_i,
-                        'turn': turn_no,
+                        # turn = 该子代理会话的第几轮委派（段数序号）。不用
+                        # execution_generation——它跨重试/重新执行单调累加，
+                        # 重新执行清行后首段会被记成"第 N 轮派发"（生产实测
+                        # 第 7 轮），与"重新执行=全新一轮从第 1 轮计"相悖。
+                        'turn': len(segments),
                         'label': label or (turn_label or '')[:80],
                         'firstMsgId': mid,
                         'startedAt': _now_iso(),

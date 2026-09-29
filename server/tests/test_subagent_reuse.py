@@ -282,7 +282,9 @@ def test_turn_segments_merge_and_idempotent(db_conn, user_id):
                     ('ses_dev_a1',))
         segs = cur.fetchone()[0]
     assert len(segs) == 2
-    assert segs[1]['turn'] == 3 and segs[1]['label'] == 'task two'
+    # turn = 段数序号（第 2 轮委派）——不再用 execution_generation
+    # （它跨重试/重新执行累加，重新执行后首段会被记成"第 N 轮派发"）
+    assert segs[1]['turn'] == 1 and segs[1]['label'] == 'task two'
     assert segs[1]['firstMsgId'] == 'um-2'
 
 
