@@ -39,6 +39,7 @@ from psycopg2.extras import RealDictCursor
 from db import get_db
 from config import AI_WORKSPACE_ROOT
 from utils import agent_ledger
+from utils import verifier
 from utils.workspace import (create_session_workspace, _rm_force,
                              batch_workspace_root, legacy_batch_workspace_root,
                              resolve_batch_data_path)
@@ -1328,7 +1329,7 @@ class BatchWorker:
             # 核对前先等子代理收敛——模型可能先于子代理结束回合,否则核对的是
             # "中途快照"(生产观察:首个子任务提前判完成,其余仍在执行)。
             agent_ledger.wait_subtasks_drained(sid)
-            gate = self._check_action_gate(sid)
+            gate = self._check_action_gate(sid, workspace_path=ws, model=model)
             # P0 门禁 fail-closed（spec §8.1）：生效检查存在时，登记不可证实
             # （异常/不完整）或核对不可证实（inconclusive）一律不得 completed。
             gate_status = None
@@ -1567,12 +1568,31 @@ class BatchWorker:
                            sid, e)
             return {'applicable': None, 'registered': 0, 'error': str(e)[:200]}
 
-    def _check_action_gate(self, sid: str) -> dict:
-        """终态核对。inconclusive(账本不健康/查询异常)不算失败:任务照常
-        完成,但期望行与日志留痕,不静默放行。"""
+    def _check_action_gate(self, sid: str, *, workspace_path=None, model=None) -> dict:
+        """终态核对。inconclusive(账本不健康/查询异常/判官故障)不算新语义:
+        统一走既有 fail-closed 分支,任务落 failed、期望行与日志留痕。
+        verifier 期望由判官核对(utils/verifier,方案 B)——无 verifier 期望时
+        run_verifier 返回 None,零开销跳过。"""
         healthy = self._ledger_health.pop(sid, True)
         result = agent_ledger.check_session_gate(sid, ledger_healthy=healthy,
                                                  get_db=get_db)
+        if healthy:
+            run = None
+            try:
+                # 先探期望：无 verifier 期望时不惊动判官（零开销路径,与
+                # run_verifier 内部的 None 早退同判据）。
+                if verifier.collect_materials(sid, get_db=get_db) is not None:
+                    run = verifier.run_verifier(sid, workspace_path=workspace_path,
+                                                model=model, get_db=get_db)
+            except Exception as e:  # noqa: BLE001 —— 钩子自身异常双保险
+                logger.warning('verifier hook crashed sid=%s: %s', sid, e)
+                mats = verifier.collect_materials(sid, get_db=get_db) or {}
+                run = {'status': 'error', 'error': str(e)[:300],
+                       'results': verifier._all_inconclusive(
+                           [c['name'] for c in mats.get('checks', [])],
+                           f'verifier 异常: {str(e)[:200]}')}
+            if run is not None:
+                result = verifier.merge_verifier_results(result, run, sid, get_db=get_db)
         if result['status'] == 'inconclusive':
             logger.warning('action gate inconclusive sid=%s: %s',
                            sid, result.get('error') or healthy is False)

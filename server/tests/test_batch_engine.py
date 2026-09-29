@@ -10,6 +10,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+from utils import agent_ledger, verifier  # noqa: E402 —— 动作门禁/判官接线用例
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1838,4 +1840,82 @@ def test_recompute_batch_status_enqueues_outbox_when_enabled(user_id, db_conn):
         cur.execute("SELECT count(*) FROM ai_delivery_outbox WHERE batch_id = %s", (bid,))
         assert cur.fetchone()[0] == 1
         cur.execute("DELETE FROM ai_delivery_outbox WHERE batch_id = %s", (bid,))
+
+
+# ---------------------------------------------------------------------------
+# 动作门禁 × verifier 判官接线（_check_action_gate 扩展）
+# ---------------------------------------------------------------------------
+
+def _seed_gate_child(db_conn, user_id, *, oc_sid, with_reply=False):
+    """最小种子：批 + running 子会话（+可选 assistant 回复）。返回 sid。"""
+    import uuid as _uuid
+    import json as _json
+    from db import get_db
+    bid, sid = str(_uuid.uuid4()), str(_uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                "VALUES (%s, %s, 'vgt', 'p', 1)", (bid, user_id))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                "  batch_seq, opencode_session_id, workspace_path, session_token) "
+                "VALUES (%s, %s, 'running', %s, 0, %s, %s, %s)",
+                (sid, user_id, bid, oc_sid, f'C:\\vgt\\{sid}', f'tok-{sid[:12]}'))
+            if with_reply:
+                cur.execute(
+                    "INSERT INTO ai_chat_messages (id, session_id, role, content) "
+                    "VALUES (%s, %s, 'assistant', %s::jsonb)",
+                    (f'm-{sid[:8]}', sid, _json.dumps([{'type': 'text', 'text': 'r'}])))
+    db_conn.commit()
+    return sid
+
+
+def test_check_action_gate_merges_verifier(db_conn, user_id, monkeypatch):
+    from utils.batch_engine import BatchWorker
+    import utils.verifier as verifier_mod
+    from utils.agent_ledger import register_session_expectations, gate_failure_message
+    from db import get_db
+    w = BatchWorker()
+    # 零开销路径：无 verifier 期望 → run_verifier 不被调用
+    called = []
+    monkeypatch.setattr(verifier_mod, 'run_verifier',
+                        lambda *a, **kw: called.append(a) or None)
+    sid0 = _seed_gate_child(db_conn, user_id, oc_sid='oc-vg0', with_reply=True)
+    w._check_action_gate(sid0, workspace_path='C:\\vgt', model='p/m')
+    assert called == []
+    # 有 verifier 期望且判官判 failed → gate failed，理由进失败文案
+    sid = _seed_gate_child(db_conn, user_id, oc_sid='oc-vg1', with_reply=True)
+    register_session_expectations(
+        sid, [{'name': '结论含标记', 'check_type': 'verifier', 'rubric': '回复包含 MARK'}],
+        get_db=get_db)
+    run = {'status': 'completed', 'error': None, 'results': [
+        {'name': '结论含标记', 'kind': 'verifier', 'status': 'failed',
+         'reasons': ['缺少 DONE-MARK'], 'evidence': '-', 'min_count': 1,
+         'check_type': 'verifier', 'effect_spec': {'rubric': '回复包含 MARK'}}]}
+    monkeypatch.setattr(verifier_mod, 'run_verifier', lambda *a, **kw: run)
+    gate = w._check_action_gate(sid, workspace_path='C:\\vgt', model='p/m')
+    assert gate['status'] == 'failed'
+    assert any(r.get('kind') == 'verifier' for r in gate['results'])
+    assert '判官未通过' in gate_failure_message(gate)
+
+
+def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypatch):
+    """verifier 基础设施故障 → gate inconclusive → 引擎既有分支落 failed。"""
+    from utils.batch_engine import BatchWorker
+    import utils.verifier as verifier_mod
+    from utils.agent_ledger import register_session_expectations
+    from db import get_db
+    w = BatchWorker()
+    sid = _seed_gate_child(db_conn, user_id, oc_sid='oc-vg2', with_reply=True)
+    register_session_expectations(
+        sid, [{'name': '结论含标记', 'check_type': 'verifier', 'rubric': '回复包含 MARK'}],
+        get_db=get_db)
+    monkeypatch.setattr(verifier_mod, 'run_verifier', lambda *a, **kw: {
+        'status': 'error', 'error': 'verifier 轮询超时(180s)',
+        'results': [{'name': '结论含标记', 'kind': 'verifier', 'status': 'inconclusive',
+                     'reasons': ['verifier 轮询超时(180s)'], 'evidence': '',
+                     'min_count': 1, 'check_type': 'verifier', 'effect_spec': None}]})
+    gate = w._check_action_gate(sid, workspace_path='C:\\vgt', model='p/m')
+    assert gate['status'] == 'inconclusive' and gate.get('error')
 
