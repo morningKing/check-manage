@@ -23,24 +23,74 @@ _PLUGIN_TEMPLATE = r"""// Baize subagent session reuse plugin (auto-installed by
 // (parent session, subagent_type): injects task_id before execution and
 // registers the session id from the tool output after execution.
 // Endpoint 与 token 由服务端安装时嵌入；同名 env 变量存在时优先。
+// 可靠性（生产"概率性不复用"修复，2026-09-29）：回调 fetch 带 3s 超时 +
+// 1 次重试 + 进程内缓存兜底——后端重启窗口/瞬时拒连时用缓存继续注入，
+// 不再静默退化为新建；失败打 stderr（serve 日志可见）。
 const ENDPOINT = process.env.BAIZE_SUBAGENT_REUSE_URL || '__ENDPOINT__'
 const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
+const FETCH_TIMEOUT_MS = 3000
+// (sessionID) → { agents:Set, pins:Map(agent→taskId), at } —— 后端瞬断时的兜底判定
+const _cache = new Map()
+const CACHE_TTL_MS = 120000
+
+function _log(...a) { console.error('[baize-subagent-reuse]', ...a) }
+
+async function _fetchJson(url, opts) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    try {
+      const res = await fetch(url, { ...opts, signal: ctrl.signal, headers: HEADERS })
+      clearTimeout(timer)
+      if (!res.ok) return { ok: false, status: res.status }
+      return { ok: true, body: await res.json() }
+    } catch (e) {
+      clearTimeout(timer)
+      if (attempt === 1) { _log('fetch failed', url.replace(/\?.*/, ''), e && e.message); return { ok: false, error: String(e && e.message) } }
+      await new Promise(r => setTimeout(r, 300))
+    }
+  }
+}
+
+function _cacheGet(sessionID) {
+  const c = _cache.get(sessionID)
+  if (!c || Date.now() - c.at > CACHE_TTL_MS) { _cache.delete(sessionID); return null }
+  return c
+}
 
 async function lookup(sessionID, agent, callID) {
-  const res = await fetch(
-    `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`,
-    { headers: HEADERS })
-  if (!res.ok) return null
-  return res.json()
+  const cached = _cacheGet(sessionID)
+  if (cached && !cached.agents.has(agent)) return { enabled: false }  // 缓存已判非复用 agent
+  const r = await _fetchJson(
+    `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`)
+  if (!r.ok) {
+    // 后端瞬断：缓存兜底——知道 pin 就继续注入，否则只能放行新建
+    if (cached) {
+      const taskId = cached.pins.get(agent) || null
+      if (taskId || cached.agents.has(agent)) return { enabled: cached.agents.has(agent), taskId }
+    }
+    return null
+  }
+  const body = r.body || {}
+  const c = _cacheGet(sessionID) || { agents: new Set(), pins: new Map(), at: 0 }
+  c.agents.add(agent); c.at = Date.now()
+  if (body.taskId) c.pins.set(agent, body.taskId)
+  _cache.set(sessionID, c)
+  return body
 }
 
 async function pinByCall(sessionID, callID, taskId) {
-  await fetch(`${ENDPOINT}/pins`, {
+  const r = await _fetchJson(`${ENDPOINT}/pins`, {
     method: 'POST',
-    headers: HEADERS,
     body: JSON.stringify({ session: sessionID, callId: callID, taskId }),
   })
+  // pin 失败不本地兜底（本地无 callID→agent 映射，乱记会让 A 复用到 B 的
+  // 会话）；后果有界：本次委派的 pin 缺失，下一次委派新建一次，后端恢复
+  // 后自愈。stderr 留痕供排查。
+  if (!r.ok) _log('pin FAILED (本次 pin 缺失，下次委派将新建；后端恢复后自愈)',
+                  sessionID, taskId)
+  return r.ok
 }
 
 export const BaizeSubagentReusePlugin = async () => ({
@@ -50,11 +100,21 @@ export const BaizeSubagentReusePlugin = async () => ({
       const args = output && output.args ? output.args : null
       if (!args) return
       const agent = args.subagent_type || args.subagentType || ''
-      if (!agent || args.task_id) return  // 模型已显式指定 task_id 则不覆盖
+      if (!agent) return
       // callId 随 lookup 上报：平台登记意图（callID → agent），使 after
       // 阶段的 pin 不依赖子代理行的持久化时序（复核竞态修复）
       const data = await lookup(input.sessionID, agent, input.callID || '')
-      if (data && data.enabled && data.taskId) args.task_id = data.taskId
+      // pin 权威（生产"概率性不复用"修复 2026-09-29）：平台有 pin 时覆盖
+      // 模型自带的 task_id——模型常会回显/编造上一轮 id，原"模型指定即放行"
+      // 会绕过复用；平台无 pin（首次委派）才保留模型的值。
+      if (data && data.enabled && data.taskId) {
+        if (args.task_id && args.task_id !== data.taskId) {
+          _log('override model-specified task_id', args.task_id, '→', data.taskId)
+        }
+        args.task_id = data.taskId
+        return
+      }
+      if (args.task_id) return  // 无 pin：保留模型指定
     } catch { /* 平台不可达 → 放行新建，不阻断委派 */ }
   },
   async 'tool.execute.after'(input, output) {
