@@ -1,7 +1,7 @@
 # 动作门禁升级：verifier 判官核对（从「做了」到「做对了」）设计
 
 - 日期：2026-09-29
-- 状态：已评审（brainstorming 产出，待实现计划）
+- 状态：已实现（2026-09-30）
 - 相关：`docs/design/ai/AI子任务动作账本与到位门禁设计.md`（现行门禁）、`server/utils/agent_ledger.py`、`server/utils/batch_engine.py`、`server/utils/action_check_extractor.py`
 
 ## 1. 背景与问题
