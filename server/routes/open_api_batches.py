@@ -612,7 +612,13 @@ def retry_failed(batch_id):
     if d['batch']['status'] not in TERMINAL_STATUSES:
         return err('该批任务仍在执行中', CONFLICT, 409)
 
-    n = reset_failed_to_pending(key['ownerUserId'], batch_id, api_key_id=key['id'])
+    # 2026-09-29 起与「重新执行」同语义（全新一轮）：reset_failed_to_pending
+    # 内部先清工作区再走重排事务，任一工作区重置失败即整体放弃（库未动）。
+    try:
+        n = reset_failed_to_pending(key['ownerUserId'], batch_id,
+                                    api_key_id=key['id'])
+    except OSError as e:
+        return err(f'工作区重置失败: {e}', INTERNAL_ERROR, 500)
     if n:
         get_worker().notify()
     log_api_operation('update', 'ai_chat_batch', batch_id, d['batch'].get('name'),
@@ -1173,6 +1179,14 @@ def submit_command(batch_id):
                                           error_code='COMMAND_REJECTED')
         return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
                         'status': 'rejected', 'error': str(e)}), 409
+    except OSError as e:
+        # retry 会先清工作区（fs 先于库，fail-closed）：重置失败时命令未生效，
+        # 账本按 rejected 收口，不留悬挂 pending。
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='WORKSPACE_RESET_FAILED')
+        return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                        'status': 'rejected',
+                        'error': f'工作区重置失败: {e}'}), 500
     if applied:
         execution_commands.finish_command(cmd['id'], 'applied',
                                           result_snapshot={'result': snapshot})

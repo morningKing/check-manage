@@ -201,6 +201,67 @@ def test_retry_failed_resets_failed_to_pending(setup_app, db_conn, tmp_path, mon
         client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
 
 
+def test_retry_failed_clears_context_like_reexecute(setup_app, tmp_path, monkeypatch, db_conn):
+    """任务级「重试失败」与子会话「重新执行」同语义（2026-09-29，全新一轮）：
+    工作区清空重建、消息/变更登记/子代理（含消息）/工具账本/门禁期望/复用
+    锚点清零，opencode_session_id/retry_count 等执行态归零，计数回滚 + 换代。"""
+    client, admin_headers = setup_app
+    bid, sid = _make_terminal_batch(client, admin_headers, db_conn, monkeypatch, tmp_path,
+                                    usid='u-rt-1', child_status='failed')
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT execution_generation FROM ai_chat_sessions WHERE id=%s", (sid,))
+        gen_before = cur.fetchone()[0]
+    r = client.post(f'/ai/chat/batches/{bid}/retry-failed', headers=admin_headers)
+    assert r.status_code == 200
+    assert r.get_json()['retried'] == 2
+    with db_conn.cursor() as cur:
+        # 两个子会话执行态全部归零（含从未跑过的第二个）
+        cur.execute("SELECT status, opencode_session_id, last_message_preview, "
+                    "error_message, retry_count, continue_prompt, active_turn_id, "
+                    "execution_generation FROM ai_chat_sessions "
+                    "WHERE batch_id=%s ORDER BY batch_seq", (bid,))
+        rows = cur.fetchall()
+        assert [row[0] for row in rows] == ['pending', 'pending']
+        for _st, oc, prev, err, retry, cprompt, atid, gen in rows:
+            assert oc is None and prev is None and err is None
+            assert retry == 0 and cprompt is None and atid is None
+            assert gen == gen_before + 1
+        # 上一轮关联行清零（与 reexecute 同一套）
+        cur.execute("SELECT count(*) FROM ai_chat_messages WHERE session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'ai_chat_messages 未清零'
+        cur.execute("SELECT count(*) FROM ai_chat_session_files WHERE session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'ai_chat_session_files 未清零'
+        cur.execute("SELECT count(*) FROM ai_chat_subtasks WHERE root_session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'ai_chat_subtasks 未清零'
+        cur.execute("SELECT count(*) FROM ai_chat_subtask_messages WHERE subtask_id LIKE %s",
+                    (f'sub-{sid[:8]}%',))
+        assert cur.fetchone()[0] == 0, 'ai_chat_subtask_messages 未清零'
+        cur.execute("SELECT count(*) FROM agent_tool_calls WHERE root_session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'agent_tool_calls 未清零'
+        cur.execute("SELECT count(*) FROM action_expectations WHERE scope_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'action_expectations 未清零'
+        cur.execute("SELECT count(*) FROM ai_subagent_pins WHERE root_session_id=%s", (sid,))
+        assert cur.fetchone()[0] == 0, 'ai_subagent_pins 未清零'
+        cur.execute("SELECT count(*) FROM ai_chat_subtask_messages WHERE subtask_id LIKE %s",
+                    (f'sub-{sid[:8]}%',))
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT failed, status FROM ai_chat_batches WHERE id=%s", (bid,))
+        failed, bstatus = cur.fetchone()
+        assert failed == 0 and bstatus == 'pending'
+
+    # 工作区清空重建：上一轮残留清零、骨架与输入恢复（uploads 备份-恢复，
+    # 不依赖有 24h TTL 的批暂存区）
+    cur = db_conn.cursor()
+    cur.execute("SELECT workspace_path FROM ai_chat_sessions WHERE id=%s", (sid,))
+    ws = Path(cur.fetchone()[0])
+    assert not (ws / 'junk-leftover.txt').exists(), '上一轮根残留应被清空'
+    assert not (ws / 'outputs' / 'old-report.md').exists(), '上一轮产出应被清空'
+    assert (ws / 'uploads' / 'r1.txt').read_text(encoding='utf-8') == '输入应保留'
+    assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
+    # 批子会话本就无 opencode.json（MCP 走全局配置）——重置后也不应凭空出现
+    assert not (ws / 'opencode.json').exists()
+
+
 def test_create_batch_stores_agent(setup_app, tmp_path, monkeypatch, db_conn):
     """agent field is persisted and returned in the batch response."""
     client, admin_headers = setup_app

@@ -130,7 +130,12 @@ def retry_failed(batch_id):
     if owner is None:
         return jsonify({'error': '批任务不存在'}), 404
 
-    n = reset_failed_to_pending(owner, batch_id)
+    # 2026-09-29 起与「重新执行」同语义（全新一轮）：reset_failed_to_pending
+    # 内部先清工作区再走重排事务，任一工作区重置失败即整体放弃（库未动）。
+    try:
+        n = reset_failed_to_pending(owner, batch_id)
+    except OSError as e:
+        return jsonify({'error': f'工作区重置失败: {e}'}), 500
     if n:
         get_worker().notify()
 

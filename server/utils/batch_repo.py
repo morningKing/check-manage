@@ -1025,25 +1025,82 @@ def update_batch_config(user_id: str, batch_id: str, *,
 
 def reset_failed_to_pending(user_id: str, batch_id: str, *,
                             api_key_id: str | None = None) -> int:
-    """Returns count of sessions reset. Also clears batch.failed counter and
-    recomputes batch.status.
+    """任务级「重试失败」：failed/needs_review 子任务全部重排为 pending，
+    返回重排个数。同时回滚 batch.failed 计数并重算批次状态。
 
-    `api_key_id` non-None additionally scopes the reset to that source key.
+    2026-09-29 起与子会话「重新执行」同语义（全新一轮，不再原地半新半旧）：
+    事务前先清空并重建每个目标子会话的工作区（上一轮残留文件会污染新一轮；
+    uploads 由 reset_session_workspace 备份-恢复保留，staged 输入与 .opencode
+    布置由 worker 派发时重新恢复），任一工作区重置失败即整体放弃、不动库
+    （fail-closed，与 reexecute 路由同序）。事务内清上一轮的 消息/变更登记/
+    子代理（含子代理消息）/工具调用账本/门禁期望/子代理复用锚点，并把
+    opencode_session_id / retry_count / continue_prompt / gate 状态等执行态
+    一并归零——新轮由派发路径全新建立。`api_key_id` non-None 额外把重置
+    限定到该来源 key。
     """
     owner_scope = "SELECT id FROM ai_chat_batches WHERE user_id=%s"
     owner_params = [batch_id, user_id]
     if api_key_id is not None:
         owner_scope += " AND api_key_id = %s"
         owner_params.append(api_key_id)
+    target_pred = ("batch_id=%s AND status IN ('failed','needs_review') "
+                   f"AND batch_id IN ({owner_scope})")
+    # 预读目标集只服务工作区重置；库内真集以事务内状态谓词为准，两者因并发
+    # 有出入时多清的工作区无害（该子任务要么已被并发重排走全新派发路径）。
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
+                "SELECT id, workspace_path FROM ai_chat_sessions "
+                f"WHERE {target_pred}", tuple(owner_params))
+            targets = cur.fetchall()
+    # 工作区清空重建（fs 先于库，失败即放弃——与 reexecute 路由同序）
+    from utils.workspace import reset_session_workspace
+    for _sid, ws_path in targets:
+        if ws_path:
+            reset_session_workspace(ws_path)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # 上一轮关联行清零（语句顺序与 reexecute_child 一致，且必须排在
+            # UPDATE 之前——状态翻转后谓词就匹配不到了）。
+            cur.execute(
+                f"DELETE FROM ai_chat_messages WHERE session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM ai_chat_session_files WHERE session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM ai_chat_subtask_messages WHERE subtask_id IN "
+                f"(SELECT id FROM ai_chat_subtasks WHERE root_session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred}))",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM ai_chat_subtasks WHERE root_session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM agent_tool_calls WHERE root_session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM action_expectations WHERE scope_type='session' "
+                f"AND scope_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
+                f"DELETE FROM ai_subagent_pins WHERE root_session_id IN "
+                f"(SELECT id FROM ai_chat_sessions WHERE {target_pred})",
+                tuple(owner_params))
+            cur.execute(
                 "UPDATE ai_chat_sessions "
-                "SET status='pending', error_message=NULL, "
+                "SET status='pending', opencode_session_id=NULL, "
+                "    last_message_preview=NULL, error_message=NULL, "
                 "    cancel_requested=false, pause_requested=false, "
+                "    gate_status=NULL, gate_error=NULL, retry_count=0, "
+                "    continue_prompt=NULL, active_turn_id=NULL, "
                 "    execution_generation = execution_generation + 1 "
-                "WHERE batch_id=%s AND status IN ('failed','needs_review') "
-                f"  AND batch_id IN ({owner_scope})",
+                f"WHERE {target_pred}",
                 tuple(owner_params),
             )
             count = cur.rowcount

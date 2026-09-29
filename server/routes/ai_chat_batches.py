@@ -459,7 +459,12 @@ def resume(batch_id):
 @ai_chat_batches_bp.post('/<batch_id>/retry-failed')
 @login_required
 def retry_failed(batch_id):
-    count = reset_failed_to_pending(g.current_user['userId'], batch_id)
+    # 2026-09-29 起与「重新执行」同语义（全新一轮）：reset_failed_to_pending
+    # 内部先清工作区再走重排事务，任一工作区重置失败即整体放弃（库未动）。
+    try:
+        count = reset_failed_to_pending(g.current_user['userId'], batch_id)
+    except Exception as e:
+        return jsonify({'error': f'工作区重置失败: {e}'}), 500
     if count:
         from utils.batch_engine import get_worker
         get_worker().notify()
@@ -643,6 +648,16 @@ def submit_batch_command(batch_id):
                         'status': 'rejected',
                         'error': {'code': 'VERSION_CONFLICT',
                                   'message': str(e), 'retryable': True}}), 409
+    except OSError as e:
+        # retry 会先清工作区（fs 先于库，fail-closed）：重置失败时命令未生效，
+        # 账本按 rejected 收口，不留悬挂 pending。
+        execution_commands.finish_command(cmd['id'], 'rejected',
+                                          error_code='WORKSPACE_RESET_FAILED')
+        return jsonify({'commandId': cmd['id'], 'duplicate': cmd['duplicate'],
+                        'status': 'rejected',
+                        'error': {'code': 'WORKSPACE_RESET_FAILED',
+                                  'message': f'工作区重置失败: {e}',
+                                  'retryable': True}}), 500
     if applied:
         execution_commands.finish_command(cmd['id'], 'applied',
                                           result_snapshot={'result': snapshot})

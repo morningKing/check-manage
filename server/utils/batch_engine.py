@@ -1172,6 +1172,9 @@ class BatchWorker:
                 else:
                     staged = session_row.get('batch_input_file') or ''
                 ws = _prepare_workspace(user_id, sid, staged)
+                # 工作区路径先落库（agent 校验 fail-fast 等会话前失败也能被
+                # retry-failed 的工作区清空覆盖）
+                self._set_workspace_path(sid, ws)
                 # Provision project-level agents/skills BEFORE the session starts —
                 # OpenCode binds the agent at prompt time, so the repo must be in
                 # .opencode/ first. Degrades gracefully: a clone failure doesn't fail
@@ -1891,6 +1894,19 @@ class BatchWorker:
                 row = cur.fetchone()
                 return (row[0], row[1] or '', row[2] or '', row[3] or '', row[4] or '') \
                     if row else None
+
+    def _set_workspace_path(self, session_id: str, ws: str):
+        """Persist workspace_path as soon as it's prepared — BEFORE the
+        OpenCode session exists (which is also when the agent check can
+        fail-fast). retry-failed's workspace pre-read keys off this column;
+        without it, children failing pre-session keep an unregistered
+        workspace that no reset would ever clean."""
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_sessions SET workspace_path = %s "
+                    "WHERE id = %s", (ws, session_id))
+            conn.commit()
 
     def _set_opencode_id(self, session_id: str, oc_session_id: str, ws: str = None):
         """Record the OpenCode session id and (so the SSE proxy can scope to it
