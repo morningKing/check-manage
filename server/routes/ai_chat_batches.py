@@ -558,12 +558,11 @@ def reexecute(batch_id, session_id):
     # _prepare_workspace 重新恢复，.opencode 技能/预置仓库同样重新布置），
     # 再走重排事务（清消息/变更登记/子代理/账本/门禁期望）。
     from utils.workspace import reset_session_workspace
-    from config import get_default_chat_model
     from db import get_db as _get_db
     with _get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT s.workspace_path, s.session_token FROM ai_chat_sessions s "
+                "SELECT s.workspace_path FROM ai_chat_sessions s "
                 "JOIN ai_chat_batches b ON s.batch_id = b.id "
                 "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
                 (session_id, batch_id, g.current_user['userId']),
@@ -571,11 +570,10 @@ def reexecute(batch_id, session_id):
             row = cur.fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
-    workspace_path, session_token = row
-    if workspace_path and session_token:
+    workspace_path = row[0]
+    if workspace_path:
         try:
-            reset_session_workspace(workspace_path, session_token=session_token,
-                                    model=get_default_chat_model())
+            reset_session_workspace(workspace_path)
         except Exception as e:
             return jsonify({'error': f'工作区重置失败: {e}'}), 500
     try:

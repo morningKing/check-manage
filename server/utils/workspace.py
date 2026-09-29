@@ -175,20 +175,21 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
     return str(p.resolve())
 
 
-def reset_session_workspace(workspace_path: str, *, session_token: str,
-                            model: str = "") -> None:
+def reset_session_workspace(workspace_path: str) -> None:
     """清空并重新初始化会话工作区（批任务「重新执行」用，2026-09-29）。
 
     整目录删除后按新建会话完全一致的骨架重建（uploads/outputs/AGENTS.md/
-    git init 初始提交），并重写 opencode.json（MCP 配置随 session_token）。
-    staged 输入恢复、.opencode 技能/预置仓库布置由 worker 派发时的
-    _prepare_workspace/_provision_workspace/inject_global_skills 完成——
-    新一轮的初始化路径与新建会话完全同径，上一轮产物不残留。
+    git init 初始提交）。staged 输入恢复、.opencode 技能/预置仓库布置由
+    worker 派发时的 _prepare_workspace/_provision_workspace/inject_global_skills
+    完成——新一轮的初始化路径与新建会话完全同径，上一轮产物不残留。
 
     **uploads/（用户输入）随备份-恢复保留**：批暂存区有 24h TTL 清扫，
     reexecute 过期的批次时若只依赖 staged 恢复，输入会永久丢失——故
     清空前把 uploads 整体移到工作区外临时目录，骨架重建后原样移回
     （staged 恢复派发时 copy2 覆盖同名，内容一致）。
+
+    注意：不重写 opencode.json——批子会话创建时本就没有该文件（MCP 走
+    全局配置），凭空写入带无效 token 的配置反而会破坏新一轮的 MCP。
 
     Windows 文件占用（杀软/句柄未释放）时重试 3 次，仍失败抛最后异常。
     """
@@ -206,12 +207,13 @@ def reset_session_workspace(workspace_path: str, *, session_token: str,
             shutil.rmtree(uploads_backup, ignore_errors=True)
         raise OSError(f'备份 uploads 失败，已取消工作区重置: {e}') from e
     try:
-        # 2) 整目录删除（Windows 文件占用重试 3 次）
+        # 2) 整目录删除（Windows 文件占用重试 3 次；git objects 只读文件经
+        # _rm_force chmod 后删除——与 cleanup_session_workspace 同解法）
         if p.exists():
             last = None
             for attempt in range(3):
                 try:
-                    shutil.rmtree(p)
+                    shutil.rmtree(p, onerror=_rm_force)
                     last = None
                     break
                 except OSError as e:
@@ -219,20 +221,8 @@ def reset_session_workspace(workspace_path: str, *, session_token: str,
                     time.sleep(0.5 * (attempt + 1))
             if last is not None:
                 raise last
-        # 3) 骨架重建 + opencode.json 重写
+        # 3) 骨架重建（不写 opencode.json——见 docstring）
         create_session_workspace(str(p.parent.parent), p.parent.name, p.name)
-        from config import MCP_SERVER_URL
-        from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
-        try:
-            extra = enabled_mcp_config(reserved_names=['check-manage'])
-        except Exception:  # noqa: BLE001 —— 外部 MCP 加载失败不阻断重置
-            extra = {}
-        write_opencode_config(
-            str(p), mcp_name='check-manage',
-            mcp_url=f"{MCP_SERVER_URL}/mcp?token={session_token}",
-            model=model or "", extra_mcp=extra,
-            include_internal=internal_mcp_enabled(),
-        )
     except Exception:
         if uploads_backup:
             shutil.rmtree(uploads_backup, ignore_errors=True)

@@ -362,7 +362,9 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
     # 批暂存区（staged 有 24h TTL，过期批次的输入也不能丢）
     assert (ws / 'uploads' / 'r1.txt').read_text(encoding='utf-8') == '输入应保留'
     assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
-    assert (ws / 'opencode.json').exists(), 'MCP 配置应随重置重写'
+    # 批子会话创建时本就无 opencode.json（MCP 走全局配置）——重置后也不应
+    # 凭空出现（带无效 token 的配置会破坏新一轮 MCP）
+    assert not (ws / 'opencode.json').exists()
     # 上一轮的关联行清零：变更登记/子代理/账本/门禁期望
     cur.execute("SELECT count(*) FROM ai_chat_session_files WHERE session_id=%s", (sid,))
     assert cur.fetchone()[0] == 0
