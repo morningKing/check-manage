@@ -62,7 +62,7 @@
   - `rubric`（必填，判定要点自然语言，≤2000 字；登记即冻结原文，核对时原文进 prompt）；
   - `tool`/`args_pattern`/`min_count` 对该类型无意义：**传入即 400**（校验器明确报错，不带病入库）；落库时 `min_count` 由登记规范化固定为 1（非用户输入）；
   - `scope`/`subagents`/`apply_to` 沿用现有语义（apply_to 定向到子任务；scope 对 verifier 不参与匹配，材料恒为子会话全树轨迹）。
-- 落库：`action_expectations.check_type='verifier'`，`effect_spec = {"rubric": ...}`，`args_pattern=NULL`，`min_count=1`。
+- 落库：`action_expectations.check_type='verifier'`，`effect_spec = {"rubric": ...}`，`tool='verifier'`、`args_pattern=''`——沿袭 file/db_record 行「tool 列存 check_type 兜底」的既有惯例（两列 NOT NULL，无需 DDL 迁移）。
 - `validate_checks` 扩展；`action-checks/extract` 预填器的 system prompt 升级为可建议 verifier 型期望（输出 `rubric` 要点），字段白名单加 `rubric`。
 
 ## 6. verifier agent：部署与形态
