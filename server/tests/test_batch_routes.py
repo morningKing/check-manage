@@ -338,10 +338,13 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
     r = client.post(f'/ai/chat/batches/{bid}/sessions/{sid}/reexecute', headers=admin_headers)
     assert r.status_code == 200
     with db_conn.cursor() as cur:
-        cur.execute("SELECT status, opencode_session_id, last_message_preview, error_message "
+        cur.execute("SELECT status, opencode_session_id, last_message_preview, error_message, "
+                    "retry_count, continue_prompt, active_turn_id "
                     "FROM ai_chat_sessions WHERE id=%s", (sid,))
-        st, oc, prev, err = cur.fetchone()
+        st, oc, prev, err, retry, cprompt, atid = cur.fetchone()
         assert st == 'pending' and oc is None and prev is None and err is None
+        # 重新执行=全新一轮：自动重试预算重置，无残留继续词/活跃 turn
+        assert retry == 0 and cprompt is None and atid is None
         cur.execute("SELECT count(*) FROM ai_chat_messages WHERE session_id=%s", (sid,))
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT done, status FROM ai_chat_batches WHERE id=%s", (bid,))

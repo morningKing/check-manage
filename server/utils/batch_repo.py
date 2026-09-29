@@ -795,6 +795,7 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
                 "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
                 "  last_message_preview=NULL, error_message=NULL, cancel_requested=false, "
                 "  pause_requested=false, gate_status=NULL, gate_error=NULL, "
+                "  retry_count=0, continue_prompt=NULL, active_turn_id=NULL, "
                 "  execution_generation = execution_generation + 1 "
                 "WHERE id = %s AND status = %s",
                 (session_id, prev_status),
