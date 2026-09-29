@@ -304,8 +304,10 @@ def validate_checks(checks) -> list:
                                  f'tool/args_pattern（判定要点写在 rubric 里）')
             if c.get('min_count') not in (None, 1):
                 raise ValueError(f'action_checks[{i}].verifier 类型不接受 min_count')
-            rubric = (c.get('rubric') or (c.get('effect_spec') or {}).get('rubric')
-                      or '').strip()
+            # effect_spec 畸形输入（真值非字典）按"无"处理——否则 AttributeError
+            # 逃过路由的 ValueError→400 映射，变成 500。
+            espec = c.get('effect_spec') if isinstance(c.get('effect_spec'), dict) else {}
+            rubric = (c.get('rubric') or espec.get('rubric') or '').strip()
             if not rubric:
                 raise ValueError(f'action_checks[{i}].rubric 必填(verifier 类型)')
             if len(rubric) > 2000:

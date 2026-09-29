@@ -650,6 +650,13 @@ def test_validate_verifier_roundtrip_idempotent():
     assert again == first
 
 
+def test_validate_verifier_malformed_effect_spec_is_400():
+    """effect_spec 非字典真值必须 ValueError（路由转 400），不能 AttributeError（500）。"""
+    from utils.agent_ledger import validate_checks
+    with pytest.raises(ValueError, match='rubric'):
+        validate_checks([{'name': 'x', 'check_type': 'verifier', 'effect_spec': 'oops'}])
+
+
 @pytest.fixture
 def user_id(db_conn):
     """一次性用户;收尾连带清掉其会话/批任务/期望行。

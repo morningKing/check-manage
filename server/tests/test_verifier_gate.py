@@ -79,6 +79,10 @@ class _FakeClient:
         self._last = last or []
         self.created, self.sent, self.aborted = [], [], []
 
+    def list_agents(self, directory=''):
+        from utils.verifier import VERIFIER_AGENT_NAME
+        return [{'name': VERIFIER_AGENT_NAME, 'mode': 'primary'}]
+
     def create_session(self, *, directory, title=''):
         self.created.append(directory)
         return 'oc-verifier-1'
@@ -91,6 +95,12 @@ class _FakeClient:
 
     def abort_session(self, oc, directory=''):
         self.aborted.append(oc)
+
+
+class _FakeClientNoAgent(_FakeClient):
+    """预检不过：OC 侧未注册 baize-verifier（agent md 部署后 serve 未重启）。"""
+    def list_agents(self, directory=''):
+        return []
 
 
 def _finished(text):
@@ -183,6 +193,22 @@ def test_run_verifier_default_client_construction(db_conn, user_id, monkeypatch)
     assert fake.aborted == ['oc-verifier-1']     # _abort_quiet 亦同一实例
     assert run['status'] == 'error'
     assert all(r['status'] == 'inconclusive' for r in run['results'])
+
+
+def test_run_verifier_missing_agent_fails_closed(db_conn, user_id):
+    """预检不过（OC 侧未注册 baize-verifier）→ 不建会话、不发 prompt，
+    直接故障路径全 inconclusive（防判官轮以默认 primary agent 跑）。"""
+    from utils import verifier
+    from db import get_db
+    sid = _seed_child(db_conn, user_id, oc_sid='oc-m7')
+    _register(sid)
+    fake = _FakeClientNoAgent([])
+    run = verifier.run_verifier(sid, workspace_path='x', model='p/m',
+                                client=fake, get_db=get_db)
+    assert run['status'] == 'error'
+    assert '重启 OC serve' in run['error']
+    assert all(r['status'] == 'inconclusive' for r in run['results'])
+    assert fake.created == [] and fake.sent == []   # 预检不过不碰会话
 
 
 def test_parse_verdicts_contract():

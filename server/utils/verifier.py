@@ -201,6 +201,17 @@ def run_verifier(session_id: str, workspace_path, model: str, *,
     timeout = timeout_sec if timeout_sec is not None else DEFAULT_TIMEOUT_SEC
     stall = stall_sec if stall_sec is not None else DEFAULT_STALL_SEC
     try:
+        # agent 可用性预检：agent md 部署后需重启 OC serve 才被加载——serve 未
+        # 重启时 send_prompt_async 会以默认 primary agent（含 write/bash/task）
+        # 在受判工作区里跑判官轮。预检不过不建会话，直接故障路径 fail-closed。
+        agents = oc.list_agents(directory=workspace_path) or []
+        agent_names = {a.get('name') if isinstance(a, dict) else str(a)
+                       for a in agents}
+        if VERIFIER_AGENT_NAME not in agent_names:
+            err = 'verifier agent 未在 OpenCode 注册（部署后需重启 OC serve）'
+            log.warning('verifier agent missing sid=%s: %s', session_id, err)
+            return {'status': 'error', 'error': err,
+                    'results': _all_inconclusive(names, err)}
         v_oc = oc.create_session(directory=workspace_path,
                                  title=f'verifier:{session_id[:8]}')
         oc.send_prompt_async(v_oc, build_verifier_prompt(materials),
