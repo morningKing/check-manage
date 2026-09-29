@@ -6,6 +6,9 @@ verdict。会话用完即弃：不落 ai_chat_messages/ai_chat_subtasks/账本�
 平台只保留 verdict 与证据引用（经 merge_verifier_results 进 gate 结果）。
 判官材料：最终 assistant 回复全文 + 账本轨迹摘要（tool/args/state/时序，
 含子代理行）+ 全部 verifier 期望的 rubric 清单。
+轮询读取 OpenCode 原始消息形状 {'info': {...}, 'parts': [...]}——role/
+finish/time 在 info 里、parts 在顶层；完成判定与 batch_engine 同口径
+（time.completed 非空且 finish 非 continuation 'tool-calls'/'tool_use'）。
 """
 import json
 import logging
@@ -221,16 +224,30 @@ def run_verifier(session_id: str, workspace_path, model: str, *,
         snapshot = json.dumps(msgs, ensure_ascii=False, sort_keys=True)
         if snapshot != last_snapshot:
             last_snapshot, last_change = snapshot, now
-        assistant = [m for m in msgs if m.get('role') == 'assistant']
-        if assistant and assistant[-1].get('finished'):
-            parts = assistant[-1].get('parts') or []
-            text = '\n'.join(p.get('text', '') for p in parts
-                             if isinstance(p, dict) and p.get('type') == 'text')
-            # 判官契约（JSON）出现才视为终态：中间态 finished 文本（如「思考中…」）
-            # 继续轮询——契约提取与 parse_verdicts 同一定义，避免把未吐契约的
-            # 中间回合误当终判；判官停滞则由上方的 stall 看门狗兜底 abort。
-            if re.search(r'\{[\s\S]*\}', text or ''):
-                break
+        # 消息形状契约：{'info': {...}, 'parts': [...]}——role/finish/time 在
+        # info、parts 在顶层。完成判定与 batch_engine.list_messages 同源
+        # （_CONTINUATION_FINISH 口径）：time.completed 非空且 finish 不属于
+        # continuation（'tool-calls'/'tool_use'）才视为回合终了。
+        assistant = []
+        for m in msgs:
+            info = m.get('info') or {}
+            if info.get('role') != 'assistant':
+                continue
+            assistant.append(m)
+        if assistant:
+            info = assistant[-1].get('info') or {}
+            finish = info.get('finish')
+            completed = (info.get('time') or {}).get('completed')
+            finished = bool(completed) and finish not in ('tool-calls', 'tool_use')
+            if finished:
+                parts = assistant[-1].get('parts') or []
+                text = '\n'.join(p.get('text', '') for p in parts
+                                 if isinstance(p, dict) and p.get('type') == 'text')
+                # 判官契约（JSON）出现才视为终判：finished 但未吐契约的文本
+                # （如中间回合「思考中…」）继续轮询——契约提取与 parse_verdicts
+                # 同一定义；判官停滞由上方 stall 看门狗兜底 abort。
+                if re.search(r'\{[\s\S]*\}', text or ''):
+                    break
         time.sleep(POLL_INTERVAL_SEC)
     parsed = parse_verdicts(text or '', names)
     if parsed['error']:

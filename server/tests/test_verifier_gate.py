@@ -94,8 +94,17 @@ class _FakeClient:
 
 
 def _finished(text):
-    return [{'role': 'user', 'finished': True, 'parts': [{'type': 'text', 'text': 'judge'}]},
-            {'role': 'assistant', 'finished': True, 'parts': [{'type': 'text', 'text': text}]}]
+    """判官终态消息（OpenCode 原始形状）：finish='stop' 且 time.completed 非空。"""
+    return [{'info': {'role': 'user', 'finish': 'stop', 'time': {'completed': 1}},
+             'parts': [{'type': 'text', 'text': 'judge'}]},
+            {'info': {'role': 'assistant', 'finish': 'stop', 'time': {'completed': 1}},
+             'parts': [{'type': 'text', 'text': text}]}]
+
+
+def _running():
+    """判官中间态消息：finish='tool-calls'（continuation）且无 completed——未终了。
+    故意返回裸 dict（非列表）：顺带覆盖 get_messages 回裸对象时的归一防御。"""
+    return {'info': {'role': 'assistant', 'finish': 'tool-calls'}, 'parts': []}
 
 
 def test_collect_materials_and_noop(db_conn, user_id):
@@ -141,7 +150,7 @@ def test_run_verifier_timeout_aborts(db_conn, user_id, monkeypatch):
     from db import get_db
     sid = _seed_child(db_conn, user_id, oc_sid='oc-m4')
     _register(sid)
-    fake = _FakeClient([{'role': 'assistant', 'finished': False, 'parts': []}])
+    fake = _FakeClient([_running()])
     monkeypatch.setattr(verifier, 'POLL_INTERVAL_SEC', 0.01)
     run = verifier.run_verifier(sid, workspace_path='x', model='p/m',
                                 timeout_sec=0.05, client=fake, get_db=get_db)
