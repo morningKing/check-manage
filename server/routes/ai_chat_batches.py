@@ -225,6 +225,10 @@ def gate_dry_run(batch_id, sid):
     if oc_sid is None:
         return jsonify({'error': 'not found'}), 404
     body = request.get_json(silent=True) or {}
+    # spec §10：verifier 条目「无法预演」要显式标注——不假装跑过证据匹配
+    if (body.get('check_type') or '').strip() == 'verifier':
+        return jsonify({'supported': False,
+                        'note': 'verifier 类型需真实会话由判官核对,无法预演'})
     tool = (body.get('tool') or '').strip()
     pattern = (body.get('args_pattern') or '').strip()
     require_state = (body.get('require_state') or 'completed').strip()

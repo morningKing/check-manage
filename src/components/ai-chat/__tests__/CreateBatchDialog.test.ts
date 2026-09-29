@@ -132,8 +132,36 @@ describe('CreateBatchDialog', () => {
     await flushPromises()
     expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
       action_checks: [
-        { name: '克隆目标仓库', tool: 'bash', args_pattern: 'git clone\\s+\\S*acme/inspector', min_count: 1 },
+        { name: '克隆目标仓库', check_type: 'tool', tool: 'bash',
+          args_pattern: 'git clone\\s+\\S*acme/inspector', min_count: 1 },
       ],
+    }))
+  })
+
+  it('verifier 行提交 {name, check_type, rubric} 且不带 tool/args_pattern/min_count', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [
+      { name: '结论含标记', check_type: 'verifier', tool: 'bash',
+        args_pattern: '', min_count: 1, subagents: '', rubric: '回复包含 MARK' },
+    ]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      action_checks: [{ name: '结论含标记', check_type: 'verifier', rubric: '回复包含 MARK' }],
     }))
   })
 

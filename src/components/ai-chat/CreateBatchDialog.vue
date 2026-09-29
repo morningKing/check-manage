@@ -76,19 +76,29 @@
         <template v-if="gateEnabled">
           <div v-for="(c, i) in gateChecks" :key="i" class="gate-card" :data-test="`gate-row-${i}`">
             <div class="gate-card__line">
-              <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:1" />
-              <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
-                        filterable allow-create default-first-option>
-                <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
+              <ElSelect v-model="c.check_type" style="flex:0 0 132px">
+                <ElOption label="工具调用断言" value="tool" />
+                <ElOption label="判官核对" value="verifier" />
               </ElSelect>
-              <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
-                             style="flex:0 0 100px" />
+              <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:1" />
+              <template v-if="c.check_type !== 'verifier'">
+                <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
+                          filterable allow-create default-first-option>
+                  <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
+                </ElSelect>
+                <ElInputNumber v-model="c.min_count" :min="1" :max="99" controls-position="right"
+                               style="flex:0 0 100px" />
+              </template>
               <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
                         :disabled="gateChecks.length <= 1">删除</ElButton>
             </div>
-            <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
-            <ElInput v-model="c.subagents"
-                     placeholder="适用子代理(可选,逗号分隔,如: general, explore;留空=对所有子代理生效)" />
+            <ElInput v-if="c.check_type === 'verifier'" v-model="c.rubric" type="textarea" :rows="3"
+                     placeholder="判定要点（≤2000 字，写给判官核对）" />
+            <template v-else>
+              <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
+              <ElInput v-model="c.subagents"
+                       placeholder="适用子代理(可选,逗号分隔,如: general, explore;留空=对所有子代理生效)" />
+            </template>
           </div>
           <div class="row__inline">
             <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
@@ -186,7 +196,12 @@ const provisionRepo = ref<string>('')
 const gateEnabled = ref(false)
 // 修正开关(设计 §5.4):门禁不过时原会话 continue 修正(默认关)
 const gateRetry = ref(false)
-const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents: string }>>([])
+// 门禁行类型:tool=工具调用断言(账本正则核对) / verifier=判官核对(rubric 语义要点)
+type GateCheckRow = {
+  name: string; check_type: 'tool' | 'verifier'; tool: string
+  args_pattern: string; min_count: number; subagents: string; rubric: string
+}
+const gateChecks = ref<GateCheckRow[]>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
 const extracting = ref(false)
 // 子代理会话复用（2026-09-24）：勾选的 agent 在本任务内由系统强制续跑同一
@@ -194,8 +209,9 @@ const extracting = ref(false)
 const reuseAgents = ref<string[]>([])
 const subagentList = ref<AgentInfo[]>([])
 const subagentOptions = computed(() => subagentList.value)
-function emptyCheck() {
-  return { name: '', tool: 'bash', args_pattern: '', min_count: 1, subagents: '' }
+function emptyCheck(): GateCheckRow {
+  return { name: '', check_type: 'tool', tool: 'bash', args_pattern: '',
+           min_count: 1, subagents: '', rubric: '' }
 }
 
 /** M1.5:AI 提炼——只产出建议并预填表单,登记仍由用户点「创建」确认 */
@@ -208,11 +224,19 @@ async function onExtract() {
       task_text: prompt.value.trim(),
       agent: selectedAgent.value || null,
     })
-    gateChecks.value = checks.map(c => ({
-      name: c.name, tool: c.tool || 'bash',
-      args_pattern: c.args_pattern, min_count: c.min_count ?? 1,
-      subagents: (c.subagents || []).join(', '),
-    }))
+    // 后端建议已支持 verifier 类型(rubric 装在 effect_spec 里)——按类型预填对应行
+    gateChecks.value = checks.map((c): GateCheckRow => {
+      const isVerifier = String(c.check_type || '') === 'verifier'
+      return {
+        name: c.name,
+        check_type: isVerifier ? 'verifier' : 'tool',
+        tool: isVerifier ? '' : (c.tool || 'bash'),
+        args_pattern: isVerifier ? '' : c.args_pattern,
+        min_count: isVerifier ? 1 : (c.min_count ?? 1),
+        subagents: (c.subagents || []).join(', '),
+        rubric: isVerifier ? String((c.effect_spec as any)?.rubric || '') : '',
+      }
+    })
     if (!gateChecks.value.length) ElMessage.warning('AI 未提炼出必经动作,请手动添加')
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.error || 'AI 提炼失败')
@@ -314,20 +338,34 @@ function removeFailed(f: { id: number }) {
 
 async function submit() {
   if (!canCreate.value) return
-  // 动作门禁:至少要有一条"名称+正则"齐全的期望才随请求下发
-  let action_checks: Array<{ name: string; tool: string; args_pattern: string; min_count: number }> | null = null
+  // 判官核对要点长度守卫:超长直接阻断(后端 validate_checks 同口径拒绝,前端先行拦截)
+  if (gateEnabled.value && gateChecks.value.some(c => (c.rubric || '').length > 2000)) {
+    ElMessage.error('判官核对要点超长（>2000 字）')
+    return
+  }
+  // 动作门禁:至少要有一条"名称+正则/判定要点"齐全的期望才随请求下发
+  // tool 行 = {name, check_type:'tool', tool, args_pattern, min_count[, subagents]}
+  // verifier 行 = {name, check_type:'verifier', rubric}
+  let action_checks: any[] | null = null
   if (gateEnabled.value) {
-    action_checks = gateChecks.value
-      .filter(c => c.name.trim() && c.args_pattern.trim())
-      .map(c => {
-        const row: any = { name: c.name.trim(), tool: c.tool || 'bash',
-          args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
-        const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
-        if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
-        return row
-      })
+    const rows: any[] = []
+    for (const c of gateChecks.value) {
+      if (c.check_type === 'verifier') {
+        if (c.name.trim() && c.rubric.trim()) {
+          rows.push({ name: c.name.trim(), check_type: 'verifier', rubric: c.rubric.trim() })
+        }
+        continue
+      }
+      if (!c.name.trim() || !c.args_pattern.trim()) continue
+      const row: any = { name: c.name.trim(), check_type: 'tool', tool: c.tool || 'bash',
+        args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
+      const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
+      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
+      rows.push(row)
+    }
+    action_checks = rows
     if (action_checks.length === 0) {
-      ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则)')
+      ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点)')
       return
     }
   }

@@ -651,3 +651,25 @@ def test_patch_config_without_name_prompt_keeps_them(setup_app, tmp_path, monkey
     with db_conn.cursor() as cur:
         cur.execute("SELECT name, prompt FROM ai_chat_batches WHERE id = %s", (bid,))
         assert cur.fetchone() == ('cfg-untouched', '原始提示词')
+
+
+def test_gate_dry_run_verifier_not_supported(setup_app, db_conn, tmp_path, monkeypatch):
+    """dry-run 守卫（spec §10）：verifier 条目「无法预演」要显式标注 supported=False，
+    不假装跑过证据匹配。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    f = _stage_one(client, admin_headers, name='dr.txt', upload_session_id='u-dr')
+    detail = client.post('/ai/chat/batches', json={'name': 'b', 'prompt': 'p', 'files': [f]},
+                         headers=admin_headers).get_json()
+    bid = detail['batch']['id']; sid = detail['sessions'][0]['id']
+    # dry-run 端点要求子会话已起步(oc_session_id 非空才过 _authorize_child),
+    # 这里直接补一个;守卫本身与账本无关
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s WHERE id=%s",
+                    ('oc-dr-verifier', sid))
+    db_conn.commit()
+    r = client.post(f'/ai/chat/batches/{bid}/children/{sid}/gate/dry-run',
+                    json={'check_type': 'verifier'}, headers=admin_headers)
+    assert r.status_code == 200 and r.get_json()['supported'] is False
+    assert '无法预演' in r.get_json()['note']
+    client.delete(f'/ai/chat/batches/{bid}', headers=admin_headers)
