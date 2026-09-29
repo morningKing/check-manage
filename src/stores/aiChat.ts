@@ -449,6 +449,20 @@ export const useAiChatStore = defineStore('aiChat', {
       finally { this.toolCallsLoading[id] = false }
     },
 
+    /** 清空会话的本地运行状态（消息/变更/产出/工具调用）——批任务重新执行
+     *  后调用：服务端已清空重置，本地内存若不跟上会继续渲染上一轮残留。
+     *  之后批子会话的轮询（reloadMessages）按窗口合并语义自动收敛到空/新轮。 */
+    resetSessionRunState(id: string) {
+      this.messages[id] = []
+      this.hasMoreMessages[id] = false
+      this.oldestLoadedSeq[id] = null
+      this.changes[id] = []
+      this.outputs[id] = []
+      this.uploads[id] = []
+      this.toolCalls[id] = []
+      this._resetStreamState(id)
+    },
+
     async loadPaletteItems(id: string) {
       try {
         const { commands, skills } = await getCommands(id)

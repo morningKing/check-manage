@@ -220,6 +220,11 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
 
   async function reexecuteChild(batchId: string, sessionId: string) {
     const detail = await api.reexecuteChild(batchId, sessionId)
+    // 重新执行=全新一轮（2026-09-29）：服务端已清消息/变更登记/工作区——
+    // 会话页若正打开着该子会话，本地内存状态（旧消息气泡/变更/产出/工具
+    // 调用）必须同步清空，否则页面继续渲染上一轮残留。
+    const { useAiChatStore } = await import('./aiChat')
+    useAiChatStore().resetSessionRunState(sessionId)
     const idx = items.value.findIndex(b => b.id === batchId)
     if (idx >= 0) items.value[idx] = detail.batch
     if (activeBatch.value?.id === batchId) {
