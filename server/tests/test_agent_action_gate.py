@@ -637,3 +637,75 @@ def test_validate_verifier_requires_rubric():
         validate_checks([{'name': 'x', 'check_type': 'verifier'}])
     with pytest.raises(ValueError, match='rubric'):
         validate_checks([{'name': 'x', 'check_type': 'verifier', 'rubric': 'x' * 2001}])
+
+
+@pytest.fixture
+def user_id(db_conn):
+    """一次性用户;收尾连带清掉其会话/批任务/期望行。
+    本文件的 gate_fixture 自建自清,不用它;verifier 门禁用例复用。"""
+    uid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (id, username, password_hash, display_name, role) "
+            "VALUES (%s, %s, 'x', %s, 'developer')",
+            (uid, f'gate-u-{uid[:8]}', f'Gate User {uid[:8]}'),
+        )
+    db_conn.commit()
+    yield uid
+    with db_conn.cursor() as cur:
+        # 期望行无 FK,按本用户会话的 scope_id 先清,再级联删会话/批任务/用户
+        cur.execute(
+            "DELETE FROM action_expectations WHERE scope_id IN "
+            "(SELECT id FROM ai_chat_sessions WHERE user_id = %s)", (uid,))
+        cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = %s", (uid,))
+        cur.execute("DELETE FROM ai_chat_batches WHERE user_id = %s", (uid,))
+        cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+    db_conn.commit()
+
+
+def _seed_gate_session(db_conn, user_id, *, oc_sid):
+    """最小种子：批 + running 子会话（自清理由本文件的 user fixture 负责的
+    用例直接调用；本 helper 供 verifier/gate 相关用例复用）。返回 sid。"""
+    import uuid as _uuid
+    from db import get_db
+    bid, sid = str(_uuid.uuid4()), str(_uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                "VALUES (%s, %s, 'gate', 'p', 1)", (bid, user_id))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                "  batch_seq, opencode_session_id, session_token) "
+                "VALUES (%s, %s, 'running', %s, 0, %s, %s)",
+                (sid, user_id, bid, oc_sid, f'tok-{sid[:12]}'))
+    return sid
+
+
+def test_gate_check_skips_verifier_expectations(db_conn, user_id):
+    """verifier 期望不参与证据匹配——否则 args_text ~ '' 恒真、verifier 行
+    被误判成 tool 核对。它的核对由引擎钩子（utils/verifier）负责。"""
+    from utils.agent_ledger import register_session_expectations, check_session_gate
+    from db import get_db
+    sid = _seed_gate_session(db_conn, user_id, oc_sid='oc-vskip')
+    n = register_session_expectations(
+        sid, [{'name': '语义达标', 'check_type': 'verifier', 'rubric': '回复包含 MARK'}],
+        get_db=get_db)
+    assert n == 1
+    gate = check_session_gate(sid, ledger_healthy=True, get_db=get_db)
+    assert gate['results'] == []                      # 跳过：不出 result、不报错
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT last_status FROM action_expectations WHERE scope_id=%s", (sid,))
+            assert cur.fetchone()[0] == 'pending'          # 核对权在引擎钩子
+
+
+def test_expectation_desc_and_failure_message_for_verifier():
+    from utils.agent_ledger import _expectation_desc, gate_failure_message
+    row = {'name': '结论含标记', 'kind': 'verifier', 'check_type': 'verifier',
+           'status': 'failed', 'reasons': ['缺少 DONE-MARK', '证据不足'],
+           'evidence': '', 'min_count': 1}
+    assert '判官核对' in _expectation_desc(row)
+    msg = gate_failure_message({'results': [row]})
+    assert msg.startswith('action_gate: ')
+    assert '结论含标记(判官未通过: 缺少 DONE-MARK; 证据不足)' in msg

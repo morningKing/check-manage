@@ -632,6 +632,10 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 results = []
                 for (eid, name, tool, pattern, req_state, min_count,
                      scope, check_type, effect_spec, subagents) in exps:
+                    if check_type == 'verifier':
+                        # 判官核对由引擎钩子（utils/verifier）负责：证据循环
+                        # 跳过——verifier 行 args_pattern='' 会让 `~ ''` 恒真
+                        continue
                     if check_type == 'file':
                         evidence = _count_file_evidence(cur, session_id,
                                                         effect_spec)
@@ -716,6 +720,9 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
 def _expectation_desc(r: dict) -> str:
     """单条期望的人类可读描述(按 check_type 分形)。"""
     ct = r.get('check_type') or 'tool'
+    if ct == 'verifier':
+        rubric = (r.get('effect_spec') or {}).get('rubric', '?')
+        return f'判官核对: {rubric[:60]}'
     if ct == 'file':
         return f"存在文件 {r.get('args_pattern') or (r.get('effect_spec') or {}).get('path', '?')}"
     if ct == 'db_record':
@@ -726,12 +733,18 @@ def _expectation_desc(r: dict) -> str:
 
 def gate_failure_message(gate_result: dict) -> str:
     """把 failed 的核对结果压成子任务 error_message(action_gate: 前缀 +
-    逐条缺失项),沿用对账器"带准确原因失败"的风格。"""
+    逐条缺失项),沿用对账器"带准确原因失败"的风格。verifier 条目渲染
+    判官理由(经 _maybe_gate_retry 进定向修复提示)。"""
     missed = [r for r in gate_result.get('results', [])
               if r.get('status') == 'failed']
-    parts = [f"{r['name']}(需 {_expectation_desc(r)},"
-             f"实际命中 {r['evidence']}/{r['min_count']})"
-             for r in missed]
+    parts = []
+    for r in missed:
+        if r.get('kind') == 'verifier':
+            reasons = '; '.join(r.get('reasons') or [])[:200]
+            parts.append(f"{r['name']}(判官未通过: {reasons})")
+        else:
+            parts.append(f"{r['name']}(需 {_expectation_desc(r)},"
+                         f"实际命中 {r['evidence']}/{r['min_count']})")
     return 'action_gate: ' + '; '.join(parts)[:400]
 
 
