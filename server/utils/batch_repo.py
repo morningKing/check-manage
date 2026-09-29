@@ -896,6 +896,8 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         action_checks= _UNSET,
                         gate_retry= _UNSET,
                         subagent_reuse= _UNSET,
+                        name= _UNSET,
+                        prompt= _UNSET,
                         api_key_id: str | None = None,
                         callback_url: str | None = None,
                         callback_secret: str | None = None) -> dict | None:
@@ -908,6 +910,9 @@ def update_batch_config(user_id: str, batch_id: str, *,
     per run via _fetch_batch_context.
 
     `api_key_id` non-None additionally scopes the update to that source key.
+
+    `name`/`prompt`（编辑对话框，2026-09-29）为 _UNSET 哨兵语义：显式传入才
+    更新，未传保持原值；prompt 对未执行子任务生效（worker 派发实时读）。
     """
     # 归属预检：action_checks/gate_retry 的子更新与主更新同口径——api_key_id
     # 非 None 时必须命中该密钥名下的批次，否则什么也不写（防跨密钥越权改门禁）。
@@ -954,6 +959,27 @@ def update_batch_config(user_id: str, batch_id: str, *,
                      batch_id, user_id),
                 )
             conn.commit()
+    if name is not _UNSET or prompt is not _UNSET:
+        # 名称/提示词(编辑对话框,2026-09-29):显式传入才更新。提示词对
+        # 「待运行 / 重试 / 重新执行」的子任务生效——worker 派发时经
+        # _fetch_batch_context 实时读 batch.prompt;运行中/已完成的子任务
+        # 不受影响。name/prompt 不允许清空(校验在路由层,这里再兜底跳过空值)。
+        sets, params = [], []
+        if name is not _UNSET and (name or '').strip():
+            sets.append("name = %s")
+            params.append(name.strip())
+        if prompt is not _UNSET and (prompt or '').strip():
+            sets.append("prompt = %s")
+            params.append(prompt.strip())
+        if sets:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"UPDATE ai_chat_batches SET {', '.join(sets)} "
+                        "WHERE id = %s AND user_id = %s",
+                        (*params, batch_id, user_id),
+                    )
+                conn.commit()
 
     sql = ("UPDATE ai_chat_batches SET agent = %s, model = %s, "
            "  provision_repo = %s, provision_ref = %s, "

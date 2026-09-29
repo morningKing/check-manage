@@ -2,6 +2,15 @@
   <ElDialog :model-value="modelValue" title="编辑批任务配置" width="640px"
             @update:model-value="$emit('update:modelValue', $event)" @open="prefill">
     <div class="row">
+      <label>批任务名称 <span class="hint">（必填 · ≤200 字符，保存后侧栏分组头同步更新）</span></label>
+      <ElInput v-model="name" maxlength="200" show-word-limit data-test="edit-batch-name" />
+    </div>
+    <div class="row">
+      <label>提示词 <span class="hint">（必填 · 对「待运行 / 重试 / 重新执行」的子任务生效，运行中与已完成的子任务不受影响）</span></label>
+      <ElInput v-model="prompt" type="textarea" :rows="5" :autosize="{ minRows: 5, maxRows: 14 }"
+               data-test="edit-batch-prompt" />
+    </div>
+    <div class="row">
       <label>Agent <span class="hint">（留空=默认，可手填项目 Agent 名）</span></label>
       <ElSelect v-model="agent" placeholder="使用 OpenCode 默认 Agent"
                 clearable filterable allow-create default-first-option>
@@ -80,6 +89,8 @@ const agents = ref<AgentInfo[]>([])
 const models = ref<ModelInfo[]>([])
 const agent = ref<string>('')
 const model = ref<string>('')
+const name = ref<string>('')
+const prompt = ref<string>('')
 const provisionRepo = ref<string>('')
 const provisionRef = ref<string>('')
 const saving = ref(false)
@@ -95,6 +106,8 @@ function emptyCheck() {
 }
 
 function prefill() {
+  name.value = props.batch.name || ''
+  prompt.value = props.batch.prompt || ''
   agent.value = props.batch.agent || ''
   model.value = props.batch.model || ''
   provisionRepo.value = props.batch.provision_repo || ''
@@ -126,6 +139,14 @@ onMounted(async () => {
 })
 
 async function save() {
+  if (!name.value.trim()) {
+    ElMessage.warning('批任务名称不能为空')
+    return
+  }
+  if (!prompt.value.trim()) {
+    ElMessage.warning('提示词不能为空')
+    return
+  }
   saving.value = true
   try {
     let action_checks: Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents?: string[] }> | null = null
@@ -145,13 +166,15 @@ async function save() {
       }
     }
     await store.updateBatchConfig(props.batch.id, {
+      name: name.value.trim(),
+      prompt: prompt.value.trim(),
       agent: agent.value || null, model: model.value || null,
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
       action_checks: gateEnabled.value ? action_checks : [],
       subagent_reuse: reuseAgents.value,
     })
-    ElMessage.success('已保存')
+    ElMessage.success('已保存（提示词对未执行子任务生效）')
     emit('saved'); emit('update:modelValue', false)
   } catch (e: unknown) {
     const err = e as { response?: { data?: { error?: string } } }

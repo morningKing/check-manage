@@ -323,6 +323,21 @@ def update_config(batch_id):
                 body.get('subagent_reuse'))
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
+    # 名称/提示词（编辑对话框，2026-09-29）：显式传入才更新，非空校验与
+    # 创建口径一致（name ≤200 字符）；prompt 对待运行/重试/重执行子任务
+    # 生效（worker 派发实时读 batch.prompt），运行中/已完成的不受影响。
+    if 'name' in body:
+        name = (body.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'name 不能为空'}), 400
+        if len(name) > 200:
+            return jsonify({'error': 'name 最长 200 字符'}), 400
+        patch_kwargs['name'] = name
+    if 'prompt' in body:
+        prompt = (body.get('prompt') or '').strip()
+        if not prompt:
+            return jsonify({'error': 'prompt 不能为空'}), 400
+        patch_kwargs['prompt'] = prompt
     result = update_batch_config(g.current_user['userId'], batch_id, agent=agent, model=model,
                                  provision_repo=provision_repo, provision_ref=provision_ref,
                                  **patch_kwargs)

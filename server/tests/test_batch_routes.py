@@ -455,3 +455,70 @@ def test_patch_invalid_action_checks_400_keeps_old_value(setup_app, db_conn):
             cur.execute("DELETE FROM action_expectations e USING ai_chat_sessions s "
                         "WHERE e.scope_id = s.id AND s.batch_id = %s", (bid,))
         db_conn.commit()
+
+
+def _mk_config_batch(client, headers, name='cfg-test',
+                     upload_session_id='u-cfg-1'):
+    f = _stage_one(client, headers, name='x.txt', upload_session_id=upload_session_id)
+    resp = client.post('/ai/chat/batches', json={
+        'name': name, 'prompt': '原始提示词', 'files': [f],
+    }, headers=headers)
+    assert resp.status_code == 201
+    return resp.get_json()['batch']['id']
+
+
+def test_patch_config_updates_name_and_prompt(setup_app, tmp_path, monkeypatch, db_conn):
+    """编辑对话框（2026-09-29）：PATCH 支持改名称与提示词。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    bid = _mk_config_batch(client, admin_headers, name='cfg-old',
+                           upload_session_id='u-cfg-2')
+
+    r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers, json={
+        'name': 'cfg-new-name', 'prompt': '全新提示词 v2',
+        'agent': '', 'model': '',
+    })
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json()['batch']['name'] == 'cfg-new-name'
+    assert r.get_json()['batch']['prompt'] == '全新提示词 v2'
+
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT name, prompt FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone() == ('cfg-new-name', '全新提示词 v2')
+
+
+def test_patch_config_rejects_empty_name_and_prompt(setup_app, tmp_path, monkeypatch, db_conn):
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    bid = _mk_config_batch(client, admin_headers, name='cfg-keep',
+                           upload_session_id='u-cfg-3')
+
+    r1 = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                      json={'name': '   '})
+    assert r1.status_code == 400 and 'name' in r1.get_json()['error']
+    r2 = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                      json={'prompt': ''})
+    assert r2.status_code == 400 and 'prompt' in r2.get_json()['error']
+    # 名称超长
+    r3 = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                      json={'name': 'x' * 201})
+    assert r3.status_code == 400
+
+    # 校验失败不半更新：原值保持
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT name, prompt FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone() == ('cfg-keep', '原始提示词')
+
+
+def test_patch_config_without_name_prompt_keeps_them(setup_app, tmp_path, monkeypatch, db_conn):
+    """只改 agent 等配置时，未传的 name/prompt 保持原值（_UNSET 语义）。"""
+    client, admin_headers = setup_app
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    bid = _mk_config_batch(client, admin_headers, name='cfg-untouched',
+                           upload_session_id='u-cfg-4')
+    r = client.patch(f'/ai/chat/batches/{bid}', headers=admin_headers,
+                     json={'agent': 'some-agent', 'model': ''})
+    assert r.status_code == 200
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT name, prompt FROM ai_chat_batches WHERE id = %s", (bid,))
+        assert cur.fetchone() == ('cfg-untouched', '原始提示词')

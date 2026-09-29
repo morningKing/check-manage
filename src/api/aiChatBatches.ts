@@ -131,6 +131,10 @@ export function updateBatchConfig(id: string, body: {
   action_checks?: ActionCheck[] | null
   /** 子代理会话复用名单:显式传入才更新(2026-09-24) */
   subagent_reuse?: string[] | null
+  /** 批任务名称(编辑对话框,2026-09-29):非空,≤200 字符 */
+  name?: string
+  /** 提示词(编辑对话框,2026-09-29):对待运行/重试/重执行子任务生效 */
+  prompt?: string
 }) {
   return patch<AiChatBatchDetail>(`/ai/chat/batches/${requireId(id)}`, body)
 }
