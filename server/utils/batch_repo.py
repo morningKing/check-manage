@@ -786,6 +786,11 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
             cur.execute(
                 "DELETE FROM action_expectations "
                 "WHERE scope_type = 'session' AND scope_id = %s", (session_id,))
+            # 复用锚点同步清除（2026-09-29）：重新执行=全新一轮，子代理会话
+            # 也应从新开始——pin 保留会让新轮委派注入旧子会话（带着上一轮
+            # 全部历史的上下文），模型可能直接复用旧结论而非真正重跑。
+            cur.execute("DELETE FROM ai_subagent_pins WHERE root_session_id = %s",
+                        (session_id,))
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
                 "  last_message_preview=NULL, error_message=NULL, cancel_requested=false, "

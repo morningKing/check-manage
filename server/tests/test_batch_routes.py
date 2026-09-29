@@ -319,6 +319,10 @@ def _make_terminal_batch(client, headers, db_conn, monkeypatch, tmp_path, *, usi
         cur.execute("INSERT INTO action_expectations (scope_type, scope_id, name, tool, "
                     "  args_pattern, min_count, source) "
                     "VALUES ('session', %s, '旧期望', 'bash', 'x', 1, 'batch')", (sids[0],))
+        # 复用锚点：重新执行应清除，使新一轮委派新建子代理会话
+        cur.execute("INSERT INTO ai_subagent_pins (id, root_session_id, batch_id, agent, task_id) "
+                    "VALUES (%s, %s, %s, 'general', 'ses_old_sub')",
+                    (f'spin-{sids[0][:8]}', sids[0], bid))
         done = 2 if child_status == 'completed' else 0
         failed = 2 if child_status == 'failed' else 0
         cur.execute("UPDATE ai_chat_batches SET status='completed', done=%s, failed=%s WHERE id=%s",
@@ -367,6 +371,9 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
     cur.execute("SELECT count(*) FROM agent_tool_calls WHERE root_session_id=%s", (sid,))
     assert cur.fetchone()[0] == 0
     cur.execute("SELECT count(*) FROM action_expectations WHERE scope_id=%s", (sid,))
+    assert cur.fetchone()[0] == 0
+    # 复用锚点清除：新轮委派将新建子代理会话（真正重新执行）
+    cur.execute("SELECT count(*) FROM ai_subagent_pins WHERE root_session_id=%s", (sid,))
     assert cur.fetchone()[0] == 0
 
 
