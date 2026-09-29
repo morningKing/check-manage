@@ -603,3 +603,37 @@ def test_gate_retry_batch_flag_off_blocks_env(gate_fixture, monkeypatch):
          'evidence': 0, 'min_count': 1, 'status': 'failed'}]}
     w = BatchWorker()
     assert w._maybe_gate_retry(f['sid'], gate, batch_id=f['bid']) is False
+
+
+# ---------------------------------------------------------------------------
+# verifier 类型（判官核对，设计 docs/design/ai/AI动作门禁verifier判官核对设计.md §5）
+# ---------------------------------------------------------------------------
+
+def test_validate_verifier_check_ok():
+    from utils.agent_ledger import validate_checks
+    checks = validate_checks([{'name': '结论含标记', 'check_type': 'verifier',
+                               'rubric': '最终回复必须包含 DONE-MARK'}])
+    c = checks[0]
+    assert c['check_type'] == 'verifier'
+    assert c['tool'] == 'verifier' and c['args_pattern'] == ''
+    assert c['effect_spec'] == {'rubric': '最终回复必须包含 DONE-MARK'}
+    assert c['min_count'] == 1 and c['scope'] == 'tree'
+
+
+def test_validate_verifier_rejects_tool_fields():
+    from utils.agent_ledger import validate_checks
+    base = {'name': 'x', 'check_type': 'verifier', 'rubric': 'r'}
+    with pytest.raises(ValueError, match='tool'):
+        validate_checks([dict(base, tool='bash')])
+    with pytest.raises(ValueError, match='args_pattern'):
+        validate_checks([dict(base, args_pattern='git.*')])
+    with pytest.raises(ValueError, match='min_count'):
+        validate_checks([dict(base, min_count=2)])
+
+
+def test_validate_verifier_requires_rubric():
+    from utils.agent_ledger import validate_checks
+    with pytest.raises(ValueError, match='rubric'):
+        validate_checks([{'name': 'x', 'check_type': 'verifier'}])
+    with pytest.raises(ValueError, match='rubric'):
+        validate_checks([{'name': 'x', 'check_type': 'verifier', 'rubric': 'x' * 2001}])

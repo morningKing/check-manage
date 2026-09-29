@@ -234,7 +234,7 @@ def finalize_interactive_turn(session_id: str, oc_session_id: str, state,
 # ---------------------------------------------------------------------------
 
 VALID_SCOPES = ('session', 'tree')
-VALID_CHECK_TYPES = ('tool', 'file', 'db_record')
+VALID_CHECK_TYPES = ('tool', 'file', 'db_record', 'verifier')
 
 
 def _validate_effect_spec(check_type, spec, idx):
@@ -294,7 +294,23 @@ def validate_checks(checks) -> list:
                              f'{VALID_CHECK_TYPES}')
         tool = (c.get('tool') or '').strip()
         pattern = (c.get('args_pattern') or '').strip()
-        if check_type == 'tool':
+        effect_spec = None
+        if check_type == 'verifier':
+            if tool or pattern:
+                raise ValueError(f'action_checks[{i}].verifier 类型不接受 '
+                                 f'tool/args_pattern（判定要点写在 rubric 里）')
+            if c.get('min_count') not in (None, 1):
+                raise ValueError(f'action_checks[{i}].verifier 类型不接受 min_count')
+            rubric = (c.get('rubric') or '').strip()
+            if not rubric:
+                raise ValueError(f'action_checks[{i}].rubric 必填(verifier 类型)')
+            if len(rubric) > 2000:
+                raise ValueError(f'action_checks[{i}].rubric 超长(>2000 字)')
+            tool = 'verifier'   # NOT NULL 列：沿袭 file/db_record 的 tool=check_type 惯例
+            pattern = ''
+            effect_spec = {'rubric': rubric}
+            min_count = 1
+        elif check_type == 'tool':
             if not tool or len(tool) > 50:
                 raise ValueError(f'action_checks[{i}].tool 必填且不超过 50 字')
             if not pattern:
@@ -322,7 +338,6 @@ def validate_checks(checks) -> list:
         if min_count < 1:
             raise ValueError(f'action_checks[{i}].min_count 至少为 1')
         require_state = (c.get('require_state') or 'completed').strip()
-        effect_spec = None
         if check_type in ('file', 'db_record'):
             effect_spec = _validate_effect_spec(check_type, c.get('effect_spec'), i)
         normalized.append({
