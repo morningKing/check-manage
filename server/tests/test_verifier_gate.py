@@ -159,6 +159,32 @@ def test_run_verifier_timeout_aborts(db_conn, user_id, monkeypatch):
     assert all(r['status'] == 'inconclusive' for r in run['results'])
 
 
+def test_run_verifier_default_client_construction(db_conn, user_id, monkeypatch):
+    """client=None 走生产默认构造点（惰性 OpenCodeClient(OPENCODE_BASE_URL) 惯例）：
+    构造恰一次；create_session/send_prompt_async/abort 拿的是同一个构造实例。"""
+    from utils import verifier
+    from db import get_db
+    sid = _seed_child(db_conn, user_id, oc_sid='oc-m6')
+    _register(sid)
+    fake = _FakeClient([_running()])
+    built = []
+
+    def _factory():
+        built.append(1)
+        return fake
+
+    monkeypatch.setattr(verifier, '_default_client', _factory)
+    monkeypatch.setattr(verifier, 'POLL_INTERVAL_SEC', 0.01)
+    run = verifier.run_verifier(sid, workspace_path='x', model='p/m',
+                                client=None, timeout_sec=0.05, get_db=get_db)
+    assert built == [1]                          # 默认路径恰一次构造
+    assert fake.created == ['x']                 # create_session 经构造实例调用
+    assert fake.sent[0][1] == 'baize-verifier'   # send_prompt_async 同一实例
+    assert fake.aborted == ['oc-verifier-1']     # _abort_quiet 亦同一实例
+    assert run['status'] == 'error'
+    assert all(r['status'] == 'inconclusive' for r in run['results'])
+
+
 def test_parse_verdicts_contract():
     from utils.verifier import parse_verdicts
     ok = parse_verdicts(

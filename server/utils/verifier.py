@@ -16,8 +16,6 @@ import os
 import re
 import time
 
-from utils import opencode_client
-
 log = logging.getLogger(__name__)
 
 VERIFIER_AGENT_NAME = 'baize-verifier'
@@ -80,6 +78,15 @@ def ensure_verifier_agent(global_dir: str):
 def _default_get_db():
     from db import get_db
     return get_db()
+
+
+def _default_client():
+    """生产默认判官客户端：沿用仓库惯例惰性构造 OpenCodeClient(OPENCODE_BASE_URL)
+    ——调用时才建，不在模块 import 时构造（同 batch_engine._client 与交互路径）。
+    utils.opencode_client 是类模块而非客户端实例，不可直接当 client 用。"""
+    from utils.opencode_client import OpenCodeClient
+    from config import OPENCODE_BASE_URL
+    return OpenCodeClient(OPENCODE_BASE_URL)
 
 
 def collect_materials(session_id: str, get_db=None):
@@ -187,7 +194,9 @@ def run_verifier(session_id: str, workspace_path, model: str, *,
     materials = collect_materials(session_id, get_db=get_db)
     if materials is None:
         return None
-    oc = client or opencode_client
+    # client=None 走生产默认构造（惰性工厂）；注入桩时 or 短路不触发构造。
+    # 判官会话创建/轮询/abort 全程用这同一个实例（_abort_quiet 亦然）。
+    oc = client or _default_client()
     names = [c['name'] for c in materials['checks']]
     timeout = timeout_sec if timeout_sec is not None else DEFAULT_TIMEOUT_SEC
     stall = stall_sec if stall_sec is not None else DEFAULT_STALL_SEC
