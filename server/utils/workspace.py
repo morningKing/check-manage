@@ -13,6 +13,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 
 _NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
 from pathlib import Path
@@ -172,6 +173,46 @@ def create_session_workspace(workspace_root: str, user_id: str, session_id: str)
         except Exception:
             pass  # fail-open: missing git is non-fatal
     return str(p.resolve())
+
+
+def reset_session_workspace(workspace_path: str, *, session_token: str,
+                            model: str = "") -> None:
+    """清空并重新初始化会话工作区（批任务「重新执行」用，2026-09-29）。
+
+    整目录删除后按新建会话完全一致的骨架重建（uploads/outputs/AGENTS.md/
+    git init 初始提交），并重写 opencode.json（MCP 配置随 session_token）。
+    staged 输入恢复、.opencode 技能/预置仓库布置由 worker 派发时的
+    _prepare_workspace/_provision_workspace/inject_global_skills 完成——
+    新一轮的初始化路径与新建会话完全同径，上一轮产物不残留。
+
+    Windows 文件占用（杀软/句柄未释放）时重试 3 次，仍失败抛最后异常。
+    """
+    p = Path(workspace_path)
+    if p.exists():
+        last = None
+        for attempt in range(3):
+            try:
+                shutil.rmtree(p)
+                last = None
+                break
+            except OSError as e:
+                last = e
+                time.sleep(0.5 * (attempt + 1))
+        if last is not None:
+            raise last
+    create_session_workspace(str(p.parent.parent), p.parent.name, p.name)
+    from config import MCP_SERVER_URL
+    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+    try:
+        extra = enabled_mcp_config(reserved_names=['check-manage'])
+    except Exception:  # noqa: BLE001 —— 外部 MCP 加载失败不阻断重置
+        extra = {}
+    write_opencode_config(
+        str(p), mcp_name='check-manage',
+        mcp_url=f"{MCP_SERVER_URL}/mcp?token={session_token}",
+        model=model or "", extra_mcp=extra,
+        include_internal=internal_mcp_enabled(),
+    )
 
 
 def _rm_force(func, path, _exc_info):

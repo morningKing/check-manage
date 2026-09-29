@@ -553,6 +553,31 @@ def continue_single_child(batch_id, session_id):
 @ai_chat_batches_bp.post('/<batch_id>/sessions/<session_id>/reexecute')
 @login_required
 def reexecute(batch_id, session_id):
+    # 重新执行=全新一轮（2026-09-29）：先清空并重建会话工作区（上一轮
+    # 残留文件会污染新一轮；staged 输入由 worker 派发时的
+    # _prepare_workspace 重新恢复，.opencode 技能/预置仓库同样重新布置），
+    # 再走重排事务（清消息/变更登记/子代理/账本/门禁期望）。
+    from utils.workspace import reset_session_workspace
+    from config import get_default_chat_model
+    from db import get_db as _get_db
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT s.workspace_path, s.session_token FROM ai_chat_sessions s "
+                "JOIN ai_chat_batches b ON s.batch_id = b.id "
+                "WHERE s.id = %s AND s.batch_id = %s AND b.user_id = %s",
+                (session_id, batch_id, g.current_user['userId']),
+            )
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    workspace_path, session_token = row
+    if workspace_path and session_token:
+        try:
+            reset_session_workspace(workspace_path, session_token=session_token,
+                                    model=get_default_chat_model())
+        except Exception as e:
+            return jsonify({'error': f'工作区重置失败: {e}'}), 500
     try:
         result = reexecute_child(g.current_user['userId'], batch_id, session_id)
     except ValueError as e:

@@ -3,6 +3,7 @@ import io
 import os
 import sys
 import pytest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -283,11 +284,41 @@ def _make_terminal_batch(client, headers, db_conn, monkeypatch, tmp_path, *, usi
     bid = detail['batch']['id']
     sids = [s['id'] for s in sorted(detail['sessions'], key=lambda x: x['batch_seq'])]
     with db_conn.cursor() as cur:
+        # 两个子会话各自终态 + 唯一 token（session_token 全局唯一约束）
         cur.execute("UPDATE ai_chat_sessions SET status=%s, opencode_session_id='oc-old', "
-                    "last_message_preview='old', error_message='e' WHERE batch_id=%s",
-                    (child_status, bid))
+                    "last_message_preview='old', error_message='e', "
+                    "workspace_path=%s, session_token=%s WHERE id=%s",
+                    (child_status, str(tmp_path / 'ws' / 'user' / sids[0]),
+                     f'tok-rx-{usid}-0', sids[0]))
+        cur.execute("UPDATE ai_chat_sessions SET status=%s, opencode_session_id='oc-old-2', "
+                    "last_message_preview='old2', error_message='e2', "
+                    "workspace_path=%s, session_token=%s WHERE id=%s",
+                    (child_status, str(tmp_path / 'ws' / 'user' / sids[1]),
+                     f'tok-rx-{usid}-1', sids[1]))
         cur.execute("INSERT INTO ai_chat_messages (id, session_id, role, content) "
                     "VALUES ('m-old-1', %s, 'user', '[]'::jsonb)", (sids[0],))
+        # 上一轮残留：工作区文件（根散文件/outputs/）+ 变更登记 + 子代理
+        # （含消息）+ 工具调用账本 + 门禁期望——重执行应全部清零
+        ws = Path(tmp_path / 'ws' / 'user' / sids[0])
+        (ws / 'outputs').mkdir(parents=True, exist_ok=True)
+        (ws / 'uploads').mkdir(parents=True, exist_ok=True)
+        (ws / 'junk-leftover.txt').write_text('上一轮残留', encoding='utf-8')
+        (ws / 'outputs' / 'old-report.md').write_text('旧报告', encoding='utf-8')
+        (ws / 'uploads' / 'r1.txt').write_text('输入应保留', encoding='utf-8')
+        cur.execute("INSERT INTO ai_chat_session_files (session_id, path, status) "
+                    "VALUES (%s, 'junk-leftover.txt', 'added')", (sids[0],))
+        cur.execute("INSERT INTO ai_chat_subtasks (id, root_session_id, agent) "
+                    "VALUES (%s, %s, 'general')", (f'sub-{sids[0][:8]}', sids[0]))
+        cur.execute("INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                    "VALUES (%s, %s, 'assistant', '[]'::jsonb)",
+                    (f'subm-{sids[0][:8]}', f'sub-{sids[0][:8]}'))
+        cur.execute("INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                    "  subtask_id, agent, part_id, tool, args_text, state) "
+                    "VALUES ('oc-old', %s, %s, 'general', 'old-part', 'bash', 'x', 'completed')",
+                    (sids[0], f'sub-{sids[0][:8]}'))
+        cur.execute("INSERT INTO action_expectations (scope_type, scope_id, name, tool, "
+                    "  args_pattern, min_count, source) "
+                    "VALUES ('session', %s, '旧期望', 'bash', 'x', 1, 'batch')", (sids[0],))
         done = 2 if child_status == 'completed' else 0
         failed = 2 if child_status == 'failed' else 0
         cur.execute("UPDATE ai_chat_batches SET status='completed', done=%s, failed=%s WHERE id=%s",
@@ -312,6 +343,30 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
         cur.execute("SELECT done, status FROM ai_chat_batches WHERE id=%s", (bid,))
         done, bstatus = cur.fetchone()
         assert done == 1 and bstatus == 'running'
+
+    # 工作区清空并初始化（2026-09-29）：上一轮残留清零、骨架与输入恢复、
+    # opencode.json（per-session MCP 配置）重写
+    cur = db_conn.cursor()
+    cur.execute("SELECT workspace_path FROM ai_chat_sessions WHERE id=%s", (sid,))
+    ws = Path(cur.fetchone()[0])
+    assert not (ws / 'junk-leftover.txt').exists(), '上一轮根残留应被清空'
+    assert not (ws / 'outputs' / 'old-report.md').exists(), '上一轮产出应被清空'
+    # uploads 输入由 worker 派发时的 _prepare_workspace 从 staging 重新恢复，
+    # reexecute 响应时尚未恢复——这里只断言旧 uploads 残留不再保留旧内容语义
+    assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
+    assert (ws / 'opencode.json').exists(), 'MCP 配置应随重置重写'
+    # 上一轮的关联行清零：变更登记/子代理/账本/门禁期望
+    cur.execute("SELECT count(*) FROM ai_chat_session_files WHERE session_id=%s", (sid,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM ai_chat_subtasks WHERE root_session_id=%s", (sid,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM ai_chat_subtask_messages WHERE subtask_id LIKE %s",
+                (f'sub-{sid[:8]}%',))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM agent_tool_calls WHERE root_session_id=%s", (sid,))
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM action_expectations WHERE scope_id=%s", (sid,))
+    assert cur.fetchone()[0] == 0
 
 
 def test_reexecute_failed_child_decrements_failed(setup_app, tmp_path, monkeypatch, db_conn):

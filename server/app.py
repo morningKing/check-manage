@@ -433,6 +433,7 @@ try:
                          'migrations', '2026_09_29_tool_calls_backfill.py')
     _spec15 = _ilu.spec_from_file_location('_toolcalls_backfill_boot', _mp15)
     _m15 = _ilu.module_from_spec(_spec15)
+    _spec15.loader.exec_module(_m15)
     _m15.run()
 except Exception as _e:
     logging.warning('tool calls backfill migration on boot failed: %s', _e)

@@ -769,6 +769,23 @@ def reexecute_child(user_id: str, batch_id: str, session_id: str) -> dict | None
             if prev_status not in ('completed', 'failed', 'cancelled', 'needs_review'):
                 raise ValueError('only completed/failed/cancelled/needs_review children can be re-executed')
             cur.execute("DELETE FROM ai_chat_messages WHERE session_id = %s", (session_id,))
+            # 重新执行=全新一轮（2026-09-29）：清上一轮的变更登记/子代理
+            # （含子代理消息）/工具调用账本/门禁期望——工具调用面板与终态
+            # 核对都从零开始；期望由 worker 派发时按批定义重新登记。
+            # 工作区清空重建由路由层 reset_session_workspace 完成。
+            cur.execute("DELETE FROM ai_chat_session_files WHERE session_id = %s",
+                        (session_id,))
+            cur.execute(
+                "DELETE FROM ai_chat_subtask_messages WHERE subtask_id IN "
+                "  (SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s)",
+                (session_id,))
+            cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s",
+                        (session_id,))
+            cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s",
+                        (session_id,))
+            cur.execute(
+                "DELETE FROM action_expectations "
+                "WHERE scope_type = 'session' AND scope_id = %s", (session_id,))
             cur.execute(
                 "UPDATE ai_chat_sessions SET status='pending', opencode_session_id=NULL, "
                 "  last_message_preview=NULL, error_message=NULL, cancel_requested=false, "
