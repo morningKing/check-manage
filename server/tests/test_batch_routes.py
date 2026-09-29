@@ -351,8 +351,9 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
     ws = Path(cur.fetchone()[0])
     assert not (ws / 'junk-leftover.txt').exists(), '上一轮根残留应被清空'
     assert not (ws / 'outputs' / 'old-report.md').exists(), '上一轮产出应被清空'
-    # uploads 输入由 worker 派发时的 _prepare_workspace 从 staging 重新恢复，
-    # reexecute 响应时尚未恢复——这里只断言旧 uploads 残留不再保留旧内容语义
+    # uploads（用户输入）随备份-恢复保留：reexecute 后立即可用，不依赖
+    # 批暂存区（staged 有 24h TTL，过期批次的输入也不能丢）
+    assert (ws / 'uploads' / 'r1.txt').read_text(encoding='utf-8') == '输入应保留'
     assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
     assert (ws / 'opencode.json').exists(), 'MCP 配置应随重置重写'
     # 上一轮的关联行清零：变更登记/子代理/账本/门禁期望

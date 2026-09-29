@@ -185,34 +185,65 @@ def reset_session_workspace(workspace_path: str, *, session_token: str,
     _prepare_workspace/_provision_workspace/inject_global_skills 完成——
     新一轮的初始化路径与新建会话完全同径，上一轮产物不残留。
 
+    **uploads/（用户输入）随备份-恢复保留**：批暂存区有 24h TTL 清扫，
+    reexecute 过期的批次时若只依赖 staged 恢复，输入会永久丢失——故
+    清空前把 uploads 整体移到工作区外临时目录，骨架重建后原样移回
+    （staged 恢复派发时 copy2 覆盖同名，内容一致）。
+
     Windows 文件占用（杀软/句柄未释放）时重试 3 次，仍失败抛最后异常。
     """
+    import tempfile
     p = Path(workspace_path)
-    if p.exists():
-        last = None
-        for attempt in range(3):
-            try:
-                shutil.rmtree(p)
-                last = None
-                break
-            except OSError as e:
-                last = e
-                time.sleep(0.5 * (attempt + 1))
-        if last is not None:
-            raise last
-    create_session_workspace(str(p.parent.parent), p.parent.name, p.name)
-    from config import MCP_SERVER_URL
-    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+    # 1) 备份用户输入（uploads 非空才备份；工作区外暂存，rmtree 不伤及）
+    uploads_backup = None
+    uploads_dir = p / 'uploads'
     try:
-        extra = enabled_mcp_config(reserved_names=['check-manage'])
-    except Exception:  # noqa: BLE001 —— 外部 MCP 加载失败不阻断重置
-        extra = {}
-    write_opencode_config(
-        str(p), mcp_name='check-manage',
-        mcp_url=f"{MCP_SERVER_URL}/mcp?token={session_token}",
-        model=model or "", extra_mcp=extra,
-        include_internal=internal_mcp_enabled(),
-    )
+        if uploads_dir.is_dir() and any(uploads_dir.iterdir()):
+            uploads_backup = Path(tempfile.mkdtemp(prefix='ws-uploads-'))
+            shutil.move(str(uploads_dir), str(uploads_backup / 'uploads'))
+    except OSError as e:
+        if uploads_backup:
+            shutil.rmtree(uploads_backup, ignore_errors=True)
+        raise OSError(f'备份 uploads 失败，已取消工作区重置: {e}') from e
+    try:
+        # 2) 整目录删除（Windows 文件占用重试 3 次）
+        if p.exists():
+            last = None
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(p)
+                    last = None
+                    break
+                except OSError as e:
+                    last = e
+                    time.sleep(0.5 * (attempt + 1))
+            if last is not None:
+                raise last
+        # 3) 骨架重建 + opencode.json 重写
+        create_session_workspace(str(p.parent.parent), p.parent.name, p.name)
+        from config import MCP_SERVER_URL
+        from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+        try:
+            extra = enabled_mcp_config(reserved_names=['check-manage'])
+        except Exception:  # noqa: BLE001 —— 外部 MCP 加载失败不阻断重置
+            extra = {}
+        write_opencode_config(
+            str(p), mcp_name='check-manage',
+            mcp_url=f"{MCP_SERVER_URL}/mcp?token={session_token}",
+            model=model or "", extra_mcp=extra,
+            include_internal=internal_mcp_enabled(),
+        )
+    except Exception:
+        if uploads_backup:
+            shutil.rmtree(uploads_backup, ignore_errors=True)
+        raise
+    # 4) 恢复用户输入（uploads 重建目录先移除，避免 move 嵌套成 uploads/uploads）
+    if uploads_backup:
+        rebuilt = p / 'uploads'
+        if rebuilt.is_dir():
+            shutil.rmtree(rebuilt)
+        shutil.move(str(uploads_backup / 'uploads'), str(rebuilt))
+        shutil.rmtree(uploads_backup, ignore_errors=True)
 
 
 def _rm_force(func, path, _exc_info):
