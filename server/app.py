@@ -204,6 +204,14 @@ try:
     except Exception as e3:
         logging.warning('subagent reuse plugin deploy failed: %s', e3)
 
+    # 判官 agent（动作门禁 verifier 的 OpenCode 子代理定义）：与上述插件同
+    # 目录部署；OC serve 启动时加载——部署后需重启 serve 生效。
+    try:
+        from utils.verifier import ensure_verifier_agent
+        ensure_verifier_agent(_OGD)
+    except Exception as e5:
+        logging.warning('verifier agent deploy failed: %s', e5)  # 判官 agent 部署失败不阻断启动（与插件同口径）；核对期走 fail-closed
+
     # 内置工具超时门限插件（tool.execute.before 挂看门狗，超时 abort 会话）：
     # 补齐交互侧门限——OC 内置工具仅 bash/webfetch 自带超时，其余无门限。
     # serve 启动时加载——部署后需重启 serve 生效。
