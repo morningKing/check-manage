@@ -639,6 +639,17 @@ def test_validate_verifier_requires_rubric():
         validate_checks([{'name': 'x', 'check_type': 'verifier', 'rubric': 'x' * 2001}])
 
 
+def test_validate_verifier_roundtrip_idempotent():
+    """登记路径幂等：创建时归一化的形状（tool='verifier' 哨兵、rubric 在
+    effect_spec 里）再次进 validate_checks 必须原样通过——派发登记会对
+    落库形状再校验，不幂等会让所有经 API 创建的 verifier 批任务登记失败。"""
+    from utils.agent_ledger import validate_checks
+    first = validate_checks([{'name': '结论含标记', 'check_type': 'verifier',
+                              'rubric': '回复包含 MARK'}])
+    again = validate_checks(first)
+    assert again == first
+
+
 @pytest.fixture
 def user_id(db_conn):
     """一次性用户;收尾连带清掉其会话/批任务/期望行。

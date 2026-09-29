@@ -296,12 +296,16 @@ def validate_checks(checks) -> list:
         pattern = (c.get('args_pattern') or '').strip()
         effect_spec = None
         if check_type == 'verifier':
-            if tool or pattern:
+            # tool='verifier' 是本函数自己写下的归一化哨兵：派发登记会对落库
+            # 形状再跑一次校验，必须放行（否则经 API 创建的 verifier 批任务
+            # 全部登记失败）；其余 tool 值与任何 args_pattern 仍然拒绝。
+            if (tool and tool != 'verifier') or pattern:
                 raise ValueError(f'action_checks[{i}].verifier 类型不接受 '
                                  f'tool/args_pattern（判定要点写在 rubric 里）')
             if c.get('min_count') not in (None, 1):
                 raise ValueError(f'action_checks[{i}].verifier 类型不接受 min_count')
-            rubric = (c.get('rubric') or '').strip()
+            rubric = (c.get('rubric') or (c.get('effect_spec') or {}).get('rubric')
+                      or '').strip()
             if not rubric:
                 raise ValueError(f'action_checks[{i}].rubric 必填(verifier 类型)')
             if len(rubric) > 2000:
