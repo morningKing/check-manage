@@ -54,6 +54,8 @@ export interface AiMessage {
   content: AiContentPart[]
   createdAt?: string
   meta?: AiMessageMeta | null
+  /** 全局消息序列号（单调时序，分页 before 游标；服务端返回，流式新消息可能暂无） */
+  seq?: number
   /** 运行中插话的排队标记：true = 尚未发送给 OpenCode，等当前回合结束自动发出 */
   queued?: boolean
 }
@@ -216,9 +218,14 @@ export function clearSession(id: string) {
     { timeout: 180_000 })
 }
 
-export function getMessages(id: string, since?: string) {
-  const q = since ? `?since=${encodeURIComponent(since)}` : ''
-  return get<{ messages: AiMessage[] }>(`/ai/chat/sessions/${encodeURIComponent(id)}/messages${q}`)
+export function getMessages(id: string, opts?: { since?: string; before?: string; limit?: number }) {
+  const q = new URLSearchParams()
+  if (opts?.since) q.set('since', opts.since)
+  if (opts?.before) q.set('before', opts.before)
+  if (opts?.limit) q.set('limit', String(opts.limit))
+  const qs = q.toString()
+  return get<{ messages: AiMessage[]; hasMore?: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/messages${qs ? '?' + qs : ''}`)
 }
 
 /** 会话复用任务段：子会话里每条 user 消息 = 一次委派任务（边界）。

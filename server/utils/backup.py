@@ -403,6 +403,61 @@ def get_backup_table_names():
     ]
 
 
+def _export_table_to_file(cur, table_name, columns, out_path,
+                          collection_filter=None, chunk_size=2000):
+    """流式导出整表到 JSON 数组文件（服务端游标 fetchmany 分块，内存 O(chunk)）。
+
+    大数据量优化 §1.3（2026-09-28）：原 fetchall 全量载入在 ai_chat_messages /
+    operation_logs / agent_tool_calls 达百万行级时进程 OOM。输出为合法 JSON
+    数组，与 _export_table 的格式兼容——恢复侧（json.loads）无感。返回行数。
+    """
+    col_str = ', '.join(columns)
+    named = cur.connection.cursor(name=f'_backup_{table_name}')
+    try:
+        if table_name == 'dynamic_data' and collection_filter:
+            named.execute(f'SELECT {col_str} FROM {table_name} WHERE collection = %s',
+                          (collection_filter,))
+        else:
+            named.execute(f'SELECT {col_str} FROM {table_name}')
+        clean_cols = [c.strip('"') for c in columns]
+        count = 0
+        with open(out_path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('[')
+            while True:
+                # 显式 list() 化：fetchmany 在测试打桩（MagicMock）下返回
+                # truthy 的 Mock 对象，直接判真值会死循环
+                rows = list(named.fetchmany(chunk_size) or [])
+                if not rows:
+                    break
+                for row in rows:
+                    record = {}
+                    for i, col in enumerate(clean_cols):
+                        record[col] = _serialize_value(row[i])
+                    f.write(('' if count == 0 else ',') +
+                            json.dumps(record, ensure_ascii=False))
+                    count += 1
+            f.write(']')
+    finally:
+        try:
+            named.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return count
+
+
+def _cleanup_stale_backup_tmp(backup_dir):
+    """清理上次备份运行崩溃遗留的 .tmp- 临时导出文件（幂等自愈）。"""
+    try:
+        for name in os.listdir(backup_dir):
+            if name.startswith('.tmp-backup-') and name.endswith('.json'):
+                try:
+                    os.remove(os.path.join(backup_dir, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def create_backup(backup_type='manual', created_by=None, tables=None,
                   include_vector_store=True, include_data_files=True):
     """
@@ -470,17 +525,19 @@ def create_backup(backup_type='manual', created_by=None, tables=None,
 
     table_stats = {}
     total_records = 0
+    _cleanup_stale_backup_tmp(BACKUP_DIR)
 
     # 1. 导出指定表数据
     with get_db() as conn:
         cur = conn.cursor()
         table_data = {}
+        table_files = {}  # table_name -> 流式临时文件路径（无 collection 过滤的整表）
         for table_name in tables_to_backup:
             _, columns, _, _ = BACKUP_TABLE_MAP[table_name]
 
             # 检查是否有 collection 过滤
             if table_name in collection_filters:
-                # 按 collection 分别导出
+                # 按 collection 分别导出（collection 显式指定，规模有界，保持内存）
                 records = []
                 for col in collection_filters[table_name]:
                     col_records = _export_table(cur, table_name, columns, collection_filter=col)
@@ -488,10 +545,13 @@ def create_backup(backup_type='manual', created_by=None, tables=None,
                 table_data[table_name] = records
                 table_stats[table_name] = len(records)
             else:
-                records = _export_table(cur, table_name, columns)
-                table_data[table_name] = records
-                table_stats[table_name] = len(records)
-            total_records += len(records)
+                # 整表流式导出到临时文件（§1.3：不再 fetchall 全量载入内存）
+                tmp_path = os.path.join(
+                    BACKUP_DIR, f'.tmp-backup-{backup_id}-{table_name}.json')
+                table_stats[table_name] = _export_table_to_file(
+                    cur, table_name, columns, tmp_path)
+                table_files[table_name] = tmp_path
+            total_records += table_stats[table_name]
 
         # 如果备份了 dynamic_data，需要同步备份对应的 data_relations
         if 'dynamic_data' in tables_to_backup and 'data_relations' not in table_data:
@@ -605,8 +665,19 @@ def create_backup(backup_type='manual', created_by=None, tables=None,
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
-        for table_name, records in table_data.items():
-            zf.writestr(f'{table_name}.json', json.dumps(records, ensure_ascii=False, indent=2))
+        # 按 tables_to_backup 顺序写入（流式临时文件与内存 records 两种来源）
+        for table_name in tables_to_backup:
+            if table_name in table_files:
+                tmp_path = table_files[table_name]
+                zf.write(tmp_path, arcname=f'{table_name}.json')
+                try:
+                    os.remove(tmp_path)
+                    table_files[table_name] = None
+                except OSError:
+                    pass
+            elif table_name in table_data:
+                zf.writestr(f'{table_name}.json',
+                            json.dumps(table_data[table_name], ensure_ascii=False, indent=2))
         if include_vector_store:
             _add_vector_store_to_zip(zf)
         if include_data_files:

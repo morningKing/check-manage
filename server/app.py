@@ -183,6 +183,14 @@ try:
     _sk.ensure_runtime_plugin(_OGD, _ep,
                               _os.getenv('MCP_INTERNAL_TOKEN', ''))
     _ret = _sk.apply_retention()
+    # 运营日志表保留（大数据量优化 §2.2/2.3/2.4）：operation_logs /
+    # agent_tool_calls / webhook_logs 分批清理过期行
+    try:
+        from utils.log_retention import apply_log_retention
+        _lr = apply_log_retention()
+        logging.info('log retention applied: %s', _lr)
+    except Exception as _e_lr:
+        logging.warning('log retention failed: %s', _e_lr)
     logging.info('SkillOpt: runtime plugin ensured at %s; retention %s',
                  _OGD, _ret)
 
@@ -214,6 +222,13 @@ try:
             logging.info('SkillOpt retention: %s', r)
         except Exception as e2:
             logging.warning('SkillOpt retention failed: %s', e2)
+        # 运营日志表保留（与执行事件 retention 同一每日作业）
+        try:
+            from utils.log_retention import apply_log_retention
+            lr = apply_log_retention()
+            logging.info('log retention: %s', lr)
+        except Exception as e2:
+            logging.warning('log retention failed: %s', e2)
 
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -399,6 +414,17 @@ try:
     _m13.run()
 except Exception as _e:
     logging.warning('artifact owner scope migration on boot failed: %s', _e)
+
+# 会话内容搜索物化（2026-09-28 大数据量优化 §1.2）：ai_chat_messages.search_text
+# 触发器维护 + trgm 索引 + 存量回填。随启动幂等执行。
+try:
+    _mp14 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_28_message_search_text.py')
+    _spec14 = _ilu.spec_from_file_location('_msg_search_boot', _mp14)
+    _m14 = _ilu.module_from_spec(_spec14)
+    _m14.run()
+except Exception as _e:
+    logging.warning('message search_text migration on boot failed: %s', _e)
 
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:

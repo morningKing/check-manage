@@ -74,6 +74,10 @@ interface State {
   sessionPinnedAt: Record<string, string | null>
   activeSessionId: string | null
   messages: Record<string, AiMessage[]>
+  /** 会话历史是否还有更早消息未加载（服务端分页窗口之外，大数据量优化 §1.1） */
+  hasMoreMessages: Record<string, boolean>
+  /** 当前已加载消息里最早一条的 seq（"加载更早"的 before 游标） */
+  oldestLoadedSeq: Record<string, number | null>
   streaming: Record<string, boolean>
   reasoning: Record<string, string>
   thinking: Record<string, boolean>
@@ -176,6 +180,8 @@ export const useAiChatStore = defineStore('aiChat', {
     sessionPinnedAt: {},
     activeSessionId: null,
     messages: {},
+    hasMoreMessages: {} as Record<string, boolean>,
+    oldestLoadedSeq: {} as Record<string, number | null>,
     streaming: {},
     reasoning: {},
     thinking: {},
@@ -302,7 +308,7 @@ export const useAiChatStore = defineStore('aiChat', {
         this.attachments[meta.id] = []
         this._resetStreamState(meta.id)
         const history = await getMessages(meta.id)
-        this.messages[meta.id] = history.messages
+        this._adoptHistory(meta.id, history)
         this._recomputeUsage(meta.id)
         this.loadPaletteItems(meta.id)
         this._openStream(meta.id)
@@ -326,8 +332,8 @@ export const useAiChatStore = defineStore('aiChat', {
       this.attachments[id] = this.attachments[id] ?? []
       this.streaming[id] = this.streaming[id] ?? false
       this._resetStreamState(id)
-      const history = await getMessages(id)
-      this.messages[id] = history.messages
+      const history = await getMessages(id, { limit: 200 })
+      this._adoptHistory(id, history)
       this._recomputeUsage(id)
       this.loadFiles(id)
       this.loadChanges(id)
@@ -348,16 +354,56 @@ export const useAiChatStore = defineStore('aiChat', {
     async reloadMessages(id: string) {
       if (this.activeSessionId !== id || this.streaming[id]) return
       try {
-        const history = await getMessages(id)
-        // Never let a transient short/empty poll wipe what's already rendered —
-        // the conversation only grows server-side (idempotent upsert), so a
-        // shorter result is a hiccup, not a real shrink. (This is why the
-        // bubbles could momentarily vanish during a live batch run.)
-        if (history.messages.length >= (this.messages[id]?.length ?? 0)) {
-          this.messages[id] = history.messages
-          this._recomputeUsage(id)
-        }
+        const history = await getMessages(id, { limit: 200 })
+        // 按窗口合并而非整体替换（大数据量优化 §1.1）：用户"加载更早"前置的
+        // 历史消息保留；服务端为空（clear）时以服务端为准。
+        this._mergeHistoryWindow(id, history)
+        this._recomputeUsage(id)
       } catch { /* non-fatal */ }
+    },
+
+    /** 加载更早的历史消息（before 游标向前翻页，按 seq 时序）。返回是否真的加载到。 */
+    async loadOlderMessages(id: string): Promise<boolean> {
+      const before = this.oldestLoadedSeq[id]
+      if (!before) return false
+      try {
+        const history = await getMessages(id, { before: String(before), limit: 200 })
+        if (!history.messages.length) {
+          this.hasMoreMessages[id] = false
+          return false
+        }
+        this.messages[id] = [...history.messages, ...(this.messages[id] ?? [])]
+        this.hasMoreMessages[id] = !!history.hasMore
+        this.oldestLoadedSeq[id] = history.messages[0]?.seq ?? before
+        return true
+      } catch { return false }
+    },
+
+    /** 采用一次服务端拉取作为该会话的完整消息窗口（初始加载/清空后）。 */
+    _adoptHistory(id: string, history: { messages: AiMessage[]; hasMore?: boolean }) {
+      this.messages[id] = history.messages
+      this.hasMoreMessages[id] = !!history.hasMore
+      this.oldestLoadedSeq[id] = history.messages[0]?.seq ?? null
+    },
+
+    /** 把服务端最新窗口合并进内存：保留窗口之前已加载的更早历史。 */
+    _mergeHistoryWindow(id: string, history: { messages: AiMessage[]; hasMore?: boolean }) {
+      if (!history.messages.length) {
+        this._adoptHistory(id, history)  // 服务端空（clear）→ 以服务端为准
+        return
+      }
+      const windowFirst = history.messages[0]
+      const existing = this.messages[id] ?? []
+      const older = existing.filter(m => (m.seq ?? 0) < (windowFirst.seq ?? 0))
+      if (older.length > 0) {
+        // 用户已手动加载过更早历史：保留前置段；分页判定以最近一次加载为准
+        this.messages[id] = [...older, ...history.messages]
+        this.oldestLoadedSeq[id] = older[0]?.seq ?? windowFirst.seq ?? null
+      } else {
+        this.messages[id] = history.messages
+        this.hasMoreMessages[id] = !!history.hasMore
+        this.oldestLoadedSeq[id] = windowFirst.seq ?? null
+      }
     },
 
     async loadFiles(id: string) {
@@ -1043,10 +1089,10 @@ export const useAiChatStore = defineStore('aiChat', {
       //  - only adopt if it has at least as many messages (a persistence race
       //    could briefly lag behind; never drop the complete in-memory turn)
       try {
-        const history = await getMessages(sid)
+        const history = await getMessages(sid, { limit: 200 })
         const current = this.messages[sid]?.length ?? 0
         if (!this.streaming[sid] && history.messages.length >= current) {
-          this.messages[sid] = history.messages
+          this._adoptHistory(sid, history)
           this._recomputeUsage(sid)  // 本回合 meta 已落库 → 状态条数值刷新
         }
       } catch { /* non-fatal: keep the in-memory copy */ }

@@ -609,8 +609,9 @@ def search_sessions():
         cur = conn.cursor()
         if batch_id:
             # Batch-scoped search: narrow by (user_id, batch_id) FIRST, then
-            # match fields / parse message JSONB (Spec §10.1 — the batch index
-            # keeps the message scan bounded to one batch's children).
+            # match fields / the materialized search_text (2026-09-28 §1.2：
+            # 原 jsonb_array_elements 逐片段 ILIKE 无索引可用，消息量大后
+            # 分钟级；search_text 触发器物化 + gin_trgm 索引可走索引扫描)。
             cur.execute(
                 "SELECT s.id, s.title, s.last_active_at, s.status, "
                 "       s.batch_id, s.batch_input_file, s.batch_seq, b.name AS batch_name, "
@@ -621,10 +622,7 @@ def search_sessions():
                 "       ( "
                 "         SELECT m.content FROM ai_chat_messages m "
                 "         WHERE m.session_id = s.id "
-                "           AND EXISTS ( "
-                "             SELECT 1 FROM jsonb_array_elements(m.content) p "
-                "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %(pat)s ESCAPE '\\' "
-                "           ) "
+                "           AND m.search_text ILIKE %(pat)s ESCAPE '\\' "
                 "         ORDER BY m.created_at DESC LIMIT 1 "
                 "       ) AS hit_content "
                 "FROM ai_chat_sessions s "
@@ -638,10 +636,8 @@ def search_sessions():
                 "    OR COALESCE(s.last_message_preview ILIKE %(pat)s ESCAPE '\\', false) "
                 "    OR EXISTS ( "
                 "      SELECT 1 FROM ai_chat_messages m2 "
-                "      CROSS JOIN jsonb_array_elements(m2.content) p "
                 "      WHERE m2.session_id = s.id "
-                "        AND p->>'type' = 'text' "
-                "        AND p->>'text' ILIKE %(pat)s ESCAPE '\\' "
+                "        AND m2.search_text ILIKE %(pat)s ESCAPE '\\' "
                 "    ) "
                 "  ) "
                 # 排序（Spec §7.2）：标题 > 文件名 > 预览 > 内容命中，再按最近
@@ -662,10 +658,7 @@ def search_sessions():
                 "       ( "
                 "         SELECT m.content FROM ai_chat_messages m "
                 "         WHERE m.session_id = s.id "
-                "           AND EXISTS ( "
-                "             SELECT 1 FROM jsonb_array_elements(m.content) p "
-                "             WHERE p->>'type' = 'text' AND p->>'text' ILIKE %s ESCAPE '\\' "
-                "           ) "
+                "           AND m.search_text ILIKE %s ESCAPE '\\' "
                 "         ORDER BY m.created_at DESC LIMIT 1 "
                 "       ) AS hit_content "
                 "FROM ai_chat_sessions s "
@@ -675,10 +668,8 @@ def search_sessions():
                 "    COALESCE(s.title ILIKE %s ESCAPE '\\', false) "
                 "    OR EXISTS ( "
                 "      SELECT 1 FROM ai_chat_messages m2 "
-                "      CROSS JOIN jsonb_array_elements(m2.content) p "
                 "      WHERE m2.session_id = s.id "
-                "        AND p->>'type' = 'text' "
-                "        AND p->>'text' ILIKE %s ESCAPE '\\' "
+                "        AND m2.search_text ILIKE %s ESCAPE '\\' "
                 "    ) "
                 "  ) "
                 "ORDER BY title_match DESC, s.last_active_at DESC NULLS LAST "
@@ -1091,30 +1082,56 @@ def get_messages(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     since = request.args.get('since')
+    before = request.args.get('before')
+    # 分页窗口（大数据量优化 §1.1，2026-09-28）：长会话不再全量返回。
+    # since（增量轮询）保持既有 id 语义；无 since 的初始加载/向前翻页取
+    # 最新 limit 条（窗口内按 seq 时序正序返回），hasMore 标记是否还有
+    # 更早历史，前端用 seq 做 before 游标（seq 是单调序列，消息 id 是
+    # 随机 token 与时序无关）。
+    try:
+        limit = int(request.args.get('limit') or 200)
+    except ValueError:
+        limit = 200
+    limit = max(1, min(limit, 1000))
     with get_db() as conn:
         cur = conn.cursor()
         if since:
             cur.execute(
-                "SELECT id, role, content, created_at, meta FROM ai_chat_messages "
+                "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
                 "WHERE session_id = %s AND id > %s "
                 "ORDER BY created_at ASC",
                 (sid, since),
             )
+            rows = cur.fetchall()
+            has_more = False
         else:
-            cur.execute(
-                "SELECT id, role, content, created_at, meta FROM ai_chat_messages "
-                "WHERE session_id = %s ORDER BY created_at ASC",
-                (sid,),
-            )
-        rows = cur.fetchall()
+            if before:
+                cur.execute(
+                    "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
+                    "WHERE session_id = %s AND seq < %s "
+                    "ORDER BY seq DESC LIMIT %s",
+                    (sid, before, limit + 1),
+                )
+            else:
+                cur.execute(
+                    "SELECT id, role, content, created_at, meta, seq FROM ai_chat_messages "
+                    "WHERE session_id = %s "
+                    "ORDER BY seq DESC LIMIT %s",
+                    (sid, limit + 1),
+                )
+            rows = cur.fetchall()
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            rows.reverse()  # 窗口内恢复时间正序，与原全量行为一致
 
     return jsonify({
         'messages': [
             {'id': r[0], 'role': r[1], 'content': r[2],
              'createdAt': r[3].isoformat() if r[3] else None,
-             'meta': r[4]}
+             'meta': r[4], 'seq': r[5]}
             for r in rows
         ],
+        'hasMore': has_more,
     })
 
 

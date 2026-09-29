@@ -196,6 +196,24 @@ const {
 const sessions = computed(() => store.sessions)
 const activeId = computed(() => store.activeSessionId)
 
+// ---- 加载更早消息（大数据量优化 §1.1）：服务端分页窗口 + before 游标向前翻页 ----
+const olderLoading = ref(false)
+async function loadOlder() {
+  const id = activeId.value
+  if (!id || olderLoading.value) return
+  const el = getScrollEl()
+  const prevHeight = el?.scrollHeight ?? 0
+  olderLoading.value = true
+  try {
+    await store.loadOlderMessages(id)
+    await nextTick()
+    // 前置插入后把视口停回原消息位置，避免跳到别处
+    if (el) el.scrollTop += el.scrollHeight - prevHeight
+  } finally {
+    olderLoading.value = false
+  }
+}
+
 // ---- F9 长任务完成：浏览器系统通知（切走/失焦时弹 OS Toast）+ 提示音 + Tab 角标 ----
 const {
   supported: notifySupported,
@@ -1474,6 +1492,11 @@ function onKey(e: Event) {
         </div>
 
         <template v-else>
+          <div v-if="store.hasMoreMessages[activeId]" class="ai-chat__load-older">
+            <ElButton size="small" text type="primary" :loading="olderLoading" @click="loadOlder">
+              加载更早消息
+            </ElButton>
+          </div>
           <div class="ai-thread">
             <div
               v-for="(m, mi) in messages" :key="m.id"
@@ -2113,6 +2136,7 @@ function onKey(e: Event) {
 .ai-chat__main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .ai-chat__messages-wrap { flex: 1; min-height: 0; position: relative; }
 .ai-chat__messages { height: 100%; }
+.ai-chat__load-older { display: flex; justify-content: center; padding: 8px 0 2px; }
 .ai-chat__welcome { height: 100%; display: flex; align-items: center; justify-content: center; }
 /* 「回到底部」浮动按钮（流式自动滚动 F4） */
 .ai-chat__jump-bottom {

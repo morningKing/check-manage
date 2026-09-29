@@ -107,16 +107,16 @@ def test_search_scopes_by_user_and_active_closed_status():
 
 
 def test_search_matches_title_and_content():
-    """The WHERE clause must match either the title OR a message text part."""
+    """The WHERE clause must match either the title OR the materialized
+    search_text（大数据量优化 §1.2：jsonb 展开换物化列 + trgm 索引）。"""
     fake, cur = _db([])
     with patch('routes.ai_chat.get_db', fake):
         _client().get('/ai/chat/sessions/search?q=jwt', headers=_h())
     sql = ' '.join(str(c.args[0]) for c in cur.execute.call_args_list)
     assert 'ILIKE' in sql
-    # message text-part extraction
-    assert "jsonb_array_elements" in sql
-    assert "->>'type'" in sql
-    assert "->>'text'" in sql
+    # 物化列谓词（触发器维护，gin_trgm 索引加速）
+    assert 'search_text ILIKE' in sql
+    assert 'jsonb_array_elements' not in sql
 
 
 def test_search_like_wildcards_are_escaped():
@@ -238,8 +238,8 @@ def test_batch_search_matches_title_file_preview_and_content():
     assert 's.title ILIKE' in sql
     assert 's.batch_input_file ILIKE' in sql
     assert 's.last_message_preview ILIKE' in sql
-    assert 'jsonb_array_elements' in sql
-    assert "->>'text'" in sql
+    assert 'search_text ILIKE' in sql
+    assert 'jsonb_array_elements' not in sql
 
 
 def test_batch_search_default_mode_unchanged():

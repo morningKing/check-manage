@@ -67,8 +67,8 @@ class TestCreateBackup:
                 assert result['type'] == 'manual'
                 assert result['status'] == 'completed'
                 assert result['createdBy'] == 'admin'
-                # 应该调用 fetchall 每个表一次
-                assert mock_cursor.fetchall.call_count >= len(BACKUP_TABLES)
+                # 每个整表一次流式导出（命名游标按表创建，§1.3 不再 fetchall 全量）
+                assert mock_cursor.connection.cursor.call_count >= len(BACKUP_TABLES)
 
     @patch('utils.backup._ensure_backup_dir')
     @patch('utils.backup.get_db')
@@ -119,12 +119,16 @@ class TestCreateBackup:
 
         # menus 表有一条数据,其它表都返回空。BACKUP_TABLES 长度会增长 ——
         # side_effect 必须能匹配实际的表数量,否则会 StopIteration。
+        # 流式导出（§1.3）：整表走命名游标 fetchmany，按 BACKUP_TABLES 顺序；
+        # 每张表 fetchmany 被调到返回空批为止 → 每表两个批次（数据批+空批）。
+        # 注意批次本身是"行列表"——menus 的数据批就是 menus_row（不要再包一层）。
         from utils.backup import BACKUP_TABLES
         # 11 列：id,name,icon,page_id,parent_id,order,path,roles,export_script_id,menu_type,project_id
         menus_row = [('menu-1', '菜单1', 'icon-menu', None, None, 1, None, None, None, 'data', None)]
-        mock_cursor.fetchall.side_effect = [
-            menus_row if name == 'menus' else []
-            for (name, _cols, _jsonb, _label) in BACKUP_TABLES
+        named_cursor = mock_cursor.connection.cursor.return_value
+        named_cursor.fetchmany.side_effect = [
+            batch for (name, _cols, _jsonb, _label) in BACKUP_TABLES
+            for batch in ((menus_row, []) if name == 'menus' else ([], []))
         ]
         mock_get_db.return_value = mock_conn
         mock_getsize.return_value = 2048
@@ -1011,9 +1015,9 @@ class TestPageConfigsRowActionsBackup:
             with patch('utils.backup.BACKUP_DIR', tmpdir):
                 create_backup(backup_type='manual', created_by='admin', tables=['page_configs'])
 
-        select_sqls = [str(call[0][0]) for call in mock_cursor.execute.call_args_list
-                      if 'SELECT' in str(call[0][0]) and 'page_configs' in str(call[0][0])]
-        assert select_sqls, '应该有一条 SELECT page_configs 的语句'
+        select_sqls = [str(call[0][0]) for call in mock_cursor.connection.cursor.return_value.execute.call_args_list
+                       if 'SELECT' in str(call[0][0]) and 'page_configs' in str(call[0][0])]
+        assert select_sqls, '应该有一条 SELECT page_configs 的语句（流式导出经命名游标）'
         assert any('row_actions' in s for s in select_sqls)
 
     @patch('db.pool')
