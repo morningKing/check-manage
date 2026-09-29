@@ -174,6 +174,41 @@ def record_state(session_id: str, oc_session_id: str, state, *,
     return ok and all_ok
 
 
+def list_tool_calls(root_session_id: str, *, tool: str | None = None,
+                    limit: int = 1000, get_db=None) -> list[dict]:
+    """树作用域工具调用时间线（根会话 + 全部子代理），供前端"工具调用"卡片。
+
+    occurred_at 是落账时刻（批任务在 worker 持久化时、交互会话在回合收敛
+    时），非真实执行时刻；同刻多行按 id 插入序稳定排序。"""
+    db_ctx = get_db or _default_get_db
+    sql = ("SELECT oc_session_id, subtask_id, agent, tool, args_text, state, "
+           "       occurred_at, id "
+           "FROM agent_tool_calls WHERE root_session_id = %s")
+    params: list = [root_session_id]
+    if tool:
+        sql += " AND tool = %s"
+        params.append(tool)
+    sql += " ORDER BY occurred_at ASC NULLS LAST, id ASC LIMIT %s"
+    params.append(limit)
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+    out = []
+    for (oc, subtask, agent, tl, args, st, at, rid) in rows:
+        out.append({
+            'id': rid,
+            'ocSessionId': oc,
+            'subtaskId': subtask,
+            'agent': agent,
+            'tool': tl,
+            'argsPreview': (args or '')[:400] or None,
+            'state': st,
+            'occurredAt': at.isoformat() if at else None,
+        })
+    return out
+
+
 def finalize_interactive_turn(session_id: str, oc_session_id: str, state,
                               get_db=None) -> dict:
     """交互回合收敛(idle/error)时的统一收口(设计 M2):先落账,等子代理收敛,

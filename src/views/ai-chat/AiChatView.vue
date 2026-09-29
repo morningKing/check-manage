@@ -1169,6 +1169,41 @@ async function refreshChanges() {
   } finally { changesLoading.value = false }
 }
 
+// ---- 工具调用卡片（agent_tool_calls 账本：根会话 + 全部子代理的时间线）----
+// 落账时机：批任务=worker 持久化时、交互会话=回合收敛时 → 进行中回合需要
+// 手动刷新（🔄）。默认最新在上；args 摘要点击展开完整参数文本。
+const toolFilter = ref('')
+const expandedArgs = ref<number | null>(null)
+const toolCallRows = computed(() => {
+  const rows = activeId.value ? store.toolCalls[activeId.value] ?? [] : []
+  const filtered = toolFilter.value ? rows.filter(c => c.tool === toolFilter.value) : rows
+  return filtered.slice().reverse()  // 账本按时间正序落库 → 展示最新在上
+})
+const toolNames = computed(() =>
+  [...new Set((activeId.value ? store.toolCalls[activeId.value] ?? [] : []).map(c => c.tool))].sort())
+const toolCallsLoading = computed(() =>
+  activeId.value ? !!store.toolCallsLoading[activeId.value] : false)
+async function refreshToolCalls() {
+  if (!activeId.value) return
+  await store.loadToolCalls(activeId.value, toolFilter.value || undefined)
+}
+watch(toolFilter, () => { void refreshToolCalls() })
+function toolCallTime(iso: string | null) {
+  return iso ? iso.slice(5, 19).replace('T', ' ') : ''
+}
+function toolCallState(state: string | null) {
+  if (state === 'completed') return '完成'
+  if (state === 'running') return '运行中'
+  if (state === 'error') return '出错'
+  return state || '—'
+}
+function argsSingleLine(text: string | null) {
+  return (text || '').replace(/\s+/g, ' ').slice(0, 120)
+}
+function toggleArgs(id: number) {
+  expandedArgs.value = expandedArgs.value === id ? null : id
+}
+
 // 折叠的「目录/ (N 个新文件)」条目可就地展开看里面的文件（点击懒加载）。
 const expandedDirs = reactive<Record<string, { open: boolean; loading: boolean; files: ChangedFile[] }>>({})
 async function toggleDir(c: ChangedFile) {
@@ -1764,6 +1799,49 @@ function onKey(e: Event) {
                   </template>
                 </div>
               </template>
+            </div>
+
+            <!-- 工具调用（agent_tool_calls 账本：根会话 + 全部子代理的时间线；
+                 落账时机=批持久化/交互收敛，进行中回合点 🔄 刷新） -->
+            <div v-if="activeId" class="ai-toolcalls" data-test="tool-calls-panel">
+              <div class="ai-toolcalls__title">
+                <span>工具调用 <span v-if="toolCallRows.length" class="ai-toolcalls__count">({{ toolCallRows.length }})</span></span>
+                <button
+                  class="ai-toolcalls__refresh" type="button"
+                  title="刷新工具调用" aria-label="刷新工具调用"
+                  :disabled="toolCallsLoading"
+                  @click="refreshToolCalls"
+                >
+                  <ElIcon :class="{ spin: toolCallsLoading }"><Refresh /></ElIcon>
+                </button>
+              </div>
+              <div class="ai-toolcalls__bar">
+                <ElSelect v-model="toolFilter" size="small" clearable filterable
+                          placeholder="全部工具" style="width: 160px" data-test="tool-calls-filter">
+                  <ElOption v-for="t in toolNames" :key="t" :label="t" :value="t" />
+                </ElSelect>
+              </div>
+              <div v-if="!toolCallRows.length" class="ai-toolcalls__empty">
+                暂无记录（点击 🔄 刷新；进行中回合在收敛后落账）
+              </div>
+              <div v-else class="ai-toolcalls__list">
+                <div v-for="c in toolCallRows" :key="c.id" class="toolcall"
+                     :data-state="c.state || ''" @click="toggleArgs(c.id)">
+                  <div class="toolcall__row">
+                    <span class="toolcall__time">{{ toolCallTime(c.occurredAt) }}</span>
+                    <ElTag size="small" class="toolcall__tool">{{ c.tool }}</ElTag>
+                    <span class="toolcall__agent" :class="{ 'toolcall__agent--sub': !!c.agent }">
+                      {{ c.agent || '主会话' }}
+                    </span>
+                    <span class="toolcall__state">{{ toolCallState(c.state) }}</span>
+                  </div>
+                  <div v-if="expandedArgs === c.id && c.argsPreview" class="toolcall__args"
+                       @click.stop>{{ c.argsPreview }}</div>
+                  <div v-else-if="c.argsPreview" class="toolcall__args-preview">
+                    {{ argsSingleLine(c.argsPreview) }}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </template>
@@ -2543,8 +2621,7 @@ function onKey(e: Event) {
   padding: 12px 14px;
   border: 1px dashed var(--el-border-color);
   border-radius: 10px;
-  background: var(--el-fill-color-lighter);
-  &__title {
+  background: var(--el-fill-color-lighter);  &__title {
     display: flex; align-items: center; gap: 6px;
     font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary);
     margin-bottom: 8px;
@@ -2603,6 +2680,75 @@ function onKey(e: Event) {
       border: 1px solid var(--el-border-color); border-radius: 6px;
       background: var(--el-bg-color);
     }
+  }
+}
+
+// ---- 工具调用卡片（agent_tool_calls 账本时间线） ----
+.ai-toolcalls {
+  margin: 4px 0 24px;
+  padding: 12px 14px;
+  border: 1px dashed var(--el-border-color);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
+  &__title {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; color: var(--el-text-color-secondary);
+    margin-bottom: 8px;
+  }
+  &__count { font-weight: 400; color: var(--el-text-color-secondary); }
+  &__bar { margin-bottom: 8px; }
+  &__empty { font-size: 12px; color: var(--el-text-color-secondary); padding: 4px 0; }
+  &__refresh {
+    margin-left: auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--el-text-color-secondary);
+    cursor: pointer;
+    &:hover { color: var(--el-color-primary); }
+    .spin { animation: ai-spin 1s linear infinite; }
+  }
+  &__list { display: flex; flex-direction: column; gap: 4px; max-height: 420px; overflow-y: auto; }
+}
+.toolcall {
+  padding: 5px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-bg-color);
+  cursor: pointer;
+  &:hover { border-color: var(--el-color-primary-light-5); }
+  &__row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  &__time {
+    flex: 0 0 auto;
+    font-family: var(--el-font-family, monospace);
+    font-size: 11px; color: var(--el-text-color-secondary);
+  }
+  &__tool { flex: 0 0 auto; }
+  &__agent {
+    flex: 0 0 auto;
+    font-size: 11px; color: var(--el-text-color-secondary);
+    &--sub { color: var(--el-color-primary); font-weight: 600; }
+  }
+  &__state {
+    margin-left: auto; flex: 0 0 auto;
+    font-size: 11px; color: var(--el-text-color-secondary);
+  }
+  &[data-state='running'] &__state { color: var(--el-color-warning); }
+  &[data-state='error'] &__state { color: var(--el-color-danger); }
+  &__args-preview {
+    margin-top: 3px;
+    font-size: 11px; color: var(--el-text-color-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  &__args {
+    margin-top: 4px; padding: 6px 8px;
+    font-family: var(--el-font-family, monospace);
+    font-size: 11px; white-space: pre-wrap; word-break: break-all;
+    max-height: 220px; overflow-y: auto;
+    background: var(--el-fill-color-light);
+    border-radius: 4px;
   }
 }
 </style>

@@ -52,6 +52,7 @@ from utils.mention_files import inline_file_mentions
 from utils.session_file_import import import_recorded_files, MAX_IMPORT_PATHS
 from utils.session_history import render_history_block
 from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+from utils import agent_ledger
 from utils.chat_persist import (
     ensure_listener, stop_listener, new_state, apply_event, persist_turn, event_session_id,
     has_listener,
@@ -1230,6 +1231,22 @@ def compact_subtask(sid, subtask_id):
 
 def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@ai_chat_bp.route('/sessions/<sid>/tool-calls', methods=['GET'])
+@login_required
+def get_session_tool_calls(sid):
+    """会话的全部工具调用时间线（根会话 + 全部子代理，agent_tool_calls 账本）。
+
+    落账时机：批任务在 worker 持久化时、交互会话在回合收敛时——进行中的
+    回合可能尚不完整，前端提供刷新。tool 参数可按工具名过滤。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    tool = (request.args.get('tool') or '').strip() or None
+    calls = agent_ledger.list_tool_calls(sid, tool=tool)
+    return jsonify({'calls': calls, 'total': len(calls)})
 
 
 @ai_chat_bp.route('/sessions/<sid>/batch', methods=['GET'])

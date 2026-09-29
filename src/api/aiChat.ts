@@ -333,6 +333,25 @@ export function getBatchOfSession(sessionId: string) {
     `/ai/chat/sessions/${encodeURIComponent(sessionId)}/batch`, undefined, { silent: true })
 }
 
+/** 会话的全部工具调用时间线（根会话 + 全部子代理，agent_tool_calls 账本）。 */
+export interface SessionToolCall {
+  id: number
+  ocSessionId: string
+  subtaskId: string | null
+  /** 子代理名；null = 根会话自己的调用 */
+  agent: string | null
+  tool: string
+  argsPreview: string | null
+  state: string | null
+  occurredAt: string | null
+}
+
+export function getSessionToolCalls(id: string, tool?: string) {
+  const q = tool ? `?tool=${encodeURIComponent(tool)}` : ''
+  return get<{ calls: SessionToolCall[]; total: number }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/tool-calls${q}`)
+}
+
 export function getChanges(id: string) {
   return get<{ changes: ChangedFile[]; truncated: boolean; ok: boolean }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/changes`, undefined, { silent: true },

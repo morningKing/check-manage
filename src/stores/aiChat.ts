@@ -23,10 +23,12 @@ import {
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
   getRuntimeState,
+  getSessionToolCalls,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
+  type SessionToolCall,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { latestTodosFromMessages, type TodoItem } from '@/utils/todos'
@@ -106,6 +108,9 @@ interface State {
   /** 用户上传到会话 uploads/ 目录的文件（与 agent 产出分开列示，实时刷新）。 */
   uploads: Record<string, AiFile[]>
   changes: Record<string, ChangedFile[]>
+  /** 会话全部工具调用时间线（根 + 子代理，agent_tool_calls 账本；大数据量 §1.1 的快查视图） */
+  toolCalls: Record<string, SessionToolCall[]>
+  toolCallsLoading: Record<string, boolean>
   paletteItems: Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>
   streamStatus: Record<string, StreamStatus>
   // Concurrent uploads (file + skill) used to clobber a single boolean; this is
@@ -193,6 +198,8 @@ export const useAiChatStore = defineStore('aiChat', {
     outputs: {},
     uploads: {},
     changes: {} as Record<string, ChangedFile[]>,
+    toolCalls: {} as Record<string, SessionToolCall[]>,
+    toolCallsLoading: {} as Record<string, boolean>,
     paletteItems: {} as Record<string, { commands: PaletteCommand[]; skills: PaletteCommand[] }>,
     streamStatus: {} as Record<string, StreamStatus>,
     uploadingCount: 0,
@@ -337,6 +344,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this._recomputeUsage(id)
       this.loadFiles(id)
       this.loadChanges(id)
+      this.loadToolCalls(id)
       this.loadPaletteItems(id)
       this.loadPendingQuestion(id)
       // Batch children are driven by the worker and viewed via polling
@@ -427,6 +435,18 @@ export const useAiChatStore = defineStore('aiChat', {
         this.changes[id] = changes
         return ok !== false
       } catch { /* non-fatal: keep existing list */ return false }
+    },
+
+    /** 会话全部工具调用（根 + 子代理，账本时间线；落账时机=批持久化/交互收敛，
+     *  进行中回合需手动刷新）。tool 空 = 全部。 */
+    async loadToolCalls(id: string, tool?: string): Promise<boolean> {
+      this.toolCallsLoading[id] = true
+      try {
+        const { calls } = await getSessionToolCalls(id, tool)
+        this.toolCalls[id] = calls
+        return true
+      } catch { return false }
+      finally { this.toolCallsLoading[id] = false }
     },
 
     async loadPaletteItems(id: string) {
