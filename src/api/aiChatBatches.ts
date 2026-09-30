@@ -129,6 +129,8 @@ export function updateBatchConfig(id: string, body: {
   provision_ref?: string | null
   /** 动作门禁期望(编辑入口,设计 §5.2):显式传入才更新,未终态子任务同步 */
   action_checks?: ActionCheck[] | null
+  /** 门禁自动修正(2026-09-30 编辑对话框):不过门时带明细续跑修复 */
+  gate_retry?: boolean
   /** 子代理会话复用名单:显式传入才更新(2026-09-24) */
   subagent_reuse?: string[] | null
   /** 批任务名称(编辑对话框,2026-09-29):非空,≤200 字符 */

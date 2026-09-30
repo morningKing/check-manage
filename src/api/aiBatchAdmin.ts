@@ -145,6 +145,22 @@ export function getBatchAttempts(batchId: string) {
     `/ai/chat/batches/${encodeURIComponent(batchId)}/attempts`)
 }
 
+export interface AdminToolCall {
+  ocSessionId: string
+  subtaskId: string | null
+  agent?: string | null
+  tool: string
+  args: string | null
+  state: string | null
+  occurredAt: string | null
+}
+
+/** 子任务工具调用时间线（调试面板，2026-09-30 从 AI 会话页迁入管理页）。 */
+export function getChildToolCalls(batchId: string, sid: string) {
+  return get<{ calls: AdminToolCall[] }>(
+    `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/sessions/${encodeURIComponent(sid)}/tool-calls`)
+}
+
 export function listBatchDeliveries(batchId: string) {
   return get<{ deliveries: AdminDelivery[] }>(
     `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/deliveries`)
@@ -152,7 +168,7 @@ export function listBatchDeliveries(batchId: string) {
 
 export function replayDelivery(oid: string) {
   return post<{ ok: boolean; status: string }>(
-    `/ai/chat/admin/deliveries/${encodeURIComponent(oid)}/replay`)
+    `/ai/chat/admin/batches/deliveries/${encodeURIComponent(oid)}/replay`)
 }
 
 export interface AdminCommand {

@@ -1,0 +1,1002 @@
+"""Tests for utils.chat_persist."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _ev(etype, props):
+    return {'event': etype, 'data': {'properties': props}}
+
+
+def test_apply_event_accumulates_text_tool_and_detects_idle():
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    # assistant message announced -> records turn_msg_id
+    assert apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc') is None
+    assert s['turn_msg_id'] == 'm1'
+    # text part
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'hi', 'sessionID': 'oc'}}), 'oc')
+    # tool part
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'query',
+                  'state': {'status': 'completed', 'title': 'q', 'output': 'res'}, 'sessionID': 'oc'}}), 'oc')
+    # idle ends the turn
+    assert apply_event(s, _ev('session.idle', {'sessionID': 'oc'}), 'oc') == 'idle'
+    content = build_content(s)
+    assert content[0] == {'type': 'text', 'text': 'hi'}
+    assert content[1]['type'] == 'tool_use'
+    assert content[1]['name'] == 'query'
+    assert content[1]['result'] == 'res'
+
+
+def test_apply_event_captures_meta_and_tool_duration():
+    from utils.chat_persist import new_state, apply_event, build_content
+    from utils.ai_message_meta import aggregate_metas, public_meta
+    s = new_state()
+    # message.updated carrying time/tokens/cost (final completed snapshot)
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                  'time': {'created': 1000, 'completed': 5400},
+                  'tokens': {'input': 18886, 'output': 159}, 'cost': 0.002}}), 'oc')
+    # tool part with state.time -> durationMs surfaced into content
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'bash',
+                  'state': {'status': 'completed', 'output': 'ok',
+                            'time': {'start': 2000, 'end': 2123}}, 'sessionID': 'oc'}}), 'oc')
+    content = build_content(s)
+    tool = [p for p in content if p['type'] == 'tool_use'][0]
+    assert tool['durationMs'] == 123
+    # turn meta aggregates correctly
+    meta = public_meta(aggregate_metas(list(s['meta_by_msg'].values())))
+    assert meta == {'durationMs': 4400, 'tokensInput': 18886, 'tokensOutput': 159, 'cost': 0.002}
+
+
+def test_apply_event_ignores_other_session():
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'OTHER'}}), 'oc')
+    assert s['turn_msg_id'] is None
+
+
+def test_build_content_drops_empty_text():
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': '   ', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == []
+
+
+import contextlib
+
+
+class _FakeCur:
+    def __init__(self, sink): self._sink = sink
+    def execute(self, sql, params=None): self._sink.append((sql, params))
+
+
+def _fake_db(sink):
+    @contextlib.contextmanager
+    def _cm():
+        class _Conn:
+            def cursor(self): return _FakeCur(sink)
+        yield _Conn()
+    return _cm
+
+
+def test_persist_turn_upserts_with_turn_msg_id(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    state = chat_persist.new_state()
+    state['turn_msg_id'] = 'msg_A'
+    state['part_order'] = ['p1']
+    state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hi'}}
+    chat_persist.persist_turn('sess1', state)
+    assert len(sink) == 1
+    sql, params = sink[0]
+    assert 'ON CONFLICT (id) DO UPDATE' in sql
+    assert params[0] == 'msg_A'      # deterministic row id = turn message id
+    assert params[1] == 'sess1'
+
+
+def test_persist_turn_noop_on_empty_content(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    chat_persist.persist_turn('sess1', chat_persist.new_state())  # no parts
+    assert sink == []
+
+
+def test_persist_turn_falls_back_to_generated_id(monkeypatch):
+    from utils import chat_persist
+    sink = []
+    monkeypatch.setattr(chat_persist, 'get_db', _fake_db(sink))
+    state = chat_persist.new_state()  # turn_msg_id stays None
+    state['part_order'] = ['p1']
+    state['parts_by_id'] = {'p1': {'type': 'text', 'text': 'hi'}}
+    chat_persist.persist_turn('sess1', state)
+    assert sink[0][1][0].startswith('msg_')   # generated fallback id
+
+
+import threading as _threading
+import time as _time
+
+
+def test_run_listener_persists_then_exits_on_idle(monkeypatch):
+    """The listener persists the turn on idle and then RETURNS, releasing the
+    OpenCode /event subscription (one listener per turn). A second turn fed into
+    the same iterator is left unconsumed — proving the early exit."""
+    from utils import chat_persist
+    saved = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: saved.append((sid, chat_persist.build_content(state))))
+    it = iter([
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'one', 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p2', 'messageID': 'm2', 'type': 'text', 'text': 'two', 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+    ])
+    chat_persist._run_listener('sess1', 'oc', it)
+    # only the first turn persisted; listener returned at its idle
+    assert [c for _, c in saved] == [[{'type': 'text', 'text': 'one'}]]
+    # the second turn's events were NOT consumed (stream released on exit)
+    assert next(it)['data']['properties']['info']['id'] == 'm2'
+
+
+def test_run_listener_persists_incrementally_while_streaming(monkeypatch):
+    """Mid-turn (before idle) the listener upserts the partial answer once the
+    debounce elapses, so switching sessions mid-stream recovers tool calls."""
+    from utils import chat_persist
+    saved = []
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: saved.append(chat_persist.build_content(state)))
+    clock = {'t': 0.0}
+
+    def fake_monotonic():
+        clock['t'] += 2.0  # each read advances 2s > 1.0s debounce
+        return clock['t']
+
+    monkeypatch.setattr(chat_persist.time, 'monotonic', fake_monotonic)
+    events = [
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'partial', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'q',
+                                              'state': {'status': 'completed', 'output': 'r'}, 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events))
+    # at least one incremental persist before idle + the idle persist
+    assert len(saved) >= 2
+    # the latest persisted snapshot carries the tool call (not just text)
+    assert any(p.get('type') == 'tool_use' for p in saved[-1])
+
+
+def test_ensure_listener_dedups_per_session(monkeypatch):
+    from utils import chat_persist
+    started = []
+    block = _threading.Event()
+
+    def fake_target(sid, oc, d, known_subtasks=None):
+        started.append(sid)
+        block.wait(2)
+
+    monkeypatch.setattr(chat_persist, '_listener_thread', fake_target)
+    try:
+        chat_persist.ensure_listener('s1', 'oc1', '/ws')
+        chat_persist.ensure_listener('s1', 'oc1', '/ws')  # already alive -> no second thread
+        _time.sleep(0.1)
+        assert started.count('s1') == 1
+    finally:
+        block.set()
+        _time.sleep(0.05)
+        chat_persist._listeners.pop('s1', None)
+
+
+def test_apply_event_ignores_unrelated_session_still_works():
+    """回归防护：新逻辑必须不影响"真正无关的会话被忽略"这个既有行为。"""
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'totally-unrelated'}}), 'oc')
+    assert s['turn_msg_id'] is None
+    assert s['subtasks'] == {}
+
+
+def test_apply_event_subtask_part_appears_in_parent_content():
+    """核心断言：父级消息里出现 subtask part 之后，父级自己 flatten 出来的
+    content 里必须真的有一条 subtask_use——这是 Task 6 渲染唯一的数据来源，
+    只在 state['subtasks'] 里记追踪状态而不放进父级 content 就是白做。
+    子代理的真实 sessionID 来自配套的 tool:'task' part。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    # tool:'task' part arrives first with the real child session ID
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    sig = apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    assert sig == 'subtask'
+    content = build_content(s)
+    stubs = [p for p in content if p['type'] == 'subtask_use']
+    assert stubs == [{'type': 'subtask_use', 'subtaskId': 'ses_child1',
+                      'agent': 'build', 'description': 'x', 'status': 'running',
+                      'segmentCount': 0}]
+
+
+def test_apply_event_discovers_subtask_with_depth_and_parent():
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    assert s['subtasks']['ses_child1']['depth'] == 1
+    assert s['subtasks']['ses_child1']['parent_id'] is None
+    assert s['subtasks']['ses_child1']['status'] == 'running'
+
+
+def test_apply_event_routes_child_events_into_subtask_scope():
+    """子代理自己的 sessionID 上的事件，一旦它已被发现，要路由进它自己的
+    累加器，而不是被当成"无关会话"丢弃。"""
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1'}}), 'oc')
+    sig = apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'text', 'text': 'working',
+                  'sessionID': 'ses_child1'}}), 'oc')
+    assert sig == 'subtask'
+    assert s['subtasks']['ses_child1']['parts_by_id']['cp1'] == {'type': 'text', 'text': 'working'}
+
+
+def test_apply_event_subtask_idle_marks_completed():
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    sig = apply_event(s, _ev('session.idle', {'sessionID': 'ses_child1'}), 'oc')
+    assert sig == 'subtask'
+    assert s['subtasks']['ses_child1']['status'] == 'completed'
+
+
+def test_apply_event_parent_stub_reflects_child_status_after_it_finishes():
+    """状态更新不能只停留在 state['subtasks']——父级自己再次 flatten 时，
+    占位气泡里的 status 必须跟着变成最新值，而不是停在发现时刻的 'running'。
+    这就是"占位存原始 part、状态现查现填"这个设计要解决的问题，用一条测试
+    钉死它。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    stubs = [p for p in build_content(s) if p['type'] == 'subtask_use']
+    assert stubs[0]['status'] == 'running'
+    apply_event(s, _ev('session.idle', {'sessionID': 'ses_child1'}), 'oc')
+    stubs = [p for p in build_content(s) if p['type'] == 'subtask_use']
+    assert stubs[0]['status'] == 'completed'
+
+
+def test_apply_event_subtask_error_marks_failed_immediately():
+    """子代理自己的轮次报错时立刻标 failed，不等 idle——透出原因，跟批任务
+    那条 _TurnFailed 是同一个道理。"""
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    sig = apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1',
+                  'error': {'name': 'ProviderAuthError',
+                           'data': {'providerID': 'anthropic', 'message': 'no key'}}}}), 'oc')
+    assert sig == 'subtask'
+    assert s['subtasks']['ses_child1']['status'] == 'failed'
+    assert 'ProviderAuthError' in s['subtasks']['ses_child1']['error']
+    assert 'anthropic' in s['subtasks']['ses_child1']['error']
+
+
+def test_apply_event_nested_subtask_depth_increments():
+    """子代理自己委托孙代——depth 从子代理的 depth 累加，不是恒为 1；孙代的
+    占位 part 出现在**子代理自己**的 content 里（不是顶层的）。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    # Top-level discovers child via tool:'task' + subtask pair
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child1'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub1',
+                  'agent': 'build', 'description': 'x'}}), 'oc')
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child1'}}), 'oc')
+    # Child discovers grandchild via tool:'task' + subtask pair
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'cpt1', 'messageID': 'cm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_grandchild'}},
+                  'sessionID': 'ses_child1'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'subtask',
+                  'sessionID': 'ses_child1', 'id': 'prt_gc1',
+                  'agent': 'review', 'description': 'y'}}), 'oc')
+    assert s['subtasks']['ses_grandchild']['depth'] == 2
+    assert s['subtasks']['ses_grandchild']['parent_id'] == 'ses_child1'
+    # 顶层 content 里只有对 ses_child1 的占位，没有孙代
+    top_stub_ids = [p['subtaskId'] for p in build_content(s) if p['type'] == 'subtask_use']
+    assert top_stub_ids == ['ses_child1']
+
+
+def test_apply_event_depth_limit_stops_at_five():
+    """超过 5 层不再追踪新的子代理——用一条深度已经是 5 的子代理去委托第 6 层，
+    第 6 层不应该出现在 state['subtasks'] 里。"""
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    # 手工把一个 depth=5 的子代理塞进去（不必真的建 5 层，直接构造边界条件）
+    s['subtasks']['ses_deep'] = {
+        'assistant_msg_ids': {'dm1'}, 'parts_by_id': {}, 'part_order': [],
+        'parent_id': None, 'depth': 5, 'agent': 'x', 'description': 'y',
+        'status': 'running', 'error': None,
+        '_tool_sessions_by_msg': {}, '_pending_subtasks_by_msg': {},
+    }
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'dpt1', 'messageID': 'dm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_too_deep'}},
+                  'sessionID': 'ses_deep'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'dp1', 'messageID': 'dm1', 'type': 'subtask',
+                  'sessionID': 'ses_deep', 'id': 'prt_deep',
+                  'agent': 'z', 'description': 'w'}}), 'oc')
+    assert 'ses_too_deep' not in s['subtasks']
+
+
+def test_persist_subtasks_writes_rows_and_messages():
+    """persist_subtasks 要把 state['subtasks'] 里的内容落到
+    ai_chat_subtasks / ai_chat_subtask_messages，而不是只停留在内存。"""
+    import uuid
+    from db import get_db
+    from utils.chat_persist import new_state, apply_event, persist_subtasks
+
+    uid = 'u-cp-sub-' + uuid.uuid4().hex[:6]
+    sid = 's-cp-sub-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    try:
+        s = new_state()
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                      'state': {'status': 'completed',
+                                'metadata': {'sessionId': 'ses_child_persist'}},
+                      'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                      'sessionID': 'oc', 'id': 'prt_sub_persist',
+                      'agent': 'build',
+                      'description': 'do x'}}), 'oc')
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child_persist'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'text', 'text': 'hi',
+                      'sessionID': 'ses_child_persist'}}), 'oc')
+
+        persist_subtasks(sid, s)
+
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT root_session_id, agent, description, status FROM "
+                           "ai_chat_subtasks WHERE id = %s", ('ses_child_persist',))
+                row = cur.fetchone()
+                assert row == (sid, 'build', 'do x', 'running')
+                cur.execute("SELECT content FROM ai_chat_subtask_messages "
+                           "WHERE subtask_id = %s", ('ses_child_persist',))
+                content = cur.fetchone()[0]
+                assert content == [{'type': 'text', 'text': 'hi'}]
+
+        # 子代理跑完之后再落一次——同一行必须被更新为 completed，不是插入
+        # 第二行（single-row-per-subtask upsert 的幂等性）。
+        apply_event(s, _ev('session.idle', {'sessionID': 'ses_child_persist'}), 'oc')
+        persist_subtasks(sid, s)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM ai_chat_subtasks WHERE id = %s",
+                           ('ses_child_persist',))
+                assert cur.fetchone() == ('completed',)
+                cur.execute("SELECT count(*) FROM ai_chat_subtask_messages "
+                           "WHERE subtask_id = %s", ('ses_child_persist',))
+                assert cur.fetchone()[0] == 1   # 还是一行，不是两行
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()
+
+
+def test_apply_event_task_tool_without_subtask_part_discovers_child():
+    """自然语言委托：只有 tool:'task' part（没有配套 subtask part）也要能发现
+    子会话，agent/description/prompt 从工具输入取。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'running',
+                            'input': {'subagent_type': 'general',
+                                      'description': 'count lines',
+                                      'prompt': 'Count the lines in AGENTS.md'},
+                            'metadata': {'sessionId': 'ses_child_nl'}},
+                  'sessionID': 'oc'}}), 'oc')
+    sub = s['subtasks'].get('ses_child_nl')
+    assert sub is not None
+    assert sub['agent'] == 'general'
+    assert sub['description'] == 'count lines'
+    assert sub['prompt'] == 'Count the lines in AGENTS.md'
+    content = build_content(s)
+    stubs = [p for p in content if p['type'] == 'subtask_use']
+    assert len(stubs) == 1
+    assert stubs[0]['subtaskId'] == 'ses_child_nl'
+    assert stubs[0]['agent'] == 'general'
+
+
+def test_apply_event_reasoning_part_persisted():
+    """模型的 reasoning part 要进持久化内容（空文本过滤），否则刷新后思考过程消失。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r1', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': 'let me think', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r2', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': '   ', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 't1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'answer', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == [
+        {'type': 'reasoning', 'text': 'let me think'},
+        {'type': 'text', 'text': 'answer'},
+    ]
+
+
+def test_apply_event_merges_adjacent_reasoning_parts():
+    """OpenCode 有时把一段连续推理拆成很多个短小的 reasoning part（各自独立 id，
+    每个只有一两个 token），不是复用同一个 id 增量续写——相邻的应该合并成一条，
+    否则前端会渲成一长串「思考完成」气泡。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    for pid, text in [('r1', '我'), ('r2', '在'), ('r3', '想')]:
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': pid, 'messageID': 'm1', 'type': 'reasoning',
+                      'text': text, 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 't1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'answer', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == [
+        {'type': 'reasoning', 'text': '我在想'},
+        {'type': 'text', 'text': 'answer'},
+    ]
+
+
+def test_apply_event_reasoning_parts_separated_by_text_stay_separate():
+    """中间隔了别的 part 类型才算另一段独立的思考，不跨类型合并。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r1', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': '第一段', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 't1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'mid answer', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'r2', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': '第二段', 'sessionID': 'oc'}}), 'oc')
+    assert build_content(s) == [
+        {'type': 'reasoning', 'text': '第一段'},
+        {'type': 'text', 'text': 'mid answer'},
+        {'type': 'reasoning', 'text': '第二段'},
+    ]
+
+
+def test_apply_event_subtask_and_tool_part_dedupe_placeholder():
+    """/command 路径 subtask part 与 tool:'task' part 并存时，父级内容里只能有
+    一个占位，且用 subtask part 的元数据（更准确）。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'input': {'subagent_type': 'general',
+                                      'description': 'tool-ish desc'},
+                            'metadata': {'sessionId': 'ses_child_dup'}},
+                  'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub_dup',
+                  'agent': 'build', 'description': 'review changes'}}), 'oc')
+    stubs = [p for p in build_content(s) if p['type'] == 'subtask_use']
+    assert len(stubs) == 1
+    assert stubs[0]['subtaskId'] == 'ses_child_dup'
+    assert stubs[0]['agent'] == 'build'
+    assert stubs[0]['description'] == 'review changes'
+    # 反向顺序（subtask part 先到）同样只出一个占位
+    s2 = new_state()
+    apply_event(s2, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s2, _ev('message.part.updated',
+        {'part': {'id': 'p2', 'messageID': 'm2', 'type': 'subtask',
+                  'sessionID': 'oc', 'id': 'prt_sub_dup2',
+                  'agent': 'build', 'description': 'review changes'}}), 'oc')
+    apply_event(s2, _ev('message.part.updated',
+        {'part': {'id': 'pt2', 'messageID': 'm2', 'type': 'tool', 'tool': 'task',
+                  'state': {'status': 'completed',
+                            'metadata': {'sessionId': 'ses_child_dup2'}},
+                  'sessionID': 'oc'}}), 'oc')
+    stubs2 = [p for p in build_content(s2) if p['type'] == 'subtask_use']
+    assert len(stubs2) == 1
+    assert stubs2[0]['subtaskId'] == 'ses_child_dup2'
+    assert stubs2[0]['agent'] == 'build'
+    assert s2['subtasks']['ses_child_dup2']['agent'] == 'build'
+
+
+def test_persist_subtasks_writes_prompt_user_message():
+    """委托 prompt 要作为子代理自己的 user 消息落库，且在 assistant 内容之前。"""
+    import uuid
+    from db import get_db
+    from utils.chat_persist import new_state, apply_event, persist_subtasks
+
+    uid = 'u-cp-pr-' + uuid.uuid4().hex[:6]
+    sid = 's-cp-pr-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    try:
+        s = new_state()
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                      'state': {'status': 'running',
+                                'input': {'subagent_type': 'general',
+                                          'description': 'd', 'prompt': 'do the thing'},
+                                'metadata': {'sessionId': 'ses_child_prompt'}},
+                      'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child_prompt'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'text', 'text': 'done',
+                      'sessionID': 'ses_child_prompt'}}), 'oc')
+
+        persist_subtasks(sid, s)
+
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT role, content FROM ai_chat_subtask_messages "
+                           "WHERE subtask_id = %s ORDER BY seq", ('ses_child_prompt',))
+                rows = cur.fetchall()
+                assert rows[0][0] == 'user'
+                assert rows[0][1] == [{'type': 'text', 'text': 'do the thing'}]
+                assert rows[1][0] == 'assistant'
+                assert rows[1][1] == [{'type': 'text', 'text': 'done'}]
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()
+
+
+class _FakeClient:
+    """REST stub: session id -> list of {'info','parts'} messages."""
+
+    def __init__(self, by_session):
+        self.by_session = by_session
+        self.calls = []
+
+    def get_messages(self, oc_sid, directory=''):
+        self.calls.append(oc_sid)
+        return self.by_session.get(oc_sid, [])
+
+
+def test_backfill_recovers_missed_first_message_and_subtask():
+    """监听器订阅前就已发出的首条 assistant 消息（含 tool:'task' part）会
+    丢失；idle 时的 REST 兜底要能把 reasoning/tool part、子代理发现与子
+    会话内容全部补回来。"""
+    from utils.chat_persist import new_state, apply_event, build_content, backfill_from_rest
+
+    s = new_state()
+    # SSE 只赶上了第二条 assistant 消息（真实竞态的典型形态）
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p3', 'messageID': 'm2', 'type': 'text', 'text': 'final',
+                  'sessionID': 'oc'}}), 'oc')
+    assert not any(p['type'] == 'subtask_use' for p in build_content(s))
+
+    client = _FakeClient({
+        'oc': [
+            {'info': {'role': 'user', 'id': 'u1', 'sessionID': 'oc',
+                      'time': {'created': 1000}}, 'parts': []},
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                      'time': {'created': 2000}},
+             'parts': [
+                 {'id': 'p1', 'messageID': 'm1', 'type': 'reasoning',
+                  'text': 'thinking...', 'sessionID': 'oc'},
+                 {'id': 'p2', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                  'sessionID': 'oc',
+                  'state': {'status': 'completed',
+                            'input': {'subagent_type': 'general',
+                                      'description': 'count lines',
+                                      'prompt': 'count the lines'},
+                            'metadata': {'sessionId': 'ses_child_bf'}}}]},
+            {'info': {'role': 'assistant', 'id': 'm2', 'sessionID': 'oc',
+                      'time': {'created': 3000}},
+             'parts': [
+                 {'id': 'p3', 'messageID': 'm2', 'type': 'text', 'text': 'final',
+                  'sessionID': 'oc'}]},
+        ],
+        'ses_child_bf': [
+            {'info': {'role': 'assistant', 'id': 'cm1', 'sessionID': 'ses_child_bf',
+                      'time': {'created': 2500, 'completed': 2800}},
+             'parts': [
+                 {'id': 'cp1', 'messageID': 'cm1', 'type': 'text',
+                  'text': 'child says hi', 'sessionID': 'ses_child_bf'}]},
+        ],
+    })
+    assert backfill_from_rest(s, client, 'oc', directory='/ws') is True
+
+    content = build_content(s)
+    types = [p['type'] for p in content]
+    assert types == ['reasoning', 'subtask_use', 'text']
+    stub = [p for p in content if p['type'] == 'subtask_use'][0]
+    assert stub['subtaskId'] == 'ses_child_bf'
+    assert stub['agent'] == 'general'
+    assert stub['status'] == 'completed'  # child REST shows time.completed
+    sub = s['subtasks']['ses_child_bf']
+    assert sub['prompt'] == 'count the lines'
+    assert sub['status'] == 'completed'
+    from utils.chat_persist import _flatten_scope, _status_snapshot
+    child_content = _flatten_scope(sub, _status_snapshot(s))
+    assert child_content == [{'type': 'text', 'text': 'child says hi'}]
+
+
+# ---- F9: 长任务完成站内通知 ----------------------------------------------
+
+def _fake_db_session_row(row):
+    """Fake get_db context manager whose single SELECT returns `row`
+    (user_id, title, batch_id) from fetchone()."""
+    @contextlib.contextmanager
+    def _cm():
+        class _Cur:
+            def execute(self, sql, params=None): pass
+            def fetchone(self): return row
+        class _Conn:
+            def cursor(self): return _Cur()
+        yield _Conn()
+    return _cm
+
+
+def _patch_notifier(monkeypatch, chat_persist):
+    calls = []
+    monkeypatch.setattr(chat_persist, 'create_notification',
+                        lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
+def test_notify_long_turn_creates_notification(monkeypatch):
+    """耗时超过阈值的交互会话 idle -> 给所有者发 aiChatTurnDone 通知，跳转回聊天页。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '我的会话', None)))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    long_ago = _time.monotonic() - 60  # 60s 前开始，超过默认 30s 阈值
+    chat_persist._maybe_notify_turn_done('sess_abc', long_ago)
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    user_id, ntype, title, content = args
+    assert user_id == 'user-1'
+    assert ntype == 'aiChatTurnDone'
+    assert '我的会话' in title
+    assert kwargs['source_collection'] == 'ai-chat'   # 铃铛点击 -> /ai-chat?session=...
+    assert kwargs['source_record_id'] == 'sess_abc'
+    assert content  # 含耗时描述
+
+
+def test_notify_short_turn_skipped(monkeypatch):
+    """耗时低于阈值 -> 不通知（且不查库）。"""
+    from utils import chat_persist
+    queried = []
+    @contextlib.contextmanager
+    def _cm():
+        queried.append(True)
+        class _Cur:
+            def execute(self, sql, params=None): pass
+            def fetchone(self): return ('user-1', 't', None)
+        class _Conn:
+            def cursor(self): return _Cur()
+        yield _Conn()
+    monkeypatch.setattr(chat_persist, 'get_db', _cm)
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_abc', _time.monotonic())  # ~0s
+    assert calls == []
+    assert queried == []  # 阈值判断先于查库
+
+
+def test_notify_batch_child_skipped(monkeypatch):
+    """批任务子会话（batch_id 非空）-> 不通知（批任务另有其进度界面）。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '子任务', 'batch_xyz')))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_child', _time.monotonic() - 120)
+    assert calls == []
+
+
+def test_notify_analysis_session_skipped(monkeypatch):
+    """后台轨迹分析会话（标题以「轨迹分析:」开头）-> 不通知。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(('user-1', '轨迹分析: sess_xyz', None)))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_an', _time.monotonic() - 120)
+    assert calls == []
+
+
+def test_notify_missing_owner_skipped(monkeypatch):
+    """会话无 user_id 或查不到 -> 不通知、不抛错。"""
+    from utils import chat_persist
+    monkeypatch.setattr(chat_persist, 'get_db',
+                        _fake_db_session_row(None))
+    calls = _patch_notifier(monkeypatch, chat_persist)
+    chat_persist._maybe_notify_turn_done('sess_x', _time.monotonic() - 120)
+    assert calls == []
+
+
+def test_backfill_ignores_messages_before_last_user_message():
+    """兜底只回放本轮（最后一条 user 消息之后）的 assistant 消息，避免把
+    上一轮内容并进当前轮。"""
+    from utils.chat_persist import new_state, backfill_from_rest, build_content
+
+    s = new_state()
+    client = _FakeClient({
+        'oc': [
+            {'info': {'role': 'assistant', 'id': 'old1', 'sessionID': 'oc',
+                      'time': {'created': 500}},
+             'parts': [{'id': 'po', 'messageID': 'old1', 'type': 'text',
+                        'text': 'previous turn', 'sessionID': 'oc'}]},
+            {'info': {'role': 'user', 'id': 'u1', 'sessionID': 'oc',
+                      'time': {'created': 1000}}, 'parts': []},
+            {'info': {'role': 'assistant', 'id': 'new1', 'sessionID': 'oc',
+                      'time': {'created': 2000}},
+             'parts': [{'id': 'pn', 'messageID': 'new1', 'type': 'text',
+                        'text': 'this turn', 'sessionID': 'oc'}]},
+        ],
+    })
+    assert backfill_from_rest(s, client, 'oc') is True
+    texts = [p['text'] for p in build_content(s) if p['type'] == 'text']
+    assert texts == ['this turn']
+
+
+def test_backfill_noop_when_everything_captured():
+    """SSE 全部捕获时兜底不产生重复内容。"""
+    from utils.chat_persist import new_state, apply_event, build_content, backfill_from_rest
+
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text', 'text': 'hi',
+                  'sessionID': 'oc'}}), 'oc')
+    client = _FakeClient({
+        'oc': [
+            {'info': {'role': 'user', 'id': 'u1', 'sessionID': 'oc',
+                      'time': {'created': 1000}}, 'parts': []},
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                      'time': {'created': 2000}},
+             'parts': [{'id': 'p1', 'messageID': 'm1', 'type': 'text',
+                        'text': 'hi', 'sessionID': 'oc'}]},
+        ],
+    })
+    assert backfill_from_rest(s, client, 'oc') is False
+    assert build_content(s) == [{'type': 'text', 'text': 'hi'}]
+
+
+def test_run_listener_idle_runs_backfill_and_persists_subtasks(monkeypatch):
+    """idle 分支：先 REST 兜底，再 persist_turn + persist_subtasks。"""
+    from utils import chat_persist
+    calls = []
+    monkeypatch.setattr(chat_persist, 'backfill_from_rest',
+                        lambda state, client, oc, directory='': calls.append('backfill') or False)
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda sid, state: calls.append('turn'))
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda sid, state: calls.append('subtasks'))
+    events = [
+        _ev('message.updated', {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('message.part.updated', {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text',
+                                              'text': 'one', 'sessionID': 'oc'}}),
+        _ev('session.idle', {'sessionID': 'oc'}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws')
+    assert calls == ['backfill', 'turn', 'subtasks']
+
+
+def test_apply_event_session_error_marks_turn_error():
+    """session.error（回合失败，properties: {sessionID?, error}）要能被接住：
+    记进 scope['error'] 并返回 'error' 信号 —— 否则出错回合的内容一个字
+    都不落库，监听线程干等到读超时。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+    apply_event(s, _ev('message.part.updated',
+        {'part': {'id': 'p1', 'messageID': 'm1', 'type': 'text',
+                  'text': 'partial', 'sessionID': 'oc'}}), 'oc')
+    sig = apply_event(s, _ev('session.error',
+        {'sessionID': 'oc',
+         'error': {'name': 'APIError', 'data': {'message': 'timeout'}}}), 'oc')
+    assert sig == 'error'
+    content = build_content(s)
+    assert content[-1]['type'] == 'error'
+    assert 'APIError' in content[-1]['text']
+    assert 'timeout' in content[-1]['text']
+    # 半截输出也要留下（error part 之前）
+    assert content[0] == {'type': 'text', 'text': 'partial'}
+
+
+def test_apply_event_error_only_turn_yields_error_part():
+    """出错的一轮往往没有任何文本 part —— 只有 error part 时也必须持久化
+    （persist_turn 对空内容是 no-op，所以 error part 是唯一的留痕）。"""
+    from utils.chat_persist import new_state, apply_event, build_content
+    s = new_state()
+    apply_event(s, _ev('message.updated',
+        {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc',
+                  'error': {'name': 'ProviderAuthError',
+                            'data': {'message': 'bad key'}}}}), 'oc')
+    content = build_content(s)
+    assert len(content) == 1
+    assert content[0]['type'] == 'error'
+    assert 'ProviderAuthError' in content[0]['text']
+
+
+def test_apply_event_session_error_without_error_field_ignored():
+    from utils.chat_persist import new_state, apply_event
+    s = new_state()
+    assert apply_event(s, _ev('session.error', {'sessionID': 'oc'}), 'oc') is None
+
+
+def test_run_listener_error_signal_persists_and_exits(monkeypatch):
+    """session.error 到达时监听器要走 idle 同款的收尾（持久化 + 退出），
+    不再做记忆提取/完成通知（那是成功路径的事）。"""
+    import utils.chat_persist as chat_persist
+    calls = []
+    monkeypatch.setattr(chat_persist, 'backfill_from_rest',
+                        lambda *a, **k: calls.append('backfill') or False)
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda *a, **k: calls.append('turn'))
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda *a, **k: calls.append('subtasks'))
+    monkeypatch.setattr(chat_persist, '_record_workspace_files',
+                        lambda *a, **k: calls.append('files'))
+    events = [
+        _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('session.error', {'sessionID': 'oc',
+                              'error': {'name': 'APIError'}}),
+    ]
+    chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws')
+    assert calls == ['backfill', 'turn', 'subtasks', 'files']
+
+
+def test_run_listener_superseded_owner_skips_persist(monkeypatch):
+    """15 号回修：stop_listener 摘除注册表后，在途过期监听线程不得再持久化
+    （否则 clear/delete 删掉的消息会被删前已入队的最后一个事件复活）。
+    owner_thread 指向一个未注册的线程 → 每次 persist 都被跳过。"""
+    import threading as _th
+    import utils.chat_persist as chat_persist
+    calls = []
+    monkeypatch.setattr(chat_persist, 'backfill_from_rest',
+                        lambda *a, **k: calls.append('backfill'))
+    monkeypatch.setattr(chat_persist, 'persist_turn',
+                        lambda *a, **k: calls.append('turn'))
+    monkeypatch.setattr(chat_persist, 'persist_subtasks',
+                        lambda *a, **k: calls.append('subtasks'))
+    monkeypatch.setattr(chat_persist, '_record_workspace_files',
+                        lambda *a, **k: calls.append('files'))
+    events = [
+        _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}),
+        _ev('session.error', {'sessionID': 'oc',
+                              'error': {'name': 'APIError'}}),
+    ]
+    stale = _th.Thread(target=lambda: None)
+    stale.start()
+    stale.join()
+    chat_persist._run_listener('sess1', 'oc', iter(events), directory='/ws',
+                               owner_thread=stale)
+    # backfill/files 照旧（观测类），但 turn/subtasks 持久化被所有权检查拦下
+    assert 'turn' not in calls and 'subtasks' not in calls

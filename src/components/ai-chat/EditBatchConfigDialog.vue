@@ -60,6 +60,9 @@
         </div>
         <div class="row__inline">
           <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
+          <ElCheckbox v-model="gateRetry" data-test="gate-retry" style="margin-left:12px">自动修正（不过门时带缺失明细在原会话续跑修复）</ElCheckbox>
+        </div>
+        <div class="row__inline">
           <span class="hint">
             保存后对未完成子任务立即生效；已完成子任务的历史核对结果保持不变。
           </span>
@@ -99,6 +102,7 @@ const subagentList = ref<AgentInfo[]>([])
 
 // 动作门禁(设计 §5.2 入口 A 的编辑面):预填批任务上已保存的期望
 const gateEnabled = ref(false)
+const gateRetry = ref(false)
 const gateChecks = ref<Array<{ name: string; tool: string; args_pattern: string; min_count: number; subagents: string }>>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
 function emptyCheck() {
@@ -118,6 +122,7 @@ function prefill() {
   const checks = (props.batch as any).action_checks as
     Array<{ name: string; tool: string; args_pattern: string; min_count?: number; subagents?: string[] }> | null
   gateEnabled.value = Array.isArray(checks) && checks.length > 0
+  gateRetry.value = (props.batch as any).gate_retry === true
   gateChecks.value = (checks || []).map(c => ({
     name: c.name, tool: c.tool || 'bash',
     args_pattern: c.args_pattern, min_count: c.min_count ?? 1,
@@ -172,6 +177,7 @@ async function save() {
       provision_repo: provisionRepo.value.trim() || null,
       provision_ref: provisionRef.value.trim() || null,
       action_checks: gateEnabled.value ? action_checks : [],
+      gate_retry: gateRetry.value,
       subagent_reuse: reuseAgents.value,
     })
     ElMessage.success('已保存（提示词对未执行子任务生效）')

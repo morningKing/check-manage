@@ -1,4 +1,4 @@
-from migrate_kefu import migrate_kefu
+from scripts.migrate_kefu import migrate_kefu
 
 
 def _col(cur, table, col):

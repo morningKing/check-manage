@@ -387,14 +387,23 @@ def _run_group(oc, group: dict, workspace_path, model: str, session_id: str,
 
 
 def run_verifier(session_id: str, workspace_path, model: str, *,
-                 timeout_sec=None, stall_sec=None, client=None, get_db=None):
+                 timeout_sec=None, stall_sec=None, client=None, get_db=None,
+                 skip_names=None):
     """终态核对钩子的执行入口。无 verifier 期望 → None（调用方零改动）。
     按核对粒度分组逐组判定（每组一次判官会话、独立超时；组数通常 1~2）。
+    `skip_names`：委派级门禁已提前判定的期望名（终态合并时跳过重复判官）。
     返回 {'status': 'completed'|'error', 'results': [...], 'error': str|None}；
     任一组 error 时整体 status='error'（该组条目已 inconclusive，fail-closed）。"""
     materials = collect_materials(session_id, get_db=get_db)
     if materials is None:
         return None
+    if skip_names:
+        skipped = set(skip_names)
+        for g in materials['groups']:
+            g['checks'] = [c for c in g['checks'] if c['name'] not in skipped]
+        materials['groups'] = [g for g in materials['groups'] if g['checks']]
+        if not materials['groups']:
+            return None
     # client=None 走生产默认构造（惰性工厂）；注入桩时 or 短路不触发构造。
     # 判官会话创建/轮询/abort 全程用这同一个实例（_abort_quiet 亦然）。
     oc = client or _default_client()

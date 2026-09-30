@@ -87,6 +87,7 @@
               <div class="child-actions">
                 <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
                 <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
+                <el-button link type="primary" @click="openToolCalls(row)">工具调用</el-button>
                 <el-button link type="warning" :disabled="!isTerminal(row.status)"
                            @click="onReexecute(row)">重跑</el-button>
                 <el-button link type="danger" :disabled="!isTerminal(row.status)"
@@ -155,6 +156,15 @@
       />
     </el-dialog>
 
+    <el-dialog v-model="toolCallsOpen" :title="`工具调用：${toolCallsIdent}`" width="72%" top="6vh">
+      <ToolCallsPanel
+        v-if="toolCallsOpen"
+        :calls="toolCallRows"
+        :loading="toolCallsLoading"
+        @refresh="loadToolCalls"
+      />
+    </el-dialog>
+
     <el-dialog v-model="previewOpen" :title="`预览：${previewPath}`" width="60%" top="10vh" append-to-body>
       <div v-if="previewLoading" class="admin-preview__hint">加载中…</div>
       <template v-else>
@@ -175,6 +185,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
+import ToolCallsPanel from '@/components/admin/ToolCallsPanel.vue'
+import { getChildToolCalls, type AdminToolCall } from '@/api/aiBatchAdmin'
 import { previewKind } from '@/utils/filePreview'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
@@ -360,6 +372,36 @@ const previewLoading = ref(false)
 // 的 @vue-office 渲染器；同样 append-to-body 避免被 filesOpen 的 mask 盖住。
 const officePreviewVisible = ref(false)
 const officePreviewFile = ref<{ name: string; url: string } | null>(null)
+
+// ---- 工具调用面板（调试信息 2026-09-30 从 AI 会话页迁入）----
+const toolCallsOpen = ref(false)
+const toolCallsLoading = ref(false)
+const toolCallsIdent = ref('')
+const toolCallRows = ref<AdminToolCall[]>([])
+let toolCallsBatchId = ''
+let toolCallsSessionId = ''
+
+async function loadToolCalls() {
+  toolCallsLoading.value = true
+  try {
+    const res = await getChildToolCalls(toolCallsBatchId, toolCallsSessionId)
+    toolCallRows.value = (res.calls || []).map((c, i) => ({ ...c, id: i + 1 }))
+  } catch {
+    toolCallRows.value = []
+  } finally {
+    toolCallsLoading.value = false
+  }
+}
+
+function openToolCalls(row: AdminChild) {
+  if (!detail.value) return
+  toolCallsBatchId = detail.value.batch.batchId
+  toolCallsSessionId = row.sessionId
+  toolCallsIdent.value = `${row.name} #${row.seq}`
+  toolCallRows.value = []
+  toolCallsOpen.value = true
+  void loadToolCalls()
+}
 
 async function openChildFiles(row: AdminChild) {
   if (!detail.value) return

@@ -701,6 +701,17 @@ class BatchWorker:
         # 动作账本健康标记(设计 §5.1):_persist_conversation 每次落账后更新,
         # 门禁核对据此区分 failed 与 inconclusive;核对后清除。
         self._ledger_health: dict = {}
+        # 委派级门禁（2026-09-30）：定向 verifier 组在名单内子代理全部终态时
+        # 提前判定——failed 且批未开 gate_retry → 置 cancel_requested 立即停止；
+        # 开启 → 暂存 verdict 交终态合并（gate_retry 定向修复仍生效）。
+        # _deleg_gate_done: (session_id, subtask_id) -> True（已核对，防重复）；
+        # _deleg_gate_results: session_id -> [verdict rows]；_gate_checking:
+        # 判官同步核对期间豁免 tool-stuck 看门狗（核对会暂停轮询线程）。
+        # 快照短路（批满负载优化）：session_id -> 最近一次持久化的消息签名
+        self._persist_sig: dict = {}
+        self._deleg_gate_done: dict = {}
+        self._deleg_gate_results: dict = {}
+        self._gate_checking: set = set()
         self._lock = threading.Lock()
         self._dispatcher: threading.Thread | None = None
         # F9：重排前的旧 attempt id（session_id -> attempt_id），下一次
@@ -1330,7 +1341,7 @@ class BatchWorker:
             self._persist_conversation(sid, prompt, oc_session_id, final_msg,
                                        directory=ws, generation=generation,
                                        turn_label=turn_label,
-                                       reuse_agents=reuse_agents)
+                                       reuse_agents=reuse_agents, force=True)
             # 到位门禁(设计 §5.3):最终一轮落账已含完整动作,先核对后写终态。
             # 核对前先等子代理收敛——模型可能先于子代理结束回合,否则核对的是
             # "中途快照"(生产观察:首个子任务提前判完成,其余仍在执行)。
@@ -1578,18 +1589,30 @@ class BatchWorker:
         """终态核对。inconclusive(账本不健康/查询异常/判官故障)不算新语义:
         统一走既有 fail-closed 分支,任务落 failed、期望行与日志留痕。
         verifier 期望由判官核对(utils/verifier,方案 B)——无 verifier 期望时
-        run_verifier 返回 None,零开销跳过。"""
+        run_verifier 返回 None,零开销跳过。委派级门禁（定向组子代理终态时
+        提前判定）的暂存 verdict 先行合并，已判期望跳过重复判官。"""
         healthy = self._ledger_health.pop(sid, True)
         result = agent_ledger.check_session_gate(sid, ledger_healthy=healthy,
                                                  get_db=get_db)
         if healthy:
+            skip_names = None
+            cached = self._deleg_gate_results.pop(sid, None)
+            if cached:
+                try:
+                    result = verifier.merge_verifier_results(
+                        result, {'status': 'completed', 'error': None,
+                                 'results': cached}, sid, get_db=get_db)
+                    skip_names = [r['name'] for r in cached]
+                except Exception:  # noqa: BLE001
+                    logger.exception('deleg gate merge failed sid=%s', sid)
             run = None
             try:
                 # 先探期望：无 verifier 期望时不惊动判官（零开销路径,与
                 # run_verifier 内部的 None 早退同判据）。
                 if verifier.collect_materials(sid, get_db=get_db) is not None:
                     run = verifier.run_verifier(sid, workspace_path=workspace_path,
-                                                model=model, get_db=get_db)
+                                                model=model, get_db=get_db,
+                                                skip_names=skip_names)
             except Exception as e:  # noqa: BLE001 —— 钩子自身异常双保险
                 logger.warning('verifier hook crashed sid=%s: %s', sid, e)
                 mats = verifier.collect_materials(sid, get_db=get_db) or {}
@@ -1792,6 +1815,137 @@ class BatchWorker:
             return [a for a in (row[0] or []) if a] if row else []
         except Exception:  # noqa: BLE001 —— 配置读取失败按不启用处理
             return []
+
+    def _maybe_check_delegation_gate(self, session_id: str, directory: str,
+                                     known: dict):
+        """委派级门禁（设计 §5.4 扩展，2026-09-30）：verifier 定向组（期望带
+        subagents 名单）在名单内子代理全部终态时提前判定。
+
+        - 全部 passed → 只暂存（终态合并为 gate passed，跳过重复判官）；
+        - failed 且批级 gate_retry 开 → 暂存（终态合并为 gate failed → 引擎
+          定向修复分支照常生效）；
+        - failed 且未开 gate_retry → 写 cancel_requested 立即停止该子任务
+          （轮询下一拍抛 _SessionCancelled，走既有取消收口），不再让它带着
+          已注定的失败继续烧 token。
+
+        判官同步执行会暂停轮询线程一个判官回合（10~60s），期间 _gate_checking
+        豁免 tool-stuck 看门狗。防御式：任何异常只记日志，不影响主持久化。"""
+        try:
+            if not known:
+                return
+            done = self._deleg_gate_done.setdefault(session_id, {})
+            # 名单内子代理：本次快照里终态且尚未核对过
+            targets = [(st_id, info) for st_id, info in known.items()
+                       if info.get('status') in ('completed', 'failed')
+                       and (st_id, session_id) not in done
+                       and info.get('agent')]
+            if not targets:
+                return
+            from db import get_db as _gdb
+            with _gdb() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT name, effect_spec, subagents FROM action_expectations "
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree') "
+                        "  AND check_type = 'verifier'", (session_id,))
+                    rows = cur.fetchall()
+            if not rows:
+                for st_id, _info in targets:
+                    done[(st_id, session_id)] = True
+                return
+            # 按 subagents 名单组合分组（与 run_verifier 的分组口径一致）
+            buckets: dict = {}
+            for name, effect_spec, subagents in rows:
+                key = tuple(sorted({str(a).strip() for a in (subagents or []) if str(a).strip()}))
+                if key == (None,):
+                    continue                      # 全树组：终态收尾统一核对
+                buckets.setdefault(key, []).append(
+                    {'name': name, 'rubric': (effect_spec or {}).get('rubric', '')})
+            if not buckets:
+                for st_id, _info in targets:
+                    done[(st_id, session_id)] = True
+                return
+            # 每组：名单内子代理是否都已终态且在本次 targets 中
+            cur_status = {st_id: info.get('status') for st_id, info in known.items()}
+            self._gate_checking.add(session_id)
+            try:
+                for key, checks in buckets.items():
+                    members = [(st_id, info) for st_id, info in known.items()
+                               if (info.get('agent') or '') in key]
+                    if not members or not all(
+                            cur_status.get(st_id) in ('completed', 'failed')
+                            for st_id, _i in members):
+                        continue                  # 名单内还有子代理未结束：等下一拍
+                    if all((st_id, session_id) in done for st_id, _i in members):
+                        continue                  # 已核对过
+                    group = {'agents': key, 'checks': checks,
+                             'subagent_segments': [], 'trace': []}
+                    from utils import verifier as _v
+                    run = _v._run_group(opencode_client, group, directory,
+                                        self._deleg_gate_model(session_id),
+                                        session_id,
+                                        _v.DEFAULT_TIMEOUT_SEC, _v.DEFAULT_STALL_SEC)
+                    for st_id, _i in members:
+                        done[(st_id, session_id)] = True
+                    cached = self._deleg_gate_results.setdefault(session_id, [])
+                    cached.extend(r['results'])
+                    failed_names = [r['name'] for r in r['results']
+                                    if r['status'] == 'failed']
+                    if not failed_names:
+                        continue
+                    # gate_retry 语义在终态合并处生效；这里只做「未开修正→立即停」
+                    bid = self._deleg_gate_batch(session_id)
+                    retry_on = False
+                    if bid:
+                        retry_on = bool(self._batch_gate_retry_flag(bid))
+                    if retry_on:
+                        logger.info(
+                            'delegation gate failed (deferred to gate_retry) '
+                            'sid=%s agents=%s checks=%s', session_id,
+                            ','.join(key), ','.join(failed_names))
+                        continue
+                    logger.warning(
+                        'delegation gate failed → stopping child sid=%s '
+                        'agents=%s checks=%s', session_id, ','.join(key),
+                        ','.join(failed_names))
+                    with _gdb() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE ai_chat_sessions SET cancel_requested = true "
+                                "WHERE id = %s AND status = 'running'",
+                                (session_id,))
+                        conn.commit()
+                    return                       # 已请求停止，本拍不再核对
+            finally:
+                self._gate_checking.discard(session_id)
+        except Exception:  # noqa: BLE001 —— 委派级门禁失败不影响主持久化
+            logger.exception('delegation gate check failed sid=%s', session_id)
+
+    def _deleg_gate_batch(self, session_id: str) -> str | None:
+        """子会话所属批任务 id（委派级门禁用；单行轻查）。"""
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT batch_id FROM ai_chat_sessions WHERE id = %s",
+                                (session_id,))
+                    row = cur.fetchone()
+            return row[0] if row else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _deleg_gate_model(self, session_id: str) -> str:
+        """委派级判官用批任务配置的模型（与主核对同源）。"""
+        bid = self._deleg_gate_batch(session_id)
+        if not bid:
+            return ''
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT model FROM ai_chat_batches WHERE id = %s", (bid,))
+                    row = cur.fetchone()
+            return row[0] or '' if row else ''
+        except Exception:  # noqa: BLE001
+            return ''
 
     def _build_reuse_directive(self, root_session_id: str,
                                agents: list) -> str:
@@ -2129,7 +2283,9 @@ class BatchWorker:
                 if (self.TOOL_STALL_TIMEOUT_SEC > 0
                         and tool_stall_start is not None
                         and now - tool_stall_start > self.TOOL_STALL_TIMEOUT_SEC):
-                    if self._subagent_progressing(msgs, baseline_ids, directory,
+                    if session_id in self._gate_checking:
+                        tool_stall_start = now   # 委派级判官核对中：豁免
+                    elif self._subagent_progressing(msgs, baseline_ids, directory,
                                                   child_sigs):
                         tool_stall_start = now   # 子代理还活着：顺延等待
                     else:
@@ -2366,6 +2522,7 @@ class BatchWorker:
                               oc_session_id: str, assistant_msg: dict | None,
                               directory: str = '',
                               generation: int | None = None,
+                              force: bool = False,
                               turn_label: str = '',
                               reuse_agents: list | None = None):
         """Persist the FULL conversation: the user prompt + every assistant
@@ -2399,6 +2556,15 @@ class BatchWorker:
             except Exception:
                 raw = []
 
+            # 快照短路（2026-09-30 批满负载优化）：消息列表与上次持久化完全
+            # 一致时跳过整棵子代理树的 REST 重拉与全量 upsert——稳定期（长
+            # 工具执行）的周期持久化从每次全量工作退化为一次哈希比较。收尾
+            # 持久化传 force=True 不短路。
+            sig = _json.dumps(raw, ensure_ascii=False, default=str)
+            if not force and self._persist_sig.get(session_id) == sig:
+                return
+            self._persist_sig[session_id] = sig
+
             # 阶段一：递归发现整棵子代理树 + 各自的当前状态。
             known: dict = {}
             child_messages: dict = {}
@@ -2421,6 +2587,11 @@ class BatchWorker:
                                     turn_no=generation or 0,
                                     turn_label=turn_label,
                                     reuse_agents=reuse_agents)
+            # 委派级门禁（2026-09-30）：定向 verifier 组在名单内子代理全部
+            # 终态时提前判定；未开 gate_retry 且不过 → 置 cancel_requested
+            # 立即停止（用户语义：校验不过别让它继续跑完整轮）。
+            if reuse_agents or True:   # 定向组不依赖 subagent_reuse 名单
+                self._maybe_check_delegation_gate(session_id, directory, known)
             # 顶层内容里的嵌套 subtask_use 带 segmentCount（气泡徽标）——
             # 必须在 _write_subtask 合并任务段之后读，才是本次持久化的最新值
             subtask_segments: dict = {}

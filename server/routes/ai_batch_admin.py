@@ -265,6 +265,43 @@ def preview_child_file(batch_id, sid):
     return jsonify(read_file_preview(abs_path))
 
 
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/tool-calls')
+@require_permission('admin.ai_chat_admin')
+def child_tool_calls(batch_id, sid):
+    """动作账本查询（管理面）：该子会话及其子代理树的工具调用时间线。
+    工具调用面板（调试信息）从 AI 会话页迁到管理页时的数据端点。"""
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    oc_sid = sess.get('opencode_session_id')
+    if not oc_sid:
+        return jsonify({'calls': []})
+    from db import get_db as _get_db
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s",
+                (sid,),
+            )
+            ids = [oc_sid] + [r[0] for r in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT oc_session_id, subtask_id, tool, args_text, state, occurred_at
+                FROM agent_tool_calls
+                WHERE oc_session_id = ANY(%s)
+                ORDER BY occurred_at, id
+                """,
+                (ids,),
+            )
+            calls = [
+                {'ocSessionId': r[0], 'subtaskId': r[1], 'tool': r[2],
+                 'args': (r[3] or '')[:2000], 'state': r[4],
+                 'occurredAt': r[5].isoformat() if r[5] else None}
+                for r in cur.fetchall()
+            ]
+    return jsonify({'calls': calls})
+
+
 @ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files/download')
 @require_permission_sse('admin.ai_chat_admin')
 def download_child_file(batch_id, sid):
@@ -375,10 +412,11 @@ def child_file_diff(batch_id, sid):
         return jsonify({'error': 'bad path', 'code': 'BAD_PATH'}), 400
     return jsonify(file_diff(sess['workspace_path'], rel))
 
-@ai_batch_admin_bp.get('/batches/<batch_id>/deliveries')
+@ai_batch_admin_bp.get('/<batch_id>/deliveries')
 @require_permission('admin.ai_chat_admin')
 def deliveries(batch_id):
-    """outbox 投递状态（P1 §10 管理面）。"""
+    """outbox 投递状态（P1 §10 管理面）。前缀已含 batches，路由不要再写一层
+    （此前 /batches/<id>/deliveries 拼成双前缀，前端调用恒 404）。"""
     from utils.delivery_outbox import list_outbox
     return jsonify({'batchId': batch_id, 'deliveries': list_outbox(batch_id)})
 

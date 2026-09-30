@@ -12,7 +12,7 @@ import {
   CopyDocument, RefreshRight, Refresh, ArrowRight, ArrowDown, Delete, Brush, Clock,
   ChatDotRound, Tickets, Search, BellFilled, MuteNotification, WarningFilled, Link,
   DataAnalysis, FolderAdd,
-  Folder, FolderOpened, Collection, Timer, Monitor, DataLine, Files, Aim, Tools,
+  Folder, FolderOpened, Collection, Timer, Monitor, DataLine, Files, Aim,
 } from '@element-plus/icons-vue'
 import { Bubble, Thinking } from 'vue-element-plus-x'
 import 'vue-element-plus-x/styles/index.css'
@@ -1171,56 +1171,7 @@ async function refreshChanges() {
   } finally { changesLoading.value = false }
 }
 
-// ---- 工具调用侧栏（agent_tool_calls 账本：根会话 + 全部子代理的时间线）----
-// 落账时机：批任务=worker 持久化时、交互会话=回合收敛时 → 进行中回合需要
-// 手动刷新（🔄）。默认最新在上；args 摘要点击展开完整参数文本。
-const TOOLPANEL_KEY = 'check-manage:ai-chat:toolpanel'
-const toolPanelOpen = ref(localStorage.getItem(TOOLPANEL_KEY) === '1')
-function toggleToolPanel() {
-  toolPanelOpen.value = !toolPanelOpen.value
-  localStorage.setItem(TOOLPANEL_KEY, toolPanelOpen.value ? '1' : '0')
-  if (toolPanelOpen.value && activeId.value
-      && !(store.toolCalls[activeId.value]?.length)) {
-    void store.loadToolCalls(activeId.value)
-  }
-}
-// 会话切换：侧栏开着就换数据（无缓存才拉）
-watch([activeId, toolPanelOpen], ([id, open]) => {
-  if (id && open && !(store.toolCalls[id]?.length)) {
-    void store.loadToolCalls(id)
-  }
-})
-const toolFilter = ref('')
-const expandedArgs = ref<number | null>(null)
-const toolCallRows = computed(() => {
-  const rows = activeId.value ? store.toolCalls[activeId.value] ?? [] : []
-  const filtered = toolFilter.value ? rows.filter(c => c.tool === toolFilter.value) : rows
-  return filtered.slice().reverse()  // 账本按时间正序落库 → 展示最新在上
-})
-const toolNames = computed(() =>
-  [...new Set((activeId.value ? store.toolCalls[activeId.value] ?? [] : []).map(c => c.tool))].sort())
-const toolCallsLoading = computed(() =>
-  activeId.value ? !!store.toolCallsLoading[activeId.value] : false)
-async function refreshToolCalls() {
-  if (!activeId.value) return
-  await store.loadToolCalls(activeId.value, toolFilter.value || undefined)
-}
-watch(toolFilter, () => { void refreshToolCalls() })
-function toolCallTime(iso: string | null) {
-  return iso ? iso.slice(5, 19).replace('T', ' ') : ''
-}
-function toolCallState(state: string | null) {
-  if (state === 'completed') return '完成'
-  if (state === 'running') return '运行中'
-  if (state === 'error') return '出错'
-  return state || '—'
-}
-function argsSingleLine(text: string | null) {
-  return (text || '').replace(/\s+/g, ' ').slice(0, 120)
-}
-function toggleArgs(id: number) {
-  expandedArgs.value = expandedArgs.value === id ? null : id
-}
+// 工具调用面板（调试信息）2026-09-30 移至管理页 /admin/ai-batches（ToolCallsPanel + 子任务「工具调用」入口）。
 
 // 折叠的「目录/ (N 个新文件)」条目可就地展开看里面的文件（点击懒加载）。
 const expandedDirs = reactive<Record<string, { open: boolean; loading: boolean; files: ChangedFile[] }>>({})
@@ -1525,7 +1476,7 @@ function onKey(e: Event) {
     />
 
     <!-- 对话主区 -->
-    <section class="ai-chat__main" :class="{ 'ai-chat__main--toolpanel': toolPanelOpen }">
+    <section class="ai-chat__main">
       <div v-if="analysisTargetSid" class="ai-chat__analysis-banner" data-test="analysis-banner">
         <ElIcon><Link /></ElIcon>
         轨迹分析会话 · 原会话
@@ -1845,50 +1796,7 @@ function onKey(e: Event) {
         </transition>
       </div>
 
-      <!-- 工具调用侧栏（agent_tool_calls 账本：根会话 + 全部子代理的时间线；
-           落账时机=批持久化/交互收敛，进行中回合点 🔄 刷新） -->
-      <aside v-if="activeId && toolPanelOpen" class="ai-chat__toolpanel" data-test="tool-calls-panel">
-        <div class="ai-toolcalls">
-          <div class="ai-toolcalls__title">
-            <span>工具调用 <span v-if="toolCallRows.length" class="ai-toolcalls__count">({{ toolCallRows.length }})</span></span>
-            <button
-              class="ai-toolcalls__refresh" type="button"
-              title="刷新工具调用" aria-label="刷新工具调用"
-              :disabled="toolCallsLoading"
-              @click="refreshToolCalls"
-            >
-              <ElIcon :class="{ spin: toolCallsLoading }"><Refresh /></ElIcon>
-            </button>
-          </div>
-          <div class="ai-toolcalls__bar">
-            <ElSelect v-model="toolFilter" size="small" clearable filterable
-                      placeholder="全部工具" style="width: 160px" data-test="tool-calls-filter">
-              <ElOption v-for="t in toolNames" :key="t" :label="t" :value="t" />
-            </ElSelect>
-          </div>
-          <div v-if="!toolCallRows.length" class="ai-toolcalls__empty">
-            暂无记录（点击 🔄 刷新；进行中回合在收敛后落账）
-          </div>
-          <div v-else class="ai-toolcalls__list">
-            <div v-for="c in toolCallRows" :key="c.id" class="toolcall"
-                 :data-state="c.state || ''" @click="toggleArgs(c.id)">
-              <div class="toolcall__row">
-                <span class="toolcall__time">{{ toolCallTime(c.occurredAt) }}</span>
-                <ElTag size="small" class="toolcall__tool">{{ c.tool }}</ElTag>
-                <span class="toolcall__agent" :class="{ 'toolcall__agent--sub': !!c.agent }">
-                  {{ c.agent || '主会话' }}
-                </span>
-                <span class="toolcall__state">{{ toolCallState(c.state) }}</span>
-              </div>
-              <div v-if="expandedArgs === c.id && c.argsPreview" class="toolcall__args"
-                   @click.stop>{{ c.argsPreview }}</div>
-              <div v-else-if="c.argsPreview" class="toolcall__args-preview">
-                {{ argsSingleLine(c.argsPreview) }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
+      <!-- 工具调用面板（调试信息）已移至管理页 /admin/ai-batches 的子任务「工具调用」入口（2026-09-30） -->
 
       <!-- 批任务子会话：显示该批次的 Agent/模型与运行状态（普通会话由底部选择器自管） -->
       <div v-if="activeBatchInfo" class="batch-bar" :class="`batch-bar--${activeBatchInfo.status}`">
@@ -1951,13 +1859,6 @@ function onKey(e: Event) {
                   :disabled="streaming || !activeId" :loading="compacting"
                   aria-label="压缩上下文" title="压缩上下文（用小模型总结历史，释放上下文空间）"
                   @click="onCompact"
-                />
-                <ElButton
-                  class="composer-add" :icon="Tools" circle text
-                  :class="{ 'composer-add--active': toolPanelOpen }"
-                  :disabled="!activeId"
-                  aria-label="工具调用面板" title="工具调用（本会话 + 全部子代理）"
-                  @click="toggleToolPanel"
                 />
                 <ElDropdown trigger="click" @command="handleAddMenu">
                   <ElButton

@@ -117,17 +117,24 @@ export const BaizeSubagentReusePlugin = async () => ({
       // callId 随 lookup 上报：平台登记意图（callID → agent），使 after
       // 阶段的 pin 不依赖子代理行的持久化时序（复核竞态修复）
       const data = await lookup(input.sessionID, agent, input.callID || '')
+      // 复用可观测性（2026-09-30）：每次 task 委派都留一行结果日志——注入了
+      // 什么/为什么没注入，serve 日志可直接回答"这次委派是否复用"。
+      const desc = `parent=${input.sessionID} agent=${agent} call=${(input.callID || '').slice(0, 12)}`
       // pin 权威（生产"概率性不复用"修复 2026-09-29）：平台有 pin 时覆盖
       // 模型自带的 task_id——模型常会回显/编造上一轮 id，原"模型指定即放行"
       // 会绕过复用；平台无 pin（首次委派）才保留模型的值。
       if (data && data.enabled && data.taskId) {
-        if (args.task_id && args.task_id !== data.taskId) {
-          _log('override model-specified task_id', args.task_id, '→', data.taskId)
-        }
+        const via = args.task_id && args.task_id !== data.taskId
+          ? 'override(model-specified)' : 'injected'
+        _log(`reuse ${via}: task_id=${data.taskId} ${desc}`)
         args.task_id = data.taskId
         return
       }
-      if (args.task_id) return  // 无 pin：保留模型指定
+      if (args.task_id) {
+        _log(`reuse model-specified (no platform pin): task_id=${args.task_id} ${desc}`)
+        return
+      }
+      _log(`reuse MISS → new session ${desc} reason=${(data && data.reason) || (data ? 'no-pin' : 'lookup-failed')}`)
     } catch { /* 平台不可达 → 放行新建，不阻断委派 */ }
   },
   async 'tool.execute.after'(input, output) {

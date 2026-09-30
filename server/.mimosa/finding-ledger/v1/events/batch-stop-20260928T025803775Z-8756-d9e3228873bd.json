@@ -1,0 +1,262 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20260928T025803775Z-8756-d9e3228873bd",
+  "runId": "20260928T025803775Z-8756-d9e3228873bd",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpyhvaffxd",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpyhvaffxd'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpx5exv6_f",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpx5exv6_f'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpwlxcz6en",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpwlxcz6en'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpumgqwoq_",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpumgqwoq_'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpsjheq0xj",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpsjheq0xj'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmppxubxypk",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmppxubxypk'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpel88atym",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpel88atym'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpdohlz1p3",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpdohlz1p3'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpayl6h710",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpayl6h710'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpaas_paxj",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpaas_paxj'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp9pv_7ky0",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp9pv_7ky0'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp8qw48fs1",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp8qw48fs1'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp6mr29yur",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp6mr29yur'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp5fhmr3dy",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp5fhmr3dy'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp25nwjt5z",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp25nwjt5z'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "bash_discovery_incomplete",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp0ylpls1m",
+        "detail": "EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp0ylpls1m'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_partial",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpyhvaffxd",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpyhvaffxd'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpx5exv6_f",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpx5exv6_f'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpwlxcz6en",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpwlxcz6en'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpumgqwoq_",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpumgqwoq_'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpsjheq0xj",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpsjheq0xj'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmppxubxypk",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmppxubxypk'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpel88atym",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpel88atym'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpdohlz1p3",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpdohlz1p3'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpayl6h710",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpayl6h710'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmpaas_paxj",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmpaas_paxj'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp9pv_7ky0",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp9pv_7ky0'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp8qw48fs1",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp8qw48fs1'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp6mr29yur",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp6mr29yur'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp5fhmr3dy",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp5fhmr3dy'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp25nwjt5z",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp25nwjt5z'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-enumerate",
+        "target": "backups/tmp0ylpls1m",
+        "detail": "bash_discovery_incomplete: EPERM: operation not permitted, scandir 'E:\\wsl\\check\\check-manage\\server\\backups\\tmp0ylpls1m'",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline",
+        "target": ".",
+        "detail": "baseline_partial: baseline capture had enumeration or snapshot errors",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "77a3d52ee9e07493b7302ed714e982d730b232c0",
+  "diffHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "rulesVersion": "unavailable",
+  "sessionHash": "c47000ee98963a7bf67ed52d11902ca5ee813bec365799a01769265fd3ff51f2",
+  "reportRef": ".mimosa/reports/task-review-sess_ca187634-a6d9-419f-a52d-a7932e1a5c2a-20260928T025803775Z-8756-d9e3228873bd.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-09-28T02:58:04.497Z"
+}

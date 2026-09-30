@@ -35,11 +35,30 @@
         <el-alert v-if="result.truncated" type="info" :closable="false" show-icon
                   :title="`仅显示最近 ${result.messages.length} 条，共 ${result.total} 条`" />
         <el-empty v-if="!result.messages.length" description="子代理还没有对话记录" />
-        <div
-          v-for="m in result.messages" :key="m.id"
-          class="subtask-bubble__msg"
-          :class="{ 'subtask-bubble__msg--boundary': boundaryOf(m) }"
+        <template
+          v-for="(m, mi) in result.messages" :key="m.id"
         >
+          <!-- 会话复用分段折叠：历史段默认收起为一行占位，点击展开 -->
+          <button
+            v-if="collapsedHeaderOf(mi)"
+            type="button"
+            class="subtask-bubble__segment subtask-bubble__segment--collapsed"
+            data-test="segment-collapsed"
+            @click="toggleSegment(collapsedHeaderOf(mi)!.ord)"
+          >
+            <span class="subtask-bubble__segment-line" />
+            <span class="subtask-bubble__segment-tag">
+              任务段 {{ collapsedHeaderOf(mi)!.ord + 1 }}
+              <template v-if="collapsedHeaderOf(mi)!.turn != null"> · 第 {{ collapsedHeaderOf(mi)!.turn + 1 }} 轮派发</template>
+              · {{ collapsedCount(collapsedHeaderOf(mi)!.ord) }} 条消息 · 点击展开
+            </span>
+            <span class="subtask-bubble__segment-line" />
+          </button>
+          <div
+            v-if="segmentVisible(segmentOrdAt(mi))"
+            class="subtask-bubble__msg"
+            :class="{ 'subtask-bubble__msg--boundary': boundaryOf(m) }"
+          >
           <!-- 会话复用：每条 user 消息 = 一次委派任务的起点，渲染任务段边界 -->
           <div v-if="boundaryOf(m)" class="subtask-bubble__segment">
             <span class="subtask-bubble__segment-line" />
@@ -72,6 +91,7 @@
             />
           </template>
         </div>
+        </template>
       </template>
     </div>
   </div>
@@ -126,6 +146,55 @@ function boundaryOf(m: { id: string; role: string }): SubtaskSegment | null {
     return segments.value.find((s) => s.firstMsgId === m.id) || null
   }
   return null
+}
+
+// ---- 会话复用分段折叠（2026-09-30）：默认只展开最新段，历史段折叠为
+// 一行占位（显示轮次与消息数），点击按需展开。expandAll 后不再自动收起。----
+const expandedSegments = ref<Set<number>>(new Set())
+const latestOrd = computed<number | null>(() => {
+  const segs = segments.value
+  return segs.length ? segs[segs.length - 1].ord : null
+})
+
+/** 消息下标 → 所属段 ord（-1 = 最新段开始之前的头部消息）。 */
+function segmentOrdAt(index: number): number {
+  const msgs = result.value?.messages || []
+  let cur = -1
+  for (let i = 0; i <= index && i < msgs.length; i++) {
+    const b = boundaryOf(msgs[i])
+    if (b) cur = b.ord
+  }
+  return cur
+}
+
+function segmentVisible(ord: number): boolean {
+  if (latestOrd.value == null) return true          // 无分段数据：全部显示
+  if (ord === latestOrd.value) return true          // 最新段恒显示
+  return expandedSegments.value.has(ord)            // 历史段按需展开
+}
+
+/** 折叠段的段首消息（用于渲染占位行）；非折叠段首返回 null。 */
+function collapsedHeaderOf(index: number): SubtaskSegment | null {
+  const b = boundaryOf(result.value?.messages?.[index] || { id: '', role: '' })
+  if (!b) return null
+  if (segmentVisible(b.ord)) return null            // 段可见：正常渲染分隔条
+  return b
+}
+
+function collapsedCount(ord: number): number {
+  const msgs = result.value?.messages || []
+  let n = 0
+  for (let i = 0; i < msgs.length; i++) {
+    if (segmentOrdAt(i) === ord) n += 1
+  }
+  return n
+}
+
+function toggleSegment(ord: number) {
+  const next = new Set(expandedSegments.value)
+  if (next.has(ord)) next.delete(ord)
+  else next.add(ord)
+  expandedSegments.value = next
 }
 async function copyTaskId() {
   try {
@@ -295,6 +364,21 @@ async function onCompact() {
   margin: 10px 0 2px; color: var(--el-text-color-secondary); font-size: 11px;
 }
 .subtask-bubble__segment-line { flex: 1; height: 1px; background: var(--el-border-color-lighter); }
+.subtask-bubble__segment--collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.subtask-bubble__segment--collapsed:hover .subtask-bubble__segment-tag {
+  color: var(--el-color-primary);
+}
 .subtask-bubble__segment-tag {
   font-weight: 600; color: var(--el-color-warning);
   background: var(--el-color-warning-light-9);
