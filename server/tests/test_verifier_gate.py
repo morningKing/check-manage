@@ -65,11 +65,38 @@ def _seed_child(db_conn, user_id, *, oc_sid, with_reply=True, with_trace=True):
     return sid
 
 
-def _register(sid, name='结论含标记', rubric='回复包含 DONE-MARK'):
+def _register(sid, name='结论含标记', rubric='回复包含 DONE-MARK', subagents=None):
     from utils.agent_ledger import register_session_expectations
     from db import get_db
-    return register_session_expectations(
-        sid, [{'name': name, 'check_type': 'verifier', 'rubric': rubric}], get_db=get_db)
+    check = {'name': name, 'check_type': 'verifier', 'rubric': rubric}
+    if subagents:
+        check['subagents'] = subagents
+    return register_session_expectations(sid, [check], get_db=get_db)
+
+
+def _seed_subtask(db_conn, sid, oc_sid, *, agent='dev', subtask_id=None,
+                  msgs=(('user', '报告一号'), ('assistant', '一号OK'))):
+    """种子一个子代理会话（ai_chat_subtasks）与其消息，返回 subtask_id。"""
+    from db import get_db
+    st_id = subtask_id or f'ses_{str(uuid.uuid4())[:8]}'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status) "
+                "VALUES (%s, %s, %s, 'completed')", (st_id, sid, agent))
+            for i, (role, text) in enumerate(msgs):
+                cur.execute(
+                    "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                    "VALUES (%s, %s, %s, %s::jsonb)",
+                    (f'sm-{st_id[4:12]}-{i}', st_id, role,
+                     json.dumps([{'type': 'text', 'text': text}])))
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                "  subtask_id, agent, part_id, tool, args_text, state) "
+                "VALUES (%s, %s, %s, %s, %s, 'read', 'filePath=src/a.py', 'completed')",
+                (oc_sid, sid, st_id, agent, f'sp-{st_id[4:12]}'))
+    db_conn.commit()
+    return st_id
 
 
 class _FakeClient:
@@ -124,8 +151,88 @@ def test_collect_materials_and_noop(db_conn, user_id):
     assert verifier.collect_materials(sid, get_db=get_db) is None  # 未登记期望
     _register(sid)
     m = verifier.collect_materials(sid, get_db=get_db)
-    assert 'DONE-MARK' in m['reply'] and m['trace'][0]['tool'] == 'write'
-    assert m['checks'] == [{'name': '结论含标记', 'rubric': '回复包含 DONE-MARK'}]
+    # 无 subagents → 单一全树组（agents=None）
+    assert len(m['groups']) == 1 and m['groups'][0]['agents'] is None
+    g = m['groups'][0]
+    assert 'DONE-MARK' in g['reply'] and g['trace'][0]['tool'] == 'write'
+    assert g['checks'] == [{'name': '结论含标记', 'rubric': '回复包含 DONE-MARK'}]
+
+
+def test_collect_materials_subagent_grouping(db_conn, user_id):
+    """定向分组：subagents 名单 → 材料=该 agent 名下子代理会话消息+其轨迹；
+    无名单期望独立成全树组；同一名单合并为一组。"""
+    from utils import verifier
+    from db import get_db
+    sid = _seed_child(db_conn, user_id, oc_sid='oc-mg')
+    st_dev = _seed_subtask(db_conn, sid, 'oc-mg', agent='dev',
+                           msgs=(('user', '报告一号'), ('assistant', '一号OK')))
+    _seed_subtask(db_conn, sid, 'oc-mg', agent='qa',
+                  subtask_id='ses_qa_group', msgs=(('user', 'qa 任务'),))
+    _register(sid)  # 全树组
+    _register(sid, name='dev 语义', rubric='dev 回答一号OK', subagents=['dev'])
+    _register(sid, name='dev again', rubric='另一条 dev 期望', subagents=['dev'])
+    _register(sid, name='qa 语义', rubric='qa 完成', subagents=['qa'])
+    m = verifier.collect_materials(sid, get_db=get_db)
+    groups = {tuple(g['agents'] or []): g for g in m['groups']}
+    assert set(groups.keys()) == {(), ('dev',), ('qa',)}
+    tree, dev, qa = groups[()], groups[('dev',)], groups[('qa',)]
+    # 全树组：最终回复 + 全树轨迹（含子代理行）
+    assert 'DONE-MARK' in tree['reply']
+    assert len(tree['trace']) == 3          # 根 write + dev read + qa read
+    # dev 定向组：两条期望合并一组、材料只有 dev 的子代理消息与其轨迹
+    assert [c['name'] for c in dev['checks']] == ['dev 语义', 'dev again']
+    assert [s['subtask_id'] for s in dev['subagent_segments']] == [st_dev]
+    dev_text = json.dumps(dev['subagent_segments'], ensure_ascii=False)
+    assert '报告一号' in dev_text and '一号OK' in dev_text and 'qa 任务' not in dev_text
+    assert len(dev['trace']) == 1 and dev['trace'][0]['tool'] == 'read'
+    # qa 定向组互不混料
+    assert 'qa 任务' in json.dumps(qa['subagent_segments'], ensure_ascii=False)
+
+
+def test_build_prompt_subagent_group(db_conn, user_id):
+    """定向组 prompt：含子代理会话消息与 agent 标注；空子代理时给证据提示。"""
+    from utils import verifier
+    group = {'agents': ('dev',), 'checks': [{'name': 'n', 'rubric': 'r'}],
+             'subagent_segments': [{'agent': 'dev', 'subtask_id': 'ses_x',
+                                    'messages': [{'role': 'user', 'text': '任务A'},
+                                                 {'role': 'assistant', 'text': '完成A'}]}],
+             'trace': [{'oc': 'ses_x', 'tool': 'read', 'args': 'f', 'state': 'completed',
+                        'at': None}]}
+    p = verifier.build_verifier_prompt(group)
+    assert '子代理 dev' in p and '任务A' in p and '完成A' in p and 'read' in p
+    empty = verifier.build_verifier_prompt(
+        {'agents': ('dev',), 'checks': group['checks'],
+         'subagent_segments': [], 'trace': []})
+    assert '没有发现任何子代理会话' in empty
+
+
+def test_run_verifier_multi_group(db_conn, user_id):
+    """分组核对：全树组 + 定向组各一轮判官会话；verdict 行带 agent 标注。
+    组内正常判定 failed 不是组错误——整体 status 仍 completed（failed 由
+    merge 聚合为 gate failed）。"""
+    from utils import verifier
+    from db import get_db
+    sid = _seed_child(db_conn, user_id, oc_sid='oc-m9')
+    _seed_subtask(db_conn, sid, 'oc-m9', agent='dev')
+    _register(sid)
+    _register(sid, name='dev 语义', rubric='dev 回答正确', subagents=['dev'])
+    v_tree = json.dumps({'results': [{'name': '结论含标记', 'verdict': 'passed',
+                                      'reasons': ['ok'], 'evidence': 'r1'}]},
+                        ensure_ascii=False)
+    v_dev = json.dumps({'results': [{'name': 'dev 语义', 'verdict': 'failed',
+                                     'reasons': ['回答不符'], 'evidence': 'msg#2'}]},
+                       ensure_ascii=False)
+    fake = _FakeClient([_finished(v_tree), _finished(v_dev)])
+    run = verifier.run_verifier(sid, workspace_path='C:\\ver-e2e\\x', model='p/m',
+                                client=fake, get_db=get_db)
+    assert run['status'] == 'completed' and run['error'] is None
+    by_name = {r['name']: r for r in run['results']}
+    assert by_name['结论含标记']['status'] == 'passed'
+    assert by_name['结论含标记']['agent'] is None
+    assert by_name['dev 语义']['status'] == 'failed'
+    assert by_name['dev 语义']['agent'] == 'dev'
+    assert len(fake.created) == 2            # 每组一次判官会话
+
 
 
 def test_run_verifier_completed(db_conn, user_id):

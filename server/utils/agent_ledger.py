@@ -740,14 +740,16 @@ def _expectation_desc(r: dict) -> str:
 def gate_failure_message(gate_result: dict) -> str:
     """把 failed 的核对结果压成子任务 error_message(action_gate: 前缀 +
     逐条缺失项),沿用对账器"带准确原因失败"的风格。verifier 条目渲染
-    判官理由(经 _maybe_gate_retry 进定向修复提示)。"""
+    判官理由(经 _maybe_gate_retry 进定向修复提示);定向组(指定 subagent)
+    的条目带 [agent=名单] 前缀。"""
     missed = [r for r in gate_result.get('results', [])
               if r.get('status') == 'failed']
     parts = []
     for r in missed:
         if r.get('kind') == 'verifier':
             reasons = '; '.join(r.get('reasons') or [])[:200]
-            parts.append(f"{r['name']}(判官未通过: {reasons})")
+            scope = f"[agent={r['agent']}]" if r.get('agent') else ''
+            parts.append(f"{r['name']}{scope}(判官未通过: {reasons})")
         else:
             parts.append(f"{r['name']}(需 {_expectation_desc(r)},"
                          f"实际命中 {r['evidence']}/{r['min_count']})")

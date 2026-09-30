@@ -94,6 +94,8 @@
             </div>
             <ElInput v-if="c.check_type === 'verifier'" v-model="c.rubric" type="textarea" :rows="3"
                      placeholder="判定要点（≤2000 字，写给判官核对）" />
+            <ElInput v-if="c.check_type === 'verifier'" v-model="c.subagents"
+                     placeholder="适用子代理(可选,逗号分隔;留空=核对任务会话整体,填写=只核对这些子代理的会话与动作)" />
             <template v-else>
               <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
               <ElInput v-model="c.subagents"
@@ -345,21 +347,24 @@ async function submit() {
   }
   // 动作门禁:至少要有一条"名称+正则/判定要点"齐全的期望才随请求下发
   // tool 行 = {name, check_type:'tool', tool, args_pattern, min_count[, subagents]}
-  // verifier 行 = {name, check_type:'verifier', rubric}
+  // verifier 行 = {name, check_type:'verifier', rubric[, subagents]}
+  //   (subagents 填写 = 判官只核对指定子代理的会话消息与动作;留空 = 任务会话整体)
   let action_checks: any[] | null = null
   if (gateEnabled.value) {
     const rows: any[] = []
     for (const c of gateChecks.value) {
+      const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
       if (c.check_type === 'verifier') {
         if (c.name.trim() && c.rubric.trim()) {
-          rows.push({ name: c.name.trim(), check_type: 'verifier', rubric: c.rubric.trim() })
+          const row: any = { name: c.name.trim(), check_type: 'verifier', rubric: c.rubric.trim() }
+          if (subs.length) row.subagents = subs  // 判官定向:只核对这些子代理
+          rows.push(row)
         }
         continue
       }
       if (!c.name.trim() || !c.args_pattern.trim()) continue
       const row: any = { name: c.name.trim(), check_type: 'tool', tool: c.tool || 'bash',
         args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
-      const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
       if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
       rows.push(row)
     }

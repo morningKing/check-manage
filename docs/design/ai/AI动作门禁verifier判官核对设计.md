@@ -61,7 +61,8 @@
   - `name`（必填，≤100 字，沿用现有规则）；
   - `rubric`（必填，判定要点自然语言，≤2000 字；登记即冻结原文，核对时原文进 prompt）；
   - `tool`/`args_pattern`/`min_count` 对该类型无意义：**传入即 400**（校验器明确报错，不带病入库）；落库时 `min_count` 由登记规范化固定为 1（非用户输入）；
-  - `scope`/`subagents`/`apply_to` 沿用现有语义（apply_to 定向到子任务；scope 对 verifier 不参与匹配，材料恒为子会话全树轨迹）。
+  - `scope`/`apply_to` 沿用现有语义（apply_to 定向到子任务；scope 对 verifier 不参与匹配）。
+  - `subagents`（2026-09-30 启用，核对粒度定向）：**留空 = 全树组**——材料为子任务最终回复全文 + 全树轨迹（现状）；**填写名单 = 定向组**——材料限定到名单内 agent 的全部子代理会话消息（`ai_chat_subtask_messages`，按 seq 时序，每会话封顶 40 条/500 字/条）与这些子代理的工具调用轨迹，verdict 即「该组材料满足 rubric」的 all-of 判定。同一名单组合为一组、每组一次判官会话（结果行带 `agent` 标注，失败文案渲染 `[agent=名单]` 前缀）；全树组至多一个。判定时机不变：任务子会话每轮终态各核对一轮（子代理终态即判无增益——verdict 最终仍要在任务终态聚合进 gate，提前判只引入异步判官与轮询路径的并发纠缠）。
 - 落库：`action_expectations.check_type='verifier'`，`effect_spec = {"rubric": ...}`，`tool='verifier'`、`args_pattern=''`——沿袭 file/db_record 行「tool 列存 check_type 兜底」的既有惯例（两列 NOT NULL，无需 DDL 迁移）。
 - `validate_checks` 扩展；`action-checks/extract` 预填器的 system prompt 升级为可建议 verifier 型期望（输出 `rubric` 要点），字段白名单加 `rubric`。
 
@@ -84,7 +85,7 @@
    - rubric 清单：全部 verifier 期望按名编号；
    - 组装为单个 prompt（含 JSON 契约示例）。
 4. `run_verifier`：`create_session(directory=子会话工作区)` → `send_prompt_async` → 轮询（2s 间隔）至回合结束 → 取最后 assistant 消息文本 → 解析 JSON。
-5. **一次会话判全部 verifier 期望**：材料按名编号、输出按名拆分——每子会话恒定一次 verifier 调用。
+5. **按粒度分组判定**（2026-09-30 起）：全树组一次会话判其全部期望（材料按名编号、输出按名拆分）；定向组（subagents 名单）按名单组合各一次会话、材料为该组子代理会话消息+轨迹。每子会话的判官会话数 = 1 + 定向名单组合数（通常 1~2），每组独立超时/停滞预算，agent 可用性预检一次全组共用。
 
 ## 8. 预算与防失控
 
