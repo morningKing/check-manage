@@ -1,6 +1,6 @@
 from unittest.mock import patch
-import seed_kefu
-from seed_kefu import seed_kefu_instance, seed_kefu_demo, DEMO_INSTANCE, DEMO_FAQ
+import scripts.seed_kefu as seed_kefu
+from scripts.seed_kefu import seed_kefu_instance, seed_kefu_demo, DEMO_INSTANCE, DEMO_FAQ
 
 
 def test_seed_creates_when_absent():
@@ -52,7 +52,7 @@ def test_demo_constants_shape():
 
 
 def test_seed_demo_uses_demo_constants():
-    with patch('seed_kefu.seed_kefu_instance', return_value=True) as m:
+    with patch('scripts.seed_kefu.seed_kefu_instance', return_value=True) as m:
         result = seed_kefu_demo()
     assert result is True
     m.assert_called_once_with(DEMO_INSTANCE, DEMO_FAQ)

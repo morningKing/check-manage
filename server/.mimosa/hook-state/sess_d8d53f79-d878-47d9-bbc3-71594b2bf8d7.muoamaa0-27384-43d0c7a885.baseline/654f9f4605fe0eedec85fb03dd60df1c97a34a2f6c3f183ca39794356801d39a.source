@@ -70,3 +70,16 @@ def test_serve_env_passthrough(monkeypatch):
     assert env['OPENCODE_TOOL_TIMEOUT_MS'] == '20000'
     assert env['OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS'] == '300000'
     assert env['OPENCODE_GLOBAL_DIR']  # 原有钉死行为保持
+
+
+def test_plugin_template_has_leak_fix_and_attributable_logging():
+    """2026-09-30 泄漏修复与日志归因：会话删除清理计时器（在途工具不会触发
+    after → 计时器泄漏 → 对死会话补 abort 误杀新回合）；日志带时间戳与入参
+    摘要；慢完成（>30s）留归因日志。"""
+    src = plugin_source()
+    assert "type !== 'session.deleted'" in src            # 泄漏清理挂在删除事件
+    assert 'session.removed' in src                       # 兼容两种事件名
+    assert 'const ts = () => new Date().toISOString()' in src   # 时间戳
+    assert 'argsSummary' in src                           # 入参摘要（归因到具体文件等）
+    assert 'SLOW_COMPLETION_MS' in src                    # 慢完成归因日志
+    assert '(input, output)' in src                       # before 读 output.args

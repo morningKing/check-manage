@@ -1,5 +1,5 @@
 import pytest
-from migrate_kefu import migrate_kefu
+from scripts.migrate_kefu import migrate_kefu
 
 
 def _col_exists(cur, table, col):

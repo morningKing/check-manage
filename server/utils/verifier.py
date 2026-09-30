@@ -56,10 +56,13 @@ tools:
 而定）。你的职责：
 
 1. 逐条核对每条期望；需要文件证据时用 read/grep/list 在当前工作区取证；
-2. 每条给 verdict（"passed" 或 "failed"）、reasons（中文，逐条、具体）、
-   evidence（引用你实际打开的文件:行或轨迹/消息条目；禁止凭空断言）；
+2. 每条给 verdict（"passed" / "failed" / "inconclusive"）、reasons（中文，逐条、具体）、
+   evidence（引用你实际打开的文件:行或轨迹/消息条目；禁止凭空断言）。
+   材料不足以核实某条时（例如 rubric 要求多次委派但材料只见一次，或要求的
+   文件/消息不存在），verdict 给 "inconclusive" 并在 reasons 说明缺什么——
+   不要凭不完整的材料下 failed 结论；
 3. 只输出一个 JSON 对象（最后输出），形如：
-   {"results": [{"name": "<期望名>", "verdict": "passed|failed",
+   {"results": [{"name": "<期望名>", "verdict": "passed|failed|inconclusive",
                  "reasons": ["…"], "evidence": "…"}]}
    results 必须覆盖期望清单里的每一个 name，一个不多一个不少；
 4. 不修改任何文件；JSON 输出后立即结束，不要追加任何文字。
@@ -252,7 +255,7 @@ def parse_verdicts(text: str, expected_names: list) -> dict:
         if isinstance(entries, list):
             for e in entries:
                 if (isinstance(e, dict) and e.get('name') in expected_names
-                        and e.get('verdict') in ('passed', 'failed')):
+                        and e.get('verdict') in ('passed', 'failed', 'inconclusive')):
                     by_name[e['name']] = e
             break
     else:

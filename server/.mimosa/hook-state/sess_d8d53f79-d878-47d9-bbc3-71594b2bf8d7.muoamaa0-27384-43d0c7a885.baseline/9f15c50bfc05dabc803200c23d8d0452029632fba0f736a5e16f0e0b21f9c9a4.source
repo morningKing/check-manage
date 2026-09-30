@@ -1487,7 +1487,8 @@ def admin_get_child_session(batch_id: str, session_id: str) -> dict | None:
     with get_db() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
-                "SELECT s.id, s.status, s.workspace_path, b.user_id AS \"ownerUserId\" "
+                "SELECT s.id, s.status, s.workspace_path, s.opencode_session_id, "
+                "       b.user_id AS \"ownerUserId\" "
                 "  FROM ai_chat_sessions s "
                 "  JOIN ai_chat_batches b ON b.id = s.batch_id "
                 " WHERE s.id = %s AND s.batch_id = %s",

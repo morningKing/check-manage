@@ -61,7 +61,12 @@ function _cacheGet(sessionID) {
 
 async function lookup(sessionID, agent, callID) {
   const cached = _cacheGet(sessionID)
-  if (cached && !cached.agents.has(agent)) return { enabled: false }  // 缓存已判非复用 agent
+  // 缓存负判定只认「确定性拒绝」（not_enabled/no_agent——名单没配这类稳定
+  // 结论）；unresolved（父会话反查失败，DB 瞬断/落库窗口）不缓存——固化它
+  // 会把瞬断窗口内的强制注入停掉 120s（生产"概率性不复用"根因之一）。
+  if (cached && !cached.agents.has(agent)) {
+    if (cached.negative && cached.negative.has(agent)) return { enabled: false }
+  }
   const r = await _fetchJson(
     `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`)
   if (!r.ok) {
@@ -73,9 +78,17 @@ async function lookup(sessionID, agent, callID) {
     return null
   }
   const body = r.body || {}
-  const c = _cacheGet(sessionID) || { agents: new Set(), pins: new Map(), at: 0 }
-  c.agents.add(agent); c.at = Date.now()
-  if (body.taskId) c.pins.set(agent, body.taskId)
+  const c = _cacheGet(sessionID) || { agents: new Set(), negative: new Set(), pins: new Map(), at: 0 }
+  if (body.enabled) {
+    c.agents.add(agent); c.at = Date.now()
+    c.negative && c.negative.delete(agent)
+    if (body.taskId) c.pins.set(agent, body.taskId)
+  } else if (body.reason === 'not_enabled' || body.reason === 'no_agent') {
+    c.agents.add(agent); c.negative.add(agent); c.at = Date.now()   // 确定性拒绝才固化
+  } else {
+    // unresolved：不写缓存——下次委派重新查询平台
+    return body
+  }
   _cache.set(sessionID, c)
   return body
 }
@@ -104,17 +117,24 @@ export const BaizeSubagentReusePlugin = async () => ({
       // callId 随 lookup 上报：平台登记意图（callID → agent），使 after
       // 阶段的 pin 不依赖子代理行的持久化时序（复核竞态修复）
       const data = await lookup(input.sessionID, agent, input.callID || '')
+      // 复用可观测性（2026-09-30）：每次 task 委派都留一行结果日志——注入了
+      // 什么/为什么没注入，serve 日志可直接回答"这次委派是否复用"。
+      const desc = `parent=${input.sessionID} agent=${agent} call=${(input.callID || '').slice(0, 12)}`
       // pin 权威（生产"概率性不复用"修复 2026-09-29）：平台有 pin 时覆盖
       // 模型自带的 task_id——模型常会回显/编造上一轮 id，原"模型指定即放行"
       // 会绕过复用；平台无 pin（首次委派）才保留模型的值。
       if (data && data.enabled && data.taskId) {
-        if (args.task_id && args.task_id !== data.taskId) {
-          _log('override model-specified task_id', args.task_id, '→', data.taskId)
-        }
+        const via = args.task_id && args.task_id !== data.taskId
+          ? 'override(model-specified)' : 'injected'
+        _log(`reuse ${via}: task_id=${data.taskId} ${desc}`)
         args.task_id = data.taskId
         return
       }
-      if (args.task_id) return  // 无 pin：保留模型指定
+      if (args.task_id) {
+        _log(`reuse model-specified (no platform pin): task_id=${args.task_id} ${desc}`)
+        return
+      }
+      _log(`reuse MISS → new session ${desc} reason=${(data && data.reason) || (data ? 'no-pin' : 'lookup-failed')}`)
     } catch { /* 平台不可达 → 放行新建，不阻断委派 */ }
   },
   async 'tool.execute.after'(input, output) {
@@ -122,9 +142,21 @@ export const BaizeSubagentReusePlugin = async () => ({
       if (!input || input.tool !== 'task' || !input.sessionID) return
       const out = output && output.output != null ? output.output : ''
       const text = typeof out === 'string' ? out : (out && out.text) || ''
+      let taskId = null
       const m = /task_id:\s*(\S+)/.exec(String(text))
-      if (!m) return
-      await pinByCall(input.sessionID, input.callID || '', m[1])
+      if (m) {
+        taskId = m[1]
+      } else {
+        // 兜底（2026-09-30）：输出截断/格式变化导致正则不命中时，task part 的
+        // metadata.sessionId 是 OC 侧可靠的子会话 id 来源（与 chat_persist 的
+        // 子代理发现同源）。拿不到就只能放弃本次登记（下次委派新建一次）。
+        const meta = output && output.metadata ? output.metadata
+          : (output && output.part && output.part.metadata) || null
+        const msid = meta && (meta.sessionId || meta.sessionID)
+        if (msid && /^ses_/.test(String(msid))) taskId = String(msid)
+      }
+      if (!taskId) return
+      await pinByCall(input.sessionID, input.callID || '', taskId)
     } catch { /* 登记失败不影响委派 */ }
   },
 })

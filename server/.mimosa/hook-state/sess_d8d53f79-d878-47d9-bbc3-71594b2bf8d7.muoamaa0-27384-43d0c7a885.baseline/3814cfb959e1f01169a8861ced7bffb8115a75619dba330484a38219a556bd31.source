@@ -1919,3 +1919,27 @@ def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypa
     gate = w._check_action_gate(sid, workspace_path='C:\\vgt', model='p/m')
     assert gate['status'] == 'inconclusive' and gate.get('error')
 
+
+
+def test_prepare_workspace_writes_batch_permissions(tmp_path, monkeypatch):
+    """派发准备工作区时写项目级 permission allow（绑定批任务的外部目录读取）：
+    无人值守会话读工作区外文件不再触发 external_directory=ask 授权询问挂死；
+    幂等合并——已有配置（如 mcp）保留、permission 补充、已 allow 不重写。"""
+    import json as _json
+    import utils.batch_engine as eng
+    from utils.workspace import ensure_batch_permissions
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(tmp_path))
+    staged = tmp_path / 'batch-staging' / 'u-t1' / 'u1'
+    staged.mkdir(parents=True)
+    (staged / 'a.txt').write_text('x', encoding='utf-8')
+    ws = eng._prepare_workspace('u-t1', str(uuid.uuid4()),
+                                f'batch-staging/u-t1/u1/a.txt')
+    cfg = _json.loads((Path(ws) / 'opencode.json').read_text(encoding='utf-8'))
+    assert cfg['permission']['external_directory'] == 'allow'
+    # 幂等合并：已有 mcp 配置保留，permission 只补键
+    (Path(ws) / 'opencode.json').write_text(
+        _json.dumps({'mcp': {'x': {'type': 'remote'}}}), encoding='utf-8')
+    ensure_batch_permissions(ws)
+    cfg2 = _json.loads((Path(ws) / 'opencode.json').read_text(encoding='utf-8'))
+    assert cfg2['mcp'] == {'x': {'type': 'remote'}}
+    assert cfg2['permission']['external_directory'] == 'allow'

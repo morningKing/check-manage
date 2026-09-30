@@ -1943,3 +1943,58 @@ def test_prepare_workspace_writes_batch_permissions(tmp_path, monkeypatch):
     cfg2 = _json.loads((Path(ws) / 'opencode.json').read_text(encoding='utf-8'))
     assert cfg2['mcp'] == {'x': {'type': 'remote'}}
     assert cfg2['permission']['external_directory'] == 'allow'
+
+
+def test_batch_terminal_cleans_oc_sessions(db_conn, monkeypatch):
+    """批收敛终态后清理子会话的 OC 会话（LRU 防淘汰）：删除全部带 oc id 的
+    子会话；env AI_BATCH_KEEP_OC_SESSIONS=1 时保留。"""
+    import os as _os
+    import uuid as _uuid
+    from db import get_db
+    import utils.batch_engine as eng
+    import utils.opencode_client as oc_mod
+
+    uid = str(_uuid.uuid4())
+    bid = str(_uuid.uuid4())
+    oc_ids = [f'ses_cl{_os.urandom(3).hex()}', f'ses_cl{_os.urandom(3).hex()}']
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, username, password_hash, display_name, role) "
+                "VALUES (%s, %s, 'x', 'CL', 'developer')", (uid, f'cl_{uid[:8]}'))
+            cur.execute(
+                "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                "VALUES (%s, %s, 'clean', 'p', 2)", (bid, uid))
+            for i, oc in enumerate(oc_ids):
+                sid = str(_uuid.uuid4())
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                    "  batch_seq, opencode_session_id, session_token) "
+                    "VALUES (%s, %s, 'completed', %s, %s, %s, %s)",
+                    (sid, uid, bid, i, oc, f'tok-cl-{sid[:12]}'))
+    db_conn.commit()
+    removed = []
+
+    class _FakeDelClient:
+        def delete_session(self, oc, directory=''):
+            removed.append(oc)
+
+    real_cls = oc_mod.OpenCodeClient
+    monkeypatch.setattr(oc_mod, 'OpenCodeClient', lambda base_url: _FakeDelClient())
+    try:
+        monkeypatch.delenv('AI_BATCH_KEEP_OC_SESSIONS', raising=False)
+        eng._cleanup_batch_oc_sessions(bid)
+        assert sorted(removed) == sorted(oc_ids), removed
+        # env=1 → 保留（依赖 continue 完整上下文的部署可关闭清理）
+        removed.clear()
+        monkeypatch.setenv('AI_BATCH_KEEP_OC_SESSIONS', '1')
+        eng._cleanup_batch_oc_sessions(bid)
+        assert removed == []
+    finally:
+        monkeypatch.setattr(oc_mod, 'OpenCodeClient', real_cls)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id = %s", (bid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+        db_conn.commit()

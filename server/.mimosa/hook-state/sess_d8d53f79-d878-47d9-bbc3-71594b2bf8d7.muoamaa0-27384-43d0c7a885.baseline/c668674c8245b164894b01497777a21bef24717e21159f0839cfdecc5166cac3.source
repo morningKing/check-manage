@@ -26,5 +26,7 @@ def main():
     print('ai_settings embedding provider columns ensured')
     cur.close(); conn.close()
 
-if __name__ == '__main__':
+def run():
+    """迁移契约入口（init_db/app 启动钩子按 run() 调用——原 main() 从未被
+    迁移执行器命中，本迁移实际从未跑过）。"""
     main()

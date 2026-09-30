@@ -17,6 +17,8 @@ Routes registered:
     GET    /ai/chat/sessions/:id/pending-question   get_pending_question
     POST   /ai/chat/sessions/:id/questions/:req_id/reply   reply_question
     POST   /ai/chat/sessions/:id/questions/:req_id/reject  reject_question
+    GET    /ai/chat/sessions/:id/pending-permission  get_pending_permission
+    POST   /ai/chat/sessions/:id/permissions/:req_id/reply  reply_permission
     POST   /ai/chat/sessions/:id/close    close_session
     POST   /ai/chat/sessions/:id/reopen   reopen_session
     POST   /ai/chat/sessions/:id/clear    clear_session (清空历史+工作区，原地重置)
@@ -1768,6 +1770,48 @@ def reject_question(sid, request_id):
     if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
         return jsonify({'error': 'question not found', 'code': 'QUESTION_NOT_FOUND'}), 404
     client.reject_question(request_id, directory=sess[4])
+    return jsonify({'ok': True}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/pending-permission', methods=['GET'])
+@login_required
+def get_pending_permission(sid):
+    """Rehydrate a still-unanswered `permission.asked`（OpenCode 权限门——如
+    `external_directory: ask` 下读工作区外的文件）。与 pending-question 同理：
+    事件只发一次，浏览器断线/重连期间出现的询问否则永久丢失。无人值守的批
+    子会话不走这里（工作区已写项目级 allow / 清扫自动拒绝）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    try:
+        pending = OpenCodeClient(OPENCODE_BASE_URL).list_permissions(directory=sess[4])
+    except Exception:
+        logger.exception('list_permissions failed session=%s', sid)
+        return jsonify({'data': None}), 200
+    match = next((q for q in pending if q.get('sessionID') == sess[2]), None)
+    return jsonify({'data': match}), 200
+
+
+@ai_chat_bp.route('/sessions/<sid>/permissions/<request_id>/reply', methods=['POST'])
+@write_required
+def reply_permission(sid, request_id):
+    """应答一个挂起的权限询问。`response` 是 once（仅本次）/ always（该模式
+    全局放行，写进 OpenCode 配置）/ reject（本次拒绝，模型继续）。request_id
+    必须属于本会话自己的挂起列表（与 reply_question 同款归属校验）。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    body = request.get_json(force=True) or {}
+    response = body.get('response')
+    if response not in ('once', 'always', 'reject'):
+        return jsonify({'error': 'response must be once/always/reject'}), 400
+    client = OpenCodeClient(OPENCODE_BASE_URL)
+    pending = client.list_permissions(directory=sess[4])
+    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+        return jsonify({'error': 'permission not found', 'code': 'PERMISSION_NOT_FOUND'}), 404
+    client.reply_permission(request_id, response, directory=sess[4])
     return jsonify({'ok': True}), 200
 
 

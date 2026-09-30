@@ -88,11 +88,16 @@ def lookup_reuse():
     session_oc_id = (request.args.get('session') or '').strip()
     agent = (request.args.get('agent') or '').strip()
     row = _resolve_root(session_oc_id)
-    if not row or not agent:
-        return jsonify({'enabled': False, 'taskId': None})
+    # reason 供插件区分「确定性拒绝」（可固化缓存）与「解析失败」（不应固化，
+    # 否则 DB 瞬断窗口内的负判定会被缓存 120s，强停该窗口内的强制注入）
+    if not row:
+        return jsonify({'enabled': False, 'taskId': None,
+                        'reason': 'unresolved'})
+    if not agent:
+        return jsonify({'enabled': False, 'taskId': None, 'reason': 'no_agent'})
     root_session_id, batch_id = row[0], row[1]
     if agent not in _reuse_agents(batch_id):
-        return jsonify({'enabled': False, 'taskId': None})
+        return jsonify({'enabled': False, 'taskId': None, 'reason': 'not_enabled'})
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
