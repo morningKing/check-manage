@@ -298,6 +298,8 @@ Content-Type: application/json
 | `model` | string | 否 | 指定模型（`<providerID>/<modelID>` 格式）；留空/不传使用系统默认 |
 | `callbackUrl` | string | 否 | 批任务进入终态时接收 HMAC 签名回调通知的 URL（必须 `http://` 或 `https://` 开头）；留空/不传则不发回调，只能轮询。见 4.2b |
 | `callbackSecret` | string | 否 | 用于计算回调签名的密钥；留空则回调仍会发送，但签名用空字符串计算（不建议在公网环境这样用） |
+| `actionChecks` | array | 否 | 动作门禁期望清单（每项是一个核对要求，子任务终态时逐条核对，不达标该子任务标记 failed 并写明缺失项）。字段见 11.5，编写指南见《AI 批任务动作门禁编写指南》 |
+| `gateRetry` | boolean | 否 | 默认 `false`。开启后，门禁核对不过的子任务会带缺失明细在原会话上定向修复续跑（预算内一次），修复后仍不过才落 failed |
 
 **响应 — 201**
 
@@ -1410,8 +1412,35 @@ GET /api/v1/ai-batches/{batchId}/events?afterSeq=<n>&limit=<n>
 - 事件类型包括 `batch.status` / `child.status` / `child.recovered` / `budget.exceeded` / `command.applied` / `delivery.sent|failed` 等；
 - 事件不外泄内部实现字段（OpenCode 会话 id、工作区路径等）。
 
-### 11.5 创建/修改时的 actionChecks 校验
+### 11.5 动作门禁（actionChecks）
 
 创建（4.2）与修改（4.2a）批任务时，`actionChecks` 现在与内部接口同一道校验
 （名称/正则可编译性/`apply_to` 形状等），非法直接 `400`，错误码
 `ACTION_CHECK_INVALID`——不再"带病入库后门禁形同虚设"。
+
+`actionChecks` 是期望（核对要求）数组，每项按 `check_type` 分四类，子任务终态时逐条核对，任一条不过（或无法证实）该子任务即 `failed` 且 `error` 带缺失明细。
+
+> ⚠️ **命名混排**：顶层字段是驼峰（`actionChecks`/`gateRetry`），但**数组元素内的字段沿用内部 snake_case**（`check_type`/`args_pattern`/`min_count`/`effect_spec`/`apply_to`/`rubric`/`subagents`）——这是历史契约，两种写法不要混用。
+
+| `check_type` | 专有字段 | 核对方式 | 适合表达 |
+|---|---|---|---|
+| `tool`（默认） | `tool`、`args_pattern`、`min_count` | 工具调用账本正则匹配（要求至少出现 N 次） | 「必须执行过 git clone」「必须调用过 write 写某文件」 |
+| `file` | `effect_spec.path` | 会话工作区内相对路径的文件存在性 | 「产出物必须落到某路径」 |
+| `db_record` | `effect_spec.collection`、`effect_spec.filter` | 数据集合（Mongo 风格过滤）命中记录数 | 「必须写入一条指定条件的记录」 |
+| `verifier` | `rubric`（判定要点，≤2000 字）、`subagents`（可选名单） | 判官核对：平台只读判官 agent 读最终回复、调用轨迹与指定子代理的会话消息，按 rubric 逐条判定 | 语义/过程类要求——「结论必须覆盖三个要点」「子代理必须先调研再汇总」等无法穷举为正则的要求 |
+
+公共字段：`name`（必填，≤100 字，同批次内唯一）；`subagents`（`tool` 与 `verifier` 均可选——填写后只核对指定子代理的动作/会话，留空对任务会话整体生效）；`apply_to`（可选，`{"batch_seq": [int]}` 或 `{"input_file_glob": "..."}`，把期望定向到部分子任务）。
+
+示例（`verifier` 定向到子代理）：
+
+```json
+"actionChecks": [
+  { "name": "调研子代理产出核对", "check_type": "verifier",
+    "rubric": "子代理的会话消息中应有两次委派任务，且第二次引用了第一次的回答",
+    "subagents": ["general"] },
+  { "name": "必须克隆仓库", "check_type": "tool",
+    "tool": "bash", "args_pattern": "git clone", "min_count": 1 }
+]
+```
+
+`verifier` 注意事项：判官核对是非确定性的 LLM 判定（理由与证据会写进子任务 `error`），对必须精确复现的核对请用前三类确定性原语；判官不可用（平台判官 agent 未部署/超时）时按「无法证实」处理——子任务同样 `failed`，不会静默放行。rubric 写法与粒度选择见《AI 批任务动作门禁编写指南》。
