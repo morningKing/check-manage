@@ -1820,7 +1820,9 @@ class BatchWorker:
         header = ('[子代理会话复用规则] 本任务启用了子代理会话复用。用 task 工具委派'
                   '以下 agent 时，必须在调用参数中携带对应的 task_id（续跑同一子会话，'
                   '保留其历史上下文），除非该 agent 尚无记录：\n')
-        footer = ('\n不要为这些 agent 新建全新会话重复已完成的工作。\n\n')
+        footer = ('\n不要为这些 agent 新建全新会话重复已完成的工作。'
+                  '对同一 agent 的多次委派必须严格串行：上一次委派完全结束后才能发起'
+                  '下一次（并行委派会绕过会话复用机制，导致上下文丢失）。\n\n')
         return header + '\n'.join(lines) + footer
 
     def _audit_reuse_violations(self, session_id: str, batch_id: str | None,

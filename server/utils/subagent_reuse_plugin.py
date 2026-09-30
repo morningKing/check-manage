@@ -61,7 +61,12 @@ function _cacheGet(sessionID) {
 
 async function lookup(sessionID, agent, callID) {
   const cached = _cacheGet(sessionID)
-  if (cached && !cached.agents.has(agent)) return { enabled: false }  // 缓存已判非复用 agent
+  // 缓存负判定只认「确定性拒绝」（not_enabled/no_agent——名单没配这类稳定
+  // 结论）；unresolved（父会话反查失败，DB 瞬断/落库窗口）不缓存——固化它
+  // 会把瞬断窗口内的强制注入停掉 120s（生产"概率性不复用"根因之一）。
+  if (cached && !cached.agents.has(agent)) {
+    if (cached.negative && cached.negative.has(agent)) return { enabled: false }
+  }
   const r = await _fetchJson(
     `${ENDPOINT}/reuse?session=${encodeURIComponent(sessionID)}&agent=${encodeURIComponent(agent)}&callId=${encodeURIComponent(callID || '')}`)
   if (!r.ok) {
@@ -73,9 +78,17 @@ async function lookup(sessionID, agent, callID) {
     return null
   }
   const body = r.body || {}
-  const c = _cacheGet(sessionID) || { agents: new Set(), pins: new Map(), at: 0 }
-  c.agents.add(agent); c.at = Date.now()
-  if (body.taskId) c.pins.set(agent, body.taskId)
+  const c = _cacheGet(sessionID) || { agents: new Set(), negative: new Set(), pins: new Map(), at: 0 }
+  if (body.enabled) {
+    c.agents.add(agent); c.at = Date.now()
+    c.negative && c.negative.delete(agent)
+    if (body.taskId) c.pins.set(agent, body.taskId)
+  } else if (body.reason === 'not_enabled' || body.reason === 'no_agent') {
+    c.agents.add(agent); c.negative.add(agent); c.at = Date.now()   // 确定性拒绝才固化
+  } else {
+    // unresolved：不写缓存——下次委派重新查询平台
+    return body
+  }
   _cache.set(sessionID, c)
   return body
 }
@@ -122,9 +135,21 @@ export const BaizeSubagentReusePlugin = async () => ({
       if (!input || input.tool !== 'task' || !input.sessionID) return
       const out = output && output.output != null ? output.output : ''
       const text = typeof out === 'string' ? out : (out && out.text) || ''
+      let taskId = null
       const m = /task_id:\s*(\S+)/.exec(String(text))
-      if (!m) return
-      await pinByCall(input.sessionID, input.callID || '', m[1])
+      if (m) {
+        taskId = m[1]
+      } else {
+        // 兜底（2026-09-30）：输出截断/格式变化导致正则不命中时，task part 的
+        // metadata.sessionId 是 OC 侧可靠的子会话 id 来源（与 chat_persist 的
+        // 子代理发现同源）。拿不到就只能放弃本次登记（下次委派新建一次）。
+        const meta = output && output.metadata ? output.metadata
+          : (output && output.part && output.part.metadata) || null
+        const msid = meta && (meta.sessionId || meta.sessionID)
+        if (msid && /^ses_/.test(String(msid))) taskId = String(msid)
+      }
+      if (!taskId) return
+      await pinByCall(input.sessionID, input.callID || '', taskId)
     } catch { /* 登记失败不影响委派 */ }
   },
 })
