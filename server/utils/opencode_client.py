@@ -253,6 +253,39 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
+    def list_permissions(self, directory: str = "") -> list:
+        """Pending permission requests (OpenCode's permission gate). Fired when
+        the config asks for approval — e.g. `external_directory: ask` and the
+        model reads a file outside the session workspace. Each item:
+        {id, sessionID, permission, patterns, metadata: {filepath, parentDir},
+        always, tool}. NOTE: invisible on the un-scoped /permission list —
+        callers must scope by the session's workspace directory (same as
+        list_questions)."""
+        params = {"directory": directory} if directory else None
+        resp = requests.get(self._url("/permission"),
+                            params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def reply_permission(self, request_id: str, reply: str,
+                         directory: str = "") -> None:
+        """Answer a pending permission request: `reply` is
+        'once' | 'always' | 'reject' ('always' whitelists the patterns in the
+        global config for future turns)."""
+        import re
+        from urllib.parse import quote
+        # request_id 进 URL 路径段：白名单校验（OpenCode 的 id 形如 per_<hex>）
+        # + percent-encode 双重防护，杜绝路径拼接注入
+        if not request_id or not re.fullmatch(r'[A-Za-z0-9_-]+', request_id):
+            raise ValueError(f'invalid permission request id: {request_id!r}')
+        if reply not in ('once', 'always', 'reject'):
+            raise ValueError(f'invalid permission reply: {reply!r}')
+        params = {"directory": directory} if directory else None
+        path = "/permission/%s/reply" % quote(request_id, safe='')
+        resp = requests.post(self._url(path), params=params,
+                             json={"reply": reply}, timeout=self.timeout)
+        resp.raise_for_status()
+
     def list_mcp(self, directory: str = "") -> dict:
         """Return configured MCP servers + connection status for `directory`, e.g.
         {"check-manage": {"status": "connected"}}. The un-scoped /mcp returns {}.

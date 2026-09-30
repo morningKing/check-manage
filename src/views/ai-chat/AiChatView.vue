@@ -19,6 +19,7 @@ import 'vue-element-plus-x/styles/index.css'
 import MarkdownView from '@/components/ai-chat/MarkdownView.vue'
 import ToolCallBubble from '@/components/ai-chat/ToolCallBubble.vue'
 import QuestionCard from '@/components/ai-chat/QuestionCard.vue'
+import PermissionCard from '@/components/ai-chat/PermissionCard.vue'
 import TodoListBlock from '@/components/ai-chat/TodoListBlock.vue'
 import QuestionResultCard from '@/components/ai-chat/QuestionResultCard.vue'
 import ContextStatusBar from '@/components/ai-chat/ContextStatusBar.vue'
@@ -714,6 +715,7 @@ watch(reasoning, async () => {
 const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 const pendingQuestion = computed(() => store.activePendingQuestion)
+const pendingPermission = computed(() => store.activePendingPermission)
 
 // P0 执行所有权（ai-harness-p0 spec §7.1 前端配合）：非终态批子会话由后台
 // 执行器独家驱动——composer 禁用并提示；终态批子会话可发送（经 continue 通道）。
@@ -1696,6 +1698,12 @@ function onKey(e: Event) {
               :request="pendingQuestion"
               @reply="(answers) => store.answerPendingQuestion(activeId!, answers)"
               @reject="() => store.rejectPendingQuestion(activeId!)"
+            />
+
+            <PermissionCard
+              v-if="pendingPermission"
+              :request="pendingPermission"
+              @reply="(response) => store.answerPendingPermission(activeId!, pendingPermission!.id, response)"
             />
 
             <!-- P0 §8.2 发送失败错误卡：保留原始输入，提供明确的重试入口 -->

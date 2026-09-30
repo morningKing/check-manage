@@ -2087,6 +2087,7 @@ class BatchWorker:
             if now - last_q_check >= self.QUESTION_CHECK_INTERVAL:
                 last_q_check = now
                 self._reject_pending_questions(oc_session_id, directory=directory)
+                self._reject_pending_permissions(oc_session_id, directory=directory)
             if on_progress and now - last_persist_at >= self.PROGRESS_PERSIST_SEC:
                 try:
                     on_progress()
@@ -2925,6 +2926,27 @@ class BatchWorker:
                 opencode_client.reject_question(q['id'], directory=directory)
                 logger.info('batch auto-rejected question oc=%s qid=%s',
                             oc_session_id, q['id'])
+            except Exception:
+                traceback.print_exc()
+
+    def _reject_pending_permissions(self, oc_session_id: str, directory: str = ''):
+        """无人值守兜底（2026-09-30）：批子会话工作区已写 external_directory
+        allow，但其他权限类型（如 doom_loop）仍可能触发 ask——权限询问同样
+        无人能答、无限期挂起。发现本会话的挂起权限请求就自动 reject（模型
+        收到拒绝后自行继续）。防御式包装同 _reject_pending_questions。"""
+        try:
+            pending = opencode_client.list_permissions(directory=directory)
+            items = [q for q in (pending or []) if isinstance(q, dict)]
+        except Exception:
+            return
+        for q in items:
+            if q.get('sessionID') != oc_session_id or not q.get('id'):
+                continue
+            try:
+                opencode_client.reply_permission(q['id'], 'reject',
+                                                 directory=directory)
+                logger.info('batch auto-rejected permission oc=%s pid=%s (%s)',
+                            oc_session_id, q['id'], q.get('permission'))
             except Exception:
                 traceback.print_exc()
 

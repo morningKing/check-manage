@@ -22,13 +22,14 @@ import {
   getSubtaskMessages,
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
+  getPendingPermission, replyPermission,
   getRuntimeState,
   getSessionToolCalls,
   createEventStream,
   type AiMessage, type AiContentPart, type AiFile, type ChangedFile, type McpServer,
   type LspServerStatus, type FormatterStatus,
   type PaletteCommand, type StreamStatus, type AgentInfo, type QuestionRequest,
-  type SessionToolCall,
+  type PermissionRequest, type SessionToolCall,
 } from '@/api/aiChat'
 import { parseAgentMentions } from '@/utils/agentMentions'
 import { latestTodosFromMessages, type TodoItem } from '@/utils/todos'
@@ -124,6 +125,7 @@ interface State {
    * and would otherwise lose a question asked while disconnected).
    */
   pendingQuestion: Record<string, QuestionRequest | null>
+  pendingPermission: Record<string, PermissionRequest | null>
   /**
    * 运行中插话队列（TUI 的 mid-turn queueing）：streaming 时发送的消息不调
    * 接口，先挂在这里并渲染成带「排队中」标记的本地气泡；当前回合 session.idle
@@ -204,6 +206,7 @@ export const useAiChatStore = defineStore('aiChat', {
     streamStatus: {} as Record<string, StreamStatus>,
     uploadingCount: 0,
     pendingQuestion: {},
+    pendingPermission: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
     turnFailure: {} as Record<string, TurnFailure | null>,
@@ -240,6 +243,9 @@ export const useAiChatStore = defineStore('aiChat', {
     },
     activePendingQuestion(state): QuestionRequest | null {
       return state.activeSessionId ? state.pendingQuestion[state.activeSessionId] ?? null : null
+    },
+    activePendingPermission(state): PermissionRequest | null {
+      return state.activeSessionId ? state.pendingPermission[state.activeSessionId] ?? null : null
     },
     activeUsage(state): SessionUsage {
       return state.activeSessionId
@@ -347,6 +353,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadToolCalls(id)
       this.loadPaletteItems(id)
       this.loadPendingQuestion(id)
+      this.loadPendingPermission(id)
       // Batch children are driven by the worker and viewed via polling
       // (reloadMessages). Opening an SSE stream for them would let the live
       // _upsertAssistantPart write into the poll-replaced message array at stale
@@ -503,6 +510,22 @@ export const useAiChatStore = defineStore('aiChat', {
         const { data } = await getPendingQuestion(id)
         this.pendingQuestion[id] = data
       } catch { /* best-effort: don't block session open on this */ }
+    },
+
+    async loadPendingPermission(id: string) {
+      try {
+        const { data } = await getPendingPermission(id)
+        this.pendingPermission[id] = data
+      } catch { /* best-effort: don't block session open on this */ }
+    },
+
+    async answerPendingPermission(sid: string, requestId: string,
+                                  response: 'once' | 'always' | 'reject') {
+      const p = this.pendingPermission[sid]
+      if (!p || p.id !== requestId) return
+      await replyPermission(sid, requestId, response)
+      // optimistic: clear locally; the permission.replied echo also handles it
+      if (this.pendingPermission[sid]?.id === requestId) this.pendingPermission[sid] = null
     },
 
     async answerPendingQuestion(sid: string, answers: string[][]) {
@@ -1072,6 +1095,7 @@ export const useAiChatStore = defineStore('aiChat', {
           void this.pollSubtaskTodos(sid)  // 收尾:拉取子代理的最终 todo 快照
           this._resetStreamState(sid)
           this.pendingQuestion[sid] = null  // defensive: a finished turn can't still have one pending
+          this.pendingPermission[sid] = null  // 同上：权限询问随回合终止一并清掉
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           this.loadChanges(sid)
           this._reloadPersisted(sid)  // converge on server-persisted turn (incl. tool calls)
@@ -1110,6 +1134,17 @@ export const useAiChatStore = defineStore('aiChat', {
         case 'question.rejected':
           if (this.pendingQuestion[sid]?.id === data?.requestID) {
             this.pendingQuestion[sid] = null
+          }
+          break
+        // 权限门询问（如 external_directory=ask 下读工作区外的文件）：
+        // 前端渲染 PermissionCard 由用户选择放行方式；无人应答会一直挂起
+        case 'permission.asked':
+          this.pendingPermission[sid] = data as PermissionRequest
+          break
+        case 'permission.replied':
+        case 'permission.rejected':
+          if (this.pendingPermission[sid]?.id === data?.requestID) {
+            this.pendingPermission[sid] = null
           }
           break
       }

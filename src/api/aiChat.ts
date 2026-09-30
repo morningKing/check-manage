@@ -436,6 +436,29 @@ export function rejectQuestion(id: string, requestId: string) {
   )
 }
 
+/** 权限询问（permission.asked）：如 external_directory=ask 下读工作区外文件。 */
+export interface PermissionRequest {
+  id: string
+  sessionID: string
+  permission: string
+  patterns: string[]
+  metadata: { filepath?: string; parentDir?: string }
+  always?: string[]
+}
+
+export function getPendingPermission(id: string) {
+  return get<{ data: PermissionRequest | null }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/pending-permission`, undefined, { silent: true },
+  )
+}
+export function replyPermission(id: string, requestId: string,
+                                response: 'once' | 'always' | 'reject') {
+  return post<{ ok: boolean }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(requestId)}/reply`,
+    { response },
+  )
+}
+
 export function deleteFromMessage(id: string, msgId: string) {
   return del<{ deleted: number }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/messages/${encodeURIComponent(msgId)}`,
