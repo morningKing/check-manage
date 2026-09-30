@@ -728,6 +728,14 @@ const activeBatchInfo = computed(() => {
   return { status: child.status, agent: b?.agent || '', model: b?.model || '',
            batchId: b?.id || '', childId: child.id }
 })
+// 无人值守的批子会话不允许 ask：清掉 selectSession 时可能加载到的挂起
+// 询问/授权（OC 侧由批任务清扫自动拒绝，见 batch_engine._reject_pending_*）
+watch(activeBatchInfo, (info) => {
+  if (info && activeId.value) {
+    store.pendingPermission[activeId.value] = null
+    store.pendingQuestion[activeId.value] = null
+  }
+})
 // 后端权威；前端只是 UX——非终态批子会话禁发。
 const batchControlled = computed(() =>
   !!activeBatchInfo.value && ['pending', 'running', 'paused'].includes(activeBatchInfo.value.status))
@@ -1644,15 +1652,19 @@ function onKey(e: Event) {
               <ElIcon class="spin"><Loading /></ElIcon> 正在思考…
             </div>
 
+            <!-- 无人值守的批子会话不渲染询问/授权气泡：设计上不允许 ask——
+                 权限请求由批任务轮询自动拒绝（_reject_pending_permissions）、
+                 question 由清扫自动拒绝；批子会话工作区已写 external_directory
+                 allow，正常不会触发。这里的守卫挡住事件竞态下的闪现。 -->
             <QuestionCard
-              v-if="pendingQuestion"
+              v-if="pendingQuestion && !activeBatchInfo"
               :request="pendingQuestion"
               @reply="(answers) => store.answerPendingQuestion(activeId!, answers)"
               @reject="() => store.rejectPendingQuestion(activeId!)"
             />
 
             <PermissionCard
-              v-if="pendingPermission"
+              v-if="pendingPermission && !activeBatchInfo"
               :request="pendingPermission"
               @reply="(response) => store.answerPendingPermission(activeId!, pendingPermission!.id, response)"
             />
