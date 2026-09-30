@@ -280,3 +280,31 @@ grep -c MCP_INTERNAL_TOKEN server/.env
 # 6. 发起一次会话并使用技能后，确认确证数据
 #    SELECT count(*) FROM ai_skill_invocations WHERE source='runtime';
 ```
+
+
+---
+
+## 多部署共享 OC serve 的隔离要求（2026-09-30）
+
+OpenCode serve 的**会话列表有 100 条的 LRU 保留上限**，且 serve 进程内加载
+的插件与全局配置（`OPENCODE_GLOBAL_DIR`）对挂在其上的所有部署一并生效。
+多个 check-manage 部署（或任何其他消费方）共享同一个 serve 时会发生：
+
+1. **会话互挤**：任一方高频创建会话都会把别方**运行中**的会话挤出 LRU，
+   后续消息读取 404，触发代价高昂的「会话失效自愈」（新建会话 + 注入有损
+   历史摘要）。实测共享环境下几分钟内新建会话即被淘汰。
+2. **配置互染**：全局 `opencode.json`（permission/provider）与 plugin 目录
+   是 serve 级的——一方改 ask/allow、另一方跟着变。
+3. **排查互相污染**：serve 日志、超时记录、会话归属无法区分来源部署。
+
+**要求**：每个部署实例必须独享自己的 OC serve——独立 `--port` 与独立的
+`OPENCODE_GLOBAL_DIR`（插件/全局配置随目录隔离）。参考启动方式：
+
+```
+OPENCODE_GLOBAL_DIR=<该实例专属目录> XDG_DATA_HOME=<该实例专属数据目录>   opencode serve --port <专属端口>
+```
+
+配套的平台侧机制：批任务收敛终态后自动删除其子会话的 OC 会话（LRU 防淘汰，
+`AI_BATCH_KEEP_OC_SESSIONS=1` 可关闭——关闭后需自行保障配额，trade-off 是
+continue 的完整上下文）；批子会话工作区写项目级
+`permission.external_directory=allow`，与全局 ask/deny 解耦。
