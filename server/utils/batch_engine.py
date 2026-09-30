@@ -309,6 +309,12 @@ def _prepare_workspace(user_id: str, session_id: str,
     uploads/ — a real bug, not a graceful no-file case.
     """
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
+    # 绑定批任务的外部目录读取（2026-09-30）：无人值守会话读工作区外的文件
+    # 会触发 OpenCode external_directory=ask 授权询问，无人应答 → 工具挂起
+    # （生产实测 read 挂 900s 被看门狗 abort）。派发时写项目级 allow——
+    # 项目配置覆盖全局 deny，只对批任务/无人值守子会话生效。
+    from utils.workspace import ensure_batch_permissions
+    ensure_batch_permissions(ws)
     if not staged_file_path:
         return ws
     paths = staged_file_path if isinstance(staged_file_path, list) else [staged_file_path]

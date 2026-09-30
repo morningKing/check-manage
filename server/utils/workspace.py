@@ -323,6 +323,42 @@ def write_opencode_config(workspace_path: str, *, mcp_name: str, mcp_url: str,
     return str(cfg_path)
 
 
+def ensure_batch_permissions(workspace_path: str) -> str | None:
+    """批任务/无人值守子会话：写项目级 opencode.json 允许读取工作区之外的
+    文件（`permission.external_directory: "allow"`，项目配置覆盖全局）。
+
+    背景（2026-09-30）：OpenCode 默认 `external_directory: ask`——无人值守
+    会话读工作区外的文件会触发授权询问，无人应答 → 工具调用无限挂起（生产
+    实测 read 挂 900s 被看门狗 abort）。绑定批任务：派发时在工作区写 allow，
+    读外部文件直接成功；全局配置保持 deny，交互会话不受影响。
+
+    幂等合并：文件已存在时只补 permission 键，不动其余内容（防覆盖会话的
+    MCP/model 配置）；permission 已是目标值时不重写（避免无谓 mtime 抖动）。
+    写失败 best-effort——回落到全局 deny：外部读取会被快速拒绝（不挂死），
+    只是能力受限。返回配置文件路径（写失败返回 None）。
+    """
+    target = {"external_directory": "allow"}
+    try:
+        cfg_path = Path(workspace_path) / "opencode.json"
+        cfg = {}
+        if cfg_path.exists():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            if not isinstance(cfg, dict):
+                cfg = {}
+        if (cfg.get("permission") or {}).get("external_directory") == "allow":
+            return str(cfg_path)
+        perm = cfg.get("permission") if isinstance(cfg.get("permission"), dict) else {}
+        perm.update(target)
+        cfg["permission"] = perm
+        cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                            encoding="utf-8")
+        return str(cfg_path)
+    except (OSError, ValueError) as e:
+        logging.getLogger(__name__).warning(
+            "batch permission config write failed ws=%s: %s", workspace_path, e)
+        return None
+
+
 def safe_resolve(root: str, rel_path: str) -> str:
     """Resolve `rel_path` under `root`; raise WorkspacePathError if it escapes.
 
