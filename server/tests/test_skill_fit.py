@@ -80,18 +80,18 @@ def test_match_steps_all_hit_in_order():
     assert r['per_step'][0]['evidence'][0]['args'] == 'git clone https://x'
 
 
-def test_match_steps_out_of_order_is_miss():
+def test_match_steps_out_of_order_tail():
+    """重排对齐（2026-10-01 非目标②转正）：指针可命中的步骤照常 hit；
+    指针已过但期望调用存在于轨迹早段 → out_of_order（不再误报 miss）。"""
     steps = parse_fit_steps(SKILL_MD)
-    # write 先于 bash：贪心顺序下 clone 错过 bash（被 write 消耗前的指针…）
-    # 指针扫描：clone 找 bash——轨迹里 bash 在 write 之后出现仍可命中（指针
-    # 只前进不回头，但 clone 是第一步，bash 在位置 1 命中）——真正乱序用例：
     trace = [_t('write', 'outputs/r.md', 1), _t('bash', 'git clone x', 2),
              _t('glob', '**/*', 3)]
     r = match_steps(steps, trace)
-    # clone 命中位置 2；inspect 命中位置 3；report 需要的 write 在位置 1
-    # （指针已过）→ miss
     statuses = {p['id']: p['status'] for p in r['per_step']}
-    assert statuses == {'clone': 'hit', 'inspect': 'hit', 'report': 'miss'}
+    # clone 命中位置 2 的 bash；inspect 命中位置 3 的 glob；
+    # report 的 write 在位置 1（指针已过）→ out_of_order
+    assert statuses == {'clone': 'hit', 'inspect': 'hit', 'report': 'out_of_order'}
+    assert r['order_violations'] == 1
     assert r['status'] == 'partial'
 
 
@@ -476,3 +476,42 @@ fit:
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
+def test_match_steps_out_of_order_detected():
+    """重排对齐：期望调用存在但次序错乱 → out_of_order（不再误报 miss）；
+    全部错序 → status='reordered'。"""
+    steps = parse_fit_steps(SKILL_MD)
+    # 次序全错：write(1) → glob(2) → bash clone(3)
+    trace = [_t('write', 'outputs/r.md', 1), _t('glob', '**/*.py', 2),
+             _t('bash', 'git clone x', 3)]
+    r = match_steps(steps, trace)
+    statuses = {p['id']: p['status'] for p in r['per_step']}
+    # 贪心：clone 消耗位置 3 的 bash（指针前扫），inspect/report 的 glob/write
+    # 在指针之前 → out_of_order
+    assert statuses == {'clone': 'hit', 'inspect': 'out_of_order',
+                        'report': 'out_of_order'}
+    assert r['order_violations'] == 2 and r['status'] == 'partial'
+    assert r['score'] == 33                          # 1/3
+
+
+def test_match_steps_partial_with_reorder_tail():
+    """混合：clone 顺序命中，report 错序出现 → partial + out_of_order。"""
+    steps = parse_fit_steps(SKILL_MD)
+    trace = [_t('bash', 'git clone x', 1), _t('write', 'outputs/r.md', 2)]
+    r = match_steps(steps, trace)
+    statuses = {p['id']: p['status'] for p in r['per_step']}
+    assert statuses['clone'] == 'hit'
+    assert statuses['inspect'] == 'miss'             # glob 全程未出现
+    assert statuses['report'] == 'out_of_order'      # write 存在但指针已过
+    assert r['order_violations'] == 1
+    assert r['status'] == 'partial'
+
+
+def test_match_steps_completely_absent_still_miss():
+    """期望工具全程未出现 → 仍 miss（重排对齐不虚构证据）。"""
+    steps = parse_fit_steps(SKILL_MD)
+    trace = [_t('bash', 'echo hi', 1), _t('grep', 'x', 2)]
+    r = match_steps(steps, trace)
+    assert r['status'] == 'diverged'
+    assert all(p['status'] == 'miss' for p in r['per_step'])

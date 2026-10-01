@@ -22,7 +22,7 @@ import {
   getSubtaskMessages,
   getLspFormatter,
   getPendingQuestion, replyQuestion, rejectQuestion,
-  getPendingPermission, replyPermission,
+  getPendingPermission, replyPermission, getSessionSkillFit,
   getRuntimeState,
   getSessionToolCalls,
   createEventStream,
@@ -126,6 +126,7 @@ interface State {
    */
   pendingQuestion: Record<string, QuestionRequest | null>
   pendingPermission: Record<string, PermissionRequest | null>
+  fitSummary: Record<string, Array<{ defKind: string; defName: string; stepsTotal: number; stepsHit: number; score: number; status: string }> | null>
   /**
    * 运行中插话队列（TUI 的 mid-turn queueing）：streaming 时发送的消息不调
    * 接口，先挂在这里并渲染成带「排队中」标记的本地气泡；当前回合 session.idle
@@ -207,6 +208,7 @@ export const useAiChatStore = defineStore('aiChat', {
     uploadingCount: 0,
     pendingQuestion: {},
     pendingPermission: {},
+    fitSummary: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
     turnFailure: {} as Record<string, TurnFailure | null>,
@@ -354,6 +356,7 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadPaletteItems(id)
       this.loadPendingQuestion(id)
       this.loadPendingPermission(id)
+      this.loadSessionSkillFit(id)
       // Batch children are driven by the worker and viewed via polling
       // (reloadMessages). Opening an SSE stream for them would let the live
       // _upsertAssistantPart write into the poll-replaced message array at stale
@@ -510,6 +513,13 @@ export const useAiChatStore = defineStore('aiChat', {
         const { data } = await getPendingQuestion(id)
         this.pendingQuestion[id] = data
       } catch { /* best-effort: don't block session open on this */ }
+    },
+
+    async loadSessionSkillFit(id: string) {
+      try {
+        const { data } = await getSessionSkillFit(id)
+        this.fitSummary[id] = data
+      } catch { /* best-effort */ }
     },
 
     async loadPendingPermission(id: string) {

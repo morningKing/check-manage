@@ -125,9 +125,6 @@ def match_steps(steps: list[dict], trace: list[dict]) -> dict:
     per_step, ptr, hits = [], 0, 0
     trace_empty = not trace
     ooo = 0
-    consumed: set[int] = set()          # 已作证据的轨迹位置（顺序 hit 或重排）——
-    # 每条调用只能归一个步骤，防止「同 expect 连续步骤」场景下一条 bash 被
-    # 第一步 hit 后又被第二步重排扫成 out_of_order 的重复计入
     for s in steps:
         expect = s.get('expect') or []
         if not expect:
@@ -146,8 +143,7 @@ def match_steps(steps: list[dict], trace: list[dict]) -> dict:
                     continue
                 hit = {'tool': t['tool'], 'args': (t['args'] or '')[:160],
                        'occurredAt': t['occurredAt']}
-                consumed.add(ptr - 1)             # 仅命中位置消耗（未命中位置
-                break                             # 留给后续步骤顺序/重排使用）
+                break
             if hit:
                 break
         if hit:
@@ -155,19 +151,15 @@ def match_steps(steps: list[dict], trace: list[dict]) -> dict:
             per_step.append({'id': s['id'], 'name': s['name'],
                              'status': 'hit', 'evidence': [hit]})
             continue
-        # 第二段：重排对齐——expect 在轨迹任意**未消耗**位置出现 → out_of_order
-        # （同一条调用不可作两步证据；真正缺失 → miss）
+        # 第二段：重排对齐——expect 在轨迹任意位置出现 → out_of_order
         oo_ev = None
-        for ti, t in enumerate(trace):
-            if ti in consumed:
-                continue
+        for t in trace:
             for e in expect:
                 if t['tool'] == e['tool'] and (
                         not e.get('args_pattern')
                         or _regex_match(e['args_pattern'], t['args'] or '')):
                     oo_ev = {'tool': t['tool'], 'args': (t['args'] or '')[:160],
                              'occurredAt': t['occurredAt']}
-                    consumed.add(ti)
                     break
             if oo_ev:
                 break

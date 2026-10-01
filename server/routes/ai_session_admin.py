@@ -898,7 +898,11 @@ def list_skill_fits():
 @ai_execution_admin_bp.get('/skill-fit/<attempt_id>')
 @require_permission('admin.ai_chat_admin')
 def skill_fit_detail(attempt_id):
-    """单 attempt 的拟合明细（含 perStep/diagnosis）；无任何结果行 → 404。"""
+    """单 attempt 的拟合明细（含 perStep/diagnosis）；无任何结果行 → 404。
+
+    附带子代理层拟合子条目（spec §10 非目标④转正，2026-10-01）：该会话
+    名下 source_type='subagent' 的 attempt 若也有拟合结果，按层附在
+    `subagentFits`——父层不合并子层数据（各层独立判定），只是同视图呈现。"""
     from db import get_db
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -912,9 +916,38 @@ def skill_fit_detail(attempt_id):
                 "ORDER BY r.def_kind, r.def_name", (attempt_id,))
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            if rows:
+                # 子代理层：该会话（或其批子会话）名下 subagent attempt 的拟合。
+                # session 锚定：取本组任一行的 session_id（同 attempt 同会话）。
+                anchor_session = rows[0]['session_id']
+                cur.execute(
+                    """
+                    SELECT r.id, r.attempt_id, r.session_id, r.def_kind, r.def_name,
+                           r.def_hash, r.steps_total, r.steps_hit, r.score, r.status,
+                           r.per_step, r.computed_at, a.effective_agent,
+                           st.agent AS subtask_agent
+                    FROM ai_skill_fit_results r
+                    JOIN ai_execution_attempts a ON a.id = r.attempt_id
+                    LEFT JOIN ai_chat_subtasks st
+                      ON st.root_session_id = r.session_id
+                     AND st.id = a.source_id
+                    WHERE a.source_type = 'subagent'
+                      AND a.parent_attempt_id = %s
+                    ORDER BY r.def_name
+                    """, (attempt_id,))
+                scols = [d[0] for d in cur.description]
+                sub_rows = [dict(zip(scols, r)) for r in cur.fetchall()]
+            else:
+                sub_rows = []
     if not rows:
         return jsonify({'error': '该 attempt 无拟合结果'}), 404
-    return jsonify({'fits': [_fit_camel(r, with_steps=True) for r in rows]})
+    resp = {'fits': [_fit_camel(r, with_steps=True) for r in rows]}
+    if sub_rows:
+        resp['subagentFits'] = [
+            {**_fit_camel(r, with_steps=True),
+             'subtaskAgent': r.get('subtask_agent')}
+            for r in sub_rows]
+    return jsonify(resp)
 
 
 @ai_execution_admin_bp.post('/skill-fit/<attempt_id>/recompute')
@@ -1027,6 +1060,56 @@ def patch_skill_def_version(version_id):
     log_operation('update', 'ai_skill_def_versions', version_id, None,
                   'SkillOpt 定义版本标注')
     return jsonify({'ok': True})
+
+
+@ai_execution_admin_bp.get('/skill-def-patterns')
+@require_permission('admin.ai_chat_admin')
+def skill_def_patterns():
+    """跨版本偏离原因深度聚合（spec §10 非目标①转正）：按 (def_kind,
+    def_name, per_step->>id) 聚合全部历史拟合的步骤级 miss/out_of_order——
+    「同一处定义缺陷在多少任务、哪些版本反复出现」的优先级排序。
+    versionHashes 为该步骤 id 出现过的版本短 hash 列表（去重，展示用截断）。"""
+    from db import get_db
+    def_kind = (request.args.get('defKind') or '').strip() or None
+    limit = min(max(int(request.args.get('limit', 50) or 50), 1), 200)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT f.def_kind, f.def_name,
+                       p->>'id'                                  AS step_id,
+                       count(*)                                  AS miss_tasks,
+                       count(DISTINCT f.def_hash)                AS versions_affected,
+                       round(avg(f.score))                       AS avg_score,
+                       array_agg(DISTINCT COALESCE(f.def_hash, '') FILTER (
+                         WHERE f.def_hash IS NOT NULL AND f.def_hash <> ''
+                       ))                                        AS hashes,
+                       max(f.computed_at)                        AS last_seen
+                FROM ai_skill_fit_results f
+                CROSS JOIN LATERAL jsonb_array_elements(f.per_step) p
+                WHERE f.status IN ('partial', 'diverged')
+                  AND p->>'status' IN ('miss', 'out_of_order')
+                  AND (%s IS NULL OR f.def_kind = %s)
+                GROUP BY f.def_kind, f.def_name, p->>'id'
+                ORDER BY miss_tasks DESC, versions_affected DESC, last_seen DESC
+                LIMIT %s
+                """, (def_kind, def_kind, limit))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    patterns = []
+    for r in rows:
+        hashes = r.get('hashes') or []
+        patterns.append({
+            'defKind': r['def_kind'],
+            'defName': r['def_name'],
+            'stepId': r['step_id'],
+            'missTasks': r['miss_tasks'],
+            'versionsAffected': r['versions_affected'],
+            'versionHashes': [h[:12] for h in hashes][:5],
+            'avgScore': r['avg_score'],
+            'lastSeenAt': r['last_seen'].isoformat() if r['last_seen'] else None,
+        })
+    return jsonify({'patterns': patterns})
 
 
 # ── SkillOpt 任务拟合 AI 能力层：步骤生成 / 回写 / 偏差诊断（§5/§5b） ─────

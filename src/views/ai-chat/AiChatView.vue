@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, defineAsyncComponent } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton, ElInput, ElScrollbar, ElIcon, ElEmpty, ElMessageBox, ElMessage,
   ElDrawer, ElTag, ElDialog,
@@ -68,6 +68,7 @@ const batches = useAiChatBatchesStore()
 // returns undefined and route.query throws — silently swallowed, leaving the
 // view stuck on the empty state with no session opened (regression from 0e0babc).
 const route = useRoute()
+const router = useRouter()
 
 const showCreateBatch = ref(false)
 const showTemplateManager = ref(false)
@@ -719,6 +720,22 @@ const pendingPermission = computed(() => store.activePendingPermission)
 
 // P0 执行所有权（ai-harness-p0 spec §7.1 前端配合）：非终态批子会话由后台
 // 执行器独家驱动——composer 禁用并提示；终态批子会话可发送（经 continue 通道）。
+const fitBadge = computed(() => {
+  const id = activeId.value
+  if (!id) return null
+  const fits = store.fitSummary[id]
+  if (!fits || !fits.length) return null
+  const avg = Math.round(fits.reduce((s, f) => s + (f.score || 0), 0) / fits.length)
+  const worst = fits.reduce((w, f) => {
+    const order: Record<string, number> = { diverged: 0, partial: 1, fit: 2 }
+    return (order[f.status] ?? 3) < (order[w.status] ?? 3) ? f : w
+  }, fits[0])
+  const textMap: Record<string, string> = { fit: '拟合', partial: '部分拟合', diverged: '偏离', no_trace: '无轨迹', parse_error: '解析失败' }
+  return { score: avg, text: textMap[worst.status] || worst.status }
+})
+function gotoSkillOpt() {
+  router.push({ path: '/admin/ai-batches', query: { tab: 'skillopt' } })
+}
 const activeBatchInfo = computed(() => {
   const id = activeId.value
   if (!id) return null
@@ -1833,6 +1850,14 @@ function onKey(e: Event) {
         </span>
       </div>
 
+        <!-- SkillOpt 拟合轻量入口（2026-10-01 非目标③转正）：有拟合数据的
+             批子会话显示摘要徽标，点击跳管理页 SkillOpt 看完整明细。只读，
+             调试/治理主体仍在管理页。 -->
+        <span v-if="fitBadge" class="batch-bar__fit" :title="`SkillOpt 拟合：${fitBadge.text}（点击查看明细）`"
+              data-test="session-fit-badge" @click="gotoSkillOpt">
+          <ElIcon><DataAnalysis /></ElIcon> 拟合 {{ fitBadge.score }} · {{ fitBadge.text }}
+        </span>
+
       <!-- 用量状态条（F1）：模型 ｜ 上下文水位线 ｜ 累计 token/费用；:key 让切换
            会话时重置「稍后」静音状态。 -->
       <ContextStatusBar
@@ -2504,6 +2529,15 @@ function onKey(e: Event) {
   color: var(--el-text-color-secondary);
 }
 .batch-bar__status { font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.batch-bar__fit {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--el-color-primary);
+  font-size: 12px;
+}
+.batch-bar__fit:hover { text-decoration: underline; }
 .batch-bar__id { cursor: pointer; font-family: monospace; font-size: 11px;
   color: var(--el-text-color-secondary); text-decoration: underline dotted; }
 .batch-bar__id:hover { color: var(--el-color-primary); }

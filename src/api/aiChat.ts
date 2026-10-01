@@ -333,6 +333,14 @@ export function getBatchOfSession(sessionId: string) {
     `/ai/chat/sessions/${encodeURIComponent(sessionId)}/batch`, undefined, { silent: true })
 }
 
+/** 会话最新 attempt 的拟合摘要（owner 只读；管理页 SkillOpt 有完整明细）。 */
+export function getSessionSkillFit(id: string) {
+  return get<{ data: Array<{ defKind: string; defName: string;
+    stepsTotal: number; stepsHit: number; score: number; status: string }> | null }>(
+    `/ai/chat/sessions/${encodeURIComponent(id)}/skill-fit`, undefined, { silent: true },
+  )
+}
+
 /** 会话的全部工具调用时间线（根会话 + 全部子代理，agent_tool_calls 账本）。 */
 export interface SessionToolCall {
   id: number

@@ -54,6 +54,23 @@
                                 @click="diagnose(row)">分析偏差</ElButton>
                     </div>
 
+                    <template v-if="subagentFitsOf(row).length">
+                      <p class="muted" style="margin:8px 0 4px">子代理层拟合（按层独立判定，不并入上方父级）：</p>
+                      <ElTable :data="subagentFitsOf(row)" size="small">
+                        <ElTableColumn label="子代理" width="120">
+                          <template #default="{ row: sf }">{{ sf.subtaskAgent || '—' }}</template>
+                        </ElTableColumn>
+                        <ElTableColumn prop="defName" label="定义" min-width="140" />
+                        <ElTableColumn label="拟合" min-width="180">
+                          <template #default="{ row: sf }">
+                            <SkillFitBadge :steps-total="sf.stepsTotal"
+                                           :per-step="sf.perStep"
+                                           :score="sf.score" :status="sf.status" />
+                          </template>
+                        </ElTableColumn>
+                      </ElTable>
+                    </template>
+
                     <div v-if="diagnosisOf(row)" class="fit-diag">
                       <div class="fit-diag__cause">
                         偏差原因：
@@ -107,6 +124,25 @@
                                  :score="row.score" :status="row.status" />
                 </template>
               </ElTableColumn>
+            </ElTable>
+
+            <h4 class="skillopt__sec">偏离模式（跨版本聚合）</h4>
+            <p class="muted">
+              全部历史拟合中步骤级 miss/错序的聚合排序——同一处定义缺陷在多少任务、
+              哪些版本反复出现（改定义优先级参考）。仅统计 partial/diverged 任务。
+            </p>
+            <p v-if="!fitPatterns.length" class="muted">暂无偏离模式数据。</p>
+            <ElTable v-else :data="fitPatterns" size="small" style="margin-bottom:18px">
+              <ElTableColumn prop="defName" label="定义" min-width="150" />
+              <ElTableColumn prop="stepId" label="偏差步骤" width="130" />
+              <ElTableColumn prop="missTasks" label="偏离任务数" width="100" sortable />
+              <ElTableColumn prop="versionsAffected" label="涉及版本" width="90" />
+              <ElTableColumn label="版本 hash" min-width="160">
+                <template #default="{ row }">
+                  <span class="mono">{{ (row.versionHashes || []).join(' ') }}</span>
+                </template>
+              </ElTableColumn>
+              <ElTableColumn prop="avgScore" label="均分" width="70" />
             </ElTable>
 
             <h4 class="skillopt__sec">定义版本效果对比</h4>
@@ -451,7 +487,8 @@ async function load() {
 const fitLoading = ref(false)
 const fitError = ref('')
 const fits = ref<SkillFitRow[]>([])
-const detailMap = ref<Record<string, { fits: SkillFitDetail[]; loading: boolean; loaded: boolean }>>({})
+const fitPatterns = ref<Array<Record<string, any>>>([])
+const detailMap = ref<Record<string, { fits: SkillFitDetail[]; subagentFits: SkillFitDetail[]; loading: boolean; loaded: boolean }>>({})
 const diagMap = ref<Record<string, SkillFitDiagnosis>>({})
 const recomputing = ref('')
 const diagnosing = ref('')
@@ -478,15 +515,21 @@ function diagnosisOf(row: SkillFitRow): SkillFitDiagnosis | null {
   return diagMap.value[fitRowKey(row)] ?? detailOf(row)?.diagnosis ?? null
 }
 
+/** 子代理层拟合子条目（spec §10 非目标④转正）：明细端点返回的 subagentFits。 */
+function subagentFitsOf(row: SkillFitRow): SkillFitDetail[] {
+  return detailMap.value[row.attemptId]?.subagentFits ?? []
+}
+
 async function ensureFitDetail(attemptId: string) {
   const cur = detailMap.value[attemptId]
   if (cur?.loaded || cur?.loading) return
-  detailMap.value[attemptId] = { fits: [], loading: true, loaded: false }
+  detailMap.value[attemptId] = { fits: [], subagentFits: [], loading: true, loaded: false }
   try {
     const res = await getSkillFitDetail(attemptId)
-    detailMap.value[attemptId] = { fits: res.fits || [], loading: false, loaded: true }
+    detailMap.value[attemptId] = { fits: res.fits || [],
+      subagentFits: (res as any).subagentFits || [], loading: false, loaded: true }
   } catch {
-    detailMap.value[attemptId] = { fits: [], loading: false, loaded: true }
+    detailMap.value[attemptId] = { fits: [], subagentFits: [], loading: false, loaded: true }
   }
 }
 function onFitExpand(row: SkillFitRow, expanded: SkillFitRow[]) {
@@ -498,7 +541,7 @@ async function recomputeFit(row: SkillFitRow) {
   recomputing.value = fitRowKey(row)
   try {
     const res = await recomputeSkillFit(row.attemptId)
-    detailMap.value[row.attemptId] = { fits: res.fits || [], loading: false, loaded: true }
+    detailMap.value[row.attemptId] = { fits: res.fits || [], subagentFits: [], loading: false, loaded: true }
     // 重算覆盖后旧诊断一并失效（后端也会置空 diagnosis 列）
     for (const k of Object.keys(diagMap.value)) {
       if (k.startsWith(`${row.attemptId}|`)) delete diagMap.value[k]
@@ -716,6 +759,13 @@ async function loadFits(withVersions = true) {
     fitLoading.value = false
   }
   if (withVersions) await loadDefVersions()
+  await loadFitPatterns()
+}
+async function loadFitPatterns() {
+  try {
+    const res = await get('/ai/chat/admin/skill-def-patterns?limit=50')
+    fitPatterns.value = res.patterns || []
+  } catch { /* 非关键 */ }
 }
 async function loadDefVersions() {
   try {

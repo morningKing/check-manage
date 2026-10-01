@@ -1270,6 +1270,34 @@ def batch_of_session(sid):
     return jsonify({'batchId': row[0]})
 
 
+@ai_chat_bp.route('/sessions/<sid>/skill-fit', methods=['GET'])
+@login_required
+def session_skill_fit(sid):
+    """本会话最新 attempt 的拟合摘要（owner 只读，2026-10-01 非目标③）：
+    AI 会话页的轻量拟合入口数据源——只回摘要（score/status/stepTotal），
+    明细仍在管理页 SkillOpt。无 attempt / 无拟合 → {data: null}。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT a.id FROM ai_execution_attempts a "
+                "WHERE a.session_id = %s "
+                "ORDER BY a.started_at DESC NULLS LAST LIMIT 1", (sid,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'data': None})
+            cur.execute(
+                "SELECT def_kind, def_name, steps_total, steps_hit, score, status "
+                "FROM ai_skill_fit_results WHERE attempt_id = %s "
+                "ORDER BY def_kind, def_name", (row[0],))
+            cols = ['defKind', 'defName', 'stepsTotal', 'stepsHit', 'score', 'status']
+            fits = [dict(zip(cols, r)) for r in cur.fetchall()]
+    return jsonify({'data': fits or None})
+
+
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
 def sse_events(sid):

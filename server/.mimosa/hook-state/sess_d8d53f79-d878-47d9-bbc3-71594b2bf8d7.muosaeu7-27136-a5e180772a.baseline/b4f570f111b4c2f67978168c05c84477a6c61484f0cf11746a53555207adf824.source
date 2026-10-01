@@ -436,6 +436,47 @@ def _recompute_batch_status(batch_id: str, anchor_sid: str | None = None) -> Non
         if not outbox_enabled():
             _notify_callback(batch_id, new_status, callback_url, callback_secret,
                              done, failed, total)
+    if new_status in ('completed', 'partial', 'failed'):
+        _cleanup_batch_oc_sessions(batch_id)
+
+
+def _cleanup_batch_oc_sessions(batch_id: str) -> None:
+    """批整体终态后清理其子会话的 OpenCode 会话（LRU 防淘汰，2026-09-30）。
+
+    OC 会话列表有 100 条的 LRU 保留上限；平台积累的已终态子会话（e2e、
+    历史批次）会把**运行中**的会话挤出池——后续 get_messages 404，触发
+    代价高昂的「会话失效自愈」（新建+注入有损摘要）。批收敛后子会话对话
+    已全部落库（查看对话读平台库，不依赖 OC），OC 侧会话即无用，删除腾位。
+    env AI_BATCH_KEEP_OC_SESSIONS=1 可保留（依赖 continue 完整上下文、
+    不接受自愈有损摘要的部署可关闭清理；关闭后需自行保障 OC 会话配额）。
+    best-effort：单会话删除失败（已淘汰/不可达）跳过，不影响任何状态。"""
+    import os
+    if os.getenv('AI_BATCH_KEEP_OC_SESSIONS', '') == '1':
+        return
+    try:
+        from utils.opencode_client import OpenCodeClient
+        from config import OPENCODE_BASE_URL
+        client = OpenCodeClient(OPENCODE_BASE_URL)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, opencode_session_id FROM ai_chat_sessions "
+                    "WHERE batch_id = %s AND opencode_session_id IS NOT NULL",
+                    (batch_id,))
+                rows = cur.fetchall()
+        if not rows:
+            return
+        removed = 0
+        for _sid, oc in rows:
+            try:
+                client.delete_session(oc)
+                removed += 1
+            except Exception:
+                pass  # 已被 LRU 淘汰 / OC 不可达——best-effort
+        logger.info('batch terminal cleanup: removed %d/%d oc sessions batch=%s',
+                    removed, len(rows), batch_id)
+    except Exception:  # noqa: BLE001 —— 清理失败不影响任何批任务状态
+        logger.exception('batch oc session cleanup failed batch=%s', batch_id)
 
 
 def _notify_callback(batch_id, status, callback_url, callback_secret,
@@ -1881,17 +1922,30 @@ class BatchWorker:
                     group = {'agents': key, 'checks': checks,
                              'subagent_segments': [], 'trace': []}
                     from utils import verifier as _v
-                    run = _v._run_group(opencode_client, group, directory,
+                    # 判官客户端用真 OpenCodeClient（与终态核对同源）——本模块的
+                    # opencode_client 是 _OpenCodeFacade 门面，未包装
+                    # send_prompt_async，传过去会让判官会话创建恒失败。
+                    run = _v._run_group(_v._default_client(), group, directory,
                                         self._deleg_gate_model(session_id),
                                         session_id,
                                         _v.DEFAULT_TIMEOUT_SEC, _v.DEFAULT_STALL_SEC)
                     for st_id, _i in members:
                         done[(st_id, session_id)] = True
+                    # 三态分流：passed/failed 落地暂存（终态合并跳过重复判官）；
+                    # inconclusive（材料不足——如委派仍在进行中）不暂存也不
+                    # 即停，标 done 后由终态核对以完整材料重判。
+                    landed = [x for x in run['results']
+                              if x['status'] in ('passed', 'failed')]
                     cached = self._deleg_gate_results.setdefault(session_id, [])
-                    cached.extend(r['results'])
-                    failed_names = [r['name'] for r in r['results']
-                                    if r['status'] == 'failed']
+                    cached.extend(landed)
+                    failed_names = [x['name'] for x in landed
+                                    if x['status'] == 'failed']
                     if not failed_names:
+                        if any(x['status'] == 'inconclusive'
+                               for x in run['results']):
+                            logger.info('delegation gate inconclusive sid=%s '
+                                        'agents=%s（材料不足，终态重判）',
+                                        session_id, ','.join(key))
                         continue
                     # gate_retry 语义在终态合并处生效；这里只做「未开修正→立即停」
                     bid = self._deleg_gate_batch(session_id)
