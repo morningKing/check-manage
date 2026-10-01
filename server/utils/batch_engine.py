@@ -2779,6 +2779,9 @@ class BatchWorker:
             return
         from utils import execution_audit
         execution_audit.finish_latest_running(session_id, 'completed')
+        # SkillOpt 拟合收敛钩子：attempt 收口即算拟合（best-effort，失败仅记日志）
+        from utils import skill_fit as _sfit
+        _sfit.compute_for_session(session_id)
         if res.get('batch_status') in ('completed', 'partial', 'failed'):
             _notify_callback(batch_id, res['batch_status'],
                              res.get('callback_url'), res.get('callback_secret'),
@@ -2795,6 +2798,10 @@ class BatchWorker:
         # 不留悬挂 running attempt（F9 的终态侧）。
         execution_audit.finish_latest_running(
             session_id, 'failed', error_code='CHILD_FAILED', error_message=error)
+        # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（CAS 未命中 early-return
+        # 也在其后，不能放到方法尾部，否则漏掉 miss 路径）。
+        from utils import skill_fit as _sfit
+        _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'failed',
             generation=self._resolve_generation(session_id, generation),
@@ -2822,6 +2829,10 @@ class BatchWorker:
         from utils import batch_repo, execution_audit
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='CANCELLED')
+        # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（同 _mark_failed，钩子
+        # 必须在 CAS 未命中 early-return 之前）。
+        from utils import skill_fit as _sfit
+        _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'cancelled',
             generation=self._resolve_generation(session_id, generation),

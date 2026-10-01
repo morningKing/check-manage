@@ -216,3 +216,50 @@ fit:
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
+def test_compute_for_session_hook_invoked(db_conn, monkeypatch):
+    """收敛钩子入口：会话无 attempt → None 且不抛（非审计来源不触发拟合）；
+    有 attempt → 委托 compute_attempt_fit（打桩计数，入参是 attempt id）。"""
+    import uuid as _uuid
+    from db import get_db
+    from utils import skill_fit
+
+    uid, sid, att_sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(5))
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) "
+                    "VALUES (%s, %s, 'x', 'SF', 'developer')", (uid, f'sfh_{uid[:8]}'))
+                cur.execute(
+                    "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                    "VALUES (%s, %s, 'sf', 'p', 2)", (bid, uid))
+                for s, seq in ((sid, 0), (att_sid, 1)):
+                    cur.execute(
+                        "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                        "  batch_seq, workspace_path, session_token) "
+                        "VALUES (%s, %s, 'completed', %s, %s, %s, %s)",
+                        (s, uid, bid, seq, f'C:\\sf\\{s}', f'tok-{s[:12]}'))
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                    "  operation, started_at, finished_at) "
+                    "VALUES (%s, %s, 'batch', 'send', NOW() - interval '5 minutes', NOW())",
+                    (attempt, att_sid))
+
+        called = []
+        monkeypatch.setattr(skill_fit, 'compute_attempt_fit',
+                            lambda a, get_db=None: called.append(a) or [])
+        # 无 attempt 的会话 → None（不委托）
+        assert skill_fit.compute_for_session(sid, get_db=get_db) is None
+        # 有 attempt 的会话 → 委托 compute_attempt_fit(attempt_id)（打桩返回 []）
+        assert skill_fit.compute_for_session(att_sid, get_db=get_db) == []
+        assert called == [attempt]
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id IN %s",
+                            ((sid, att_sid),))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
