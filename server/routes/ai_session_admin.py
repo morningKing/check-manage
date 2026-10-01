@@ -1081,9 +1081,9 @@ def skill_def_patterns():
                        count(*)                                  AS miss_tasks,
                        count(DISTINCT f.def_hash)                AS versions_affected,
                        round(avg(f.score))                       AS avg_score,
-                       array_agg(DISTINCT COALESCE(f.def_hash, '') FILTER (
+                       array_agg(DISTINCT COALESCE(f.def_hash, '')) FILTER (
                          WHERE f.def_hash IS NOT NULL AND f.def_hash <> ''
-                       ))                                        AS hashes,
+                       )                                        AS hashes,
                        max(f.computed_at)                        AS last_seen
                 FROM ai_skill_fit_results f
                 CROSS JOIN LATERAL jsonb_array_elements(f.per_step) p
