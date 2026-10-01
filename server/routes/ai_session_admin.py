@@ -837,3 +837,179 @@ def skill_analytics():
             scols = [d[0] for d in cur.description]
             step_stats = [dict(zip(scols, r)) for r in cur.fetchall()]
     return jsonify({'skills': items, 'stepStats': step_stats})
+
+
+# ── SkillOpt 任务拟合（task-fit）：结果列表/明细/重算 + 定义版本时间线 ─────
+
+def _fit_camel(r: dict, with_steps: bool = False) -> dict:
+    """ai_skill_fit_results 行 → API 契约（camelCase）。明细额外带
+    perStep/diagnosis；列表不带（负载考虑，步骤详情点开明细再看）。"""
+    out = {
+        'attemptId': r.get('attempt_id'),
+        'sessionId': r.get('session_id'),
+        'defKind': r.get('def_kind'),
+        'defName': r.get('def_name'),
+        'defHash': r.get('def_hash'),
+        'stepsTotal': r.get('steps_total'),
+        'stepsHit': r.get('steps_hit'),
+        'score': r.get('score'),
+        'status': r.get('status'),
+        'computedAt': r['computed_at'].isoformat()
+        if r.get('computed_at') else None,
+    }
+    if with_steps:
+        out['perStep'] = r.get('per_step') or []
+        out['diagnosis'] = r.get('diagnosis')
+    return out
+
+
+@ai_execution_admin_bp.get('/skill-fit')
+@require_permission('admin.ai_chat_admin')
+def list_skill_fits():
+    """任务拟合结果列表（computed_at 倒序，?sessionId= 过滤，limit 默认 50）。"""
+    from db import get_db
+    try:
+        limit = min(max(int(request.args.get('limit') or 50), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+    session_id = (request.args.get('sessionId') or '').strip() or None
+    sql = ("SELECT attempt_id, session_id, def_kind, def_name, def_hash, "
+           "       steps_total, steps_hit, score, status, computed_at "
+           "FROM ai_skill_fit_results")
+    params: list = []
+    if session_id:
+        sql += " WHERE session_id = %s"
+        params.append(session_id)
+    sql += " ORDER BY computed_at DESC LIMIT %s"
+    params.append(limit)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    return jsonify({'fits': [_fit_camel(r) for r in rows]})
+
+
+@ai_execution_admin_bp.get('/skill-fit/<attempt_id>')
+@require_permission('admin.ai_chat_admin')
+def skill_fit_detail(attempt_id):
+    """单 attempt 的拟合明细（含 perStep/diagnosis）；无任何结果行 → 404。"""
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT attempt_id, session_id, def_kind, def_name, def_hash, "
+                "       steps_total, steps_hit, score, status, per_step, "
+                "       diagnosis, computed_at "
+                "FROM ai_skill_fit_results WHERE attempt_id = %s "
+                "ORDER BY def_kind, def_name", (attempt_id,))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    if not rows:
+        return jsonify({'error': '该 attempt 无拟合结果'}), 404
+    return jsonify({'fits': [_fit_camel(r, with_steps=True) for r in rows]})
+
+
+@ai_execution_admin_bp.post('/skill-fit/<attempt_id>/recompute')
+@require_permission('admin.ai_chat_admin')
+def skill_fit_recompute(attempt_id):
+    """幂等重算：委托 utils.skill_fit.compute_attempt_fit，结果行按
+    (attempt_id, def_name) upsert（唯一索引 uq_skill_fit_attempt_def），
+    重复调用行数不膨胀，结果以最后一次为准。"""
+    from db import get_db
+    from utils import skill_fit
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM ai_execution_attempts WHERE id = %s",
+                        (attempt_id,))
+            if not cur.fetchone():
+                return jsonify({'error': 'attempt 不存在'}), 404
+    results = skill_fit.compute_attempt_fit(attempt_id)
+    return jsonify({'fits': [_fit_camel(r, with_steps=True) for r in results]})
+
+
+@ai_execution_admin_bp.get('/skill-def-versions')
+@require_permission('admin.ai_chat_admin')
+def list_skill_def_versions():
+    """定义版本时间线：按 (def_kind, def_name, content_hash) 聚合拟合指标。
+
+    版本行 LEFT JOIN 拟合聚合——无拟合结果的版本也出现在时间线
+    （tasks=0，avgScore/fitRate 为 null，COALESCE 兜底）；fitRate = 状态为
+    fit 的任务占比（分母只计有拟合结果的任务）。"""
+    from db import get_db
+    def_kind = (request.args.get('defKind') or '').strip() or None
+    def_name = (request.args.get('defName') or '').strip() or None
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT v.id, v.def_kind, v.def_name, v.content_hash,
+                       v.version_label, v.note, v.first_seen_at,
+                       COALESCE(t.tasks, 0)     AS tasks,
+                       COALESCE(t.fit_tasks, 0) AS fit_tasks,
+                       COALESCE(t.score_sum, 0) AS score_sum
+                FROM ai_skill_def_versions v
+                LEFT JOIN (
+                  SELECT def_kind, def_name, def_hash AS content_hash,
+                         count(*)                               AS tasks,
+                         count(*) FILTER (WHERE status = 'fit') AS fit_tasks,
+                         sum(score)                             AS score_sum
+                  FROM ai_skill_fit_results
+                  GROUP BY def_kind, def_name, def_hash
+                ) t
+                  ON t.def_kind = v.def_kind
+                 AND t.def_name = v.def_name
+                 AND t.content_hash = v.content_hash
+                WHERE (%s IS NULL OR v.def_kind = %s)
+                  AND (%s IS NULL OR v.def_name = %s)
+                ORDER BY v.def_name, v.first_seen_at
+                """, (def_kind, def_kind, def_name, def_name))
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    versions = []
+    for r in rows:
+        tasks = r['tasks'] or 0
+        versions.append({
+            'id': r['id'],
+            'defKind': r['def_kind'],
+            'defName': r['def_name'],
+            'contentHash': r['content_hash'],
+            'versionLabel': r['version_label'],
+            'note': r['note'],
+            'firstSeenAt': r['first_seen_at'].isoformat()
+            if r.get('first_seen_at') else None,
+            'tasks': tasks,
+            'avgScore': round(r['score_sum'] / tasks, 1) if tasks else None,
+            'fitRate': round(r['fit_tasks'] / tasks, 4) if tasks else None,
+        })
+    return jsonify({'versions': versions})
+
+
+@ai_execution_admin_bp.patch('/skill-def-versions/<version_id>')
+@require_permission('admin.ai_chat_admin')
+def patch_skill_def_version(version_id):
+    """版本可读化标注（versionLabel/note）。显式传 null 可清空对应字段，
+    未提供的字段保持不变。"""
+    from db import get_db
+    body = request.get_json(silent=True) or {}
+    sets, params = [], []
+    if 'versionLabel' in body:
+        sets.append("version_label = %s")
+        params.append(body.get('versionLabel'))
+    if 'note' in body:
+        sets.append("note = %s")
+        params.append(body.get('note'))
+    if not sets:
+        return jsonify({'error': 'versionLabel/note 至少提供一项'}), 400
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_skill_def_versions SET " + ', '.join(sets) +
+                " WHERE id = %s", (*params, version_id))
+            updated = cur.rowcount
+        conn.commit()
+    if not updated:
+        return jsonify({'error': '版本不存在'}), 404
+    log_operation('update', 'ai_skill_def_versions', version_id, None,
+                  'SkillOpt 定义版本标注')
+    return jsonify({'ok': True})
