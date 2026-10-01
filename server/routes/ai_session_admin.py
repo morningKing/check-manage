@@ -1013,3 +1013,74 @@ def patch_skill_def_version(version_id):
     log_operation('update', 'ai_skill_def_versions', version_id, None,
                   'SkillOpt 定义版本标注')
     return jsonify({'ok': True})
+
+
+# ── SkillOpt 任务拟合 AI 能力层：步骤生成 / 回写 / 偏差诊断（§5/§5b） ─────
+
+@ai_execution_admin_bp.post('/skill-def-steps/generate')
+@require_permission('admin.ai_chat_admin')
+def skill_def_steps_generate():
+    """AI 生成 fit.steps 草案（body {kind, path}）：读定义全文交
+    utils.skill_fit_ai.generate_steps。读文件失败 404；AI 失败 502。"""
+    from utils import skill_fit_ai
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path 必填'}), 400
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except (OSError, ValueError) as e:
+        return jsonify({'error': f'定义文件读取失败: {e}'}), 404
+    try:
+        steps = skill_fit_ai.generate_steps(text)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 502
+    log_operation('create', 'ai_skill_def_steps', path, body.get('kind'),
+                  'SkillOpt AI 生成 fit.steps 草案（产生 LLM 调用成本）')
+    return jsonify({'steps': steps})
+
+
+@ai_execution_admin_bp.post('/skill-def-steps/apply')
+@require_permission('admin.ai_chat_admin')
+def skill_def_steps_apply():
+    """回写 fit.steps 到定义文件（body {path, steps}）：apply 前对每个
+    args_pattern 跑 validate_pg_regex，非法 400 且不写文件；文件不存在 404。"""
+    from utils import skill_fit_ai
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    steps = body.get('steps')
+    if not path or not isinstance(steps, list):
+        return jsonify({'error': 'path 必填，steps 必须是数组'}), 400
+    if not os.path.isfile(path):
+        return jsonify({'error': '定义文件不存在'}), 404
+    try:
+        out_path = skill_fit_ai.apply_steps(path, steps)
+    except FileNotFoundError as e:
+        return jsonify({'error': f'定义文件不存在: {e}'}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    log_operation('update', 'ai_skill_def_steps', out_path, None,
+                  'SkillOpt 回写 fit.steps 到定义文件')
+    return jsonify({'path': out_path})
+
+
+@ai_execution_admin_bp.post('/skill-fit/<result_id>/diagnose')
+@require_permission('admin.ai_chat_admin')
+def skill_fit_diagnose(result_id):
+    """偏差诊断（手动触发，§5b）：partial/diverged 结果行 → 结构化诊断
+    {cause, suggestions[], revised_steps} 写入 diagnosis 列；
+    (result_id, def_hash, 轨迹签名) 进程内缓存，同签名重复点击不再打 LLM。
+    结果行不存在 404；非 partial/diverged 400；AI 失败 502。"""
+    from utils import skill_fit_ai
+    try:
+        diagnosis = skill_fit_ai.diagnose_result(result_id)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 502
+    log_operation('create', 'ai_skill_fit_diagnosis', result_id, None,
+                  'SkillOpt 偏差诊断（产生 LLM 调用成本）')
+    return jsonify({'diagnosis': diagnosis})
