@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS ai_skill_fit_results (
   per_step      JSONB NOT NULL DEFAULT '[]',
                 -- [{id,name,status:'hit'|'miss'|'skipped',
                 --   evidence:[{tool,args,occurredAt}]}]
+  diagnosis     JSONB,                      -- 偏差诊断（手动触发，见 §5b）
+                -- {cause, suggestions[], revised_steps, analyzed_at,
+                --  trace_sig}
   computed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS ai_skill_fit_attempt_idx
@@ -126,6 +129,26 @@ status=parse_error、日志留痕）。
   content_hash 变化，历史拟合结果不追溯。
 - **失效**：定义 hash 变化后旧生成结果视为过期，UI 提示重新生成。
 
+## 5b. 偏差诊断（手动触发，2026-10-01 增补）
+
+对有偏差的结果行（status=partial/diverged），管理页提供「分析偏差」按钮：
+
+- **输入**：定义全文（fit.steps + 正文）、拟合 per_step 证据、miss 步骤
+  前后的实际工具调用上下文、任务 prompt；
+- **输出（结构化 JSON，存结果行 `diagnosis` 列）**：
+  - `cause`：偏差原因分类——`definition_stale`（流程已变，步骤该更新）/
+    `step_redundant`（定义多余）/`order_deviation`（做了但次序不对）/
+    `model_noncompliance`（模型未遵循，可能 prompt 不足）/`environment`
+    （工具报错导致）；
+  - `suggestions[]`：每类原因的具体修改建议（改定义/改 prompt/改环境）；
+  - `revised_steps`：修订后的 steps 草案——可直接送入 §5 生成器的
+    编辑-回写流程落地；
+- **触发**：仅手动（结果行按钮）。按 `(attempt_id, def_hash, 轨迹签名)`
+  缓存——同签名重复点击不重复调用 LLM；重新拟合（轨迹变化）后缓存失效；
+- **通道与失败语义**：AI 设置通道（同 §5 生成器），失败 502、不落库。
+- 二期方向：按 def_name 聚合多次偏离——「该技能 80% 的任务在同一步骤
+  偏离」→ 定义改进优先级排序。
+
 ## 6. API（admin 权限，挂现有 skillopt 路由组）
 
 | 端点 | 说明 |
@@ -135,6 +158,7 @@ status=parse_error、日志留痕）。
 | `POST /ai/skillopt/fits/<attempt_id>/recompute` | 手动重算（幂等） |
 | `POST /ai/skillopt/definitions/steps/generate` | AI 生成步骤建议（见 §5） |
 | `POST /ai/skillopt/definitions/steps/apply` | 确认回写 frontmatter（见 §5） |
+| `POST /ai/skillopt/fits/<result_id>/diagnose` | 偏差诊断（手动触发，见 §5b） |
 
 计算入口：attempt 收敛钩子（`collect_skill_invocations` 调用点旁追加
 `skill_fit.compute_attempt_fit(attempt_id)`，best-effort 异常吞掉）。
@@ -146,6 +170,9 @@ status=parse_error、日志留痕）。
   灰=skipped）+ score 数字 + 状态徽标（拟合/部分拟合/偏离/无轨迹/解析失败）。
 - **行展开**：步骤明细表（步骤名 / 状态图标 / 证据工具调用摘要 tool+args 截断
   + 时间）；`recompute` 按钮；跳转该会话的 Attempt 链入口。
+- **偏差诊断**：partial/diverged 行显示「分析偏差」按钮 → 诊断面板
+  （原因分类标签 + 建议 + 修订步骤 diff 预览）→「采纳修订步骤」把
+  revised_steps 送入定义步骤编辑-回写流程（§5）。
 - **定义步骤管理**：定义清单（从 manifests 聚合）每行「生成步骤」按钮 →
   建议编辑对话框（可增删改步骤与 expect）→ 试算预览 → 保存回写。
 - 空态：无 fit 声明的定义与无轨迹的任务均有明确文案，不假装能拟合。
@@ -168,6 +195,8 @@ status=parse_error、日志留痕）。
 - **路由测试**：fits 列表/明细的 admin 权限与形状；recompute 幂等。
 - **生成器测试**：打桩 AI 通道（schema 约束与失败 502 路径）；apply 的
   frontmatter 合并（保留原字段与正文）与正则校验。
+- **偏差诊断测试**：打桩 AI 通道（结构化输出解析/失败 502）；诊断缓存
+  （同轨迹签名不重复调用；重拟合后失效）。
 - **真实链路手工验证**：跑一个带 fit 声明的技能的批任务 → 收敛后管理页看
   图标与步骤明细。
 
