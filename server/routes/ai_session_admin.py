@@ -1031,16 +1031,39 @@ def patch_skill_def_version(version_id):
 
 # ── SkillOpt 任务拟合 AI 能力层：步骤生成 / 回写 / 偏差诊断（§5/§5b） ─────
 
+def _path_in_allowed_roots(path: str) -> bool:
+    """SkillOpt 定义文件路径 confinement（终审 Fix 3）：path realpath 归一后
+    必须落在允许根内（AI 工作区根 / 平台全局技能根，后者是前者子目录，
+    显式并列以容忍二者将来分体部署）。参照 utils/global_skills.py
+    read_skill_file 的 normpath+commonpath 模式——commonpath 相等比较
+    （优于 startswith 前缀碰撞），跨盘符等无法比较的情形一律视为逃逸。"""
+    from config import AI_WORKSPACE_ROOT
+    from utils.global_skills import global_skills_root
+    roots = {os.path.realpath(AI_WORKSPACE_ROOT),
+             os.path.realpath(global_skills_root(AI_WORKSPACE_ROOT))}
+    real = os.path.realpath(path)
+    for root in roots:
+        try:
+            if os.path.commonpath([root, real]) == root:
+                return True
+        except ValueError:            # Windows 跨盘符等：无法共根 → 逃逸
+            continue
+    return False
+
+
 @ai_execution_admin_bp.post('/skill-def-steps/generate')
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_generate():
     """AI 生成 fit.steps 草案（body {kind, path}）：读定义全文交
-    utils.skill_fit_ai.generate_steps。读文件失败 404；AI 失败 502。"""
+    utils.skill_fit_ai.generate_steps。path 逃出允许根 400；读文件失败 404；
+    AI 失败 502。"""
     from utils import skill_fit_ai
     body = request.get_json(silent=True) or {}
     path = (body.get('path') or '').strip()
     if not path:
         return jsonify({'error': 'path 必填'}), 400
+    if not _path_in_allowed_roots(path):
+        return jsonify({'error': 'path escapes allowed roots'}), 400
     try:
         with open(path, encoding='utf-8', errors='replace') as f:
             text = f.read()
@@ -1058,14 +1081,17 @@ def skill_def_steps_generate():
 @ai_execution_admin_bp.post('/skill-def-steps/apply')
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_apply():
-    """回写 fit.steps 到定义文件（body {path, steps}）：apply 前对每个
-    args_pattern 跑 validate_pg_regex，非法 400 且不写文件；文件不存在 404。"""
+    """回写 fit.steps 到定义文件（body {path, steps}）：path 逃出允许根 400；
+    apply 前对每个 args_pattern 跑 validate_pg_regex，非法 400 且不写文件；
+    文件不存在 404。"""
     from utils import skill_fit_ai
     body = request.get_json(silent=True) or {}
     path = (body.get('path') or '').strip()
     steps = body.get('steps')
     if not path or not isinstance(steps, list):
         return jsonify({'error': 'path 必填，steps 必须是数组'}), 400
+    if not _path_in_allowed_roots(path):
+        return jsonify({'error': 'path escapes allowed roots'}), 400
     if not os.path.isfile(path):
         return jsonify({'error': '定义文件不存在'}), 404
     try:

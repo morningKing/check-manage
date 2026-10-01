@@ -2949,6 +2949,10 @@ class BatchWorker:
         execution_audit.finish_latest_running(
             session_id, 'stopped', error_code='NEEDS_REVIEW',
             error_message=reason)
+        # SkillOpt 拟合收敛钩子：finish 已执行即算拟合（同 _mark_failed，钩子
+        # 必须在 CAS 未命中 early-return 之前）。
+        from utils import skill_fit as _sfit
+        _sfit.compute_for_session(session_id)
         res = batch_repo.transition_child(
             session_id, 'needs_review',
             generation=self._resolve_generation(session_id, generation),

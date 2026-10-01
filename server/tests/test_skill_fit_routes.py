@@ -135,3 +135,50 @@ def test_skill_fit_list_and_detail(client, admin_headers, db_conn, tmp_path):
 def test_skill_fit_detail_missing_404(client, admin_headers):
     r = client.get('/ai/chat/admin/skill-fit/no-such-attempt', headers=admin_headers)
     assert r.status_code == 404
+
+
+# ── 终审 Fix 3：generate/apply 的 path confinement ─────────────────────────
+
+# Windows 下跨盘符绝对路径 / POSIX 下的系统绝对路径，二者都落在允许根外
+_ESCAPE_PATH = 'C:\\Windows\\win.ini' if os.name == 'nt' else '/etc/passwd'
+
+
+def test_skill_def_steps_generate_rejects_path_escape(client, admin_headers):
+    """generate 的 path 逃出允许根（AI 工作区根/全局技能根）→ 400，
+    不读文件不打 LLM。"""
+    r = client.post('/ai/chat/admin/skill-def-steps/generate',
+                    headers=admin_headers,
+                    json={'kind': 'skill', 'path': _ESCAPE_PATH})
+    assert r.status_code == 400
+    assert r.get_json()['error'] == 'path escapes allowed roots'
+
+
+def test_skill_def_steps_apply_rejects_path_escape(client, admin_headers):
+    """apply 的 path 逃出允许根 → 400（先于 isfile/写盘判定）。"""
+    r = client.post('/ai/chat/admin/skill-def-steps/apply',
+                    headers=admin_headers,
+                    json={'path': _ESCAPE_PATH, 'steps': []})
+    assert r.status_code == 400
+    assert r.get_json()['error'] == 'path escapes allowed roots'
+
+
+def test_skill_def_steps_generate_allows_workspace_path(client, admin_headers,
+                                                        tmp_path, monkeypatch):
+    """confinement 正例：允许根内的定义文件正常走 generate——防止把合法
+    路径一并拦死的回归（AI 通道打桩，不产生 LLM 调用）。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    import utils.skill_fit_ai as _fa
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
+        {'id': 'clone', 'name': '克隆仓库',
+         'expect': [{'tool': 'bash', 'args_pattern': 'git clone'}]}]})
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    d = tmp_path / 'demo-skill'
+    d.mkdir()
+    (d / 'SKILL.md').write_text('# 数据拉取\n1. clone\n', encoding='utf-8')
+    r = client.post('/ai/chat/admin/skill-def-steps/generate',
+                    headers=admin_headers,
+                    json={'kind': 'skill', 'path': str(d / 'SKILL.md')})
+    assert r.status_code == 200
+    assert r.get_json()['steps'][0]['id'] == 'clone'

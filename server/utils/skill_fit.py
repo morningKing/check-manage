@@ -80,11 +80,35 @@ def parse_cached(path: str, content_hash: str) -> list[dict]:
             steps = parse_fit_steps(f.read())
     except FileNotFoundError:
         raise FitParseError(f'定义文件不存在: {path}')
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as e:
+        # 终审 Fix 4：文件级异常统一收敛为 FitParseError——compute 路径据此
+        # 落 parse_error 结果行，而不是让整个 attempt 中断（yaml.YAMLError
+        # 正常已在 parse_fit_steps 内转 FitParseError，这里兜底防御）。
+        raise FitParseError(f'定义文件读取/解析失败: {path} ({e})') from e
     if content_hash:
         _parse_cache[content_hash] = steps
         while len(_parse_cache) > _PARSE_CACHE_MAX:
             _parse_cache.popitem(last=False)
     return steps
+
+
+# 终审 Fix 2：引擎错配防御的告警去重（同一坏模式只 warning 一次，防刷日志）。
+_regex_warned: set[str] = set()
+
+
+def _regex_match(pattern: str, text: str) -> bool:
+    """Python re 匹配（引擎对齐防御）：apply/preview 已在入口校验 Python re
+    合法性，但存量定义/直写库里的模式仍可能是 PG 合法而 Python re 非法的
+    （如 PG 独有断言 \\y）——编译失败按不匹配处理（log.warning 一次），
+    绝不抛，不让 compute 中断整个 attempt。"""
+    try:
+        return re.search(pattern, text) is not None
+    except re.error as ex:
+        if pattern not in _regex_warned and len(_regex_warned) < 256:
+            _regex_warned.add(pattern)
+            log.warning('skill_fit: args_pattern Python re 编译失败，该 expect '
+                        '按 miss 处理: %r (%s)', pattern, ex)
+        return False
 
 
 def match_steps(steps: list[dict], trace: list[dict]) -> dict:
@@ -104,12 +128,14 @@ def match_steps(steps: list[dict], trace: list[dict]) -> dict:
             t = trace[ptr]
             ptr += 1
             for e in expect:                      # OR 语义：任一命中即该步 hit
-                if t['tool'] == e['tool'] and (
-                        not e.get('args_pattern')
-                        or re.search(e['args_pattern'], t['args'] or '')):
-                    hit = {'tool': t['tool'], 'args': (t['args'] or '')[:160],
-                           'occurredAt': t['occurredAt']}
-                    break
+                if t['tool'] != e['tool']:
+                    continue
+                if e.get('args_pattern') and not _regex_match(
+                        e['args_pattern'], t['args'] or ''):
+                    continue
+                hit = {'tool': t['tool'], 'args': (t['args'] or '')[:160],
+                       'occurredAt': t['occurredAt']}
+                break
             if hit:
                 break
         if hit:
@@ -152,12 +178,16 @@ def _ensure_uq_index(db_ctx) -> None:
 def _load_trace(db_ctx, session_id, started_at, finished_at) -> list[dict]:
     """attempt 时窗（started_at ~ finished_at，未结束则到 NOW）内的账本工具
     调用时序。root_session_id = attempt.session_id 天然含全部子代理的调用
-    （账本落账时已带 root+subtask 双标识），按时序稳定排序。"""
+    （账本落账时已带 root+subtask 双标识），按时序稳定排序。只取
+    state='completed' 的调用——失败/在途不算「按定义执行」。"""
     with db_ctx() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT tool, args_text, occurred_at FROM agent_tool_calls "
                 "WHERE root_session_id = %s "
+                "  AND state = 'completed'\n"
+                "  -- 只认 completed：失败/在途调用不算「按定义执行」（同动作门禁\n"
+                "  -- require_state='completed' 惯例），否则会被贪心指针消耗污染后续匹配\n"
                 "  AND occurred_at BETWEEN %s AND COALESCE(%s, NOW()) "
                 "ORDER BY occurred_at ASC NULLS LAST, id ASC",
                 (session_id, started_at, finished_at))

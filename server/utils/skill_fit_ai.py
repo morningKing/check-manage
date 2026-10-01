@@ -150,7 +150,9 @@ def apply_steps(path: str, steps: list[dict]) -> str:
     """把 steps 回写为定义文件 frontmatter 的 fit.steps（幂等覆盖）。
 
     先校验后写盘：任一 args_pattern 过不了 PG `~` 口径（validate_pg_regex）
-    → ValueError 且**不写文件**；文件不存在 → FileNotFoundError（路由层 404）。
+    或 Python re 编译（终审 Fix 2：匹配引擎是 Python re——PG 合法而 Python
+    非法的模式如 PG 独有断言 \\y，写盘后在匹配时才炸）→ ValueError 且
+    **不写文件**；文件不存在 → FileNotFoundError（路由层 404）。
     返回文件路径。"""
     if not isinstance(steps, list):
         raise ValueError('steps 必须是数组')
@@ -167,6 +169,12 @@ def apply_steps(path: str, steps: list[dict]) -> str:
                 except ValueError as ex:
                     raise ValueError(
                         f'steps[{i}] expect args_pattern {ex}') from ex
+                try:
+                    re.compile(str(e['args_pattern']))
+                except re.error as ex:
+                    raise ValueError(
+                        f'steps[{i}] expect args_pattern 不是合法的 Python 正则'
+                        f'（匹配引擎不兼容）: {ex}') from ex
 
     with open(path, encoding='utf-8') as f:
         text = f.read()
@@ -243,7 +251,9 @@ def _load_attempt_window(db_ctx, attempt_id: str) -> tuple:
 
 def _load_trace(db_ctx, session_id, started_at, finished_at) -> list[dict]:
     """attempt 时窗内的账本工具调用时序（同 skill_fit._load_trace 口径；
-    子代理调用落账带 root_session_id，天然含全部子代理）。"""
+    子代理调用落账带 root_session_id，天然含全部子代理；只取
+    state='completed'——失败/在途调用不算「按定义执行」，否则污染
+    preview 的贪心指针）。"""
     if not session_id:
         return []
     with db_ctx() as conn:
@@ -251,6 +261,8 @@ def _load_trace(db_ctx, session_id, started_at, finished_at) -> list[dict]:
             cur.execute(
                 "SELECT tool, args_text, occurred_at FROM agent_tool_calls "
                 "WHERE root_session_id = %s "
+                "  AND state = 'completed'\n"
+                "  -- 只认 completed：失败/在途调用不算「按定义执行」（同 skill_fit 口径）\n"
                 "  AND occurred_at BETWEEN %s AND COALESCE(%s, NOW()) "
                 "ORDER BY occurred_at ASC NULLS LAST, id ASC",
                 (session_id, started_at, finished_at))
@@ -378,7 +390,8 @@ def preview_steps(steps: list[dict], attempt_id: str, get_db=None) -> dict:
     match_steps），返回 per_step/steps_total/steps_hit/score/status 预览。
     纯试算——不写任何表。
 
-    Raises ValueError: steps 形状非法（缺 id / expect 非数组，路由层 400）；
+    Raises ValueError: steps 形状非法（缺 id / expect 非数组）或 args_pattern
+           不是合法的 Python 正则（终审 Fix 2，路由层 400）；
            LookupError: attempt 不存在（路由层 404）。"""
     if not isinstance(steps, list) or not steps:
         raise ValueError('steps 必须是非空数组')
@@ -388,6 +401,14 @@ def preview_steps(steps: list[dict], attempt_id: str, get_db=None) -> dict:
         expect = s.get('expect') or []
         if not isinstance(expect, list):
             raise ValueError(f'steps[{i}].expect 必须是数组')
+        for e in expect:
+            if isinstance(e, dict) and e.get('args_pattern'):
+                try:
+                    re.compile(str(e['args_pattern']))
+                except re.error as ex:
+                    raise ValueError(
+                        f'steps[{i}] expect args_pattern 不是合法的 Python 正则'
+                        f'（匹配引擎不兼容）: {ex}') from ex
 
     db_ctx = get_db or _default_get_db
     with db_ctx() as conn:

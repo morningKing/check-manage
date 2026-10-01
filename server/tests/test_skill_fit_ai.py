@@ -70,6 +70,33 @@ def test_apply_steps_rejects_bad_regex(tmp_path):
     assert 'fit:' not in f.read_text(encoding='utf-8')   # 未写文件
 
 
+# 终审 Fix 2：PG 合法但 Python re 非法的模式（PG 独有断言 \y=词边界；
+# 匹配引擎是 Python re，写盘后到 match_steps 才炸 → apply 即拒绝）。
+PG_ONLY_PATTERN = r'\y'
+
+
+def test_apply_steps_rejects_pg_only_regex(tmp_path):
+    from utils.skill_fit_ai import apply_steps
+    f = tmp_path / 'SKILL.md'
+    f.write_text('---\ndescription: x\n---\n正文\n', encoding='utf-8')
+    with pytest.raises(ValueError):
+        apply_steps(str(f), [{'id': 'a', 'name': 'a',
+                              'expect': [{'tool': 'bash',
+                                          'args_pattern': PG_ONLY_PATTERN}]}])
+    assert 'fit:' not in f.read_text(encoding='utf-8')   # 未写文件
+
+
+def test_preview_steps_rejects_py_invalid_regex():
+    """终审 Fix 2：preview 对每个 args_pattern 补 Python re 编译校验——
+    非法 → ValueError（路由层 400），且在 DB 查询前即拒绝。"""
+    from utils.skill_fit_ai import preview_steps
+    with pytest.raises(ValueError):
+        preview_steps([{'id': 'a', 'name': 'A',
+                        'expect': [{'tool': 'bash',
+                                    'args_pattern': PG_ONLY_PATTERN}]}],
+                      'no-such-attempt', get_db=None)
+
+
 def test_diagnose_shape_and_cache(monkeypatch, db_conn, tmp_path):
     """种子 partial 结果行 → diagnose 返回结构化诊断并落 diagnosis 列；
     同轨迹签名二次调用不再打 LLM（缓存命中）。"""
@@ -143,8 +170,8 @@ def test_preview_steps_matches(tmp_path):
                         "  NOW() - interval '1 minute', NOW() + interval '1 minute')",
                         (attempt, sid))
             cur.execute("INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
-                        "  part_id, tool, args_text, occurred_at) "
-                        "VALUES (%s, %s, %s, 'bash', 'git clone x', NOW())",
+                        "  part_id, tool, args_text, state, occurred_at) "
+                        "VALUES (%s, %s, %s, 'bash', 'git clone x', 'completed', NOW())",
                         (sid, sid, f'pv-{part}', ))
     try:
         steps = [{'id': 'clone', 'name': '克隆仓库',

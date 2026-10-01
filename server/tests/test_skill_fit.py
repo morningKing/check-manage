@@ -100,6 +100,27 @@ def test_match_steps_no_trace():
     assert r['status'] == 'no_trace' and r['score'] == 0
 
 
+def test_match_steps_py_invalid_regex_is_miss_not_raise():
+    """终审 Fix 2：match_steps 防御——PG 合法但 Python re 非法的模式
+    （PG 独有断言 \\y）在匹配时按 miss 处理（log.warning 一次），绝不抛。"""
+    steps = [{'id': 'a', 'name': 'A',
+              'expect': [{'tool': 'bash', 'args_pattern': r'\y'}]}]
+    r = match_steps(steps, [_t('bash', 'git clone x', 1)])
+    assert r['status'] == 'diverged' and r['score'] == 0
+    assert r['per_step'][0]['status'] == 'miss' and not r['per_step'][0]['evidence']
+
+
+def test_parse_cached_binary_garbage_raises_fit_parse_error(tmp_path):
+    """终审 Fix 4：二进制坏字节文件（OSError/UnicodeDecodeError 族）统一
+    收敛为 FitParseError——compute 路径据此落 parse_error 行，不中断整个
+    attempt。"""
+    import hashlib
+    f = tmp_path / 'SKILL.md'
+    f.write_bytes(b'\xff\xfe\x00\x01binary\x9c\xd3garbage')
+    with pytest.raises(FitParseError):
+        parse_cached(str(f), hashlib.sha256(f.read_bytes()).hexdigest())
+
+
 def test_match_steps_skipped_not_scored():
     steps = parse_fit_steps(SKILL_MD)
     steps.append({'id': 'free', 'name': '无期望步骤', 'expect': []})
@@ -208,6 +229,101 @@ fit:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s",
                             (attempt,))
+                cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
+                cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s",
+                            (sid,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
+def test_compute_attempt_fit_ignores_error_state_calls(db_conn, tmp_path):
+    """终审 Fix 1：轨迹只认 completed——state='error' 的调用不算「按定义
+    执行」（与动作门禁 require_state='completed' 惯例一致），且不会被贪心
+    指针消耗污染后续匹配。
+
+    种子：定义两步——A: bash（无 pattern，任意 bash 即命中）、B: bash
+    'echo ok'；轨迹两条同参调用：error 在前、completed 在后。若 error
+    参与匹配，A 会先消耗 error 行，B 命中 completed 行 → fit 100；过滤后
+    轨迹只剩 completed 行，A 消耗之、B miss → partial 50。"""
+    import hashlib
+    import uuid as _uuid
+    from db import get_db
+    from utils import skill_fit
+
+    uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
+    skill_dir = os.path.join(str(tmp_path), 'err-skill')
+    os.makedirs(skill_dir, exist_ok=True)
+    md_path = os.path.join(skill_dir, 'SKILL.md')
+    md_text = """---
+description: 错误调用过滤演示
+fit:
+  steps:
+    - id: run
+      name: 跑命令
+      expect:
+        - tool: bash
+    - id: probe
+      name: 探活
+      expect:
+        - tool: bash
+          args_pattern: 'echo ok'
+---
+"""
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_text)
+    md_hash = hashlib.sha256(md_text.encode('utf-8')).hexdigest()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) "
+                    "VALUES (%s, %s, 'x', 'SF', 'developer')", (uid, f'sfe_{uid[:8]}'))
+                cur.execute(
+                    "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                    "VALUES (%s, %s, 'sf', 'p', 1)", (bid, uid))
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                    "  batch_seq, workspace_path, session_token) "
+                    "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                    (sid, uid, bid, f'C:\\sfe\\{sid}', f'tok-{sid[:12]}'))
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                    "  operation, started_at, finished_at) "
+                    "VALUES (%s, %s, 'batch', 'send', NOW() - interval '5 minutes', NOW())",
+                    (attempt, sid))
+                cur.execute(
+                    "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                    "  source, path, content_hash, injected) "
+                    "VALUES (%s, %s, 'skill', 'err-skill', 'session', %s, %s, true)",
+                    ('man_' + _uuid.uuid4().hex[:8], attempt, md_path, md_hash))
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                    "  subtask_id, agent, part_id, tool, args_text, state, occurred_at) "
+                    "VALUES (%s, %s, NULL, NULL, 'p1', 'bash', 'echo ok', 'error', "
+                    "  NOW() - interval '1 minute')",
+                    (f'oc-sfe-{attempt[:8]}', sid))
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                    "  subtask_id, agent, part_id, tool, args_text, state, occurred_at) "
+                    "VALUES (%s, %s, NULL, NULL, 'p2', 'bash', 'echo ok', 'completed', NOW())",
+                    (f'oc-sfe-{attempt[:8]}', sid))
+
+        rows = skill_fit.compute_attempt_fit(attempt)
+        assert len(rows) == 1
+        r = rows[0]
+        assert r['status'] == 'partial' and r['score'] == 50
+        statuses = [p['status'] for p in r['per_step']]
+        assert statuses == ['hit', 'miss']
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_skill_def_versions WHERE content_hash = %s "
+                            "AND def_name = 'err-skill'", (md_hash,))
                 cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id = %s",
                             (attempt,))
                 cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
