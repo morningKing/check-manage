@@ -843,8 +843,10 @@ def skill_analytics():
 
 def _fit_camel(r: dict, with_steps: bool = False) -> dict:
     """ai_skill_fit_results 行 → API 契约（camelCase）。明细额外带
-    perStep/diagnosis；列表不带（负载考虑，步骤详情点开明细再看）。"""
+    perStep/diagnosis；列表不带（负载考虑，步骤详情点开明细再看）。
+    id 是结果行主键，偏差诊断端点按它定位。"""
     out = {
+        'id': r.get('id'),
         'attemptId': r.get('attempt_id'),
         'sessionId': r.get('session_id'),
         'defKind': r.get('def_kind'),
@@ -873,7 +875,7 @@ def list_skill_fits():
     except (TypeError, ValueError):
         limit = 50
     session_id = (request.args.get('sessionId') or '').strip() or None
-    sql = ("SELECT attempt_id, session_id, def_kind, def_name, def_hash, "
+    sql = ("SELECT id, attempt_id, session_id, def_kind, def_name, def_hash, "
            "       steps_total, steps_hit, score, status, computed_at "
            "FROM ai_skill_fit_results")
     params: list = []
@@ -898,7 +900,7 @@ def skill_fit_detail(attempt_id):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT attempt_id, session_id, def_kind, def_name, def_hash, "
+                "SELECT id, attempt_id, session_id, def_kind, def_name, def_hash, "
                 "       steps_total, steps_hit, score, status, per_step, "
                 "       diagnosis, computed_at "
                 "FROM ai_skill_fit_results WHERE attempt_id = %s "
