@@ -123,9 +123,9 @@ CREATE TABLE IF NOT EXISTS ai_skill_def_versions (
    `fit.steps`（无 fit 块的定义跳过）。
 2. **轨迹序列**：该 attempt 时窗（attempt.started_at ~ finished_at）内的工具调用
    时序 `[(tool, args_text, occurred_at)]`——来源 `agent_tool_calls`
-   （root_session_id = attempt.session_id）；skill 加载事件来自
-   `ai_execution_events(type='skill.invoke')`，作为轨迹首元素参与匹配
-   （expect 可声明 `tool: skill`）。
+   （root_session_id = attempt.session_id，**含全部子代理的调用**，账本落账
+   时已带 root+subtask 双标识）。skill 加载即 `tool='skill'` 的账本调用
+   （统一事实源；`ai_execution_events` 的 skill.invoke 事件仅作参考）。
 3. **贪心顺序匹配**：指针扫描轨迹，按步骤序逐个寻找首个满足
    `tool 相等 AND (无 args_pattern OR args_text ~ pattern)` 的调用 → 命中
    （hit，记录证据调用）并推进指针；轨迹耗尽仍未命中 → miss。
@@ -172,6 +172,23 @@ CREATE TABLE IF NOT EXISTS ai_skill_def_versions (
 - **通道与失败语义**：AI 设置通道（同 §5 生成器），失败 502、不落库。
 - 二期方向：按 def_name 聚合多次偏离——「该技能 80% 的任务在同一步骤
   偏离」→ 定义改进优先级排序。
+
+### 5c. 子代理 skill 调用的采集修复（2026-10-01 增补）
+
+**现状缺口（代码级核实）**：OC 事件里 subagent 内 part 的 sessionID 是子代理
+自己的会话 id（非父会话）；`skillopt._platform_session_id` 只查
+`ai_chat_sessions` → 子代理 id 无行 → `record_runtime_skill_event` 静默丢弃
+——**`ai_skill_invocations` 的 confirmed 采集收不到 subagent 的 skill 调用**
+（`ai_execution_events` 的 skill.invoke 同缺）。
+
+修复（skillopt 采集层）：
+- `_platform_session_id` 落空时回退查 `ai_chat_subtasks`
+  （id = OC 会话 id → root_session_id），命中则归属根会话，并在
+  `ai_skill_invocations` 新增可空列 `subtask_id` 标注子代理归属（含索引）；
+- `record_runtime_skill_event` 尝试取该子代理自己的 attempt
+  （execution_audit，source_type='subagent'），取不到再退根 attempt；
+- 拟合引擎不受此缺口影响（轨迹走账本，本就含子代理）——修复的是 confirmed
+  证据的完整性，使「该子代理确实按定义加载了技能」可在子代理粒度确证。
 
 ## 6. API（admin 权限，挂现有 skillopt 路由组）
 
