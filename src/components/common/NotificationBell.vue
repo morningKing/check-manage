@@ -95,7 +95,8 @@ async function handleClick(n: Notification) {
   }
   if (n.sourceCollection === 'ai-chat' && n.sourceRecordId) {
     // AI 长任务完成通知：跳转到对应会话（AiChatView 读取 query.session）
-    router.push({ path: '/ai-chat', query: { session: n.sourceRecordId } })
+    router.push({ path: '/ai-chat',
+                  query: { session: n.sourceRecordId, _t: String(Date.now()) } })
   } else if (n.sourceCollection && n.sourceRecordId) {
     router.push({
       path: `/${n.sourceCollection}`,

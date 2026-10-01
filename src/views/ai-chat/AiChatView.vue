@@ -902,43 +902,7 @@ function batchStatusLabel(s: string) {
 }
 
 onMounted(async () => {
-  try {
-    await store.loadSessions()
-    // Check URL query parameter: /ai-chat?session=xxx
-    const querySessionId = route.query.session as string | undefined
-    if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
-      // Open the specified session from URL
-      await store.openSession(querySessionId)
-      store.hydrateSessionModel(querySessionId)
-      store.hydrateSessionAgent(querySessionId)
-    } else if (querySessionId) {
-      // 不在会话列表里 → 可能是批任务子会话(列表接口不含它们;批任务完成
-      // 通知的点击就落在这里),也可能是轨迹分析会话(kind=trace_analysis,
-      // 同样不进列表)。批子会话找到所属批次、选中之;否则按 id 直开会话。
-      try {
-        const { batchId } = await getBatchOfSession(querySessionId)
-        await batches.fetchList()
-        await batches.selectBatch(batchId)
-        await selectBatchChild(querySessionId)
-      } catch {
-        try {
-          await store.openSession(querySessionId)
-          store.hydrateSessionModel(querySessionId)
-          store.hydrateSessionAgent(querySessionId)
-        } catch {
-          if (sessions.value.length) {
-            await store.openSession(sessions.value[0].id)
-            store.hydrateSessionModel(sessions.value[0].id)
-            store.hydrateSessionAgent(sessions.value[0].id)
-          }
-        }
-      }
-    } else if (sessions.value.length) {
-      await store.openSession(sessions.value[0].id)
-      store.hydrateSessionModel(sessions.value[0].id)
-      store.hydrateSessionAgent(sessions.value[0].id)
-    }
-  } catch { /* surfaced by interceptor */ }
+  await restoreFromQuery()
   // pre-fetch models and agents for the dropdowns (best-effort)
   fetchModels()
   fetchAgents()
@@ -969,6 +933,48 @@ async function selectSession(id: string) {
 async function selectBatchChild(id: string) {
   if (id !== activeId.value) await store.openSession(id)
 }
+
+// /ai-chat?session=<id> 直开恢复（批任务通知铃铛的点击落在这里）。抽成函数：
+// 组件已在 /ai-chat 页时点铃铛只变 query 不重挂载，必须靠 watch 兜住。
+async function restoreFromQuery() {
+  try {
+    await store.loadSessions()
+    const querySessionId = route.query.session as string | undefined
+    if (querySessionId && sessions.value.some((s: any) => s.id === querySessionId)) {
+      await store.openSession(querySessionId)
+      store.hydrateSessionModel(querySessionId)
+      store.hydrateSessionAgent(querySessionId)
+      return
+    }
+    if (!querySessionId) return
+    // 不在会话列表里 → 可能是批任务子会话(列表接口不含它们;批任务完成
+    // 通知的点击就落在这里),也可能是轨迹分析会话(kind=trace_analysis,
+    // 同样不进列表)。批子会话找到所属批次、选中之;否则按 id 直开会话。
+    try {
+      const { batchId } = await getBatchOfSession(querySessionId)
+      await batches.fetchList()
+      await batches.selectBatch(batchId)
+      await selectBatchChild(querySessionId)
+    } catch {
+      try {
+        await store.openSession(querySessionId)
+        store.hydrateSessionModel(querySessionId)
+        store.hydrateSessionAgent(querySessionId)
+      } catch {
+        if (sessions.value.length) {
+          await store.openSession(sessions.value[0].id)
+          store.hydrateSessionModel(sessions.value[0].id)
+          store.hydrateSessionAgent(sessions.value[0].id)
+        }
+      }
+    }
+  } catch { /* surfaced by interceptor */ }
+}
+// 页内点击铃铛：query 变化即恢复（_t 时间戳由 NotificationBell 附带，保证
+// 重复点击同一通知也能再次触发）。
+watch(() => route.query, (q) => {
+  if (q.session) void restoreFromQuery()
+})
 async function renameSession(id: string, current: string) {
   try {
     const res = await ElMessageBox.prompt('重命名会话', '重命名', { inputValue: current })
