@@ -167,6 +167,21 @@ def _load_trace(db_ctx, session_id, started_at, finished_at) -> list[dict]:
             for (tool, args_text, occurred_at) in rows]
 
 
+def _register_def_version(cur, vals: dict) -> None:
+    """定义版本自动注册（spec §3.4）：拟合计算遇到新 (def_kind, def_name,
+    content_hash) 即 upsert ai_skill_def_versions——冲突 DO NOTHING，
+    first_seen_at 只记首次，重复 compute 幂等不翻倍。manifest 无 hash 时
+    按空串注册（版本表 content_hash NOT NULL，未知 hash 无法区分版本）。"""
+    cur.execute(
+        """
+        INSERT INTO ai_skill_def_versions (id, def_kind, def_name, content_hash)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (def_kind, def_name, content_hash) DO NOTHING
+        """,
+        ('defv_' + secrets.token_hex(6), vals['def_kind'],
+         vals['def_name'], vals['def_hash'] or ''))
+
+
 def _upsert_result(cur, vals: dict) -> dict:
     """落一行拟合结果（attempt_id + def_name 冲突覆盖，结果以最后一次为准），
     返回 RETURNING 行字典。重算覆盖后旧诊断一并失效（§5b 缓存口径）。"""
@@ -209,7 +224,9 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
        结果行并日志留痕）；
     2. 轨迹：agent_tool_calls 里 root_session_id = attempt.session_id 的
        时窗内调用（含全部子代理）；
-    3. 逐定义 match_steps → upsert 结果行，返回结果行列表。
+    3. 逐定义 match_steps → upsert 结果行，并按 (def_kind, def_name,
+       content_hash) 自动注册定义版本（spec §3.4，首次遇见才建行），
+       返回结果行列表。
     """
     db_ctx = get_db or _default_get_db
     _ensure_uq_index(db_ctx)
@@ -257,13 +274,15 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
         if not steps:
             continue                # 无 fit 块的定义不参与拟合（不出结果行）
         vals_list.append({**base, **match_steps(steps, trace)})
-    # 4. 落库（幂等 upsert）
+    # 4. 落库（幂等 upsert）；同时注册定义版本——拟合遇到新 hash 即登记，
+    #    ON CONFLICT DO NOTHING 保证重复 compute 幂等（spec §3.4）
     out: list[dict] = []
     if vals_list:
         with db_ctx() as conn:
             with conn.cursor() as cur:
                 for vals in vals_list:
                     out.append(_upsert_result(cur, vals))
+                    _register_def_version(cur, vals)
     return out
 
 

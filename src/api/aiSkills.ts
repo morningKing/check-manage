@@ -88,6 +88,8 @@ export interface SkillFitRow {
   id: string | null
   attemptId: string
   sessionId: string
+  /** 执行该任务的 agent（ai_execution_attempts.effective_agent） */
+  agent: string | null
   defKind: string
   defName: string
   defHash: string | null
@@ -116,6 +118,9 @@ export interface SkillDefVersion {
   tasks: number
   avgScore: number | null
   fitRate: number | null
+  /** 偏离分布：partial / diverged 结果数（spec §7 binding） */
+  partialCount: number
+  divergedCount: number
 }
 
 /** 试算预览（preview_steps 口径，不落库） */

@@ -849,6 +849,7 @@ def _fit_camel(r: dict, with_steps: bool = False) -> dict:
         'id': r.get('id'),
         'attemptId': r.get('attempt_id'),
         'sessionId': r.get('session_id'),
+        'agent': r.get('effective_agent'),
         'defKind': r.get('def_kind'),
         'defName': r.get('def_name'),
         'defHash': r.get('def_hash'),
@@ -875,14 +876,16 @@ def list_skill_fits():
     except (TypeError, ValueError):
         limit = 50
     session_id = (request.args.get('sessionId') or '').strip() or None
-    sql = ("SELECT id, attempt_id, session_id, def_kind, def_name, def_hash, "
-           "       steps_total, steps_hit, score, status, computed_at "
-           "FROM ai_skill_fit_results")
+    sql = ("SELECT r.id, r.attempt_id, r.session_id, r.def_kind, r.def_name, r.def_hash, "
+           "       r.steps_total, r.steps_hit, r.score, r.status, r.computed_at, "
+           "       a.effective_agent "
+           "FROM ai_skill_fit_results r "
+           "LEFT JOIN ai_execution_attempts a ON a.id = r.attempt_id")
     params: list = []
     if session_id:
-        sql += " WHERE session_id = %s"
+        sql += " WHERE r.session_id = %s"
         params.append(session_id)
-    sql += " ORDER BY computed_at DESC LIMIT %s"
+    sql += " ORDER BY r.computed_at DESC LIMIT %s"
     params.append(limit)
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -900,11 +903,13 @@ def skill_fit_detail(attempt_id):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, attempt_id, session_id, def_kind, def_name, def_hash, "
-                "       steps_total, steps_hit, score, status, per_step, "
-                "       diagnosis, computed_at "
-                "FROM ai_skill_fit_results WHERE attempt_id = %s "
-                "ORDER BY def_kind, def_name", (attempt_id,))
+                "SELECT r.id, r.attempt_id, r.session_id, r.def_kind, r.def_name, "
+                "       r.def_hash, r.steps_total, r.steps_hit, r.score, r.status, "
+                "       r.per_step, r.diagnosis, r.computed_at, a.effective_agent "
+                "FROM ai_skill_fit_results r "
+                "LEFT JOIN ai_execution_attempts a ON a.id = r.attempt_id "
+                "WHERE r.attempt_id = %s "
+                "ORDER BY r.def_kind, r.def_name", (attempt_id,))
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     if not rows:
@@ -937,7 +942,8 @@ def list_skill_def_versions():
 
     版本行 LEFT JOIN 拟合聚合——无拟合结果的版本也出现在时间线
     （tasks=0，avgScore/fitRate 为 null，COALESCE 兜底）；fitRate = 状态为
-    fit 的任务占比（分母只计有拟合结果的任务）。"""
+    fit 的任务占比（分母只计有拟合结果的任务）；partialCount/divergedCount
+    为该版本的偏离分布（spec §7 binding）。"""
     from db import get_db
     def_kind = (request.args.get('defKind') or '').strip() or None
     def_name = (request.args.get('defName') or '').strip() or None
@@ -947,15 +953,19 @@ def list_skill_def_versions():
                 """
                 SELECT v.id, v.def_kind, v.def_name, v.content_hash,
                        v.version_label, v.note, v.first_seen_at,
-                       COALESCE(t.tasks, 0)     AS tasks,
-                       COALESCE(t.fit_tasks, 0) AS fit_tasks,
-                       COALESCE(t.score_sum, 0) AS score_sum
+                       COALESCE(t.tasks, 0)          AS tasks,
+                       COALESCE(t.fit_tasks, 0)      AS fit_tasks,
+                       COALESCE(t.partial_tasks, 0)  AS partial_tasks,
+                       COALESCE(t.diverged_tasks, 0) AS diverged_tasks,
+                       COALESCE(t.score_sum, 0)      AS score_sum
                 FROM ai_skill_def_versions v
                 LEFT JOIN (
                   SELECT def_kind, def_name, def_hash AS content_hash,
-                         count(*)                               AS tasks,
-                         count(*) FILTER (WHERE status = 'fit') AS fit_tasks,
-                         sum(score)                             AS score_sum
+                         count(*)                                  AS tasks,
+                         count(*) FILTER (WHERE status = 'fit')     AS fit_tasks,
+                         count(*) FILTER (WHERE status = 'partial') AS partial_tasks,
+                         count(*) FILTER (WHERE status = 'diverged') AS diverged_tasks,
+                         sum(score)                                 AS score_sum
                   FROM ai_skill_fit_results
                   GROUP BY def_kind, def_name, def_hash
                 ) t
@@ -983,6 +993,8 @@ def list_skill_def_versions():
             'tasks': tasks,
             'avgScore': round(r['score_sum'] / tasks, 1) if tasks else None,
             'fitRate': round(r['fit_tasks'] / tasks, 4) if tasks else None,
+            'partialCount': r['partial_tasks'],
+            'divergedCount': r['diverged_tasks'],
         })
     return jsonify({'versions': versions})
 

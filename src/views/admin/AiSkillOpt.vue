@@ -85,6 +85,14 @@
                   <span class="mono" :title="row.sessionId">{{ shortHash(row.sessionId) }}</span>
                 </template>
               </ElTableColumn>
+              <ElTableColumn label="Agent" width="120">
+                <template #default="{ row }">
+                  <span v-if="row.agent" class="mono" :title="row.agent">
+                    {{ trunc(row.agent, 16) }}
+                  </span>
+                  <span v-else class="muted">—</span>
+                </template>
+              </ElTableColumn>
               <ElTableColumn label="来源" width="80">
                 <template #default="{ row }">
                   <ElTag size="small" :type="row.defKind === 'skill' ? 'success' : 'primary'">
@@ -103,7 +111,8 @@
 
             <h4 class="skillopt__sec">定义版本效果对比</h4>
             <p class="muted">
-              按 (来源/定义/内容 hash) 聚合拟合指标的时间线；卡内为相邻版本的平均分变化（↑绿 ↓红）。
+              按 (来源/定义/内容 hash) 聚合拟合指标的时间线；卡内为相邻版本的平均分变化
+              （↑绿 ↓红）与偏离数变化（变多红、变少绿）。
             </p>
             <p v-if="!versionGroups.length" class="muted">暂无定义版本数据。</p>
             <div v-for="g in versionGroups" :key="g.key" class="fit-vg">
@@ -116,8 +125,11 @@
               <div v-if="deltaCards(g).length" class="fit-deltas">
                 <span v-for="(d, i) in deltaCards(g)" :key="i" class="fit-delta"
                       :class="deltaNumClass(d.delta)">
-                  {{ d.from }} → {{ d.to }}：
-                  <b>{{ fmtDeltaNum(d.delta) }}</b>
+                  {{ d.from }} → {{ d.to }}：<b>{{ fmtDeltaNum(d.delta) }}</b>
+                  <span v-if="d.dd != null && d.dd !== 0"
+                        :class="divergeDeltaClass(d.dd)">
+                    · 偏离 {{ d.dd > 0 ? '+' : '' }}{{ d.dd }}
+                  </span>
                 </span>
               </div>
               <ElTable :data="g.versions" size="small">
@@ -138,6 +150,20 @@
                 <ElTableColumn prop="tasks" label="任务" width="70" />
                 <ElTableColumn label="平均分" width="80">
                   <template #default="{ row: v }">{{ v.avgScore ?? '—' }}</template>
+                </ElTableColumn>
+                <ElTableColumn label="偏离分布" width="140">
+                  <template #default="{ row: v }">
+                    <template v-if="v.tasks > 0">
+                      <ElTag v-if="v.divergedCount" size="small" type="danger">
+                        偏离 {{ v.divergedCount }}
+                      </ElTag>
+                      <ElTag v-if="v.partialCount" size="small" type="warning">
+                        部分 {{ v.partialCount }}
+                      </ElTag>
+                      <span v-if="!v.divergedCount && !v.partialCount" class="muted">无偏离</span>
+                    </template>
+                    <span v-else class="muted">—</span>
+                  </template>
                 </ElTableColumn>
                 <ElTableColumn label="拟合率" width="90">
                   <template #default="{ row: v }">{{ fmtRate(v.fitRate) }}</template>
@@ -512,6 +538,7 @@ async function copyRevised(diag: SkillFitDiagnosis) {
 interface VersionView extends SkillDefVersion {
   deltaScore: number | null
   deltaFitRate: number | null
+  deltaDiverged: number | null
 }
 interface VersionGroup {
   key: string
@@ -527,7 +554,9 @@ const versionGroups = computed<VersionGroup[]>(() => {
   for (const v of defVersions.value) {
     const key = `${v.defKind}/${v.defName}`
     if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push({ ...v, deltaScore: null, deltaFitRate: null })
+    map.get(key)!.push({
+      ...v, deltaScore: null, deltaFitRate: null, deltaDiverged: null,
+    })
   }
   const groups: VersionGroup[] = []
   for (const [key, list] of map) {
@@ -539,6 +568,7 @@ const versionGroups = computed<VersionGroup[]>(() => {
         ? Math.round((cur.avgScore - prev.avgScore) * 10) / 10 : null
       cur.deltaFitRate = prev.fitRate != null && cur.fitRate != null
         ? cur.fitRate - prev.fitRate : null
+      cur.deltaDiverged = cur.divergedCount - prev.divergedCount
     }
     const first = list[0]
     groups.push({ key, defKind: first.defKind, defName: first.defName, versions: list })
@@ -547,7 +577,7 @@ const versionGroups = computed<VersionGroup[]>(() => {
 })
 
 function deltaCards(g: VersionGroup) {
-  const out: Array<{ from: string; to: string; delta: number | null }> = []
+  const out: Array<{ from: string; to: string; delta: number | null; dd: number | null }> = []
   for (let i = 1; i < g.versions.length; i++) {
     const prev = g.versions[i - 1]
     const cur = g.versions[i]
@@ -555,6 +585,7 @@ function deltaCards(g: VersionGroup) {
       from: prev.versionLabel || shortHash(prev.contentHash),
       to: cur.versionLabel || shortHash(cur.contentHash),
       delta: cur.deltaScore,
+      dd: cur.deltaDiverged,
     })
   }
   return out
@@ -727,6 +758,11 @@ function fmtDeltaNum(v: number | null | undefined) {
 function deltaNumClass(v: number | null | undefined) {
   if (v == null || v === 0) return ''
   return v > 0 ? 'delta-up' : 'delta-down'
+}
+/** 偏离数变化的语义配色：变多=坏（红），变少=好（绿） */
+function divergeDeltaClass(dd: number | null | undefined) {
+  if (dd == null || dd === 0) return ''
+  return dd > 0 ? 'delta-down' : 'delta-up'
 }
 function shortHash(h?: string | null) {
   return h ? h.slice(0, 10) + '…' : '—'

@@ -263,3 +263,100 @@ def test_compute_for_session_hook_invoked(db_conn, monkeypatch):
                             ((sid, att_sid),))
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
+def test_compute_registers_def_versions(db_conn, tmp_path):
+    """spec §3.4 定义版本自动注册：拟合计算遇到新 (def_kind, def_name,
+    content_hash) → ai_skill_def_versions 出现对应行（first_seen_at 只记
+    首次）；重复 compute 幂等——版本行不翻倍、时间戳不变。"""
+    import hashlib
+    import uuid as _uuid
+    from db import get_db
+    from utils import skill_fit
+
+    uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
+    skill_dir = os.path.join(str(tmp_path), 'reg-skill')
+    os.makedirs(skill_dir, exist_ok=True)
+    md_path = os.path.join(skill_dir, 'SKILL.md')
+    md_text = """---
+description: 版本注册演示
+fit:
+  steps:
+    - id: ping
+      name: 探活
+      expect:
+        - tool: bash
+          args_pattern: 'echo'
+---
+"""
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_text)
+    md_hash = hashlib.sha256(md_text.encode('utf-8')).hexdigest()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) "
+                    "VALUES (%s, %s, 'x', 'SF', 'developer')", (uid, f'sfr_{uid[:8]}'))
+                cur.execute(
+                    "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                    "VALUES (%s, %s, 'sfr', 'p', 1)", (bid, uid))
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                    "  batch_seq, workspace_path, session_token) "
+                    "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                    (sid, uid, bid, f'C:\sfr\{sid}', f'tok-{sid[:12]}'))
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                    "  operation, started_at, finished_at) "
+                    "VALUES (%s, %s, 'batch', 'send', NOW() - interval '5 minutes', NOW())",
+                    (attempt, sid))
+                cur.execute(
+                    "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                    "  source, path, content_hash, injected) "
+                    "VALUES (%s, %s, 'skill', 'reg-skill', 'session', %s, %s, true)",
+                    ('man_' + _uuid.uuid4().hex[:8], attempt, md_path, md_hash))
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                    "  subtask_id, agent, part_id, tool, args_text, state) "
+                    "VALUES (%s, %s, NULL, NULL, 'p1', 'bash', 'echo ok', 'completed')",
+                    (f'oc-sfr-{attempt[:8]}', sid))
+
+        rows = skill_fit.compute_attempt_fit(attempt)
+        assert len(rows) == 1 and rows[0]['status'] == 'fit'
+
+        def _fetch_versions(cur):
+            cur.execute(
+                "SELECT id, def_kind, def_name, content_hash, first_seen_at "
+                "FROM ai_skill_def_versions "
+                "WHERE def_kind = 'skill' AND def_name = 'reg-skill' "
+                "  AND content_hash = %s", (md_hash,))
+            return cur.fetchall()
+
+        with db_conn.cursor() as cur:
+            vrows = _fetch_versions(cur)
+        assert len(vrows) == 1                       # 新 hash 自动注册
+        assert vrows[0][1] == 'skill' and vrows[0][2] == 'reg-skill'
+
+        # 重复 compute：幂等——版本行不翻倍，first_seen_at 不变
+        skill_fit.compute_attempt_fit(attempt)
+        with db_conn.cursor() as cur:
+            vrows2 = _fetch_versions(cur)
+        assert len(vrows2) == 1
+        assert vrows2[0][0] == vrows[0][0]
+        assert vrows2[0][4] == vrows[0][4]
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_skill_def_versions WHERE content_hash = %s "
+                            "AND def_name = 'reg-skill'", (md_hash,))
+                cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
+                cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s",
+                            (sid,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
