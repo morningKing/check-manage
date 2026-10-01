@@ -1,7 +1,7 @@
 # SkillOpt 任务拟合设计——执行轨迹 vs 定义步骤的拟合度（图标呈现）
 
 - 日期：2026-10-01
-- 状态：已评审（brainstorming 产出，待实现计划）
+- 状态：已实现（2026-10-01）
 - 相关：`server/utils/skillopt.py`、`server/utils/execution_audit.py`、`src/views/admin/AiSkillOpt.vue`
 
 ## 1. 背景与问题
