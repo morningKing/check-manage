@@ -90,6 +90,30 @@ frontmatter 解析结果按 `content_hash` 进进程内 LRU 缓存（`_fit_parse
 定义文件被清理后仍可按 hash 命中；yaml 解析失败 → 该定义 `parse_error`（结果行
 status=parse_error、日志留痕）。
 
+### 3.4 版本实体 `ai_skill_def_versions`（新表）
+
+content_hash 是版本指纹且已贯穿全部结果（manifests/invocations/fit_results），
+但它是匿名指纹——版本需要人可读的实体：
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_skill_def_versions (
+  id             VARCHAR(100) PRIMARY KEY,
+  def_kind       VARCHAR(30) NOT NULL,      -- skill | agent
+  def_name       VARCHAR(300) NOT NULL,
+  content_hash   VARCHAR(64) NOT NULL,
+  version_label  VARCHAR(200),              -- 人工命名，如「v3 增加校验步骤」
+  note           TEXT,
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (def_kind, def_name, content_hash)
+);
+```
+
+- 版本注册：拟合计算/清单扫描遇到新 hash 时自动 upsert（first_seen_at 首次
+  观测时间）；`version_label`/`note` 由人工在 UI 设置；
+- 版本时间线：按 first_seen_at 排序即该定义的演进序列；
+- 生成器/手动回写 frontmatter 后的新 hash 自动注册为新版本（AI 优化的
+  落地动作天然产生版本切换点）。
+
 ## 4. 拟合引擎（`utils/skill_fit.py`，纯函数 + 薄 I/O）
 
 `compute_attempt_fit(attempt_id) -> list[dict]`：
@@ -159,6 +183,8 @@ status=parse_error、日志留痕）。
 | `POST /ai/skillopt/definitions/steps/generate` | AI 生成步骤建议（见 §5） |
 | `POST /ai/skillopt/definitions/steps/apply` | 确认回写 frontmatter（见 §5） |
 | `POST /ai/skillopt/fits/<result_id>/diagnose` | 偏差诊断（手动触发，见 §5b） |
+| `GET /ai/skillopt/versions?defKind&defName` | 版本时间线 + 每版本效果聚合 |
+| `PATCH /ai/skillopt/versions/<id>` | 设置 version_label / note |
 
 计算入口：attempt 收敛钩子（`collect_skill_invocations` 调用点旁追加
 `skill_fit.compute_attempt_fit(attempt_id)`，best-effort 异常吞掉）。
@@ -175,6 +201,16 @@ status=parse_error、日志留痕）。
   revised_steps 送入定义步骤编辑-回写流程（§5）。
 - **定义步骤管理**：定义清单（从 manifests 聚合）每行「生成步骤」按钮 →
   建议编辑对话框（可增删改步骤与 expect）→ 试算预览 → 保存回写。
+- **版本效果对比**（每个定义一个视图）：
+  - 版本时间线：横轴时间，版本切换点标注（hash 短 id + 人工 label），
+    一眼看到「定义在什么时候改过几次」；
+  - 每版本效果卡：该版本期间的任务数、平均拟合 score、拟合率（fit 占比）、
+    偏离原因分布（diagnosis.cause 聚合）；
+  - **相邻版本对比卡**（v(n) → v(n+1)）：平均分变化 Δ、拟合率变化、
+    偏离原因分布迁移——「这次优化到底有没有效果」的直接答案；
+    附典型任务示例（改进最大/退步最大的 attempt 链接）。
+  - 数据口径：fit_results 按 def_hash 分组聚合（版本冻结保证历史归因
+    正确），无拟合结果的任务不计入。
 - 空态：无 fit 声明的定义与无轨迹的任务均有明确文案，不假装能拟合。
 
 ## 8. 错误处理
@@ -197,12 +233,15 @@ status=parse_error、日志留痕）。
   frontmatter 合并（保留原字段与正文）与正则校验。
 - **偏差诊断测试**：打桩 AI 通道（结构化输出解析/失败 502）；诊断缓存
   （同轨迹签名不重复调用；重拟合后失效）。
+- **版本测试**：新 hash 自动注册（幂等）；label 设置；版本聚合口径
+  （按 def_hash 分组、无拟合结果任务不计入）。
 - **真实链路手工验证**：跑一个带 fit 声明的技能的批任务 → 收敛后管理页看
   图标与步骤明细。
 
 ## 10. 非目标（YAGNI）
 
-- 不做跨 attempt 的定义质量趋势分析（二期）；
+- 版本效果对比 v1 交付（版本聚合 + 相邻版本 Δ）；**跨版本偏离原因的
+  深度聚合分析**（如「同一处定义缺陷在多版本反复出现」的自动识别）为二期；
 - 不做执行轨迹的自动重排对齐（edit distance）——v1 贪心顺序匹配足够；
 - 不把拟合图标放回 AI 会话页（调试/治理信息留在管理页）；
 - 不支持 agent 委派子代理的跨层轨迹合并（子代理有自己的 attempt 与清单，
