@@ -35,11 +35,13 @@ def upsert_invocation(session_id: str, attempt_id: str | None, skill: str,
                       evidence_level: str = 'confirmed', status: str | None = None,
                       completed_at=None, tool_calls: int | None = None,
                       duration_ms: int | None = None,
-                      evidence_refs: list | None = None) -> str | None:
+                      evidence_refs: list | None = None,
+                      subtask_id: str | None = None) -> str | None:
     """写入/升级一次 Skill 调用记录。
 
     - runtime 行：evidence_level=confirmed，不被 heuristic 降级；
-    - heuristic 行：仅在无 runtime 行时创建（DO UPDATE 里 runtime 优先）。
+    - heuristic 行：仅在无 runtime 行时创建（DO UPDATE 里 runtime 优先）；
+    - subtask_id：spec §5c，subagent 发起的调用标注其子代理 OC 会话 id。
     """
     outcome = None
     if status:
@@ -58,8 +60,8 @@ def upsert_invocation(session_id: str, attempt_id: str | None, skill: str,
                     "INSERT INTO ai_skill_invocations "
                     "(id, session_id, attempt_id, skill_name, skill_hash, source, "
                     " evidence_level, outcome, completed_at, tool_calls, "
-                    " duration_ms, evidence_refs) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    " duration_ms, evidence_refs, subtask_id) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON CONFLICT (attempt_id, skill_name, skill_hash) DO UPDATE SET "
                     " source = CASE WHEN EXCLUDED.source = 'runtime' THEN 'runtime' "
                     "   ELSE ai_skill_invocations.source END, "
@@ -73,7 +75,8 @@ def upsert_invocation(session_id: str, attempt_id: str | None, skill: str,
                     (iid, session_id, attempt_id, skill, skill_hash, source,
                      evidence_level, outcome, completed_at, tool_calls,
                      duration_ms,
-                     json.dumps(evidence_refs or [], ensure_ascii=False)))
+                     json.dumps(evidence_refs or [], ensure_ascii=False),
+                     subtask_id))
             conn.commit()
         return iid
     except Exception as e:
@@ -89,7 +92,10 @@ def _platform_session_id(session_id: str) -> str:
     插件在 OpenCode 宿主进程内只能看到 OpenCode 自己的 sessionID；库里
     ai_skill_invocations / ai_execution_attempts 的 session_id 外键指向
     ai_chat_sessions(id)，必须先映射，否则所有上报都撞外键约束。
-    传进来的若已是平台 id（sess_ 前缀）则原样返回。"""
+    传进来的若已是平台 id（sess_ 前缀）则原样返回。
+    spec §5c：subagent 内 part 的 sessionID 是子代理自己的 OC 会话 id
+    （即 ai_chat_subtasks.id），ai_chat_sessions 查不到时回退子代理表
+    映射到根会话，否则子代理的 skill 上报会被静默丢弃。"""
     if not session_id or session_id.startswith('sess_'):
         return session_id
     try:
@@ -101,9 +107,20 @@ def _platform_session_id(session_id: str) -> str:
                     "ORDER BY last_active_at DESC NULLS LAST LIMIT 1",
                     (session_id,))
                 row = cur.fetchone()
-                return row[0] if row else ''
+                if row:
+                    return row[0]
     except Exception as e:
         logger.warning('platform session lookup failed %s: %s', session_id, e)
+        return ''
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT root_session_id FROM ai_chat_subtasks "
+                            "WHERE id = %s", (session_id,))
+                row = cur.fetchone()
+                return row[0] if row else ''
+    except Exception as e:
+        logger.warning('subtask session lookup failed %s: %s', session_id, e)
         return ''
 
 
@@ -111,10 +128,31 @@ def record_runtime_skill_event(payload: dict) -> dict:
     """OpenCode 插件上报 skill 工具调用（Spec P2：invoked → confirmed）。
 
     payload: {skillName, sessionID, messageID, partID, status, title}
+    spec §5c：subagent 内 part 的 sessionID 是子代理自己的 OC 会话 id
+    （即 ai_chat_subtasks.id）——命中子代理时归属其根会话、以 subtask_id
+    标注，并在返回里带回 subtaskId；attempt 归属沿用 get_attempts 既有
+    逻辑（子代理无独立 attempt 时落根会话的 attempt）。
     """
     skill = payload.get('skillName') or ''
     status = payload.get('status') or ''
-    session_id = _platform_session_id(payload.get('sessionID') or '')
+    oc_id = payload.get('sessionID') or ''
+    session_id = _platform_session_id(oc_id)
+    subtask_id = None
+    if oc_id and not oc_id.startswith('sess_'):
+        # 子代理甄别：sessionID 可能是 ai_chat_subtasks.id。主映射无论命中
+        # 与否都要核对子代理表——命中时以子代理归属优先（root_session_id
+        # 覆盖 session_id 并标注 subtask_id），未命中则保持主映射结果。
+        # 子代理 id 是主键至多一行，取首行即可。
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT root_session_id FROM ai_chat_subtasks "
+                                "WHERE id = %s", (oc_id,))
+                    rows = cur.fetchall()
+            if rows:
+                session_id, subtask_id = rows[0][0], oc_id
+        except Exception as e:
+            logger.warning('subtask lookup failed %s: %s', oc_id, e)
     if not session_id or not skill:
         return {'ok': False, 'reason': 'missing fields'}
 
@@ -136,8 +174,11 @@ def record_runtime_skill_event(payload: dict) -> dict:
 
     upsert_invocation(session_id, attempt_id, skill, source='runtime',
                       evidence_level='confirmed', status=status or None,
-                      evidence_refs=[ref])
-    return {'ok': True}
+                      evidence_refs=[ref], subtask_id=subtask_id)
+    result = {'ok': True}
+    if subtask_id:
+        result['subtaskId'] = subtask_id
+    return result
 
 
 def mark_session_idle(session_id: str) -> None:
