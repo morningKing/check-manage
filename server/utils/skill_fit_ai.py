@@ -1,10 +1,12 @@
 """SkillOpt 任务拟合的 AI 能力层（设计 docs/design/ai/SkillOpt任务拟合设计.md §5/§5b）。
 
-三个能力，共用一条 AI 设置通道（同 action_check_extractor：
+四个能力，共用一条 AI 设置通道（同 action_check_extractor：
 get_ai_settings / get_http_session，失败 RuntimeError → 路由层转 502）：
 
   generate_steps(definition_text)   定义全文 → fit.steps 草案（{"steps":[…]} JSON）
   apply_steps(path, steps)          回写 frontmatter fit.steps（保留其余字段与正文）
+  preview_steps(steps, attempt_id)  建议 steps 对历史 attempt 轨迹的试算预览
+                                    （纯计算不落库，spec §5「预览试算」）
   diagnose_result(result_id, ...)   partial/diverged 结果行的偏差诊断（结构化
                                     {cause, suggestions[], revised_steps}，落
                                     diagnosis 列；按 (result_id, def_hash,
@@ -25,6 +27,7 @@ import yaml
 
 from utils.ai_query import get_ai_settings, get_http_session
 from utils.agent_ledger import validate_pg_regex
+from utils.skill_fit import match_steps
 from db import get_db as _default_get_db
 
 log = logging.getLogger(__name__)
@@ -366,3 +369,35 @@ def diagnose_result(result_id: str, get_db=None) -> dict:
     log.info('diagnose: result=%s cause=%s trace_sig=%s…',
              result_id, diagnosis['cause'], digest[:8])
     return diagnosis
+
+
+# ── 预览试算（§5）：建议 steps vs 历史 attempt 轨迹，纯计算不落库 ─────────
+
+def preview_steps(steps: list[dict], attempt_id: str, get_db=None) -> dict:
+    """把建议的 steps 对某个历史 attempt 的实际轨迹做贪心匹配（Task 2 的
+    match_steps），返回 per_step/steps_total/steps_hit/score/status 预览。
+    纯试算——不写任何表。
+
+    Raises ValueError: steps 形状非法（缺 id / expect 非数组，路由层 400）；
+           LookupError: attempt 不存在（路由层 404）。"""
+    if not isinstance(steps, list) or not steps:
+        raise ValueError('steps 必须是非空数组')
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict) or not str(s.get('id') or '').strip():
+            raise ValueError(f'steps[{i}] 必须是含 id 的对象')
+        expect = s.get('expect') or []
+        if not isinstance(expect, list):
+            raise ValueError(f'steps[{i}].expect 必须是数组')
+
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT session_id, started_at, finished_at "
+                "FROM ai_execution_attempts WHERE id = %s", (attempt_id,))
+            row = cur.fetchone()
+    if not row:
+        raise LookupError(f'attempt 不存在: {attempt_id}')
+    session_id, started_at, finished_at = row
+    trace = _load_trace(db_ctx, session_id, started_at, finished_at)
+    return match_steps(steps, trace)

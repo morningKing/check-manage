@@ -1065,6 +1065,27 @@ def skill_def_steps_apply():
     return jsonify({'path': out_path})
 
 
+@ai_execution_admin_bp.post('/skill-def-steps/preview')
+@require_permission('admin.ai_chat_admin')
+def skill_def_steps_preview():
+    """步骤试算预览（spec §5）：建议 steps 对历史 attempt 的实际轨迹做
+    贪心匹配，返回 per_step/steps_total/steps_hit/score/status——纯试算
+    不落库。steps 非法（缺 id/expect 非数组）400；attempt 不存在 404。"""
+    from utils import skill_fit_ai
+    body = request.get_json(silent=True) or {}
+    attempt_id = (body.get('attemptId') or '').strip()
+    steps = body.get('steps')
+    if not attempt_id or not isinstance(steps, list):
+        return jsonify({'error': 'attemptId 必填，steps 必须是数组'}), 400
+    try:
+        preview = skill_fit_ai.preview_steps(steps, attempt_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    return jsonify({'preview': preview})
+
+
 @ai_execution_admin_bp.post('/skill-fit/<result_id>/diagnose')
 @require_permission('admin.ai_chat_admin')
 def skill_fit_diagnose(result_id):

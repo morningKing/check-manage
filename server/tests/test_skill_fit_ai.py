@@ -121,3 +121,75 @@ def test_diagnose_shape_and_cache(monkeypatch, db_conn, tmp_path):
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
                 cur.execute("DELETE FROM users WHERE id=%s", (uid,))
         db_conn.commit()
+
+
+def test_preview_steps_matches(tmp_path):
+    """种子 attempt + 账本轨迹（bash git clone x）→ 建议 steps 试算命中：
+    status='fit'、score=100（纯试算，无结果行落库）。"""
+    import uuid as _uuid
+    from db import get_db
+    from utils.skill_fit_ai import preview_steps
+    uid, sid, attempt, part = (str(_uuid.uuid4()) for _ in range(4))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s, %s, 'x', 'PV', 'developer')", (uid, f'pv_{uid[:8]}'))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, status, session_token) "
+                        "VALUES (%s, %s, 'completed', %s)",
+                        (sid, uid, f'tok-{sid[:12]}'))
+            cur.execute("INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                        "  operation, started_at, finished_at) "
+                        "VALUES (%s, %s, 'batch', 'send', "
+                        "  NOW() - interval '1 minute', NOW() + interval '1 minute')",
+                        (attempt, sid))
+            cur.execute("INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                        "  part_id, tool, args_text, occurred_at) "
+                        "VALUES (%s, %s, %s, 'bash', 'git clone x', NOW())",
+                        (sid, sid, f'pv-{part}', ))
+    try:
+        steps = [{'id': 'clone', 'name': '克隆仓库',
+                  'expect': [{'tool': 'bash', 'args_pattern': 'git clone'}]}]
+        preview = preview_steps(steps, attempt, get_db=get_db)
+        assert preview['status'] == 'fit'
+        assert preview['score'] == 100
+        assert preview['steps_total'] == 1 and preview['steps_hit'] == 1
+        assert preview['per_step'][0]['status'] == 'hit'
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM ai_skill_fit_results "
+                            "WHERE attempt_id=%s", (attempt,))
+                assert cur.fetchone()[0] == 0          # 纯试算不落库
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id=%s", (sid,))
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+                cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+
+
+# ── 路由层（真实 DB 的 client，shadow 模式同 test_skill_fit_routes.py） ────
+
+@pytest.fixture
+def client():
+    """真实 DB 的 test client（shadow 掉 conftest 的 mock-DB `client`）。
+
+    断言走真库（attempt 缺失 → 404），并把 utils.skill_fit_ai 的
+    `_default_get_db` 重绑回真实实现——防止该模块在早前 app 夹具的
+    db.get_db mock 窗口内首次导入时绑到 mock 连接。权限判定走 conftest
+    autouse 的 RBAC 预置缓存（admin=superuser），不需要 DB。"""
+    import db as _db
+    import utils.skill_fit_ai as fa
+    from app import app as flask_app
+    fa._default_get_db = _db.get_db
+    flask_app.config['TESTING'] = True
+    return flask_app.test_client()
+
+
+def test_preview_steps_attempt_missing_404(client, admin_headers):
+    """种子不建 attempt：preview 路由对不存在的 attemptId 返回 404。"""
+    r = client.post('/ai/chat/admin/skill-def-steps/preview',
+                    headers=admin_headers,
+                    json={'attemptId': 'no-such-attempt',
+                          'steps': [{'id': 'a', 'name': 'A', 'expect': []}]})
+    assert r.status_code == 404
