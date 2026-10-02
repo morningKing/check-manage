@@ -906,6 +906,83 @@ def list_skill_fits():
     return jsonify({'fits': [_fit_camel(r) for r in rows]})
 
 
+@ai_execution_admin_bp.get('/skill-fit/definition-summary')
+@require_permission('admin.ai_chat_admin')
+def skill_fit_definition_summary():
+    """左栏定义清单 + 概览指标（页面重设计 spec §9.3）。
+
+    清单 = ai_skill_def_versions ∪ ai_skill_fit_results 的 (def_kind,
+    def_name) 并集——从未跑过任务的新定义也出现在左栏，否则「生成步骤」
+    入口不可达（旧版本对比区可达，不能回归）。指标与 /skill-def-versions
+    同口径：fitRate = fit 状态行占比（分母只计有拟合结果的任务）。"""
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT d.def_kind, d.def_name,
+                       COALESCE(t.tasks, 0)          AS tasks,
+                       COALESCE(t.fit_tasks, 0)      AS fit_tasks,
+                       COALESCE(t.partial_tasks, 0)  AS partial_tasks,
+                       COALESCE(t.diverged_tasks, 0) AS diverged_tasks,
+                       COALESCE(t.score_sum, 0)      AS score_sum,
+                       d.versions                    AS versions,
+                       lv.version_label              AS latest_label,
+                       lv.content_hash               AS latest_hash,
+                       t.last_activity               AS last_activity
+                FROM (
+                  SELECT u.def_kind, u.def_name, max(u.versions) AS versions
+                  FROM (
+                    SELECT def_kind, def_name,
+                           count(DISTINCT content_hash) AS versions
+                    FROM ai_skill_def_versions
+                    GROUP BY def_kind, def_name
+                    UNION ALL
+                    SELECT def_kind, def_name, 0 AS versions
+                    FROM ai_skill_fit_results
+                    GROUP BY def_kind, def_name
+                  ) u GROUP BY u.def_kind, u.def_name
+                ) d
+                LEFT JOIN (
+                  SELECT def_kind, def_name,
+                         count(*)                                     AS tasks,
+                         count(*) FILTER (WHERE status = 'fit')       AS fit_tasks,
+                         count(*) FILTER (WHERE status = 'partial')   AS partial_tasks,
+                         count(*) FILTER (WHERE status = 'diverged')  AS diverged_tasks,
+                         sum(score)                                   AS score_sum,
+                         max(computed_at)                             AS last_activity
+                  FROM ai_skill_fit_results
+                  GROUP BY def_kind, def_name
+                ) t ON t.def_kind = d.def_kind AND t.def_name = d.def_name
+                LEFT JOIN LATERAL (
+                  SELECT v.version_label, v.content_hash
+                  FROM ai_skill_def_versions v
+                  WHERE v.def_kind = d.def_kind AND v.def_name = d.def_name
+                  ORDER BY v.first_seen_at DESC LIMIT 1
+                ) lv ON true
+                """)
+            cols = [c[0] for c in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+    defs = []
+    for r in rows:
+        tasks = r['tasks'] or 0
+        defs.append({
+            'defKind': r['def_kind'], 'defName': r['def_name'],
+            'tasks': tasks,
+            'fitRate': round(r['fit_tasks'] / tasks, 4) if tasks else None,
+            'avgScore': round(r['score_sum'] / tasks, 1) if tasks else None,
+            'partialCount': r['partial_tasks'],
+            'divergedCount': r['diverged_tasks'],
+            'versions': r['versions'] or 0,
+            'latestLabel': r['latest_label'],
+            'latestHash': r['latest_hash'],
+            'lastActivity': r['last_activity'].isoformat() if r['last_activity'] else None,
+        })
+    # 最近活动倒序；无活动的（'' 排最后）按名称补充排序
+    defs.sort(key=lambda x: (x['lastActivity'] or '', x['defName']), reverse=True)
+    return jsonify({'definitions': defs})
+
+
 @ai_execution_admin_bp.get('/skill-fit/<attempt_id>')
 @require_permission('admin.ai_chat_admin')
 def skill_fit_detail(attempt_id):

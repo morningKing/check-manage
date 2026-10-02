@@ -244,3 +244,54 @@ def test_skill_def_patterns_filter_by_def_name(client, admin_headers, db_conn, t
             cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
             cur.execute("DELETE FROM users WHERE id=%s", (uid,))
         db_conn.commit()
+
+
+def test_skill_fit_definition_summary_union_and_metrics(client, admin_headers,
+                                                        db_conn, tmp_path):
+    """清单 = 版本表 ∪ 拟合结果并集（裸版本定义也出现）；指标与版本端点同口径。"""
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    agent_name = f'demo-agent-{uuid.uuid4().hex[:6]}'
+    bare_name = f'bare-def-{uuid.uuid4().hex[:6]}'
+    try:
+        with db_conn.cursor() as cur:
+            # def_hash='h1'：版本端点按 (def_kind, def_name, def_hash) 归因
+            # 拟合行，末尾「与版本端点 fitRate 相等」断言要求该行可归因到
+            # h1 版本（brief 种子漏了该列，NULL 永不等于 content_hash）。
+            cur.execute("INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
+                        "  def_kind, def_name, def_hash, steps_total, steps_hit, score, status, per_step) "
+                        "VALUES (%s, %s, %s, 'agent', %s, 'h1', 1, 0, 0, 'diverged', %s::jsonb)",
+                        ('fit_' + uuid.uuid4().hex[:10], attempt, sid, agent_name,
+                         _json.dumps([])))
+            cur.execute("INSERT INTO ai_skill_def_versions (id, def_kind, def_name, content_hash) "
+                        "VALUES (%s, 'agent', %s, 'h1'), (%s, 'agent', %s, 'h2')",
+                        ('dv_' + uuid.uuid4().hex[:10], agent_name,
+                         'dv_' + uuid.uuid4().hex[:10], bare_name))
+        db_conn.commit()
+        r = client.get('/ai/chat/admin/skill-fit/definition-summary', headers=admin_headers)
+        assert r.status_code == 200
+        defs = {f"{x['defKind']}/{x['defName']}": x
+                for x in r.get_json()['definitions']}
+        # 并集：从未跑任务的裸版本定义也在清单里
+        bare = defs[f'agent/{bare_name}']
+        assert bare['tasks'] == 0 and bare['fitRate'] is None
+        # 指标口径
+        d = defs[f'agent/{agent_name}']
+        assert d['tasks'] == 1 and d['fitRate'] == 0.0 and d['divergedCount'] == 1
+        assert d['versions'] == 1 and d['latestHash'] == 'h1'
+        assert d['lastActivity'] is not None
+        # 与版本端点口径一致（同一份数据 fitRate 相等）
+        v = client.get('/ai/chat/admin/skill-def-versions', headers=admin_headers,
+                       query_string={'defName': agent_name})
+        vr = next(x for x in v.get_json()['versions'] if x['contentHash'] == 'h1')
+        assert vr['fitRate'] == d['fitRate']
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            cur.execute("DELETE FROM ai_skill_def_versions WHERE def_kind='agent' "
+                        "AND def_name IN (%s, %s)", (agent_name, bare_name))
+        db_conn.commit()
