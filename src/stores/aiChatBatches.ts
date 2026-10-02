@@ -109,6 +109,9 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   }
 
   function clearSelection() {
+    // SSE 订阅随选择一起释放（P1-A4）：否则离开批次页后连接残留，
+    // 后端仍持续推送已不可见批次的事件帧。
+    stopBatchEvents()
     stopDetailPolling()
     activeBatch.value = null
     activeSessions.value = []

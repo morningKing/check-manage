@@ -1320,3 +1320,32 @@ def test_backup_covers_ai_harness_tables():
     for name, cols, jsonb_idx, _label in BACKUP_TABLES:
         bad = [i for i in jsonb_idx if not 0 <= i < len(cols)]
         assert not bad, f"{name} JSONB 索引越界: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# P1-B3：/metrics Prometheus 文本格式监控端点
+# ---------------------------------------------------------------------------
+
+def test_metrics_endpoint(app, mock_conn):
+    """P1-B3：/metrics 端点返回 Prometheus 文本格式指标。"""
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    @contextmanager
+    def fake_db():
+        yield mock_conn
+
+    # 六个聚合指标各 fetchone 一次；lease 心跳 fetchall
+    mock_conn.cursor.return_value.fetchone.return_value = (0,)
+    mock_conn.cursor.return_value.fetchall.return_value = []
+    # routes.metrics 在 import 时绑定了自己的 get_db，须对模块本身打补丁
+    # （与 conftest._rebind_module_get_db_to_real 记录的绑定陷阱同因）
+    with patch('routes.metrics.get_db', fake_db):
+        r = app.test_client().get('/metrics')
+    assert r.status_code == 200
+    assert 'text/plain' in r.content_type
+    body = r.get_data(as_text=True)
+    assert 'ai_batch_queue_depth' in body
+    assert 'ai_batch_running' in body
+    assert 'ai_outbox_pending' in body
+    assert 'ai_batch_needs_review' in body

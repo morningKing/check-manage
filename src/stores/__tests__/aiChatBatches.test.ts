@@ -3,6 +3,31 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useAiChatBatchesStore } from '../aiChatBatches'
 import * as api from '@/api/aiChatBatches'
 
+// P1-A4：SSE 消费者 mock——store 只用 BatchEventStream([ids], handlers) +
+// open()/close()，fake 类把 handlers 暴露出来供用例直接发帧。
+const { FakeBatchEventStream } = vi.hoisted(() => {
+  class FakeBatchEventStream {
+    static last: FakeBatchEventStream | null = null
+    static instances: FakeBatchEventStream[] = []
+    batchIds: string[]
+    handlers: Record<string, (...args: unknown[]) => void>
+    opened = false
+    closed = false
+    constructor(batchIds: string[], handlers: Record<string, (...args: unknown[]) => void>) {
+      this.batchIds = batchIds
+      this.handlers = handlers
+      FakeBatchEventStream.last = this
+      FakeBatchEventStream.instances.push(this)
+    }
+    open() { this.opened = true }
+    close() { this.closed = true }
+    emitEvent(batchId: string, event: unknown) { this.handlers.onEvent?.(batchId, event) }
+    emitDone(batchId: string) { this.handlers.onDone?.(batchId) }
+  }
+  return { FakeBatchEventStream }
+})
+
+vi.mock('@/api/batchEvents', () => ({ BatchEventStream: FakeBatchEventStream }))
 vi.mock('@/api/aiChatBatches')
 
 beforeAll(() => {
@@ -14,6 +39,8 @@ beforeEach(() => {
   vi.clearAllTimers()
   setActivePinia(createPinia())
   vi.clearAllMocks()
+  FakeBatchEventStream.last = null
+  FakeBatchEventStream.instances = []
   // Reset document.hidden to false for each test
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
 })
@@ -108,5 +135,84 @@ describe('aiChatBatches store', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await vi.runOnlyPendingTimersAsync()
     expect(getBatchMock.mock.calls.length).toBeGreaterThan(1)
+  })
+
+  // ------------------------------------------------------------------
+  // P1-A4：SSE 批任务事件消费者
+  // ------------------------------------------------------------------
+  it('selectBatch subscribes SSE for a running batch', async () => {
+    vi.mocked(api.getBatch).mockResolvedValue({ batch: mockBatch, sessions: [] })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    expect(FakeBatchEventStream.last).not.toBeNull()
+    expect(FakeBatchEventStream.last!.batchIds).toEqual(['b1'])
+    expect(FakeBatchEventStream.last!.opened).toBe(true)
+  })
+
+  it('selectBatch skips SSE for a terminal batch', async () => {
+    const terminal = { ...mockBatch, status: 'completed' as const, done: 3 }
+    vi.mocked(api.getBatch).mockResolvedValue({ batch: terminal, sessions: [] })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    expect(FakeBatchEventStream.last).toBeNull()
+  })
+
+  it('SSE batch_event triggers detail refresh into store', async () => {
+    // 首次 selectBatch 拉到 done=1；事件帧到达后再拉到 done=2
+    vi.mocked(api.getBatch)
+      .mockResolvedValueOnce({ batch: mockBatch, sessions: [] })
+      .mockResolvedValue({
+        batch: { ...mockBatch, done: 2 },
+        sessions: [{ id: 's-2' } as never],
+      })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    expect(s.activeBatch?.done).toBe(1)
+    FakeBatchEventStream.last!.emitEvent('b1', {
+      batchId: 'b1', eventSeq: 1, type: 'child_done', data: {},
+    })
+    // onEvent → _applyRunningDetail（异步 refetch + applyDetail）
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.activeBatch?.done).toBe(2)
+    // 轮询仍作为降级路径保留（未被 SSE 停掉）
+    expect(s.polling).toBe(true)
+  })
+
+  it('SSE batch_done triggers final detail refresh', async () => {
+    vi.mocked(api.getBatch)
+      .mockResolvedValueOnce({ batch: mockBatch, sessions: [] })
+      .mockResolvedValue({ batch: { ...mockBatch, status: 'completed' as const, done: 3 }, sessions: [] })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    FakeBatchEventStream.last!.emitDone('b1')
+    // 推进一个轮询周期：终态 detail 到达后，下一次 tick 观察到终态并停止轮询
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(s.activeBatch?.status).toBe('completed')
+    // 终态到达后轮询停止
+    expect(s.polling).toBe(false)
+  })
+
+  it('clearSelection closes the SSE stream', async () => {
+    vi.mocked(api.getBatch).mockResolvedValue({ batch: mockBatch, sessions: [] })
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    const stream = FakeBatchEventStream.last!
+    s.clearSelection()
+    expect(stream.closed).toBe(true)
+    expect(s.polling).toBe(false)
+  })
+
+  it('switching batches replaces the SSE subscription', async () => {
+    vi.mocked(api.getBatch).mockImplementation(async (id: string) => ({
+      batch: { ...mockBatch, id }, sessions: [],
+    }))
+    const s = useAiChatBatchesStore()
+    await s.selectBatch('b1')
+    await s.selectBatch('b2')
+    expect(FakeBatchEventStream.instances).toHaveLength(2)
+    // 旧订阅已被关闭，只保留最新批次的订阅
+    expect(FakeBatchEventStream.instances[0].closed).toBe(true)
+    expect(FakeBatchEventStream.instances[1].closed).toBe(false)
+    expect(FakeBatchEventStream.instances[1].batchIds).toEqual(['b2'])
   })
 })

@@ -47,6 +47,7 @@ from routes.ai_chat_prompt_templates import ai_chat_prompt_templates_bp
 from routes.ai_chat_batches import ai_chat_batches_bp
 from routes.ai_batch_admin import ai_batch_admin_bp
 from routes.ai_session_admin import ai_session_admin_bp, ai_execution_admin_bp
+from routes.metrics import metrics_bp
 from routes.ai_skills import ai_skills_bp
 from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
@@ -126,6 +127,8 @@ app.register_blueprint(ai_chat_batches_bp)
 app.register_blueprint(ai_batch_admin_bp)
 app.register_blueprint(ai_session_admin_bp)
 app.register_blueprint(ai_execution_admin_bp)
+# 监控端点必须在 catch-all dynamic_bp 之前注册（P1-B3）
+app.register_blueprint(metrics_bp)
 
 
 @app.before_request
