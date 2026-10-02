@@ -869,22 +869,33 @@ def _fit_camel(r: dict, with_steps: bool = False) -> dict:
 @ai_execution_admin_bp.get('/skill-fit')
 @require_permission('admin.ai_chat_admin')
 def list_skill_fits():
-    """任务拟合结果列表（computed_at 倒序，?sessionId= 过滤，limit 默认 50）。"""
+    """任务拟合结果列表（computed_at 倒序；?sessionId/?defKind/?defName 过滤，limit 默认 50）。"""
     from db import get_db
     try:
         limit = min(max(int(request.args.get('limit') or 50), 1), 200)
     except (TypeError, ValueError):
         limit = 50
     session_id = (request.args.get('sessionId') or '').strip() or None
+    def_kind = (request.args.get('defKind') or '').strip() or None
+    def_name = (request.args.get('defName') or '').strip() or None
     sql = ("SELECT r.id, r.attempt_id, r.session_id, r.def_kind, r.def_name, r.def_hash, "
            "       r.steps_total, r.steps_hit, r.score, r.status, r.computed_at, "
            "       a.effective_agent "
            "FROM ai_skill_fit_results r "
            "LEFT JOIN ai_execution_attempts a ON a.id = r.attempt_id")
+    conds: list = []
     params: list = []
     if session_id:
-        sql += " WHERE r.session_id = %s"
+        conds.append("r.session_id = %s")
         params.append(session_id)
+    if def_kind:
+        conds.append("r.def_kind = %s")
+        params.append(def_kind)
+    if def_name:
+        conds.append("r.def_name = %s")
+        params.append(def_name)
+    if conds:
+        sql += " WHERE " + " AND ".join(conds)
     sql += " ORDER BY r.computed_at DESC LIMIT %s"
     params.append(limit)
     with get_db() as conn:

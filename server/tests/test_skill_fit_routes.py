@@ -182,3 +182,35 @@ def test_skill_def_steps_generate_allows_workspace_path(client, admin_headers,
                     json={'kind': 'skill', 'path': str(d / 'SKILL.md')})
     assert r.status_code == 200
     assert r.get_json()['steps'][0]['id'] == 'clone'
+
+
+def test_skill_fit_list_filters_by_def(client, admin_headers, db_conn, tmp_path):
+    """defKind/defName 过滤：同 attempt 两条不同定义，过滤后只回对应定义。"""
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    agent_name = f'demo-agent-{uuid.uuid4().hex[:6]}'
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
+                        "  def_kind, def_name, steps_total, steps_hit, score, status, per_step) "
+                        "VALUES (%s, %s, %s, 'agent', %s, 1, 0, 0, 'diverged', %s::jsonb)",
+                        ('fit_' + uuid.uuid4().hex[:10], attempt, sid, agent_name,
+                         _json.dumps([])))
+        db_conn.commit()
+        r = client.get('/ai/chat/admin/skill-fit', headers=admin_headers,
+                       query_string={'defName': agent_name})
+        assert r.status_code == 200
+        rows = [f for f in r.get_json()['fits'] if f['attemptId'] == attempt]
+        assert rows and {f['defName'] for f in rows} == {agent_name}
+        r2 = client.get('/ai/chat/admin/skill-fit', headers=admin_headers,
+                        query_string={'defKind': 'skill'})
+        mine = [f for f in r2.get_json()['fits'] if f['attemptId'] == attempt]
+        assert mine and {f['defKind'] for f in mine} == {'skill'}
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()
