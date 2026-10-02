@@ -26,6 +26,8 @@ import subprocess
 import uuid
 
 _NO_WINDOW = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
+import json
+import secrets
 import threading
 import time
 import traceback
@@ -1858,9 +1860,15 @@ class BatchWorker:
             return []
 
     def _maybe_check_delegation_gate(self, session_id: str, directory: str,
-                                     known: dict):
+                                     known: dict, raw: list | None = None):
         """委派级门禁（设计 §5.4 扩展，2026-09-30）：verifier 定向组（期望带
         subagents 名单）在名单内子代理全部终态时提前判定。
+
+        材料完整性守卫（2026-10-02）：仅当父回合已 finished（模型已收尾，
+        不会再有新委派）才判定——子代理终态但父回合仍在跑时材料可能不完整
+        （rubric 提及的后续委派尚未发生），提前判会把「应有两委派只见到一」
+        误判成 failed 并误停达标任务（生产 e2e 实测）。未 finished 时跳过
+        本拍，等下一拍重查。
 
         - 全部 passed → 只暂存（终态合并为 gate passed，跳过重复判官）；
         - failed 且批级 gate_retry 开 → 暂存（终态合并为 gate failed → 引擎
@@ -1874,6 +1882,18 @@ class BatchWorker:
         try:
             if not known:
                 return
+            # 父回合 finished 感知：finished 前 material 可能不完整，跳过判定
+            if raw is not None:
+                last_assistant_fin = False
+                for m in raw:
+                    info = m.get('info') or {}
+                    if info.get('role') == 'assistant':
+                        fin = (info.get('time') or {}).get('completed')
+                        finish = info.get('finish')
+                        last_assistant_fin = bool(
+                            fin) and finish not in ('tool-calls', 'tool_use')
+                if not last_assistant_fin:
+                    return
             done = self._deleg_gate_done.setdefault(session_id, {})
             # 名单内子代理：本次快照里终态且尚未核对过
             targets = [(st_id, info) for st_id, info in known.items()
@@ -1922,6 +1942,48 @@ class BatchWorker:
                     group = {'agents': key, 'checks': checks,
                              'subagent_segments': [], 'trace': []}
                     from utils import verifier as _v
+                    # 材料组装（spec §4 定向组口径，同 verifier.collect_materials
+                    # 的查询/截断上限；渲染走 build_verifier_prompt，形状必须与
+                    # 终态路径一致）。此前两键恒为空——判官拿到的材料是空的
+                    # （「该名单下没有发现任何子代理会话…无工具调用记录」），
+                    # 达标与否全看判官宽松度，负向场景必然误判 failed → 误停。
+                    # 组装失败跳过本组本拍（不标 done）：拿空材料判定会重蹈误停。
+                    try:
+                        with _gdb() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "SELECT id, agent FROM ai_chat_subtasks "
+                                    "WHERE root_session_id = %s AND agent = ANY(%s) "
+                                    "ORDER BY created_at, id",
+                                    (session_id, list(key)))
+                                segments, st_ids = [], []
+                                for st_id, st_agent in cur.fetchall():
+                                    st_ids.append(st_id)
+                                    cur.execute(
+                                        "SELECT role, content FROM ai_chat_subtask_messages "
+                                        "WHERE subtask_id = %s ORDER BY seq LIMIT %s",
+                                        (st_id, _v._MAX_SUBAGENT_MSG_ROWS))
+                                    segments.append({
+                                        'agent': st_agent, 'subtask_id': st_id,
+                                        'messages': [
+                                            {'role': r[0],
+                                             'text': _v._parts_text(r[1])[:_v._MAX_SUBAGENT_MSG_CHARS]}
+                                            for r in cur.fetchall()]})
+                                if st_ids:
+                                    cur.execute(
+                                        "SELECT oc_session_id, tool, args_text, state, "
+                                        "       occurred_at "
+                                        "FROM agent_tool_calls WHERE root_session_id = %s "
+                                        "  AND subtask_id = ANY(%s) "
+                                        "ORDER BY occurred_at, id LIMIT %s",
+                                        (session_id, st_ids, _v._MAX_TRACE_ROWS))
+                                    group['trace'] = _v._trace_rows(cur.fetchall())
+                                group['subagent_segments'] = segments
+                    except Exception as e:  # noqa: BLE001 —— 材料不全不判定
+                        logger.warning('delegation gate material build failed '
+                                       'sid=%s agents=%s: %s',
+                                       session_id, ','.join(key), e)
+                        continue
                     # 判官客户端用真 OpenCodeClient（与终态核对同源）——本模块的
                     # opencode_client 是 _OpenCodeFacade 门面，未包装
                     # send_prompt_async，传过去会让判官会话创建恒失败。
@@ -1931,11 +1993,59 @@ class BatchWorker:
                                         _v.DEFAULT_TIMEOUT_SEC, _v.DEFAULT_STALL_SEC)
                     for st_id, _i in members:
                         done[(st_id, session_id)] = True
-                    # 三态分流：passed/failed 落地暂存（终态合并跳过重复判官）；
-                    # inconclusive（材料不足——如委派仍在进行中）不暂存也不
-                    # 即停，标 done 后由终态核对以完整材料重判。
+                    # 落库持久证据：failed 判定即写 fit_results 行——即停路径
+                    # （cancelled）不走终态 gate 核对，没有这里就无法在拟合
+                    # 摘要/版本聚合中看到即停任务的判官结果。passed 暂存即可
+                    # （终态 merge 落库）。def_hash 期望级缺失置 NULL（列可空）。
+                    # attempt_id 现查最新 attempt（同 verifier.merge_verifier_results
+                    # 口径；此前引用了未定义的 attempt 名——INSERT 恒 NameError，
+                    # 被裸 except 吞掉，拟合行从未落过）。
+                    att_id = None
+                    try:
+                        with _gdb() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "SELECT id FROM ai_execution_attempts "
+                                    "WHERE session_id = %s "
+                                    "ORDER BY started_at DESC NULLS LAST LIMIT 1",
+                                    (session_id,))
+                                row = cur.fetchone()
+                                att_id = row[0] if row else None
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning('deleg gate fit attempt lookup failed '
+                                       'sid=%s: %s', session_id, e)
                     landed = [x for x in run['results']
                               if x['status'] in ('passed', 'failed')]
+                    for x in landed:
+                        if x['status'] != 'failed' or not att_id:
+                            continue
+                        try:
+                            with _gdb() as conn2:
+                                with conn2.cursor() as cur2:
+                                    cur2.execute(
+                                        "INSERT INTO ai_skill_fit_results "
+                                        "(id, attempt_id, session_id, def_kind, "
+                                        " def_name, def_hash, steps_total, "
+                                        " steps_hit, score, status, per_step) "
+                                        "VALUES (%s, %s, %s, 'verifier', %s, NULL, "
+                                        " %s, %s, %s, 'failed', %s::jsonb) "
+                                        "ON CONFLICT (attempt_id, def_name) DO UPDATE SET "
+                                        " score = EXCLUDED.score, "
+                                        " status = 'failed', "
+                                        " per_step = EXCLUDED.per_step, "
+                                        " computed_at = NOW()",
+                                        ('fit_' + secrets.token_hex(6), att_id,
+                                         session_id, x['name'], len(run['results']),
+                                         sum(1 for y in run['results']
+                                             if y['status'] == 'passed'),
+                                         0,
+                                         json.dumps(run['results'],
+                                                    ensure_ascii=False)))
+                                conn2.commit()
+                        except Exception as e:
+                            logger.warning('deleg gate fit row persist failed '
+                                           'sid=%s def=%s: %s',
+                                           session_id, x['name'], e)
                     cached = self._deleg_gate_results.setdefault(session_id, [])
                     cached.extend(landed)
                     failed_names = [x['name'] for x in landed
@@ -2645,7 +2755,8 @@ class BatchWorker:
             # 终态时提前判定；未开 gate_retry 且不过 → 置 cancel_requested
             # 立即停止（用户语义：校验不过别让它继续跑完整轮）。
             if reuse_agents or True:   # 定向组不依赖 subagent_reuse 名单
-                self._maybe_check_delegation_gate(session_id, directory, known)
+                self._maybe_check_delegation_gate(session_id, directory, known,
+                                                  raw=raw)
             # 顶层内容里的嵌套 subtask_use 带 segmentCount（气泡徽标）——
             # 必须在 _write_subtask 合并任务段之后读，才是本次持久化的最新值
             subtask_segments: dict = {}

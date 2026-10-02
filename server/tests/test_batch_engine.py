@@ -1921,6 +1921,91 @@ def test_check_action_gate_verifier_error_fail_closed(db_conn, user_id, monkeypa
 
 
 
+def test_delegation_gate_fills_materials_from_db(db_conn, user_id, monkeypatch):
+    """委派级判官材料组装（2026-10-02 复审修复）：_maybe_check_delegation_gate
+    构建 group 后必须从真库填充 subagent_segments/trace——此前两键恒为空，
+    判官拿空材料（「该名单下没有发现任何子代理会话…无工具调用记录」），
+    负向用例必然误判 failed → 误停达标任务。
+
+    种子：委派级期望（subagents=['dev']）+ ai_chat_subtasks/messages +
+    账本轨迹；打桩 _v._run_group 捕获传入的 group（返回 passed，不触即停/
+    fit 落库分支）。断言 group['subagent_segments'] 含种子消息文本、
+    group['trace'] 非空。"""
+    import json as _json
+    from utils.batch_engine import BatchWorker
+    import utils.verifier as _v
+    from utils.agent_ledger import register_session_expectations
+    from db import get_db
+    w = BatchWorker()
+    sid = _seed_gate_child(db_conn, user_id, oc_sid=f'oc-dg-{uuid.uuid4().hex[:8]}',
+                           with_reply=True)
+    register_session_expectations(
+        sid, [{'name': '子代理出报告', 'check_type': 'verifier',
+               'rubric': '子代理报告包含一号', 'subagents': ['dev']}],
+        get_db=get_db)
+    st_id = f'ses_{uuid.uuid4().hex[:8]}'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status) "
+                "VALUES (%s, %s, 'dev', 'completed')", (st_id, sid))
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                "VALUES (%s, %s, 'user', %s::jsonb)",
+                (f'sm-{st_id[4:12]}-u', st_id,
+                 _json.dumps([{'type': 'text', 'text': '报告一号'}])))
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                "VALUES (%s, %s, 'assistant', %s::jsonb)",
+                (f'sm-{st_id[4:12]}-a', st_id,
+                 _json.dumps([{'type': 'text', 'text': '一号OK'}])))
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                "  subtask_id, agent, part_id, tool, args_text, state) "
+                "VALUES (%s, %s, %s, 'dev', %s, 'read', 'filePath=src/a.py', 'completed')",
+                (f'oc-dg-{uuid.uuid4().hex[:8]}', sid, st_id,
+                 f'sp-{st_id[4:12]}'))
+    db_conn.commit()
+    captured = []
+
+    def _fake_run_group(oc, group, workspace_path, model, session_id, *a, **kw):
+        captured.append(dict(group))
+        return {'status': 'completed', 'error': None, 'results': [
+            {'name': '子代理出报告', 'kind': 'verifier', 'status': 'passed',
+             'reasons': ['一号在'], 'evidence': '-', 'min_count': 1,
+             'check_type': 'verifier', 'effect_spec': None}]}
+
+    monkeypatch.setattr(_v, '_run_group', _fake_run_group)
+    try:
+        w._maybe_check_delegation_gate(
+            sid, 'C:\\dgt', {st_id: {'status': 'completed', 'agent': 'dev'}},
+            raw=None)
+        assert len(captured) == 1
+        group = captured[0]
+        assert group['agents'] == ('dev',)
+        segs = group['subagent_segments']
+        assert len(segs) == 1 and segs[0]['subtask_id'] == st_id
+        texts = ' | '.join(m['text'] for m in segs[0]['messages'])
+        assert '报告一号' in texts and '一号OK' in texts
+        assert group['trace'], 'trace 不得为空——判官需要工具调用证据'
+        assert any(t['tool'] == 'read' for t in group['trace'])
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM action_expectations WHERE scope_id = %s",
+                            (sid,))
+                cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s",
+                            (sid,))
+                cur.execute(
+                    "DELETE FROM ai_chat_subtask_messages WHERE subtask_id IN "
+                    "(SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s)",
+                    (sid,))
+                cur.execute("DELETE FROM ai_chat_subtasks WHERE root_session_id = %s",
+                            (sid,))
+        db_conn.commit()
+
+
+
 def test_prepare_workspace_writes_batch_permissions(tmp_path, monkeypatch):
     """派发准备工作区时写项目级 permission allow（绑定批任务的外部目录读取）：
     无人值守会话读工作区外文件不再触发 external_directory=ask 授权询问挂死；
