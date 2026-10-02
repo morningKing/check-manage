@@ -21,9 +21,10 @@ from utils.api_errors import (CONFLICT, INTERNAL_ERROR, INVALID_ARGUMENT, NOT_FO
 from utils.batch_engine import get_worker
 from utils.batch_repo import (append_to_batch, cancel_batch,
                               create_batch, delete_batch, get_batch_detail,
-                              get_max_files_per_batch,
-                              get_batch_results, get_batch_usage, get_session_usage,
-                              list_batches, reset_failed_to_pending)
+                              get_batch_results, get_batch_usage,
+                              get_children_progress, get_max_files_per_batch,
+                              get_session_usage, list_batches,
+                              reset_failed_to_pending)
 from utils.filename import safe_filename
 from utils.operation_log import log_api_operation
 # 请求体上限来自零依赖的共享模块：同一组数字 proxy.py 也要用（它在
@@ -242,6 +243,11 @@ def _batch_out(b: dict) -> dict:
         'queueWaitMs': ext.get('queueWaitMs'),
         'runningMs': ext.get('runningMs'),
         'lastProgressAt': ext.get('lastProgressAt'),
+        # P1-A1 增量：批次级 paused/eventCursor + per-child 结构化数组。
+        # children 为 best-effort（底层失败返回空列表），不影响主契约字段。
+        'paused': bool(ext.get('paused', False)),
+        'eventCursor': ext.get('eventCursor'),
+        'children': get_children_progress(b['id']),
     }
 
 

@@ -1109,3 +1109,127 @@ def test_structured_error_backward_compat(app):
     assert body['error'] == 'msg'
     assert body['code'] == 'CODE'
     assert 'error_detail' not in body
+
+
+# ---------------------------------------------------------------------------
+# P1-A1：对外 _batch_out 增量返回 paused/eventCursor + children 结构化数组
+# ---------------------------------------------------------------------------
+
+OPEN_BASE = '/v1/ai-batches'
+
+
+@pytest.fixture
+def gap_open_client(db_conn):
+    """真实（不 mock DB）的对外 API test client。
+
+    同 test_open_api_batch_integration.py 的模式：把已导入模块绑定的
+    get_db 一律 rebind 回真实实现，让真实 api_key_required 网关 +
+    get_batch_detail/get_children_progress 走真库。"""
+    import db as db_module
+    if hasattr(db_module.pool, '_mock_name'):
+        db_module.pool = None
+    real_get_db = db_module.get_db
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if getattr(mod, 'get_db', None) is not None and (
+                mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                or mod_name == 'auth'):
+            try:
+                mod.get_db = real_get_db
+            except (AttributeError, TypeError):
+                pass
+    from app import app
+    app.config['TESTING'] = True
+    return app.test_client()
+
+
+def _seed_open_key(db_conn, user_id):
+    """造一把绑定到 user_id 的真实 API Key，返回 (明文 key, key id)。"""
+    from auth import hash_api_key
+    key = 'cm_gap_' + uuid.uuid4().hex
+    kid = 'ak-gap-' + uuid.uuid4().hex[:8]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO api_keys (id, name, key_hash, is_active, owner_user_id) "
+            "VALUES (%s, 'gap-open-key', %s, TRUE, %s)",
+            (kid, hash_api_key(key), user_id))
+    db_conn.commit()
+    return key, kid
+
+
+def _seed_open_batch(db_conn, user_id, api_key_id, files):
+    """带 api_key_id 的批次 + n 个 pending 子会话（get_batch_detail 按
+    api_key_id 过滤，必须写上才能被对外 detail 读到）。返回 (batch_id, sids)。"""
+    bid = str(uuid.uuid4())
+    sids = []
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_batches (id, user_id, api_key_id, name, "
+            "  prompt, total, status) "
+            "VALUES (%s, %s, %s, 'gap-open-batch', 'p', %s, 'pending')",
+            (bid, user_id, api_key_id, len(files)))
+        for i, f in enumerate(files):
+            sid = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                "  batch_seq, batch_input_file) "
+                "VALUES (%s, %s, 'pending', %s, %s, %s)", (sid, user_id, bid, i, f))
+            sids.append(sid)
+    db_conn.commit()
+    return bid, sids
+
+
+def _cleanup_open_batch(db_conn, bid, kid):
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_batch_events WHERE batch_id=%s", (bid,))
+        cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+        cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+        cur.execute("DELETE FROM api_keys WHERE id=%s", (kid,))
+    db_conn.commit()
+
+
+def test_batch_out_has_paused_and_event_cursor(db_conn, user_id, gap_open_client):
+    """P1-A1：_batch_out 增量返回 paused 和 eventCursor。"""
+    key, kid = _seed_open_key(db_conn, user_id)
+    bid, sids = _seed_open_batch(db_conn, user_id, kid, ['a.csv'])
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_batch_events (batch_id, event_seq, event_id, "
+                "  event_type, aggregate_type) VALUES (%s, 1, %s, 'x', 'batch')",
+                (bid, f'evt-pec-{bid}'))
+        db_conn.commit()
+        r = gap_open_client.get(f'{OPEN_BASE}/{bid}', headers={'X-API-Key': key})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        body = r.get_json()
+        assert 'paused' in body and body['paused'] is False  # 无 paused 子会话
+        assert 'eventCursor' in body and isinstance(body['eventCursor'], int)
+        assert body['eventCursor'] == 1                      # 读的是真实事件游标
+    finally:
+        _cleanup_open_batch(db_conn, bid, kid)
+
+
+def test_batch_out_children_array(db_conn, user_id, gap_open_client):
+    """P1-A1：_batch_out 返回 children 结构化数组。"""
+    key, kid = _seed_open_key(db_conn, user_id)
+    bid, sids = _seed_open_batch(db_conn, user_id, kid, ['dir/a.csv', 'b.pdf'])
+    try:
+        r = gap_open_client.get(f'{OPEN_BASE}/{bid}', headers={'X-API-Key': key})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        children = r.get_json()['children']
+        assert isinstance(children, list) and len(children) == 2
+        first, second = children              # ORDER BY batch_seq
+        assert first['childId'] == sids[0] and first['seq'] == 0
+        assert first['name'] == 'a.csv'       # 路径只取文件名
+        assert first['status'] == 'pending'
+        assert first['attempt'] == 1          # execution_generation 0 + 1
+        assert first['retryCount'] == 0
+        assert first['retryable'] is True     # 非终态可重试
+        assert first['error'] == {'code': None, 'message': None, 'retryable': False}
+        assert second['childId'] == sids[1] and second['name'] == 'b.pdf'
+        for c in children:
+            assert {'childId', 'name', 'status', 'attempt', 'retryCount',
+                    'retryable', 'error'} <= set(c)
+    finally:
+        _cleanup_open_batch(db_conn, bid, kid)

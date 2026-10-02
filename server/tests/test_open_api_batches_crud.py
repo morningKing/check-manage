@@ -252,12 +252,17 @@ def test_detail_returns_contract_fields_only(client, mock_conn, mock_cursor):
          patch('routes.open_api_batches.get_batch_detail', return_value=detail):
         resp = client.get(f'{BASE}/b-1', headers=HDR)
     body = resp.get_json()
-    # P1 §8.3：generation/queueWaitMs/runningMs/lastProgressAt 为增量扩展
-    # （内部字段仍绝不外泄——batch.secret/prompt/user_id 等照旧被拦）
+    # P1 §8.3：generation/queueWaitMs/runningMs/lastProgressAt 为增量扩展；
+    # P1-A1 再增 paused/eventCursor/children（per-child 结构化数组）。
+    # 内部字段仍绝不外泄——batch.secret/prompt/user_id 等照旧被拦
     assert set(body) == {'batchId', 'name', 'status', 'total', 'done', 'failed',
                          'agent', 'model', 'callbackUrl', 'createdAt', 'completedAt',
                          'generation', 'queueWaitMs', 'runningMs', 'lastProgressAt',
+                         'paused', 'eventCursor', 'children',
                          'usage'}
+    assert body['paused'] is False
+    assert body['eventCursor'] is None
+    assert body['children'] == []
     assert body['callbackUrl'] == 'https://example.com/hook'
     assert 'opencode_session_id' not in resp.get_data(as_text=True)
     assert 'user_id' not in resp.get_data(as_text=True)

@@ -1550,7 +1550,15 @@ def get_batch_progress_ext(batch_id: str) -> dict:
                 cur.execute("SELECT completed_at FROM ai_chat_batches "
                             "WHERE id = %s", (batch_id,))
                 completed_at = (cur.fetchone() or [None])[0]
-        out = {'generation': gen}
+                out = {'generation': gen}
+                # P1-A1：批次级事件游标（事件流增量拉取的起点）与 paused
+                # （任一子会话处于 paused 即视为批次可恢复暂停）。
+                cur.execute("SELECT COALESCE(MAX(event_seq), 0) "
+                            "FROM ai_batch_events WHERE batch_id = %s", (batch_id,))
+                out['eventCursor'] = cur.fetchone()[0]
+                cur.execute("SELECT EXISTS(SELECT 1 FROM ai_chat_sessions "
+                            "WHERE batch_id = %s AND status = 'paused')", (batch_id,))
+                out['paused'] = cur.fetchone()[0]
         if created_at and first_started:
             out['queueWaitMs'] = int(
                 (first_started - created_at).total_seconds() * 1000)
@@ -1567,3 +1575,40 @@ def get_batch_progress_ext(batch_id: str) -> dict:
         return out
     except Exception:
         return {}
+
+
+def get_children_progress(batch_id: str) -> list[dict]:
+    """P1-A1：per-child 结构化状态（attempt/retryable/error/lastProgressAt）。
+    best-effort，失败返回空列表。"""
+    try:
+        from psycopg2.extras import RealDictCursor
+        with get_db() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT id, batch_seq, batch_input_file, status, "
+                    "execution_generation, retry_count, error_message, "
+                    "gate_status, last_active_at "
+                    "FROM ai_chat_sessions WHERE batch_id = %s "
+                    "AND deleted_at IS NULL ORDER BY batch_seq", (batch_id,))
+                rows = [dict(r) for r in cur.fetchall()]
+        out = []
+        for r in rows:
+            terminal = r['status'] in ('completed', 'failed', 'cancelled', 'needs_review')
+            out.append({
+                'childId': r['id'],
+                'seq': r['batch_seq'],
+                'name': (r['batch_input_file'] or '').replace('\\', '/').rsplit('/', 1)[-1] if r['batch_input_file'] else None,
+                'status': r['status'],
+                'attempt': (r['execution_generation'] or 0) + 1,
+                'retryCount': r['retry_count'] or 0,
+                'retryable': not terminal,
+                'lastProgressAt': r['last_active_at'].isoformat() if r.get('last_active_at') else None,
+                'error': {
+                    'code': 'GATE_INCONCLUSIVE' if r.get('gate_status') == 'inconclusive' else None,
+                    'message': r.get('error_message'),
+                    'retryable': r['status'] in ('failed', 'needs_review'),
+                },
+            })
+        return out
+    except Exception:
+        return []
