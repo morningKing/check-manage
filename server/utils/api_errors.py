@@ -16,10 +16,29 @@ INTERNAL_ERROR = 'INTERNAL_ERROR'
 UPSTREAM_UNAVAILABLE = 'UPSTREAM_UNAVAILABLE'
 
 
-def err(message: str, code: str, status: int):
-    """返回可直接 `return` 的 (jsonify(...), status) 二元组。"""
+def err(message: str, code: str, status: int, *,
+        retryable: bool | None = None,
+        phase: str | None = None,
+        attempt: int | None = None,
+        evidence_refs: list | None = None):
+    """返回可直接 `return` 的 (jsonify(...), status) 二元组。
+
+    P1-A1：可选结构化增量字段（retryable/phase/attempt/evidence_refs）——
+    传入时输出 `error_detail` 对象；不传时行为与既有完全一致。"""
     from flask import jsonify
-    return jsonify({'error': message, 'code': code}), status
+    body: dict = {'error': message, 'code': code}
+    detail: dict = {}
+    if retryable is not None:
+        detail['retryable'] = retryable
+    if phase is not None:
+        detail['phase'] = phase
+    if attempt is not None:
+        detail['attempt'] = attempt
+    if evidence_refs is not None:
+        detail['evidenceRefs'] = evidence_refs
+    if detail:
+        body['error_detail'] = detail
+    return jsonify(body), status
 
 
 def register_error_handlers(bp):

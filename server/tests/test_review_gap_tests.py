@@ -1082,3 +1082,30 @@ def test_internal_commands_endpoint(db_conn, gap_internal_client):
     assert r4.get_json()['error']['code'] == 'VERSION_CONFLICT'
     # 清理（user-admin 不经 fixture）
     client.delete(f'/ai/chat/batches/{bid}?stop=1', headers=hdrs)
+
+
+def test_structured_error_detail(app):
+    """P1-A1：err() 支持 error_detail 增量字段。"""
+    from utils.api_errors import err
+    with app.test_request_context():
+        resp, status = err('msg', 'CODE', 409,
+                           retryable=True, phase='dispatch', attempt=2,
+                           evidence_refs=['event:bevt_x'])
+        body = resp.get_json()
+    assert body['error'] == 'msg'
+    assert body['code'] == 'CODE'
+    assert body['error_detail']['retryable'] is True
+    assert body['error_detail']['phase'] == 'dispatch'
+    assert body['error_detail']['attempt'] == 2
+    assert body['error_detail']['evidenceRefs'] == ['event:bevt_x']
+
+
+def test_structured_error_backward_compat(app):
+    """P1-A1：不传 kwargs 时行为与既有完全一致（无 error_detail 键）。"""
+    from utils.api_errors import err
+    with app.test_request_context():
+        resp, status = err('msg', 'CODE', 404)
+        body = resp.get_json()
+    assert body['error'] == 'msg'
+    assert body['code'] == 'CODE'
+    assert 'error_detail' not in body
