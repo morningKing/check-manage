@@ -132,7 +132,36 @@ export interface FitPreview {
   status: string
 }
 
-export function listSkillFits(params?: { sessionId?: string; limit?: number }) {
+/** 左栏定义清单 + 概览指标（/skill-fit/definition-summary） */
+export interface SkillFitDefinitionSummary {
+  defKind: string
+  defName: string
+  tasks: number
+  fitRate: number | null
+  avgScore: number | null
+  partialCount: number
+  divergedCount: number
+  versions: number
+  latestLabel: string | null
+  latestHash: string | null
+  lastActivity: string | null
+}
+
+/** 步骤级偏离聚合（/skill-def-patterns） */
+export interface SkillDefPattern {
+  defKind: string
+  defName: string
+  stepId: string
+  missTasks: number
+  versionsAffected: number
+  versionHashes: string[]
+  avgScore: number | null
+  lastSeenAt: string | null
+}
+
+export function listSkillFits(params?: {
+  sessionId?: string; defKind?: string; defName?: string; limit?: number
+}) {
   return get<{ fits: SkillFitRow[] }>(`${ADMIN}/skill-fit`, params)
 }
 
@@ -168,4 +197,15 @@ export function previewSkillDefSteps(body: { steps: FitStep[]; attemptId: string
 export function diagnoseSkillFit(resultId: string) {
   return post<{ diagnosis: SkillFitDiagnosis }>(
     `${ADMIN}/skill-fit/${encodeURIComponent(resultId)}/diagnose`)
+}
+
+export function getSkillFitDefinitionSummary() {
+  return get<{ definitions: SkillFitDefinitionSummary[] }>(
+    `${ADMIN}/skill-fit/definition-summary`)
+}
+
+export function listSkillDefPatterns(params?: {
+  defKind?: string; defName?: string; limit?: number
+}) {
+  return get<{ patterns: SkillDefPattern[] }>(`${ADMIN}/skill-def-patterns`, params)
 }
