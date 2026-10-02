@@ -1233,3 +1233,90 @@ def test_batch_out_children_array(db_conn, user_id, gap_open_client):
                     'retryable', 'error'} <= set(c)
     finally:
         _cleanup_open_batch(db_conn, bid, kid)
+
+
+# ---------------------------------------------------------------------------
+# P1-A2b：扫描产物导入 data_files 的 file_import effect 补漏
+# ---------------------------------------------------------------------------
+
+def test_scan_output_import_records_file_import_effect(db_conn, user_id,
+                                                       tmp_path, monkeypatch):
+    """_import_child_outputs_to_record 直插 data_files（不经
+    import_recorded_files），补登记 file_import effect 并即时收口
+    committed——幂等键 = session_id:文件相对路径。"""
+    from unittest.mock import patch
+
+    from utils.ai_scan_engine import _import_child_outputs_to_record
+
+    coll = f'gap_eff_{uuid.uuid4().hex[:8]}'
+    rid, sid, bid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    ws = tmp_path / 'ws'
+    (ws / 'outputs').mkdir(parents=True)
+    (ws / 'outputs' / 'result.txt').write_text('ok', encoding='utf-8')
+    monkeypatch.setenv('DATA_FILES_ROOT', str(tmp_path / 'storage'))
+
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO dynamic_data (id, collection, data, branch_id) "
+            "VALUES (%s, %s, %s::jsonb, 'main')",
+            (rid, coll, json.dumps({'files': []})))
+    db_conn.commit()
+    try:
+        session_row = {'id': sid, 'user_id': user_id, 'batch_id': bid,
+                       'workspace_path': str(ws)}
+        task = {'collection': coll, 'branchId': 'main'}
+        with patch('utils.execution_effect.record_effect') as m_rec, \
+             patch('utils.execution_effect.settle_effect') as m_set:
+            m_rec.return_value = {'id': 'eff-test', 'status': 'planned',
+                                  'external_ref': None, 'result_hash': None}
+            n = _import_child_outputs_to_record(task, rid, session_row,
+                                                'files')
+        assert n == 1
+        assert m_rec.call_count == 1
+        args, kwargs = m_rec.call_args
+        assert args[0] == sid                    # 子会话 id
+        assert args[1] == 'file_import'          # effect 类型
+        assert args[2] == f'{sid}:result.txt'    # 幂等键
+        assert kwargs.get('batch_id') == bid
+        s_args, s_kwargs = m_set.call_args
+        assert s_args[0] == 'eff-test'
+        assert s_args[1] == 'committed'
+        assert s_kwargs.get('external_ref')      # 新 data_file 的 id
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM data_files WHERE original_name = %s "
+                        "AND uploaded_by = %s", ('result.txt', user_id))
+            cur.execute("DELETE FROM dynamic_data WHERE id = %s", (rid,))
+        db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# P1-A9：BACKUP_TABLES 覆盖 AI Harness 新表
+# ---------------------------------------------------------------------------
+
+def test_backup_covers_ai_harness_tables():
+    """P1-A9：BACKUP_TABLES 覆盖 AI Harness 新表。"""
+    from utils.backup import BACKUP_TABLES
+    table_names = {t[0] for t in BACKUP_TABLES}
+    required = {
+        'ai_orchestration_definitions', 'ai_orchestration_runs',
+        'ai_orchestration_steps', 'artifacts', 'artifact_refs',
+        'ai_runtime_manifests', 'ai_execution_attempts',
+        'ai_execution_events', 'ai_execution_checkpoints',
+        'ai_execution_effects', 'ai_execution_commands',
+        'ai_batch_events', 'ai_delivery_outbox',
+        'ai_execution_budgets', 'ai_execution_usage',
+        'ai_chat_turns', 'agent_tool_calls', 'action_expectations',
+    }
+    missing = required - table_names
+    assert not missing, f"BACKUP_TABLES 缺少: {missing}"
+
+    # 无重复登记（BACKUP_TABLES 按列表遍历导出，重复行会导出两遍）
+    names = [t[0] for t in BACKUP_TABLES]
+    dupes = {n for n in names if names.count(n) > 1}
+    assert not dupes, f"BACKUP_TABLES 重复登记: {dupes}"
+
+    # JSONB 索引必须落在列范围内
+    for name, cols, jsonb_idx, _label in BACKUP_TABLES:
+        bad = [i for i in jsonb_idx if not 0 <= i < len(cols)]
+        assert not bad, f"{name} JSONB 索引越界: {bad}"

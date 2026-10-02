@@ -203,6 +203,10 @@ def _import_child_outputs_to_record(task, record_id, session_row, file_field):
         return 0
     storage_root = os.environ.get('DATA_FILES_ROOT') or os.path.join(
         os.path.expanduser('~'), '.check-manage', 'data_files')
+    # effect 账本旁路补漏（P1-A2b）：此路径直接 INSERT data_files，不经过
+    # import_recorded_files——逐文件登记 file_import effect 并即时收口，
+    # 审计/恢复按 (session_id, effect_type, idempotency_key) 幂等去重。
+    from utils.execution_effect import record_effect, settle_effect
     imported = []
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -231,6 +235,13 @@ def _import_child_outputs_to_record(task, record_id, session_row, file_field):
                     "VALUES (%s, %s, %s, %s, %s, %s)",
                     (fid, fn, 'application/octet-stream', size, dst,
                      session_row.get('user_id') or 'ai-scan'))
+                eff = record_effect(
+                    session_row.get('id'), 'file_import',
+                    f"{session_row.get('id')}:{fn}",
+                    batch_id=session_row.get('batch_id'))
+                if eff:
+                    settle_effect(eff['id'], 'committed',
+                                  external_ref=str(fid))
                 imported.append({'uid': fid, 'name': fn})
     if not imported:
         return 0

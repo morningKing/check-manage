@@ -202,12 +202,114 @@ BACKUP_TABLES = [
     # P2 §9.3 Artifact Store 元数据（物理文件在 AI_WORKSPACE_ROOT/artifacts/
     # 下，由备份打包流程随 _snapshot_artifacts 单独导出——见 manifest 的
     # artifacts/ 目录）。
-    ('artifacts', ['id', 'name', 'media_type', 'size_bytes', 'sha256',
-                   'storage_key', 'status', 'retention_days', 'created_at',
-                   'expires_at'], set(), 'AI产物'),
+    ('artifacts', ['id', 'owner_user_id', 'name', 'media_type', 'size_bytes',
+                   'sha256', 'storage_key', 'status', 'retention_days',
+                   'created_at', 'expires_at'], set(), 'AI产物'),
     ('artifact_refs', ['id', 'artifact_id', 'run_id', 'step_id', 'attempt_id',
                        'session_id', 'batch_id', 'relation',
                        'created_at'], set(), 'AI产物引用'),
+
+    # AI Harness（P1-A9）：执行安全/持久化/编排三层的新表。列清单对照
+    # init_db.py 引用的 migrations/ DDL（2026_09_17_execution_audit_tables、
+    # 2026_09_20_agent_action_gate、2026_09_23_harness_p0/p1/p2）逐列填写，
+    # 含后续 ALTER ADD COLUMN 追加列（PG 追加在表尾）。artifacts /
+    # artifact_refs 已在上方，不重复登记。还原顺序见下方 RESTORE_ORDER
+    # 同步扩充（definitions → runs → steps 等外键依赖序）。
+    ('ai_orchestration_definitions',
+     ['id', 'version', 'name', 'description', 'enabled', 'owner_user_id',
+      'nodes', 'edges', 'retry_policy', 'timeout_policy', 'budget_policy',
+      'approval_policy', 'compensation_policy', 'created_at', 'published_at'],
+     {6, 7, 8, 9, 10, 11, 12}, 'AI编排定义'),
+    ('ai_orchestration_runs',
+     ['id', 'definition_id', 'definition_version', 'status', 'current_nodes',
+      'run_input_snapshot', 'runtime_manifest_id', 'budget_snapshot',
+      'requested_by', 'requested_by_kind', 'error_code', 'error_message',
+      'started_at', 'finished_at', 'created_at'],
+     {4, 5, 7}, 'AI编排运行'),
+    ('ai_orchestration_steps',
+     ['id', 'run_id', 'node_id', 'kind', 'name', 'status', 'depends_on',
+      'node_def', 'session_id', 'attempt_count', 'output', 'error_code',
+      'error_message', 'started_at', 'finished_at', 'updated_at'],
+     {6, 7, 10}, 'AI编排步骤'),
+    ('ai_runtime_manifests',
+     ['id', 'runtime_kind', 'runtime_version', 'model', 'agent_hashes',
+      'skill_hashes', 'plugin_hashes', 'mcp_config_hash', 'guidance_hash',
+      'workspace_config_hash', 'resource_profile', 'network_policy',
+      'created_at'],
+     {4, 5, 6, 10, 11}, 'AI运行时清单'),
+    # 执行事实层（attempt 含 P1 租约/恢复/预算追加列，budget_snapshot 为 JSONB）
+    ('ai_execution_attempts',
+     ['id', 'session_id', 'source_type', 'source_id', 'parent_attempt_id',
+      'attempt_no', 'operation', 'requested_agent', 'effective_agent',
+      'requested_model', 'effective_model', 'agent_resolution',
+      'model_resolution', 'raw_prompt_hash', 'effective_prompt_hash',
+      'effective_prompt_len', 'prompt_version', 'workspace_path',
+      'workspace_config_hash', 'guidance_hash', 'status', 'error_code',
+      'error_message', 'started_at', 'finished_at', 'created_at',
+      'lease_owner', 'lease_until', 'heartbeat_at', 'fencing_token',
+      'queue_started_at', 'dispatch_started_at', 'last_progress_at',
+      'recovery_reason', 'checkpoint_id', 'budget_snapshot'],
+     {35}, 'AI执行尝试'),
+    ('ai_execution_events',
+     ['id', 'attempt_id', 'event_seq', 'event_type', 'occurred_at',
+      'received_at', 'session_id', 'parent_session_id', 'message_id',
+      'part_id', 'tool_call_id', 'parent_part_id', 'subtask_id', 'status',
+      'payload', 'redaction_status'],
+     {14}, 'AI执行事件'),
+    ('ai_execution_checkpoints',
+     ['id', 'session_id', 'attempt_id', 'execution_generation',
+      'checkpoint_type', 'message_seq', 'opencode_session_id',
+      'workspace_manifest_hash', 'completed_effect_ids', 'artifact_refs',
+      'context_snapshot', 'is_latest', 'created_at'],
+     {8, 9, 10}, 'AI执行检查点'),
+    ('ai_execution_effects',
+     ['id', 'session_id', 'attempt_id', 'batch_id', 'step_key', 'effect_type',
+      'idempotency_key', 'request_hash', 'status', 'external_ref',
+      'result_hash', 'created_at', 'committed_at'],
+     set(), 'AI副作用账本'),
+    ('ai_execution_commands',
+     ['id', 'idempotency_key', 'batch_id', 'session_id', 'command_type',
+      'requested_by', 'requested_by_kind', 'payload', 'expected_generation',
+      'status', 'result_snapshot', 'error_code', 'created_at', 'applied_at'],
+     {7, 10}, 'AI执行命令'),
+    ('ai_batch_events',
+     ['batch_id', 'event_seq', 'event_id', 'event_type', 'aggregate_type',
+      'aggregate_id', 'execution_generation', 'payload', 'created_at'],
+     {7}, 'AI批次事件'),
+    ('ai_delivery_outbox',
+     ['id', 'event_id', 'batch_id', 'event_type', 'target_url', 'payload',
+      'signature', 'idempotency_key', 'status', 'attempt_count',
+      'next_retry_at', 'last_error', 'delivered_at', 'created_at'],
+     {5}, 'AI投递发件箱'),
+    ('ai_execution_budgets',
+     ['id', 'scope_type', 'scope_id', 'max_wall_clock_ms', 'max_tokens',
+      'max_cost', 'max_tool_calls', 'max_subagents', 'max_workspace_bytes',
+      'max_concurrency', 'on_exceed', 'enabled', 'created_at'],
+     set(), 'AI执行预算'),
+    ('ai_execution_usage',
+     ['session_id', 'batch_id', 'tokens_input', 'tokens_output', 'cost',
+      'wall_clock_ms', 'tool_calls', 'subagents', 'workspace_bytes',
+      'updated_at'],
+     set(), 'AI执行用量'),
+    # 动作账本与到位门禁（agent_tool_calls / action_expectations 含
+    # 2026_09_20 迁移的 ALTER 追加列：agent / check_type / effect_spec /
+    # subagents）
+    ('ai_chat_turns',
+     ['id', 'session_id', 'batch_id', 'user_id', 'client_request_id',
+      'operation', 'status', 'retry_of', 'attempt_id', 'expected_generation',
+      'error_code', 'error_message', 'started_at', 'last_event_at',
+      'finished_at', 'created_at'],
+     set(), 'AI对话轮次'),
+    ('agent_tool_calls',
+     ['id', 'oc_session_id', 'root_session_id', 'subtask_id', 'message_id',
+      'part_id', 'tool', 'args_text', 'state', 'occurred_at', 'agent'],
+     set(), 'Agent工具调用账本'),
+    ('action_expectations',
+     ['id', 'scope_type', 'scope_id', 'name', 'tool', 'args_pattern',
+      'require_state', 'min_count', 'source', 'last_status',
+      'last_checked_at', 'last_evidence', 'created_at', 'check_type',
+      'effect_spec', 'subagents'],
+     {14, 15}, '到位期望'),
 ]
 
 # 表名到定义的映射
@@ -235,12 +337,24 @@ RESTORE_ORDER = [
     'webhook_rules',
     'trigger_rules',
     'ai_chat_prompt_templates',
+    # AI Harness 无依赖表（P1-A9）
+    'ai_orchestration_definitions', # AI编排定义（无外键依赖）
+    'ai_runtime_manifests',         # AI运行时清单（无外键依赖）
+    'ai_execution_commands',        # AI执行命令（无外键依赖）
+    'ai_batch_events',              # AI批次事件（无外键依赖）
+    'ai_delivery_outbox',           # AI投递发件箱（无外键依赖）
+    'ai_execution_budgets',         # AI执行预算（无外键依赖）
+    'action_expectations',          # 到位期望（无外键依赖）
     # Level 2: Self-referencing or simple dependencies
     'collection_versions',
     'project_versions',
     'menus',                # Depends on page_configs
     'etl_logs',             # Depends on etl_tasks
     'column_views',         # Depends on page_configs
+    # AI Harness 编排链（P1-A9）：ai_chat_sessions.orchestration_run_id
+    # 外键引用 runs，故 runs/steps 必须排在 Level 4 的 ai_chat_sessions 之前
+    'ai_orchestration_runs',        # Depends on ai_orchestration_definitions
+    'ai_orchestration_steps',       # Depends on ai_orchestration_runs
     # Level 3: Multiple dependencies on Level 1/2
     'data_relations',
     'operation_logs',
@@ -268,6 +382,14 @@ RESTORE_ORDER = [
     'ai_chat_messages',             # Depends on ai_chat_sessions
     'ai_chat_subtask_messages',     # Depends on ai_chat_subtasks
     'ai_chat_session_files',        # Depends on ai_chat_sessions
+    # AI Harness 执行事实层（P1-A9）：依赖 ai_chat_sessions / attempts
+    'ai_execution_attempts',        # Depends on ai_chat_sessions（parent_attempt_id 自引用）
+    'ai_chat_turns',                # Depends on ai_chat_sessions / ai_chat_batches
+    'ai_execution_events',          # Depends on ai_execution_attempts
+    'ai_execution_checkpoints',     # Depends on ai_chat_sessions / attempts
+    'ai_execution_effects',         # Depends on ai_chat_sessions
+    'ai_execution_usage',           # Depends on ai_chat_sessions
+    'agent_tool_calls',             # Depends on ai_chat_subtasks
     'artifacts',
     'artifact_refs',
 ]
