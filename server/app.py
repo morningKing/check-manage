@@ -472,6 +472,19 @@ try:
 except Exception as _e:
     logging.warning('embedding provider migration on boot failed: %s', _e)
 
+# PG LISTEN/NOTIFY 触发器（2026-09-26 P3-C1）：子会话入队（status→pending）
+# 时 pg_notify('batch_claim_ready')，batch dispatcher 的专用 LISTEN 连接
+# select 唤醒立即 claim（替代等待下一轮 2s poll）。随启动幂等执行。
+try:
+    _mp17 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_26_batch_notify_trigger.py')
+    _spec17 = _ilu.spec_from_file_location('_batch_notify_boot', _mp17)
+    _m17 = _ilu.module_from_spec(_spec17)
+    _spec17.loader.exec_module(_m17)
+    _m17.run()
+except Exception as _e:
+    logging.warning('batch notify trigger migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills

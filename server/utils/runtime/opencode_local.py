@@ -23,6 +23,15 @@ class OpenCodeLocalRuntime(AgentRuntime):
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)
 
+    def get_client(self):
+        """底层 OpenCodeClient 的公开取用点（P3-A8 生产接线）。
+
+        batch_engine._OpenCodeFacade 经 get_runtime().get_client() 取客户端，
+        不再各自直连构造。返回的 OpenCodeClient 与直连
+        `OpenCodeClient(OPENCODE_BASE_URL)` 行为完全相同（同一构造参数的
+        无状态 HTTP wrapper）——本方法是架构接线，不改变任何行为。"""
+        return self._client()
+
     def create_session(self, directory: str, title: str = '') -> str:
         return self._client().create_session(directory=directory, title=title)
 

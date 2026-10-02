@@ -1753,3 +1753,134 @@ def test_progress_persist_updates_usage(db_conn, user_id, monkeypatch):
     row2 = _usage_row()
     assert row2[0] == 500 + 500 + 200
     assert row2[1] == 100 + 100 + 50
+
+
+# ---------------------------------------------------------------------------
+# P3-C1：PG LISTEN/NOTIFY 替代 dispatcher 轮询（触发器迁移 + LISTEN 接线）
+# ---------------------------------------------------------------------------
+
+def test_batch_notify_trigger_exists(db_conn):
+    """P3-C1：NOTIFY 触发器迁移幂等可重跑，且函数/触发器已落库。"""
+    import importlib.util as ilu
+    import os as _os
+    mp = _os.path.join(_os.path.dirname(__file__), '..', 'migrations',
+                       '2026_09_26_batch_notify_trigger.py')
+    spec = ilu.spec_from_file_location('_batch_notify_boot_test', mp)
+    m = ilu.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.run()  # 幂等：重跑不应报错
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM pg_proc "
+                    "WHERE proname = 'notify_batch_claim'")
+        assert cur.fetchone()[0] >= 1, 'notify_batch_claim() 函数未创建'
+        cur.execute("SELECT count(*) FROM pg_trigger "
+                    "WHERE tgname = 'notify_batch_claim_ready' "
+                    "  AND tgisinternal = false")
+        assert cur.fetchone()[0] >= 1, 'ai_chat_sessions 触发器未创建'
+
+
+def test_batch_enqueue_notifies_claim_channel(db_conn, user_id):
+    """P3-C1 端到端：子会话行 status→pending 提交后，batch_claim_ready
+    通知到达 LISTEN 连接（dispatcher select 唤醒的数据源）；非 pending
+    与 no-op 转移不产生通知。"""
+    import select as _select
+    import psycopg2
+    from config import DB_CONFIG
+    listener = psycopg2.connect(**DB_CONFIG)
+    listener.autocommit = True
+    sid = str(uuid.uuid4())
+    try:
+        with listener.cursor() as cur:
+            cur.execute('LISTEN batch_claim_ready')
+        # 非 pending 插入：不通知
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status) "
+                "VALUES (%s, %s, 'failed')", (sid, user_id))
+        db_conn.commit()
+        assert not _select.select([listener], [], [], 0.5)[0], \
+            '非 pending 转移不应通知'
+        # failed → pending 转移：通知
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET status='pending' "
+                        "WHERE id=%s", (sid,))
+        db_conn.commit()
+        got = False
+        deadline = time.time() + 5
+        while time.time() < deadline and not got:
+            if _select.select([listener], [], [], 0.5)[0]:
+                listener.poll()
+                got = any(n.channel == 'batch_claim_ready'
+                          for n in listener.notifies)
+        assert got, 'status→pending 未触发 batch_claim_ready 通知'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+        db_conn.commit()
+        listener.close()
+
+
+def test_batch_engine_dispatcher_has_listen():
+    """P3-C1 源码断言：dispatcher 等待原语接入 LISTEN/NOTIFY——select 唤醒、
+    断线重连退避、stop/退出关闭连接，且保留 _wake.wait 轮询兜底。"""
+    import pathlib
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    src = (repo_root / 'server' / 'utils' / 'batch_engine.py').read_text(
+        encoding='utf-8', errors='replace')
+    assert 'LISTEN {self.LISTEN_CHANNEL}' in src, '缺少 LISTEN 订阅'
+    assert "LISTEN_CHANNEL = 'batch_claim_ready'" in src, '频道名与迁移不一致'
+    assert 'select.select(' in src, 'dispatcher 未用 select 等待通知'
+    assert 'LISTEN_RECONNECT_SEC' in src, '缺少断线重连退避'
+    assert 'def _listen_close' in src, '缺少 LISTEN 连接关闭（stop 路径）'
+    assert 'self._wait_for_wake(10)' in src, 'dispatcher 未接入等待原语'
+    assert 'self._wake.wait(slice_sec)' in src, '轮询兜底被移除'
+
+
+# ---------------------------------------------------------------------------
+# P3-A8：Runtime Adapter 生产接线（batch_engine 经 get_runtime 取 client）
+# ---------------------------------------------------------------------------
+
+def test_batch_engine_uses_runtime_adapter():
+    """P3-A8：batch_engine 的 OpenCode 调用经 runtime adapter。"""
+    from utils.runtime import get_runtime
+    rt = get_runtime()
+    assert rt is not None, 'runtime adapter 应可用'
+    assert hasattr(rt, 'get_client'), 'OpenCodeLocalRuntime 应有 get_client 方法'
+
+
+def test_runtime_get_client_returns_opencode_client():
+    """P3-A8：get_client() 返回 OpenCodeClient 实例（与直连构造同型，
+    行为不变可回退）。"""
+    from utils.runtime import get_runtime
+    from utils.opencode_client import OpenCodeClient
+    client = get_runtime().get_client()
+    assert isinstance(client, OpenCodeClient)
+
+
+def test_facade_client_prefers_runtime_and_falls_back(monkeypatch):
+    """P3-A8：facade._client() 优先 runtime.get_client()；runtime 不可用
+    （返回 None / 抛异常 / 无 get_client）时兜底直连，不 crash。"""
+    from utils import runtime as rt_mod
+    import utils.batch_engine as eng
+    from utils.opencode_client import OpenCodeClient
+
+    sentinel = object()
+
+    class _StubRt:
+        def get_client(self):
+            return sentinel
+
+    orig_default = rt_mod._default
+    try:
+        rt_mod._default = _StubRt()
+        assert eng.opencode_client._client() is sentinel  # 经 adapter
+    finally:
+        rt_mod._default = orig_default
+
+    def _boom():
+        raise RuntimeError('runtime down')
+    monkeypatch.setattr(rt_mod, 'get_runtime', _boom)
+    assert isinstance(eng.opencode_client._client(), OpenCodeClient)  # 兜底直连
+
+    monkeypatch.setattr(rt_mod, 'get_runtime', lambda: None)
+    assert isinstance(eng.opencode_client._client(), OpenCodeClient)  # None 兜底

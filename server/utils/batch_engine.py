@@ -20,6 +20,7 @@ so all three calls resolve through the patched object.
 """
 import logging
 import os
+import select
 import shutil
 import sys
 import subprocess
@@ -92,18 +93,24 @@ class _OpenCodeFacade:
     """
 
     def _client(self):
-        # P2 §8.1 Runtime Adapter 接线（缺口补齐批次 3.1）：OC 访问优先经
-        # AgentRuntime 抽象（OpenCodeLocalRuntime 包装同一 client，行为不变，
-        # AI_AGENT_RUNTIME 可切换实现）；adapter 未覆盖的方法/打桩场景回退
-        # 既有直连。测试对 eng.opencode_client 的整体替换不受影响。
+        # P2 §8.1 / P3-A8 Runtime Adapter 生产接线：OC 访问经 AgentRuntime
+        # 抽象的公开取客户端方法 get_client()（OpenCodeLocalRuntime 包装同一
+        # client，行为不变，AI_AGENT_RUNTIME 可切换实现）。runtime 不可用
+        # （get_runtime() 返回 None / 抛异常 / 无 get_client）时逐级回退：
+        # adapter 私有 _client → 既有直连。测试对 eng.opencode_client 的
+        # 整体替换不受影响。
         try:
             from utils.runtime import get_runtime
             rt = get_runtime()
-            inner = getattr(rt, '_client', None)
+        except Exception:
+            rt = None  # runtime 不可用/未启用 → 走下方兜底直连
+        if rt is not None:
+            getter = getattr(rt, 'get_client', None)
+            if callable(getter):
+                return getter()
+            inner = getattr(rt, '_client', None)  # 旧 adapter 无 get_client 的兼容回退
             if callable(inner):
                 return inner()
-        except Exception:
-            pass  # runtime 不可用/未启用 → 直连（既有行为）
         from utils.opencode_client import OpenCodeClient
         from config import OPENCODE_BASE_URL
         return OpenCodeClient(OPENCODE_BASE_URL)
@@ -716,6 +723,16 @@ class BatchWorker:
     # 租约 key 可注入（测试隔离/多部署共存）；生产默认 'batch'
     LEASE_KEY = os.getenv('AI_BATCH_LEASE_KEY', 'batch')
     POLL_INTERVAL_SEC = 2
+    # P3-C1（PG LISTEN/NOTIFY 替代纯轮询）：子会话入队（status→pending）时
+    # 迁移 2026_09_26_batch_notify_trigger.py 的触发器 pg_notify 本频道，
+    # dispatcher 的专用 LISTEN 连接 select 到可读即唤醒 claim——入队到
+    # claim 从「等下一轮 2s poll」变成事件驱动。断线自动重连
+    # （LISTEN_RECONNECT_SEC 退避），重连窗口内仍走 _wake.wait 轮询兜底。
+    LISTEN_CHANNEL = 'batch_claim_ready'
+    LISTEN_RECONNECT_SEC = 5.0
+    # LISTEN 健在时 select 的等待切片上限：通知即时唤醒；切片上限同时保证
+    # 外部 notify() 置位的 _wake 最多一个切片内被看到（不差于原 2s poll）。
+    LISTEN_SLICE_SEC = 2.0
     # Hard per-child cap. Default 0 = NO cap: a batch child runs as long as it
     # keeps making progress (legit long tasks / subagent delegations shouldn't be
     # killed by an arbitrary clock). Override with AI_BATCH_SESSION_TIMEOUT_SEC.
@@ -786,6 +803,12 @@ class BatchWorker:
         self._acquire_retry_thread: threading.Thread | None = None
         # 租约 key 可注入（测试隔离/多部署共存）；生产默认 'batch'
         self._lease_key = self.LEASE_KEY
+        # P3-C1：专用 LISTEN 连接（独立直连，不占 ThreadedConnectionPool
+        # 名额）。None = 未连接/不可用（轮询兜底接管）；_listen_next_try 是
+        # 断线重连的退避计时器（monotonic 秒）。
+        self._listen_conn = None
+        self._listen_next_try = 0.0
+        self._listen_lock = threading.Lock()
 
     # --- lifecycle ---
 
@@ -881,6 +904,7 @@ class BatchWorker:
         """
         self._stop.set()
         self._wake.set()
+        self._listen_close()  # P3-C1：先关 LISTEN 连接再 join dispatcher
         if not wait:
             return
         if self._dispatcher and self._dispatcher.is_alive():
@@ -904,12 +928,114 @@ class BatchWorker:
     # 运行中对账器节流：每分钟最多跑一轮（与 dispatcher 同线程，无竞态）。
     RECONCILE_INTERVAL_SEC = float(os.getenv('AI_BATCH_RECONCILE_SEC', '60'))
 
+    # --- PG LISTEN/NOTIFY（P3-C1）---
+
+    def _listen_connect(self):
+        """建立（或重连）专用 LISTEN 连接。
+
+        独立 psycopg2 直连——不经过 db.get_db 的 ThreadedConnectionPool，
+        不占池名额（连接池连接被归还后不能保证留在本线程，NOTIFY 需要一条
+        专属于 listener 的长连接）。autocommit=True 让 LISTEN 立即生效。
+        失败只记录并按退避计时器顺延重试，绝不抛出——dispatcher 始终有
+        POLL_INTERVAL/_wake.wait 轮询兜底。"""
+        with self._listen_lock:
+            if self._stop.is_set():
+                return
+            if self._listen_conn is not None and not self._listen_conn.closed:
+                return
+            if time.monotonic() < self._listen_next_try:
+                return  # 断线退避窗口内：不再尝试，兜底轮询接管
+            try:
+                import psycopg2
+                from config import DB_CONFIG
+                conn = psycopg2.connect(connect_timeout=5, **DB_CONFIG)
+                conn.autocommit = True
+                with conn.cursor() as cur:
+                    cur.execute(f'LISTEN {self.LISTEN_CHANNEL}')
+                self._listen_conn = conn
+                logger.info('batch dispatcher LISTEN %s ready',
+                            self.LISTEN_CHANNEL)
+            except Exception:
+                logger.warning('batch dispatcher LISTEN connect failed; '
+                               'poll fallback stays active', exc_info=True)
+                self._listen_conn = None
+                self._listen_next_try = (time.monotonic()
+                                         + self.LISTEN_RECONNECT_SEC)
+
+    def _listen_close(self):
+        """关闭 LISTEN 连接（stop() 跨线程调用安全，best-effort）。"""
+        with self._listen_lock:
+            conn, self._listen_conn = self._listen_conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _listen_mark_down(self):
+        """LISTEN 连接异常后统一收口：关闭连接 + 启动重连退避计时器。"""
+        self._listen_close()
+        with self._listen_lock:
+            self._listen_next_try = (time.monotonic()
+                                     + self.LISTEN_RECONNECT_SEC)
+
+    def _wait_for_wake(self, timeout: float) -> None:
+        """dispatcher 的等待原语（替代裸 self._wake.wait(timeout)）。
+
+        LISTEN 健在：select 在通知 socket 上等——pg_notify 即时唤醒
+        （收到 → conn.poll() 消费 + _wake.set() 立即返回）。select 按
+        LISTEN_SLICE_SEC 切片，保证外部 notify() 置位的 _wake 最多一个
+        切片内被看到（不差于原 2s poll 的响应口径）。
+
+        LISTEN 不可用（未连上/断线退避窗口内）：退回既有
+        self._wake.wait(timeout) 轮询兜底——LISTEN 失败时行为与改造前
+        完全一致，不会因 NOTIFY 通道问题影响派发。"""
+        deadline = time.monotonic() + timeout
+        while not self._stop.is_set():
+            if self._wake.is_set():
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            conn = self._listen_conn
+            if conn is None or conn.closed:
+                self._listen_connect()
+                conn = self._listen_conn
+            slice_sec = min(remaining, self.LISTEN_SLICE_SEC)
+            if conn is None or conn.closed:
+                # 兜底：无可用 LISTEN 连接（连接中失败/退避窗口内）
+                self._wake.wait(slice_sec)
+                continue
+            try:
+                r, _w, _x = select.select([conn.fileno()], [], [], slice_sec)
+            except Exception:
+                # fd 已被 stop() 关闭 / 连接被内核判死：转入重连退避，
+                # 本切片按 Event 兜底等待（与改造前等价）
+                logger.warning('batch LISTEN connection lost; '
+                               'reconnecting with backoff', exc_info=True)
+                self._listen_mark_down()
+                self._wake.wait(slice_sec)
+                continue
+            if r:
+                try:
+                    conn.poll()  # 消费通知，连接回到可 select 状态
+                    self._wake.set()
+                    return
+                except Exception:
+                    logger.warning('batch LISTEN poll failed; '
+                                   'reconnecting with backoff', exc_info=True)
+                    self._listen_mark_down()
+                    continue
+
     def _dispatcher_loop(self):
         logger.info('batch dispatcher started')
         last_reconcile = 0.0
         try:
+            # P3-C1：dispatcher 启动即尝试建立 LISTEN 连接（失败不阻断，
+            # _wait_for_wake 内按退避计时器自动重试 + 轮询兜底）。
+            self._listen_connect()
             while not self._stop.is_set():
-                self._wake.wait(timeout=10)
+                self._wait_for_wake(10)
                 self._wake.clear()
                 if self._stop.is_set():
                     break
@@ -930,6 +1056,7 @@ class BatchWorker:
             # this log turns a silent dead worker — the cause of "批任务一直待运行"
             # — into something diagnosable.
             logger.info('batch dispatcher exited (stop=%s)', self._stop.is_set())
+            self._listen_close()  # P3-C1：dispatcher 退出即释放 LISTEN 连接
             if self._holds_lease:
                 from utils import execution_lease
                 execution_lease.release(self._lease_key, self._lease_owner)
