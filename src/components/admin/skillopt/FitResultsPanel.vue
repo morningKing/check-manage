@@ -196,7 +196,7 @@ async function ensureFitDetail(attemptId: string) {
   try {
     const res = await getSkillFitDetail(attemptId)
     detailMap.value[attemptId] = { fits: res.fits || [],
-      subagentFits: (res as any).subagentFits || [], loading: false, loaded: true }
+      subagentFits: res.subagentFits ?? [], loading: false, loaded: true }
   } catch {
     detailMap.value[attemptId] = { fits: [], subagentFits: [], loading: false, loaded: true }
   }

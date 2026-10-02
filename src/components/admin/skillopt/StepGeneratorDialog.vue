@@ -80,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElDialog, ElTable, ElTableColumn, ElInput, ElButton, ElMessage } from 'element-plus'
 import SkillFitBadge from '@/components/admin/SkillFitBadge.vue'
 import {
@@ -103,6 +103,12 @@ const gen = ref({
   path: '', steps: [] as GenStepRow[], attemptId: '',
   preview: null as FitPreview | null,
   busy: false, previewing: false, saving: false, error: '',
+})
+// 每次打开重置对话框内部状态（恢复抽取前 openGenerator 的行为）
+watch(() => props.visible, v => {
+  if (v) Object.assign(gen.value, {
+    path: '', steps: [], attemptId: '', preview: null, error: '',
+  })
 })
 
 function toGenRow(s: FitStep): GenStepRow {

@@ -13,207 +13,39 @@
       <ElTabPane label="任务拟合" name="fit">
         <div v-loading="fitLoading" class="skillopt__pane">
           <ElAlert v-if="fitError" type="error" :closable="false" :title="fitError" />
-          <template v-else>
-            <h4 class="skillopt__sec">拟合结果</h4>
-            <p class="muted">
-              定义 frontmatter fit.steps 与执行轨迹的拟合度（点开展开行看步骤明细与偏差诊断）。
-            </p>
-            <p v-if="!fits.length" class="muted">暂无拟合结果——任务执行后自动计算，也可在展开行手动重算。</p>
-            <ElTable v-else :data="fits" size="small" :row-key="fitRowKey"
-                     @expand-change="onFitExpand">
-              <ElTableColumn type="expand">
-                <template #default="{ row }">
-                  <p v-if="!detailLoaded(row)" class="muted">加载明细中…</p>
-                  <div v-else class="fit-detail">
-                    <p v-if="!detailSteps(row).length" class="muted">该定义无步骤明细（无 fit 块或解析失败）。</p>
-                    <ElTable v-else :data="detailSteps(row)" size="small">
-                      <ElTableColumn prop="name" label="步骤" min-width="150" />
-                      <ElTableColumn label="状态" width="100">
-                        <template #default="{ row: ps }">
-                          <span class="fit-dot" :class="dotClass(ps.status)" />
-                          {{ stepStatusText(ps.status) }}
-                        </template>
-                      </ElTableColumn>
-                      <ElTableColumn label="证据（tool · args）" min-width="260">
-                        <template #default="{ row: ps }">
-                          <span v-if="ps.evidence && ps.evidence.length" class="mono"
-                                :title="ps.evidence[0].args">
-                            {{ ps.evidence[0].tool }} · {{ trunc(ps.evidence[0].args, 96) }}
-                          </span>
-                          <span v-else class="muted">—</span>
-                        </template>
-                      </ElTableColumn>
-                    </ElTable>
-
-                    <div class="fit-detail__ops">
-                      <ElButton size="small" :loading="recomputing === fitRowKey(row)"
-                                @click="recomputeFit(row)">重新计算</ElButton>
-                      <ElButton v-if="row.status === 'partial' || row.status === 'diverged'"
-                                size="small" type="warning"
-                                :loading="diagnosing === fitRowKey(row)"
-                                @click="diagnose(row)">分析偏差</ElButton>
-                    </div>
-
-                    <template v-if="subagentFitsOf(row).length">
-                      <p class="muted" style="margin:8px 0 4px">子代理层拟合（按层独立判定，不并入上方父级）：</p>
-                      <ElTable :data="subagentFitsOf(row)" size="small">
-                        <ElTableColumn label="子代理" width="120">
-                          <template #default="{ row: sf }">{{ sf.subtaskAgent || '—' }}</template>
-                        </ElTableColumn>
-                        <ElTableColumn prop="defName" label="定义" min-width="140" />
-                        <ElTableColumn label="拟合" min-width="180">
-                          <template #default="{ row: sf }">
-                            <SkillFitBadge :steps-total="sf.stepsTotal"
-                                           :per-step="sf.perStep"
-                                           :score="sf.score" :status="sf.status" />
-                          </template>
-                        </ElTableColumn>
-                      </ElTable>
-                    </template>
-
-                    <div v-if="diagnosisOf(row)" class="fit-diag">
-                      <div class="fit-diag__cause">
-                        偏差原因：
-                        <ElTag size="small" :type="causeTagType(diagnosisOf(row)!.cause)">
-                          {{ causeLabel(diagnosisOf(row)!.cause) }}
-                        </ElTag>
-                      </div>
-                      <ol v-if="diagnosisOf(row)!.suggestions.length" class="fit-diag__sugs">
-                        <li v-for="(s, i) in diagnosisOf(row)!.suggestions" :key="i">{{ s }}</li>
-                      </ol>
-                      <template v-if="diagnosisOf(row)!.revised_steps && diagnosisOf(row)!.revised_steps.length">
-                        <div class="fit-diag__revhead">
-                          修订步骤草案
-                          <ElButton link size="small" @click="copyRevised(diagnosisOf(row)!)">
-                            复制 JSON
-                          </ElButton>
-                        </div>
-                        <pre class="fit-diag__json">{{ JSON.stringify(diagnosisOf(row)!.revised_steps, null, 2) }}</pre>
-                      </template>
-                    </div>
-                  </div>
-                </template>
-              </ElTableColumn>
-              <ElTableColumn label="时间" width="165">
-                <template #default="{ row }">{{ fmtTime(row.computedAt) }}</template>
-              </ElTableColumn>
-              <ElTableColumn label="会话" width="120">
-                <template #default="{ row }">
-                  <span class="mono" :title="row.sessionId">{{ shortHash(row.sessionId) }}</span>
-                </template>
-              </ElTableColumn>
-              <ElTableColumn label="Agent" width="120">
-                <template #default="{ row }">
-                  <span v-if="row.agent" class="mono" :title="row.agent">
-                    {{ trunc(row.agent, 16) }}
-                  </span>
-                  <span v-else class="muted">—</span>
-                </template>
-              </ElTableColumn>
-              <ElTableColumn label="来源" width="80">
-                <template #default="{ row }">
-                  <ElTag size="small" :type="row.defKind === 'skill' ? 'success' : 'primary'">
-                    {{ kindText(row.defKind) }}
-                  </ElTag>
-                </template>
-              </ElTableColumn>
-              <ElTableColumn prop="defName" label="定义" min-width="160" />
-              <ElTableColumn label="拟合" min-width="200">
-                <template #default="{ row }">
-                  <SkillFitBadge :steps-total="row.stepsTotal" :per-step="dotsOf(row)"
-                                 :score="row.score" :status="row.status" />
-                </template>
-              </ElTableColumn>
-            </ElTable>
-
-            <h4 class="skillopt__sec">偏离模式（跨版本聚合）</h4>
-            <p class="muted">
-              全部历史拟合中步骤级 miss/错序的聚合排序——同一处定义缺陷在多少任务、
-              哪些版本反复出现（改定义优先级参考）。仅统计 partial/diverged 任务。
-            </p>
-            <p v-if="!fitPatterns.length" class="muted">暂无偏离模式数据。</p>
-            <ElTable v-else :data="fitPatterns" size="small" style="margin-bottom:18px">
-              <ElTableColumn prop="defName" label="定义" min-width="150" />
-              <ElTableColumn prop="stepId" label="偏差步骤" width="130" />
-              <ElTableColumn prop="missTasks" label="偏离任务数" width="100" sortable />
-              <ElTableColumn prop="versionsAffected" label="涉及版本" width="90" />
-              <ElTableColumn label="版本 hash" min-width="160">
-                <template #default="{ row }">
-                  <span class="mono">{{ (row.versionHashes || []).join(' ') }}</span>
-                </template>
-              </ElTableColumn>
-              <ElTableColumn prop="avgScore" label="均分" width="70" />
-            </ElTable>
-
-            <h4 class="skillopt__sec">定义版本效果对比</h4>
-            <p class="muted">
-              按 (来源/定义/内容 hash) 聚合拟合指标的时间线；卡内为相邻版本的平均分变化
-              （↑绿 ↓红）与偏离数变化（变多红、变少绿）。
-            </p>
-            <p v-if="!versionGroups.length" class="muted">暂无定义版本数据。</p>
-            <div v-for="g in versionGroups" :key="g.key" class="fit-vg">
-              <div class="fit-vg__head">
-                <ElTag size="small" :type="g.defKind === 'skill' ? 'success' : 'primary'">
-                  {{ kindText(g.defKind) }}
-                </ElTag>
-                <strong>{{ g.defName }}</strong>
-              </div>
-              <div v-if="deltaCards(g).length" class="fit-deltas">
-                <span v-for="(d, i) in deltaCards(g)" :key="i" class="fit-delta"
-                      :class="deltaNumClass(d.delta)">
-                  {{ d.from }} → {{ d.to }}：<b>{{ fmtDeltaNum(d.delta) }}</b>
-                  <span v-if="d.dd != null && d.dd !== 0"
-                        :class="divergeDeltaClass(d.dd)">
-                    · 偏离 {{ d.dd > 0 ? '+' : '' }}{{ d.dd }}
-                  </span>
-                </span>
-              </div>
-              <ElTable :data="g.versions" size="small">
-                <ElTableColumn label="版本 hash" width="130">
-                  <template #default="{ row: v }">
-                    <span class="mono" :title="v.contentHash">{{ shortHash(v.contentHash) }}</span>
-                  </template>
-                </ElTableColumn>
-                <ElTableColumn label="版本标注" min-width="170">
-                  <template #default="{ row: v }">
-                    <ElInput v-model="labelDrafts[v.id]" size="small" placeholder="标签，回车保存"
-                             @change="saveLabel(v)" />
-                  </template>
-                </ElTableColumn>
-                <ElTableColumn label="首见" width="150">
-                  <template #default="{ row: v }">{{ fmtTime(v.firstSeenAt) }}</template>
-                </ElTableColumn>
-                <ElTableColumn prop="tasks" label="任务" width="70" />
-                <ElTableColumn label="平均分" width="80">
-                  <template #default="{ row: v }">{{ v.avgScore ?? '—' }}</template>
-                </ElTableColumn>
-                <ElTableColumn label="偏离分布" width="140">
-                  <template #default="{ row: v }">
-                    <template v-if="v.tasks > 0">
-                      <ElTag v-if="v.divergedCount" size="small" type="danger">
-                        偏离 {{ v.divergedCount }}
-                      </ElTag>
-                      <ElTag v-if="v.partialCount" size="small" type="warning">
-                        部分 {{ v.partialCount }}
-                      </ElTag>
-                      <span v-if="!v.divergedCount && !v.partialCount" class="muted">无偏离</span>
-                    </template>
-                    <span v-else class="muted">—</span>
-                  </template>
-                </ElTableColumn>
-                <ElTableColumn label="拟合率" width="90">
-                  <template #default="{ row: v }">{{ fmtRate(v.fitRate) }}</template>
-                </ElTableColumn>
-                <ElTableColumn label="操作" width="100">
-                  <template #default="{ row: v }">
-                    <ElButton link size="small" type="primary" @click="openGenerator(v)">
-                      生成步骤
-                    </ElButton>
-                  </template>
-                </ElTableColumn>
-              </ElTable>
-            </div>
-          </template>
+          <div v-else-if="!definitions.length" class="fit-empty">
+            <p>暂无拟合数据——任务执行后自动计算拟合结果。</p>
+            <p class="muted">可在技能/代理定义 frontmatter 配置 fit.steps 声明步骤契约。</p>
+          </div>
+          <div v-else class="fit-layout">
+            <aside class="fit-layout__side">
+              <FitDefinitionList :definitions="definitions" :selected="selected"
+                                 @select="selected = $event" />
+              <ElButton link size="small" class="fit-layout__global"
+                        @click="globalPatternsVisible = true">
+                全局偏离 Top
+              </ElButton>
+            </aside>
+            <section class="fit-layout__main">
+              <DefOverview v-if="selected" :def="selected" />
+              <ElTabs v-model="detailTab">
+                <ElTabPane label="拟合结果" name="results">
+                  <FitResultsPanel v-if="selected" :def-kind="selected.defKind"
+                                   :def-name="selected.defName"
+                                   @recomputed="loadDefinitions" />
+                </ElTabPane>
+                <ElTabPane label="版本演进" name="versions">
+                  <DefVersionTimeline v-if="selected" :def-kind="selected.defKind"
+                                      :def-name="selected.defName"
+                                      @generate="openGeneratorFromVersion" />
+                </ElTabPane>
+                <ElTabPane label="偏离模式" name="patterns">
+                  <DefPatternsPanel v-if="selected" :def-kind="selected.defKind"
+                                    :def-name="selected.defName" />
+                </ElTabPane>
+              </ElTabs>
+            </section>
+          </div>
         </div>
       </ElTabPane>
 
@@ -309,7 +141,11 @@
       </ElTabPane>
     </ElTabs>
 
-    <!-- ── 步骤生成器对话框 ─────────────────────────────────────────── -->
+    <!-- ── 页面级对话框（与两个 tab 平级）───────────────────────────── -->
+    <ElDialog v-model="globalPatternsVisible" title="全局偏离模式（跨定义 Top）"
+              width="860px" append-to-body>
+      <DefPatternsPanel v-if="globalPatternsVisible" />
+    </ElDialog>
     <StepGeneratorDialog :visible="genVisible" :def-kind="genKind"
                          :def-name="genName" @update:visible="genVisible = $event" />
   </div>
@@ -319,18 +155,17 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   ElTable, ElTableColumn, ElTag, ElAlert, ElButton,
-  ElTabs, ElTabPane, ElInput, ElMessage,
+  ElTabs, ElTabPane, ElDialog,
 } from 'element-plus'
 import { get } from '@/utils/request'
-import SkillFitBadge from '@/components/admin/SkillFitBadge.vue'
+import FitDefinitionList from '@/components/admin/skillopt/FitDefinitionList.vue'
+import DefOverview from '@/components/admin/skillopt/DefOverview.vue'
+import FitResultsPanel from '@/components/admin/skillopt/FitResultsPanel.vue'
+import DefVersionTimeline from '@/components/admin/skillopt/DefVersionTimeline.vue'
+import DefPatternsPanel from '@/components/admin/skillopt/DefPatternsPanel.vue'
 import StepGeneratorDialog from '@/components/admin/skillopt/StepGeneratorDialog.vue'
-import {
-  listSkillFits, getSkillFitDetail, recomputeSkillFit, listSkillDefVersions,
-  updateSkillDefVersion, diagnoseSkillFit,
-} from '@/api/aiSkills'
-import type {
-  SkillFitRow, SkillFitDetail, SkillFitDiagnosis, FitPerStep, SkillDefVersion,
-} from '@/api/aiSkills'
+import { getSkillFitDefinitionSummary } from '@/api/aiSkills'
+import type { SkillFitDefinitionSummary, SkillDefVersion } from '@/api/aiSkills'
 
 // ── 调用聚合 tab（既有逻辑）────────────────────────────────────────────
 
@@ -406,214 +241,46 @@ async function load() {
   }
 }
 
-// ── 任务拟合：列表 / 明细 / 重算 / 诊断 ────────────────────────────────
+// ── 任务拟合：主从状态 ──────────────────────────────────────────────
 
 const fitLoading = ref(false)
 const fitError = ref('')
-const fits = ref<SkillFitRow[]>([])
-const fitPatterns = ref<Array<Record<string, any>>>([])
-const detailMap = ref<Record<string, { fits: SkillFitDetail[]; subagentFits: SkillFitDetail[]; loading: boolean; loaded: boolean }>>({})
-const diagMap = ref<Record<string, SkillFitDiagnosis>>({})
-const recomputing = ref('')
-const diagnosing = ref('')
-
-function fitRowKey(row: SkillFitRow) {
-  return `${row.attemptId}|${row.defKind}|${row.defName}`
-}
-function detailOf(row: SkillFitRow): SkillFitDetail | null {
-  const found = detailMap.value[row.attemptId]?.fits
-    ?.find(f => f.defKind === row.defKind && f.defName === row.defName)
-  return found ?? null
-}
-function detailSteps(row: SkillFitRow): FitPerStep[] {
-  return detailOf(row)?.perStep ?? []
-}
-function detailLoaded(row: SkillFitRow): boolean {
-  return detailMap.value[row.attemptId]?.loaded ?? false
-}
-/** 行内拟合点：明细拉到后行徽标也能显示分段点 */
-function dotsOf(row: SkillFitRow): FitPerStep[] {
-  return detailSteps(row)
-}
-function diagnosisOf(row: SkillFitRow): SkillFitDiagnosis | null {
-  return diagMap.value[fitRowKey(row)] ?? detailOf(row)?.diagnosis ?? null
-}
-
-/** 子代理层拟合子条目（spec §10 非目标④转正）：明细端点返回的 subagentFits。 */
-function subagentFitsOf(row: SkillFitRow): SkillFitDetail[] {
-  return detailMap.value[row.attemptId]?.subagentFits ?? []
-}
-
-async function ensureFitDetail(attemptId: string) {
-  const cur = detailMap.value[attemptId]
-  if (cur?.loaded || cur?.loading) return
-  detailMap.value[attemptId] = { fits: [], subagentFits: [], loading: true, loaded: false }
-  try {
-    const res = await getSkillFitDetail(attemptId)
-    detailMap.value[attemptId] = { fits: res.fits || [],
-      subagentFits: (res as any).subagentFits || [], loading: false, loaded: true }
-  } catch {
-    detailMap.value[attemptId] = { fits: [], subagentFits: [], loading: false, loaded: true }
-  }
-}
-function onFitExpand(row: SkillFitRow, expanded: SkillFitRow[]) {
-  const open = expanded.some(x => fitRowKey(x) === fitRowKey(row))
-  if (open) void ensureFitDetail(row.attemptId)
-}
-
-async function recomputeFit(row: SkillFitRow) {
-  recomputing.value = fitRowKey(row)
-  try {
-    const res = await recomputeSkillFit(row.attemptId)
-    detailMap.value[row.attemptId] = { fits: res.fits || [], subagentFits: [], loading: false, loaded: true }
-    // 重算覆盖后旧诊断一并失效（后端也会置空 diagnosis 列）
-    for (const k of Object.keys(diagMap.value)) {
-      if (k.startsWith(`${row.attemptId}|`)) delete diagMap.value[k]
-    }
-    await loadFits(false)
-    ElMessage.success('已重新计算')
-  } catch { /* 全局 toast 已提示 */ } finally {
-    recomputing.value = ''
-  }
-}
-
-async function diagnose(row: SkillFitRow) {
-  if (!row.id) {
-    ElMessage.warning('该结果行缺少 id，无法诊断（请刷新列表）')
-    return
-  }
-  diagnosing.value = fitRowKey(row)
-  try {
-    const res = await diagnoseSkillFit(row.id)
-    diagMap.value[fitRowKey(row)] = res.diagnosis
-  } catch { /* 全局 toast 已提示 */ } finally {
-    diagnosing.value = ''
-  }
-}
-
-async function copyRevised(diag: SkillFitDiagnosis) {
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(diag.revised_steps ?? [], null, 2))
-    ElMessage.success('修订步骤 JSON 已复制')
-  } catch {
-    ElMessage.error('复制失败，请手动选择文本')
-  }
-}
-
-// ── 定义版本时间线 ─────────────────────────────────────────────────────
-
-interface VersionView extends SkillDefVersion {
-  deltaScore: number | null
-  deltaFitRate: number | null
-  deltaDiverged: number | null
-}
-interface VersionGroup {
-  key: string
-  defKind: string
-  defName: string
-  versions: VersionView[]
-}
-const defVersions = ref<SkillDefVersion[]>([])
-const labelDrafts = ref<Record<string, string>>({})
-
-const versionGroups = computed<VersionGroup[]>(() => {
-  const map = new Map<string, VersionView[]>()
-  for (const v of defVersions.value) {
-    const key = `${v.defKind}/${v.defName}`
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push({
-      ...v, deltaScore: null, deltaFitRate: null, deltaDiverged: null,
-    })
-  }
-  const groups: VersionGroup[] = []
-  for (const [key, list] of map) {
-    // 后端 ORDER BY def_name, first_seen_at：组内旧 → 新
-    for (let i = 1; i < list.length; i++) {
-      const prev = list[i - 1]
-      const cur = list[i]
-      cur.deltaScore = prev.avgScore != null && cur.avgScore != null
-        ? Math.round((cur.avgScore - prev.avgScore) * 10) / 10 : null
-      cur.deltaFitRate = prev.fitRate != null && cur.fitRate != null
-        ? cur.fitRate - prev.fitRate : null
-      cur.deltaDiverged = cur.divergedCount - prev.divergedCount
-    }
-    const first = list[0]
-    groups.push({ key, defKind: first.defKind, defName: first.defName, versions: list })
-  }
-  return groups
-})
-
-function deltaCards(g: VersionGroup) {
-  const out: Array<{ from: string; to: string; delta: number | null; dd: number | null }> = []
-  for (let i = 1; i < g.versions.length; i++) {
-    const prev = g.versions[i - 1]
-    const cur = g.versions[i]
-    out.push({
-      from: prev.versionLabel || shortHash(prev.contentHash),
-      to: cur.versionLabel || shortHash(cur.contentHash),
-      delta: cur.deltaScore,
-      dd: cur.deltaDiverged,
-    })
-  }
-  return out
-}
-
-async function saveLabel(v: SkillDefVersion) {
-  const draft = (labelDrafts.value[v.id] ?? '').trim()
-  if (draft === (v.versionLabel ?? '')) return
-  try {
-    await updateSkillDefVersion(v.id, { versionLabel: draft || null })
-    ElMessage.success('版本标注已保存')
-    await loadDefVersions()
-  } catch { /* 全局 toast 已提示 */ }
-}
-
-// ── 步骤生成器对话框 ───────────────────────────────────────────────────
-
+const definitions = ref<SkillFitDefinitionSummary[]>([])
+const selected = ref<SkillFitDefinitionSummary | null>(null)
+const detailTab = ref('results')
+const globalPatternsVisible = ref(false)
 const genVisible = ref(false)
 const genKind = ref('')
 const genName = ref('')
-function openGenerator(v: SkillDefVersion) {
-  genKind.value = v.defKind
-  genName.value = v.defName
-  genVisible.value = true
-}
 
-// ── 数据加载与格式化 ───────────────────────────────────────────────────
-
-async function loadFits(withVersions = true) {
+async function loadDefinitions() {
   fitLoading.value = true
   fitError.value = ''
   try {
-    const res = await listSkillFits({ limit: 50 })
-    fits.value = res.fits || []
+    const res = await getSkillFitDefinitionSummary()
+    definitions.value = res.definitions || []
+    // 选中项刷新后按 (defKind, defName) 重新对齐；无选中/已消失则取第一个
+    const cur = selected.value
+    const found = cur
+      ? definitions.value.find(
+          d => d.defKind === cur.defKind && d.defName === cur.defName)
+      : undefined
+    selected.value = found ?? definitions.value[0] ?? null
   } catch (e: unknown) {
     fitError.value = errMsg(e)
   } finally {
     fitLoading.value = false
   }
-  if (withVersions) await loadDefVersions()
-  await loadFitPatterns()
 }
-async function loadFitPatterns() {
-  try {
-    const res = await get('/ai/chat/admin/skill-def-patterns?limit=50')
-    fitPatterns.value = res.patterns || []
-  } catch { /* 非关键 */ }
-}
-async function loadDefVersions() {
-  try {
-    const res = await listSkillDefVersions()
-    defVersions.value = res.versions || []
-    for (const v of defVersions.value) {
-      labelDrafts.value[v.id] = v.versionLabel ?? ''
-    }
-  } catch { /* 非关键 */ }
+function openGeneratorFromVersion(v: SkillDefVersion) {
+  genKind.value = v.defKind
+  genName.value = v.defName
+  genVisible.value = true
 }
 
 function refresh() {
   void load()
-  void loadFits()
+  void loadDefinitions()
 }
 onMounted(refresh)
 
@@ -634,61 +301,11 @@ function deltaClass(v: number | null | undefined) {
   if (v == null || v === 0) return ''
   return v > 0 ? 'delta-up' : 'delta-down'
 }
-function fmtDeltaNum(v: number | null | undefined) {
-  if (v == null) return '—'
-  if (v === 0) return '0'
-  return (v > 0 ? '↑ +' : '↓ ') + Math.round(Math.abs(v) * 10) / 10
-}
-function deltaNumClass(v: number | null | undefined) {
-  if (v == null || v === 0) return ''
-  return v > 0 ? 'delta-up' : 'delta-down'
-}
-/** 偏离数变化的语义配色：变多=坏（红），变少=好（绿） */
-function divergeDeltaClass(dd: number | null | undefined) {
-  if (dd == null || dd === 0) return ''
-  return dd > 0 ? 'delta-down' : 'delta-up'
-}
 function shortHash(h?: string | null) {
   return h ? h.slice(0, 10) + '…' : '—'
 }
 function fmtTime(v?: string | null) {
   return v ? new Date(v).toLocaleString() : '—'
-}
-function trunc(s: string | undefined, n: number) {
-  const t = s || ''
-  return t.length > n ? t.slice(0, n) + '…' : t
-}
-function dotClass(status: string) {
-  if (status === 'hit') return 'is-hit'
-  if (status === 'miss') return 'is-miss'
-  return 'is-skipped'
-}
-function stepStatusText(status: string) {
-  if (status === 'hit') return '命中'
-  if (status === 'miss') return '未命中'
-  if (status === 'skipped') return '跳过'
-  return status
-}
-function kindText(kind: string) {
-  if (kind === 'skill') return '技能'
-  if (kind === 'agent') return '代理'
-  return kind
-}
-
-const CAUSE_LABELS: Record<string, string> = {
-  definition_stale: '定义过时',
-  step_redundant: '步骤冗余',
-  order_deviation: '顺序偏差',
-  model_noncompliance: '模型未遵循',
-  environment: '环境异常',
-}
-function causeLabel(cause?: string | null) {
-  return (cause && CAUSE_LABELS[cause]) || cause || '—'
-}
-function causeTagType(cause?: string | null): 'warning' | 'danger' | 'info' {
-  if (cause === 'model_noncompliance') return 'danger'
-  if (cause === 'environment') return 'info'
-  return 'warning'
 }
 </script>
 
@@ -703,36 +320,8 @@ function causeTagType(cause?: string | null): 'warning' | 'danger' | 'info' {
 .delta-up { color: var(--el-color-success); font-weight: 600; }
 .delta-down { color: var(--el-color-danger); font-weight: 600; }
 
-.fit-detail { padding: 4px 12px 12px 48px; }
-.fit-detail__ops { display: flex; gap: 8px; margin: 10px 0 4px; }
-.fit-diag {
-  margin-top: 8px; padding: 10px 12px; border-radius: 6px;
-  background: var(--el-fill-color-light); border: 1px solid var(--el-border-color-lighter);
-}
-.fit-diag__cause { font-size: 13px; margin-bottom: 6px; }
-.fit-diag__sugs { margin: 4px 0 8px; padding-left: 20px; font-size: 12.5px; }
-.fit-diag__sugs li { margin: 2px 0; }
-.fit-diag__revhead { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin: 6px 0 4px; }
-.fit-diag__json {
-  margin: 0; padding: 8px 10px; font-size: 12px; line-height: 1.5;
-  background: var(--el-fill-color-darker); border-radius: 4px;
-  max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all;
-}
-
-.fit-vg { margin-bottom: 18px; }
-.fit-vg__head { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px; }
-.fit-deltas { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 8px; }
-.fit-delta {
-  font-size: 12px; padding: 2px 10px; border-radius: 10px;
-  background: var(--el-fill-color); color: var(--el-text-color-regular);
-}
-.fit-delta b { font-variant-numeric: tabular-nums; }
-
-.fit-dot {
-  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-  margin-right: 4px; vertical-align: middle;
-}
-.fit-dot.is-hit { background: var(--el-color-success); }
-.fit-dot.is-miss { background: var(--el-color-danger); }
-.fit-dot.is-skipped { background: var(--el-border-color-darker); opacity: .55; }
+.fit-layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
+.fit-layout__side { display: flex; flex-direction: column; gap: 8px; }
+.fit-layout__global { align-self: flex-start; margin-top: 4px; }
+.fit-empty { padding: 48px 0; text-align: center; }
 </style>

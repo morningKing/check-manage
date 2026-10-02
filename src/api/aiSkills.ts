@@ -166,7 +166,8 @@ export function listSkillFits(params?: {
 }
 
 export function getSkillFitDetail(attemptId: string) {
-  return get<{ fits: SkillFitDetail[] }>(`${ADMIN}/skill-fit/${encodeURIComponent(attemptId)}`)
+  return get<{ fits: SkillFitDetail[]; subagentFits?: SkillFitDetail[] }>(
+    `${ADMIN}/skill-fit/${encodeURIComponent(attemptId)}`)
 }
 
 export function recomputeSkillFit(attemptId: string) {
