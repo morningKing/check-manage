@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 
 log = logging.getLogger(__name__)
@@ -60,7 +61,9 @@ tools:
    evidence（引用你实际打开的文件:行或轨迹/消息条目；禁止凭空断言）。
    材料不足以核实某条时（例如 rubric 要求多次委派但材料只见一次，或要求的
    文件/消息不存在），verdict 给 "inconclusive" 并在 reasons 说明缺什么——
-   不要凭不完整的材料下 failed 结论；
+   不要凭不完整的材料下 failed 结论。特别注意：rubric 提及「应有 N 次委派/
+   后续步骤」而材料中尚未出现时，**极可能后续委派仍在进行**——判
+   "inconclusive"，绝不下 failed；
 3. 只输出一个 JSON 对象（最后输出），形如：
    {"results": [{"name": "<期望名>", "verdict": "passed|failed|inconclusive",
                  "reasons": ["…"], "evidence": "…"}]}
@@ -444,6 +447,19 @@ def merge_verifier_results(gate: dict, run: dict, session_id: str,
     任一 inconclusive → 整体 inconclusive（携带 error，引擎 fail-closed）；
     否则任一 failed → failed；否则 passed。"""
     db_ctx = get_db or _default_get_db
+    # fit_results 落库需要 attempt_id（FK）：由 session_id 现查最新 attempt。
+    # 查不到（异常/无审计来源）则跳过 fit 行落库，仍回写期望行。
+    att_id = None
+    try:
+        with db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM ai_execution_attempts WHERE session_id = %s "
+                    "ORDER BY started_at DESC NULLS LAST LIMIT 1", (session_id,))
+                row = cur.fetchone()
+                att_id = row[0] if row else None
+    except Exception as e:  # noqa: BLE001
+        log.warning('merge fit attempt lookup failed sid=%s: %s', session_id, e)
     gate['results'] = list(gate.get('results') or []) + list(run.get('results') or [])
     statuses = [r['status'] for r in gate['results']]
     if any(s == 'inconclusive' for s in statuses):
@@ -457,6 +473,30 @@ def merge_verifier_results(gate: dict, run: dict, session_id: str,
     with db_ctx() as conn:
         with conn.cursor() as cur:
             for r in run.get('results') or []:
+                # fit_results 落库（upsert，依赖 uq_skill_fit_attempt_def）：
+                # 委派级 inconclusive 不落行 → 终态重判的 verdict 必须在这里
+                # INSERT，否则「inconclusive → 终态重判」路径的拟合结果永远
+                # 缺失（拟合摘要/版本聚合查不到）。
+                if att_id:
+                    cur.execute(
+                        "INSERT INTO ai_skill_fit_results "
+                        "(id, attempt_id, session_id, def_kind, def_name, def_hash, "
+                        " steps_total, steps_hit, score, status, per_step) "
+                        "VALUES (%s, %s, %s, 'verifier', %s, NULL, 1, %s, %s, %s, %s::jsonb) "
+                        "ON CONFLICT (attempt_id, def_name) DO UPDATE SET "
+                        " steps_total = EXCLUDED.steps_total, "
+                        " steps_hit = EXCLUDED.steps_hit, score = EXCLUDED.score, "
+                        " status = EXCLUDED.status, per_step = EXCLUDED.per_step, "
+                        " computed_at = NOW()",
+                        ('fit_' + secrets.token_hex(6), att_id, session_id,
+                         r['name'], 1 if r['status'] == 'passed' else 0,
+                         100 if r['status'] == 'passed' else 0, r['status'],
+                         json.dumps([{
+                             'id': r['name'], 'name': r['name'],
+                             'status': 'hit' if r['status'] == 'passed' else 'miss',
+                             'evidence': [{'tool': 'verifier',
+                                           'args': '; '.join(r.get('reasons') or [])[:150]}],
+                         }], ensure_ascii=False)))
                 if r['status'] == 'inconclusive':
                     cur.execute(
                         "UPDATE action_expectations SET last_status='pending', "

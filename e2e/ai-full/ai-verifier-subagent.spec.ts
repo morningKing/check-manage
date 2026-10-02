@@ -22,12 +22,13 @@ import {
 } from './batch-helpers'
 
 const API = 'http://127.0.0.1:3002'
+const _json = (v: unknown) => JSON.stringify(v)
 
 test.setTimeout(1_200_000)
 
 interface RunOpts { rubric: string; name: string }
 
-async function runBatch(token: string, opts: RunOpts): Promise<{ status: string; errMsg: string }> {
+async function runBatch(token: string, opts: RunOpts): Promise<{ status: string; errMsg: string; sid: string; fits: Array<{ defName: string; status: string }> }> {
   const HDRS = authHeaders(token)
   const file = await uploadStaging(token, 'in.txt', 'SUBAGENT-VERIFIER-E2E', `vs-${Date.now()}`)
   const d = await createBatch(token, {
@@ -41,13 +42,19 @@ async function runBatch(token: string, opts: RunOpts): Promise<{ status: string;
     files: [file],
   })
   const bid = d.batch.id as string
+  const sid = d.sessions[0].id as string
   try {
     const deadline = Date.now() + 900_000
     while (Date.now() < deadline) {
       const dd = await getDetail(token, bid)
       if (BATCH_TERMINAL.includes(dd.batch.status)) {
         const s = dd.sessions[0]
-        return { status: s.status, errMsg: String(s.error_message || '') }
+        // 拟合摘要必须在删批前取：fit 结果行 FK 级联于批删除
+        const sf = await (await fetch(
+          `http://127.0.0.1:3002/ai/chat/sessions/${sid}/skill-fit`,
+          { headers: { Authorization: `Bearer ${token}` } })).json()
+        return { status: s.status, errMsg: String(s.error_message || ''),
+                 sid, fits: sf.data || [] }
       }
       await new Promise(rr => setTimeout(rr, 3000))
     }
@@ -68,15 +75,20 @@ test('定向组：subagents=[general] 判官读子代理材料核对 → complet
   expect(r.errMsg).not.toContain('action_gate')
 })
 
-test('定向组：负向 → failed 且 error_message 带 [agent=general] 判官理由', async () => {
+test('定向组：负向 → 委派级即停 cancelled，判官失败记入拟合摘要', async () => {
+  // 2026-10-01 委派级门禁上线后的新语义：名单内子代理终态即判定 failed
+  // 且未开 gate_retry → 立即 cancel（不再跑完全程），终态为 cancelled。
+  // 判官拦截证据改由 owner 拟合摘要（GET /sessions/<sid>/skill-fit）断言。
   const token = await adminToken()
   const r = await runBatch(token, {
     name: 'bad',
     rubric: '指定子代理的会话消息中必须包含字符串 SUBAGENT-NO-MARK-XYZ'
       + '（正常任务不可能满足，用于验证定向组判官拦截与 agent 标注）。',
   })
-  expect(r.status).toBe('failed')
-  expect(r.errMsg).toContain('action_gate')
-  expect(r.errMsg).toContain('[agent=general]')
-  expect(r.errMsg).toContain('判官未通过')
+  // cancelled（委派级即停抢到）与 failed（回合先收口、终态核对拦截）都是
+  // 有效拦截——判官耗时与模型完成剩余委派存在竞态，不锁定具体终态
+  expect(['cancelled', 'failed']).toContain(r.status)
+  const fit = (r.fits || []).find(f => f.defName === '子代理语义核对')
+  expect(fit, `判官失败应写入拟合结果（fits=${_json(r.fits)}）`).toBeTruthy()
+  expect(fit.status).toBe('failed')
 })
