@@ -1884,3 +1884,117 @@ def test_facade_client_prefers_runtime_and_falls_back(monkeypatch):
 
     monkeypatch.setattr(rt_mod, 'get_runtime', lambda: None)
     assert isinstance(eng.opencode_client._client(), OpenCodeClient)  # None 兜底
+
+
+# ---------------------------------------------------------------------------
+# P3-C2：管理面 attempt 生命周期时间线（/ai/chat/admin/batches/sessions/<sid>/
+# attempt-timeline）+ /metrics 的 ai_attempts_running gauge
+# ---------------------------------------------------------------------------
+
+def _seed_attempt_session(db_conn, uid):
+    """建一个无 batch 归属的交互会话（timeline 端点正是要覆盖这类会话）。"""
+    sid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, workspace_path, "
+            "  session_token, token_expires_at) "
+            "VALUES (%s, %s, 'active', '', %s, NOW() + interval '1 day')",
+            (sid, uid, 'tok-' + sid[:16]))
+    db_conn.commit()
+    return sid
+
+
+def _seed_attempts(db_conn, sid):
+    """两条 attempt：第 1 条已完成（含 duration），第 2 条失败带恢复原因。"""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+            "  attempt_no, operation, status, agent_resolution, model_resolution, "
+            "  started_at, finished_at) "
+            "VALUES (%s, %s, 'interactive', 1, 'send', 'completed', "
+            "  'requested', 'requested', "
+            "  NOW() - interval '10 seconds', NOW() - interval '3 seconds')",
+            (f'att-{sid}-1', sid))
+        cur.execute(
+            "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+            "  attempt_no, operation, status, agent_resolution, model_resolution, "
+            "  started_at, error_code, error_message, parent_attempt_id, recovery_reason) "
+            "VALUES (%s, %s, 'interactive', 2, 'retry', 'failed', "
+            "  'fallback', 'requested', NOW() - interval '2 seconds', "
+            "  'TIMEOUT', 'upstream timeout', %s, 'lease_expired')",
+            (f'att-{sid}-2', sid, f'att-{sid}-1'))
+    db_conn.commit()
+
+
+def test_attempt_timeline_lists_attempts_in_order(db_conn, user_id, gap_internal_client):
+    """P3-C2：时间线按 attempt_no 升序返回全字段；未结束的 attempt 以 NOW()
+    兜底计 duration_s；时间戳 isoformat。"""
+    client, headers = gap_internal_client
+    sid = _seed_attempt_session(db_conn, user_id)
+    _seed_attempts(db_conn, sid)
+
+    resp = client.get(
+        f'/ai/chat/admin/batches/sessions/{sid}/attempt-timeline', headers=headers)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['sessionId'] == sid
+    attempts = body['attempts']
+    assert [a['attempt_no'] for a in attempts] == [1, 2]
+
+    a1, a2 = attempts
+    assert a1['status'] == 'completed'
+    assert a1['agent_resolution'] == 'requested'
+    assert isinstance(a1['duration_s'], int) and a1['duration_s'] >= 7  # 10s - 3s
+    assert a1['started_at'].endswith('+00:00') or 'T' in a1['started_at']
+
+    assert a2['status'] == 'failed'
+    assert a2['operation'] == 'retry'
+    assert a2['model_resolution'] == 'requested'
+    assert a2['error_code'] == 'TIMEOUT'
+    assert a2['error_message'] == 'upstream timeout'
+    assert a2['parent_attempt_id'] == f'att-{sid}-1'
+    assert a2['recovery_reason'] == 'lease_expired'
+    # 未结束：finished_at 为空，duration 以 NOW() 兜底（>= 起点差）
+    assert a2['finished_at'] is None
+    assert isinstance(a2['duration_s'], int)
+
+
+def test_attempt_timeline_unknown_session_404(db_conn, gap_internal_client):
+    """不存在的会话 404（与同文件其余子任务端点的 404 语义一致）。"""
+    client, headers = gap_internal_client
+    resp = client.get(
+        f'/ai/chat/admin/batches/sessions/{uuid.uuid4()}/attempt-timeline',
+        headers=headers)
+    assert resp.status_code == 404
+
+
+def test_attempt_timeline_rejects_non_admin(app, dev_headers):
+    """能力门：developer（admin_keys 为空）一律 403，不能跨用户读 attempt。"""
+    resp = app.test_client().get(
+        '/ai/chat/admin/batches/sessions/s-x/attempt-timeline', headers=dev_headers)
+    assert resp.status_code == 403
+
+
+def test_attempt_timeline_rejects_anonymous(app):
+    resp = app.test_client().get(
+        '/ai/chat/admin/batches/sessions/s-x/attempt-timeline')
+    assert resp.status_code in (401, 403)
+
+
+def test_metrics_includes_ai_attempts_running(app, mock_conn):
+    """P3-C2：/metrics 暴露 ai_attempts_running gauge（claimed/running/recovering）。"""
+    from contextlib import contextmanager
+    from unittest.mock import patch
+
+    @contextmanager
+    def fake_db():
+        yield mock_conn
+
+    mock_conn.cursor.return_value.fetchone.return_value = (0,)
+    mock_conn.cursor.return_value.fetchall.return_value = []
+    with patch('routes.metrics.get_db', fake_db):
+        r = app.test_client().get('/metrics')
+    assert r.status_code == 200
+    body = r.get_data(as_text=True)
+    assert '# TYPE ai_attempts_running gauge' in body
+    assert 'ai_attempts_running 0' in body

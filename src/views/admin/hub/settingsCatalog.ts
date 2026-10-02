@@ -72,6 +72,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
     { id: 'ai-skillopt', label: 'AI 技能优化', perm: 'admin.ai_chat_admin', icon: 'Opportunity',
       component: () => import('@/views/admin/AiSkillOpt.vue') },
+    // P3-A7：编排管理面前端骨架（消费 /ai/orchestrations 定义与运行端点）
+    { id: 'ai-orchestrations', label: 'AI 编排管理', perm: 'admin.ai_orchestration_admin', icon: 'SetUp',
+      component: () => import('@/views/admin/AiOrchestrationManager.vue') },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
     { id: 'query', label: '数据查询', perm: 'admin.query', icon: 'Search',

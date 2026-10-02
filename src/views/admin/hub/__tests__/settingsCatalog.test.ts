@@ -9,9 +9,9 @@ import {
 } from '../settingsCatalog'
 
 describe('SETTINGS_GROUPS', () => {
-  it('共 7 组 25 条', () => {
+  it('共 7 组 26 条', () => {
     expect(SETTINGS_GROUPS).toHaveLength(7)
-    expect(ALL_SETTINGS_ITEMS).toHaveLength(25)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(26)
   })
 
   it('条目 id 全局唯一', () => {

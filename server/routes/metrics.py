@@ -18,6 +18,8 @@ def metrics():
              "SELECT count(*) FROM ai_chat_sessions WHERE status='failed' AND created_at > NOW() - interval '1 hour'"),
             ('ai_orchestration_runs_active', 'Active orchestration runs',
              "SELECT count(*) FROM ai_orchestration_runs WHERE status IN ('running','waiting_approval')"),
+            ('ai_attempts_running', 'Currently running execution attempts',
+             "SELECT count(*) FROM ai_execution_attempts WHERE status IN ('claimed','running','recovering')"),
             ('ai_outbox_pending', 'Undelivered outbox rows',
              "SELECT count(*) FROM ai_delivery_outbox WHERE status IN ('pending','failed')"),
             ('ai_batch_needs_review', 'Children needing review',

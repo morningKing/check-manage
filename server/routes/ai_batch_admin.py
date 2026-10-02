@@ -302,6 +302,39 @@ def child_tool_calls(batch_id, sid):
     return jsonify({'calls': calls})
 
 
+@ai_batch_admin_bp.get('/sessions/<sid>/attempt-timeline')
+@require_permission('admin.ai_chat_admin')
+def attempt_timeline(sid):
+    """attempt 生命周期时间线（P3-C2，管理面跨用户只读）。
+
+    会话级（不带 batch 前缀）：交互会话没有 batch_id，也能看 attempt 链。
+    duration_s 对未结束的 attempt 以 NOW() 兜底，表示"至今已跑多久"。
+    """
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM ai_chat_sessions WHERE id = %s", (sid,))
+            if cur.fetchone() is None:
+                return jsonify({'error': '会话不存在', 'code': 'NOT_FOUND'}), 404
+            cur.execute(
+                "SELECT id, attempt_no, operation, status, "
+                "agent_resolution, model_resolution, "
+                "started_at, finished_at, "
+                "EXTRACT(EPOCH FROM (COALESCE(finished_at, NOW()) - started_at))::int "
+                "  AS duration_s, "
+                "error_code, error_message, parent_attempt_id, recovery_reason "
+                "FROM ai_execution_attempts "
+                "WHERE session_id = %s "
+                "ORDER BY attempt_no", (sid,))
+            cols = [d[0] for d in cur.description]
+            attempts = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in attempts:
+        for k in ('started_at', 'finished_at'):
+            if r.get(k) is not None:
+                r[k] = r[k].isoformat()
+    return jsonify({'sessionId': sid, 'attempts': attempts})
+
+
 @ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/files/download')
 @require_permission_sse('admin.ai_chat_admin')
 def download_child_file(batch_id, sid):
