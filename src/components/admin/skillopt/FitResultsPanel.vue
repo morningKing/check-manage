@@ -9,7 +9,9 @@
         <ElRadioButton value="other">其他</ElRadioButton>
       </ElRadioGroup>
     </div>
-    <p v-if="!filteredFits.length" class="muted">该定义暂无拟合结果。</p>
+    <p v-if="!filteredFits.length" class="muted">
+      {{ statusFilter ? '当前筛选无结果' : '该定义暂无拟合结果。' }}
+    </p>
     <ElTable v-else :data="filteredFits" size="small" :row-key="fitRowKey"
              @expand-change="onFitExpand">
       <ElTableColumn type="expand">
@@ -247,14 +249,21 @@ async function copyRevised(diag: SkillFitDiagnosis) {
   }
 }
 
+/** 序列守卫：切定义后慢返回的旧响应不得覆盖当前列表 */
+let loadSeq = 0
 async function load() {
-  const res = await listSkillFits({
-    defKind: props.defKind, defName: props.defName, limit: 100,
-  })
-  fits.value = res.fits || []
+  const seq = ++loadSeq
+  try {
+    const res = await listSkillFits({
+      defKind: props.defKind, defName: props.defName, limit: 100,
+    })
+    if (seq !== loadSeq) return
+    fits.value = res.fits || []
+  } catch { /* 全局 toast 已提示 */ }
 }
 watch([() => props.defKind, () => props.defName], () => {
   statusFilter.value = ''
+  fits.value = []
   detailMap.value = {}
   diagMap.value = {}
   void load().catch(() => { /* 全局 toast 已提示 */ })

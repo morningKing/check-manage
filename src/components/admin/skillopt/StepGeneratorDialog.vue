@@ -41,7 +41,7 @@
           <div class="gen__row">
             <span class="gen__label">试算 attempt</span>
             <ElInput v-model="gen.attemptId" size="small"
-                     placeholder="历史 attemptId（可从上方拟合列表复制）" />
+                     placeholder="历史 attemptId（可从拟合结果子标签复制）" />
             <ElButton size="small" :loading="gen.previewing" @click="runPreview">试算</ElButton>
           </div>
           <div v-if="gen.preview" class="gen__preview-result">

@@ -57,27 +57,36 @@ const labelDrafts = ref<Record<string, string>>({})
 
 const displayVersions = computed(() => [...versions.value].reverse())
 
+/** 序列守卫：切定义后慢返回的旧响应不得覆盖当前列表 */
+let loadSeq = 0
 async function load() {
-  const res = await listSkillDefVersions({
-    defKind: props.defKind, defName: props.defName,
-  })
-  const list: VersionView[] = (res.versions || []).map(v => ({
-    ...v, deltaScore: null, deltaFitRate: null, deltaDiverged: null,
-  }))
-  // 后端 ORDER BY first_seen_at：组内旧 → 新；Δ = 相邻版本差值
-  for (let i = 1; i < list.length; i++) {
-    const prev = list[i - 1]
-    const cur = list[i]
-    cur.deltaScore = prev.avgScore != null && cur.avgScore != null
-      ? Math.round((cur.avgScore - prev.avgScore) * 10) / 10 : null
-    cur.deltaFitRate = prev.fitRate != null && cur.fitRate != null
-      ? cur.fitRate - prev.fitRate : null
-    cur.deltaDiverged = cur.divergedCount - prev.divergedCount
-  }
-  versions.value = list
-  for (const v of list) labelDrafts.value[v.id] = v.versionLabel ?? ''
+  const seq = ++loadSeq
+  try {
+    const res = await listSkillDefVersions({
+      defKind: props.defKind, defName: props.defName,
+    })
+    const list: VersionView[] = (res.versions || []).map(v => ({
+      ...v, deltaScore: null, deltaFitRate: null, deltaDiverged: null,
+    }))
+    // 后端 ORDER BY first_seen_at：组内旧 → 新；Δ = 相邻版本差值
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1]
+      const cur = list[i]
+      cur.deltaScore = prev.avgScore != null && cur.avgScore != null
+        ? Math.round((cur.avgScore - prev.avgScore) * 10) / 10 : null
+      cur.deltaFitRate = prev.fitRate != null && cur.fitRate != null
+        ? cur.fitRate - prev.fitRate : null
+      cur.deltaDiverged = cur.divergedCount - prev.divergedCount
+    }
+    if (seq !== loadSeq) return
+    versions.value = list
+    for (const v of list) labelDrafts.value[v.id] = v.versionLabel ?? ''
+  } catch { /* 全局 toast 已提示 */ }
 }
-watch([() => props.defKind, () => props.defName], () => void load(), { immediate: true })
+watch([() => props.defKind, () => props.defName], () => {
+  versions.value = []
+  void load()
+}, { immediate: true })
 
 function hasDelta(v: VersionView) {
   return v.deltaScore != null || (v.deltaFitRate != null && v.deltaFitRate !== 0)

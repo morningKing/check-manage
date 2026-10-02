@@ -29,13 +29,22 @@ const props = defineProps<{ defKind?: string; defName?: string }>()
 const isGlobal = computed(() => !props.defName)
 
 const patterns = ref<SkillDefPattern[]>([])
+/** 序列守卫：切定义后慢返回的旧响应不得覆盖当前列表 */
+let loadSeq = 0
 async function load() {
-  const res = await listSkillDefPatterns({
-    defKind: props.defKind, defName: props.defName, limit: 50,
-  })
-  patterns.value = res.patterns || []
+  const seq = ++loadSeq
+  try {
+    const res = await listSkillDefPatterns({
+      defKind: props.defKind, defName: props.defName, limit: 50,
+    })
+    if (seq !== loadSeq) return
+    patterns.value = res.patterns || []
+  } catch { /* 全局 toast 已提示 */ }
 }
-watch([() => props.defKind, () => props.defName], () => void load(), { immediate: true })
+watch([() => props.defKind, () => props.defName], () => {
+  patterns.value = []
+  void load()
+}, { immediate: true })
 </script>
 
 <style scoped>

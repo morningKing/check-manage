@@ -25,7 +25,7 @@ test('主从布局：左栏列表或空状态 + 子标签切换', async ({ page 
   await login(page)
   await page.goto('/admin/ai-skillopt')
   await expect(page.getByText('SkillOpt — 技能优化')).toBeVisible()
-  // vite 冷编译可能触发整页重载——元素迟迟不出现就重进一次
+  // vite 冷编译可能触发整页重载——元素迟迟不出现就重试最多 3 次
   const firstDef = page.locator('.fit-def').first()
   const empty = page.getByText('暂无拟合数据')
   const mask = page.locator('.skillopt__pane .el-loading-mask')
