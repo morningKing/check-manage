@@ -1082,6 +1082,7 @@ def skill_def_patterns():
     versionHashes 为该步骤 id 出现过的版本短 hash 列表（去重，展示用截断）。"""
     from db import get_db
     def_kind = (request.args.get('defKind') or '').strip() or None
+    def_name = (request.args.get('defName') or '').strip() or None
     limit = min(max(int(request.args.get('limit', 50) or 50), 1), 200)
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -1101,10 +1102,11 @@ def skill_def_patterns():
                 WHERE f.status IN ('partial', 'diverged')
                   AND p->>'status' IN ('miss', 'out_of_order')
                   AND (%s IS NULL OR f.def_kind = %s)
+                  AND (%s IS NULL OR f.def_name = %s)
                 GROUP BY f.def_kind, f.def_name, p->>'id'
                 ORDER BY miss_tasks DESC, versions_affected DESC, last_seen DESC
                 LIMIT %s
-                """, (def_kind, def_kind, limit))
+                """, (def_kind, def_kind, def_name, def_name, limit))
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     patterns = []

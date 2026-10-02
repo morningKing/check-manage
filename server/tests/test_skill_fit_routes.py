@@ -214,3 +214,33 @@ def test_skill_fit_list_filters_by_def(client, admin_headers, db_conn, tmp_path)
             cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
             cur.execute("DELETE FROM users WHERE id=%s", (uid,))
         db_conn.commit()
+
+
+def test_skill_def_patterns_filter_by_def_name(client, admin_headers, db_conn, tmp_path):
+    """defName 过滤：只回该定义的步骤级偏离聚合。"""
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    agent_name = f'demo-agent-{uuid.uuid4().hex[:6]}'
+    step_row = _json.dumps([{'id': 'clone', 'name': '克隆仓库',
+                             'status': 'miss', 'evidence': []}])
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
+                        "  def_kind, def_name, steps_total, steps_hit, score, status, per_step) "
+                        "VALUES (%s, %s, %s, 'agent', %s, 1, 0, 0, 'diverged', %s::jsonb)",
+                        ('fit_' + uuid.uuid4().hex[:10], attempt, sid, agent_name, step_row))
+        db_conn.commit()
+        r = client.get('/ai/chat/admin/skill-def-patterns', headers=admin_headers,
+                       query_string={'defName': agent_name})
+        assert r.status_code == 200
+        pats = r.get_json()['patterns']
+        assert pats and all(p['defName'] == agent_name for p in pats)
+        assert any(p['stepId'] == 'clone' for p in pats)
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()
