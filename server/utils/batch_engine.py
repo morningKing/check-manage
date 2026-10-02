@@ -310,6 +310,24 @@ def _prepare_workspace(user_id: str, session_id: str,
     ENTIRE workspace root (every user's every session) into this session's own
     uploads/ — a real bug, not a graceful no-file case.
     """
+    # P2-B4：配额检查（AI_WORKSPACE_QUOTA_MB 仅显式设置时生效，默认 0 不启用；
+    # 在后台 worker 线程内执行，不在请求路径上）。超限抛 PermissionError →
+    # _run_one 的 except Exception 落 failed，配额自然阻断新派发。
+    from config import AI_WORKSPACE_QUOTA_MB
+    if AI_WORKSPACE_QUOTA_MB > 0:
+        user_ws_dir = os.path.join(_workspace_root(), user_id)
+        if os.path.isdir(user_ws_dir):
+            try:
+                total_mb = sum(
+                    os.path.getsize(os.path.join(dp, f))
+                    for dp, _, fns in os.walk(user_ws_dir) for f in fns
+                ) / (1024 * 1024)
+            except OSError:
+                total_mb = 0.0  # 遍历竞态（并发清理）fail-open，不阻断派发
+            if total_mb > AI_WORKSPACE_QUOTA_MB:
+                raise PermissionError(
+                    f'工作区配额超限：用户 {user_id} 已占用 '
+                    f'{total_mb:.0f}MB > {AI_WORKSPACE_QUOTA_MB}MB')
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
     # 绑定批任务的外部目录读取（2026-09-30）：无人值守会话读工作区外的文件
     # 会触发 OpenCode external_directory=ask 授权询问，无人应答 → 工具挂起
@@ -2838,6 +2856,29 @@ class BatchWorker:
                             (mid, session_id, _json.dumps(content),
                              _json.dumps(meta) if meta else None),
                         )
+                    # P2-C5：实时 usage 累计（不等回合收敛）。刻意走累加而非
+                    # get_session_usage 的 max 口径——进度持久化在回合内多次
+                    # 执行、每条 assistant 消息的 tokensInput 又含重发的上下文，
+                    # 运行中数值只求"实时可见"偏大无妨；子任务终态 finally 的
+                    # accumulate_usage 以精确口径整行覆盖（REPLACE 语义），
+                    # 收敛后数值自校正。
+                    for mid, content, meta in assistant_rows:
+                        if meta and isinstance(meta, dict) and (
+                                meta.get('tokensInput') or meta.get('tokensOutput')
+                                or meta.get('cost')):
+                            cur.execute("""
+                                INSERT INTO ai_execution_usage
+                                    (session_id, tokens_input, tokens_output, cost, updated_at)
+                                VALUES (%s, %s, %s, %s, NOW())
+                                ON CONFLICT (session_id) DO UPDATE SET
+                                    tokens_input = ai_execution_usage.tokens_input + EXCLUDED.tokens_input,
+                                    tokens_output = ai_execution_usage.tokens_output + EXCLUDED.tokens_output,
+                                    cost = ai_execution_usage.cost + EXCLUDED.cost,
+                                    updated_at = NOW()
+                            """, (session_id,
+                                  int(meta.get('tokensInput') or 0),
+                                  int(meta.get('tokensOutput') or 0),
+                                  float(meta.get('cost') or 0)))
                 conn.commit()
         except Exception:
             traceback.print_exc()

@@ -1612,3 +1612,144 @@ def test_all_schedulers_use_lease():
         encoding='utf-8', errors='replace')
     assert 'audit_retention' in app_src and 'execution_lease' in app_src, \
         'app.py 的 audit retention 调度器缺少租约保护'
+
+
+# ---------------------------------------------------------------------------
+# P2-B4：workspace TTL 回收 + 配额检查
+# ---------------------------------------------------------------------------
+
+def test_workspace_ttl_cleanup(db_conn, user_id, tmp_path, monkeypatch):
+    """P2-B4：终态子会话 workspace 过 TTL 后被回收（目录删除 + 清列）；
+    未过 TTL 的终态会话不动。"""
+    import config as cfg
+    import utils.orchestration_engine as orch
+    monkeypatch.setattr(cfg, 'AI_SESSION_TTL_HOURS', 1)  # TTL=1h
+
+    ws_stale = tmp_path / 'ws-stale'
+    ws_stale.mkdir()
+    (ws_stale / 'out.txt').write_text('x', encoding='utf-8')
+    ws_fresh = tmp_path / 'ws-fresh'
+    ws_fresh.mkdir()
+    (ws_fresh / 'keep.txt').write_text('x', encoding='utf-8')
+
+    bid_stale, sid_stale = str(uuid.uuid4()), str(uuid.uuid4())
+    bid_fresh, sid_fresh = str(uuid.uuid4()), str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        # 过 TTL：批次 2h 前终态，子会话终态带 workspace
+        cur.execute(
+            "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total, "
+            "  status, completed_at) "
+            "VALUES (%s, %s, 'ttl-stale', 'p', 1, 'completed', "
+            "  NOW() - interval '2 hours')", (bid_stale, user_id))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+            "  batch_seq, workspace_path) "
+            "VALUES (%s, %s, 'completed', %s, 0, %s)",
+            (sid_stale, user_id, bid_stale, str(ws_stale)))
+        # 未过 TTL：批次刚终态
+        cur.execute(
+            "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total, "
+            "  status, completed_at) "
+            "VALUES (%s, %s, 'ttl-fresh', 'p', 1, 'completed', NOW())",
+            (bid_fresh, user_id))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+            "  batch_seq, workspace_path) "
+            "VALUES (%s, %s, 'completed', %s, 0, %s)",
+            (sid_fresh, user_id, bid_fresh, str(ws_fresh)))
+    db_conn.commit()
+
+    orch.OrchestrationScheduler()._cleanup_stale_workspaces()
+
+    assert not ws_stale.exists()          # 目录被删除
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT workspace_path FROM ai_chat_sessions WHERE id=%s",
+                    (sid_stale,))
+        assert cur.fetchone()[0] is None  # 列被清空（retry 不会再指向死路径）
+        cur.execute("SELECT workspace_path FROM ai_chat_sessions WHERE id=%s",
+                    (sid_fresh,))
+        assert cur.fetchone()[0] == str(ws_fresh)
+    assert ws_fresh.exists()              # 未过 TTL：目录保留
+
+
+def test_workspace_quota_rejects(tmp_path, monkeypatch):
+    """P2-B4：workspace 超配额时 _prepare_workspace 抛 PermissionError；
+    配额默认 0（未显式设置）不启用、不阻断派发。"""
+    import os
+    import shutil
+    import config as cfg
+    import utils.batch_engine as eng
+    uid = f'quota-{uuid.uuid4().hex[:8]}'
+    monkeypatch.setattr(cfg, 'AI_WORKSPACE_QUOTA_MB', 1)  # 1MB
+    monkeypatch.setattr(eng, '_workspace_root', lambda: str(tmp_path))
+    user_ws = tmp_path / uid / 'prev-session'
+    user_ws.mkdir(parents=True)
+    (user_ws / 'big.bin').write_bytes(b'x' * (2 * 1024 * 1024))  # 已占 2MB
+
+    with pytest.raises(PermissionError):
+        eng._prepare_workspace(uid, str(uuid.uuid4()), '')
+
+    # 显式关闭（0）：同一占用下新会话照常创建
+    monkeypatch.setattr(cfg, 'AI_WORKSPACE_QUOTA_MB', 0)
+    ws = eng._prepare_workspace(uid, 'sess-quota-off', '')
+    assert ws and os.path.isdir(ws)
+    shutil.rmtree(ws, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# P2-C5：进度落库实时 usage 累计
+# ---------------------------------------------------------------------------
+
+def test_progress_persist_updates_usage(db_conn, user_id, monkeypatch):
+    """P2-C5：进度落库（_persist_conversation）后 ai_execution_usage 即时
+    更新，不等回合收敛。重复持久化走累加（实时可见口径刻意偏大，终态由
+    accumulate_usage 整行覆盖自校正）。"""
+    from unittest.mock import MagicMock
+    import utils.batch_engine as eng
+    from utils.batch_engine import BatchWorker
+
+    sid = str(uuid.uuid4())
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, title, status) "
+            "VALUES (%s, %s, 'usage-live', 'running')", (sid, user_id))
+    db_conn.commit()
+
+    def _msg(mid, tok_in, tok_out, cost):
+        return {
+            'info': {'id': mid, 'role': 'assistant',
+                     'time': {'created': 1000, 'completed': 2000},
+                     'tokens': {'input': tok_in, 'output': tok_out},
+                     'cost': cost},
+            'parts': [{'type': 'text', 'text': '完成'}],
+        }
+
+    fake_oc = MagicMock()
+    fake_oc.get_messages.return_value = [_msg(f'{sid}:m1', 500, 100, 0.01)]
+    monkeypatch.setattr(eng, 'opencode_client', fake_oc)
+
+    worker = BatchWorker()
+    worker._persist_conversation(sid, '提示词', 'oc-usage-1', None)
+
+    def _usage_row():
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT tokens_input, tokens_output, cost "
+                "FROM ai_execution_usage WHERE session_id = %s", (sid,))
+            return cur.fetchone()
+
+    row = _usage_row()
+    assert row is not None
+    assert row[0] == 500 and row[1] == 100
+    assert abs(float(row[2]) - 0.01) < 1e-6
+
+    # 第二拍（消息列表新增 m2）：累加语义 —— m1 重复计入 + m2（实时可见，
+    # 运行中数值允许偏大；终态 finally 的 accumulate_usage 会整行覆盖）
+    fake_oc.get_messages.return_value = [
+        _msg(f'{sid}:m1', 500, 100, 0.01),
+        _msg(f'{sid}:m2', 200, 50, 0.005),
+    ]
+    worker._persist_conversation(sid, '提示词', 'oc-usage-1', None)
+    row2 = _usage_row()
+    assert row2[0] == 500 + 500 + 200
+    assert row2[1] == 100 + 100 + 50

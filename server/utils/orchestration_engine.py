@@ -851,6 +851,7 @@ class OrchestrationScheduler:
         while not self._stop.is_set():
             try:
                 self.tick()
+                self._cleanup_stale_workspaces()
             except Exception:
                 logger.exception('orchestration tick failed')
             if not execution_lease.heartbeat('scheduler', self._owner):
@@ -876,6 +877,46 @@ class OrchestrationScheduler:
                 _advance_run(rid)
             except Exception:
                 logger.exception('advance run failed id=%s', rid)
+
+    def _cleanup_stale_workspaces(self):
+        """P2-B4：终态子会话 workspace 过 TTL 后回收目录并清列。
+
+        只碰 status 终态（completed/failed/needs_review/cancelled）且批次
+        completed_at 已过 AI_SESSION_TTL_HOURS 的行——workspace 删除不可逆，
+        运行中/暂停/软删除的一律不动。清列（workspace_path=NULL）与删目录
+        同事务：retry-failed 不会再拿到指向已删目录的路径。全 best-effort，
+        失败只记日志，不阻断编排推进。"""
+        import shutil
+        from config import AI_SESSION_TTL_HOURS
+        if AI_SESSION_TTL_HOURS <= 0:
+            return
+        cutoff_hours = AI_SESSION_TTL_HOURS
+        try:
+            from db import get_db
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT s.id, s.workspace_path
+                        FROM ai_chat_sessions s
+                        JOIN ai_chat_batches b ON s.batch_id = b.id
+                        WHERE s.status IN ('completed','failed','needs_review','cancelled')
+                          AND s.workspace_path IS NOT NULL
+                          AND s.deleted_at IS NULL
+                          AND b.completed_at < NOW() - (%s || ' hours')::interval
+                    """, (str(cutoff_hours),))
+                    rows = cur.fetchall()
+                    for sid, ws_path in rows:
+                        if ws_path and os.path.isdir(ws_path):
+                            shutil.rmtree(ws_path, ignore_errors=True)
+                        cur.execute(
+                            "UPDATE ai_chat_sessions SET workspace_path = NULL "
+                            "WHERE id = %s", (sid,))
+                conn.commit()
+            if rows:
+                logger.info('workspace TTL cleanup: reclaimed %d stale '
+                            'workspace(s)', len(rows))
+        except Exception:
+            logger.exception('workspace TTL cleanup failed')
 
     def stop(self):
         self._stop.set()
