@@ -259,6 +259,50 @@ def _advance_run_locked(run_id: str) -> None:
         reached.add(cur_node)
         frontier.extend(t for t in _active_targets(cur_node) if t not in reached)
     changed = False
+
+    # P2-A5：step 超时兜底——子会话卡死（hang/进程丢失）时 step 不再永久
+    # running、run 不再永久 running。阈值：节点 timeout_sec → definition
+    # timeout_policy.default_sec → 默认 900s。判定与转移在同一条 SQL 内
+    # 完成（CAS status='running' + 时间谓词），并发推进时输者 0 行生效。
+    # 只看 running：waiting_approval 由审批自身超时（expire_overdue）负责，
+    # join/approval 结构节点不占执行槽、不走这里。
+    timeout_default = 900
+    try:
+        from utils import orchestration_defs as _odef
+        _d = _odef.get_definition(run['definition_id'],
+                                  run['definition_version'])
+        timeout_default = int(((_d or {}).get('timeout_policy') or {})
+                              .get('default_sec') or 900)
+    except Exception:
+        timeout_default = 900
+    timed_out = []
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for s in steps:
+                if s['status'] != 'running':
+                    continue
+                t_sec = ((s.get('node_def') or {}).get('timeout_sec')
+                         or timeout_default)
+                try:
+                    t_sec = int(t_sec)
+                except (TypeError, ValueError):
+                    t_sec = timeout_default
+                cur.execute(
+                    "UPDATE ai_orchestration_steps SET status='failed', "
+                    "  error_message=%s, finished_at=NOW(), updated_at=NOW() "
+                    "WHERE id=%s AND status='running' AND started_at IS NOT NULL "
+                    "  AND started_at + (%s || ' seconds')::interval < NOW()",
+                    (f'step timeout ({t_sec}s)', s['id'], str(t_sec)))
+                if cur.rowcount:
+                    # 同轮内存可见：下游 skip 传播/run 派生直接按 failed 走
+                    s['status'] = 'failed'
+                    timed_out.append((s['id'], t_sec))
+                    changed = True
+    for _sid, _t in timed_out:
+        batch_events.append_event(run_id, 'step.timeout',
+                                  aggregate_type='step', aggregate_id=_sid,
+                                  payload={'timeoutSec': _t})
+
     with get_db() as conn:
         with conn.cursor() as cur:
             for s in steps:
@@ -272,6 +316,18 @@ def _advance_run_locked(run_id: str) -> None:
                     (deps.get(d) or {}).get('status') in ('failed', 'needs_review',
                                                           'skipped')
                     for d in (s.get('depends_on') or []))
+                # P2-A6：join_policy='any_success' 的 join 不因单侧依赖
+                # skip/failed 提前死亡——仍有非终态依赖（成功的那个可能还在
+                # 路上）时继续等；全部依赖终态且无一成功时才允许 skip
+                # （run 不卡死）。
+                if (dep_dead and s['kind'] == 'join'
+                        and ((s.get('node_def') or {}).get('join_policy')
+                             or 'all_success') == 'any_success'
+                        and any((deps.get(d) or {}).get('status')
+                                not in STEP_TERMINAL
+                                for d in (s.get('depends_on') or [])
+                                if d in by_node)):
+                    dep_dead = False
                 if s['node_id'] not in reached or dep_dead:
                     cur.execute(
                         "UPDATE ai_orchestration_steps SET status='skipped', "
@@ -289,10 +345,19 @@ def _advance_run_locked(run_id: str) -> None:
     for s in steps_sorted:
         if s['status'] != 'blocked' or s['node_id'] not in reached:
             continue
-        deps_ok = all(
-            by_node[d]['status'] == 'succeeded'
-            for d in (s.get('depends_on') or [])
-            if d in by_node)
+        dep_ids = [d for d in (s.get('depends_on') or []) if d in by_node]
+        if s['kind'] == 'join':
+            # P2-A6：join 汇聚语义——all_success（默认）要求全部依赖成功；
+            # any_success 只要有任一依赖成功即通过（一侧条件分支 skip/failed
+            # 不再永久阻塞 join）。
+            policy = ((s.get('node_def') or {}).get('join_policy')
+                      or 'all_success')
+            dep_statuses = [by_node[d]['status'] for d in dep_ids]
+            deps_ok = (('succeeded' in dep_statuses)
+                       if policy == 'any_success'
+                       else all(st == 'succeeded' for st in dep_statuses))
+        else:
+            deps_ok = all(by_node[d]['status'] == 'succeeded' for d in dep_ids)
         if not deps_ok:
             continue
         if s['kind'] == 'join':
@@ -393,6 +458,8 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
                   or '上一步未通过校验，请根据错误信息重试并给出完整结果。')
         with get_db() as conn:
             with conn.cursor() as cur:
+                # P2-A5：换代重跑同时重置超时时钟（started_at）——否则重试
+                # 会继承首跑的 started_at，被超时兜底立即误杀
                 cur.execute(
                     "UPDATE ai_chat_sessions SET status='pending', "
                     "  continue_prompt=%s, error_message=NULL, "
@@ -400,7 +467,8 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
                     "WHERE id=%s", (prompt, sid))
                 cur.execute(
                     "UPDATE ai_orchestration_steps SET status='running', "
-                    "  attempt_count = attempt_count + 1, updated_at=NOW() "
+                    "  attempt_count = attempt_count + 1, started_at=NOW(), "
+                    "  updated_at=NOW() "
                     "WHERE id=%s AND status='running'", (step['id'],))
             conn.commit()
         return

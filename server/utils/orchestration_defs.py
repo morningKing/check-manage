@@ -41,7 +41,27 @@ def validate_definition(nodes, edges) -> tuple[list, list]:
                 # 策略拦截（P2 §7.1，缺口补齐 3）：声明后 step 派发前先进审批
                 'approval_policy': n.get('approval_policy') or None,
                 'priority': int(n.get('priority') or 0),
+                # P2-A3：扩展字段透传——此前白名单丢弃，run 侧引擎从
+                # node_def 读不到这些字段
+                'skills': n.get('skills'),
+                'input_refs': n.get('input_refs'),
+                'runtime': n.get('runtime'),
+                'budget': n.get('budget'),
+                # P2-A5/A6：节点超时与 join 汇聚策略
+                'timeout_sec': n.get('timeout_sec'),
+                'join_policy': n.get('join_policy'),
                 'condition': n.get('condition') or None}
+        # P2-A5：节点级超时（秒）必须是正整数
+        if node['timeout_sec'] is not None and (
+                not isinstance(node['timeout_sec'], int)
+                or isinstance(node['timeout_sec'], bool)
+                or node['timeout_sec'] < 1):
+            raise ValueError(f'nodes[{i}].timeout_sec 必须是正整数（秒）')
+        # P2-A6：join 汇聚策略枚举
+        if node['join_policy'] is not None and node['join_policy'] not in (
+                'all_success', 'any_success'):
+            raise ValueError(
+                f'nodes[{i}].join_policy 只支持 all_success/any_success')
         if kind == 'agent' and not node['prompt_template']:
             raise ValueError(f'agent 节点 {nid} 必须有 prompt_template')
         if kind == 'approval':
@@ -112,23 +132,32 @@ def publish_definition(name: str, *, description: str | None, nodes, edges,
                        owner_user_id: str | None = None,
                        retry_policy=None, timeout_policy=None,
                        budget_policy=None, approval_policy=None,
-                       compensation_policy=None) -> dict:
-    """发布定义新版本：同 id 已存在则 version+1（旧版本保留）。"""
+                       compensation_policy=None,
+                       def_id: str | None = None) -> dict:
+    """发布定义新版本（P2-A3）：同 id 递增 version（旧版本保留可取）。
+
+    id 缺省自动生成；调用方传 def_id 时每次发布都是该 id 的新版本，
+    无需查重。校验失败抛 ValueError（路由回 400）。"""
     norm_nodes, norm_edges = validate_definition(nodes, edges)
     from db import get_db
-    did = 'orch_' + secrets.token_hex(6)
+    did = (def_id or '').strip() or ('orch_' + secrets.token_hex(6))
     import json as _json
     with get_db() as conn:
         with conn.cursor() as cur:
+            # P2-A3：同 id 递增 version——发布即新版本
+            cur.execute(
+                "SELECT COALESCE(MAX(version), 0) "
+                "FROM ai_orchestration_definitions WHERE id = %s", (did,))
+            next_ver = int(cur.fetchone()[0]) + 1
             cur.execute(
                 "INSERT INTO ai_orchestration_definitions "
                 "  (id, version, name, description, owner_user_id, nodes, edges, "
                 "   retry_policy, timeout_policy, budget_policy, approval_policy, "
                 "   compensation_policy, published_at) "
-                "VALUES (%s, 1, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, "
+                "VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, "
                 "        %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, NOW()) "
                 "RETURNING id, version",
-                (did, name, description, owner_user_id,
+                (did, next_ver, name, description, owner_user_id,
                  _json.dumps(norm_nodes, ensure_ascii=False),
                  _json.dumps(norm_edges, ensure_ascii=False),
                  _json.dumps(retry_policy or {}),
@@ -149,19 +178,22 @@ def get_definition(def_id: str, version: int | None = None) -> dict | None:
             if version is None:
                 cur.execute(
                     "SELECT id, version, name, description, nodes, edges, "
-                    "approval_policy FROM ai_orchestration_definitions "
+                    "approval_policy, timeout_policy "
+                    "FROM ai_orchestration_definitions "
                     "WHERE id = %s ORDER BY version DESC LIMIT 1", (def_id,))
             else:
                 cur.execute(
                     "SELECT id, version, name, description, nodes, edges, "
-                    "approval_policy FROM ai_orchestration_definitions "
+                    "approval_policy, timeout_policy "
+                    "FROM ai_orchestration_definitions "
                     "WHERE id = %s AND version = %s", (def_id, version))
             row = cur.fetchone()
     if not row:
         return None
+    # timeout_policy（P2-A5）：引擎按其 default_sec 兜底无节点级超时的 step
     return {'id': row[0], 'version': row[1], 'name': row[2],
             'description': row[3], 'nodes': row[4], 'edges': row[5],
-            'approval_policy': row[6]}
+            'approval_policy': row[6], 'timeout_policy': row[7]}
 
 
 def list_definitions(limit: int = 50) -> list[dict]:

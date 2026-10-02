@@ -1349,3 +1349,214 @@ def test_metrics_endpoint(app, mock_conn):
     assert 'ai_batch_running' in body
     assert 'ai_outbox_pending' in body
     assert 'ai_batch_needs_review' in body
+
+
+# ---------------------------------------------------------------------------
+# P2-A5/A6/A3：step 超时兜底 + join_policy 汇聚 + 定义字段透传/版本递增
+# ---------------------------------------------------------------------------
+
+def test_step_timeout_marks_failed(db_conn, user_id):
+    """P2-A5：running step 超过节点 timeout_sec 后由调度标 failed + 写
+    step.timeout 事件，run 不再永久 running。timeout_sec 必须 正整数
+    （0/负数/字符串在校验层拒绝）。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    # 校验把关：timeout_sec 必须是正整数
+    with pytest.raises(ValueError):
+        defs.validate_definition(
+            [{'id': 's1', 'kind': 'agent', 'prompt_template': 'x',
+              'timeout_sec': 0}], [])
+    with pytest.raises(ValueError):
+        defs.validate_definition(
+            [{'id': 's1', 'kind': 'agent', 'prompt_template': 'x',
+              'timeout_sec': -5}], [])
+    with pytest.raises(ValueError):
+        defs.validate_definition(
+            [{'id': 's1', 'kind': 'agent', 'prompt_template': 'x',
+              'timeout_sec': '60'}], [])
+    d = defs.publish_definition(
+        f'gap-timeout-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[{'id': 's1', 'kind': 'agent', 'prompt_template': 'x',
+                'timeout_sec': 1}],
+        edges=[])
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    try:
+        # advance 会 launch step（创建子会话 pending）→ step running
+        eng2._advance_run(run['id'])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status, session_id FROM ai_orchestration_steps "
+                        "WHERE run_id=%s", (run['id'],))
+            status, sid = cur.fetchone()
+        assert status == 'running' and sid
+        # 模拟超时：把 started_at 拨到 1 小时前（远超 timeout_sec=1）
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_orchestration_steps SET "
+                        "started_at = NOW() - interval '1 hour' "
+                        "WHERE run_id=%s", (run['id'],))
+        db_conn.commit()
+        # 再 advance → 超时兜底标 failed
+        eng2._advance_run(run['id'])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status, error_message FROM ai_orchestration_steps "
+                        "WHERE run_id=%s", (run['id'],))
+            status, err = cur.fetchone()
+            assert status == 'failed'
+            assert 'step timeout' in (err or '')
+            cur.execute("SELECT count(*) FROM ai_batch_events "
+                        "WHERE batch_id=%s AND event_type='step.timeout'",
+                        (run['id'],))
+            assert cur.fetchone()[0] == 1          # 超时事件已写
+        assert eng2.get_run(run['id'])['status'] == 'failed'  # run 不再 running
+    finally:
+        # 子会话仍 pending——先收掉，避免共享库被并行 worker 认领
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions "
+                        "WHERE orchestration_run_id=%s", (run['id'],))
+        db_conn.commit()
+
+
+def test_join_any_success_policy(db_conn, user_id):
+    """P2-A6：join_policy='any_success'——菱形 DAG 一侧条件不命中被 skip
+    不阻塞 join：a succeeded 后 join 正常通过、run completed。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    d = defs.publish_definition(
+        f'gap-joinany-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[
+            {'id': 'split', 'kind': 'agent', 'prompt_template': '评估'},
+            {'id': 'a', 'kind': 'agent', 'prompt_template': 'A 路径'},
+            {'id': 'b', 'kind': 'agent', 'prompt_template': 'B 路径'},
+            {'id': 'merge', 'kind': 'join', 'join_policy': 'any_success'},
+        ],
+        edges=[
+            {'source': 'split', 'target': 'a', 'kind': 'advance',
+             'condition': {'field': 'size', 'op': '>', 'value': 100}},
+            {'source': 'split', 'target': 'b', 'kind': 'advance'},
+            {'source': 'a', 'target': 'merge', 'kind': 'join'},
+            {'source': 'b', 'target': 'merge', 'kind': 'join'},
+        ])
+    run = eng2.create_run(d['id'], user_id)
+    # 预置 split 成功且 size=200 → a 命中条件、b 不可达 → skipped
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_orchestration_steps SET status='succeeded', "
+            "output='{\"size\": 200, \"text\": \"ok\"}'::jsonb, finished_at=NOW() "
+            "WHERE run_id=%s AND node_id='split'", (run['id'],))
+    db_conn.commit()
+    eng2._advance_run(run['id'])
+    step_map = {s['node_id']: s for s in eng2.get_run(run['id'])['steps']}
+    assert step_map['b']['status'] == 'skipped'
+    assert step_map['a']['status'] == 'running'
+    # 修复前：b skipped 立即把 join 传播成 skipped（永久阻塞）；修复后等 a
+    assert step_map['merge']['status'] == 'blocked'
+    # a 完成 → join 在 any_success 下通过（不因 b skipped 阻塞）
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_orchestration_steps SET status='succeeded', "
+                    "output='{\"text\": \"a done\"}'::jsonb, finished_at=NOW() "
+                    "WHERE run_id=%s AND node_id='a'", (run['id'],))
+        # a 的子会话不再需要——终态化避免被共享库 worker 认领
+        cur.execute("UPDATE ai_chat_sessions SET status='cancelled' "
+                    "WHERE orchestration_run_id=%s", (run['id'],))
+    db_conn.commit()
+    eng2._advance_run(run['id'])
+    step_map = {s['node_id']: s for s in eng2.get_run(run['id'])['steps']}
+    assert step_map['merge']['status'] == 'succeeded'
+    assert eng2.get_run(run['id'])['status'] == 'completed'
+
+
+def test_join_default_policy_still_skips_on_dead_dep(db_conn, user_id):
+    """P2-A6 回归护栏：默认 all_success join 的失败/skip 传播语义不变——
+    依赖终态且无一成功 → join skipped（run 不卡死，H6 行为保留）。"""
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    d = defs.publish_definition(
+        f'gap-joinall-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[
+            {'id': 'split', 'kind': 'agent', 'prompt_template': '评估'},
+            {'id': 'a', 'kind': 'agent', 'prompt_template': 'A 路径'},
+            {'id': 'b', 'kind': 'agent', 'prompt_template': 'B 路径'},
+            {'id': 'merge', 'kind': 'join'},   # 未声明 join_policy → 默认
+        ],
+        edges=[
+            {'source': 'split', 'target': 'a', 'kind': 'advance',
+             'condition': {'field': 'size', 'op': '<', 'value': 1}},
+            {'source': 'split', 'target': 'b', 'kind': 'advance'},
+            {'source': 'a', 'target': 'merge', 'kind': 'join'},
+            {'source': 'b', 'target': 'merge', 'kind': 'join'},
+        ])
+    run = eng2.create_run(d['id'], user_id)
+    # split 成功但条件不命中 → a 不可达 → skipped，b 派发 running
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ai_orchestration_steps SET status='succeeded', "
+            "output='{\"size\": 200, \"text\": \"ok\"}'::jsonb, finished_at=NOW() "
+            "WHERE run_id=%s AND node_id='split'", (run['id'],))
+    db_conn.commit()
+    eng2._advance_run(run['id'])
+    # skip 传播按调度 tick 收敛（b 的派发在首轮 runnable pass）→ 再推一轮
+    eng2._advance_run(run['id'])
+    step_map = {s['node_id']: s for s in eng2.get_run(run['id'])['steps']}
+    assert step_map['a']['status'] == 'skipped'
+    assert step_map['merge']['status'] == 'skipped'   # skip 向下游传播（不变）
+
+
+def test_publish_version_increments(db_conn, user_id):
+    """P2-A3：同 id 重复发布递增 version，旧版本保留可取、缺省取最新；
+    未传 id 仍自动生成（既有调用不受影响）。"""
+    from utils import orchestration_defs as defs
+    did = f'gap-ver-{uuid.uuid4().hex[:8]}'
+    v1 = defs.publish_definition('gap-ver-def', description=None,
+                                 owner_user_id=user_id, def_id=did,
+                                 nodes=[{'id': 's', 'kind': 'agent',
+                                         'prompt_template': 'v1'}], edges=[])
+    assert v1 == {'id': did, 'version': 1}
+    v2 = defs.publish_definition('gap-ver-def', description=None,
+                                 owner_user_id=user_id, def_id=did,
+                                 nodes=[{'id': 's', 'kind': 'agent',
+                                         'prompt_template': 'v2'}], edges=[])
+    assert v2 == {'id': did, 'version': 2}
+    # 版本不可变：v1 仍取到旧内容；缺省取最新版本
+    assert defs.get_definition(did, version=1)['nodes'][0]['prompt_template'] == 'v1'
+    latest = defs.get_definition(did)
+    assert latest['version'] == 2
+    assert latest['nodes'][0]['prompt_template'] == 'v2'
+    # 不传 def_id：自动生成 id、从 version=1 起步
+    auto = defs.publish_definition(f'gap-ver-auto-{uuid.uuid4().hex[:6]}',
+                                   description=None, owner_user_id=user_id,
+                                   nodes=[{'id': 's', 'kind': 'agent',
+                                           'prompt_template': 'x'}], edges=[])
+    assert auto['version'] == 1 and auto['id'] != did
+
+
+def test_publish_preserves_all_fields(db_conn, user_id):
+    """P2-A3：skills/input_refs/runtime/budget/timeout_sec/join_policy
+    不再被归一化白名单丢弃（引擎从 step.node_def 读这些字段驱动
+    超时/join 语义）。join_policy 枚举校验同时把关。"""
+    from utils import orchestration_defs as defs
+    d = defs.publish_definition(
+        f'gap-fields-{uuid.uuid4().hex[:8]}', description=None,
+        owner_user_id=user_id,
+        nodes=[
+            {'id': 's', 'kind': 'agent', 'prompt_template': 'x',
+             'skills': ['sql'], 'input_refs': ['a.csv'],
+             'runtime': {'kind': 'opencode_local'},
+             'budget': {'max_cost': 1.5}, 'timeout_sec': 60},
+            {'id': 'j', 'kind': 'join', 'join_policy': 'any_success'},
+        ],
+        edges=[{'source': 's', 'target': 'j', 'kind': 'join'},
+               {'source': 's', 'target': 'j', 'kind': 'advance'}])
+    got = defs.get_definition(d['id'])
+    nodes = {n['id']: n for n in got['nodes']}
+    assert nodes['s']['skills'] == ['sql']
+    assert nodes['s']['input_refs'] == ['a.csv']
+    assert nodes['s']['runtime'] == {'kind': 'opencode_local'}
+    assert nodes['s']['budget'] == {'max_cost': 1.5}
+    assert nodes['s']['timeout_sec'] == 60
+    assert nodes['j']['join_policy'] == 'any_success'
+    # 枚举校验：非法 join_policy 拒绝发布
+    with pytest.raises(ValueError):
+        defs.validate_definition(
+            [{'id': 's', 'kind': 'agent', 'prompt_template': 'x'},
+             {'id': 'j', 'kind': 'join', 'join_policy': 'bogus'}],
+            [{'source': 's', 'target': 'j', 'kind': 'join'},
+             {'source': 's', 'target': 'j', 'kind': 'advance'}])
