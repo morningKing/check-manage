@@ -3,12 +3,15 @@
 见 utils/field_indexes.py（资格判定 + 与 page_configs.fields 的同步）。
 CONCURRENTLY 不能在事务块里跑，每次建/删都用独立的 autocommit 连接。
 """
+import logging
 import traceback
 import psycopg2
 from apscheduler.schedulers.background import BackgroundScheduler
 from config import DB_CONFIG
 from db import get_db
 from utils.field_indexes import sql_literal
+
+logger = logging.getLogger(__name__)
 
 _scheduler = None
 TICK_INTERVAL_SEC = 30
@@ -125,6 +128,16 @@ def _safe_tick():
 def start_field_index_scheduler(app):
     global _scheduler
     if _scheduler is not None:
+        return
+    # P2-B2：统一租约框架——抢不到 field_index scheduler 租约就不在本进程
+    # 启动（多实例部署只有一份在跑；本批不做后台重试，简单 return）。
+    # 放在 building→pending 复位之前：只有租约持有进程才做这次复位。
+    from utils import execution_lease
+    ok, _ = execution_lease.acquire('field_index', execution_lease.owner_id(),
+                                    lease_kind='scheduler')
+    if not ok:
+        logger.warning('field index scheduler lease NOT acquired; '
+                       'disabled in this process')
         return
     # 启动时把上次进程异常退出、卡在 building 状态的行退回 pending 重试
     # （不会重复建：CREATE INDEX CONCURRENTLY IF NOT EXISTS 本身幂等）。

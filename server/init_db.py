@@ -664,6 +664,20 @@ def init_db():
             conn.commit()
             print("Created ai_settings table.")
 
+        # Migration: ai_settings 批量并发与 provider 限流列（P2-B1，幂等）。
+        # batch_max_concurrent：批调度并发度（NULL=退回 env AI_BATCH_CONCURRENCY，
+        # 再退回 3）；provider_max_concurrent：按 provider 限流配置（本批只加列，
+        # 消费逻辑后续登记）。
+        cur.execute("""
+            ALTER TABLE ai_settings
+                ADD COLUMN IF NOT EXISTS batch_max_concurrent INT NULL;
+        """)
+        cur.execute("""
+            ALTER TABLE ai_settings
+                ADD COLUMN IF NOT EXISTS provider_max_concurrent JSONB NULL;
+        """)
+        conn.commit()
+
         # Migration: create system_config table if missing
         cur.execute("""
             SELECT table_name FROM information_schema.tables

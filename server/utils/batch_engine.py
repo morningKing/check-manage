@@ -917,6 +917,19 @@ class BatchWorker:
                 execution_lease.release(self._lease_key, self._lease_owner)
                 self._holds_lease = False
 
+    def _effective_concurrency(self) -> int:
+        """P2-B1：并发度优先级 ai_settings.batch_max_concurrent > env AI_BATCH_CONCURRENCY > 3。"""
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT batch_max_concurrent FROM ai_settings LIMIT 1")
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return max(1, int(row[0]))
+        except Exception:
+            pass
+        return max(1, int(os.getenv('AI_BATCH_CONCURRENCY', '3')))
+
     def _dispatch_tick(self) -> bool:
         """Run one claim+submit cycle. Returns True normally, False if an
         exception was caught.
@@ -928,7 +941,9 @@ class BatchWorker:
         try:
             self._cancel_pending_requests()
             with self._lock:
-                free = self.MAX_CONCURRENT - len(self._running_session_ids)
+                # P2-B1：并发度可配——ai_settings.batch_max_concurrent >
+                # env AI_BATCH_CONCURRENCY > 类属性默认 3。
+                free = self._effective_concurrency() - len(self._running_session_ids)
             if free <= 0:
                 return True
             pending = self._claim_pending_sessions(limit=free)

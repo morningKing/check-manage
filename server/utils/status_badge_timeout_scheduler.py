@@ -6,11 +6,14 @@
 经过 dynamic.py/open_api.py 的路由逻辑，因此不会触发 webhook（避免第三方系统
 收到自己造成的"超时"这个回环通知）。
 """
+import logging
 import traceback
 from datetime import datetime, timezone
 import psycopg2.extras
 from apscheduler.schedulers.background import BackgroundScheduler
 from db import get_db
+
+logger = logging.getLogger(__name__)
 
 _scheduler = None
 
@@ -73,6 +76,15 @@ def _safe_tick():
 def start_status_badge_timeout_scheduler(app):
     global _scheduler
     if _scheduler is not None:
+        return
+    # P2-B2：统一租约框架——抢不到 status_badge scheduler 租约就不在本进程
+    # 启动（多实例部署只有一份在跑；本批不做后台重试，简单 return）。
+    from utils import execution_lease
+    ok, _ = execution_lease.acquire('status_badge', execution_lease.owner_id(),
+                                    lease_kind='scheduler')
+    if not ok:
+        logger.warning('status badge timeout scheduler lease NOT acquired; '
+                       'disabled in this process')
         return
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(_safe_tick, 'interval', minutes=1, id='status_badge_timeout_tick',

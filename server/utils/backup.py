@@ -7,6 +7,7 @@
 - 后台线程轮询定时备份设置
 """
 
+import logging
 import os
 import json
 import uuid
@@ -17,6 +18,8 @@ import threading
 from datetime import datetime, timezone, timedelta
 from db import get_db
 import psycopg2.extras
+
+logger = logging.getLogger(__name__)
 
 # 备份文件存储目录
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backups')
@@ -1291,6 +1294,16 @@ def cleanup_old_backups(retention_count):
 
 def start_backup_scheduler(app):
     """启动备份调度器后台线程"""
+    # P2-B2：统一租约框架——抢不到 backup scheduler 租约就不在本进程启动
+    # （多实例部署只有一份定时备份在跑；本批不做后台重试，简单 return）。
+    from utils import execution_lease
+    ok, _ = execution_lease.acquire('backup', execution_lease.owner_id(),
+                                    lease_kind='scheduler')
+    if not ok:
+        logger.warning('backup scheduler lease NOT acquired; '
+                       'disabled in this process')
+        return
+
     def scheduler_loop():
         while True:
             time.sleep(60)  # 每分钟检查一次

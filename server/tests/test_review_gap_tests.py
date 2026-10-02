@@ -1560,3 +1560,55 @@ def test_publish_preserves_all_fields(db_conn, user_id):
              {'id': 'j', 'kind': 'join', 'join_policy': 'bogus'}],
             [{'source': 's', 'target': 'j', 'kind': 'join'},
              {'source': 's', 'target': 'j', 'kind': 'advance'}])
+
+
+# ---------------------------------------------------------------------------
+# P2-B1：批调度并发度可配（ai_settings.batch_max_concurrent）
+# ---------------------------------------------------------------------------
+
+def test_max_concurrent_from_settings(db_conn):
+    """P2-B1：并发度从 ai_settings 动态读取。"""
+    from utils.batch_engine import BatchWorker
+    w = BatchWorker()
+    # 列可能尚未随 init_db 落库（幂等补齐，保证用例自洽）
+    with db_conn.cursor() as cur:
+        cur.execute("ALTER TABLE ai_settings ADD COLUMN IF NOT EXISTS "
+                    "batch_max_concurrent INT NULL")
+        cur.execute("UPDATE ai_settings SET batch_max_concurrent = NULL")
+    db_conn.commit()
+    # 不设 DB → env 默认 3
+    assert w._effective_concurrency() == 3
+    # 设 DB → 读 DB 值
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_settings SET batch_max_concurrent = 1")
+    db_conn.commit()
+    assert w._effective_concurrency() == 1
+    # 清理
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_settings SET batch_max_concurrent = NULL")
+    db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# P2-B2：统一租约框架——后台调度器 start 入口含 execution_lease 保护
+# ---------------------------------------------------------------------------
+
+def test_all_schedulers_use_lease():
+    """P2-B2：所有后台调度器 start 入口含 execution_lease 保护。"""
+    import pathlib
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    schedulers = [
+        'server/utils/ai_scan_scheduler.py',
+        'server/utils/backup.py',
+        'server/utils/status_badge_timeout_scheduler.py',
+        'server/utils/field_index_scheduler.py',
+        'server/utils/etl_scheduler.py',
+    ]
+    for p in schedulers:
+        src = (repo_root / p).read_text(encoding='utf-8', errors='replace')
+        assert 'execution_lease' in src, f'{p} 缺少租约保护'
+    # audit retention 在 app.py 而非 skillopt.py：检查它被租约保护
+    app_src = (repo_root / 'server' / 'app.py').read_text(
+        encoding='utf-8', errors='replace')
+    assert 'audit_retention' in app_src and 'execution_lease' in app_src, \
+        'app.py 的 audit retention 调度器缺少租约保护'

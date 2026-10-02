@@ -278,8 +278,19 @@ try:
         _sched.add_job(_workspace_and_events_retention_daily, 'cron',
                        hour=3, minute=41,
                        id='workspace-events-retention', replace_existing=True)
-        _sched.start()
-        logging.info('SkillOpt retention scheduler started (03:17 daily)')
+        # P2-B2：统一租约框架——audit retention（03:17 每日作业，含 SkillOpt
+        # retention + 运营日志 retention）抢 audit_retention scheduler 租约，
+        # 抢不到不在本进程启动（多实例部署只跑一份；本批不做后台重试）。
+        from utils import execution_lease
+        _ar_ok, _ = execution_lease.acquire(
+            'audit_retention', execution_lease.owner_id(),
+            lease_kind='scheduler')
+        if not _ar_ok:
+            logging.warning('audit retention scheduler lease NOT acquired; '
+                            'disabled in this process')
+        else:
+            _sched.start()
+            logging.info('SkillOpt retention scheduler started (03:17 daily)')
     except Exception as e2:
         logging.warning('SkillOpt retention scheduler failed: %s', e2)
 except Exception as _e:

@@ -11,6 +11,7 @@
 轮到下一个 tick，天然实现"单线程串行执行多个 ETL 运行请求"，不需要自己管理
 线程池/唤醒事件。
 """
+import logging
 import traceback
 from datetime import datetime, timezone
 
@@ -18,6 +19,8 @@ import psycopg2.extras
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from db import get_db
+
+logger = logging.getLogger(__name__)
 
 _scheduler = None
 TICK_INTERVAL_SEC = 2
@@ -200,6 +203,16 @@ def _restart_audit():
 def start_etl_scheduler(app):
     global _scheduler
     if _scheduler is not None:
+        return
+    # P2-B2：统一租约框架——抢不到 etl scheduler 租约就不在本进程启动
+    # （多实例部署只有一份在跑；本批不做后台重试，简单 return）。
+    # 放在 _restart_audit 之前：只有租约持有进程才做 running→error 复位。
+    from utils import execution_lease
+    ok, _ = execution_lease.acquire('etl', execution_lease.owner_id(),
+                                    lease_kind='scheduler')
+    if not ok:
+        logger.warning('etl scheduler lease NOT acquired; '
+                       'disabled in this process')
         return
     try:
         _restart_audit()
