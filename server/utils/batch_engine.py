@@ -2447,7 +2447,7 @@ class BatchWorker:
                 if (self.TOOL_STALL_TIMEOUT_SEC > 0
                         and tool_stall_start is not None
                         and now - tool_stall_start > self.TOOL_STALL_TIMEOUT_SEC):
-                    if session_id in self._gate_checking:
+                    if sid in self._gate_checking:   # _gate_checking 存的是内部 sid
                         tool_stall_start = now   # 委派级判官核对中：豁免
                     elif self._subagent_progressing(msgs, baseline_ids, directory,
                                                   child_sigs):
