@@ -26,6 +26,7 @@ import os
 import re
 import time
 
+import psycopg2
 import psycopg2.extras
 
 from db import get_db as _default_get_db
@@ -275,14 +276,17 @@ def _validate_effect_spec(check_type, spec, idx):
 
 def validate_pg_regex(pattern: str) -> None:
     """以 PG `~` 口径校验正则（12 号 §7-5：核对执行与 dry-run 与登记三处
-    同一口径）。非法抛 ValueError——调用方据此返回 400。"""
-    try:
-        from db import get_db as _gdb
-        with _gdb() as _conn:
-            with _conn.cursor() as _cur:
+    同一口径）。非法抛 ValueError——调用方据此返回 400。
+    只把正则本身的问题（sqlstate 2201B）转 ValueError；其余 psycopg2.Error
+    （连接失败、DB 不可用等）原样抛出，让调用方感知基础设施故障而非误报
+    400。"""
+    from db import get_db as _gdb
+    with _gdb() as _conn:
+        with _conn.cursor() as _cur:
+            try:
                 _cur.execute("SELECT '' ~ %s", (pattern,))
-    except Exception as e:
-        raise ValueError(f'不是合法的 PostgreSQL 正则: {e}')
+            except psycopg2.errors.InvalidRegularExpression as e:
+                raise ValueError(f'不是合法的 PostgreSQL 正则: {e}') from e
 
 
 def validate_checks(checks) -> list:

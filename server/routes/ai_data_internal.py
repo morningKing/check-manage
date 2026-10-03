@@ -118,7 +118,8 @@ def internal_execute():
             ok2 = resp.status_code < 400
             settle_effect_by_key('mcp_write', effect_key,
                                  'committed' if ok2 else 'failed',
-                                 external_ref=f'{method} {path}')
+                                 external_ref=f'{method} {path}',
+                                 session_id=session_id)
         except Exception:
             pass
     return jsonify({'status': resp.status_code,

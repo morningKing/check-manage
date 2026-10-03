@@ -116,17 +116,24 @@ def settle_effect(effect_id: str, status: str, *,
 
 
 def settle_effect_by_key(effect_type: str, idempotency_key: str, status: str, *,
-                         external_ref: str | None = None) -> bool:
+                         external_ref: str | None = None,
+                         session_id: str | None = None) -> bool:
     """按 (effect_type, idempotency_key) 定位并 settle（H7：投递器无 effect id
-    场景）。找不到行（effect 未登记，如旧数据）返回 False。"""
+    场景）。`session_id` 传入时定位同时限定会话——effect 幂等键本身是
+    (session_id, effect_type, idempotency_key)，不带 session 的查找在跨会话
+    key 碰撞时会 settle 到别的会话的行。找不到行（effect 未登记，如旧数据、
+    session 不匹配）返回 False。投递器无 session 上下文，保持 None。"""
     try:
         from db import get_db
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id FROM ai_execution_effects "
-                    "WHERE effect_type = %s AND idempotency_key = %s",
-                    (effect_type, idempotency_key[:200]),
+                    "WHERE effect_type = %s AND idempotency_key = %s"
+                    + (" AND session_id = %s" if session_id else ""),
+                    (effect_type, idempotency_key[:200], session_id)
+                    if session_id
+                    else (effect_type, idempotency_key[:200]),
                 )
                 row = cur.fetchone()
         if not row:
