@@ -1231,6 +1231,82 @@ def compact_subtask(sid, subtask_id):
     return jsonify({'ok': True, 'message': '已开始压缩子代理上下文'})
 
 
+@ai_chat_bp.route('/sessions/<sid>/subtasks', methods=['GET'])
+@login_required
+def list_subtasks(sid):
+    """P3-B5：列出会话的全部子代理（含状态）——运行中的子代理可见，
+    用户据此决定是否单独取消某个子代理。归属校验与 compact 同一模式：
+    根会话必须属于当前用户（_load_session_for_user 已按 user_id 过滤），
+    子任务按 root_session_id 挂在 URL 中的会话上，不枚举他人数据。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, agent, status, description, created_at, completed_at, "
+            "       error_message "
+            "FROM ai_chat_subtasks WHERE root_session_id = %s "
+            "ORDER BY created_at", (sid,))
+        rows = cur.fetchall()
+    return jsonify([
+        {'id': r[0], 'agent': r[1], 'status': r[2], 'description': r[3],
+         'created_at': r[4].isoformat() if r[4] else None,
+         'completed_at': r[5].isoformat() if r[5] else None,
+         'error_message': r[6]}
+        for r in rows
+    ])
+
+
+@ai_chat_bp.route('/sessions/<sid>/subtasks/<subtask_id>/abort', methods=['POST'])
+@login_required
+def abort_subtask(sid, subtask_id):
+    """P3-B5：取消指定的运行中子代理——用户对失控子代理的干预（与主会话
+    abort 同一生命线语义），**刻意不加** _execution_controlled 门禁：父会话
+    正被批任务/编排 worker 驱动时，用户仍必须能单独叫停其中一个子代理。
+
+    best-effort abort：OpenCode 不可达/子会话已自行结束都不 500——DB 终态
+    照常落（残余回合的 idle 事件由监听器忽略或对账收敛），取消结果以
+    subtask.status='failed' 为准。"""
+    user = flask_g.current_user
+    sess = _load_session_for_user(sid, user['userId'])
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # 归属校验（同 compact_subtask）：子任务必须真属于 URL 中的父会话，
+    # 不能仅凭 owner 枚举同 owner 其他会话的子任务
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT status FROM ai_chat_subtasks "
+            "WHERE id = %s AND root_session_id = %s", (subtask_id, sid))
+        row = cur.fetchone()
+    if row is None:
+        return jsonify({'error': 'subtask not found', 'code': 'SUBTASK_NOT_FOUND'}), 404
+    if row[0] != 'running':
+        return jsonify({'error': {
+            'code': 'SUBTASK_NOT_RUNNING',
+            'message': '子代理已结束，无需取消',
+            'retryable': False,
+            'operation': 'abort_subtask',
+        }}), 409
+    # 父会话的 workspace_path 作为 directory；NULL 时传空串（与上游 abort 一致，
+    # abort_session 只在非空时带 directory 参数）
+    try:
+        OpenCodeClient(OPENCODE_BASE_URL).abort_session(
+            subtask_id, directory=(sess[4] or ''))
+    except Exception as e:
+        logger.warning('abort_subtask no-op session=%s subtask=%s: %s',
+                       sid, subtask_id, e)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE ai_chat_subtasks SET status = 'failed', "
+            "error_message = '已被用户手动取消', completed_at = NOW() "
+            "WHERE id = %s AND status = 'running'", (subtask_id,))
+    return jsonify({'aborted': True, 'subtaskId': subtask_id})
+
+
 def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 

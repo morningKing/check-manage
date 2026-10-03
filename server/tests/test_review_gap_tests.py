@@ -2247,3 +2247,125 @@ def test_m3_gates_on_mutation_endpoints(db_conn, gap_internal_client):
             cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
             cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
         db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# P3-B5：子代理独立查看与取消（列表 + abort 端点）
+# ---------------------------------------------------------------------------
+
+def test_list_subtasks(db_conn, gap_internal_client):
+    """P3-B5：列出子代理——按 created_at 顺序返回全部字段；父会话不存在
+    （不属于当前用户）→ 404，不能凭空枚举。"""
+    uid = 'user-admin'
+    sid = str(uuid.uuid4())
+    st1 = 'ses_gap_' + uuid.uuid4().hex[:8]
+    st2 = 'ses_gap_' + uuid.uuid4().hex[:8]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, workspace_path) "
+            "VALUES (%s, %s, 'completed', '/ws/gap-list')", (sid, uid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status, "
+            "  description, created_at, completed_at) "
+            "VALUES (%s, %s, 'build', 'completed', '构建完成', "
+            "  NOW() - interval '5 minutes', NOW() - interval '1 minute')",
+            (st1, sid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status, "
+            "  description) VALUES (%s, %s, 'scan', 'running', '扫描中')",
+            (st2, sid))
+    db_conn.commit()
+    client, hdrs = gap_internal_client
+    try:
+        r = client.get(f'/ai/chat/sessions/{sid}/subtasks', headers=hdrs)
+        assert r.status_code == 200
+        items = r.get_json()
+        assert [i['id'] for i in items] == [st1, st2]    # created_at 升序
+        by_id = {i['id']: i for i in items}
+        assert by_id[st1]['status'] == 'completed'
+        assert by_id[st1]['agent'] == 'build'
+        assert by_id[st1]['description'] == '构建完成'
+        assert by_id[st1]['completed_at'] is not None
+        assert by_id[st2]['status'] == 'running'
+        assert by_id[st2]['error_message'] is None
+        # 归属：会话不存在/不属于当前用户 → 404
+        r2 = client.get(f'/ai/chat/sessions/{uuid.uuid4()}/subtasks', headers=hdrs)
+        assert r2.status_code == 404
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+        db_conn.commit()
+
+
+def test_abort_subtask(db_conn, gap_internal_client, monkeypatch):
+    """P3-B5：abort 运行中的子代理——best-effort 调 OpenCode（带父会话
+    workspace_path 作 directory）、DB 落 failed/'已被用户手动取消'；
+    OpenCode 不可达同样 200（幂等 no-op）；非 running → 409，不存在的
+    子任务 → 404。"""
+    from unittest.mock import MagicMock
+    uid = 'user-admin'
+    sid = str(uuid.uuid4())
+    stid = 'ses_gap_' + uuid.uuid4().hex[:8]
+    stid2 = 'ses_gap_' + uuid.uuid4().hex[:8]
+    stid3 = 'ses_gap_' + uuid.uuid4().hex[:8]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id, user_id, status, workspace_path) "
+            "VALUES (%s, %s, 'running', '/ws/gap-abort')", (sid, uid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status) "
+            "VALUES (%s, %s, 'build', 'running')", (stid, sid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status) "
+            "VALUES (%s, %s, 'scan', 'running')", (stid2, sid))
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, status) "
+            "VALUES (%s, %s, 'plan', 'completed')", (stid3, sid))
+    db_conn.commit()
+    aborted = []
+    fake_oc = MagicMock()
+    fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append((oc, k))
+    import routes.ai_chat as _chatmod
+    monkeypatch.setattr(_chatmod, 'OpenCodeClient', lambda base_url: fake_oc)
+    client, hdrs = gap_internal_client
+    try:
+        # 运行中：正常取消
+        r = client.post(f'/ai/chat/sessions/{sid}/subtasks/{stid}/abort',
+                        headers=hdrs)
+        assert r.status_code == 200
+        assert r.get_json() == {'aborted': True, 'subtaskId': stid}
+        assert aborted == [(stid, {'directory': '/ws/gap-abort'})]
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status, error_message, completed_at "
+                        "FROM ai_chat_subtasks WHERE id=%s", (stid,))
+            status, err, completed = cur.fetchone()
+        assert status == 'failed'
+        assert '手动取消' in (err or '')
+        assert completed is not None
+        # best-effort：OpenCode 不可达 → 仍 200，DB 照常落终态
+        import requests as _rq
+        fake_oc.abort_session.side_effect = _rq.ConnectionError('boom')
+        r2 = client.post(f'/ai/chat/sessions/{sid}/subtasks/{stid2}/abort',
+                         headers=hdrs)
+        assert r2.status_code == 200
+        assert r2.get_json() == {'aborted': True, 'subtaskId': stid2}
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status, error_message FROM ai_chat_subtasks "
+                        "WHERE id=%s", (stid2,))
+            status2, err2 = cur.fetchone()
+        assert status2 == 'failed'
+        assert '手动取消' in (err2 or '')
+        # 已终态：409 SUBTASK_NOT_RUNNING
+        r3 = client.post(f'/ai/chat/sessions/{sid}/subtasks/{stid3}/abort',
+                         headers=hdrs)
+        assert r3.status_code == 409
+        assert r3.get_json()['error']['code'] == 'SUBTASK_NOT_RUNNING'
+        # 子任务不存在（或不属于该会话）→ 404
+        r4 = client.post(f'/ai/chat/sessions/{sid}/subtasks/ses_gap_nope/abort',
+                         headers=hdrs)
+        assert r4.status_code == 404
+        assert r4.get_json()['code'] == 'SUBTASK_NOT_FOUND'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+        db_conn.commit()
