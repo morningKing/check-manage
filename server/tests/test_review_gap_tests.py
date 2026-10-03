@@ -839,6 +839,49 @@ def test_settle_skips_event_for_deleted_batch(db_conn, user_id, monkeypatch):
         db_conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# P3 单步调试
+# ---------------------------------------------------------------------------
+
+def test_single_step_mode_limits_launch(db_conn, user_id):
+    """P3 单步调试：single_step 模式下 _advance_run 只派发 1 个 agent step。"""
+    from utils.orchestration_defs import publish_definition
+    from utils import orchestration_engine as oe
+    d = publish_definition('sst-linear', description=None,
+        nodes=[
+            {'id': 's1', 'kind': 'agent', 'name': 'step-1', 'prompt_template': 'p1'},
+            {'id': 's2', 'kind': 'agent', 'name': 'step-2', 'prompt_template': 'p2'},
+        ], edges=[{'source': 's1', 'target': 's2', 'kind': 'advance'}],
+        owner_user_id=user_id)
+    run = oe.create_run(d['id'], user_id, run_input={})
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_orchestration_runs SET execution_mode = 'single_step' WHERE id = %s", (run['id'],))
+    db_conn.commit()
+    oe._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE orchestration_run_id = %s", (run['id'],))
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT execution_mode FROM ai_orchestration_runs WHERE id = %s", (run['id'],))
+        assert cur.fetchone()[0] == 'single_step'
+
+
+def test_auto_mode_launches_all(db_conn, user_id):
+    """P3 对照：auto 模式下派发全部 runnable step。"""
+    from utils.orchestration_defs import publish_definition
+    from utils import orchestration_engine as oe
+    d = publish_definition('auto-linear', description=None,
+        nodes=[
+            {'id': 'a1', 'kind': 'agent', 'name': 'step-1', 'prompt_template': 'p1'},
+            {'id': 'a2', 'kind': 'agent', 'name': 'step-2', 'prompt_template': 'p2'},
+        ], edges=[],
+        owner_user_id=user_id)
+    run = oe.create_run(d['id'], user_id, run_input={})
+    oe._advance_run(run['id'])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE orchestration_run_id = %s", (run['id'],))
+        assert cur.fetchone()[0] == 2
+
+
 def test_m14_outbox_enqueue_failure_does_not_poison_txn(db_conn, user_id,
                                                         monkeypatch):
     """M14 outbox 侧（12 号 §2.2-8：代码对齐但零测试）：入队失败只回滚

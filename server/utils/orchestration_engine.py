@@ -224,6 +224,9 @@ def _advance_run_locked(run_id: str) -> None:
     by_node = {s['node_id']: s for s in steps}
     edges = _run_edges(run)
     nodes_def = {s['node_id']: s for s in steps}
+    # P3 单步调试：single_step 模式下每次 _advance_run 只派发 1 个 agent step
+    execution_mode = run.get('execution_mode') or 'auto'
+    single_step_launched = False
 
     # 1) 可达性：从无入边的根出发，沿"生效边"走；不可达 step → skipped。
     # 生效边语义（借鉴 workflow_engine._advance_targets）：某节点的出边里
@@ -399,6 +402,12 @@ def _advance_run_locked(run_id: str) -> None:
             # 背压（P2 §10）：每轮 _advance_run 的 agent 派发数有上限
             if launch_budget <= 0:
                 continue
+            # P3 单步调试：single_step 模式只允许派发 1 个 agent step/轮，
+            # 后续步骤等用户显式 advance
+            if execution_mode == 'single_step':
+                if single_step_launched:
+                    continue
+                single_step_launched = True
             _launch_agent_step(run, s, by_node)
             launch_budget -= 1
             changed = True

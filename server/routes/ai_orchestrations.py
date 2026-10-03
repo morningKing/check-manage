@@ -142,3 +142,52 @@ def suspend_step(run_id):
         run_id=run_id, step_id=step_id, risk_level='high',
         effect_summary=f'人工挂起: {step.get("name") or step["node_id"]}')
     return jsonify({'approvalId': aid}), 201
+
+
+@ai_orchestrations_bp.post('/runs/<run_id>/mode')
+@login_required
+def set_execution_mode(run_id):
+    """P3 单步调试：切换 run 执行模式（auto=自动推进 / single_step=单步）。"""
+    run = orchestration_engine.get_run(run_id)
+    if not run or run['status'] not in ('running', 'waiting_approval', 'pending'):
+        return jsonify({'error': 'run not active'}), 409
+    body = request.get_json(silent=True) or {}
+    mode = body.get('mode')
+    if mode not in ('auto', 'single_step'):
+        return jsonify({'error': "mode must be 'auto' or 'single_step'"}), 400
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_orchestration_runs SET execution_mode = %s "
+                "WHERE id = %s", (mode, run_id))
+        conn.commit()
+    return jsonify({'runId': run_id, 'executionMode': mode})
+
+
+@ai_orchestrations_bp.post('/runs/<run_id>/advance')
+@login_required
+def advance_step(run_id):
+    """P3 单步调试：手动推进一个 runnable step（仅 single_step 模式有意义）。"""
+    run = orchestration_engine.get_run(run_id)
+    if not run or run['status'] not in ('running', 'waiting_approval', 'pending'):
+        return jsonify({'error': 'run not active'}), 409
+    # 临时切 auto → _advance_run 派发 1 个 step → 切回 single_step
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ai_orchestration_runs SET execution_mode = 'auto' WHERE id = %s",
+                (run_id,))
+        conn.commit()
+    try:
+        orchestration_engine._advance_run(run_id)
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_orchestration_runs SET execution_mode = 'single_step' "
+                    "WHERE id = %s AND execution_mode = 'auto'", (run_id,))
+            conn.commit()
+    fresh = orchestration_engine.get_run(run_id)
+    return jsonify(fresh)

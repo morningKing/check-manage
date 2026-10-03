@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS ai_orchestration_runs (
   status        VARCHAR(30) NOT NULL DEFAULT 'pending',
   -- pending | running | waiting_approval | paused | recovering
   -- | partial | completed | failed | cancelled | needs_review
+  execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto',
+  -- auto = 自动推进 | single_step = 单步调试（每次只派发 1 个 agent step）
   current_nodes JSONB NOT NULL DEFAULT '[]'::jsonb,
   run_input_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   runtime_manifest_id VARCHAR(100),
@@ -123,6 +125,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
   expires_at  TIMESTAMPTZ
 );
 -- 唯一索引由 2026_09_25_artifact_owner_scope.py 统一创建（owner 隔离口径）。
+
+-- P3 单步调试：execution_mode 列（幂等追加）
+ALTER TABLE ai_orchestration_runs
+    ADD COLUMN IF NOT EXISTS execution_mode VARCHAR(20) NOT NULL DEFAULT 'auto';
 -- 此处不得再建全局 uniq_artifact_sha：boot 重放会在 M9 DROP 之后复活全局
 -- 去重索引，与 owner 隔离冲突（12 号 §4.3）。
 
