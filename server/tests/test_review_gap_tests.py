@@ -2369,3 +2369,136 @@ def test_abort_subtask(db_conn, gap_internal_client, monkeypatch):
         with db_conn.cursor() as cur:
             cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
         db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# C4：effect 自动补偿——mcp_write POST 创建的记录可回退
+# ---------------------------------------------------------------------------
+
+def _seed_comp_record(db_conn, coll, rid):
+    """补偿用例共用：dynamic_data 里一条待回退记录。"""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO dynamic_data (id, collection, data) "
+            "VALUES (%s, %s, %s::jsonb)", (rid, coll, json.dumps({'name': 'x'})))
+    db_conn.commit()
+
+
+def _force_effect_status(db_conn, eid, status):
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE ai_execution_effects SET status=%s WHERE id=%s",
+                    (status, eid))
+    db_conn.commit()
+
+
+def _cleanup_comp(db_conn, sid, coll, rid):
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_execution_effects WHERE session_id=%s", (sid,))
+        cur.execute("DELETE FROM dynamic_data WHERE id=%s AND collection=%s",
+                    (rid, coll))
+    db_conn.commit()
+
+
+def test_compensate_effect_deletes_record(db_conn, user_id):
+    """C4：补偿 mcp_write POST 创建的记录 → dynamic_data 行被删除、
+    effect 落 compensated（生产代码首个 compensated 写入点）。"""
+    from utils.execution_effect import record_effect, compensate_effect
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    coll = f'gap_comp_{uuid.uuid4().hex[:8]}'
+    rid = f'rec-{uuid.uuid4().hex[:8]}'
+    try:
+        _seed_comp_record(db_conn, coll, rid)
+        key = f'eff-comp-{uuid.uuid4().hex[:8]}'
+        eff = record_effect(sid, 'mcp_write', key, batch_id=bid,
+                            external_ref=json.dumps(
+                                {'method': 'POST', 'path': f'/{coll}',
+                                 'body': {'id': rid, 'name': 'x'}}))
+        assert eff and eff['status'] == 'planned'
+        # 登记时即写入补偿依据（此前 external_ref 只在 settle 时 COALESCE）
+        assert eff['external_ref'] == json.dumps(
+            {'method': 'POST', 'path': f'/{coll}', 'body': {'id': rid, 'name': 'x'}})
+        _force_effect_status(db_conn, eff['id'], 'committed')
+        out = compensate_effect(eff['id'])
+        assert out and out['compensated'] is True
+        assert out['collection'] == coll and out['record_id'] == rid
+        assert out['deleted'] is True
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM dynamic_data "
+                "WHERE id=%s AND collection=%s", (rid, coll))
+            assert cur.fetchone()[0] == 0           # 记录已回退
+            cur.execute("SELECT status FROM ai_execution_effects WHERE id=%s",
+                        (eff['id'],))
+            assert cur.fetchone()[0] == 'compensated'
+        # 幂等：已 compensated 的 effect 不可再补偿
+        assert compensate_effect(eff['id']) is None
+    finally:
+        _cleanup_comp(db_conn, sid, coll, rid)
+
+
+def test_compensate_effect_skips_non_post(db_conn, user_id):
+    """C4：非 POST 的 effect 不被补偿——PUT 旧值未知、DELETE 无逆操作，
+    记录保留、status 保持 committed。"""
+    from utils.execution_effect import record_effect, compensate_effect
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    coll = f'gap_comp_{uuid.uuid4().hex[:8]}'
+    rid = f'rec-{uuid.uuid4().hex[:8]}'
+    try:
+        _seed_comp_record(db_conn, coll, rid)
+        for method, path in (('PUT', f'/{coll}/{rid}'),
+                             ('DELETE', f'/{coll}/{rid}')):
+            key = f'eff-skip-{method}-{uuid.uuid4().hex[:8]}'
+            eff = record_effect(sid, 'mcp_write', key,
+                                external_ref=json.dumps(
+                                    {'method': method, 'path': path,
+                                     'body': {'id': rid}}))
+            _force_effect_status(db_conn, eff['id'], 'committed')
+            assert compensate_effect(eff['id']) is None
+            with db_conn.cursor() as cur:
+                cur.execute("SELECT status FROM ai_execution_effects "
+                            "WHERE id=%s", (eff['id'],))
+                assert cur.fetchone()[0] == 'committed'
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM dynamic_data "
+                        "WHERE id=%s AND collection=%s", (rid, coll))
+            assert cur.fetchone()[0] == 1           # 记录未被误删
+    finally:
+        _cleanup_comp(db_conn, sid, coll, rid)
+
+
+def test_compensate_effect_skips_unknown_and_bad_ref(db_conn, user_id):
+    """C4：unknown 禁自动补偿（对齐"禁自动重放"语义）；external_ref 非
+    补偿 JSON（旧数据 / 'POST /menus' 旧格式）一律跳过。"""
+    from utils.execution_effect import record_effect, compensate_effect
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    coll = f'gap_comp_{uuid.uuid4().hex[:8]}'
+    rid = f'rec-{uuid.uuid4().hex[:8]}'
+    try:
+        _seed_comp_record(db_conn, coll, rid)
+        # unknown + 完全可补偿的 POST ref → 仍拒绝
+        key = f'eff-unk-{uuid.uuid4().hex[:8]}'
+        eff = record_effect(sid, 'mcp_write', key,
+                            external_ref=json.dumps(
+                                {'method': 'POST', 'path': f'/{coll}',
+                                 'body': {'id': rid}}))
+        _force_effect_status(db_conn, eff['id'], 'unknown')
+        assert compensate_effect(eff['id']) is None
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_execution_effects WHERE id=%s",
+                        (eff['id'],))
+            assert cur.fetchone()[0] == 'unknown'
+        # external_ref 是旧格式（非补偿 JSON dict）→ 跳过
+        key2 = f'eff-old-{uuid.uuid4().hex[:8]}'
+        eff2 = record_effect(sid, 'mcp_write', key2,
+                             external_ref='POST /menus')
+        _force_effect_status(db_conn, eff2['id'], 'committed')
+        assert compensate_effect(eff2['id']) is None
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM dynamic_data WHERE id=%s", (rid,))
+            assert cur.fetchone()[0] == 1           # 全程未被误删
+    finally:
+        _cleanup_comp(db_conn, sid, coll, rid)
+

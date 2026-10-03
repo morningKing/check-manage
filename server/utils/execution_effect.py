@@ -11,6 +11,9 @@
     if eff and eff['status'] == 'committed': 复用既有结果，不重做
     ... 执行副作用 ...
     settle_effect(eff['id'], 'committed', external_ref=...)
+
+补偿（C4）：
+    compensate_effect(eff_id)  # mcp_write POST 创建的记录 → 删除，effect → compensated
 """
 import hashlib
 import logging
@@ -24,9 +27,13 @@ def record_effect(session_id: str, effect_type: str, idempotency_key: str, *,
                   attempt_id: str | None = None,
                   step_key: str | None = None,
                   request: str | None = None,
+                  external_ref: str | None = None,
                   conn=None) -> dict | None:
     """登记（或复用）一个 effect。返回行 dict（含当前 status）或 None（失败）。
 
+    `external_ref` 在登记时即写入（C4 补偿依据：存储回退所需的外部请求
+    信息，如 mcp_write 的 method/path/body）；settle 时的 COALESCE 只在其
+    为 NULL 的旧行上补写，不会覆盖登记值。
     `conn` 传入时在调用方事务内登记（SAVEPOINT 隔离，失败只回滚 effect
     本身）——effect 与 outbox 入队同生共死，不留孤儿 planned（10 号 §3.2）；
     不传时自开短事务（兼容旧调用方）。"""
@@ -39,14 +46,15 @@ def record_effect(session_id: str, effect_type: str, idempotency_key: str, *,
             """
             INSERT INTO ai_execution_effects
                 (id, session_id, attempt_id, batch_id, step_key,
-                 effect_type, idempotency_key, request_hash, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'planned')
+                 effect_type, idempotency_key, request_hash, external_ref,
+                 status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'planned')
             ON CONFLICT (session_id, effect_type, idempotency_key)
             DO UPDATE SET id = ai_execution_effects.id
             RETURNING id, status, external_ref, result_hash
             """,
             (eid, session_id, attempt_id, batch_id, step_key,
-             effect_type, idempotency_key[:200], request_hash),
+             effect_type, idempotency_key[:200], request_hash, external_ref),
         )
         row = cur.fetchone()
         return {'id': row[0], 'status': row[1], 'external_ref': row[2],
@@ -142,6 +150,107 @@ def settle_effect_by_key(effect_type: str, idempotency_key: str, status: str, *,
     except Exception as e:  # noqa: BLE001
         logger.warning('effect settle_by_key failed key=%s: %s', idempotency_key, e)
         return False
+
+
+def compensate_effect(effect_id: str, conn=None) -> dict | None:
+    """C4：补偿一个 effect（仅支持 mcp_write POST 创建的记录 → 删除）。
+
+    流程：
+      1. 读取 effect 行（status 必须 committed，external_ref 含 method/path/body）
+      2. 解析 external_ref JSON → 取 method/path/body
+      3. 仅 method=POST 且 path 匹配 /{collection} 格式时补偿
+         （PUT 旧值未知无法回滚、DELETE 无逆操作、/menus 等非 dynamic_data
+         集合不可删）——其余一律跳过返回 None
+      4. 从 body 中取记录 id（body['id']，POST 创建时由调用方提供）
+      5. 数据库层直接 DELETE dynamic_data 行（effect 只关心"这条记录不再
+         存在"，无需走 Flask test client 的完整转发链）
+      6. settle 原 effect 为 compensated（独立收口路径：committed 粘性不让
+         settle_effect 改终态，补偿在此单独开洞且仅 committed → compensated）
+      7. 返回补偿结果 dict；不满足条件/失败返回 None
+
+    `unknown` 状态禁止自动补偿（对齐"禁自动重放"语义）。
+    `conn` 传入时在调用方事务内执行（SAVEPOINT 隔离）；不传时自开短事务。
+    """
+    import json as _json
+    import re as _re
+
+    def _run(cur):
+        cur.execute(
+            "SELECT status, effect_type, external_ref "
+            "FROM ai_execution_effects WHERE id = %s", (effect_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        status, effect_type, external_ref = row
+        # 仅 committed 可补偿；unknown/planned/failed 一律不动
+        if status != 'committed' or effect_type != 'mcp_write':
+            return None
+        try:
+            ref = _json.loads(external_ref) \
+                if isinstance(external_ref, str) else None
+        except Exception:
+            ref = None
+        if not isinstance(ref, dict):
+            return None
+        method = (ref.get('method') or '').upper().strip()
+        path = (ref.get('path') or '').strip()
+        body = ref.get('body')
+        if method != 'POST':
+            return None
+        m = _re.match(r'^/([A-Za-z0-9][A-Za-z0-9_-]*)$', path)
+        if not m:
+            return None
+        collection = m.group(1)
+        if collection == 'menus':
+            return None  # 数据菜单不走 dynamic_data，无行可删
+        try:
+            from routes.dynamic import RESERVED
+            if collection in RESERVED:
+                return None
+        except Exception:
+            pass  # 路由不可导入时放行——转发白名单已在写入侧挡过保留集合
+        if not isinstance(body, dict) or not body.get('id'):
+            return None  # 无 id 无法定位，跳过（autoSequence 类创建不自动补偿）
+        record_id = str(body['id'])
+        cur.execute(
+            "DELETE FROM dynamic_data WHERE id = %s AND collection = %s",
+            (record_id, collection))
+        deleted = cur.rowcount > 0
+        # 独立收口：不走 settle_effect 状态机（committed 终态粘性），
+        # 条件带 status='committed' 防并发双补偿
+        cur.execute(
+            "UPDATE ai_execution_effects SET status = 'compensated' "
+            "WHERE id = %s AND status = 'committed'", (effect_id,))
+        if cur.rowcount == 0:
+            return None  # 并发下已被补偿/状态已变
+        return {'id': effect_id, 'compensated': True,
+                'collection': collection, 'record_id': record_id,
+                'deleted': deleted}
+
+    if conn is not None:
+        with conn.cursor() as cur:
+            try:
+                cur.execute('SAVEPOINT eff_comp')
+                out = _run(cur)
+                cur.execute('RELEASE SAVEPOINT eff_comp')
+                return out
+            except Exception as e:  # noqa: BLE001
+                try:
+                    cur.execute('ROLLBACK TO SAVEPOINT eff_comp')
+                except Exception:  # noqa: BLE001
+                    pass
+                logger.warning('effect compensate failed id=%s: %s',
+                               effect_id, e)
+                return None
+    try:
+        from db import get_db
+        with get_db() as conn2:
+            with conn2.cursor() as cur:
+                out = _run(cur)
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning('effect compensate failed id=%s: %s', effect_id, e)
+        return None
 
 
 def has_unknown_effects(session_id: str) -> bool:

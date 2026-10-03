@@ -104,7 +104,14 @@ def internal_execute():
                 _body_json.encode('utf-8')).hexdigest()[:16]
             effect_key = f'{session_id}:{method}:{path}:{_body_hash}'
             from utils.execution_effect import record_effect
-            record_effect(session_id, 'mcp_write', effect_key)
+            # C4：登记时即存补偿所需的完整请求信息（method/path/body），
+            # step 失败时 compensate_effect 据此回退 POST 创建的记录
+            record_effect(
+                session_id, 'mcp_write', effect_key,
+                external_ref=json.dumps(
+                    {'method': method, 'path': path,
+                     'body': body if isinstance(body, dict) else None},
+                    ensure_ascii=False, default=str))
         except Exception:
             effect_key = None  # 登记失败不阻断写路径（副作用照常执行）
 
@@ -116,9 +123,11 @@ def internal_execute():
         try:
             from utils.execution_effect import settle_effect_by_key
             ok2 = resp.status_code < 400
+            # external_ref 传 None：登记时已存补偿 JSON（method/path/body），
+            # settle 的 COALESCE 不得覆盖——否则补偿依据丢失
             settle_effect_by_key('mcp_write', effect_key,
                                  'committed' if ok2 else 'failed',
-                                 external_ref=f'{method} {path}',
+                                 external_ref=None,
                                  session_id=session_id)
         except Exception:
             pass

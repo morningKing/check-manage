@@ -625,6 +625,30 @@ def _run_owner(run_id: str):
     return (run or {}).get('requested_by')
 
 
+def _compensate_step_effects(session_id: str, step_id: str):
+    """C4：补偿 step 的已提交副作用（best-effort）。
+
+    step 失败终态时回退该子会话已提交的 mcp_write POST 创建记录；
+    PUT/DELETE 无逆操作、unknown 禁自动补偿——均由 compensate_effect
+    内部把关（不满足条件的 effect 返回 None 跳过）。补偿失败只记日志，
+    不影响 run 推进。"""
+    from db import get_db
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM ai_execution_effects "
+                    "WHERE session_id = %s AND status = 'committed' "
+                    "  AND effect_type = 'mcp_write'",
+                    (session_id,))
+                effect_ids = [r[0] for r in cur.fetchall()]
+            for eid in effect_ids:
+                from utils.execution_effect import compensate_effect
+                compensate_effect(eid, conn=conn)
+    except Exception:
+        logger.exception('effect compensation failed session=%s', session_id)
+
+
 def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
     """批 worker 在编排子会话到终态后调用：按子会话事实推进 step。
     合同校验（P2 §9.2 最小集）：output_contract.type='file' 检查产物存在。"""
@@ -798,6 +822,10 @@ def on_child_terminal(run_id: str, step_id: str, session_id: str) -> None:
                  json.dumps(step_output, ensure_ascii=False) if step_output else None,
                  err, step_id))
         conn.commit()
+    # C4：step 失败终态时补偿该子会话已提交的 mcp_write POST 创建
+    # （在 step 状态落库之后执行；重试路径已在上方提前 return，不补偿）
+    if new_status == 'failed':
+        _compensate_step_effects(session_id=session_id, step_id=step_id)
     # 产物收集（Phase D：workspace outputs → artifact store）
     if new_status == 'succeeded' and ws:
         try:
