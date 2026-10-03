@@ -296,12 +296,17 @@ def _advance_run_locked(run_id: str) -> None:
                 if cur.rowcount:
                     # 同轮内存可见：下游 skip 传播/run 派生直接按 failed 走
                     s['status'] = 'failed'
-                    timed_out.append((s['id'], t_sec))
+                    timed_out.append((s['id'], t_sec, s.get('session_id')))
                     changed = True
-    for _sid, _t in timed_out:
+    for _sid, _t, _child in timed_out:
+        # 遗留项 3：超时兜底不只标 failed——子会话若已在 OpenCode 发出回合，
+        # 不 abort 会滞留 running 直到对账器接管。best-effort：abort 失败
+        # 不影响已落地的 step 转移（batch_engine 取消路径同模式）。
+        _abort_timeout_child(_child)
         batch_events.append_event(run_id, 'step.timeout',
                                   aggregate_type='step', aggregate_id=_sid,
-                                  payload={'timeoutSec': _t})
+                                  payload={'timeoutSec': _t,
+                                           'sessionId': _child})
 
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -433,6 +438,36 @@ def _advance_run_locked(run_id: str) -> None:
         batch_events.append_event(run_id, 'run.status',
                                   aggregate_type='run', aggregate_id=run_id,
                                   payload={'status': new_status})
+
+
+def _abort_timeout_child(session_id: str | None) -> None:
+    """遗留项 3：step 超时兜底的收尾——abort 子会话的 OpenCode 回合。
+
+    超时 CAS 只把 step 标 failed；子会话若已有在跑的 OpenCode 回合，不
+    abort 会滞留 running 直到对账器接管。这里按 step.session_id 反查
+    ai_chat_sessions.opencode_session_id 并 best-effort abort：进程已死/
+    网络异常只记日志不抛——step 的 failed 转移已落地，对账器兜底语义
+    不变（batch_engine 取消路径同模式）。"""
+    if not session_id:
+        return
+    try:
+        from db import get_db
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT opencode_session_id, workspace_path "
+                    "FROM ai_chat_sessions WHERE id = %s", (session_id,))
+                row = cur.fetchone()
+        oc_sid, ws = row if row else (None, None)
+        if not oc_sid:
+            return
+        from utils.opencode_client import OpenCodeClient
+        from config import OPENCODE_BASE_URL
+        OpenCodeClient(OPENCODE_BASE_URL).abort_session(oc_sid,
+                                                        directory=ws or '')
+    except Exception:
+        logger.warning('step timeout abort child session failed sid=%s',
+                       session_id, exc_info=True)
 
 
 def _run_edges(run: dict) -> list[dict]:

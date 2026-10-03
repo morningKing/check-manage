@@ -2136,21 +2136,114 @@ def test_settle_by_key_session_scoped(db_conn, user_id):
     db_conn.commit()
 
 
-def test_settle_by_key_session_scoped(db_conn, user_id):
-    """遗留项 1：session 不匹配时 settle 返回 False。
-    （ai_execution_effects.session_id 有 FK → sess-a 用真实会话；
-    sess-b 只出现在 SELECT 条件里，用不存在的 id。）"""
-    from utils.execution_effect import record_effect, settle_effect_by_key
-    _, sids = _seed_batch(db_conn, user_id, 1)
-    sid = sids[0]                       # sess-a 等价物（真实会话）
-    other = str(uuid.uuid4())           # sess-b 等价物（不存在）
-    eff = record_effect(sid, 'mcp_write', 'key-scoped', conn=None)
-    assert eff is not None
-    assert settle_effect_by_key('mcp_write', 'key-scoped', 'committed',
-                                session_id=other) is False
-    assert settle_effect_by_key('mcp_write', 'key-scoped', 'committed',
-                                session_id=sid) is True
-    # 清理
-    with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_execution_effects WHERE session_id = %s", (sid,))
-    db_conn.commit()
+# ---------------------------------------------------------------------------
+# 遗留项 3：step 超时兜底同时 abort 子会话的 OpenCode 回合
+# ---------------------------------------------------------------------------
+
+def test_step_timeout_aborts_child_session(db_conn, user_id, monkeypatch):
+    """遗留项 3：step 超时时 abort 对应的子会话——超时 CAS 标 failed 的同时
+    按子会话 opencode_session_id best-effort abort（此前子会话滞留 running
+    直到对账器接管），step.timeout 事件 payload 补 sessionId。"""
+    from unittest.mock import MagicMock
+    from utils import orchestration_defs as defs, orchestration_engine as eng2
+    d = defs.publish_definition(
+        f'gap-tabort-{uuid.uuid4().hex[:6]}', description=None,
+        owner_user_id=user_id,
+        nodes=[{'id': 's1', 'kind': 'agent', 'prompt_template': 'x',
+                'timeout_sec': 1}],
+        edges=[])
+    run = eng2.create_run(d['id'], user_id, run_input={'task': 'x'})
+    try:
+        # advance 派发 agent step（创建子会话 pending、step running）
+        eng2._advance_run(run['id'])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT session_id FROM ai_orchestration_steps "
+                        "WHERE run_id=%s", (run['id'],))
+            child_sid = cur.fetchone()[0]
+        assert child_sid
+        # 子会话绑假 oc id（模拟已发出 OpenCode 回合）+ 模拟超时
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET "
+                        "opencode_session_id='oc-tabort-1' WHERE id=%s",
+                        (child_sid,))
+            cur.execute("UPDATE ai_orchestration_steps SET "
+                        "started_at = NOW() - interval '1 hour' "
+                        "WHERE run_id=%s", (run['id'],))
+        db_conn.commit()
+        aborted = []
+        fake_oc = MagicMock()
+        fake_oc.abort_session.side_effect = lambda oc, **k: aborted.append(oc)
+        import utils.opencode_client as _ocmod
+        monkeypatch.setattr(_ocmod, 'OpenCodeClient', lambda base_url: fake_oc)
+
+        eng2._advance_run(run['id'])
+
+        assert aborted == ['oc-tabort-1']       # 子会话回合被 abort
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status FROM ai_orchestration_steps "
+                        "WHERE run_id=%s", (run['id'],))
+            assert cur.fetchone()[0] == 'failed'
+            cur.execute("SELECT payload FROM ai_batch_events "
+                        "WHERE batch_id=%s AND event_type='step.timeout'",
+                        (run['id'],))
+            payload = cur.fetchone()[0]
+        assert payload['sessionId'] == child_sid    # 事件 payload 补 sessionId
+        assert payload['timeoutSec'] == 1
+    finally:
+        # 子会话仍非终态——先收掉，避免共享库被并行 worker 认领
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_chat_sessions "
+                        "WHERE orchestration_run_id=%s", (run['id'],))
+        db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 遗留项 5：M3 门禁扩展到 6 个变更入口（close/clear/run_script/
+# delete-message/DELETE session/archive）；abort 刻意豁免——用户必须能停
+# 失控任务
+# ---------------------------------------------------------------------------
+
+def test_m3_gates_on_mutation_endpoints(db_conn, gap_internal_client):
+    """遗留项 5：非终态批子会话的 6 个变更入口一律 409
+    BATCH_SESSION_CONTROLLED；abort 端点不挡（停失控任务的生命线）。"""
+    uid = 'user-admin'
+    bid, sid = _seed_running_batch(db_conn, uid, name='AITEST-m3mut')
+    client, hdrs = gap_internal_client
+    try:
+        # close → 409
+        r = client.post(f'/ai/chat/sessions/{sid}/close', headers=hdrs)
+        assert r.status_code == 409
+        assert r.get_json()['error']['code'] == 'BATCH_SESSION_CONTROLLED'
+        assert r.get_json()['error']['operation'] == 'close_session'
+        # clear → 409
+        r = client.post(f'/ai/chat/sessions/{sid}/clear', headers=hdrs)
+        assert r.status_code == 409
+        assert r.get_json()['error']['operation'] == 'clear_session'
+        # run_script → 409
+        r = client.post(f'/ai/chat/sessions/{sid}/run', headers=hdrs,
+                        json={'code': 'print(1)'})
+        assert r.status_code == 409
+        assert r.get_json()['error']['operation'] == 'run_script'
+        # delete-message → 409
+        r = client.delete(f'/ai/chat/sessions/{sid}/messages/msg-x',
+                          headers=hdrs)
+        assert r.status_code == 409
+        assert r.get_json()['error']['operation'] == 'delete_message'
+        # DELETE session → 409
+        r = client.delete(f'/ai/chat/sessions/{sid}', headers=hdrs)
+        assert r.status_code == 409
+        assert r.get_json()['error']['operation'] == 'delete_session'
+        # archive（admin-only）→ 409
+        r = client.post(f'/ai/chat/sessions/{sid}/archive', headers=hdrs)
+        assert r.status_code == 409
+        assert r.get_json()['error']['operation'] == 'archive_session'
+        # abort 不挡：仍可用（无 oc 回合 → 幂等 no-op 200）
+        r = client.post(f'/ai/chat/sessions/{sid}/abort', headers=hdrs)
+        assert r.status_code == 200
+        assert r.get_json() == {'ok': True, 'stopped': False}
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_batch_events WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+        db_conn.commit()

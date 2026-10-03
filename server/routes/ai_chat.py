@@ -1853,6 +1853,15 @@ def delete_message_onwards(sid, msg_id):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，
+    # 删消息（Edit/Retry 的前提是独占回合）不得绕过
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能删除消息',
+            'retryable': False,
+            'operation': 'delete_message',
+        }}), 409
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -1903,6 +1912,15 @@ def run_script(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，
+    # 手工跑脚本（写工作区 + 落历史消息）不得绕过
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能运行脚本',
+            'retryable': False,
+            'operation': 'run_script',
+        }}), 409
     body = request.get_json(force=True) or {}
     code = body.get('code') or ''
     filename = body.get('filename') or 'script'
@@ -1939,6 +1957,15 @@ def close_session(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，
+    # close 会改 status、停 listener，不得绕过（要停失控任务请走 abort）
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能关闭',
+            'retryable': False,
+            'operation': 'close_session',
+        }}), 409
     if sess[3] in ('archived', 'deleted'):
         return jsonify({'error': '该状态会话不可关闭', 'code': 'INVALID_STATUS'}), 409
     # P0 spec §10.2: 关闭 ≠ 停止回合，但关闭运行中的会话必须先停掉在跑的回合，
@@ -1997,6 +2024,15 @@ def clear_session(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
     if sess[3] in ('archived', 'deleted'):
         return jsonify({'error': '该状态会话不可清空', 'code': 'INVALID_STATUS'}), 409
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，
+    # clear（删 OpenCode 会话/重建工作区/重绑 oc id）不得绕过
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能清空',
+            'retryable': False,
+            'operation': 'clear_session',
+        }}), 409
     old_oc = sess[2]
     # 1) 停监听 + 删旧 OpenCode 会话（先删以释放工作区句柄，Windows 上尤为重要）
     stop_listener(sid)
@@ -2042,6 +2078,15 @@ def delete_session(sid):
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，
+    # 删除会话（吊销 token/重绑状态）不得绕过（要停失控任务请走 abort）
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能删除会话',
+            'retryable': False,
+            'operation': 'delete_session',
+        }}), 409
     opencode_session_id = sess[2]
     # P0 spec §10.3: 删除存在运行中回合的会话时先发起停止，避免 OpenCode 继续
     # 往一个已删除的会话里执行（abort 幂等、best-effort）。
@@ -2107,6 +2152,25 @@ def admin_list_sessions():
 @require_permission('admin.ai_chat_admin')
 def archive_session(sid):
     """Archive any session (admin only)."""
+    # M3 门禁（遗留项 5）：非终态批/编排子会话由后台执行器独家驱动，admin
+    # 归档（改 status + 停 listener）同样不得绕过。admin 可归档任意用户的
+    # 会话，故不按 user_id 过滤、只读行不做 last_active 续期。
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, user_id, opencode_session_id, status, workspace_path, "
+            "       batch_id, orchestration_run_id "
+            "FROM ai_chat_sessions WHERE id = %s", (sid,))
+        sess = cur.fetchone()
+    if not sess:
+        return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    if _execution_controlled(sess):
+        return jsonify({'error': {
+            'code': 'BATCH_SESSION_CONTROLLED',
+            'message': '批任务子会话正在由后台执行器控制，暂不能归档',
+            'retryable': False,
+            'operation': 'archive_session',
+        }}), 409
     stop_listener(sid)
     with get_db() as conn:
         cur = conn.cursor()
