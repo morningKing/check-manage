@@ -544,6 +544,33 @@ def _launch_agent_step(run: dict, step: dict, by_node: dict):
                      f"[编排] {run['id'][:8]} · {step.get('name') or step['node_id']}",
                      secrets.token_hex(32), prompt, node.get('agent'),
                      node.get('model'), run['id'], step['id']))
+                # P3 门禁支持编排：节点声明 action_checks → 与子会话同一事务
+                # 登记为期望行，终态由批 worker 的既有门禁核对评估（_run_one
+                # 对编排子会话 batch_id=NULL 不登记批级期望、也不清除编排侧
+                # 期望，gate_participates 按 evaluated/expected 参与判定）。
+                # 同事务保证 worker 认领（commit 触发 notify）时期望已可见，
+                # 不存在"有会话无期望"的 fail-open 窗口；登记失败回滚到保存
+                # 点，不阻断派发、不影响会话创建。
+                if node.get('action_checks'):
+                    try:
+                        cur.execute("SAVEPOINT orch_action_checks")
+                        from contextlib import contextmanager as _cm
+                        from utils.agent_ledger import (
+                            register_session_expectations)
+
+                        @_cm
+                        def _same_conn():
+                            yield conn
+
+                        register_session_expectations(
+                            sid, node['action_checks'],
+                            source='orchestration', get_db=_same_conn)
+                    except Exception:
+                        cur.execute(
+                            "ROLLBACK TO SAVEPOINT orch_action_checks")
+                        logger.warning(
+                            'orchestration step action_checks registration '
+                            'failed sid=%s', sid, exc_info=True)
         conn.commit()
     if not won:
         return

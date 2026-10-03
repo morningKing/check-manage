@@ -50,7 +50,11 @@ def validate_definition(nodes, edges) -> tuple[list, list]:
                 # P2-A5/A6：节点超时与 join 汇聚策略
                 'timeout_sec': n.get('timeout_sec'),
                 'join_policy': n.get('join_policy'),
-                'condition': n.get('condition') or None}
+                'condition': n.get('condition') or None,
+                # P3 门禁支持编排：节点声明的动作检查随定义保留——run 侧引擎
+                # 在子会话创建时登记为期望行，终态由批 worker 既有门禁核对。
+                # 此前白名单丢弃该字段，声明形同虚设
+                'action_checks': n.get('action_checks')}
         # P2-A5：节点级超时（秒）必须是正整数
         if node['timeout_sec'] is not None and (
                 not isinstance(node['timeout_sec'], int)
@@ -64,6 +68,15 @@ def validate_definition(nodes, edges) -> tuple[list, list]:
                 f'nodes[{i}].join_policy 只支持 all_success/any_success')
         if kind == 'agent' and not node['prompt_template']:
             raise ValueError(f'agent 节点 {nid} 必须有 prompt_template')
+        # P3 门禁支持编排：声明了 action_checks 就在发布时校验格式（非法
+        # 400，不静默丢弃带病入库）；登记时的二次校验/PG 正则核对由
+        # agent_ledger.validate_checks 与 register_session_expectations 承担
+        if node['action_checks']:
+            from utils.agent_ledger import validate_checks
+            try:
+                validate_checks(node['action_checks'])
+            except ValueError as e:
+                raise ValueError(f'nodes[{i}].action_checks: {e}')
         if kind == 'approval':
             appr = node['approval'] or {}
             if not (appr.get('requested_roles') or appr.get('requested_users')):

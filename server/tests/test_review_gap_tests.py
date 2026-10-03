@@ -2545,3 +2545,47 @@ def test_compensate_effect_skips_unknown_and_bad_ref(db_conn, user_id):
     finally:
         _cleanup_comp(db_conn, sid, coll, rid)
 
+
+
+# ---------------------------------------------------------------------------
+# P3 门禁支持编排：定义节点 action_checks → 子会话创建时登记期望 →
+# 终态由批 worker 既有门禁核对评估
+# ---------------------------------------------------------------------------
+
+def test_orchestration_step_action_checks(db_conn, user_id):
+    """P3 门禁支持编排：定义节点声明 action_checks → 子会话创建时期望登记
+    → 终态核对生效。"""
+    from utils.orchestration_defs import publish_definition
+    from utils import orchestration_engine as oe
+    from utils.agent_ledger import check_session_gate
+
+    d = publish_definition('gate-test', description=None,
+        nodes=[
+            {'id': 'check-me', 'kind': 'agent', 'name': '带门禁的步骤',
+             'prompt_template': 'test',
+             'action_checks': [
+                 {'name': 'must-save', 'tool': 'save_artifact',
+                  'args_pattern': 'report', 'check_type': 'tool', 'min_count': 1}
+             ]},
+        ], edges=[], owner_user_id=user_id)
+    run = oe.create_run(d['id'], user_id, run_input={})
+    oe._advance_run(run['id'])
+    # step 派发 → 子会话创建 → 期望应已登记
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT session_id FROM ai_orchestration_steps "
+                    "WHERE run_id = %s", (run['id'],))
+        sid = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM action_expectations "
+                    "WHERE scope_id = %s", (sid,))
+        assert cur.fetchone()[0] == 1  # 期望已登记
+    # 终态核对信号：期望已登记 → 门禁参与判定，不 skipped 放行。
+    # 正常路径子会话尚无 OpenCode 回合 → inconclusive 且携带 expected=1
+    # （引擎据此 fail-closed）；共享开发库上 live batch worker 若已抢先认领
+    # （环境性竞态）则核对已实际执行 → results 参与判定。两种形态都不允许
+    # 出现"有期望却无判定信号"。
+    gate = check_session_gate(sid, get_db=get_db)
+    if (gate.get('expected') or 0) > 0:
+        assert gate['status'] == 'inconclusive'
+        assert gate.get('expected') == 1
+    else:
+        assert len(gate.get('results') or []) == 1
