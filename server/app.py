@@ -52,6 +52,7 @@ from routes.ai_skills import ai_skills_bp
 from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
+from routes.ai_gate_internal import ai_gate_internal_bp
 from routes.ai_data_internal import ai_data_internal_bp
 from routes.ai_subagent_internal import ai_subagent_internal_bp
 from routes.ai_orchestrations import ai_orchestrations_bp
@@ -183,8 +184,11 @@ try:
     # FLASK_PORT，路径必须与 routes/ai_memory_internal.py 的实际路由一致。
     from config import FLASK_PORT as _FPORT
     _ep = f'http://127.0.0.1:{_FPORT}/ai/memory/internal/runtime-events'
+    # PreToolUse 门禁校验端点（P3-C3）：与 skill 上报同一插件进程、同一 token
+    _gate_ep = f'http://127.0.0.1:{_FPORT}/ai/gate/internal/pre-check'
     _sk.ensure_runtime_plugin(_OGD, _ep,
-                              _os.getenv('MCP_INTERNAL_TOKEN', ''))
+                              _os.getenv('MCP_INTERNAL_TOKEN', ''),
+                              gate_endpoint=_gate_ep)
     _ret = _sk.apply_retention()
     # 运营日志表保留（大数据量优化 §2.2/2.3/2.4）：operation_logs /
     # agent_tool_calls / webhook_logs 分批清理过期行
@@ -485,6 +489,19 @@ try:
 except Exception as _e:
     logging.warning('batch notify trigger migration on boot failed: %s', _e)
 
+# action gate mode 列（2026-09-26 P3-C3）：'post'=终态核对（既有）/
+# 'pre'=PreToolUse 拦截（deny list）。随启动幂等执行，必须先于任何
+# pre-check 查询（列缺失会让核对 SQL 报错 → 全部 inconclusive）。
+try:
+    _mp18 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_09_26_action_gate_mode.py')
+    _spec18 = _ilu.spec_from_file_location('_gate_mode_boot', _mp18)
+    _m18 = _ilu.module_from_spec(_spec18)
+    _spec18.loader.exec_module(_m18)
+    _m18.run()
+except Exception as _e:
+    logging.warning('action gate mode migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -497,6 +514,7 @@ app.register_blueprint(ai_skills_bp)
 app.register_blueprint(ai_opencode_admin_bp)
 app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
+app.register_blueprint(ai_gate_internal_bp)
 app.register_blueprint(ai_subagent_internal_bp)
 app.register_blueprint(ai_data_internal_bp)
 app.register_blueprint(ai_orchestrations_bp)

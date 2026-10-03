@@ -10,8 +10,14 @@
 2. validate_checks / register_session_expectations —— 把批定义/模板的
    action_checks 登记为期望行(派发前调用,先于执行不存在漏登窗口);
    正则可编译性在此校验,登记后终态核对前执行侧无增删路径。
+   mode 字段(P3-C3):'post'=终态核对(默认);'pre'=PreToolUse 拦截
+   (deny list,只支持 tool 型)。
 3. check_session_gate —— 终态核对:对某子任务会话的全部期望逐一在账本计数,
    tree 作用域覆盖根会话 + 该根下全部子代理(skill 步骤常由子代理执行)。
+   mode='pre' 的行不参与终态核对——deny 规则在工具调用前由
+   pre_check_tool 过程拦截,终态"该做的做了没"对 deny 规则无意义。
+4. pre_check_tool —— PreToolUse 拦截检查(P3-C3):OC 插件在工具调用前
+   经 /ai/gate/internal/pre-check 询问,deny list 命中即阻断该次调用。
 """
 import glob as _glob
 import json
@@ -235,6 +241,10 @@ def finalize_interactive_turn(session_id: str, oc_session_id: str, state,
 
 VALID_SCOPES = ('session', 'tree')
 VALID_CHECK_TYPES = ('tool', 'file', 'db_record', 'verifier')
+# P3-C3：'post'=终态核对（既有语义，缺省——向后兼容）；'pre'=PreToolUse
+# 拦截（deny list，工具调用前阻断）。只有 tool 型检查支持 pre：file/db_record/
+# verifier 都是"效果断言"，只能在终态核对，过程期无从拦截。
+VALID_MODES = ('post', 'pre')
 
 
 def _validate_effect_spec(check_type, spec, idx):
@@ -337,6 +347,13 @@ def validate_checks(checks) -> list:
         scope = (c.get('scope') or 'tree').strip()
         if scope not in VALID_SCOPES:
             raise ValueError(f'action_checks[{i}].scope 只支持 {VALID_SCOPES}')
+        # P3-C3：mode 不传默认 'post'（向后兼容——既有创建路径/模板零改动）
+        mode = (c.get('mode') or 'post').strip()
+        if mode not in VALID_MODES:
+            raise ValueError(f'action_checks[{i}.mode 只支持 {VALID_MODES}')
+        if mode == 'pre' and check_type != 'tool':
+            raise ValueError(f'action_checks[{i}].mode=pre 只支持 tool 型检查'
+                             '（file/db_record/verifier 是效果断言，只能终态核对）')
         try:
             min_count = int(c.get('min_count', 1) or 1)
         except (TypeError, ValueError):
@@ -350,6 +367,7 @@ def validate_checks(checks) -> list:
             'name': name, 'tool': tool, 'args_pattern': pattern,
             'require_state': require_state, 'min_count': min_count,
             'scope': scope, 'check_type': check_type,
+            'mode': mode,
             'effect_spec': effect_spec,
             'subagents': c.get('subagents'),
             # F2（ai-harness-p0 spec §8.2）：保留 apply_to——此前规范化时被
@@ -472,8 +490,8 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                     INSERT INTO action_expectations
                         (scope_type, scope_id, name, tool, args_pattern,
                          require_state, min_count, source, last_status,
-                         check_type, effect_spec, subagents)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)
+                         check_type, effect_spec, subagents, mode)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
                     ON CONFLICT (scope_type, scope_id, name) DO UPDATE SET
                         tool = EXCLUDED.tool,
                         args_pattern = EXCLUDED.args_pattern,
@@ -483,6 +501,7 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                         check_type = EXCLUDED.check_type,
                         effect_spec = EXCLUDED.effect_spec,
                         subagents = EXCLUDED.subagents,
+                        mode = EXCLUDED.mode,
                         last_status = 'pending',
                         last_checked_at = NULL,
                         last_evidence = NULL
@@ -493,9 +512,48 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                      psycopg2.extras.Json(c['effect_spec'])
                      if c['effect_spec'] else None,
                      psycopg2.extras.Json(c['subagents'])
-                     if c.get('subagents') else None),
+                     if c.get('subagents') else None,
+                     c.get('mode') or 'post'),
                 )
     return len(normalized)
+
+
+# ---------------------------------------------------------------------------
+# 2.5 PreToolUse 拦截（P3-C3）
+# ---------------------------------------------------------------------------
+
+def pre_check_tool(session_id: str, tool: str, args_text: str,
+                   get_db=None) -> dict:
+    """P3-C3：PreToolUse 拦截检查——工具调用前由 OC 插件经
+    /ai/gate/internal/pre-check 调用。
+
+    该会话存在 mode='pre' 的期望行且 tool 相等 + args_text 命中
+    args_pattern（Python re.search；登记时已按 PG `~` 口径校验过正则，
+    常用方言两侧语义一致）→ {'allow': False, 'reason': …}；否则 allow。
+
+    `session_id` 须已是期望登记的 scope_id（OC 内部会话 id 的映射在路由层
+    完成）。查询异常向上抛——由路由统一 fail-open（拦截基础设施故障不得
+    阻断全部工具调用；终态核对仍兜底）。
+    """
+    import re as _re
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name, args_pattern FROM action_expectations
+                WHERE scope_id = %s AND mode = 'pre' AND tool = %s
+                """,
+                (session_id, tool),
+            )
+            rows = cur.fetchall()
+    for name, pattern in rows:
+        if pattern and _re.search(pattern, args_text or ''):
+            return {'allow': False,
+                    'reason': f'门禁规则「{name}」拦截了工具 {tool} 的调用'}
+    # rules=0 供插件短路缓存：该会话无任何 pre 规则时，后续工具调用不再
+    # 发 pre-check 请求（无规则是常态，热路径零开销）。
+    return {'allow': True, 'rules': len(rows)}
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +671,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                     # 误判成 skipped 而静默放行
                     cur.execute(
                         "SELECT count(*) FROM action_expectations "
-                        "WHERE scope_id = %s AND scope_type IN ('session','tree')",
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree') "
+                        "  AND mode = 'post'",
                         (session_id,),
                     )
                     expected_n = cur.fetchone()[0]
@@ -627,6 +686,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                            subagents
                     FROM action_expectations
                     WHERE scope_id = %s AND scope_type IN ('session','tree')
+                      AND mode = 'post'
                     ORDER BY id
                     """,
                     (session_id,),
@@ -713,7 +773,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT count(*) FROM action_expectations "
-                        "WHERE scope_id = %s AND scope_type IN ('session','tree')",
+                        "WHERE scope_id = %s AND scope_type IN ('session','tree') "
+                        "  AND mode = 'post'",
                         (session_id,),
                     )
                     expected_n = cur.fetchone()[0]

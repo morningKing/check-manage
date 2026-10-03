@@ -1998,3 +1998,119 @@ def test_metrics_includes_ai_attempts_running(app, mock_conn):
     body = r.get_data(as_text=True)
     assert '# TYPE ai_attempts_running gauge' in body
     assert 'ai_attempts_running 0' in body
+
+
+# ---------------------------------------------------------------------------
+# P3-C3：action gate PreToolUse 拦截——deny list 过程阻断
+# （走真实共享开发库，与 test_agent_action_gate 同约定；app 夹具的 mock
+#   cursor 恒返回空集，无法表达"命中 deny 行"，故不用 app 夹具）
+# ---------------------------------------------------------------------------
+
+def _cleanup_expectations(*scope_ids):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM action_expectations "
+                        "WHERE scope_id = ANY(%s)", (list(scope_ids),))
+
+
+def test_pre_check_tool_denies():
+    """P3-C3：pre 模式期望匹配 → deny。"""
+    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
+    try:
+        register_session_expectations(sid, [
+            {'name': 'no-delete', 'tool': 'bash', 'args_pattern': 'rm -rf',
+             'mode': 'pre'}], source='pre-test', get_db=get_db)
+        result = pre_check_tool(sid, 'bash', 'command=rm -rf /', get_db=get_db)
+        assert result['allow'] is False
+        assert 'no-delete' in result['reason']
+    finally:
+        _cleanup_expectations(sid)
+
+
+def test_pre_check_tool_allows_non_matching():
+    """pre 模式期望不匹配 → allow。"""
+    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
+    try:
+        register_session_expectations(sid, [
+            {'name': 'no-delete', 'tool': 'bash', 'args_pattern': 'rm -rf',
+             'mode': 'pre'}], source='pre-test', get_db=get_db)
+        result = pre_check_tool(sid, 'bash', 'command=echo hello',
+                                get_db=get_db)
+        assert result['allow'] is True
+        assert result['rules'] == 1          # 有 pre 规则：插件不短路缓存
+    finally:
+        _cleanup_expectations(sid)
+
+
+def test_pre_check_post_mode_ignored():
+    """post 模式期望不参与 pre-check。"""
+    from utils.agent_ledger import register_session_expectations, pre_check_tool
+    sid = f'gap-pre-{uuid.uuid4().hex[:10]}'
+    try:
+        register_session_expectations(sid, [
+            {'name': 'post-check', 'tool': 'bash', 'args_pattern': 'git clone',
+             'mode': 'post'}], source='pre-test', get_db=get_db)
+        result = pre_check_tool(sid, 'bash', 'command=git clone',
+                                get_db=get_db)
+        assert result['allow'] is True
+        assert result['rules'] == 0          # 无 pre 规则：插件短路缓存
+    finally:
+        _cleanup_expectations(sid)
+
+
+def test_validate_checks_mode_backward_compatible():
+    """P3-C3：mode 缺省 'post'（既有创建路径零改动）；非法值拒绝；
+    pre 只支持 tool 型检查（file/db_record/verifier 是效果断言，只能终态核对）。"""
+    from utils.agent_ledger import validate_checks
+    out = validate_checks(
+        [{'name': 'm-default', 'tool': 'bash', 'args_pattern': 'x'}])
+    assert out[0]['mode'] == 'post'
+    out2 = validate_checks(
+        [{'name': 'm-explicit', 'tool': 'bash', 'args_pattern': 'x',
+          'mode': 'pre'}])
+    assert out2[0]['mode'] == 'pre'
+    with pytest.raises(ValueError, match='mode'):
+        validate_checks(
+            [{'name': 'm-bogus', 'tool': 'bash', 'args_pattern': 'x',
+              'mode': 'bogus'}])
+    with pytest.raises(ValueError, match=r'mode=pre'):
+        validate_checks(
+            [{'name': 'm-file-pre', 'check_type': 'file',
+              'effect_spec': {'path': 'out/*.txt'}, 'mode': 'pre'}])
+
+
+def test_gate_terminal_check_skips_pre_mode(db_conn, user_id):
+    """P3-C3：mode='pre' 的行不参与终态核对（deny 规则在过程期拦截，
+    终态"该做的做了没"对 deny 规则无意义）；post 行核对行为不变；
+    inconclusive 的 expected 计数同样只数 post 行（仅 pre 期望的会话
+    不再触发 fail-closed——过程拦截与终态核对互不纠缠）。"""
+    from utils.agent_ledger import (register_session_expectations,
+                                    check_session_gate)
+    bid, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]
+    _set_child(db_conn, sid, status='running', opencode_session_id='oc-pre-x')
+    try:
+        register_session_expectations(sid, [
+            {'name': 'deny-rm', 'tool': 'bash', 'args_pattern': 'rm -rf',
+             'mode': 'pre', 'scope': 'session'},
+            {'name': 'must-echo', 'tool': 'bash', 'args_pattern': 'echo done',
+             'scope': 'session'},
+        ], source='pre-test', get_db=get_db)
+        gate = check_session_gate(sid, ledger_healthy=True, get_db=get_db)
+        assert gate['status'] == 'failed'        # post 期望未命中 → 照旧 failed
+        assert [r['name'] for r in gate['results']] == ['must-echo']
+        gate2 = check_session_gate(sid, ledger_healthy=False, get_db=get_db)
+        assert gate2['status'] == 'inconclusive'
+        assert gate2.get('expected') == 1        # 只数 post 行
+    finally:
+        _cleanup_expectations(sid)
+
+
+def test_pre_check_endpoint_requires_internal_token(app):
+    """P3-C3：内部端点走 X-Internal-Token 鉴权（与 memory/subagent 内部
+    通道同一信任边界）——无 token 一律 403（token 未配置时同样拒绝）。"""
+    r = app.test_client().post('/ai/gate/internal/pre-check',
+                               json={'sessionId': 'sess_x', 'tool': 'bash'})
+    assert r.status_code == 403

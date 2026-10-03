@@ -109,9 +109,10 @@ def test_validate_checks_normalizes():
     ])
     # F2：规范化输出保留 apply_to（未声明为 None）——此前被剥离导致
     # 定向门禁在内部路径整体失效。
+    # P3-C3：mode 缺省 'post'（终态核对，既有语义）。
     assert out == [{'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone',
                     'require_state': 'completed', 'min_count': 1, 'scope': 'tree',
-                    'check_type': 'tool', 'effect_spec': None,
+                    'check_type': 'tool', 'mode': 'post', 'effect_spec': None,
                     'subagents': None, 'apply_to': None}]
 
 
