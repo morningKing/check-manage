@@ -1,10 +1,13 @@
 /**
  * OrchDagEditor 单测（P3-editor）：
  * - 初始化：definition → 保存 payload 结构对齐后端 validate_definition
- *   （nodes 全字段 + edges kind/condition 经 edge.data 往返保留）
+ *   （nodes 全字段 + edges kind/condition 经 edge.data 往返保留；
+ *   name/description 取自工具栏输入）
  * - palette 添加节点 → 保存 payload 包含新节点
  * - node-click → 属性面板编辑 → 保存写回 name/label
- * - 预校验：空画布 / 环 → warning 拦截不 emit save
+ * - edge-click → 面板切 edge 模式 → 编辑条件/删除边 → 保存写回（遗留 2）
+ * - 工具栏改 name → save 携带（遗留 3）
+ * - pane-click 清空选择；预校验：空画布 / 环 → warning 拦截不 emit save
  * - 取消 → emit cancel
  *
  * Vue Flow 以最小 mock 顶替（jsdom 不渲染 canvas）：props 同步进 hoisted
@@ -40,6 +43,11 @@ vi.mock('@vue-flow/core', () => ({
     addNodes: (ns: any[]) => { h.nodes.push(...ns) },
     addEdges: (es: any[]) => { h.edges.push(...es) },
     findNode: (id: string) => h.nodes.find(n => n.id === id),
+    findEdge: (id: string) => h.edges.find(e => e.id === id),
+    removeEdges: (items: any[]) => {
+      const ids = new Set(items.map(x => (typeof x === 'string' ? x : x.id)))
+      h.edges = h.edges.filter(e => !ids.has(e.id))
+    },
     getNodes: { get value() { return h.nodes } },
     getEdges: { get value() { return h.edges } },
     onConnect: (fn: (params: any) => void) => { h.connectHandler = fn },
@@ -59,15 +67,15 @@ const stubs = {
     props: ['type', 'size'],
     emits: ['click'],
   },
-  // NodePropertiesPanel 内部 el-* 组件（编辑名称用）
+  // NodePropertiesPanel 内部 el-* 组件（编辑名称/条件用）
   'el-form': { template: '<form><slot /></form>' },
   'el-form-item': { template: '<div><slot /></div>', props: ['label'] },
   'el-input': {
     props: ['modelValue', 'type', 'rows', 'placeholder'],
     emits: ['update:modelValue'],
-    template: `<textarea v-if="type === 'textarea'" :value="modelValue"
+    template: `<textarea v-if="type === 'textarea'" :value="modelValue" :placeholder="placeholder"
         @input="$emit('update:modelValue', $event.target.value)" />
-      <input v-else :value="modelValue"
+      <input v-else :value="modelValue" :placeholder="placeholder"
         @input="$emit('update:modelValue', $event.target.value)" />`,
   },
   'el-input-number': {
@@ -121,6 +129,7 @@ describe('OrchDagEditor', () => {
     expect(w.emitted('save')![0][0]).toEqual({
       id: 'orch_a',
       name: '编排A',
+      description: '',
       nodes: [
         { id: 'a', kind: 'agent', name: '抽取', prompt_template: '做抽取', model: 'gpt',
           skills: [], budget: {}, timeout_sec: 60, join_policy: undefined, priority: 2 },
@@ -156,10 +165,85 @@ describe('OrchDagEditor', () => {
     })
     await nextTick()
     expect(w.text()).toContain('属性 — agent')
-    await w.find('input').setValue('抽取-改')
+    // 注意：工具栏有 name/description 两个输入，须限定属性面板内的输入框
+    await w.find('.node-props input').setValue('抽取-改')
     await saveButton(w).trigger('click')
     const saved = (w.emitted('save')![0][0] as any).nodes.find((n: any) => n.id === 'a')
     expect(saved.name).toBe('抽取-改')
+    w.unmount()
+  })
+
+  // ── 条件边属性编辑（遗留 2）──────────────────────────────────────
+  const compensationEdge = {
+    id: 'e1-a-b', source: 'a', target: 'b',
+    data: { kind: 'compensation', condition: { field: 'text', op: 'contains', value: 'ok' } },
+  }
+
+  it('edge-click → 面板切 edge 模式；编辑条件 → 保存写回 condition', async () => {
+    const w = mountEditor(def)
+    const flow = w.findComponent({ name: 'VueFlow' })
+    flow.vm.$emit('edge-click', { edge: compensationEdge })
+    await nextTick()
+    expect(w.text()).toContain('条件边 — a → b')
+    // 面板第一个输入 = 条件 field
+    await w.find('.node-props input').setValue('status')
+    await saveButton(w).trigger('click')
+    const edges = (w.emitted('save')![0][0] as any).edges
+    expect(edges[1].condition).toEqual({ field: 'status', op: 'contains', value: 'ok' })
+    w.unmount()
+  })
+
+  it('edge 面板切换 op → 保存写回新 op', async () => {
+    const w = mountEditor(def)
+    const flow = w.findComponent({ name: 'VueFlow' })
+    flow.vm.$emit('edge-click', { edge: compensationEdge })
+    await nextTick()
+    await w.find('.node-props select').setValue('not_contains')
+    await saveButton(w).trigger('click')
+    const edges = (w.emitted('save')![0][0] as any).edges
+    expect(edges[1].condition).toEqual({ field: 'text', op: 'not_contains', value: 'ok' })
+    w.unmount()
+  })
+
+  it('edge 面板删除按钮 → 边被移除，保存不含该边且清空面板', async () => {
+    const w = mountEditor(def)
+    const flow = w.findComponent({ name: 'VueFlow' })
+    flow.vm.$emit('edge-click', { edge: compensationEdge })
+    await nextTick()
+    await w.find('.node-props button').trigger('click')
+    await saveButton(w).trigger('click')
+    const edges = (w.emitted('save')![0][0] as any).edges
+    expect(edges).toEqual([{ source: 'a', target: 'b', kind: 'advance' }])
+    expect(w.text()).toContain('点击节点或边查看属性')
+    w.unmount()
+  })
+
+  it('pane-click → 清空节点/边选择，面板回空态', async () => {
+    const w = mountEditor(def)
+    const flow = w.findComponent({ name: 'VueFlow' })
+    flow.vm.$emit('node-click', { node: { id: 'a', data: { nodeId: 'a', label: '抽取', kind: 'agent' } } })
+    await nextTick()
+    expect(w.text()).toContain('属性 — agent')
+    flow.vm.$emit('pane-click', {})
+    await nextTick()
+    expect(w.text()).toContain('点击节点或边查看属性')
+    w.unmount()
+  })
+
+  // ── 定义名称/描述编辑（遗留 3）──────────────────────────────────
+  it('工具栏编辑 name → save 携带编辑后的 name', async () => {
+    const w = mountEditor(def)
+    await w.find('input[placeholder="定义名称"]').setValue('编排A-改名')
+    await saveButton(w).trigger('click')
+    expect((w.emitted('save')![0][0] as any).name).toBe('编排A-改名')
+    w.unmount()
+  })
+
+  it('工具栏编辑 description → save 携带 description', async () => {
+    const w = mountEditor(def)
+    await w.find('input[placeholder="描述（可选）"]').setValue('新描述')
+    await saveButton(w).trigger('click')
+    expect((w.emitted('save')![0][0] as any).description).toBe('新描述')
     w.unmount()
   })
 

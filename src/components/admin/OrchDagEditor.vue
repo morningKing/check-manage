@@ -1,14 +1,15 @@
 <script setup lang="ts">
 /**
  * 拖拽式 DAG 定义编辑器（spec §4）：左侧 NodePalette + 中间 Vue Flow 画布
- * （editable）+ 右侧 NodePropertiesPanel + 右上角工具栏。
+ * （editable）+ 右侧 NodePropertiesPanel（node/edge 双模式）+ 右上角工具栏
+ * （定义名称/描述可编辑）。
  *
  * 数据流（spec §4.3）：definition prop → Vue Flow nodes/edges（dagre 初始布局）
  * → 用户拖拽/连线/编辑 → 保存时从 Vue Flow state 反向提取 definition JSON
  * → emit('save')，由父组件 POST /ai/orchestrations/definitions（后端
  * validate_definition 复检）。前端预校验：空画布 / 自环 / 环检测。
  */
-import { ref, computed, markRaw } from 'vue'
+import { ref, computed, watch, markRaw } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -22,7 +23,7 @@ import NodePropertiesPanel from './NodePropertiesPanel.vue'
 import OrchStepNode from './OrchStepNode.vue'
 
 const props = defineProps<{
-  definition: { id?: string; name?: string; nodes: any[]; edges: any[] } | null
+  definition: { id?: string; name?: string; description?: string | null; nodes: any[]; edges: any[] } | null
 }>()
 const emit = defineEmits<{
   (e: 'save', json: Record<string, any>): void
@@ -30,10 +31,27 @@ const emit = defineEmits<{
 }>()
 
 // useVueFlow 必须在 <VueFlow> 的父组件 setup 里调用；getNodes/getEdges 是
-// computed ref（onSave 读取 .value），addNodes/addEdges/findNode 操作内部 store。
-const { addNodes, addEdges, findNode, getNodes, getEdges, onConnect } = useVueFlow()
+// computed ref（onSave 读取 .value），addNodes/addEdges/findNode/findEdge/
+// removeEdges 操作内部 store。
+const { addNodes, addEdges, findNode, findEdge, removeEdges, getNodes, getEdges, onConnect } = useVueFlow()
 
 const selectedNode = ref<Record<string, any> | null>(null)
+const selectedEdge = ref<Record<string, any> | null>(null)
+
+// 属性面板双模式选择（遗留 2）：节点优先，其次条件边
+const panelSelected = computed(() => {
+  if (selectedNode.value) return { type: 'node' as const, data: selectedNode.value }
+  if (selectedEdge.value) return { type: 'edge' as const, data: selectedEdge.value }
+  return null
+})
+
+// 遗留 3：定义名称/描述可编辑，保存时随 payload 上抛
+const defName = ref('')
+const defDescription = ref('')
+watch(() => props.definition, (d) => {
+  defName.value = d?.name ?? ''
+  defDescription.value = d?.description ?? ''
+}, { immediate: true })
 
 // 自定义节点类型：markRaw 避免 Vue Flow 把组件包成响应式（与 OrchRunGraph 一致）
 const nodeTypes = { 'orch-step': markRaw(OrchStepNode) as any }
@@ -85,10 +103,32 @@ onConnect((params: any) => {
   }])
 })
 
-// 点击节点 → 属性面板
+// 点击节点 → 属性面板（node 模式），同时清掉边选择
 function onNodeClick(e: any) {
+  selectedEdge.value = null
   const node = e.node
   if (node) selectedNode.value = { id: node.id, ...node.data }
+}
+
+// 点击边 → 属性面板切到 edge 模式（遗留 2）：暴露 id/source/target/condition。
+// condition 只认 data.condition（连线与 initialEdges 均保证存在）；label 是展示
+// 文本，不作条件来源，避免把展示串当条件对象编辑。
+function onEdgeClick(e: any) {
+  selectedNode.value = null
+  const edge = e.edge
+  if (!edge) return
+  selectedEdge.value = {
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    condition: edge.data?.condition ?? null,
+  }
+}
+
+// 点击画布空白 → 清空节点/边选择
+function onPaneClick() {
+  selectedNode.value = null
+  selectedEdge.value = null
 }
 
 // 属性面板更新 → 写回 Vue Flow 节点 data（name 同步 label）
@@ -101,6 +141,21 @@ function onNodeUpdate(fields: Record<string, any>) {
     if (k === 'name') node.data = { ...node.data, label: v }
   }
   selectedNode.value = { id: node.id, ...node.data }
+}
+
+// 属性面板条件编辑 → 写回 Vue Flow 边的 data.condition，并同步 label 展示
+function onEdgeUpdate(edgeId: string, condition: Record<string, any>) {
+  const edge = findEdge(edgeId)
+  if (!edge) return
+  edge.data = { ...(edge.data ?? {}), condition }
+  edge.label = `${condition.op ?? ''} ${condition.value ?? ''}`.trim()
+  selectedEdge.value = { id: edge.id, source: edge.source, target: edge.target, condition }
+}
+
+// 属性面板删除边 → 从 Vue Flow 移除并清掉选择
+function onEdgeRemove(edgeId: string) {
+  removeEdges([edgeId])
+  selectedEdge.value = null
 }
 
 // palette 添加节点（点击 / 拖入兜底）
@@ -153,7 +208,8 @@ function onSave() {
   }
   emit('save', {
     id: props.definition?.id,
-    name: props.definition?.name ?? 'Unnamed',
+    name: defName.value.trim() || 'Unnamed',
+    description: defDescription.value,
     nodes: nodes.map(n => ({
       id: n.id,
       kind: n.data?.kind ?? 'agent',
@@ -180,6 +236,10 @@ function onSave() {
     <NodePalette @add-node="onAddNode" />
     <div class="orch-dag-editor__canvas">
       <div class="orch-dag-editor__toolbar">
+        <el-input v-model="defName" class="orch-dag-editor__name" placeholder="定义名称"
+                  size="small" title="定义名称" />
+        <el-input v-model="defDescription" class="orch-dag-editor__desc" placeholder="描述（可选）"
+                  size="small" title="定义描述" />
         <el-button type="primary" size="small" @click="onSave">保存</el-button>
         <el-button size="small" @click="$emit('cancel')">取消</el-button>
       </div>
@@ -189,12 +249,15 @@ function onSave() {
         :node-types="nodeTypes"
         :fit-view-on-init="true"
         @node-click="onNodeClick"
+        @edge-click="onEdgeClick"
+        @pane-click="onPaneClick"
       >
         <Background pattern-color="#e0e0e0" :gap="20" />
         <Controls />
       </VueFlow>
     </div>
-    <NodePropertiesPanel :node="selectedNode" @update:node="onNodeUpdate" />
+    <NodePropertiesPanel :selected="panelSelected" @update:node="onNodeUpdate"
+                         @update:edge="onEdgeUpdate" @remove-edge="onEdgeRemove" />
   </div>
 </template>
 
@@ -205,6 +268,8 @@ function onSave() {
 }
 .orch-dag-editor__canvas { flex: 1; position: relative; }
 .orch-dag-editor__toolbar {
-  position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; gap: 8px;
+  position: absolute; top: 8px; right: 8px; z-index: 10; display: flex; gap: 8px; align-items: center;
 }
+.orch-dag-editor__name :deep(input), .orch-dag-editor__desc :deep(input) { width: 160px; }
+.orch-dag-editor__desc :deep(input) { width: 200px; }
 </style>

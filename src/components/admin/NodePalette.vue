@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
- * 节点类型面板（spec §4.1）：agent/tool/approval/join 四种，点击或拖入画布。
+ * 节点类型面板（spec §4.1）：agent/approval/join 三种，点击或拖入画布。
  * dragstart 与 click 同发 add-node——编辑器在画布 drop 与面板点击两条路径
  * 上都创建节点（jsdom/无 DnD 环境下 click 兜底）。
+ *
+ * tool 已移除（YAGNI）：后端 validate_definition 只接受
+ * (agent, approval, join) 三种 kind，含 tool 的定义发布时 400；
+ * 等引擎加 tool 分支后再扩展面板。
  */
 defineEmits<{ (e: 'add-node', kind: string): void }>()
 const kinds = [
   { kind: 'agent', label: 'Agent', icon: '🤖', desc: 'AI 执行步骤' },
-  { kind: 'tool', label: 'Tool', icon: '🔧', desc: '工具调用' },
   { kind: 'approval', label: 'Approval', icon: '✋', desc: '人工审批' },
   { kind: 'join', label: 'Join', icon: '🔗', desc: '汇聚节点' },
 ]
