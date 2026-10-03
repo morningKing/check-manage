@@ -28,6 +28,11 @@
           <el-table-column label="发布时间" width="170">
             <template #default="{ row }">{{ fmt(row.publishedAt) }}</template>
           </el-table-column>
+          <el-table-column v-if="canPublish" label="操作" width="90">
+            <template #default="{ row }">
+              <el-button size="small" @click="onEditDefinition(row)">编辑</el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -115,6 +120,18 @@
         <el-button type="primary" :loading="publishing" @click="onPublish">发布</el-button>
       </template>
     </el-dialog>
+
+    <!-- ── DAG 编辑器对话框（P3-editor） ───────────────────────────── -->
+    <el-dialog v-model="editorVisible" title="编辑编排定义" width="90%" destroy-on-close>
+      <div v-loading="editorLoading" style="min-height: 200px">
+        <OrchDagEditor
+          v-if="editorVisible && editingDefinition"
+          :definition="editingDefinition"
+          @save="onEditorSave"
+          @cancel="editorVisible = false"
+        />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -124,9 +141,11 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import OrchRunGraph from '@/components/admin/OrchRunGraph.vue'
 import OrchStepDetail from '@/components/admin/OrchStepDetail.vue'
+import OrchDagEditor from '@/components/admin/OrchDagEditor.vue'
 import {
-  listDefinitions, publishDefinition, listRuns, getRun,
-  type OrchDefinition, type OrchPublishBody, type OrchRun, type OrchStep,
+  listDefinitions, getDefinition, publishDefinition, listRuns, getRun,
+  type OrchDefinition, type OrchDefinitionDetail, type OrchPublishBody,
+  type OrchRun, type OrchStep,
 } from '@/api/orchestration'
 
 const auth = useAuthStore()
@@ -225,6 +244,40 @@ const selectedStep = computed<OrchStep | null>(() => {
 function onSelectStep(runId: string, nodeId: string) {
   selectedRunId.value = runId
   selectedNodeId.value = nodeId
+}
+
+// ── DAG 编辑器（P3-editor） ─────────────────────────────────────────
+const editorVisible = ref(false)
+const editorLoading = ref(false)
+const editingDefinition = ref<OrchDefinitionDetail | null>(null)
+
+/**
+ * 打开编辑器。列表接口只回摘要（无 nodes/edges），须先取定义详情
+ * （GET /ai/orchestrations/definitions/<id>，最新已发布版本）。
+ */
+async function onEditDefinition(row: OrchDefinition) {
+  editorVisible.value = true
+  editorLoading.value = true
+  try {
+    editingDefinition.value = await getDefinition(row.id)
+  } catch {
+    // 错误提示由全局拦截器给出；加载失败直接关掉空编辑器
+    editorVisible.value = false
+  } finally {
+    editorLoading.value = false
+  }
+}
+
+/** 编辑器保存 → 发布新版本（定义不可变，同 id 递增 version）→ 刷新列表 */
+async function onEditorSave(json: Record<string, any>) {
+  try {
+    const res = await publishDefinition(json as unknown as OrchPublishBody)
+    ElMessage.success(`已发布 ${res.id} v${res.version}`)
+    editorVisible.value = false
+    await reloadDefinitions()
+  } finally {
+    // loading/异常提示交给全局拦截器
+  }
 }
 
 // ── 发布对话框 ──────────────────────────────────────────────────────

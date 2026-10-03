@@ -19,6 +19,16 @@ def list_definitions():
     return jsonify({'definitions': orchestration_defs.list_definitions()})
 
 
+@ai_orchestrations_bp.get('/definitions/<def_id>')
+@login_required
+def get_definition(def_id):
+    """定义详情（P3 DAG 编辑器加载 nodes/edges；缺省最新已发布版本）。"""
+    d = orchestration_defs.get_definition(def_id)
+    if not d:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(d)
+
+
 @ai_orchestrations_bp.post('/definitions')
 @login_required
 @require_permission('admin.ai_orchestration_admin')

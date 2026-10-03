@@ -21,6 +21,14 @@ export interface OrchDefinition {
   publishedAt: string | null
 }
 
+/** 编排定义详情（get_definition：含 nodes/edges 拓扑，供 DAG 编辑器加载） */
+export interface OrchDefinitionDetail extends OrchDefinition {
+  nodes: any[]
+  edges: any[]
+  approval_policy?: Record<string, unknown> | null
+  timeout_policy?: Record<string, unknown> | null
+}
+
 /** 发布编排定义的返回（publish_definition：发布即新版本） */
 export interface OrchPublishResult {
   id: string
@@ -82,6 +90,11 @@ export interface OrchRunDetail {
 /** 列出编排定义（每个 id 的最新版本） */
 export function listDefinitions() {
   return get<{ definitions: OrchDefinition[] }>(`${BASE}/definitions`)
+}
+
+/** 取单个编排定义（缺省最新已发布版本，含 nodes/edges） */
+export function getDefinition(defId: string) {
+  return get<OrchDefinitionDetail>(`${BASE}/definitions/${encodeURIComponent(defId)}`)
 }
 
 /** 发布（或升版）编排定义；校验失败后端回 400 */

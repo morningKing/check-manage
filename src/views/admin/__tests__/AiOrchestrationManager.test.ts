@@ -1,14 +1,16 @@
 /**
- * AiOrchestrationManager 组件单测（P3-A7）
+ * AiOrchestrationManager 组件单测（P3-A7 + P3-editor）
  *
  * 覆盖：
  * - 挂载时并行拉取定义与运行列表（definitions / runs 集合键）
  * - 发布对话框：JSON 解析失败 / 缺 name / nodes 为空 → 拦截且不发请求
  * - 发布成功 → publishDefinition 收到解析后的 body，成功提示 + 刷新定义列表
  * - 运行展开行懒加载 steps：首次展开调 getRun，重复展开不重复请求
+ * - DAG 编辑器（P3-editor）：编辑按钮 → getDefinition 加载详情 →
+ *   编辑器 save → publishDefinition 发布新版本并刷新；详情加载失败关编辑器
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 // Mock ElMessage before component import
@@ -25,12 +27,14 @@ vi.mock('@/stores/auth', () => ({
 
 // Mock the API layer
 const mockListDefinitions = vi.fn()
+const mockGetDefinition = vi.fn()
 const mockPublishDefinition = vi.fn()
 const mockListRuns = vi.fn()
 const mockGetRun = vi.fn()
 
 vi.mock('@/api/orchestration', () => ({
   listDefinitions: (...args: any[]) => mockListDefinitions(...args),
+  getDefinition: (...args: any[]) => mockGetDefinition(...args),
   publishDefinition: (...args: any[]) => mockPublishDefinition(...args),
   listRuns: (...args: any[]) => mockListRuns(...args),
   getRun: (...args: any[]) => mockGetRun(...args),
@@ -39,24 +43,63 @@ vi.mock('@/api/orchestration', () => ({
 import AiOrchestrationManager from '../AiOrchestrationManager.vue'
 import { ElMessage } from 'element-plus'
 
-// el-table stub：给运行表一个触发 expand-change 的按钮（定义表不受影响）
+// el-table stub：给运行表一个触发 expand-change 的按钮（定义表不受影响）；
+// 渲染列 slot（P3-editor：定义表的操作列里有「编辑」按钮）
 const ElTableStub = {
   template: `<div>
     <button class="stub-trigger-expand" @click="$emit('expand-change', data[0], [data[0]])" />
+    <slot />
   </div>`,
   props: ['data', 'rowKey'],
   emits: ['expand-change'],
 }
 
+// 列 stub：沿 $parent 链找表 data（test-utils stub 下 provide/inject 不贯通），
+// 逐行渲染列的 scoped slot
+const ElTableColumnStub = {
+  template: `<div class="stub-column">
+    <template v-for="(row, i) in rows" :key="i"><slot :row="row" /></template>
+  </div>`,
+  computed: {
+    rows(this: any): any[] {
+      let p: any = this.$parent
+      while (p) {
+        if (Array.isArray(p.data)) return p.data
+        p = p.$parent
+      }
+      return []
+    },
+  },
+}
+
+// DAG 编辑器 stub：点击按钮即 emit save（画布交互已在 OrchDagEditor.test.ts 覆盖）
+const OrchDagEditorStub = {
+  template: `<div class="stub-dag-editor">
+    <button class="stub-editor-save" @click="$emit('save', savePayload)" />
+  </div>`,
+  props: ['definition'],
+  emits: ['save', 'cancel'],
+  data() {
+    return {
+      savePayload: {
+        id: 'orch_a', name: '编排A',
+        nodes: [{ id: 'step-1', kind: 'agent', name: '第一步', prompt_template: 'p' }],
+        edges: [],
+      },
+    }
+  },
+}
+
 const stubs = {
+  OrchDagEditor: OrchDagEditorStub,
   'el-tabs': { template: '<div><slot /></div>', props: ['modelValue'] },
   'el-tab-pane': { template: '<div><slot /></div>', props: ['label', 'name'] },
-  // 渲染 data 条数即可断言绑定；不渲染列 scoped slot（拿不到 row）
+  // 列 slot 逐行渲染（P3-editor：定义表操作列的「编辑」按钮可点）
   'el-table': ElTableStub,
-  'el-table-column': { template: '<div />' },
+  'el-table-column': ElTableColumnStub,
   'el-button': {
     template: '<button @click="$emit(\'click\')"><slot /></button>',
-    props: ['type', 'plain', 'loading'],
+    props: ['type', 'plain', 'loading', 'size'],
     emits: ['click'],
   },
   'el-dialog': {
@@ -107,6 +150,11 @@ describe('AiOrchestrationManager', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockListDefinitions.mockResolvedValue({ definitions: sampleDefinitions })
+    mockGetDefinition.mockResolvedValue({
+      ...sampleDefinitions[0],
+      nodes: [{ id: 'step-1', kind: 'agent', name: '第一步', prompt_template: 'p' }],
+      edges: [{ source: 'step-1', target: 'step-2', kind: 'advance' }],
+    })
     mockListRuns.mockResolvedValue({ runs: sampleRuns })
     mockGetRun.mockResolvedValue({ ...sampleRuns[0], steps: sampleSteps })
     mockPublishDefinition.mockResolvedValue({ id: 'orch_a', version: 3 })
@@ -175,6 +223,47 @@ describe('AiOrchestrationManager', () => {
     await btns[1].trigger('click')
     await nextTick()
     expect(mockGetRun).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('DAG 编辑器：编辑按钮 → 加载定义详情 → 编辑器携带 definition', async () => {
+    const wrapper = await mountView()
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await flushPromises()
+    expect(mockGetDefinition).toHaveBeenCalledTimes(1)
+    expect(mockGetDefinition).toHaveBeenCalledWith('orch_a')
+    const editor = wrapper.findComponent(OrchDagEditorStub)
+    expect(editor.exists()).toBe(true)
+    const definition = (editor.vm as any).definition
+    expect(definition.id).toBe('orch_a')
+    expect(definition.nodes).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('DAG 编辑器：save → publishDefinition 发布新版本并刷新定义列表', async () => {
+    const wrapper = await mountView()
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await flushPromises()
+    await wrapper.find('.stub-editor-save').trigger('click')
+    await flushPromises()
+    expect(mockPublishDefinition).toHaveBeenCalledTimes(1)
+    const body = mockPublishDefinition.mock.calls[0][0]
+    expect(body.id).toBe('orch_a')
+    expect(body.name).toBe('编排A')
+    expect(body.nodes).toEqual([
+      { id: 'step-1', kind: 'agent', name: '第一步', prompt_template: 'p' },
+    ])
+    expect(ElMessage.success).toHaveBeenCalled()
+    expect(mockListDefinitions).toHaveBeenCalledTimes(2) // 挂载 + 保存后刷新
+    wrapper.unmount()
+  })
+
+  it('DAG 编辑器：详情加载失败 → 编辑器不渲染', async () => {
+    const wrapper = await mountView()
+    mockGetDefinition.mockRejectedValue(new Error('not found'))
+    await wrapper.findAll('button').find(b => b.text() === '编辑')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.stub-dag-editor').exists()).toBe(false)
     wrapper.unmount()
   })
 })
