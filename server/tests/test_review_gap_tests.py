@@ -2134,3 +2134,23 @@ def test_settle_by_key_session_scoped(db_conn, user_id):
     with db_conn.cursor() as cur:
         cur.execute("DELETE FROM ai_execution_effects WHERE session_id = %s", (sid,))
     db_conn.commit()
+
+
+def test_settle_by_key_session_scoped(db_conn, user_id):
+    """遗留项 1：session 不匹配时 settle 返回 False。
+    （ai_execution_effects.session_id 有 FK → sess-a 用真实会话；
+    sess-b 只出现在 SELECT 条件里，用不存在的 id。）"""
+    from utils.execution_effect import record_effect, settle_effect_by_key
+    _, sids = _seed_batch(db_conn, user_id, 1)
+    sid = sids[0]                       # sess-a 等价物（真实会话）
+    other = str(uuid.uuid4())           # sess-b 等价物（不存在）
+    eff = record_effect(sid, 'mcp_write', 'key-scoped', conn=None)
+    assert eff is not None
+    assert settle_effect_by_key('mcp_write', 'key-scoped', 'committed',
+                                session_id=other) is False
+    assert settle_effect_by_key('mcp_write', 'key-scoped', 'committed',
+                                session_id=sid) is True
+    # 清理
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM ai_execution_effects WHERE session_id = %s", (sid,))
+    db_conn.commit()
