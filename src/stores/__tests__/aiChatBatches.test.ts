@@ -215,4 +215,39 @@ describe('aiChatBatches store', () => {
     expect(FakeBatchEventStream.instances[1].closed).toBe(false)
     expect(FakeBatchEventStream.instances[1].batchIds).toEqual(['b2'])
   })
+
+  // ------------------------------------------------------------------
+  // P3-M11：列表级 SSE——当页非终态批次的事件触发防抖 fetchList
+  // ------------------------------------------------------------------
+  it('list SSE event triggers debounced fetchList', async () => {
+    vi.mocked(api.listBatches).mockResolvedValue({ items: [mockBatch], total: 1 })
+    const s = useAiChatBatchesStore()
+    s.startListPolling()
+    // 首个轮询 tick（10s）：fetchList 落地 running 批次 → subscribeListEvents
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(vi.mocked(api.listBatches)).toHaveBeenCalledTimes(1)
+    const listStream = FakeBatchEventStream.last!
+    expect(listStream).not.toBeNull()
+    expect(listStream.batchIds).toEqual(['b1'])
+    expect(listStream.opened).toBe(true)
+    // 3s 防抖窗口内多次事件合并为一次 fetchList
+    listStream.emitEvent('b1', { batchId: 'b1', eventSeq: 1, type: 'child_done', data: {} })
+    listStream.emitEvent('b1', { batchId: 'b1', eventSeq: 2, type: 'child_done', data: {} })
+    expect(vi.mocked(api.listBatches)).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(vi.mocked(api.listBatches)).toHaveBeenCalledTimes(2)
+    s.stopListPolling()
+  })
+
+  it('list SSE skips subscription when the page has only terminal batches', async () => {
+    const doneBatch = { ...mockBatch, status: 'completed' as const, done: 3 }
+    vi.mocked(api.listBatches).mockResolvedValue({ items: [doneBatch], total: 1 })
+    const s = useAiChatBatchesStore()
+    s.startListPolling()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(vi.mocked(api.listBatches)).toHaveBeenCalledTimes(1)
+    // 全部终态 → 不建立列表级 SSE 订阅，仅靠轮询降级
+    expect(FakeBatchEventStream.last).toBeNull()
+    s.stopListPolling()
+  })
 })

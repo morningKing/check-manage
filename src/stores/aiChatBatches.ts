@@ -32,6 +32,8 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
     const tick = async () => {
       if (!listPolling.value) return
       try { await fetchList() } catch { /* swallow during polling */ }
+      // 每轮 tick 后按最新列表重建订阅（当页非终态集合会变化）
+      subscribeListEvents()
       listTimer = setTimeout(tick, LIST_POLL_MS)
     }
     listTimer = setTimeout(tick, LIST_POLL_MS)
@@ -40,6 +42,40 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   function stopListPolling() {
     listPolling.value = false
     if (listTimer) { clearTimeout(listTimer); listTimer = null }
+    unsubscribeListEvents()
+  }
+
+  // 列表级 SSE（P3-M11）：订阅当页非终态批次的事件，收到即防抖刷新列表；
+  // 10s 轮询保留为降级路径。
+  let listES: BatchEventStream | null = null
+  let listRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+  function subscribeListEvents() {
+    listES?.close()
+    const active = items.value
+      .filter(b => !TERMINAL_STATUSES.has(b.status))
+      .map(b => b.id)
+      .slice(0, 20)  // 后端 ids 上限 20
+    if (!active.length) { listES = null; return }
+    listES = new BatchEventStream(active, {
+      onEvent: () => {
+        // 防抖：3s 内合并多次事件为一次 fetchList
+        if (listRefreshTimer) return
+        listRefreshTimer = setTimeout(async () => {
+          listRefreshTimer = null
+          try { await fetchList() } catch { /* swallow */ }
+        }, 3000)
+      },
+      onDone: () => {},
+      onError: () => { /* 降级轮询已在运行 */ },
+    })
+    listES.open()
+  }
+
+  function unsubscribeListEvents() {
+    listES?.close()
+    listES = null
+    if (listRefreshTimer) { clearTimeout(listRefreshTimer); listRefreshTimer = null }
   }
 
   async function selectBatch(id: string) {
