@@ -42,7 +42,16 @@
             <template #default="{ row }">
               <div v-loading="stepLoading[row.id]" class="orch-manager__steps">
                 <template v-if="runSteps[row.id]">
-                  <el-table :data="runSteps[row.id]" size="small" border>
+                  <!-- P3-Graph：运行 DAG 可视化（只读） -->
+                  <OrchRunGraph
+                    :definition="runDefs[row.id]"
+                    :steps="runSteps[row.id]"
+                    style="margin-bottom: 12px"
+                    @select-step="nodeId => onSelectStep(row.id, nodeId)"
+                  />
+                  <OrchStepDetail v-if="selectedRunId === row.id" :step="selectedStep" />
+                  <!-- 既有 step 表格保留在下方 -->
+                  <el-table :data="runSteps[row.id]" size="small" border style="margin-top: 12px">
                     <el-table-column prop="node_id" label="节点" min-width="140" show-overflow-tooltip />
                     <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip />
                     <el-table-column prop="kind" label="类型" width="90" />
@@ -113,6 +122,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import OrchRunGraph from '@/components/admin/OrchRunGraph.vue'
+import OrchStepDetail from '@/components/admin/OrchStepDetail.vue'
 import {
   listDefinitions, publishDefinition, listRuns, getRun,
   type OrchDefinition, type OrchPublishBody, type OrchRun, type OrchStep,
@@ -142,6 +153,42 @@ const runsLoading = ref(false)
 const runSteps = reactive<Record<string, OrchStep[]>>({})
 const stepLoading = reactive<Record<string, boolean>>({})
 
+/** run 详情 step 携带的发布时冻结节点快照（后端 get_run SELECT node_def，OrchStep 类型未声明） */
+interface OrchStepWithDef extends OrchStep {
+  node_def?: { id?: string; kind?: string; name?: string } | null
+}
+
+/** 只读 DAG 拓扑（从 run 详情重建，供 OrchRunGraph 使用） */
+interface OrchGraphDef {
+  nodes: { id: string; kind: string; name: string }[]
+  edges: { source: string; target: string }[]
+}
+
+/**
+ * 从 run 详情的 steps 重建 DAG 拓扑（P3-Graph）。
+ * 后端 get_run 不返回 definition 原文（无 edges），但每行 step 携带发布时
+ * 冻结的 node_def（id/kind/name）与 depends_on（入边 source 集合，
+ * create_run 时由 definition.edges 推导），足以还原节点与拓扑；
+ * 边的 kind/condition 语义不在快照里，统一按 advance 渲染。
+ */
+function deriveDefinition(steps: OrchStepWithDef[]): OrchGraphDef {
+  const nodes = steps.map(s => {
+    const nd: { kind?: string; name?: string } = s.node_def ?? {}
+    return { id: s.node_id, kind: nd.kind ?? s.kind ?? 'agent', name: nd.name ?? s.name ?? s.node_id }
+  })
+  const edges: OrchGraphDef['edges'] = []
+  for (const s of steps) {
+    for (const d of s.depends_on || []) {
+      edges.push({ source: d, target: s.node_id })
+    }
+  }
+  return { nodes, edges }
+}
+
+// runId → 该 run 的拓扑。先于 runSteps 赋值：展开行的 v-if 以 steps 为准，
+// 保证图组件首渲染时 definition 必已就绪。
+const runDefs = reactive<Record<string, OrchGraphDef>>({})
+
 async function reloadRuns() {
   runsLoading.value = true
   try {
@@ -157,10 +204,27 @@ async function onRunExpand(row: OrchRun, expandedRows: OrchRun[]) {
   stepLoading[row.id] = true
   try {
     const detail = await getRun(row.id)
+    runDefs[row.id] = deriveDefinition(detail.steps || [])
     runSteps[row.id] = detail.steps || []
   } finally {
     stepLoading[row.id] = false
   }
+}
+
+// ── 图视图选中态（P3-Graph） ────────────────────────────────────────
+const selectedRunId = ref<string | null>(null)
+const selectedNodeId = ref<string | null>(null)
+
+/** 当前选中的 step（限定在选中 run 内，多行同时展开时不跨 run 串数据） */
+const selectedStep = computed<OrchStep | null>(() => {
+  if (!selectedRunId.value || !selectedNodeId.value) return null
+  return (runSteps[selectedRunId.value] || [])
+    .find(s => s.node_id === selectedNodeId.value) ?? null
+})
+
+function onSelectStep(runId: string, nodeId: string) {
+  selectedRunId.value = runId
+  selectedNodeId.value = nodeId
 }
 
 // ── 发布对话框 ──────────────────────────────────────────────────────
