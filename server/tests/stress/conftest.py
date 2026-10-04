@@ -130,6 +130,7 @@ class Stack:
         self.base = f'http://127.0.0.1:{STRESS_PORT}'
         self.backend_pid = None
         self._proc = None
+        self._backend_log = None
         self._serve_procs = []
         self.token = ''
         self.tmp_dirs = []
@@ -150,9 +151,15 @@ class Stack:
         if profile:
             env['AI_STUB_PROFILE'] = json.dumps(profile)
         env.update(env_extra or {})
+        # 后端日志落盘（metrics 目录/backend.log，追加）：werkzeug 每请求一条
+        # access log，stdout=PIPE 无人消费会在 30-60 分钟压测下写满管道缓冲 →
+        # 日志写阻塞请求线程 → 后端静默停摆。落盘零阻塞且留排障证据。
+        METRICS_ROOT.mkdir(parents=True, exist_ok=True)
+        self._close_backend_log()
+        self._backend_log = open(METRICS_ROOT / 'backend.log', 'ab')
         self._proc = subprocess.Popen(
             [sys.executable, 'app.py'], cwd=str(SERVER_DIR), env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            stdout=self._backend_log, stderr=subprocess.STDOUT)
         self.backend_pid = self._proc.pid
         self._wait_health()
 
@@ -161,6 +168,14 @@ class Stack:
         self.stop_backend()
         self.start_backend(concurrency, profile, env_extra)
 
+    def _close_backend_log(self):
+        if getattr(self, '_backend_log', None):
+            try:
+                self._backend_log.close()
+            except Exception:
+                pass
+            self._backend_log = None
+
     def stop_backend(self):
         if self._proc and self._proc.poll() is None:
             for child in psutil.Process(self._proc.pid).children(recursive=True):
@@ -168,6 +183,7 @@ class Stack:
             self._proc.kill()
             self._proc.wait(timeout=10)
         self._proc = None
+        self._close_backend_log()
 
     def _wait_health(self, timeout=60):
         deadline = time.time() + timeout
@@ -323,11 +339,17 @@ def create_batch(stack, n_children: int, *, callback_url=None, api=None):
     故 >50 时复用同一 staged 文件路径凑不满——套件用 ≤50）。api=可选
     dict(base, headers) 走开放 API（空壳批/回调场景）；默认管理 API。
 
-    已核实形状（routes/ai_chat_batches.py:66-143, routes/open_api_batches.py:147/358）：
-    - 内部 staging：POST form {file, upload_session_id} → 201 {name, path}
-    - 内部建批：files=[{name, path}], ... → 201（children=len(files)）
-    - 开放上传：POST /v1/ai-batches/uploads（同 form）→ 201 同形状
-    - 开放建批：POST /v1/ai-batches {name, prompt, files, callbackUrl}（files 可空=空壳）
+    已核实形状（routes/ai_chat_batches.py:64-95/139-141, utils/batch_repo.py:313,
+    routes/open_api_batches.py:147-194/413-414/637-668）：
+    - 内部 staging：POST form {file(单数), upload_session_id} → 201 扁平 {name, path}
+    - 内部建批：files=[{name, path}], ... → 201 {'batch': {...}, 'sessions': [...]}
+      —— 批 id 取 r.json()['batch']['id']
+    - 开放上传：POST /v1/ai-batches/uploads（multipart 字段名 files 复数，
+      request.files.getlist('files')）→ 201 {'files': [{name, path}, …]}
+    - 开放建批：POST /v1/ai-batches {name, prompt, files, callbackUrl}
+      （files 可空=空壳）→ 201 {'batchId', 'status', 'total'}，批 id 取 ['batchId']
+    - 开放 append：POST /v1/ai-batches/<id>/append {files:[...]} → 200
+      {'batchId', 'status', 'total', 'appended'}
     """
     s = requests.Session()
     prompt = '直接回复:STRESS-OK。不要读取文件,不要执行命令。'
@@ -335,41 +357,41 @@ def create_batch(stack, n_children: int, *, callback_url=None, api=None):
     if api:
         base, hdr = api['base'], api['headers']
         up = s.post(f'{base}/v1/ai-batches/uploads', headers=hdr,
-                    files={'file': ('stress-in.txt', b'STRESS-INPUT', 'text/plain')},
+                    files={'files': ('stress-in.txt', b'STRESS-INPUT', 'text/plain')},
                     data={'upload_session_id': name}, timeout=30)
         up.raise_for_status()
-        staged = up.json()                       # {name, path}
+        staged = up.json()['files']              # [{'name','path'},…]（非扁平）
         body = {'name': name, 'prompt': prompt,
-                'files': [staged] * n_children}
+                'files': staged * n_children}
         if callback_url:
             body['callbackUrl'] = callback_url
         r = s.post(f'{base}/v1/ai-batches', headers=hdr, json=body, timeout=30)
         r.raise_for_status()
-        return r.json()['id']
+        return r.json()['batchId']
     up = s.post(f'{stack.base}/ai/chat/batches/staging/upload',
                 headers=stack.auth_header,
                 files={'file': ('stress-in.txt', b'STRESS-INPUT', 'text/plain')},
                 data={'upload_session_id': name}, timeout=30)
     up.raise_for_status()
-    staged = up.json()                           # {name, path}
+    staged = up.json()                           # 扁平 {name, path}（内部 staging 特有）
     body = {'name': name, 'prompt': prompt,
             'files': [staged] * min(n_children, 50)}
     r = s.post(f'{stack.base}/ai/chat/batches', headers=stack.auth_header,
                json=body, timeout=30)
     r.raise_for_status()
-    return r.json()['id']
+    return r.json()['batch']['id']               # 201 {'batch':…, 'sessions':…}
 
 
 def append_files(stack, batch_id: str, n: int, *, api: dict):
     """空壳批 append 填充（开放 API POST /v1/ai-batches/<id>/append）。"""
     s = requests.Session()
     up = s.post(f'{api["base"]}/v1/ai-batches/uploads', headers=api['headers'],
-                files={'file': ('stress-append.txt', b'STRESS-APPEND', 'text/plain')},
+                files={'files': ('stress-append.txt', b'STRESS-APPEND', 'text/plain')},
                 data={'upload_session_id': f'append-{time.time_ns()}'}, timeout=30)
     up.raise_for_status()
     r = s.post(f'{api["base"]}/v1/ai-batches/{batch_id}/append',
                headers=api['headers'],
-               json={'files': [up.json()] * n}, timeout=30)
+               json={'files': up.json()['files'] * n}, timeout=30)
     r.raise_for_status()
     return r.json()
 
