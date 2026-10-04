@@ -65,6 +65,7 @@ class StubClient:
             s.messages.append({'info': {'role': 'user', 'time': {}},
                                'parts': [{'type': 'text', 'text': content}]})
             lo, hi = self.profile['delay_ms']
+            s.done = False
             s.pending_until = time.time() + random.uniform(lo, hi) / 1000
             s.outcome = 'error' if random.random() < self.profile['error_rate'] \
                 else 'stop'

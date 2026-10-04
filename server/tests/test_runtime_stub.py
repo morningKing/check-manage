@@ -42,6 +42,24 @@ def test_error_rate_lands_failed_shape():
     time.sleep(0.05)
     a = [m for m in c.get_messages(sid) if m['info']['role'] == 'assistant']
     assert a[0]['info']['finish'] == 'error'               # worker 判 failed 的形状
+    assert a[0]['info']['time']['completed'] > 0            # finish+completed 须同时成立
+
+
+def test_second_dispatch_same_session_lands_second_terminal():
+    rt = make_rt()
+    c = rt.get_client()
+    sid = c.create_session(directory='D:/ws')
+    c.send_prompt_async(sid, 'round1')
+    time.sleep(0.05)
+    a1 = [m for m in c.get_messages(sid) if m['info']['role'] == 'assistant']
+    assert len(a1) == 1 and a1[0]['info']['finish'] == 'stop'
+    c.send_prompt_async(sid, 'round2')                      # 同会话二次派发
+    time.sleep(0.05)
+    msgs = c.get_messages(sid)
+    a = [m for m in msgs if m['info']['role'] == 'assistant']
+    assert len(a) == 2                                      # 第二条 assistant 落地
+    assert a[1]['info']['finish'] == 'stop'
+    assert a[1]['info']['time']['completed'] > a[0]['info']['time']['completed']
 
 
 def test_abort_lands_terminal_shape():
