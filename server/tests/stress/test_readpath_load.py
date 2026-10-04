@@ -92,14 +92,16 @@ def test_r3_admin_list_500_batches(stress_stack, sampler):
     assert lat[-1] < 5.0, f'管理列表最大延迟 {lat[-1]:.2f}s 超 5s'
 
 
-def test_r4_outbox_flood_10k(stress_stack, sampler):
+def test_r4_outbox_flood_3k(stress_stack, sampler):
     sampler.record('readpath-R4')
     srv, state = callback_target.start(behavior='ok')
     try:
         t0 = time.time()
         now = time.time_ns()
+        # 洪峰 3000 而非 1 万：投递器单线程 LIMIT 10/5s tick ≈120 行/分钟，
+        # 1 万行要 ~83 分钟远超 1800s 死线；3000 行 ~25 分钟，死线内可达。
         flood = [(f'obx-stress-{now}-{i}', f'evt-{now}-{i}')
-                 for i in range(10000)]
+                 for i in range(3000)]
         conn = psycopg2.connect(**stress_stack.db_dsn)
         with conn.cursor() as cur:
             psycopg2.extras.execute_batch(
@@ -112,9 +114,9 @@ def test_r4_outbox_flood_10k(stress_stack, sampler):
                  for o, e in flood])
         conn.commit()
         conn.close()
-        deadline = time.time() + 1800               # 1 万行排空给 30 分钟
+        deadline = time.time() + 1800               # 3000 行给 30 分钟（约 25 分钟可达）
         while time.time() < deadline:
-            if state['deliveries'] >= 10000:
+            if state['deliveries'] >= 3000:
                 break
             time.sleep(10)
         wall = time.time() - t0
@@ -122,10 +124,24 @@ def test_r4_outbox_flood_10k(stress_stack, sampler):
                                   'wall_s': wall,
                                   'throughput_per_min':
                                       state['deliveries'] / max(1, wall) * 60})
-        assert state['deliveries'] >= 10000
-        # 幂等：带 Idempotency 头的投递无重复 key（重放会撞 key）
-        keys = [k for k in state['idem_keys'] if k]
-        assert len(keys) == len(set(keys)), '检测到重复投递（幂等键重复）'
+        assert state['deliveries'] >= 3000
+        # 真实去重信号（替代恒真的 idem_keys 断言）：投递链路
+        # webhook_engine._fire_single_webhook 根本不发 Idempotency-Key 头，
+        # key 集合必空、len==len(set) 恒真。改为 DB 终态精确校验——
+        # 重试残留会使 outbox 非 delivered 计数 >0，重复投递会使 deliveries 超额。
+        conn = psycopg2.connect(**stress_stack.db_dsn)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM ai_delivery_outbox "
+                            "WHERE batch_id LIKE 'stress-flood-%' "
+                            "AND status <> 'delivered'")
+                leftover = cur.fetchone()[0]
+        finally:
+            conn.close()
+        assert leftover == 0, \
+            f'outbox 残留 {leftover} 行未 delivered（重试未收口）'
+        assert state['deliveries'] == 3000, \
+            f"投递次数 {state['deliveries']} != 3000（重复投递/计数漂移）"
     finally:
         callback_target.shutdown(srv)
 
