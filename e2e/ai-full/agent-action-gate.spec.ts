@@ -53,7 +53,9 @@ async function openCreateDialog(page: Page) {
   await createBatchBtn.waitFor({ state: 'visible', timeout: 15_000 })
   await createBatchBtn.click()
   const dialog = page.getByRole('dialog', { name: '新建批任务' })
-  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
+  // 15s:全量跑时本文件字母序最先访问 /ai-chat,吃掉 vite 冷编译,
+  // 首开对话框可能超 5s(与 ai-subagent-reuse 的同款等待对齐)
+  await dialog.waitFor({ state: 'visible', timeout: 15_000 })
   return dialog
 }
 
