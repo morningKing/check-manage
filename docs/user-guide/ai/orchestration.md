@@ -1,7 +1,7 @@
 # AI 编排管理使用指南
 
 > **路径**：设置中心 → AI 能力 → AI 执行中心（「编排管理」页签）
-> **权限**：管理员或被授予 `admin.ai_orchestration_admin` / `admin.ai_chat_admin` 能力键的用户
+> **权限**：`admin.ai_orchestration_admin`（「AI 编排定义管理」）——「AI 执行中心」入口对持有 `admin.ai_chat_admin` 或本权限的用户可见，但「编排管理」页签仅对本权限持有者渲染
 > **前置**：AI 批任务功能已启用（编排 run 复用批 worker 执行）
 
 ---
@@ -174,9 +174,14 @@ AI 编排管理用于定义和管理**多步骤 AI 工作流**。一个编排（
 
 - **通过**：步骤从 checkpoint 继续
 - **拒绝**：步骤标 failed，下游级联 skip
-- **编辑后批准**：修改参数后批准
 
-审批操作通过左侧导航 **工作流 → 我的待办** 收件箱或通知中心完成。
+审批入口是统一的待办收件箱：点击**顶部栏「我的待办」按钮**打开收件箱
+（`/workflow/inbox`）。收件箱不区分 AI 与否——AI 审批是其中**带「AI 审批」标记的行**，
+行内直接提供 **通过 / 拒绝** 操作（工作流待办则是「去处理」跳转数据页）。
+「编辑后批准」（批准时携带下游输入修改）目前仅审批 API 支持
+（approve 请求体可带 `edits`），收件箱界面暂未提供该入口。
+
+审批权限：管理员可在收件箱看到全部审批；普通用户只看到审批节点上**点名自己（或所在角色）**的待决审批（平台能力键清单中有对应的「AI 执行前审批」`admin.ai_approval`）。所有通过/拒绝动作都会写入操作日志（含备注）。
 
 ---
 
@@ -186,7 +191,7 @@ AI 编排管理用于定义和管理**多步骤 AI 工作流**。一个编排（
 
 | 现象 | 可能原因 | 排查方式 |
 |---|---|---|
-| run 永久 running | 某个 step 卡住（子会话无响应） | 检查 AI 批任务管理页对应子会话状态 |
+| run 永久 running | 某个 step 卡住（子会话无响应） | 检查 AI 执行中心「批量执行」页签对应子会话状态 |
 | step failed + `step timeout` | 超过了定义的 timeout_sec | 增大 timeout 或排查子会话失败原因 |
 | run = waiting_approval | 有审批节点待处理 | 前往我的待办处理审批 |
 | run = needs_review | 存在结局未知的副作用 | 人工确认后 retry 或 reexecute |
@@ -194,27 +199,26 @@ AI 编排管理用于定义和管理**多步骤 AI 工作流**。一个编排（
 
 ### 与批任务的关系
 
-编排 run 的 agent step 复用批任务的执行基础设施（worker 认领、工作区隔离、effect 账本、事件流）。每个 step 在 AI 批任务管理页表现为一个子会话：
+编排 run 的 agent step 复用批任务的执行基础设施（worker 认领、工作区隔离、effect 账本、事件流）。每个 step 在「批量执行」页签表现为一个子会话：
 
-- 在 **AI 批任务管理** 页（设置中心 → AI 能力 → AI 执行中心（「批量执行」页签））可查看子会话的完整对话、工具调用和产物
+- 在 **AI 执行中心 →「批量执行」页签** 可查看子会话的完整对话、工具调用和产物
 - 编排子会话的正常发送/命令/压缩被门禁拦截（409），由 worker 独家驱动
 
 ---
 
 ## API 参考
 
-编排功能也通过 Open API 暴露，供外部系统调用：
+编排功能也通过 Open API 暴露，供外部系统调用（Base Path `/api/v1`，请求头带 `X-API-Key`）：
 
 | 端点 | 说明 |
 |---|---|
-| `POST /ai/orchestrations/definitions` | 发布定义（同 id 自动 version +1） |
-| `GET /ai/orchestrations/definitions` | 列出定义 |
-| `GET /ai/orchestrations/definitions/{id}` | 获取定义详情 |
-| `GET /ai/orchestrations/runs` | 列出运行 |
-| `GET /ai/orchestrations/runs/{id}` | 获取运行详情（含 steps） |
-| `POST /ai/orchestrations/runs` | 发起运行 |
+| `GET /api/v1/ai-orchestrations/definitions` | 列出已发布定义 |
+| `GET /api/v1/ai-orchestrations/definitions/{id}` | 获取定义详情（含 nodes/edges） |
+| `POST /api/v1/ai-orchestrations/runs` | 以密钥属主身份发起运行（body: `definitionId` + 可选 `input`） |
+| `GET /api/v1/ai-orchestrations/runs/{id}` | 获取运行详情 |
+| `GET /api/v1/ai-orchestrations/runs/{id}/events` | 运行事件增量读取（`afterSeq`，语义同批任务事件流） |
 
-详见 API 参考文档（`docs/user-guide/integration/`）。
+注意：对外 API 对编排**定义是只读的**（发布/编辑定义在管理界面完成）；运行按发起密钥的属主隔离（别人的 run 一律 404）。鉴权同批任务对外 API——详见 [AI 批任务对外 API](../integration/ai-batch-api.md) 第 2 节的密钥绑定要求。
 
 ---
 

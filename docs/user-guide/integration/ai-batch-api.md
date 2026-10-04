@@ -22,7 +22,7 @@ http://<host>:<port>/api/v1/ai-batches
 
 **与 open-api.md 的关系：** `/api/v1` 这个 Base Path 下同时挂了两类接口——[open-api.md](./open-api.md) 描述的数据集合读写接口，以及本文档描述的 AI 批任务接口（`/api/v1/ai-batches/*`）。两者共用 API Key 鉴权机制，但**权限维度不同**：数据集合接口按「页面是否开放 API 访问」授权；AI 批任务接口按「密钥是否绑定用户」授权（见下一节），且所有批任务严格按创建它的密钥隔离。
 
-**不想按"每个文件拆一个子会话"的模型来？** 批任务要求至少一个文件、且每个文件各自开一个隔离的 AI 会话；如果你的场景是"一句 prompt + 可选几份文档，要一个综合答案"（文档不需要分开处理），见 [ai-session-api.md](./ai-session-api.md)（`/api/v1/ai-sessions/*`）——跟批任务共用同一套执行引擎、`agents`/`models` 发现端点，甚至共用同一个 `/uploads` 上传接口暂存文件，只是所有文件进同一个 AI 会话、不拆分子任务，整体更轻量。
+**不想按"每个文件拆一个子会话"的模型来？** 批任务的每个文件各自开一个隔离的 AI 会话（也允许 0 文件先建"空批壳"、之后用 append 填充）；如果你的场景是"一句 prompt + 可选几份文档，要一个综合答案"（文档不需要分开处理），见 [ai-session-api.md](./ai-session-api.md)（`/api/v1/ai-sessions/*`）——跟批任务共用同一套执行引擎、`agents`/`models` 发现端点，甚至共用同一个 `/uploads` 上传接口暂存文件，只是所有文件进同一个 AI 会话、不拆分子任务，整体更轻量。
 
 ---
 
@@ -38,7 +38,7 @@ AI 批任务会以某个用户的身份运行 AI 会话、占用其额度、把�
 
 HTTP 状态码为 `403`。**解决办法：去密钥管理页重新创建一个新密钥**（新建的密钥会自动绑定当前登录用户），旧密钥无法通过编辑补上绑定关系。
 
-新建路径：管理员登录系统 → 「系统配置 → 数据工具 → Open API」→ 「创建 API Key」。新建的密钥同时可用于本文档的批任务接口和 `open-api.md` 的数据集合接口。
+新建路径：管理员登录系统 → **设置中心 → 集成对接 → Open API** → 「创建 API Key」。新建的密钥同时可用于本文档的批任务接口和 `open-api.md` 的数据集合接口。
 
 ---
 
@@ -118,6 +118,7 @@ curl -s -X POST \
 |------|------|------|
 | GET | `/api/v1/ai-batches/agents` | 列出可用的 AI agent（创建批任务时可指定） |
 | GET | `/api/v1/ai-batches/models` | 列出可用的 LLM 模型（创建批任务时可指定） |
+| GET | `/api/v1/ai-batches/skills` | 列出可用的全局 skill（创建批任务 prompt 可引用） |
 | POST | `/api/v1/ai-batches/uploads` | 上传文件到暂存区，拿到创建批任务要用的 `files` 数组 |
 | POST | `/api/v1/ai-batches` | 创建批任务（每个文件对应一个子任务/AI 会话） |
 | PATCH | `/api/v1/ai-batches/{batchId}` | 修改批任务的 agent/model/回调配置（整体替换，见 4.2a） |
@@ -230,6 +231,38 @@ curl -s -H "X-API-Key: $API_KEY" \
 
 ---
 
+### 4.0c 列出可用 Skill
+
+```
+GET /api/v1/ai-batches/skills
+```
+
+列出平台已启用的全局 skill，供批任务 prompt 里引用（如「用 xx skill 处理」）。只返回 `enabled` 的 skill。
+
+**响应 — 200**
+
+```json
+{
+  "skills": [
+    { "name": "scheme-review", "description": "方案审核" }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `skills[].name` | string | skill 名称，可在 prompt 中引用 |
+| `skills[].description` | string \| null | skill 描述 |
+
+**示例**
+
+```bash
+curl -s -H "X-API-Key: $API_KEY" \
+  "http://localhost:8080/api/v1/ai-batches/skills" | jq
+```
+
+---
+
 ### 4.1 上传文件
 
 ```
@@ -293,13 +326,14 @@ Content-Type: application/json
 |------|------|------|------|
 | `name` | string | 是 | 批任务名称 |
 | `prompt` | string | 是 | 下发给每个文件对应 AI 会话的处理指令，最长 20000 字符 |
-| `files` | array | 是 | 上一步 `/uploads` 返回的 `files` 数组（或其子集），每项需含 `name` 与 `path`；最多 50 个 |
+| `files` | array | 否 | 上一步 `/uploads` 返回的 `files` 数组（或其子集），每项需含 `name` 与 `path`；单批累计最多 50 个。**允许留空/不传**——先建一个"空批壳"，之后用 `/append`（4.8）填充文件 |
 | `agent` | string | 否 | 指定 OpenCode agent 名称；留空/不传使用系统默认 |
 | `model` | string | 否 | 指定模型（`<providerID>/<modelID>` 格式）；留空/不传使用系统默认 |
 | `callbackUrl` | string | 否 | 批任务进入终态时接收 HMAC 签名回调通知的 URL（必须 `http://` 或 `https://` 开头）；留空/不传则不发回调，只能轮询。见 4.2b |
 | `callbackSecret` | string | 否 | 用于计算回调签名的密钥；留空则回调仍会发送，但签名用空字符串计算（不建议在公网环境这样用） |
 | `actionChecks` | array | 否 | 动作门禁期望清单（每项是一个核对要求，子任务终态时逐条核对，不达标该子任务标记 failed 并写明缺失项）。字段见 11.5，编写指南见《AI 批任务动作门禁编写指南》 |
-| `gateRetry` | boolean | 否 | 默认 `false`。开启后，门禁核对不过的子任务会带缺失明细在原会话上定向修复续跑（预算内一次），修复后仍不过才落 failed |
+
+> **`gateRetry`（门禁不过时自动修正）不在创建接口上**：创建请求体里的 `gateRetry` 会被忽略；需要开启时用 `PATCH /{batchId}`（4.2a）设置。
 
 **响应 — 201**
 
@@ -311,7 +345,7 @@ Content-Type: application/json
 
 | HTTP 状态码 | 触发条件 |
 |-------------|---------|
-| 400 | `name` 或 `prompt` 缺失；`prompt` 超过 20000 字符；`files` 为空/不是数组；`files` 超过 50 个；某个文件项缺 `name`/`path`；`files[].path` 未通过合法性校验（不属于本密钥所属用户、包含 `..`、格式不对等）；`files[].path` 指向的文件**已过期或不存在**（错误信息形如「文件「xxx.pdf」已过期或不存在，请重新调用 /uploads 上传后再创建批任务」）；`callbackUrl` 非空但不是 `http://`/`https://` 开头 |
+| 400 | `name` 或 `prompt` 缺失；`prompt` 超过 20000 字符；`files` 不是数组或超过 50 个；某个文件项缺 `name`/`path`；`files[].path` 未通过合法性校验（不属于本密钥所属用户、包含 `..`、格式不对等）；`files[].path` 指向的文件**已过期或不存在**（错误信息形如「文件「xxx.pdf」已过期或不存在，请重新调用 /uploads 上传后再创建批任务」）；`callbackUrl` 非空但不是 `http://`/`https://` 开头 |
 | 413 | 请求体超过 1 MB（本接口是 JSON，正常调用远小于此） |
 
 > `files[].path` 必须是调用 `/uploads` 拿到的路径，且必须落在**本密钥所属用户**的暂存目录下。别的用户的路径、或手工构造/篡改的路径（含 `..` 穿越），一律按非法路径拒绝（400），不会读到别人的文件。
@@ -330,7 +364,7 @@ X-API-Key: cm_xxx
 Content-Type: application/json
 ```
 
-**请求体**（字段与 4.2 创建批任务相同：`agent`/`model`/`callbackUrl`/`callbackSecret`，均可选）
+**请求体**（字段：`agent`/`model`/`callbackUrl`/`callbackSecret`，以及 `gateRetry`——布尔，开启后动作门禁核对不过的子任务会带缺失明细在原会话上定向修复续跑一次，修复后仍不过才落 failed；均可选）
 
 ```json
 { "agent": "build", "model": "", "callbackUrl": "https://example.com/hook", "callbackSecret": "s3cret" }
@@ -418,14 +452,20 @@ GET /api/v1/ai-batches?page=1&pageSize=20
       "callbackUrl": null,
       "createdAt": "2026-08-10T03:20:00.000Z",
       "completedAt": null,
-      "usage": null
+      "usage": null,
+      "generation": 1,
+      "queueWaitMs": 1200,
+      "runningMs": 45000,
+      "lastProgressAt": "2026-08-10T03:21:10.000Z",
+      "paused": false,
+      "children": []
     }
   ],
   "total": 1
 }
 ```
 
-只会返回**用当前这把密钥创建**的批任务（见第 8 节「隔离说明」）。`usage` 字段说明见 4.4。
+只会返回**用当前这把密钥创建**的批任务（见第 8 节「隔离说明」）。`usage` 字段说明见 4.4；`generation` 之后为增量扩展字段（说明同 4.4）。
 
 ---
 
@@ -450,13 +490,38 @@ GET /api/v1/ai-batches/{batchId}
   "callbackUrl": null,
   "createdAt": "2026-08-10T03:20:00.000Z",
   "completedAt": "2026-08-10T03:24:00.000Z",
-  "usage": { "durationMs": 45230, "tokensInput": 12800, "tokensOutput": 640, "cost": 0.0312 }
+  "usage": { "durationMs": 45230, "tokensInput": 12800, "tokensOutput": 640, "cost": 0.0312 },
+  "generation": 1,
+  "queueWaitMs": 1200,
+  "runningMs": 240000,
+  "lastProgressAt": "2026-08-10T03:23:50.000Z",
+  "paused": false,
+  "children": [
+    {
+      "childId": "99e4…",
+      "seq": 0,
+      "name": "report1.pdf",
+      "status": "completed",
+      "attempt": 1,
+      "retryCount": 0,
+      "retryable": false,
+      "lastProgressAt": "2026-08-10T03:22:30.000Z",
+      "error": { "code": null, "message": null, "retryable": false }
+    }
+  ]
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `usage` | object \| null | 批任务下全部子任务的用量汇总，任一子任务还没有可用数据时（比如批任务仍是 `pending`）为 `null`。`durationMs`/`tokensOutput`/`cost` 是各子任务对应值的**累加**；`tokensInput` 也是累加（不同子任务是各自独立的 AI 会话上下文，互不共享，因此不做"取最大值"的去重）。数据来源于各子任务底层 AI 会话的执行记录，仅供成本核算参考，不是精确计费依据 |
+| `generation` | integer | 该批任务的当前执行代数（子会话执行 generation 的最大值 +1 口径；重跑/恢复会推进代数） |
+| `queueWaitMs` | integer \| null | 首个子任务进入 `running` 距创建的等待毫秒数 |
+| `runningMs` | integer \| null | 首个子任务进入 `running` 起、至今（未终态）或至终态的毫秒数 |
+| `lastProgressAt` | string \| null | 最新一次子任务活动时间（ISO 8601），判断"这批还在不在动"比 `status` 更直接 |
+| `paused` | boolean | 批任务是否处于整批暂停（见 4.6a 之后的 pause/resume，11.1） |
+| `eventCursor` | integer \| null | 事件流游标提示（配合 11.4 `/events` 的 `afterSeq` 使用） |
+| `children` | array | 每个子任务的结构化进度行：`childId`（不透明 id，可作 `/sessions/{childId}` 寻址）、`seq`、`name`、`status`、`attempt`（第几次尝试，从 1 起）、`retryCount`、`retryable`（是否仍可重试）、`lastProgressAt`、`error`（`code`/`message`/`retryable`，`code=GATE_INCONCLUSIVE` 表示门禁无法确证）。增量字段为 best-effort，任何失败返回空数组，不影响主契约字段 |
 
 **错误响应**
 
@@ -1199,7 +1264,7 @@ curl -s -X POST \
 |-------------|--------|---------|
 | 401 | — | 请求头缺少 `X-API-Key`（`Missing API key`）/ 密钥不存在（`Invalid API key`）/ 密钥已停用（`API key has been revoked`）。这三种由更底层的鉴权网关统一处理，不带 `code` 字段 |
 | 403 | `FORBIDDEN` | 密钥未绑定用户（存量密钥），见第 2 节 |
-| 400 | `INVALID_ARGUMENT` | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建/修改配置：`name`/`prompt` 缺失（仅创建）、`prompt` 超长、`files` 为空/超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在、`callbackUrl` 非空但不是 `http://`/`https://` 开头。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
+| 400 | `INVALID_ARGUMENT` | 上传：未提供文件 / 单文件超 20 MB / 累计超 100 MB（另有一条「文件名无效」是代码里的防御性兜底判断，正常调用不会触发，见下方说明）。创建/修改配置：`name`/`prompt` 缺失（仅创建）、`prompt` 超长、`files` 超过 50 个/字段缺失、`files[].path` 未通过归属校验、`files[].path` 指向的文件已过期或不存在、`callbackUrl` 非空但不是 `http://`/`https://` 开头。列表：`page`/`pageSize` 不是整数。追加：`files` 为空/单次超过 50 个/字段缺失、`files[].path` 未通过归属校验或指向的文件已过期不存在、追加后总数超过单批 50 个的上限 |
 | 404 | `NOT_FOUND` | `batchId` 不存在，或存在但不属于本密钥（不泄漏存在性，一律 404 不用 403） |
 | 409 | `CONFLICT` | 对处于非终态（`pending`/`running`）的批任务调用 `retry-failed`；对处于非终态的子会话调用 `continue`；对已处于终态的批任务调用 `cancel`（见 4.6a） |
 | 411 | `INVALID_ARGUMENT` | 请求使用了分块传输（`Transfer-Encoding: chunked`）、没有 `Content-Length`；本套接口要求请求体带 `Content-Length` |

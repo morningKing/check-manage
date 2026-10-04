@@ -2,6 +2,13 @@
 
 ## 1. 系统架构图
 
+AI 能力由**三个独立进程**组成（口径同 AI 设计分册 01《总体架构与运行时》）：
+**Flask 后端**（默认 `:3002`，AI 能力的唯一网关与 SSE 代理）、**OpenCode serve**
+（默认 `:4096`，Agent 运行时：会话/工具调用/SSE 事件流的真正生产者）、
+**MCP Server**（默认 `:3003`，平台工具面，27 个 MCP 工具）。生产入口 `proxy.py`
+（默认 `:8080`）按序拉起三个子进程并把 `/api/*` 反代到 Flask；**浏览器与外部系统
+只与 proxy/Flask 通信**，不直连 OpenCode 或 MCP。
+
 ```mermaid
 graph TB
     subgraph 外部系统
@@ -10,16 +17,16 @@ graph TB
 
     subgraph "check-manage 平台"
         subgraph "入口层"
-            PROXY["proxy.py<br/>:8080 反向代理<br/>SSE 白名单 / 请求体大小拦截"]
+            PROXY["proxy.py<br/>:8080 反向代理<br/>拉起三个子进程 / SSE 白名单 / 请求体大小拦截"]
             VITE["Vite 开发代理<br/>:5173（仅开发环境）"]
         end
 
         subgraph "Flask 后端 :3002"
             AUTH["auth.py<br/>API Key 鉴权 + JWT 鉴权"]
-            OPEN_API["open_api_batches.py<br/>对外 AI 批任务 API<br/>/api/v1/ai-batches/*"]
+            OPEN_API["open_api_*.py<br/>/v1 对外 API 家族<br/>ai-batches(28) / ai-sessions(3)<br/>ai-orchestrations(5) / ai-scan-tasks(3)<br/>memories(3) / prompt-templates(5)<br/>+ open_api.py 数据面(11)"]
             INT_BATCH["ai_chat_batches.py<br/>内部批任务 API（JWT）"]
             INT_CHAT["ai_chat.py<br/>内部对话 API（JWT + SSE）"]
-            INT_SCAN["ai_scan_tasks.py<br/>内部定时扫描 API（JWT）"]
+            INT_SCAN["ai_scan_tasks.py<br/>内部定时巡检 API（JWT）"]
             DYNAMIC["dynamic.py<br/>业务数据 CRUD API"]
         end
 
@@ -28,24 +35,25 @@ graph TB
             ENGINE["batch_engine.py<br/>BatchWorker<br/>并发=3 / 超时 / 持久化"]
             SCAN_ENGINE["ai_scan_engine.py<br/>定时扫描引擎"]
             QUERY["ai_query.py<br/>NL→MongoDB 过滤器翻译"]
+            RUNTIME["runtime/<br/>AgentRuntime 抽象<br/>AI_AGENT_RUNTIME 切换实现"]
         end
 
-        subgraph "AI 运行时"
-            OC["OpenCode Agent Runtime<br/>会话管理 / 工具调用 / 多轮对话"]
-            MCP["MCP Server<br/>12 个工具<br/>数据查询 / 文件操作 / 记忆"]
+        subgraph "AI 运行时（独立进程）"
+            OC["OpenCode serve :4096<br/>Agent Runtime<br/>会话管理 / 工具调用 / 多轮对话"]
+            MCP["MCP Server :3003<br/>27 个工具<br/>数据查询 / 文件操作 / 记忆 / 数据写"]
         end
 
         subgraph "数据层"
             PG["PostgreSQL<br/>ai_chat_batches<br/>ai_chat_sessions<br/>ai_chat_messages<br/>dynamic_data / page_configs"]
-            FS["文件系统<br/>batch-staging/<br/>ai-workspaces/<br/>vector_store/"]
+            FS["文件系统<br/>batch-staging/&lt;userId&gt;/<br/>ai-workspaces/&lt;userId&gt;/&lt;sessionId&gt;/<br/>vector_store/"]
         end
 
         subgraph "前端（仅内部用户）"
-            UI["Vue 3 + Element Plus<br/>AI 助手侧边栏<br/>批任务管理"]
+            UI["Vue 3 + Element Plus<br/>AI 助手侧边栏<br/>设置中心 · AI 执行中心"]
         end
     end
 
-    EXT -->|"HTTP /api/v1/ai-batches/*<br/>X-API-Key 认证"| PROXY
+    EXT -->|"HTTP /api/v1/ai-batches/* 等<br/>X-API-Key 认证"| PROXY
     UI -->|"HTTP /api/*<br/>JWT 认证"| VITE
     PROXY -->|"转发 /api/* → /*"| AUTH
     VITE -->|"转发 /api/* → /*"| AUTH
@@ -63,17 +71,26 @@ graph TB
     QUERY -->|"调用 LLM"| OC
 
     REPO --> ENGINE
-    ENGINE -->|"create_session<br/>send_prompt_async<br/>get_messages"| OC
+    ENGINE --> RUNTIME
+    RUNTIME -->|"create_session<br/>dispatch<br/>list_messages"| OC
     ENGINE -->|"持久化对话"| PG
     SCAN_ENGINE --> REPO
 
-    OC -->|"工具调用"| MCP
-    MCP -->|"数据查询"| DYNAMIC
+    OC -->|"工具调用（per-session token）"| MCP
+    MCP -->|"数据写经内部端点回 Flask"| DYNAMIC
     MCP -->|"文件读写"| FS
 
     REPO --> PG
     OPEN_API -->|"workspace 读写"| FS
 ```
+
+**workspace 身份链路**（外部对接方需要理解的一点）：每个 AI 会话有独立的
+workspace 目录 `<ai-workspaces>/<userId>/<sessionId>/`（内含 `uploads/` 输入、
+`outputs/` 产出、自动 git 仓库）。Flask 在建会话时为它签发**opaque 会话 token**
+并写入 workspace 的 `opencode.json`——OpenCode 会话内每次工具调用都带这个 token
+连到 MCP Server，MCP 侧查库还原出 `(session_id, user_id, role)` 再按 RBAC 过滤工具面；
+token 过期/吊销即断身份。因此**工具调用的权限与创建会话的用户一致**，外部系统
+经 API Key 创建的批任务/单会话，其子会话同样运行在密钥绑定用户的身份下。
 
 ## 2. 外部系统对接交互流程
 
@@ -106,7 +123,7 @@ sequenceDiagram
     REPO-->>WORKER: session rows → status='running'
     WORKER->>OC: create_session(workspace)
     OC-->>WORKER: opencode_session_id
-    WORKER->>OC: send_prompt_async(prompt)
+    WORKER->>OC: dispatch(prompt)
     OC->>MCP: 工具调用 (query_collection / save_artifact / ...)
     MCP-->>OC: 工具结果
     OC-->>WORKER: 完成信号
@@ -162,7 +179,7 @@ sequenceDiagram
 
     WORKER->>REPO: claim (检测到 opencode_session_id 已存在)
     Note right of WORKER: 跳过 create_session<br/>复用已有 OpenCode 会话
-    WORKER->>OC: send_prompt_async(新 prompt)
+    WORKER->>OC: dispatch(新 prompt)
     OC->>OC: 能看到完整对话历史
     OC-->>WORKER: 完成
     WORKER->>REPO: mark_done
@@ -285,15 +302,20 @@ graph TB
 
 | 能力 | 对外 API Key | 内部 JWT | Admin | MCP |
 |------|:---:|:---:|:---:|:---:|
-| 列出 agents | ✅ | ✅ | — | — |
-| 列出 models | ✅ | ✅ | — | — |
+| 列出 agents / models / skills | ✅ | ✅ | — | — |
 | NL 查询翻译 | ✅ | ✅ | — | — |
 | 创建/列出/详情/删除 批任务 | ✅ | ✅ | ✅ | — |
-| 取结果 / 重试 / 追加 / 修改配置 | ✅ | ✅ | — | — |
+| 取结果 / 重试 / 追加 / 修改配置 / 暂停恢复 / 命令 / 事件流 | ✅ | ✅ | ✅ | — |
 | 子会话 对话/文件/下载/ZIP | ✅ | — | ✅ | — |
-| 子会话 继续/重执行 | ✅ | ✅ | ✅ | — |
+| 子会话 继续/重执行/取消 | ✅ | ✅ | ✅ | — |
 | 导入文件到系统 | ✅ | — | ✅ | — |
+| 单会话（创建/查状态/取消，批引擎驱动） | ✅ | — | — | — |
 | 交互式对话 + SSE | — | ✅ | — | — |
-| 定时扫描任务 | — | — | ✅ | — |
-| 数据查询 / 文件操作 | — | — | — | ✅ |
-| 记忆管理 | — | ✅ | — | ✅ |
+| 编排（定义只读 / 发起与查询运行 / 运行事件） | ✅ | ✅ | ✅ | — |
+| AI 审批（列表 / 通过 / 拒绝） | — | ✅（管理员看全部，被点名用户看待决） | — | — |
+| 定时扫描任务（列表 / 详情 / 立即触发） | ✅ | — | ✅ | — |
+| 长期记忆（列表 / 补写 / 删除） | ✅ | ✅ | — | ✅ |
+| Prompt 模板（CRUD） | ✅ | ✅ | — | — |
+| 数据查询 / 文件操作 / 数据写 | — | — | — | ✅ |
+
+> 对外族的鉴权统一是 `api_key_required`；多数族另挂 `require_bound_key`（密钥必须绑定用户）——编排族当前未挂绑定键校验（已知观测）。
