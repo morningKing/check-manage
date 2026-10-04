@@ -57,6 +57,8 @@ def _run_level(stress_stack, sampler, level: int) -> dict:
     return {'level': level, 'batches': len(batch_ids),
             'children': len(children), 'done': done,
             'failed': failed, 'cancelled': cancelled,
+            'failed_errors': [c.get('error_message') for c in children
+                              if c['status'] == 'failed'],
             'success_rate': done / max(1, len(children)),
             'throughput_cpm': len(children) / wall * 60,
             'invariants': stress_stack.invariants(), 'wall_s': wall}
