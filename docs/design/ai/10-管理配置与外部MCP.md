@@ -139,7 +139,7 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 | `action_check_extractor`（动作门禁提炼器） | `:16,:93` 同通道 | 05 |
 | `memory`（mem0 单例与嵌入） | `mem0_enabled`+`apiKey` 闸门（`:100-103`）；`_build_config` 按 `embedding_provider` 分支 api/ollama embedder，摘要 llm 恒走原端点（`:60-88`） | 09（§4.1） |
 | `config.get_default_chat_model` | `default_chat_model` 优先，回落 `OPENCODE_MODEL` env，再回落空（OC 自选） | 01（§4.1）/02 |
-| `kefu_repo`（客服会话建会话） | `write_opencode_config(include_internal=internal_mcp_enabled())` + `model=instance.get('model') or get_default_chat_model()`；**不传 `extra_mcp`**——客服会话不并外部 MCP（`kefu_repo.py:204-210`；蓝图仍注册 `app.py:525-526`，前端入口已裁剪，`settingsCatalog.ts:65-67` 注释） | —（客服已裁剪入口） |
+| `kefu_repo`（客服会话建会话） | `write_opencode_config(include_internal=internal_mcp_enabled())` + `model=instance.get('model') or get_default_chat_model()`；**不传 `extra_mcp`**——客服会话不并外部 MCP（`kefu_repo.py:204-210`；蓝图仍注册 `app.py:526-527`，前端入口已裁剪，`settingsCatalog.ts:65-67` 注释） | —（客服已裁剪入口） |
 | `batch_repo.get_max_files_per_batch` | `max_batch_sessions`，缺省/非法回落 50 | 03 |
 
 八处消费全部**只读**——写入口只有 `PUT /ai/settings` 一处（外加内置开关列经 `set_internal_mcp_enabled`），无「各功能单独配模型」的旁路。
