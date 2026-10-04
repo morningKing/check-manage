@@ -134,7 +134,12 @@ export interface SeedOpts {
 }
 
 /** 直插一对批+running 子会话行（绕开 API，规避 worker 认领竞态——
- * claim 只认 pending 行，见 batch_engine.py:1116）。返回 ids 供断言/清理。 */
+ * claim 只认 pending 行，见 batch_engine.py:1116）。返回 ids 供断言/清理。
+ * 清理约定：种子行**不能**走 API DELETE ?stop=1——cancel_batch 只置
+ * cancel_requested（batch_repo.py:408），worker 从未认领过该子任务，
+ * drain 10s 超时 → 409 保留。必须直接
+ * dbSeed(`DELETE FROM ai_chat_batches WHERE id='${bid}'`)：
+ * sessions 及 effects/checkpoints/messages 经 FK ON DELETE CASCADE 级联删除。 */
 export async function seedRunningChild(o: SeedOpts): Promise<{ bid: string; sid: string }> {
   const adminId = dbSeed(`SELECT id FROM users WHERE username='admin'`)[0][0]
   const bid = `b-${crypto.randomUUID()}`
@@ -150,7 +155,7 @@ export async function seedRunningChild(o: SeedOpts): Promise<{ bid: string; sid:
     INSERT INTO ai_chat_sessions
       (id, user_id, title, workspace_path, session_token, token_expires_at, status,
        batch_id, batch_seq, batch_input_file, lease_until, retry_count, created_at)
-    VALUES ('${sid}', '${adminId}', 'seed child', '${ws.replace(/\\/g, '\\\\')}',
+    VALUES ('${sid}', '${adminId}', 'seed child', '${ws}',
             '${crypto.randomUUID().replace(/-/g, '')}', NOW() + interval '1 hour', 'running',
             '${bid}', 1, 'seed-in.txt', ${lease}, ${o.retryCount ?? 0}, NOW());
     ${o.ocId ? `UPDATE ai_chat_sessions SET opencode_session_id='${o.ocId}' WHERE id='${sid}';` : ''}
