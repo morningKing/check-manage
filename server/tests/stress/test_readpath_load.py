@@ -1,5 +1,6 @@
 """读路径压载（spec §4.3）：SSE 并发连接 / 事件分页 / 大列表 / outbox 洪峰。
 全部 stub 层（回 stub 后端即可），不依赖真模型。
+模块入口强制复位 stub 运行时（防 chaos 套件泄漏 opencode_local）。
 
 与 brief 的差异（写前对照实际路由核实，见 task-5-report.md）：
 - R1 打真 SSE 路由 GET /ai/chat/batches/events?ids=<bid>
@@ -16,10 +17,20 @@ import psycopg2.extras
 import pytest
 import requests
 
-from tests.stress.conftest import create_batch, wait_terminal
+from tests.stress.conftest import METRICS_ROOT, create_batch, wait_terminal
 from tests.stress.fakes import callback_target
 
 pytestmark = pytest.mark.stress
+
+
+@pytest.fixture(scope='module', autouse=True)
+def _reset_stub_runtime(stress_stack):
+    # 全量 pytest -m stress 按字母序 chaos 先于 readpath，其
+    # _switch_to_real_serve 把后端切成 opencode_local+真 serve 且无恢复；
+    # session 级 stress_stack 不会自行复位 runtime——模块入口强制重启回
+    # stub（start_backend 默认 AI_AGENT_RUNTIME=stub、无 profile），
+    # 否则本模块被真模型执行（烧 token + 时序断言失效）。
+    stress_stack.restart_backend(concurrency=3)
 
 
 def test_r1_sse_50_connections_5min(stress_stack, sampler):
@@ -169,8 +180,7 @@ def test_r4_outbox_flood_3k(stress_stack, sampler):
 
 def _dump(name, payload):
     import json
-    from pathlib import Path
-    out = Path('docs/ai-testing/evidence/stress')
-    out.mkdir(parents=True, exist_ok=True)
+    out = METRICS_ROOT                           # 与 Sampler 同源（仓库根 docs/…），
+    out.mkdir(parents=True, exist_ok=True)       # 相对路径会在 cd server 时劈叉到 server/docs/
     (out / f'{time.strftime("%Y%m%d-%H%M%S")}-{name}.json').write_text(
         json.dumps(payload, ensure_ascii=False, indent=1), encoding='utf-8')
