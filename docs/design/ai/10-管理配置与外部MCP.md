@@ -12,9 +12,9 @@
 | 职责 | 说明 | 证据 |
 | --- | --- | --- |
 | AI 设置读写 | `GET/PUT /ai/settings`：单行配置的读取（API Key 掩码）与全量更新（校验 + 掩码回传识别 + 记忆单例重置） | `server/routes/ai.py:68-142`；`server/utils/ai_query.py:61-129` |
-| MCP 服务管理 | 内置 MCP（`check-manage`，:3003）的开关与 `/health` 探测；外部 MCP（remote/local）CRUD；两者合并进每个会话 `opencode.json` 的 `mcp` 映射 | `server/routes/ai.py:184-288`；`server/utils/mcp_servers.py`（172 行）；合并点 `server/utils/workspace.py:288-323` |
-| 设置中心 AI 四域入口 | `settingsCatalog.ts` 唯一真源派生侧边栏/路由/权限门；AI 域四个条目页签化合并五张旧页面；旧路径两张重定向表 | `src/views/admin/hub/settingsCatalog.ts`（185 行）；`src/router/settingsRoutes.ts`（91 行）；`hub/SettingsTabShell.vue` |
-| 运行时权限拆分 | 原 `admin.ai_settings` 一把抓拆出 8 个 `admin.ai_runtime_*` 细粒度键；历史角色授权幂等平移 | `server/migrations/2026_09_15_split_ai_runtime_permissions.py`（61 行）；`server/utils/permissions.py:17-29` |
+| MCP 服务管理 | 内置 MCP（`check-manage`，:3003）的开关与 `/health` 探测；外部 MCP（remote/local）CRUD；两者合并进每个会话 `opencode.json` 的 `mcp` 映射 | `server/routes/ai.py:184-288`；`server/utils/mcp_servers.py`（171 行）；合并点 `server/utils/workspace.py:288-323` |
+| 设置中心 AI 四域入口 | `settingsCatalog.ts` 唯一真源派生侧边栏/路由/权限门；AI 域四个条目页签化合并五张旧页面；旧路径两张重定向表 | `src/views/admin/hub/settingsCatalog.ts`（184 行）；`src/router/settingsRoutes.ts`（90 行）；`hub/SettingsTabShell.vue` |
+| 运行时权限拆分 | 原 `admin.ai_settings` 一把抓拆出 8 个 `admin.ai_runtime_*` 细粒度键；历史角色授权幂等平移 | `server/migrations/2026_09_15_split_ai_runtime_permissions.py`（60 行）；`server/utils/permissions.py:17-29` |
 
 ## 2. 模块组成
 
@@ -36,8 +36,8 @@
 | `views/admin/hub/settingsCatalog.ts` | 设置中心**唯一真源**：分组/条目/页签三级结构，侧边栏渲染（`SettingsSideMenu.vue:50,57` `filterGroups`）、路由生成（`settingsRoutes.ts:20-31`）、权限判定（`canItem` any-of 语义 `:140-142`）全部从此派生；两张旧路径重定向表 | `settingsCatalog.ts:1-8`（头注释）、`:43-125`（六组）、`:128-158`（派生函数）、`:166-184`（重定向表） |
 | `router/settingsRoutes.ts` | 22 条功能路由 + 四类兼容重定向（`/admin` 首个有权限条目、分组 id 带 `?tab=`、AI 旧条目 → 域入口 tab、历史别名 → 新条目） | `settingsRoutes.ts:20-31,43-90` |
 | `hub/SettingsTabShell.vue` | 域入口页签壳：按 `auth.can(t.perm)` 过滤页签、`?tab=` 深链双向同步（replace 不留历史）、`defineAsyncComponent` 恒定包装 + keep-alive 防切签重挂载 | `SettingsTabShell.vue:24,26-29,31-43` |
-| `hub/AiConfigHub.vue` | 「AI 配置」域入口壳：`<SettingsTabShell item-id="ai-settings" />`（模型与密钥 + 运行时两页签）；同构壳还有 `AiSkillHub.vue`（技能域）、`AiExecutionHub.vue`（执行中心域） | `AiConfigHub.vue:1-7` |
-| `components/admin/McpServersCard.vue` | MCP 服务管理卡：内置 MCP 行（开关 + 检测连接 + 延迟徽标）+ 外部 MCP 表格（增删改查、启停 switch、remote/local 双表单） | `McpServersCard.vue`（331 行） |
+| `hub/AiConfigHub.vue` | 「AI 配置」域入口壳：`<SettingsTabShell item-id="ai-settings" />`（模型与密钥 + 运行时两页签）；同构壳还有 `AiSkillHub.vue`（技能域）、`AiExecutionHub.vue`（执行中心域） | `AiConfigHub.vue:1-6` |
+| `components/admin/McpServersCard.vue` | MCP 服务管理卡：内置 MCP 行（开关 + 检测连接 + 延迟徽标）+ 外部 MCP 表格（增删改查、启停 switch、remote/local 双表单） | `McpServersCard.vue`（330 行） |
 | `views/admin/AiSettings.vue` | 「模型与密钥」页：`GET/PUT /ai/settings` 表单（`:218,:252`），模型下拉数据来自 `GET /ai/chat/models`（`api/aiChat.ts:285` `listModels`，端点本身归 02 册） | `AiSettings.vue:218,242,252` |
 | `api/aiMcpServers.ts` | MCP 前端 API 模块：6 函数对应后端 6 端点 | `aiMcpServers.ts:16,21,26,31,50,55` |
 
@@ -49,7 +49,7 @@
 
 | 列 | 类型/默认 | 语义 | 消费方 |
 | --- | --- | --- | --- |
-| `enabled` | BOOL FALSE | AI 能力总开关（NL 查询/建页/拟合/门禁提炼以它为闸门） | `ai_query.py:210-211`、`ai_schema_designer.py:201-202`、`skill_fit_ai.py:76-77`、`action_check_extractor.py:93-95` |
+| `enabled` | BOOL FALSE | AI 能力总开关（NL 查询/建页/拟合/门禁提炼以它为闸门） | `ai_query.py:210-211`、`ai_schema_designer.py:200-201`、`skill_fit_ai.py:76-77`、`action_check_extractor.py:93-95` |
 | `api_key` | VARCHAR(500) '' | OpenAI 兼容 API Key（**明文入库，出接口必打码**，见 §4.1/§7.1） | 全部 LLM 通道 `Authorization: Bearer` |
 | `endpoint` | VARCHAR(1000) 默认 dashscope compatible-mode | OpenAI 兼容补全端点 | 同上（mem0 的 llm+api embedder 也经 `_base_url` 推导） |
 | `model` | VARCHAR(200) 'qwen-plus' | 补全模型（NL 查询/建页/拟合/门禁/mem0 摘要共用） | 同上 |
@@ -108,12 +108,15 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
   ──► name 唯一校验（create 全表 / update 排除自身）──► INSERT/UPDATE ai_mcp_servers
   ──► log_operation('create'/'update','ai_mcp_server',…)
 
-会话创建/轨迹分析建分析会话时（运行时面归 01 册 §4.1，此处只列贡献点）：
-  enabled_mcp_config(reserved_names=['check-manage'])          # ai_chat.py:85 / ai_session_admin.py:287
+会话创建/清空重置/轨迹分析建分析会话时（运行时面归 01 册 §4.1，此处只列贡献点）：
+  enabled_mcp_config(reserved_names=['check-manage'])          # ai_chat.py:85（create/clear 共用）/ ai_session_admin.py:287
     跳过禁用项与预留名（防遮蔽平台条目，mcp_servers.py:126-130）
     remote → {type:'remote', url, enabled:true, headers?}
     local  → {type:'local', command, enabled:true, environment?}
   write_opencode_config(..., extra_mcp=…, include_internal=…)  # workspace.py:288-323
+    三处生产调用点：ai_chat.py:149-150（create_session 建会话）、
+                    ai_chat.py:2127-2129（clear_session 清空/重置——同轴生效路径）、
+                    ai_session_admin.py:288-292（轨迹分析分析会话）
     平台条目恒胜出（workspace.py:313 二次防遮蔽）
 ```
 
@@ -126,19 +129,20 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 - **健康探测**（`GET /mcp-servers/internal/health`，`ai.py:215-232`）：服务端 `urllib` 直探 `{MCP_SERVER_URL}/health`（3s 超时），`ok = status==200 且 body 含 'ok'`，返回 `latencyMs`；网络层异常返回 502 带错误文本。**动机**（docstring :218-220）：一次轨迹分析事故中 MCP 已宕而会话持续失败，配置面却毫无信号——此端点即管理面的「盲区补丁」。消费侧两处印证：管理卡「检测连接」按钮（`McpServersCard.vue:132-142`，502 也渲染为不可达徽标）；轨迹分析建分析会话前的同型 pre-flight 探测 + 内置开关禁用时 409 拒跑（`ai_session_admin.py:180-199`——分析 agent 建立在 `analyze_trace`/`query_sessions` 内置工具上，禁用即拒绝，不静默降级）。
 - **管理视图**（`GET /mcp-servers`，`ai.py:200-212`）：外部表行 + 内置伪行 `{name:'check-manage', url, enabled}` 同卡展示（内置不是 `ai_mcp_servers` 的行，是 `ai_settings` 的开关列 + `config.MCP_SERVER_URL`）。
 
-### 4.4 `ai_settings` 配置通道：一处配置、七处消费
+### 4.4 `ai_settings` 配置通道：一处配置、八处消费
 
 | 消费方 | 读什么 | 分册归属 |
 | --- | --- | --- |
 | `ai_query.nl_to_mongo_filter`（NL 查询） | enabled 闸门 + apiKey/endpoint/model/timeout/maxTokens（`ai_query.py:208-215,220-237`） | 02（§4.7） |
-| `ai_schema_designer`（NL 建页草案） | 同通道：`:19` 复用 import，`:198-205` 同款闸门与 Key 校验 | 02（§4.8） |
+| `ai_schema_designer`（NL 建页草案） | 同通道：`:19` 复用 import；`cfg :198`、enabled 闸门 `:200-201`、Key 校验 `:203-205` | 02（§4.8） |
 | `skill_fit_ai._llm_json`（拟合 AI 层） | 同通道 + 共享 `get_http_session`；失败 RuntimeError → 路由层 502 | 08（§4.4） |
 | `action_check_extractor`（动作门禁提炼器） | `:16,:93` 同通道 | 05 |
 | `memory`（mem0 单例与嵌入） | `mem0_enabled`+`apiKey` 闸门（`:100-103`）；`_build_config` 按 `embedding_provider` 分支 api/ollama embedder，摘要 llm 恒走原端点（`:60-88`） | 09（§4.1） |
 | `config.get_default_chat_model` | `default_chat_model` 优先，回落 `OPENCODE_MODEL` env，再回落空（OC 自选） | 01（§4.1）/02 |
+| `kefu_repo`（客服会话建会话） | `write_opencode_config(include_internal=internal_mcp_enabled())` + `model=instance.get('model') or get_default_chat_model()`；**不传 `extra_mcp`**——客服会话不并外部 MCP（`kefu_repo.py:204-210`；蓝图仍注册 `app.py:525-526`，前端入口已裁剪，`settingsCatalog.ts:65-67` 注释） | —（客服已裁剪入口） |
 | `batch_repo.get_max_files_per_batch` | `max_batch_sessions`，缺省/非法回落 50 | 03 |
 
-七处消费全部**只读**——写入口只有 `PUT /ai/settings` 一处（外加内置开关列经 `set_internal_mcp_enabled`），无「各功能单独配模型」的旁路。
+八处消费全部**只读**——写入口只有 `PUT /ai/settings` 一处（外加内置开关列经 `set_internal_mcp_enabled`），无「各功能单独配模型」的旁路。
 
 ### 4.5 设置中心：AI 四域入口的页签化合并
 
@@ -179,7 +183,7 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 | `admin.ai_agent_write` | `:25` | `:262,:277,:290,:302,:313` | agent 增删改/启停（docstring `:15`） |
 | `admin.ai_runtime_publish` | `:26` | `:152` | 平台技能 → 全局发布 |
 | `admin.ai_runtime_apply` | `:27` | `:359` | `POST /runtime/apply` 应用待生效配置 |
-| `admin.ai_runtime_rollback` | `:28` | **无强制点（预留键）** | 目录有注册、迁移有平移，但当前无任何路由 `require_permission` 它、前端亦无消费（全库唯一出现处 `permissions.py:27`） |
+| `admin.ai_runtime_rollback` | `:28` | **无强制点（预留键）** | 目录有注册、迁移有平移，但二者之外无任何消费者——无路由 `require_permission` 它、前端亦无引用 |
 | `admin.ai_runtime_restart` | `:29` | `:378` | `POST /restart` |
 | `admin.ai_runtime_force` | `:30` | `:388`（restart 处理器内的**二次检查**，`force` 标志位） | 强制重启（中断运行中回合，docstring `:19`；08 册 §5.2 引 Spec §10.3） |
 
@@ -194,7 +198,7 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 | 端点 | 方法 | 语义 | 证据 |
 | --- | --- | --- | --- |
 | `/ai/settings` | GET | 读全量配置；`apiKey` 打码为 `*(n-4)+末4位`（≤4 字符原样返回） | `ai.py:68-77` |
-| `/ai/settings` | PUT | 全量更新；12 项校验（endpoint/model 必填 `:93-96`、timeout/maxTokens 正整数 `:97-100`、maxBatchSessions 1-10000 `:106-108`、embeddingProvider ∈ {api,ollama} `:112-114`、ollama 时 URL 必填 `:115-117`、embeddingDims 64-4096 `:118-120`）；掩码回传识别保旧 Key `:122-125`；成功后 `reset_memory_singleton()` `:134`、返回前再打码 `:136-138`、`log_operation`（Key 明文不记录）`:139-141` | `ai.py:80-142`；落库 `ai_query.py:109-129` |
+| `/ai/settings` | PUT | 全量更新；8 个校验分支（endpoint/model 必填 `:93-96`、timeout/maxTokens 正整数 `:97-100`、maxBatchSessions 1-10000 `:106-108`、embeddingProvider ∈ {api,ollama} `:112-114`、ollama 时 URL 必填 `:115-117`、embeddingDims 64-4096 `:118-120`）；掩码回传识别保旧 Key `:122-125`；成功后 `reset_memory_singleton()` `:134`、返回前再打码 `:136-138`、`log_operation`（Key 明文不记录）`:139-141` | `ai.py:80-142`；落库 `ai_query.py:109-129` |
 
 ### 5.2 MCP 服务族（蓝图 `ai`，权限 `admin.ai_settings`，6 端点）
 
@@ -224,7 +228,7 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 ## 6. 依赖与协作关系
 
 - **下游被依赖（配置通道）**：02（NL 查询/建页）、03（批子会话上限）、05（门禁提炼器）、08（拟合 AI 层）、09（mem0/嵌入）、01（默认会话模型）——全部经 §4.4 表列的读取点，写侧唯一。
-- **下游被依赖（MCP 配置贡献）**：`ai_chat.create_session`（`ai_chat.py:146-150`）、`ai_session_admin` 轨迹分析建分析会话（`ai_session_admin.py:285-292`）经 `write_opencode_config`（`workspace.py:288-323`）把 `enabled_mcp_config` + `internal_mcp_enabled` 落进 per-session `opencode.json`；运行时消费语义归 01 册 §4.1（其第 3 步已写明「外部注册项不得遮蔽平台条目、管理端关闭时整个平台条目不写」）。
+- **下游被依赖（MCP 配置贡献）**：`ai_chat.create_session`（`ai_chat.py:146-150`）、`ai_chat.clear_session` 清空/重置（`ai_chat.py:2127-2129`）、`ai_session_admin` 轨迹分析建分析会话（`ai_session_admin.py:285-292`）经 `write_opencode_config`（`workspace.py:288-323`）把 `enabled_mcp_config` + `internal_mcp_enabled` 落进 per-session `opencode.json`；`utils/kefu_repo`（客服会话，`kefu_repo.py:204-210`）只消费 `internal_mcp_enabled` + `get_default_chat_model`、**不并外部 MCP**；运行时消费语义归 01 册 §4.1（其第 3 步已写明「外部注册项不得遮蔽平台条目、管理端关闭时整个平台条目不写」）。
 - **上游依赖**：`auth.require_permission`（`admin.ai_settings` 门）、`utils.permissions`（目录与缓存）、`utils.operation_log`（全部写操作留痕：`ai.py:139,179,246,259,274,285`）、`config.MCP_SERVER_URL`（内置 MCP 地址，`ai.py:203,223,244`）。
 - **与 08 册**：08 册边界声明「AI 设置（`ai_settings`/`get_ai_settings`）归分册 10」；其 §4.4 的 `_llm_json` 通道与 §5.2 的权限七键表与本册 §4.4/§4.6 互为印证，端点细节不重复。
 - **与 09 册**：`/ai/memories` 三端点与 mem0 机制归 09；本册只认领 `ai_settings` 的 mem0 五列（`mem0_enabled/embedding_model/embedding_provider/embedding_ollama_url/embedding_dims`）与 PUT 里的对应校验、`reset_memory_singleton` 触发点。
@@ -233,7 +237,7 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 ## 7. 设计决策
 
 1. **API Key 明文入库、出接口打码、回传掩码识别**（`ai.py:74-76,122-125,136-138`）：不引入加密存储，赌的是 DB 访问面已收口；管理面前端永不持有完整明文（只显示末 4 位），PUT 以「去末 4 位全 `*`」判定未修改。代价：形如 `****abcd` 的真实 Key 无法录入（会被当未修改丢弃）——概率极低、可换 Key 解决，接受。短 Key（≤4 字符）不打码是规则的边界事实（`len(key) > 4` 才掩码），正常 API Key 长度远超 4，未再加固。
-2. **内置 MCP 开关与外部注册分离**：内置不是 `ai_mcp_servers` 的一行，而是 `ai_settings` 的布尔列 + `config.MCP_SERVER_URL` 常量——它由部署拓扑决定（`ai.py:206-211` 管理伪行拼装），不应被当成可删除的外部条目。开关语义钉死在「**之后**新建/重置的会话」，既有工作区永不回改（`workspace.py:300-301`），与外部 MCP 的增删改同一生效模型；前端两处提示文案同源（`McpServersCard.vue:15-17,41-43`）。读取 fail-open（异常回落 True，`mcp_servers.py:156-157`）：内置 MCP 是数据查询/记忆/轨迹分析的工具源，静默断供比多写一条配置危害大。轨迹分析是该开关唯一的服务端消费者（禁用即 409 拒跑，`ai_session_admin.py:190-199`）——因为它构建在内置工具集上，无法降级；普通聊天会话不禁（少工具可用，用户可感知自行判断）。
+2. **内置 MCP 开关与外部注册分离**：内置不是 `ai_mcp_servers` 的一行，而是 `ai_settings` 的布尔列 + `config.MCP_SERVER_URL` 常量——它由部署拓扑决定（`ai.py:206-211` 管理伪行拼装），不应被当成可删除的外部条目。开关语义钉死在「**之后**新建/重置的会话」，既有工作区永不回改（`workspace.py:300-301`），与外部 MCP 的增删改同一生效模型；前端两处提示文案同源（`McpServersCard.vue:15-17,41-43`）。读取 fail-open（异常回落 True，`mcp_servers.py:156-157`）：内置 MCP 是数据查询/记忆/轨迹分析的工具源，静默断供比多写一条配置危害大。该开关的服务端消费者有四类建会话路径（交互 create/clear、轨迹分析、客服），其中**拒绝型消费者唯一**——轨迹分析在禁用时 409 拒跑（`ai_session_admin.py:190-199`），因为它构建在内置工具集上无法降级；交互与客服会话不禁（少平台工具可用，静默降级，用户可感知自行判断）。
 3. **外部 MCP 只贡献配置、平台是 opencode.json 唯一写者**（`mcp_servers.py:1-7` 模块头）：外部服务永远以 `enabled_mcp_config()` 的产出并入 `write_opencode_config`，平台条目名 `check-manage` 同时在 `reserved_names`（`mcp_servers.py:126-130`）与写入处 `name != mcp_name`（`workspace.py:313`）双重防遮蔽——外部注册一个叫 `check-manage` 的服务不能劫持会话的工具面。外部项不做可达性探测（与内置的 health 端点不对称）：外部服务类型多样（remote/local）、探测语义无法统一，坏配置留给会话内暴露。
 4. **四域入口合并的菜单演进**：设置中心早期为 AI 能力开过 5 个平级条目（ai-settings/ai-opencode/ai-skillopt/ai-batches/ai-sessions/ai-orchestrations 中除 ai-settings 外的 5 个），随功能增长收敛为 4 个域入口（AI 配置/定时巡检/技能/执行中心），旧路径以 `SETTINGS_REDIRECTS` 永久重定向而非删除（`settingsCatalog.ts:173-177` 注释写明与别名的差异）。合并的原则：**同一治理受众的页面进同一域入口**（配置类 → AI 配置；技能治理 → AI 技能；运行观察类 → 执行中心），页签级权限让一个入口服务多种角色（any-of 条目 perm + 每页签独立 perm + 壳层二次过滤，`SettingsTabShell.vue:24`）。派生式目录（`settingsCatalog.ts:1-8`「唯一真源」头注释）消灭「加了功能忘了加路由」：侧边栏/路由/权限门/重定向全部由同一份数据生成，并有单测钉住（`hub/__tests__/settingsCatalog.test.ts`、`router/__tests__/settingsHubRoutes.test.ts`）。
 5. **权限拆分「平移不回退」**（迁移 docstring `:6-9`）：拆分是治理细化而非收紧——现持 `admin.ai_settings` 的角色自动获得全部 8 个新键，操作面不变，之后再按需回收。`ai_runtime_force` 设计为 restart 的**标志位权限**而非独立端点（`ai_opencode_admin.py:366,382,388`）：同一动作的普通/强制两档分权，避免复制端点。`ai_runtime_rollback` 为预留键（§4.6 表）：目录/迁移/授权链已就位，路由侧尚未有回滚操作可管——先占键位保角色平移的完备性，后续补操作时无需再动迁移。
@@ -247,30 +251,30 @@ PUT /ai/settings ──► 校验（endpoint/model 必填、timeout/maxTokens/ma
 
 **后端工具与配置**
 
-- `server/utils/mcp_servers.py`（172 行）——模块头（唯一写者口径）`:1-7`；`McpServerError :15`；`VALID_TYPES :19`；`_normalize :22-47`；`list_servers :50`、`get_server :57`、`create_server :65-86`（uuid `:69`、重名 `:73-75`）、`update_server :89-110`、`delete_server :113-119`；`enabled_mcp_config :122-140`（预留名 `:126-130`）；`internal_mcp_enabled :143-157`（fail-open `:156-157`）；`set_internal_mcp_enabled :160-171`
-- `server/utils/ai_query.py`（274 行）——共享 Session `:31-54`；`get_ai_settings :61-106`（默认值 `:74-89`）；`update_ai_settings :109-129`；`nl_to_mongo_filter :186-273`（归 02，通道在此）
+- `server/utils/mcp_servers.py`（171 行）——模块头（唯一写者口径）`:1-7`；`McpServerError :15`；`VALID_TYPES :19`；`_normalize :22-47`；`list_servers :50`、`get_server :57`、`create_server :65-86`（uuid `:69`、重名 `:73-75`）、`update_server :89-110`、`delete_server :113-119`；`enabled_mcp_config :122-140`（预留名 `:126-130`）；`internal_mcp_enabled :143-157`（fail-open `:156-157`）；`set_internal_mcp_enabled :160-171`
+- `server/utils/ai_query.py`（273 行）——共享 Session `:31-54`；`get_ai_settings :61-106`（默认值 `:74-89`）；`update_ai_settings :109-129`；`nl_to_mongo_filter :186-273`（归 02，通道在此）
 - `server/utils/ai_schema_designer.py`（254 行）——通道复用 `:19`、`:198-229`（归 02）
 - `server/config.py:134-150`——`get_default_chat_model`（`default_chat_model` → `OPENCODE_MODEL` env → 空）
 - `server/utils/batch_repo.py:199-209`——`get_max_files_per_batch`（`max_batch_sessions` 消费）
 - `server/utils/workspace.py:288-323`——`write_opencode_config`（include_internal 分支 `:305-311`、防遮蔽 `:313`）
-- 合并调用点：`server/routes/ai_chat.py:78,81-86,146-150`；`server/routes/ai_session_admin.py:169,180-199,285-292`
+- 合并调用点：`server/routes/ai_chat.py:78,81-86,146-150,2127-2129`（create/clear 共用 `_external_mcp`）；`server/routes/ai_session_admin.py:169,180-199,285-292`；`server/utils/kefu_repo.py:204-210`（客服：仅 internal+model，无 `extra_mcp`）
 - mem0 嵌入分支：`server/utils/memory.py:60-88`（机制归 09）
 
 **权限与迁移**
 
 - `server/utils/permissions.py`——`admin.ai_settings :17`；拆分注释 `:18-21`；八键 `:22-29`；`ai_scan :34`、`ai_chat_admin :47`、`ai_orchestration_admin :49`；`invalidate_cache :122`
-- `server/migrations/2026_09_15_split_ai_runtime_permissions.py`（61 行）——docstring `:1-12`；`NEW_KEYS :22-31`；`run :34-56`（平移 `:37-51`、缓存失效 `:54`）
+- `server/migrations/2026_09_15_split_ai_runtime_permissions.py`（60 行）——docstring `:1-12`；`NEW_KEYS :22-31`；`run :34-56`（平移 `:37-51`、缓存失效 `:54`）
 - `server/migrations/2026_09_29_embedding_provider.py:23-25`——嵌入提供方三列
 - `server/db_schema/rbac.py:6-32`——roles/role_permissions/role_page_permissions DDL
 - `server/routes/ai_opencode_admin.py`——权限目录 docstring `:13-19`；强制点 `:51,:79,:85,:94,:124,:141,:152,:185,:194,:203,:218,:234,:240,:262,:277,:290,:302,:313,:328,:359,:378`；force 二次检查 `:388`（端点表归 08 §5.2）
 
 **前端**
 
-- `src/views/admin/hub/settingsCatalog.ts`（185 行）——接口 `:11-41`；六组 `:43-125`（AI 域 `:69-98`）；`ALL_SETTINGS_ITEMS :128`、`findSettingsItem :132`、`itemPerms :136`、`canItem :140-142`、`filterGroups :145-149`、`firstAccessibleItemPath :155-158`；`LEGACY_PATH_ALIASES :166-171`；`SETTINGS_REDIRECTS :178-184`
-- `src/router/settingsRoutes.ts`（91 行）——`buildSettingsRoutes :20-31`；`buildSettingsRedirects :43-90`（`/admin :46-54`、分组 `:56-73`、AI 旧条目 `:78-83`、别名 `:85-87`）
+- `src/views/admin/hub/settingsCatalog.ts`（184 行）——接口 `:11-41`；六组 `:43-125`（AI 域 `:69-98`）；`ALL_SETTINGS_ITEMS :128`、`findSettingsItem :132`、`itemPerms :136`、`canItem :140-142`、`filterGroups :145-149`、`firstAccessibleItemPath :155-158`；`LEGACY_PATH_ALIASES :166-171`；`SETTINGS_REDIRECTS :178-184`
+- `src/router/settingsRoutes.ts`（90 行）——`buildSettingsRoutes :20-31`；`buildSettingsRedirects :43-90`（`/admin :46-54`、分组 `:56-73`、AI 旧条目 `:78-83`、别名 `:85-87`）
 - `src/views/admin/hub/SettingsTabShell.vue`（44 行）——页签过滤 `:24`、恒定包装 `:26-29`、深链同步 `:31-43`
-- `src/views/admin/hub/AiConfigHub.vue`（7 行）——壳 `:1-7`；同构 `AiSkillHub.vue`/`AiExecutionHub.vue`
-- `src/components/admin/McpServersCard.vue`（331 行）——头注 `:1-3`、生效提示 `:15-17`、内置 MCP 行 `:19-44`、表格 `:46-68`、表单弹窗 `:71-105`、`checkInternalHealth :132-142`、`toggleInternal :144-161`、KV/行解析 `:163-179`、`loadMcp :181-188`、`mcpPayload :213-223`、`saveMcp :225-242`、`toggleMcp :244-251`、`removeMcp :253-264`
+- `src/views/admin/hub/AiConfigHub.vue`（6 行）——壳 `:1-2`；同构 `AiSkillHub.vue`/`AiExecutionHub.vue`
+- `src/components/admin/McpServersCard.vue`（330 行）——头注 `:1-3`、生效提示 `:15-17`、内置 MCP 行 `:19-44`、表格 `:46-68`、表单弹窗 `:71-105`、`checkInternalHealth :132-142`、`toggleInternal :144-161`、KV/行解析 `:163-179`、`loadMcp :181-188`、`mcpPayload :213-223`、`saveMcp :225-242`、`toggleMcp :244-251`、`removeMcp :253-264`
 - `src/views/admin/AiSettings.vue`（313 行）——GET `:218`、listModels `:242`（`api/aiChat.ts:285`）、PUT `:252`
 - `src/api/aiMcpServers.ts`——6 函数 `:16,:21,:26,:31,:50,:55`
 - 消费方：`src/components/layout/SettingsSideMenu.vue:50,57`；单测 `src/views/admin/hub/__tests__/settingsCatalog.test.ts`、`src/router/__tests__/settingsHubRoutes.test.ts`、`hub/__tests__/SettingsTabShell.test.ts`
