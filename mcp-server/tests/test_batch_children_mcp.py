@@ -49,11 +49,12 @@ def seeded(db_conn):
             "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
             "VALUES (%s, 'user-owner', 'mcp-test-batch', 'p', 1)", (bid,))
         cur.execute(
-            "INSERT INTO ai_chat_sessions (id, user_id, batch_id, batch_seq, "
+            "INSERT INTO ai_chat_sessions (id, user_id, title, batch_id, batch_seq, "
             "  status, batch_input_file, opencode_session_id, "
             "  created_at, last_active_at) "
-            "VALUES (%s, 'user-owner', %s, 0, 'completed', 'inputs/one.txt', "
-            "  'oc-mcp-1', NOW() - INTERVAL '2 minutes', NOW())", (cid_ok, bid))
+            "VALUES (%s, 'user-owner', 'mcp-seeded-title', %s, 0, 'completed', "
+            "  'inputs/one.txt', 'oc-mcp-1', NOW() - INTERVAL '2 minutes', NOW())",
+            (cid_ok, bid))
         cur.execute(
             "INSERT INTO ai_chat_messages (id, session_id, role, content) "
             "VALUES (%s, %s, 'assistant', %s)",
@@ -88,6 +89,7 @@ def test_children_status_overview(db_conn, ctx, seeded):
     c = r['children'][0]
     assert c['childId'] == seeded['childId']
     assert c['status'] == child_status
+    assert c['title'] == 'mcp-seeded-title'
     assert c['statusZh'] in ('运行中', '已完成', '失败', '待运行', '已暂停')
     # 结果摘要：最后一条 assistant 回复首 300 字
     assert c['resultSummary'] and '汇总结果' in c['resultSummary']
@@ -252,6 +254,7 @@ def test_search_created_window(db_conn, ctx, seeded_search):
     r = batch_children_search.handle(
         {'batch_id': bid, 'created_from': today, 'created_to': today}, ctx)
     assert r['matched'] == 3          # fixture 子任务都是 NOW() 创建
+    assert r['children'][0]['title'] == 'mcp-seeded-title'
     r = batch_children_search.handle(
         {'batch_id': bid, 'created_from': yesterday,
          'created_to': yesterday}, ctx)

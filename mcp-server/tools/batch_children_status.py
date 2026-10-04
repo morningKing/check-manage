@@ -58,7 +58,7 @@ def children_overview(batch_id: str) -> dict | None:
             batch = dict(zip(('id', 'name', 'status', 'total', 'done',
                               'failed'), b))
             cur.execute(
-                "SELECT s.id, s.batch_seq, s.batch_input_file, s.status, "
+                "SELECT s.id, s.title, s.batch_seq, s.batch_input_file, s.status, "
                 "  s.gate_status, s.error_message, s.last_message_preview, "
                 "  s.created_at AS started_at, s.last_active_at AS finished_at, s.last_active_at, "
                 "  (SELECT count(*) FROM action_expectations e "
@@ -73,7 +73,7 @@ def children_overview(batch_id: str) -> dict | None:
                 "ORDER BY s.batch_seq NULLS LAST", (batch_id,))
             children = []
             for r in cur.fetchall():
-                (cid, seq, infile, st, gate_st, err, preview,
+                (cid, title, seq, infile, st, gate_st, err, preview,
                  started, finished, last_active, g_fail, g_pass,
                  last_reply_json) = r
                 # 最后一条 assistant 回复的首行文本 = 该子任务的结果摘要
@@ -96,6 +96,7 @@ def children_overview(batch_id: str) -> dict | None:
                         pass
                 children.append({
                     'childId': cid,
+                    'title': title,
                     'seq': seq,
                     'file': (infile or '').split('/')[-1] if infile else None,
                     'status': st,

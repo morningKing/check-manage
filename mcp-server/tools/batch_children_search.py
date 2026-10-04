@@ -223,7 +223,7 @@ def search_children(batch_id: str, inp: dict) -> dict | None:
             gate_failed = cur.fetchone()[0]
 
             cur.execute(
-                "SELECT s.id, s.batch_seq, s.batch_input_file, s.status, "
+                "SELECT s.id, s.title, s.batch_seq, s.batch_input_file, s.status, "
                 "  s.gate_status, s.error_message, s.last_message_preview, "
                 "  s.created_at, s.last_active_at, "
                 "  (SELECT count(*) FROM action_expectations e "
@@ -235,7 +235,7 @@ def search_children(batch_id: str, inp: dict) -> dict | None:
                 args + [norm['limit']])
             children = []
             for r in cur.fetchall():
-                (cid, seq, infile, st, gate_st, err, preview,
+                (cid, title, seq, infile, st, gate_st, err, preview,
                  created, last_active, g_fail, g_pass) = r
                 duration_ms = None
                 if created and last_active:
@@ -243,6 +243,7 @@ def search_children(batch_id: str, inp: dict) -> dict | None:
                                       * 1000)
                 children.append({
                     'childId': cid,
+                    'title': title,
                     'seq': seq,
                     'file': (infile or '').split('/')[-1] if infile else None,
                     'status': st,

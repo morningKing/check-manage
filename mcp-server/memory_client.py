@@ -8,6 +8,23 @@ import urllib.error
 FLASK_INTERNAL_URL = os.getenv('FLASK_INTERNAL_URL', 'http://127.0.0.1:3002')
 MCP_INTERNAL_TOKEN = os.getenv('MCP_INTERNAL_TOKEN', '')
 
+# 内部端点只应指向本机 Flask；显式配置成远程地址需 MCP_ALLOW_REMOTE_INTERNAL=1，
+# 防止错误 env 把内部 token 发到非预期主机（SSRF 加固）。
+_ALLOW_REMOTE = os.getenv('MCP_ALLOW_REMOTE_INTERNAL', '') == '1'
+
+
+def _check_url(url: str) -> None:
+    if _ALLOW_REMOTE:
+        return
+    if not url.startswith(('http://127.0.0.1', 'http://localhost',
+                           'https://127.0.0.1', 'https://localhost')):
+        raise RuntimeError(
+            f'FLASK_INTERNAL_URL must be loopback (got {url}); '
+            'set MCP_ALLOW_REMOTE_INTERNAL=1 to override')
+
+
+_check_url(FLASK_INTERNAL_URL)
+
 
 def _post(path: str, payload: dict) -> dict:
     data = json.dumps(payload).encode('utf-8')
