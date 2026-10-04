@@ -35,8 +35,8 @@
  *    停止/暂停前的消息 id 续跑后原样保留 + 新增内容（在原工作上继续）。
  *    建批流程换 createBatchViaDialog。
  *  - 用例 9「SSE 实时消费」（新增，确定性）：API cancel → 列表级 SSE
- *    推送（store.subscribeListEvents，3s 防抖 fetchList）让徽标 8s 内变
- *    cancelled，先于 10s 列表轮询（LIST_POLL_MS）能带来的更新。
+ *    推送（store.subscribeListEvents，3s 防抖 fetchList）让徽标 9s 内落
+ *    终态（<10s 列表轮询周期，LIST_POLL_MS——判据成立），先于轮询更新。
  *
  * LLM 预算标记（同 gate/lifecycle spec 约定，用例内 testInfo.annotations）：
  * - 用例 1/6/7/8：@llm（真 LLM，1-2 个子会话/例）；
@@ -624,7 +624,7 @@ test('SSE 实时消费：API 触发子任务取消，UI 徽标先于 10s 轮询�
     // 列表级 SSE 订阅在 startListPolling 的首个 tick（10s）后才建立
     // （aiChatBatches.startListPolling：tick 内 fetchList → subscribeListEvents，
     // 挂载时只有 fetchList 没有 subscribe）——先喂满一个轮询周期，确保
-    // cancel 发生时 SSE 订阅已带本批 id，8s 窗口量的是「SSE 推送→徽标」。
+    // cancel 发生时 SSE 订阅已带本批 id，9s 窗口量的是「SSE 推送→徽标」。
     await page.waitForTimeout(11_000)
 
     const t0 = Date.now()
@@ -632,18 +632,19 @@ test('SSE 实时消费：API 触发子任务取消，UI 徽标先于 10s 轮询�
       method: 'POST', headers: authHeaders(tk),
     })
     expect(res.status, 'API cancel 应成功').toBeLessThan(300)
-    // SSE push 到达 → 3s 防抖 fetchList → 徽标 8s 内落终态。批次无
+    // SSE push 到达 → 3s 防抖 fetchList → 徽标 9s 内落终态。批次无
     // cancelled 终态（cancelled 计入 failed 聚合，见用例 3 注），故按
     // .badge 元素的终态修饰类判定（组 className/文本不含类名，brief 草稿
     // 的 /cancelled|failed/ 对 g.className+textContent 永不匹配，已修正）。
-    // 列表轮询周期 10s，若仅靠轮询必然 >10s——这就是本例的判据。
+    // 窗口 9s：链路含变量段（worker cancel 去注册 ~4.5s），给负载留余量，
+    // 且仍严格小于 10s 列表轮询周期——「靠轮询必然 >10s」，SSE 判据不变。
     await page.waitForFunction((n) => {
       const g = [...document.querySelectorAll('.batch-group')]
         .find(el => el.querySelector('.bg-name')?.textContent?.includes(n))
       const badge = g?.querySelector('.badge')
       return !!badge && ['badge--cancelled', 'badge--failed', 'badge--partial'].some(
         c => badge.classList.contains(c))
-    }, name, { timeout: 8_000 })
+    }, name, { timeout: 9_000 })
     console.log(`SSE 更新延迟 ${Date.now() - t0}ms`)
     await screenshot(page, 'ui-journeys-sse')
   } finally {
