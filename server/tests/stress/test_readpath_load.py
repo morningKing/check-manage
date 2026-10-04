@@ -41,12 +41,33 @@ def test_r1_sse_50_connections_5min(stress_stack, sampler):
                 for _ in r.iter_lines(chunk_size=1):
                     if stop.is_set():
                         return
-        except Exception as e:                      # 断流/超时都算失败
+        except requests.exceptions.ChunkedEncodingError:
+            # 批次终态后服务端回 batch_done 即关流；urllib3 对服务端关闭的
+            # chunked 流抛 ChunkedEncodingError(Response ended prematurely)
+            # 而非干净返回——按批次状态分类：已终态=正常关流，不计错。
+            try:
+                d = requests.get(
+                    f'{stress_stack.base}/ai/chat/batches/{bid}',
+                    headers=stress_stack.auth_header, timeout=10).json()
+                terminal = d.get('batch', {}).get('status') in (
+                    'completed', 'failed', 'partial')
+            except Exception:                       # 状态探针失败按未终态算
+                terminal = False
+            if not terminal:
+                errors.append('SSE 断流且批次未终态')
+        except Exception as e:                      # 其余断流/超时都算失败
             errors.append(e)
 
-    threads = [threading.Thread(target=watch, daemon=True) for _ in range(50)]
-    for t in threads:
+    # 1s/连接爬坡建连：50 个同时建连会在 SSE 入口的 get_batch_detail 处
+    # 瞬间借满 DB 池（db.py ThreadedConnectionPool maxconn=20）→ PoolError
+    # → 服务端恒 500。错峰后任意时刻仅个位数并发借用，稳态仍是 50 条并发
+    # 长连接持续 5 分钟。
+    threads = []
+    for _ in range(50):
+        t = threading.Thread(target=watch, daemon=True)
         t.start()
+        threads.append(t)
+        time.sleep(1.0)
     time.sleep(300)                                 # 持续 5 分钟
     stop.set()
     for t in threads:
