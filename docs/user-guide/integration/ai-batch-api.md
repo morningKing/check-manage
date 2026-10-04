@@ -331,7 +331,7 @@ Content-Type: application/json
 | `model` | string | 否 | 指定模型（`<providerID>/<modelID>` 格式）；留空/不传使用系统默认 |
 | `callbackUrl` | string | 否 | 批任务进入终态时接收 HMAC 签名回调通知的 URL（必须 `http://` 或 `https://` 开头）；留空/不传则不发回调，只能轮询。见 4.2b |
 | `callbackSecret` | string | 否 | 用于计算回调签名的密钥；留空则回调仍会发送，但签名用空字符串计算（不建议在公网环境这样用） |
-| `actionChecks` | array | 否 | 动作门禁期望清单（每项是一个核对要求，子任务终态时逐条核对，不达标该子任务标记 failed 并写明缺失项）。字段见 11.5，编写指南见《AI 批任务动作门禁编写指南》 |
+| `actionChecks` | array | 否 | 动作门禁期望清单（每项是一个核对要求，子任务终态时逐条核对，不达标该子任务标记 failed 并写明缺失项）。字段见 11.5，编写指南见 [AI 动作门禁与执行前审批](../ai/action-gate.md) |
 
 > **`gateRetry`（门禁不过时自动修正）不在创建接口上**：创建请求体里的 `gateRetry` 会被忽略；需要开启时用 `PATCH /{batchId}`（4.2a）设置。
 
@@ -1508,4 +1508,4 @@ GET /api/v1/ai-batches/{batchId}/events?afterSeq=<n>&limit=<n>
 ]
 ```
 
-`verifier` 注意事项：判官核对是非确定性的 LLM 判定（理由与证据会写进子任务 `error`），对必须精确复现的核对请用前三类确定性原语；判官不可用（平台判官 agent 未部署/超时）时按「无法证实」处理——子任务同样 `failed`，不会静默放行。rubric 写法与粒度选择见《AI 批任务动作门禁编写指南》。
+`verifier` 注意事项：判官核对是非确定性的 LLM 判定（理由与证据会写进子任务 `error`），对必须精确复现的核对请用前三类确定性原语；判官不可用（平台判官 agent 未部署/超时）时按「无法证实」处理——子任务同样 `failed`，不会静默放行。rubric 写法与粒度选择见 [AI 动作门禁与执行前审批](../ai/action-gate.md)。

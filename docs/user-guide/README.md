@@ -64,6 +64,11 @@ Check-Manage 用户使用文档，按功能域分子目录组织。文件名采�
 | [smart-customer-service.md](./ai/smart-customer-service.md) | 智能客服：公开匿名访客对话入口，OpenCode Agent 驱动，RBAC 只读钳制 |
 | [trace-analysis.md](./ai/trace-analysis.md) | AI 执行轨迹分析：管理员对任意 AI 会话发起六步诊断（评分 / 根因 / 优化建议） |
 | [orchestration.md](./ai/orchestration.md) | AI 编排管理：拖拽式 DAG 定义编辑器、运行可视化（状态着色 DAG）、审批收件箱、step 超时兜底 |
+| [action-gate.md](./ai/action-gate.md) | AI 动作门禁与执行前审批：核对清单三入口、pre 阻断 vs 终态核对、判官（verifier）编写要点、自动修正、审批收件箱 |
+| [skills.md](./ai/skills.md) | AI 技能与 SkillOpt：技能广场（zip 上传/启停/发布到运行时）、任务拟合与调用聚合治理 |
+| [runtime.md](./ai/runtime.md) | OpenCode 运行时管理：全局目录技能/Agent 编辑、生效状态、应用与重启（强制重启分权） |
+| [mcp-servers.md](./ai/mcp-servers.md) | MCP 服务管理：内置 MCP 开关与健康探测、外部 MCP 注册（生效边界与已知问题） |
+| [budgets.md](./ai/budgets.md) | 执行预算与用量：维度与超限策略（warn/drain/abort）、两判定点、事件流识别 budget.exceeded（配置入口未开放） |
 
 ## 📚 参考
 
