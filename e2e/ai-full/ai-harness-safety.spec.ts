@@ -6,7 +6,8 @@
  *  - 终态子会话经批通道 continue；
  *  - 对外 DELETE：非终态 409 BATCH_NOT_TERMINAL / stop=true drain 后删除。
  * P1 持久化执行：
- *  - 事件流（内部 + 对外）afterSeq 增量；命令幂等（Idempotency-Key）。
+ *  - 事件流（内部 + 对外）afterSeq 增量；命令幂等（Idempotency-Key）已
+ *    收编至 batch/control.spec.ts（2026-10-04，仅该块移出、本文件保留）。
  * P2 编排：
  *  - 3 节点 DAG（抽取 → 审批 → 汇总）真实跑通：waiting_approval → approve → completed。
  *
@@ -64,7 +65,7 @@ async function waitBatchTerminal(request: import('@playwright/test').APIRequestC
   throw new Error(`batch ${batchId} not terminal in ${timeoutMs}ms`)
 }
 
-test('P0/P1：批任务全链路——发送门禁/事件流/命令幂等/stop-and-delete', async ({ request, page }) => {
+test('P0/P1：批任务全链路——发送门禁/事件流/stop-and-delete', async ({ request, page }) => {
   const key = await createApiKey(request, TAG)
   try {
     // ---- 创建批任务（2 个文件，真实 OpenCode）----
@@ -142,16 +143,8 @@ test('P0/P1：批任务全链路——发送门禁/事件流/命令幂等/stop-a
     expect(extBody.events[0]).toHaveProperty('eventId')
     expect(extBody.events[0]).toHaveProperty('eventSeq')
 
-    // ---- P1：命令幂等（对已完成批次 pause → rejected + 幂等键复用）----
-    const idem = `${TAG}-idem-1`
-    const cmd1 = await openApi(request, key, 'POST', `/v1/ai-batches/${batchId}/pause`, {},
-                               { 'Idempotency-Key': idem })
-    // 终态批次 pause → 409（命令 rejected），但命令行已登记
-    expect([200, 409]).toContain(cmd1.status)
-    const cmd2 = await openApi(request, key, 'POST', `/v1/ai-batches/${batchId}/pause`, {},
-                               { 'Idempotency-Key': idem })
-    // 同幂等键：不再重复执行，状态一致
-    expect(cmd2.status).toBe(cmd1.status)
+    // （P1 命令幂等块 2026-10-04 收编至 batch/control.spec.ts——
+    //   POST /commands + Idempotency-Key 语义在该文件维护）
 
     // ---- P0-3：对外删除保护（非终态 409 / stop=true drain 删除）----
     const staged2 = await stagingUpload(request, `${TAG}-u2`, [
