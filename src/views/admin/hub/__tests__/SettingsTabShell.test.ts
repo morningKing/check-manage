@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import type { Router } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 // 壳的模板用的是真实 el-tabs/el-tab-pane/el-empty，测试需要注册 Element Plus
 // 才能渲染出 .el-tabs__item（仅环境补齐，断言语义不变）。
@@ -50,6 +51,14 @@ async function mountShell(query: Record<string, string> = {}, perms: string[] = 
   return w
 }
 
+// 从壳的 el-tabs 头部按文案找页签项（子组件内可能嵌套 el-tabs，故锚定壳层 header）
+function findTab(w: Awaited<ReturnType<typeof mountShell>>, label: string) {
+  const tab = w.findAll('.settings-tab-shell > .el-tabs__header .el-tabs__item')
+    .find(el => el.text().includes(label))
+  expect(tab, `页签「${label}」应渲染`).toBeTruthy()
+  return tab!
+}
+
 describe('SettingsTabShell', () => {
   it('无权限的 tab 不渲染', async () => {
     const w = await mountShell({}, ['admin.ai_settings'])   // 只放行 ai_settings
@@ -67,5 +76,21 @@ describe('SettingsTabShell', () => {
     // 故这里只断言激活页签回落，不断言地址栏。
     const w = await mountShell({ tab: 'bogus' })
     expect((w.find('.el-tabs__item.is-active').element as HTMLElement).textContent).toContain('模型与密钥')
+  })
+  it('点击页签回写 query.tab', async () => {
+    const w = await mountShell()
+    const router = (w.vm as { $router: Router }).$router
+    // 组件设计：进页无 query 不补写地址栏，仅切换页签时回写
+    expect(router.currentRoute.value.query.tab).toBeUndefined()
+    await findTab(w, '运行时').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('runtime')
+  })
+  it('懒挂载：未激活 pane 内容不在 DOM，激活后出现', async () => {
+    const w = await mountShell()
+    expect(w.find('.pane-runtime').exists()).toBe(false)
+    await findTab(w, '运行时').trigger('click')
+    await flushPromises()   // 异步组件解析
+    expect(w.find('.pane-runtime').exists()).toBe(true)
   })
 })
