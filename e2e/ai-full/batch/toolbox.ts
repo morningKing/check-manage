@@ -184,7 +184,11 @@ export async function restartBackend(env: Record<string, string> = {}): Promise<
   const child = spawn('python', ['app.py'], {
     cwd: path.join(DIRNAME, '..', '..', '..', 'server'),
     env: { ...process.env, ...env },
-    detached: false, stdio: 'ignore',
+    // detached:true（Windows=新进程组+独立控制台）：后端必须活过本 runner 退出
+    // ——detached:false 时子进程随父控制台关闭被杀（Task 12 实测 run 结束即失联）
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
   })
   child.unref()
   const deadline = Date.now() + 60_000
