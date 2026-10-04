@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test'
 import {
   adminToken, authHeaders, uploadStaging, createBatch,
   waitBatchTerminal, cleanupBatch,
-} from './batch-helpers'
+} from './batch/batch-helpers'
 
 test.setTimeout(1_200_000)
 

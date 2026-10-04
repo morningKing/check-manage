@@ -24,7 +24,7 @@ import path from 'node:path'
 import {
   adminToken, authHeaders, uploadStaging, createBatch, getDetail,
   cleanupBatch, makeProvisionRepo, waitFor,
-} from './batch-helpers'
+} from './batch/batch-helpers'
 
 const PRIMARY = 'e2e-primary'
 const SUB = 'e2e-sub'

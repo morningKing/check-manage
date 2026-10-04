@@ -24,7 +24,7 @@ import { test, expect } from '@playwright/test'
 import {
   adminToken, authHeaders, uploadStaging, createBatch, getDetail,
   waitBatchTerminal, cleanupBatch, waitFor, countByStatus,
-} from './batch-helpers'
+} from './batch/batch-helpers'
 
 const API = 'http://127.0.0.1:3002'
 const SLEEP_PROMPT = '用 bash 工具执行命令 `sleep 90`（必须完整等待 90 秒），结束后把文本 "done" 写入 outputs/done.txt，最后回复 DONE。'

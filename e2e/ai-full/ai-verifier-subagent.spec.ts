@@ -19,7 +19,7 @@ import { test, expect } from '@playwright/test'
 import {
   adminToken, authHeaders, uploadStaging, createBatch, getDetail,
   cleanupBatch, BATCH_TERMINAL,
-} from './batch-helpers'
+} from './batch/batch-helpers'
 
 const API = 'http://127.0.0.1:3002'
 const _json = (v: unknown) => JSON.stringify(v)

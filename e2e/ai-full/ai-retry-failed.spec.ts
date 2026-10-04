@@ -27,7 +27,7 @@ import path from 'node:path'
 import {
   adminToken, authHeaders, uploadStaging, createBatch,
   waitBatchTerminal, cleanupBatch,
-} from './batch-helpers'
+} from './batch/batch-helpers'
 
 test.setTimeout(600_000)
 
