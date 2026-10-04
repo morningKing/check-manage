@@ -4,7 +4,8 @@
  * P0 执行安全：
  *  - 运行中批子会话走普通发送 → 409 BATCH_SESSION_CONTROLLED（API + UI composer 禁用）；
  *  - 终态子会话经批通道 continue；
- *  - 对外 DELETE：非终态 409 BATCH_NOT_TERMINAL / stop=true drain 后删除。
+ *  - 对外 DELETE 治理（非终态 409 BATCH_NOT_TERMINAL / stop=true drain）
+ *    已收编至 batch/openapi.spec.ts（2026-10-04，仅该块移出、本文件保留）。
  * P1 持久化执行：
  *  - 事件流（内部 + 对外）afterSeq 增量；命令幂等（Idempotency-Key）已
  *    收编至 batch/control.spec.ts（2026-10-04，仅该块移出、本文件保留）。
@@ -65,7 +66,8 @@ async function waitBatchTerminal(request: import('@playwright/test').APIRequestC
   throw new Error(`batch ${batchId} not terminal in ${timeoutMs}ms`)
 }
 
-test('P0/P1：批任务全链路——发送门禁/事件流/stop-and-delete', async ({ request, page }) => {
+test('P0/P1：批任务全链路——发送门禁/事件流（stop-and-delete 已收编 batch/openapi.spec.ts）',
+     async ({ request, page }) => {
   const key = await createApiKey(request, TAG)
   try {
     // ---- 创建批任务（2 个文件，真实 OpenCode）----
@@ -145,41 +147,8 @@ test('P0/P1：批任务全链路——发送门禁/事件流/stop-and-delete', a
 
     // （P1 命令幂等块 2026-10-04 收编至 batch/control.spec.ts——
     //   POST /commands + Idempotency-Key 语义在该文件维护）
-
-    // ---- P0-3：对外删除保护（非终态 409 / stop=true drain 删除）----
-    const staged2 = await stagingUpload(request, `${TAG}-u2`, [
-      { name: 'c.txt', body: `长任务材料：${'细节。'.repeat(200)}` },
-    ])
-    const created2 = await openApi(request, key, 'POST', '/v1/ai-batches', {
-      name: `AITEST-${TAG}-del`,
-      prompt: '请仔细阅读 uploads/c.txt 并用 300 字复述全文，不要遗漏任何一点。',
-      files: staged2,
-    })
-    expect(created2.status).toBe(201)
-    const batch2 = created2.json.batchId as string
-
-    // 运行中直接删 → 409 BATCH_NOT_TERMINAL
-    let got409 = false
-    for (let i = 0; i < 20 && !got409; i++) {
-      const d = await api(request, 'GET', `/ai/chat/batches/${batch2}`)
-      if (!['completed', 'partial', 'failed'].includes(d.json?.batch?.status)) {
-        const del = await openApi(request, key, 'DELETE', `/v1/ai-batches/${batch2}`)
-        if (del.status === 409) {
-          expect(del.json?.error?.code).toBe('BATCH_NOT_TERMINAL')
-          got409 = true
-        }
-      } else break
-      await new Promise(r => setTimeout(r, 1000))
-    }
-    // stop=true → cancel + bounded drain → 删除成功
-    const delStop = await openApi(request, key, 'DELETE', `/v1/ai-batches/${batch2}?stop=true`)
-    expect([200, 409]).toContain(delStop.status)  // drain 超时保留任务(409)或删除成功(200)
-    if (delStop.status === 200) {
-      expect(delStop.json).toEqual({ deleted: true })
-    }
-    const keyDel = await openApi(request, key, 'GET', `/v1/ai-batches/${batch2}`)
-    expect([200, 404]).toContain(keyDel.status)
-    await page.screenshot({ path: `${SHOT_DIR}/harness-p0-delete-guard.png` })
+    // （P0-3 对外删除治理块 2026-10-04 收编至 batch/openapi.spec.ts——
+    //   BATCH_NOT_TERMINAL 409 / stop=true drain 语义在该文件维护）
   } finally {
     await deleteApiKey(request, TAG)
   }
