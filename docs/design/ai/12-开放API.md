@@ -7,7 +7,7 @@
 
 开放 API 是系统对**外部系统**（非浏览器前端）暴露的统一 HTTP 契约层，挂在 `/v1` 前缀下（公网经 `proxy.py` 以 `/api/v1/...` 访问，代理契约「`/api/X` → 后端 `/X`」，`docs/user-guide/integration/ai-batch-api.md` §1）。它分两大块：**数据面**（`/v1/collections`、`/v1/branches`、`/v1/files`，按「页面是否开放 API」授权读写业务数据）与 **AI 能力面**（批任务/单会话/编排/审批/扫描/记忆/Prompt 模板/行操作，按「密钥是否绑定用户」授权并严格按密钥属主隔离）。对外契约层的统一纪律：**只调底层 repo/engine 函数，不复用内部路由的处理器**——内部返回体含 `opencode_session_id`/`workspace_path` 等实现细节，一旦对外就成了公开承诺（`open_api_batches.py:1-7` 文件头）。
 
-按职责分九个蓝图（`ls server/routes/open_api_*.py` 实际清单 + 同前缀的 `ai_approvals.py`；注册于 `server/app.py:99-106` 与 `:521`）：
+按职责分九个蓝图（glob `open_api_*.py` 匹配 7 个 + `open_api.py` + 同前缀的 `ai_approvals.py`；注册于 `server/app.py:99-106` 与 `:521`）：
 
 | 职责 | 文件 | 前缀 | 端点数 | 鉴权 |
 | --- | --- | --- | --- | --- |
@@ -34,15 +34,15 @@
 - `server/routes/open_api_row_actions.py`（106 行）——蓝图 `open_api_row_actions`，前缀 `/v1/collections`（`:25-26`），注册 `app.py:101`。1 端点（§5.5）。独立成文件的理由：直接透传 `row_action_engine.RowActionError.message`（中文），与 open-api.md 的全英文 error 惯例冲突（模块头 `:1-13`）。行操作上下文 `_load_row_action_context :35-51` 独立一份而不跨路由文件 import（改生产路由的风险高于复制十来行 SQL，`:36-38`）。
 - `server/routes/open_api_scan_tasks.py`（90 行）——蓝图 `open_api_scan_tasks`，前缀 `/v1/ai-scan-tasks`（`:20-21`），注册 `app.py:102`。3 端点（§5.6）。`run-now` 是内部 `admin.ai_scan` JWT 权限门的 API Key 等价物：按 `ai_scan_tasks.owner_user_id` 与密钥 owner 匹配（`:66-90`）；刻意不检查 `task['enabled']`（内部 run-now 也不检查，不引入内部没有的新规则，`:9-10`）。
 - `server/routes/open_api_prompt_templates.py`（124 行）——蓝图 `open_api_prompt_templates`，前缀 `/v1/prompt-templates`（`:25-26`），注册 `app.py:103`。5 端点（§5.7），直接复用 `utils/prompt_template.py` 五函数（本就以 user_id 为第一参数、SQL 层按 user_id 过滤）；error 沿用内部路由的英文文案（该家族不在「AI 对外中文」惯例内，模块头 `:1-8`）。
-- `server/routes/open_api_memories.py`（77 行）——蓝图 `open_api_memories`，前缀 `/v1/memories`（`:25-26`），注册 `app.py:104`。3 端点（§5.8），复用 `utils/memory.py`。安全关键点：`delete_memory(memory_id)` 不按 user_id 过滤，删除前必须先 `list_memories(owner)` 建「这把密钥能看到的 id 集合」再确认目标在集合内，否则是 IDOR（模块头 `:1-15` 与 `:69-73`）。
+- `server/routes/open_api_memories.py`（77 行）——蓝图 `open_api_memories`，前缀 `/v1/memories`（`:25-26`），注册 `app.py:104`。3 端点（§5.8），复用 `utils/memory.py`。安全关键点：`delete_memory(memory_id)` 不按 user_id 过滤，删除前必须先 `list_memories(owner)` 建「这把密钥能看到的 id 集合」再确认目标在集合内，否则是 IDOR（模块头 `:1-15` 与 `:69-74`）。
 - `server/routes/ai_approvals.py`（73 行）——蓝图 `ai_approvals`，前缀 `/v1/ai-approvals`（`:13-14`），注册 `app.py:521`。3 端点（§5.9）：列表按角色过滤、approve/reject 统一 `_decide :41-73`（approve 可带 `edits` 合并 `run_input_snapshot`，`:45-46`）。JWT 门禁与决策幂等归分册 05。
 
 配套：
 
 - `server/auth.py`——鉴权链两装饰器：`api_key_required :172-210`、`require_bound_key :213-225`；`hash_api_key :167-169`（SHA-256）。
-- `server/routes/api_keys.py`——密钥管理面（JWT `admin.api_keys` 权限）：创建时明文密钥 `cm_<token_urlsafe(32)>` **仅创建响应返回一次**（`:47`）、`owner_user_id` 绑定为创建者（`:58`）、启停 `:66-94`、删除 `:97-113`。
+- `server/routes/api_keys.py`——密钥管理面（JWT `admin.api_keys` 权限）：创建时明文密钥 `cm_<token_urlsafe(32)>` **仅创建响应返回一次**（`:52`）、`owner_user_id` 绑定为创建者（`:58`）、启停（PUT `:75`、`toggle_api_key :77-103`）、删除（DELETE `:105`、`delete_api_key :107` 起）。
 - `server/utils/api_errors.py`——`/v1/*` AI 能力蓝图共用的错误 helper：`err() :19-42` 输出 `{error, code}` 形状（`error` 字符串是既有契约不破坏；`code` 是加法扩展；P1-A1 起可选 `error_detail` 结构化增量 retryable/phase/attempt/evidenceRefs）、`register_error_handlers :44`（各 AI 蓝图注册处如 `open_api_batches.py:41`）。
-- `server/utils/upload_limits.py`——请求体上限**唯一真源**（零依赖模块，Flask 与 `proxy.py` 两进程共读）：`MAX_UPLOAD_TOTAL_BYTES=100MB`（`:12`）、uploads 路径再留 1MB multipart 余量（`:14-15`）、其余 JSON 端点 1MB（`:17`）、`body_limit_for_path :46-60`（不属于 AI 对外接口的路径一律返回 None=不限制，保住备份还原与 `/v1/collections` 大 JSON 通道）。
+- `server/utils/upload_limits.py`——请求体上限**唯一真源**（零依赖模块，Flask 与 `proxy.py` 两进程共读）：`MAX_UPLOAD_TOTAL_BYTES=100MB`（`:20`）、uploads 路径再留 1MB multipart 余量（`:21-23`）、其余 JSON 端点 1MB（`:25`）、`body_limit_for_path :44`（不属于 AI 对外接口的路径一律返回 None=不限制，保住备份还原与 `/v1/collections` 大 JSON 通道）。
 - `server/utils/operation_log.py`——`log_api_operation :113`（API Key actor 专用，与 JWT 的 `log_operation` 共享 INSERT `:51`）。
 
 ### 2.2 前端
@@ -64,9 +64,9 @@
 
 | 表.列 | 证据 | 开放 API 语义 |
 | --- | --- | --- |
-| `ai_chat_batches.api_key_id` / `scan_task_id` | `batch_repo.py:296-300` 写入 | 来源区分；列表/详情/控制全部按 `(owner_user_id, api_key_id)` 双条件过滤（`batch_repo.list_batches/get_batch_detail` 带 `api_key_id=`，`open_api_batches.py:428-429,439`） |
+| `ai_chat_batches.api_key_id` / `scan_task_id` | `batch_repo.py:288-292` 写入 | 来源区分；列表/详情/控制全部按 `(owner_user_id, api_key_id)` 双条件过滤（`batch_repo.list_batches/get_batch_detail` 带 `api_key_id=`，`open_api_batches.py:428-429,439`） |
 | `ai_chat_batches.callback_url` / `callback_secret` | `db_schema/ai_batches.py:31-33` | 批终态回调目标与 HMAC 密钥（§4.6） |
-| `ai_chat_sessions.api_key_id` / `input_files` / `continue_prompt` | `ai_session_repo.py:43-46`；`continue_prompt` 列 `db_schema/ai_scan.py:45` | 单会话行的归属（user_id+api_key_id 双检）、随附文件、prompt 暂存（首 claim 时被 `_run_one` 的 `batch_id IS NULL` 分支读取并清掉，`ai_session_repo.py:8-13`） |
+| `ai_chat_sessions.api_key_id` / `input_files` / `continue_prompt` | `ai_session_repo.py:43-46`；`continue_prompt` 列 `db_schema/ai_scan.py:45` | 单会话行的归属（user_id+api_key_id 双检）、随附文件、prompt 暂存（首 claim 时被 `_run_one` 的 `batch_id IS NULL` 分支读取并清掉，`ai_session_repo.py:1-8`） |
 | `ai_execution_commands.idempotency_key` UNIQUE | `2026_09_23_harness_p1_durable_execution.py:126-127` | 命令幂等（§4.5） |
 | `ai_delivery_outbox.signature` / `(event_id,target_url)` UNIQUE | `2026_09_23_harness_p1_durable_execution.py:154-177` | 回调 HMAC 密钥随行保存、投递去重（机制归分册 03 §3.7） |
 | `page_configs.api_public` / `api_writable` / `row_actions` / `fields` | `open_api.py:61-69,95-103,106-111`；row_actions 读取 `open_api_row_actions.py:40-44` | 数据面授权模型：页面级开关决定集合可见/可写；`fields` 驱动必填校验、主键唯一性、file/image 字段 apiUrl 补全 |
@@ -108,7 +108,7 @@ API Key 来源的批子会话在执行审计中 `source_type='open_api'`（由�
 
 ### 4.4 单会话面（`/v1/ai-sessions`，batch_id IS NULL 分支）
 
-`create_session`（`ai_session_repo.py:18-50`）插入一行 `status='pending'`、`batch_id=NULL`、`api_key_id=非空` 的 `ai_chat_sessions`，prompt 暂存 `continue_prompt`，files 存 `input_files` JSONB。执行与批任务**共用同一个 worker/dispatcher/并发上限**：claim CTE 的候选条件是 `batch_id IS NOT NULL OR api_key_id IS NOT NULL OR orchestration_run_id IS NOT NULL`（`batch_engine.py:1122-1124`）——单会话（api_key_id）、编排首节点（orchestration_run_id）、批子任务（batch_id）三来源在同一张表里排队；`_run_one` 的 `batch_id is None` 分支首 claim 时读 `continue_prompt` 并立即清掉、把 `uploads/` 下的随附文件拷进会话工作区（`ai_session_repo.py:8-13` 模块注释）。与批任务的契约差异：所有文件进**同一个**会话、不按文件拆子任务；`status` 五态 pending/running/completed/failed/cancelled，`output` 仅 completed 非空、`error` 仅 failed 非空；**没有 SSE，轮询是唯一完成信号**（`open_api_ai_sessions.py:95-97`）。取消语义：pending 时 worker 下一轮直接落 cancelled 不占并发槽；running 时协作式打断（OpenCode abort + 提前结束轮询）；已终态 409（`:105-121`）。归属双检见 §4.1-3。
+`create_session`（`ai_session_repo.py:18-50`）插入一行 `status='pending'`、`batch_id=NULL`、`api_key_id=非空` 的 `ai_chat_sessions`，prompt 暂存 `continue_prompt`，files 存 `input_files` JSONB。执行与批任务**共用同一个 worker/dispatcher/并发上限**：claim CTE 的候选条件是 `batch_id IS NOT NULL OR api_key_id IS NOT NULL OR orchestration_run_id IS NOT NULL`（`batch_engine.py:1133-1134`）——单会话（api_key_id）、编排首节点（orchestration_run_id）、批子任务（batch_id）三来源在同一张表里排队；`_run_one` 的 `batch_id is None` 分支首 claim 时读 `continue_prompt` 并立即清掉、把 `uploads/` 下的随附文件拷进会话工作区（`ai_session_repo.py:1-8` 模块注释）。与批任务的契约差异：所有文件进**同一个**会话、不按文件拆子任务；`status` 五态 pending/running/completed/failed/cancelled，`output` 仅 completed 非空、`error` 仅 failed 非空；**没有 SSE，轮询是唯一完成信号**（`open_api_ai_sessions.py:95-97`）。取消语义：pending 时 worker 下一轮直接落 cancelled 不占并发槽；running 时协作式打断（OpenCode abort + 提前结束轮询）；已终态 409（`:105-121`）。归属双检见 §4.1-3。
 
 ### 4.5 幂等语义（逐条对码）
 
@@ -133,7 +133,7 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 
 ### 4.7 请求体上限门（双进程同源）
 
-`utils/upload_limits.py` 是唯一真源，两道执行点：Flask 侧 `open_api_batches.py:49-81` 的蓝图级 `before_request`（批任务家族）+ `app.py:135-160` 的应用级 `before_request`（补齐 `/v1/ai-sessions`、`/v1/memories`、`/v1/prompt-templates`、`/v1/ai-scan-tasks`、行操作 run 五族——此前这些端点只有 proxy 会拦）；代理侧 `proxy.py` 在 `rfile.read()` 之前拦截（它把整个 body 读进代理内存，发生在 Flask 之前）。无 `Content-Length` 的分块传输一律 411。**刻意不设全局 `MAX_CONTENT_LENGTH`**：备份还原 ZIP 大小本质无上界；`/v1/collections` 数据接口刻意不整段限制（可能批量导入大 JSON），只精确匹配行操作 run 端点（`upload_limits.py:5-10,46-60`）。
+`utils/upload_limits.py` 是唯一真源，两道执行点：Flask 侧 `open_api_batches.py:49-81` 的蓝图级 `before_request`（批任务家族）+ `app.py:135-160` 的应用级 `before_request`（补齐 `/v1/ai-sessions`、`/v1/memories`、`/v1/prompt-templates`、`/v1/ai-scan-tasks`、行操作 run 五族——此前这些端点只有 proxy 会拦）；代理侧 `proxy.py` 在 `rfile.read()` 之前拦截（它把整个 body 读进代理内存，发生在 Flask 之前）。无 `Content-Length` 的分块传输一律 411。**刻意不设全局 `MAX_CONTENT_LENGTH`**：备份还原 ZIP 大小本质无上界；`/v1/collections` 数据接口刻意不整段限制（可能批量导入大 JSON），只精确匹配行操作 run 端点（`upload_limits.py:14-17,44`）。
 
 ## 5. 关键接口
 
@@ -249,7 +249,7 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 ## 6. 依赖与协作关系
 
 - **上游依赖**：PostgreSQL（`api_keys`/`page_configs`/`dynamic_data`/`ai_chat_sessions`/`ai_chat_batches`/`ai_execution_commands`/`ai_delivery_outbox` 等）；`utils/batch_repo`+`batch_engine`（批与单会话执行，分册 03）；`utils/orchestration_defs/engine`（编排，分册 04）；`utils/ai_scan_repo/engine`（扫描，分册 07）；`utils/memory`（mem0，分册 09）；`utils/prompt_template`；`utils/row_action_engine`；`utils/opencode_client`（agents/models 发现）；`utils/ai_query`+`mongo_query`（NL 翻译）；`utils/webhook_engine`（HMAC，与 webhook 规则引擎共用）；`utils/workspace`（暂存/工作区/路径遏制）；`utils/agent_ledger`（actionChecks 校验，分册 05）；`utils/session_file_import`/`workspace_changes`/`workspace_outputs`（产出读取与导入）。
-- **下游消费方**：外部集成系统（经 `proxy.py` `/api/v1/...`，文档面 `docs/user-guide/integration/`）；批 worker 是单会话/编排 run/批子任务的统一执行体（claim 条件三分支，`batch_engine.py:1122-1124`）；outbox 投递器消费批回调（分册 03 §4.7）；执行审计把 API Key 来源批标为 `open_api`（分册 06）；管理面 outbox 投递状态/重放在分册 03 的 admin 蓝图。
+- **下游消费方**：外部集成系统（经 `proxy.py` `/api/v1/...`，文档面 `docs/user-guide/integration/`）；批 worker 是单会话/编排 run/批子任务的统一执行体（claim 条件三分支，`batch_engine.py:1133-1134`）；outbox 投递器消费批回调（分册 03 §4.7）；执行审计把 API Key 来源批标为 `open_api`（分册 06）；管理面 outbox 投递状态/重放在分册 03 的 admin 蓝图。
 - **协作约束**：对外契约层只吐白名单字段、不复用内部处理器（内部字段外泄即成公开承诺）；`error` 字段保持字符串形状，`code`/`error_detail` 只做加法扩展（`api_errors.py:1-9`）；所有控制类写操作同步落命令账本，形成完整命令历史；error 文案三种惯例并存——数据面 `open-api.md` 英文、AI 能力面（批/单会话/扫描/记忆）中文、prompt-templates 英文（沿用内部路由）、row-actions 中文（透传引擎异常），各自在文件头注明理由。
 
 ## 7. 设计决策
@@ -259,7 +259,7 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 3. **绑定键是 AI 能力面的硬门槛**：存量未绑定密钥一律 403 要求重建，而非默认归属到某个用户——「以谁的名义跑」必须显式（`auth.py:213-225`）。密钥只存哈希、明文仅创建时返回一次；`owner_user_id` FK ON DELETE SET NULL 保证删用户不级联删密钥，失主密钥由 `require_bound_key` 统一挡下。
 4. **幂等三档**：命令平面显式 `Idempotency-Key`（外部重试安全）、批内控制端点自然键派生（同请求者同类操作天然去重）、读侧 afterSeq/eventId 游标合并（保留期外显式 `CURSOR_EXPIRED` 让客户端重新同步而非静默丢帧）——三档都落到 `ai_execution_commands.idempotency_key` 唯一约束或事件表主键上，不靠应用内存。
 5. **回调交付复用 webhook 引擎**：一套 `_fire_single_webhook`（HMAC-SHA256 签名头三件套）服务 webhook 规则与批回调两类消费方；outbox 同事务入队 + 退避死信把「回调端点挂了」从批执行路径上解耦（分册 03 §4.7、分册 11 §4.8）。`callbackSecret` 不回显是单向承诺：调用方自留密钥，平台只按它签名。
-6. **memories 删除的 IDOR 闸门照抄内部路由**（`open_api_memories.py:1-15,69-73`）：`delete_memory` 不做属主过滤是 mem0 的形状，路由层必须先建属主 id 集合再删——「不能因为是新代码就漏掉」。同理行操作上下文独立复制而不 import 生产路由（改动风险 > 十行 SQL 复制，`open_api_row_actions.py:36-38`）。
+6. **memories 删除的 IDOR 闸门照抄内部路由**（`open_api_memories.py:1-15,69-74`）：`delete_memory` 不做属主过滤是 mem0 的形状，路由层必须先建属主 id 集合再删——「不能因为是新代码就漏掉」。同理行操作上下文独立复制而不 import 生产路由（改动风险 > 十行 SQL 复制，`open_api_row_actions.py:36-38`）。
 7. **观测：`/v1/ai-orchestrations` 未挂 `require_bound_key`**（5 端点仅 `api_key_required`，§5.4）——与其余 AI 能力面（批/单会话/扫描/记忆/模板/行操作全部绑定键）不对称；未绑定密钥（`ownerUserId=NULL`）可创建 `requested_by=NULL` 的 run，且 `get_run` 的 `requested_by != owner` 比对对 NULL==NULL 通过、理论上存在跨失主密钥互见。属现状记录，与本册冲突处以代码为准；收紧属产品决策不在本册范围。
 8. **`/v1/ai-approvals` 是前缀下的身份例外**：同在 `/v1` 命名空间但走 JWT——审批裁决是「人」的动作（admin 或被点名者），API Key 无审批资格；契约细节（decision_hash/edits/点名权限）归分册 05，本册仅做家族汇总。
 9. **请求体上限必须双进程各判一次**（§4.7）：proxy 在 Flask 之前把 body 读进内存，只在 Flask 设限等于生产入口裸奔——数值收敛到零依赖的 `upload_limits.py` 单一真源；全局 `MAX_CONTENT_LENGTH` 被刻意否决以保住备份还原。
@@ -277,13 +277,13 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 - `server/routes/open_api_prompt_templates.py` —— 蓝图 `:25-26`；`_template_out :45`；5 端点见 §5.7
 - `server/routes/open_api_memories.py` —— 蓝图 `:25-26`；3 端点见 §5.8（IDOR 闸门 `:69-74`）
 - `server/routes/ai_approvals.py` —— 蓝图 `:13-14`；3 端点见 §5.9（`_decide :41-73`；契约归分册 05）
-- `server/routes/api_keys.py` —— 密钥管理面：创建（明文仅一次 `:47`、owner 绑定 `:58`）、启停 `:66`、删除 `:97`
+- `server/routes/api_keys.py` —— 密钥管理面：创建（明文仅一次 `:52`、owner 绑定 `:58`）、启停 `:75/:77`、删除 `:105/:107`
 
 **鉴权与共享设施**
 
 - `server/auth.py` —— `hash_api_key :167`；`api_key_required :172-210`；`require_bound_key :213-225`
 - `server/utils/api_errors.py` —— `err :19`（`{error, code[, error_detail]}`）；`register_error_handlers :44`
-- `server/utils/upload_limits.py` —— 上限常量 `:12-17`；前缀表 `:34-42`；`body_limit_for_path :46-60`
+- `server/utils/upload_limits.py` —— 上限常量 `:20-25`；前缀表 `:35-41`；`body_limit_for_path :44`
 - `server/utils/operation_log.py` —— 共享 INSERT `:51`；`log_api_operation :113`
 - `server/utils/ai_session_repo.py` —— `create_session :18`（prompt→continue_prompt、input_files）；`get_session_for_owner :53`（双归属）；`cancel_session :95`
 
@@ -297,7 +297,7 @@ HMAC 口径（`webhook_engine.py`）：`_compute_signature :393-405` 对 `${time
 
 **执行与交付（机制主描述在分册 03/04/07/09）**
 
-- `server/utils/batch_engine.py` —— claim 三来源条件 `:1122-1124`；直发回调兜底 `_notify_callback :509-545`（outbox 让位判断 `:525-530`；payload `:537-543`）；attempt 来源判定 `:1440-1476`（归分册 06）
+- `server/utils/batch_engine.py` —— claim 三来源条件 `:1133-1134`；直发回调兜底 `_notify_callback :509-545`（outbox 让位判断 `:525-530`；payload `:537-543`）；attempt 来源判定 `:1440-1476`（归分册 06）
 - `server/utils/delivery_outbox.py` —— `deliver_one :183`（复用 webhook HMAC）；退避/死信 `:22-23`（归分册 03 §4.7）
 - `server/utils/webhook_engine.py` —— 签名头 `:326-335`；`_compute_signature :393-405`（HMAC-SHA256）
 - `server/utils/execution_commands.py` —— `submit_command :22-65`（幂等键派生 `:31-39`）；`finish_command :68`
