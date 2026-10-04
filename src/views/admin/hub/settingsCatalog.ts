@@ -67,23 +67,34 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     //   component: () => import('@/views/admin/KefuManager.vue') },
   ] },
   { id: 'ai', label: 'AI 能力', icon: 'MagicStick', items: [
-    { id: 'ai-settings', label: 'AI 配置', perm: 'admin.ai_settings', icon: 'Setting',
-      component: () => import('@/views/admin/AiSettings.vue') },
+    { id: 'ai-settings', label: 'AI 配置', perm: ['admin.ai_settings', 'admin.ai_runtime_read'], icon: 'Setting',
+      component: () => import('@/views/admin/hub/AiConfigHub.vue'),
+      tabs: [
+        { id: 'model', label: '模型与密钥', perm: 'admin.ai_settings',
+          component: () => import('@/views/admin/AiSettings.vue') },
+        { id: 'runtime', label: '运行时', perm: 'admin.ai_runtime_read',
+          component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
+      ] },
     { id: 'ai-scan', label: 'AI 定时巡检', perm: 'admin.ai_scan', icon: 'Timer',
       component: () => import('@/views/admin/AiScanTaskManager.vue') },
-    { id: 'ai-batches', label: 'AI 批量执行', perm: 'admin.ai_chat_admin', icon: 'Tickets',
-      component: () => import('@/views/admin/AiBatchAdmin.vue') },
-    { id: 'ai-sessions', label: 'AI 会话审计', perm: 'admin.ai_chat_admin', icon: 'ChatDotRound',
-      component: () => import('@/views/admin/AiSessionAdmin.vue') },
-    { id: 'ai-skills', label: 'AI 技能广场', perm: 'admin.ai_settings', icon: 'MagicStick',
-      component: () => import('@/views/admin/AiSkillManager.vue') },
-    { id: 'ai-opencode', label: 'AI 运行时管理', perm: 'admin.ai_runtime_read', icon: 'Cpu',
-      component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
-    { id: 'ai-skillopt', label: 'AI 技能优化', perm: 'admin.ai_chat_admin', icon: 'Opportunity',
-      component: () => import('@/views/admin/AiSkillOpt.vue') },
-    // P3-A7：编排管理面前端骨架（消费 /ai/orchestrations 定义与运行端点）
-    { id: 'ai-orchestrations', label: 'AI 编排管理', perm: 'admin.ai_orchestration_admin', icon: 'SetUp',
-      component: () => import('@/views/admin/AiOrchestrationManager.vue') },
+    { id: 'ai-skills', label: 'AI 技能', perm: ['admin.ai_settings', 'admin.ai_chat_admin'], icon: 'MagicStick',
+      component: () => import('@/views/admin/hub/AiSkillHub.vue'),
+      tabs: [
+        { id: 'square', label: '技能广场', perm: 'admin.ai_settings',
+          component: () => import('@/views/admin/AiSkillManager.vue') },
+        { id: 'fit', label: '拟合优化', perm: 'admin.ai_chat_admin',
+          component: () => import('@/views/admin/AiSkillOpt.vue') },
+      ] },
+    { id: 'ai-execution', label: 'AI 执行中心', perm: ['admin.ai_chat_admin', 'admin.ai_orchestration_admin'], icon: 'Tickets',
+      component: () => import('@/views/admin/hub/AiExecutionHub.vue'),
+      tabs: [
+        { id: 'batches', label: '批量执行', perm: 'admin.ai_chat_admin',
+          component: () => import('@/views/admin/AiBatchAdmin.vue') },
+        { id: 'sessions', label: '会话审计', perm: 'admin.ai_chat_admin',
+          component: () => import('@/views/admin/AiSessionAdmin.vue') },
+        { id: 'orchestrations', label: '编排管理', perm: 'admin.ai_orchestration_admin',
+          component: () => import('@/views/admin/AiOrchestrationManager.vue') },
+      ] },
   ] },
   { id: 'data-ops', label: '数据运维', icon: 'DataLine', items: [
     { id: 'query', label: '数据查询', perm: 'admin.query', icon: 'Search',
@@ -157,4 +168,17 @@ export const LEGACY_PATH_ALIASES: Record<string, string> = {
   'ai-scan-tasks': 'ai-scan',
   'menu-export': 'data-export',
   'etl-tasks': 'etl',
+}
+
+/**
+ * 合并前的 AI 旧条目路径 → 域入口对应 tab。
+ * 与 LEGACY_PATH_ALIASES 的差异：目标不是「条目 id」而是「条目内 tab」，故
+ * 单独一张表、由 settingsRoutes 消费为带 query 的重定向。
+ */
+export const SETTINGS_REDIRECTS: Record<string, { path: string; tab: string }> = {
+  'ai-opencode': { path: '/admin/ai-settings', tab: 'runtime' },
+  'ai-skillopt': { path: '/admin/ai-skills', tab: 'fit' },
+  'ai-batches': { path: '/admin/ai-execution', tab: 'batches' },
+  'ai-sessions': { path: '/admin/ai-execution', tab: 'sessions' },
+  'ai-orchestrations': { path: '/admin/ai-execution', tab: 'orchestrations' },
 }

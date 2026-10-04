@@ -6,12 +6,13 @@ import {
   filterGroups,
   firstAccessibleItemPath,
   LEGACY_PATH_ALIASES,
+  SETTINGS_REDIRECTS,
 } from '../settingsCatalog'
 
 describe('SETTINGS_GROUPS', () => {
-  it('共 7 组 26 条', () => {
+  it('共 7 组 22 条', () => {
     expect(SETTINGS_GROUPS).toHaveLength(7)
-    expect(ALL_SETTINGS_ITEMS).toHaveLength(26)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(22)
   })
 
   it('条目 id 全局唯一', () => {
@@ -125,5 +126,45 @@ describe('schema：any-of 权限', () => {
     expect(canItem(['admin.a', 'admin.b'], k => k === 'admin.b')).toBe(true)
     expect(canItem(['admin.a', 'admin.b'], () => false)).toBe(false)
     expect(canItem('admin.a', k => k === 'admin.a')).toBe(true)
+  })
+})
+
+describe('AI 组合并', () => {
+  it('共 7 组 22 条', () => {
+    expect(SETTINGS_GROUPS).toHaveLength(7)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(22)
+  })
+  it('被并掉的 5 个旧 id 不再是条目', () => {
+    for (const id of ['ai-opencode', 'ai-skillopt', 'ai-batches', 'ai-sessions', 'ai-orchestrations']) {
+      expect(findSettingsItem(id), id).toBeUndefined()
+    }
+  })
+  it('三个域入口的 tabs 声明完整', () => {
+    const tabIds = (id: string) => (findSettingsItem(id)?.tabs ?? []).map(t => t.id)
+    expect(tabIds('ai-settings')).toEqual(['model', 'runtime'])
+    expect(tabIds('ai-skills')).toEqual(['square', 'fit'])
+    expect(tabIds('ai-execution')).toEqual(['batches', 'sessions', 'orchestrations'])
+  })
+  it('域入口 perm 为 any-of 数组', () => {
+    expect(findSettingsItem('ai-execution')?.perm)
+      .toEqual(['admin.ai_chat_admin', 'admin.ai_orchestration_admin'])
+  })
+})
+
+describe('SETTINGS_REDIRECTS', () => {
+  it('5 条旧路径齐全，目标是真实条目 + 合法 tab id', () => {
+    // 注：sort() 默认按码位序，'ai-opencode'（o-p）排在 'ai-orchestrations'（o-r）之前
+    expect(Object.keys(SETTINGS_REDIRECTS).sort())
+      .toEqual(['ai-batches', 'ai-opencode', 'ai-orchestrations', 'ai-sessions', 'ai-skillopt'])
+    for (const r of Object.values(SETTINGS_REDIRECTS)) {
+      const item = findSettingsItem(r.path.replace('/admin/', ''))
+      expect(item, r.path).toBeDefined()
+      expect((item?.tabs ?? []).some(t => t.id === r.tab), r.path).toBe(true)
+    }
+  })
+  it('重定向 key 不与真实条目 id 冲突', () => {
+    for (const alias of Object.keys(SETTINGS_REDIRECTS)) {
+      expect(findSettingsItem(alias), alias).toBeUndefined()
+    }
   })
 })
