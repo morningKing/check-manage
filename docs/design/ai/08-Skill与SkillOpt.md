@@ -180,7 +180,7 @@ OpenCode 运行时对会话可见（GET /skill?directory=…；命令面板 ai_c
 - **拟合左栏清单** `GET /skill-fit/definition-summary`（`:909-983`）：清单 = `ai_skill_def_versions` ∪ `ai_skill_fit_results` 的 (def_kind, def_name) **并集**——从未跑过任务的新定义也出现在左栏，否则「生成步骤」入口不可达；指标 fitRate = fit 状态行占比（分母只计有拟合结果的任务）。
 - **拟合结果族**：列表 `GET /skill-fit`（`?sessionId/defKind/defName` 过滤，limit ≤200，`:869-906`）；明细 `GET /skill-fit/<attempt_id>`（含 perStep/diagnosis，无结果行 404；**附带子代理层 `subagentFits`**——该会话名下 `source_type='subagent'` 且 `parent_attempt_id` 命中的 attempt 拟合按层附上，父层不合并子层数据、各层独立判定，`:986-1038`）；幂等重算 `POST /skill-fit/<attempt_id>/recompute`（委托 `compute_attempt_fit`，`:1041-1056`）；偏差诊断 `POST /skill-fit/<result_id>/diagnose`（§4.4，`:1302-1320`）。
 - **定义版本**：时间线 `GET /skill-def-versions`（版本行 LEFT JOIN 拟合聚合，无拟合结果的版本 tasks=0 也出现在时间线；fitRate/partialCount/divergedCount 同口径，`:1059-1120`）；可读化标注 `PATCH /skill-def-versions/<version_id>`（versionLabel/note，显式 null 可清空，`:1123-1150`）。
-- **步骤级偏离聚合** `GET /skill-def-patterns`（`:1153-1202`）：`per_step` JSONB `CROSS JOIN LATERAL jsonb_array_elements` 展开后按 (def_kind, def_name, step_id) 聚合全部历史拟合的 miss/out_of_order——「同一处定义缺陷在多少任务、哪些版本反复出现」的优先级排序；`versionHashes` 为出现过的版本短 hash 列表（去重截 5 个）。
+- **步骤级偏离聚合** `GET /skill-def-patterns`（`:1153-1202`）：`per_step` JSONB `CROSS JOIN LATERAL jsonb_array_elements` 展开后按 (def_kind, def_name, step_id) 聚合 **partial/diverged 两态**拟合的步骤级 miss/out_of_order（`ai_session_admin.py:1179`）——「同一处定义缺陷在多少任务、哪些版本反复出现」的优先级排序；`versionHashes` 为出现过的版本短 hash 列表（去重截 5 个）。
 
 ## 5. 关键接口
 
