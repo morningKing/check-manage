@@ -32,5 +32,5 @@
 ### 开发人员
 1. 架构总览：[design/功能架构说明.md](./design/功能架构说明.md)
 2. 并发控制：[design/10-数据并发控制.md](./design/10-数据并发控制.md)
-3. 业务域设计：[design/README.md](./design/README.md)（① 认证 ~ ⑨ AI）
+3. 业务域设计：[design/README.md](./design/README.md)（① 认证 ~ ⑨ AI；域⑨为 09（入口）+ ai/ 分册库）
 4. Open API：[user-guide/integration/open-api.md](./user-guide/integration/open-api.md)

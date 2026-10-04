@@ -21,15 +21,15 @@
 | ⑥ | 开放集成 | api_keys · open_api · webhook · trigger_rules | [06-开放集成.md](./06-开放集成.md) |
 | ⑦ | 版本协作 | project_versions · cross_project_deps | [07-版本协作.md](./07-版本协作.md) |
 | ⑧ | 运维监控 | operation_logs · backups · notifications · dashboards | [08-运维监控.md](./08-运维监控.md) |
-| ⑨ | AI 智能助手 | ai_chat · batches · prompt_templates · ai_scan_tasks · 长期记忆 mem0 + OpenCode/MCP | [09-AI智能助手.md](./09-AI智能助手.md) |
+| ⑨ | AI 智能助手 | ai_chat · batches · prompt_templates · ai_scan_tasks · 长期记忆 mem0 + OpenCode/MCP | [09-AI智能助手.md](./09-AI智能助手.md)（入口）+ [ai/00–12 分册库](./ai/00-总览与功能清单.md) |
 
 ## 横切关注点
 
 | 文档 | 说明 |
 |------|------|
 | [10-数据并发控制.md](./10-数据并发控制.md) | 跨所有写入路径的并发一致性权威设计：乐观锁、序号原子分配、手填主键 advisory 锁、序号计数器全局不变式、工作流推进并发与分支隔离、关系一致性、分支锁定、触发器/Webhook 最终一致。配 4 张 SVG 场景图（`assets/concurrency-*.svg`）。 |
-| [11-AI执行轨迹分析.md](ai/11-AI执行轨迹分析.md) | 域⑨扩展：Skill 调用/MCP 工具/Agent 委托的统一轨迹采集、成本归因、性能分析、执行链路追溯、**主动跑偏检测（MAST 分类法）+ 根因分析（Agent-as-a-Judge）+ 优化建议引擎**。 |
-| [13-AI批任务实时进度与编排设计.md](ai/13-AI批任务实时进度与编排设计.md) | 域⑨扩展：批任务 SSE 实时进度推送（DB 版本号条件推送）、并发度运行时可配、批级优先级插队、暂停/恢复编排语义。 |
+| [11-AI执行轨迹分析.md](ai/11-AI执行轨迹分析.md) | 域⑨扩展：Skill 调用/MCP 工具/Agent 委托的统一轨迹采集、成本归因、性能分析、执行链路追溯、**主动跑偏检测（MAST 分类法）+ 根因分析（Agent-as-a-Judge）+ 优化建议引擎**。细节已迁移至分册 [06-执行审计与轨迹分析](ai/06-执行审计与轨迹分析.md)。 |
+| [13-AI批任务实时进度与编排设计.md](ai/13-AI批任务实时进度与编排设计.md) | 域⑨扩展：批任务 SSE 实时进度推送（DB 版本号条件推送）、并发度运行时可配、批级优先级插队、暂停/恢复编排语义。细节已迁移至分册 [03-批任务与执行引擎](ai/03-批任务与执行引擎.md)（容灾视角归 [11-容灾稳定性与压测](ai/11-容灾稳定性与压测.md)）。 |
 | [AI批任务容灾与恢复机制.md](ai/AI批任务容灾与恢复机制.md) | 域⑨扩展：OpenCode 重启/系统崩溃后的自动恢复——运行中对账器、派发期会话重建、失败分类自动重试、扫描记录孤儿清扫；含环境变量调优与自检步骤。 |
 | [OpenCode运行时依赖与部署.md](ai/OpenCode运行时依赖与部署.md) | 域⑨部署指南：OpenCode 本体安装、全局配置目录、SkillOpt 运行时插件（自动/手动安装与验证）、skill·agent 生效语义、环境变量总表与故障排查。 |
 
