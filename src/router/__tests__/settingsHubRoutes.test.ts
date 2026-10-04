@@ -133,6 +133,28 @@ describe('老路径别名重定向', () => {
   })
 })
 
+describe('AI 旧路径重定向', () => {
+  it.each([
+    ['/admin/ai-opencode', '/admin/ai-settings', 'runtime'],
+    ['/admin/ai-skillopt', '/admin/ai-skills', 'fit'],
+    ['/admin/ai-batches', '/admin/ai-execution', 'batches'],
+    ['/admin/ai-sessions', '/admin/ai-execution', 'sessions'],
+    ['/admin/ai-orchestrations', '/admin/ai-execution', 'orchestrations'],
+  ])('%s → %s?tab=%s', async (from, path, tab) => {
+    const r = makeRouter(() => true)
+    await r.push(from)
+    expect(r.currentRoute.value.path).toBe(path)
+    expect(r.currentRoute.value.query).toMatchObject({ tab })
+  })
+})
+
+describe('域入口路由', () => {
+  it('ai-execution meta.perm 为 any-of 数组', () => {
+    const r = buildSettingsRoutes().find(x => x.path === '/admin/ai-execution')!
+    expect(r.meta?.perm).toEqual(['admin.ai_chat_admin', 'admin.ai_orchestration_admin'])
+  })
+})
+
 describe('同名老路径直接成为真路由', () => {
   it.each(['/admin/users', '/admin/roles', '/admin/backup', '/admin/system-settings'])(
     '%s 是真路由而非重定向',

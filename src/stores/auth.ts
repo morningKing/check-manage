@@ -8,7 +8,7 @@ import { ref, computed } from 'vue'
 import { getStorage, setStorage, removeStorage, STORAGE_KEYS } from '@/utils/storage'
 import { login as loginApi, getCurrentUser as getMeApi } from '@/api/auth'
 import { useMenuStore } from '@/stores/menu'
-import { findSettingsItem, filterGroups, itemPerms } from '@/views/admin/hub/settingsCatalog'
+import { findSettingsItem, filterGroups } from '@/views/admin/hub/settingsCatalog'
 import type { UserInfo, UserRole, LoginParams } from '@/types'
 import type { CurrentBranch } from '@/api/projectVersion'
 
@@ -118,6 +118,7 @@ export const useAuthStore = defineStore('auth', () => {
    *
    * @param meta 可选的路由 meta（`router.beforeEach` 里的 `to.meta`）。设置中心的
    *   路由由 `buildSettingsRoutes` 生成，`meta.perm` 与实际匹配到的路由直接绑定，
+   *   支持 `string | string[]`（数组为 any-of 语义，域入口合并后任一权限即放行），
    *   优先使用；不传时（例如测试里直接传字符串路径）回退到按目录查表，语义不变。
    */
   function hasRoutePermission(path: string, meta?: Record<string, unknown>): boolean {
@@ -129,9 +130,11 @@ export const useAuthStore = defineStore('auth', () => {
     // 设置中心：/admin 按「是否有任一可见条目」放行；/admin/<id> 按该条目的能力 key
     if (path === '/admin') return filterGroups(can).length > 0
     if (path.startsWith('/admin/')) {
-      const metaPerm = typeof meta?.perm === 'string' ? meta.perm : undefined
+      const raw = meta?.perm
+      const metaPerm: string | string[] | undefined =
+        Array.isArray(raw) ? (raw as string[]) : typeof raw === 'string' ? raw : undefined
       const perm = metaPerm ?? findSettingsItem(path.split('/')[2])?.perm
-      if (perm) return itemPerms(perm).some(can)
+      if (perm) return Array.isArray(perm) ? perm.some(k => can(k)) : can(perm)
       // 非条目 id（分组 id / 老路径别名）→ 由路由重定向处理，这里落到下方兜底
     }
 

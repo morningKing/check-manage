@@ -13,6 +13,7 @@ import {
   firstAccessibleItemPath,
   canItem,
   LEGACY_PATH_ALIASES,
+  SETTINGS_REDIRECTS,
 } from '@/views/admin/hub/settingsCatalog'
 
 /** 22 条功能路由。路径写全 /admin/<id>，直接挂为 AppLayout 的子路由。 */
@@ -34,6 +35,7 @@ export function buildSettingsRoutes(): RouteRecordRaw[] {
  *   1. /admin                    → 首个有权限条目
  *   2. /admin/<分类id>[?tab=x]   → /admin/<x> 或该组首个有权限条目
  *   3. /admin/<老路径别名>       → /admin/<新条目 id>
+ *   4. /admin/<AI 旧条目id>      → /admin/<域入口>?tab=<tab>（SETTINGS_REDIRECTS）
  *
  * `getCan` 是个惰性取权限判定函数的工厂 —— 重定向在导航时才求值，那时
  * auth store 才一定就绪；测试里可以直接注入一个纯函数。
@@ -46,7 +48,7 @@ export function buildSettingsRedirects(
       path: '/admin',
       // 返回 { path, query: {} } 而非裸字符串：函数式 redirect 返回字符串时
       // vue-router 4 会默认继承原 query，裸字符串会让 ?tab= 之类的历史查询串
-      // 残留在地址栏上（下面两处同理，共 3 处）。
+      // 残留在地址栏上（下面三处同理，共 4 处）。
       redirect: () => ({ path: firstAccessibleItemPath(getCan()), query: {} }),
     },
   ]
@@ -67,6 +69,16 @@ export function buildSettingsRedirects(
         const first = group.items.find(i => canItem(i.perm, can))
         return { path: first ? `/admin/${first.id}` : '/admin', query: {} }
       },
+    })
+  }
+
+  // AI 旧条目路径 → 域入口对应 tab。目标不是条目 id 而是「条目内 tab」，故
+  // redirect 显式携带 query.tab（对象形态，理由同上）；权限不足时由守卫兜底拦截。
+  // 必须排在 LEGACY_PATH_ALIASES 之前：两张表键空间不相交，仅是生成顺序约定。
+  for (const [alias, target] of Object.entries(SETTINGS_REDIRECTS)) {
+    routes.push({
+      path: `/admin/${alias}`,
+      redirect: () => ({ path: target.path, query: { tab: target.tab } }),
     })
   }
 

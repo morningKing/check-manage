@@ -90,4 +90,13 @@ describe('hasRoutePermission —— 设置中心', () => {
     expect(auth.hasRoutePermission('/admin/users')).toBe(true)
     expect(auth.hasRoutePermission('/admin/users', undefined)).toBe(true)
   })
+
+  it('/admin/<域入口> 任一权限放行', () => {
+    const auth = makeAuth(['admin.ai_orchestration_admin'])
+    expect(auth.hasRoutePermission('/admin/ai-execution')).toBe(true)
+  })
+  it('/admin/<域入口> 全无权限拒绝', () => {
+    const auth = makeAuth(['admin.users'])
+    expect(auth.hasRoutePermission('/admin/ai-execution')).toBe(false)
+  })
 })
