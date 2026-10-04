@@ -21,18 +21,26 @@ vi.mock('@/views/admin/hub/settingsCatalog', async (orig) => {
     } : undefined,
   }
 })
+
+// 授权态可按用例覆写：默认放行两个权限，让「模型与密钥 / 运行时」同时可见——
+// 这样 ?tab=runtime 深链才能与「默认进首个可见页签」区分开（有鉴别力）；
+// 「无权限的 tab 不渲染」用例单独收紧为单权限。
+const grant = vi.hoisted(() => ({ perms: ['admin.ai_settings', 'admin.ai_runtime_read'] as string[] }))
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ can: (k: string) => k === 'admin.ai_settings' }),
+  useAuthStore: () => ({ can: (k: string) => grant.perms.includes(k) }),
 }))
 
 import SettingsTabShell from '../SettingsTabShell.vue'
+
+const ALL_PERMS = ['admin.ai_settings', 'admin.ai_runtime_read']
 
 function makeRouter() {
   return createRouter({ history: createMemoryHistory(),
     routes: [{ path: '/admin/:id', component: { template: '<div/>' } }] })
 }
 
-async function mountShell(query = {}) {
+async function mountShell(query: Record<string, string> = {}, perms: string[] = ALL_PERMS) {
+  grant.perms = perms   // 每次重置授权态，避免用例间泄漏
   setActivePinia(createPinia())
   const router = makeRouter()
   router.push({ path: '/admin/ai-settings', query }); await router.isReady()
@@ -44,15 +52,19 @@ async function mountShell(query = {}) {
 
 describe('SettingsTabShell', () => {
   it('无权限的 tab 不渲染', async () => {
-    const w = await mountShell()                    // 只有 ai_settings
+    const w = await mountShell({}, ['admin.ai_settings'])   // 只放行 ai_settings
     expect(w.text()).toContain('模型与密钥')
     expect(w.text()).not.toContain('运行时')
   })
-  it('?tab= 定位对应页签', async () => {
-    const w = await mountShell({ tab: 'model' })
-    expect((w.find('.el-tabs__item.is-active').element as HTMLElement).textContent).toContain('模型与密钥')
+  it('?tab= 深链定位到非默认页签', async () => {
+    // 两个页签都可见，深链指向第二个：默认激活的是「模型与密钥」，
+    // 断言「运行时」激活才证明 query 真正参与了定位，而非与默认行为重合。
+    const w = await mountShell({ tab: 'runtime' })
+    expect((w.find('.el-tabs__item.is-active').element as HTMLElement).textContent).toContain('运行时')
   })
-  it('非法 tab 回退首个可见 tab 并回写 query', async () => {
+  it('非法 tab 回退首个可见 tab', async () => {
+    // 注：进页时组件不会自愈 URL（回写 query 只发生在切换页签时），
+    // 故这里只断言激活页签回落，不断言地址栏。
     const w = await mountShell({ tab: 'bogus' })
     expect((w.find('.el-tabs__item.is-active').element as HTMLElement).textContent).toContain('模型与密钥')
   })
