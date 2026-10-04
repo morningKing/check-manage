@@ -1,8 +1,10 @@
+> ⚠️ **已归档**（2026-10-04）：本文内容已由 [`08-Skill与SkillOpt.md`](../ai/08-Skill与SkillOpt.md) 取代，仅保留历史背景与追溯价值，不再是权威版本。
+
 # SkillOpt 任务拟合页「定义主从布局」重设计
 
 - 日期：2026-09-30
 - 状态：已评审（brainstorming 通过，方向：定义主从布局）
-- 关联：`docs/design/ai/SkillOpt任务拟合设计.md`（功能设计）、`2026-09-17-ai-execution-audit-skillopt-spec.md`（审计底座）
+- 关联：`docs/design/archive/SkillOpt任务拟合设计.md`（功能设计）、`2026-09-17-ai-execution-audit-skillopt-spec.md`（审计底座）
 
 ## 1. 背景与问题
 
