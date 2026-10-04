@@ -22,7 +22,7 @@ describe('SETTINGS_GROUPS', () => {
   it('每条都有非空 label / perm / icon / component', () => {
     for (const it of ALL_SETTINGS_ITEMS) {
       expect(it.label, it.id).toBeTruthy()
-      expect(it.perm, it.id).toMatch(/^admin\./)
+      for (const p of itemPerms(it.perm)) expect(p, it.id).toMatch(/^admin\./)
       expect(it.icon, it.id).toBeTruthy()
       expect(typeof it.component, it.id).toBe('function')
     }
@@ -111,5 +111,19 @@ describe('分组 id 与条目 id 不冲突', () => {
     const groupIds = new Set(_G.map(g => g.id))
     const clash = _I.filter(i => groupIds.has(i.id)).map(i => i.id)
     expect(clash).toEqual([])
+  })
+})
+
+import { itemPerms, canItem } from '../settingsCatalog'
+
+describe('schema：any-of 权限', () => {
+  it('itemPerms 归一化 string|string[]', () => {
+    expect(itemPerms('admin.users')).toEqual(['admin.users'])
+    expect(itemPerms(['admin.a', 'admin.b'])).toEqual(['admin.a', 'admin.b'])
+  })
+  it('canItem 任一命中即可', () => {
+    expect(canItem(['admin.a', 'admin.b'], k => k === 'admin.b')).toBe(true)
+    expect(canItem(['admin.a', 'admin.b'], () => false)).toBe(false)
+    expect(canItem('admin.a', k => k === 'admin.a')).toBe(true)
   })
 })

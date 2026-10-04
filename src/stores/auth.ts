@@ -8,7 +8,7 @@ import { ref, computed } from 'vue'
 import { getStorage, setStorage, removeStorage, STORAGE_KEYS } from '@/utils/storage'
 import { login as loginApi, getCurrentUser as getMeApi } from '@/api/auth'
 import { useMenuStore } from '@/stores/menu'
-import { findSettingsItem, filterGroups } from '@/views/admin/hub/settingsCatalog'
+import { findSettingsItem, filterGroups, itemPerms } from '@/views/admin/hub/settingsCatalog'
 import type { UserInfo, UserRole, LoginParams } from '@/types'
 import type { CurrentBranch } from '@/api/projectVersion'
 
@@ -131,7 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (path.startsWith('/admin/')) {
       const metaPerm = typeof meta?.perm === 'string' ? meta.perm : undefined
       const perm = metaPerm ?? findSettingsItem(path.split('/')[2])?.perm
-      if (perm) return can(perm)
+      if (perm) return itemPerms(perm).some(can)
       // 非条目 id（分组 id / 老路径别名）→ 由路由重定向处理，这里落到下方兜底
     }
 

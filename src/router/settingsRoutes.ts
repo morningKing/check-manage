@@ -11,6 +11,7 @@ import {
   ALL_SETTINGS_ITEMS,
   findSettingsItem,
   firstAccessibleItemPath,
+  canItem,
   LEGACY_PATH_ALIASES,
 } from '@/views/admin/hub/settingsCatalog'
 
@@ -60,10 +61,10 @@ export function buildSettingsRedirects(
         // tab 必须既存在又是当前用户有权限的条目，否则落到该组首个有权限条目 ——
         // 避免把只有分组内其他能力的用户，用老书签的 ?tab= 指到自己无权限的条目，
         // 白白挨一次守卫拦截再弹回 /home（这本来是兜底分支该负责的体验）。
-        if (tabItem && can(tabItem.perm)) {
+        if (tabItem && canItem(tabItem.perm, can)) {
           return { path: `/admin/${tabItem.id}`, query: {} }
         }
-        const first = group.items.find(i => can(i.perm))
+        const first = group.items.find(i => canItem(i.perm, can))
         return { path: first ? `/admin/${first.id}` : '/admin', query: {} }
       },
     })

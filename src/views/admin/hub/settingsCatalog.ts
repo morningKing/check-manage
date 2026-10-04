@@ -8,12 +8,21 @@
  */
 import type { Component } from 'vue'
 
+export interface SettingsTab {
+  id: string
+  label: string
+  perm: string
+  component: () => Promise<Component>
+}
+
 export interface SettingsItem {
   /** 路由末段，如 'users' → /admin/users */
   id: string
   label: string
   /** 所需管理能力 key（admin.*） */
-  perm: string
+  perm: string | string[]
+  /** 页内 tab（域入口条目用）；不声明即纯单页条目 */
+  tabs?: SettingsTab[]
   /** 懒加载的功能组件 */
   component: () => Promise<Component>
   /** Element Plus 图标组件名，渲染在侧边栏条目文字前 */
@@ -113,10 +122,18 @@ export function findSettingsItem(id: string): SettingsItem | undefined {
   return ALL_SETTINGS_ITEMS.find(i => i.id === id)
 }
 
+export function itemPerms(perm: string | string[]): string[] {
+  return Array.isArray(perm) ? perm : [perm]
+}
+
+export function canItem(perm: string | string[], can: (key: string) => boolean): boolean {
+  return itemPerms(perm).some(can)
+}
+
 /** 按权限过滤：剔除无权限条目，再剔除空组 */
 export function filterGroups(can: (key: string) => boolean): SettingsGroup[] {
   return SETTINGS_GROUPS
-    .map(g => ({ ...g, items: g.items.filter(i => can(i.perm)) }))
+    .map(g => ({ ...g, items: g.items.filter(i => canItem(i.perm, can)) }))
     .filter(g => g.items.length > 0)
 }
 
