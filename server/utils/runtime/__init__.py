@@ -21,8 +21,12 @@ def get_runtime() -> AgentRuntime:
     if _default is None:
         import os
         kind = os.getenv('AI_AGENT_RUNTIME', 'opencode_local')
-        if kind != 'opencode_local':
+        if kind == 'stub':
+            from utils.runtime.stub import StubRuntime
+            _default = StubRuntime()          # profile 由 AI_STUB_PROFILE 注入
+        elif kind != 'opencode_local':
             raise RuntimeCapabilityError(
                 f'runtime {kind} 尚未在此环境启用（Phase E 按环境开启）')
-        _default = OpenCodeLocalRuntime()
+        else:
+            _default = OpenCodeLocalRuntime()
     return _default

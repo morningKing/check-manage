@@ -1,0 +1,152 @@
+"""StubRuntime —— 压测容量层专用运行时（ai-stress spec §3）。
+
+内存态模拟 agent 生命周期：send_prompt_async 记录派发，完成器线程按 profile
+延迟落 assistant 终态消息。消息形状与 opencode_client.get_messages 原始返回
+逐字段对齐（{'info','parts'}；完成判据 = info.finish 非 tool-calls 且
+info.time.completed 存在——worker list_messages 门控的字段，形状漂移即
+worker 永远判未完成，test_runtime_stub 的对照测试锁住）。
+"""
+import random
+import threading
+import time
+import uuid
+
+from utils.runtime.base import AgentRuntime
+
+DEFAULT_PROFILE = {'delay_ms': [2000, 8000], 'error_rate': 0.0,
+                   'hang_rate': 0.0, 'hang_recover_after_ms': 0}
+
+
+def parse_profile(raw: dict | None) -> dict:
+    p = {**DEFAULT_PROFILE, **(raw or {})}
+    p['delay_ms'] = [int(p['delay_ms'][0]), int(p['delay_ms'][1])]
+    for k in ('error_rate', 'hang_rate'):
+        p[k] = float(p[k])
+    p['hang_recover_after_ms'] = int(p['hang_recover_after_ms'])
+    return p
+
+
+class _Session:
+    __slots__ = ('messages', 'pending_until', 'outcome', 'done',
+                 'hang_until', 'directory')
+    def __init__(self):
+        self.messages = []          # raw OpenCode 形状
+        self.pending_until = None
+        self.outcome = 'stop'       # 'stop' | 'error'
+        self.done = False
+        self.hang_until = 0.0
+        self.directory = ''
+
+
+class StubClient:
+    """batch_engine._OpenCodeFacade 经 get_runtime().get_client() 消费的面。"""
+
+    def __init__(self, profile: dict):
+        self.profile = profile
+        self._sessions: dict[str, _Session] = {}
+        self._lock = threading.Lock()
+        self._completer = threading.Thread(target=self._complete_loop,
+                                           daemon=True)
+        self._completer.start()
+
+    def create_session(self, *, directory: str, title: str = '') -> str:
+        sid = f'stub_{uuid.uuid4().hex}'
+        s = _Session()
+        s.directory = directory
+        with self._lock:
+            self._sessions[sid] = s
+        return sid
+
+    def send_prompt_async(self, sid: str, content: str, model: str = '',
+                          directory: str = '', agent: str = '',
+                          agent_parts=None) -> None:
+        with self._lock:
+            s = self._sessions[sid]
+            s.messages.append({'info': {'role': 'user', 'time': {}},
+                               'parts': [{'type': 'text', 'text': content}]})
+            lo, hi = self.profile['delay_ms']
+            s.pending_until = time.time() + random.uniform(lo, hi) / 1000
+            s.outcome = 'error' if random.random() < self.profile['error_rate'] \
+                else 'stop'
+            if random.random() < self.profile['hang_rate']:
+                s.hang_until = time.time() + \
+                    self.profile['hang_recover_after_ms'] / 1000
+
+    def get_messages(self, sid: str, directory: str = '') -> list:
+        with self._lock:
+            return [dict(m) for m in self._sessions[sid].messages]
+
+    def abort_session(self, sid: str, directory: str = '') -> None:
+        with self._lock:
+            s = self._sessions[sid]
+            s.pending_until = None
+            s.hang_until = 0.0
+            self._append_terminal(s, 'aborted')
+
+    def delete_session(self, sid: str) -> None:
+        with self._lock:
+            self._sessions.pop(sid, None)
+
+    # ---- 内部 ----
+    def _append_terminal(self, s: _Session, finish: str) -> None:
+        now_ms = int(time.time() * 1000)
+        s.messages.append({
+            'info': {'role': 'assistant', 'finish': finish,
+                     'time': {'completed': now_ms}},
+            'parts': [{'type': 'text', 'text': f'STUB-DONE {finish}'}],
+        })
+
+    def _complete_loop(self) -> None:
+        while True:
+            time.sleep(0.02)
+            with self._lock:
+                for s in self._sessions.values():
+                    if s.done or s.pending_until is None:
+                        continue
+                    now = time.time()
+                    if now < s.hang_until:
+                        continue
+                    if now >= s.pending_until:
+                        s.pending_until = None
+                        s.done = True
+                        self._append_terminal(s, s.outcome)
+
+
+class StubRuntime(AgentRuntime):
+    kind = 'stub'
+
+    def __init__(self, profile: dict | None = None):
+        if profile is None:
+            import json as _json, os as _os
+            raw = _os.getenv('AI_STUB_PROFILE', '')
+            profile = _json.loads(raw) if raw.strip() else None
+        self.profile = parse_profile(profile)
+        self._client = StubClient(self.profile)
+
+    def capabilities(self) -> dict:
+        return {'kind': 'stub', 'checkpoint': False, 'pause': False,
+                'network_isolation': True}
+
+    def create_session(self, directory: str, title: str = '') -> str:
+        return self._client.create_session(directory=directory, title=title)
+
+    def dispatch(self, oc_session_id: str, prompt: str, *, directory: str = '',
+                 agent: str = '', model: str = '') -> None:
+        self._client.send_prompt_async(oc_session_id, prompt,
+                                       directory=directory, agent=agent,
+                                       model=model)
+
+    def list_messages(self, oc_session_id: str, directory: str = '') -> list:
+        return self._client.get_messages(oc_session_id, directory=directory)
+
+    def get_messages(self, oc_session_id: str, directory: str = '') -> list:
+        return self._client.get_messages(oc_session_id, directory=directory)
+
+    def abort(self, oc_session_id: str, directory: str = '') -> None:
+        self._client.abort_session(oc_session_id, directory=directory)
+
+    def health(self) -> dict:
+        return {'ok': True, 'kind': 'stub'}
+
+    def get_client(self) -> StubClient:
+        return self._client
