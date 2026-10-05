@@ -19,7 +19,7 @@ from utils.runtime.base import AgentRuntime
 
 DEFAULT_PROFILE = {'delay_ms': [2000, 8000], 'error_rate': 0.0,
                    'hang_rate': 0.0, 'hang_recover_after_ms': 0,
-                   'tool_parts': 0}
+                   'tool_parts': 0, 'delegate': []}
 
 
 def parse_profile(raw: dict | None) -> dict:
@@ -29,6 +29,7 @@ def parse_profile(raw: dict | None) -> dict:
         p[k] = float(p[k])
     p['hang_recover_after_ms'] = int(p['hang_recover_after_ms'])
     p['tool_parts'] = int(p.get('tool_parts', 0) or 0)
+    p['delegate'] = list(p.get('delegate') or [])
     return p
 
 
@@ -51,7 +52,9 @@ class StubClient:
         self.profile = profile
         self._sessions: dict[str, _Session] = {}
         self._subs: list[tuple[str, queue.SimpleQueue]] = []   # (directory, q)
-        self._lock = threading.Lock()
+        # RLock 而非 Lock：委派路径在持锁的 _complete_loop/abort_session 内
+        # 递归调 create_session（同线程再次取锁）——不可重入锁会自死锁。
+        self._lock = threading.RLock()
         self._completer = threading.Thread(target=self._complete_loop,
                                            daemon=True)
         self._completer.start()
@@ -128,13 +131,41 @@ class StubClient:
                 q.put((etype, props))
 
     # ---- 完成时间线（REST 视图与事件视图消费同一事实；abort 语义保持）----
-    def _append_terminal(self, sid: str, s: _Session, finish: str) -> None:
+    def _append_terminal(self, sid: str, s: _Session, finish: str,
+                         delegate: bool = True) -> None:
+        """落一轮 assistant 终态消息（message.updated → 委派段 → tool parts →
+        text → REST 落库 → idle/error 事件）。
+
+        锁约定：调用方必须已持 self._lock（_complete_loop / abort_session /
+        本方法自身的委派递归都满足）。委派段对每个 profile['delegate'] 的
+        agent 名同步创建子会话（同 directory），emit tool:'task' part
+        （state.metadata.sessionId=子 oc sid、state.input.subagent_type=agent
+        名——apply_event 据此发现子代理作用域），再内联跑完子会话完整时间线
+        （含自己的 tool/text/idle）。子会话不级联委派（delegate=False）——
+        stub 树深度恒为 1 层，否则无限递归。
+        """
         now_ms = int(time.time() * 1000)
         msg_id = f'msg_{uuid.uuid4().hex}'
         self._emit(sid, s, 'message.updated',
                    {'info': {'id': msg_id, 'role': 'assistant',
                              'time': {'created': now_ms}}})
         parts = []
+        # 委派段：每个 agent 名 → 同步创建子会话 + tool:'task' part + 子轮时间线
+        if delegate:
+            for i, agent_name in enumerate(self.profile.get('delegate') or []):
+                child_sid = self.create_session(directory=s.directory,
+                                                title=f'stub-sub-{agent_name}')
+                child_s = self._sessions[child_sid]
+                task_part = {'id': f'{msg_id}-task{i}', 'messageID': msg_id,
+                             'type': 'tool', 'tool': 'task',
+                             'state': {'status': 'completed',
+                                       'input': {'subagent_type': agent_name,
+                                                 'description': 'stub delegation',
+                                                 'prompt': 'stub subtask'},
+                                       'metadata': {'sessionId': child_sid}}}
+                parts.append(task_part)
+                self._emit(sid, s, 'message.part.updated', {'part': task_part})
+                self._append_terminal(child_sid, child_s, 'stop', delegate=False)
         for i in range(int(self.profile.get('tool_parts', 0) or 0)):
             part = {'id': f'{msg_id}-tool{i}', 'messageID': msg_id,
                     'type': 'tool', 'tool': 'bash',
@@ -162,7 +193,9 @@ class StubClient:
         while True:
             time.sleep(0.02)
             with self._lock:
-                for sid, s in self._sessions.items():
+                # 快照迭代：委派段会向 _sessions 插入子会话，原字典迭代中
+                # 插入会抛 RuntimeError: dictionary changed size
+                for sid, s in list(self._sessions.items()):
                     if s.done or s.pending_until is None:
                         continue
                     now = time.time()

@@ -119,3 +119,49 @@ def test_facade_delegates_to_client(monkeypatch):
 
     assert list(FakeRT().subscribe_events('/ws/x', read_timeout=3)) == \
         [('sentinel', '/ws/x', 3)]
+
+
+@pytest.fixture()
+def stub_delegate(monkeypatch):
+    monkeypatch.setenv('AI_STUB_ALLOW', '1')
+    from utils.runtime.stub import StubRuntime
+    rt = StubRuntime(profile={'delay_ms': [10, 20], 'delegate': ['explorer'],
+                              'tool_parts': 1})
+    yield rt
+
+
+def test_delegate_discovers_subtask(stub_delegate):
+    """S5 探针：stub 总线的委派形状必须能被 apply_event 发现为子代理作用域。
+    失败 = S5 走降级预案（spec §5 已预声明）。"""
+    from utils.chat_persist import new_state, apply_event
+    oc = stub_delegate.create_session(directory='/ws/d')
+    state = new_state()
+    gen = stub_delegate.get_client().subscribe_events(directory='/ws/d')
+    stub_delegate.dispatch(oc, 'delegate work', directory='/ws/d')
+    for evt in gen:
+        apply_event(state, evt, oc)
+        if evt['event'] == 'session.idle':
+            break
+    assert state['subtasks'], f'委派未被发现: subtasks={list(state["subtasks"])}'
+    (child_oc, scope), = state['subtasks'].items()
+    assert scope['status'] == 'completed'
+    assert child_oc.startswith('stub_')
+    # 子会话的 REST 视图独立存在（账本按 oc_session_id 归账的锚）
+    child_msgs = stub_delegate.get_messages(child_oc)
+    assert child_msgs and child_msgs[-1]['info']['finish'] == 'stop'
+
+
+def test_tool_parts_reach_ledger_extraction(stub):
+    from utils.agent_ledger import extract_tool_parts
+    oc = stub.create_session(directory='/ws/led')
+    stub.dispatch(oc, 'work', directory='/ws/led')
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        msgs = stub.get_messages(oc)
+        if msgs and msgs[-1]['info'].get('time', {}).get('completed'):
+            break
+        time.sleep(0.05)
+    calls = extract_tool_parts(stub.get_messages(oc))
+    assert [c[1] for c in calls] == ['bash', 'bash'], calls
+    assert all(c[3] == 'completed' for c in calls)
+    assert 'stub-cmd-0' in calls[0][2]
