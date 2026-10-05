@@ -71,8 +71,8 @@ def args_to_text(inp) -> str:
 
 
 def extract_from_parts(parts) -> list:
-    """从 part 字典集合抽取 tool part 记录(REST 消息 parts 与交互态
-    parts_by_id 的值同构)。返回 [(part_id, tool, args_text, state)]。"""
+    """从 part 字典集合抽取 tool part 记录(REST 消息 parts 原始形状)。
+    返回 [(part_id, tool, args_text, state)]。"""
     out: dict = {}
     for p in parts or []:
         if not isinstance(p, dict) or p.get('type') != 'tool':
@@ -85,6 +85,38 @@ def extract_from_parts(parts) -> list:
         state = (state_obj.get('status') or 'pending')
         args_text = args_to_text(state_obj.get('input'))[:MAX_ARGS_LEN]
         out[pid] = (str(pid), str(tool), args_text, str(state)[:20])
+    return list(out.values())
+
+
+def extract_from_part_map(part_map) -> list:
+    """从 chat_persist 累积态 parts_by_id 抽取 tool 调用记录。
+
+    累积态的值是 map_part 映射后的形状（'tool_use'：name/status/input，
+    无 'id' 字段——part id 只在 dict key 上）；批路径 REST 的原始形状
+    （'tool'：tool/state.input）由 extract_from_parts 负责。两形状此处都收
+    ——2026-10-05 S0 能力压测发现：修复前 record_state 只认原始形状，
+    交互路径账本恒 0 行、交互工具型门禁恒 failed。"""
+    out: dict = {}
+    for pid, p in (part_map or {}).items():
+        if not isinstance(p, dict):
+            continue
+        t = p.get('type')
+        if t == 'tool':                      # 原始 OpenCode part 形状
+            key = str(p.get('id') or pid)
+            tool = p.get('tool')
+            state_obj = p.get('state') or {}
+            args_text = args_to_text(state_obj.get('input'))
+            state = (state_obj.get('status') or 'pending')
+        elif t == 'tool_use':                # map_part 映射形状
+            key = str(pid)
+            tool = p.get('name')
+            args_text = args_to_text(p.get('input'))
+            state = (p.get('status') or 'pending')
+        else:
+            continue
+        if not tool:
+            continue
+        out[key] = (key, str(tool), args_text[:MAX_ARGS_LEN], str(state)[:20])
     return list(out.values())
 
 
@@ -150,7 +182,7 @@ def record_state(session_id: str, oc_session_id: str, state, *,
             part_map = state.get('parts_by_id')
         else:
             part_map = scope.get('parts_by_id')
-        part_rows = extract_from_parts((part_map or {}).values())
+        part_rows = extract_from_part_map(part_map)
         if not part_rows:
             continue
         try:

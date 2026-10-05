@@ -728,3 +728,41 @@ def test_expectation_desc_and_failure_message_for_verifier():
     msg = gate_failure_message({'results': [row]})
     assert msg.startswith('action_gate: ')
     assert '结论含标记(判官未通过: 缺少 DONE-MARK; 证据不足)' in msg
+
+
+def test_interactive_ledger_records_mapped_parts_from_apply_event(gate_fixture):
+    """回归（2026-10-05 S0 能力压测发现）：交互累积态 parts_by_id 存的是
+    map_part 映射后的 'tool_use' 形状（apply_event 统一映射；映射值无 'id'
+    字段，part id 只在 dict key 上）。修复前 extract_from_parts 只认原始
+    'tool' 形状 → 交互路径账本恒 0 行、工具型门禁恒 failed。本用例走真实
+    累积路径（new_state → apply_event → finalize）锁死生产形状。"""
+    f = gate_fixture
+    from utils.chat_persist import new_state, apply_event
+    agent_ledger.register_session_expectations(f['sid'], [
+        {'name': '执行对账脚本', 'tool': 'bash',
+         'args_pattern': 'scripts/reconcile\\.py'},
+    ])
+    oc = f['oc_sid']
+    state = new_state()
+    apply_event(state, {'event': 'message.updated',
+                        'data': {'type': 'message.updated',
+                                 'properties': {'sessionID': oc,
+                                                'info': {'id': 'm1',
+                                                         'role': 'assistant',
+                                                         'time': {'created': 1}}}}}, oc)
+    apply_event(state, {'event': 'message.part.updated',
+                        'data': {'type': 'message.part.updated',
+                                 'properties': {'sessionID': oc,
+                                                'part': {'id': 'm1-tool0',
+                                                         'messageID': 'm1',
+                                                         'type': 'tool',
+                                                         'tool': 'bash',
+                                                         'state': {'status': 'completed',
+                                                                   'input': {'command': 'python scripts/reconcile.py'},
+                                                                   'output': 'ok'}}}}}, oc)
+    apply_event(state, {'event': 'session.idle',
+                        'data': {'type': 'session.idle',
+                                 'properties': {'sessionID': oc}}}, oc)
+    gate = agent_ledger.finalize_interactive_turn(f['sid'], oc, state)
+    assert gate['status'] == 'passed', gate
+    assert gate['results'][0]['evidence'] == 1
