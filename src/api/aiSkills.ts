@@ -121,6 +121,9 @@ export interface SkillDefVersion {
   /** 偏离分布：partial / diverged 结果数（spec §7 binding） */
   partialCount: number
   divergedCount: number
+  /** 正文是否已归档（历史存量行为 false，内容动作置灰） */
+  archived: boolean
+  contentCapturedAt: string | null
 }
 
 /** 试算预览（preview_steps 口径，不落库） */
@@ -187,7 +190,7 @@ export function generateSkillDefSteps(body: { kind?: string; path: string }) {
   return post<{ steps: FitStep[] }>(`${ADMIN}/skill-def-steps/generate`, body)
 }
 
-export function applySkillDefSteps(body: { path: string; steps: FitStep[] }) {
+export function applySkillDefSteps(body: { path: string; steps: FitStep[]; versionLabel?: string }) {
   return post<{ path: string }>(`${ADMIN}/skill-def-steps/apply`, body)
 }
 
@@ -209,4 +212,39 @@ export function listSkillDefPatterns(params?: {
   defKind?: string; defName?: string; limit?: number
 }) {
   return get<{ patterns: SkillDefPattern[] }>(`${ADMIN}/skill-def-patterns`, params)
+}
+
+/** 版本归档正文（spec §5） */
+export interface SkillDefVersionContent {
+  id: string
+  defKind: string
+  defName: string
+  contentHash: string | null
+  versionLabel: string | null
+  contentCapturedAt: string | null
+  content: string
+}
+
+/** compare 端点的单端元信息 */
+export interface SkillDefVersionDiffMeta {
+  id: string
+  defName: string
+  contentHash: string | null
+  versionLabel: string | null
+  contentCapturedAt: string | null
+}
+
+export function getSkillDefVersionContent(id: string) {
+  return get<SkillDefVersionContent>(
+    `${ADMIN}/skill-def-versions/${encodeURIComponent(id)}/content`)
+}
+
+export function compareSkillDefVersions(params: { fromId: string; toId: string }) {
+  return get<{ from: SkillDefVersionDiffMeta; to: SkillDefVersionDiffMeta; diff: string }>(
+    `${ADMIN}/skill-def-versions/compare`, params)
+}
+
+export function rollbackSkillDefVersion(id: string) {
+  return post<{ ok: boolean; path: string; contentHash: string }>(
+    `${ADMIN}/skill-def-versions/${encodeURIComponent(id)}/rollback`)
 }
