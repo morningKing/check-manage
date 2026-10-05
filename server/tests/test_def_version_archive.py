@@ -133,6 +133,46 @@ def test_register_definition_versions_archives_known_and_mismatch(db_conn, tmp_p
         db_conn.commit()
 
 
+def test_register_definition_versions_non_utf8_degrades_to_hash_only(db_conn, tmp_path):
+    """非 UTF-8 定义文件（如 GBK）→ 只登记 hash 不归档，不中止整个注册批；
+    同批正常 utf-8 定义照常归档（比照 mismatch 降级语义）。"""
+    from utils.execution_audit import register_definition_versions
+    gbk_name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    utf8_name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    d = tmp_path / 'nonutf8-batch'
+    d.mkdir()
+    raw_gbk = '中文正文'.encode('gbk')
+    f_gbk = d / f'{gbk_name}.md'
+    f_gbk.write_bytes(raw_gbk)
+    h_gbk = hashlib.sha256(raw_gbk).hexdigest()
+    f_utf8 = d / f'{utf8_name}.md'
+    f_utf8.write_bytes(b'utf8-body')
+    h_utf8 = hashlib.sha256(b'utf8-body').hexdigest()
+    batch = [
+        {'kind': 'skill', 'name': gbk_name, 'path': str(f_gbk),
+         'content_hash': h_gbk},
+        {'kind': 'skill', 'name': utf8_name, 'path': str(f_utf8),
+         'content_hash': h_utf8},
+    ]
+    try:
+        assert register_definition_versions(batch) == 2      # 两行都登记
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT content FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (gbk_name, h_gbk))
+            assert cur.fetchone()[0] is None                 # GBK 行只登记不归档
+            cur.execute("SELECT content FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (utf8_name, h_utf8))
+            assert cur.fetchone()[0] == 'utf8-body'          # 正常行照常归档
+    finally:
+        with db_conn.cursor() as cur:
+            for n in (gbk_name, utf8_name):
+                cur.execute("DELETE FROM ai_skill_def_versions "
+                            "WHERE def_kind='skill' AND def_name=%s", (n,))
+        db_conn.commit()
+
+
 def test_collect_and_save_manifests_registers_versions(db_conn, tmp_path, monkeypatch):
     """collect_and_save_workspace_manifests 接线：执行落 manifest 后兜底归档。"""
     import utils.execution_audit as _ea

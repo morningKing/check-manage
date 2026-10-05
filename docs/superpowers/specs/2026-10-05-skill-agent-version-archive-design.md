@@ -176,3 +176,14 @@ content_hash)` 命中**同一版本行**——时间线不产生虚假的"回滚
 - skill 附属脚本文件不在归档/diff/回滚范围（二期候选：正文 + 附属文件
   hash 清单）。
 - 跨库恢复（`server/backups` 体系）不在本设计范围。
+
+## 10. 交付对齐记录（2026-10-05 实施终审）
+
+- §5 compare 实际签名为 `?fromId=&toId=`（defKind/defName 由版本行内联校验同一定义，
+  简化了参数面），spec 表中的 `defKind&defName` 查询参数未实现。
+- §6 「历史版本未归档正文」tooltip 未实施——未归档节点三动作置灰但无提示文案
+  （后续跟进项）。
+- §4.3 被动归档对非 UTF-8 正文的降级：只登记 hash 不归档（终审 F1 修复，与
+  hash 不一致降级同语义）。
+- 迁移自动执行路径为 init_db.py 的 `_run_dated_migrations`（app.py 启动钩子
+  不执行 dated migrations——升级环境需重跑 init_db 或迁移脚本）。

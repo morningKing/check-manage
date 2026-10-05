@@ -349,7 +349,7 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
             continue                # 无 fit 块的定义不参与拟合（不出结果行）
         vals_list.append({**base, **match_steps(steps, trace)})
     # 4. 落库（幂等 upsert）；同时注册定义版本——拟合遇到新 hash 即登记，
-    #    ON CONFLICT DO NOTHING 保证重复 compute 幂等（spec §3.4）
+    #    ON CONFLICT DO UPDATE 保旧内容不覆盖，重复 compute 幂等（spec §3.4）
     out: list[dict] = []
     if vals_list:
         with db_ctx() as conn:

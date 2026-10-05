@@ -375,8 +375,17 @@ def register_definition_versions(manifests: list[dict]) -> int:
                         register_def_version(cur, kind, name, chash)
                         registered += 1
                         continue
-                    register_def_version(cur, kind, name, chash,
-                                         content=raw.decode('utf-8'))
+                    try:
+                        content = raw.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # 正文无法以 utf-8 定格（如 GBK 文件）：比照 mismatch 语义
+                        # 只登记 hash，不让单文件中止整个注册批
+                        logger.warning('def version archive: 正文非 UTF-8，'
+                                       '只登记不归档 %s (%s)', path, name)
+                        register_def_version(cur, kind, name, chash)
+                        registered += 1
+                        continue
+                    register_def_version(cur, kind, name, chash, content=content)
                     registered += 1
             conn.commit()
         return registered
