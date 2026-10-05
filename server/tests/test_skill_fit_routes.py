@@ -342,3 +342,108 @@ def test_skill_def_steps_apply_registers_version(client, admin_headers, db_conn,
             cur.execute("DELETE FROM ai_skill_def_versions "
                         "WHERE def_kind='skill' AND def_name=%s", (name,))
         db_conn.commit()
+
+
+def _seed_two_versions(db_conn, name):
+    """种子：同一定义两个已归档版本 + 一个未归档版本。返回 (id_v1, id_v2, id_v0)。"""
+    from utils.skill_fit import register_def_version
+    h1 = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
+    h2 = hashlib.sha256('v1 正文\n+v2 新增行'.encode('utf-8')).hexdigest()
+    ids = {}
+    with db_conn.cursor() as cur:
+        register_def_version(cur, 'skill', name, h1, content='v1 正文')
+        cur.execute("SELECT id FROM ai_skill_def_versions WHERE def_kind='skill' "
+                    "AND def_name=%s AND content_hash=%s", (name, h1))
+        ids['v1'] = cur.fetchone()[0]
+        register_def_version(cur, 'skill', name, h2,
+                             content='v1 正文\n+v2 新增行')
+        cur.execute("SELECT id FROM ai_skill_def_versions WHERE def_kind='skill' "
+                    "AND def_name=%s AND content_hash=%s", (name, h2))
+        ids['v2'] = cur.fetchone()[0]
+        register_def_version(cur, 'skill', name, 'a' * 64)   # 未归档
+        cur.execute("SELECT id FROM ai_skill_def_versions WHERE def_kind='skill' "
+                    "AND def_name=%s AND content_hash=%s", (name, 'a' * 64))
+        ids['v0'] = cur.fetchone()[0]
+    db_conn.commit()
+    return ids['v1'], ids['v2'], ids['v0']
+
+
+def test_skill_def_version_content_endpoint(client, admin_headers, db_conn):
+    """content 端点：归档版本回全文；未归档 400；不存在 404。"""
+    name = f'cmp-skill-{uuid.uuid4().hex[:6]}'
+    v1, v2, v0 = _seed_two_versions(db_conn, name)
+    try:
+        r = client.get(f'/ai/chat/admin/skill-def-versions/{v2}/content',
+                       headers=admin_headers)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['content'] == 'v1 正文\n+v2 新增行'
+        assert body['defName'] == name and body['defKind'] == 'skill'
+        assert body['contentHash'] == hashlib.sha256(
+            'v1 正文\n+v2 新增行'.encode('utf-8')).hexdigest()
+        r0 = client.get(f'/ai/chat/admin/skill-def-versions/{v0}/content',
+                        headers=admin_headers)
+        assert r0.status_code == 400 and r0.get_json()['error'] == '版本未归档'
+        r404 = client.get('/ai/chat/admin/skill-def-versions/defv_nosuch/content',
+                          headers=admin_headers)
+        assert r404.status_code == 404
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
+
+
+def test_skill_def_versions_compare_endpoint(client, admin_headers, db_conn):
+    """compare 端点：相邻版本 unified diff；未归档 400；跨定义 400。"""
+    from utils.skill_fit import register_def_version
+    name = f'cmp-skill-{uuid.uuid4().hex[:6]}'
+    v1, v2, v0 = _seed_two_versions(db_conn, name)
+    other = f'cmp-skill-{uuid.uuid4().hex[:6]}'
+    try:
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'skill', other,
+                                 hashlib.sha256(b'x').hexdigest(), content='x')
+            cur.execute("SELECT id FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (other,))
+            other_id = cur.fetchone()[0]
+        db_conn.commit()
+        r = client.get('/ai/chat/admin/skill-def-versions/compare',
+                       headers=admin_headers,
+                       query_string={'fromId': v1, 'toId': v2})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert '+v2 新增行' in body['diff']
+        assert body['from']['id'] == v1 and body['to']['id'] == v2
+        r0 = client.get('/ai/chat/admin/skill-def-versions/compare',
+                        headers=admin_headers,
+                        query_string={'fromId': v0, 'toId': v2})
+        assert r0.status_code == 400 and r0.get_json()['error'] == '版本未归档'
+        rx = client.get('/ai/chat/admin/skill-def-versions/compare',
+                        headers=admin_headers,
+                        query_string={'fromId': v1, 'toId': other_id})
+        assert rx.status_code == 400 and '同一定义' in rx.get_json()['error']
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name IN (%s, %s)",
+                        (name, other))
+        db_conn.commit()
+
+
+def test_skill_def_versions_list_has_archived_flag(client, admin_headers, db_conn):
+    """列表端点补 archived/contentCapturedAt（UI 置灰依据）。"""
+    name = f'cmp-skill-{uuid.uuid4().hex[:6]}'
+    v1, v2, v0 = _seed_two_versions(db_conn, name)
+    try:
+        r = client.get('/ai/chat/admin/skill-def-versions', headers=admin_headers,
+                       query_string={'defName': name})
+        assert r.status_code == 200
+        rows = {v['id']: v for v in r.get_json()['versions']}
+        assert rows[v2]['archived'] is True and rows[v2]['contentCapturedAt']
+        assert rows[v0]['archived'] is False and rows[v0]['contentCapturedAt'] is None
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()

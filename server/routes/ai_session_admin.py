@@ -1076,6 +1076,8 @@ def list_skill_def_versions():
                 """
                 SELECT v.id, v.def_kind, v.def_name, v.content_hash,
                        v.version_label, v.note, v.first_seen_at,
+                       v.content IS NOT NULL                AS archived,
+                       v.content_captured_at,
                        COALESCE(t.tasks, 0)          AS tasks,
                        COALESCE(t.fit_tasks, 0)      AS fit_tasks,
                        COALESCE(t.partial_tasks, 0)  AS partial_tasks,
@@ -1118,8 +1120,81 @@ def list_skill_def_versions():
             'fitRate': round(r['fit_tasks'] / tasks, 4) if tasks else None,
             'partialCount': r['partial_tasks'],
             'divergedCount': r['diverged_tasks'],
+            'archived': r.get('archived') or False,
+            'contentCapturedAt': r['content_captured_at'].isoformat()
+            if r.get('content_captured_at') else None,
         })
     return jsonify({'versions': versions})
+
+
+@ai_execution_admin_bp.get('/skill-def-versions/compare')
+@require_permission('admin.ai_chat_admin')
+def compare_skill_def_versions():
+    """两版本 unified diff（spec §5）：fromId/toId 须属同一定义且均已归档。
+    服务端 difflib 生成（标准库），前端按行着色渲染，不引 diff 依赖。"""
+    import difflib
+    from_id = (request.args.get('fromId') or '').strip()
+    to_id = (request.args.get('toId') or '').strip()
+    if not from_id or not to_id:
+        return jsonify({'error': 'fromId/toId 必填'}), 400
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, def_kind, def_name, content_hash, version_label, "
+                "       content, content_captured_at "
+                "FROM ai_skill_def_versions WHERE id IN (%s, %s)",
+                (from_id, to_id))
+            cols = [d[0] for d in cur.description]
+            rows = {r['id']: r
+                    for r in (dict(zip(cols, x)) for x in cur.fetchall())}
+    src, dst = rows.get(from_id), rows.get(to_id)
+    if not src or not dst:
+        return jsonify({'error': '版本不存在'}), 404
+    if (src['def_kind'], src['def_name']) != (dst['def_kind'], dst['def_name']):
+        return jsonify({'error': '两个版本不属于同一定义'}), 400
+    if src['content'] is None or dst['content'] is None:
+        return jsonify({'error': '版本未归档'}), 400
+    diff = '\n'.join(difflib.unified_diff(
+        src['content'].splitlines(), dst['content'].splitlines(),
+        fromfile=f"{src['def_name']}@{(src['content_hash'] or '')[:12]}",
+        tofile=f"{dst['def_name']}@{(dst['content_hash'] or '')[:12]}",
+        lineterm=''))
+
+    def _meta(r):
+        return {'id': r['id'], 'defName': r['def_name'],
+                'contentHash': r['content_hash'],
+                'versionLabel': r['version_label'],
+                'contentCapturedAt': r['content_captured_at'].isoformat()
+                if r['content_captured_at'] else None}
+
+    return jsonify({'from': _meta(src), 'to': _meta(dst), 'diff': diff})
+
+
+@ai_execution_admin_bp.get('/skill-def-versions/<version_id>/content')
+@require_permission('admin.ai_chat_admin')
+def get_skill_def_version_content(version_id):
+    """版本正文预览（spec §5）。不存在 404；未归档（content 为 NULL）400。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, def_kind, def_name, content_hash, version_label, "
+                "       content, content_captured_at "
+                "FROM ai_skill_def_versions WHERE id = %s", (version_id,))
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'error': '版本不存在'}), 404
+    cols = ['id', 'def_kind', 'def_name', 'content_hash', 'version_label',
+            'content', 'content_captured_at']
+    r = dict(zip(cols, row))
+    if r['content'] is None:
+        return jsonify({'error': '版本未归档'}), 400
+    return jsonify({
+        'id': r['id'], 'defKind': r['def_kind'], 'defName': r['def_name'],
+        'contentHash': r['content_hash'], 'versionLabel': r['version_label'],
+        'contentCapturedAt': r['content_captured_at'].isoformat()
+        if r['content_captured_at'] else None,
+        'content': r['content'],
+    })
 
 
 @ai_execution_admin_bp.patch('/skill-def-versions/<version_id>')
