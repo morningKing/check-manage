@@ -133,12 +133,14 @@ test('真实会话执行审计：Attempt / 生效模型 / 数据完整性', asyn
 
   // Attempt 表格出现且至少一条 completed（回合已收敛）
   await expect(drawer.locator('h4', { hasText: '执行尝试' })).toBeVisible()
-  await expect(drawer.locator('.el-table__row', { hasText: 'completed' }).first())
-    .toBeVisible({ timeout: 15_000 })
-  // 生效模型解析方式被记录（平台配置了默认模型 → session_default）
-  const firstAttemptRow = drawer.locator('.el-table__row')
-    .filter({ hasText: 'session_default' }).first()
-  await expect(firstAttemptRow).toBeVisible()
+  const firstAttemptRow = drawer.locator('.el-table__row', { hasText: 'completed' }).first()
+  await expect(firstAttemptRow).toBeVisible({ timeout: 15_000 })
+  // 生效模型解析方式被记录：合法解析枚举之一（routes/ai_chat.py:958——
+  // 平台配置了默认模型 → session_default；未配置 → runtime_default；
+  // 显式请求 → requested）。此前硬编码 session_default 与环境耦合：
+  // ai_settings.default_chat_model 被清空后记录值是 runtime_default，
+  // 断言即失败（2026-10-04 三轮全量 2/3 复现，与批域重构无关）。
+  await expect(firstAttemptRow).toContainText(/session_default|runtime_default|requested/)
   // Prompt hash 已记录 → 可打开快照
   await expect(firstAttemptRow.getByText('查看快照')).toBeVisible()
 

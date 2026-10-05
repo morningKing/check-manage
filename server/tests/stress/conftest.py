@@ -211,12 +211,14 @@ class Stack:
         for p in self._serve_procs:              # 幂等：已有存活实例直接复用
             if p.poll() is None:
                 return p
-        from utils.opencode_launch import serve_env
+        from dotenv import load_dotenv
+        load_dotenv(SERVER_DIR / '.env')     # opencode_bin() 读 os.environ——先让 .env 的 OPENCODE_BIN 入环境
+        from utils.opencode_launch import opencode_bin, serve_env
         gd = tempfile.mkdtemp(prefix='stress-oc-global-')
         self.tmp_dirs.append(gd)
         env = serve_env({**os.environ, 'OPENCODE_GLOBAL_DIR': gd})
         proc = subprocess.Popen(
-            ['opencode', 'serve', '--port', str(port)], cwd=str(Path.home()),
+            [opencode_bin(), 'serve', '--port', str(port)], cwd=str(Path.home()),
             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self._serve_procs.append(proc)
         deadline = time.time() + 30

@@ -107,14 +107,31 @@ export async function cleanupBatch(token: string, bid: string): Promise<void> {
 
 export interface AgentDef { mode: 'primary' | 'subagent'; body: string }
 
-/** 本地 git 预置仓库：自定义 agent 定义（OpenCode agent md），返回仓库路径
- * （调用方用完 fs.rmSync(recursive, force) 清理）。 */
-export function makeProvisionRepo(agents: Record<string, AgentDef>): string {
+/** 本地 git 预置仓库：自定义 agent 定义（OpenCode agent md）与项目技能
+ * （skill/<name>/SKILL.md，frontmatter name/description），返回仓库路径
+ * （调用方用完 fs.rmSync(recursive, force) 清理）。
+ *
+ * skills 形参（2026-10-04 为 ui-journeys「技能注入」用例加）：键为技能名，
+ * 值为 SKILL.md 正文。服务端把预置仓库整仓 clone 成子会话工作区的
+ * .opencode/（batch_engine._provision_workspace：「The repo root is treated
+ * as the .opencode config dir (it should contain agent/, skill/, …)」），
+ * 因此仓库里 skill/<name>/SKILL.md 即 OpenCode 的**项目级技能** ——
+ * 与全局技能（AI 全局技能管理页、中心存储 global-skills/）是两条注入路径，
+ * 项目技能注入成功是静默的（无「已注入全局技能」通知）。 */
+export function makeProvisionRepo(
+  agents: Record<string, AgentDef>,
+  skills: Record<string, string> = {},
+): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-prov-'))
   fs.mkdirSync(path.join(repo, 'agent'), { recursive: true })
   for (const [name, def] of Object.entries(agents)) {
     fs.writeFileSync(path.join(repo, 'agent', `${name}.md`),
       `---\ndescription: E2E agent ${name}\nmode: ${def.mode}\n---\n${def.body}\n`, 'utf-8')
+  }
+  for (const [name, body] of Object.entries(skills)) {
+    fs.mkdirSync(path.join(repo, 'skill', name), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'skill', name, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: E2E skill ${name}\n---\n${body}\n`, 'utf-8')
   }
   const g = (args: string[]) =>
     execFileSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd: repo })

@@ -3,86 +3,13 @@ import { test, expect } from '@playwright/test'
 /**
  * E2E test for subtask trace visibility (Task 7 fix).
  *
- * This test verifies the SubtaskBubble component renders correctly when
- * subtask data exists in the database. It uses the API to seed test data
- * rather than relying on the /review command (which depends on OpenCode
- * having the right git context).
+ * 2026-10-04 收编改造：批子会话委派用例（原用例 3）移入
+ * e2e/ai-full/batch/ui-journeys.spec.ts「批子会话委派」；占位弱用例
+ * （依赖历史遗留 subtask 数据的 fake-session 冒烟）删除。
  *
- * The fix being tested:
- * - C-1: SubtaskPart.sessionID was the parent session, not the child.
- *        The fix extracts the child session ID from tool:'task'.state.metadata.sessionId.
- * - The SubtaskBubble should render with correct agent/description/status
- *   and expand to show the subagent's conversation.
+ * Remaining: natural-language delegation end-to-end + the subtask messages
+ * endpoint contract (C-1 fix at API level).
  */
-test('subtask bubble renders and expands with correct child session data', async ({ page, request }) => {
-  await page.goto('/')
-
-  // Log in
-  await page.fill('input[placeholder*="用户名"]', 'admin')
-  await page.fill('input[placeholder*="密码"]', 'admin123')
-  await page.getByRole('button', { name: /登\s*录/ }).click()
-
-  // Open AI drawer
-  await page.getByRole('button', { name: /AI 助手/ }).click()
-
-  // Wait for input to be ready
-  const input = page.getByPlaceholder(/给 AI 助手发消息/)
-  await input.waitFor({ state: 'visible', timeout: 15_000 })
-
-  // Send a test message to ensure we have an active session
-  await input.fill('test subtask trace')
-  await page.getByRole('button', { name: '发送' }).click()
-
-  // Wait for the assistant reply
-  await expect(page.locator('.msg--assistant').last()).toBeVisible({ timeout: 30_000 })
-
-  // Get the current session ID from the URL or page
-  // The session ID is typically in the URL or can be found in the page state
-  // For now, we'll check if there's any subtask bubble visible
-
-  // Check if there are any existing subtask bubbles (from previous test runs)
-  const existingBubbles = page.locator('.subtask-bubble')
-  const count = await existingBubbles.count()
-
-  if (count > 0) {
-    // There's already a subtask bubble - verify it renders correctly
-    const bubble = existingBubbles.first()
-    await expect(bubble).toBeVisible()
-
-    // Check agent name
-    const agentSpan = bubble.locator('.subtask-bubble__agent')
-    await expect(agentSpan).toBeVisible()
-    const agentText = await agentSpan.textContent()
-    expect(agentText?.trim()).toBeTruthy()
-
-    // Check description
-    const descSpan = bubble.locator('.subtask-bubble__desc')
-    await expect(descSpan).toBeVisible()
-
-    // Click to expand
-    await bubble.click()
-
-    // Wait for content to load
-    const content = bubble.locator('.subtask-bubble__body, [class*="subtask-bubble__content"]').first()
-    await expect(content).toBeVisible({ timeout: 10_000 })
-
-    // Take screenshot
-    await page.screenshot({ path: 'e2e-screenshots/subtask-bubble-expanded.png', fullPage: true })
-  } else {
-    // No existing subtask bubbles - this is expected for a fresh session
-    // The important thing is that the component exists and would render correctly
-    // when data is present. We've verified the component is loaded by checking
-    // that the AI chat works at all.
-
-    // Verify the AI chat is functional (smoke test)
-    const lastAssistant = page.locator('.msg--assistant').last()
-    await expect(lastAssistant).toBeVisible()
-    const text = await lastAssistant.textContent()
-    expect(text?.trim().length).toBeGreaterThan(0)
-
-    console.log('No existing subtask bubbles found - component exists but no subtask data in this session')
-  }
-})
 
 /**
  * Real delegation end-to-end: send a message that forces the model to
@@ -92,8 +19,10 @@ test('subtask bubble renders and expands with correct child session data', async
  * input/output.
  */
 test('natural-language delegation shows full child trace in subtask bubble', async ({ page }) => {
+  // 委托回合（父+子代理两次模型调用）在慢网络下可达 2-3 分钟；完成态等待
+  // 里还有 240s 的窗口，单条 setTimeout（原文件两条重复声明，后者覆盖前者
+  // 只剩 180s，小于内部等待窗口——已收敛为一条 320s）
   test.setTimeout(320_000)
-  test.setTimeout(180_000)
 
   await page.goto('/')
   await page.fill('input[placeholder*="用户名"]', 'admin')
@@ -181,69 +110,6 @@ test('natural-language delegation shows full child trace in subtask bubble', asy
   expect(toolCalls > 0 || bodyText.length > 200).toBeTruthy()
 
   await page.screenshot({ path: 'e2e-screenshots/subtask-trace-expanded.png', fullPage: true })
-})
-
-test('batch child delegation shows the subagent conversation in chat', async ({ page }) => {
-  test.setTimeout(420_000)
-  const batchName = `batch-subtask-${Date.now()}`
-
-  await page.goto('/')
-  await page.fill('input[placeholder*="用户名"]', 'admin')
-  await page.fill('input[placeholder*="密码"]', 'admin123')
-  await page.getByRole('button', { name: /登\s*录/ }).click()
-  await page.getByRole('button', { name: /登\s*录/ }).waitFor({ state: 'hidden', timeout: 10_000 })
-  await page.goto('/ai-chat')
-
-  const createBatch = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
-    .locator('button', { hasText: '新建' })
-  await createBatch.waitFor({ state: 'visible', timeout: 15_000 })
-  await createBatch.click()
-
-  const dialog = page.getByRole('dialog', { name: '新建批任务' })
-  await dialog.waitFor({ state: 'visible', timeout: 5_000 })
-  await dialog.locator('input[data-test="name"]').fill(batchName)
-  await dialog.locator('textarea[data-test="prompt"]').fill(
-    '你必须使用 task 工具委托一个 general 子代理去完成：统计当前工作区 AGENTS.md 文件的行数。'
-    + '不要自己读取或统计，必须由子代理执行并返回结果。',
-  )
-  await dialog.locator('input[type="file"]').setInputFiles([
-    { name: 'subtask-probe.txt', mimeType: 'text/plain', buffer: (globalThis as any).Buffer.from('probe') },
-  ])
-  await expect(dialog.locator('.files')).toContainText('subtask-probe.txt', { timeout: 8_000 })
-  await dialog.locator('button[data-test="create-btn"]').click()
-
-  const group = page.locator('.batch-group', { hasText: batchName }).first()
-  await group.waitFor({ state: 'visible', timeout: 10_000 })
-  await page.waitForFunction((name) => {
-    const group = Array.from(document.querySelectorAll('.batch-group'))
-      .find(el => el.querySelector('.bg-name')?.textContent?.includes(name))
-    const badge = group?.querySelector('.badge')
-    return !!badge && ['completed', 'failed', 'partial'].some(s => badge.classList.contains(`badge--${s}`))
-  }, batchName, { timeout: 360_000 })
-
-  const head = group.locator('.batch-group__head')
-  for (let i = 0; i < 5 && (await group.locator('.bg-child').count()) === 0; i++) {
-    await head.click()
-    await page.waitForTimeout(500)
-  }
-  await expect(group.locator('.bg-child')).toHaveCount(1, { timeout: 10_000 })
-  await group.locator('.bg-child').first().click()
-
-  const bubble = page.locator('.subtask-bubble').first()
-  await bubble.waitFor({ state: 'visible', timeout: 120_000 })
-  await expect(bubble.locator('.subtask-bubble__agent')).toContainText('general')
-  // 注：__task-id/__copy 是 feat/batch-session-parity 分支的 UI，main 上没有
-  await expect(page.locator('.subtask-bubble--completed').first()).toBeVisible({ timeout: 120_000 })
-
-  await bubble.locator('.subtask-bubble__head').click()
-  const body = bubble.locator('.subtask-bubble__body')
-  await expect(body).toBeVisible({ timeout: 10_000 })
-  // 会话复用引入任务段边界：段首用户消息标注「本段任务输入」，段内为「委托输入」
-  // （SubtaskBubble boundaryOf）——两种都是合法的用户输入标注
-  await expect(body.locator('.subtask-bubble__role').first())
-    .toContainText(/委托输入|本段任务输入/)
-  await expect(body.locator('.subtask-bubble__msg').first()).toBeVisible()
-  await page.screenshot({ path: '.playwright-mcp/batch-subtask-trace-expanded.png', fullPage: true })
 })
 
 /**
