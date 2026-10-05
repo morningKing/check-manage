@@ -1,0 +1,90 @@
+{
+ "capacity": 50,
+ "levels": [
+  {
+   "level": 5,
+   "batches": 100,
+   "children": 500,
+   "done": 500,
+   "failed": 0,
+   "cancelled": 0,
+   "failed_errors": [],
+   "success_rate": 1.0,
+   "throughput_cpm": 26.1107998422016,
+   "invariants": {
+    "orphans": 0,
+    "zombie_running": 0,
+    "counter_violations": 0
+   },
+   "wall_s": 1148.949866771698
+  },
+  {
+   "level": 10,
+   "batches": 100,
+   "children": 500,
+   "done": 500,
+   "failed": 0,
+   "cancelled": 0,
+   "failed_errors": [],
+   "success_rate": 1.0,
+   "throughput_cpm": 25.80374520034986,
+   "invariants": {
+    "orphans": 0,
+    "zombie_running": 0,
+    "counter_violations": 0
+   },
+   "wall_s": 1162.6219282150269
+  },
+  {
+   "level": 20,
+   "batches": 100,
+   "children": 500,
+   "done": 500,
+   "failed": 0,
+   "cancelled": 0,
+   "failed_errors": [],
+   "success_rate": 1.0,
+   "throughput_cpm": 26.497286872904404,
+   "invariants": {
+    "orphans": 0,
+    "zombie_running": 0,
+    "counter_violations": 0
+   },
+   "wall_s": 1132.1913878917694
+  },
+  {
+   "level": 35,
+   "batches": 100,
+   "children": 500,
+   "done": 500,
+   "failed": 0,
+   "cancelled": 0,
+   "failed_errors": [],
+   "success_rate": 1.0,
+   "throughput_cpm": 26.281194175144766,
+   "invariants": {
+    "orphans": 0,
+    "zombie_running": 0,
+    "counter_violations": 0
+   },
+   "wall_s": 1141.5006411075592
+  },
+  {
+   "level": 50,
+   "batches": 100,
+   "children": 500,
+   "done": 500,
+   "failed": 0,
+   "cancelled": 0,
+   "failed_errors": [],
+   "success_rate": 1.0,
+   "throughput_cpm": 26.84839488119198,
+   "invariants": {
+    "orphans": 0,
+    "zombie_running": 0,
+    "counter_violations": 0
+   },
+   "wall_s": 1117.385234117508
+  }
+ ]
+}
