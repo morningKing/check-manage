@@ -19,23 +19,38 @@
  *  - action-checks/attach：运行中补挂期望（session_ids + validate_checks
  *    口径 checks），终态核对 gate 通过（sessions[].gate_passed）。
  *
+ * 组 4（2026-10-04 Task 14 收编，原文件同日删除）：
+ *  - agent-action-gate.spec.ts 用例 2/3/4 → 用例 11-13：tool 门禁 fail
+ *    （哨兵正则必不命中 → failed + action_gate 明细 + 侧栏「门禁 ×1」徽标）、
+ *    tree 作用域（子代理动作计入根会话核对 → completed + 「门禁 ✓」徽标）、
+ *    db_record 效果断言（指向既有 products 数据，确定性通过 → completed +
+ *    「门禁 ✓」徽标）。断言语义原样；机制换本目录 helpers（uploadStaging/
+ *    createBatch/waitBatchTerminal/expandBatchGroup），删批断言改
+ *    cleanupBatch(stop=1) finally 兜底（源「用后即删」语义保留且失败路径
+ *    也清理）。合同事实：批详情 sessions[].gate_failed/gate_passed 是计数
+ *    （非布尔 gate_status），徽标断言为 UI 侧栏行为、原样保留。
+ *
  * LLM 预算标记（同 lifecycle/control spec 约定）：
  * - 组 1 用例 1-3：@llm —— 各 1 个真实 OpenCode 子会话（达标/不达标/重试闭环）；
  * - 组 2 用例 4-5：@llm —— 各 1 个子会话（委派 general 两次）；
  * - 组 3 用例 6-7：@llm —— 各 1 个预置仓库子会话（串行委派）；
  * - 用例 8/9（dry-run/tool-calls）：@llm-light —— sleep 10s 轻量消耗；
- * - 用例 10（attach）：@llm —— sleep 120s 长窗口 + 终态门禁核对。
+ * - 用例 10（attach）：@llm —— sleep 120s 长窗口 + 终态门禁核对；
+ * - 组 4 用例 11-13：@llm —— 各 1 个真实子会话（哨兵 fail / tree 子代理 /
+ *   db_record 确定性）。
  *
  * 断言直连后端 3002（理由见 batch-helpers.ts 头注释）。
  */
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import {
   API, BATCH_TERMINAL, adminToken, authHeaders, uploadStaging, createBatch,
   getDetail, cleanupBatch, makeProvisionRepo, waitFor, waitBatchTerminal,
   countByStatus,
 } from './batch-helpers'
-import { adminTokenCached, sleepBatch } from './toolbox'
+import { adminTokenCached, sleepBatch, tag } from './toolbox'
+import { gotoWithAuth, screenshot } from '../helpers'
+import { expandBatchGroup } from './ui-helpers'
 
 const _json = (v: unknown) => JSON.stringify(v)
 
@@ -386,4 +401,170 @@ test('action-checks/attach 运行中补挂期望：终态被核对', async ({ },
     expect(final.sessions[0].gate_failed).toBe(0)
     expect(String(final.sessions[0].error_message || '')).not.toContain('action_gate')
   } finally { await cleanupBatch(tk, bid) }
+})
+
+// ---------------------------------------------------------------------------
+// 组 4：tool/tree/db_record 门禁 + 侧栏徽标（2026-10-04 Task 14 自
+// agent-action-gate.spec.ts 用例 2/3/4 收编，原文件同日删除；断言语义原样，
+// 机制换本目录 helpers）
+// ---------------------------------------------------------------------------
+
+/** 真登录态进 /ai-chat；等真实元素，绝不等 networkidle（SSE 常驻）。
+ * 与 ui-journeys 的 gotoChat 同款（选择器原样搬运自被收编的
+ * agent-action-gate.spec.ts，已对线上 UI 验证；vite 依赖重优化会触发整页
+ * 重载，重进一次）。 */
+async function gotoChat(page: Page): Promise<void> {
+  await gotoWithAuth(page, '/ai-chat')
+  const sidebar = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
+  for (let i = 0; i < 3; i++) {
+    try {
+      await sidebar.waitFor({ state: 'visible', timeout: 60_000 })
+      return
+    } catch {
+      await gotoWithAuth(page, '/ai-chat')
+    }
+  }
+  await sidebar.waitFor({ state: 'visible', timeout: 60_000 })
+}
+
+test('gate fail：哨兵动作无命中 → failed + action_gate 明细 + 侧栏「门禁 ×1」徽标',
+     async ({ page }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话（prompt 回 OK 即终）
+  const tk = await adminTokenCached()
+  const name = tag('gate-fail')
+  const sentinel = `e2e-gate-sentinel-${Date.now()}`
+  const staged = await uploadStaging(tk, 'one.txt', 'BATCH-MARK-ONE', `e2e-${Date.now()}`)
+  // createBatch 非 201 直接 throw（源用例 status===201 断言由该异常等价承担）
+  const created = await createBatch(tk, {
+    name,
+    prompt: '直接回复:OK。不要读取任何文件,不要执行任何命令。',
+    files: [staged],
+    action_checks: [
+      { name: '读取哨兵文件', tool: 'read',
+        args_pattern: `${sentinel}\\.md`, min_count: 1 },
+    ],
+  })
+  const batchId = created.batchId || created.batch?.id
+  expect(batchId).toBeTruthy()
+  try {
+    const final = await waitBatchTerminal(tk, batchId, 480_000, 5000)
+    expect(final.batch.status).toBe('failed')  // 哨兵正则必然无命中 → 门禁不过
+    const child = final.sessions[0]
+    expect(child.status).toBe('failed')
+    expect(child.error_message).toContain('action_gate')
+    expect(child.error_message).toContain('读取哨兵文件')
+    // 合同事实：gate_failed 是计数（action_expectations 按 last_status 统计），非布尔
+    expect(child.gate_failed).toBeGreaterThanOrEqual(1)
+
+    // 账本查询端点：该子会话树可查（至少无异常；可能无工具调用）
+    const calls = await fetch(
+      `${API}/ai/chat/batches/${batchId}/children/${child.id}/tool-calls`,
+      { headers: authHeaders(tk) })
+    expect(calls.status).toBe(200)
+    expect(Array.isArray((await calls.json())?.calls)).toBe(true)
+
+    // UI：侧栏子会话行出现「门禁 ×1」失败徽标（UI 断言原样保留）
+    await gotoChat(page)
+    await expandBatchGroup(page, name)
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    await expect(group.locator('.gate-badge--fail')).toContainText('门禁 ×1',
+      { timeout: 60_000 })
+    await screenshot(page, 'action-gate-fail-badge')
+  } finally {
+    await cleanupBatch(tk, batchId)   // 源「用后即删」语义；stop=1 失败路径兜底
+  }
+})
+
+test('tree 作用域：子代理动作计入根会话核对 → completed + 侧栏「门禁 ✓」徽标',
+     async ({ page }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话，内部两次子代理委派
+  const tk = await adminTokenCached()
+  const name = tag('gate-subagent')
+  const agents = await (await fetch(`${API}/ai/chat/agents`, { headers: authHeaders(tk) })).json()
+  const subs = (agents?.subagents || []).map((s: any) => s.name)
+  test.skip(subs.length < 2, '环境需要至少两个子代理')
+
+  const staged = await uploadStaging(tk, 'one.txt', `GATE-SUBAGENT-MARK-${Date.now()}`,
+                                     `e2e-${Date.now()}`)
+  // 双子代理委托：让两个子代理都实际动工具(读同一个输入文件),门禁用 tree
+  // 作用域在根会话上核对——子代理的动作必须被计入,这正是 tree 的设计目的
+  const created = await createBatch(tk, {
+    name,
+    prompt: (
+      '请分别委托两个子代理完成任务,不要自己动手:\n'
+      + `1. @${subs[0]} 读取工作区 uploads/one.txt,原样回复文件内容;\n`
+      + `2. @${subs[1]} 查看工作区 uploads/ 目录下有哪些文件,回复文件名列表。\n`
+      + '两个子代理都完成后,汇总它们的结果回复。'
+    ),
+    files: [staged],
+    action_checks: [
+      { name: '子代理读取输入文件', tool: 'read',
+        args_pattern: 'one\\.txt', scope: 'tree', min_count: 1,
+        // 子代理定向:只有被委托读文件的子代理(general)的动作参与核对,
+        // explore 的动作不误伤
+        subagents: [subs[0]] },
+    ],
+  })
+  const batchId = created.batchId || created.batch?.id
+  try {
+    const final = await waitBatchTerminal(tk, batchId, 480_000, 5000)
+    expect(final.batch.status).toBe('completed')
+    const child = final.sessions[0]
+    expect(child.status).toBe('completed')
+    expect(child.gate_passed).toBeGreaterThanOrEqual(1)
+
+    // tree 作用域的实锤:账本里必须有子代理(非根会话)自己的工具调用
+    const calls = await fetch(
+      `${API}/ai/chat/batches/${batchId}/children/${child.id}/tool-calls`,
+      { headers: authHeaders(tk) })
+    expect(calls.status).toBe(200)
+    const subCalls = ((await calls.json())?.calls || []).filter((c: any) => c.subtaskId)
+    expect(subCalls.length, '应有子代理会话的工具调用入账').toBeGreaterThan(0)
+
+    // UI:门禁 ✓ 徽标出现在子会话行（UI 断言原样保留）
+    await gotoChat(page)
+    await expandBatchGroup(page, name)
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    await expect(group.locator('.gate-badge--pass')).toContainText('门禁 ✓',
+      { timeout: 60_000 })
+    await screenshot(page, 'action-gate-multi-subagent-pass')
+  } finally {
+    await cleanupBatch(tk, batchId)
+  }
+})
+
+test('gate pass：db_record 效果断言（确定性）→ completed + 侧栏「门禁 ✓」徽标',
+     async ({ page }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })   // 1 个真实子会话（prompt 回 OK 即终）
+  const tk = await adminTokenCached()
+  const name = tag('gate-pass')
+  const staged = await uploadStaging(tk, 'one.txt', 'BATCH-MARK-ONE', `e2e-${Date.now()}`)
+  // db_record 断言指向既有 products 数据,与模型行为无关 → 确定性通过
+  const created = await createBatch(tk, {
+    name,
+    prompt: '直接回复:OK。不要读取任何文件,不要执行任何命令。',
+    files: [staged],
+    action_checks: [
+      { name: '产品数据存在', check_type: 'db_record',
+        effect_spec: { collection: 'products', filter: {} }, min_count: 1 },
+    ],
+  })
+  const batchId = created.batchId || created.batch?.id
+  try {
+    const final = await waitBatchTerminal(tk, batchId, 480_000, 5000)
+    expect(final.batch.status).toBe('completed')
+    const child = final.sessions[0]
+    expect(child.status).toBe('completed')
+    expect(child.gate_passed).toBeGreaterThanOrEqual(1)
+
+    // UI:门禁 ✓ 徽标（UI 断言原样保留）
+    await gotoChat(page)
+    await expandBatchGroup(page, name)
+    const group = page.locator('.batch-group', { hasText: name }).first()
+    await expect(group.locator('.gate-badge--pass')).toContainText('门禁 ✓',
+      { timeout: 60_000 })
+    await screenshot(page, 'action-gate-pass-badge')
+  } finally {
+    await cleanupBatch(tk, batchId)
+  }
 })

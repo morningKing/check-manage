@@ -15,7 +15,13 @@ export const SHOT_DIR = 'e2e/screenshots/ai-full'
 
 let cachedToken: string | null = null
 
-/** admin JWT（缓存复用；登录态失效自动重登一次） */
+/**
+ * admin JWT（缓存复用；登录态失效自动重登一次）
+ *
+ * @deprecated 批任务域用例请改用 e2e/ai-full/batch/batch-helpers.ts 的
+ * `adminToken`（直连 3002 权威版）。本函数保留给非批用例；当最后一批
+ * 消费方迁移后删除。
+ */
 export async function adminToken(request: APIRequestContext): Promise<string> {
   if (cachedToken) return cachedToken
   const res = await request.post('/api/auth/login', {
@@ -83,7 +89,13 @@ export async function openApi(request: APIRequestContext, key: string,
   return { status: res.status(), json }
 }
 
-/** 批任务暂存上传（内部通道，UI 同款） */
+/**
+ * 批任务暂存上传（内部通道，UI 同款）
+ *
+ * @deprecated 批任务域用例请改用 e2e/ai-full/batch/batch-helpers.ts 的
+ * `uploadStaging`（直连 3002 权威版）。本函数保留给非批用例（ai-openapi、
+ * batch/openapi 迁移过渡期）；当最后一批消费方迁移后删除。
+ */
 export async function stagingUpload(request: APIRequestContext,
                                     uploadSessionId: string,
                                     files: { name: string; body: string }[]):
@@ -107,7 +119,13 @@ export async function stagingUpload(request: APIRequestContext,
   return out
 }
 
-/** 轮询直到谓词成立；返回最后一次值。intervalMs/poll 次数可配。 */
+/**
+ * 轮询直到谓词成立；返回最后一次值。intervalMs/poll 次数可配。
+ *
+ * @deprecated 批任务域用例请改用 e2e/ai-full/batch/batch-helpers.ts 的
+ * `waitFor`（直连 3002 权威版，deadline+label 形参）。本函数保留给非批
+ * 用例；当最后一批消费方迁移后删除。
+ */
 export async function waitFor<T>(fn: () => Promise<T | null>,
                                  opts: { timeoutMs?: number; intervalMs?: number } = {}):
                                  Promise<T> {
@@ -123,6 +141,11 @@ export async function waitFor<T>(fn: () => Promise<T | null>,
   throw new Error(`waitFor timeout after ${timeout}ms; last=${JSON.stringify(last)}`)
 }
 
+/**
+ * @deprecated 批任务域用例请改用 e2e/ai-full/batch/batch-helpers.ts 的
+ * `BATCH_TERMINAL`（直连 3002 权威版）。本常量保留给非批用例；当最后一批
+ * 消费方迁移后删除。
+ */
 export const BATCH_TERMINAL = ['completed', 'partial', 'failed']
 export const SESSION_TERMINAL = ['completed', 'failed', 'cancelled']
 

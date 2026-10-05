@@ -37,11 +37,17 @@
  *  - 用例 9「SSE 实时消费」（新增，确定性）：API cancel → 列表级 SSE
  *    推送（store.subscribeListEvents，3s 防抖 fetchList）让徽标 9s 内落
  *    终态（<10s 列表轮询周期，LIST_POLL_MS——判据成立），先于轮询更新。
+ *  - 用例 10「发送门禁 UI」（2026-10-04 Task 14 自 ai-harness-safety.spec.ts
+ *    P0-1 的 UI 半边收编，原文件同日只剩 P2 编排用例）：运行中子会话页
+ *    .batch-bar 可见 → composer 禁用 → 状态条渲染合法批状态文案。
+ *    源用例等真实 claim（模型快时抢不到 running 就降级告警）；此处
+ *    sleepBatch 90s 长窗口消除该竞态，断言语义原样（3 次重挂载重试保留）。
+ *    API 409 半边在 control.spec.ts 用例 9。
  *
  * LLM 预算标记（同 gate/lifecycle spec 约定，用例内 testInfo.annotations）：
  * - 用例 1/6/7/8：@llm（真 LLM，1-2 个子会话/例）；
  * - 用例 5：@llm（真 LLM 列技能清单）；
- * - 用例 3/4/9：@llm-light（sleepBatch/廉价 prompt，1 次轻量消耗/例）；
+ * - 用例 3/4/9/10：@llm-light（sleepBatch/廉价 prompt，1 次轻量消耗/例）；
  * - 用例 2：0 LLM（纯 UI，提交被门禁校验阻断，不建批）。
  *
  * 断言直连后端 3002（理由见 batch-helpers.ts 头注释）；UI 断言走本目录
@@ -53,7 +59,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   API, authHeaders, adminToken, cleanupBatch, createBatch, getDetail,
-  makeProvisionRepo, uploadStaging, waitBatchTerminal,
+  makeProvisionRepo, uploadStaging, waitBatchTerminal, waitFor, countByStatus,
 } from './batch-helpers'
 import { adminTokenCached, sleepBatch, tag } from './toolbox'
 import { gotoWithAuth, screenshot } from '../helpers'
@@ -65,16 +71,17 @@ test.setTimeout(900_000)
 
 /** 真登录态进 /ai-chat；等真实元素，绝不等 networkidle（SSE 常驻）。
  * vite 依赖重优化会触发整页重载，重进一次（选择器原样搬运自
- * agent-action-gate.spec.ts 的 gotoChat，已验证）。 */
-async function gotoChat(page: Page): Promise<void> {
-  await gotoWithAuth(page, '/ai-chat')
+ * agent-action-gate.spec.ts 的 gotoChat，已验证）。suffix 供直达
+ * ?session=<sid>（用例 10 发送门禁 UI，同源 spec 的同款形参）。 */
+async function gotoChat(page: Page, suffix = ''): Promise<void> {
+  await gotoWithAuth(page, `/ai-chat${suffix}`)
   const sidebar = page.locator('.ai-sidebar__section-head', { hasText: '批任务' })
   for (let i = 0; i < 3; i++) {
     try {
       await sidebar.waitFor({ state: 'visible', timeout: 60_000 })
       return
     } catch {
-      await gotoWithAuth(page, '/ai-chat')
+      await gotoWithAuth(page, `/ai-chat${suffix}`)
     }
   }
   await sidebar.waitFor({ state: 'visible', timeout: 60_000 })
@@ -624,7 +631,7 @@ test('SSE 实时消费：API 触发子任务取消，UI 徽标先于 10s 轮询�
     // 列表级 SSE 订阅在 startListPolling 的首个 tick（10s）后才建立
     // （aiChatBatches.startListPolling：tick 内 fetchList → subscribeListEvents，
     // 挂载时只有 fetchList 没有 subscribe）——先喂满一个轮询周期，确保
-    // cancel 发生时 SSE 订阅已带本批 id，9s 窗口量的是「SSE 推送→徽标」。
+    // cancel 发生时 SSE 订阅已带本批 id，9.5s 窗口量的是「SSE 推送→徽标」。
     await page.waitForTimeout(11_000)
 
     const t0 = Date.now()
@@ -632,22 +639,64 @@ test('SSE 实时消费：API 触发子任务取消，UI 徽标先于 10s 轮询�
       method: 'POST', headers: authHeaders(tk),
     })
     expect(res.status, 'API cancel 应成功').toBeLessThan(300)
-    // SSE push 到达 → 3s 防抖 fetchList → 徽标 9s 内落终态。批次无
+    // SSE push 到达 → 3s 防抖 fetchList → 徽标 9.5s 内落终态。批次无
     // cancelled 终态（cancelled 计入 failed 聚合，见用例 3 注），故按
     // .badge 元素的终态修饰类判定（组 className/文本不含类名，brief 草稿
     // 的 /cancelled|failed/ 对 g.className+textContent 永不匹配，已修正）。
-    // 窗口 9s：链路含变量段（worker cancel 去注册 ~4.5s），给负载留余量，
-    // 且仍严格小于 10s 列表轮询周期——「靠轮询必然 >10s」，SSE 判据不变。
+    // 窗口 9.5s：链路含变量段（worker cancel 去注册 ~4.5s）+ 3s 防抖，
+    // 全量负载下实测延迟 8.2s（9s 窗口在 2026-10-04 三轮全量中 2/3 超窗），
+    // 放宽到 9.5s 后仍严格小于 10s 列表轮询周期——「靠轮询必然 >10s」，
+    // SSE 判据（先于轮询更新）不变。
     await page.waitForFunction((n) => {
       const g = [...document.querySelectorAll('.batch-group')]
         .find(el => el.querySelector('.bg-name')?.textContent?.includes(n))
       const badge = g?.querySelector('.badge')
       return !!badge && ['badge--cancelled', 'badge--failed', 'badge--partial'].some(
         c => badge.classList.contains(c))
-    }, name, { timeout: 9_000 })
+    }, name, { timeout: 9_500 })
     console.log(`SSE 更新延迟 ${Date.now() - t0}ms`)
     await screenshot(page, 'ui-journeys-sse')
   } finally {
     await cleanupBatch(tk, bid)   // cancelled 非终态批次，stop=1 兜底删除
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 10：发送门禁 UI（← ai-harness-safety.spec.ts P0-1 的 UI 半边，
+// 2026-10-04 Task 14 收编；API 409 半边在 control.spec.ts 用例 9）
+// ---------------------------------------------------------------------------
+
+test('发送门禁 UI：运行中子会话 batch-bar 可见、composer 禁用、状态条文案合法',
+     async ({ page }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm-light' })   // sleepBatch 1 次轻量消耗
+  const tk = await adminTokenCached()
+  const bid = await sleepBatch(tk, { children: 1, sleepSec: 90 })
+  try {
+    // 等子会话真 running 再进会话页（源用例等真实 claim，模型快时抢不到
+    // running 只能降级告警；sleepBatch 长窗口消除该竞态）
+    await waitFor(async () => countByStatus(await getDetail(tk, bid))['running'] === 1,
+                  120_000, '子会话进入 running')
+    const sid = (await getDetail(tk, bid)).sessions[0].id
+    // 挂载链存在瞬态竞态（列表/详情 fetch 偶发落空）——导航重试等状态条
+    // 出现（源用例同款 3 次重试语义）
+    let sawBar = false
+    for (let i = 0; i < 3 && !sawBar; i++) {
+      await gotoChat(page, `?session=${sid}`)
+      try {
+        await expect(page.locator('.batch-bar')).toBeVisible({ timeout: 8_000 })
+        sawBar = true
+      } catch { /* 重挂载再试 */ }
+    }
+    expect(sawBar, 'sleep 90s 长窗口内 batch-bar 应出现').toBe(true)
+    // 批受控子会话的普通发送必须被禁用（发送门禁的 UI 面）
+    await expect(page.locator('.composer-send[type=primary], .composer-send').first())
+      .toBeDisabled({ timeout: 15_000 })
+    // 状态条随批状态渲染一条合法文案（running 窗口内应为「正在运行」；
+    // 正则保留源用例的终态宽容度）
+    await expect(page.locator('.batch-bar__status'))
+      .toContainText(/正在运行|待运行|已暂停|已完成|部分完成|失败|已取消/, { timeout: 10_000 })
+    await screenshot(page, 'ui-journeys-composer-disabled')
+  } finally {
+    await cleanupBatch(tk, bid)   // stop=1 失败路径兜底删除
   }
 })

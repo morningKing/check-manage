@@ -30,16 +30,49 @@
 
 | 资产 | 位置 | 运行方式 |
 |------|------|----------|
-| 全量 AI E2E 套件（5 个 spec + 共享助手） | `e2e/ai-full/` | `npx playwright test e2e/ai-full/` |
+| 全量 AI E2E 套件（ai-full 根 7 spec + `batch/` 批任务域 11 spec，共 93 例） | `e2e/ai-full/` | `npx playwright test e2e/ai-full/` |
 | API 层/安全回归（pytest，真实 DB 链路） | `server/tests/test_batch_standalone_prompt_retry.py` 等 10 个新文件 | `npm run test:server` |
 | 前端 AI 组件/Store 测试 | `src/components/ai-chat/__tests__/BatchGroup.test.ts` 等 4 个新文件 | `npm run test` |
-| 既有 AI E2E（冒烟/批任务/审计/子代理等 19 个 spec） | `e2e/*.spec.ts` | `npm run test:e2e` |
+| 既有 AI E2E（冒烟/批任务 UI/审计/子代理等 14 个 spec） | `e2e/*.spec.ts` | `npm run test:e2e` |
+
+### 批任务域套件结构（2026-10-04 重构后，`e2e/ai-full/batch/`，71 例）
+
+2026-10-04 起批任务 e2e 按域收编为单一事实源（旧根目录批 spec 已删除，散落用例
+全部迁入；`e2e/ai-full/helpers.ts` 的批相关函数已标 `@deprecated`，指向本目录
+`batch-helpers.ts` 直连 3002 权威版，保留给非批用例过渡）：
+
+| 域 spec | 例数 | 覆盖 |
+|---------|------|------|
+| smoke | 2 | 建批→终态冒烟 / staging 通道 |
+| lifecycle | 6 | 建批全生命周期、删除治理 409/stop=1、events afterSeq 增量等 |
+| control | 9 | pause/resume/cancel 正路径与边界、命令幂等、发送门禁 409 |
+| gate | 13 | verifier 三向 + gate_retry、定向组、委派级即停、dry-run/tool-calls/attach、tool/tree/db_record 门禁 + 侧栏徽标 |
+| retry-reexecute | 5 | 重试/重执行 + continue 通道（终态续跑 202 历史保留） |
+| reuse | 4 | 子代理会话复用（并发观测/权威锚点/UI 徽标） |
+| openapi | 7 | 对外 API：鉴权/生命周期/删除治理/Key 隔离/webhook HMAC/file-records/对外事件流 |
+| admin | 5 | 管理面：筛选/详情/重试/软删 + UI 列表抽屉 |
+| permissions | 2 | 跨用户隔离/控制面拒绝/管理面 403 |
+| resilience | 8 | 对账矩阵/工具看门狗/进程级租约接管（DB 种子 + 看门狗 env） |
+| ui-journeys | 10 | UI 旅程：对话框建批/门禁表单校验/按钮面/批内搜索/技能注入/委派气泡/停止暂停续跑/SSE 实时/发送门禁 UI |
+| ai-full 根（非批域） | 22 | session-core / mcp-tools / openapi(旧) / governance-audit / admin-nav / skillopt / harness-safety(P2 编排 DAG) |
+
+**LLM 预算标记约定**（用例内 `testInfo.annotations.push({ type: … })`）：
+`@llm`＝真实 OpenCode 回合（预算大头）；`@llm-light`＝sleepBatch 等廉价轻量消耗；
+`@resilience`＝会重启后端 3002（见下）；**无标记＝0 LLM 确定性用例**
+（fail-fast / DB 种子 / 纯校验构造）。统计口径见各 spec 头注释。
+
+**resilience 域副作用警告**：`batch/resilience.spec.ts` 含 3 例 `@resilience`
+用例会**真实重启后端 3002**（kill + 带 env 拉起 + 探活，期间其他进行中的请求/
+批任务会短暂中断）——这是被测行为（进程级租约接管），跑该 spec 时不要依赖
+3002 的连续可用；全量回归中它排在其他域之后属刻意顺序，套件必须能在重启后自愈。
 
 ## 环境要求（复用套件时）
 
 1. Postgres（`server/config.py`）；2. MCP Server :3003（`npm run mcp`）；3. OpenCode :4096；
 4. Flask :3002（`npm run server`，**改后端代码必须手动重启**）；5. Vite :5173（`npm run dev`）。
 `npm run dev:all` 一键拉起后三件套。E2E 登录态 `e2e/.auth/admin.json`（admin/admin123）。
+另注意：全量回归中 `batch/resilience.spec.ts` 会自行重启 3002（见上节警告），
+无需人工干预，也不应在回归进行中手动操作后端。
 
 ## 已知并行限制
 

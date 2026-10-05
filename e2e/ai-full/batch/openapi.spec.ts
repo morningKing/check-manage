@@ -7,6 +7,9 @@
  *    （旧用例并入下方 webhook 用例：事件头/timestamp/精确签名/secret 不回显全保留）；
  *  - 自 ../ai-harness-safety.spec.ts P0-3 迁入：对外删除治理
  *    （非终态 409 BATCH_NOT_TERMINAL / stop=true bounded drain）。
+ *  - 自 ../ai-harness-safety.spec.ts P1「对外 events」并入用例 3（2026-10-04
+ *    Task 14，原文件同日只剩 P2 编排用例）：X-API-Key 事件流契约
+ *    （200 / 非空 / camelCase eventId+eventSeq）。
  * 新增：跨 API Key 隔离（list/detail 按 api_key_id 再圈一层，
  * 见 utils/batch_repo.py::list_batches）、file-records/results 对外契约。
  *
@@ -99,6 +102,16 @@ test('对外批任务全生命周期：上传→创建→完成→results→PATC
     const r = await openApi(request, KEY, 'GET', `/v1/ai-batches/${batchId}`)
     return BATCH_TERMINAL.includes(r.json?.status) ? r.json : null
   }, { timeoutMs: 480_000, intervalMs: 5000 })
+
+  // 对外事件流（← ai-harness-safety.spec.ts P1「对外 events」收编，Task 14）：
+  // X-API-Key 可读批事件时间线，对外契约是 camelCase（eventId/eventSeq），
+  // 与内部 events 的 snake_case（event_seq）刻意区分——断言与源一致
+  const evExt = await openApi(request, KEY, 'GET',
+                              `/v1/ai-batches/${batchId}/events?limit=50`)
+  expect(evExt.status).toBe(200)
+  expect((evExt.json?.events ?? []).length).toBeGreaterThan(0)
+  expect(evExt.json.events[0]).toHaveProperty('eventId')
+  expect(evExt.json.events[0]).toHaveProperty('eventSeq')
 
   // results：completed 的子任务才有 output
   const results = await openApi(request, KEY, 'GET', `/v1/ai-batches/${batchId}/results`)

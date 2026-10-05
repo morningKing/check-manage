@@ -32,10 +32,16 @@
  *     （fail-fast 子任务全 failed，非 cancelled/paused）→ 409（:574）。
  *     brief 标题写「completed 批」，实际用 fail-fast 构造（终态 failed）——
  *     同一拒绝路径，0 LLM。
+ *   9 发送门禁（2026-10-04 Task 14 自 ai-harness-safety.spec.ts P0-1 的
+ *     API 半边收编）：batch 受控的 running 子会话上普通发送
+ *     POST /ai/chat/sessions/<sid>/messages → 409 BATCH_SESSION_CONTROLLED
+ *     ——批内输入只走批通道/continue。源用例等真实 claim（模型快时抢不到
+ *     running 只能降级告警），此处 sleepBatch 确定性 running 窗口；UI 半边
+ *     （batch-bar + composer 禁用）在 ui-journeys.spec.ts 用例 10。
  *
  * LLM 预算标记（同 lifecycle.spec.ts 约定，标注在头部）：
  * - 用例 1：@llm —— 3 个 sleep 子会话（各 1 次 bash sleep 回合）；
- * - 用例 2/3/5/6/7：@llm-light —— sleep 长任务（2/2/2/1/1 次轻量消耗）；
+ * - 用例 2/3/5/6/7/9：@llm-light —— sleep 长任务（2/2/2/1/1/1 次轻量消耗）；
  * - 用例 4/8：0 LLM（fail-fast 构造）。
  *
  * 断言直连后端 3002（理由见 batch-helpers.ts 头注释）。
@@ -280,4 +286,28 @@ test('控制面边界：终态批控制面拒绝——pause/cancel/resume 返回
   } finally {
     await cleanupBatch(tk, bid)
   }
+})
+
+// ---------------------------------------------------------------------------
+// 用例 9：发送门禁（← ai-harness-safety.spec.ts P0-1 的 API 半边，
+// 2026-10-04 Task 14 收编；UI 半边在 ui-journeys.spec.ts 用例 10）
+// ---------------------------------------------------------------------------
+
+test('发送门禁：running 子会话走普通发送 → 409 BATCH_SESSION_CONTROLLED', async ({ }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm-light' })   // sleepBatch 1 次轻量消耗
+  const tk = await adminTokenCached()
+  const bid = await sleepBatch(tk, { children: 1, sleepSec: 90 })
+  try {
+    await waitFor(async () => countByStatus(await getDetail(tk, bid))['running'] === 1,
+                  120_000, '子会话进入 running')
+    const sid = (await getDetail(tk, bid)).sessions[0].id
+    // 批受控子会话的普通发送被拒——批内输入只走批通道/continue
+    // （断言语义与源用例一致：409 + error.code）
+    const send = await fetch(`${API}/ai/chat/sessions/${sid}/messages`, {
+      method: 'POST', headers: authHeaders(tk),
+      body: JSON.stringify({ content: '插队：直接告诉我结论' }),
+    })
+    expect(send.status).toBe(409)
+    expect((await send.json())?.error?.code).toBe('BATCH_SESSION_CONTROLLED')
+  } finally { await cleanupBatch(tk, bid) }
 })
