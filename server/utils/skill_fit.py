@@ -233,19 +233,27 @@ def _load_trace(db_ctx, session_id, started_at, finished_at) -> list[dict]:
             for (tool, args_text, occurred_at) in rows]
 
 
-def _register_def_version(cur, vals: dict) -> None:
-    """定义版本自动注册（spec §3.4）：拟合计算遇到新 (def_kind, def_name,
-    content_hash) 即 upsert ai_skill_def_versions——冲突 DO NOTHING，
-    first_seen_at 只记首次，重复 compute 幂等不翻倍。manifest 无 hash 时
-    按空串注册（版本表 content_hash NOT NULL，未知 hash 无法区分版本）。"""
+def register_def_version(cur, def_kind: str, def_name: str,
+                         content_hash: str, content: str | None = None) -> None:
+    """定义版本注册（spec §3.4/§4.1）：(def_kind, def_name, content_hash)
+    UNIQUE upsert。冲突不再 DO NOTHING，而是「后到补齐正文」——已有正文
+    永不覆盖（COALESCE 保旧），无正文行被带正文的注册补齐
+    （content_captured_at 随正文补 NOW）。manifest 无 hash 时按空串注册
+    （版本表 content_hash NOT NULL，空 hash 行不参与内容 diff/回滚）。"""
     cur.execute(
         """
-        INSERT INTO ai_skill_def_versions (id, def_kind, def_name, content_hash)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (def_kind, def_name, content_hash) DO NOTHING
+        INSERT INTO ai_skill_def_versions
+          (id, def_kind, def_name, content_hash, content, content_captured_at)
+        VALUES (%s, %s, %s, %s, %s,
+                CASE WHEN %s IS NULL THEN NULL ELSE NOW() END)
+        ON CONFLICT (def_kind, def_name, content_hash) DO UPDATE SET
+          content             = COALESCE(ai_skill_def_versions.content,
+                                         EXCLUDED.content),
+          content_captured_at = COALESCE(ai_skill_def_versions.content_captured_at,
+                                         EXCLUDED.content_captured_at)
         """,
-        ('defv_' + secrets.token_hex(6), vals['def_kind'],
-         vals['def_name'], vals['def_hash'] or ''))
+        ('defv_' + secrets.token_hex(6), def_kind, def_name,
+         content_hash or '', content, content))
 
 
 def _upsert_result(cur, vals: dict) -> dict:
@@ -348,7 +356,8 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
             with conn.cursor() as cur:
                 for vals in vals_list:
                     out.append(_upsert_result(cur, vals))
-                    _register_def_version(cur, vals)
+                    register_def_version(cur, vals['def_kind'],
+                                         vals['def_name'], vals['def_hash'])
     return out
 
 

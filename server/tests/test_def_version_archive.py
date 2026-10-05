@@ -37,3 +37,55 @@ def test_migration_columns_exist_and_idempotent(db_conn):
             "AND column_name IN ('content', 'content_captured_at')")
         cols = {r[0] for r in cur.fetchall()}
     assert {'content', 'content_captured_at'} <= cols
+
+
+def _def_versions(cur, kind, name):
+    cur.execute(
+        "SELECT content_hash, content, content_captured_at "
+        "FROM ai_skill_def_versions WHERE def_kind=%s AND def_name=%s "
+        "ORDER BY first_seen_at", (kind, name))
+    return cur.fetchall()
+
+
+def test_register_def_version_content_backfill_and_no_overwrite(db_conn):
+    """新 hash 带正文注册；无正文行被后到注册补齐；已有正文永不覆盖。"""
+    from utils.skill_fit import register_def_version
+    name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    h = hashlib.sha256(b'v1').hexdigest()
+    try:
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'skill', name, h)  # 拟合路径：无正文
+            db_conn.commit()
+            rows = _def_versions(cur, 'skill', name)
+            assert len(rows) == 1 and rows[0][1] is None and rows[0][2] is None
+            register_def_version(cur, 'skill', name, h, content='正文 v1')
+            db_conn.commit()
+            rows = _def_versions(cur, 'skill', name)
+            assert len(rows) == 1                        # 不翻倍
+            assert rows[0][1] == '正文 v1' and rows[0][2] is not None
+            register_def_version(cur, 'skill', name, h, content='偷换正文')
+            db_conn.commit()
+            rows = _def_versions(cur, 'skill', name)
+            assert len(rows) == 1 and rows[0][1] == '正文 v1'  # 已有正文不覆盖
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
+
+
+def test_register_def_version_empty_hash_allowed(db_conn):
+    """manifest 无 hash 按空串注册（content_hash NOT NULL 兜底，现状行为保持）。"""
+    from utils.skill_fit import register_def_version
+    name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    try:
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'agent', name, '')
+            db_conn.commit()
+            rows = _def_versions(cur, 'agent', name)
+            assert len(rows) == 1 and rows[0][0] == ''
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='agent' AND def_name=%s", (name,))
+        db_conn.commit()
