@@ -653,8 +653,8 @@ git commit -m "feat(skillopt): steps 回写主动归档定义版本+默认 label
 def _seed_two_versions(db_conn, name):
     """种子：同一定义两个已归档版本 + 一个未归档版本。返回 (id_v1, id_v2, id_v0)。"""
     from utils.skill_fit import register_def_version
-    h1 = hashlib.sha256(b'v1 正文').hexdigest()
-    h2 = hashlib.sha256(b'v1 正文\n+v2 新增行').hexdigest()
+    h1 = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
+    h2 = hashlib.sha256('v1 正文\n+v2 新增行'.encode('utf-8')).hexdigest()
     ids = {}
     with db_conn.cursor() as cur:
         register_def_version(cur, 'skill', name, h1, content='v1 正文')
@@ -685,7 +685,8 @@ def test_skill_def_version_content_endpoint(client, admin_headers, db_conn):
         body = r.get_json()
         assert body['content'] == 'v1 正文\n+v2 新增行'
         assert body['defName'] == name and body['defKind'] == 'skill'
-        assert body['contentHash'] == hashlib.sha256(b'v1 正文\n+v2 新增行').hexdigest()
+        assert body['contentHash'] == hashlib.sha256(
+            'v1 正文\n+v2 新增行'.encode('utf-8')).hexdigest()
         r0 = client.get(f'/ai/chat/admin/skill-def-versions/{v0}/content',
                         headers=admin_headers)
         assert r0.status_code == 400 and r0.get_json()['error'] == '版本未归档'
@@ -910,7 +911,7 @@ def test_skill_def_version_rollback(client, admin_headers, db_conn, tmp_path,
     target.parent.mkdir(parents=True)
     target.write_text('当前已是新版正文', encoding='utf-8')
     from utils.skill_fit import register_def_version
-    h_old = hashlib.sha256(b'v1 正文').hexdigest()
+    h_old = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
     try:
         with db_conn.cursor() as cur:
             register_def_version(cur, 'skill', name, h_old, content='v1 正文')
@@ -943,7 +944,7 @@ def test_skill_def_version_rollback(client, admin_headers, db_conn, tmp_path,
         assert r.status_code == 200
         body = r.get_json()
         assert body['ok'] is True and body['contentHash'] == h_old
-        assert target.read_bytes() == b'v1 正文'          # bytes 精确写回
+        assert target.read_bytes() == 'v1 正文'.encode('utf-8')  # bytes 精确写回
         assert hashlib.sha256(target.read_bytes()).hexdigest() == h_old
         assert logged and logged[0][0] == 'update'        # 操作日志留痕
         with db_conn.cursor() as cur:
@@ -982,7 +983,7 @@ def test_skill_def_version_rollback_error_paths(client, admin_headers, db_conn,
             cur.execute("SELECT id FROM ai_skill_def_versions "
                         "WHERE def_kind='skill' AND def_name=%s", (name,))
             vid0 = cur.fetchone()[0]
-            h = hashlib.sha256(b'v1 正文').hexdigest()
+            h = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
             register_def_version(cur, 'skill', name, h, content='v1 正文')
             cur.execute("SELECT id FROM ai_skill_def_versions "
                         "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
