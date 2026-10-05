@@ -11,6 +11,12 @@
           <ElButton link size="small" type="primary" @click="emit('generate', v)">
             生成步骤
           </ElButton>
+          <ElButton link size="small" :disabled="!v.archived"
+                    @click="openContent(v)">内容</ElButton>
+          <ElButton link size="small" :disabled="!v.archived || !prevOf(v)"
+                    @click="openDiff(v)">对比</ElButton>
+          <ElButton link size="small" type="warning" :disabled="!v.archived"
+                    @click="rollback(v)">回滚</ElButton>
         </div>
         <div class="vt__metrics">
           任务 {{ v.tasks }} · 均分 {{ v.avgScore ?? '—' }} · 拟合率 {{ fmtRate(v.fitRate) }}
@@ -33,6 +39,18 @@
         </div>
       </ElTimelineItem>
     </ElTimeline>
+    <ElDialog v-model="contentDialog.visible"
+              :title="`版本内容 — ${contentDialog.label}`" width="720px">
+      <div v-loading="contentDialog.loading">
+        <pre class="vt__content">{{ contentDialog.content }}</pre>
+      </div>
+    </ElDialog>
+    <ElDialog v-model="diffDialog.visible"
+              :title="`版本对比 — ${diffDialog.title}`" width="860px">
+      <div v-loading="diffDialog.loading">
+        <DefContentDiff v-if="!diffDialog.loading" :diff="diffDialog.diff" />
+      </div>
+    </ElDialog>
   </div>
 </template>
 
@@ -40,8 +58,13 @@
 import { ref, computed, watch } from 'vue'
 import {
   ElTimeline, ElTimelineItem, ElInput, ElButton, ElTag, ElMessage,
+  ElDialog, ElMessageBox,
 } from 'element-plus'
-import { listSkillDefVersions, updateSkillDefVersion } from '@/api/aiSkills'
+import DefContentDiff from './DefContentDiff.vue'
+import {
+  listSkillDefVersions, updateSkillDefVersion, getSkillDefVersionContent,
+  compareSkillDefVersions, rollbackSkillDefVersion,
+} from '@/api/aiSkills'
 import type { SkillDefVersion } from '@/api/aiSkills'
 
 const props = defineProps<{ defKind: string; defName: string }>()
@@ -103,6 +126,63 @@ async function saveLabel(v: SkillDefVersion) {
   } catch { /* 全局 toast 已提示 */ }
 }
 
+// ── 版本归档动作（spec §6）：内容预览 / 相邻对比 / 前滚式回滚 ───────────
+
+const contentDialog = ref<{ visible: boolean; loading: boolean; label: string
+  ; content: string }>({ visible: false, loading: false, label: '', content: '' })
+const diffDialog = ref<{ visible: boolean; loading: boolean; title: string
+  ; diff: string }>({ visible: false, loading: false, title: '', diff: '' })
+
+/** displayVersions 新→旧；v 的「上一版」= 列表中其后第一个已归档版本 */
+function prevOf(v: VersionView): VersionView | undefined {
+  const idx = displayVersions.value.findIndex(x => x.id === v.id)
+  return displayVersions.value.slice(idx + 1).find(x => x.archived)
+}
+
+async function openContent(v: VersionView) {
+  contentDialog.value = { visible: true, loading: true,
+    label: v.versionLabel || v.defName, content: '' }
+  try {
+    const res = await getSkillDefVersionContent(v.id)
+    contentDialog.value.content = res.content
+  } catch {
+    contentDialog.value.visible = false   // 全局 toast 已提示
+  } finally {
+    contentDialog.value.loading = false
+  }
+}
+
+async function openDiff(v: VersionView) {
+  const prev = prevOf(v)
+  if (!prev) return
+  diffDialog.value = { visible: true, loading: true, title: '', diff: '' }
+  try {
+    const res = await compareSkillDefVersions({ fromId: prev.id, toId: v.id })
+    diffDialog.value.title =
+      `${prev.versionLabel || prev.defName}@${shortHash(prev.contentHash)}` +
+      ` → ${v.versionLabel || v.defName}@${shortHash(v.contentHash)}`
+    diffDialog.value.diff = res.diff
+  } catch {
+    diffDialog.value.visible = false
+  } finally {
+    diffDialog.value.loading = false
+  }
+}
+
+async function rollback(v: VersionView) {
+  try {
+    await ElMessageBox.confirm(
+      '将把该版本归档的正文原样写回当前定义文件（下次执行起生效）。确定回滚？',
+      '回滚确认', { type: 'warning', confirmButtonText: '回滚',
+                    cancelButtonText: '取消' })
+  } catch { return }
+  try {
+    await rollbackSkillDefVersion(v.id)
+    ElMessage.success('已回滚：正文已写回定义文件')
+    await load()
+  } catch { /* 全局 toast 已提示 */ }
+}
+
 // ── 格式化 helpers（从父组件就近迁入）─────────────────────────────────
 
 function fmtRate(v: number | null | undefined) {
@@ -149,4 +229,9 @@ function fmtTime(v?: string | null) {
 .muted { color: var(--el-text-color-secondary); font-size: 12px; }
 .delta-up { color: var(--el-color-success); font-weight: 600; }
 .delta-down { color: var(--el-color-danger); font-weight: 600; }
+.vt__content {
+  margin: 0; max-height: 60vh; overflow: auto;
+  font-family: monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+  word-break: break-all;
+}
 </style>
