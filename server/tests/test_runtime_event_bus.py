@@ -121,6 +121,11 @@ def test_facade_delegates_to_client(monkeypatch):
         [('sentinel', '/ws/x', 3)]
 
 
+def test_facade_subscribe_is_agentruntime_method():
+    from utils.runtime.base import AgentRuntime
+    assert hasattr(AgentRuntime, 'subscribe_events')
+
+
 @pytest.fixture()
 def stub_delegate(monkeypatch):
     monkeypatch.setenv('AI_STUB_ALLOW', '1')

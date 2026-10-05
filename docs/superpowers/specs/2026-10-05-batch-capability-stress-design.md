@@ -46,8 +46,8 @@
 
 ## 3. 产品侧改动（最小面）
 
-1. **门面**（`utils/runtime/base.py`）：`AgentRuntime` 增加 `subscribe_events(directory='', read_timeout=None)`，默认实现委托 `self.get_client().subscribe_events(...)`——OpenCodeLocalRuntime 天然继承（其 `get_client()` 即 OpenCodeClient，`utils/opencode_client.py:317` 已有该方法，行为 byte 级不变）；StubRuntime 经 StubClient 新总线实现。
-2. **sse_events**（`routes/ai_chat.py:1379`）：`OpenCodeClient(OPENCODE_BASE_URL)` → `get_runtime()`，仅此一处替换，生成器内部逻辑不动。
+1. **接线面为 5 处**（实施期核实修正）：`routes/ai_chat.py` 的 create_session、send_message、sse_events + `utils/chat_persist.py` 的监听线程事件源、REST 回填。实施期核实发现监听线程与建会话同样硬编码，漏接任何一处 stub 栈下交互链路断裂（监听器注册但不收事件还会挡住 SSE 兜底落库）。其中 create_session/send_message 与 REST 回填走 `get_runtime().get_client()`，sse_events 与监听事件源走 `get_runtime().subscribe_events(...)`（经门面默认委托）。
+2. **门面**（`utils/runtime/base.py`）：`AgentRuntime` 增加 `subscribe_events(directory='', read_timeout=None)`，默认实现委托 `self.get_client().subscribe_events(...)`——OpenCodeLocalRuntime 天然继承（行为 byte 级不变）；StubRuntime 经 StubClient 新总线实现（§4）。
 3. **StubClient 事件总线**（§4）。
 4. **回归保护**：① 单测锁 stub 事件形状（对齐 `opencode_client.subscribe_events` 真实产出的 `{"event": <type>, "data": {type, properties}}` 形状，沿 StubRuntime 形状锁先例）；② 该单测在 base（硬编码 OpenCodeClient、无门面方法）上必须失败——A/B 实跑记录；③ ai-full 会话域真链路 e2e 复跑，确认生产路径无行为漂移。
 
@@ -140,4 +140,5 @@ tree 作用域期望 + 总线 `delegate` 委派形状 → `apply_event` 发现�
 - 真模型门禁链路压测（烧 token；行为正确性由 e2e 域承担）；
 - 数小时 soak 耐久；容量梯档升级（更高并发阶梯另立）；
 - 前端 SSE 消费端（batchEvents.ts store）UI 压测——以 API 层为准；
-- 压测平台化（时序库/仪表盘）。
+- 压测平台化（时序库/仪表盘）；
+- ai_chat.py 辅助端点（providers/abort/summarize 等）保持硬编码 `OpenCodeClient(OPENCODE_BASE_URL)` 不接入门面——压测套件不触达，stub 栈下不可用属已知面（AI_STUB_ALLOW 防呆挡误配生产）。

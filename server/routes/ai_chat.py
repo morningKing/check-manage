@@ -42,6 +42,7 @@ from utils.filename import safe_filename
 from db import get_db
 from auth import login_required, login_required_sse, write_required, require_permission
 from utils.opencode_client import OpenCodeClient
+from utils.runtime import get_runtime
 from utils.workspace import (
     create_session_workspace, write_opencode_config,
     safe_resolve, cleanup_session_workspace,
@@ -158,7 +159,7 @@ def create_session():
         pass  # best-effort
 
     # 4) ask OpenCode to start a session bound to this workspace (directory query param)
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = get_runtime().get_client()
     opencode_session_id = client.create_session(directory=workspace_path, title='新会话')
 
     # 5) persist opencode_session_id
@@ -937,7 +938,7 @@ def send_message(sid):
     if not isinstance(agent_mentions, list):
         agent_mentions = []
     import requests as _requests
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = get_runtime().get_client()
     oc_sid = sess[2]
     logger.info('send_message session=%s oc=%s user=%s model=%s agent=%s attachments=%d',
                 sid, oc_sid, user['userId'], effective_model or 'default',
@@ -1383,7 +1384,7 @@ def sse_events(sid):
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
 
     opencode_session_id = sess[2]
-    client = OpenCodeClient(OPENCODE_BASE_URL)
+    client = get_runtime()
 
     def generate():
         # OpenCode text parts arrive as full snapshots keyed by part id; track the

@@ -26,6 +26,20 @@ def setup(mock_conn, mock_cursor, tmp_path):
     fake_client.create_session.return_value = "oc_sess_42"
     fake_client.register_mcp.return_value = None
 
+    class _RuntimeStub:
+        """get_runtime() 的测试替身：交互路径（create_session/send_message/
+        sse_events）接线 runtime 门面后不再直构 OpenCodeClient，打桩点从
+        routes.ai_chat.OpenCodeClient 相应迁到这里——get_client/subscribe_events
+        全部委派 fake_client，既有断言（oc.send_prompt_async / oc.subscribe_events）
+        保持有效。"""
+        def __init__(self, c):
+            self._c = c
+        def get_client(self):
+            return self._c
+        def subscribe_events(self, directory='', read_timeout=None):
+            return self._c.subscribe_events(directory=directory,
+                                            read_timeout=read_timeout)
+
     patches = [
         patch('db.get_db', fake_db),
         patch('db.pool', MagicMock()),
@@ -33,6 +47,8 @@ def setup(mock_conn, mock_cursor, tmp_path):
         patch('utils.session_token.get_db', fake_db),
         patch('utils.chat_persist.get_db', fake_db),
         patch('routes.ai_chat.OpenCodeClient', return_value=fake_client),
+        patch('routes.ai_chat.get_runtime',
+              lambda: _RuntimeStub(fake_client)),
         patch('config.AI_WORKSPACE_ROOT', str(tmp_path)),
         patch('routes.ai_chat.AI_WORKSPACE_ROOT', str(tmp_path)),
     ]
