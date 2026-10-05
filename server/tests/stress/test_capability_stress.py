@@ -463,9 +463,11 @@ def test_s5_tree_scope_aggregation(stress_stack, sampler):
     S5.1 tree-explorer passed 且证据数 ≥ 2（explorer 每委派 2 次 bash）；
     S5.2 tree-exclude-writer failed（explorer 无 writer-only-marker）。"""
     sampler.record('cap-S5-start')
+    # delay 2-3s：给监听线程的订阅留出必胜窗口（监听器晚订阅不重放，回合太短
+    # 会整体错过——发现 #5，见报告；read_timeout 已在 stub 落实，饿死态可退出）
     stress_stack.restart_backend(
         concurrency=3,
-        profile={'delay_ms': [500, 1200], 'tool_parts': 2,
+        profile={'delay_ms': [2000, 3000], 'tool_parts': 2,
                  'delegate': ['explorer', 'writer']},
         env_extra={'DB_POOL_MAXCONN': '60'})
     n = 5

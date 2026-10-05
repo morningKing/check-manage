@@ -104,17 +104,26 @@ class StubClient:
 
         Yield {'event': <type>, 'data': {'type': <type>, 'properties': {...}}}，
         与 opencode_client.subscribe_events 的帧形状一致；properties.sessionID
-        为 apply_event 的路由键，由 _emit 统一写入。
+        为 apply_event 的路由键，由 _emit 统一写入。read_timeout 语义对齐
+        OpenCode /event：连续无事件超过该秒数即结束流（消费方通常是
+        chat_persist 监听线程，靠它从"回合事件已错过"的饿死态退出）。
         """
         q: queue.SimpleQueue = queue.SimpleQueue()
         with self._lock:
             self._subs.append((directory or '', q))
+        idle_deadline = None if not read_timeout \
+            else time.monotonic() + float(read_timeout)
         try:
             while True:
                 try:
                     etype, props = q.get(timeout=0.5)
                 except queue.Empty:
+                    if idle_deadline is not None \
+                            and time.monotonic() >= idle_deadline:
+                        return          # 不活动超时：结束流（对齐 /event）
                     continue
+                idle_deadline = None if not read_timeout \
+                    else time.monotonic() + float(read_timeout)
                 yield {'event': etype,
                        'data': {'type': etype, 'properties': props}}
         finally:
