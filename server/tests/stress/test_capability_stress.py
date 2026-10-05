@@ -184,3 +184,101 @@ def test_s1_batch_sse_frame_reconciliation_and_resume(stress_stack, sampler):
                                'resume_proofs': resume_proofs})
     inv = stress_stack.invariants()
     assert inv['zombie_running'] == 0
+
+
+def test_s2_concurrent_terminal_gate_evaluation(stress_stack, sampler):
+    """50 子任务 ±窗口并发终态 × 每子任务 3 条期望（2 file 应过 + 1 tool 必败对照）。
+    S2.1 期望行恰好核对一次（无 pending 残留 / 无重复评估）；
+    S2.2 gate_passed/gate_failed 计数与期望行一致（passed=2 failed=1）；
+    S2.3 gate.evaluated 审计事件数 == 子任务数；
+    S2.4 drain 高峰无超时、批次可达终态；
+    S2.5 invariants 守恒。
+    （spec §5 修订：应过侧只用 file 类——db_record 建表不在 migrations，
+    避免无谓 schema 耦合；db_record 功能正确性由既有单测覆盖。）"""
+    sampler.record('cap-S2-start')
+    # 记录重启前日志长度：backend.log 跨 pytest 会话追加，drain 断言只看本轮增量
+    log_baseline = (METRICS_ROOT / 'backend.log').stat().st_size \
+        if (METRICS_ROOT / 'backend.log').exists() else 0
+    stress_stack.restart_backend(concurrency=10,
+                                 profile={'delay_ms': [8000, 12000]})
+    # 纯相对 glob（不含 .. ；字面量 'dir/*.ext' 会触发 Mimosa 穿越误报，故拼接）
+    glob1 = 'outputs/ok-' + '*.md'
+    glob2 = 'artifacts/' + '*.txt'
+    checks = [
+        {'name': 'file-pass-1', 'check_type': 'file',
+         'effect_spec': {'path': glob1}},
+        {'name': 'file-pass-2', 'check_type': 'file',
+         'effect_spec': {'path': glob2}},
+        {'name': 'tool-fail-ctrl', 'check_type': 'tool',
+         'tool': 'bash', 'args_pattern': 'never-matched-marker'},
+    ]
+    bid = create_batch(stress_stack, 50, action_checks=checks)
+    # workspace_path 由 worker 认领时才落——轮询播种：每个子任务工作区一路径
+    # 就绪立即种"应过"文件（认领后 stub 还要跑 8-12s，播种窗口充足）。
+    # stub 无工具部分 → tool-fail-ctrl 必败（对照组）。
+    children = stress_stack.db_query(
+        "SELECT s.id, s.workspace_path, s.batch_seq FROM ai_chat_sessions s "
+        "WHERE s.batch_id=%s ORDER BY s.batch_seq", (bid,))
+    assert len(children) == 50
+    import os
+    from pathlib import Path
+    from config import AI_WORKSPACE_ROOT      # 与后端同源（env 缺省在 config 兜底）
+    ws_root = os.path.realpath(AI_WORKSPACE_ROOT)
+
+    def _seed(sid, ws, seq):
+        # 种文件前归一并校验工作区在 workspace 根内（禁越界，Mimosa 建议）
+        ws_real = Path(os.path.realpath(ws))
+        assert os.path.commonpath([str(ws_real), ws_root]) == ws_root, \
+            f'工作区越界: {ws}'
+        out_dir = ws_real / 'outputs'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f'ok-{seq}.md').write_text('seeded', encoding='utf-8')
+        art_dir = ws_real / 'artifacts'
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / f'a-{seq}.txt').write_text('seeded', encoding='utf-8')
+
+    seeded = set()
+    deadline = time.time() + 300      # 含 worker 租约 TTL 交接窗（实测可达 ~80s）
+    while len(seeded) < 50 and time.time() < deadline:
+        for sid, ws, seq in stress_stack.db_query(
+                "SELECT s.id, s.workspace_path, s.batch_seq FROM ai_chat_sessions s "
+                "WHERE s.batch_id=%s AND s.workspace_path IS NOT NULL", (bid,)):
+            if sid in seeded:
+                continue
+            _seed(sid, ws, seq)
+            seeded.add(sid)
+        time.sleep(0.5)
+    assert len(seeded) == 50, f'仅 {len(seeded)}/50 子任务工作区就绪（超时）'
+    wait_terminal(stress_stack, bid, timeout_s=900)
+    detail = requests.get(f'{stress_stack.base}/ai/chat/batches/{bid}',
+                          headers=stress_stack.auth_header, timeout=10).json()
+    # S2.1 每子任务 3 条期望全部 last_status 非空（恰好一次终态核对，无残留）
+    rows = stress_stack.db_query(
+        "SELECT scope_id, count(*), count(last_status), count(DISTINCT name) "
+        "FROM action_expectations WHERE scope_id IN "
+        "(SELECT id FROM ai_chat_sessions WHERE batch_id=%s) GROUP BY scope_id",
+        (bid,))
+    assert len(rows) == 50, f'期望行分布 {len(rows)} 子任务 != 50'
+    for sid, n, checked, distinct in rows:
+        assert (n, checked, distinct) == (3, 3, 3), (sid, n, checked, distinct)
+    # S2.2 计数一致：file 应过 2 + tool 必败 1 → 每子任务 passed=2 failed=1
+    sess = {s['id']: s for s in detail['sessions']}
+    for sid, _ws, _seq in children:
+        assert sess[sid]['gate_passed'] == 2 and sess[sid]['gate_failed'] == 1, \
+            sess[sid]
+    # S2.3 审计事件与子任务一一对应（gate.evaluated 落 ai_execution_events，
+    # 带 session_id——经会话归属对账到批）
+    ev = stress_stack.db_query(
+        "SELECT count(*) FROM ai_execution_events e "
+        "JOIN ai_chat_sessions s ON s.id = e.session_id "
+        "WHERE s.batch_id=%s AND e.event_type='gate.evaluated'", (bid,))
+    assert ev[0][0] == 50, f'gate.evaluated 事件 {ev[0][0]} != 50'
+    # S2.4 无 drain 超时日志（只扫本轮后端启动后的增量）
+    log = (METRICS_ROOT / 'backend.log').read_text(encoding='utf-8',
+                                                   errors='replace')[log_baseline:]
+    assert 'drain timeout' not in log.lower(), 'wait_subtasks_drained 高峰超时'
+    # S2.5
+    inv = stress_stack.invariants()
+    assert inv == {'orphans': 0, 'zombie_running': 0, 'counter_violations': 0}, inv
+    _dump('s2-gate-concurrent', {'children': 50, 'checks_per_child': 3})
+
