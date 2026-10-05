@@ -398,3 +398,60 @@ def test_s3_gate_retry_success_path(stress_stack, sampler):
     assert all(r[0] == 'completed' for r in rows), rows
     assert all(r[1] == 1 for r in rows), f'修正成功侧 retry_count 应恰 1: {rows}'
 
+
+def test_s4_interactive_finalize_contention(stress_stack, sampler):
+    """20 交互会话并发跑 + 每会话双 SSE 流（模拟重连期旧流未死形态）：
+    S4.1 账本按 (oc_session_id, part_id) 幂等——bash 恰 2 行/会话；
+    S4.2 attach 的交互期望每条恰好一次核对结果（无未核对残留）；
+    S4.3 双流并发收口不重复落账。"""
+    sampler.record('cap-S4-start')
+    # DB_POOL_MAXCONN=60：20 会话并发 finalize 突刺在默认池(20)下会池饥饿——
+    # record_state 拿不到连接 → 账本 0 行、门禁 inconclusive（发现 #3，见报告）。
+    # 本用例测的是「双流收口幂等」这一被测属性，需在充分资源下成立。
+    stress_stack.restart_backend(
+        concurrency=3, profile={'delay_ms': [500, 1500], 'tool_parts': 2},
+        env_extra={'DB_POOL_MAXCONN': '60'})
+    n = 20
+    sids = [create_interactive_session(stress_stack) for _ in range(n)]
+    stops, threads = [], []
+    for sid in sids:
+        register_expectations(stress_stack, sid, [
+            {'name': 'interactive-tool', 'check_type': 'tool',
+             'tool': 'bash', 'args_pattern': 'no-such-cmd'}])
+        for _dup in range(2):
+            stop = threading.Event()
+            sink = []
+            t = threading.Thread(target=collect_sse, daemon=True, args=(
+                stress_stack, f'/ai/chat/sessions/{sid}/events', None,
+                stop, sink,
+                lambda f: f.event in ('session.idle', 'session.error')))
+            t.start()
+            stops.append(stop)
+            threads.append(t)
+    time.sleep(0.5)
+    for sid in sids:
+        send_message(stress_stack, sid,
+                     '直接回复:STRESS-OK。不要读取文件,不要执行命令。')
+    for t in threads:
+        t.join(timeout=60)
+    for s in stops:
+        s.set()
+    # S4.1+S4.3：oc 会话级 bash 行数 == 2（双流 × finalize 幂等键兜住）
+    rows = stress_stack.db_query(
+        "SELECT s.id, s.opencode_session_id, count(t.id) "
+        "FROM ai_chat_sessions s LEFT JOIN agent_tool_calls t "
+        "ON t.oc_session_id = s.opencode_session_id AND t.tool='bash' "
+        "WHERE s.id = ANY(%s) GROUP BY s.id, s.opencode_session_id", (sids,))
+    for sid, oc, cnt in rows:
+        assert cnt == 2, f'{sid} 账本 bash {cnt} 行 != 2（双流重复落账）'
+    # S4.2 交互期望恰好一次核对（登记 n 行、全部已核对、无重复登记）
+    rows = stress_stack.db_query(
+        "SELECT count(*) FROM action_expectations WHERE scope_id = ANY(%s) "
+        "AND name='interactive-tool'", (sids,))
+    assert rows[0][0] == n, rows
+    rows = stress_stack.db_query(
+        "SELECT count(*) FROM action_expectations WHERE scope_id = ANY(%s) "
+        "AND name='interactive-tool' AND last_status IS NULL", (sids,))
+    assert rows[0][0] == 0, '存在未核对（超时/丢失收口）的交互期望'
+    _dump('s4-finalize-contention', {'sessions': n, 'streams': 2 * n})
+
