@@ -39,3 +39,13 @@ class AgentRuntime:
 
     def health(self) -> dict:
         raise NotImplementedError
+
+    def subscribe_events(self, directory: str = '', read_timeout=None):
+        """订阅会话事件流（OpenCode /event 的 runtime 抽象）。
+
+        默认委托 get_client()：OpenCodeClient 原生具备该方法（行为不变）；
+        StubRuntime 经 StubClient 内存总线实现。Yield
+        {'event': <type>, 'data': {'type': <type>, 'properties': {...}}}。
+        """
+        return self.get_client().subscribe_events(directory=directory,
+                                                  read_timeout=read_timeout)
