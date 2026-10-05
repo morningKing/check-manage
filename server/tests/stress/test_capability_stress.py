@@ -282,3 +282,119 @@ def test_s2_concurrent_terminal_gate_evaluation(stress_stack, sampler):
     assert inv == {'orphans': 0, 'zombie_running': 0, 'counter_violations': 0}, inv
     _dump('s2-gate-concurrent', {'children': 50, 'checks_per_child': 3})
 
+
+def test_s3_gate_retry_budget_race(stress_stack, sampler):
+    """门禁必败 → gate_retry continue 修正（stub 重跑仍败）→ 预算耗尽 failed；
+    同窗口并发 cancel 一半子任务（cancel vs 修正轮 requeue 竞态）。
+    S3.1 retry_count ≤ AI_BATCH_MAX_AUTO_RETRY(2)+gate 预算(1)，不超发；
+    S3.2 终态合法唯一；
+    S3.3 终态批无 pending 残留（修正轮孤儿）；
+    S3.5 守恒。"""
+    sampler.record('cap-S3-start')
+    stress_stack.restart_backend(
+        concurrency=10,
+        profile={'delay_ms': [3000, 5000], 'tool_parts': 1})
+    checks = [{'name': 'never-file', 'check_type': 'file',
+               'effect_spec': {'path': 'outputs/never-seeded.md'}}]
+    bid = create_batch(stress_stack, 20, action_checks=checks,
+                       gate_retry=True)
+    # 等子任务进入 running 后 cancel（竞态窗口：cancel vs 门禁 continue 的
+    # requeue）。租约交接窗内不会有 running——死线放宽到 300s。
+    deadline = time.time() + 300
+    while time.time() < deadline:
+        rows = stress_stack.db_query(
+            "SELECT count(*) FROM ai_chat_sessions WHERE batch_id=%s "
+            "AND status='running'", (bid,))
+        if rows[0][0] >= 10:
+            break
+        time.sleep(0.5)
+    assert rows[0][0] >= 10, '300s 内未进入 running（租约交接超预期）'
+    requests.post(f'{stress_stack.base}/ai/chat/batches/{bid}/cancel',
+                  headers=stress_stack.auth_header, timeout=10)
+    wait_terminal(stress_stack, bid, timeout_s=900)
+    # S3.1 预算：任何子任务 retry_count ≤ auto-retry(2)+gate 修正(1)
+    rows = stress_stack.db_query(
+        "SELECT max(retry_count) FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+    assert rows[0][0] <= 3, f'retry_count 超发: {rows[0][0]}'
+    # S3.2 终态合法
+    status_rows = stress_stack.db_query(
+        "SELECT status, count(*) FROM ai_chat_sessions WHERE batch_id=%s "
+        "GROUP BY status", (bid,))
+    bad = [r for r in status_rows if r[0] not in ('completed', 'failed', 'cancelled')]
+    assert bad == [], status_rows
+    # S3.3 终态批无 pending（continue requeue 会写 pending——终态批不许残留）
+    pending = stress_stack.db_query(
+        "SELECT count(*) FROM ai_chat_sessions WHERE batch_id=%s "
+        "AND status='pending'", (bid,))
+    assert pending[0][0] == 0, '终态批残留 pending（修正轮孤儿）'
+    inv = stress_stack.invariants()
+    assert inv['counter_violations'] == 0
+    _dump('s3-gate-retry-race', {'final': dict(status_rows)})
+
+
+def test_s3_gate_retry_success_path(stress_stack, sampler):
+    """修正成功侧：第一轮门禁失败（期望行翻 failed）→ 补写期望文件 →
+    修正轮 gate 转 passed → completed，retry_count==1。
+    （计划原稿"t+4s 补种"的前提已失效——重启后 worker 租约交接 ~80s，
+    子任务起跑远晚于 4s；改为事件驱动：等首轮核对失败再种。）"""
+    sampler.record('cap-S3b-start')
+    # delay 6-9s：修正轮（continue 重跑）给"轮询发现 failed → 补种"留 ≥6s 窗口
+    # （2-3s 档实测会输给 round-2 的核对——种文件晚 0.7s 即判失败）
+    stress_stack.restart_backend(
+        concurrency=3, profile={'delay_ms': [6000, 9000], 'tool_parts': 0})
+    checks = [{'name': 'late-file', 'check_type': 'file',
+               'effect_spec': {'path': 'outputs/late.md'}}]
+    bid = create_batch(stress_stack, 2, action_checks=checks, gate_retry=True)
+    import os
+    from pathlib import Path
+    from config import AI_WORKSPACE_ROOT
+    ws_root = os.path.realpath(AI_WORKSPACE_ROOT)
+    # 等第一轮门禁核对失败（期望行翻 failed = 修正轮已排队）
+    deadline = time.time() + 300
+    cont = 0
+    while time.time() < deadline:
+        # 触发信号 = continue attempt 出现（round-1 已收口、round-2 刚起跑）。
+        # 不能用 last_status='failed'：round-2 认领时的期望重登记会把行重置
+        # 回 pending（幂等覆盖），轮询只能看到 0.1-1s 的窗口，实测必错过。
+        rows = stress_stack.db_query(
+            "SELECT count(*) FROM ai_execution_attempts a "
+            "JOIN ai_chat_sessions s ON s.id = a.session_id "
+            "WHERE s.batch_id=%s AND a.attempt_no >= 2", (bid,))
+        cont = rows[0][0]
+        if cont >= 2:
+            break
+        time.sleep(0.5)
+    assert cont >= 2, '修正轮（attempt_no>=2）未出现'
+    # 补写期望文件 → 修正轮（continue 续跑后重新核对）应转 passed
+    for sid, ws in stress_stack.db_query(
+            "SELECT s.id, s.workspace_path FROM ai_chat_sessions s "
+            "WHERE s.batch_id=%s AND s.workspace_path IS NOT NULL", (bid,)):
+        ws_real = Path(os.path.realpath(ws))
+        assert os.path.commonpath([str(ws_real), ws_root]) == ws_root, \
+            f'工作区越界: {ws}'
+        out_dir = ws_real / 'outputs'
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / 'late.md').write_text('late', encoding='utf-8')
+    wait_terminal(stress_stack, bid, timeout_s=600)
+    # 取证：修正轮真实时间线（attempt 时间戳 + 期望核对时刻），断言失败时可诊断
+    forensics = {
+        'attempts': stress_stack.db_query(
+            "SELECT s.batch_seq, a.attempt_no, a.operation, a.status, "
+            "a.started_at, a.finished_at FROM ai_execution_attempts a "
+            "JOIN ai_chat_sessions s ON s.id=a.session_id "
+            "WHERE s.batch_id=%s ORDER BY s.batch_seq, a.attempt_no", (bid,)),
+        'expectations': stress_stack.db_query(
+            "SELECT s.batch_seq, e.name, e.last_status, e.last_checked_at "
+            "FROM action_expectations e JOIN ai_chat_sessions s ON s.id=e.scope_id "
+            "WHERE s.batch_id=%s ORDER BY s.batch_seq", (bid,)),
+    }
+    _dump('s3b-retry-forensics', {
+        'attempts': [[str(x) for x in row] for row in forensics['attempts']],
+        'expectations': [[str(x) for x in row] for row in forensics['expectations']],
+    })
+    rows = stress_stack.db_query(
+        "SELECT status, retry_count FROM ai_chat_sessions WHERE batch_id=%s",
+        (bid,))
+    assert all(r[0] == 'completed' for r in rows), rows
+    assert all(r[1] == 1 for r in rows), f'修正成功侧 retry_count 应恰 1: {rows}'
+
