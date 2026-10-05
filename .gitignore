@@ -90,3 +90,4 @@ e2e/screenshots/
 
 # playwright 共享登录态（本地生成）
 e2e/.auth/
+.mimosa/
