@@ -455,3 +455,71 @@ def test_s4_interactive_finalize_contention(stress_stack, sampler):
     assert rows[0][0] == 0, '存在未核对（超时/丢失收口）的交互期望'
     _dump('s4-finalize-contention', {'sessions': n, 'streams': 2 * n})
 
+
+def test_s5_tree_scope_aggregation(stress_stack, sampler):
+    """委派负载下树作用域聚合（主路：S5 探针已证 stub 委派形状可被
+    apply_event 发现）：根会话期望（tree + subagents=['explorer']）核对计入
+    explorer 子代理的 bash 动作；不相关 writer 动作不参与（必败对照）。
+    S5.1 tree-explorer passed 且证据数 ≥ 2（explorer 每委派 2 次 bash）；
+    S5.2 tree-exclude-writer failed（explorer 无 writer-only-marker）。"""
+    sampler.record('cap-S5-start')
+    stress_stack.restart_backend(
+        concurrency=3,
+        profile={'delay_ms': [500, 1200], 'tool_parts': 2,
+                 'delegate': ['explorer', 'writer']},
+        env_extra={'DB_POOL_MAXCONN': '60'})
+    n = 5
+    sids = []
+    stops, threads = [], []
+    pattern = 'stub-' + 'cmd-'
+    marker = 'writer-only-' + 'marker'
+    for _ in range(n):
+        sid = create_interactive_session(stress_stack)
+        sids.append(sid)
+        register_expectations(stress_stack, sid, [
+            {'name': 'tree-explorer', 'check_type': 'tool', 'scope': 'tree',
+             'tool': 'bash', 'args_pattern': pattern,
+             'subagents': ['explorer'], 'min_count': 2},
+            {'name': 'tree-exclude-writer', 'check_type': 'tool',
+             'scope': 'tree', 'tool': 'bash',
+             'args_pattern': marker,
+             'subagents': ['explorer'], 'min_count': 1},
+        ])
+        stop = threading.Event()
+        sink = []
+        t = threading.Thread(target=collect_sse, daemon=True, args=(
+            stress_stack, f'/ai/chat/sessions/{sid}/events', None, stop, sink,
+            lambda f: f.event in ('session.idle', 'session.error')))
+        t.start()
+        stops.append(stop)
+        threads.append(t)
+    time.sleep(0.5)
+    for sid in sids:
+        send_message(stress_stack, sid, 'delegate and finish')
+    for t in threads:
+        t.join(timeout=60)
+    for s in stops:
+        s.set()
+    # 聚合对账：核对结果与账本明细按 agent 过滤的聚合一致
+    for sid in sids:
+        exp = stress_stack.db_query(
+            "SELECT name, last_status, last_evidence FROM action_expectations "
+            "WHERE scope_id=%s ORDER BY name", (sid,))
+        d = {r[0]: (r[1], r[2]) for r in exp}
+        assert d.get('tree-explorer') == ('passed', 2), (sid, d)
+        assert d.get('tree-exclude-writer') == ('failed', 0), (sid, d)
+    # 账本明细对账：每个根会话恰有 explorer/writer 各 1 个子代理、各 2 行 bash
+    rows = stress_stack.db_query(
+        "SELECT st.root_session_id, st.agent, count(t.id) "
+        "FROM ai_chat_subtasks st LEFT JOIN agent_tool_calls t "
+        "ON t.subtask_id = st.id AND t.tool='bash' "
+        "WHERE st.root_session_id = ANY(%s) "
+        "GROUP BY st.root_session_id, st.agent ORDER BY 1, 2", (sids,))
+    agg = {}
+    for root, agent, cnt in rows:
+        agg[(root, agent)] = cnt
+    for sid in sids:
+        assert agg.get((sid, 'explorer')) == 2, (sid, agg)
+        assert agg.get((sid, 'writer')) == 2, (sid, agg)
+    _dump('s5-tree-scope', {'sessions': n})
+
