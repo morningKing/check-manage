@@ -500,6 +500,17 @@ def test_s5_tree_scope_aggregation(stress_stack, sampler):
         t.join(timeout=60)
     for s in stops:
         s.set()
+    # SSE 收口的账本落账与监听器持久化存在 FK 竞态（发现 #4，良性自愈：
+    # record_state 子代理行在 ai_chat_subtasks 落行前插入即失败 → 本轮
+    # inconclusive，监听器 finalize 幂等补账）。容忍 30s 自愈窗口再对账。
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        rows = stress_stack.db_query(
+            "SELECT count(*) FROM action_expectations WHERE scope_id = ANY(%s) "
+            "AND last_status IS NULL", (sids,))
+        if rows[0][0] == 0:
+            break
+        time.sleep(1)
     # 聚合对账：核对结果与账本明细按 agent 过滤的聚合一致
     for sid in sids:
         exp = stress_stack.db_query(

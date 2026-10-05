@@ -27,6 +27,11 @@ def test_create_and_prompt_completes_with_oc_raw_shape():
     assert a and a[0]['info']['finish'] == 'stop'          # 终结 reason
     assert a[0]['info']['time']['completed'] > 0            # 完成时间戳
     assert isinstance(a[0]['parts'], list) and a[0]['parts']
+    # info.id 必须存在且逐轮唯一：worker continue 模式的基线快照
+    # （_snapshot_assistant_ids）靠它区分旧回合消息——缺 id 时基线恒空集，
+    # 旧终态消息被判为本轮完成，修正轮（gate-retry）0ms 即时假完成
+    # （2026-10-05 S3b 能力压测实证：attempt 仅存活 24ms）。
+    assert a[0]['info']['id'] and str(a[0]['info']['id']).startswith('msg_')
 
 
 def test_prompt_before_completion_has_no_assistant():

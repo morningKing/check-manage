@@ -179,7 +179,7 @@ class StubClient:
         parts.append(text_part)
         self._emit(sid, s, 'message.part.updated', {'part': text_part})
         s.messages.append({
-            'info': {'role': 'assistant', 'finish': finish,
+            'info': {'id': msg_id, 'role': 'assistant', 'finish': finish,
                      'time': {'completed': now_ms}},
             'parts': parts,
         })
