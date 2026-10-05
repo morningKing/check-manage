@@ -72,7 +72,7 @@ ai-workspaces/
 .dev-ai-workspaces/
 # Superpowers / Trae / Claude local tooling dirs & generated indexes
 .superpowers/
-superpowers/
+/superpowers/
 .trae/
 .claude/worktrees/
 SKILLS.md
