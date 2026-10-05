@@ -502,6 +502,20 @@ try:
 except Exception as _e:
     logging.warning('action gate mode migration on boot failed: %s', _e)
 
+# 定义版本正文归档列（2026-10-05）：ai_skill_def_versions 加
+# content/content_captured_at（SkillOpt 版本归档与对比）。随启动幂等执行；
+# init_db 的 _run_dated_migrations 自动扫描不覆盖生产「拉代码+重启」路径，
+# 新迁移必须在此显式注册（2026_09_18_skillopt_p2 漏注册事故同因）。
+try:
+    _mp19 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_10_05_def_version_content_archive.py')
+    _spec19 = _ilu.spec_from_file_location('_def_version_content_boot', _mp19)
+    _m19 = _ilu.module_from_spec(_spec19)
+    _spec19.loader.exec_module(_m19)
+    _m19.run()
+except Exception as _e:
+    logging.warning('def version content archive migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
