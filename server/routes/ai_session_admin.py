@@ -1227,6 +1227,46 @@ def patch_skill_def_version(version_id):
     return jsonify({'ok': True})
 
 
+@ai_execution_admin_bp.post('/skill-def-versions/<version_id>/rollback')
+@require_permission('admin.ai_chat_admin')
+def rollback_skill_def_version(version_id):
+    """回滚到归档版本（spec §4.4/§5）：归档正文按 bytes 原样写回该定义
+    最新 manifest 记录的文件路径。写回内容 sha256 == content_hash，下次
+    扫描注册时 UNIQUE 命中同一版本行——时间线不产生虚假回滚版本，回滚
+    动作本身经 log_operation 留痕。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT def_kind, def_name, content_hash, content "
+                "FROM ai_skill_def_versions WHERE id = %s", (version_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': '版本不存在'}), 404
+            def_kind, def_name, content_hash, content = row
+            if content is None or not content_hash:
+                return jsonify({'error': '版本未归档'}), 400
+            cur.execute(
+                "SELECT path FROM ai_execution_manifests "
+                "WHERE kind = %s AND name = %s "
+                "  AND path IS NOT NULL AND path <> '' "
+                "ORDER BY created_at DESC LIMIT 1", (def_kind, def_name))
+            mrow = cur.fetchone()
+        conn.commit()
+    if not mrow or not mrow[0]:
+        return jsonify({'error': '无法定位定义文件'}), 404
+    path = mrow[0]
+    if not _path_in_allowed_roots(path):
+        return jsonify({'error': 'path escapes allowed roots'}), 400
+    try:
+        with open(path, 'wb') as f:
+            f.write(content.encode('utf-8'))
+    except OSError as e:
+        return jsonify({'error': f'定义文件写入失败: {e}'}), 500
+    log_operation('update', 'ai_skill_def_versions', version_id, def_name,
+                  'SkillOpt 定义版本回滚')
+    return jsonify({'ok': True, 'path': path, 'contentHash': content_hash})
+
+
 @ai_execution_admin_bp.get('/skill-def-patterns')
 @require_permission('admin.ai_chat_admin')
 def skill_def_patterns():

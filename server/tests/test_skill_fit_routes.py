@@ -447,3 +447,148 @@ def test_skill_def_versions_list_has_archived_flag(client, admin_headers, db_con
             cur.execute("DELETE FROM ai_skill_def_versions "
                         "WHERE def_kind='skill' AND def_name=%s", (name,))
         db_conn.commit()
+
+
+def test_skill_def_version_rollback(client, admin_headers, db_conn, tmp_path,
+                                    monkeypatch):
+    """回滚（spec §4.4）：归档正文 bytes 写回 manifest 最新 path；写回后
+    文件 sha256 == content_hash；版本行数不膨胀；动作留操作日志。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    logged = []
+    monkeypatch.setattr(_admin, 'log_operation',
+                        lambda *a, **kw: logged.append(a))
+    name = f'rlb-skill-{uuid.uuid4().hex[:6]}'
+    target = tmp_path / f'{name}' / 'SKILL.md'
+    target.parent.mkdir(parents=True)
+    target.write_text('当前已是新版正文', encoding='utf-8')
+    from utils.skill_fit import register_def_version
+    h_old = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
+    # FK 链种子初始化在 try 之前，保证 finally 清理不依赖用例中途失败点
+    uid, bid, sid, attempt = (str(uuid.uuid4()), str(uuid.uuid4()),
+                              str(uuid.uuid4()), str(uuid.uuid4()))
+    try:
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'skill', name, h_old, content='v1 正文')
+            cur.execute("SELECT id FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, h_old))
+            vid = cur.fetchone()[0]
+            # manifest 行指向 tmp 定义文件（FK 链沿用 _seed_fit_fixture 模式）
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s, %s, 'x', 'FR', 'developer')", (uid, f'fr_{uid[:8]}'))
+            cur.execute("INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                        "VALUES (%s, %s, 'fr', 'p', 1)", (bid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                        "  batch_seq, workspace_path, session_token) "
+                        "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                        (sid, uid, bid, str(tmp_path), f'tok-{sid[:12]}'))
+            cur.execute("INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                        "  operation, started_at, finished_at) "
+                        "VALUES (%s, %s, 'batch', 'send', NOW(), NOW())", (attempt, sid))
+            cur.execute("INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                        "  source, path, content_hash, injected) "
+                        "VALUES (%s, %s, 'skill', %s, 'session', %s, %s, true)",
+                        ('man_' + uuid.uuid4().hex[:8], attempt, name,
+                         str(target), 'f' * 64))
+        db_conn.commit()
+        r = client.post(f'/ai/chat/admin/skill-def-versions/{vid}/rollback',
+                        headers=admin_headers)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['ok'] is True and body['contentHash'] == h_old
+        assert target.read_bytes() == 'v1 正文'.encode('utf-8')  # bytes 精确写回
+        assert hashlib.sha256(target.read_bytes()).hexdigest() == h_old
+        assert logged and logged[0][0] == 'update'        # 操作日志留痕
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+            assert cur.fetchone()[0] == 1                 # 版本行不膨胀
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
+
+
+def test_skill_def_version_rollback_error_paths(client, admin_headers, db_conn,
+                                                tmp_path, monkeypatch):
+    """未归档 400；定位不到定义文件 404；路径逃逸 400。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    from utils.skill_fit import register_def_version
+    name = f'rlb-skill-{uuid.uuid4().hex[:6]}'
+    name2 = name  # 404 分支用第二个定义；预先赋值保证 finally 可清理
+    # FK 链种子（escape 用例的 manifest 依赖）——变量初始化在 try 之前，
+    # 保证 finally 清理不依赖用例中途失败点
+    uid, bid, sid, attempt = (str(uuid.uuid4()), str(uuid.uuid4()),
+                              str(uuid.uuid4()), str(uuid.uuid4()))
+    try:
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'skill', name, 'b' * 64)  # 未归档
+            cur.execute("SELECT id FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+            vid0 = cur.fetchone()[0]
+            h = hashlib.sha256('v1 正文'.encode('utf-8')).hexdigest()
+            register_def_version(cur, 'skill', name, h, content='v1 正文')
+            cur.execute("SELECT id FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, h))
+            vid1 = cur.fetchone()[0]
+            escape = 'C:\\Windows\\win.ini' if os.name == 'nt' else '/etc/passwd'
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s, %s, 'x', 'FR', 'developer')", (uid, f'fr_{uid[:8]}'))
+            cur.execute("INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                        "VALUES (%s, %s, 'fr', 'p', 1)", (bid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                        "  batch_seq, workspace_path, session_token) "
+                        "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                        (sid, uid, bid, str(tmp_path), f'tok-{sid[:12]}'))
+            cur.execute("INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                        "  operation, started_at, finished_at) "
+                        "VALUES (%s, %s, 'batch', 'send', NOW(), NOW())", (attempt, sid))
+            cur.execute("INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                        "  source, path, content_hash, injected) "
+                        "VALUES (%s, %s, 'skill', %s, 'session', %s, %s, true)",
+                        ('man_' + uuid.uuid4().hex[:8], attempt, name,
+                         escape, 'f' * 64))
+        db_conn.commit()
+        r = client.post(f'/ai/chat/admin/skill-def-versions/{vid0}/rollback',
+                        headers=admin_headers)
+        assert r.status_code == 400 and r.get_json()['error'] == '版本未归档'
+        r404 = client.post(f'/ai/chat/admin/skill-def-versions/{vid1}/rollback',
+                           headers=admin_headers)
+        # manifest 最新 path = escape 路径 → 先过「定位」再被 confinement 拦下
+        assert r404.status_code == 400
+        assert r404.get_json()['error'] == 'path escapes allowed roots'
+        # 再验证完全无 manifest 的 404 分支：换一个无 manifest 的定义
+        name2 = f'rlb-skill-{uuid.uuid4().hex[:6]}'
+        with db_conn.cursor() as cur:
+            register_def_version(cur, 'skill', name2, h, content='v1 正文')
+            cur.execute("SELECT id FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name2, h))
+            vid2 = cur.fetchone()[0]
+        db_conn.commit()
+        r404b = client.post(f'/ai/chat/admin/skill-def-versions/{vid2}/rollback',
+                            headers=admin_headers)
+        assert r404b.status_code == 404
+        assert r404b.get_json()['error'] == '无法定位定义文件'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            cur.execute("DELETE FROM ai_skill_def_versions WHERE def_kind='skill' "
+                        "AND def_name IN (%s, %s)", (name, name2))
+        db_conn.commit()
