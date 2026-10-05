@@ -437,12 +437,12 @@ def register_definition_versions(manifests: list[dict]) -> int:
                         with open(path, 'rb') as f:
                             raw = f.read()
                     except OSError as e:
-                        log.warning('def version archive: 定义文件读取失败 %s (%s)',
-                                    path, e)
+                        logger.warning('def version archive: 定义文件读取失败 %s (%s)',
+                                       path, e)
                         continue
                     if hashlib.sha256(raw).hexdigest() != chash:
-                        log.warning('def version archive: hash 与重读正文不一致，'
-                                    '只登记不归档 %s (%s)', path, name)
+                        logger.warning('def version archive: hash 与重读正文不一致，'
+                                       '只登记不归档 %s (%s)', path, name)
                         register_def_version(cur, kind, name, chash)
                         registered += 1
                         continue
