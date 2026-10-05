@@ -33,6 +33,12 @@ def get_runtime() -> AgentRuntime:
                 import os
                 kind = os.getenv('AI_AGENT_RUNTIME', 'opencode_local')
                 if kind == 'stub':
+                    # 防呆（压测终审 M8）：stub 会让所有批任务"静默成功"，
+                    # 误配到生产等于 AI 全体放假——必须显式放行。
+                    if os.getenv('AI_STUB_ALLOW', '') != '1':
+                        raise RuntimeCapabilityError(
+                            'AI_AGENT_RUNTIME=stub 需要显式 AI_STUB_ALLOW=1 '
+                            '（防误配：stub 会假成功所有 agent 任务）')
                     from utils.runtime.stub import StubRuntime
                     _default = StubRuntime()      # profile 由 AI_STUB_PROFILE 注入
                 elif kind != 'opencode_local':

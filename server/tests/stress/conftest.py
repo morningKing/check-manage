@@ -145,6 +145,7 @@ class Stack:
                'FLASK_PORT': str(STRESS_PORT),
                'DB_NAME': STRESS_DB,
                'AI_AGENT_RUNTIME': 'stub',
+               'AI_STUB_ALLOW': '1',
                'AI_BATCH_CONCURRENCY': str(concurrency),
                'INIT_ADMIN_PASSWORD': ADMIN_PASS,
                'PYTHONUTF8': '1'}

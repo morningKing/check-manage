@@ -5,6 +5,8 @@ Worker engine lives in utils.batch_engine; this module only owns the HTTP edge.
 import uuid
 from pathlib import Path
 
+import psycopg2.pool
+
 from flask import Blueprint, current_app, g, jsonify, request
 from utils.filename import safe_filename
 
@@ -819,10 +821,17 @@ def batch_events_sse():
     if not ids:
         return jsonify({'error': 'ids required'}), 400
     user_id = g.current_user['userId']
-    owned = []
-    for bid in ids:
-        if get_batch_detail(user_id, bid):
-            owned.append(bid)
+    # 连接建立阶段池饥饿 → 503+Retry-After（客户端重连），不 500
+    try:
+        owned = []
+        for bid in ids:
+            if get_batch_detail(user_id, bid):
+                owned.append(bid)
+    except psycopg2.pool.PoolError:
+        resp = jsonify({'error': 'server busy, retry shortly'})
+        resp.headers['Retry-After'] = '5'
+        resp.headers['X-Accel-Buffering'] = 'no'
+        return resp, 503
     try:
         after = {bid: max(0, int(request.args.get('afterSeq', 0))) for bid in owned}
     except (TypeError, ValueError):
@@ -842,23 +851,31 @@ def batch_events_sse():
                     pass
         deadline = _time.time() + 30 * 60
         while _time.time() < deadline:
-            for bid in owned:
-                rows = batch_events.read_events(bid, after_seq=after[bid],
-                                                limit=200)
-                for r in rows:
-                    after[bid] = r['event_seq']
-                    frame = {'eventId': f"{bid}:{r['event_seq']}",
-                             'eventSeq': r['event_seq'],
-                             'type': r['event_type'],
-                             'data': r.get('payload') or {}}
-                    yield (f"id: {bid}:{r['event_seq']}\n"
-                           f"event: batch_event\n"
-                           f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
-            # 终态检查：全部批次终态 → batch_done 收流
-            statuses = []
-            for bid in owned:
-                d = get_batch_detail(user_id, bid)
-                statuses.append(d['batch']['status'] if d else 'completed')
+            # 池饥饿降级（压测发现：大量 SSE 同相位 tick 瞬时借满连接池时，
+            # 不处理会把 PoolError 抛进生成器直接断流/500）——本轮跳过等下一
+            # tick，游标未动故事件不丢；get_db 自身已有 1s 排队等待。
+            try:
+                for bid in owned:
+                    rows = batch_events.read_events(bid, after_seq=after[bid],
+                                                    limit=200)
+                    for r in rows:
+                        after[bid] = r['event_seq']
+                        frame = {'eventId': f"{bid}:{r['event_seq']}",
+                                 'eventSeq': r['event_seq'],
+                                 'type': r['event_type'],
+                                 'data': r.get('payload') or {}}
+                        yield (f"id: {bid}:{r['event_seq']}\n"
+                               f"event: batch_event\n"
+                               f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
+                # 终态检查：全部批次终态 → batch_done 收流
+                statuses = []
+                for bid in owned:
+                    d = get_batch_detail(user_id, bid)
+                    statuses.append(d['batch']['status'] if d else 'completed')
+            except psycopg2.pool.PoolError:
+                yield ': pool-busy\n\n'
+                _time.sleep(15)
+                continue
             if statuses and all(st in ('completed', 'partial', 'failed')
                                 for st in statuses):
                 done_frame = _json.dumps({'statuses': dict(zip(owned, statuses))})

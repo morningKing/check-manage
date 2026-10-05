@@ -180,17 +180,22 @@ def test_list_models_flattens_connected_providers(setup):
 
 def test_get_messages_returns_history(setup):
     client, cursor, oc, dev_h, _, _ = setup
-    # owner check + history fetch (6-tuple: …, workspace_path, batch_id)
-    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws', None)
+    # owner check：_load_session_for_user 现 SELECT 7 列（…, batch_id, orchestration_run_id）
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    # history fetch：消息 SELECT 现 6 列（id, role, content, created_at, meta, seq），
+    # 默认分支 ORDER BY seq DESC（最新在前）——mock 按该序返回
     cursor.fetchall.return_value = [
-        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None, None),
-        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None, None),
+        ('msg_2', 'assistant', [{'type': 'text', 'text': 'hey'}],  None, None, 2),
+        ('msg_1', 'user',      [{'type': 'text', 'text': 'hi'}],   None, None, 1),
     ]
     resp = client.get('/ai/chat/sessions/sess_x/messages', headers=dev_h)
     assert resp.status_code == 200
     body = resp.get_json()
     assert len(body['messages']) == 2
+    # 路由按 seq DESC 取数后 reverse 成时间序输出：user 在前
     assert body['messages'][0]['role'] == 'user'
+    assert body['messages'][1]['role'] == 'assistant'
 
 
 def test_loading_session_touches_last_active_and_extends_token(setup):

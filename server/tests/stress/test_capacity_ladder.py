@@ -85,6 +85,12 @@ def test_capacity_ladder(stress_stack, sampler):
     # 运行时相对路径会把结论 JSON 与采样产物劈成两棵树。
     import json
     METRICS_ROOT.mkdir(parents=True, exist_ok=True)
-    (METRICS_ROOT / f"{time.strftime('%Y%m%d-%H%M%S')}-capacity.json").write_text(
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    (METRICS_ROOT / f"{stamp}-capacity.json").write_text(
         json.dumps({'capacity': capacity, 'levels': levels},
                    ensure_ascii=False, indent=1), encoding='utf-8')
+    # spec §5：跑完自动汇总 md（渲染器见 tests/stress/report.py）
+    from tests.stress.report import render_capacity_report
+    (METRICS_ROOT / f"{stamp}-capacity.md").write_text(
+        render_capacity_report({'capacity': capacity, 'levels': levels}),
+        encoding='utf-8')

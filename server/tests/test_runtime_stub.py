@@ -3,6 +3,8 @@
 import threading
 import time
 
+import pytest
+
 from utils.runtime.stub import StubRuntime, parse_profile
 
 PROFILE_FAST = {'delay_ms': [0, 0], 'error_rate': 0.0, 'hang_rate': 0.0}
@@ -102,6 +104,7 @@ def test_get_runtime_concurrent_first_call_single_instance(monkeypatch):
     """
     import utils.runtime as rtmod
     monkeypatch.setenv('AI_AGENT_RUNTIME', 'stub')
+    monkeypatch.setenv('AI_STUB_ALLOW', '1')                # 防呆门显式放行
     monkeypatch.delenv('AI_STUB_PROFILE', raising=False)   # 默认 profile 即可
     monkeypatch.setattr(rtmod, '_default', None)            # 强制走懒初始化竞态窗口
     n = 16
@@ -122,3 +125,16 @@ def test_get_runtime_concurrent_first_call_single_instance(monkeypatch):
     assert all(r is first for r in results)                 # 同一 runtime 单例
     assert all(r.get_client() is first.get_client()
                for r in results)                            # 同一内存会话字典
+
+
+def test_get_runtime_stub_requires_explicit_allow(monkeypatch):
+    """防呆（压测终审 M8）：AI_AGENT_RUNTIME=stub 未带 AI_STUB_ALLOW=1 必须
+    拒绝——stub 会假成功所有 agent 任务，误配到生产等于 AI 全体放假。"""
+    import utils.runtime as rtmod
+    from utils.runtime.base import RuntimeCapabilityError
+    monkeypatch.setenv('AI_AGENT_RUNTIME', 'stub')
+    monkeypatch.delenv('AI_STUB_ALLOW', raising=False)
+    monkeypatch.setattr(rtmod, '_default', None)
+    with pytest.raises(RuntimeCapabilityError, match='AI_STUB_ALLOW'):
+        rtmod.get_runtime()
+    assert rtmod._default is None                           # 拒绝后不留半初始化单例
