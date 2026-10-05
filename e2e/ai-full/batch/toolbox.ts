@@ -173,14 +173,24 @@ export async function seedRunningChild(o: SeedOpts): Promise<{ bid: string; sid:
 
 /** 重启后端（Windows 环境）：kill 3002 → 带 env 重启 → 探活。不传 env 即恢复默认。 */
 export async function restartBackend(env: Record<string, string> = {}): Promise<void> {
-  // 找到监听 3002 的 PID 并 kill（netstat 行形如 `TCP  127.0.0.1:3002 ... LISTENING  1234`）
+  // 找到监听 3002 的 PID 并 kill（netstat 行形如 `TCP  127.0.0.1:3002 ... LISTENING  1234`）。
+  // /:3002\s/ 锚定端口列，避免 includes(':3002') 子串误匹配 :30021 等监听行；
+  // netstat 失败/无监听（首启）可容忍，但 taskkill 失败必须显式抛出——吞掉会让
+  // 旧进程继续占用 3002，重启退化为数分钟后的看门狗超时，难以定位。
+  let pid: string | undefined
   try {
     const out = execFileSync('netstat', ['-ano'], { encoding: 'utf-8', shell: true })
-    const pid = out.split('\n').map(l => l.trim())
-      .filter(l => l.includes(':3002') && l.includes('LISTENING'))
+    pid = out.split('\n').map(l => l.trim())
+      .filter(l => /:3002\s/.test(l) && l.includes('LISTENING'))
       .pop()?.split(/\s+/).pop()
-    if (pid) execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
-  } catch { /* 3002 无进程时忽略 */ }
+  } catch { /* netstat 失败视同无监听（首启容忍） */ }
+  if (pid) {
+    try {
+      execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
+    } catch (e) {
+      throw new Error(`restartBackend: taskkill PID=${pid} 失败，3002 仍被旧进程占用：${e}`)
+    }
+  }
   const child = spawn('python', ['app.py'], {
     cwd: path.join(DIRNAME, '..', '..', '..', 'server'),
     env: { ...process.env, ...env },

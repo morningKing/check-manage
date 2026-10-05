@@ -259,6 +259,7 @@ test('终态 webhook：HMAC 签名回调真实送达本地 receiver', async ({ r
   })
   const keyTag = tag('hook')
   const key = await createApiKey(request, keyTag)
+  let bid = ''
   try {
     const secret = `sec-${Date.now()}`
     const staged = await stagingUpload(request, `hook-${Date.now()}`,
@@ -271,7 +272,7 @@ test('终态 webhook：HMAC 签名回调真实送达本地 receiver', async ({ r
       callbackSecret: secret,
     })
     expect(created.status).toBe(201)
-    const bid = created.json.batchId as string
+    bid = created.json.batchId as string
     // 回调 secret 不得回显
     expect(JSON.stringify(created.json)).not.toContain(secret)
 
@@ -299,6 +300,7 @@ test('终态 webhook：HMAC 签名回调真实送达本地 receiver', async ({ r
     expect(BATCH_TERMINAL).toContain(final.json?.status)
     await openApi(request, key, 'DELETE', `/v1/ai-batches/${bid}`)
   } finally {
+    if (bid) await cleanupBatch(await adminTokenCached(), bid).catch(() => {})   // 兜底（成功路径已删则为 no-op）
     server.close()
     await deleteApiKey(request, keyTag)
   }

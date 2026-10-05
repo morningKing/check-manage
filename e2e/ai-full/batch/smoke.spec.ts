@@ -14,12 +14,15 @@ test.setTimeout(120_000)
 test('fail-fast：未知 agent 子任务秒级 failed', async () => {
   const tk = await adminTokenCached()
   const bid = await failFastBatch(tk, { files: 2 })
-  const detail = await waitFor(async () => {
-    const d = await getDetail(tk, bid)
-    return (d.sessions ?? []).every((s: any) => s.status === 'failed') ? d : null
-  }, 90_000, 'fail-fast 子任务 failed')
-  expect(countByStatus(detail)['failed']).toBe(2)
-  await cleanupBatch(tk, bid)
+  try {
+    const detail = await waitFor(async () => {
+      const d = await getDetail(tk, bid)
+      return (d.sessions ?? []).every((s: any) => s.status === 'failed') ? d : null
+    }, 90_000, 'fail-fast 子任务 failed')
+    expect(countByStatus(detail)['failed']).toBe(2)
+  } finally {
+    await cleanupBatch(tk, bid)
+  }
 })
 
 test('sleep 长任务进入 running 且工作区 fs 可读写', async () => {

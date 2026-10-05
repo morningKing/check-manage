@@ -1,5 +1,6 @@
 """e2e toolbox DB 桥：stdin 读 SQL（可多语句）经 server 的 DB_CONFIG 执行。
-SELECT 打印 JSON 行数组；DDL/DML 打印 []。仅供 e2e 确定性种子使用。"""
+SELECT 打印 JSON 行数组；DDL/DML 打印 []。仅供 e2e 确定性种子使用。
+警告：仅接受自造值（UUID/tag）插值，禁止传入外部文本（防 SQL 注入 footgun）。"""
 import json
 import os
 import sys

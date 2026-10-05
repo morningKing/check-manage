@@ -19,6 +19,7 @@ test('跨用户隔离：他人批不可见、控制面拒绝、不泄漏存在�
   const admin = await adminTokenCached()
   const userB = await secondUser()
   const bid = await failFastBatch(admin, { files: 1 })
+  let ownBid = ''
   try {
     // 前提锚点：admin 自己可见——下面的 404/不可见才是「跨用户」而非「不存在」
     expect((await getDetail(admin, bid)).batch.id).toBe(bid)
@@ -69,10 +70,14 @@ test('跨用户隔离：他人批不可见、控制面拒绝、不泄漏存在�
     const own = await createBatch(userB.token, {
       name: tag('own'), prompt: 'x', agent: 'e2e-no-such-agent', files: [up],
     } as any)
-    const ownBid = (own as any).batch?.id ?? (own as any).id
+    ownBid = (own as any).batch?.id ?? (own as any).id
     expect((await getDetail(userB.token, ownBid)).batch.name).toContain('AITEST')
-    await cleanupBatch(userB.token, ownBid)
-  } finally { await cleanupBatch(admin, bid); await userB.cleanup() }
+  } finally {
+    // 对照组批的清理必须在 userB.cleanup() 之前，且移入 finally：
+    // 断言失败时留在 try 里会泄漏批、随后用户被删成无主行
+    if (ownBid) await cleanupBatch(userB.token, ownBid).catch(() => {})   // 兜底（已删则为 no-op）
+    await cleanupBatch(admin, bid); await userB.cleanup()
+  }
 })
 
 test('非 admin 访问管理面 403；admin 正常', async () => {
