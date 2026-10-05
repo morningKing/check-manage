@@ -333,9 +333,62 @@ def save_manifests(attempt_id: str, manifests: list[dict]) -> int:
     return _safe(_impl) or 0
 
 
+def register_definition_versions(manifests: list[dict]) -> int:
+    """定义版本被动兜底归档（spec §4.3）：扫描出的 kind∈(skill,agent) 且
+    path/hash 齐备的行，def_versions 未登记的 hash 读文件带正文注册
+    （check-first：已知 hash 不重读文件）。重读文件 sha256 与 manifest hash
+    不一致（两次读之间被改）只登记 hash 不归档——正文无法自证与 hash 对应，
+    warning 留痕。返回新登记行数。失败经 _safe 吞掉，不阻断执行链路。"""
+    from utils.skill_fit import register_def_version
+
+    def _impl() -> int:
+        from db import get_db
+        cands = [(m.get('kind'), m.get('name'), m.get('content_hash'), m.get('path'))
+                 for m in manifests or []
+                 if m.get('kind') in ('skill', 'agent')
+                 and m.get('path') and m.get('content_hash')]
+        if not cands:
+            return 0
+        conds = ','.join(['(%s, %s, %s)'] * len(cands))
+        flat = [v for c in cands for v in c[:3]]
+        registered = 0
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT def_kind, def_name, content_hash "
+                    "FROM ai_skill_def_versions "
+                    f"WHERE (def_kind, def_name, content_hash) IN ({conds})", flat)
+                known = set(cur.fetchall())
+                for kind, name, chash, path in cands:
+                    if (kind, name, chash) in known:
+                        continue
+                    try:
+                        with open(path, 'rb') as f:
+                            raw = f.read()
+                    except OSError as e:
+                        logger.warning('def version archive: 定义文件读取失败 %s (%s)',
+                                       path, e)
+                        continue
+                    if hashlib.sha256(raw).hexdigest() != chash:
+                        logger.warning('def version archive: hash 与重读正文不一致，'
+                                       '只登记不归档 %s (%s)', path, name)
+                        register_def_version(cur, kind, name, chash)
+                        registered += 1
+                        continue
+                    register_def_version(cur, kind, name, chash,
+                                         content=raw.decode('utf-8'))
+                    registered += 1
+            conn.commit()
+        return registered
+    return _safe(_impl) or 0
+
+
 def collect_and_save_workspace_manifests(attempt_id: str,
                                          workspace_path: str | None) -> int:
-    return save_manifests(attempt_id, scan_workspace_manifests(workspace_path))
+    manifests = scan_workspace_manifests(workspace_path)
+    saved = save_manifests(attempt_id, manifests)
+    register_definition_versions(manifests)  # 被动兜底归档（spec §4.3）
+    return saved
 
 
 # ── Read helpers (admin APIs / auditor) ─────────────────────────────────

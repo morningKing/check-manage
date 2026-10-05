@@ -89,3 +89,89 @@ def test_register_def_version_empty_hash_allowed(db_conn):
             cur.execute("DELETE FROM ai_skill_def_versions "
                         "WHERE def_kind='agent' AND def_name=%s", (name,))
         db_conn.commit()
+
+
+def test_register_definition_versions_archives_known_and_mismatch(db_conn, tmp_path):
+    """spec §4.3：未登记 hash 读文件带正文注册；已知 hash 不重读（返回 0）；
+    manifest hash 与重读正文 sha256 不一致 → 只登记 hash 不归档。"""
+    from utils.execution_audit import register_definition_versions
+    name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    d = tmp_path / name
+    d.mkdir()
+    md = d / 'SKILL.md'
+    md.write_bytes(b'v1')
+    h1 = hashlib.sha256(b'v1').hexdigest()
+    m1 = [{'kind': 'skill', 'name': name, 'path': str(md), 'content_hash': h1}]
+    try:
+        assert register_definition_versions(m1) == 1
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT content, content_captured_at "
+                        "FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, h1))
+            row = cur.fetchone()
+        assert row and row[0] == 'v1' and row[1] is not None
+        assert register_definition_versions(m1) == 0          # check-first 不重复
+        md.write_bytes(b'v2')                                  # 新 hash → 新版本行
+        h2 = hashlib.sha256(b'v2').hexdigest()
+        assert register_definition_versions(
+            [{'kind': 'skill', 'name': name, 'path': str(md),
+              'content_hash': h2}]) == 1
+        bad = 'f' * 64                                         # hash 与正文不一致
+        assert register_definition_versions(
+            [{'kind': 'skill', 'name': name, 'path': str(md),
+              'content_hash': bad}]) == 1
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT content FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, bad))
+            assert cur.fetchone()[0] is None                   # 只登记不归档
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
+
+
+def test_collect_and_save_manifests_registers_versions(db_conn, tmp_path, monkeypatch):
+    """collect_and_save_workspace_manifests 接线：执行落 manifest 后兜底归档。"""
+    import utils.execution_audit as _ea
+    name = f'arch-skill-{uuid.uuid4().hex[:8]}'
+    ws = tmp_path / 'ws'
+    skills = ws / '.opencode' / 'skills' / name
+    skills.mkdir(parents=True)
+    (skills / 'SKILL.md').write_bytes(b'collect-v1')
+    uid, bid, sid, attempt = str(uuid.uuid4()), str(uuid.uuid4()), \
+        str(uuid.uuid4()), str(uuid.uuid4())
+    try:
+        with db_conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s, %s, 'x', 'FR', 'developer')", (uid, f'fr_{uid[:8]}'))
+            cur.execute("INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                        "VALUES (%s, %s, 'fr', 'p', 1)", (bid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                        "  batch_seq, workspace_path, session_token) "
+                        "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                        (sid, uid, bid, str(ws), f'tok-{sid[:12]}'))
+            cur.execute("INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                        "  operation, started_at, finished_at) "
+                        "VALUES (%s, %s, 'batch', 'send', NOW(), NOW())", (attempt, sid))
+        db_conn.commit()
+        saved = _ea.collect_and_save_workspace_manifests(attempt, str(ws))
+        assert saved >= 1
+        h = hashlib.sha256(b'collect-v1').hexdigest()
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT content FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, h))
+            assert cur.fetchone()[0] == 'collect-v1'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
