@@ -10,6 +10,8 @@ Endpoints (all require admin.ai_chat_admin):
 """
 import os
 import secrets
+import hashlib
+from datetime import datetime
 import logging
 
 from flask import Blueprint, g as flask_g, jsonify, request
@@ -1254,10 +1256,13 @@ def skill_def_steps_generate():
 @ai_execution_admin_bp.post('/skill-def-steps/apply')
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_apply():
-    """回写 fit.steps 到定义文件（body {path, steps}）：path 逃出允许根 400；
-    apply 前对每个 args_pattern 跑 validate_pg_regex，非法 400 且不写文件；
-    文件不存在 404。"""
+    """回写 fit.steps 到定义文件（body {path, steps, versionLabel?}）：
+    path 逃出允许根 400；apply 前对每个 args_pattern 跑 validate_pg_regex，
+    非法 400 且不写文件；文件不存在 404。写盘成功后按落盘内容登记定义
+    版本并归档正文（spec §4.2）：bytes 回读保证 hash 与正文自洽，默认
+    label「AI步骤优化 <YYYY-MM-DD>」，body.versionLabel 可覆盖。"""
     from utils import skill_fit_ai
+    from utils.skill_fit import register_def_version
     body = request.get_json(silent=True) or {}
     path = (body.get('path') or '').strip()
     steps = body.get('steps')
@@ -1273,6 +1278,26 @@ def skill_def_steps_apply():
         return jsonify({'error': f'定义文件不存在: {e}'}), 404
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 版本登记（spec §4.2）：bytes 回读一次，sha256 与刚落盘内容自洽
+    with open(out_path, 'rb') as f:
+        raw = f.read()
+    chash = hashlib.sha256(raw).hexdigest()
+    if os.path.basename(out_path) == 'SKILL.md':
+        def_kind, def_name = 'skill', os.path.basename(os.path.dirname(out_path))
+    else:
+        def_kind = 'agent'
+        def_name = os.path.splitext(os.path.basename(out_path))[0]
+    label = (body.get('versionLabel') or '').strip() or \
+        f'AI步骤优化 {datetime.now():%Y-%m-%d}'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            register_def_version(cur, def_kind, def_name, chash,
+                                 content=raw.decode('utf-8'))
+            cur.execute("UPDATE ai_skill_def_versions SET version_label = %s "
+                        "WHERE def_kind = %s AND def_name = %s "
+                        "AND content_hash = %s",
+                        (label, def_kind, def_name, chash))
+        conn.commit()
     log_operation('update', 'ai_skill_def_steps', out_path, None,
                   'SkillOpt 回写 fit.steps 到定义文件')
     return jsonify({'path': out_path})

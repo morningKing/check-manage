@@ -295,3 +295,50 @@ def test_skill_fit_definition_summary_union_and_metrics(client, admin_headers,
             cur.execute("DELETE FROM ai_skill_def_versions WHERE def_kind='agent' "
                         "AND def_name IN (%s, %s)", (agent_name, bare_name))
         db_conn.commit()
+
+
+def test_skill_def_steps_apply_registers_version(client, admin_headers, db_conn,
+                                                 tmp_path, monkeypatch):
+    """apply 写盘后登记定义版本并归档正文（spec §4.2）：hash 取自落盘
+    内容回读；默认 label「AI步骤优化 <日期>」；versionLabel 显式覆盖。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    name = f'demo-skill-{uuid.uuid4().hex[:6]}'
+    d = tmp_path / name
+    d.mkdir()
+    p = d / 'SKILL.md'
+    p.write_text('# v1\n', encoding='utf-8')
+    steps = [{'id': 's1', 'name': '步骤1', 'expect': [{'tool': 'bash'}]}]
+    try:
+        r = client.post('/ai/chat/admin/skill-def-steps/apply',
+                        headers=admin_headers,
+                        json={'path': str(p), 'steps': steps})
+        assert r.status_code == 200
+        chash = hashlib.sha256(p.read_bytes()).hexdigest()
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT content, version_label, content_captured_at "
+                        "FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, chash))
+            row = cur.fetchone()
+        assert row and row[0] == p.read_bytes().decode('utf-8')
+        assert row[1] and row[1].startswith('AI步骤优化 ')
+        assert row[2] is not None
+        r2 = client.post('/ai/chat/admin/skill-def-steps/apply',
+                         headers=admin_headers,
+                         json={'path': str(p), 'steps': steps,
+                               'versionLabel': '手工标注'})
+        assert r2.status_code == 200
+        chash2 = hashlib.sha256(p.read_bytes()).hexdigest()
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT version_label FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s AND content_hash=%s",
+                        (name, chash2))
+            assert cur.fetchone()[0] == '手工标注'
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND def_name=%s", (name,))
+        db_conn.commit()
