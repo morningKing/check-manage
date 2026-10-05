@@ -1,0 +1,53 @@
+[
+ {
+  "t": 1791220871.2422926,
+  "label": "cap-S5-start",
+  "metrics_error": true,
+  "backend_rss_mb": 124.235776,
+  "backend_cpu": 0.0
+ },
+ {
+  "t": 1791220875.2840867,
+  "label": "cap-S5-start",
+  "ai_batch_queue_depth": 0.0,
+  "ai_batch_running": 0.0,
+  "ai_batch_failed_last_hour": 0.0,
+  "ai_orchestration_runs_active": 0.0,
+  "ai_attempts_running": 0.0,
+  "ai_outbox_pending": 0.0,
+  "ai_batch_needs_review": 0.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"audit_retention\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"backup\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"batch\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scan\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"status_badge\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"field_index\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"etl\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"delivery\"}": 35.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scheduler\"}": 35.0,
+  "backend_rss_mb": 129.04448,
+  "backend_cpu": 0.0
+ },
+ {
+  "t": 1791220877.3172154,
+  "label": "cap-S5-start",
+  "ai_batch_queue_depth": 0.0,
+  "ai_batch_running": 0.0,
+  "ai_batch_failed_last_hour": 0.0,
+  "ai_orchestration_runs_active": 0.0,
+  "ai_attempts_running": 5.0,
+  "ai_outbox_pending": 0.0,
+  "ai_batch_needs_review": 0.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"audit_retention\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"backup\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"batch\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scan\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"status_badge\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"field_index\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"etl\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"delivery\"}": 37.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scheduler\"}": 37.0,
+  "backend_rss_mb": 130.64192,
+  "backend_cpu": 0.0
+ }
+]

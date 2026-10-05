@@ -1,0 +1,31 @@
+[
+ {
+  "t": 1791218791.7300391,
+  "label": "cap-S0-start",
+  "metrics_error": true,
+  "backend_rss_mb": 127.205376,
+  "backend_cpu": 0.0
+ },
+ {
+  "t": 1791218795.7856066,
+  "label": "cap-S0-start",
+  "ai_batch_queue_depth": 0.0,
+  "ai_batch_running": 0.0,
+  "ai_batch_failed_last_hour": 0.0,
+  "ai_orchestration_runs_active": 0.0,
+  "ai_attempts_running": 1.0,
+  "ai_outbox_pending": 0.0,
+  "ai_batch_needs_review": 0.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"audit_retention\"}": 11.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"backup\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"batch\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scan\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"status_badge\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"field_index\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"etl\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"delivery\"}": 10.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scheduler\"}": 10.0,
+  "backend_rss_mb": 130.564096,
+  "backend_cpu": 0.0
+ }
+]

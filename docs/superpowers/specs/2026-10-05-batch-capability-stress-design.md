@@ -46,8 +46,8 @@
 
 ## 3. 产品侧改动（最小面）
 
-1. **门面**（`utils/runtime/base.py`）：`AgentRuntime` 增加 `subscribe_events(directory='', read_timeout=None)`，默认实现委托 `self.get_client().subscribe_events(...)`——OpenCodeLocalRuntime 天然继承（其 `get_client()` 即 OpenCodeClient，`utils/opencode_client.py:317` 已有该方法，行为 byte 级不变）；StubRuntime 经 StubClient 新总线实现。
-2. **sse_events**（`routes/ai_chat.py:1379`）：`OpenCodeClient(OPENCODE_BASE_URL)` → `get_runtime()`，仅此一处替换，生成器内部逻辑不动。
+1. **接线面为 5 处**（实施期核实修正）：`routes/ai_chat.py` 的 create_session、send_message、sse_events + `utils/chat_persist.py` 的监听线程事件源、REST 回填。实施期核实发现监听线程与建会话同样硬编码，漏接任何一处 stub 栈下交互链路断裂（监听器注册但不收事件还会挡住 SSE 兜底落库）。其中 create_session/send_message 与 REST 回填走 `get_runtime().get_client()`，sse_events 与监听事件源走 `get_runtime().subscribe_events(...)`（经门面默认委托）。
+2. **门面**（`utils/runtime/base.py`）：`AgentRuntime` 增加 `subscribe_events(directory='', read_timeout=None)`，默认实现委托 `self.get_client().subscribe_events(...)`——OpenCodeLocalRuntime 天然继承（行为 byte 级不变）；StubRuntime 经 StubClient 新总线实现（§4）。
 3. **StubClient 事件总线**（§4）。
 4. **回归保护**：① 单测锁 stub 事件形状（对齐 `opencode_client.subscribe_events` 真实产出的 `{"event": <type>, "data": {type, properties}}` 形状，沿 StubRuntime 形状锁先例）；② 该单测在 base（硬编码 OpenCodeClient、无门面方法）上必须失败——A/B 实跑记录；③ ai-full 会话域真链路 e2e 复跑，确认生产路径无行为漂移。
 
@@ -74,50 +74,53 @@ pytest.mark.stress；数据 `STRESS-` 前缀；模块入口 `restart_backend` �
 | S1.4 | 会话流：帧序 == 总线发件序（不发不丢不错序）；idle 后 `ai_chat_messages` 落库内容与 parts 快照一致 | apply_event 路由 + persist_turn 承压 |
 | S1.5 | `: pool-busy` 降级帧出现时游标不动、后续帧无丢失（建连洪峰触发，观察性用例不强制每次复现） | PoolError 降级语义 |
 
-### S2 并发终态 × 门禁评估（~8min）
+### S2 并发终态 × 门禁评估（实测 ~3.5min）
 
-批 50 children，`AI_STUB_PROFILE` delay 收窄制造 ±2s 并发终态窗；action_checks 混编：file 类（workspaceIO 预置应过）+ db_record 类（dbSeed 预置应过）+ tool 类（stub 无工具部分必败，做 failed 侧对照）：
+批 50 children，concurrency=10 + delay 8–12s；action_checks：2 file 类（轮询子任务工作区就绪即预置应过）+ 1 tool 类（stub 无工具部分必败，做 failed 侧对照）。
+**实施修订**：① 应过侧只用 file 类（db_record 建表不在 migrations，避免无谓 schema 耦合，功能正确性由既有单测覆盖）；② `gate.evaluated` 实落 **`ai_execution_events`**（按 session_id 关联子任务对账，不在 `ai_batch_events`）；③ workspace_path 由 worker 认领时才落库，播种改轮询式；④ 依赖「执行线程池跟随 AI_BATCH_CONCURRENCY」修复（发现 #2，见 §10）——否则并发终态窗物理不成立。
 
-| # | 断言 |
+| # | 断言（落地版） |
 |---|---|
-| S2.1 | 每条 action_expectations 行恰好一次终态核对（无 pending 残留、无重复评估） |
-| S2.2 | get_batch_detail 逐子任务 gate_passed/gate_failed == 该子任务期望行计数（DB 对账） |
-| S2.3 | `gate.evaluated` 事件与核对一一对应可对账（审计链完整） |
-| S2.4 | `wait_subtasks_drained` 高峰无超时泄漏日志、无死锁（批次可达终态） |
+| S2.1 | 每子任务 3 条期望行 last_status 全部非空（恰好一次终态核对） |
+| S2.2 | get_batch_detail 逐子任务 gate_passed==2 / gate_failed==1（DB 对账） |
+| S2.3 | `ai_execution_events` 中 gate.evaluated 事件数 == 子任务数（经 session_id 对账） |
+| S2.4 | 本轮后端日志增量无 drain 超时、批次可达终态 |
 | S2.5 | invariants() 守恒全绿 |
 
-### S3 修正/重试/取消竞态（~10min）
+### S3 修正/重试/取消竞态（实测 ~3.5min）
 
-必败 file 期望（不预置）+ 批级 `gate_retry=TRUE` → 门禁 fail → continue 修正轮（stub 重跑仍 fail）→ 预算耗尽 failed；同时间窗并发施加 cancel：
+必败 file 期望（不预置）+ 批级 `gate_retry=TRUE` → 门禁 fail → continue 修正轮（stub 重跑仍 fail）→ 预算耗尽 failed；子任务进入 running 后并发施加 cancel。
+**实施修订**：成功侧（S3b）的补种触发信号 = **`ai_execution_attempts` 出现 attempt_no≥2 的 continue attempt**——不能用 last_status='failed' 轮询：round-2 认领时的期望重登记（幂等覆盖）会把行重置回 pending，last_status 轮询只留 0.1–1s 窗口（实测必错过）；同时 stub delay 拉宽到 6–9s 给补种留窗。
 
-| # | 断言 |
+| # | 断言（落地版） |
 |---|---|
-| S3.1 | retry_count ≤ `AI_BATCH_MAX_AUTO_RETRY`(2) + gate retry 预算语义，不超发 |
-| S3.2 | 终态唯一（attempt 谓词），cancel 与 continue 竞态不产生双写/复活 |
-| S3.3 | 无孤儿修正轮（stub dispatch 记录 vs 子任务终态时序对账：终态后无新派发） |
-| S3.4 | 修正成功侧（小用例）：运行中经 workspaceIO 补写期望文件 → 修正轮 gate 转 passed → completed，retry_count==1 |
+| S3.1 | retry_count ≤ auto-retry(2) + gate 预算(1)，不超发 |
+| S3.2 | 终态合法唯一（completed/failed/cancelled） |
+| S3.3 | 终态批无 pending 残留（修正轮孤儿） |
+| S3.4 | 修正成功侧：continue attempt 出现后补写期望文件 → 修正轮 gate 转 passed → completed，retry_count==1 |
 | S3.5 | 批次终态守恒 + invariants 全绿 |
 
-### S4 交互收口竞争（~8min）
+### S4 交互收口竞争（实测 ~35s）
 
-20 交互会话并发（send → 挂 SSE → 总线发 `tool_parts` + idle 并发收口）：
+20 交互会话并发 + 每会话双 SSE 流（模拟重连期旧流未死形态）+ attach 交互期望；`DB_POOL_MAXCONN=60`（发现 #A：默认池 20 下 20 并发 finalize 突刺池饥饿，账本行丢失、门禁转 inconclusive——本用例需在充分资源下测「双流收口幂等」这一被测属性）。
 
-| # | 断言 |
+| # | 断言（落地版） |
 |---|---|
-| S4.1 | agent_tool_calls 按 (oc_session_id, part_id) 幂等：无重复行，行数 == 总线发出工具部分数 |
-| S4.2 | attach 登记的交互期望每条恰好一次核对结果 |
-| S4.3 | 同会话双 SSE 流并发（模拟重连期旧流未死）→ 账本仍恰好一份 |
+| S4.1+S4.3 | 每 oc 会话账本 bash 行数 == 2（双流 × finalize 幂等键兜住，重复落账即红） |
+| S4.2 | 交互期望登记恰 n 行且全部已核对（无未核对残留） |
 
-### S5 树作用域聚合正确性（~5min）
+### S5 树作用域聚合正确性（实测 ~25s）
 
-tree 作用域期望 + 总线 `delegate` 委派形状 → `apply_event` 发现子代理 → 子代理动作计入根会话核对；`subagents` 定向与 `apply_to` 过滤混编：
+tree 作用域期望 + 总线 `delegate` 委派形状（每会话委派 explorer+writer 各 1 个子代理、各带 2 次 bash）→ `apply_event` 发现子代理 → 子代理动作计入根会话核对；`subagents` 定向过滤混编。
+**实施修订**：① 探针（2026-10-05-s5-probe.md）证实事件驱动发现可行，**主路成立、降级预案未启用**；② delay 2–3s 给监听器订阅留必胜窗口（修复 #4：监听器晚订阅错过短回合会永久饿死，见 §10）；③ 断言前容忍 30s 自愈窗口（发现 #B：SSE 收口落账与监听器持久化存在 `agent_tool_calls.subtask_id` FK 竞态，监听器 finalize 幂等补账）。
 
-| # | 断言 |
+| # | 断言（落地版） |
 |---|---|
-| S5.1 | 根会话核对结果 == 账本明细按 agent 过滤聚合（DB 级对账） |
-| S5.2 | 不相关 agent 动作不参与核对；apply_to 不匹配的子任务不登记期望 |
+| S5.1 | 每根会话 tree-explorer == ('passed', 2)（explorer 的 bash 计入，writer 不参与） |
+| S5.2 | 每根会话 tree-exclude-writer == ('failed', 0)（不相关 agent 动作不参与的必败对照） |
+| S5.3 | 账本明细对账：每根会话 explorer/writer 各恰 1 个子代理、各恰 2 行 bash |
 
-**S5 降级预案（预声明）**：若委派形状过不了 `apply_event` 发现逻辑（形状过度敏感），改为直接种 `ai_chat_subtasks` + 账本行，只验核对聚合 SQL 语义；实施第一步先做形状探针再定。
+**S5 降级预案**：探针证实主路可行，未启用（存档于 evidence/2026-10-05-s5-probe.md）。
 
 ## 6. 规模、指标与产物
 
@@ -125,19 +128,46 @@ tree 作用域期望 + 总线 `delegate` 委派形状 → `apply_event` 发现�
 - 指标 dump 落 `docs/ai-testing/evidence/stress/`（沿 `_dump` 惯例）：SSE 帧对账结果/重连补发延迟、drain 时长分布、gate 评估延迟、账本行数、吞吐。
 - 跑完自动汇总 md 报告（沿压测栈 report 惯例）。
 
-## 7. 判别力与回归保护
+## 7. 判别力与回归保护（实测登记，2026-10-06）
 
-- S1.1/S1.2 帧对账断言在现有 R1 实现上**必然失败**（现实现不解析帧）——天然 base 必失败；
-- §3.4 门面/sse_events 接线的单测在 base（硬编码 OpenCodeClient）上必须失败——A/B 实跑记录；
-- 门禁场景（S2–S5）并发断言**不预声明** base 必失败，实施时逐例 `git show base` A/B 实跑后填写（沿 12 号报告铁律：判别力声明必须实测，不得推断）。
+| 用例 | base 必失败声明 | 验证方式 | 结论 |
+|---|---|---|---|
+| Task1 事件总线/门面单测 | 是（结构性） | base 无 `subscribe_events` → AttributeError；S0 已对同一接线链路做 live A/B | 结构性成立 |
+| S0 交互冒烟 | 是（接线） | `git checkout f041f71~1 -- ai_chat.py chat_persist.py` 实跑 | **实测红**（ConnectionError→500），恢复后绿 |
+| S1 帧对账 | 结构性成立 | 现网无帧解析实现可对照（R1 不解析帧） | 结构性成立 |
+| S2 并发门禁 | 无产品 diff——首跑即 base | 首跑暴露 MAX_CONCURRENT 缺陷（发现 #2）→ 修复 | **实测压出产品缺陷** |
+| S3 预算竞态 | 缺陷注入成本高 | 依赖既有单元验证 + 压测中实证预算语义（retry_count 恰 1/不超发） | 声明放弃独立 base 对照（理由：修复侧闭环 e2e 已有生产验证） |
+| S4 账本幂等 | 唯一索引结构性兜底 | 压测中实测：默认池下丢失（发现 #3）而非重复——幂等方向从未被破坏 | 结构性（唯一索引）+ 负载发现 |
+| S5 聚合 | 首跑即 base | 首跑暴露 FK 竞态/监听器饿死（发现 #4/#5）→ 修复 | **实测压出保真度缺口** |
+| 交互账本 map_part 修复 | 是 | 回归测试走真实 apply_event 累积路径，修复前 commit 实测红（gate failed 0 行） | **实测红→绿** |
+| MAX_CONCURRENT 修复 | 是 | 单测 env=7 断言执行器线程数，修复前 commit 实测红（恒 3） | **实测红→绿** |
+| stub info.id 修复 | 是 | 形状锁断言 info.id，修复前实车（S3b attempt 24ms 假完成） | **实测压出** |
 
 ## 8. 交付物
 
-1. 本 spec；2. writing-plans 实施计划；3. 门面/stub/sse_events 改动 + 形状锁单测；4. `test_capability_stress.py` 五场景；5. evidence 报告；6. 若压出产品缺陷：按惯例先在修复前 commit 上固化失败测试，再修复，独立核对。
+1. 本 spec；2. writing-plans 实施计划；3. 门面/stub/sse_events 改动 + 形状锁单测；4. `test_capability_stress.py` 六用例（S0–S5，S3 含正反两侧）；5. evidence 报告（含判别力登记表与发现清单）；6. 压测压出的产品缺陷 4 项已按「先固化失败测试（修复前 commit 实测红）再修复」处置（见 §10）。
 
 ## 9. 不做（YAGNI）
 
 - 真模型门禁链路压测（烧 token；行为正确性由 e2e 域承担）；
 - 数小时 soak 耐久；容量梯档升级（更高并发阶梯另立）；
 - 前端 SSE 消费端（batchEvents.ts store）UI 压测——以 API 层为准；
-- 压测平台化（时序库/仪表盘）。
+- 压测平台化（时序库/仪表盘）；
+- ai_chat.py 辅助端点（providers/abort/summarize 等）保持硬编码 `OpenCodeClient(OPENCODE_BASE_URL)` 不接入门面——压测套件不触达，stub 栈下不可用属已知面（AI_STUB_ALLOW 防呆挡误配生产）。
+
+## 10. 实施压出的产品修复与发现（2026-10-05/06）
+
+**已修复 4 项**（均按「先固化失败测试、修复前 commit 实测红」处置）：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 交互路径动作账本恒 0 落账、交互工具型门禁恒 failed | `record_state` 走 `extract_from_parts` 只认原始 'tool' 形状；交互累积态（apply_event）存的是 map_part 映射后 'tool_use'（无 id 字段，id 在 dict key 上）——既有单测喂手工原始形状掩盖 | `extract_from_part_map` 双形状兼容（41271d3） |
+| 2 | `AI_BATCH_CONCURRENCY` 只放大认领数，执行线程池恒 3（硬编码类属性）——「并发终态窗」物理不成立；**容量阶梯"无拐点"由此而来，该结论需重审** | `_executor = ThreadPoolExecutor(max_workers=3)` 不读 env | `_resolve_max_concurrent()` 跟随同一 env，缺省仍 3（a49e8b0） |
+| 3 | gate-retry 修正轮 24ms 即时假完成（stub 栈） | StubClient REST 消息 info 缺 `id`——worker continue 基线快照（_snapshot_assistant_ids）恒空集，旧终态消息被判为本轮完成 | stub 补 info.id + 形状锁断言（2d61733） |
+| 4 | 监听器晚订阅错过整个短回合后永久饿死（stub 栈）——无人持久化/收口 | stub 总线无视 read_timeout，饿死监听器永不退出 | stub 落实 read_timeout 不活动超时（对齐 OpenCode /event）（d0af9e1） |
+
+**登记待决 3 项**（未修，属容量/健壮性权衡或低概率边界）：
+
+- **#A 池饥饿（S4）**：默认 `DB_POOL_MAXCONN=20` 下 20 会话并发 finalize 突刺（+40 SSE 流落库）→ record_state 拿不到连接 → 账本行丢失、门禁转 inconclusive。方向 fail-closed（安全），但交互门禁在高并发下不可靠。建议：交互收口对 PoolError 短重试，或生产调大 DB_POOL_MAXCONN（env 已可配，f00284a）。
+- **#B FK 竞态自愈窗口（S5）**：SSE 收口的 record_state 子代理行在 `ai_chat_subtasks` 落行前插入即 FK 失败 → 本轮 inconclusive，由监听器 finalize 幂等补账自愈；自愈不达时本回期望行停留 pending。良性（无错误数据），但交互门禁结果可能延迟一轮。
+- **#C SSE 兜底持久化被 has_listener 单边压制**：监听器已注册即跳过 SSE 兜底 persist_turn——监听器若饿死（#4 场景，生产中等价于「晚订阅错过超短回合」），本回合消息无人持久化。建议：兜底 persist 改为「监听器已收口才跳过」或对 idle 后 N 秒无落库做补偿。

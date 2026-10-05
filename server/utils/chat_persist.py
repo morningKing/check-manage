@@ -12,11 +12,11 @@ import threading
 import time
 
 from db import get_db
-from utils.opencode_client import OpenCodeClient
+from utils.runtime import get_runtime
 from utils.ai_message_meta import (
     meta_from_info, aggregate_metas, public_meta)
 from utils.notifier import create_notification
-from config import OPENCODE_BASE_URL, AI_CHAT_NOTIFY_MIN_SECONDS
+from config import AI_CHAT_NOTIFY_MIN_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -669,7 +669,7 @@ def _run_listener(sid, opencode_session_id, event_source, directory='',
             # REST 回填、持久化（含 error part）、释放订阅。幂等（按消息 id
             # upsert），即使两个信号都到也只会写同一行。
             try:
-                backfill_from_rest(state, OpenCodeClient(OPENCODE_BASE_URL),
+                backfill_from_rest(state, get_runtime().get_client(),
                                    opencode_session_id, directory=directory)
             except Exception as e:
                 logger.warning('backfill failed session=%s: %s', sid, e)
@@ -737,7 +737,7 @@ def _listener_thread(sid, opencode_session_id, directory, known_subtasks=None):
     removes itself from the registry so a later turn can start a fresh one."""
     try:
         logger.info('persist listener start session=%s oc=%s', sid, opencode_session_id)
-        source = OpenCodeClient(OPENCODE_BASE_URL).subscribe_events(
+        source = get_runtime().subscribe_events(
             directory=directory, read_timeout=INACTIVITY_TIMEOUT,
         )
         _run_listener(sid, opencode_session_id, source, directory=directory,

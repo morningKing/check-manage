@@ -12,9 +12,11 @@ import utils.chat_persist as cp
 
 
 def test_listener_thread_logs_crash_and_cleans_registry(caplog):
-    fake_client = MagicMock()
-    fake_client.subscribe_events.side_effect = RuntimeError('boom')
-    with patch.object(cp, 'OpenCodeClient', return_value=fake_client):
+    # Task 3 接线：_listener_thread 经 get_runtime().subscribe_events 取事件源，
+    # 打桩点从模块级 OpenCodeClient 迁到 cp.get_runtime。
+    fake_runtime = MagicMock()
+    fake_runtime.subscribe_events.side_effect = RuntimeError('boom')
+    with patch.object(cp, 'get_runtime', return_value=fake_runtime):
         with caplog.at_level(logging.ERROR, logger='utils.chat_persist'):
             cp._listener_thread('sess_crash', 'oc1', '/ws')
     assert any('persist listener crashed' in r.getMessage()

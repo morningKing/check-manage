@@ -337,7 +337,8 @@ def sampler(stress_stack):
 
 
 # ---- 共享助手（套件 import）----
-def create_batch(stack, n_children: int, *, callback_url=None, api=None):
+def create_batch(stack, n_children: int, *, callback_url=None, api=None,
+                 action_checks=None, gate_retry: bool | None = None):
     """建批。n_children = 子任务数（内部 API 每个文件一个子任务，上限 50/批，
     故 >50 时复用同一 staged 文件路径凑不满——套件用 ≤50）。api=可选
     dict(base, headers) 走开放 API（空壳批/回调场景）；默认管理 API。
@@ -379,6 +380,10 @@ def create_batch(stack, n_children: int, *, callback_url=None, api=None):
     staged = up.json()                           # 扁平 {name, path}（内部 staging 特有）
     body = {'name': name, 'prompt': prompt,
             'files': [staged] * min(n_children, 50)}
+    if action_checks:
+        body['action_checks'] = action_checks
+    if gate_retry is not None:
+        body['gate_retry'] = gate_retry
     r = s.post(f'{stack.base}/ai/chat/batches', headers=stack.auth_header,
                json=body, timeout=30)
     r.raise_for_status()

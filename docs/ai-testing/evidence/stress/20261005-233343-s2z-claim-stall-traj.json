@@ -1,0 +1,470 @@
+[
+ {
+  "t": 0.2,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 5.5,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 10.7,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 16.0,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 21.2,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 26.4,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 31.7,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 36.9,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 42.2,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 47.4,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 52.7,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 57.9,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 63.2,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 68.5,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 73.7,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 79.0,
+  "by_status": [
+   [
+    "pending",
+    20,
+    0,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 84.3,
+  "by_status": [
+   [
+    "pending",
+    10,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 89.5,
+  "by_status": [
+   [
+    "pending",
+    10,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 94.8,
+  "by_status": [
+   [
+    "failed",
+    3,
+    3,
+    0
+   ],
+   [
+    "pending",
+    8,
+    0,
+    0
+   ],
+   [
+    "running",
+    9,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 100.0,
+  "by_status": [
+   [
+    "failed",
+    3,
+    3,
+    0
+   ],
+   [
+    "pending",
+    7,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 105.3,
+  "by_status": [
+   [
+    "failed",
+    5,
+    5,
+    0
+   ],
+   [
+    "pending",
+    5,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 110.5,
+  "by_status": [
+   [
+    "failed",
+    6,
+    6,
+    0
+   ],
+   [
+    "pending",
+    4,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 115.8,
+  "by_status": [
+   [
+    "failed",
+    8,
+    8,
+    0
+   ],
+   [
+    "pending",
+    3,
+    0,
+    0
+   ],
+   [
+    "running",
+    9,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 121.1,
+  "by_status": [
+   [
+    "failed",
+    9,
+    9,
+    0
+   ],
+   [
+    "pending",
+    1,
+    0,
+    0
+   ],
+   [
+    "running",
+    10,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 126.3,
+  "by_status": [
+   [
+    "failed",
+    11,
+    11,
+    0
+   ],
+   [
+    "pending",
+    1,
+    0,
+    0
+   ],
+   [
+    "running",
+    8,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 131.6,
+  "by_status": [
+   [
+    "failed",
+    12,
+    12,
+    0
+   ],
+   [
+    "running",
+    8,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 136.8,
+  "by_status": [
+   [
+    "failed",
+    13,
+    13,
+    0
+   ],
+   [
+    "running",
+    7,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 142.1,
+  "by_status": [
+   [
+    "failed",
+    15,
+    15,
+    0
+   ],
+   [
+    "running",
+    5,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ },
+ {
+  "t": 147.3,
+  "by_status": [
+   [
+    "failed",
+    16,
+    16,
+    0
+   ],
+   [
+    "running",
+    4,
+    3,
+    0
+   ]
+  ],
+  "gate_evals": 0
+ }
+]

@@ -719,7 +719,6 @@ def _require_fencing(token):
 
 
 class BatchWorker:
-    MAX_CONCURRENT = 3
     # 租约 key 可注入（测试隔离/多部署共存）；生产默认 'batch'
     LEASE_KEY = os.getenv('AI_BATCH_LEASE_KEY', 'batch')
     POLL_INTERVAL_SEC = 2
@@ -774,7 +773,8 @@ class BatchWorker:
     def __init__(self):
         self._wake = threading.Event()
         self._stop = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT)
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._resolve_max_concurrent())
         self._running_session_ids: set = set()
         # 动作账本健康标记(设计 §5.1):_persist_conversation 每次落账后更新,
         # 门禁核对据此区分 failed 与 inconclusive;核对后清除。
@@ -809,6 +809,17 @@ class BatchWorker:
         self._listen_conn = None
         self._listen_next_try = 0.0
         self._listen_lock = threading.Lock()
+
+    @staticmethod
+    def _resolve_max_concurrent() -> int:
+        """执行并行度：跟随 AI_BATCH_CONCURRENCY，与 _effective_concurrency
+        的认领上限同源。2026-10-05 S2 能力压测发现：原硬编码类属性 3 使 env
+        只放大认领数、执行并行度恒 3——「并发终态窗」物理不成立，容量阶梯
+        各级"无拐点"亦由此而来。env 缺省仍为 3（未配置环境行为不变）。"""
+        try:
+            return max(1, int(os.getenv('AI_BATCH_CONCURRENCY', '3')))
+        except ValueError:
+            return 3
 
     # --- lifecycle ---
 
@@ -912,7 +923,8 @@ class BatchWorker:
         # cancel_futures so pending submissions don't keep the threadpool alive
         self._executor.shutdown(wait=True, cancel_futures=True)
         # Allow a follow-on start() to spin up a fresh executor.
-        self._executor = ThreadPoolExecutor(max_workers=self.MAX_CONCURRENT)
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._resolve_max_concurrent())
         if self._acquire_retry_thread and self._acquire_retry_thread.is_alive():
             self._acquire_retry_thread.join(timeout=2)
         if self._holds_lease:

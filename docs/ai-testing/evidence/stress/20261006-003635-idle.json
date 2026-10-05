@@ -1,0 +1,29 @@
+[
+ {
+  "t": 1791218190.843875,
+  "label": "idle",
+  "metrics_error": true
+ },
+ {
+  "t": 1791218192.875374,
+  "label": "idle",
+  "ai_batch_queue_depth": 0.0,
+  "ai_batch_running": 0.0,
+  "ai_batch_failed_last_hour": 0.0,
+  "ai_orchestration_runs_active": 0.0,
+  "ai_attempts_running": 0.0,
+  "ai_outbox_pending": 0.0,
+  "ai_batch_needs_review": 0.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"audit_retention\"}": 5.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"backup\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"batch\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scan\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"status_badge\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"field_index\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"etl\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"delivery\"}": 4.0,
+  "ai_worker_lease_heartbeat_seconds{kind=\"scheduler\"}": 4.0,
+  "backend_rss_mb": 128.524288,
+  "backend_cpu": 0.0
+ }
+]
