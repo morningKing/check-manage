@@ -127,26 +127,28 @@ test('TD-A18 Excel 视图渲染与查看交互', async ({ page, request }) => {
   await expect(viewer).not.toBeVisible()
 })
 
-// fixme(产品能力缺口)：Excel 视图当前为只读，无法做单元格编辑回写 ——
-// src/components/common/ExcelView.vue setReadOnly() 对 BeforeSheetEditStart
-// 一律 cancel=true（组件头注释「只读模式，不可编辑」，亦无 editable prop）；
-// 双击单元格实测打开「查看记录」对话框（导航行为），不开单元格编辑器
-// （探针截图 e2e/screenshots/data-full/_probe-after-dblclick.png）。
-// 坐标已按截图核对修正仍无法回写。待产品实现 Excel 编辑回写后移除 fixme。
-test.fixme('TD-A18b Excel 单元格编辑回写（产品缺口，待实现）', async ({ page, request }) => {
+// TD-A18b（启用）：Excel 单元格编辑回写。ExcelView editable（DynamicPage :editable="canUpdate"）
+// 放行标量字段的数据单元格，BeforeSheetEditEnd 捕获编辑值→parseCellEdit 回转→
+// updatePageData（单字段 + _version 乐观锁）落库。
+test('TD-A18b Excel 单元格编辑回写', async ({ page, request }) => {
   const marker = `XLS-${Date.now()}`
-  await createRecord(request, h.collection, { name: marker, qty: 1 })
+  // createdAt 给早值（早于 TD-A18 的 2020-01-01）：列表默认 ORDER BY created_at,id
+  // → 该记录排首条，对应表单第 2 行（第 1 行为表头，univerHelper cellData[0]=表头）。
+  // 全量跑时同 collection 还有族内前序用例残留记录，早值保证目标行确定。
+  await createRecord(request, h.collection,
+    { name: marker, qty: 1, createdAt: '2019-01-01T00:00:00.000Z' })
+  const seeded = await listRecords(request, h.collection)
+  expect(seeded.json.data[0]?.name, '标记记录应排首条（表单第 2 行）').toBe(marker)
   await gotoWithAuth(page, h.path)
   // 视图切换：table → excel（el-radio-button 渲染为 label 包 input[type=radio]）
   await page.locator('.view-toggle .el-radio-button:has(input[value="excel"])').click()
   await expect(page.locator('.univer-container')).toBeVisible()
   await page.waitForTimeout(3_000) // Univer 渲染稳定
-  await screenshot(page, 'crud-ui-excel-view')
+  await screenshot(page, 'crud-ui-excel-edit')
 
   // 双击「名称」列第 2 行单元格（首行表头、首列名称，1 基），追加后缀
   const box = await page.locator('.univer-container').boundingBox()
   expect(box, 'Univer 容器应有尺寸').not.toBeNull()
-  // 列宽取 COLUMN_WIDTH_MAP.default=150、行高 24；若断言失败先看截图核对列序再调常量
   // 实测布局（crud-ui-excel-view.png 像素测量 + 探针验证）：容器内偏移
   // 工具栏 ~40px + 列字母行 ~21px + 序号#列 ~60px，名称列默认宽 ~150px；
   // 数据行 2 中心 = 容器原点 + (179, 90)。
@@ -156,7 +158,6 @@ test.fixme('TD-A18b Excel 单元格编辑回写（产品缺口，待实现）', 
   await page.keyboard.type('-改')
   await page.keyboard.press('Enter')
   await page.waitForTimeout(2_000)
-  await screenshot(page, 'crud-ui-excel-edited')
 
   const listed = await listRecords(request, h.collection)
   const rec = (listed.json.data || []).find((r: any) =>
