@@ -153,3 +153,24 @@ test('TC-SESS-04 v2 归档：UI 归档 active 会话 + oplog 留痕；批控会�
     await cleanup()
   }
 })
+
+test('TC-SESS-05 权限边界：guest 对 v2 系列与归档全 403', async ({ request }) => {
+  const u = await secondUser('sessv2')
+  const key = newId('perm-')
+  const sid = await seedPlainSession({ key })
+  try {
+    const g = async (p: string, method = 'GET') => fetch(`${API}${p}`, {
+      method, headers: { ...authHeaders(u.token), 'Content-Type': 'application/json' },
+    })
+    expect((await g('/ai/chat/admin/sessions/v2')).status).toBe(403)
+    expect((await g(`/ai/chat/admin/sessions/v2/${sid}`)).status).toBe(403)
+    expect((await g(`/ai/chat/admin/sessions/v2/${sid}/messages`)).status).toBe(403)
+    expect((await g(`/ai/chat/admin/sessions/v2/${sid}/files`)).status).toBe(403)
+    expect((await g(`/ai/chat/sessions/${sid}/archive`, 'POST')).status).toBe(403)
+    // 不存在的会话同样先过权限关（require_permission 先于存在性检查）→ 403 而非 404
+    expect((await g(`/ai/chat/admin/sessions/v2/${newId('sess_')}`)).status).toBe(403)
+  } finally {
+    await u.cleanup()
+    await cleanup()
+  }
+})
