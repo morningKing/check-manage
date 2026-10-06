@@ -69,8 +69,8 @@ def make_page(headers: dict, family: str, purpose: str,
     产品约束（routes/menus.py MENU_TYPES）：data 菜单是 level-3，父级必须是
     project 菜单，而 project 的父级必须是 workspace——所以这里按
     workspace → project → data 三级建链；祖先菜单 id 由 collection 确定性
-    推导（menu-ws-*/menu-proj-*），句柄键保持 brief 约定的 5 个不变，
-    drop_page 据此回收整条链。
+    推导（menu-ws-*/menu-proj-*），句柄键保持 brief 约定的 5 个加分支用例
+    依赖的 project_menu_id/workspace_menu_id 共 7 个，drop_page 据此回收整条链。
     """
     ts = int(time.time() * 1000)
     collection = f'DTEST-{family}-{purpose}-{ts}'
@@ -103,6 +103,8 @@ def make_page(headers: dict, family: str, purpose: str,
     assert r3.status_code == 201, f'menu create failed: {r3.status_code} {r3.text}'
     return {'collection': collection, 'page_id': page_id,
             'menu_id': r3.json().get('id', f'menu-{collection}'),
+            'project_menu_id': f'menu-proj-{collection}',
+            'workspace_menu_id': f'menu-ws-{collection}',
             'path': f'/dtest/{collection}', 'name': collection}
 
 
