@@ -57,3 +57,20 @@ test('TC-TRACE-04 分析历史与报告契约（种子：snake_case 历史 / cam
     cleanupSessionsByPrefix()
   }
 })
+
+test('TC-TRACE-01 fail-closed：内置 MCP 禁用 → 409 且会话/诊断零残留', async ({ request }) => {
+  const key = newId('tr1-')
+  const sid = await seedPlainSession({ key })
+  try {
+    expect((await api(request, 'put', '/ai/mcp-servers/internal', { enabled: false })).status).toBe(200)
+    try {
+      const r = await api(request, 'post', `/ai/chat/admin/sessions/v2/${sid}/analyze`)
+      expect(r.status).toBe(409)
+      expect(r.json.error).toContain('内置 MCP 已被禁用')
+      expect(analysisRowCount(sid)).toBe(0)
+      expect(Number(dbSeed(`SELECT count(*) FROM ai_execution_diagnoses WHERE target_session_id='${sid}'`)[0][0])).toBe(0)
+    } finally {
+      expect((await api(request, 'put', '/ai/mcp-servers/internal', { enabled: true })).status).toBe(200)
+    }
+  } finally { cleanupSessionsByPrefix() }
+})
