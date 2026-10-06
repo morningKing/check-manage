@@ -156,6 +156,7 @@ test('TD-C12 reference 选择器 UI 选父并在详情继承显示', async ({ pa
   const parentName = `父记录-${Date.now()}`
   const p = await createRecord(request, hParent.collection, { name: parentName })
   const parentId = p.json.id as string
+  expect(p.status, '父记录应创建成功').toBe(201)
 
   await gotoWithAuth(page, hChild.path)
   await page.getByRole('button', { name: '新增' }).click()
@@ -204,6 +205,8 @@ test('TD-C13 quoteSelect 多选 UI 落库并回显', async ({ page, request }) =
   const q2 = await createRecord(request, hQ.collection, { name: q2Name })
   const q1Id = q1.json.id as string
   const q2Id = q2.json.id as string
+  expect(q1.status, '引用源应创建成功').toBe(201)
+  expect(q2.status, '引用源应创建成功').toBe(201)
 
   await gotoWithAuth(page, hA.path)
   await page.getByRole('button', { name: '新增' }).click()
@@ -251,6 +254,8 @@ test('TD-C14 关系图谱对话框渲染与关闭', async ({ page, request }) =>
   const bName = `图谱邻居-${Date.now()}`
   const b = await createRecord(request, hB.collection, { name: bName })
   const a = await createRecord(request, hA.collection, { name: '图谱中心甲' })
+  expect(b.status, 'B 记录应创建成功').toBe(201)
+  expect(a.status, 'A 记录应创建成功').toBe(201)
   const put = await api(request, 'PUT',
     `/relations/${hA.collection}/${a.json.id}/rel`,
     { targetCollection: hB.collection, targetField: 'rev', ids: [b.json.id] })

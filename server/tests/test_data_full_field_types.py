@@ -105,8 +105,7 @@ def test_td_b04_autosequence_batch_no_alloc_and_reseed(admin, pageh):
                  {'records': [{'id': uuid.uuid4().hex,
                                'data': {'name': '导入甲', 'sn': 'DTS-050'}} for _ in range(1)]})
     assert r.status_code < 300
-    got = live.api('GET', f"/{pageh['collection']}", admin,
-                   ).json() if False else live.api('GET', f"/{pageh['collection']}?keyword=导入甲", admin).json()
+    got = live.api('GET', f"/{pageh['collection']}?keyword=导入甲", admin).json()
     assert got['data'][0]['sn'] == 'DTS-050'
     nxt = _post(admin, pageh['collection'],
                 {'id': uuid.uuid4().hex, 'name': 'reseed后'}).json()
