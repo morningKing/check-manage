@@ -24,8 +24,13 @@ Task 2/3 续加本文件）。契约锚点（计划④ Global Constraints，已�
   400 {"error":"校验失败","validationErrors":[...],"validationWarnings":[...]}，
   warnings 非阻塞；脚本异常→400 校验脚本执行错误：...；删脚本 NULL 化绑定。
 """
+import hashlib
+import hmac
+import json
+import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -314,4 +319,156 @@ def test_td_f08_validation_warnings_nonblocking(admin):
         assert r.status_code == 201  # warnings 非阻塞
     finally:
         live.api('DELETE', f"/validationScripts/{s['id']}", admin)
+        live.drop_page(admin, page)
+
+
+# ---- Webhook TD-F09–F12 ----
+
+class _StubHandler(BaseHTTPRequestHandler):
+    server_version = 'DTESTStub/1.0'
+
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(length)
+        # 引擎按 title-case 发送（X-Webhook-Event 等，utils/webhook_engine.py:331-336）；
+        # HTTP 头名大小写不敏感，stub 统一小写存档便于断言。
+        rec = {'path': self.path,
+               'headers': {k.lower(): v for k, v in self.headers.items()
+                           if k.lower() in ('x-webhook-timestamp', 'x-webhook-signature',
+                                            'x-webhook-event', 'content-type')},
+               'body': body.decode('utf-8', 'replace')}
+        self.server.requests.append(rec)
+        code = self.server.respond_code
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'ok': code < 400}).encode('utf-8'))
+
+    def log_message(self, *a):  # 静音访问日志
+        pass
+
+
+@pytest.fixture(scope='module')
+def stub():
+    server = HTTPServer(('127.0.0.1', 0), _StubHandler)
+    server.requests = []
+    server.respond_code = 200
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+
+
+def _webhook_rule(admin, stub, page, timing='after', event='update', retries=0,
+                  secret='dtest-secret'):
+    body = {'name': f"DTEST-F-hook-{uuid.uuid4().hex[:8]}",
+            'sourceCollections': [page['collection']],
+            'triggerEvent': event, 'triggerTiming': timing,
+            'webhookUrl': f"http://127.0.0.1:{stub.server_address[1]}/hook",
+            'secret': secret, 'timeout': 2, 'retries': retries}
+    r = live.api('POST', '/webhook/rules', admin, body)
+    assert r.status_code == 201, f'{r.status_code} {r.text[:300]}'
+    return r.json()
+
+
+def test_td_f09_webhook_rule_crud_and_manual_never_fires(admin, stub):
+    page = live.make_page(admin, 'F', 'hook-cfg', fields=[NAME])
+    try:
+        rule = _webhook_rule(admin, stub, page, event='manual')
+        lst = live.api('GET', '/webhook/rules', admin)
+        assert any(x['id'] == rule['id'] for x in lst.json())
+        # manual 永不自动触发：真实 update 后 stub 零命中
+        hits = len(stub.requests)
+        rec = _rec(admin, page['collection'], 'manual对象')
+        _upd(admin, page['collection'], rec['id'], rec['_version'], name='manual对象改')
+        time.sleep(2)
+        assert len(stub.requests) == hits
+        dele = live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        assert dele.status_code < 300
+    finally:
+        live.drop_page(admin, page)
+
+
+def test_td_f10_webhook_before_failure_blocks_and_success_passes(admin, stub):
+    page = live.make_page(admin, 'F', 'hook-before', fields=[NAME])
+    rule = _webhook_rule(admin, stub, page, timing='before', event='create')
+    try:
+        stub.respond_code = 500
+        blocked = live.api('POST', f"/{page['collection']}", admin,
+                           {'id': uuid.uuid4().hex, 'name': '被拦截'})
+        assert blocked.status_code == 400
+        assert blocked.json()['error'] == 'Before webhook blocked the operation'
+        assert blocked.json().get('webhookErrors')
+        stub.respond_code = 200
+        ok = live.api('POST', f"/{page['collection']}", admin,
+                      {'id': uuid.uuid4().hex, 'name': '放行'})
+        assert ok.status_code == 201
+    finally:
+        stub.respond_code = 200
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        live.drop_page(admin, page)
+
+
+def test_td_f11_webhook_after_payload_signature_and_logs(admin, stub):
+    page = live.make_page(admin, 'F', 'hook-after', fields=[NAME])
+    secret = 'dtest-secret'
+    rule = _webhook_rule(admin, stub, page, timing='after', event='create', secret=secret)
+    try:
+        before_count = len(stub.requests)
+        rec = _rec(admin, page['collection'], '签名行')
+        hit = _wait(lambda: (stub.requests[before_count:] or [None])[0],
+                    timeout_s=15, label='stub 收到请求')
+        payload = json.loads(hit['body'])
+        assert hit['headers'].get('x-webhook-event') == 'create'
+        ts = hit['headers'].get('x-webhook-timestamp')
+        sig = hit['headers'].get('x-webhook-signature')
+        # 真实签名格式（utils/webhook_engine.py:327-329 + 393-405）：
+        # payload_json = json.dumps(payload, ensure_ascii=False) 且原样作为
+        # 请求体字节发送（data=payload_json.encode('utf-8')，无尾换行），
+        # message = f'{timestamp}.{payload}'——故用收到的 body 原文重算即可。
+        expected = hmac.new(secret.encode(), f'{ts}.{hit["body"]}'.encode(),
+                            hashlib.sha256).hexdigest()
+        assert sig == expected, f'签名不符: {sig} != {expected}'
+        assert rec['id'] in json.dumps(payload) or payload, 'payload 应含事件数据'
+        logs = _wait(lambda: live.api(
+            'GET', f"/webhook/rules/{rule['id']}/logs", admin).json()['logs'] or None,
+            timeout_s=10, label='webhook 日志')
+        assert logs[0]['success'] is True and logs[0]['responseStatus'] == 200
+        all_logs = live.api('GET', '/webhook/logs?limit=50', admin)
+        assert all_logs.status_code == 200 and 'total' in all_logs.json()
+    finally:
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        live.drop_page(admin, page)
+
+
+def test_td_f12_webhook_test_endpoint_and_after_failure_logged(admin, stub):
+    page = live.make_page(admin, 'F', 'hook-test', fields=[NAME])
+    rule = _webhook_rule(admin, stub, page, timing='after', event='update')
+    try:
+        t = live.api('POST', f"/webhook/rules/{rule['id']}/test", admin, {})
+        assert t.status_code < 300 and t.json()['success'] is True
+        assert t.json()['responseStatus'] == 200
+        stub.respond_code = 500
+        rec = _rec(admin, page['collection'], '失败行')
+        _upd(admin, page['collection'], rec['id'], rec['_version'], name='失败行改')
+        fail = _wait(lambda: next((x for x in live.api(
+            'GET', f"/webhook/rules/{rule['id']}/logs", admin).json()['logs']
+            if x['success'] is False), None), timeout_s=15, label='失败日志')
+        assert fail['responseStatus'] == 500
+        # 产品现状（未修，见 task-2-report）：per-rule 日志端点的 ?success= 过滤
+        # 拼 SQL 用 "".join(conditions)（routes/webhooks.py:315，缺 " AND " 分隔，
+        # 条件种子见 :300）→ ?success=false 必 500 SQL 语法错误。按现状断言留证。
+        broken = live.api('GET', f"/webhook/rules/{rule['id']}/logs?success=false", admin)
+        assert broken.status_code == 500 and 'success' in broken.json().get('error', '')
+        # success 过滤路径改在 /webhook/logs（:556 用 " AND ".join，正确）上验证
+        glob = live.api('GET', '/webhook/logs?success=false&limit=200', admin)
+        assert glob.status_code == 200 and 'total' in glob.json()
+        match = [x for x in glob.json()['logs']
+                 if x['ruleId'] == rule['id'] and x['success'] is False]
+        assert match and match[0]['responseStatus'] == 500
+        assert live.api('GET', f"/{page['collection']}/{rec['id']}",
+                        admin).json()['name'] == '失败行改'  # after 失败不影响业务
+    finally:
+        stub.respond_code = 200
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
         live.drop_page(admin, page)
