@@ -232,3 +232,27 @@ def test_td_a22_oversized_field_value_no_5xx(admin, pageh):
     r = live.api('POST', f"/{pageh['collection']}", admin,
                  {'id': _rid(), 'name': '长' * 500_000})
     assert r.status_code < 500, f'超长值应不 5xx，得 {r.status_code}: {r.text[:200]}'
+
+
+def test_td_a23_create_without_id_gets_server_generated_id(admin, pageh):
+    """POST 不带 id：服务端应兜底生成并回带（修复前为 500 NotNullViolation）。"""
+    r = live.api('POST', f"/{pageh['collection']}", admin, {'name': '无id探针'})
+    assert r.status_code == 201, f'缺 id 不应 500/4xx，得 {r.status_code}: {r.text[:200]}'
+    rid = r.json().get('id')
+    assert rid, f'响应应回带生成的 id，实得: {str(r.json())[:200]}'
+    got = live.api('GET', f"/{pageh['collection']}/{rid}", admin)
+    assert got.status_code == 200
+    assert got.json().get('name') == '无id探针'
+
+
+def test_td_a24_batch_create_without_id_succeeds(admin, pageh):
+    """batch-create 记录缺 id：服务端逐条兜底生成，整体成功不 500。"""
+    before = _ids(admin, pageh['collection'])['total']
+    r = live.api('POST', f"/{pageh['collection']}/batch-create", admin,
+                 {'records': [{'data': {'name': f'无id批{i}'}} for i in range(2)]})
+    assert r.status_code < 300, f'批量缺 id 不应 5xx/4xx，得 {r.status_code}: {r.text[:200]}'
+    after = _ids(admin, pageh['collection'])['total']
+    assert after == before + 2
+    fresh = [x for x in _ids(admin, pageh['collection'])['data']
+             if str(x.get('name', '')).startswith('无id批')]
+    assert len(fresh) == 2 and all(x.get('id') for x in fresh)
