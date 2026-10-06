@@ -74,3 +74,19 @@ test('TC-TRACE-01 fail-closed：内置 MCP 禁用 → 409 且会话/诊断零残
     }
   } finally { cleanupSessionsByPrefix() }
 })
+
+test('TC-TRACE-02 fail-closed：MCP 不可达 → 502（进程级 env 覆盖）', async ({ request }) => {
+  test.setTimeout(240_000)
+  const key = newId('tr2-')
+  const sid = await seedPlainSession({ key })
+  try {
+    await restartBackend({ MCP_SERVER_URL: 'http://127.0.0.1:1' })
+    const r = await api(request, 'post', `/ai/chat/admin/sessions/v2/${sid}/analyze`)
+    expect(r.status).toBe(502)
+    expect(r.json.error).toContain('MCP 服务不可用')
+    expect(analysisRowCount(sid)).toBe(0)
+  } finally {
+    await restartBackend()          // 无参恢复默认 env
+    cleanupSessionsByPrefix()
+  }
+})
