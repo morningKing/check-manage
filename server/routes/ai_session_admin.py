@@ -703,28 +703,62 @@ def skill_analytics_versions():
 @ai_execution_admin_bp.post('/analyses/<diagnosis_id>/suggestions/<suggestion_id>/feedback')
 @require_permission('admin.ai_chat_admin')
 def suggestion_feedback(diagnosis_id, suggestion_id):
-    """建议反馈/应用（SkillOpt P2 效果追踪）：accepted/rejected/applied/rolled_back，
-    applied 时快照当前技能指标作为 before_metrics。"""
+    """建议反馈/应用（SkillOpt P2 效果追踪）：accepted/rejected/applied/rolled_back。
+    applied 分支写 applied_at=NOW()，并把 appliedValue 解析出的 skillName
+    固化进 before_metrics——GET /skill-suggestions/<id>/effect 以
+    (applied_at, before_metrics.skillName) 为门闩计算前后 7 天窗口，
+    两列缺一则追踪恒为 not_applied。"""
     body = request.get_json(silent=True) or {}
     action = body.get('action')
     if action not in ('accepted', 'rejected', 'modified', 'applied', 'rolled_back'):
         return jsonify({'error': '无效 action'}), 400
-    log_operation('update', 'ai_suggestion_feedback', suggestion_id,
+    log_operation('update', 'ai_suggestion_feedback', suggestion_id, None,
                   f'SkillOpt 建议反馈 {action}（诊断 {diagnosis_id}）')
+    import json as _json
     from db import get_db
     import secrets as _sec
+    # appliedValue 契约：JSON 串 {"skillName": ...}（调用方 stringify 后入
+    # TEXT 列），兼容纯文本技能名；解析不出 skillName 时 before_metrics 记
+    # null，effect 端 coalesce 回退为全技能统计（不阻断反馈落库）。
+    skill_name = None
+    if action == 'applied':
+        raw = body.get('appliedValue')
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = _json.loads(raw)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                skill_name = parsed.get('skillName') or None
+            elif isinstance(parsed, str) and parsed.strip():
+                skill_name = parsed.strip()
+            else:
+                skill_name = raw.strip()
+        elif isinstance(raw, dict):
+            skill_name = raw.get('skillName') or None
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM ai_execution_diagnoses WHERE id = %s",
                         (diagnosis_id,))
             if not cur.fetchone():
                 return jsonify({'error': '诊断不存在'}), 404
-            cur.execute(
-                "INSERT INTO ai_suggestion_feedback "
-                "(id, diagnosis_id, suggestion_id, action, applied_value, applied_by) "
-                "VALUES (%s,%s,%s,%s,%s,%s)",
-                ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id, action,
-                 body.get('appliedValue'), flask_g.current_user['userId']))
+            if action == 'applied':
+                cur.execute(
+                    "INSERT INTO ai_suggestion_feedback "
+                    "(id, diagnosis_id, suggestion_id, action, applied_value, "
+                    " applied_by, applied_at, before_metrics) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,NOW(),%s::jsonb)",
+                    ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id,
+                     action, body.get('appliedValue'),
+                     flask_g.current_user['userId'],
+                     _json.dumps({'skillName': skill_name})))
+            else:
+                cur.execute(
+                    "INSERT INTO ai_suggestion_feedback "
+                    "(id, diagnosis_id, suggestion_id, action, applied_value, applied_by) "
+                    "VALUES (%s,%s,%s,%s,%s,%s)",
+                    ('sfb_' + _sec.token_hex(6), diagnosis_id, suggestion_id, action,
+                     body.get('appliedValue'), flask_g.current_user['userId']))
         conn.commit()
     return jsonify({'ok': True})
 

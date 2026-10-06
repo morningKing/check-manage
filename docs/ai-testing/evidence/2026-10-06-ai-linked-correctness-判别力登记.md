@@ -69,6 +69,18 @@
 2. **GAP-2 修复后**：TC-FIT-05 全绿（effect 返回 `tracked` + `before.invocations>=1`）。
 3. **GAP-2 修复需代码审查复核 before_metrics 列对位**：TC-FIT-05 的 `>=1` 计数断言**检不出** before_metrics 快照内容本身的列错位/键错位（如 `skillName` 键写错、JSON 序列化形状不符、INSERT 列序与 VALUES 错位）——测试只能证明「窗口有数」，不能证明「快照内容正确」。修复 commit 必须人工核对：INSERT 写入的 before_metrics 结构与 effect 端点读取键（`:759`/`:769` 的 `before.get('skillName')`）逐键一致，且 applied_at 在 applied 分支显式赋值 `NOW()`（或列默认）。
 
+### 修复记录（2026-10-06，分支 `fix/skillopt-feedback-chain`）
+
+- **修复内容**（`server/routes/ai_session_admin.py` `suggestion_feedback`）：
+  - BUG-1：`log_operation` 补齐第 5 位置参数——target_name 置 `None`（同文件 `:1416` 回写路由同款惯例），原文本落 description；
+  - GAP-2：applied 分支 INSERT 增写 `applied_at = NOW()` 与 `before_metrics = {"skillName": <解析值>}`（JSONB）；appliedValue 契约 = JSON 串 `{"skillName": ...}`（兼容纯文本技能名），解析不出 skillName 时记 null——effect 端 `coalesce(%s, skill_name)` 回退全技能统计（不阻断落库）。
+- **人工核对（验证要求 #3）**：INSERT 列序 `(…, applied_at, before_metrics)` 与 VALUES `(…, NOW(), %s::jsonb)` 逐位对齐；`_json.dumps({'skillName': skill_name})` 与 effect 读取键 `before.get('skillName')` 逐键一致。✅
+- **验证结果**：
+  1. TC-FIT-05 单例：**passed（5.0s）**——POST feedback 200 + effect `tracked` + `before.invocations>=1`（两级判别全通过）；
+  2. 三 spec 全量：**14 passed + 2 skipped（4.2m）**——TC-FIT-05 红点消除，仅 TC-FIT-06/TC-TRACE-05 因 LLM 不可达保持 skip；
+  3. L1 回归：`test_skill_fit_routes.py + test_skillopt.py + test_skill_fit.py + test_skillopt_collection.py` **50 passed**。
+- 该用例自本记录起转为常规回归绿；修复前 commit（`d9d8f01` 及此前）上红 = 判别力证据存档于 §4。
+
 ---
 
 ## 3. @llm skip 留证
