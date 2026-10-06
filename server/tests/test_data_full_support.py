@@ -103,6 +103,13 @@ def test_td_h01_comment_crud_and_empty_rejected(admin, pageh):
     assert dele.status_code < 300
     after = live.api('GET', f"/comments/{pageh['collection']}/{rec['id']}", admin)
     assert all(c['id'] != cid for c in after.json())  # 删除即从列表消失
+    # 契约#9：评论不校验记录存在（comments.py add_comment 直接 INSERT）——
+    # 对不存在的 record_id 仍 201，落行后按 id 删掉
+    orphan = live.api('POST',
+                      f"/comments/{pageh['collection']}/no-such-record", admin,
+                      {'content': 'DTEST 评论孤儿宿主'})
+    assert orphan.status_code == 201, f'{orphan.status_code} {orphan.text[:300]}'
+    live.api('DELETE', f"/comments/{orphan.json()['id']}", admin)
 
 
 def test_td_h02_comment_permission_author_vs_admin(admin, pageh):
@@ -148,14 +155,14 @@ def test_td_h03_timeline_merges_comment_and_change(admin, pageh):
     upd = live.api('PUT', f"/{pageh['collection']}/{rec['id']}", admin,
                    {'name': '时间线宿主改', '_version': rec['_version']})
     assert upd.status_code < 300, f'{upd.status_code} {upd.text[:300]}'
-    cid = _comment(admin, pageh['collection'], rec['id'], '时间线评论')
+    cid = _comment(admin, pageh['collection'], rec['id'], 'DTEST-H-时间线评论')
     try:
         t = live.api('GET', f"/timeline/{pageh['collection']}/{rec['id']}", admin)
         assert t.status_code == 200, f'{t.status_code} {t.text[:300]}'
         entries = t.json()
         types = {e['type'] for e in entries}
         assert 'comment' in types and ({'change', 'statusChange'} & types)
-        assert any(e.get('content') == '时间线评论'
+        assert any(e.get('content') == 'DTEST-H-时间线评论'
                    for e in entries if e['type'] == 'comment')
         ts_list = [e['timestamp'] for e in entries]
         assert ts_list == sorted(ts_list)  # 按 timestamp 排序
@@ -180,9 +187,9 @@ def test_td_h04_backup_list_download_and_create_defect(admin):
     POST 会返回 201，此处会翻转失败提醒把断言改回 201 契约，并补全
     建档→finally DELETE 的删除腿。既有备份行一律不删（dev 资产）。
     """
-    t0 = time.monotonic()
+    t0 = time.time()  # epoch 秒：与 os.path.getmtime 同一时钟域，守卫才有效
     r = live.api('POST', '/backups', admin, {'note': 'DTEST-H 备份冒烟'})
-    elapsed = time.monotonic() - t0
+    elapsed = time.time() - t0
     body = r.json()
     assert r.status_code == 500 and '备份失败' in body.get('error', ''), (
         f'缺陷已修复或行为漂移：{r.status_code} {str(body)[:300]} '
