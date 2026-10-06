@@ -6,6 +6,8 @@ POST /importRuns 是纯历史登记（解析在前端 SheetJS）；ETL dryRun �
 async 202 + 轮询日志、save 恒写 main、cancel 已结束 409；导出脚本 python 必须给
 result 赋值、execute 二进制、batchExport ZIP、menuExport 只有导出无导入。
 """
+import json
+import time
 import uuid
 
 import pytest
@@ -136,3 +138,251 @@ def test_td_e05_import_run_validation_and_pagination(admin, pageh):
                    admin)
     assert lst.status_code == 200
     assert len(lst.json()['runs']) <= 1 and 'total' in lst.json()
+
+
+# ---------------------------------------------------------------------------
+# ETL（TD-E06–E10）
+# ---------------------------------------------------------------------------
+
+def _etl_task(admin, pageh, mode='insert', match_field=None):
+    steps = [
+        {'id': 's1', 'name': '入数', 'type': 'json_input',
+         'config': {'data': json.dumps([
+             {'name': 'ETL甲', 'qty': 1}, {'name': 'ETL乙', 'qty': 2}])},
+         'onError': 'stop'},
+        {'id': 's2', 'name': '入库', 'type': 'save_to_collection',
+         'config': {'collection': pageh['collection'], 'mode': mode,
+                    **({'matchField': match_field} if match_field else {})},
+         'onError': 'stop'},
+    ]
+    r = live.api('POST', '/etlTasks', admin,
+                 {'name': f"DTEST-E-etl-{uuid.uuid4().hex[:8]}",
+                  'description': '数据管理 e2e', 'steps': steps, 'enabled': True})
+    assert r.status_code < 300, f'{r.status_code} {r.text[:300]}'
+    return r.json()
+
+
+def _wait_etl_log(admin, task_id, log_id, timeout_s=40):
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        g = live.api('GET', f'/etlTasks/{task_id}/logs/{log_id}', admin)
+        if g.status_code == 200:
+            last = g.json()
+            if last.get('status') in ('success', 'partial', 'error', 'cancelled'):
+                return last
+        time.sleep(2)
+    raise AssertionError(f'ETL 日志未在 {timeout_s}s 内终态: {last}')
+
+
+def test_td_e06_etl_crud_and_steps_stored(admin, pageh):
+    """实测适配（brief 注意块，证据 routes/etl_tasks.py 路由表）：产品没有
+    GET /etlTasks/<task_id> 单任务端点——<task_id> 路径只挂 PUT/DELETE，
+    GET 落 404。steps 落库断言改经列表端点 GET /etlTasks（返回含 steps 的
+    完整任务字典）。"""
+    t = _etl_task(admin, pageh)
+    try:
+        got = live.api('GET', f"/etlTasks/{t['id']}", admin)
+        assert got.status_code == 404  # 产品无单任务 GET 端点
+        lst = live.api('GET', '/etlTasks', admin)
+        assert lst.status_code == 200
+        mine = [x for x in lst.json() if x['id'] == t['id']]
+        assert mine, f'新建任务应出现在列表: {t["id"]}'
+        assert mine[0]['steps'][0]['type'] == 'json_input'
+        assert mine[0]['steps'][1]['type'] == 'save_to_collection'
+    finally:
+        live.api('DELETE', f"/etlTasks/{t['id']}", admin)
+
+
+def test_td_e07_etl_dry_run_sync_no_side_effects(admin, pageh):
+    t = _etl_task(admin, pageh)
+    try:
+        r = live.api('POST', f"/etlTasks/{t['id']}/run", admin, {'dryRun': True})
+        assert r.status_code < 300, f'{r.status_code} {r.text[:300]}'
+        body = r.json()
+        assert body['totalRecords'] == 2 and body['successCount'] == 2
+        after = _names(admin, pageh['collection'])
+        # dryRun 回滚：零副作用（ETL 数据未落库）
+        assert 'ETL甲' not in after and 'ETL乙' not in after
+    finally:
+        live.api('DELETE', f"/etlTasks/{t['id']}", admin)
+
+
+def test_td_e08_etl_real_run_async_inserts_to_main(admin, pageh):
+    t = _etl_task(admin, pageh)
+    try:
+        r = live.api('POST', f"/etlTasks/{t['id']}/run", admin, {})
+        assert r.status_code == 202, f'真跑应 202 async，得 {r.status_code}'
+        log = _wait_etl_log(admin, t['id'], r.json()['logId'])
+        assert log['status'] == 'success', f"{log['status']} {log.get('errorDetail')}"
+        assert log['totalRecords'] == 2 and log['successCount'] == 2
+        names = _names(admin, pageh['collection'])
+        assert 'ETL甲' in names and 'ETL乙' in names
+    finally:
+        live.api('DELETE', f"/etlTasks/{t['id']}", admin)
+
+
+def test_td_e09_etl_upsert_mode_idempotent_rerun(admin, pageh):
+    t = _etl_task(admin, pageh, mode='upsert', match_field='name')
+    try:
+        r1 = live.api('POST', f"/etlTasks/{t['id']}/run", admin, {})
+        log1 = _wait_etl_log(admin, t['id'], r1.json()['logId'])
+        assert log1['status'] == 'success'
+        r2 = live.api('POST', f"/etlTasks/{t['id']}/run", admin, {})
+        log2 = _wait_etl_log(admin, t['id'], r2.json()['logId'])
+        assert log2['status'] == 'success'
+        names = _names(admin, pageh['collection'])
+        assert sum(1 for n in names if n.startswith('ETL')) == 2  # 重跑不翻倍
+    finally:
+        live.api('DELETE', f"/etlTasks/{t['id']}", admin)
+
+
+def test_td_e10_etl_cancel_finished_409_and_logs_list(admin, pageh):
+    t = _etl_task(admin, pageh)
+    try:
+        r = live.api('POST', f"/etlTasks/{t['id']}/run", admin, {})
+        log = _wait_etl_log(admin, t['id'], r.json()['logId'])
+        c = live.api('POST', f"/etlTasks/{t['id']}/logs/{log['id']}/cancel", admin, {})
+        assert c.status_code == 409  # 任务已结束，无法取消
+        logs = live.api('GET', f"/etlTasks/{t['id']}/logs", admin)
+        assert logs.status_code == 200 and len(logs.json()) >= 1
+    finally:
+        live.api('DELETE', f"/etlTasks/{t['id']}", admin)
+
+
+# ---------------------------------------------------------------------------
+# 导出与菜单导出（TD-E11–E16）
+# ---------------------------------------------------------------------------
+
+CSV_SCRIPT = (
+    "lines = [','.join([str(r.get('name','')), str(r.get('qty',''))]) for r in data]\n"
+    "result = '\\n'.join(lines)\n"
+    "filename = 'dtest-export.csv'\n"
+    "content_type = 'text/csv'\n"
+)
+
+
+def _export_script(admin, collection):
+    r = live.api('POST', '/exportScripts', admin, {
+        'name': f"DTEST-E-exp-{uuid.uuid4().hex[:8]}",
+        'description': '数据管理 e2e', 'language': 'python',
+        'script': CSV_SCRIPT, 'outputFormat': 'csv',
+        'scope': 'page', 'boundCollection': collection})
+    assert r.status_code < 300, f'{r.status_code} {r.text[:300]}'
+    return r.json()
+
+
+def test_td_e11_export_script_crud_unique_name(admin, pageh):
+    s = _export_script(admin, pageh['collection'])
+    try:
+        dup = live.api('POST', '/exportScripts', admin, {
+            'name': s['name'], 'script': CSV_SCRIPT, 'outputFormat': 'csv',
+            'scope': 'page', 'boundCollection': pageh['collection']})
+        assert dup.status_code == 400  # 名称全局唯一
+        lst = live.api('GET', f"/exportScripts/for-collection/{pageh['collection']}",
+                       admin)
+        assert lst.status_code == 200
+    finally:
+        live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+
+
+def test_td_e12_export_test_preview_and_syntax_error(admin, pageh):
+    s = _export_script(admin, pageh['collection'])
+    try:
+        live.api('POST', f"/{pageh['collection']}", admin,
+                 {'id': uuid.uuid4().hex, 'name': '导出行', 'qty': 7})
+        t = live.api('POST', f"/exportScripts/{s['id']}/test", admin,
+                     {'collection': pageh['collection']})
+        assert t.status_code < 300, f'{t.status_code} {t.text[:300]}'
+        body = t.json()
+        assert body['success'] is True and '导出行' in body['preview']
+        bad = live.api('POST', '/exportScripts', admin, {
+            'name': f"DTEST-E-bad-{uuid.uuid4().hex[:8]}",
+            'script': 'result = (语法错误', 'outputFormat': 'csv',
+            'scope': 'page', 'boundCollection': pageh['collection']})
+        assert bad.status_code < 300  # 脚本存储不校验语法
+        t2 = live.api('POST', f"/exportScripts/{bad.json()['id']}/test", admin,
+                      {'collection': pageh['collection']})
+        assert t2.status_code == 400 and t2.json().get('success') is False
+        live.api('DELETE', f"/exportScripts/{bad.json()['id']}", admin)
+    finally:
+        live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+
+
+def test_td_e13_export_execute_binary_and_binding_mismatch(admin, pageh):
+    s = _export_script(admin, pageh['collection'])
+    other = live.make_page(admin, 'E', 'exp-other', fields=[NAME])
+    try:
+        live.api('POST', f"/{pageh['collection']}", admin,
+                 {'id': uuid.uuid4().hex, 'name': '执行行', 'qty': 3})
+        ex = live.api('POST', '/exportScripts/execute', admin,
+                      {'scriptId': s['id'], 'collection': pageh['collection']})
+        assert ex.status_code == 200
+        assert '执行行' in ex.content.decode('utf-8')
+        mismatch = live.api('POST', '/exportScripts/execute', admin,
+                            {'scriptId': s['id'], 'collection': other['collection']})
+        assert mismatch.status_code == 400  # 绑定不符
+    finally:
+        live.drop_page(admin, other)
+        live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+
+
+def test_td_e14_export_batch_zip(admin, pageh):
+    s = _export_script(admin, pageh['collection'])
+    try:
+        live.api('POST', f"/{pageh['collection']}", admin,
+                 {'id': uuid.uuid4().hex, 'name': '批导行', 'qty': 1})
+        z = live.api('POST', '/exportScripts/batchExport', admin,
+                     {'tasks': [{'scriptId': s['id'],
+                                 'collection': pageh['collection']}]})
+        assert z.status_code == 200
+        assert z.content[:2] == b'PK'  # ZIP 魔数
+    finally:
+        live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+
+
+def test_td_e15_menu_export_preview_zip_and_batch_clear(admin):
+    """batchClear 清空整个 collection——用独立页，不碰模块共享 pageh。
+
+    实测适配（brief 注意块，证据 utils/menu_export.py:143-181）：POST
+    /menuExport 默认走绑定驱动模式——menu/页面级都无绑定导出脚本时该页被
+    跳过，0 文件 → 400「所有导出任务均失败」。故导出前给 solo 页绑定一个
+    页面级脚本（body 不传 scriptId，走产品默认路径），finally 一并回收。"""
+    solo = live.make_page(admin, 'E', 'menuexp', fields=[NAME, QTY])
+    s = None
+    try:
+        live.api('POST', f"/{solo['collection']}", admin,
+                 {'id': uuid.uuid4().hex, 'name': '菜单导出行', 'qty': 5})
+        av = live.api('GET', '/menuExport/availableMenus', admin)
+        assert av.status_code == 200
+        pv = live.api('POST', '/menuExport/preview', admin,
+                      {'menuIds': [solo['menu_id']], 'branchId': 'main'})
+        assert pv.status_code == 200
+        body = pv.json()
+        assert any(m['menuId'] == solo['menu_id'] for m in body['menus'])
+        s = _export_script(admin, solo['collection'])  # 绑定驱动模式需绑定脚本
+        z = live.api('POST', '/menuExport', admin,
+                     {'menuIds': [solo['menu_id']], 'branchId': 'main'})
+        assert z.status_code == 200 and z.content[:2] == b'PK'
+        clear = live.api('POST', '/menuExport/batchClear', admin,
+                         {'collections': [solo['collection']], 'branchId': 'main'})
+        assert clear.status_code < 300
+        assert _names(admin, solo['collection']) == {}  # batchClear 清空分支记录
+    finally:
+        if s is not None:
+            live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+        live.drop_page(admin, solo)
+
+
+def test_td_e16_export_missing_result_assignment_rejected(admin, pageh):
+    """实际契约：脚本不给 result 赋值 → test 端点 400 success:false。"""
+    r = live.api('POST', '/exportScripts', admin, {
+        'name': f"DTEST-E-nores-{uuid.uuid4().hex[:8]}",
+        'script': "x = 1\n", 'outputFormat': 'csv',
+        'scope': 'page', 'boundCollection': pageh['collection']})
+    try:
+        t = live.api('POST', f"/exportScripts/{r.json()['id']}/test", admin,
+                     {'collection': pageh['collection']})
+        assert t.status_code == 400 and t.json().get('success') is False
+    finally:
+        live.api('DELETE', f"/exportScripts/{r.json()['id']}", admin)
