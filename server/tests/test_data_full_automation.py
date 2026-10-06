@@ -429,7 +429,13 @@ def test_td_f11_webhook_after_payload_signature_and_logs(admin, stub):
         expected = hmac.new(secret.encode(), f'{ts}.{hit["body"]}'.encode(),
                             hashlib.sha256).hexdigest()
         assert sig == expected, f'签名不符: {sig} != {expected}'
-        assert rec['id'] in json.dumps(payload) or payload, 'payload 应含事件数据'
+        # payload 真实结构（utils/webhook_engine.py _build_payload :248-256 公共键
+        # event/timing/timestamp/ruleId/ruleName/operator/branchId；:259-277 数据事件
+        # 追加 collection/pageName/recordId；:296-300 after/create 追加 record=new_data）
+        assert payload.get('recordId') == rec['id'], \
+            f'payload.recordId 应为记录 id: {payload.get("recordId")!r}'
+        assert payload.get('event') == 'create' and payload.get('timing') == 'after'
+        assert payload.get('collection') == page['collection']
         logs = _wait(lambda: live.api(
             'GET', f"/webhook/rules/{rule['id']}/logs", admin).json()['logs'] or None,
             timeout_s=10, label='webhook 日志')
