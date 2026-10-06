@@ -66,6 +66,12 @@ export interface DataPageHandle {
   menuId: string
   path: string
   name: string
+  // 祖先菜单确定性 id（menu-ws-*/menu-proj-*，与 server/tests/data_full_live.py
+  // make_page 的推导一致）。分支用例（族D L3）需要 projectMenuId 调
+  // /project-versions 系列端点；DynamicPage 的 projectMenuId computed 取的
+  // 正是 data 菜单的 parentId（即 menu-proj-*）。
+  projectMenuId: string
+  workspaceMenuId: string
 }
 
 let cachedToken: string | null = null
@@ -160,7 +166,8 @@ export async function createDataPage(request: APIRequestContext,
     throw new Error(`create menu failed: ${menu.status} ${JSON.stringify(menu.json)}`)
   }
   return { collection, pageId, menuId: menu.json.id ?? `menu-${collection}`,
-           path: `/dtest/${collection}`, name }
+           path: `/dtest/${collection}`, name,
+           projectMenuId: projId, workspaceMenuId: wsId }
 }
 
 export async function deleteDataPage(request: APIRequestContext,
