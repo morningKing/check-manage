@@ -90,3 +90,43 @@ test('TC-TRACE-02 fail-closed：MCP 不可达 → 502（进程级 env 覆盖）'
     cleanupSessionsByPrefix()
   }
 })
+
+function listSessWorkspacePaths(root: string): Set<string> {
+  // 收集 ai-workspaces 树内 sess_<12hex> 形态的路径（分析会话工作区命名）
+  const out = new Set<string>()
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[]
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const p = path.join(dir, e.name)
+      if (/sess_[0-9a-f]{12}/.test(e.name)) out.add(p)
+      else if (e.isDirectory()) walk(p)
+    }
+  }
+  walk(root)
+  return out
+}
+
+test('TC-TRACE-03 派发失败清理：diagnosis failed + 无孤儿会话行 + 工作区零残留', async ({ request }) => {
+  test.setTimeout(240_000)
+  const key = newId('tr3-')
+  const sid = await seedPlainSession({ key })
+  const wsRoot = resolveWorkspaceRoot()          // 来自 ../fit-seed（跨 spec 复用该 helper）
+  const before = listSessWorkspacePaths(wsRoot)
+  try {
+    await restartBackend({ OPENCODE_BASE_URL: 'http://127.0.0.1:1' })
+    const r = await api(request, 'post', `/ai/chat/admin/sessions/v2/${sid}/analyze`)
+    expect(r.status).toBe(502)
+    expect(r.json.error).toContain('OpenCode 会话创建失败')
+    const d = dbSeed(`SELECT status, error_message FROM ai_execution_diagnoses WHERE target_session_id='${sid}' ORDER BY created_at DESC LIMIT 1`)
+    expect(d).toHaveLength(1)
+    expect(d[0][0]).toBe('failed')
+    expect(String(d[0][1])).toContain('OpenCode 会话创建失败')
+    expect(analysisRowCount(sid)).toBe(0)
+    const grown = listSessWorkspacePaths(wsRoot).difference(before)   // Node 22+ Set.prototype.difference
+    expect([...grown]).toEqual([])
+  } finally {
+    await restartBackend()
+    cleanupSessionsByPrefix()
+  }
+})
