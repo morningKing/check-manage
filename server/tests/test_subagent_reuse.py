@@ -48,8 +48,9 @@ def _seed_batch(db_conn, user_id, *, reuse=None, oc_sid=None):
         cur.execute(
             "INSERT INTO ai_chat_sessions "
             "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
-            "   opencode_session_id, workspace_path) "
-            "VALUES (%s, %s, 'pending', %s, 0, 'f0.csv', %s, %s)",
+            "   opencode_session_id, workspace_path, created_at) "
+            "VALUES (%s, %s, 'pending', %s, 0, 'f0.csv', %s, %s, "
+            "        NOW() - interval '1 hour')",
             (sid, user_id, bid, oc_sid, f'C:\\Users\\admin\\.check-manage\\ai-workspaces\\user-admin\\{sid}'),
         )
     db_conn.commit()

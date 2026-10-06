@@ -802,6 +802,10 @@ def test_worker_start_without_lease_disables_dispatcher(db_conn):
         assert w._holds_lease is False
         assert w._dispatcher is None
     finally:
+        # 必须 stop：start() 抢不到租约会转入 _acquire_retry_loop（每 10s
+        # 重试），本用例 finally 释放租约后它就会接管并拉起 daemon dispatcher，
+        # 每 10s 抢走全库 pending 行，毒化整个 suite 后续所有认领类用例。
+        w.stop()
         execution_lease.release(key, owner)
 
 

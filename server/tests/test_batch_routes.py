@@ -53,11 +53,24 @@ def setup_app(db_conn):
         {'Authorization': f'Bearer {admin}'},
     )
 
-    with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_batches WHERE user_id = 'test-user-batch-routes'")
-        cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = 'test-user-batch-routes'")
-        cur.execute("DELETE FROM users WHERE id = 'test-user-batch-routes'")
-    db_conn.commit()
+    # 前序用例泄漏的后台线程（worker/调度器）可能与这里的级联 DELETE 互为
+    # 死锁受害者；死锁是瞬时的，回滚重试即可。清理失败会残留 pending 行，
+    # 毒化后续按 created_at 认领的用例（test_harness_p1_durable 等）。
+    import time
+    from psycopg2 import errors as _pg_errors
+    for _attempt in range(4):
+        try:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_batches WHERE user_id = 'test-user-batch-routes'")
+                cur.execute("DELETE FROM ai_chat_sessions WHERE user_id = 'test-user-batch-routes'")
+                cur.execute("DELETE FROM users WHERE id = 'test-user-batch-routes'")
+            db_conn.commit()
+            break
+        except _pg_errors.DeadlockDetected:
+            db_conn.rollback()
+            if _attempt == 3:
+                raise
+            time.sleep(0.2 * (_attempt + 1))
 
 
 def _stage_one(client, headers, content=b'hi', name='f.txt',

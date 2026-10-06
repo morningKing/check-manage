@@ -53,38 +53,63 @@ TEST_USER_PREFIXES = ('p2_user_%', 'gap_user_%')
 
 def _clear_other_pending(db_conn, keep_run_id=None):
     """清掉残留 pending 行（共享库确定性认领）。编排臂按 TEST_USER_PREFIXES
-    （fixture 保留模式）+ NULL requested_by run 收敛，不触碰真实用户数据。"""
+    （fixture 保留模式）+ NULL requested_by run 收敛，不触碰真实用户数据。
+
+    专属测试库（casemanage_test，见 tests/conftest.py）上没有真实数据，
+    放宽为清理**陈旧**（>10 分钟）pending 残留——前缀/名称过滤是共享 dev
+    库时代的保守设计，会漏掉 admin API 用例创建的行。只清陈旧行是 xdist
+    并行安全的前提：并发 worker 刚种的新鲜行不能碰。"""
+    from config import DB_CONFIG
+    on_test_db = DB_CONFIG.get('dbname') == 'casemanage_test'
     like = ' OR '.join("u.username LIKE %s" for _ in TEST_USER_PREFIXES)
     with db_conn.cursor() as cur:
-        # 批次臂：保留 AITEST-/具名保留批（e2e/openapi 测试经 admin API 创建，
-        # 用户是真实 admin，只能按批次保留前缀识别）；保留名清单与
-        # test_batch_engine / test_batch_execution_safety_p0 / test_harness_p1_durable 一致
-        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
-                    "WHERE s.batch_id = b.id AND s.status='pending' "
-                    "  AND (b.name LIKE 'AITEST-%' "
-                    "       OR b.name IN ('p0-test', 'p1-test', 'engine-test', "
-                    "                    'pause-test', 'gap-test'))")
-        if keep_run_id:
-            cur.execute(
-                "DELETE FROM ai_chat_sessions s "
-                "WHERE s.status='pending' AND s.batch_id IS NULL "
-                "  AND s.api_key_id IS NULL AND s.orchestration_run_id IS NOT NULL "
-                "  AND s.orchestration_run_id <> %s "
-                "  AND s.orchestration_run_id IN ("
-                "      SELECT r.id FROM ai_orchestration_runs r "
-                "      LEFT JOIN users u ON u.id = r.requested_by "
-                f"      WHERE r.requested_by IS NULL OR ({like}))",
-                (keep_run_id, *TEST_USER_PREFIXES))
+        if on_test_db:
+            # 批次臂 + 编排臂陈旧残留清理（保留本轮 run 的行）
+            if keep_run_id:
+                cur.execute(
+                    "DELETE FROM ai_chat_sessions s "
+                    "WHERE s.status='pending' "
+                    "  AND s.created_at < NOW() - interval '10 minutes' "
+                    "  AND (s.batch_id IS NOT NULL OR s.orchestration_run_id IS NOT NULL) "
+                    "  AND (s.orchestration_run_id IS NULL "
+                    "       OR s.orchestration_run_id <> %s)",
+                    (keep_run_id,))
+            else:
+                cur.execute(
+                    "DELETE FROM ai_chat_sessions s "
+                    "WHERE s.status='pending' "
+                    "  AND s.created_at < NOW() - interval '10 minutes' "
+                    "  AND (s.batch_id IS NOT NULL OR s.orchestration_run_id IS NOT NULL)")
         else:
-            cur.execute(
-                "DELETE FROM ai_chat_sessions s "
-                "WHERE s.status='pending' AND s.batch_id IS NULL "
-                "  AND s.api_key_id IS NULL AND s.orchestration_run_id IS NOT NULL "
-                "  AND s.orchestration_run_id IN ("
-                "      SELECT r.id FROM ai_orchestration_runs r "
-                "      LEFT JOIN users u ON u.id = r.requested_by "
-                f"      WHERE r.requested_by IS NULL OR ({like}))",
-                (*TEST_USER_PREFIXES,))
+            # 批次臂：保留 AITEST-/具名保留批（e2e/openapi 测试经 admin API 创建，
+            # 用户是真实 admin，只能按批次保留前缀识别）；保留名清单与
+            # test_batch_engine / test_batch_execution_safety_p0 / test_harness_p1_durable 一致
+            cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                        "WHERE s.batch_id = b.id AND s.status='pending' "
+                        "  AND (b.name LIKE 'AITEST-%' "
+                        "       OR b.name IN ('p0-test', 'p1-test', 'engine-test', "
+                        "                    'pause-test', 'gap-test'))")
+            if keep_run_id:
+                cur.execute(
+                    "DELETE FROM ai_chat_sessions s "
+                    "WHERE s.status='pending' AND s.batch_id IS NULL "
+                    "  AND s.api_key_id IS NULL AND s.orchestration_run_id IS NOT NULL "
+                    "  AND s.orchestration_run_id <> %s "
+                    "  AND s.orchestration_run_id IN ("
+                    "      SELECT r.id FROM ai_orchestration_runs r "
+                    "      LEFT JOIN users u ON u.id = r.requested_by "
+                    f"      WHERE r.requested_by IS NULL OR ({like}))",
+                    (keep_run_id, *TEST_USER_PREFIXES))
+            else:
+                cur.execute(
+                    "DELETE FROM ai_chat_sessions s "
+                    "WHERE s.status='pending' AND s.batch_id IS NULL "
+                    "  AND s.api_key_id IS NULL AND s.orchestration_run_id IS NOT NULL "
+                    "  AND s.orchestration_run_id IN ("
+                    "      SELECT r.id FROM ai_orchestration_runs r "
+                    "      LEFT JOIN users u ON u.id = r.requested_by "
+                    f"      WHERE r.requested_by IS NULL OR ({like}))",
+                    (*TEST_USER_PREFIXES,))
     db_conn.commit()
 
 

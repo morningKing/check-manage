@@ -587,8 +587,9 @@ def test_m8_orchestration_cleanup_spares_real_form(db_conn):
             (gone_run_id, gone_uid))
         cur.execute(
             "INSERT INTO ai_chat_sessions (id, user_id, status, "
-            "  orchestration_run_id, orchestration_step_id) "
-            "VALUES (%s, %s, 'pending', %s, 'step-x')",
+            "  orchestration_run_id, orchestration_step_id, created_at) "
+            "VALUES (%s, %s, 'pending', %s, 'step-x', "
+            "        NOW() - interval '1 hour')",
             (gone_sid, gone_uid, gone_run_id))
     db_conn.commit()
     try:
@@ -596,7 +597,9 @@ def test_m8_orchestration_cleanup_spares_real_form(db_conn):
         with db_conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE id=%s",
                         (sid,))
-            assert cur.fetchone()[0] == 1        # 测试风名字的存活用户不被删
+            # 存活行是新鲜的：dev 模式按名字保守过滤放过它；专属测试库模式
+            # （tests/conftest.py P0）按「只清 >10 分钟陈旧残留」放过它。
+            assert cur.fetchone()[0] == 1
             cur.execute("SELECT count(*) FROM ai_chat_sessions WHERE id=%s",
                         (gone_sid,))
             assert cur.fetchone()[0] == 0        # fixture 模式用户的残留被回收

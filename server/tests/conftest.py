@@ -13,6 +13,15 @@ from contextlib import contextmanager
 # 让 import 能找到 server 下的模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# ---------------------------------------------------------------------------
+# 独立测试库（2026-10-06 P0）：此前单测与 dev 后端(:3002)共享 casemanage 库，
+# 后端 batch worker 会认领/推进测试刚插入的 pending 行，把断言弄脏成偶发失败
+# （test_batch_auto_retry 一整族；claim_guard 夹具即为此而设，但覆盖不全）。
+# 这里默认把整套单测指到 casemanage_test，单测从此不碰 dev 数据；显式设置
+# DB_NAME 环境变量者仍然赢。建库/迁移引导见 _bootstrap_test_db（sessionstart）。
+TEST_DB_NAME = 'casemanage_test'
+os.environ.setdefault('DB_NAME', TEST_DB_NAME)
+
 
 @pytest.fixture
 def mock_cursor():
@@ -150,12 +159,145 @@ def _reset_and_prime_permission_cache():
 _SESSION_STARTED_AT = None
 
 
+def _maintenance_dsn():
+    """连 maintenance 库（postgres）做建库判断；参数处理同压测栈 _base_dsn。"""
+    import psycopg2
+    from config import DB_CONFIG
+    dsn = dict(DB_CONFIG)
+    dsn['dbname'] = 'postgres'
+    dsn.pop('options', None)
+    return dsn
+
+
+def _bootstrap_test_db():
+    """确保独立测试库存在且 schema 与 migrations/ 齐平（只在控制器进程跑）。
+
+    三档：
+      - 库缺失   -> CREATE DATABASE casemanage_test + 子进程全量 init_db
+                    （DDL+seed+迁移）
+      - 库已存在 -> 只跑一遍幂等 dated migrations 补漂移（新合并的迁移文件）
+      - TEST_DB_REBUILD=1 -> 先删后建（schema 怀疑脏时的逃生门；会踢掉
+        该库上的存量连接，勿与其他 pytest 会话并行使用）
+
+    自动引导只覆盖固定库名 casemanage_test（DDL 用全字面量，零拼接）；
+    显式自定义 DB_NAME 的会话不做自动建库，缺库时给出手工引导指引。
+    xdist：worker 携带 PYTEST_XDIST_WORKER 环境变量，在 pytest_sessionstart
+    里被跳过——控制器的 sessionstart 先于收集/派发完成，worker 起来时库必然
+    就绪；worker 若仍连不上会以明显的关系缺失错误暴露，不会静默。
+    """
+    import io
+    import subprocess
+    import time
+    from contextlib import redirect_stdout
+    import psycopg2
+    import pytest as _pytest
+
+    effective = os.environ.get('DB_NAME', TEST_DB_NAME)
+    server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    if effective != TEST_DB_NAME:
+        # 自定义库名：不代建（DDL 拒绝动态标识符），给手工路径。
+        print(f"[test-db] DB_NAME={effective} 为自定义库，跳过自动引导；"
+              f"若库不存在请手工执行：CREATE DATABASE {effective}; "
+              f"然后 DB_NAME={effective} python init_db.py")
+        return
+
+    try:
+        conn = psycopg2.connect(**_maintenance_dsn())
+    except psycopg2.OperationalError as e:
+        raise _pytest.UsageError(
+            f'[test-db] 连不上 Postgres maintenance 库（{e}）。'
+            f'请核对 DB_HOST/DB_PORT/DB_USER/DB_PASSWORD（config.DB_CONFIG）。')
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1 FROM pg_database WHERE datname=%s',
+                        (TEST_DB_NAME,))
+            exists = cur.fetchone() is not None
+            if os.environ.get('TEST_DB_REBUILD') == '1' and exists:
+                cur.execute(
+                    'SELECT pg_terminate_backend(pid) FROM pg_stat_activity '
+                    'WHERE datname=%s AND pid <> pg_backend_pid()',
+                    (TEST_DB_NAME,))
+                cur.execute('DROP DATABASE casemanage_test')
+                exists = False
+                print(f'[test-db] TEST_DB_REBUILD=1 -> 已删除 {TEST_DB_NAME}')
+            if exists:
+                created = False
+            else:
+                cur.execute('CREATE DATABASE casemanage_test')
+                created = True
+                print(f'[test-db] 测试库不存在 -> 已创建 {TEST_DB_NAME}')
+    finally:
+        conn.close()
+
+    if created:
+        print('[test-db] 全量 init_db 引导中（一次性，DDL+seed+迁移）...')
+        proc = subprocess.run(
+            [sys.executable, 'init_db.py'], cwd=server_dir,
+            env={**os.environ, 'DB_NAME': TEST_DB_NAME, 'PYTHONUTF8': '1'},
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=600)
+        if proc.returncode != 0:
+            raise _pytest.UsageError(
+                f'[test-db] init_db 引导失败（DB_NAME={TEST_DB_NAME}），'
+                f'输出尾部：\n{proc.stdout[-2000:]}\n{proc.stderr[-1000:]}')
+        print('[test-db] init_db 引导完成。')
+        return
+
+    # 已存在 -> 幂等迁移校对漂移；迁移各自带存在性检查，现势 schema 下快跳过。
+    # _run_dated_migrations 会逐个 print，捕获后只在失败时展开，避免刷屏。
+    t0 = time.time()
+    import init_db as _initdb
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            _initdb._run_dated_migrations()
+    except SystemExit as e:
+        raise _pytest.UsageError(
+            f'[test-db] {TEST_DB_NAME} schema 迁移失败'
+            f'（可 TEST_DB_REBUILD=1 重建）：\n{e}\n{buf.getvalue()[-1500:]}')
+    print(f'[test-db] {TEST_DB_NAME} schema 就绪'
+          f'（幂等迁移校对 {time.time() - t0:.1f}s）')
+
+    _ensure_canonical_users()
+
+
+def _ensure_canonical_users():
+    """确保三个规范用户行存在（user-admin/user-dev/user-guest）。
+
+    套件约定：conftest 的 admin_token/dev_token 夹具伪造这三个 id 的 JWT，
+    23 个测试文件直接拿这些 id 写库（FK 指向 users）。dev 库的 user-admin
+    是历史积累，init_db 不播种（管理员由应用首启创建）——全新测试库必须
+    自带，否则 FK 违反。幂等：只在缺行时插入。
+    """
+    import psycopg2
+    from config import DB_CONFIG
+    conn = psycopg2.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            for uid, username, role in (
+                    ('user-admin', 'admin', 'admin'),
+                    ('user-dev', 'developer', 'developer'),
+                    ('user-guest', 'guest', 'guest')):
+                cur.execute(
+                    'INSERT INTO users (id, username, password_hash, '
+                    'display_name, role) '
+                    'SELECT %s, %s, %s, %s, %s '
+                    'WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = %s)',
+                    (uid, username, 'x', f'test-{username}', role, uid))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def pytest_sessionstart(session):
     """记录会话起点（14-12 §2.1：GC 限定本会话创建的行，不触碰并行
     进程/会话的孤儿——跨会话删除是全局副作用）。"""
     global _SESSION_STARTED_AT
     import datetime
     _SESSION_STARTED_AT = datetime.datetime.now(datetime.timezone.utc)
+    if not os.environ.get('PYTEST_XDIST_WORKER'):
+        _bootstrap_test_db()
 
 
 def pytest_sessionfinish(session, exitstatus):

@@ -48,8 +48,9 @@ def _seed_batch(db_conn, user_id, n=1, *, status='pending'):
             sid = str(uuid.uuid4())
             cur.execute(
                 "INSERT INTO ai_chat_sessions "
-                "  (id, user_id, status, batch_id, batch_seq, batch_input_file) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
+                "  (id, user_id, status, batch_id, batch_seq, batch_input_file, "
+                "   created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, NOW() - interval '1 hour')",
                 (sid, user_id, status, bid, i, f'f{i}.csv'))
             sids.append(sid)
     db_conn.commit()
@@ -57,14 +58,29 @@ def _seed_batch(db_conn, user_id, n=1, *, status='pending'):
 
 
 def _clear_other_pending(db_conn, keep_bid):
-    """M8 治理：仅清理「测试命名」批次的 pending 残留行，不碰真实用户数据。"""
+    """M8 治理：仅清理「测试命名」批次的 pending 残留行，不碰真实用户数据。
+
+    专属测试库（casemanage_test，见 tests/conftest.py）上没有真实数据，
+    放宽为清理其他批次的**陈旧**（>10 分钟）pending 残留——名称前缀过滤
+    是共享 dev 库时代的保守设计，会漏掉 admin API 用例创建的任意命名批次。
+    只清陈旧行是 xdist 并行安全的前提：并发 worker 刚种的新鲜行不能碰，
+    否则会删掉别的 worker 正在认领/断言的行（本轮已实证）。"""
+    from config import DB_CONFIG
+    on_test_db = DB_CONFIG.get('dbname') == 'casemanage_test'
     with db_conn.cursor() as cur:
-        cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
-                    "WHERE s.batch_id = b.id AND s.status='pending' "
-                    "  AND b.id <> %s "
-                    "  AND (b.name LIKE 'AITEST-%%' OR b.name IN ('p0-test', "
-                    "       'p1-test', 'engine-test', 'pause-test', 'gap-test'))",
-                    (keep_bid,))
+        if on_test_db:
+            cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                        "WHERE s.batch_id = b.id AND s.status='pending' "
+                        "  AND b.id <> %s "
+                        "  AND s.created_at < NOW() - interval '10 minutes'",
+                        (keep_bid,))
+        else:
+            cur.execute("DELETE FROM ai_chat_sessions s USING ai_chat_batches b "
+                        "WHERE s.batch_id = b.id AND s.status='pending' "
+                        "  AND b.id <> %s "
+                        "  AND (b.name LIKE 'AITEST-%%' OR b.name IN ('p0-test', "
+                        "       'p1-test', 'engine-test', 'pause-test', 'gap-test'))",
+                        (keep_bid,))
     db_conn.commit()
 
 
