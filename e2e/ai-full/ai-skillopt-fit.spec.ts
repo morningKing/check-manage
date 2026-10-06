@@ -81,3 +81,69 @@ test('TC-FIT-02 preview：贪心匹配契约 + 400 形状族 + 404 + 不落库',
     expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: newId('att_'), steps })).status).toBe(404)
   } finally { cleanupFitSeeds() }
 })
+
+test('TC-FIT-03 回写→自动归档→回滚：sha256 自洽、虚假版本零产生、越界/非法正则拒绝', async ({ request }) => {
+  const a = await seedFitAttempt(['read', 'write'])
+  // 产品口径：apply/rollback 的 def_name 由文件路径派生（SKILL.md → 目录名，
+  // ai_session_admin.py:1400-1404）；rollback 按 (kind, def_name) 反查最新
+  // manifest 定位文件（:1248-1252）。fit-seed 的进程级共享 defName 与 mkdtemp
+  // 目录名必然不同、且 fit-seed.ts 冻结不可改——按生产不变式（manifest.name
+  // == 定义目录名）把该 attempt 的种子 manifest 改名为路径派生名，版本时间线
+  // 按该名观测，断言强度不变。
+  const pathDefName = path.basename(path.dirname(a.path))
+  dbSeed(`UPDATE ai_execution_manifests SET name='${pathDefName}' WHERE attempt_id='${a.attemptId}' AND kind='skill'`)
+  const versionsOf = async () => (await api(request, 'get',
+    `/ai/chat/admin/skill-def-versions?defKind=skill&defName=${pathDefName}`)).json.versions
+  try {
+    // 基线：recompute 登记版本（content_hash = 种子文件 sha256）
+    await api(request, 'post', `/ai/chat/admin/skill-fit/${a.attemptId}/recompute`)
+    const orig = fs.readFileSync(a.path)
+    expect(await versionsOf()).toHaveLength(1)
+
+    const newSteps = [...TWO_STEPS, { id: 'apply_marker_step', expect: [{ tool: 'glob' }] }]
+    const r = await api(request, 'post', '/ai/chat/admin/skill-def-steps/apply', { path: a.path, steps: newSteps })
+    expect(r.status).toBe(200)
+    const after = fs.readFileSync(a.path)
+    expect(after.equals(orig)).toBe(false)
+    expect(after.toString()).toContain('apply_marker_step')   // steps 写进 frontmatter fit.steps
+    const newHash = crypto.createHash('sha256').update(after).digest('hex')
+    let vs = await versionsOf()
+    expect(vs).toHaveLength(2)                                 // 基线 + apply 新版本
+    const applied = vs.find((v: any) => v.contentHash === newHash)
+    expect(applied).toBeTruthy()
+    expect(applied.archived).toBe(true)                        // bytes 回读归档正文
+    expect(applied.versionLabel).toBe(`AI步骤优化 ${new Date().toLocaleDateString('sv-SE')}`)
+    // 非法正则 400 且不写盘（先校验后写盘）
+    const bad = await api(request, 'post', '/ai/chat/admin/skill-def-steps/apply',
+      { path: a.path, steps: [{ id: 'x', expect: [{ tool: 'read', args_pattern: '(unclosed' }] }] })
+    expect(bad.status).toBe(400)
+    expect(fs.readFileSync(a.path).equals(after)).toBe(true)
+    // 路径越界 400（_path_in_allowed_roots）
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/apply',
+      { path: 'C:/Windows/system32/evil.md', steps: newSteps })).status).toBe(400)
+    // 回滚（产品语义：把「目标版本」归档正文 bytes 原样写回文件——
+    // ai_session_admin.py:1232-1267 与 DefVersionTimeline.vue 确认框同义；
+    // baseline 版本由 recompute 登记、无归档正文，不可作回滚目标）。故先
+    // 第二次 apply 造 v3，再回滚到 v2：文件恢复 v2 归档 bytes 且时间线
+    // 不产生虚假回滚版本行（对 brief「文件恢复原文」的等强改写，见报告）。
+    const r2 = await api(request, 'post', '/ai/chat/admin/skill-def-steps/apply',
+      { path: a.path, steps: [...TWO_STEPS, { id: 'apply_marker_step2', expect: [{ tool: 'glob' }] }] })
+    expect(r2.status).toBe(200)
+    const v3Bytes = fs.readFileSync(a.path)
+    expect(v3Bytes.equals(after)).toBe(false)
+    vs = await versionsOf()
+    expect(vs).toHaveLength(3)
+    // 未归档版本（content=NULL）拒绝回滚——与 UI 回滚按钮置灰同契约
+    const baseline = vs.find((v: any) => !v.archived)
+    expect(baseline).toBeTruthy()
+    expect((await api(request, 'post', `/ai/chat/admin/skill-def-versions/${baseline.id}/rollback`)).status).toBe(400)
+    // 回滚到 v2：文件恢复 v2 归档 bytes（sha256 自洽）+ 零虚假版本行
+    const rb = await api(request, 'post', `/ai/chat/admin/skill-def-versions/${applied.id}/rollback`)
+    expect(rb.status).toBe(200)
+    const restored = fs.readFileSync(a.path)
+    expect(restored.equals(v3Bytes)).toBe(false)               // 真实写回：不再是 v3 内容
+    expect(restored.equals(after)).toBe(true)                  // 恰为 v2 归档 bytes
+    expect(crypto.createHash('sha256').update(restored).digest('hex')).toBe(applied.contentHash)
+    expect(await versionsOf()).toHaveLength(3)
+  } finally { cleanupFitSeeds() }
+})
