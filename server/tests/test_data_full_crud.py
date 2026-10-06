@@ -128,7 +128,7 @@ def test_td_a08_keyword_search(admin, pageh):
     assert any(rec.get('name') == '搜索针XYZ' for rec in body['data'])
 
 
-def test_td_a09_missing_collection_404_no_leak(admin):
+def test_td_a09_missing_collection_returns_empty(admin):
     """未知 collection 不 5xx、不报错、返回空集（不泄漏存在性）。
 
     R2 对齐实测契约：404 "Not found" 仅用于 RESERVED 保留名；

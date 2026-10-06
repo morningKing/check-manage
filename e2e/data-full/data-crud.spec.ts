@@ -1,6 +1,6 @@
 /**
- * 族A 动态数据 CRUD + 三视图 —— L3 真实链路（TD-A15–A19、A21）。
- * 表单控件用 placeholder 定位（helpers.CRUD_FIELDS 预埋锚点）。
+ * 族A 动态数据 CRUD + 三视图 —— L3 真实链路（TD-A15–A19、A21、A18b，共 7 例）。
+ * 表单控件用 placeholder / label 定位（helpers.CRUD_FIELDS 预埋锚点）。
  */
 import { test, expect } from '@playwright/test'
 import {
