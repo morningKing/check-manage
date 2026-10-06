@@ -3,14 +3,17 @@
  *
  * 约定（spec: docs/superpowers/specs/2026-10-06-data-management-e2e-design.md）：
  * - 测试资产一律 DTEST- 前缀 + 时间戳（数据页名称全局唯一，防撞名）。
- * - menu 删除不级联 page_configs/dynamic_data —— deleteDataPage 二段删：
- *   记录 → pageConfig → menu（TD-A20 验证过该顺序）。
+ * - menu 删除不级联 page_configs/dynamic_data —— deleteDataPage 按序回收：
+ *   记录 → pageConfig → menu 链 data→project→workspace（TD-A20 验证过该顺序）。
+ *   data 菜单是 level-3，必须有 project 父级（project 父级必须是 workspace），
+ *   故 createDataPage 建 workspace→project→data 三级链。
  * - viewConfig 无法随 POST /pageConfigs 落库（INSERT 未含该列），
  *   createDataPage 的 opts.viewConfig 走 PUT 补写。
  * - 截图证据 e2e/screenshots/data-full/。
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { APIRequestContext, Page } from '@playwright/test'
 
 export const AUTH_FILE = 'e2e/.auth/admin.json'
@@ -107,12 +110,37 @@ export async function createDataPage(request: APIRequestContext,
       throw new Error(`apply viewConfig failed: ${put.status} ${JSON.stringify(put.json)}`)
     }
   }
+  // 产品约束（server/routes/menus.py，与 server/tests/data_full_live.py make_page 一致）：
+  // data 菜单是 level-3，父级必须是 project，project 的父级必须是 workspace ——
+  // 按 workspace → project → data 三级建链；祖先菜单 id 由 collection 确定性
+  // 推导（menu-ws-*/menu-proj-*），deleteDataPage 据此回收整条链。
+  const wsId = `menu-ws-${collection}`
+  const ws = await api(request, 'POST', '/menus', {
+    id: wsId, name: `${collection}-ws`, menuType: 'workspace',
+    path: `/dtest-ws/${collection}`, order: 9999,
+  })
+  if (ws.status !== 201) {
+    await api(request, 'DELETE', `/pageConfigs/${pageId}`)
+    throw new Error(`create workspace menu failed: ${ws.status} ${JSON.stringify(ws.json)}`)
+  }
+  const projId = `menu-proj-${collection}`
+  const proj = await api(request, 'POST', '/menus', {
+    id: projId, name: `${collection}-proj`, menuType: 'project',
+    parentId: wsId, path: `/dtest-proj/${collection}`, order: 9999,
+  })
+  if (proj.status !== 201) {
+    await api(request, 'DELETE', `/menus/${wsId}`)
+    await api(request, 'DELETE', `/pageConfigs/${pageId}`)
+    throw new Error(`create project menu failed: ${proj.status} ${JSON.stringify(proj.json)}`)
+  }
   const menu = await api(request, 'POST', '/menus', {
-    id: `menu-${collection}`, name, pageId,
+    id: `menu-${collection}`, name, pageId, parentId: projId,
     path: `/dtest/${collection}`, menuType: 'data',
     roles: ['admin', 'developer', 'guest'], order: 9999,
   })
   if (menu.status !== 201) {
+    await api(request, 'DELETE', `/menus/${projId}`)
+    await api(request, 'DELETE', `/menus/${wsId}`)
     await api(request, 'DELETE', `/pageConfigs/${pageId}`)
     throw new Error(`create menu failed: ${menu.status} ${JSON.stringify(menu.json)}`)
   }
@@ -127,15 +155,25 @@ export async function deleteDataPage(request: APIRequestContext,
   for (const rec of list.json?.data || []) {
     await api(request, 'DELETE', `/${h.collection}/${encodeURIComponent(rec.id)}`)
   }
-  // ② 配置 ③ 菜单
+  // ② 配置 ③ 菜单链（data → project → workspace，menu 删除不级联）
   await api(request, 'DELETE', `/pageConfigs/${h.pageId}`)
   await api(request, 'DELETE', `/menus/${h.menuId}`)
+  await api(request, 'DELETE', `/menus/menu-proj-${h.collection}`)
+  await api(request, 'DELETE', `/menus/menu-ws-${h.collection}`)
 }
 
 export async function createRecord(request: APIRequestContext,
                                    collection: string, data: object):
                                    Promise<{ status: number; json: any }> {
-  return api(request, 'POST', `/${collection}`, data)
+  // dynamic_data.id 为 NOT NULL 且无默认值——载荷缺 id 时服务端 500
+  // （NotNullViolation）。产品 UI 在客户端生成 id/createdAt
+  // （stores/pageConfig.ts addPageData：`${endpoint}-${uuid 前 8}`），这里对齐。
+  const payload = { ...(data as Record<string, unknown>) }
+  if (payload.id == null || payload.id === '') {
+    payload.id = `${collection}-${randomUUID().slice(0, 8)}`
+    payload.createdAt = new Date().toISOString()
+  }
+  return api(request, 'POST', `/${collection}`, payload)
 }
 
 export async function listRecords(request: APIRequestContext,
