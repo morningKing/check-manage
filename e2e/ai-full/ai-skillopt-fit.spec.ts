@@ -7,6 +7,7 @@ import { test, expect } from '@playwright/test'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { api, gotoWithAuth } from './helpers'
 import { API, dbSeed } from './batch/toolbox'
 import { newId, seedPlainSession, cleanupSessionsByPrefix } from './db-helpers'
@@ -145,5 +146,41 @@ test('TC-FIT-03 回写→自动归档→回滚：sha256 自洽、虚假版本零
     expect(restored.equals(after)).toBe(true)                  // 恰为 v2 归档 bytes
     expect(crypto.createHash('sha256').update(restored).digest('hex')).toBe(applied.contentHash)
     expect(await versionsOf()).toHaveLength(3)
+  } finally { cleanupFitSeeds() }
+})
+
+// package.json 带 "type": "module"，ESM 下无 __dirname——同 fit-seed.ts 以
+// import.meta.url 求模块目录（对 brief 原稿 __dirname 的等价替换，其余逐字一致）。
+const DIRNAME = path.dirname(fileURLToPath(import.meta.url))
+
+function internalToken(): string {
+  const envPath = path.resolve(DIRNAME, '..', '..', 'server', '.env')
+  const m = fs.readFileSync(envPath, 'utf-8').match(/^MCP_INTERNAL_TOKEN=(.*)$/m)
+  const tok = m ? m[1].trim() : ''
+  expect(tok, 'server/.env 必须配置 MCP_INTERNAL_TOKEN（dev 栈前置）').not.toBe('')
+  return tok
+}
+
+test('TC-FIT-04 采集链路：runtime 事件落库 + 幂等不降级 + idle 收敛 + 聚合 + 403', async ({ request }) => {
+  const a = await seedFitAttempt(['read'])
+  const tok = internalToken()
+  const evt = { kind: 'skill', skillName: `AITEST-skill-${Date.now()}`, sessionID: a.sessionId,
+    messageID: 'm1', partID: 'p1', status: 'completed', title: 'e2e' }
+  const post = (body: unknown, token = tok) => fetch(`${API}/ai/memory/internal/runtime-events`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Internal-Token': token },
+    body: JSON.stringify(body),
+  })
+  try {
+    expect((await post(evt)).status).toBe(200)
+    expect((await post(evt)).status).toBe(200)          // 重复上报
+    const rows = dbSeed(`SELECT source, evidence_level FROM ai_skill_invocations WHERE session_id='${a.sessionId}' AND skill_name='${evt.skillName}'`)
+    expect(rows).toHaveLength(1)                         // 幂等：仍 1 行
+    expect(rows[0][0]).toBe('runtime')                   // source 不被降级
+    expect((await post({ kind: 'session.idle', sessionID: a.sessionId })).status).toBe(200)
+    expect(dbSeed(`SELECT outcome FROM ai_skill_invocations WHERE session_id='${a.sessionId}' AND skill_name='${evt.skillName}'`)[0][0]).toBe('completed')
+    const an = (await api(request, 'get', '/ai/chat/admin/skill-analytics')).json
+    const s = an.skills.find((x: any) => x.name === evt.skillName)
+    expect(s.runtime_confirmed).toBe(1)
+    expect((await post(evt, 'wrong-token')).status).toBe(403)
   } finally { cleanupFitSeeds() }
 })
