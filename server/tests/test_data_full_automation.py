@@ -478,3 +478,125 @@ def test_td_f12_webhook_test_endpoint_and_after_failure_logged(admin, stub):
         stub.respond_code = 200
         live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
         live.drop_page(admin, page)
+
+
+# ---- 行动作 TD-F13–F15 ----
+
+def _action_page(admin, stub):
+    """manual webhook 规则先行（pageConfigs.rowActions 校验其存在），页带四值状态字段。"""
+    rule_r = live.api('POST', '/webhook/rules', admin, {
+        'name': f"DTEST-F-ra-{uuid.uuid4().hex[:8]}",
+        'sourceCollections': [], 'triggerEvent': 'manual',
+        'triggerTiming': 'after',
+        'webhookUrl': f"http://127.0.0.1:{stub.server_address[1]}/row-action",
+        'secret': '', 'timeout': 2, 'retries': 0})
+    assert rule_r.status_code == 201, f'{rule_r.status_code} {rule_r.text[:300]}'
+    rule = rule_r.json()
+    fields = [
+        NAME,
+        {'id': 'f2', 'label': '处理状态', 'fieldName': 'ra_status',
+         'controlType': 'text', 'required': False, 'order': 2},
+        {'id': 'f3', 'label': '回执', 'fieldName': 'ra_receipt',
+         'controlType': 'text', 'required': False, 'order': 3},
+    ]
+    page = live.make_page(admin, 'F', 'ra', fields=fields)
+    put = live.api('PUT', f"/pageConfigs/{page['page_id']}", admin, {
+        'rowActions': [{'id': 'approve', 'label': '审批',
+                        'actionType': 'webhook', 'webhookRuleId': rule['id'],
+                        'statusField': 'ra_status', 'runningValue': 'running',
+                        'doneValue': 'done', 'failedValue': 'failed',
+                        'responseMapping': [{'jsonKey': 'ok', 'column': 'ra_receipt'}],
+                        'roles': [], 'enabled': True}]})
+    assert put.status_code < 300, f'rowActions 绑定失败 {put.status_code} {put.text[:300]}'
+    return page, rule
+
+
+def test_td_f13_row_action_run_async_writeback(admin, stub):
+    page, rule = _action_page(admin, stub)
+    try:
+        rec = _rec(admin, page['collection'], '审批对象')
+        r = live.api('POST',
+                     f"/{page['collection']}/{rec['id']}/row-actions/approve/run",
+                     admin, {})
+        assert r.status_code < 300, f'{r.status_code} {r.text[:300]}'
+        assert r.json()['ok'] is True and r.json()['status'] in ('running', 'submitted')
+        assert r.json()['statusField'] == 'ra_status'
+        done = _wait(lambda: (lambda g: g.json().get('ra_status') in ('done', 'failed')
+                              and g.json() or None)(
+            live.api('GET', f"/{page['collection']}/{rec['id']}", admin)),
+            timeout_s=20, label='回写终态')
+        assert done['ra_status'] == 'done', f"应回写 done，得 {done['ra_status']}"
+        # stub 返回 {"ok": true}；实际契约（utils/row_action_engine.py）：
+        # _map_response 取回的是布尔 True（:331-332），write_back 以 str(val)
+        # 落库（:77-78 to_jsonb(%s::text)）——即 Python 的 'True'，不是 'true'。
+        assert done.get('ra_receipt') == 'True'
+    finally:
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        live.drop_page(admin, page)
+
+
+def test_td_f14_row_action_unknown_404_and_disabled_400(admin, stub):
+    page, rule = _action_page(admin, stub)
+    try:
+        rec = _rec(admin, page['collection'], '错误对象')
+        unk = live.api('POST',
+                       f"/{page['collection']}/{rec['id']}/row-actions/nope/run", admin, {})
+        assert unk.status_code == 404  # 行操作不存在
+        dis = live.api('PUT', f"/pageConfigs/{page['page_id']}", admin, {
+            'rowActions': [{'id': 'approve', 'label': '审批',
+                            'actionType': 'webhook', 'webhookRuleId': rule['id'],
+                            'statusField': 'ra_status', 'runningValue': 'running',
+                            'doneValue': 'done', 'failedValue': 'failed',
+                            'roles': [], 'enabled': False}]})
+        assert dis.status_code < 300
+        off = live.api('POST',
+                       f"/{page['collection']}/{rec['id']}/row-actions/approve/run",
+                       admin, {})
+        assert off.status_code == 400 and off.json()['error'] == '该行操作已停用'
+    finally:
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        live.drop_page(admin, page)
+
+
+def test_td_f15_row_action_open_api_entry(admin, stub):
+    """Open API 入口与内部同构：X-API-Key 调 run → 同样异步回写。
+
+    实际绑定模型（实读 routes/api_keys.py + auth.py:213 require_bound_key）：
+    密钥**不绑页**，创建时即绑创建者（owner_user_id = 当前登录用户），
+    require_bound_key 只拒 owner_user_id 为空的存量密钥——POST /apiKeys
+    只要 name 即可（pageBindings 非存储字段）。另一道前置闸：Open API 只放行
+    apiPublic + apiWritable 的页（routes/open_api.py check_collection_writable，
+    两列默认 False，不打开直接 404 not public）；逐键 SET 的部分 PUT 不动
+    rowActions（routes/page_configs.py:210-218）。
+    """
+    page, rule = _action_page(admin, stub)
+    try:
+        open_put = live.api('PUT', f"/pageConfigs/{page['page_id']}", admin,
+                            {'apiPublic': True, 'apiWritable': True})
+        assert open_put.status_code < 300, \
+            f'apiPublic/apiWritable 打开失败 {open_put.status_code} {open_put.text[:300]}'
+        key = live.api('POST', '/apiKeys', admin,
+                       {'name': f'DTEST-F-key-{uuid.uuid4().hex[:6]}'})
+        assert key.status_code == 201, f'{key.status_code} {key.text[:300]}'
+        try:
+            rec = _rec(admin, page['collection'], '开放对象')
+            import requests as _rq
+            resp = _rq.post(
+                f'{live.BASE}/api/v1/collections/{page["collection"]}/{rec["id"]}'
+                f'/row-actions/approve/run',
+                headers={'X-API-Key': key.json()['key']}, json={}, timeout=15)
+            assert resp.status_code < 300, f'{resp.status_code} {resp.text[:300]}'
+            assert resp.json()['ok'] is True
+            assert resp.json()['status'] in ('running', 'submitted')
+            assert resp.json()['statusField'] == 'ra_status'
+            done = _wait(lambda: (lambda g: g.json().get('ra_status') in ('done', 'failed')
+                                  and g.json() or None)(
+                live.api('GET', f"/{page['collection']}/{rec['id']}", admin)),
+                timeout_s=20, label='开放入口回写')
+            assert done['ra_status'] == 'done'
+            assert done.get('ra_receipt') == 'True'
+        finally:
+            live.api('DELETE', f"/apiKeys/{key.json()['id']}", admin)
+    finally:
+        live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+        live.drop_page(admin, page)
