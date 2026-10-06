@@ -14,6 +14,7 @@ from utils.field_indexes import sql_literal
 from utils.row_action_engine import run_action, resolve_status_gate, RowActionError
 import psycopg2.extras
 import json
+import uuid
 
 dynamic_bp = Blueprint('dynamic', __name__)
 
@@ -612,6 +613,11 @@ def create_item(collection):
         return denied
     body = request.get_json(force=True)
     rid = body.get('id')
+    if not rid:
+        # dynamic_data.id NOT NULL 无默认：客户端恒带 id，API 直调缺失时
+        # 服务端以 uuid 兜底生成并回带，而不是让 NotNullViolation 变成 500
+        rid = uuid.uuid4().hex
+        body['id'] = rid
     created_at = body.get('createdAt')
     client_relations = body.get('_relations')
     data = {k: v for k, v in body.items() if k not in ('id', 'createdAt', '_relations', '_workflowComment')}
@@ -1134,6 +1140,11 @@ def batch_create_items(collection):
 
         for idx, record in enumerate(records):
             rid = record.get('id')
+            if not rid:
+                # 与单条 create 同款兜底：缺 id 服务端生成（uuid 不会与
+                # all_ids 唯一性预检或既有记录冲突），避免 NotNullViolation 500
+                rid = uuid.uuid4().hex
+                record['id'] = rid
             data = record.get('data', {})
             relations = record.get('relations', {})
 
