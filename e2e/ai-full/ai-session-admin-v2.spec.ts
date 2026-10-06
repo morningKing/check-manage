@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { api, gotoWithAuth } from './helpers'
-import { API, authHeaders, adminToken, secondUser, dbSeed } from './batch/toolbox'
+import { API, authHeaders, adminToken, secondUser, dbSeed, seedRunningChild } from './batch/toolbox'
 import { newId, seedPlainSession, seedBatch, cleanupSessionsByPrefix, cleanupBatchesByPrefix } from './db-helpers'
 
 test.setTimeout(120_000)
@@ -120,5 +120,36 @@ test('TC-SESS-03 详情抽屉：基本信息/对话历史/文件列表 + 下载�
   } finally {
     await cleanup()
     fs.rmSync(ws, { recursive: true, force: true })
+  }
+})
+
+test('TC-SESS-04 v2 归档：UI 归档 active 会话 + oplog 留痕；批控会话 409', async ({ page, request }) => {
+  const key = newId('arch-')
+  const sid = await seedPlainSession({ key, status: 'active' })
+  const running = await seedRunningChild({})
+  try {
+    await gotoWithAuth(page, '/admin/ai-execution?tab=sessions')
+    const row = page.locator('.el-table__row', { hasText: `AITEST-SESSV2-${key}` }).first()
+    await row.waitFor({ state: 'visible', timeout: 30_000 })
+    await row.locator('.el-dropdown').first().click()
+    await page.locator('.el-dropdown-menu__item', { hasText: '归档' }).first().click()
+    await page.locator('.el-message-box').getByText('确定', { exact: true }).click()
+    await expect(page.locator('.el-message', { hasText: '已归档' })).toBeVisible()
+    // 列表刷新后状态徽标
+    await page.locator('button', { hasText: '查询' }).click()
+    await expect(page.locator('.el-table__row', { hasText: `AITEST-SESSV2-${key}` }).first())
+      .toContainText('已归档')
+    // oplog 留痕（描述逐字来自 ai_chat.py archive 端点）
+    const logs = dbSeed(`SELECT action, description FROM operation_logs WHERE target_type='ai_chat_session' AND target_id='${sid}' ORDER BY created_at DESC LIMIT 1`)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toEqual(['update', '归档会话（admin）'])
+    // 批控 running 子会话：归档 409 BATCH_SESSION_CONTROLLED（API 通道；UI 对 running 行不渲染归档项）
+    const tk = await adminToken()
+    const res = await fetch(`${API}/ai/chat/sessions/${running.sid}/archive`, { method: 'POST', headers: authHeaders(tk) })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('BATCH_SESSION_CONTROLLED')
+  } finally {
+    dbSeed(`DELETE FROM ai_chat_batches WHERE id='${running.bid}'`)
+    await cleanup()
   }
 })
