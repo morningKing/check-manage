@@ -15,7 +15,9 @@ import {
   API,
 } from './batch-helpers'
 
-export { API }
+// adminToken/authHeaders 来自 batch-helpers，这里转发导出（ai-session-admin-v2
+// 等联动套件按 toolbox 单一入口取用；对既有 12 个批任务 spec 纯增量、零影响）。
+export { API, adminToken, authHeaders }
 
 // package.json 带 "type": "module"，本仓库 e2e 规约以 import.meta.url 求模块目录
 // （同 e2e/ai-chat-stop-resume.spec.ts），不直接用 __dirname。
