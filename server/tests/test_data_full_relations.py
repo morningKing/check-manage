@@ -93,9 +93,11 @@ def test_td_c03_relation_full_replace(admin, ab_pages):
     # update_relations：new_ids = set(...)），GET 仅 ORDER BY field_name
     # （无 related_id 次级排序），多 id 间顺序无契约保证
     assert sorted(got) == sorted([b2['id'], b3['id']])
-    # 被移除的 b1 反向行同步删除
-    assert live.api('GET', f"/relations/{pb['collection']}/{b1['id']}",
-                    admin).json().get('rel') in (None, [],)
+    # 被移除的 b1 反向行同步删除：先验 GET 200 再验 a 不在 b1 的反向列表
+    # （T3-R1 加固：原 `in (None, [])` 空转容错会把请求失败误判为清理成功）
+    rev = live.api('GET', f"/relations/{pb['collection']}/{b1['id']}", admin)
+    assert rev.status_code == 200, f'GET b1 反向关系应 200，得 {rev.status_code}'
+    assert a['id'] not in (rev.json().get('rel') or [])
 
 
 def test_td_c04_relations_inline_on_create(admin, ab_pages):
@@ -117,8 +119,11 @@ def test_td_c05_record_delete_cleans_both_directions(admin, ab_pages):
     live.api('PUT', f"/relations/{pa['collection']}/{a['id']}/rel", admin,
              {'targetCollection': pb['collection'], 'targetField': 'rel', 'ids': [b['id']]})
     assert live.api('DELETE', f"/{pa['collection']}/{a['id']}", admin).status_code < 300
-    assert live.api('GET', f"/relations/{pb['collection']}/{b['id']}",
-                    admin).json().get('rel') in (None, [],)
+    # b 的反向行（指向已删的 a）应被双向清理：先验 GET 200 再验移除
+    # （T3-R1 加固：同 C03，空转容错已收紧）
+    rev = live.api('GET', f"/relations/{pb['collection']}/{b['id']}", admin)
+    assert rev.status_code == 200, f'GET b 反向关系应 200，得 {rev.status_code}'
+    assert a['id'] not in (rev.json().get('rel') or [])
 
 
 def test_td_c06_reference_parent_delete_restrict_409(admin):
