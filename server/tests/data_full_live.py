@@ -32,6 +32,23 @@ def api(method: str, path: str, headers: dict | None = None, json=None) -> reque
                             headers=headers, json=json, timeout=30)
 
 
+def upload_file(headers: dict, content: bytes, filename: str,
+                collection=None, field_name=None) -> requests.Response:
+    """POST /api/data-files/upload（multipart）→ 201 {id,name,size,mimeType,url}。
+
+    collection/fieldName 为可选业务锚点（服务端仅记录，不校验 collection 存在）。
+    """
+    data = {}
+    if collection is not None:
+        data['collection'] = collection
+    if field_name is not None:
+        data['fieldName'] = field_name
+    return requests.post(
+        f'{BASE}/api/data-files/upload', headers=headers, data=data,
+        files={'file': (filename, content, 'application/octet-stream')},
+        timeout=30)
+
+
 CRUD_FIELDS = [
     {'id': 'f1', 'label': '名称', 'fieldName': 'name', 'controlType': 'text',
      'required': True, 'order': 1, 'placeholder': '请输入名称'},

@@ -13,6 +13,10 @@ from contextlib import contextmanager
 # 让 import 能找到 server 下的模块
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# data_full_* 系列以平铺名 import 同目录助手（data_full_live）；
+# 在 conftest 统一补路径，各测试文件不再自带 sys.path hack。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # ---------------------------------------------------------------------------
 # 独立测试库（2026-10-06 P0）：此前单测与 dev 后端(:3002)共享 casemanage 库，
 # 后端 batch worker 会认领/推进测试刚插入的 pending 行，把断言弄脏成偶发失败

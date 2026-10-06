@@ -1,15 +1,9 @@
 """族A 动态数据 CRUD —— L2 live-server API 层（TD-A01–A14、A20、A22）。"""
-import os
-import sys
 import time
 import uuid
 
 import pytest
 import requests
-
-# tests/ 是带 __init__.py 的包：pytest prepend 模式只把 server/ 加进 sys.path，
-# 须补上本目录才能按 brief 以平铺名 import 助手模块。
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import data_full_live as live
 
