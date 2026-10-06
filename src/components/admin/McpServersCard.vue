@@ -43,7 +43,7 @@
       </div>
     </div>
 
-    <el-table :data="mcpServers" v-loading="mcpLoading" size="small">
+    <el-table :data="mcpServers" v-loading="mcpLoading" size="small" empty-text="暂无外部 MCP 服务">
       <el-table-column prop="name" label="名称" min-width="120" />
       <el-table-column prop="type" label="类型" width="90">
         <template #default="{ row }">{{ row.type === 'remote' ? '远程' : '本地' }}</template>
@@ -65,7 +65,6 @@
         </template>
       </el-table-column>
     </el-table>
-    <el-empty v-if="!mcpLoading && !mcpServers.length" description="暂无外部 MCP 服务" :image-size="60" />
   </el-card>
 
   <el-dialog v-model="mcpDialog.open" :title="mcpDialog.id ? '编辑 MCP 服务' : '添加 MCP 服务'" width="560px">

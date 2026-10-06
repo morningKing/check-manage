@@ -136,15 +136,17 @@ describe('老路径别名重定向', () => {
 describe('AI 旧路径重定向', () => {
   it.each([
     ['/admin/ai-opencode', '/admin/ai-settings', 'runtime'],
-    ['/admin/ai-skillopt', '/admin/ai-skills', 'fit'],
+    // 技能广场并入运行时后 ai-skills 单页化为拟合优化，重定向不再带 tab
+    ['/admin/ai-skillopt', '/admin/ai-skills', null],
     ['/admin/ai-batches', '/admin/ai-execution', 'batches'],
     ['/admin/ai-sessions', '/admin/ai-execution', 'sessions'],
     ['/admin/ai-orchestrations', '/admin/ai-execution', 'orchestrations'],
-  ])('%s → %s?tab=%s', async (from, path, tab) => {
+  ])('%s → %s', async (from, path, tab) => {
     const r = makeRouter(() => true)
     await r.push(from)
     expect(r.currentRoute.value.path).toBe(path)
-    expect(r.currentRoute.value.query).toMatchObject({ tab })
+    if (tab) expect(r.currentRoute.value.query).toMatchObject({ tab })
+    else expect(r.currentRoute.value.query).toStrictEqual({})
   })
 })
 

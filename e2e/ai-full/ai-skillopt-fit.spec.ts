@@ -43,8 +43,8 @@ test('TC-FIT-01 拟合三态：recompute 落库 + 幂等不重复 + 明细 perSt
     expect(d.versions).toBeGreaterThanOrEqual(1)
     // 404：attempt 不存在
     expect((await api(request, 'post', `/ai/chat/admin/skill-fit/${newId('att_')}/recompute`)).status).toBe(404)
-    // UI：主从布局出现定义行 + 结果行 + 重新计算 toast
-    await gotoWithAuth(page, '/admin/ai-skills?tab=fit')
+    // UI：主从布局出现定义行 + 结果行 + 重新计算 toast（技能广场并入运行时后本页单页化，无 ?tab=）
+    await gotoWithAuth(page, '/admin/ai-skills')
     const defCard = page.locator('.fit-def', { hasText: aFit.defName }).first()
     await defCard.waitFor({ state: 'visible', timeout: 30_000 })
     await defCard.click()

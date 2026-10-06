@@ -12,7 +12,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { findSettingsItem } from '@/views/admin/hub/settingsCatalog'
+import { findSettingsItem, itemPerms } from '@/views/admin/hub/settingsCatalog'
 import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps<{ itemId: string }>()
@@ -21,7 +21,7 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const tabs = computed(() => findSettingsItem(props.itemId)?.tabs ?? [])
-const visibleTabs = computed(() => tabs.value.filter(t => auth.can(t.perm)))
+const visibleTabs = computed(() => tabs.value.filter(t => itemPerms(t.perm).some(k => auth.can(k))))
 
 // defineAsyncComponent 包装必须对同一 tab 恒定（setup 期一次构建），
 // 否则 keep-alive 永远命中不了缓存、切 tab 即重挂载重取数。

@@ -1,17 +1,21 @@
+<!-- 平台全局技能面板：原「AI 全局技能与 MCP 服务管理」页主体，现挂在
+     OpenCode 运行时管理页的「平台技能」页签下。
+     平台技能按会话注入、即传即用，与 OpenCode 全局目录技能互不影响。 -->
 <template>
-  <div class="skill-manager">
-    <div class="skill-manager__header">
-      <span class="skill-manager__title">AI 全局技能与 MCP 服务管理</span>
-      <el-button type="primary" @click="showUpload = true">上传技能</el-button>
+  <div class="platform-skills">
+    <div class="platform-skills__toolbar">
+      <el-button type="primary" size="small" data-test="platform-skill-upload" @click="showUpload = true">
+        上传技能
+      </el-button>
+      <span class="platform-skills__hint">
+        上传后对所有新建 AI 会话（交互式与批任务）自动可用，即传即用、无需重启。
+      </span>
     </div>
-    <p class="skill-manager__desc">
-      全局技能上传后，所有新建的 AI 会话（交互式和批任务）自动可用。技能以 zip 包上传，需包含 SKILL.md 文件。
-    </p>
 
-    <el-table :data="skills" v-loading="loading" style="width: 100%">
+    <el-table :data="skills" v-loading="loading" size="small">
       <el-table-column prop="name" label="名称" width="180">
         <template #default="{ row }">
-          <span class="skill-manager__name">{{ row.name }}</span>
+          <span class="platform-skills__name">{{ row.name }}</span>
         </template>
       </el-table-column>
       <el-table-column prop="description" label="描述" min-width="240" show-overflow-tooltip />
@@ -39,9 +43,6 @@
         </template>
       </el-table-column>
     </el-table>
-
-    <!-- ==================== MCP 服务管理（自 AI 配置页迁入） ==================== -->
-    <McpServersCard />
 
     <!-- Upload dialog -->
     <el-dialog v-model="showUpload" title="上传全局技能" width="480px" destroy-on-close>
@@ -88,18 +89,18 @@
                destroy-on-close>
       <div v-loading="filesLoading">
         <div v-if="skillFiles.length === 0" class="el-text-color-secondary">无文件</div>
-        <div v-for="f in skillFiles" :key="f.path" class="skill-manager__file-item"
+        <div v-for="f in skillFiles" :key="f.path" class="platform-skills__file-item"
              @click="previewFile(f)">
-          <span class="skill-manager__file-name">{{ f.name }}</span>
-          <span class="skill-manager__file-path el-text-color-secondary">{{ f.path }}</span>
-          <span class="skill-manager__file-size el-text-color-secondary">{{ formatSize(f.size) }}</span>
+          <span class="platform-skills__file-name">{{ f.name }}</span>
+          <span class="platform-skills__file-path el-text-color-secondary">{{ f.path }}</span>
+          <span class="platform-skills__file-size el-text-color-secondary">{{ formatSize(f.size) }}</span>
         </div>
       </div>
     </el-dialog>
 
     <!-- File preview dialog -->
     <el-dialog v-model="showPreview" :title="previewPath" width="700px" destroy-on-close>
-      <pre v-if="previewContent" class="skill-manager__preview">{{ previewContent }}</pre>
+      <pre v-if="previewContent" class="platform-skills__preview">{{ previewContent }}</pre>
       <div v-else-if="previewBinary" class="el-text-color-secondary">二进制文件，无法预览</div>
       <div v-else v-loading="true" style="height: 100px" />
     </el-dialog>
@@ -114,7 +115,6 @@ import {
   listSkillFiles, readSkillFile, uploadGlobalSkill,
   type GlobalSkill, type GlobalSkillFile,
 } from '@/api/aiSkills'
-import McpServersCard from '@/components/admin/McpServersCard.vue'
 
 const skills = ref<GlobalSkill[]>([])
 const loading = ref(false)
@@ -264,25 +264,17 @@ onMounted(fetchList)
 </script>
 
 <style scoped lang="scss">
-.skill-manager {
-  padding: 20px;
-
-  &__header {
+.platform-skills {
+  &__toolbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    margin-bottom: 8px;
+    gap: 12px;
+    margin-bottom: 10px;
   }
 
-  &__title {
-    font-size: 18px;
-    font-weight: 600;
-  }
-
-  &__desc {
+  &__hint {
     color: var(--el-text-color-secondary);
-    font-size: 13px;
-    margin-bottom: 16px;
+    font-size: 12.5px;
   }
 
   &__name {

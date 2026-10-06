@@ -26,8 +26,9 @@
       </div>
     </div>
     <p class="oc-runtime__desc">
-      直接管理 OpenCode 全局目录中的技能与 Agent（<code>{{ overview?.globalDir || '~/.config/opencode' }}</code>），
-      对该机器上所有 OpenCode 会话生效。平台「AI 技能管理」按会话注入、即传即用，两者互不影响。
+      集中管理 AI 会话可用的技能、智能体与 MCP 服务。OpenCode 全局目录中的技能/Agent
+      （<code>{{ overview?.globalDir || '~/.config/opencode' }}</code>）修改后需重启生效；
+      平台技能按会话注入、即传即用；MCP 服务变更对新建/清空的会话生效。
     </p>
 
     <el-tabs v-model="activeTab">
@@ -130,6 +131,16 @@
         <el-pagination v-model:current-page="agentPage" :page-size="agentPageSize"
                        :total="filteredAgents.length" layout="total, prev, pager, next"
                        size="small" class="oc-runtime__pager" />
+      </el-tab-pane>
+
+      <!-- ─────────────── 平台技能页签（原「AI 全局技能」页并入） ─────────────── -->
+      <el-tab-pane v-if="canPerm('admin.ai_settings')" label="平台技能" name="platform-skills" lazy>
+        <PlatformSkillsPanel />
+      </el-tab-pane>
+
+      <!-- ─────────────── MCP 服务页签（原卡片并入，即传即用无需重启） ─────────────── -->
+      <el-tab-pane v-if="canPerm('admin.ai_settings')" label="MCP 服务" name="mcp" lazy>
+        <McpServersCard />
       </el-tab-pane>
     </el-tabs>
 
@@ -318,6 +329,8 @@ import type {
 } from '@/api/aiOpencodeAdmin'
 import { listPlatformSkills } from '@/api/aiOpencodeAdmin'
 import type { GlobalSkill } from '@/api/aiSkills'
+import PlatformSkillsPanel from '@/components/admin/PlatformSkillsPanel.vue'
+import McpServersCard from '@/components/admin/McpServersCard.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const SOURCE_TAG: Record<string, { label: string; type: 'primary' | 'success' | 'warning' | 'info' }> = {
@@ -350,7 +363,7 @@ function canPerm(key: string): boolean {
 
 const overview = ref<OpencodeOverview | null>(null)
 const runtimeInfo = ref<api.RuntimeStatusInfo | null>(null)
-const activeTab = ref<'skills' | 'agents'>('skills')
+const activeTab = ref<'skills' | 'agents' | 'platform-skills' | 'mcp'>('skills')
 const skillItems = ref<GlobalSkillItem[]>([])
 const agentItems = ref<GlobalAgentItem[]>([])
 const loadingSkills = ref(false)

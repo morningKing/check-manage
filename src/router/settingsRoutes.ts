@@ -72,13 +72,14 @@ export function buildSettingsRedirects(
     })
   }
 
-  // AI 旧条目路径 → 域入口对应 tab。目标不是条目 id 而是「条目内 tab」，故
-  // redirect 显式携带 query.tab（对象形态，理由同上）；权限不足时由守卫兜底拦截。
-  // 必须排在 LEGACY_PATH_ALIASES 之前：两张表键空间不相交，仅是生成顺序约定。
+  // AI 旧条目路径 → 现存条目（可选带 tab）。带 tab 时 redirect 显式携带
+  // query.tab（对象形态，理由同上）；不带 tab 时清空 query，避免历史查询串残留。
+  // 权限不足时由守卫兜底拦截。必须排在 LEGACY_PATH_ALIASES 之前：两张表键
+  // 空间不相交，仅是生成顺序约定。
   for (const [alias, target] of Object.entries(SETTINGS_REDIRECTS)) {
     routes.push({
       path: `/admin/${alias}`,
-      redirect: () => ({ path: target.path, query: { tab: target.tab } }),
+      redirect: () => ({ path: target.path, query: target.tab ? { tab: target.tab } : {} }),
     })
   }
 

@@ -11,7 +11,8 @@ import type { Component } from 'vue'
 export interface SettingsTab {
   id: string
   label: string
-  perm: string
+  /** 所需权限（any-of：数组任一命中即可见该页签） */
+  perm: string | string[]
   component: () => Promise<Component>
 }
 
@@ -72,19 +73,15 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       tabs: [
         { id: 'model', label: '模型与密钥', perm: 'admin.ai_settings',
           component: () => import('@/views/admin/AiSettings.vue') },
-        { id: 'runtime', label: '运行时', perm: 'admin.ai_runtime_read',
+        // 技能广场（平台全局技能 + MCP 服务管理）已并入运行时页，页内按
+        // ai_settings 控显 pane，故此处 any-of：只有 ai_settings 的用户仍可达。
+        { id: 'runtime', label: '运行时', perm: ['admin.ai_runtime_read', 'admin.ai_settings'],
           component: () => import('@/views/admin/AiOpencodeRuntime.vue') },
       ] },
     { id: 'ai-scan', label: 'AI 定时巡检', perm: 'admin.ai_scan', icon: 'Timer',
       component: () => import('@/views/admin/AiScanTaskManager.vue') },
-    { id: 'ai-skills', label: 'AI 技能', perm: ['admin.ai_settings', 'admin.ai_chat_admin'], icon: 'MagicStick',
-      component: () => import('@/views/admin/hub/AiSkillHub.vue'),
-      tabs: [
-        { id: 'square', label: '技能广场', perm: 'admin.ai_settings',
-          component: () => import('@/views/admin/AiSkillManager.vue') },
-        { id: 'fit', label: '拟合优化', perm: 'admin.ai_chat_admin',
-          component: () => import('@/views/admin/AiSkillOpt.vue') },
-      ] },
+    { id: 'ai-skills', label: '技能拟合优化', perm: 'admin.ai_chat_admin', icon: 'MagicStick',
+      component: () => import('@/views/admin/AiSkillOpt.vue') },
     { id: 'ai-execution', label: 'AI 执行中心', perm: ['admin.ai_chat_admin', 'admin.ai_orchestration_admin'], icon: 'Tickets',
       component: () => import('@/views/admin/hub/AiExecutionHub.vue'),
       tabs: [
@@ -171,13 +168,14 @@ export const LEGACY_PATH_ALIASES: Record<string, string> = {
 }
 
 /**
- * 合并前的 AI 旧条目路径 → 域入口对应 tab。
- * 与 LEGACY_PATH_ALIASES 的差异：目标不是「条目 id」而是「条目内 tab」，故
- * 单独一张表、由 settingsRoutes 消费为带 query 的重定向。
+ * 合并前的 AI 旧条目路径 → 现存条目（可选带条目内 tab）。
+ * 与 LEGACY_PATH_ALIASES 的差异：目标可落到「条目内 tab」，故由 settingsRoutes
+ * 消费为带 query 的重定向；不带 tab 时重定向清空 query。
  */
-export const SETTINGS_REDIRECTS: Record<string, { path: string; tab: string }> = {
+export const SETTINGS_REDIRECTS: Record<string, { path: string; tab?: string }> = {
   'ai-opencode': { path: '/admin/ai-settings', tab: 'runtime' },
-  'ai-skillopt': { path: '/admin/ai-skills', tab: 'fit' },
+  // 技能广场并入运行时后 ai-skills 单页化为拟合优化，旧 tab 重定向随之取消
+  'ai-skillopt': { path: '/admin/ai-skills' },
   'ai-batches': { path: '/admin/ai-execution', tab: 'batches' },
   'ai-sessions': { path: '/admin/ai-execution', tab: 'sessions' },
   'ai-orchestrations': { path: '/admin/ai-execution', tab: 'orchestrations' },
