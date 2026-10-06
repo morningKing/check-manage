@@ -6,7 +6,7 @@
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { api, gotoWithAuth, restartBackend } from './helpers'
+import { api, gotoWithAuth, openChatSession, restartBackend } from './helpers'
 import { API, authHeaders, adminToken, dbSeed } from './batch/toolbox'
 import { newId, seedPlainSession, cleanupSessionsByPrefix } from './db-helpers'
 import { resolveWorkspaceRoot } from './fit-seed'
@@ -128,5 +128,80 @@ test('TC-TRACE-03 派发失败清理：diagnosis failed + 无孤儿会话行 + �
   } finally {
     await restartBackend()
     cleanupSessionsByPrefix()
+  }
+})
+
+test('TC-TRACE-05 @llm 轨迹分析闭环：真实会话→触发→收敛→报告结构→抽屉历史', async ({ page, request }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })
+  test.setTimeout(600_000)
+  const tk = await adminToken()
+  // LLM 预检（ledger Ruling Task 16）：dev LLM 不可达时步骤 1 会挂满 180s——
+  // 先打一发真实 LLM 调用探活，502 即整例 skip，避免环境性红。
+  const gsRoot = path.join(resolveWorkspaceRoot(), 'global-skills')
+  let defPath = path.join(gsRoot, 'trace-analyzer', 'SKILL.md')
+  if (!fs.existsSync(defPath)) {
+    const pick = fs.readdirSync(gsRoot, { withFileTypes: true })
+      .find(e => e.isDirectory() && fs.existsSync(path.join(gsRoot, e.name, 'SKILL.md')))
+    if (!pick) throw new Error(`LLM 预检定义文件缺失：${gsRoot} 下没有 */SKILL.md`)
+    defPath = path.join(gsRoot, pick.name, 'SKILL.md')
+  }
+  const probe = await fetch(`${API}/ai/chat/admin/skill-def-steps/generate`, {
+    method: 'POST',
+    headers: { ...authHeaders(tk), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'skill', path: defPath }),
+  })
+  if (probe.status === 502) return test.skip(true, 'LLM 不可达（预检 502），冒烟跳过')
+  expect(probe.status).toBe(200)   // 探活即弃：生成的 steps 不参与后续断言
+  // 1) 真实会话真跑一轮（API 建会话改名 + UI 发消息，规避自动创建竞态）
+  const create = await fetch(`${API}/ai/chat/sessions`, { method: 'POST', headers: { ...authHeaders(tk), 'Content-Type': 'application/json' }, body: '{}' })
+  expect(create.status).toBeLessThan(300)
+  const sid = (await create.json()).id
+  const title = newId('AITEST-trace-live-')
+  await fetch(`${API}/ai/chat/sessions/${sid}`, { method: 'PATCH', headers: authHeaders(tk), body: JSON.stringify({ title }) })
+  await openChatSession(page, sid)
+  // 深链挂载竞态兜底（ai-harness-safety 手法）：composer 15s 不可见则 reload 一次再等
+  const composer = page.getByPlaceholder(/给 AI 助手发消息/)
+  try {
+    await composer.waitFor({ state: 'visible', timeout: 15_000 })
+  } catch {
+    await page.reload()
+    await composer.waitFor({ state: 'visible', timeout: 15_000 })
+  }
+  await composer.fill('hello trace e2e')
+  await page.getByRole('button', { name: '发送' }).click()
+  await expect(page.locator('.msg--assistant').first()).toBeVisible({ timeout: 180_000 })
+  // 2) API 触发轨迹分析
+  const r = await fetch(`${API}/ai/chat/admin/sessions/v2/${sid}/analyze`, { method: 'POST', headers: authHeaders(tk) })
+  if (r.status === 502) return test.skip(true, 'LLM/MCP 链路不可用（analyze 502），冒烟跳过')
+  expect(r.status).toBe(200)
+  const { analysisId, analysisSessionId } = await r.json()
+  try {
+    // 3) 轮询至终态并要求 completed（96×5s = 480s 预算）
+    let final: any = null
+    for (let i = 0; i < 96; i++) {
+      const s = await (await fetch(`${API}/ai/chat/admin/analyses/${analysisId}`, { headers: authHeaders(tk) })).json()
+      if (['completed', 'partial', 'failed'].includes(s.status)) { final = s; break }
+      await page.waitForTimeout(5000)
+    }
+    expect(final?.status).toBe('completed')
+    // 4) 报告结构完整（断言结构，不断言内容语义）
+    const rep = await (await fetch(`${API}/ai/chat/admin/analyses/${analysisId}/report`, { headers: authHeaders(tk) })).json()
+    expect(Object.keys(rep.report ?? {}).length).toBeGreaterThan(0)
+    expect(analysisRowCount(sid)).toBe(1)
+    expect(dbSeed(`SELECT count(*) FROM ai_chat_sessions WHERE id='${analysisSessionId}' AND kind='trace_analysis'`)[0][0]).toBe(1)
+    // 5) 审计抽屉「轨迹分析历史」出现该行
+    await gotoWithAuth(page, '/admin/ai-execution?tab=sessions')
+    const row = page.locator('.el-table__row', { hasText: title }).first()
+    await row.waitFor({ state: 'visible', timeout: 30_000 })
+    await row.locator('.el-dropdown').first().click()
+    await page.locator('.el-dropdown-menu__item', { hasText: '执行审计' }).first().click()
+    const drawer = page.locator('.el-drawer', { hasText: '执行合规审计' })
+    await expect(drawer.getByText('轨迹分析历史')).toBeVisible({ timeout: 15_000 })
+    await expect(drawer.locator('.analysis-row').first()).toBeVisible()
+  } finally {
+    // 定点清理：目标会话 + 分析会话 + 诊断行（按 id，防误删）
+    dbSeed(`DELETE FROM ai_execution_diagnoses WHERE target_session_id='${sid}'`)
+    dbSeed(`DELETE FROM ai_chat_sessions WHERE id='${analysisSessionId}'`)
+    dbSeed(`DELETE FROM ai_chat_sessions WHERE id='${sid}'`)
   }
 })
