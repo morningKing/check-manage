@@ -3,9 +3,11 @@
  *
  * 职责：
  * - 以真正的电子表格形式展示数据（工具栏、公式栏、Sheet 标签）
- * - 只读模式，不可编辑
+ * - 默认只读；editable=true（页面有 update 权限）时放行标量字段的数据单元格编辑，
+ *   编辑提交后经显示值回转（parseCellEdit）发 cell-edit 事件，由父组件走
+ *   与编辑对话框一致的更新链路落库（单字段 + _version 乐观锁）
  * - 支持列筛选、列宽拖拽、冻结窗格
- * - 双击单元格触发导航事件
+ * - 双击单元格触发导航事件（可编辑标量列的双击进入单元格编辑，不导航）
  * - 支持跨路由及刷新后的状态缓存（筛选、样式等，存储在 sessionStorage）
  */
 <template>
@@ -17,11 +19,18 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { createUniver, LocaleType } from '@univerjs/presets'
 import { UniverSheetsCorePreset } from '@univerjs/preset-sheets-core'
 import { UniverSheetsFilterPreset } from '@univerjs/preset-sheets-filter'
 import type { FieldConfig, DynamicRecord } from '@/types'
-import { buildWorkbookData } from '@/utils/univerHelper'
+import {
+  buildWorkbookData,
+  formatCellValue,
+  parseCellEdit,
+  cellToTarget,
+  isEditableControlType
+} from '@/utils/univerHelper'
 
 // 导入 Univer 样式
 import '@univerjs/preset-sheets-core/lib/index.css'
@@ -122,18 +131,38 @@ interface Props {
   loading?: boolean
   /** 集合 ID，用于缓存快照 */
   collectionId?: string
+  /** 是否允许单元格编辑回写（页面 update 权限；默认 false 保持只读——访客/无权限页面行为与历史版本一致） */
+  editable?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
-  collectionId: ''
+  collectionId: '',
+  editable: false
 })
+
+/** 单元格编辑回写事件载荷 */
+interface ExcelCellEditPayload {
+  /** 单元格行号（Univer 行号，0 基） */
+  row: number
+  /** 单元格列号（Univer 列号，0 基） */
+  col: number
+  /** 被编辑的记录 */
+  record: DynamicRecord
+  /** 被编辑的字段 */
+  field: FieldConfig
+  /** 回转后的原始字段值 */
+  value: string | number
+  /** 编辑前的单元格显示文本（回写失败时用于还原单元格显示） */
+  displayText: string
+}
 
 const emit = defineEmits<{
   (e: 'row-click', row: DynamicRecord): void
   (e: 'reference-click', row: DynamicRecord, field: FieldConfig): void
   (e: 'relation-click', relatedRecordId: string, field: FieldConfig): void
   (e: 'quote-click', quotedRecordId: string, field: FieldConfig): void
+  (e: 'cell-edit', payload: ExcelCellEditPayload): void
 }>()
 
 // ==================== State ====================
@@ -206,8 +235,11 @@ function initUniver() {
   // 加载初始数据（优先使用缓存）
   loadWorkbook()
 
-  // 设置只读模式
-  setReadOnly()
+  // 设置编辑门禁（只读或按字段放行）
+  setupEditGate()
+
+  // 监听编辑提交，走回写链路
+  setupEditCommitListener()
 
   // 监听单元格双击事件
   setupCellClickListener()
@@ -267,21 +299,85 @@ function reloadWorkbook() {
     univerAPI.disposeUnit(activeWorkbook.getId())
   }
 
-  // 加载新数据
+  // 加载新数据（编辑门禁/提交监听在 initUniver 注册一次即可，
+  // 回调内动态读取 props，数据重载无需重复注册，避免重复回写）
   loadWorkbook()
-  setReadOnly()
 }
 
 /**
- * 设置只读模式
+ * 该单元格是否允许编辑：数据区（非表头/序号列）+ 标量字段。
+ * 引用字段展开出的继承虚拟列（disabled=true）同样是派生展示，不在回写范围。
  */
-function setReadOnly() {
-  if (!univerAPI) return
+function isEditableCell(row: number, col: number): boolean {
+  const target = cellToTarget(row, col, props.fields, props.data)
+  if (!target || target.field.disabled) return false
+  return isEditableControlType(target.field.controlType)
+}
 
-  // 监听编辑开始事件，阻止所有编辑操作
+/**
+ * 设置编辑门禁（BeforeSheetEditStart）
+ *
+ * - editable=false（默认，访客/无 update 权限）：拦截一切编辑，行为与历史只读版本一致
+ * - editable=true：仅放行标量字段的数据单元格；表头行、序号列与
+ *   多选/关联/引用等派生展示列（见 univerHelper EDITABLE_CONTROL_TYPES 注释）仍然拦截
+ */
+function setupEditGate() {
   univerAPI.addEvent(univerAPI.Event.BeforeSheetEditStart, (params: any) => {
-    params.cancel = true // 阻止编辑
+    if (!props.editable || !isEditableCell(params.row, params.column)) {
+      params.cancel = true // 阻止编辑
+    }
   })
+}
+
+/**
+ * 监听编辑提交（BeforeSheetEditEnd）→ 显示文本回转（parseCellEdit）→
+ * 发 cell-edit 事件，由父组件复用编辑对话框的更新链路落库。
+ *
+ * 解析失败（非数字/未知选项）时取消提交（单元格保持原值）并 ElMessage 警告；
+ * 回写本身是异步的，失败/冲突的还原由父组件调用 restoreCell() 处理。
+ * 事件监听在 initUniver 注册一次，回调内动态读取 props（数据/字段随刷新更新）。
+ */
+function setupEditCommitListener() {
+  univerAPI.addEvent(univerAPI.Event.BeforeSheetEditEnd, (params: any) => {
+    if (!params.isConfirm) return // ESC 取消的编辑不回写
+    if (!props.editable || !isEditableCell(params.row, params.column)) return
+
+    const target = cellToTarget(params.row, params.column, props.fields, props.data)
+    if (!target) return
+
+    const text = extractEditedPlainText(params.value)
+    const parsed = parseCellEdit(text, target.field)
+    if (!parsed.ok) {
+      params.cancel = true // 阻止本次编辑写入单元格
+      ElMessage.warning(parsed.reason)
+      return
+    }
+
+    emit('cell-edit', {
+      row: params.row,
+      col: params.column,
+      record: target.record,
+      field: target.field,
+      value: parsed.value,
+      displayText: formatCellValue(target.record[target.field.fieldName], target.field, target.record)
+    })
+  })
+}
+
+/**
+ * 提取编辑器纯文本。Univer 文档流以 \r\n 结尾（toPlainText 后为 \n），
+ * 需去掉结尾换行才是用户实际输入。
+ */
+function extractEditedPlainText(value: any): string {
+  let text = ''
+  if (value && typeof value.toPlainText === 'function') {
+    text = value.toPlainText()
+  } else if (value !== null && value !== undefined) {
+    text = String(value)
+  }
+  if (text.endsWith('\n')) text = text.slice(0, -1)
+  if (text.endsWith('\r')) text = text.slice(0, -1)
+  return text
 }
 
 /**
@@ -318,6 +414,10 @@ function handleCellDoubleClick() {
 
   // 第 0 行是表头，跳过
   if (row === 0) return
+
+  // editable 模式下，标量字段数据单元格的双击交给 Univer 进入单元格编辑，
+  // 不再触发「打开详情」导航；序号列与非标量字段的双击导航行为不变
+  if (props.editable && isEditableCell(row, col)) return
 
   // 第 0 列是序号列，双击触发 row-click
   if (col === 0) {
@@ -381,7 +481,19 @@ defineExpose({
     // Univer 的筛选通过 UI 操作，这里不需要实现
   },
   /** 手动保存快照（供父组件在视图切换时调用） */
-  saveSnapshot: saveSnapshotToCache
+  saveSnapshot: saveSnapshotToCache,
+  /**
+   * 还原单元格显示文本（回写失败/版本冲突时由父组件调用，
+   * 避免单元格上残留未落库的编辑值）
+   */
+  restoreCell: (row: number, col: number, text: string) => {
+    if (!univerAPI) return
+    const activeWorkbook = univerAPI.getActiveWorkbook()
+    if (!activeWorkbook) return
+    const activeSheet = activeWorkbook.getActiveSheet()
+    if (!activeSheet) return
+    activeSheet.getRange(row, col).setValue(text)
+  }
 })
 </script>
 
@@ -399,7 +511,7 @@ defineExpose({
   overflow: hidden;
   position: relative;
 
-  // 禁用编辑（只读模式）
+  // 编辑门禁由 BeforeSheetEditStart 控制（默认只读，editable 时放行标量字段）
   :deep(.univer-sheet-container) {
     pointer-events: auto;
   }

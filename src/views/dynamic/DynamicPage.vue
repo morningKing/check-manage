@@ -354,10 +354,12 @@
         :fields="effectiveFields"
         :loading="excelLoading"
         :collection-id="pageId"
+        :editable="canUpdate"
         @row-click="handleView"
         @reference-click="handleReferenceClick"
         @relation-click="handleRelationClick"
         @quote-click="handleQuoteClick"
+        @cell-edit="handleExcelCellEdit"
       />
     </el-card>
 
@@ -1591,7 +1593,10 @@ const editingViewId = ref<number | null>(null)
 const viewMode = ref<'table' | 'kanban' | 'excel' | 'calendar' | 'gantt'>('table')
 
 /** Excel 视图组件引用 */
-const excelViewRef = ref<{ saveSnapshot: () => void } | null>(null)
+const excelViewRef = ref<{
+  saveSnapshot: () => void
+  restoreCell: (row: number, col: number, text: string) => void
+} | null>(null)
 const calendarViewRef = ref<{ getApi: () => any } | null>(null)
 
 /**
@@ -2923,6 +2928,49 @@ async function submitFormData(data: Record<string, any>): Promise<void> {
     }
   } finally {
     submitLoading.value = false
+  }
+}
+
+/**
+ * Excel 视图单元格编辑回写（TD-A18b）
+ *
+ * 与编辑对话框共用同一更新链路：updatePageData（单字段合并提交，store 自动
+ * 附带 _version 乐观锁）→ refreshSingleRecord 智能刷新表格与 Excel 全量数据；
+ * 409 VERSION_CONFLICT 时与对话框路径一样提示 conflictMessage() 并刷新。
+ * 失败时把单元格显示还原为编辑前的值，避免残留未落库的编辑文本。
+ */
+async function handleExcelCellEdit(payload: {
+  row: number
+  col: number
+  record: DynamicRecord
+  field: FieldConfig
+  value: string | number
+  displayText: string
+}): Promise<void> {
+  const { row, col, record, field, value, displayText } = payload
+  try {
+    await pageConfigStore.updatePageData(pageId.value, record.id, {
+      [field.fieldName]: value,
+    })
+    ElMessage.success('更新成功')
+    const refreshed = await pageConfigStore.refreshSingleRecord(pageId.value, record.id)
+    if (refreshed) {
+      tableData.value = [...pageConfigStore.getCachedPageData(pageId.value)]
+      excelData.value = [...pageConfigStore.getCachedPageData(pageId.value)]
+      // 智能刷新绕过了 loadPageData，statusBadge 轮询判定要在这里补一次
+      statusBadgePolling.evaluateAndSchedule(tableData.value)
+    } else {
+      // 刷新单条失败，回退到全量加载
+      await loadPageData()
+    }
+  } catch (error: any) {
+    excelViewRef.value?.restoreCell(row, col, displayText)
+    if (isVersionConflict(error)) {
+      ElMessage.warning(conflictMessage())
+      await handleRefresh()
+      return
+    }
+    ElMessage.error('更新失败')
   }
 }
 

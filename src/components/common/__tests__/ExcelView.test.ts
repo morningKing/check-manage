@@ -142,7 +142,7 @@ describe('parseCellEdit — 编辑文本回转为原始字段值', () => {
   })
 
   it('number 字段：非数字文本拒绝', () => {
-    const field = makeField({ controlType: 'number', fieldName: 'qty' })
+    const field = makeField({ controlType: 'number', fieldName: 'qty', label: '数量' })
     const result = parseCellEdit('abc', field)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toContain('数量')
@@ -173,6 +173,7 @@ describe('parseCellEdit — 编辑文本回转为原始字段值', () => {
     const field = makeField({
       controlType: 'select',
       fieldName: 'status',
+      label: '状态',
       options: [{ label: '待处理', value: 'todo' }],
     })
     const result = parseCellEdit('不存在的选项', field)
