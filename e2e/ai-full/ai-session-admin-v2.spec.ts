@@ -61,3 +61,17 @@ test('TC-SESS-01 v2 筛选：sourceType 五类 × status × kind 默认隐藏 ×
     expect(badSrc.json.error).toContain('无效来源类型')
   } finally { await cleanup() }
 })
+
+test('TC-SESS-02 关键词搜索：命中消息正文、精确排除、无匹配返空', async ({ request }) => {
+  const key = newId('kw-')
+  const needle = `${key}-needle`    // 只出现在消息正文，不出现在标题
+  const sHit = await seedPlainSession({ key, messages: [{ role: 'user', text: needle }] })
+  await seedPlainSession({ key })   // 标题同前缀但正文无 needle
+  try {
+    const r = (await api(request, 'get', `/ai/chat/admin/sessions/v2?keyword=${encodeURIComponent(needle)}&kind=all`)).json
+    expect(r.items.map((x: any) => x.id)).toEqual([sHit])
+    expect(r.total).toBe(1)
+    const none = (await api(request, 'get', `/ai/chat/admin/sessions/v2?keyword=${key}-nope&kind=all`)).json
+    expect(none.items).toEqual([])
+  } finally { await cleanup() }
+})
