@@ -55,3 +55,29 @@ test('TC-FIT-01 拟合三态：recompute 落库 + 幂等不重复 + 明细 perSt
     await expect(page.locator('.el-message', { hasText: '已重新计算' })).toBeVisible()
   } finally { cleanupFitSeeds() }
 })
+
+test('TC-FIT-02 preview：贪心匹配契约 + 400 形状族 + 404 + 不落库', async ({ request }) => {
+  const a = await seedFitAttempt(['read', 'write'])
+  try {
+    // steps 带 name：匹配引擎 match_steps 直取 s['name']（skill_fit.py:117），
+    // 定义解析入口恒补 name（skill_fit.py:63）——preview 入参按解析产物同形；
+    // 缺 name 时 preview_steps 自身校验放行但匹配崩（KeyError → 404 'name'）。
+    const steps = [
+      { id: 'read_input', name: 'read_input', expect: [{ tool: 'read' }] },
+      { id: 'save_result', name: 'save_result', expect: [{ tool: 'write', args_pattern: '"path"' }] },
+    ]
+    const r = await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: a.attemptId, steps })
+    expect(r.status).toBe(200)
+    expect(r.json.preview).toMatchObject({ steps_total: 2, steps_hit: 2, score: 100, status: 'fit' })
+    // 不落库：行数不变
+    const list = (await api(request, 'get', `/ai/chat/admin/skill-fit?defName=${a.defName}&limit=100`)).json
+    expect(list.fits).toHaveLength(0)
+    // 400 族：缺 id / expect 非数组 / 非法正则 / 缺 attemptId
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: a.attemptId, steps: [{ expect: [{ tool: 'read' }] }] })).status).toBe(400)
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: a.attemptId, steps: [{ id: 'x', expect: 'read' }] })).status).toBe(400)
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: a.attemptId, steps: [{ id: 'x', expect: [{ tool: 'read', args_pattern: '(unclosed' }] }] })).status).toBe(400)
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { steps })).status).toBe(400)
+    // 404：attempt 不存在
+    expect((await api(request, 'post', '/ai/chat/admin/skill-def-steps/preview', { attemptId: newId('att_'), steps })).status).toBe(404)
+  } finally { cleanupFitSeeds() }
+})
