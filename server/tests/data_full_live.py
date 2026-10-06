@@ -1,6 +1,8 @@
 """数据管理全量 E2E —— L2 live-server 公共助手。
 
-与 server/tests/ 既有 mock-DB 单测不同：本模块打真实 dev 后端（:3002）。
+与 server/tests/ 既有 mock-DB 单测不同：本模块打真实 dev 栈——
+经 Vite :5173 代理访问 /api（Flask :3002 本体不挂 /api 前缀，代理把 /api
+rewrite 掉再转发；故默认 BASE=:5173，可用 env DATA_FULL_BASE_URL 覆盖）。
 服务未启动时由 fixture skip，不影响 `npm run test:server` 离线跑。
 """
 import os
@@ -8,7 +10,7 @@ import time
 
 import requests
 
-BASE = os.environ.get('DATA_FULL_BASE_URL', 'http://localhost:3002')
+BASE = os.environ.get('DATA_FULL_BASE_URL', 'http://localhost:5173')
 
 
 def server_up() -> bool:

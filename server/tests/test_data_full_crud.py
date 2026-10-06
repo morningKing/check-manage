@@ -26,7 +26,7 @@ def _rid() -> str:
 @pytest.fixture(scope='module')
 def admin():
     if not live.server_up():
-        pytest.skip('dev 后端 :3002 未启动（npm run dev:all 或 cd server && python app.py）')
+        pytest.skip('dev 栈未启动（Vite :5173 代理 /api → Flask :3002；npm run dev:all）')
     return live.login()
 
 
@@ -129,9 +129,16 @@ def test_td_a08_keyword_search(admin, pageh):
 
 
 def test_td_a09_missing_collection_404_no_leak(admin):
-    r = live.api('GET', '/DTEST-no-such-collection', admin)
-    assert r.status_code == 404
-    assert r.json()['error'] == 'Not found'
+    """未知 collection 不 5xx、不报错、返回空集（不泄漏存在性）。
+
+    R2 对齐实测契约：404 "Not found" 仅用于 RESERVED 保留名；
+    未知名 GET 返回 200 空集，而非 404。
+    """
+    r = live.api('GET', f"/DTEST-no-such-{int(time.time() * 1000)}", admin)
+    assert r.status_code == 200
+    body = r.json()
+    assert body['data'] == []
+    assert body['total'] == 0
 
 
 def test_td_a10_malformed_json_400(admin, pageh):
