@@ -184,3 +184,55 @@ test('TC-FIT-04 采集链路：runtime 事件落库 + 幂等不降级 + idle 收
     expect((await post(evt, 'wrong-token')).status).toBe(403)
   } finally { cleanupFitSeeds() }
 })
+
+// Step 0（task-10-brief）源码核对结论：
+// - effect 端点按 before_metrics 的 'skillName' 键过滤 invocations
+//   （ai_session_admin.py:759/769）——brief 的 appliedValue 语义正确；
+// - 但 applied_value 列是 TEXT（:724，migration 2026_09_18_skillopt_p2.py:53），
+//   INSERT 直传 body.get('appliedValue')（:727）——对象形状 psycopg2 无法
+//   适配（实测 500 "can't adapt type 'dict'"），按 Step 0 授权把形状改为
+//   字符串（JSON 序列化保留 skillName 语义）；
+// - feedback INSERT 只落 (id, diagnosis_id, suggestion_id, action,
+//   applied_value, applied_by)（:722-727）——applied_at（无默认无触发器，
+//   实测 information_schema/pg_trigger）与 before_metrics 永不被写，effect
+//   端点 :744-745 对 applied_at NULL 一律返回 not_applied → 「tracked +
+//   before 窗口」断言按 brief 保持原样，红即产品真实缺口（效果追踪半接线），
+//   不做断言弱化。
+test('TC-FIT-05 反馈→效果追踪：applied 落库 + before 窗口含种子调用 + 400/404', async ({ request }) => {
+  const key = newId('fb-')
+  const sid = await seedPlainSession({ key })
+  const attemptId = newId('att_')
+  dbSeed(`INSERT INTO ai_execution_attempts (id, session_id, source_type, attempt_no, operation, status, started_at, finished_at)
+          VALUES ('${attemptId}', '${sid}', 'interactive', 1, 'send', 'completed', NOW() - INTERVAL '2 hour', NOW() - INTERVAL '1 hour')`)
+  const skillName = `AITEST-skill-${Date.now()}`
+  // id 是无默认 NOT NULL 主键（实测 information_schema），brief 原稿漏列——补自造 id
+  dbSeed(`INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, outcome)
+          VALUES ('${newId('inv_')}', '${sid}', '${attemptId}', '${skillName}', 'h1', 'runtime', 'confirmed', NOW() - INTERVAL '90 minutes', 'completed')`)
+  const diagId = newId('ana_')
+  dbSeed(`INSERT INTO ai_execution_diagnoses (id, target_session_id, status) VALUES ('${diagId}', '${sid}', 'completed')`)
+  const sugId = 'sug_' + crypto.randomBytes(4).toString('hex')
+  try {
+    const fb = await api(request, 'post', `/ai/chat/admin/analyses/${diagId}/suggestions/${sugId}/feedback`,
+      { action: 'applied', appliedValue: JSON.stringify({ skillName }) })
+    expect(fb.status).toBe(200)
+    const row = (await api(request, 'get', '/ai/chat/admin/suggestion-feedbacks')).json.feedbacks
+      .find((f: any) => f.diagnosis_id === diagId)
+    expect(row).toBeTruthy()
+    expect(row.action).toBe('applied')
+    // effect：tracked + before 7 天窗口包含 90 分钟前的种子调用
+    const eff = (await api(request, 'get', `/ai/chat/admin/skill-suggestions/${sugId}/effect`)).json
+    expect(eff.status).toBe('tracked')
+    expect(eff.before.invocations).toBeGreaterThanOrEqual(1)
+    expect(eff.after).toBeTruthy()
+    // 非法 action 400 / 诊断不存在 404
+    expect((await api(request, 'post', `/ai/chat/admin/analyses/${diagId}/suggestions/${sugId}/feedback`, { action: 'bogus' })).status).toBe(400)
+    expect((await api(request, 'post', `/ai/chat/admin/analyses/${newId('ana_')}/suggestions/${sugId}/feedback`, { action: 'applied' })).status).toBe(404)
+  } finally {
+    // 定点清理：feedback→invocations→diagnoses→attempts→sessions
+    dbSeed(`DELETE FROM ai_suggestion_feedback WHERE diagnosis_id='${diagId}'`)
+    dbSeed(`DELETE FROM ai_skill_invocations WHERE session_id='${sid}'`)
+    dbSeed(`DELETE FROM ai_execution_diagnoses WHERE id='${diagId}'`)
+    dbSeed(`DELETE FROM ai_execution_attempts WHERE id='${attemptId}'`)
+    cleanupSessionsByPrefix()
+  }
+})
