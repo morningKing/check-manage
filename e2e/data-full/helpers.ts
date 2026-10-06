@@ -28,6 +28,16 @@ export interface FieldLite {
   order: number
   placeholder?: string
   options?: { label: string; value: string }[]
+  // 族B 控件配置（计划②预批偏差）：POST /pageConfigs 的 fields 原样落库
+  // （server/routes/page_configs.py:78-80 Json(body.get('fields'))），
+  // 前端 FieldConfig 读取这些键（src/types/field.ts:268-276）。
+  sequenceConfig?: { prefix: string; max: number }
+  compositeTextConfig?: { sourceFields: string[]; separator: string }
+  workflowConfig?: {
+    enabled: boolean
+    transitions: { from: string; to: string; label: string; roles?: string[] }[]
+  }
+  fileConfig?: { allowedExtensions: string[] }
 }
 
 /** 族A 标准字段（placeholder 同时是 UI 用例的定位锚点） */
