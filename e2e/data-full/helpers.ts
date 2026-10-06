@@ -38,6 +38,11 @@ export interface FieldLite {
     transitions: { from: string; to: string; label: string; roles?: string[] }[]
   }
   fileConfig?: { allowedExtensions: string[] }
+  // 族C 关联配置（计划②预批偏差，同上）：POST /pageConfigs 的 fields 原样落库，
+  // 前端 FieldConfig 读取这些键（src/types/field.ts:101-129）。
+  relationConfig?: { targetCollection: string; displayField: string; targetField: string }
+  referenceConfig?: { targetCollection: string; displayField: string; inheritFields: string[] }
+  quoteConfig?: { targetCollection: string; displayField: string }
 }
 
 /** 族A 标准字段（placeholder 同时是 UI 用例的定位锚点） */
