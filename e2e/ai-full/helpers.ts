@@ -6,9 +6,12 @@
  * - 登录走真实 /api/auth/login；API Key 用后即删，不残留密钥。
  * - 截图证据目录 e2e/screenshots/ai-full/。
  */
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { APIRequestContext, Page } from '@playwright/test'
+import { API } from './batch/batch-helpers'
 
 export const AUTH_FILE = 'e2e/.auth/admin.json'
 export const SHOT_DIR = 'e2e/screenshots/ai-full'
@@ -192,4 +195,53 @@ export async function findSession(request: APIRequestContext, sid: string):
   const r = await api(request, 'GET', '/ai/chat/sessions')
   const sessions = r.json?.sessions || []
   return sessions.find((s: any) => s.id === sid) || null
+}
+
+// package.json 带 "type": "module"，本仓库 e2e 规约以 import.meta.url 求模块目录
+// （同 batch/toolbox.ts、e2e/ai-chat-stop-resume.spec.ts），不直接用 __dirname。
+const DIRNAME = path.dirname(fileURLToPath(import.meta.url))
+
+/** 重启后端（Windows 环境）：kill 3002 → 带 env 重启 → 探活。不传 env 即恢复默认。
+ * 原 batch/toolbox.ts 实现（2026-10-06 共享化迁入，函数体逐字保留；仅 server 目录
+ * 相对层级随本文件位置少一级 `..`），toolbox 侧 re-export 转发、batch 用例不受影响。 */
+export async function restartBackend(env: Record<string, string> = {}): Promise<void> {
+  // 找到监听 3002 的 PID 并 kill（netstat 行形如 `TCP  127.0.0.1:3002 ... LISTENING  1234`）。
+  // /:3002\s/ 锚定端口列，避免 includes(':3002') 子串误匹配 :30021 等监听行；
+  // netstat 失败/无监听（首启）可容忍，但 taskkill 失败必须显式抛出——吞掉会让
+  // 旧进程继续占用 3002，重启退化为数分钟后的看门狗超时，难以定位。
+  let pid: string | undefined
+  try {
+    const out = execFileSync('netstat', ['-ano'], { encoding: 'utf-8', shell: true })
+    pid = out.split('\n').map(l => l.trim())
+      .filter(l => /:3002\s/.test(l) && l.includes('LISTENING'))
+      .pop()?.split(/\s+/).pop()
+  } catch { /* netstat 失败视同无监听（首启容忍） */ }
+  if (pid) {
+    try {
+      execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
+    } catch (e) {
+      throw new Error(`restartBackend: taskkill PID=${pid} 失败，3002 仍被旧进程占用：${e}`)
+    }
+  }
+  const child = spawn('python', ['app.py'], {
+    cwd: path.join(DIRNAME, '..', '..', 'server'),
+    env: { ...process.env, ...env },
+    // detached:true（Windows=新进程组+独立控制台）：后端必须活过本 runner 退出
+    // ——detached:false 时子进程随父控制台关闭被杀（Task 12 实测 run 结束即失联）
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  child.unref()
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`${API}/auth/login`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })
+      if (r.status < 500) return   // 400/401/422 都证明 Flask 已起
+    } catch { /* 未起，重试 */ }
+    await new Promise(rr => setTimeout(rr, 1000))
+  }
+  throw new Error('backend restart: 60s 内未探活')
 }

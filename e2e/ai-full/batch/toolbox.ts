@@ -3,7 +3,7 @@
  * 原则（spec §3）：系统栈真实（后端/OpenCode/DB 真进程），但不烧 LLM——
  * fail-fast / sleep 长任务 / fs 直写 / DB 种子构造目标状态。
  */
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,7 +15,9 @@ import {
   API,
 } from './batch-helpers'
 
-export { API }
+// adminToken/authHeaders 来自 batch-helpers，这里转发导出（ai-session-admin-v2
+// 等联动套件按 toolbox 单一入口取用；对既有 12 个批任务 spec 纯增量、零影响）。
+export { API, adminToken, authHeaders }
 
 // package.json 带 "type": "module"，本仓库 e2e 规约以 import.meta.url 求模块目录
 // （同 e2e/ai-chat-stop-resume.spec.ts），不直接用 __dirname。
@@ -171,45 +173,6 @@ export async function seedRunningChild(o: SeedOpts): Promise<{ bid: string; sid:
   return { bid, sid }
 }
 
-/** 重启后端（Windows 环境）：kill 3002 → 带 env 重启 → 探活。不传 env 即恢复默认。 */
-export async function restartBackend(env: Record<string, string> = {}): Promise<void> {
-  // 找到监听 3002 的 PID 并 kill（netstat 行形如 `TCP  127.0.0.1:3002 ... LISTENING  1234`）。
-  // /:3002\s/ 锚定端口列，避免 includes(':3002') 子串误匹配 :30021 等监听行；
-  // netstat 失败/无监听（首启）可容忍，但 taskkill 失败必须显式抛出——吞掉会让
-  // 旧进程继续占用 3002，重启退化为数分钟后的看门狗超时，难以定位。
-  let pid: string | undefined
-  try {
-    const out = execFileSync('netstat', ['-ano'], { encoding: 'utf-8', shell: true })
-    pid = out.split('\n').map(l => l.trim())
-      .filter(l => /:3002\s/.test(l) && l.includes('LISTENING'))
-      .pop()?.split(/\s+/).pop()
-  } catch { /* netstat 失败视同无监听（首启容忍） */ }
-  if (pid) {
-    try {
-      execFileSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' })
-    } catch (e) {
-      throw new Error(`restartBackend: taskkill PID=${pid} 失败，3002 仍被旧进程占用：${e}`)
-    }
-  }
-  const child = spawn('python', ['app.py'], {
-    cwd: path.join(DIRNAME, '..', '..', '..', 'server'),
-    env: { ...process.env, ...env },
-    // detached:true（Windows=新进程组+独立控制台）：后端必须活过本 runner 退出
-    // ——detached:false 时子进程随父控制台关闭被杀（Task 12 实测 run 结束即失联）
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-  })
-  child.unref()
-  const deadline = Date.now() + 60_000
-  while (Date.now() < deadline) {
-    try {
-      const r = await fetch(`${API}/auth/login`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
-      })
-      if (r.status < 500) return   // 400/401/422 都证明 Flask 已起
-    } catch { /* 未起，重试 */ }
-    await new Promise(rr => setTimeout(rr, 1000))
-  }
-  throw new Error('backend restart: 60s 内未探活')
-}
+// restartBackend 已共享化至 ../helpers（轨迹分析 e2e 套件等非批用例复用）；
+// 函数体逐字迁出、此处 re-export 转发——batch 既有用例 import 路径不变。
+export { restartBackend } from '../helpers'
