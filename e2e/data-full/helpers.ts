@@ -169,8 +169,12 @@ export async function createRecord(request: APIRequestContext,
   // （NotNullViolation）。产品 UI 在客户端生成 id/createdAt
   // （stores/pageConfig.ts addPageData：`${endpoint}-${uuid 前 8}`），这里对齐。
   const payload = { ...(data as Record<string, unknown>) }
+  // id 与 createdAt 各自独立补缺——调用方显式传入的值（如早 createdAt 控制
+  // 列表排序）不得被覆盖。
   if (payload.id == null || payload.id === '') {
     payload.id = `${collection}-${randomUUID().slice(0, 8)}`
+  }
+  if (payload.createdAt == null || payload.createdAt === '') {
     payload.createdAt = new Date().toISOString()
   }
   return api(request, 'POST', `/${collection}`, payload)

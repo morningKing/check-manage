@@ -91,13 +91,49 @@ test('TD-A17 UI 批量删除', async ({ page, request }) => {
     .toHaveCount(0)
 })
 
+// TD-A18（绿用例）：Excel 视图渲染 + 查看交互。ExcelView 只读（见 TD-A18b 注），
+// 双击单元格的产品行为是打开「查看记录」对话框 —— 这里断言该真实交互。
+test('TD-A18 Excel 视图渲染与查看交互', async ({ page, request }) => {
+  const marker = `XLS-${Date.now()}`
+  // createdAt 给早值：列表默认 ORDER BY created_at,id → 该记录排首条，
+  // 对应表单第 2 行（第 1 行为表头，univerHelper cellData[0]=表头）。
+  await createRecord(request, h.collection,
+    { name: marker, qty: 1, createdAt: '2020-01-01T00:00:00.000Z' })
+  const seeded = await listRecords(request, h.collection)
+  expect(seeded.json.data[0]?.name, '标记记录应排首条（表单第 2 行）').toBe(marker)
+  await gotoWithAuth(page, h.path)
+  // 视图切换：table → excel（el-radio-button 渲染为 label 包 input[type=radio]）
+  await page.locator('.view-toggle .el-radio-button:has(input[value="excel"])').click()
+  await expect(page.locator('.univer-container')).toBeVisible()
+  await page.waitForTimeout(3_000) // Univer 渲染稳定
+  await screenshot(page, 'crud-ui-excel-view')
+
+  // 双击「名称」列第 2 行单元格（首行表头、首列名称，1 基）
+  const box = await page.locator('.univer-container').boundingBox()
+  expect(box, 'Univer 容器应有尺寸').not.toBeNull()
+  // 实测布局（crud-ui-excel-view.png 像素测量 + 探针验证）：容器内偏移
+  // 工具栏 ~40px + 列字母行 ~21px + 序号#列 60px（univerHelper columns[0].w=60），
+  // 名称列默认宽 ~150px；数据行 2 中心 = 容器原点 + (179, 90)。
+  const cellX = box!.x + 179
+  const cellY = box!.y + 90
+  await page.mouse.dblclick(cellX, cellY)
+  // 只读视图的双击导航：打开「查看记录」对话框，含该记录名称
+  const viewer = page.locator('.el-dialog:visible', { hasText: marker })
+  await expect(viewer).toBeVisible({ timeout: 10_000 })
+  await expect(viewer).toContainText('查看记录')
+  await screenshot(page, 'crud-ui-excel-viewer')
+  // 头部 X 按钮 aria-label=「关闭此对话框」，与底部「关闭」按钮子串撞名 —— exact 匹配底部
+  await viewer.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(viewer).not.toBeVisible()
+})
+
 // fixme(产品能力缺口)：Excel 视图当前为只读，无法做单元格编辑回写 ——
 // src/components/common/ExcelView.vue setReadOnly() 对 BeforeSheetEditStart
 // 一律 cancel=true（组件头注释「只读模式，不可编辑」，亦无 editable prop）；
 // 双击单元格实测打开「查看记录」对话框（导航行为），不开单元格编辑器
 // （探针截图 e2e/screenshots/data-full/_probe-after-dblclick.png）。
 // 坐标已按截图核对修正仍无法回写。待产品实现 Excel 编辑回写后移除 fixme。
-test.fixme('TD-A18 Excel 视图编辑回写', async ({ page, request }) => {
+test.fixme('TD-A18b Excel 单元格编辑回写（产品缺口，待实现）', async ({ page, request }) => {
   const marker = `XLS-${Date.now()}`
   await createRecord(request, h.collection, { name: marker, qty: 1 })
   await gotoWithAuth(page, h.path)
