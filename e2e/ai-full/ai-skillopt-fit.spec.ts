@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { api, gotoWithAuth } from './helpers'
 import { API, dbSeed } from './batch/toolbox'
 import { newId, seedPlainSession, cleanupSessionsByPrefix } from './db-helpers'
-import { seedFitAttempt, cleanupFitSeeds, TWO_STEPS, resolveWorkspaceRoot } from './fit-seed'
+import { seedFitAttempt, cleanupFitSeeds, TWO_STEPS } from './fit-seed'
 
 test.setTimeout(180_000)
 
@@ -60,8 +60,8 @@ test('TC-FIT-01 拟合三态：recompute 落库 + 幂等不重复 + 明细 perSt
 test('TC-FIT-02 preview：贪心匹配契约 + 400 形状族 + 404 + 不落库', async ({ request }) => {
   const a = await seedFitAttempt(['read', 'write'])
   try {
-    // steps 带 name：匹配引擎 match_steps 直取 s['name']（skill_fit.py:117），
-    // 定义解析入口恒补 name（skill_fit.py:63）——preview 入参按解析产物同形；
+    // steps 带 name：匹配引擎 match_steps 直取 s['name']（skill_fit.py:134/:155，
+    // 匹配器直接下标），定义解析入口恒补 name（skill_fit.py:63）——preview 入参按解析产物同形；
     // 缺 name 时 preview_steps 自身校验放行但匹配崩（KeyError → 404 'name'）。
     const steps = [
       { id: 'read_input', name: 'read_input', expect: [{ tool: 'read' }] },

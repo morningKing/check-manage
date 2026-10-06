@@ -133,7 +133,8 @@ test('TC-TRACE-03 派发失败清理：diagnosis failed + 无孤儿会话行 + �
 
 test('TC-TRACE-05 @llm 轨迹分析闭环：真实会话→触发→收敛→报告结构→抽屉历史', async ({ page, request }, testInfo) => {
   testInfo.annotations.push({ type: 'llm' })
-  test.setTimeout(600_000)
+  // 预算 660s（探针+assistant 180s+轮询 480s）< 900s，留 headroom
+  test.setTimeout(900_000)
   const tk = await adminToken()
   // LLM 预检（ledger Ruling Task 16）：dev LLM 不可达时步骤 1 会挂满 180s——
   // 先打一发真实 LLM 调用探活，502 即整例 skip，避免环境性红。

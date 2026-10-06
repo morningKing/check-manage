@@ -18,7 +18,7 @@
 
 | 用例号 | 判别力点（预期抓取的缺陷） | 基线结果 | 验证方式 |
 |---|---|---|---|
-| TC-SESS-01 | **source_type SQL 计算列优先级**（`kefu` > `scan` > `api_batch` > `batch` > `regular`）：批行带 `api_key_id` 时必须归 `api_batch` 而不得被 `sourceType=batch` 命中——若 CASE 分支顺序错，api_batch 行会跨类泄漏；**kind 过滤 SQL**（默认隐藏 `trace_analysis`，`kind=all`/`kind=trace_analysis` 三态）；status 过滤与分页 total 一致性；非法参数 400 中文契约（「无效状态」「无效来源类型」） | main 全绿但零覆盖：v2 列表端点无任何筛选正确性测试，计算列优先级错误将无测试可抓 | DB 直插 6 条自造会话（5 类 source 各 1 + trace_analysis 1，同随机 keyword 收敛种子集），逐类 `sourceType=<t>` 断言返回 id 数组 `toEqual([目标id])` 精确单命中；`kind` 三态行数/包含性断言；非法 status/sourceType 断言 400 + error 子串 |
+| TC-SESS-01 | **source_type SQL 计算列优先级**（`kefu` > `scan` > `api_batch` > `batch` > `regular`）：批行带 `api_key_id` 时必须归 `api_batch` 而不得被 `sourceType=batch` 命中——若 CASE 分支顺序错，api_batch 行会跨类泄漏；**kind 过滤 SQL**（默认隐藏 `trace_analysis`，`kind=all`/`kind=trace_analysis` 三态）；status 过滤精确性（closed 种子被 completed 排除、closed 单命中，防过滤 no-op 空洞通过）与分页 total 一致性；非法参数 400 中文契约（「无效状态」「无效来源类型」） | main 全绿但零覆盖：v2 列表端点无任何筛选正确性测试，计算列优先级错误将无测试可抓 | DB 直插 7 条自造会话（5 类 source 各 1 + trace_analysis 1 + regular closed 1，同随机 keyword 收敛种子集），逐类 `sourceType=<t>&status=completed` 断言返回 id 数组 `toEqual([目标id])` 精确单命中；`kind` 三态行数/包含性断言；status=completed&kind=all 断言精确排除 closed 种子、status=closed&kind=all 单命中；非法 status/sourceType 断言 400 + error 子串 |
 | TC-SESS-02 | **关键词全消息搜索的 EXISTS jsonb 路径**：keyword 必须命中消息正文（jsonb 数组内层 text），而非仅标题——若 SQL 只 LIKE 标题或 jsonb 路径写错，正文命中为空 | main 全绿但零覆盖：v2 关键词搜索无正文级断言 | 种子两条同前缀会话，仅一条的 `messages` 正文含 needle（标题不含）；keyword=needle 断言精确单命中 + total=1；keyword=无匹配串断言 `items` 空数组 |
 | TC-SESS-03 | **详情抽屉数据装配**（基本信息 sid/标题、对话历史消息渲染、文件按 outputs 分组）与**下载端点路径守卫**（`commonpath().startswith(ws)` 契约，Windows 反斜杠/正斜杠分隔符一致性）——装配漏字段或守卫误判 400 均被抓 | main 全绿但零覆盖：v2 详情抽屉 UI 与 files/download 无端到端断言 | 种子会话 + 临时工作区写入 `outputs/report.md`（内容指纹串）；UI 走真实链路打开抽屉断言三 tab 渲染（标题全等、消息文本可见、文件名 exact 可见）；API 通道 fetch download 断言 200 且响应体与种子内容全等 |
 | TC-SESS-04 | **v2 归档入口 → archive 联动**（UI 归档后列表徽标「已归档」）、**oplog 留痕**（operation_logs 精确到 action=`update`、description=`归档会话（admin）`）、**批控会话 BATCH_SESSION_CONTROLLED 409**（running 批子会话拒绝归档）——漏留痕或批控放行均被抓 | main 全绿但零覆盖：v2 入口归档与批控 409 无测试 | UI 真实链路：行下拉「归档」→ 确认框 → `el-message 已归档` → 查询后徽标断言；DB 断言 oplog 行 `[["update","归档会话（admin）"]]` 全等；API 通道对 `seedRunningChild` 造的批控 running 子会话 POST archive 断言 409 + `error.code==='BATCH_SESSION_CONTROLLED'` |
@@ -116,6 +116,19 @@ npx playwright test e2e/ai-full/ai-trace-analysis.spec.ts -g "TC-TRACE-05"
 
 - 分片 1：**无**——恰 1 failed（TC-FIT-05 预期红）+ 2 skipped（TC-FIT-06 / TC-TRACE-05 预期 skip）+ 63 passed，与预期 outcomes 完全一致。
 - 分片 2：1 例预期外失败（batch/lifecycle，见上——单次重跑转绿，判 flake）；除此之外与预期一致（TC-FIT-05 与两例 @llm skip 均落在分片 1，分片 2 无新用例故 0 skipped）。
+
+### 终审修复后复跑（2026-10-06）
+
+**复跑原因**：终审发现两处测试侧问题并已修复——**F1**（TC-SESS-01 原 `status=completed` 断言在 6 条全 completed 种子上属空洞通过——过滤即使为 no-op 也绿；补种第 7 条 `status='closed'` regular 会话，改为 `status=completed&kind=all` 精确 id 排除断言 + `status=closed&kind=all` 单命中断言，种子计数随之 6→7）；**F2**（TC-TRACE-05 `test.setTimeout` 600s→900s，对齐 660s 真实预算——探针 + assistant 180s + 轮询 480s——留 headroom）。F1 改变了种子计数，**证据必须反映提交后的代码**，故对 16 例新用例所在的分片 1 复跑。
+
+| 分片 | 命令 | passed | failed | skipped | 汇总行 |
+|---|---|---|---|---|---|
+| 1/2（终审修复后复跑） | `npx playwright test e2e/ai-full --shard=1/2` | 63 | 1 | 2 | `1 failed`（e2e\ai-full\ai-skillopt-fit.spec.ts:201:1 › TC-FIT-05 反馈→效果追踪：applied 落库 + before 窗口含种子调用 + 400/404）<br>`2 skipped`（TC-FIT-06、TC-TRACE-05）<br>`63 passed (21.3m)` |
+
+- 复跑结果与修复前**完全一致**：唯一失败仍为 TC-FIT-05 预期红（`expect(fb.status).toBe(200)` 实得 **500**，§2 BUG-1 判别力证据，不受测试侧修复影响）；TC-SESS-01 收紧后的 status 精确断言转绿，同时证实 v2 列表 status 过滤**非** no-op（closed 种子被 completed 精确排除）。
+- **分片 2 不受影响，未复跑**：本次修复仅触及 `ai-session-admin-v2.spec.ts`、`ai-trace-analysis.spec.ts`、`ai-skillopt-fit.spec.ts` 三个文件，与分片 2 的测试文件集合**无交集**（分片 2 不含本轮 16 例新用例），其既有结果继续有效。
+- TC-TRACE-05 再次因 LLM 预检 502 skip（`ai_settings` endpoint host `x` 不可达，见 §3）——F2 的 900s 超时改动本次**未被实际执行**（skip 用例不消耗新预算），属纯预算余量修正；待 LLM 恢复后按 §3 命令补跑时生效。
+- §1.1 TC-SESS-01 行的「验证方式/判别力点」已随 F1 同步订正（6 条→7 条种子、status 精确断言描述），与本表其余部分保持一致。
 
 ---
 

@@ -29,15 +29,17 @@ test('TC-SESS-01 v2 筛选：sourceType 五类 × status × kind 默认隐藏 ×
   const sScan = await seedPlainSession({ key, scanTaskId: true })
   const sKefu = await seedPlainSession({ key, kefu: true })
   const sTrace = await seedPlainSession({ key, kind: 'trace_analysis' })
+  const sClosed = await seedPlainSession({ key, status: 'closed' })
   try {
     const q = async (params: string) =>
       (await api(request, 'get', `/ai/chat/admin/sessions/v2?pageSize=100&${params}`)).json
     const ids = (r: any) => r.items.map((x: any) => x.id)
 
-    // sourceType 逐类精确命中，且返回项无跨类泄漏
+    // sourceType 逐类精确命中，且返回项无跨类泄漏。sClosed 同为 regular 来源，
+    // 故与 status=completed 复合后才精确——顺带覆盖 sourceType × status 组合过滤
     for (const [t, sid] of [['regular', sRegular], ['batch', sBatch], ['api_batch', sApi],
       ['scan', sScan], ['kefu', sKefu]] as const) {
-      const r = await q(`sourceType=${t}&keyword=${key}`)
+      const r = await q(`sourceType=${t}&keyword=${key}&status=completed`)
       expect(ids(r)).toEqual([sid])
     }
     // 判别力：api_batch（批行带 api_key_id）不得被 sourceType=batch 命中（计算列优先级）
@@ -45,16 +47,20 @@ test('TC-SESS-01 v2 筛选：sourceType 五类 × status × kind 默认隐藏 ×
     expect(ids(rb)).toEqual([sBatch])
     // kind 默认隐藏 trace_analysis；kind=all 可见；kind=trace_analysis 只看分析会话
     expect(ids(await q(`keyword=${key}`))).not.toContain(sTrace)
-    expect(ids(await q(`keyword=${key}`))).toHaveLength(5)
+    expect(ids(await q(`keyword=${key}`))).toHaveLength(6)   // 6 条 chat 类（含 closed）
     const all = await q(`keyword=${key}&kind=all`)
-    expect(ids(all)).toHaveLength(6)
+    expect(ids(all)).toHaveLength(7)
     expect(ids(all)).toContain(sTrace)
+    expect(ids(all)).toContain(sClosed)
     expect(ids(await q(`keyword=${key}&kind=trace_analysis`))).toEqual([sTrace])
-    // status 过滤
-    const st = await q(`keyword=${key}&status=completed&kind=all`)
-    expect(ids(st)).toHaveLength(6)   // 种子会话全部 completed
+    // status 过滤判别力：status=completed 必须精确排除 closed 种子（过滤为 no-op
+    // 时会混入 sClosed 共 7 行）；closed 单命中。completed 两侧排序以消除
+    // created_at 同微秒插入的顺序不确定性，仍为 id 数组全等断言。
+    expect(ids(await q(`keyword=${key}&status=completed&kind=all`)).sort())
+      .toEqual([sRegular, sBatch, sApi, sScan, sKefu, sTrace].sort())
+    expect(ids(await q(`keyword=${key}&status=closed&kind=all`))).toEqual([sClosed])
     // 分页 total 与 items 一致
-    expect(all.total).toBe(6)
+    expect(all.total).toBe(7)
     // 非法参数 400（中文错误契约）
     const badStatus = await api(request, 'get', '/ai/chat/admin/sessions/v2?status=bogus')
     expect(badStatus.status).toBe(400)
