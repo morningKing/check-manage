@@ -288,6 +288,7 @@ def test_td_e11_export_script_crud_unique_name(admin, pageh):
 
 def test_td_e12_export_test_preview_and_syntax_error(admin, pageh):
     s = _export_script(admin, pageh['collection'])
+    bad_id = None
     try:
         live.api('POST', f"/{pageh['collection']}", admin,
                  {'id': uuid.uuid4().hex, 'name': '导出行', 'qty': 7})
@@ -301,18 +302,23 @@ def test_td_e12_export_test_preview_and_syntax_error(admin, pageh):
             'script': 'result = (语法错误', 'outputFormat': 'csv',
             'scope': 'page', 'boundCollection': pageh['collection']})
         assert bad.status_code < 300  # 脚本存储不校验语法
-        t2 = live.api('POST', f"/exportScripts/{bad.json()['id']}/test", admin,
+        bad_id = bad.json().get('id')
+        t2 = live.api('POST', f"/exportScripts/{bad_id}/test", admin,
                       {'collection': pageh['collection']})
         assert t2.status_code == 400 and t2.json().get('success') is False
-        live.api('DELETE', f"/exportScripts/{bad.json()['id']}", admin)
     finally:
+        if bad_id:  # T4-R1：t2 断言失败也回收 bad 脚本，不泄漏 DTEST-E-bad-*
+            live.api('DELETE', f"/exportScripts/{bad_id}", admin)
         live.api('DELETE', f"/exportScripts/{s['id']}", admin)
 
 
 def test_td_e13_export_execute_binary_and_binding_mismatch(admin, pageh):
-    s = _export_script(admin, pageh['collection'])
-    other = live.make_page(admin, 'E', 'exp-other', fields=[NAME])
+    s = None
+    other = None
     try:
+        # T4-R1：setup 挪进 try——make_page 异常时不泄漏已创建的导出脚本
+        s = _export_script(admin, pageh['collection'])
+        other = live.make_page(admin, 'E', 'exp-other', fields=[NAME])
         live.api('POST', f"/{pageh['collection']}", admin,
                  {'id': uuid.uuid4().hex, 'name': '执行行', 'qty': 3})
         ex = live.api('POST', '/exportScripts/execute', admin,
@@ -323,8 +329,10 @@ def test_td_e13_export_execute_binary_and_binding_mismatch(admin, pageh):
                             {'scriptId': s['id'], 'collection': other['collection']})
         assert mismatch.status_code == 400  # 绑定不符
     finally:
-        live.drop_page(admin, other)
-        live.api('DELETE', f"/exportScripts/{s['id']}", admin)
+        if other is not None:
+            live.drop_page(admin, other)
+        if s is not None:
+            live.api('DELETE', f"/exportScripts/{s['id']}", admin)
 
 
 def test_td_e14_export_batch_zip(admin, pageh):
@@ -380,9 +388,11 @@ def test_td_e16_export_missing_result_assignment_rejected(admin, pageh):
         'name': f"DTEST-E-nores-{uuid.uuid4().hex[:8]}",
         'script': "x = 1\n", 'outputFormat': 'csv',
         'scope': 'page', 'boundCollection': pageh['collection']})
+    assert r.status_code < 300, f'{r.status_code} {r.text[:300]}'  # T4-R1：失败给明确诊断
+    script_id = r.json()['id']
     try:
-        t = live.api('POST', f"/exportScripts/{r.json()['id']}/test", admin,
+        t = live.api('POST', f"/exportScripts/{script_id}/test", admin,
                      {'collection': pageh['collection']})
         assert t.status_code == 400 and t.json().get('success') is False
     finally:
-        live.api('DELETE', f"/exportScripts/{r.json()['id']}", admin)
+        live.api('DELETE', f"/exportScripts/{script_id}", admin)
