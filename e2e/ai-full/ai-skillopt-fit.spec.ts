@@ -236,3 +236,31 @@ test('TC-FIT-05 反馈→效果追踪：applied 落库 + before 窗口含种子�
     cleanupSessionsByPrefix()
   }
 })
+
+test('TC-FIT-06 @llm 步骤生成+偏差诊断冒烟', async ({ request }, testInfo) => {
+  testInfo.annotations.push({ type: 'llm' })
+  const a = await seedFitAttempt(['glob'])        // diverged → 可诊断
+  try {
+    const gen = await api(request, 'post', '/ai/chat/admin/skill-def-steps/generate',
+      { kind: 'skill', path: a.path })
+    if (gen.status === 502) return test.skip(true, 'LLM 不可用（generate 502），冒烟跳过')
+    expect(gen.status).toBe(200)
+    expect(Array.isArray(gen.json.steps)).toBe(true)
+    expect(gen.json.steps.length).toBeGreaterThan(0)
+    expect(gen.json.steps[0].id).toBeTruthy()
+    await api(request, 'post', `/ai/chat/admin/skill-fit/${a.attemptId}/recompute`)
+    const fitId = (await api(request, 'get', `/ai/chat/admin/skill-fit/${a.attemptId}`)).json.fits[0].id
+    const dg = await api(request, 'post', `/ai/chat/admin/skill-fit/${fitId}/diagnose`)
+    if (dg.status === 502) return test.skip(true, 'LLM 不可用（diagnose 502），冒烟跳过')
+    expect(dg.status).toBe(200)
+    expect(['definition_stale', 'step_redundant', 'order_deviation', 'model_noncompliance', 'environment'])
+      .toContain(dg.json.diagnosis.cause)
+    expect(Array.isArray(dg.json.diagnosis.suggestions)).toBe(true)
+    expect(Array.isArray(dg.json.diagnosis.revised_steps)).toBe(true)
+    // oplog 留痕两条（generate target_id=定义路径；diagnose target_id=结果行 id）。
+    // target_id 是路由收到的原始字符串（utils/operation_log.py 原样入库，无分隔符
+    // 归一），Windows 下即反斜杠路径——对 brief 原稿 replace(/\\/g,'/') 的修正。
+    expect(dbSeed(`SELECT count(*) FROM operation_logs WHERE target_type='ai_skill_def_steps' AND target_id='${a.path}'`)[0][0]).toBeGreaterThanOrEqual(1)
+    expect(dbSeed(`SELECT count(*) FROM operation_logs WHERE target_type='ai_skill_fit_diagnosis' AND target_id='${fitId}'`)[0][0]).toBe(1)
+  } finally { cleanupFitSeeds() }
+})
