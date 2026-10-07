@@ -66,8 +66,17 @@ test('TD-B15 autoTimestamp UI 提交后填充并在编辑后刷新', async ({ pa
   const dialog = page.locator('.el-dialog:visible')
   await dialog.getByPlaceholder('请输入名称').fill('时戳甲')
   await dialog.getByRole('button', { name: '确定' }).click()
+  // 加固（2026-10-07 flaky 收敛）：点确定后先等对话框关闭（提交落定），再重载
+  // 触发权威整组刷新后精确断言。背景：04 缺陷 #8——addPageData 本地 push 与
+  // 整组替换两条刷新链路交错，同记录可瞬时渲染两行且持续到下次整组刷新
+  // （A2 轮 B19 复现 strict-mode violation；加固 sanity 轮实测双行持续 >5s 不自愈），
+  // API 复核始终仅 1 条（纯展示层竞态）。重载后 toHaveCount(1) 仍是精确计数：
+  // 真实双提交（后端两条）重载后仍两行、必失败；.first() 容忍只在 TD-F16
+  // （04 #8 金丝雀）保留。
+  await expect(dialog).toBeHidden()
+  await page.reload()
   await expect(page.locator('.table-card .el-table__body tr', { hasText: '时戳甲' }))
-    .toBeVisible()
+    .toHaveCount(1)
 
   const first = await listRecords(request, h.collection)
   const rec1 = first.json.data.find((r: any) => r.name === '时戳甲')
@@ -82,8 +91,11 @@ test('TD-B15 autoTimestamp UI 提交后填充并在编辑后刷新', async ({ pa
   const editDialog = page.locator('.el-dialog:visible')
   await editDialog.getByPlaceholder('请输入名称').fill('时戳甲-改')
   await editDialog.getByRole('button', { name: '确定' }).click()
+  // 加固：同 B15 首提交——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(editDialog).toBeHidden()
+  await page.reload()
   await expect(page.locator('.table-card .el-table__body tr', { hasText: '时戳甲-改' }))
-    .toBeVisible()
+    .toHaveCount(1)
 
   const second = await listRecords(request, h.collection)
   const rec2 = second.json.data.find((r: any) => r.name === '时戳甲-改')
@@ -113,9 +125,11 @@ test('TD-B16 compositeText UI 提交计算并在编辑后重算', async ({ page,
   await expect(dialog.locator('.el-form-item', { hasText: '组合' })
     .locator('.composite-text')).toHaveText('组合甲 - 3')
   await dialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固：同 B15——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '组合甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
   await expect(row).toContainText('组合甲 - 3')
 
   // 编辑 name → updatePageData 重算 comp
@@ -123,9 +137,11 @@ test('TD-B16 compositeText UI 提交计算并在编辑后重算', async ({ page,
   const editDialog = page.locator('.el-dialog:visible')
   await editDialog.getByPlaceholder('请输入名称').fill('组合乙')
   await editDialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固：同 B16 首提交——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(editDialog).toBeHidden()
+  await page.reload()
   const row2 = page.locator('.table-card .el-table__body tr', { hasText: '组合乙' })
-  await expect(row2).toBeVisible()
+  await expect(row2).toHaveCount(1)
   await expect(row2).toContainText('组合乙 - 3')
 
   const listed = await listRecords(request, h.collection)
@@ -156,10 +172,13 @@ test('TD-B17 markdown 编辑、表格摘要与详情渲染', async ({ page, requ
   await page.keyboard.press('Enter')
   await page.keyboard.type('**粗体**文本')
   await dialog.getByRole('button', { name: '确定' }).click()
+  // 加固：同 B15——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
 
   // 表格单元格 = 去 Markdown 标记的纯文本摘要（DataTable.vue:583-592）
   const row = page.locator('.table-card .el-table__body tr', { hasText: 'MD甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
   await expect(row).toContainText('标题甲 粗体文本')
   await expect(row).not.toContainText('#')
   await expect(row).not.toContainText('**')
@@ -200,9 +219,11 @@ test('TD-B18 文件上传 UI 落库为数组并经编辑追加', async ({ page, 
   await expect(page.locator('.el-message', { hasText: '上传成功' }))
     .toBeVisible({ timeout: 15_000 })
   await dialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固：同 B15——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '附件甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
   // 表格 file 单元格 = `${length} 个文件`（DataTable.vue:554-559）
   await expect(row).toContainText('1 个文件')
   await screenshot(page, 'ft-file-uploaded')
@@ -226,8 +247,11 @@ test('TD-B18 文件上传 UI 落库为数组并经编辑追加', async ({ page, 
   await expect(page.locator('.el-message', { hasText: '上传成功' }))
     .toBeVisible({ timeout: 15_000 })
   await editDialog.getByRole('button', { name: '确定' }).click()
-  await expect(page.locator('.table-card .el-table__body tr', { hasText: '附件甲' }))
-    .toContainText('2 个文件')
+  // 加固：同 B18 首提交——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(editDialog).toBeHidden()
+  await page.reload()
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText('2 个文件')
 
   listed = await listRecords(request, h.collection)
   rec = listed.json.data.find((r: any) => r.name === '附件甲')
@@ -254,8 +278,13 @@ test('TD-B19 autoSequence 表单只读并生成递增序号', async ({ page, req
     .locator('.auto-sequence')).toHaveText('保存后生成')
   await dialog.getByPlaceholder('请输入名称').fill('序号甲')
   await dialog.getByRole('button', { name: '确定' }).click()
-  await expect(page.locator('.table-card .el-table__body tr', { hasText: '序号甲' }))
-    .toContainText('DTSU-001')
+  // 加固（A2 轮本例复现 strict-mode violation：两行均 DTSU-001，同记录展示层
+  // 双行）：对话框关闭 + 重载收敛 04 #8 竞态后 toHaveCount(1) 精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
+  const row1 = page.locator('.table-card .el-table__body tr', { hasText: '序号甲' })
+  await expect(row1).toHaveCount(1)
+  await expect(row1).toContainText('DTSU-001')
 
   // 第二条 → DTSU-002（服务端 allocate_sequence，dynamic.py:653-660）
   await page.getByRole('button', { name: '新增' }).click()
@@ -264,8 +293,12 @@ test('TD-B19 autoSequence 表单只读并生成递增序号', async ({ page, req
     .locator('.auto-sequence')).toHaveText('保存后生成')
   await dialog2.getByPlaceholder('请输入名称').fill('序号乙')
   await dialog2.getByRole('button', { name: '确定' }).click()
-  await expect(page.locator('.table-card .el-table__body tr', { hasText: '序号乙' }))
-    .toContainText('DTSU-002')
+  // 加固：同 B19 首条——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog2).toBeHidden()
+  await page.reload()
+  const row2 = page.locator('.table-card .el-table__body tr', { hasText: '序号乙' })
+  await expect(row2).toHaveCount(1)
+  await expect(row2).toContainText('DTSU-002')
 
   const listed = await listRecords(request, h.collection)
   const sns = listed.json.data
@@ -306,8 +339,11 @@ test('TD-B20 workflow 字段级流转 UI', async ({ page, request }) => {
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item',
                      { hasText: '待处理' }).click()
   await dialog.getByRole('button', { name: '确定' }).click()
+  // 加固：同 B15——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '流转甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
 
   // 打开查看弹窗（行「更多」下拉 → 查看），footer 出现「开始」按钮
   await row.locator('.row-actions-trigger').click()

@@ -125,9 +125,16 @@ test('TD-C11 relation 选择器 UI 关联落库并回显', async ({ page, reques
   await screenshot(page, 'rel-picker-selected')
   await page.keyboard.press('Escape') // multiple 下拉点选后不自动收起
   await dialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固（2026-10-07 flaky 收敛）：点确定后先等对话框关闭（提交落定），再重载
+  // 触发权威整组刷新后 toHaveCount(1) 精确断言。背景：04 缺陷 #8——addPageData
+  // 本地 push 与整组替换两条刷新链路交错，同记录可瞬时双行且持续到下次整组
+  // 刷新（A2 轮 B19/C13 同族复现），API 复核始终仅 1 条（纯展示层竞态）。
+  // 重载后计数仍精确：真实双提交（后端两条）重载后仍两行、必失败；
+  // .first() 容忍只在 TD-F16（04 #8 金丝雀）保留。
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '关联主记录甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
 
   // 落库断言：relation 不入记录 JSON，而在 data_relations 表（GET /relations/<c>/<r>）
   const listed = await listRecords(request, hA.collection)
@@ -166,15 +173,22 @@ test('TD-C12 reference 选择器 UI 选父并在详情继承显示', async ({ pa
   // reference 选择器（单选）：点开 → 键入父名 → 点选（单选选中后下拉自动收起）
   const refItem = dialog.locator('.el-form-item', { hasText: '父记录' })
   await refItem.locator('.el-select__wrapper').click()
-  await refItem.locator('input.el-select__input').fill(parentName)
+  // 加固（C12 负载窗口）：remote 搜索改逐键输入——fill 一次性赋值在满载窗口下
+  // 疑丢首字符；select-v2 remote 与 useRemoteCollectionOptions 双段 300ms 防抖
+  // 由下方 expect 轮询兜底，逐键不放大等待。
+  await refItem.locator('input.el-select__input').pressSequentially(parentName)
   const opt = page.locator('.el-select-dropdown:visible .el-select-dropdown__item',
     { hasText: parentName })
-  await expect(opt, '远程搜索应命中父记录').toBeVisible({ timeout: 10_000 })
+  // 加固：全量连跑 CPU 饱和（workers=1 前后端同机）拉长远程搜索往返，
+  // 默认/10s 曾在负载窗口超时 → 提额 30s
+  await expect(opt, '远程搜索应命中父记录').toBeVisible({ timeout: 30_000 })
   await opt.click()
   await dialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固：同 C11——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '子记录甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
 
   // 落库断言：reference 字段存父记录 id
   const listed = await listRecords(request, hChild.collection)
@@ -184,7 +198,8 @@ test('TD-C12 reference 选择器 UI 选父并在详情继承显示', async ({ pa
   // 详情对话框：父名以 _ref_ 解析显示而非裸 id
   const viewer = await openViewer(page, '子记录甲')
   // reference 行：span.reference-link = _ref_pref_display = 父记录[displayField=name]
-  await expect(viewer.locator('.reference-link')).toHaveText(parentName, { timeout: 10_000 })
+  // 加固：_ref_ 解析需父记录查询往返，满载窗口下变慢 → 10s 提额 20s
+  await expect(viewer.locator('.reference-link')).toHaveText(parentName, { timeout: 20_000 })
   // 继承虚拟列 _ref_pref_name（allExpandedFields 展开 + 无列视图全字段进查看弹窗）：
   // 父名出现两次 —— reference 行 + 继承行
   await expect(viewer.locator('tr', { hasText: parentName })).toHaveCount(2)
@@ -222,9 +237,13 @@ test('TD-C13 quoteSelect 多选 UI 落库并回显', async ({ page, request }) =
   await screenshot(page, 'quote-multi-selected')
   await page.keyboard.press('Escape')
   await dialog.getByRole('button', { name: '确定' }).click()
-
+  // 加固（A2 轮本例复现：确定后行 5s 内未渲染「element(s) not found」——
+  // #8 竞态的另一支：整组替换先于提交完成拉了旧列表）：对话框关闭 +
+  // 重载触发权威刷新，toHaveCount(1) 精确断言
+  await expect(dialog).toBeHidden()
+  await page.reload()
   const row = page.locator('.table-card .el-table__body tr', { hasText: '引用聚合甲' })
-  await expect(row).toBeVisible()
+  await expect(row).toHaveCount(1)
 
   // 落库断言：quoteSelect 值为记录 JSON 内的 id 数组
   const listed = await listRecords(request, hA.collection)
@@ -264,8 +283,10 @@ test('TD-C14 关系图谱对话框渲染与关闭', async ({ page, request }) =>
   await gotoWithAuth(page, hA.path)
   const viewer = await openViewer(page, '图谱中心甲')
   // 详情 relation 行应有邻居标签（_rel_rel_labels 解析）
+  // 加固（C14 负载窗口）：标签解析需 relations 查询往返，满载下变慢
+  // （本例历史上在全量跑负载窗口内超时一次）→ 10s 提额 30s
   await expect(viewer.locator('.relation-tag-link', { hasText: bName }))
-    .toBeVisible({ timeout: 10_000 })
+    .toBeVisible({ timeout: 30_000 })
 
   // footer「关系图谱」按钮（DynamicPage.vue:607-609）→ 图谱对话框
   await viewer.getByRole('button', { name: '关系图谱' }).click()
@@ -273,10 +294,12 @@ test('TD-C14 关系图谱对话框渲染与关闭', async ({ page, request }) =>
   const graphDialog = page.locator('.el-dialog:visible', {
     has: page.locator('.el-dialog__title', { hasText: '关系图谱' }),
   })
-  await expect(graphDialog).toBeVisible({ timeout: 10_000 })
+  // 加固：对话框打开 + 图谱组件挂载在满载窗口下变慢 → 提额
+  await expect(graphDialog).toBeVisible({ timeout: 20_000 })
   // force-graph 在 .graph-container 注入 canvas（RelationGraphDialog.vue:16,525+）
+  // 加固：force-graph 初始化（数据拉取 + canvas 渲染）满载下显著变慢 → 15s 提额 30s
   await expect(graphDialog.locator('.graph-container canvas'))
-    .toBeVisible({ timeout: 15_000 })
+    .toBeVisible({ timeout: 30_000 })
   await page.waitForTimeout(2_000) // 力导布局稳定
   await screenshot(page, 'rel-graph-dialog')
   await graphDialog.getByRole('button', { name: '关闭', exact: true }).click()
