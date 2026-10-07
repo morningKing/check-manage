@@ -5,6 +5,7 @@ import {
   exportToExcel,
   generateImportTemplate,
   exportImportFailures,
+  deriveExportFilename,
 } from '../excel'
 import {
   parseWorkbookBuffer,
@@ -140,6 +141,24 @@ describe('Excel Utils', () => {
       ]
       expect(getExportableFields(fields).map((f) => f.fieldName)).toEqual(['name'])
       expect(getExportableFields(fields, false).map((f) => f.fieldName)).toEqual(['name'])
+    })
+  })
+
+  describe('deriveExportFilename', () => {
+    it('pageConfig 已载入 → 用页面名', () => {
+      expect(deriveExportFilename({ name: '销售明细' }, 'data_sales')).toBe('销售明细')
+    })
+
+    it('pageConfig 未载入（null/undefined/空名/空白名）→ 确定性回退标识，不落泛名「数据」', () => {
+      expect(deriveExportFilename(null, 'data_sales')).toBe('data_sales')
+      expect(deriveExportFilename(undefined, 'data_sales')).toBe('data_sales')
+      expect(deriveExportFilename({ name: '' }, 'data_sales')).toBe('data_sales')
+      expect(deriveExportFilename({ name: '   ' }, 'data_sales')).toBe('data_sales')
+      expect(deriveExportFilename({ name: '' }, 'data_sales')).not.toBe('数据')
+    })
+
+    it('页面名与回退标识皆空 → 兜底「数据」（无 id 的退化路径，正常不可达）', () => {
+      expect(deriveExportFilename(null, '')).toBe('数据')
     })
   })
 

@@ -1050,7 +1050,7 @@ import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore,
 import { DataTable, ConfirmDialog, RelationGraphDialog, KanbanBoard, RecordTimeline, WorkflowActions, ProjectVersionManager, ImportHistoryDialog, ExcelView, CalendarView, GanttView, MarkdownPreview } from '@/components/common'
 import { DynamicForm } from '@/components/dynamic-form'
 import { ViewSelector, ViewManageDialog, ColumnConfigDialog } from '@/components/column-view'
-import { exportToExcel, generateImportTemplate, parseImportFile, parseJsonImportFile, exportImportFailures } from '@/utils/excel'
+import { exportToExcel, deriveExportFilename, generateImportTemplate, parseImportFile, parseJsonImportFile, exportImportFailures } from '@/utils/excel'
 import { importPageRecords, retryImportFailures, diffRetryResult, type ImportFailure } from '@/utils/importPageRecords'
 import { createImportRun, syncImportRunRetryResult } from '@/api/importRuns'
 import { useMultiFileImport } from '@/composables/useMultiFileImport'
@@ -3022,7 +3022,9 @@ async function copyCollection() {
  * 处理导出
  */
 async function handleExport(): Promise<void> {
-  const name = pageConfig.value?.name || '数据'
+  // 文件名：pageConfig 已载入用页面名；竞态窗口内未载入则回退 collection
+  // （确定性 id，不落泛名「数据」——E18）
+  const name = deriveExportFilename(pageConfig.value, collection.value)
   // 全量拉取（绕过分页 1000 条限制），保留当前筛选条件
   let allData = tableData.value
   try {

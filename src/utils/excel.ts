@@ -92,6 +92,27 @@ function valueToLabel(value: any, field: FieldConfig, record?: Record<string, an
 }
 
 /**
+ * 导出文件名推导
+ *
+ * pageConfig 已载入时用页面名；未载入（页面配置请求返回前触发导出的竞态窗口）
+ * 回退到调用方给定的确定性标识（collection），不再落到泛名「数据」——保证同页
+ * 导出文件名可预期。两者皆空才兜底「数据」（无 id 的退化路径，正常不可达）。
+ *
+ * @param pageConfig - 页面配置（可能尚未载入）
+ * @param fallback - 确定性回退标识（调用方传 collection 等稳定 id）
+ */
+export function deriveExportFilename(
+  pageConfig: { name?: string } | null | undefined,
+  fallback: string
+): string {
+  const name = pageConfig?.name?.trim()
+  if (name) return name
+  const fallbackName = fallback?.trim()
+  if (fallbackName) return fallbackName
+  return '数据'
+}
+
+/**
  * 导出数据到 Excel
  *
  * @param data - 表格数据
