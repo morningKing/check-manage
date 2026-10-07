@@ -373,6 +373,7 @@ def _webhook_rule(admin, stub, page, timing='after', event='update', retries=0,
 
 def test_td_f09_webhook_rule_crud_and_manual_never_fires(admin, stub):
     page = live.make_page(admin, 'F', 'hook-cfg', fields=[NAME])
+    rule = None
     try:
         rule = _webhook_rule(admin, stub, page, event='manual')
         lst = live.api('GET', '/webhook/rules', admin)
@@ -381,11 +382,12 @@ def test_td_f09_webhook_rule_crud_and_manual_never_fires(admin, stub):
         hits = len(stub.requests)
         rec = _rec(admin, page['collection'], 'manual对象')
         _upd(admin, page['collection'], rec['id'], rec['_version'], name='manual对象改')
-        time.sleep(2)
+        # webhook 在请求线程内同步执行（§4 事实#19），PUT 返回即确定，无需负等待
         assert len(stub.requests) == hits
-        dele = live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
-        assert dele.status_code < 300
     finally:
+        if rule is not None:
+            dele = live.api('DELETE', f"/webhook/rules/{rule['id']}", admin)
+            assert dele.status_code < 300
         live.drop_page(admin, page)
 
 

@@ -107,6 +107,8 @@ def test_td_b04_autosequence_batch_no_alloc_and_reseed(admin, pageh):
     assert r.status_code < 300
     got = live.api('GET', f"/{pageh['collection']}?keyword=导入甲", admin).json()
     assert got['data'][0]['sn'] == 'DTS-050'
+    # 本例自身记录数 pin：batch（upsert 语义）只应留下这 1 行，动作从不额外建行
+    assert got['total'] == 1, f'应恰 1 行导入记录，得 total={got["total"]}'
     nxt = _post(admin, pageh['collection'],
                 {'id': uuid.uuid4().hex, 'name': 'reseed后'}).json()
     got = live.api('GET', f"/{pageh['collection']}/{nxt['id']}", admin).json()

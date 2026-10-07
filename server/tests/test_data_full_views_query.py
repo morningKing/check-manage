@@ -110,6 +110,7 @@ def test_td_g03_view_copy_and_private_scope(admin, pageh):
         others_list = live.api('GET',
                                f"/column-views/{pageh['page_id']}/views", other)
         names = [x['name'] for x in others_list.json()['views']]
+        assert names, '探测列表不应为空'  # 正控：空列表会令下断言空过
         assert '私甲' not in names and cp.json()['name'] not in names
     finally:
         if uid:

@@ -109,7 +109,9 @@ def test_td_h01_comment_crud_and_empty_rejected(admin, pageh):
                       f"/comments/{pageh['collection']}/no-such-record", admin,
                       {'content': 'DTEST 评论孤儿宿主'})
     assert orphan.status_code == 201, f'{orphan.status_code} {orphan.text[:300]}'
-    live.api('DELETE', f"/comments/{orphan.json()['id']}", admin)
+    orphan_del = live.api('DELETE', f"/comments/{orphan.json()['id']}", admin)
+    assert orphan_del.status_code < 300, (
+        f'{orphan_del.status_code} {orphan_del.text[:300]}')
 
 
 def test_td_h02_comment_permission_author_vs_admin(admin, pageh):
@@ -199,14 +201,15 @@ def test_td_h04_backup_list_download_and_create_defect(admin):
     # （只删 mtime >= t0 的自建碎片，不碰他人/历史文件；产品侧
     # _cleanup_stale_backup_tmp 也会在下一次建档开头自愈兜底）
     from utils.backup import BACKUP_DIR
-    for n in os.listdir(BACKUP_DIR):
-        p = os.path.join(BACKUP_DIR, n)
-        if (n.startswith('.tmp-backup-') and n.endswith('.json')
-                and os.path.isfile(p) and os.path.getmtime(p) >= t0):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+    if os.path.isdir(BACKUP_DIR):
+        for n in os.listdir(BACKUP_DIR):
+            p = os.path.join(BACKUP_DIR, n)
+            if (n.startswith('.tmp-backup-') and n.endswith('.json')
+                    and os.path.isfile(p) and os.path.getmtime(p) >= t0):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
     # 列表：JSON 数组形状（实读 :45-57），按 created_at 倒序
     lst = live.api('GET', '/backups', admin)
     assert lst.status_code == 200
