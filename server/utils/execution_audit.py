@@ -260,15 +260,54 @@ def record_event(attempt_id: str, event_type: str, *, occurred_at=None,
 
 # ── Manifests ────────────────────────────────────────────────────────────
 
+def _scan_platform_skill_manifests(workspace_path: str | None,
+                                   existing_names: set[str]) -> list[dict]:
+    """平台全局技能清单补扫（best-effort）。
+
+    平台技能自 2026-09-28 起改为同步挂 OC 全局 skills 目录（见
+    global_skills.sync_platform_skills_to_oc_global——workspace 里出现
+    .opencode 会触发 OC 实例引导的 npm 安装，拖慢建会话），workspace 不再
+    含 .opencode/skills，仅扫 workspace 会漏掉全部平台技能：SkillOpt 任务
+    拟合等 manifest 消费方在交互/批主链路上因此失明（2026-10-07 实测缺口）。
+    这里把启用的平台技能按中央存储路径（<workspace_root>/global-skills/）
+    补进清单，injected/available 口径与 Spec §2.2 一致。"""
+    out: list[dict] = []
+    if not workspace_path:
+        return out
+    parts = workspace_path.replace('\\', '/').rstrip('/').split('/')
+    if len(parts) < 3:
+        return out
+    workspace_root = '/'.join(parts[:-2])
+    try:
+        from utils.global_skills import global_skills_root, list_global_skills
+        skills = [s for s in list_global_skills()
+                  if s.get('enabled') and s.get('name') not in existing_names]
+        gs_root = global_skills_root(workspace_root)
+    except Exception as e:  # noqa: BLE001 — manifest 收集绝不阻断主流程
+        logger.warning('scan platform skill manifests failed: %s', e)
+        return out
+    for s in skills:
+        skill_md = os.path.join(gs_root, s['name'], 'SKILL.md')
+        if os.path.isfile(skill_md):
+            out.append({
+                'kind': 'skill', 'name': s['name'],
+                'source': 'platform_global', 'path': skill_md,
+                'content_hash': sha256_file(skill_md),
+                'injected': True, 'injection_status': 'success',
+            })
+    return out
+
+
 def scan_workspace_manifests(workspace_path: str | None) -> list[dict]:
     """Inventory the definitions actually visible to this execution's
     workspace (Spec §2.2: injected ≠ loaded ≠ invoked — this only ever
     claims `injected/available`).
 
-    Returns rows for: platform/session skills under .opencode/skills,
-    project agents under .opencode/agent, AGENTS.md guidance. opencode.json
-    is returned separately by the caller via workspace_config hash on the
-    attempt row."""
+    Returns rows for: platform/session skills under .opencode/skills plus
+    enabled platform global skills (central storage; see
+    _scan_platform_skill_manifests), project agents under .opencode/agent,
+    AGENTS.md guidance. opencode.json is returned separately by the caller
+    via workspace_config hash on the attempt row."""
     out: list[dict] = []
     if not workspace_path or not os.path.isdir(workspace_path):
         return out
@@ -283,6 +322,8 @@ def scan_workspace_manifests(workspace_path: str | None) -> list[dict]:
                     'path': skill_md, 'content_hash': sha256_file(skill_md),
                     'injected': True, 'injection_status': 'success',
                 })
+    out.extend(_scan_platform_skill_manifests(
+        workspace_path, {r['name'] for r in out if r['kind'] == 'skill'}))
     agent_root = os.path.join(oc, 'agent')
     if os.path.isdir(agent_root):
         for fn in sorted(os.listdir(agent_root)):

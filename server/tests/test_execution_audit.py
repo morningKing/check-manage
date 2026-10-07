@@ -140,6 +140,55 @@ def test_workspace_manifest_scan(tmp_path):
     assert skill['injected'] is True and skill['content_hash']
 
 
+def test_workspace_manifest_scan_includes_platform_skills(tmp_path, monkeypatch):
+    """平台技能改挂 OC 全局目录后（2026-09-28），workspace 不再含
+    .opencode/skills——scan 必须把启用的平台技能按中央存储路径补进清单，
+    否则 SkillOpt 任务拟合等 manifest 消费方在交互/批主链路上失明
+    （2026-10-07 实测缺口）。workspace 扫到的同名技能优先，禁用/无目录不进。"""
+    import utils.global_skills as gs
+    ws = tmp_path / 'ws'
+    (ws / '.opencode' / 'skills' / 'data-ops').mkdir(parents=True)
+    (ws / '.opencode' / 'skills' / 'data-ops' / 'SKILL.md').write_text(
+        '---\nname: data-ops\n---\nbody', encoding='utf-8')
+    (ws / 'AGENTS.md').write_text('guidance', encoding='utf-8')
+    gs_root = tmp_path / 'gs'
+    (gs_root / 'stock-analysis').mkdir(parents=True)
+    (gs_root / 'stock-analysis' / 'SKILL.md').write_text(
+        '---\nname: stock-analysis\n---\nbody', encoding='utf-8')
+    monkeypatch.setattr(gs, 'list_global_skills', lambda: [
+        {'name': 'stock-analysis', 'enabled': True},
+        {'name': 'disabled-one', 'enabled': False},
+        {'name': 'no-dir', 'enabled': True},
+        {'name': 'data-ops', 'enabled': True},
+    ])
+    monkeypatch.setattr(gs, 'global_skills_root',
+                        lambda root=None: str(gs_root))
+    rows = execution_audit.scan_workspace_manifests(str(ws))
+    skills = {r['name']: r for r in rows if r['kind'] == 'skill'}
+    assert set(skills) == {'stock-analysis', 'data-ops'}
+    assert skills['stock-analysis']['source'] == 'platform_global'
+    assert skills['data-ops']['source'] == 'session'          # workspace 优先
+    assert skills['stock-analysis']['path'].endswith(
+        os.path.join('stock-analysis', 'SKILL.md'))
+    assert skills['stock-analysis']['content_hash']
+    assert skills['stock-analysis']['injected'] is True
+
+
+def test_platform_skill_manifest_scan_db_failure_swallowed(tmp_path, monkeypatch):
+    """DB 不可用时平台技能补扫静默返回，不影响其余清单（best-effort）。"""
+    import utils.global_skills as gs
+    ws = tmp_path / 'ws'
+    ws.mkdir()
+    (ws / 'AGENTS.md').write_text('guidance', encoding='utf-8')
+
+    def _boom():
+        raise RuntimeError('db down')
+
+    monkeypatch.setattr(gs, 'list_global_skills', _boom)
+    rows = execution_audit.scan_workspace_manifests(str(ws))
+    assert [(r['kind'], r['name']) for r in rows] == [('guidance', 'AGENTS.md')]
+
+
 # ── Contract parsing ─────────────────────────────────────────────────────
 
 def test_contract_from_skill_md(tmp_path):
