@@ -30,8 +30,14 @@ POOL_WAIT_SEC = _env_num('DB_POOL_WAIT_SEC', 1.0, float)
 def get_pool():
     global pool
     if pool is None:
+        # TCP keepalives：池内连接闲置时会被 NAT/防火墙静默掐断（半开连接），
+        # 借到即 500。psycopg2 无 pool_pre_ping（那是 SQLAlchemy 的参数），
+        # 正确做法是连接层 TCP keepalive：闲置 30s 后每 10s 探测，3 次失败
+        # 即由 OS 判定连接死亡，下一次 getconn 拿到的不会再是死连接。
         pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2, maxconn=POOL_MAXCONN, **DB_CONFIG)
+            minconn=2, maxconn=POOL_MAXCONN,
+            keepalives=1, keepalives_idle=30, keepalives_interval=10,
+            keepalives_count=3, **DB_CONFIG)
     return pool
 
 
