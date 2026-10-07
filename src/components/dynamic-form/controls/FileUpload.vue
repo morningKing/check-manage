@@ -100,17 +100,21 @@ const tipText = computed(() => {
 
 /**
  * 监听 modelValue 变化，同步文件列表
+ *
+ * uid 必须保留 value 数组里的原始值（data_files 的 uuid 字符串）：
+ * handleRemove 按它过滤。此前把 uid 重映射为下标 0/1/…，uuid 与下标
+ * 永不匹配，删除项经本 watch 重渲染复活（缺陷 04 #3）。
  */
 watch(
   () => props.modelValue,
   (newValue) => {
     if (newValue) {
-      fileList.value = newValue.map((file, index) => ({
-        uid: index,
+      fileList.value = newValue.map((file) => ({
+        uid: file.uid,
         name: file.name,
         url: file.url,
         status: 'success' as const
-      })) as UploadFile[]
+      })) as unknown as UploadFile[]
     } else {
       fileList.value = []
     }
@@ -188,10 +192,14 @@ function handleSuccess(): void {
 
 /**
  * 文件移除处理
+ *
+ * 两侧都 String 化再比较：同步进来的列表项 uid 是 value 的字符串
+ * uuid（见 watch），el-upload 刚选择、尚未被 watch 重同步的项则是
+ * 其自增的数字 uid——统一成字符串才能稳定匹配（缺陷 04 #3）。
  */
 function handleRemove(file: UploadFile): void {
   const currentFiles = props.modelValue || []
-  const updatedFiles = currentFiles.filter((f) => f.uid !== String(file.uid))
+  const updatedFiles = currentFiles.filter((f) => String(f.uid) !== String(file.uid))
   emit('update:modelValue', updatedFiles)
 }
 </script>

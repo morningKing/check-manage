@@ -16,11 +16,11 @@
  * - WorkflowActions.vue:2-13 仅渲染于查看记录弹窗 footer（DynamicPage.vue:593-600，guest 不渲染），
  *                           点击后打开「推进意见」对话框（DynamicPage.vue:621-649，append-to-body）。
  *
- * 已知产品缺陷（不修产品，测试按真实行为断言）：FileUpload 移除路径失效——
- * watch（FileUpload.vue:104-119）把列表项 uid 重映射为 index，而 handleRemove
- * （FileUpload.vue:192-196）按 f.uid !== String(file.uid) 过滤（uid 为 data_files
- * 的 uuid），永不匹配，删除项经 watch 重渲染复活。故 B18「替换」经真实 UI 只能
- * 达成「追加」，断言按追加语义写。
+ * 04 #3（FileUpload 移除路径失效，删除项复活）已修复（fix(upload): FileUpload
+ * 移除匹配修正——删除项复活修复，2026-10-07）：watch（FileUpload.vue:104-122）
+ * 同步列表时保留 value 的原始 uid（data_files uuid），handleRemove（:199-208）
+ * 两侧 String 化匹配，删除项不再经 watch 重渲染复活。B18 因此转替换语义断言：
+ * 编辑中上传第二个文件并移除第一个，落库恰 1 个新文件。
  */
 import { test, expect } from '@playwright/test'
 import type { APIRequestContext } from '@playwright/test'
@@ -197,9 +197,9 @@ test('TD-B17 markdown 编辑、表格摘要与详情渲染', async ({ page, requ
 })
 
 // ---------------------------------------------------------------------------
-// TD-B18 file：真后端上传 + 记录落库为数组；编辑追加第二个文件
+// TD-B18 file：真后端上传 + 记录落库为数组；编辑替换（上传新文件 + 移除旧文件）
 // ---------------------------------------------------------------------------
-test('TD-B18 文件上传 UI 落库为数组并经编辑追加', async ({ page, request }) => {
+test('TD-B18 文件上传 UI 落库为数组并经编辑替换', async ({ page, request }) => {
   const h = await makePage(request, 'file', [
     NAME_FIELD,
     { id: 'f2', label: '附件', fieldName: 'attach', controlType: 'file',
@@ -237,7 +237,7 @@ test('TD-B18 文件上传 UI 落库为数组并经编辑追加', async ({ page, 
     .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
   expect(rec.attach[0].url).toMatch(/^\/api\/data-files\/[0-9a-f-]+\/download$/)
 
-  // 编辑追加第二个文件（「替换」经真实 UI 不可达：移除路径缺陷，见文件头注释）
+  // 编辑替换：上传第二个文件 → 移除第一个文件（04 #3 修复后 UI 可达）
   await row.getByRole('button', { name: '编辑' }).click()
   const editDialog = page.locator('.el-dialog:visible')
   await editDialog.locator('input[type="file"]').setInputFiles({
@@ -246,18 +246,31 @@ test('TD-B18 文件上传 UI 落库为数组并经编辑追加', async ({ page, 
   })
   await expect(page.locator('.el-message', { hasText: '上传成功' }))
     .toBeVisible({ timeout: 15_000 })
+  // 等消息自动消失（ElMessage 默认 3s 自灭），避免悬浮层干扰后续 hover
+  await expect(page.locator('.el-message', { hasText: '上传成功' }))
+    .toBeHidden({ timeout: 15_000 })
+  // 移除 dtest-甲.txt：el-upload 列表项 hover 才显示关闭图标
+  // （FileUpload.vue watch 保留原始 uuid，handleRemove 按其匹配过滤）
+  const itemA = editDialog.locator('.el-upload-list__item', { hasText: 'dtest-甲.txt' })
+  await itemA.hover()
+  await itemA.locator('.el-icon--close').click()
+  await expect(editDialog.locator('.el-upload-list__item', { hasText: 'dtest-甲.txt' }))
+    .toHaveCount(0)
+  await expect(editDialog.locator('.el-upload-list__item', { hasText: 'dtest-乙.txt' }))
+    .toHaveCount(1)
   await editDialog.getByRole('button', { name: '确定' }).click()
   // 加固：同 B18 首提交——对话框关闭 + 重载收敛 #8 展示层竞态后精确断言
   await expect(editDialog).toBeHidden()
   await page.reload()
   await expect(row).toHaveCount(1)
-  await expect(row).toContainText('2 个文件')
+  await expect(row).toContainText('1 个文件')
 
   listed = await listRecords(request, h.collection)
   rec = listed.json.data.find((r: any) => r.name === '附件甲')
-  expect(rec.attach, '第二次上传后应为 2 个文件').toHaveLength(2)
-  expect(rec.attach.map((f: any) => f.name))
-    .toEqual(['dtest-甲.txt', 'dtest-乙.txt'])
+  expect(rec.attach, '替换后应恰 1 个文件').toHaveLength(1)
+  expect(rec.attach[0].name).toBe('dtest-乙.txt')
+  expect(String(rec.attach[0].uid), 'uid 应为新文件 data_files.id（uuid）')
+    .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
 })
 
 // ---------------------------------------------------------------------------
