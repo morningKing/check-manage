@@ -382,3 +382,49 @@ def compute_for_session(session_id: str, get_db=None) -> list[dict] | None:
         log.warning('skill_fit.compute_for_session failed sid=%s: %s',
                     session_id, e)
         return None
+
+
+def resolve_definition_path(kind: str, name: str,
+                            content_hash: str | None = None,
+                            get_db=None) -> dict | None:
+    """按 (kind, name[, content_hash]) 自动定位定义文件当前路径。
+
+    事实源是 ai_execution_manifests（每次 attempt 的注入记录）：
+    1. 传了 content_hash → 优先取 hash 一致且文件仍存在的最新注入——
+       hash 对得上说明该路径现在放的就是目标版本；
+    2. 无 hash / 对不上 → 取文件仍存在的最新注入（回滚端点 2026-10-01
+       起的同款定位口径，这里补上 hash 偏好与存在性过滤）；
+    3. 全部候选文件缺失 → None（调用方给出「请手动填路径」类提示）。
+
+    路径 confinement（allowed roots）由调用方在读取/写盘前执行——这里
+    只做定位。返回 {'path', 'contentHash', 'source'}，source ∈
+    'manifest_hash_match' | 'manifest_latest'。"""
+    kind = (kind or '').strip()
+    name = (name or '').strip()
+    if not kind or not name:
+        return None
+    try:
+        db_ctx = get_db or _default_get_db
+        with db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT path, content_hash FROM ai_execution_manifests "
+                    "WHERE kind = %s AND name = %s "
+                    "  AND path IS NOT NULL AND path <> '' "
+                    "ORDER BY created_at DESC LIMIT 50", (kind, name))
+                rows = cur.fetchall()
+    except Exception as e:  # noqa: BLE001
+        log.warning('resolve_definition_path(%s, %s) failed: %s', kind, name, e)
+        return None
+    if not rows:
+        return None
+    if content_hash:
+        for path, chash in rows:
+            if chash == content_hash and os.path.isfile(path):
+                return {'path': path, 'contentHash': chash,
+                        'source': 'manifest_hash_match'}
+    for path, chash in rows:
+        if os.path.isfile(path):
+            return {'path': path, 'contentHash': chash,
+                    'source': 'manifest_latest'}
+    return None

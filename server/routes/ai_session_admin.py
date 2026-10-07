@@ -1375,17 +1375,49 @@ def _path_in_allowed_roots(path: str) -> bool:
     return False
 
 
+@ai_execution_admin_bp.post('/skill-def-steps/resolve')
+@require_permission('admin.ai_chat_admin')
+def skill_def_steps_resolve():
+    """按 (kind, name[, contentHash]) 自动定位定义文件路径（生成器预填用）：
+    最新注入记录优先、hash 一致者优先、文件须仍存在（utils.skill_fit
+    .resolve_definition_path）。无可用记录 404——前端回落为手动填路径。
+    路径 confinement 由 generate/apply 在读取/写盘前执行，与手输一致。"""
+    from utils.skill_fit import resolve_definition_path
+    body = request.get_json(silent=True) or {}
+    kind = (body.get('kind') or '').strip()
+    name = (body.get('name') or '').strip()
+    if not kind or not name:
+        return jsonify({'error': 'kind 和 name 必填'}), 400
+    resolved = resolve_definition_path(kind, name,
+                                       (body.get('contentHash') or '').strip() or None)
+    if not resolved:
+        return jsonify({'error': f'未找到「{name}」仍存在的历史注入记录'}), 404
+    return jsonify(resolved)
+
+
 @ai_execution_admin_bp.post('/skill-def-steps/generate')
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_generate():
-    """AI 生成 fit.steps 草案（body {kind, path}）：读定义全文交
-    utils.skill_fit_ai.generate_steps。path 逃出允许根 400；读文件失败 404；
-    AI 失败 502。"""
+    """AI 生成 fit.steps 草案：body {kind, path} 或 {kind, name,
+    contentHash?}——后者由最新 manifest 注入记录自动定位路径（hash 一致
+    优先），免去用户手输绝对路径。path 逃出允许根 400；定位/读文件失败
+    404；AI 失败 502。响应附 path/source（定位来源），前端可回填输入框。"""
     from utils import skill_fit_ai
+    from utils.skill_fit import resolve_definition_path
     body = request.get_json(silent=True) or {}
+    kind = (body.get('kind') or '').strip()
     path = (body.get('path') or '').strip()
+    resolved = None
     if not path:
-        return jsonify({'error': 'path 必填'}), 400
+        name = (body.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'path 或 name 至少提供一项'}), 400
+        resolved = resolve_definition_path(
+            kind, name, (body.get('contentHash') or '').strip() or None)
+        if not resolved:
+            return jsonify({'error': f'未找到「{name}」仍存在的历史注入记录，'
+                                     '请手动填写定义路径'}), 404
+        path = resolved['path']
     if not _path_in_allowed_roots(path):
         return jsonify({'error': 'path escapes allowed roots'}), 400
     try:
@@ -1397,23 +1429,36 @@ def skill_def_steps_generate():
         steps = skill_fit_ai.generate_steps(text)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
-    log_operation('create', 'ai_skill_def_steps', path, body.get('kind'),
+    log_operation('create', 'ai_skill_def_steps', path, kind or body.get('kind'),
                   'SkillOpt AI 生成 fit.steps 草案（产生 LLM 调用成本）')
-    return jsonify({'steps': steps})
+    return jsonify({'steps': steps, 'path': path,
+                    'source': (resolved or {}).get('source')})
 
 
 @ai_execution_admin_bp.post('/skill-def-steps/apply')
 @require_permission('admin.ai_chat_admin')
 def skill_def_steps_apply():
-    """回写 fit.steps 到定义文件（body {path, steps, versionLabel?}）：
+    """回写 fit.steps 到定义文件：body {path, steps, versionLabel?} 或
+    {name, steps, contentHash?, versionLabel?}（name 走 manifest 自动定位）。
     path 逃出允许根 400；apply 前对每个 args_pattern 跑 validate_pg_regex，
-    非法 400 且不写文件；文件不存在 404。写盘成功后按落盘内容登记定义
-    版本并归档正文（spec §4.2）：bytes 回读保证 hash 与正文自洽，默认
-    label「AI步骤优化 <YYYY-MM-DD>」，body.versionLabel 可覆盖。"""
+    非法 400 且不写文件；文件不存在/定位失败 404。写盘成功后按落盘内容
+    登记定义版本并归档正文（spec §4.2）：bytes 回读保证 hash 与正文自洽，
+    默认 label「AI步骤优化 <YYYY-MM-DD>」，body.versionLabel 可覆盖。"""
     from utils import skill_fit_ai
-    from utils.skill_fit import register_def_version
+    from utils.skill_fit import register_def_version, resolve_definition_path
     body = request.get_json(silent=True) or {}
+    kind = (body.get('kind') or '').strip()
     path = (body.get('path') or '').strip()
+    if not path:
+        name = (body.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'path 或 name 至少提供一项'}), 400
+        resolved = resolve_definition_path(
+            kind, name, (body.get('contentHash') or '').strip() or None)
+        if not resolved:
+            return jsonify({'error': f'未找到「{name}」仍存在的历史注入记录，'
+                                     '请手动填写定义路径'}), 404
+        path = resolved['path']
     steps = body.get('steps')
     if not path or not isinstance(steps, list):
         return jsonify({'error': 'path 必填，steps 必须是数组'}), 400

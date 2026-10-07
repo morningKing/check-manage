@@ -186,11 +186,22 @@ export function updateSkillDefVersion(id: string, data: { versionLabel?: string 
   return patch<{ ok: boolean }>(`${ADMIN}/skill-def-versions/${encodeURIComponent(id)}`, data)
 }
 
-export function generateSkillDefSteps(body: { kind?: string; path: string }) {
-  return post<{ steps: FitStep[] }>(`${ADMIN}/skill-def-steps/generate`, body)
+export function generateSkillDefSteps(body: { kind?: string; path: string }
+  | { kind?: string; name: string; contentHash?: string }) {
+  return post<{ steps: FitStep[]; path: string; source?: string | null }>(
+    `${ADMIN}/skill-def-steps/generate`, body)
 }
 
-export function applySkillDefSteps(body: { path: string; steps: FitStep[]; versionLabel?: string }) {
+/** 按定义名自动定位文件路径（生成器预填；404 = 无可用注入记录，回落手输） */
+export function resolveSkillDefPath(body: { kind: string; name: string;
+                                            contentHash?: string }) {
+  return post<{ path: string; contentHash: string | null;
+                source: 'manifest_hash_match' | 'manifest_latest' }>(
+    `${ADMIN}/skill-def-steps/resolve`, body)
+}
+
+export function applySkillDefSteps(body: { path: string; steps: FitStep[]; versionLabel?: string }
+  | { kind: string; name: string; contentHash?: string; steps: FitStep[]; versionLabel?: string }) {
   return post<{ path: string }>(`${ADMIN}/skill-def-steps/apply`, body)
 }
 

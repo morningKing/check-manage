@@ -6,11 +6,14 @@
       <div class="gen__row">
         <span class="gen__label">定义路径</span>
         <ElInput v-model="gen.path" size="small"
-                 placeholder="定义文件绝对路径（服务端读取并解析 fit.steps）" />
+                 placeholder="定义文件绝对路径（留空时按「生成」自动定位最新注入记录）" />
         <ElButton size="small" type="primary" :loading="gen.busy" @click="runGenerate">
           生成步骤
         </ElButton>
       </div>
+      <p v-if="gen.source" class="gen__src">
+        已自动定位（{{ gen.source === 'manifest_hash_match' ? '版本哈希匹配' : '最近一次注入' }}），可手动改写
+      </p>
       <p v-if="gen.error" class="gen__err">{{ gen.error }}</p>
 
       <template v-if="gen.steps.length">
@@ -85,10 +88,12 @@ import { ElDialog, ElTable, ElTableColumn, ElInput, ElButton, ElMessage } from '
 import SkillFitBadge from '@/components/admin/SkillFitBadge.vue'
 import {
   generateSkillDefSteps, applySkillDefSteps, previewSkillDefSteps,
+  resolveSkillDefPath,
 } from '@/api/aiSkills'
 import type { FitStep, FitPreview } from '@/api/aiSkills'
 
-const props = defineProps<{ visible: boolean; defKind: string; defName: string }>()
+const props = defineProps<{ visible: boolean; defKind: string; defName: string;
+                            defHash?: string }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
 interface GenStepRow {
@@ -99,17 +104,37 @@ interface GenStepRow {
   /** 生成结果里首个 expect 之外的项，编辑时保留不丢 */
   extraExpect: FitStep['expect']
 }
+type GenStepSource = 'manifest_hash_match' | 'manifest_latest'
 const gen = ref({
   path: '', steps: [] as GenStepRow[], attemptId: '',
   preview: null as FitPreview | null,
   busy: false, previewing: false, saving: false, error: '',
+  source: '' as '' | GenStepSource,
 })
-// 每次打开重置对话框内部状态（恢复抽取前 openGenerator 的行为）
+// 每次打开重置对话框内部状态，并按 (defKind, defName, defHash) 自动定位
+// 定义路径预填——用户不再需要手输绝对路径；定位失败（无历史注入记录）
+// 保持留空，回落手输。
 watch(() => props.visible, v => {
-  if (v) Object.assign(gen.value, {
-    path: '', steps: [], attemptId: '', preview: null, error: '',
-  })
+  if (v) {
+    Object.assign(gen.value, {
+      path: '', steps: [], attemptId: '', preview: null, error: '',
+      source: '',
+    })
+    void autoResolve()
+  }
 })
+
+async function autoResolve() {
+  if (!props.defName) return
+  try {
+    const res = await resolveSkillDefPath({
+      kind: props.defKind, name: props.defName,
+      ...(props.defHash ? { contentHash: props.defHash } : {}),
+    })
+    gen.value.path = res.path
+    gen.value.source = res.source
+  } catch { /* 无记录/网络失败 → 留空手输；错误已由全局 toast 提示 */ }
+}
 
 function toGenRow(s: FitStep): GenStepRow {
   const expect = s.expect || []
@@ -138,18 +163,25 @@ function removeStep(i: number) {
   gen.value.steps.splice(i, 1)
 }
 async function runGenerate() {
-  if (!gen.value.path.trim()) {
+  const path = gen.value.path.trim()
+  if (!path && !props.defName) {
     gen.value.error = '请填写定义文件路径'
     return
   }
   gen.value.error = ''
   gen.value.busy = true
   try {
-    const res = await generateSkillDefSteps({
-      kind: props.defKind || undefined, path: gen.value.path.trim(),
-    })
+    // path 为空时由服务端按 (kind, name, contentHash) 从注入记录自动定位
+    const res = await generateSkillDefSteps(
+      path ? { kind: props.defKind || undefined, path }
+           : { kind: props.defKind || undefined, name: props.defName,
+               ...(props.defHash ? { contentHash: props.defHash } : {}) })
     gen.value.steps = (res.steps || []).map(toGenRow)
     gen.value.preview = null
+    if (res.path) {
+      gen.value.path = res.path
+      gen.value.source = (res.source as GenStepSource) || ''
+    }
   } catch { /* 全局 toast 已提示 */ } finally {
     gen.value.busy = false
   }
@@ -171,16 +203,19 @@ async function runPreview() {
   }
 }
 async function saveSteps() {
-  if (!gen.value.path.trim()) {
+  const path = gen.value.path.trim()
+  if (!path && !props.defName) {
     gen.value.error = '请填写定义文件路径'
     return
   }
   gen.value.error = ''
   gen.value.saving = true
   try {
-    const res = await applySkillDefSteps({
-      path: gen.value.path.trim(), steps: gen.value.steps.map(fromGenRow),
-    })
+    const res = await applySkillDefSteps(
+      path ? { path, steps: gen.value.steps.map(fromGenRow) }
+           : { kind: props.defKind, name: props.defName,
+               ...(props.defHash ? { contentHash: props.defHash } : {}),
+               steps: gen.value.steps.map(fromGenRow) })
     ElMessage.success(`已回写 ${res.path}`)
     emit('update:visible', false)
   } catch { /* 全局 toast 已提示 */ } finally {
@@ -221,6 +256,7 @@ function stepStatusText(status: string) {
 .gen__label { flex: none; width: 72px; font-size: 12.5px; color: var(--el-text-color-secondary); }
 .gen__row .el-input { flex: 1; }
 .gen__err { color: var(--el-color-danger); font-size: 12.5px; margin: 0 0 8px; }
+.gen__src { color: var(--el-color-success); font-size: 12px; margin: 0 0 8px; }
 .gen__steps { margin-bottom: 8px; }
 .gen__preview { margin-top: 12px; border-top: 1px dashed var(--el-border-color); padding-top: 10px; }
 .gen__preview-result { margin-top: 8px; }

@@ -515,3 +515,86 @@ def test_match_steps_completely_absent_still_miss():
     r = match_steps(steps, trace)
     assert r['status'] == 'diverged'
     assert all(p['status'] == 'miss' for p in r['per_step'])
+
+
+# ── 定义路径自动定位（生成器预填，2026-10-07） ─────────────────────────────
+
+def _seed_manifests(db_conn, name, entries):
+    """最小种子链：user + session + attempt，再按 entries 插 manifest 行。
+    entries = [(path, content_hash, exists_on_disk 已由调用方保证,
+    created_at 按序递减)]，返回 (uid, sid, attempt)。"""
+    import uuid as _uuid
+    from db import get_db
+    uid, sid, attempt = str(_uuid.uuid4()), str(_uuid.uuid4()), str(_uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, username, password_hash, display_name, role) "
+                "VALUES (%s, %s, 'x', 'RV', 'developer')", (uid, f'rv_{uid[:8]}'))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status, session_token) "
+                "VALUES (%s, %s, 'completed', %s)", (sid, uid, f'tok-{sid[:12]}'))
+            cur.execute(
+                "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                "  operation, started_at, finished_at) "
+                "VALUES (%s, %s, 'batch', 'send', NOW(), NOW())", (attempt, sid))
+            for i, (path, chash, minutes_ago) in enumerate(entries):
+                cur.execute(
+                    "INSERT INTO ai_execution_manifests (id, attempt_id, kind, "
+                    "  name, source, path, content_hash, injected, created_at) "
+                    "VALUES (%s, %s, 'skill', %s, 'platform_global', %s, %s, "
+                    "  true, NOW() - (%s || ' minutes')::interval)",
+                    (f'man_{_uuid.uuid4().hex[:8]}', attempt, name, path, chash,
+                     str(minutes_ago)))
+    db_conn.commit()
+    return uid, sid, attempt
+
+
+def _cleanup_manifest_seed(db_conn, uid, sid, attempt):
+    from db import get_db
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+    db_conn.commit()
+
+
+def test_resolve_definition_path_prefers_hash_then_existing(db_conn, tmp_path):
+    """hash 一致且文件在 → hash_match；hash 指向已删文件 → 回落最新仍存在
+    的注入（manifest_latest）；全部文件缺失/无记录 → None。"""
+    import hashlib
+    import uuid as _uuid
+    from utils.skill_fit import resolve_definition_path
+    old_md = tmp_path / 'old'
+    old_md.mkdir()
+    (old_md / 'SKILL.md').write_text('old version', encoding='utf-8')
+    gone_md = tmp_path / 'gone'           # 曾被注入、现已被删
+    h_old = hashlib.sha256(b'old version').hexdigest()
+    h_gone = hashlib.sha256(b'gone version').hexdigest()
+    name = f'rslv-{_uuid.uuid4().hex[:6]}'
+    uid, sid, attempt = _seed_manifests(db_conn, name, [
+        (str(gone_md / 'SKILL.md'), h_gone, 0),          # 最新：文件已删
+        (str(old_md / 'SKILL.md'), h_old, 10),           # 较旧：文件仍在
+    ])
+    try:
+        # hash 命中仍在盘的旧版本（走默认 _default_get_db 工厂，与生产一致）
+        r = resolve_definition_path('skill', name, h_old)
+        assert r == {'path': str(old_md / 'SKILL.md'), 'contentHash': h_old,
+                     'source': 'manifest_hash_match'}
+        # hash 指向已删文件 → 跳过，回落最新仍存在的注入
+        r2 = resolve_definition_path('skill', name, h_gone)
+        assert r2['path'] == str(old_md / 'SKILL.md')
+        assert r2['source'] == 'manifest_latest'
+        # 不带 hash → 同样回落
+        r3 = resolve_definition_path('skill', name)
+        assert r3['source'] == 'manifest_latest'
+        # 全部候选文件缺失：把旧文件也删掉 → None
+        (old_md / 'SKILL.md').unlink()
+        assert resolve_definition_path('skill', name) is None
+        # 未知定义 → None；缺参 → None
+        assert resolve_definition_path('skill', 'no-such-name') is None
+        assert resolve_definition_path('skill', '') is None
+    finally:
+        _cleanup_manifest_seed(db_conn, uid, sid, attempt)

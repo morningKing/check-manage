@@ -592,3 +592,126 @@ def test_skill_def_version_rollback_error_paths(client, admin_headers, db_conn,
             cur.execute("DELETE FROM ai_skill_def_versions WHERE def_kind='skill' "
                         "AND def_name IN (%s, %s)", (name, name2))
         db_conn.commit()
+
+
+# ── 生成器路径自动定位（2026-10-07）：resolve 端点 + generate/apply 按 name ──
+
+def test_skill_def_steps_resolve_endpoint(client, admin_headers, db_conn, tmp_path):
+    """resolve：按 name+hash 定位到最新注入路径；hash 不带则 latest；
+    无记录 404；缺参 400。"""
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    md_hash = hashlib.sha256((tmp_path / 'SKILL.md').read_bytes()).hexdigest()
+    try:
+        r = client.post('/ai/chat/admin/skill-def-steps/resolve',
+                        headers=admin_headers,
+                        json={'kind': 'skill', 'name': 'demo-skill',
+                              'contentHash': md_hash})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['path'] == str(tmp_path / 'SKILL.md')
+        assert body['source'] == 'manifest_hash_match'
+        r2 = client.post('/ai/chat/admin/skill-def-steps/resolve',
+                         headers=admin_headers,
+                         json={'kind': 'skill', 'name': 'demo-skill'})
+        assert r2.status_code == 200
+        assert r2.get_json()['source'] == 'manifest_latest'
+        r404 = client.post('/ai/chat/admin/skill-def-steps/resolve',
+                           headers=admin_headers,
+                           json={'kind': 'skill', 'name': 'no-such-def'})
+        assert r404.status_code == 404
+        r400 = client.post('/ai/chat/admin/skill-def-steps/resolve',
+                           headers=admin_headers, json={'kind': 'skill'})
+        assert r400.status_code == 400
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()
+
+
+def test_skill_def_steps_generate_by_name(client, admin_headers, db_conn,
+                                          tmp_path, monkeypatch):
+    """generate 传 {kind, name, contentHash}：自动定位路径读文件走 AI——
+    用户不再手输绝对路径；响应带 path/source 供前端回填。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    import utils.skill_fit_ai as _fa
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
+        {'id': 'clone', 'name': '克隆仓库',
+         'expect': [{'tool': 'bash', 'args_pattern': 'git clone'}]}]})
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    md_hash = hashlib.sha256((tmp_path / 'SKILL.md').read_bytes()).hexdigest()
+    try:
+        r = client.post('/ai/chat/admin/skill-def-steps/generate',
+                        headers=admin_headers,
+                        json={'kind': 'skill', 'name': 'demo-skill',
+                              'contentHash': md_hash})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['steps'][0]['id'] == 'clone'
+        assert body['path'] == str(tmp_path / 'SKILL.md')
+        assert body['source'] == 'manifest_hash_match'
+        # name 定位不到 → 404 并提示手输
+        r404 = client.post('/ai/chat/admin/skill-def-steps/generate',
+                           headers=admin_headers,
+                           json={'kind': 'skill', 'name': 'no-such-def'})
+        assert r404.status_code == 404
+        assert '手动填写' in r404.get_json()['error']
+        # path 与 name 都缺 → 400
+        r400 = client.post('/ai/chat/admin/skill-def-steps/generate',
+                           headers=admin_headers, json={'kind': 'skill'})
+        assert r400.status_code == 400
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()
+
+
+def test_skill_def_steps_apply_by_name(client, admin_headers, db_conn,
+                                       tmp_path, monkeypatch):
+    """apply 传 {kind, name, steps}：定位→回写→版本登记，全链路无手输 path。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path))
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)
+    try:
+        steps = [{'id': 'renamed-step', 'name': '新步骤',
+                  'expect': [{'tool': 'glob'}]}]
+        r = client.post('/ai/chat/admin/skill-def-steps/apply',
+                        headers=admin_headers,
+                        json={'kind': 'skill', 'name': 'demo-skill',
+                              'steps': steps})
+        assert r.status_code == 200
+        md = tmp_path / 'SKILL.md'
+        text = md.read_text(encoding='utf-8')
+        assert 'renamed-step' in text and 'description: 数据拉取' in text
+        chash = hashlib.sha256(md.read_bytes()).hexdigest()
+        with db_conn.cursor() as cur:
+            # def_name 由路径目录名派生（fixture 的 md 在 tmp 根 → 目录名非
+            # 'demo-skill'），这里按内容 hash 验证版本登记发生
+            cur.execute("SELECT count(*) FROM ai_skill_def_versions "
+                        "WHERE def_kind='skill' AND content_hash=%s", (chash,))
+            assert cur.fetchone()[0] == 1
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_skill_def_versions WHERE content_hash=%s",
+                        (hashlib.sha256((tmp_path / 'SKILL.md').read_bytes()).hexdigest(),))
+            cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        db_conn.commit()

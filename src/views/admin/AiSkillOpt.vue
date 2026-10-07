@@ -147,7 +147,8 @@
       <DefPatternsPanel v-if="globalPatternsVisible" />
     </ElDialog>
     <StepGeneratorDialog :visible="genVisible" :def-kind="genKind"
-                         :def-name="genName" @update:visible="genVisible = $event" />
+                         :def-name="genName" :def-hash="genHash"
+                         @update:visible="genVisible = $event" />
   </div>
 </template>
 
@@ -252,6 +253,7 @@ const globalPatternsVisible = ref(false)
 const genVisible = ref(false)
 const genKind = ref('')
 const genName = ref('')
+const genHash = ref('')
 
 async function loadDefinitions() {
   fitLoading.value = true
@@ -275,6 +277,7 @@ async function loadDefinitions() {
 function openGeneratorFromVersion(v: SkillDefVersion) {
   genKind.value = v.defKind
   genName.value = v.defName
+  genHash.value = v.contentHash || ''
   genVisible.value = true
 }
 
