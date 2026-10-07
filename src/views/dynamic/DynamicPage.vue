@@ -1043,7 +1043,7 @@
  */
 import { ref, computed, watch, nextTick, onActivated, onDeactivated, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Upload, Download, ArrowDown, Search, DCaret, Grid, Operation, MagicStick, Tickets, Document, Loading, Back, Check, Calendar, DataLine, RefreshRight, CopyDocument, QuestionFilled, Select, Delete } from '@element-plus/icons-vue'
 import * as ElIconsAll from '@element-plus/icons-vue'
 import { usePageConfigStore, useMenuStore, useAuthStore, useJumpNavigationStore, useColumnViewStore } from '@/stores'
@@ -2118,8 +2118,24 @@ async function handleBranchSwitch(command: string): Promise<void> {
   // 如果属于项目，分支切换需要通过项目版本管理
   if (projectMenuId.value) {
     if (command === 'main') {
-      // TODO: 实现项目分支切换到 main
-      ElMessage.warning('项目分支切换请在项目版本管理中进行')
+      // 切回主分支：与版本管理抽屉 handleSwitchToMain 相同的确认与接口
+      // （PVM.vue 同款 ElMessageBox + switchToMainProjectBranch）
+      try {
+        await ElMessageBox.confirm(
+          '确定切换回主分支？这将同步切换项目下所有数据集的分支状态。',
+          '切换主分支',
+          { type: 'warning' }
+        )
+        await switchToMainProjectBranch(projectMenuId.value)
+        await loadCurrentBranch()
+        await loadPageData()
+        ElMessage.success('已切换回主分支')
+      } catch (error: any) {
+        if (error !== 'cancel') {
+          const msg = error?.response?.data?.error || '切换失败'
+          ElMessage.error(msg)
+        }
+      }
       return
     }
     try {

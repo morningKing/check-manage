@@ -1,7 +1,7 @@
 /**
- * 族D L3 分支与依赖 UI 旅程 —— 真实链路（TD-D17–D19，共 3 例）。
+ * 族D L3 分支与依赖 UI 旅程 —— 真实链路（TD-D17–D19 + TD-D18b，共 4 例）。
  *
- * 选择器出处（本仓实读，2026-10-06）：
+ * 选择器出处（本仓实读，2026-10-06；TD-D18b 2026-10-07 复核）：
  * - 操作菜单「版本管理/依赖管理」：DynamicPage.vue:198-203（isAdmin「数据治理」组，
  *   command=version/dependency），命令处理 :3105-3118 —— projectMenuId 存在时打开
  *   ProjectVersionManager（defaultTab versions/dependencies）。
@@ -10,8 +10,9 @@
  *   请输入版本名称 :150、radio 分支（可编辑） :155、footer「创建」 :169）；
  *   「切换回主分支」按钮 :25-32（仅 currentBranch.branchId !== 'main' 时渲染）。
  * - 头部分支下拉：DynamicPage.vue:31-65（.title-row 内 el-tag 显示当前分支名 :25-30，
- *   .branch-switch-link 触发）。注意「主分支」菜单项在项目页只弹 warning 不切换
- *   （DynamicPage.vue:2119-2123 TODO 未实现）——UI 切回 main 的产品实路是抽屉按钮。
+ *   .branch-switch-link 触发；「主分支」项 :43-49 非 main 时可点）。04 #4 已修复：
+ *   页头「主分支」项走与抽屉同款 ElMessageBox 确认 + switch-main 接口
+ *   （原 :2119-2123 TODO no-op 由 TD-D18b 锁定）。
  * - 依赖 tab 空态：ProjectDependencyManager.vue:96 el-empty「当前分支没有声明任何项目依赖」。
  *
  * 页面骨架（createDataPage）：workspace→project→data 三级菜单链，data 菜单的
@@ -170,9 +171,9 @@ test('TD-D18 分支切换数据隔离', async ({ page, request }) => {
   await expect(page.locator('.table-card .el-table__body tr', { hasText: branchOnly }))
     .toBeVisible({ timeout: 15_000 })
 
-  // 切回主分支：头部分支下拉「主分支」项在项目页是 TODO 未实现
-  // （DynamicPage.vue:2119-2123 只弹 warning），产品实路 = 抽屉「切换回主分支」
-  // （PVM.vue:25-32，仅非 main 分支时渲染）→ 确认框
+  // 切回主分支走抽屉「切换回主分支」按钮（PVM.vue:25-32，仅非 main 分支时渲染）
+  // → 确认框。04 #4 修复后页头下拉也可直切（TD-D18b 锁定）；本例保留抽屉路径
+  // 作为第二条产品实路的回归覆盖。
   await openMoreCommand(page, '版本管理')
   const drawer = page.locator('.el-dialog:visible', { hasText: '项目版本管理' })
   await expect(drawer).toBeVisible({ timeout: 10_000 })
@@ -190,6 +191,54 @@ test('TD-D18 分支切换数据隔离', async ({ page, request }) => {
     .toHaveCount(0)
   // 头部标签回到 main（服务端 current-branch 对 main 返回 branchName:'main'，
   // server/routes/project_versions.py:432 —— 标签文案是 'main' 而非『主分支』）
+  await expect(page.locator('.title-row .el-tag', { hasText: /^main$/ }))
+    .toBeVisible({ timeout: 15_000 })
+})
+
+test('TD-D18b 页头下拉切回主分支', async ({ page, request }) => {
+  const { h, entry } = await newPage(request, 'ui-br-header-main')
+  const branchName = tag('D', 'ui-brhdr')
+  const mainA = `主干甲-${h.collection}`
+  const mainB = `主干乙-${h.collection}`
+  const branchOnly = `分支独有-${h.collection}`
+
+  // API 侧准备：main 两条 → 建分支 → 切到分支 → 分支加 1 条
+  await createRecord(request, h.collection, { name: mainA, qty: 1 })
+  await createRecord(request, h.collection, { name: mainB, qty: 2 })
+  const brId = await makeBranchViaApi(request, h, branchName)
+  entry.branchName = branchName
+  await switchBranchViaApi(request, h, brId)
+  await createRecord(request, h.collection, { name: branchOnly })
+
+  await gotoWithAuth(page, h.path)
+  await expect(page.locator('.title-row .el-tag', { hasText: branchName }))
+    .toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.table-card .el-table__body tr', { hasText: branchOnly }))
+    .toBeVisible({ timeout: 15_000 })
+
+  // 页头下拉切回主分支：.branch-switch-link（DynamicPage.vue:38）→「主分支」项
+  // （非 main 分支时可点，:disabled="!currentBranch?.branchId"）→ 确认框
+  // （与抽屉 handleSwitchToMain 同款 ElMessageBox UX）→ 确定
+  await page.locator('.branch-switch-link').click()
+  const mainItem = page.locator(
+    '.branch-dropdown-menu .el-dropdown-menu__item:visible',
+    { hasText: '主分支' }
+  )
+  await expect(mainItem).toBeVisible({ timeout: 10_000 })
+  await expect(mainItem).toBeEnabled()
+  await mainItem.click()
+  const confirmBox = page.locator('.el-message-box:visible', { hasText: '切换主分支' })
+  await expect(confirmBox).toBeVisible({ timeout: 10_000 })
+  await confirmBox.getByRole('button', { name: '确定' }).click()
+
+  // 表格回到 main 数据：主干两条在、分支独有条不在；标签回 main
+  await expect(page.locator('.table-card .el-table__body tr', { hasText: mainA }))
+    .toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.table-card .el-table__body tr', { hasText: mainB }))
+    .toBeVisible()
+  await expect(page.locator('.table-card .el-table__body tr', { hasText: branchOnly }))
+    .toHaveCount(0)
+  // 头部标签回到 main（同 TD-D18：服务端对 main 返回 branchName:'main'）
   await expect(page.locator('.title-row .el-tag', { hasText: /^main$/ }))
     .toBeVisible({ timeout: 15_000 })
 })
