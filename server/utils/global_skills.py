@@ -332,7 +332,21 @@ def sync_platform_skills_to_oc_global(oc_global_dir: str, workspace_root: str,
                 if os.path.islink(dst):
                     os.remove(dst)  # 旧链接指向变了 → 重建
                 elif os.path.exists(dst):
-                    # 同名实体目录：平台同步副本（带标记）或用户自装 → 视为可用
+                    # 同名实体目录：平台同步副本（带标记）或用户自装。
+                    # 带标记副本必须校验内容——删旧传新的"更新"只换中央存储，
+                    # 不同步副本会把旧版本一直喂给 OC（2026-10-07 实测缺口）；
+                    # 无标记的用户自装目录不动。
+                    if not os.path.exists(os.path.join(dst, PLATFORM_SYNC_MARKER)):
+                        synced.append(name)
+                        continue
+                    if _dir_hash(dst) == _dir_hash(src):
+                        synced.append(name)  # 内容一致 → 幂等
+                        continue
+                    shutil.rmtree(dst, ignore_errors=True)
+                    shutil.copytree(src, dst)
+                    with open(os.path.join(dst, PLATFORM_SYNC_MARKER), 'w',
+                              encoding='utf-8') as f:
+                        f.write(src)
                     synced.append(name)
                     continue
                 os.symlink(src, dst)
@@ -429,13 +443,13 @@ BUILTIN_HASH_MARKER = '.builtin-hash'
 
 
 def _dir_hash(dirpath: str) -> str:
-    """目录内容哈希;跳过 .builtin-hash marker 本身,否则 marker 内容会改变
-    目录哈希,导致"存下的哈希永远对不上"。"""
+    """目录内容哈希;跳过标记文件本身（builtin 与平台同步副本两种）,否则
+    标记内容会改变目录哈希,导致"存下的哈希永远对不上"。"""
     import hashlib
     h = hashlib.sha1()
     for root, _, fns in sorted(os.walk(dirpath)):
         for fn in sorted(fns):
-            if fn == BUILTIN_HASH_MARKER:
+            if fn in (BUILTIN_HASH_MARKER, PLATFORM_SYNC_MARKER):
                 continue
             fp = os.path.join(root, fn)
             h.update(os.path.relpath(fp, dirpath).encode('utf-8'))
