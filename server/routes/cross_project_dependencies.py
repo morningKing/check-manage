@@ -281,6 +281,12 @@ def get_merge_order(project_menu_id):
     if not source_branch:
         return jsonify({'error': '缺少 sourceBranch 参数'}), 400
 
+    # main 是虚拟主分支（非 project_versions 真实行）——传给
+    # get_coordinated_merge_order 会按 id 查版本失败 → ValueError → 500。
+    # 显式 400 拦截（真实分支路径不受影响）。
+    if source_branch == 'main':
+        return jsonify({'error': '虚拟主分支 main 无合并顺序，请指定具体分支'}), 400
+
     try:
         order = get_coordinated_merge_order(project_menu_id, source_branch)
         return jsonify({'mergeOrder': order, 'total': len(order)})

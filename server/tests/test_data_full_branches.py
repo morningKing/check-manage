@@ -443,6 +443,26 @@ def test_td_d12_merge_check_and_order(admin):
         live.drop_page(admin, p2)
 
 
+def test_td_d12b_merge_order_main_virtual_400(admin):
+    """虚拟主分支 main 请求 merge-order → 显式 400（04 #5 修复，不再 500）。
+
+    'main' 是虚拟分支（user_current_project_branch 概念值，project_versions
+    无对应行）——util get_coordinated_merge_order 按 id 查版本会 ValueError
+    → 通用 except 回 500。路由层（routes/cross_project_dependencies.py
+    get_merge_order）先拦截：main → 400 「虚拟主分支 main 无合并顺序，请指定
+    具体分支」。真实分支路径见 TD-D12（_make_branch 后 merge-order 200）。
+    """
+    page = _project(admin, 'mo-main')
+    try:
+        mo = live.api('GET',
+                      f"/projects/{page['project_menu_id']}/merge-order?sourceBranch=main",
+                      admin)
+        assert mo.status_code == 400, f'{mo.status_code} {mo.text[:300]}'
+        assert mo.json().get('error') == '虚拟主分支 main 无合并顺序，请指定具体分支'
+    finally:
+        live.drop_page(admin, page)
+
+
 def test_td_d13_update_dependencies_after_merge(admin):
     p1, p2 = _dep_topology(admin, 'udam')
     dep_id = None
