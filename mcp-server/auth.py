@@ -28,7 +28,7 @@ def validate_session_token(token: str) -> dict:
             FROM ai_chat_sessions s
             JOIN users u ON u.id = s.user_id
             WHERE s.session_token = %s
-              AND s.status = 'active'
+              AND s.status IN ('active', 'running')
             """,
             (token,),
         )

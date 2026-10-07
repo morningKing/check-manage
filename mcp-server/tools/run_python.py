@@ -63,7 +63,7 @@ def _workspace_for_session(session_id: str):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT workspace_path FROM ai_chat_sessions WHERE id = %s AND status = 'active'",
+            "SELECT workspace_path FROM ai_chat_sessions WHERE id = %s AND status IN ('active', 'running')",
             (session_id,),
         )
         row = cur.fetchone()
