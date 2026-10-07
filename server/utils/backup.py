@@ -16,6 +16,7 @@ import shutil
 import zipfile
 import threading
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from db import get_db
 import psycopg2.extras
 
@@ -479,6 +480,10 @@ def _serialize_value(val):
         return None
     if isinstance(val, datetime):
         return val.isoformat()
+    if isinstance(val, Decimal):
+        # NUMERIC 列（如 ai_execution_usage.cost）psycopg2 返回 Decimal，
+        # json.dumps 无 default= 会直接 TypeError——导出前转 float
+        return float(val)
     if isinstance(val, (dict, list)):
         return val
     return val

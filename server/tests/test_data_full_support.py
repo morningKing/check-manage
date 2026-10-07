@@ -14,18 +14,19 @@
   二进制 ZIP（PK 魔数）；settings 路由 GET/PUT 均为 /backups/settings
   （:170-193，brief 的探测式写法已按实读定稿）。
   红线：绝不调 /backups/<id>/restore 与 /backups/factory-reset。
-  已知产品缺陷（2026-10-07 实测定档，H04）：POST /backups 全量导出在
-  ai_execution_usage 表上必然 500——cost 列 NUMERIC（dev 库 319 行非空），
-  utils/backup._serialize_value（:476-484）未处理 Decimal，json.dumps 无
-  default= → TypeError → 500「备份失败: Object of type Decimal is not JSON
-  serializable」。H04 按实测行为定档并断言缺陷指纹，修复后需改回 201 契约。
+  历史缺陷 04 #7（2026-10-07 定档并已修）：POST /backups 全量导出曾在
+  ai_execution_usage 表 500——cost 列 NUMERIC 返回 Decimal，
+  utils/backup._serialize_value（:476-484）未处理 Decimal 且 json.dumps 无
+  default= → TypeError「Object of type Decimal is not JSON serializable」。
+  修复：_serialize_value 增加 Decimal→float 分支；H04 改回 201 契约
+  （建档（记录耗时）→列表→下载→DELETE 删除腿）。
 
 清理约定：
 - record_comments 无 FK（init_db.py:509-522），删记录不级联删评论 →
   各用例把自建的评论显式 DELETE；
 - H02 的探针用户/角色 finally 删（沿族G G03 模式）；
-- H04 因建备份被上述缺陷阻断，不产生任何备份行/文件（备份行在 ZIP 完成
-  后才落库，实测验证），无 finally DELETE 项；
+- H04 自建备份 finally DELETE（只删自建行/文件，既有备份为 dev 资产不碰），
+  建档若再留 .tmp-backup-*.json 碎片按 mtime 守卫清走；
 - H05 settings 往返后回写原值，不改动 dev 定时备份配置。
 """
 import os
@@ -173,31 +174,43 @@ def test_td_h03_timeline_merges_comment_and_change(admin, pageh):
 
 
 def test_td_h04_backup_list_download_and_create_defect(admin):
-    """备份 建档缺陷定档 + 列表 + 下载（delete 腿被缺陷阻断，见下）。
+    """备份 建档（201 契约，print 记录实际耗时）+ 列表 + 下载 + 删除全链路。
 
-    产品缺陷定档（2026-10-07 实测，按边界规则不改产品代码，DONE_WITH_CONCERNS
-    上报）：POST /backups 全量导出必 500——BACKUP_TABLES 含 ai_execution_usage，
-    其 cost 列为 NUMERIC（dev 库 casemanage 319 行非空，样例 Decimal('0.0042')），
-    utils/backup._serialize_value（:476-484）未处理 Decimal 且 json.dumps
-    （:562 / :805）无 default= → TypeError「Object of type Decimal is not JSON
-    serializable」，路由捕获后回 500「备份失败: …」（backups.py:79-80）。
-    失败不留备份行（备份行在 ZIP 完成后才 INSERT，实测验证无残留行），仅在
-    server/backups 留 .tmp-backup-<id>-*.json 碎片——本用例断言后即按 mtime
-    清走自建碎片（产品侧 _cleanup_stale_backup_tmp 另有下次建档自愈兜底）。
-
-    下面的 500 + 指纹断言是刻意的缺陷金丝雀：产品修复 _serialize_value 后
-    POST 会返回 201，此处会翻转失败提醒把断言改回 201 契约，并补全
-    建档→finally DELETE 的删除腿。既有备份行一律不删（dev 资产）。
+    04 #7 缺陷已修（_serialize_value 补 Decimal→float）：POST /backups 全量
+    导出经 ai_execution_usage（cost 列 NUMERIC → Decimal）不再崩，返回 201。
+    dev 资产红线：本用例只删自建备份行/文件，既有备份一律不碰；
+    restore/factory-reset 仍不触。
     """
     t0 = time.time()  # epoch 秒：与 os.path.getmtime 同一时钟域，守卫才有效
+    t_start = time.time()
     r = live.api('POST', '/backups', admin, {'note': 'DTEST-H 备份冒烟'})
-    elapsed = time.time() - t0
+    elapsed = time.time() - t_start
+    print(f'[H04] 备份建档耗时 {elapsed:.1f}s (note=DTEST-H 备份冒烟)')
     body = r.json()
-    assert r.status_code == 500 and '备份失败' in body.get('error', ''), (
-        f'缺陷已修复或行为漂移：{r.status_code} {str(body)[:300]} '
-        f'({elapsed:.1f}s)——若已 201，请按 docstring 改回建档契约并补删除腿')
-    assert 'Decimal is not JSON serializable' in body['error']
-    # 定档断言后立刻清走本次 POST 遗留的 .tmp-backup-*.json 碎片
+    assert r.status_code == 201, f'{r.status_code} {str(body)[:300]} ({elapsed:.1f}s)'
+    bid = body['id']
+    try:
+        # 列表：JSON 数组（实读 :45-57），包含自建备份（note 由建档后 UPDATE 回填）
+        lst = live.api('GET', '/backups', admin)
+        assert lst.status_code == 200
+        assert isinstance(lst.json(), list)
+        mine = next((x for x in lst.json() if x['id'] == bid), None)
+        assert mine is not None, f'列表缺自建备份 {bid}'
+        assert mine.get('note') == 'DTEST-H 备份冒烟'
+        # 下载：二进制 ZIP 魔数
+        dl = live.api('GET', f'/backups/{bid}/download', admin)
+        assert dl.status_code == 200
+        assert dl.content[:2] == b'PK'
+    finally:
+        # 删除腿：行+文件一并移除（routes/backups.py delete_backup）
+        d = live.api('DELETE', f'/backups/{bid}', admin)
+        assert d.status_code < 300, f'删除自建备份失败 {d.status_code} {d.text[:200]}'
+        after = live.api('GET', '/backups', admin).json()
+        assert all(x['id'] != bid for x in after), '删除后行仍在'
+        from utils.backup import BACKUP_DIR
+        assert not os.path.exists(os.path.join(BACKUP_DIR, f'{bid}.zip')), \
+            '删除后 zip 文件仍在'
+    # 防御性清理：建档过程若遗留 .tmp-backup-*.json 碎片，按 mtime 守卫清走
     # （只删 mtime >= t0 的自建碎片，不碰他人/历史文件；产品侧
     # _cleanup_stale_backup_tmp 也会在下一次建档开头自愈兜底）
     from utils.backup import BACKUP_DIR
@@ -210,15 +223,6 @@ def test_td_h04_backup_list_download_and_create_defect(admin):
                     os.remove(p)
                 except OSError:
                     pass
-    # 列表：JSON 数组形状（实读 :45-57），按 created_at 倒序
-    lst = live.api('GET', '/backups', admin)
-    assert lst.status_code == 200
-    assert isinstance(lst.json(), list) and lst.json()
-    # 下载：对既有最新备份只读校验二进制 ZIP 魔数（不触碰任何既有行）
-    newest = lst.json()[0]
-    dl = live.api('GET', f"/backups/{newest['id']}/download", admin)
-    assert dl.status_code == 200
-    assert dl.content[:2] == b'PK'
 
 
 def test_td_h05_backup_settings_roundtrip(admin):
