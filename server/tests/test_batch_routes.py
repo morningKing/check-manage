@@ -271,7 +271,9 @@ def test_retry_failed_clears_context_like_reexecute(setup_app, tmp_path, monkeyp
     assert not (ws / 'outputs' / 'old-report.md').exists(), '上一轮产出应被清空'
     assert (ws / 'uploads' / 'r1.txt').read_text(encoding='utf-8') == '输入应保留'
     assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
-    # 批子会话本就无 opencode.json（MCP 走全局配置）——重置后也不应凭空出现
+    # 批子会话的 opencode.json（per-session MCP 配置）由 worker 派发时的
+    # _prepare_workspace 生成——重置后尚未派发，此刻不应存在（旧配置已随
+    # 整目录删除清掉，新一轮派发会写入新 token 的配置）
     assert not (ws / 'opencode.json').exists()
 
 
@@ -436,8 +438,8 @@ def test_reexecute_completed_child_clears_context(setup_app, tmp_path, monkeypat
     # 批暂存区（staged 有 24h TTL，过期批次的输入也不能丢）
     assert (ws / 'uploads' / 'r1.txt').read_text(encoding='utf-8') == '输入应保留'
     assert (ws / '.git').exists() and (ws / 'AGENTS.md').exists()
-    # 批子会话创建时本就无 opencode.json（MCP 走全局配置）——重置后也不应
-    # 凭空出现（带无效 token 的配置会破坏新一轮 MCP）
+    # 批子会话的 opencode.json 由派发时 _prepare_workspace 写入（fresh
+    # token）——重置只清场不写配置，此刻尚未派发故不应存在
     assert not (ws / 'opencode.json').exists()
     # 上一轮的关联行清零：变更登记/子代理/账本/门禁期望
     cur.execute("SELECT count(*) FROM ai_chat_session_files WHERE session_id=%s", (sid,))

@@ -2083,3 +2083,52 @@ def test_batch_terminal_cleans_oc_sessions(db_conn, monkeypatch):
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
         db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# 批子会话 MCP 接线（2026-10-07 缺口修复）
+# ---------------------------------------------------------------------------
+
+def test_prepare_workspace_writes_mcp_config(db_conn, user_id, tmp_path,
+                                             monkeypatch):
+    """批子会话配给必须写 per-session opencode.json（平台 MCP url+token+
+    model），否则平台 MCP 工具（query_collection/run_python/save_artifact…）
+    在批子会话整体不可用——2026-09-29 工作区配置重构后的回归，当日 R4 实测
+    模型调 check-manage_save_artifact 被 OC 记 invalid。ensure_batch_permissions
+    的幂等合并在此基础上补 permission.allow，两者共存。"""
+    import json as _json
+    from pathlib import Path as _Path
+    from db import get_db
+    from utils.batch_engine import _prepare_workspace
+    monkeypatch.setenv('AI_CHAT_WORKSPACE_ROOT', str(tmp_path))
+    bid, sid = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                "VALUES (%s, %s, 'mcp', 'p', 1)", (bid, user_id))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                "  batch_seq, session_token) VALUES (%s, %s, 'pending', %s, 0, NULL)",
+                (sid, user_id, bid))
+    db_conn.commit()
+    try:
+        ws = _prepare_workspace(user_id, sid, None)
+        cfg = _json.loads((_Path(ws) / 'opencode.json').read_text(encoding='utf-8'))
+        mcp = cfg.get('mcp') or {}
+        assert 'check-manage' in mcp, f'平台 MCP 段缺失: {sorted(mcp)}'
+        assert 'token=' in (mcp['check-manage'] or {}).get('url', '')
+        assert cfg['permission']['external_directory'] == 'allow'
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT session_token FROM ai_chat_sessions WHERE id=%s",
+                            (sid,))
+                tok = cur.fetchone()[0]
+        assert tok, '会话 token 未落库（MCP 鉴权无据）'
+        assert tok in mcp['check-manage']['url'], '配置里的 token 与落库不一致'
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+        db_conn.commit()

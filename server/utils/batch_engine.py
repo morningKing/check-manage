@@ -300,8 +300,9 @@ def _prepare_workspace(user_id: str, session_id: str,
     staged across multiple separate /uploads calls (no requirement that they
     share a parent staging directory).
 
-    Returns the absolute workspace path.  Pure side-effect — no DB writes.
-    Can be monkeypatched in tests:
+    Returns the absolute workspace path.  Side effect beyond the filesystem:
+    generates and persists the child's session token (MCP 鉴权需要) — no other
+    DB writes. Can be monkeypatched in tests:
         monkeypatch.setattr(eng, '_prepare_workspace', lambda *a, **kw: str(tmp_path))
 
     Raises FileNotFoundError if a staged input is gone (e.g. the staging dir
@@ -336,6 +337,26 @@ def _prepare_workspace(user_id: str, session_id: str,
                     f'工作区配额超限：用户 {user_id} 已占用 '
                     f'{total_mb:.0f}MB > {AI_WORKSPACE_QUOTA_MB}MB')
     ws = create_session_workspace(_workspace_root(), user_id, session_id)
+    # 平台 MCP 接线（2026-10-07 缺口修复）：交互会话在 create_session 写
+    # workspace opencode.json（per-session token 的 MCP url + model），批子
+    # 会话自 2026-09-29 工作区配置重构（去 .opencode 目录）起没有任何 MCP
+    # 段——平台 MCP 工具（query_collection/run_python/save_artifact…）在
+    # 批子会话整体不可用，模型调用被 OC 记 invalid（当日 R4 实测），账本里
+    # 批会话的 check-manage_* 调用自 9-29 后为零。先写 MCP/model，再由
+    # ensure_batch_permissions 幂等合并 permission 键（不动 MCP 段）。
+    from config import (AI_SESSION_TTL_HOURS, MCP_SERVER_URL,
+                        get_default_chat_model)
+    from utils.mcp_servers import enabled_mcp_config, internal_mcp_enabled
+    from utils.session_token import generate_token
+    from utils.workspace import write_opencode_config
+    _mcp_name = 'check-manage'
+    write_opencode_config(
+        ws, mcp_name=_mcp_name,
+        mcp_url=(f'{MCP_SERVER_URL}/mcp?token='
+                 f'{generate_token(session_id, AI_SESSION_TTL_HOURS)}'),
+        model=get_default_chat_model(),
+        extra_mcp=enabled_mcp_config(reserved_names=[_mcp_name]),
+        include_internal=internal_mcp_enabled())
     # 绑定批任务的外部目录读取（2026-09-30）：无人值守会话读工作区外的文件
     # 会触发 OpenCode external_directory=ask 授权询问，无人应答 → 工具挂起
     # （生产实测 read 挂 900s 被看门狗 abort）。派发时写项目级 allow——

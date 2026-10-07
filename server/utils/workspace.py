@@ -188,8 +188,9 @@ def reset_session_workspace(workspace_path: str) -> None:
     清空前把 uploads 整体移到工作区外临时目录，骨架重建后原样移回
     （staged 恢复派发时 copy2 覆盖同名，内容一致）。
 
-    注意：不重写 opencode.json——批子会话创建时本就没有该文件（MCP 走
-    全局配置），凭空写入带无效 token 的配置反而会破坏新一轮的 MCP。
+    注意：不写 opencode.json——per-session MCP 配置由 worker 派发时的
+    _prepare_workspace 统一生成（fresh token 落库后再写配置），重置只负责
+    清场：旧配置随整目录删除清掉，新一轮拿到的一定是新 token。
 
     Windows 文件占用（杀软/句柄未释放）时重试 3 次，仍失败抛最后异常。
     """
