@@ -312,7 +312,7 @@ def get_rule_logs(rule_id):
                 f'''SELECT id, rule_id, rule_name, webhook_url, event_type, request_payload,
                       response_status, response_body, error_message, duration_ms,
                       retry_count, success, created_at
-                   FROM webhook_logs WHERE {"".join(conditions)}
+                   FROM webhook_logs WHERE {" AND ".join(conditions)}
                    ORDER BY created_at DESC LIMIT %s''',
                 params + [limit]
             )

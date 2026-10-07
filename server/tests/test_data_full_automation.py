@@ -463,12 +463,16 @@ def test_td_f12_webhook_test_endpoint_and_after_failure_logged(admin, stub):
             'GET', f"/webhook/rules/{rule['id']}/logs", admin).json()['logs']
             if x['success'] is False), None), timeout_s=15, label='失败日志')
         assert fail['responseStatus'] == 500
-        # 产品现状（未修，见 task-2-report）：per-rule 日志端点的 ?success= 过滤
-        # 拼 SQL 用 "".join(conditions)（routes/webhooks.py:315，缺 " AND " 分隔，
-        # 条件种子见 :300）→ ?success=false 必 500 SQL 语法错误。按现状断言留证。
-        broken = live.api('GET', f"/webhook/rules/{rule['id']}/logs?success=false", admin)
-        assert broken.status_code == 500 and 'success' in broken.json().get('error', '')
-        # success 过滤路径改在 /webhook/logs（:556 用 " AND ".join，正确）上验证
+        # ?success= 过滤契约：per-rule 日志端点按 success 布尔过滤且 200
+        # （routes/webhooks.py:300-306 条件种子，" AND ".join 拼 SQL）
+        fls = live.api('GET', f"/webhook/rules/{rule['id']}/logs?success=false", admin)
+        assert fls.status_code == 200, f'{fls.status_code} {fls.text[:300]}'
+        assert isinstance(fls.json().get('logs'), list) and fls.json()['logs']
+        assert all(x['success'] is False for x in fls.json()['logs'])
+        tru = live.api('GET', f"/webhook/rules/{rule['id']}/logs?success=true", admin)
+        assert tru.status_code == 200 and tru.json()['logs']
+        assert all(x['success'] is True for x in tru.json()['logs'])
+        # 全局日志端点同样支持 success 过滤
         glob = live.api('GET', '/webhook/logs?success=false&limit=200', admin)
         assert glob.status_code == 200 and 'total' in glob.json()
         match = [x for x in glob.json()['logs']
