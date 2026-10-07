@@ -39,7 +39,7 @@ Check-Manage 是一个**配置驱动的企业级动态数据管理平台**。核
 | **配置驱动** | 无需编码，通过页面配置自动生成表单和表格 |
 | **版本控制** | 支持数据快照、分支管理、合并冲突解决（类似Git） |
 | **分支管理** | 用户级分支隔离，支持并行开发，数据互不影响 |
-| **Excel视图** | 基于 Univer 的真实电子表格体验 |
+| **Excel视图** | 基于 Univer 的真实电子表格体验；支持标量字段单元格编辑回写（需数据页编辑权限，非标量列保持只读） |
 | **AI查询** | 自然语言转查询条件（集成 Qwen API） |
 | **ETL管道** | 可视化数据导入管道，支持 HTTP/脚本/映射/过滤 |
 | **备份还原** | 全量/表级备份，定时策略，数据对比 |
@@ -175,13 +175,13 @@ Check-Manage 是一个**配置驱动的企业级动态数据管理平台**。核
 
 #### 2.5.1 全量合并
 
-**API**: `POST /versions/merge`
+**API**: `POST /project-versions/merge`
 
 **策略**:
-- `theirs` - 使用源版本数据覆盖当前数据
-- `ours` - 保留当前数据，忽略源版本
+- `theirs` - 使用源版本数据覆盖当前数据（下方合并流程仅在该策略下执行）
+- `ours` - 保留当前数据，忽略源版本。**注意**：当前实现中 `ours` 是静默 no-op——仅登记合并记录、把版本标记为 `merged`，不执行任何数据同步，数据零变更；请勿依赖该策略实现「以当前数据为准」的合并（UI 合并入口不提供 `ours` 选项）
 
-**合并流程**（`server/utils/version.py:merge_version_to_current`）：
+**合并流程**（`server/utils/project_version.py:merge_project_version`，`theirs` 策略）：
 
 1. 加载源版本数据（快照从 `version_snapshots`，分支从 `dynamic_data`）
 2. 加载目标数据（当前分支）
@@ -615,6 +615,12 @@ CREATE TABLE dynamic_data (
 - 引用依赖检查（被其他 Collection 引用时禁止删除）
 - 关联关系清理
 - 触发器执行
+
+**批量删除**: `POST /<collection>/batch-delete`
+
+整体返回 200（不会以 409 报错）：被其他 Collection 引用而无法删除的记录列在
+响应的 `blocked` 字段里（`{"deleted": <已删条数>, "blocked": {"<id>": "被「××页面」引用"}}`），
+其余记录正常删除。
 
 ### 5.3 字段控件类型
 
