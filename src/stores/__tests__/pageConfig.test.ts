@@ -2284,3 +2284,77 @@ describe('PageConfig Store — resolve import values chunking/progress', () => {
     expect(onChunkProcessed).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// 04 #8 新建记录并发刷新竞态：同 id 至多一行不变量
+// ---------------------------------------------------------------------------
+
+/**
+ * 场景还原（缺陷 04 #8，TD-F16 DUP_ROWS 取证）：服务端「先提交、后响应」，
+ * POST 响应仍在途时一次整组拉取（statusBadge 轮询 / 手动刷新）已完成，
+ * 把**已含新记录**的服务端快照写回 pageDataCache；随后 addPageData 的本地
+ * push 落地 → 同一条记录在缓存/表格中出现两份（API 复核仅 1 条）。
+ *
+ * 不变量：pageDataCache 数组内同 id 至多一行。
+ */
+describe('PageConfig Store — 04 #8 addPageData 与整组拉取竞态', () => {
+  let store: ReturnType<typeof usePageConfigStore>
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    store = usePageConfigStore()
+    vi.mocked(get).mockReset()
+    vi.mocked(post).mockReset()
+  })
+
+  it('fetchPageData 快照已含新记录后 addPageData 落地 → 同 id 至多一行', async () => {
+    const pageId = 'page-tasks'
+    const existing = { id: 'task-e1', name: '既有', _version: 3 }
+    const created = { id: 'task-r1', name: '新建', _version: 1 }
+
+    // addPageData 的 POST：服务端已提交，响应挂起（模拟慢响应在途）
+    let resolvePost!: (v: unknown) => void
+    vi.mocked(post).mockImplementation(
+      () => new Promise((resolve) => { resolvePost = resolve })
+    )
+
+    // fetchPageData 的整组 GET：在服务端提交之后查询 → 快照已含新记录
+    vi.mocked(get).mockImplementation(async (url: string) => {
+      if (url === '/tasks') {
+        return { data: [existing, created], total: 2, page: 1, pageSize: 50 }
+      }
+      return {}
+    })
+
+    // 1) 整组拉取先落地（快照已含 task-r1）
+    await store.fetchPageData(pageId)
+    expect(store.getCachedPageData(pageId).map((r) => r.id))
+      .toEqual(['task-e1', 'task-r1'])
+
+    // 2) addPageData 的 POST 响应此刻才被前端处理 → 本地 push 落地
+    const adding = store.addPageData(pageId, { name: '新建' } as any)
+    resolvePost(created)
+    await adding
+
+    // 不变量：同 id 至多一行（修复前 push 一份 → 快照里已有一份 = 两行）
+    const ids = store.getCachedPageData(pageId).map((r) => r.id)
+    expect(ids.filter((id) => id === 'task-r1'), '同一条记录被缓存两次（04 #8）')
+      .toHaveLength(1)
+    expect(ids, '既有记录不应受影响').toEqual(['task-e1', 'task-r1'])
+  })
+
+  it('常规路径不受影响：缓存为空/不含该记录时新记录照常追加', async () => {
+    const pageId = 'page-tasks'
+    const created = { id: 'task-r2', name: '新建2', _version: 1 }
+
+    vi.mocked(post).mockResolvedValue(created)
+    vi.mocked(get).mockResolvedValue({ data: [], total: 0, page: 1, pageSize: 50 })
+
+    // 先整组拉取建立缓存（快照不含新记录）
+    await store.fetchPageData(pageId)
+    expect(store.getCachedPageData(pageId)).toEqual([])
+
+    await store.addPageData(pageId, { name: '新建2' } as any)
+    expect(store.getCachedPageData(pageId).map((r) => r.id)).toEqual(['task-r2'])
+  })
+})

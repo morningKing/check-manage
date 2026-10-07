@@ -561,7 +561,17 @@ export const usePageConfigStore = defineStore('pageConfig', () => {
     try {
       const created = await post<DynamicRecord>(`/${endpoint}`, newRecord)
       if (pageDataCache.value[pageId]) {
-        pageDataCache.value[pageId].push(created)
+        // 不变量「数组内同 id 至多一行」：服务端先提交后响应，POST 在途时
+        // 一次并发整组拉取（statusBadge 轮询/手动刷新）可能已把含本记录的
+        // 快照写回缓存，盲 push 会让同一条记录渲染两行（缺陷 04 #8）。
+        // 改为按 id upsert：存在即替换（保留快照位次），不存在才追加。
+        const list = pageDataCache.value[pageId]
+        const index = list.findIndex((r) => r.id === created.id)
+        if (index !== -1) {
+          list[index] = created
+        } else {
+          list.push(created)
+        }
       }
       return created
     } catch (error) {
