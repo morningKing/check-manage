@@ -502,6 +502,21 @@ try:
 except Exception as _e:
     logging.warning('action gate mode migration on boot failed: %s', _e)
 
+# SkillOpt 任务拟合表（2026-10-01）：ai_skill_fit_results / ai_skill_def_versions
+# / ai_skill_invocations.subtask_id。随启动幂等执行。漏注册事故第二例（2026-10-08
+# 生产任务拟合页全空）——init_db 自动扫描只覆盖全新库，生产「拉代码+重启」
+# 路径只认这里的显式注册；护栏测试 tests/test_migration_boot_registration.py
+# 防再犯。
+try:
+    _mp18b = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_01_skill_fit_tables.py')
+    _spec18b = _ilu.spec_from_file_location('_skill_fit_tables_boot', _mp18b)
+    _m18b = _ilu.module_from_spec(_spec18b)
+    _spec18b.loader.exec_module(_m18b)
+    _m18b.run()
+except Exception as _e:
+    logging.warning('skill fit tables migration on boot failed: %s', _e)
+
 # 定义版本正文归档列（2026-10-05）：ai_skill_def_versions 加
 # content/content_captured_at（SkillOpt 版本归档与对比）。随启动幂等执行；
 # init_db 的 _run_dated_migrations 自动扫描不覆盖生产「拉代码+重启」路径，
