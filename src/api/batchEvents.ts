@@ -77,7 +77,9 @@ export class BatchEventStream {
   open(): void {
     if (this.closed || this.es) return
     const ids = this.batchIds.join(',')
-    const url = `/ai/chat/batches/events?ids=${encodeURIComponent(ids)}` +
+    // 必须带 /api 前缀：生产 proxy.py 只转发 /api/*，裸路径会被 SPA fallback
+    // 以 index.html（text/html）兜底，EventSource 报 MIME type 错误。
+    const url = `/api/ai/chat/batches/events?ids=${encodeURIComponent(ids)}` +
       `&access_token=${encodeURIComponent(readToken())}`
     const es = new EventSource(url)
     this.es = es
@@ -123,7 +125,8 @@ export class BatchEventStream {
 export async function fetchBatchEvents(
   batchId: string, afterSeq: number, limit = 200,
 ): Promise<{ events: BatchEvent[]; nextAfterSeq: number; hasMore: boolean }> {
-  const { data } = await axios.get(`/ai/chat/batches/${batchId}/events`, {
+  // 裸 axios 没有 request.ts 的 baseURL:'/api'，前缀必须写全（同上 MIME 回归）。
+  const { data } = await axios.get(`/api/ai/chat/batches/${batchId}/events`, {
     params: { afterSeq, limit },
   })
   return {
