@@ -7,9 +7,13 @@ OpenCode 插件 baize-subagent-reuse.js（由 utils.subagent_reuse_plugin 随启
     返回 {enabled, taskId}。enabled 判定：该父会话属于某个批任务、且批级
     subagent_reuse 配置包含该 agent。taskId 为当前钉住的子会话 id
     （(root_session_id, agent) 唯一），无则 null（首次委派，由 OC 新建）。
-- POST /pins  body {session, agent, taskId}
+- POST /pins  body {session, agent?, callId?, taskId}
     把 OC 新建/续跑的子会话 id 登记为该 (root_session_id, agent) 的钉住值。
-    未启用时静默 no-op（返回 {enabled: false}）。
+    agent 解析三级兜底（2026-10-08 生产「概率性新开 task_id」修复）：
+    ① callId intent（before 钩子 /reuse 时登记）；② body.agent（插件进程内
+    callID→agent 映射随 POST 带回）；③ 按 taskId 反查 ai_chat_subtasks
+    （after 时点 worker 周期持久化早已写入该行）。三级全空才放弃——
+    未启用/名单外仍静默 no-op。
 
 鉴权：X-Internal-Token（与 ai_memory_internal 同一把 MCP_INTERNAL_TOKEN）。
 """
@@ -28,11 +32,13 @@ ai_subagent_internal_bp = Blueprint('ai_subagent_internal', __name__,
 # 复用竞态修复（复核 e2e 实测）：委派 after 回调登记 pin 时依赖
 # ai_chat_subtasks 行已被周期持久化——第二次委派可能先于持久化发生，
 # resolve-agent 查不到行 → pin 缺失 → 复用落空。改为 before 钩子登记
-# 意图（callID → root+agent，进程内存、10 分钟 TTL），after 直接按
-# callID 取 agent 写 pin，不再依赖持久化时序。
+# 意图（callID → root+agent，进程内存），after 按 callID 取 agent 写 pin。
+# TTL 与批任务时长匹配（2026-10-08 从 600s 提到 2h）：机会式剪枝只在其它
+# 委派登记时清过期条目，批任务并发下 10 分钟根本盖不住长委派——超时后
+# after 落空即「下一次委派新开 task_id」。
 _INTENT: dict = {}
 _INTENT_LOCK = threading.Lock()
-_INTENT_TTL_SEC = 600
+_INTENT_TTL_SEC = 2 * 60 * 60
 
 
 def _intent_remember(call_id: str, root_session_id: str, agent: str):
@@ -112,10 +118,50 @@ def lookup_reuse():
     return jsonify({'enabled': True, 'taskId': hit[0] if hit else None})
 
 
+def _agent_of_subtask(root_session_id: str, task_id: str):
+    """按子会话 id 反查 agent（限定 root——跨会话撞 id 不能误登记）。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT agent FROM ai_chat_subtasks "
+                "WHERE id = %s AND root_session_id = %s",
+                (task_id, root_session_id),
+            )
+            hit = cur.fetchone()
+    return hit[0] if hit and hit[0] else None
+
+
+def _write_pin(root_session_id: str, agent: str, task_id: str,
+               batch_id=None) -> None:
+    """(root_session_id, agent) → task_id 锚点 upsert。batch_id 缺省时由
+    会话行反查（callId intent 路径不带批次上下文）。"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_subagent_pins
+                    (id, root_session_id, batch_id, agent, task_id)
+                VALUES (%s, %s,
+                        COALESCE(%s, (SELECT batch_id FROM ai_chat_sessions
+                                      WHERE id = %s)),
+                        %s, %s)
+                ON CONFLICT (root_session_id, agent) DO UPDATE SET
+                    task_id = EXCLUDED.task_id,
+                    batch_id = EXCLUDED.batch_id,
+                    updated_at = NOW()
+                """,
+                ('spin_' + secrets.token_hex(8), root_session_id, batch_id,
+                 root_session_id, agent, task_id),
+            )
+        conn.commit()
+
+
 @ai_subagent_internal_bp.get('/resolve-agent')
 def resolve_agent():
     """tool.execute.after 回调用：工具输出只知道 taskId（子会话 id），agent
-    名由平台反查（ai_chat_subtasks.id 即子会话 id，进度落库时已带 agent）。"""
+    名由平台反查（ai_chat_subtasks.id 即子会话 id，进度落库时已带 agent）。
+    （callId intent 改造后插件不再调这里；保留给旧版插件兼容，/pins 的
+    兜底也复用 _agent_of_subtask。）"""
     if not _authorized():
         return jsonify({'error': 'forbidden'}), 403
     session_oc_id = (request.args.get('session') or '').strip()
@@ -127,15 +173,7 @@ def resolve_agent():
     agents = _reuse_agents(batch_id)
     if not agents:
         return jsonify({'enabled': False, 'agent': None})
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT agent FROM ai_chat_subtasks "
-                "WHERE id = %s AND root_session_id = %s",
-                (task_id, root_session_id),
-            )
-            hit = cur.fetchone()
-    agent = hit[0] if hit and hit[0] else None
+    agent = _agent_of_subtask(root_session_id, task_id)
     return jsonify({'enabled': agent in agents if agent else False,
                     'agent': agent})
 
@@ -149,48 +187,27 @@ def upsert_pin():
     agent = (body.get('agent') or '').strip()[:200]
     task_id = (body.get('taskId') or '').strip()[:100]
     call_id = (body.get('callId') or '').strip()
-    # callId 路径（复核竞态修复）：agent 来自 before 登记的 intent，
-    # 不依赖 ai_chat_subtasks 行是否已持久化
+    # ① callId intent（before 钩子 /reuse 时登记）：agent 权威，且 before
+    # 时点已校验过复用名单，直接写。
     if call_id:
         intent = _intent_take(call_id)
         if intent:
             root_session_id, agent = intent[0], intent[1]
             if task_id:
-                with get_db() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "INSERT INTO ai_subagent_pins "
-                            "  (id, root_session_id, batch_id, agent, task_id) "
-                            "VALUES (%s, %s, (SELECT batch_id FROM ai_chat_sessions "
-                            "          WHERE id = %s), %s, %s) "
-                            "ON CONFLICT (root_session_id, agent) DO UPDATE SET "
-                            "  task_id = EXCLUDED.task_id, updated_at = NOW()",
-                            ('spin_' + secrets.token_hex(8), root_session_id,
-                             root_session_id, agent, task_id),
-                        )
-                    conn.commit()
+                _write_pin(root_session_id, agent, task_id)
                 return jsonify({'enabled': True, 'pinned': True})
             return jsonify({'enabled': False, 'pinned': False})
+        # intent 未命中（TTL 剪枝 / before 瞬断走插件缓存兜底没调到 /reuse）
+        # → 落到下面的兜底链，别再依赖 callId。
     row = _resolve_root(session_oc_id)
-    if not row or not agent or not task_id:
+    if not row or not task_id:
         return jsonify({'enabled': False, 'pinned': False})
     root_session_id, batch_id = row[0], row[1]
-    if agent not in _reuse_agents(batch_id):
+    # ② body.agent（插件进程内 callID→agent 映射带回）缺失时
+    # ③ 按 taskId 反查 ai_chat_subtasks（after 时点周期持久化早已写入）
+    if not agent:
+        agent = _agent_of_subtask(root_session_id, task_id) or ''
+    if not agent or agent not in _reuse_agents(batch_id):
         return jsonify({'enabled': False, 'pinned': False})
-    pin_id = 'spin_' + secrets.token_hex(6)
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO ai_subagent_pins
-                    (id, root_session_id, batch_id, agent, task_id)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (root_session_id, agent) DO UPDATE SET
-                    task_id = EXCLUDED.task_id,
-                    batch_id = EXCLUDED.batch_id,
-                    updated_at = NOW()
-                """,
-                (pin_id, root_session_id, batch_id, agent, task_id),
-            )
-        conn.commit()
+    _write_pin(root_session_id, agent, task_id, batch_id)
     return jsonify({'enabled': True, 'pinned': True})

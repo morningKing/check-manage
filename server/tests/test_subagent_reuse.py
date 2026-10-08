@@ -328,3 +328,87 @@ def test_plugin_deploy_idempotent(tmp_path):
     ensure_subagent_reuse_plugin(gd, ep, 'tok-2')
     src2 = open(p1, encoding='utf-8').read()
     assert src2 != src1 and 'tok-2' in src2
+    # 双保险（2026-10-08）：before 阶段进程内记 callID→agent，after 随 POST
+    # 带回 agent——平台 intent 剪枝/未登记时的最后兜底
+    assert '_rememberCallAgent' in src2
+
+
+# ---------------------------------------------------------------------------
+# 7. pin 登记兜底（生产「概率性新开 task_id」修复，2026-10-08）
+# ---------------------------------------------------------------------------
+
+def test_pins_intent_pruned_falls_back_to_subtasks(db_conn, internal_client, user_id):
+    """长委派（>TTL）+ 期间其它委派登记触发机会式剪枝 → after 的 callId
+    intent 已不在，且插件 pinByCall 不发 agent——/pins 必须按 ai_chat_subtasks
+    反查 agent 兜底写 pin，否则下一次委派必新开 task_id。"""
+    bid, sid = _seed_batch(db_conn, user_id, reuse=['dev'], oc_sid='oc-ttl-1')
+
+    r = internal_client.get('/ai/subagent-internal/reuse'
+                            '?session=oc-ttl-1&agent=dev&callId=call-long',
+                            headers=_hdr())
+    assert r.get_json()['enabled'] is True
+
+    # 委派执行期间，worker 周期持久化已把子代理行写进 ai_chat_subtasks
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, "
+            " description, status) VALUES ('ses_dev_zz', %s, 'dev', 'd', 'completed')",
+            (sid,))
+    db_conn.commit()
+
+    # intent TTL 过期 + 期间其它委派登记 → 机会式剪枝把 call-long 清掉
+    from routes import ai_subagent_internal as mod
+    with mod._INTENT_LOCK:
+        root, agent, ts = mod._INTENT['call-long']
+        mod._INTENT['call-long'] = (root, agent, ts - (mod._INTENT_TTL_SEC + 60))
+    internal_client.get('/ai/subagent-internal/reuse'
+                        '?session=oc-ttl-1&agent=dev&callId=call-other',
+                        headers=_hdr())
+    assert 'call-long' not in mod._INTENT
+
+    # after 回调（现网插件入参：无 agent 字段）→ 兜底反查后 pin 必须写成
+    r = internal_client.post('/ai/subagent-internal/pins', headers=_hdr(),
+                             json={'session': 'oc-ttl-1', 'callId': 'call-long',
+                                   'taskId': 'ses_dev_zz'})
+    assert r.get_json()['pinned'] is True
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT task_id FROM ai_subagent_pins "
+                    "WHERE root_session_id=%s AND agent='dev'", (sid,))
+        assert cur.fetchone() == ('ses_dev_zz',)
+
+
+def test_pins_body_agent_without_intent(db_conn, internal_client, user_id):
+    """插件双保险契约：intent 未登记（before 瞬断走缓存兜底、/reuse 未被
+    调到）但 body 带 agent（插件进程内 callID→agent 映射）→ pin 写成；
+    名单外 agent 仍拒绝。"""
+    _bid, sid = _seed_batch(db_conn, user_id, reuse=['dev'], oc_sid='oc-fb-1')
+    r = internal_client.post('/ai/subagent-internal/pins', headers=_hdr(),
+                             json={'session': 'oc-fb-1', 'callId': 'call-x',
+                                   'taskId': 'ses_dev_fb', 'agent': 'dev'})
+    assert r.get_json()['pinned'] is True
+    # 名单外 agent：拒绝
+    r = internal_client.post('/ai/subagent-internal/pins', headers=_hdr(),
+                             json={'session': 'oc-fb-1', 'callId': 'call-y',
+                                   'taskId': 'ses_other', 'agent': 'ghost'})
+    assert r.get_json()['pinned'] is False
+
+
+def test_pins_fallback_rejects_subtask_row_of_other_root(db_conn, internal_client, user_id):
+    """兜底反查必须限定 root_session_id——跨会话撞 task_id 不能把别人的
+    子代理行登记成本会话的 pin。"""
+    bid, sid = _seed_batch(db_conn, user_id, reuse=['dev'], oc_sid='oc-x-1')
+    bid2, sid2 = _seed_batch(db_conn, user_id, reuse=['dev'], oc_sid='oc-x-2')
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, "
+            " description, status) VALUES ('ses_foreign', %s, 'dev', 'd', 'completed')",
+            (sid2,))
+    db_conn.commit()
+    r = internal_client.post('/ai/subagent-internal/pins', headers=_hdr(),
+                             json={'session': 'oc-x-1', 'callId': 'call-z',
+                                   'taskId': 'ses_foreign'})
+    assert r.get_json()['pinned'] is False
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM ai_subagent_pins WHERE root_session_id=%s",
+                    (sid,))
+        assert cur.fetchone()[0] == 0

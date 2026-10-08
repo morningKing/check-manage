@@ -33,6 +33,26 @@ const FETCH_TIMEOUT_MS = 3000
 // (sessionID) → { agents:Set, pins:Map(agent→taskId), at } —— 后端瞬断时的兜底判定
 const _cache = new Map()
 const CACHE_TTL_MS = 120000
+// (callID → { agent, at }) —— 双保险（2026-10-08 生产「概率性新开 task_id」）：
+// before 阶段进程内记住委派目标，after 阶段随 POST /pins 带回 agent——
+// 平台侧 intent 被剪枝/未登记（before 瞬断走缓存兜底时 /reuse 未被调到）
+// 时，body.agent 是 pin 写成的最后兜底。
+const _callAgents = new Map()
+const CALL_AGENT_TTL_MS = 2 * 60 * 60 * 1000
+
+function _rememberCallAgent(callID, agent) {
+  if (!callID || !agent) return
+  const now = Date.now()
+  for (const [k, v] of _callAgents)
+    if (now - v.at > CALL_AGENT_TTL_MS) _callAgents.delete(k)
+  _callAgents.set(callID, { agent, at: now })
+}
+
+function _takeCallAgent(callID) {
+  const v = callID ? _callAgents.get(callID) : null
+  if (v) _callAgents.delete(callID)
+  return v ? v.agent : ''
+}
 
 function _log(...a) { console.error('[baize-subagent-reuse]', ...a) }
 
@@ -93,10 +113,12 @@ async function lookup(sessionID, agent, callID) {
   return body
 }
 
-async function pinByCall(sessionID, callID, taskId) {
+async function pinByCall(sessionID, callID, taskId, agent) {
+  const body = { session: sessionID, callId: callID, taskId }
+  if (agent) body.agent = agent   // intent 兜底：平台 callId 未命中时按 body.agent 写 pin
   const r = await _fetchJson(`${ENDPOINT}/pins`, {
     method: 'POST',
-    body: JSON.stringify({ session: sessionID, callId: callID, taskId }),
+    body: JSON.stringify(body),
   })
   // pin 失败不本地兜底（本地无 callID→agent 映射，乱记会让 A 复用到 B 的
   // 会话）；后果有界：本次委派的 pin 缺失，下一次委派新建一次，后端恢复
@@ -114,6 +136,9 @@ export const BaizeSubagentReusePlugin = async () => ({
       if (!args) return
       const agent = args.subagent_type || args.subagentType || ''
       if (!agent) return
+      // 先记 callID→agent（与 lookup 结果无关——lookup 失败走缓存兜底时
+      // 平台收不到 callId intent，这里就是 after 阶段唯一的 agent 来源）
+      _rememberCallAgent(input.callID || '', agent)
       // callId 随 lookup 上报：平台登记意图（callID → agent），使 after
       // 阶段的 pin 不依赖子代理行的持久化时序（复核竞态修复）
       const data = await lookup(input.sessionID, agent, input.callID || '')
@@ -156,7 +181,8 @@ export const BaizeSubagentReusePlugin = async () => ({
         if (msid && /^ses_/.test(String(msid))) taskId = String(msid)
       }
       if (!taskId) return
-      await pinByCall(input.sessionID, input.callID || '', taskId)
+      await pinByCall(input.sessionID, input.callID || '', taskId,
+                      _takeCallAgent(input.callID || ''))
     } catch { /* 登记失败不影响委派 */ }
   },
 })
