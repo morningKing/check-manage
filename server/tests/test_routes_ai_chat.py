@@ -39,6 +39,8 @@ def setup(mock_conn, mock_cursor, tmp_path):
         def subscribe_events(self, directory='', read_timeout=None):
             return self._c.subscribe_events(directory=directory,
                                             read_timeout=read_timeout)
+        def get_messages(self, opencode_session_id, directory=''):
+            return self._c.get_messages(opencode_session_id, directory=directory)
 
     patches = [
         patch('db.get_db', fake_db),
@@ -367,6 +369,105 @@ def test_sse_events_forwards_subtask_events_not_just_top_level(setup):
     # message.part.updated: tool:'task' (pt1) + subtask (p1) = 2
     assert body.count('event: message.part.updated') == 2
     assert 'ses_child1' in body
+
+
+def test_sse_events_emits_midturn_snapshot_burst_on_subscribe(setup):
+    """OpenCode 事件不回放：中途挂流（批子会话由 worker 驱动、浏览器随时
+    打开；或断线重连）会错过本回合的 message.updated，前端门禁随后把该
+    消息全部 part 事件丢弃——subagent 委派区块/文本不渲染。订阅起点必须
+    按 REST 快照补发一爆发：message.updated（snapshot 标记）注册消息 id，
+    随后逐 part 的 message.part.updated 让前端收编流式目标。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    # REST 快照：最近一条 assistant 消息进行中（time.completed 缺失）
+    oc.get_messages.return_value = [
+        {'info': {'id': 'm_prev', 'role': 'assistant', 'sessionID': 'oc_sess_42',
+                  'time': {'completed': 1.0}},
+         'parts': [{'id': 'old', 'type': 'text', 'text': '上一轮'}]},
+        {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42',
+                  'time': {}},
+         'parts': [
+             {'id': 'pt1', 'type': 'tool', 'tool': 'task', 'messageID': 'm1',
+              'sessionID': 'oc_sess_42',
+              'state': {'status': 'running', 'metadata': {'sessionId': 'ses_child1'}}},
+             {'id': 'p1', 'type': 'text', 'messageID': 'm1',
+              'sessionID': 'oc_sess_42', 'text': '进行中'},
+         ]},
+    ]
+    oc.subscribe_events.return_value = iter([])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    # 快照按会话工作区拉取
+    assert oc.get_messages.call_args.kwargs.get('directory') == '/tmp/ws'
+    # 爆发先于实时流：进行中消息的 message.updated + 两个 part 快照，
+    # 全部带 snapshot 标记；已完成消息（m_prev）不进爆发
+    assert body.count('event: message.updated') == 1
+    assert body.count('event: message.part.updated') == 2
+    assert '"snapshot": true' in body
+    assert 'm_prev' not in body
+    assert 'ses_child1' in body and '"id": "p1"' in body   # part 内容随爆发透传（中文经 json.dumps ASCII 转义）
+    # 爆发第一帧是 message.updated（注册消息 id 在 part 之前）
+    assert body.index('event: message.updated') < body.index('event: message.part.updated')
+
+
+def test_sse_events_no_snapshot_burst_when_turn_completed(setup):
+    """最近一条 assistant 已完成（有 time.completed）→ 没有进行中的回合，
+    不发爆发（完成的回合由持久化历史收敛）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    oc.get_messages.return_value = [
+        {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42',
+                  'time': {'completed': 1.0}},
+         'parts': [{'id': 'p1', 'type': 'text', 'messageID': 'm1', 'text': 'done'}]},
+    ]
+    oc.subscribe_events.return_value = iter([])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    assert body == ''
+
+
+def test_sse_events_snapshot_burst_skipped_on_rest_failure(setup):
+    """REST 快照失败必须静默跳过——爆发是增强不是前提，事件流照常打开。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    oc.get_messages.side_effect = RuntimeError('oc down')
+    oc.subscribe_events.return_value = iter([
+        {'event': 'session.idle', 'data': {'type': 'session.idle',
+            'properties': {'sessionID': 'oc_sess_42'}}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    assert resp.status_code == 200
+    body = b''.join(resp.response).decode('utf-8')
+    assert 'snapshot' not in body
+    assert 'event: session.idle' in body
+
+
+def test_sse_events_snapshot_burst_batch_child_no_persist(setup):
+    """批子会话（batch_id 非空）同样要拿爆发（worker 驱动、浏览器中途打开
+    是主场景）；但爆发喂进 apply_event 产生的 turn_msg_id 不得触发代理端
+    持久化——worker 是批子会话唯一持久化写者。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'running',
+                                    '/tmp/ws', 'batch-1', None)
+    oc.get_messages.return_value = [
+        {'info': {'id': 'm1', 'role': 'assistant', 'sessionID': 'oc_sess_42',
+                  'time': {}},
+         'parts': [{'id': 'p1', 'type': 'text', 'messageID': 'm1',
+                    'sessionID': 'oc_sess_42', 'text': '进行中'}]},
+    ]
+    oc.subscribe_events.return_value = iter([
+        {'event': 'session.idle', 'data': {'type': 'session.idle',
+            'properties': {'sessionID': 'oc_sess_42'}}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    assert '"snapshot": true' in body
+    assert 'event: session.idle' in body
+    inserts = [c.args[0] for c in cursor.execute.call_args_list]
+    assert not any("INSERT INTO ai_chat_messages" in s for s in inserts)
 
 
 def test_delete_session_cleans_everything(setup):

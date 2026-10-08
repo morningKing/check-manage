@@ -1312,6 +1312,41 @@ def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _midturn_snapshot_events(client, opencode_session_id: str, directory: str) -> list:
+    """订阅起点的回合快照爆发（2026-10-08 批子会话 subagent 区块不渲染修复）。
+
+    OpenCode 事件不回放：中途挂流（批子会话由 worker 驱动、浏览器随时打开；
+    或断线重连）会错过本回合的 message.updated，前端按消息 id 把关的门禁
+    随后丢弃该回合全部 part 事件——委托区块/文本一个都不渲染，但任务照常
+    跑。这里按 REST 快照补发一爆发，同构于实时事件：message.updated（带
+    snapshot 标记，前端据此收编流式目标并置 streaming）+ 逐 part 的
+    message.part.updated（前端按 part id 就地重建索引）。
+
+    仅当最近一条 assistant 消息缺 time.completed（回合进行中）才发；已完成
+    的回合由持久化历史收敛，无需爆发。REST 失败静默跳过——爆发是增强，
+    不是事件流的前提。爆发与实时订阅之间有一个亚秒窗口的事件不重发，
+    part 快照本身是幂等 upsert，由后续快照/回合收敛兜底。"""
+    try:
+        msgs = client.get_messages(opencode_session_id, directory=directory) or []
+    except Exception:  # noqa: BLE001
+        logger.warning('midturn snapshot fetch failed oc=%s',
+                       opencode_session_id, exc_info=True)
+        return []
+    for m in reversed(msgs):
+        info = (m or {}).get('info') or {}
+        if info.get('role') != 'assistant':
+            continue
+        if ((info.get('time') or {}).get('completed')):
+            return []          # 最近一条 assistant 已完成：没有进行中的回合
+        events = [{'event': 'message.updated',
+                   'data': {'properties': {'info': info, 'snapshot': True}}}]
+        for p in (m.get('parts') or []):
+            events.append({'event': 'message.part.updated',
+                           'data': {'properties': {'part': p, 'snapshot': True}}})
+        return events
+    return []
+
+
 @ai_chat_bp.route('/sessions/<sid>/tool-calls', methods=['GET'])
 @login_required
 def get_session_tool_calls(sid):
@@ -1397,6 +1432,13 @@ def sse_events(sid):
         state = new_state()
         logger.info('sse stream open session=%s oc=%s', sid, opencode_session_id)
         try:
+            # 订阅起点先补发进行中回合的快照爆发（见 _midturn_snapshot_events），
+            # 再进入实时流。爆发同样喂 apply_event：代理自己的累积状态与前端
+            # 同步预热——中途挂流触发的兜底持久化（无后台监听器时）才不会缺
+            # 订阅前的那截内容。
+            for evt in _midturn_snapshot_events(client, opencode_session_id, sess[4]):
+                apply_event(state, evt, opencode_session_id)
+                yield _format_sse(evt['event'], evt['data']['properties'])
             for evt in client.subscribe_events(directory=sess[4]):
                 etype = evt.get('event', '')
                 props = (evt.get('data') or {}).get('properties') or {}

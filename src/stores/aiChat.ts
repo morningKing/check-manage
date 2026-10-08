@@ -357,27 +357,45 @@ export const useAiChatStore = defineStore('aiChat', {
       this.loadPendingQuestion(id)
       this.loadPendingPermission(id)
       this.loadSessionSkillFit(id)
-      // Batch children are driven by the worker and viewed via polling
-      // (reloadMessages). Opening an SSE stream for them would let the live
-      // _upsertAssistantPart write into the poll-replaced message array at stale
-      // indices — corrupting/blanking the tool bubbles. So poll-only here.
+      // 批子会话由 worker 驱动、浏览器中途打开：SSE 订阅起点由后端补发
+      // 进行中回合的快照爆发（message.updated 带 snapshot 标记 →
+      // _adoptStreamTarget 收编流式目标 + 置 streaming），因此轮询守卫
+      // （reloadMessages）对它同样有效；轮询只在流未订阅/重连中降级启用。
       if (opts.stream === false) this._closeStream()
       else this._openStream(id)
     },
 
     // Re-fetch the persisted messages for `id` and adopt them. Used to live-poll
-    // a running batch child (whose work is persisted incrementally server-side
-    // but isn't pushed over SSE). No-op if the session is no longer active or is
-    // streaming live (interactive sessions update via SSE, not polling).
+    // a batch child whose SSE stream is absent/reconnecting (its work is
+    // persisted incrementally server-side by the worker). No-op if the session
+    // is no longer active or the SSE stream is live-streaming a turn — the
+    // streamed part indices point into the in-memory array, and a wholesale
+    // replace would make subsequent live events write through stale indices
+    // (blanking tool/subtask bubbles). Degrading (reconnect/no-stream) drops
+    // the stream state first: stale events can't corrupt the adopted view, and
+    // the subscribe-time snapshot burst re-adopts the target on reconnect.
     async reloadMessages(id: string) {
-      if (this.activeSessionId !== id || this.streaming[id]) return
+      if (this.activeSessionId !== id || this._streamLive(id)) return
       try {
         const history = await getMessages(id, { limit: 200 })
+        // fetch 期间流可能已恢复并收编流式目标——再次让位，放弃这次降级整替
+        if (this.activeSessionId !== id || this._streamLive(id)) return
+        if (this.streaming[id]) {
+          this.streaming[id] = false
+          this.thinking[id] = false
+          this._resetStreamState(id)
+        }
         // 按窗口合并而非整体替换（大数据量优化 §1.1）：用户"加载更早"前置的
         // 历史消息保留；服务端为空（clear）时以服务端为准。
         this._mergeHistoryWindow(id, history)
         this._recomputeUsage(id)
       } catch { /* non-fatal */ }
+    },
+
+    /** 该会话当前是否由 SSE 实时驱动一个进行中的回合（整替消息数组不安全）。 */
+    _streamLive(id: string): boolean {
+      return !!(this.streaming[id] && this.streamSid === id
+        && this.streamStatus[id] !== 'reconnecting')
     },
 
     /** 加载更早的历史消息（before 游标向前翻页，按 seq 时序）。返回是否真的加载到。 */
@@ -990,6 +1008,16 @@ export const useAiChatStore = defineStore('aiChat', {
           const info = data?.info
           if (info?.role === 'assistant' && info?.id) {
             ;(_assistantMsgIds[sid] ?? (_assistantMsgIds[sid] = new Set())).add(info.id)
+            if (data?.snapshot) {
+              // 挂流快照（批子会话中途打开/断线重连，后端在订阅起点按 REST
+              // 快照补发）：本回合在订阅前已在跑，不收编的话门禁会把它后续
+              // 全部 part 事件丢弃——委托区块/文本一个都不渲染。把同名行
+              // 收编为流式目标（清空重建，爆发 parts 随后就到）并置
+              // streaming，让轮询守卫按「回合进行中」让位。
+              this.streaming[sid] = true
+              this.thinking[sid] = true
+              this._adoptStreamTarget(sid, info.id)
+            }
             // 已完成的消息快照自带 token —— 回合还在流式进行时就地刷新
             // 「当前上下文占用」，让水位线随每步推进实时变化；累计口径等
             // idle 落库后由 _reloadPersisted → _recomputeUsage 统一重算。
@@ -1197,18 +1225,44 @@ export const useAiChatStore = defineStore('aiChat', {
       this.reasoning[sid] = Object.values(map).join('')
     },
 
+    /** 把一条消息收编为流式目标（挂流快照路径）：同名行存在则清空其 content
+     *  重建——爆发 parts 随后就到，按 part id 就地重建，不与旧的扁平化持久化
+     *  内容叠加出重复区块；不存在（持久化尚未落库）则用真实消息 id 新建，
+     *  与持久化收敛（_adoptHistory/_reloadPersisted）的行 id 天然对齐。 */
+    _adoptStreamTarget(sid: string, msgId: string) {
+      const list = this.messages[sid] ?? (this.messages[sid] = [])
+      const existing = list.find((m) => m.id === msgId)
+      if (!existing) {
+        list.push({ id: msgId, role: 'assistant', content: [] })
+      } else if (existing.role !== 'assistant') {
+        return  // 同 id 却不是 assistant 行：理论不可达，防炸不动它
+      } else {
+        existing.content = []
+      }
+      _streamingAssistantMsgId[sid] = msgId
+      _partIndexById[sid] = {}
+      _reasoningByPart[sid] = {}
+    },
+
     _upsertAssistantPart(sid: string, partId: string, partData: AiContentPart) {
       // Upsert a part by its OpenCode part id so text/tool parts render in
-      // arrival order and snapshots replace (not append) in place.
+      // arrival order and snapshots replace (not append) in place. The target
+      // message is located BY ID, never list[length-1] — after a poll adopt or
+      // external clear the last row may be a user bubble (old defect: live
+      // subtask parts landed there and clobbered the user's prompt text).
       const list = this.messages[sid] ?? (this.messages[sid] = [])
       let msgId = _streamingAssistantMsgId[sid]
-      if (!msgId) {
-        msgId = 'streaming_' + Date.now()
+      let msg = msgId ? list.find((m) => m.id === msgId) : undefined
+      if (!msg) {
+        // 目标行不在数组里（外部整替/清空过）——按原 id 重建；重建时 part
+        // 索引一并重置（旧索引指向已丢弃的数组）。
+        msgId = msgId ?? 'streaming_' + Date.now()
         _streamingAssistantMsgId[sid] = msgId
         _partIndexById[sid] = {}
-        list.push({ id: msgId, role: 'assistant', content: [] })
+        _reasoningByPart[sid] = {}
+        msg = { id: msgId, role: 'assistant', content: [] }
+        list.push(msg)
       }
-      const msg = list[list.length - 1]
       const idxMap = _partIndexById[sid] ?? (_partIndexById[sid] = {})
       const existing = idxMap[partId]
       if (existing === undefined) {

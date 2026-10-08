@@ -874,9 +874,12 @@ watch(activeId, () => {
   input.value = ''
 })
 
-// Live view for a running batch child: its work is persisted incrementally on
-// the server but not pushed over SSE, so poll its messages while it runs. The
-// watch keys on activeId AND the batch children's statuses, so it (re)starts
+// Live view for a running batch child: SSE drives token-level live rendering
+// (the backend emits a mid-turn snapshot burst at subscribe time so attaching
+// mid-run still renders in-flight subagent blocks — see store
+// _adoptStreamTarget). This poll is only the fallback for when the stream is
+// absent/reconnecting; while live, store.reloadMessages is a guarded no-op.
+// The watch keys on activeId AND the batch children's statuses, so it (re)starts
 // when the child's status becomes known/running and stops on completion (with a
 // final refresh). Keying only on activeId would miss the case where
 // activeSessions loads after the child is opened.
