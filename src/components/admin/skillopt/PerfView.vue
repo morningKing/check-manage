@@ -47,7 +47,7 @@
       </div>
       <!-- 任务下钻 -->
       <PerfTaskDetail v-if="openAttemptId" :attempt-id="openAttemptId"
-                      :peer-p50-ms="selected?.p50Ms ?? null" @close="openAttemptId = null" />
+                      @close="openAttemptId = null" />
     </template>
   </div>
 </template>
@@ -71,14 +71,16 @@ const openAttemptId = ref<string | null>(null)
 const isSel = (d: PerfDefSummary) =>
   selected.value?.defKind === d.defKind && selected.value?.defName === d.defName
 
-// fmtMs/pct 使用共享实现（./format，含进位边界修复）
-defineExpose({ fmtMs, pct })
-
+let defReqSeq = 0
 async function selectDef(d: PerfDefSummary) {
   selected.value = d
+  const seq = ++defReqSeq
   try {
-    defTasks.value = (await perfDefTasks(d.defKind, d.defName)).tasks
-  } catch { defTasks.value = [] }
+    const tasks = (await perfDefTasks(d.defKind, d.defName)).tasks
+    if (seq === defReqSeq) defTasks.value = tasks   // 快速连点：旧响应不覆盖新选择
+  } catch {
+    if (seq === defReqSeq) defTasks.value = []
+  }
 }
 function openTask(id: string) { openAttemptId.value = id }
 

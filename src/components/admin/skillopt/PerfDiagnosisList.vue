@@ -16,10 +16,16 @@
 </template>
 
 <script setup lang="ts">
+import { onUnmounted } from 'vue'
 import { ElAlert, ElTag, ElButton } from 'element-plus'
 import type { Diagnosis } from '@/api/aiSkills'
 
 defineProps<{ diagnoses: Diagnosis[] }>()
+
+// 连续点击防竞态：新点击清掉上一次的摘除定时器（否则 2s 内旧定时器会提前
+// 摘掉新一次的 flash）
+let flashTimer: ReturnType<typeof setTimeout> | null = null
+onUnmounted(() => { if (flashTimer) clearTimeout(flashTimer) })
 
 function anchorTarget(d: Diagnosis): string | null {
   if (d.anchor.type === 'subtask') return `subtask:${d.anchor.ref}`
@@ -29,7 +35,7 @@ function anchorTarget(d: Diagnosis): string | null {
 }
 
 function locate(d: Diagnosis) {
-  // 回退链（对接约定见上）：turn 行锚 → segment 锚 → 逐类型兜底
+  // 回退链（对接约定见 PerfTaskDetail 锚点注释）：turn 行锚 → segment 锚 → 逐类型兜底
   const candidates: string[] = []
   if (d.anchor.type === 'turn') candidates.push(`.diag-anchor-turn-${d.anchor.ref}`)
   for (const t of ['segment', 'subtask', 'turn']) {
@@ -42,7 +48,11 @@ function locate(d: Diagnosis) {
     el.classList.remove('diag-flash')
     void (el as HTMLElement).offsetWidth
     el.classList.add('diag-flash')
-    setTimeout(() => el.classList.remove('diag-flash'), 2000)
+    if (flashTimer) clearTimeout(flashTimer)
+    flashTimer = setTimeout(() => {
+      el.classList.remove('diag-flash')
+      flashTimer = null
+    }, 2000)
     return
   }
 }
@@ -53,6 +63,13 @@ function locate(d: Diagnosis) {
 .diag--warn { background: var(--el-color-warning-light-9); }
 .diag--info { background: var(--el-fill-color-light); }
 .diag__text { flex: 1; font-size: 13px; }
-:global(.diag-flash) { outline: 2px solid var(--el-color-primary); animation: diagPulse 1s ease 2; }
+</style>
+
+<!-- diag-flash 挂在被定位的任意元素上（含非本组件的表格行/区块），keyframes
+     必须全局可见：scoped 块会重写 keyframes 名而 :global 块里的 animation
+     引用不被重写，二者分家会导致动画指向不存在的名字（深色样式事故同款教训：
+     主题/全局态覆盖放非 scoped 独立块，显式前缀限定）。 -->
+<style lang="scss">
+.diag-flash { outline: 2px solid var(--el-color-primary); animation: diagPulse 1s ease 2; }
 @keyframes diagPulse { 50% { opacity: 0.55; } }
 </style>

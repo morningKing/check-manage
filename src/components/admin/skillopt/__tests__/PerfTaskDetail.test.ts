@@ -34,7 +34,7 @@ import PerfTaskDetail from '../PerfTaskDetail.vue'
 describe('PerfTaskDetail', () => {
   it('渲染覆盖条三段、子代理表与诊断列表', async () => {
     const w = mount(PerfTaskDetail, {
-      props: { attemptId: 'a1', peerP50Ms: 20000 },
+      props: { attemptId: 'a1' },
       // ElTableColumn 的作用域插槽依赖真实组件渲染；不注册会退化为普通元素、
       // 插槽被无参调用导致 { row } 解构报错（同 PerfView.test 约定）
       global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
@@ -45,5 +45,19 @@ describe('PerfTaskDetail', () => {
     expect(w.find('[data-test="cov-wait"]').attributes('style')).toContain('30%')
     expect(w.text()).toContain('general')
     expect(w.text()).toContain('68% 时间在等子代理')
+  })
+
+  it('诊断接口失败不影响主数据渲染（仅提示，不整页报错）', async () => {
+    const { perfAttemptDiagnosis } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttemptDiagnosis as any).mockRejectedValueOnce(new Error('diag down'))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.find('[data-test="cov-model"]').exists()).toBe(true)   // 主数据在
+    expect(w.text()).toContain('诊断加载失败')
+    expect(w.text()).not.toContain('68% 时间在等子代理')
   })
 })

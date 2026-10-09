@@ -48,13 +48,16 @@ export function buildWaterfallOption(detail: PerfAttemptDetail) {
   for (const turn of detail.turns) {
     if (turn.durationMs == null || !turn.createdAt) continue
     const s = Date.parse(turn.createdAt)
+    if (!Number.isFinite(s)) continue        // 畸形时间串不产 NaN 段
     segs.push({ name: `模型轮次 ${(turn.durationMs / 1000).toFixed(1)}s`,
                 type: 'model', ref: turn.messageId, start: s, end: s + turn.durationMs })
   }
   for (const st of detail.subtasks) {
     if (!st.startedAt) continue
     const s = Date.parse(st.startedAt)
+    if (!Number.isFinite(s)) continue
     const e = st.finishedAt ? Date.parse(st.finishedAt) : s + st.wallMs
+    if (!Number.isFinite(e) || e <= s) continue
     segs.push({ name: `子代理 ${st.agent || ''} ${(st.wallMs / 1000).toFixed(1)}s`,
                 type: 'subagent', ref: st.subtaskId, start: s, end: e })
   }

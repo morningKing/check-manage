@@ -49,6 +49,8 @@
           该任务早于工具耗时采集上线（或无工具级数据），仅新跑任务可见每工具耗时分解。
         </div>
 
+        <ElAlert v-if="diagnosesError" type="warning" :closable="false"
+                 :title="diagnosesError" />
         <PerfDiagnosisList :diagnoses="diagnoses" />
       </template>
     </div>
@@ -65,13 +67,14 @@ import { buildWaterfallOption } from './chartOptions'
 import PerfDiagnosisList from './PerfDiagnosisList.vue'
 import { fmtMs, pct } from './format'
 
-const props = defineProps<{ attemptId: string; peerP50Ms: number | null }>()
+const props = defineProps<{ attemptId: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const loading = ref(false)
 const error = ref('')
 const detail = ref<PerfAttemptDetail | null>(null)
 const diagnoses = ref<Diagnosis[]>([])
+const diagnosesError = ref('')
 const waterfallEl = ref<HTMLElement | null>(null)
 const { ready: wfReady, setOption: wfSet } = useEcharts(waterfallEl)
 
@@ -87,9 +90,6 @@ function segStyle(kind: 'model' | 'wait' | 'idle') {
   return { width: pct(map[kind]), background: color[kind] }
 }
 
-// fmtMs/pct 使用共享实现（./format），本组件不再定义本地版本
-defineExpose({ fmtMs, pct })
-
 function renderWaterfall() {
   if (wfReady.value && detail.value) wfSet(buildWaterfallOption(detail.value))
 }
@@ -98,10 +98,11 @@ watch([wfReady, detail], () => nextTick(renderWaterfall), { immediate: true })
 onMounted(async () => {
   loading.value = true
   try {
-    const [d, dg] = await Promise.all([
-      perfAttempt(props.attemptId), perfAttemptDiagnosis(props.attemptId)])
-    detail.value = d
-    diagnoses.value = dg.diagnoses
+    // 分开请求：分解与诊断互不拖累（诊断挂了不影响主数据渲染）
+    detail.value = await perfAttempt(props.attemptId)
+    try {
+      diagnoses.value = (await perfAttemptDiagnosis(props.attemptId)).diagnoses
+    } catch { diagnosesError.value = '诊断加载失败，可稍后重试' }
   } catch (e: any) {
     error.value = e?.message || '加载任务分解失败'
   } finally { loading.value = false }

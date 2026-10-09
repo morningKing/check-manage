@@ -5,22 +5,29 @@ import { ref, onMounted, onUnmounted, type Ref } from 'vue'
  *  组件层不因此报错。setOption 前必须等 ready。 */
 export function useEcharts(el: Ref<HTMLElement | null>) {
   let chart: any = null
+  let disposed = false
   const ready = ref(false)
   const pending: Array<[string, (params: any) => void]> = []
 
   onMounted(async () => {
     try {
       const echarts = await import('echarts')
-      if (el.value) {
-        chart = echarts.init(el.value)
-        ready.value = true
-        for (const [event, cb] of pending.splice(0)) chart.on(event, cb)
-      }
+      // 动态 import 解析前组件可能已卸载——此时不再 init（否则图表建在
+      // 已分离元素上且永不 dispose）
+      if (disposed || !el.value) return
+      chart = echarts.init(el.value)
+      ready.value = true
+      for (const [event, cb] of pending.splice(0)) chart.on(event, cb)
     } catch (e) {
       console.warn('[useEcharts] init skipped:', e)
     }
   })
-  onUnmounted(() => { chart?.dispose(); chart = null })
+  onUnmounted(() => {
+    disposed = true
+    chart?.dispose()
+    chart = null
+    pending.length = 0
+  })
 
   return {
     ready,

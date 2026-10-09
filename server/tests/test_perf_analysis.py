@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
 """SkillOpt 任务性能分析（spec 2026-10-09）：覆盖切分/任务指标/诊断规则/端点。"""
-import sys, os
+import json
+import sys
+import os
+import uuid
+
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from utils.perf_analysis import coverage_split
+from utils.perf_analysis import (coverage_split, load_attempt_metrics,
+                                 list_definition_tasks, list_slow_tasks,
+                                 definition_overview, diagnose)
 
 
 class TestCoverageSplit:
@@ -40,12 +48,7 @@ class TestCoverageSplit:
         assert r['modelMs'] + r['subagentWaitMs'] + r['idleMs'] == r['wallMs']
 
 
-# 追加到 server/tests/test_perf_analysis.py
-import json, uuid
-import pytest
-
-from utils.perf_analysis import (load_attempt_metrics, list_definition_tasks,
-                                 list_slow_tasks, definition_overview)
+# ---- 任务指标与聚合（DB 播种）----
 
 
 @pytest.fixture
@@ -191,9 +194,19 @@ class TestDefinitionAggregates:
         entry = next(d for d in ov if d['defName'] == 'stock-analysis')
         assert entry['tasks'] == 0        # 分母只计已完结
 
+    def test_null_started_at_attempt_not_listed(self, db_conn, user_id):
+        """未派发（started_at NULL）的 attempt 不进任务列表——否则 wallMs
+        以 epoch 起点计成天文数字（T2 审查 Minor 的回归钉）。"""
+        _b, _s, a1 = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_execution_attempts SET started_at = NULL"
+                        " WHERE id=%s", (a1,))
+        db_conn.commit()
+        assert list_definition_tasks(db_conn, 'skill', 'stock-analysis') == []
+        assert all(t['attemptId'] != a1 for t in list_slow_tasks(db_conn, limit=50))
 
-# 追加到 server/tests/test_perf_analysis.py
-from utils.perf_analysis import diagnose
+
+# ---- 诊断规则（纯函数）----
 
 
 def _bd(**over):

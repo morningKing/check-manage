@@ -58,6 +58,8 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
     INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, source, path, content_hash, injected)
     VALUES ('pf-e2e-man', 'pf-e2e-att', 'skill', 'perf-e2e-skill', 'platform_global',
             'C:/tmp/pf-e2e/SKILL.md', 'h', true);
+    -- 消息 created_at 与 attempt started_at 重合：聚合时窗用 >= 含端点，
+    -- 边界消息计入模型区间（确定性切分：模型 200s/等待 100s/间隙 100s）
     INSERT INTO ai_chat_messages (id, session_id, role, content, meta, created_at)
     VALUES ('pf-e2e-msg', 'pf-e2e-sess', 'assistant', '[{"type":"text","text":"done"}]'::jsonb,
             '{"durationMs":200000,"tokensInput":50000,"tokensOutput":3000}'::jsonb,

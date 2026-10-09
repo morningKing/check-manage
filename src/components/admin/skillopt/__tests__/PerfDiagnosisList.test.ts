@@ -29,4 +29,25 @@ describe('PerfDiagnosisList', () => {
     expect(el.className).toContain('diag-flash')
     w.unmount()
   })
+
+  it('turn 锚走行类回退链（.diag-anchor-turn-<ref> 优先于 segment 表头）', async () => {
+    document.body.innerHTML =
+      '<div data-diag-anchor="segment:m9">表头</div>' +
+      '<div class="diag-anchor-turn-m9">轮次行</div>'
+    for (const el of document.querySelectorAll('.diag-anchor-turn-m9, [data-diag-anchor="segment:m9"]')) {
+      ;(el as any).scrollIntoView = vi.fn()
+    }
+    const w = mount(PerfDiagnosisList, {
+      props: { diagnoses: [{ ruleId: 'slow_turn_big_context', severity: 'warn',
+                             text: '第 1 轮过慢',
+                             anchor: { type: 'turn', ref: 'm9' } }] },
+      attachTo: document.body,
+    })
+    await w.findAll('button[data-test="diag-locate"]')[0].trigger('click')
+    expect(document.querySelector('.diag-anchor-turn-m9')!.className)
+      .toContain('diag-flash')                       // 命中行锚而非表头
+    expect(document.querySelector('[data-diag-anchor="segment:m9"]')!.className)
+      .not.toContain('diag-flash')
+    w.unmount()
+  })
 })

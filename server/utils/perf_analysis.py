@@ -6,9 +6,8 @@
 """
 from __future__ import annotations
 
-import logging
-
-log = logging.getLogger(__name__)
+import time as _time
+from datetime import datetime as _dt
 
 
 def _to_ms(dt) -> int | None:
@@ -67,8 +66,7 @@ def coverage_split(wall_start_ms: int, wall_end_ms: int,
             'subagentWaitMs': wait_ms, 'idleMs': idle_ms}
 
 
-# ---- 追加到 server/utils/perf_analysis.py ----
-import time as _time
+# ---- 任务指标与聚合（SQL 层）----
 
 
 def _now_ms() -> int:
@@ -105,7 +103,7 @@ _ATTEMPT_SQL = (
 _TASK_LIST_SQL = (
     "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at"
     " FROM ai_execution_attempts a"
-    " WHERE a.source_type <> 'kefu' AND EXISTS ("
+    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL AND EXISTS ("
     "   SELECT 1 FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
     "   AND m.kind = %s AND m.name = %s)"
     " ORDER BY a.started_at DESC NULLS LAST LIMIT %s")
@@ -116,8 +114,7 @@ _DEF_P50_SQL = (
     " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
     "   AND a.finished_at IS NOT NULL AND EXISTS ("
     "   SELECT 1 FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
-    "   AND m.kind = %s AND m.name = %s)"
-    " ORDER BY 1")
+    "   AND m.kind = %s AND m.name = %s)")
 
 _SLOW_SQL = (
     "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at,"
@@ -164,7 +161,8 @@ def _tool_aggregates(cur, sid: str, start_ms: int, end_ms: int) -> dict:
         key = f'{tool}|{_norm_args(args_text)}'
         counts[key] = counts.get(key, 0) + 1
     repeats = [{'tool': k.split('|', 1)[0], 'argsPreview': k.split('|', 1)[1],
-                'count': n} for k, n in counts.items() if n >= 3]
+                'count': n} for k, n in counts.items()
+               if n >= REPEAT_TOOL_COUNT]
     repeats.sort(key=lambda r: -r['count'])
     return {'errorCount': errors, 'repeats': repeats}
 
@@ -318,8 +316,6 @@ def definition_overview(db_ctx) -> list:
 
 
 # ---- 诊断规则（spec §6，阈值常量逐字）----
-from datetime import datetime as _dt
-
 SUBAGENT_WAIT_RATIO = 0.5
 SUBAGENT_MIN_WALL_MS = 60_000
 MODEL_RATIO = 0.7
@@ -429,9 +425,7 @@ def diagnose(breakdown: dict, peer_p50_ms: int | None = None) -> list:
 
 
 def _def_of_attempt(db_ctx, attempt_id: str):
-    from db import get_db as _default
-    ctx = db_ctx or _default
-    with ctx() as conn:
+    with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT kind, name FROM ai_execution_manifests "
