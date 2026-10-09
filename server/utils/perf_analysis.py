@@ -355,7 +355,7 @@ def diagnose(breakdown: dict, peer_p50_ms: int | None = None) -> list:
         add('model_dominant', 'info',
             f'时间主要花在模型推理（共 {model_ms // 1000}s / '
             f'{breakdown.get("turns") or 0} 轮）',
-            'segment', slow['messageId'] if slow else 'turns')
+            'turn', slow['messageId'] if slow else 'turns')
 
     for i, t in enumerate(breakdown.get('turnDetails') or [], start=1):
         if (t.get('durationMs') or 0) > SLOW_TURN_MS \

@@ -211,6 +211,14 @@ def _bd(**over):
     return base
 
 
+def _ts_st(sid, agent, start_s, end_s):
+    """带真实 ISO 时间戳的子代理（秒偏移 → 2026-10-09T10:00:SS）。"""
+    return {'subtaskId': sid, 'agent': agent, 'wallMs': 5_000,
+            'status': 'completed', 'description': 'd',
+            'startedAt': f'2026-10-09T10:00:{start_s:02d}',
+            'finishedAt': f'2026-10-09T10:00:{end_s:02d}'}
+
+
 class TestDiagnose:
     def test_subagent_wait_dominant_and_reuse_hint(self):
         bd = _bd(subagentWaitMs=70_000, idleMs=20_000,
@@ -257,6 +265,18 @@ class TestDiagnose:
         st = [{'subtaskId': f'ses_{i}', 'agent': 'a', 'wallMs': 10_000,
                'status': 'completed', 'description': 'd'} for i in range(3)]
         assert 'sequential_subagents' in [d['ruleId'] for d in diagnose(_bd(subtasks=st))]
+
+    def test_sequential_subagents_parallel_overlap_not_flagged(self):
+        # 真实时间戳分支：(a) 区间重叠大（并行执行）→ 不提示串行
+        st = [_ts_st('p1', 'x', 0, 5), _ts_st('p2', 'y', 0, 5)]
+        assert 'sequential_subagents' not in [
+            d['ruleId'] for d in diagnose(_bd(subtasks=st))]
+
+    def test_sequential_subagents_serial_disjoint_flagged(self):
+        # 真实时间戳分支：(b) 区间不重叠（串行执行）→ 提示串行
+        st = [_ts_st('s1', 'x', 0, 5), _ts_st('s2', 'y', 5, 10)]
+        assert 'sequential_subagents' in [
+            d['ruleId'] for d in diagnose(_bd(subtasks=st))]
 
     def test_healthy_task_no_warn(self):
         bd = _bd(modelMs=90_000, idleMs=10_000)   # 模型主导 info，无 warn
