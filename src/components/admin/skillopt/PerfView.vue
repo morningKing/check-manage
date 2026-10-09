@@ -58,6 +58,7 @@ import { perfOverview, perfDefTasks, perfSlowTasks, type PerfDefSummary, type Pe
 import PerfSlowTop from './PerfSlowTop.vue'
 import PerfTrendChart from './PerfTrendChart.vue'
 import PerfTaskDetail from './PerfTaskDetail.vue'
+import { fmtMs, pct } from './format'
 
 const loading = ref(false)
 const error = ref('')
@@ -70,15 +71,7 @@ const openAttemptId = ref<string | null>(null)
 const isSel = (d: PerfDefSummary) =>
   selected.value?.defKind === d.defKind && selected.value?.defName === d.defName
 
-function fmtMs(ms: number | null | undefined): string {
-  if (ms == null) return '-'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
-function pct(r: number | null | undefined): string {
-  return r == null ? '-' : `${Math.round(r * 100)}%`
-}
+// fmtMs/pct 使用共享实现（./format，含进位边界修复）
 defineExpose({ fmtMs, pct })
 
 async function selectDef(d: PerfDefSummary) {

@@ -11,12 +11,9 @@
 </template>
 <script setup lang="ts">
 import type { PerfTaskEntry } from '@/api/aiSkills'
+import { fmtMs } from './format'
 defineProps<{ tasks: PerfTaskEntry[] }>()
 const emit = defineEmits<{ (e: 'open', attemptId: string): void }>()
-function fmtMs(ms: number): string {
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
 </script>
 <style scoped>
 .row { display: flex; gap: 10px; padding: 6px 0; cursor: pointer; align-items: baseline; }

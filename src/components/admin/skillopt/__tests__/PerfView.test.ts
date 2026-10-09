@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ElTabs, ElTabPane, ElTable, ElTableColumn, ElCard, ElAlert, ElButton } from 'element-plus'
 
+// PerfTrendChart 实体化后，PerfView 渲染会触发 echarts 动态 import——
+// jsdom 下虽已 try/catch 降级，mock 掉更快更稳
+vi.mock('../useEcharts', () => ({
+  useEcharts: () => ({ ready: { value: false }, setOption: vi.fn() }),
+}))
+
 vi.mock('@/api/aiSkills', () => ({
   perfOverview: vi.fn(async () => ({
     defs: [{ defKind: 'skill', defName: 'stock-analysis', tasks: 3,
