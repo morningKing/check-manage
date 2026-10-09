@@ -341,6 +341,24 @@ class TestPerfEndpoints:
         assert r.status_code == 200
         assert any(t['attemptId'] == aid for t in r.get_json()['tasks'])
 
+    def test_diagnosis_uses_cross_task_peer_p50(self, db_conn, user_id,
+                                                pf_client, admin_h):
+        # 同一定义两个 attempt：快 100s（P50）、慢 500s（>4×P50=OUTLIER_P50_FACTOR）
+        # → 端点级首次断言概览→diagnose 的跨任务接缝（定向 P50 查询）
+        _b, _s, slow_id = _seed_perf(db_conn, user_id)      # 墙钟 500s（600-100）
+        _fb, _fs, fast_id = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            cur.execute("UPDATE ai_execution_attempts SET"
+                        " started_at = NOW() - interval '200 seconds',"
+                        " finished_at = NOW() - interval '100 seconds' WHERE id = %s",
+                        (fast_id,))
+        db_conn.commit()
+        r = pf_client.get(f'/ai/chat/admin/perf/attempts/{slow_id}/diagnosis',
+                          headers=admin_h)
+        assert r.status_code == 200
+        rules = [d['ruleId'] for d in r.get_json()['diagnoses']]
+        assert 'outlier_vs_peers' in rules
+
     def test_attempt_404_and_limit_clamp(self, db_conn, user_id, pf_client, admin_h):
         assert pf_client.get('/ai/chat/admin/perf/attempts/nope',
                              headers=admin_h).status_code == 404

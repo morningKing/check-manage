@@ -6,6 +6,7 @@ import { ref, onMounted, onUnmounted, type Ref } from 'vue'
 export function useEcharts(el: Ref<HTMLElement | null>) {
   let chart: any = null
   const ready = ref(false)
+  const pending: Array<[string, (params: any) => void]> = []
 
   onMounted(async () => {
     try {
@@ -13,6 +14,7 @@ export function useEcharts(el: Ref<HTMLElement | null>) {
       if (el.value) {
         chart = echarts.init(el.value)
         ready.value = true
+        for (const [event, cb] of pending.splice(0)) chart.on(event, cb)
       }
     } catch (e) {
       console.warn('[useEcharts] init skipped:', e)
@@ -23,5 +25,11 @@ export function useEcharts(el: Ref<HTMLElement | null>) {
   return {
     ready,
     setOption(opt: any) { chart?.setOption(opt) },
+    /** 事件订阅：ready 前调用则挂起队列，init 完成后统一注册；卸载时随
+     *  chart.dispose 一并清理。 */
+    on(event: string, cb: (params: any) => void) {
+      if (chart) chart.on(event, cb)
+      else pending.push([event, cb])
+    },
   }
 }

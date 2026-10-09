@@ -110,6 +110,15 @@ _TASK_LIST_SQL = (
     "   AND m.kind = %s AND m.name = %s)"
     " ORDER BY a.started_at DESC NULLS LAST LIMIT %s")
 
+_DEF_P50_SQL = (
+    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
+    " FROM ai_execution_attempts a"
+    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+    "   AND a.finished_at IS NOT NULL AND EXISTS ("
+    "   SELECT 1 FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
+    "   AND m.kind = %s AND m.name = %s)"
+    " ORDER BY 1")
+
 _SLOW_SQL = (
     "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at,"
     " (SELECT m.kind FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
@@ -254,6 +263,18 @@ def load_attempt_metrics(db_ctx, attempt_id: str):
 
 def list_definition_tasks(db_ctx, kind: str, name: str, limit: int = 50) -> list:
     return _list_metrics(db_ctx, _TASK_LIST_SQL, (kind, name, limit), with_detail=False)
+
+
+def definition_p50(db_ctx, kind: str, name: str) -> int | None:
+    """该定义已完结任务的墙钟 P50（毫秒）；无已完结任务返回 None。
+
+    单条 SQL 只取墙钟列（_TASK_LIST_SQL 的 EXISTS/kefu 过滤形态 + 完结过滤），
+    供诊断端点热路径用——替代全量 definition_overview（D×200×2-3 查询）。"""
+    with _open_conn(db_ctx) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_DEF_P50_SQL, (kind, name))
+            walls = sorted(int(r[0]) for r in cur.fetchall())
+    return _percentile(walls, 0.5) if walls else None
 
 
 def list_slow_tasks(db_ctx, limit: int = 10) -> list:

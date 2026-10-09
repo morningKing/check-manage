@@ -5,7 +5,7 @@ import { ElTabs, ElTabPane, ElTable, ElTableColumn, ElCard, ElAlert, ElButton } 
 // PerfTrendChart 实体化后，PerfView 渲染会触发 echarts 动态 import——
 // jsdom 下虽已 try/catch 降级，mock 掉更快更稳
 vi.mock('../useEcharts', () => ({
-  useEcharts: () => ({ ready: { value: false }, setOption: vi.fn() }),
+  useEcharts: () => ({ ready: { value: false }, setOption: vi.fn(), on: vi.fn() }),
 }))
 
 vi.mock('@/api/aiSkills', () => ({

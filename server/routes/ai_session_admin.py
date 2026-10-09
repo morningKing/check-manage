@@ -1584,20 +1584,17 @@ def perf_attempt(aid):
 @require_permission('admin.ai_chat_admin')
 def perf_attempt_diagnosis(aid):
     from db import get_db
-    from utils.perf_analysis import load_attempt_metrics, diagnose, definition_overview
+    from utils.perf_analysis import (load_attempt_metrics, diagnose,
+                                     definition_p50, _def_of_attempt)
     m = load_attempt_metrics(get_db, aid)
     if not m:
         return jsonify({'error': 'attempt not found'}), 404
-    # 同定义 P50 做对照（取该 attempt 的 manifest 定义）
+    # 同定义 P50 做对照：定向单查询取该定义 P50（manifests 里该 attempt 的
+    # 第一个 skill/agent），不再触发全量概览重算（D×200×2-3 查询）
     peer_p50 = None
-    defs = [d for d in definition_overview(get_db)]
-    # 用 attempt 的定义归属查 P50：manifests 里该 attempt 的第一个 skill/agent
-    from utils.perf_analysis import _def_of_attempt
     dk, dn = _def_of_attempt(get_db, aid)
     if dk and dn:
-        entry = next((d for d in defs
-                      if d['defKind'] == dk and d['defName'] == dn), None)
-        peer_p50 = entry['p50Ms'] if entry and entry['p50Ms'] else None
+        peer_p50 = definition_p50(get_db, dk, dn)
     return jsonify({'diagnoses': diagnose(m, peer_p50)})
 
 

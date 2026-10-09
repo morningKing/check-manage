@@ -1,8 +1,24 @@
 import type { PerfTaskEntry, PerfAttemptDetail } from '@/api/aiSkills'
 
-export function buildTrendOption(tasks: PerfTaskEntry[]) {
-  const sorted = [...tasks].sort((a, b) =>
+/** 柱色按 source_type 区分（spec §5.1），未识别来源回落 batch 蓝。 */
+export const SOURCE_COLORS: Record<string, string> = {
+  batch: '#409eff', interactive: '#67c23a',
+  open_api: '#e6a23c', scan: '#909399',
+}
+
+export function sourceColor(sourceType: string | null | undefined): string {
+  return SOURCE_COLORS[sourceType || ''] || '#409eff'
+}
+
+/** 趋势图 x 轴顺序（startedAt 升序）：buildTrendOption 与 PerfTrendChart
+ *  的 click→attemptId 映射共用，保证 dataIndex 对齐。 */
+export function sortTasksByStartedAt(tasks: PerfTaskEntry[]): PerfTaskEntry[] {
+  return [...tasks].sort((a, b) =>
     (a.startedAt || '').localeCompare(b.startedAt || ''))
+}
+
+export function buildTrendOption(tasks: PerfTaskEntry[]) {
+  const sorted = sortTasksByStartedAt(tasks)
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['墙钟', '模型占比'] },
@@ -13,8 +29,9 @@ export function buildTrendOption(tasks: PerfTaskEntry[]) {
       { type: 'value', name: '模型占比', max: 1 },
     ],
     series: [
-      // __sources 供 PerfTrendChart 组件层按 sourceType 上色（bar series 的
-      // color 回调经 dataIndex 查它），ECharts 忽略未知键、纯函数可断言
+      // 柱色按 sourceType 区分由 PerfTrendChart 组件层接线：itemStyle.color
+      // 回调经 dataIndex 查排序后任务的 sourceType（SOURCE_COLORS）。
+      // __sources 为同序元数据供纯函数断言；ECharts 忽略未知键。
       { name: '墙钟', type: 'bar', data: sorted.map(t => t.wallMs),
         __sources: sorted.map(t => t.sourceType) },
       { name: '模型占比', type: 'line', yAxisIndex: 1,

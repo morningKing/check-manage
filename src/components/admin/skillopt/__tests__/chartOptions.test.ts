@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTrendOption, buildWaterfallOption } from '../chartOptions'
+import { buildTrendOption, buildWaterfallOption, SOURCE_COLORS, sourceColor } from '../chartOptions'
 import type { PerfTaskEntry, PerfAttemptDetail } from '@/api/aiSkills'
 
 const t = (over: Partial<PerfTaskEntry>): PerfTaskEntry => ({
@@ -22,6 +22,21 @@ describe('buildTrendOption', () => {
   it('柱色按 sourceType 映射（__sources 供组件层 color 回调使用）', () => {
     const opt = buildTrendOption([t({ sourceType: 'interactive' })])
     expect((opt.series as any[])[0].__sources).toEqual(['interactive'])
+  })
+})
+
+describe('SOURCE_COLORS / sourceColor', () => {
+  it('四类来源着色（spec §5.1），未识别来源回落 batch 蓝', () => {
+    expect(SOURCE_COLORS).toEqual({
+      batch: '#409eff', interactive: '#67c23a',
+      open_api: '#e6a23c', scan: '#909399',
+    })
+    expect(sourceColor('batch')).toBe('#409eff')
+    expect(sourceColor('interactive')).toBe('#67c23a')
+    expect(sourceColor('open_api')).toBe('#e6a23c')
+    expect(sourceColor('scan')).toBe('#909399')
+    expect(sourceColor('unknown')).toBe('#409eff')
+    expect(sourceColor(undefined)).toBe('#409eff')
   })
 })
 
