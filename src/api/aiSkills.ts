@@ -259,3 +259,67 @@ export function rollbackSkillDefVersion(id: string) {
   return post<{ ok: boolean; path: string; contentHash: string }>(
     `${ADMIN}/skill-def-versions/${encodeURIComponent(id)}/rollback`)
 }
+
+// ── SkillOpt 性能分析（perf）────────────────────────────────────────────────
+
+export interface PerfDefSummary {
+  defKind: string; defName: string; tasks: number
+  p50Ms: number; p95Ms: number; avgModelRatio: number | null
+  lastActivity: string | null
+}
+
+export interface PerfTaskEntry {
+  attemptId: string; sessionId: string; sourceType: string; status: string
+  startedAt: string | null; finishedAt: string | null
+  wallMs: number; modelMs: number; modelRatio: number
+  subagentWaitMs: number; idleMs: number
+  turns: number; tokensIn: number; tokensOut: number; subtaskCount: number
+  completeness: { turnsWithoutDuration: number; runningSubtasks: number }
+  defKind?: string; defName?: string
+}
+
+export interface PerfTurn {
+  messageId: string; createdAt: string | null
+  durationMs: number; tokensIn: number; tokensOut: number; preview: string
+}
+
+export interface PerfSubtask {
+  subtaskId: string; agent: string | null; description: string | null
+  status: string; startedAt: string | null; finishedAt: string | null
+  wallMs: number
+}
+
+export interface PerfAttemptDetail {
+  attempt: PerfTaskEntry & {
+    requestedModel?: string | null; effectiveModel?: string | null
+    batchReuseAgents?: string[] | null
+  }
+  coverage: { wallMs: number; modelMs: number; subagentWaitMs: number; idleMs: number }
+  turns: PerfTurn[]
+  subtasks: PerfSubtask[]
+  tools: { errorCount: number; repeats: { tool: string; argsPreview: string; count: number }[] }
+  completeness: { turnsWithoutDuration: number; runningSubtasks: number }
+}
+
+export interface Diagnosis {
+  ruleId: string; severity: 'info' | 'warn'; text: string
+  anchor: { type: 'turn' | 'subtask' | 'segment' | 'def'; ref: string }
+}
+
+export function perfOverview() {
+  return get<{ defs: PerfDefSummary[] }>(`${ADMIN}/perf/overview`)
+}
+export function perfDefTasks(kind: string, name: string, limit = 50) {
+  return get<{ tasks: PerfTaskEntry[] }>(
+    `${ADMIN}/perf/defs/${encodeURIComponent(kind)}/${encodeURIComponent(name)}/tasks?limit=${limit}`)
+}
+export function perfAttempt(id: string) {
+  return get<PerfAttemptDetail>(`${ADMIN}/perf/attempts/${encodeURIComponent(id)}`)
+}
+export function perfAttemptDiagnosis(id: string) {
+  return get<{ diagnoses: Diagnosis[] }>(
+    `${ADMIN}/perf/attempts/${encodeURIComponent(id)}/diagnosis`)
+}
+export function perfSlowTasks(limit = 10) {
+  return get<{ tasks: PerfTaskEntry[] }>(`${ADMIN}/perf/slow-tasks?limit=${limit}`)
+}
