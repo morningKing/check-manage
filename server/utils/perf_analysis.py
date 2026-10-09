@@ -99,7 +99,8 @@ def _open_conn(db_ctx):
 _ATTEMPT_SQL = (
     "SELECT a.id, a.session_id, a.source_type, a.source_id, a.status,"
     " a.started_at, a.finished_at, a.requested_model, a.effective_model "
-    "FROM ai_execution_attempts a WHERE a.id = %s")
+    "FROM ai_execution_attempts a WHERE a.id = %s"
+    " AND a.source_type <> 'kefu'")
 
 _TASK_LIST_SQL = (
     "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at"

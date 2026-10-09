@@ -156,6 +156,11 @@ class TestAttemptMetrics:
         assert m['sourceType'] == 'batch'
         assert m['batchReuseAgents'] == ['dev']
 
+    def test_kefu_attempt_returns_none(self, db_conn, user_id):
+        # 全链路排除 kefu（spec §2）：详情路径同样不返回指标 → 端点 404 语义
+        _bid, _sid, aid = _seed_perf(db_conn, user_id, source_type='kefu')
+        assert load_attempt_metrics(db_conn, aid) is None
+
 
 class TestDefinitionAggregates:
     def test_definition_tasks_and_overview_exclude_kefu(self, db_conn, user_id):
