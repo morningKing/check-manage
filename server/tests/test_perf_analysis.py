@@ -190,3 +190,75 @@ class TestDefinitionAggregates:
         ov = definition_overview(db_conn)
         entry = next(d for d in ov if d['defName'] == 'stock-analysis')
         assert entry['tasks'] == 0        # 分母只计已完结
+
+
+# 追加到 server/tests/test_perf_analysis.py
+from utils.perf_analysis import diagnose
+
+
+def _bd(**over):
+    base = {
+        'wallMs': 100_000, 'modelMs': 10_000, 'subagentWaitMs': 10_000,
+        'idleMs': 80_000, 'sourceType': 'batch', 'batchReuseAgents': None,
+        'turnDetails': [{'messageId': 'm1', 'durationMs': 5_000,
+                         'tokensIn': 1_000, 'tokensOut': 100}],
+        'subtasks': [{'subtaskId': 'ses_a', 'agent': 'general', 'wallMs': 10_000,
+                      'status': 'completed', 'startedAt': None, 'finishedAt': None,
+                      'description': 'd'}],
+        'tools': {'errorCount': 0, 'repeats': []},
+    }
+    base.update(over)
+    return base
+
+
+class TestDiagnose:
+    def test_subagent_wait_dominant_and_reuse_hint(self):
+        bd = _bd(subagentWaitMs=70_000, idleMs=20_000,
+                 subtasks=[{'subtaskId': 'ses_a', 'agent': 'general', 'wallMs': 70_000,
+                            'status': 'completed', 'description': 'd'}])
+        rules = [d['ruleId'] for d in diagnose(bd)]
+        assert 'subagent_wait_dominant' in rules
+        # 批 + 未配复用 → 追加提示
+        assert 'subagent_reuse_hint' in rules
+        # 已配复用 → 不提示
+        bd2 = _bd(subagentWaitMs=70_000, idleMs=20_000, batchReuseAgents=['general'])
+        assert 'subagent_reuse_hint' not in [d['ruleId'] for d in diagnose(bd2)]
+
+    def test_model_dominant_is_info(self):
+        bd = _bd(modelMs=80_000, idleMs=10_000)
+        hit = next(d for d in diagnose(bd) if d['ruleId'] == 'model_dominant')
+        assert hit['severity'] == 'info'
+
+    def test_slow_turn_big_context(self):
+        bd = _bd(turnDetails=[{'messageId': 'm2', 'durationMs': 45_000,
+                               'tokensIn': 180_000, 'tokensOut': 0}])
+        hit = next(d for d in diagnose(bd) if d['ruleId'] == 'slow_turn_big_context')
+        assert hit['anchor'] == {'type': 'turn', 'ref': 'm2'}
+
+    def test_repeated_tools_and_error_storm(self):
+        bd = _bd(tools={'errorCount': 4, 'repeats': [
+            {'tool': 'read', 'argsPreview': 'a.py', 'count': 5}]})
+        rules = [d['ruleId'] for d in diagnose(bd)]
+        assert 'repeated_tool_calls' in rules and 'tool_error_storm' in rules
+
+    def test_engine_overhead_threshold(self):
+        # idle 80% 但墙钟只有 100s（<120s 下限）→ 不触发
+        assert 'engine_overhead' not in [d['ruleId'] for d in diagnose(_bd())]
+        bd = _bd(wallMs=200_000, modelMs=10_000, subagentWaitMs=10_000, idleMs=180_000)
+        assert 'engine_overhead' in [d['ruleId'] for d in diagnose(bd)]
+
+    def test_outlier_vs_peers(self):
+        assert 'outlier_vs_peers' in [d['ruleId']
+                                      for d in diagnose(_bd(), peer_p50_ms=20_000)]
+        assert 'outlier_vs_peers' not in [d['ruleId']
+                                          for d in diagnose(_bd(), peer_p50_ms=50_000)]
+
+    def test_sequential_subagents(self):
+        st = [{'subtaskId': f'ses_{i}', 'agent': 'a', 'wallMs': 10_000,
+               'status': 'completed', 'description': 'd'} for i in range(3)]
+        assert 'sequential_subagents' in [d['ruleId'] for d in diagnose(_bd(subtasks=st))]
+
+    def test_healthy_task_no_warn(self):
+        bd = _bd(modelMs=90_000, idleMs=10_000)   # 模型主导 info，无 warn
+        ds = diagnose(bd)
+        assert not [d for d in ds if d['severity'] == 'warn']

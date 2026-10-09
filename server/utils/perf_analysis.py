@@ -294,3 +294,114 @@ def definition_overview(db_ctx) -> list:
                                     / len(tasks), 4) if tasks else None),
             'lastActivity': (tasks[0]['startedAt'] if tasks else None)})
     return out
+
+
+# ---- 诊断规则（spec §6，阈值常量逐字）----
+from datetime import datetime as _dt
+
+SUBAGENT_WAIT_RATIO = 0.5
+SUBAGENT_MIN_WALL_MS = 60_000
+MODEL_RATIO = 0.7
+SLOW_TURN_MS = 30_000
+BIG_CONTEXT_TOKENS = 80_000
+REPEAT_TOOL_COUNT = 3
+TOOL_ERROR_COUNT = 3
+IDLE_RATIO = 0.3
+IDLE_MIN_WALL_MS = 120_000
+OUTLIER_P50_FACTOR = 4
+SEQUENTIAL_OVERLAP = 0.1
+
+
+def _overlap_ratio(a: tuple[int, int], b: tuple[int, int]) -> float:
+    inter = max(0, min(a[1], b[1]) - max(a[0], b[0]))
+    shorter = max(1, min(a[1] - a[0], b[1] - b[0]))
+    return inter / shorter
+
+
+def _iso_ms(v):
+    """startedAt/finishedAt（ISO 串或 datetime）→ epoch 毫秒；缺省 None。"""
+    if isinstance(v, str):
+        return int(_dt.fromisoformat(v).timestamp() * 1000)
+    return _to_ms(v)
+
+
+def diagnose(breakdown: dict, peer_p50_ms: int | None = None) -> list:
+    wall = breakdown.get('wallMs') or 0
+    out: list = []
+
+    def add(rule_id, severity, text, anchor_type, ref):
+        out.append({'ruleId': rule_id, 'severity': severity, 'text': text,
+                    'anchor': {'type': anchor_type, 'ref': ref}})
+
+    subtasks = breakdown.get('subtasks') or []
+    wait_ms = breakdown.get('subagentWaitMs') or 0
+    if wall > SUBAGENT_MIN_WALL_MS and wait_ms / wall > SUBAGENT_WAIT_RATIO:
+        slowest = max(subtasks, key=lambda s: s.get('wallMs') or 0) if subtasks else None
+        add('subagent_wait_dominant', 'warn',
+            f'{round(wait_ms / wall * 100)}% 时间在等子代理（{len(subtasks)} 次委派）',
+            'subtask', slowest['subtaskId'] if slowest else 'subtasks')
+        if breakdown.get('sourceType') == 'batch' and not breakdown.get('batchReuseAgents'):
+            agents = sorted({s.get('agent') for s in subtasks if s.get('agent')})
+            add('subagent_reuse_hint', 'info',
+                f'批任务未启用子代理会话复用（委派 agent：{",".join(agents) or "未识别"}）'
+                '——多轮委派场景建议在批配置开启 subagent_reuse',
+                'subtask', slowest['subtaskId'] if slowest else 'subtasks')
+
+    model_ms = breakdown.get('modelMs') or 0
+    if wall and model_ms / wall > MODEL_RATIO:
+        turns = [t for t in (breakdown.get('turnDetails') or [])
+                 if t.get('durationMs') is not None]
+        slow = max(turns, key=lambda t: t['durationMs']) if turns else None
+        add('model_dominant', 'info',
+            f'时间主要花在模型推理（共 {model_ms // 1000}s / '
+            f'{breakdown.get("turns") or 0} 轮）',
+            'segment', slow['messageId'] if slow else 'turns')
+
+    for i, t in enumerate(breakdown.get('turnDetails') or [], start=1):
+        if (t.get('durationMs') or 0) > SLOW_TURN_MS \
+                and (t.get('tokensIn') or 0) > BIG_CONTEXT_TOKENS:
+            add('slow_turn_big_context', 'warn',
+                f'第 {i} 轮 {t["durationMs"] // 1000}s、输入 '
+                f'{round(t["tokensIn"] / 1000)}k token——建议拆分任务或压缩历史',
+                'turn', t['messageId'])
+
+    tools = breakdown.get('tools') or {}
+    for r in tools.get('repeats') or []:
+        add('repeated_tool_calls', 'warn',
+            f'{r["tool"]} 同一参数重复 {r["count"]} 次（如 {r["argsPreview"][:40]}）'
+            '——考虑在指令里要求一次读全/批量操作', 'segment', 'tools')
+    if (tools.get('errorCount') or 0) >= TOOL_ERROR_COUNT:
+        add('tool_error_storm', 'warn',
+            f'{tools["errorCount"]} 次工具失败重试，检查工具参数与环境',
+            'segment', 'tools')
+
+    idle = breakdown.get('idleMs') or 0
+    if wall > IDLE_MIN_WALL_MS and idle / wall > IDLE_RATIO:
+        add('engine_overhead', 'warn',
+            f'引擎开销占 {round(idle / wall * 100)}%——检查 OpenCode 服务状态/'
+            '同时段任务是否普遍如此', 'segment', 'idle')
+
+    if peer_p50_ms and wall > peer_p50_ms * OUTLIER_P50_FACTOR:
+        add('outlier_vs_peers', 'warn',
+            f'比该定义典型水平慢 {round(wall / max(1, peer_p50_ms))} 倍'
+            f'（P50 {peer_p50_ms // 1000}s vs 本次 {wall // 1000}s）', 'def', 'self')
+
+    if len(subtasks) >= 2:
+        times = [(_iso_ms(s.get('startedAt')), _iso_ms(s.get('finishedAt')))
+                 for s in subtasks]
+        if all(a is not None and b is not None for a, b in times):
+            ivs = times  # 真实时间戳齐全：按实际重叠形态判定
+        else:
+            # 相对序即可判重叠形态——无完整时间戳时按列表序排成串行块
+            ivs, cur = [], 0
+            for s in subtasks:
+                w = s.get('wallMs') or 0
+                ivs.append((cur, cur + w))
+                cur += w
+        pairs = [(ivs[i], ivs[j]) for i in range(len(ivs))
+                 for j in range(i + 1, len(ivs))]
+        if all(_overlap_ratio(a, b) < SEQUENTIAL_OVERLAP for a, b in pairs):
+            add('sequential_subagents', 'info',
+                f'{len(subtasks)} 个子代理串行执行，评估可否并行委托',
+                'subtask', subtasks[0]['subtaskId'])
+    return out
