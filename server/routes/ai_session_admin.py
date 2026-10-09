@@ -1537,3 +1537,77 @@ def skill_fit_diagnose(result_id):
     log_operation('create', 'ai_skill_fit_diagnosis', result_id, None,
                   'SkillOpt 偏差诊断（产生 LLM 调用成本）')
     return jsonify({'diagnosis': diagnosis})
+
+
+# ── 任务性能分析（spec 2026-10-09 §4）────────────────────────────
+
+@ai_execution_admin_bp.get('/perf/overview')
+@require_permission('admin.ai_chat_admin')
+def perf_overview():
+    from db import get_db
+    from utils.perf_analysis import definition_overview
+    return jsonify({'defs': definition_overview(get_db)})
+
+
+@ai_execution_admin_bp.get('/perf/defs/<kind>/<name>/tasks')
+@require_permission('admin.ai_chat_admin')
+def perf_def_tasks(kind, name):
+    from db import get_db
+    from utils.perf_analysis import list_definition_tasks
+    try:
+        limit = min(max(int(request.args.get('limit') or 50), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify({'tasks': list_definition_tasks(get_db, kind, name, limit)})
+
+
+@ai_execution_admin_bp.get('/perf/attempts/<aid>')
+@require_permission('admin.ai_chat_admin')
+def perf_attempt(aid):
+    from db import get_db
+    from utils.perf_analysis import load_attempt_metrics
+    m = load_attempt_metrics(get_db, aid)
+    if not m:
+        return jsonify({'error': 'attempt not found'}), 404
+    cov = {'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
+           'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs']}
+    return jsonify({'attempt': {k: v for k, v in m.items()
+                                if k not in ('turnDetails', 'subtasks', 'tools')},
+                    'coverage': cov,
+                    'turns': m.get('turnDetails') or [],
+                    'subtasks': m.get('subtasks') or [],
+                    'tools': m.get('tools') or {},
+                    'completeness': m.get('completeness')})
+
+
+@ai_execution_admin_bp.get('/perf/attempts/<aid>/diagnosis')
+@require_permission('admin.ai_chat_admin')
+def perf_attempt_diagnosis(aid):
+    from db import get_db
+    from utils.perf_analysis import load_attempt_metrics, diagnose, definition_overview
+    m = load_attempt_metrics(get_db, aid)
+    if not m:
+        return jsonify({'error': 'attempt not found'}), 404
+    # 同定义 P50 做对照（取该 attempt 的 manifest 定义）
+    peer_p50 = None
+    defs = [d for d in definition_overview(get_db)]
+    # 用 attempt 的定义归属查 P50：manifests 里该 attempt 的第一个 skill/agent
+    from utils.perf_analysis import _def_of_attempt
+    dk, dn = _def_of_attempt(get_db, aid)
+    if dk and dn:
+        entry = next((d for d in defs
+                      if d['defKind'] == dk and d['defName'] == dn), None)
+        peer_p50 = entry['p50Ms'] if entry and entry['p50Ms'] else None
+    return jsonify({'diagnoses': diagnose(m, peer_p50)})
+
+
+@ai_execution_admin_bp.get('/perf/slow-tasks')
+@require_permission('admin.ai_chat_admin')
+def perf_slow_tasks():
+    from db import get_db
+    from utils.perf_analysis import list_slow_tasks
+    try:
+        limit = min(max(int(request.args.get('limit') or 10), 1), 50)
+    except (TypeError, ValueError):
+        limit = 10
+    return jsonify({'tasks': list_slow_tasks(get_db, limit)})

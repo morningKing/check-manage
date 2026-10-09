@@ -282,3 +282,75 @@ class TestDiagnose:
         bd = _bd(modelMs=90_000, idleMs=10_000)   # 模型主导 info，无 warn
         ds = diagnose(bd)
         assert not [d for d in ds if d['severity'] == 'warn']
+
+
+@pytest.fixture
+def admin_h():
+    from auth import create_token
+    tok = create_token({'id': 'user-admin', 'username': 'admin', 'role': 'admin'})
+    return {'Authorization': f'Bearer {tok}'}
+
+
+@pytest.fixture
+def pf_client(db_conn):
+    import db as db_module
+    db_module.pool = None
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if getattr(mod, 'get_db', None) is not None and (
+                mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                or mod_name == 'auth'):
+            try:
+                mod.get_db = db_module.get_db
+            except (AttributeError, TypeError):
+                pass
+    from app import app
+    app.config['TESTING'] = True
+    return app.test_client()
+
+
+class TestPerfEndpoints:
+    def test_overview_tasks_slow_attempt_contract(self, db_conn, user_id,
+                                                  pf_client, admin_h):
+        _b, _s, aid = _seed_perf(db_conn, user_id)
+        r = pf_client.get('/ai/chat/admin/perf/overview', headers=admin_h)
+        assert r.status_code == 200
+        assert any(d['defName'] == 'stock-analysis' for d in r.get_json()['defs'])
+
+        r = pf_client.get('/ai/chat/admin/perf/defs/skill/stock-analysis/tasks',
+                          headers=admin_h)
+        assert r.status_code == 200
+        tasks = r.get_json()['tasks']
+        assert tasks and tasks[0]['attemptId'] == aid
+        assert {'attemptId', 'wallMs', 'modelRatio', 'completeness'} <= set(tasks[0])
+
+        r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}', headers=admin_h)
+        body = r.get_json()
+        assert r.status_code == 200
+        assert body['attempt']['attemptId'] == aid
+        assert set(body['coverage']) == {'wallMs', 'modelMs', 'subagentWaitMs', 'idleMs'}
+        assert isinstance(body['turns'], list) and isinstance(body['subtasks'], list)
+
+        r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}/diagnosis',
+                          headers=admin_h)
+        assert r.status_code == 200
+        assert isinstance(r.get_json()['diagnoses'], list)
+
+        r = pf_client.get('/ai/chat/admin/perf/slow-tasks?limit=5', headers=admin_h)
+        assert r.status_code == 200
+        assert any(t['attemptId'] == aid for t in r.get_json()['tasks'])
+
+    def test_attempt_404_and_limit_clamp(self, db_conn, user_id, pf_client, admin_h):
+        assert pf_client.get('/ai/chat/admin/perf/attempts/nope',
+                             headers=admin_h).status_code == 404
+        r = pf_client.get('/ai/chat/admin/perf/defs/skill/x/tasks?limit=99999',
+                          headers=admin_h)
+        assert r.status_code == 200       # 收敛到 200，不 500
+
+    def test_requires_admin_permission(self, pf_client):
+        from auth import create_token
+        tok = create_token({'id': 'u2', 'username': 'g', 'role': 'guest'})
+        r = pf_client.get('/ai/chat/admin/perf/overview',
+                          headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 403

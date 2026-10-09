@@ -405,3 +405,16 @@ def diagnose(breakdown: dict, peer_p50_ms: int | None = None) -> list:
                 f'{len(subtasks)} 个子代理串行执行，评估可否并行委托',
                 'subtask', subtasks[0]['subtaskId'])
     return out
+
+
+def _def_of_attempt(db_ctx, attempt_id: str):
+    from db import get_db as _default
+    ctx = db_ctx or _default
+    with ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT kind, name FROM ai_execution_manifests "
+                "WHERE attempt_id = %s AND kind IN ('skill','agent') "
+                "ORDER BY kind, name LIMIT 1", (attempt_id,))
+            row = cur.fetchone()
+    return (row[0], row[1]) if row else (None, None)
