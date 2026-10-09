@@ -1,4 +1,4 @@
-import type { PerfTaskEntry } from '@/api/aiSkills'
+import type { PerfTaskEntry, PerfAttemptDetail } from '@/api/aiSkills'
 
 export function buildTrendOption(tasks: PerfTaskEntry[]) {
   const sorted = [...tasks].sort((a, b) =>
@@ -20,5 +20,50 @@ export function buildTrendOption(tasks: PerfTaskEntry[]) {
       { name: '模型占比', type: 'line', yAxisIndex: 1,
         data: sorted.map(t => t.modelRatio), smooth: true },
     ],
+  }
+}
+
+/** 任务下钻时间轴瀑布：y 轴为段类型（子代理/模型）、x 轴为绝对时间。
+ *  每段 data 项挂 __ref（messageId/subtaskId），诊断「定位」可据此跳转。 */
+export function buildWaterfallOption(detail: PerfAttemptDetail) {
+  const segs: { name: string; type: string; ref: string;
+                start: number; end: number }[] = []
+  for (const turn of detail.turns) {
+    if (turn.durationMs == null || !turn.createdAt) continue
+    const s = Date.parse(turn.createdAt)
+    segs.push({ name: `模型轮次 ${(turn.durationMs / 1000).toFixed(1)}s`,
+                type: 'model', ref: turn.messageId, start: s, end: s + turn.durationMs })
+  }
+  for (const st of detail.subtasks) {
+    if (!st.startedAt) continue
+    const s = Date.parse(st.startedAt)
+    const e = st.finishedAt ? Date.parse(st.finishedAt) : s + st.wallMs
+    segs.push({ name: `子代理 ${st.agent || ''} ${(st.wallMs / 1000).toFixed(1)}s`,
+                type: 'subagent', ref: st.subtaskId, start: s, end: e })
+  }
+  return {
+    tooltip: { formatter: (p: any) => p.name },
+    grid: { left: 90, right: 30, top: 20, bottom: 40 },
+    xAxis: { type: 'time' },
+    yAxis: { type: 'category', data: ['子代理', '模型'], inverse: false },
+    series: [{
+      type: 'custom',
+      renderItem: (_params: any, api: any) => {
+        const catIdx = api.value(0)
+        const left = api.coord([api.value(1), catIdx])[0]
+        const right = api.coord([api.value(2), catIdx])[0]
+        const top = api.coord([api.value(1), catIdx])[1]
+        return {
+          type: 'rect',
+          shape: { x: left, y: top - 12, width: Math.max(1, right - left), height: 24 },
+          style: { fill: catIdx === 1 ? '#409eff' : '#e6a23c' },
+        }
+      },
+      encode: { x: [1, 2], y: 0 },
+      data: segs.map(s => ({
+        name: s.name, value: [s.type === 'model' ? 1 : 0, s.start, s.end],
+        __ref: s.ref,
+      })),
+    }],
   }
 }

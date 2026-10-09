@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildTrendOption } from '../chartOptions'
-import type { PerfTaskEntry } from '@/api/aiSkills'
+import { buildTrendOption, buildWaterfallOption } from '../chartOptions'
+import type { PerfTaskEntry, PerfAttemptDetail } from '@/api/aiSkills'
 
 const t = (over: Partial<PerfTaskEntry>): PerfTaskEntry => ({
   attemptId: 'a', sessionId: 's', sourceType: 'batch', status: 'completed',
@@ -22,5 +22,28 @@ describe('buildTrendOption', () => {
   it('柱色按 sourceType 映射（__sources 供组件层 color 回调使用）', () => {
     const opt = buildTrendOption([t({ sourceType: 'interactive' })])
     expect((opt.series as any[])[0].__sources).toEqual(['interactive'])
+  })
+})
+
+const detail = (): PerfAttemptDetail => ({
+  attempt: t({}) as any,
+  coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000 },
+  turns: [{ messageId: 'm1', createdAt: '2026-10-09T10:00:00',
+            durationMs: 60000, tokensIn: 5000, tokensOut: 500, preview: 'p' }],
+  subtasks: [{ subtaskId: 'ses_1', agent: 'general', description: 'd',
+               status: 'completed', startedAt: '2026-10-09T10:00:10',
+               finishedAt: '2026-10-09T10:00:40', wallMs: 30000 }],
+  tools: { errorCount: 0, repeats: [] },
+  completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+})
+
+describe('buildWaterfallOption', () => {
+  it('时间轴系列含模型段与子代理段，y 为段类型、x 为绝对时间', () => {
+    const opt = buildWaterfallOption(detail())
+    const data = (opt.series as any[])[0].data
+    expect(data.length).toBe(2)                       // 1 个模型段 + 1 个子代理段
+    expect(data[0].name).toContain('模型')
+    expect(data[1].name).toContain('子代理')
+    expect(opt.xAxis.type).toBe('time')
   })
 })
