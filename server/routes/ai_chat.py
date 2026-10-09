@@ -29,6 +29,8 @@ Routes registered:
 import os
 import json
 import logging
+import os
+import queue
 import secrets
 import threading
 import requests
@@ -77,6 +79,18 @@ from config import (
 logger = logging.getLogger(__name__)
 
 MCP_NAME = 'check-manage'
+
+# SSE 存活参数（2026-10-09 生产间歇性卡顿修复）：聊天事件流是常驻 generator，
+# 原实现同步阻塞在上游 iter_lines（read_timeout=None）——上游无事件时它既不
+# 写客户端也读不到上游，死 tab / 挂死的 OpenCode 连接会让 waitress 线程
+# 无限期滞留（几个空闲流就能占满线程池，全站请求排队 5-10s 甚至超时）。
+#   SSE_PING_SEC             队列空转这么久就向客户端 yield ': ping'——写失败
+#                            即 GeneratorExit，死连接 ≤ 一个 ping 周期内释放线程
+#   SSE_UPSTREAM_READ_TIMEOUT 上游读超时：pump 线程最长阻塞这么久，OpenCode
+#                            挂死不再变成永久占用（超时结束客户端流，浏览器
+#                            EventSource 自动重连走既有收敛路径）
+SSE_PING_SEC = float(os.getenv('AI_SSE_PING_SEC', '') or 15)
+SSE_UPSTREAM_READ_TIMEOUT = float(os.getenv('AI_SSE_UPSTREAM_READ_TIMEOUT', '') or 60)
 
 
 def _external_mcp():
@@ -1410,6 +1424,25 @@ def session_skill_fit(sid):
     return jsonify({'data': fits or None})
 
 
+def _pump_upstream_events(q, client, directory: str):
+    """后台线程：把「读上游 SSE」从请求线程里拆出来。
+
+    事件原样入队；EOF / 异常 / 读超时统一以 None 哨兵收尾。请求线程只在
+    q.get(timeout=SSE_PING_SEC) 上有界等待，空转即向客户端发 ping——两头的
+    死连接（浏览器已关 / OpenCode 挂死）都能在有限时间内被发现并释放线程。
+    上游结束时主循环收流，浏览器 EventSource 自动重连（订阅起点快照爆发 +
+    _syncAfterReconnect 的收敛语义与断线场景完全一致，不新造状态机）。
+    """
+    try:
+        for evt in client.subscribe_events(
+                directory=directory, read_timeout=SSE_UPSTREAM_READ_TIMEOUT):
+            q.put(evt)
+    except Exception:  # noqa: BLE001 —— 上游断开/超时统一走哨兵，主循环决定收流
+        logger.info('sse upstream ended dir=%s', directory, exc_info=True)
+    finally:
+        q.put(None)
+
+
 @ai_chat_bp.route('/sessions/<sid>/events', methods=['GET'])
 @login_required_sse
 def sse_events(sid):
@@ -1439,7 +1472,24 @@ def sse_events(sid):
             for evt in _midturn_snapshot_events(client, opencode_session_id, sess[4]):
                 apply_event(state, evt, opencode_session_id)
                 yield _format_sse(evt['event'], evt['data']['properties'])
-            for evt in client.subscribe_events(directory=sess[4]):
+            q = queue.Queue()
+            pump = threading.Thread(
+                target=_pump_upstream_events, args=(q, client, sess[4]),
+                daemon=True, name=f'sse-pump-{sid[:8]}')
+            pump.start()
+            while True:
+                try:
+                    evt = q.get(timeout=SSE_PING_SEC)
+                except queue.Empty:
+                    # 空闲心跳：注释帧对 EventSource 不可见，但让代理链路保活、
+                    # 并让已断开的客户端在下一个 ping 周期内触发 GeneratorExit。
+                    yield ': ping\n\n'
+                    continue
+                if evt is None:
+                    # 上游断开（EOF/异常/读超时）：结束客户端流。浏览器 EventSource
+                    # 自动重连，重连路径的快照爆发 + _syncAfterReconnect 负责
+                    # 收敛——与旧实现的断线语义一致，只是不再无限期挂住线程。
+                    return
                 etype = evt.get('event', '')
                 props = (evt.get('data') or {}).get('properties') or {}
                 ev_sid = event_session_id(props)

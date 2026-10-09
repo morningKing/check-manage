@@ -17,10 +17,12 @@ def _env_num(name, default, cast):
         return default
 
 
-# DB_POOL_MAXCONN：池上限可配。生产 waitress 的 BACKEND_THREADS（默认 8）<
-# 默认 20，默认行为不变；高并发场景（如大量 SSE 长连接）调大时需同步核对
-# Postgres max_connections。
-POOL_MAXCONN = _env_num('DB_POOL_MAXCONN', 20, int)
+# DB_POOL_MAXCONN：池上限可配。生产 waitress 的 BACKEND_THREADS（2026-10-09
+# 起默认 32）必须保持 < 池上限——SSE 长连接每条占一个线程（批事件流 tick 还
+# 会瞬时借连接），线程数贴着池上限走会让普通 REST 请求在 POOL_WAIT_SEC 排队。
+# 默认 40（+后台 worker/调度线程余量）仍远低于 PG 默认 max_connections=100；
+# 再往上调需同步核对 Postgres max_connections。
+POOL_MAXCONN = _env_num('DB_POOL_MAXCONN', 40, int)
 # get_db 在池耗尽时的排队等待窗口（秒）：dev Werkzeug 无界线程下，大量 SSE
 # 长连接同相位 tick 会瞬时借满池——有界等待吸收相位碰撞；持续饥饿仍抛
 # PoolError，由调用方降级（SSE 路由发 busy 帧而非断流）。

@@ -335,14 +335,19 @@ def start_backend():
     """Start the Flask backend as a subprocess (production WSGI server).
 
     Uses waitress with a *bounded* thread pool instead of Werkzeug's unbounded
-    threaded dev server. The pool size (BACKEND_THREADS, default 8) is kept
-    below the DB pool max (ThreadedConnectionPool maxconn=20) so concurrent
+    threaded dev server. The pool size (BACKEND_THREADS, default 32) is kept
+    below the DB pool max (ThreadedConnectionPool maxconn=40) so concurrent
     requests can't exhaust DB connections.
+
+    2026-10-09 起 8→32：waitress 里每条 SSE 长连接整段占一个线程（AI 助手页
+    常驻聊天流 + 批事件流），8 个线程被几个并发 tab 占满后所有 REST 请求排队
+    5-10s 甚至超时——生产间歇性卡顿的主因。32 为 IO-bound 线程的安全量级，
+    同步抬高了 DB 池上限（见 db.py）。
     """
     server_dir = os.path.dirname(__file__)
     env = opencode_launch.child_env()
     env['FLASK_DEBUG'] = '0'
-    threads = max(1, int(os.environ.get('BACKEND_THREADS', '8')))
+    threads = max(1, int(os.environ.get('BACKEND_THREADS', '32')))
     # Send stdout+stderr to a log file, NOT DEVNULL: a failed start (missing
     # 'waitress', DB down, port in use, import error) must be diagnosable rather
     # than vanishing silently. _report_dead_subprocess() surfaces this on failure.

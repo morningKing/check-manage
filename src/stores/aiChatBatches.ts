@@ -49,13 +49,23 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   // 10s 轮询保留为降级路径。
   let listES: BatchEventStream | null = null
   let listRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  // 当前 listES 打开时的 ids 快照（排序后）。10s 轮询每轮 tick 都会走到
+  // 订阅函数：ids 集合未变时必须复用连接——原先每轮 close+open，后端每次
+  // 重建连接（新 waitress 线程 + 归属查询），是生产请求风暴源之一。
+  let listIds: string[] = []
 
   function subscribeListEvents() {
-    listES?.close()
     const active = items.value
       .filter(b => !TERMINAL_STATUSES.has(b.status))
       .map(b => b.id)
       .slice(0, 20)  // 后端 ids 上限 20
+    const nextIds = [...active].sort()
+    const unchanged = listES !== null
+      && nextIds.length === listIds.length
+      && nextIds.every((id, i) => id === listIds[i])
+    if (unchanged) return
+    listES?.close()
+    listIds = nextIds
     if (!active.length) { listES = null; return }
     listES = new BatchEventStream(active, {
       onEvent: () => {
@@ -75,6 +85,7 @@ export const useAiChatBatchesStore = defineStore('aiChatBatches', () => {
   function unsubscribeListEvents() {
     listES?.close()
     listES = null
+    listIds = []
     if (listRefreshTimer) { clearTimeout(listRefreshTimer); listRefreshTimer = null }
   }
 

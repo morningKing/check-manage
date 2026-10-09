@@ -250,4 +250,55 @@ describe('aiChatBatches store', () => {
     expect(FakeBatchEventStream.last).toBeNull()
     s.stopListPolling()
   })
+
+  // ------------------------------------------------------------------
+  // 2026-10-09：列表轮询复用 SSE 连接——ids 未变不重建。原先每 10s tick
+  // 都 close+open，后端每次重连占新线程 + 归属查询，是生产请求风暴源之一。
+  // ------------------------------------------------------------------
+  it('list polling reuses the SSE connection while active ids are unchanged', async () => {
+    vi.mocked(api.listBatches).mockResolvedValue({
+      items: [mockBatch, { ...mockBatch, id: 'b2' }], total: 2,
+    })
+    const s = useAiChatBatchesStore()
+    s.startListPolling()
+    await vi.advanceTimersByTimeAsync(10000)   // tick 1：建立 ['b1','b2'] 订阅
+    expect(FakeBatchEventStream.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10000)   // tick 2：ids 未变 → 复用
+    await vi.advanceTimersByTimeAsync(10000)   // tick 3：仍然复用
+    expect(FakeBatchEventStream.instances).toHaveLength(1)
+    expect(FakeBatchEventStream.instances[0].opened).toBe(true)
+    expect(FakeBatchEventStream.instances[0].closed).toBe(false)
+    s.stopListPolling()
+  })
+
+  it('list polling rebuilds the SSE connection when active ids change', async () => {
+    vi.mocked(api.listBatches)
+      .mockResolvedValueOnce({ items: [mockBatch], total: 1 })
+      .mockResolvedValue({ items: [mockBatch, { ...mockBatch, id: 'b3' }], total: 2 })
+    const s = useAiChatBatchesStore()
+    s.startListPolling()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(FakeBatchEventStream.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10000)   // 新增非终态 b3 → 重建
+    expect(FakeBatchEventStream.instances).toHaveLength(2)
+    expect(FakeBatchEventStream.instances[0].closed).toBe(true)
+    expect(FakeBatchEventStream.instances[1].batchIds).toEqual(['b1', 'b3'])
+    s.stopListPolling()
+  })
+
+  it('list polling closes the SSE connection when all batches turn terminal', async () => {
+    vi.mocked(api.listBatches)
+      .mockResolvedValueOnce({ items: [mockBatch], total: 1 })
+      .mockResolvedValue({
+        items: [{ ...mockBatch, status: 'completed' as const, done: 3 }], total: 1,
+      })
+    const s = useAiChatBatchesStore()
+    s.startListPolling()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(FakeBatchEventStream.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10000)   // 全部终态 → 关流不重建
+    expect(FakeBatchEventStream.instances).toHaveLength(1)
+    expect(FakeBatchEventStream.instances[0].closed).toBe(true)
+    s.stopListPolling()
+  })
 })

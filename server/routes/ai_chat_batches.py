@@ -823,10 +823,18 @@ def batch_events_sse():
     user_id = g.current_user['userId']
     # 连接建立阶段池饥饿 → 503+Retry-After（客户端重连），不 500
     try:
-        owned = []
-        for bid in ids:
-            if get_batch_detail(user_id, bid):
-                owned.append(bid)
+        # 归属过滤一条 IN 查询（2026-10-09）：原先逐 id 调 get_batch_detail——
+        # 每次都是「批次行 + 全部子会话行 + gate 子查询」的重量级 detail，
+        # ×最多 20 个 id ×每次重连（前端列表轮询曾每 10s 重建连接）。
+        from db import get_db as _get_db
+        with _get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM ai_chat_batches "
+                            "WHERE id = ANY(%s) AND user_id = %s",
+                            (ids, user_id))
+                owned_set = {r[0] for r in cur.fetchall()}
+        # 保持请求顺序（tick 循环与游标确定性）；非归属/不存在静默剔除
+        owned = [bid for bid in ids if bid in owned_set]
     except psycopg2.pool.PoolError:
         resp = jsonify({'error': 'server busy, retry shortly'})
         resp.headers['Retry-After'] = '5'
@@ -867,11 +875,19 @@ def batch_events_sse():
                         yield (f"id: {bid}:{r['event_seq']}\n"
                                f"event: batch_event\n"
                                f"data: {_json.dumps(frame, ensure_ascii=False)}\n\n")
-                # 终态检查：全部批次终态 → batch_done 收流
-                statuses = []
-                for bid in owned:
-                    d = get_batch_detail(user_id, bid)
-                    statuses.append(d['batch']['status'] if d else 'completed')
+                # 终态检查：全部批次终态 → batch_done 收流。一条 IN 查询取
+                # status 列（2026-10-09）：原先逐批调 get_batch_detail——每
+                # 15s tick ×每连接 ×N 个批次地全量扫子会话 + gate 子查询，
+                # 是 DB 池同相位瞬时借满的主源。缺失行（批次已删）按
+                # completed 收流，语义与旧代码一致。
+                from db import get_db as _gdb
+                with _gdb() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT id, status FROM ai_chat_batches "
+                                    "WHERE id = ANY(%s) AND user_id = %s",
+                                    (owned, user_id))
+                        status_map = dict(cur.fetchall())
+                statuses = [status_map.get(bid, 'completed') for bid in owned]
             except psycopg2.pool.PoolError:
                 yield ': pool-busy\n\n'
                 _time.sleep(15)
