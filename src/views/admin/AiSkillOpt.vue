@@ -49,6 +49,11 @@
         </div>
       </ElTabPane>
 
+      <!-- ── 性能分析（2026-10-09 spec）────────────────────────────── -->
+      <ElTabPane label="性能分析" name="perf">
+        <PerfView />
+      </ElTabPane>
+
       <!-- ── 调用聚合（既有视图）──────────────────────────────────── -->
       <ElTabPane label="调用聚合" name="invocations">
         <p class="skillopt__desc">
@@ -165,6 +170,7 @@ import FitResultsPanel from '@/components/admin/skillopt/FitResultsPanel.vue'
 import DefVersionTimeline from '@/components/admin/skillopt/DefVersionTimeline.vue'
 import DefPatternsPanel from '@/components/admin/skillopt/DefPatternsPanel.vue'
 import StepGeneratorDialog from '@/components/admin/skillopt/StepGeneratorDialog.vue'
+import PerfView from '@/components/admin/skillopt/PerfView.vue'
 import { getSkillFitDefinitionSummary } from '@/api/aiSkills'
 import type { SkillFitDefinitionSummary, SkillDefVersion } from '@/api/aiSkills'
 

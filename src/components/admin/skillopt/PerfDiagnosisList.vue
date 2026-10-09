@@ -1,10 +1,58 @@
-<!-- 诊断列表（占位，Task 8 实体化：接收 anchorResolver 做「定位」跳转） -->
 <template>
-  <div class="diag-list">
-    <div v-for="(d, i) in diagnoses" :key="i" class="diag" :class="d.severity">{{ d.text }}</div>
+  <div class="diag-list" data-test="diag-list">
+    <h4>优化诊断</h4>
+    <ElAlert v-if="!diagnoses.length" type="success" :closable="false"
+             title="未发现明显耗时问题" />
+    <div v-for="(d, i) in diagnoses" :key="i"
+         class="diag" :class="`diag--${d.severity}`">
+      <ElTag size="small" :type="d.severity === 'warn' ? 'warning' : 'info'">
+        {{ d.severity === 'warn' ? '建议优化' : '说明' }}
+      </ElTag>
+      <span class="diag__text">{{ d.text }}</span>
+      <ElButton v-if="anchorTarget(d)" link size="small" data-test="diag-locate"
+                @click="locate(d)">定位</ElButton>
+    </div>
   </div>
 </template>
+
 <script setup lang="ts">
+import { ElAlert, ElTag, ElButton } from 'element-plus'
 import type { Diagnosis } from '@/api/aiSkills'
+
 defineProps<{ diagnoses: Diagnosis[] }>()
+
+function anchorTarget(d: Diagnosis): string | null {
+  if (d.anchor.type === 'subtask') return `subtask:${d.anchor.ref}`
+  if (d.anchor.type === 'turn') return `turn:${d.anchor.ref}`
+  if (d.anchor.type === 'segment') return `segment:${d.anchor.ref}`
+  return null
+}
+
+function locate(d: Diagnosis) {
+  // 回退链（对接约定见上）：turn 行锚 → segment 锚 → 逐类型兜底
+  const candidates: string[] = []
+  if (d.anchor.type === 'turn') candidates.push(`.diag-anchor-turn-${d.anchor.ref}`)
+  for (const t of ['segment', 'subtask', 'turn']) {
+    candidates.push(`[data-diag-anchor="${t}:${d.anchor.ref}"]`)
+  }
+  for (const sel of candidates) {
+    const el = document.querySelector(sel)
+    if (!el) continue
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.remove('diag-flash')
+    void (el as HTMLElement).offsetWidth
+    el.classList.add('diag-flash')
+    setTimeout(() => el.classList.remove('diag-flash'), 2000)
+    return
+  }
+}
 </script>
+
+<style scoped lang="scss">
+.diag { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; margin-bottom: 6px; }
+.diag--warn { background: var(--el-color-warning-light-9); }
+.diag--info { background: var(--el-fill-color-light); }
+.diag__text { flex: 1; font-size: 13px; }
+:global(.diag-flash) { outline: 2px solid var(--el-color-primary); animation: diagPulse 1s ease 2; }
+@keyframes diagPulse { 50% { opacity: 0.55; } }
+</style>
