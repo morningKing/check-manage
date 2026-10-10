@@ -10,7 +10,8 @@ vi.mock('@/api/aiSkills', async (orig) => ({
                status: 'completed', turns: 1, tokensIn: 5000, tokensOut: 500,
                subtaskCount: 1, sessionId: 's1', startedAt: null, finishedAt: null,
                completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
-    coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000 },
+    coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000,
+                toolMs: 0 },
     turns: [{ messageId: 'm1', createdAt: null, durationMs: 60000,
               tokensIn: 5000, tokensOut: 500, preview: 'p' }],
     subtasks: [{ subtaskId: 'ses_1', agent: 'general', description: 'd',
@@ -32,7 +33,7 @@ vi.mock('../useEcharts', () => ({
 import PerfTaskDetail from '../PerfTaskDetail.vue'
 
 describe('PerfTaskDetail', () => {
-  it('渲染覆盖条三段、子代理表与诊断列表', async () => {
+  it('渲染覆盖条各段、子代理表与诊断列表', async () => {
     const w = mount(PerfTaskDetail, {
       props: { attemptId: 'a1' },
       // ElTableColumn 的作用域插槽依赖真实组件渲染；不注册会退化为普通元素、
@@ -59,5 +60,35 @@ describe('PerfTaskDetail', () => {
     expect(w.find('[data-test="cov-model"]').exists()).toBe(true)   // 主数据在
     expect(w.text()).toContain('诊断加载失败')
     expect(w.text()).not.toContain('68% 时间在等子代理')
+  })
+
+  it('工具耗时表渲染 byTool 聚合（时长/占比），覆盖条含工具段', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 30000, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 5000, tokensOut: 500,
+                 subtaskCount: 1, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 30000, idleMs: 0,
+                  toolMs: 20000 },
+      turns: [],
+      subtasks: [],
+      tools: { errorCount: 1, durationAvailable: true,
+               byTool: [{ tool: 'bash', count: 2, totalMs: 40000 },
+                        { tool: 'read', count: 3, totalMs: 10000 }],
+               repeats: [] },
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.find('[data-test="tool-perf-table"]').exists()).toBe(true)
+    expect(w.text()).toContain('bash')
+    expect(w.text()).toContain('40.0s')
+    expect(w.find('[data-test="cov-tool"]').attributes('style')).toContain('20%')
   })
 })

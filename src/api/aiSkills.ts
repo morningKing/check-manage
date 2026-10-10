@@ -289,15 +289,23 @@ export interface PerfSubtask {
   wallMs: number
 }
 
+export interface PerfToolAgg {
+  errorCount: number
+  repeats: { tool: string; argsPreview: string; count: number; totalMs: number | null }[]
+  byTool: { tool: string; count: number; totalMs: number | null }[]
+  durationAvailable: boolean
+}
+
 export interface PerfAttemptDetail {
   attempt: PerfTaskEntry & {
     requestedModel?: string | null; effectiveModel?: string | null
     batchReuseAgents?: string[] | null
   }
-  coverage: { wallMs: number; modelMs: number; subagentWaitMs: number; idleMs: number }
+  coverage: { wallMs: number; modelMs: number; subagentWaitMs: number; idleMs: number;
+              toolMs: number }
   turns: PerfTurn[]
   subtasks: PerfSubtask[]
-  tools: { errorCount: number; repeats: { tool: string; argsPreview: string; count: number }[] }
+  tools: PerfToolAgg
   completeness: { turnsWithoutDuration: number; runningSubtasks: number }
 }
 

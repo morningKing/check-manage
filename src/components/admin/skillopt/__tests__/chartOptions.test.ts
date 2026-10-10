@@ -42,13 +42,14 @@ describe('SOURCE_COLORS / sourceColor', () => {
 
 const detail = (): PerfAttemptDetail => ({
   attempt: t({}) as any,
-  coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000 },
+  coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000,
+              toolMs: 0 },
   turns: [{ messageId: 'm1', createdAt: '2026-10-09T10:00:00',
             durationMs: 60000, tokensIn: 5000, tokensOut: 500, preview: 'p' }],
   subtasks: [{ subtaskId: 'ses_1', agent: 'general', description: 'd',
                status: 'completed', startedAt: '2026-10-09T10:00:10',
                finishedAt: '2026-10-09T10:00:40', wallMs: 30000 }],
-  tools: { errorCount: 0, repeats: [] },
+  tools: { errorCount: 0, repeats: [], byTool: [], durationAvailable: false },
   completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
 })
 
