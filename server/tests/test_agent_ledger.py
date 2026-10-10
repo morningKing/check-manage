@@ -6,7 +6,6 @@ extract_from_parts / extract_from_part_map 返回六元组：
 started_at 由 state.time.start（epoch ms）换算 tz-aware UTC datetime。
 纯函数用例，不触库。
 """
-import uuid
 from datetime import datetime, timezone
 
 from utils.agent_ledger import extract_from_parts, extract_from_part_map

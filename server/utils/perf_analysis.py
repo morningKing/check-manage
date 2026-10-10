@@ -4,6 +4,9 @@
 时间轴切出互斥的时长（模型活跃 / 子代理等待 / 引擎间隙；二期 detail 路径再
 从模型活跃中切出第四类工具执行 toolMs），和恒等于墙钟。
 全部函数 get_db 参数注入（skill_fit 惯例），时间统一 epoch 毫秒。
+口径注记：工具区间（toolMs 覆盖）按 agent_tool_calls.started_at 夹窗，
+而 byTool/repeats 时长聚合沿用一期的 occurred_at 夹窗——两列在批路径可差
+一个持久化轮询周期，边界调用的覆盖段与聚合表可能轻微对不上，属已知取舍。
 """
 from __future__ import annotations
 
