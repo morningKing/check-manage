@@ -89,7 +89,9 @@ def user_id(db_conn):
         cur.execute("DELETE FROM ai_chat_batches WHERE user_id = %s", (uid,))
         cur.execute("DELETE FROM users WHERE id = %s", (uid,))
         # agent_tool_calls 无 FK 不随会话级联，且无用户维度，按本套件前缀回收
-        cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id LIKE 'oc-x-%'")
+        # （oc-agg-*/oc-old 为时长聚合用例的固定幂等键，一并回收防重跑撞唯一索引）
+        cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id LIKE 'oc-x-%'"
+                    " OR oc_session_id LIKE 'oc-agg-%' OR oc_session_id = 'oc-old'")
     db_conn.commit()
 
 
@@ -207,6 +209,46 @@ class TestAttemptMetrics:
                                       'subagentWaitMs', 'idleMs'}
         assert m['modelMs'] == 200_000          # 400s 轮次 - 200s 工具
         assert m['subagentWaitMs'] == 0 and m['idleMs'] == 100_000
+
+    def test_tool_aggregates_with_duration(self, db_conn, user_id):
+        _bid, _sid, aid = _seed_perf(db_conn, user_id)
+        rows = [
+            ('pa1', 'bash', '{}', 'completed', 40_000),
+            ('pa2', 'bash', '{}', 'completed', 30_000),
+            ('pa3', 'read', '{"p":"a"}', 'completed', 5_000),
+            ('pa4', 'read', '{"p":"a"}', 'completed', 5_000),
+            ('pa5', 'read', '{"p":"a"}', 'error', None),      # 旧数据无时长
+        ]
+        with db_conn.cursor() as cur:
+            for i, (pid, tool, args, st, dur) in enumerate(rows):
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                    " part_id, tool, args_text, state, occurred_at, duration_ms)"
+                    " VALUES (%s, %s, %s, %s, %s, %s,"
+                    " NOW() - interval '300 seconds', %s)",
+                    (f'oc-agg-{i}', _sid, pid, tool, args, st, dur))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        tools = m['tools']
+        assert tools['errorCount'] == 1
+        assert tools['durationAvailable'] is True
+        by = {t['tool']: t for t in tools['byTool']}
+        assert by['bash'] == {'tool': 'bash', 'count': 2, 'totalMs': 70_000}
+        assert by['read']['count'] == 3 and by['read']['totalMs'] == 10_000
+        rep = next(r for r in tools['repeats'] if r['tool'] == 'read')
+        assert rep['count'] == 3 and rep['totalMs'] == 10_000
+
+    def test_tool_duration_unavailable_flag(self, db_conn, user_id):
+        _bid, _sid, aid = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " part_id, tool, args_text, state, occurred_at)"
+                " VALUES ('oc-old', %s, 'px', 'read', '{}', 'completed',"
+                " NOW() - interval '300 seconds')", (_sid,))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        assert m['tools']['durationAvailable'] is False
 
 
 class TestDefinitionAggregates:
@@ -339,6 +381,29 @@ class TestDiagnose:
         bd = _bd(modelMs=90_000, idleMs=10_000)   # 模型主导 info，无 warn
         ds = diagnose(bd)
         assert not [d for d in ds if d['severity'] == 'warn']
+
+    def test_tool_hotspot_rule(self):
+        bd = _bd(wallMs=100_000,
+                 tools={'errorCount': 0, 'durationAvailable': True,
+                        'byTool': [{'tool': 'bash', 'count': 2, 'totalMs': 50_000}],
+                        'repeats': []})
+        hit = next(d for d in diagnose(bd) if d['ruleId'] == 'tool_hotspot')
+        assert hit['severity'] == 'warn'
+        assert hit['anchor'] == {'type': 'segment', 'ref': 'tools'}
+        # 占比不足不触发
+        bd2 = _bd(wallMs=100_000,
+                  tools={'errorCount': 0, 'durationAvailable': True,
+                         'byTool': [{'tool': 'bash', 'count': 2, 'totalMs': 30_000}],
+                         'repeats': []})
+        assert 'tool_hotspot' not in [d['ruleId'] for d in diagnose(bd2)]
+
+    def test_repeated_tool_calls_text_carries_duration(self):
+        bd = _bd(tools={'errorCount': 0, 'durationAvailable': True,
+                        'byTool': [{'tool': 'read', 'count': 5, 'totalMs': 9_000}],
+                        'repeats': [{'tool': 'read', 'argsPreview': 'a.py',
+                                     'count': 5, 'totalMs': 9_000}]})
+        hit = next(d for d in diagnose(bd) if d['ruleId'] == 'repeated_tool_calls')
+        assert '9.0s' in hit['text']
 
 
 @pytest.fixture

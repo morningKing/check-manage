@@ -166,22 +166,43 @@ def _norm_args(args_text) -> str:
 
 def _tool_aggregates(cur, sid: str, start_ms: int, end_ms: int) -> dict:
     cur.execute(
-        "SELECT tool, args_text, state FROM agent_tool_calls "
+        "SELECT tool, args_text, state, duration_ms FROM agent_tool_calls "
         "WHERE root_session_id = %s AND occurred_at >= to_timestamp(%s/1000.0)"
         " AND occurred_at <= to_timestamp(%s/1000.0)",
         (sid, start_ms, end_ms))
-    counts: dict = {}
+    rows = cur.fetchall()
+    by_tool: dict = {}
+    key_counts: dict = {}
     errors = 0
-    for tool, args_text, state in cur.fetchall():
+    any_duration = False
+    for tool, args_text, state, dur in rows:
         if state == 'error':
             errors += 1
+        entry = by_tool.setdefault(tool, {'count': 0, 'totalMs': 0,
+                                          'hasDuration': False})
+        entry['count'] += 1
+        if dur is not None:
+            any_duration = True
+            entry['hasDuration'] = True
+            entry['totalMs'] += int(dur)
         key = f'{tool}|{_norm_args(args_text)}'
-        counts[key] = counts.get(key, 0) + 1
-    repeats = [{'tool': k.split('|', 1)[0], 'argsPreview': k.split('|', 1)[1],
-                'count': n} for k, n in counts.items()
-               if n >= REPEAT_TOOL_COUNT]
-    repeats.sort(key=lambda r: -r['count'])
-    return {'errorCount': errors, 'repeats': repeats}
+        kc = key_counts.setdefault(key, {'count': 0, 'totalMs': 0,
+                                         'hasDuration': False, 'tool': tool,
+                                         'argsPreview': _norm_args(args_text)})
+        kc['count'] += 1
+        if dur is not None:
+            kc['hasDuration'] = True
+            kc['totalMs'] += int(dur)
+    by = [{'tool': t, 'count': v['count'],
+           'totalMs': v['totalMs'] if v['hasDuration'] else None}
+          for t, v in sorted(by_tool.items(), key=lambda kv: -kv[1]['totalMs'])]
+    repeats = [{'tool': v['tool'], 'argsPreview': v['argsPreview'],
+                'count': v['count'],
+                'totalMs': v['totalMs'] if v['hasDuration'] else None}
+               for v in key_counts.values() if v['count'] >= REPEAT_TOOL_COUNT]
+    repeats.sort(key=lambda r: -(r['totalMs'] or 0))
+    return {'errorCount': errors, 'repeats': repeats, 'byTool': by,
+            'durationAvailable': any_duration}
 
 
 def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
@@ -357,6 +378,7 @@ SLOW_TURN_MS = 30_000
 BIG_CONTEXT_TOKENS = 80_000
 REPEAT_TOOL_COUNT = 3
 TOOL_ERROR_COUNT = 3
+TOOL_HOTSPOT_RATIO = 0.4
 IDLE_RATIO = 0.3
 IDLE_MIN_WALL_MS = 120_000
 OUTLIER_P50_FACTOR = 4
@@ -418,9 +440,19 @@ def diagnose(breakdown: dict, peer_p50_ms: int | None = None) -> list:
 
     tools = breakdown.get('tools') or {}
     for r in tools.get('repeats') or []:
+        total = r.get('totalMs')
+        suffix = f'（共约 {total / 1000:.1f}s）' if total else ''
         add('repeated_tool_calls', 'warn',
-            f'{r["tool"]} 同一参数重复 {r["count"]} 次（如 {r["argsPreview"][:40]}）'
+            f'{r["tool"]} 同一参数重复 {r["count"]} 次{suffix}'
             '——考虑在指令里要求一次读全/批量操作', 'segment', 'tools')
+    if wall and tools.get('durationAvailable'):
+        for t in tools.get('byTool') or []:
+            total = t.get('totalMs')
+            if total and total / wall > TOOL_HOTSPOT_RATIO:
+                add('tool_hotspot', 'warn',
+                    f'{round(total / wall * 100)}% 时间在 {t["tool"]}'
+                    f'（共 {total / 1000:.1f}s / {t["count"]} 次）',
+                    'segment', 'tools')
     if (tools.get('errorCount') or 0) >= TOOL_ERROR_COUNT:
         add('tool_error_storm', 'warn',
             f'{tools["errorCount"]} 次工具失败重试，检查工具参数与环境',
