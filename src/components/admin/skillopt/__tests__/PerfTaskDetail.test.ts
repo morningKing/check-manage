@@ -110,10 +110,49 @@ describe('PerfTaskDetail', () => {
     expect(w.text()).toContain('子代理 ses_9ab')
     // 轮次表工具数列 + 展开行小计（ElTable 展开内容需触发展开才渲染）
     expect(w.text()).toContain('1 次')
+    // 推理列：轮毛 50s − 轮内 bash 32s = 18s（全部调用有时长 → 精确值）
+    expect(w.find('[data-test="turn-inference-cell"]').text()).toBe('18.0s')
     await w.find('.el-table__expand-icon').trigger('click')
     await new Promise(r => setTimeout(r, 0))
     expect(w.text()).toContain('本轮工具 1 次 · 合计 32.0s')
     expect(w.text()).toContain('ls -la /data')
+    expect(w.find('[data-test="turn-inference"]').text()).toContain('18.0s')
+  })
+
+  it('轮内有未采集时长调用时推理值显下界（≥）', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 0, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 0, tokensOut: 0,
+                 subtaskCount: 0, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 0, idleMs: 0,
+                  toolMs: 0 },
+      turns: [{ messageId: 'm9', createdAt: null, durationMs: 60000,
+                tokensIn: 0, tokensOut: 0, preview: 'p', toolCount: 2 }],
+      subtasks: [],
+      tools: { errorCount: 0, durationAvailable: true,
+               byTool: [], repeats: [],
+               callsTruncated: false,
+               calls: [{ partId: 'pd1', tool: 'bash', args: '{}',
+                         state: 'completed', startedAt: null, durationMs: 10000,
+                         subtaskId: null, turnIndex: 0 },
+                       { partId: 'pd2', tool: 'read', args: '{}',
+                         state: 'completed', startedAt: null, durationMs: null,
+                         subtaskId: null, turnIndex: 0 }] },
+      skills: [],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    // 60s 毛 − 10s（另一调用未采集）→ 推理 ≥ 50s
+    expect(w.find('[data-test="turn-inference-cell"]').text()).toContain('≥')
+    expect(w.find('[data-test="turn-inference-cell"]').text()).toContain('50.0s')
   })
 
   it('Skill 耗时表渲染 runtime 精确值与来源徽标，无记录显示空态', async () => {

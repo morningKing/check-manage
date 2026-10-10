@@ -47,6 +47,12 @@
           <ElTableColumn type="expand">
             <template #default="{ row }">
               <div class="turn-calls" data-test="turn-calls">
+                <div class="turn-call">
+                  <ElTag size="small" type="warning" class="turn-call__tool">模型</ElTag>
+                  <code class="turn-call__args">模型推理（毛时长 − 轮内工具）</code>
+                  <span class="turn-call__dur" data-test="turn-inference">
+                    {{ inferenceLabel(row) }}</span>
+                </div>
                 <div v-if="!turnCalls(row).length" class="muted">本轮无工具调用记录。</div>
                 <template v-else>
                   <div v-for="c in turnCalls(row)" :key="c.partId" class="turn-call">
@@ -69,6 +75,11 @@
             <template #default="{ row }">
               <span :class="{ 'slow-turn': (row.durationMs || 0) >= 30000 }">
                 {{ row.durationMs == null ? '缺数据' : fmtMs(row.durationMs) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="推理" width="100">
+            <template #default="{ row }">
+              <span data-test="turn-inference-cell">{{ inferenceLabel(row) }}</span>
             </template>
           </ElTableColumn>
           <ElTableColumn label="工具" width="90">
@@ -208,6 +219,25 @@ function turnToolSubtotal(row: { messageId?: string }): string {
   const withDur = calls.filter(c => c.durationMs != null)
   if (!withDur.length) return ''
   return `本轮工具 ${calls.length} 次 · 合计 ${fmtMs(withDur.reduce((a, c) => a + (c.durationMs || 0), 0))}`
+}
+
+/** 轮内模型推理 = 轮毛时长 − 轮内工具时长。轮内存在未采集时长的调用时
+ *  只能给出下界（前缀 ≥，其耗时并入推理值）；轮毛时长缺失 → null。 */
+function turnInference(row: { messageId?: string }):
+        { ms: number | null; complete: boolean } {
+  const turn = detail.value?.turns.find(t => t.messageId === row.messageId)
+  if (!turn || turn.durationMs == null) return { ms: null, complete: false }
+  const calls = turnCalls(row)
+  const known = calls.filter(c => c.durationMs != null)
+  const toolSum = known.reduce((a, c) => a + (c.durationMs || 0), 0)
+  return { ms: Math.max(0, turn.durationMs - toolSum),
+           complete: known.length === calls.length }
+}
+
+function inferenceLabel(row: { messageId?: string }): string {
+  const { ms, complete } = turnInference(row)
+  if (ms == null) return '缺数据'
+  return (complete ? '' : '≥ ') + fmtMs(ms)
 }
 function shortTime(iso: string | null): string {
   if (!iso) return '-'
