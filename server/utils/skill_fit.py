@@ -417,7 +417,7 @@ def resolve_definition_path(kind: str, name: str,
         log.warning('resolve_definition_path(%s, %s) failed: %s', kind, name, e)
         return None
     if not rows:
-        return None
+        return _resolve_oc_global_fallback(kind, name)
     if content_hash:
         for path, chash in rows:
             if chash == content_hash and os.path.isfile(path):
@@ -427,4 +427,26 @@ def resolve_definition_path(kind: str, name: str,
         if os.path.isfile(path):
             return {'path': path, 'contentHash': chash,
                     'source': 'manifest_latest'}
-    return None
+    return _resolve_oc_global_fallback(kind, name)
+
+
+def _resolve_oc_global_fallback(kind: str, name: str) -> dict | None:
+    """manifest 无记录或文件全部缺失时的兜底定位（2026-10-11）：OC 受管
+    技能根下的系统技能可能没有注入记录（旧链路对系统技能失明），按名字
+    找到技能目录即返回当前 SKILL.md（带正文 hash，生成器可免手输路径）。
+    仅对 kind='skill' 生效；agent 定义不在受管技能根体系内。"""
+    if kind != 'skill':
+        return None
+    try:
+        from utils.opencode_global import find_skill_dir
+        d = find_skill_dir(name)
+    except Exception as e:  # noqa: BLE001 — 名称非法/目录异常按未定位处理
+        log.warning('resolve oc global fallback(%s) failed: %s', name, e)
+        return None
+    if not d:
+        return None
+    p = os.path.join(d, 'SKILL.md')
+    if not os.path.isfile(p):
+        return None
+    from utils.execution_audit import sha256_file
+    return {'path': p, 'contentHash': sha256_file(p), 'source': 'oc_global'}

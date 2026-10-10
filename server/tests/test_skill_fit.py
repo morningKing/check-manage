@@ -598,3 +598,27 @@ def test_resolve_definition_path_prefers_hash_then_existing(db_conn, tmp_path):
         assert resolve_definition_path('skill', '') is None
     finally:
         _cleanup_manifest_seed(db_conn, uid, sid, attempt)
+
+
+def test_resolve_definition_path_falls_back_to_oc_global(tmp_path, monkeypatch):
+    """系统技能兜底定位（2026-10-11）：系统技能在 2026-10-11 之前没有
+    manifest 注入记录，生成器/回滚的路径定位回落 OC 受管技能根——按名字
+    找到技能目录里的 SKILL.md 即返回（source='oc_global'），带正文 hash。"""
+    import os as _os
+    import utils.opencode_global as ocg
+    gdir = tmp_path / 'oc-global'
+    (gdir / 'skill' / 'my-oc-skill').mkdir(parents=True)
+    body = '---\nname: my-oc-skill\n---\nbody'
+    # write_bytes：Windows 文本模式会把 \n 转成 \r\n，sha256 就对不上正文了
+    (gdir / 'skill' / 'my-oc-skill' / 'SKILL.md').write_bytes(body.encode('utf-8'))
+    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR', str(gdir))
+    from utils.skill_fit import resolve_definition_path
+    r = resolve_definition_path('skill', 'my-oc-skill')
+    assert r is not None
+    assert r['source'] == 'oc_global'
+    assert r['path'] == str(gdir / 'skill' / 'my-oc-skill' / 'SKILL.md')
+    import hashlib as _h
+    assert r['contentHash'] == _h.sha256(body.encode('utf-8')).hexdigest()
+    # OC 根里没有的名字 → 仍为 None；agent 类不走该兜底
+    assert resolve_definition_path('skill', 'absent-oc-skill') is None
+    assert resolve_definition_path('agent', 'my-oc-skill') is None

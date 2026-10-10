@@ -184,6 +184,32 @@ def test_skill_def_steps_generate_allows_workspace_path(client, admin_headers,
     assert r.get_json()['steps'][0]['id'] == 'clone'
 
 
+def test_skill_def_steps_generate_allows_oc_global_skill_path(
+        client, admin_headers, tmp_path, monkeypatch):
+    """confinement 正例（2026-10-11 系统技能支持）：OC 全局配置区受管根
+    （~/.config/opencode/skill|skills/）下的定义文件同样放行——旧白名单只
+    认 AI 工作区根/平台全局技能根，系统技能一律 400，生成器/回写不可达。"""
+    import config as _config
+    import routes.ai_session_admin as _admin
+    import utils.opencode_global as _ocg
+    import utils.skill_fit_ai as _fa
+    monkeypatch.setattr(_config, 'AI_WORKSPACE_ROOT', str(tmp_path / 'ws-root'))
+    monkeypatch.setattr(_ocg.config, 'OPENCODE_GLOBAL_DIR',
+                        str(tmp_path / 'oc-global'))
+    monkeypatch.setattr(_fa, '_llm_json', lambda system, user: {'steps': [
+        {'id': 'clone', 'name': '克隆仓库',
+         'expect': [{'tool': 'bash', 'args_pattern': 'git clone'}]}]})
+    monkeypatch.setattr(_admin, 'log_operation', lambda *a, **kw: None)
+    d = tmp_path / 'oc-global' / 'skill' / 'my-system-skill'
+    d.mkdir(parents=True)
+    (d / 'SKILL.md').write_text('# 系统技能\n1. clone\n', encoding='utf-8')
+    r = client.post('/ai/chat/admin/skill-def-steps/generate',
+                    headers=admin_headers,
+                    json={'kind': 'skill', 'path': str(d / 'SKILL.md')})
+    assert r.status_code == 200
+    assert r.get_json()['steps'][0]['id'] == 'clone'
+
+
 def test_skill_fit_list_filters_by_def(client, admin_headers, db_conn, tmp_path):
     """defKind/defName 过滤：同 attempt 两条不同定义，过滤后只回对应定义。"""
     uid, bid, sid, attempt = _seed_fit_fixture(db_conn, tmp_path)

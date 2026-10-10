@@ -146,6 +146,7 @@ def test_workspace_manifest_scan_includes_platform_skills(tmp_path, monkeypatch)
     否则 SkillOpt 任务拟合等 manifest 消费方在交互/批主链路上失明
     （2026-10-07 实测缺口）。workspace 扫到的同名技能优先，禁用/无目录不进。"""
     import utils.global_skills as gs
+    import utils.opencode_global as ocg
     ws = tmp_path / 'ws'
     (ws / '.opencode' / 'skills' / 'data-ops').mkdir(parents=True)
     (ws / '.opencode' / 'skills' / 'data-ops' / 'SKILL.md').write_text(
@@ -163,6 +164,9 @@ def test_workspace_manifest_scan_includes_platform_skills(tmp_path, monkeypatch)
     ])
     monkeypatch.setattr(gs, 'global_skills_root',
                         lambda root=None: str(gs_root))
+    # 隔离真机 OC 全局技能目录（系统技能补扫会读到真机技能）
+    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR',
+                        str(tmp_path / 'no-such-oc-global'))
     rows = execution_audit.scan_workspace_manifests(str(ws))
     skills = {r['name']: r for r in rows if r['kind'] == 'skill'}
     assert set(skills) == {'stock-analysis', 'data-ops'}
@@ -177,6 +181,7 @@ def test_workspace_manifest_scan_includes_platform_skills(tmp_path, monkeypatch)
 def test_platform_skill_manifest_scan_db_failure_swallowed(tmp_path, monkeypatch):
     """DB 不可用时平台技能补扫静默返回，不影响其余清单（best-effort）。"""
     import utils.global_skills as gs
+    import utils.opencode_global as ocg
     ws = tmp_path / 'ws'
     ws.mkdir()
     (ws / 'AGENTS.md').write_text('guidance', encoding='utf-8')
@@ -185,8 +190,71 @@ def test_platform_skill_manifest_scan_db_failure_swallowed(tmp_path, monkeypatch
         raise RuntimeError('db down')
 
     monkeypatch.setattr(gs, 'list_global_skills', _boom)
+    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR',
+                        str(tmp_path / 'no-such-oc-global'))
     rows = execution_audit.scan_workspace_manifests(str(ws))
     assert [(r['kind'], r['name']) for r in rows] == [('guidance', 'AGENTS.md')]
+
+
+def test_workspace_manifest_scan_includes_oc_global_skills(tmp_path, monkeypatch):
+    """OpenCode 系统技能（用户装在 OC 全局配置区受管根 skill/、skills/ 的
+    SKILL.md）必须进清单——此前采集链路只扫 workspace 与平台 global_skills，
+    对系统技能完全失明，SkillOpt 拟合清单/定义版本从未收录（2026-10-11
+    用户报告：拟合分析仅支持平台技能）。无 SKILL.md 的目录（含 <built-in>
+    的纯运行时技能，盘上无文件）不进。"""
+    import utils.opencode_global as ocg
+    ws = tmp_path / 'ws'
+    ws.mkdir()
+    gdir = tmp_path / 'oc-global'
+    (gdir / 'skill' / 'my-system-skill').mkdir(parents=True)
+    (gdir / 'skill' / 'my-system-skill' / 'SKILL.md').write_text(
+        '---\nname: my-system-skill\n---\nbody', encoding='utf-8')
+    (gdir / 'skills' / 'second-root-skill').mkdir(parents=True)
+    (gdir / 'skills' / 'second-root-skill' / 'SKILL.md').write_text(
+        '---\nname: second-root-skill\n---\nbody', encoding='utf-8')
+    (gdir / 'skill' / 'not-a-skill').mkdir(parents=True)   # 无 SKILL.md
+    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR', str(gdir))
+    rows = execution_audit.scan_workspace_manifests(str(ws))
+    oc_rows = [r for r in rows if r.get('source') == 'oc_global']
+    assert {r['name'] for r in oc_rows} == {'my-system-skill', 'second-root-skill'}
+    assert all(r['kind'] == 'skill' and r['injected'] is True
+               and r['content_hash'] and r['path'].endswith('SKILL.md')
+               for r in oc_rows)
+
+
+def test_oc_global_skill_scan_dedups_workspace_and_platform_names(
+        tmp_path, monkeypatch):
+    """平台技能经 sync 挂进 OC 受管根、workspace 也可能有同名目录——同名
+    技能以先扫到的来源为准，不重复出 manifest 行。"""
+    import utils.global_skills as gs
+    import utils.opencode_global as ocg
+    ws = tmp_path / 'ws'
+    (ws / '.opencode' / 'skills' / 'session-skill').mkdir(parents=True)
+    (ws / '.opencode' / 'skills' / 'session-skill' / 'SKILL.md').write_text(
+        '---\nname: session-skill\n---\nbody', encoding='utf-8')
+    gs_root = tmp_path / 'gs'
+    (gs_root / 'plat-skill').mkdir(parents=True)
+    (gs_root / 'plat-skill' / 'SKILL.md').write_text(
+        '---\nname: plat-skill\n---\nbody', encoding='utf-8')
+    gdir = tmp_path / 'oc-global'
+    (gdir / 'skill' / 'plat-skill').mkdir(parents=True)       # 平台 sync 的挂载
+    (gdir / 'skill' / 'plat-skill' / 'SKILL.md').write_text(
+        '---\nname: plat-skill\n---\nbody', encoding='utf-8')
+    (gdir / 'skill' / 'oc-only').mkdir(parents=True)
+    (gdir / 'skill' / 'oc-only' / 'SKILL.md').write_text(
+        '---\nname: oc-only\n---\nbody', encoding='utf-8')
+    monkeypatch.setattr(gs, 'list_global_skills', lambda: [
+        {'name': 'plat-skill', 'enabled': True}])
+    monkeypatch.setattr(gs, 'global_skills_root', lambda root=None: str(gs_root))
+    monkeypatch.setattr(ocg.config, 'OPENCODE_GLOBAL_DIR', str(gdir))
+    rows = execution_audit.scan_workspace_manifests(str(ws))
+    by_name = {}
+    for r in rows:
+        if r['kind'] == 'skill':
+            by_name.setdefault(r['name'], []).append(r['source'])
+    assert by_name['plat-skill'] == ['platform_global']   # 不因 oc 受管根重复
+    assert by_name['session-skill'] == ['session']
+    assert by_name['oc-only'] == ['oc_global']
 
 
 # ── Contract parsing ─────────────────────────────────────────────────────

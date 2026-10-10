@@ -298,6 +298,47 @@ def _scan_platform_skill_manifests(workspace_path: str | None,
     return out
 
 
+def _scan_oc_global_skill_manifests(existing_names: set[str]) -> list[dict]:
+    """OpenCode 系统技能清单补扫（best-effort，2026-10-11）。
+
+    用户装在 OC 全局配置区受管根（~/.config/opencode/skill|skills/）的
+    系统技能既不在平台 global_skills 存储、也不进 workspace，此前采集链路
+    对它完全失明——SkillOpt 拟合清单/定义版本/生成器定位从未收录（用户
+    报告：拟合分析仅支持平台技能）。这里按受管技能根补扫文件型技能
+    （目录含 SKILL.md）；<built-in>（OC 自带、盘上无文件）与 external
+    （配置区之外）无 SKILL.md 可读，不产出 manifest 行。平台技能经 sync
+    挂进受管根的同名条目按 existing_names 去重，不重复出行。"""
+    out: list[dict] = []
+    try:
+        from utils.opencode_global import skill_roots
+        roots = skill_roots()
+    except Exception as e:  # noqa: BLE001 — manifest 收集绝不阻断主流程
+        logger.warning('scan oc global skill manifests failed: %s', e)
+        return out
+    seen: set[str] = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        try:
+            names = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for name in names:
+            key = name.lower()
+            if key in seen or name in existing_names:
+                continue
+            skill_md = os.path.join(root, name, 'SKILL.md')
+            if not os.path.isfile(skill_md):
+                continue
+            seen.add(key)
+            out.append({
+                'kind': 'skill', 'name': name, 'source': 'oc_global',
+                'path': skill_md, 'content_hash': sha256_file(skill_md),
+                'injected': True, 'injection_status': 'success',
+            })
+    return out
+
+
 def scan_workspace_manifests(workspace_path: str | None) -> list[dict]:
     """Inventory the definitions actually visible to this execution's
     workspace (Spec §2.2: injected ≠ loaded ≠ invoked — this only ever
@@ -305,9 +346,11 @@ def scan_workspace_manifests(workspace_path: str | None) -> list[dict]:
 
     Returns rows for: platform/session skills under .opencode/skills plus
     enabled platform global skills (central storage; see
-    _scan_platform_skill_manifests), project agents under .opencode/agent,
-    AGENTS.md guidance. opencode.json is returned separately by the caller
-    via workspace_config hash on the attempt row."""
+    _scan_platform_skill_manifests) plus OpenCode system skills under the
+    OC global config roots (see _scan_oc_global_skill_manifests), project
+    agents under .opencode/agent, AGENTS.md guidance. opencode.json is
+    returned separately by the caller via workspace_config hash on the
+    attempt row."""
     out: list[dict] = []
     if not workspace_path or not os.path.isdir(workspace_path):
         return out
@@ -324,6 +367,8 @@ def scan_workspace_manifests(workspace_path: str | None) -> list[dict]:
                 })
     out.extend(_scan_platform_skill_manifests(
         workspace_path, {r['name'] for r in out if r['kind'] == 'skill'}))
+    out.extend(_scan_oc_global_skill_manifests(
+        {r['name'] for r in out if r['kind'] == 'skill'}))
     agent_root = os.path.join(oc, 'agent')
     if os.path.isdir(agent_root):
         for fn in sorted(os.listdir(agent_root)):

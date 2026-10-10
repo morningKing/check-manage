@@ -1359,14 +1359,17 @@ def skill_def_patterns():
 
 def _path_in_allowed_roots(path: str) -> bool:
     """SkillOpt 定义文件路径 confinement（终审 Fix 3）：path realpath 归一后
-    必须落在允许根内（AI 工作区根 / 平台全局技能根，后者是前者子目录，
-    显式并列以容忍二者将来分体部署）。参照 utils/global_skills.py
+    必须落在允许根内（AI 工作区根 / 平台全局技能根——后者是前者子目录，
+    显式并列以容忍二者将来分体部署 / OpenCode 受管技能根，系统技能的
+    SKILL.md 就在那里，2026-10-11 起纳入）。参照 utils/global_skills.py
     read_skill_file 的 normpath+commonpath 模式——commonpath 相等比较
     （优于 startswith 前缀碰撞），跨盘符等无法比较的情形一律视为逃逸。"""
     from config import AI_WORKSPACE_ROOT
     from utils.global_skills import global_skills_root
+    from utils.opencode_global import skill_roots
     roots = {os.path.realpath(AI_WORKSPACE_ROOT),
              os.path.realpath(global_skills_root(AI_WORKSPACE_ROOT))}
+    roots.update(os.path.realpath(r) for r in skill_roots())
     real = os.path.realpath(path)
     for root in roots:
         try:
