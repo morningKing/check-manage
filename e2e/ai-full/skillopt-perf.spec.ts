@@ -32,6 +32,7 @@ with get_db() as conn:
 // agent_tool_calls 对 sessions 无 FK——会话级联清不掉工具调用行，
 // 而 (oc_session_id, part_id) 唯一索引使复跑必撞，故必须显式先清。
 const PF_CLEANUP = `
+  DELETE FROM ai_skill_invocations WHERE id = 'pf-e2e-inv';
   DELETE FROM agent_tool_calls WHERE oc_session_id = 'oc-pf-e2e';
   DELETE FROM ai_chat_sessions WHERE id = 'pf-e2e-sess';
   DELETE FROM ai_execution_attempts WHERE id = 'pf-e2e-att';
@@ -61,6 +62,11 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
     INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, source, path, content_hash, injected)
     VALUES ('pf-e2e-man', 'pf-e2e-att', 'skill', 'perf-e2e-skill', 'platform_global',
             'C:/tmp/pf-e2e/SKILL.md', 'h', true);
+    -- 2026-10-11 归因口径：性能视图只认 runtime 确认调用（injected manifest
+    -- 是「对执行可见」不是「用过」）——下钻/概览的种子必须带调用证词
+    INSERT INTO ai_skill_invocations (id, session_id, attempt_id, skill_name, skill_hash, source, evidence_level, invoked_at, evidence_refs)
+    VALUES ('pf-e2e-inv', 'pf-e2e-sess', 'pf-e2e-att', 'perf-e2e-skill', '', 'runtime', 'confirmed',
+            NOW() - interval '400 seconds', '[]'::jsonb);
     -- 消息 created_at 与 attempt started_at 重合：聚合时窗用 >= 含端点，
     -- 边界消息计入模型区间（确定性切分：模型 200s/等待 100s/间隙 100s）
     INSERT INTO ai_chat_messages (id, session_id, role, content, meta, created_at)
@@ -109,6 +115,7 @@ test('性能分析：真实批任务收敛后出现在性能视图（@llm）', a
   const staged = await uploadStaging(tk, 'in.txt', 'hello\n', `e2e-perf-${Date.now()}`)
   const created = await createBatch(tk, {
     name,
+    agent: 'build',
     prompt: '读取 uploads/in.txt 并复述其内容，一句话即可。',
     files: [staged],
   })
@@ -117,9 +124,9 @@ test('性能分析：真实批任务收敛后出现在性能视图（@llm）', a
     await waitBatchTerminal(tk, bid, 360_000)
     await gotoWithAuth(page, PAGE)
     await page.getByText('性能分析').click()
-    // 该批默认 agent 在 workspace 无 skill/agent 定义文件 → manifest 只有
-    // guidance，慢任务 Top 行的归属显示回退为 sessionId（不含批名）——
-    // 断言 Top 非空并点首行打开下钻（真链路的视图可用性）
+    // 2026-10-11 归因口径：慢任务 Top 只收录可诚实归因的任务——批配置了
+    // agent（effective_agent='build'）→ 归属 agent 维度；无 skill 调用证据
+    // 不再误归 skill。断言 Top 非空并点首行打开下钻（真链路的视图可用性）
     await expect(page.locator('.perf-slow-top .row').first())
       .toBeVisible({ timeout: 10_000 })
     await page.locator('.perf-slow-top .row').first().click()

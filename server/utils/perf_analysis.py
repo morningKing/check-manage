@@ -129,32 +129,19 @@ _ATTEMPT_SQL = (
     "FROM ai_execution_attempts a WHERE a.id = %s"
     " AND a.source_type <> 'kefu'")
 
-_TASK_LIST_SQL = (
-    "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at"
-    " FROM ai_execution_attempts a"
-    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL AND EXISTS ("
-    "   SELECT 1 FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
-    "   AND m.kind = %s AND m.name = %s)"
-    " ORDER BY a.started_at DESC NULLS LAST LIMIT %s")
-
-_DEF_P50_SQL = (
-    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
-    " FROM ai_execution_attempts a"
-    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-    "   AND a.finished_at IS NOT NULL AND EXISTS ("
-    "   SELECT 1 FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
-    "   AND m.kind = %s AND m.name = %s)")
-
-_SLOW_SQL = (
-    "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at, a.finished_at,"
-    " (SELECT m.kind FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
-    "   AND m.kind IN ('skill','agent') ORDER BY m.kind, m.name LIMIT 1) AS kind,"
-    " (SELECT m.name FROM ai_execution_manifests m WHERE m.attempt_id = a.id"
-    "   AND m.kind IN ('skill','agent') ORDER BY m.kind, m.name LIMIT 1) AS name "
-    "FROM ai_execution_attempts a "
-    "WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
-    "   AND a.finished_at IS NOT NULL "
-    "ORDER BY EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) DESC LIMIT %s")
+# 定义→任务的证据口径（2026-10-11 归因修复）。旧口径 EXISTS(manifest
+# kind+name) 把「清单里出现过」当「用过」：派发时全部启用技能都会被补录
+# injected manifest（_scan_platform_skill_manifests），workspace 里的全部
+# agent 定义同理——任何 attempt 都命中任何定义，skill 下钻/概览被批任务
+# 占满（用户报告：点进 skill 看到的是 agent 批任务）。只认运行证据：
+# - skill：ai_skill_invocations 有 runtime 确认调用（插件上报 confirmed；
+#   heuristic inferred 行是「仅可见」的启发式，不作为呈现依据，与主聚合
+#   「UI never presents inferred usage as proven」口径一致）；
+# - agent：attempt.effective_agent 即该定义（实际执行者；批/交互派发时
+#   选了 agent 才会落 effective_agent，未选不归因）。
+# 实现注记：kind 按 URL 维度在 Python 侧选 SQL（skill/agent/其他各一条），
+# SQL 以字面量内联在 execute/_list_metrics 调用处、kind/name 全部 %s
+# 参数化——SQL 常量经变量中转进 execute 会被静态扫描误判为拼接。
 
 _MSG_SQL = (
     "SELECT id, created_at, meta FROM ai_chat_messages "
@@ -257,7 +244,12 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         "FROM ai_chat_subtasks WHERE root_session_id = %s ORDER BY created_at", (sid,))
     sub_ivs, subtasks, running = [], [], 0
     for stid, agent, desc, status, created, finished in cur.fetchall():
-        s_ms, e_ms = _to_ms(created), _to_ms(finished) or _now_ms()
+        s_ms = _to_ms(created)
+        # 已收尾但缺 completed_at 的子代理（中断残留/旧数据）按 attempt 终点
+        # 截断——顶到当前时刻会把子代理 wallMs/P95/最慢 Top 顶成天文数字
+        e_ms = _to_ms(finished)
+        if e_ms is None:
+            e_ms = end_ms
         if status == 'running':
             running += 1
         sub_ivs.append((s_ms, e_ms))
@@ -371,17 +363,69 @@ def load_attempt_metrics(db_ctx, attempt_id: str):
 
 
 def list_definition_tasks(db_ctx, kind: str, name: str, limit: int = 50) -> list:
-    return _list_metrics(db_ctx, _TASK_LIST_SQL, (kind, name, limit), with_detail=False)
+    """定义→任务列表（证据口径见上方注释块）。kind 按 URL 维度在 Python
+    侧选 SQL（skill/agent/其他各一条），kind/name 全部 %s 参数化。"""
+    if kind == 'skill':
+        return _list_metrics(db_ctx, (
+            "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
+            " a.finished_at FROM ai_execution_attempts a"
+            " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+            " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
+            "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
+            "   AND i.source = 'runtime')"
+            " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+            (name, limit), with_detail=False)
+    if kind == 'agent':
+        return _list_metrics(db_ctx, (
+            "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
+            " a.finished_at FROM ai_execution_attempts a"
+            " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+            " AND a.effective_agent = %s"
+            " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+            (name, limit), with_detail=False)
+    return _list_metrics(db_ctx, (
+        "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
+        " a.finished_at FROM ai_execution_attempts a"
+        " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+        " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
+        "   WHERE m.attempt_id = a.id AND m.kind = %s AND m.name = %s)"
+        " ORDER BY a.started_at DESC NULLS LAST LIMIT %s"),
+        (kind, name, limit), with_detail=False)
 
 
 def definition_p50(db_ctx, kind: str, name: str) -> int | None:
     """该定义已完结任务的墙钟 P50（毫秒）；无已完结任务返回 None。
 
-    单条 SQL 只取墙钟列（_TASK_LIST_SQL 的 EXISTS/kefu 过滤形态 + 完结过滤），
-    供诊断端点热路径用——替代全量 definition_overview（D×200×2-3 查询）。"""
+    单条 SQL 只取墙钟列（list_definition_tasks 的证据过滤/kefu 过滤形态
+    + 完结过滤），供诊断端点热路径用——替代全量 definition_overview
+    （D×200×2-3 查询）。"""
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            cur.execute(_DEF_P50_SQL, (kind, name))
+            if kind == 'skill':
+                cur.execute((
+                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_skill_invocations i"
+                    "   WHERE i.attempt_id = a.id AND i.skill_name = %s"
+                    "   AND i.source = 'runtime')"), (name,))
+            elif kind == 'agent':
+                cur.execute((
+                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND a.effective_agent = %s"), (name,))
+            else:
+                cur.execute((
+                    "SELECT EXTRACT(EPOCH FROM (a.finished_at - a.started_at)) * 1000"
+                    " FROM ai_execution_attempts a"
+                    " WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                    "   AND a.finished_at IS NOT NULL"
+                    " AND EXISTS (SELECT 1 FROM ai_execution_manifests m"
+                    "   WHERE m.attempt_id = a.id AND m.kind = %s"
+                    "   AND m.name = %s)"), (kind, name))
             walls = sorted(int(r[0]) for r in cur.fetchall())
     return _percentile(walls, 0.5) if walls else None
 
@@ -390,31 +434,57 @@ def list_slow_tasks(db_ctx, limit: int = 10) -> list:
     out = []
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            cur.execute(_SLOW_SQL, (limit,))
+            # 归属列：runtime 确认调用的 skill（最早一次）优先，否则有效代理；
+            # 只收录可诚实归因的 attempt。旧实现按 manifests 字母序 LIMIT 1
+            # 恒判 agent。kind/name 全部参数化，SQL 字面量内联。
+            cur.execute((
+                "SELECT a.id, a.session_id, a.source_type, a.status, a.started_at,"
+                " a.finished_at,"
+                " (SELECT i.skill_name FROM ai_skill_invocations i"
+                "   WHERE i.attempt_id = a.id AND i.source = 'runtime'"
+                "   ORDER BY i.invoked_at LIMIT 1) AS skill_name,"
+                " a.effective_agent "
+                "FROM ai_execution_attempts a "
+                "WHERE a.source_type <> 'kefu' AND a.started_at IS NOT NULL"
+                "   AND a.finished_at IS NOT NULL "
+                "   AND (EXISTS (SELECT 1 FROM ai_skill_invocations i"
+                "     WHERE i.attempt_id = a.id AND i.source = 'runtime')"
+                "     OR a.effective_agent IS NOT NULL) "
+                "ORDER BY EXTRACT(EPOCH FROM (a.finished_at - a.started_at))"
+                " DESC LIMIT %s"), (limit,))
             cols = [d[0] for d in cur.description]
             for r in cur.fetchall():
                 row = dict(zip(cols, r))
                 m = _attempt_metrics(cur, row, with_detail=False)
-                m['defKind'], m['defName'] = row.get('kind'), row.get('name')
+                if row.get('skill_name'):
+                    m['defKind'], m['defName'] = 'skill', row['skill_name']
+                else:
+                    m['defKind'], m['defName'] = 'agent', row.get('effective_agent')
                 out.append(m)
     return out
 
 
 def definition_overview(db_ctx) -> list:
-    defs_sql = (
-        "SELECT DISTINCT m.kind, m.name FROM ai_execution_manifests m "
-        "JOIN ai_execution_attempts a ON a.id = m.attempt_id "
-        "WHERE m.kind IN ('skill','agent') AND a.source_type <> 'kefu' "
-        "ORDER BY m.kind, m.name")
-    out = []
+    """定义清单同口径：只列有运行证据的定义（runtime 确认调用的 skill /
+    实际执行过的 agent），不再从 injected manifest 反推。"""
+    pairs: list[tuple[str, str]] = []
     with _open_conn(db_ctx) as conn:
         with conn.cursor() as cur:
-            cur.execute(defs_sql)
-            pairs = cur.fetchall()
-    for kind, name in pairs:
-        tasks = [t for t in _list_metrics(
-            db_ctx, _TASK_LIST_SQL, (kind, name, 200), with_detail=False)
-            if t['finishedAt'] is not None]
+            cur.execute((
+                "SELECT DISTINCT i.skill_name FROM ai_skill_invocations i"
+                " JOIN ai_execution_attempts a ON a.id = i.attempt_id"
+                " WHERE i.source = 'runtime' AND a.source_type <> 'kefu'"
+                " ORDER BY i.skill_name"))
+            pairs.extend(('skill', r[0]) for r in cur.fetchall())
+            cur.execute((
+                "SELECT DISTINCT a.effective_agent FROM ai_execution_attempts a"
+                " WHERE a.source_type <> 'kefu' AND a.effective_agent IS NOT NULL"
+                " ORDER BY a.effective_agent"))
+            pairs.extend(('agent', r[0]) for r in cur.fetchall())
+    out = []
+    for kind, name in sorted(pairs):
+        tasks = [t for t in list_definition_tasks(db_ctx, kind, name, 200)
+                 if t['finishedAt'] is not None]
         walls = sorted(t['wallMs'] for t in tasks)
         out.append({
             'defKind': kind, 'defName': name, 'tasks': len(tasks),

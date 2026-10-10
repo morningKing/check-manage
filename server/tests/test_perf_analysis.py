@@ -112,8 +112,12 @@ def user_id(db_conn):
 
 
 def _seed_perf(db_conn, user_id, *, source_type='batch', oc_sid=None,
-               model_turns=None, subtasks=None, reuse=None):
-    """种子 批+会话+attempt+manifests(+消息+子代理)。时间用 NOW() 偏移秒。"""
+               model_turns=None, subtasks=None, reuse=None, invoked=True,
+               effective_agent=None, agents=None):
+    """种子 批+会话+attempt+manifests(+消息+子代理)。时间用 NOW() 偏移秒。
+
+    invoked=True 时补一行 runtime 确认的 skill 调用证据（2026-10-11 归因
+    口径：下钻只认 runtime confirmed，injected manifest 不再算「用过」）。"""
     bid, sid, aid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     oc = oc_sid or ('oc-' + uuid.uuid4().hex[:8])
     with db_conn.cursor() as cur:
@@ -127,15 +131,29 @@ def _seed_perf(db_conn, user_id, *, source_type='batch', oc_sid=None,
             "VALUES (%s,%s,'completed',%s,0,%s,'C:\\tmp\\pf')", (sid, user_id, bid, oc))
         cur.execute(
             "INSERT INTO ai_execution_attempts (id, session_id, source_type, source_id,"
-            " status, started_at, finished_at) "
+            " status, started_at, finished_at, effective_agent) "
             "VALUES (%s,%s,%s,%s,'completed', NOW() - interval '600 seconds',"
-            "        NOW() - interval '100 seconds')", (aid, sid, source_type, bid))
+            "        NOW() - interval '100 seconds', %s)",
+            (aid, sid, source_type, bid, effective_agent))
         cur.execute(
             "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, source,"
             " path, content_hash, injected) "
             "VALUES (%s,%s,'skill','stock-analysis','session',"
             " 'C:\\tmp\\pf\\SKILL.md','h1',true)",
             ('man_' + aid, aid))
+        for j, ag in enumerate(agents or []):
+            cur.execute(
+                "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name,"
+                " source, injected, selected) "
+                "VALUES (%s,%s,'agent',%s,'platform_global',false,'requested')",
+                ('mag_' + aid + str(j), aid, ag))
+        if invoked:
+            cur.execute(
+                "INSERT INTO ai_skill_invocations (id, session_id, attempt_id,"
+                " skill_name, skill_hash, source, evidence_level, invoked_at,"
+                " evidence_refs) VALUES (%s,%s,%s,'stock-analysis','','runtime',"
+                " 'confirmed', NOW() - interval '500 seconds', '[]'::jsonb)",
+                ('inv_' + aid, sid, aid))
         for i, (dur, tin, tout, offs) in enumerate(model_turns or []):
             cur.execute(
                 "INSERT INTO ai_chat_messages (id, session_id, role, content, meta,"
@@ -146,12 +164,14 @@ def _seed_perf(db_conn, user_id, *, source_type='batch', oc_sid=None,
                  json.dumps({'durationMs': dur, 'tokensInput': tin,
                              'tokensOutput': tout}), offs))
         for i, (agent, start_off, end_off) in enumerate(subtasks or []):
+            end_expr = ("NOW() - interval '600 seconds' + interval '%s seconds'"
+                        if end_off is not None else "NULL")
             cur.execute(
-                "INSERT INTO ai_chat_subtasks (id, root_session_id, agent, description,"
-                " status, created_at, completed_at) VALUES (%s,%s,%s,'d','completed',"
-                " NOW() - interval '600 seconds' + interval '%s seconds',"
-                " NOW() - interval '600 seconds' + interval '%s seconds')",
-                (f'ses_pf_{aid[:6]}_{i}', sid, agent, start_off, end_off))
+                f"INSERT INTO ai_chat_subtasks (id, root_session_id, agent, description,"
+                f" status, created_at, completed_at) VALUES (%s,%s,%s,'d','completed',"
+                f" NOW() - interval '600 seconds' + interval '%s seconds', {end_expr})",
+                (f'ses_pf_{aid[:6]}_{i}', sid, agent, start_off,
+                 *((end_off,) if end_off is not None else ())))
     db_conn.commit()
     return bid, sid, aid
 
@@ -367,13 +387,70 @@ class TestAttemptMetrics:
 class TestDefinitionAggregates:
     def test_definition_tasks_and_overview_exclude_kefu(self, db_conn, user_id):
         _b1, _s1, a1 = _seed_perf(db_conn, user_id, model_turns=[(100_000, 10, 10, 0)])
-        _b2, _s2, a2 = _seed_perf(db_conn, user_id, source_type='kefu')
+        _b2, _s2, a2 = _seed_perf(db_conn, user_id, source_type='kefu', invoked=False)
         tasks = list_definition_tasks(db_conn, 'skill', 'stock-analysis')
         assert [t['attemptId'] for t in tasks] == [a1]     # kefu 被排除
         ov = definition_overview(db_conn)
         entry = next(d for d in ov if d['defName'] == 'stock-analysis')
         assert entry['tasks'] == 1 and entry['defKind'] == 'skill'
         assert entry['p50Ms'] == tasks[0]['wallMs']
+
+    def test_injected_manifest_without_invocation_not_listed(self, db_conn, user_id):
+        """归因口径修复钉（2026-10-11 用户报告：skill 的分析点进去全是批任务）
+        ——派发时全部启用技能都会被补录 injected manifest，任何 attempt 都
+        命中任何技能；下钻/概览/慢任务只认 runtime 确认调用，不再把「清单里
+        出现过」当「用过」。"""
+        _b, _s, aid = _seed_perf(db_conn, user_id, invoked=False)
+        assert list_definition_tasks(db_conn, 'skill', 'stock-analysis') == []
+        assert all(d['defName'] != 'stock-analysis' for d in definition_overview(db_conn))
+        # 无调用证据且无有效代理 → 慢任务 Top 不收录（无法诚实归因）
+        assert all(t['attemptId'] != aid for t in list_slow_tasks(db_conn, limit=50))
+
+    def test_slow_tasks_attribution_prefers_confirmed_skill(self, db_conn, user_id):
+        """慢任务归属修复钉：批 attempt 同时有 agent（selected=requested）与
+        多个技能的 injected manifest，旧实现 ORDER BY kind,name LIMIT 1 恒判
+        agent——有 runtime 确认调用时必须归该 skill。"""
+        _b, _s, aid = _seed_perf(db_conn, user_id, effective_agent='dev',
+                                 agents=['dev'])
+        hit = next(t for t in list_slow_tasks(db_conn, limit=50)
+                   if t['attemptId'] == aid)
+        assert hit['defKind'] == 'skill' and hit['defName'] == 'stock-analysis'
+
+    def test_slow_tasks_agent_attribution_when_no_skill_invoked(self, db_conn, user_id):
+        _b, _s, aid = _seed_perf(db_conn, user_id, invoked=False,
+                                 effective_agent='dev', agents=['dev'])
+        hit = next(t for t in list_slow_tasks(db_conn, limit=50)
+                   if t['attemptId'] == aid)
+        assert hit['defKind'] == 'agent' and hit['defName'] == 'dev'
+
+    def test_agent_tasks_match_effective_agent_not_injected_manifests(
+            self, db_conn, user_id):
+        """agent 维度同口径修复：交互 attempt 派发时 workspace 里的全部
+        agent 定义都会被扫成 injected manifest——只有 effective_agent 才算
+        该 agent 真跑过。"""
+        a1 = _seed_perf(db_conn, user_id, effective_agent='dev', agents=['dev'])[2]
+        a2 = _seed_perf(db_conn, user_id, invoked=False, agents=['dev'])[2]
+        tasks = list_definition_tasks(db_conn, 'agent', 'dev')
+        assert [t['attemptId'] for t in tasks] == [a1]     # a2 未选该 agent
+        ov = definition_overview(db_conn)
+        entry = next(d for d in ov if d['defKind'] == 'agent' and d['defName'] == 'dev')
+        assert entry['tasks'] == 1
+
+    def test_running_subtask_without_completed_at_capped_at_attempt_end(
+            self, db_conn, user_id):
+        """未落 completed_at 的已收尾子代理（中断残留/旧数据）按 attempt 终点
+        截断——顶到当前时刻会把子代理 wallMs/P95/最慢 Top 顶成天文数字。"""
+        _b, _s, aid = _seed_perf(db_conn, user_id,
+                                 subtasks=[('general', 10, None)])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT status, completed_at FROM ai_chat_subtasks "
+                        "WHERE root_session_id = %s", (_s,))
+            status, comp = cur.fetchone()
+        assert status == 'completed' and comp is None
+        m = load_attempt_metrics(db_conn, aid)
+        sub = m['subtasks'][0]
+        assert sub['status'] == 'completed'
+        assert sub['wallMs'] <= m['wallMs'] + 2_000   # 不再顶到 now()（墙钟 500s）
 
     def test_slow_tasks_carry_def_attribution(self, db_conn, user_id):
         _b, _s, aid = _seed_perf(db_conn, user_id)
@@ -686,7 +763,7 @@ def _db_window_ms(db_conn):
 
 class TestDeriveSkillDurations:
     def test_runtime_row_exact_duration_via_part_id(self, db_conn, user_id):
-        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _b, sid, aid = _seed_perf(db_conn, user_id, invoked=False)
         _seed_invocation(db_conn, aid, sid, 'stock-analysis',
                          evidence_refs=['event:skill:part-skill-1'])
         _seed_tool_row(db_conn, sid, 'part-skill-1',
