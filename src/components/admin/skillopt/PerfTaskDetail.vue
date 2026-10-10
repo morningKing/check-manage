@@ -47,28 +47,69 @@
           <ElTableColumn type="expand">
             <template #default="{ row }">
               <div class="turn-calls" data-test="turn-calls">
-                <div class="turn-call">
-                  <ElTag size="small" type="warning" class="turn-call__tool">模型</ElTag>
-                  <code class="turn-call__args">模型推理（毛时长 − 轮内工具）</code>
-                  <span class="turn-call__dur" data-test="turn-inference">
-                    {{ inferenceLabel(row) }}</span>
-                </div>
-                <div v-if="!turnCalls(row).length" class="muted">本轮无工具调用记录。</div>
-                <template v-else>
-                  <div v-for="c in turnCalls(row)" :key="c.partId" class="turn-call">
-                    <ElTag v-if="c.isDelegation" size="small" type="warning"
-                           class="turn-call__tool">开子代理</ElTag>
-                    <ElTag v-else size="small"
-                           :type="c.state === 'error' ? 'danger' : 'info'"
-                           class="turn-call__tool">{{ c.tool }}</ElTag>
-                    <code class="turn-call__args">{{ c.args || '（无参数）' }}</code>
-                    <span class="turn-call__dur"
-                          :class="{ 'slow-turn': (c.durationMs || 0) >= 30000 }">
-                      {{ c.durationMs == null ? '-' : fmtMs(c.durationMs) }}</span>
+                <!-- 时间轴分支：推理/工具/委托段按时序铺开（和=轮时长）；
+                     task 段的子代理内部分解对齐在同轴上行 -->
+                <template v-if="timelineOf(row).segments.length">
+                  <TurnTimelineChart :timeline="timelineOf(row)" />
+                  <div class="seq-list" data-test="turn-seq-list">
+                    <template v-for="(s, i) in timelineOf(row).segments" :key="i">
+                      <div class="seq-row" :class="`seq-row--${s.type}`">
+                        <ElTag size="small"
+                               :type="s.type === 'inference' ? 'warning'
+                                 : s.type === 'task' ? 'warning' : 'success'">
+                          {{ s.type === 'inference' ? '推理'
+                            : s.type === 'task' ? '开子代理' : '工具' }}
+                        </ElTag>
+                        <code v-if="s.type !== 'inference'" class="seq-args">{{ s.label }}</code>
+                        <span class="seq-dur"
+                              :class="{ 'slow-turn': s.type !== 'inference' && (s.end - s.start) >= 30000 }">
+                          {{ fmtMs(s.end - s.start) }}</span>
+                      </div>
+                      <div v-for="(ns, j) in timelineOf(row).nested[s.ref || ''] || []"
+                           :key="`${i}-${j}`" class="seq-row seq-row--nested">
+                        <ElTag size="small"
+                               :type="ns.type === 'inference' ? 'warning' : 'success'">
+                          {{ ns.type === 'inference' ? '推理' : '工具' }}
+                        </ElTag>
+                        <span class="seq-dur">{{ fmtMs(ns.end - ns.start) }}</span>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="turn-call">
+                    <ElTag size="small" type="warning" class="turn-call__tool">模型</ElTag>
+                    <code class="turn-call__args">模型推理（毛时长 − 轮内工具与委托）</code>
+                    <span class="turn-call__dur" data-test="turn-inference">
+                      {{ inferenceLabel(row) }}</span>
                   </div>
                   <div class="muted" v-if="turnSubtotals(row)">
                     {{ turnSubtotals(row) }}
                   </div>
+                </template>
+                <!-- 回退：无法重建时间轴（旧数据/轮毛缺失）→ 平铺明细 -->
+                <template v-else>
+                  <div class="turn-call">
+                    <ElTag size="small" type="warning" class="turn-call__tool">模型</ElTag>
+                    <code class="turn-call__args">模型推理（毛时长 − 轮内工具）</code>
+                    <span class="turn-call__dur" data-test="turn-inference">
+                      {{ inferenceLabel(row) }}</span>
+                  </div>
+                  <div v-if="!turnCalls(row).length" class="muted">本轮无工具调用记录。</div>
+                  <template v-else>
+                    <div v-for="c in turnCalls(row)" :key="c.partId" class="turn-call">
+                      <ElTag v-if="c.isDelegation" size="small" type="warning"
+                             class="turn-call__tool">开子代理</ElTag>
+                      <ElTag v-else size="small"
+                             :type="c.state === 'error' ? 'danger' : 'info'"
+                             class="turn-call__tool">{{ c.tool }}</ElTag>
+                      <code class="turn-call__args">{{ c.args || '（无参数）' }}</code>
+                      <span class="turn-call__dur"
+                            :class="{ 'slow-turn': (c.durationMs || 0) >= 30000 }">
+                        {{ c.durationMs == null ? '-' : fmtMs(c.durationMs) }}</span>
+                    </div>
+                    <div class="muted" v-if="turnSubtotals(row)">
+                      {{ turnSubtotals(row) }}
+                    </div>
+                  </template>
                 </template>
               </div>
             </template>
@@ -190,6 +231,8 @@ import {
 } from '@/api/aiSkills'
 import { useEcharts } from './useEcharts'
 import { buildWaterfallOption } from './chartOptions'
+import { buildTurnTimeline, type TurnTimeline } from './turnTimeline'
+import TurnTimelineChart from './TurnTimelineChart.vue'
 import PerfDiagnosisList from './PerfDiagnosisList.vue'
 import { fmtMs, pct } from './format'
 import type { PerfToolCall } from '@/api/aiSkills'
@@ -209,6 +252,12 @@ const cov = computed(() => detail.value?.coverage
   ?? { wallMs: 0, modelMs: 0, subagentWaitMs: 0, idleMs: 0, toolMs: 0 })
 const tools = computed(() => detail.value?.tools)
 const skills = computed(() => detail.value?.skills ?? [])
+/** 轮内时间轴（推理/工具/委托交替 + task 委托的子代理嵌套分解） */
+function timelineOf(row: { messageId?: string }): TurnTimeline {
+  const turn = detail.value?.turns.find(t => t.messageId === row.messageId)
+  if (!turn) return { segments: [], nested: {}, unplaced: [] }
+  return buildTurnTimeline(turn, tools.value?.calls ?? [])
+}
 /** 子代理墙钟合计（毛和；并行会重叠，对账以覆盖条为准） */
 const subtaskWallSum = computed(() =>
   (detail.value?.subtasks ?? []).reduce((acc, s) => acc + (s.wallMs || 0), 0))
@@ -223,8 +272,7 @@ function turnCalls(row: { messageId?: string }): PerfToolCall[] {
   return (tools.value?.calls ?? []).filter(c => c.turnIndex === idx)
 }
 /** 轮内小计：工具（非委派）与「开子代理」委派等待分行——毛时长 = 推理 +
- *  工具 + 委派等待，三类各自可对账。 */
-function turnSubtotals(row: { messageId?: string }): string {
+ *  工具 + 委派等待，三类各自可对账。 */function turnSubtotals(row: { messageId?: string }): string {
   const calls = turnCalls(row)
   const parts: string[] = []
   const tools = calls.filter(c => !c.isDelegation)
@@ -314,4 +362,9 @@ h4 { margin: 18px 0 8px; }
 .turn-call__args { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-call__dur { font-variant-numeric: tabular-nums; font-size: 12px; }
 .call-args { font-size: 12px; }
+.seq-list { margin-bottom: 8px; }
+.seq-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.seq-row--nested { margin-left: 28px; }
+.seq-args { font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seq-dur { font-variant-numeric: tabular-nums; font-size: 12px; }
 </style>
