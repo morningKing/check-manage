@@ -18,7 +18,8 @@ class TestCoverageSplit:
     def test_disjoint_no_overlap(self):
         # 墙钟 0..1000；模型 [0,400]，子代理 [600,1000]（与模型不重叠）
         r = coverage_split(0, 1000, [(0, 400)], [(600, 1000)])
-        assert r == {'wallMs': 1000, 'modelMs': 400, 'subagentWaitMs': 400, 'idleMs': 200}
+        assert r == {'wallMs': 1000, 'modelMs': 400, 'toolMs': 0,
+                     'subagentWaitMs': 400, 'idleMs': 200}
 
     def test_subagent_under_model_is_wait_zero(self):
         # 子代理区间完全落在模型活跃内（父轮次在等 task 返回）→ 等待为 0
@@ -37,7 +38,8 @@ class TestCoverageSplit:
 
     def test_empty_intervals_all_idle(self):
         r = coverage_split(0, 500, [], [])
-        assert r == {'wallMs': 500, 'modelMs': 0, 'subagentWaitMs': 0, 'idleMs': 500}
+        assert r == {'wallMs': 500, 'modelMs': 0, 'toolMs': 0,
+                     'subagentWaitMs': 0, 'idleMs': 500}
 
     def test_intervals_outside_wall_clamped(self):
         r = coverage_split(100, 500, [(0, 300)], [(400, 900)])
@@ -46,6 +48,27 @@ class TestCoverageSplit:
     def test_sum_equals_wall(self):
         r = coverage_split(0, 9999, [(0, 3000), (2500, 7000)], [(1000, 2000), (6500, 9999)])
         assert r['modelMs'] + r['subagentWaitMs'] + r['idleMs'] == r['wallMs']
+
+    def test_tool_intervals_split_from_model(self):
+        # 工具 [200,600] 完全落在模型 [0,1000] 内 → toolMs=400，modelMs=600
+        # （600+400 已铺满墙钟 → idle=0，四类之和恒等于 wallMs）
+        r = coverage_split(0, 1000, [(0, 1000)], [], [(200, 600)])
+        assert r == {'wallMs': 1000, 'modelMs': 600, 'toolMs': 400,
+                     'subagentWaitMs': 0, 'idleMs': 0}
+
+    def test_tool_outside_model_ignored(self):
+        # 工具只发生在模型回合内；模型外的「工具区间」不计（防御）
+        r = coverage_split(0, 1000, [(0, 400)], [], [(500, 900)])
+        assert r['toolMs'] == 0 and r['modelMs'] == 400
+
+    def test_tool_partial_overlap(self):
+        r = coverage_split(0, 1000, [(0, 500)], [], [(300, 800)])
+        assert r['toolMs'] == 200 and r['modelMs'] == 300 and r['idleMs'] == 500
+
+    def test_default_no_tool_param_backwards_compatible(self):
+        r = coverage_split(0, 1000, [(0, 400)], [(600, 1000)])
+        assert r['toolMs'] == 0
+        assert r['modelMs'] == 400 and r['subagentWaitMs'] == 400
 
 
 # ---- 任务指标与聚合（DB 播种）----
@@ -163,6 +186,27 @@ class TestAttemptMetrics:
         # 全链路排除 kefu（spec §2）：详情路径同样不返回指标 → 端点 404 语义
         _bid, _sid, aid = _seed_perf(db_conn, user_id, source_type='kefu')
         assert load_attempt_metrics(db_conn, aid) is None
+
+    def test_detail_coverage_includes_tool_ms(self, db_conn, user_id):
+        _bid, _sid, aid = _seed_perf(
+            db_conn, user_id, model_turns=[(400_000, 10_000, 100, 0)])
+        # 模型轮 [0,400]s；工具 [100,300]s 在其中 → toolMs 200s，纯模型 200s
+        # （t0 = NOW()-600s，故 started NOW()-500s；墙钟 500s → idle 100s）
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " part_id, tool, args_text, state, occurred_at,"
+                " started_at, duration_ms) VALUES (%s, %s, 'pd1', 'bash', '{}',"
+                " 'completed', NOW() - interval '500 seconds',"
+                " NOW() - interval '500 seconds', 200000)",
+                ('oc-x-pd1', _sid))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        assert m['coverage']['toolMs'] == 200_000
+        assert set(m['coverage']) == {'wallMs', 'modelMs', 'toolMs',
+                                      'subagentWaitMs', 'idleMs'}
+        assert m['modelMs'] == 200_000          # 400s 轮次 - 200s 工具
+        assert m['subagentWaitMs'] == 0 and m['idleMs'] == 100_000
 
 
 class TestDefinitionAggregates:

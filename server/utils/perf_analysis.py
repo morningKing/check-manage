@@ -1,7 +1,8 @@
 """SkillOpt 任务性能分析（2026-10-09 spec）：纯读聚合层。
 
 覆盖切分（§3.2）：模型轮次与子代理区间在真实执行中重叠——把区间投到 attempt
-时间轴切出互斥的三类时长（模型活跃 / 子代理等待 / 引擎间隙），和恒等于墙钟。
+时间轴切出互斥的时长（模型活跃 / 子代理等待 / 引擎间隙；二期 detail 路径再
+从模型活跃中切出第四类工具执行 toolMs），和恒等于墙钟。
 全部函数 get_db 参数注入（skill_fit 惯例），时间统一 epoch 毫秒。
 """
 from __future__ import annotations
@@ -51,18 +52,34 @@ def _subtract(base: list[tuple[int, int]], mask: list[tuple[int, int]]) -> list[
     return out
 
 
+def _intersect(base: list[tuple[int, int]], mask: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """base ∩ mask（都为合并过的升序区间），返回相交区间。"""
+    out: list[tuple[int, int]] = []
+    for s, e in base:
+        for ms, me in mask:
+            if me <= s or ms >= e:
+                continue
+            out.append((max(s, ms), min(e, me)))
+    return out
+
+
 def coverage_split(wall_start_ms: int, wall_end_ms: int,
                    model_intervals: list[tuple[int, int]],
-                   subagent_intervals: list[tuple[int, int]]) -> dict:
-    """attempt 墙钟 → 三类互斥覆盖时长（spec §3.2）。"""
+                   subagent_intervals: list[tuple[int, int]],
+                   tool_intervals: list[tuple[int, int]] | None = None) -> dict:
+    """attempt 墙钟 → 互斥覆盖时长。二期（spec §3.2/§7）：tool_intervals
+    提供时产出第四类 toolMs = 工具覆盖 ∩ 模型覆盖（工具发生在模型回合内），
+    modelMs 相应扣除——四类之和仍 = wallMs。缺省 tool 0，一期调用零改动。"""
     wall_ms = max(0, wall_end_ms - wall_start_ms)
     model = _union(model_intervals, wall_start_ms, wall_end_ms)
     sub = _union(subagent_intervals, wall_start_ms, wall_end_ms)
-    model_ms = _covered_ms(model)
-    wait = _subtract(sub, model)
+    tool_ivs = _union(tool_intervals or [], wall_start_ms, wall_end_ms)
+    tool_ms = _covered_ms(_intersect(model, tool_ivs))
+    model_ms = _covered_ms(_subtract(model, tool_ivs))
+    wait = _subtract(sub, model)               # 子代理等待仍相对模型总覆盖
     wait_ms = _covered_ms(wait)
-    idle_ms = max(0, wall_ms - model_ms - wait_ms)
-    return {'wallMs': wall_ms, 'modelMs': model_ms,
+    idle_ms = max(0, wall_ms - model_ms - tool_ms - wait_ms)
+    return {'wallMs': wall_ms, 'modelMs': model_ms, 'toolMs': tool_ms,
             'subagentWaitMs': wait_ms, 'idleMs': idle_ms}
 
 
@@ -204,7 +221,18 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
                          'status': status, 'startedAt': _iso(created),
                          'finishedAt': _iso(finished),
                          'wallMs': max(0, e_ms - s_ms)})
-    cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs)
+    # 二期 detail 路径：取工具执行区间切出第四类 toolMs（非 detail 不查询）
+    tool_ivs: list | None = None
+    if with_detail:
+        cur.execute(
+            "SELECT started_at, duration_ms FROM agent_tool_calls "
+            "WHERE root_session_id = %s AND duration_ms IS NOT NULL"
+            " AND started_at >= to_timestamp(%s/1000.0)"
+            " AND started_at <= to_timestamp(%s/1000.0)",
+            (sid, start_ms, end_ms))
+        tool_ivs = [(int(_to_ms(s)), int(_to_ms(s)) + int(d))
+                    for s, d in cur.fetchall() if s is not None]
+    cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs, tool_ivs)
     wall_ms = cov['wallMs']
     tools = {'errorCount': 0, 'repeats': []}
     if with_detail:
@@ -232,6 +260,12 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         out['turnDetails'] = turn_details
         out['subtasks'] = subtasks
         out['tools'] = tools
+        # 四类覆盖明细（含 toolMs）：顶层 modelMs 已是扣除工具后的净值，
+        # coverage 与其同源，供端点/前端直接拆包
+        out['coverage'] = {'wallMs': wall_ms, 'modelMs': cov['modelMs'],
+                           'toolMs': cov['toolMs'],
+                           'subagentWaitMs': cov['subagentWaitMs'],
+                           'idleMs': cov['idleMs']}
     return out
 
 
