@@ -1569,10 +1569,13 @@ def perf_attempt(aid):
     m = load_attempt_metrics(get_db, aid)
     if not m:
         return jsonify({'error': 'attempt not found'}), 404
-    cov = {'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
-           'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs']}
-    return jsonify({'attempt': {k: v for k, v in m.items()
-                                if k not in ('turnDetails', 'subtasks', 'tools')},
+    cov = m.get('coverage') or {
+        'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
+        'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs'],
+        'toolMs': 0}
+    return jsonify({'attempt': {**{k: v for k, v in m.items()
+                                   if k not in ('turnDetails', 'subtasks', 'tools', 'coverage')},
+                                 'toolMs': cov.get('toolMs', 0)},
                     'coverage': cov,
                     'turns': m.get('turnDetails') or [],
                     'subtasks': m.get('subtasks') or [],

@@ -451,7 +451,11 @@ class TestPerfEndpoints:
         body = r.get_json()
         assert r.status_code == 200
         assert body['attempt']['attemptId'] == aid
-        assert set(body['coverage']) == {'wallMs', 'modelMs', 'subagentWaitMs', 'idleMs'}
+        assert set(body['coverage']) == {'wallMs', 'modelMs', 'toolMs',
+                                         'subagentWaitMs', 'idleMs'}
+        assert 'toolMs' in body['coverage']
+        assert set(body['tools']) >= {'errorCount', 'repeats', 'byTool',
+                                      'durationAvailable'}
         assert isinstance(body['turns'], list) and isinstance(body['subtasks'], list)
 
         r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}/diagnosis',
