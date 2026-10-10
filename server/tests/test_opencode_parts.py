@@ -28,6 +28,7 @@ def test_map_part_tool_maps_all_fields():
     assert map_part(part) == {
         'type': 'tool_use', 'name': 'bash', 'title': 't', 'status': 'completed',
         'input': {'cmd': 'ls'}, 'result': 'ok', 'durationMs': 123,
+        'time': {'start': 1000, 'end': 1123},
     }
 
 

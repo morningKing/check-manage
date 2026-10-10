@@ -20,7 +20,7 @@ def test_content_from_parts_maps_text_and_tool():
     assert len(tool) == 1
     assert tool[0] == {'type': 'tool_use', 'name': 'read', 'title': 'T',
                        'status': 'completed', 'input': {'p': 1}, 'result': 'OUT',
-                       'durationMs': 350}
+                       'durationMs': 350, 'time': {'start': 1000, 'end': 1350}}
     assert all(p['type'] in ('text', 'tool_use', 'reasoning') for p in out)
 
 

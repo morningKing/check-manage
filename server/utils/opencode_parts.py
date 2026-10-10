@@ -66,6 +66,8 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
             'input': st.get('input'),
             'result': st.get('output') if st.get('output') is not None else st.get('result'),
             'durationMs': tool_duration_ms(st),
+            # 工具级耗时采集（spec §7）：绝对 start/end 透传给账本交互路径
+            'time': st.get('time'),
         }
     if t == 'subtask':
         sid = (subtask_id_map or {}).get(part.get('id')) or part.get('sessionID')

@@ -25,11 +25,13 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 
 import psycopg2
 import psycopg2.extras
 
 from db import get_db as _default_get_db
+from utils.ai_message_meta import tool_duration_ms
 
 MAX_ARGS_LEN = 8192
 MAX_FILE_EVIDENCE = 1000
@@ -70,9 +72,19 @@ def args_to_text(inp) -> str:
         return str(inp)
 
 
+def _start_dt(time_obj):
+    """state.time.start（epoch ms）→ tz-aware UTC datetime；缺省 None。"""
+    start = (time_obj or {}).get('start')
+    if not start:
+        return None
+    return datetime.fromtimestamp(int(start) / 1000, tz=timezone.utc)
+
+
 def extract_from_parts(parts) -> list:
     """从 part 字典集合抽取 tool part 记录(REST 消息 parts 原始形状)。
-    返回 [(part_id, tool, args_text, state)]。"""
+    返回 [(part_id, tool, args_text, state, started_at, duration_ms)]——
+    started_at 由 state.time.start(epoch ms)换算(tz-aware UTC),
+    duration_ms 由 tool_duration_ms(state) 得出;无 time 时两者为 None。"""
     out: dict = {}
     for p in parts or []:
         if not isinstance(p, dict) or p.get('type') != 'tool':
@@ -84,7 +96,9 @@ def extract_from_parts(parts) -> list:
         state_obj = p.get('state') or {}
         state = (state_obj.get('status') or 'pending')
         args_text = args_to_text(state_obj.get('input'))[:MAX_ARGS_LEN]
-        out[pid] = (str(pid), str(tool), args_text, str(state)[:20])
+        started = _start_dt(state_obj.get('time'))
+        out[pid] = (str(pid), str(tool), args_text, str(state)[:20],
+                    started, tool_duration_ms(state_obj))
     return list(out.values())
 
 
@@ -95,7 +109,9 @@ def extract_from_part_map(part_map) -> list:
     无 'id' 字段——part id 只在 dict key 上）；批路径 REST 的原始形状
     （'tool'：tool/state.input）由 extract_from_parts 负责。两形状此处都收
     ——2026-10-05 S0 能力压测发现：修复前 record_state 只认原始形状，
-    交互路径账本恒 0 行、交互工具型门禁恒 failed。"""
+    交互路径账本恒 0 行、交互工具型门禁恒 failed。
+    返回 [(part_id, tool, args_text, state, started_at, duration_ms)]，
+    started_at/duration_ms 口径同 extract_from_parts。"""
     out: dict = {}
     for pid, p in (part_map or {}).items():
         if not isinstance(p, dict):
@@ -107,16 +123,22 @@ def extract_from_part_map(part_map) -> list:
             state_obj = p.get('state') or {}
             args_text = args_to_text(state_obj.get('input'))
             state = (state_obj.get('status') or 'pending')
-        elif t == 'tool_use':                # map_part 映射形状
+            started = _start_dt(state_obj.get('time'))
+            dur = tool_duration_ms(state_obj)
+        elif t == 'tool_use':                # map_part 映射形状（已透传 time）
             key = str(pid)
             tool = p.get('name')
             args_text = args_to_text(p.get('input'))
             state = (p.get('status') or 'pending')
+            started = _start_dt(p.get('time'))
+            dur = p.get('durationMs')
+            dur = int(dur) if isinstance(dur, (int, float)) else None
         else:
             continue
         if not tool:
             continue
-        out[key] = (key, str(tool), args_text[:MAX_ARGS_LEN], str(state)[:20])
+        out[key] = (key, str(tool), args_text[:MAX_ARGS_LEN], str(state)[:20],
+                    started, dur)
     return list(out.values())
 
 
@@ -148,17 +170,20 @@ def record_messages(oc_session_id: str, messages, *,
                     """
                     INSERT INTO agent_tool_calls
                         (oc_session_id, root_session_id, subtask_id, agent,
-                         part_id, tool, args_text, state)
+                         part_id, tool, args_text, state, started_at, duration_ms)
                     VALUES %s
                     ON CONFLICT (oc_session_id, part_id) DO UPDATE
                     SET state = EXCLUDED.state,
-                        args_text = EXCLUDED.args_text
+                        args_text = EXCLUDED.args_text,
+                        started_at = EXCLUDED.started_at,
+                        duration_ms = EXCLUDED.duration_ms
                     WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
                        OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
+                       OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
                     """,
                     [(oc_session_id, root_session_id, subtask_id, agent_name,
-                      pid, tool, args, state)
-                     for (pid, tool, args, state) in part_rows],
+                      pid, tool, args, state, started, dur)
+                     for (pid, tool, args, state, started, dur) in part_rows],
                 )
         return True
     except Exception as e:  # noqa: BLE001 —— 账本绝不打断任务流程
@@ -193,18 +218,21 @@ def record_state(session_id: str, oc_session_id: str, state, *,
                         """
                         INSERT INTO agent_tool_calls
                             (oc_session_id, root_session_id, subtask_id, agent,
-                             part_id, tool, args_text, state)
+                             part_id, tool, args_text, state, started_at, duration_ms)
                         VALUES %s
                         ON CONFLICT (oc_session_id, part_id) DO UPDATE
                         SET state = EXCLUDED.state,
-                            args_text = EXCLUDED.args_text
+                            args_text = EXCLUDED.args_text,
+                            started_at = EXCLUDED.started_at,
+                            duration_ms = EXCLUDED.duration_ms
                         WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
                            OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
+                           OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
                         """,
                         [(child_sid, session_id,
                           None if scope is None else child_sid, agent_name,
-                          pid, tool, args, st)
-                         for (pid, tool, args, st) in part_rows],
+                          pid, tool, args, st, started, dur)
+                         for (pid, tool, args, st, started, dur) in part_rows],
                     )
         except Exception as e:  # noqa: BLE001
             log.warning('agent ledger record_state failed oc=%s: %s', child_sid, e)
