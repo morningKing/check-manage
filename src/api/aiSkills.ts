@@ -281,6 +281,7 @@ export interface PerfTaskEntry {
 export interface PerfTurn {
   messageId: string; createdAt: string | null
   durationMs: number; tokensIn: number; tokensOut: number; preview: string
+  toolCount: number
 }
 
 export interface PerfSubtask {
@@ -289,11 +290,26 @@ export interface PerfSubtask {
   wallMs: number
 }
 
+/** 逐工具调用明细（账本时间线）：args 为规范化的调用参数文本（bash 即命令），
+ *  旧数据无时长列为 null；turnIndex = 归属的模型轮次序号（子代理调用为 null）。 */
+export interface PerfToolCall {
+  partId: string
+  tool: string
+  args: string
+  state: string
+  startedAt: string | null
+  durationMs: number | null
+  subtaskId: string | null
+  turnIndex: number | null
+}
+
 export interface PerfToolAgg {
   errorCount: number
   repeats: { tool: string; argsPreview: string; count: number; totalMs: number | null }[]
   byTool: { tool: string; count: number; totalMs: number | null }[]
   durationAvailable: boolean
+  calls: PerfToolCall[]
+  callsTruncated: boolean
 }
 
 /** skill 调用耗时（方案 2 推导）：runtime 行为二期时长列精确值，

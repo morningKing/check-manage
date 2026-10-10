@@ -33,11 +33,31 @@
         <h4 data-diag-anchor="segment:turns">模型轮次</h4>
         <ElTable :data="detail.turns" size="small" data-test="turn-table"
                  :row-class-name="turnRowClass">
+          <ElTableColumn type="expand">
+            <template #default="{ row }">
+              <div class="turn-calls" data-test="turn-calls">
+                <div v-if="!turnCalls(row).length" class="muted">本轮无工具调用记录。</div>
+                <div v-for="c in turnCalls(row)" :key="c.partId" class="turn-call">
+                  <ElTag size="small" :type="c.state === 'error' ? 'danger' : 'info'"
+                         class="turn-call__tool">{{ c.tool }}</ElTag>
+                  <code class="turn-call__args">{{ c.args || '（无参数）' }}</code>
+                  <span class="turn-call__dur"
+                        :class="{ 'slow-turn': (c.durationMs || 0) >= 30000 }">
+                    {{ c.durationMs == null ? '-' : fmtMs(c.durationMs) }}</span>
+                </div>
+              </div>
+            </template>
+          </ElTableColumn>
           <ElTableColumn prop="createdAt" label="时间" width="170" />
           <ElTableColumn label="耗时" width="100">
             <template #default="{ row }">
               <span :class="{ 'slow-turn': (row.durationMs || 0) >= 30000 }">
                 {{ row.durationMs == null ? '缺数据' : fmtMs(row.durationMs) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="工具" width="90">
+            <template #default="{ row }">
+              {{ row.toolCount ? `${row.toolCount} 次` : '-' }}
             </template>
           </ElTableColumn>
           <ElTableColumn prop="tokensIn" label="输入 token" width="110" />
@@ -63,6 +83,36 @@
         <div v-else class="muted" data-test="tool-perf-placeholder">
           本任务无工具级耗时数据（早于采集上线或无工具调用）。
         </div>
+        <template v-if="tools?.calls?.length">
+          <div class="muted" style="margin: 8px 0 6px">
+            工具调用明细（时间序{{ tools.callsTruncated ? '，仅前 ' + tools.calls.length + ' 条' : '' }}；
+            耗时「-」为早于采集上线的旧数据）
+          </div>
+          <ElTable :data="tools.calls" size="small" data-test="tool-call-list"
+                   max-height="360">
+            <ElTableColumn label="时间" width="110">
+              <template #default="{ row }">{{ shortTime(row.startedAt) }}</template>
+            </ElTableColumn>
+            <ElTableColumn prop="tool" label="工具" width="110" />
+            <ElTableColumn label="命令 / 参数" min-width="260" show-overflow-tooltip>
+              <template #default="{ row }">
+                <code class="call-args">{{ row.args || '（无参数）' }}</code>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="耗时" width="100">
+              <template #default="{ row }">
+                <span :class="{ 'slow-turn': (row.durationMs || 0) >= 30000 }">
+                  {{ row.durationMs == null ? '-' : fmtMs(row.durationMs) }}</span>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn prop="state" label="状态" width="100" />
+            <ElTableColumn label="归属" width="110">
+              <template #default="{ row }">
+                {{ row.subtaskId ? '子代理 ' + row.subtaskId.slice(0, 8) : '根' }}
+              </template>
+            </ElTableColumn>
+          </ElTable>
+        </template>
 
         <!-- Skill 耗时（方案 2 推导）：runtime 精确 / inferred 启发式跨度 -->
         <h4>Skill 耗时</h4>
@@ -107,6 +157,7 @@ import { useEcharts } from './useEcharts'
 import { buildWaterfallOption } from './chartOptions'
 import PerfDiagnosisList from './PerfDiagnosisList.vue'
 import { fmtMs, pct } from './format'
+import type { PerfToolCall } from '@/api/aiSkills'
 
 const props = defineProps<{ attemptId: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -123,6 +174,16 @@ const cov = computed(() => detail.value?.coverage
   ?? { wallMs: 0, modelMs: 0, subagentWaitMs: 0, idleMs: 0, toolMs: 0 })
 const tools = computed(() => detail.value?.tools)
 const skills = computed(() => detail.value?.skills ?? [])
+/** 轮次展开行：该轮内的逐工具调用（turnIndex 归组，时间序） */
+function turnCalls(row: { messageId?: string }): PerfToolCall[] {
+  const idx = detail.value?.turns.findIndex(t => t.messageId === row.messageId) ?? -1
+  if (idx < 0) return []
+  return (tools.value?.calls ?? []).filter(c => c.turnIndex === idx)
+}
+function shortTime(iso: string | null): string {
+  if (!iso) return '-'
+  return iso.slice(11, 19)
+}
 const ratio = (ms: number) => (cov.value.wallMs ? ms / cov.value.wallMs : 0)
 const turnRowClass = ({ row }: any) =>
   [(row.durationMs || 0) >= 30_000 ? 'slow-turn-row' : '',
@@ -165,4 +226,9 @@ onMounted(async () => {
 h4 { margin: 18px 0 8px; }
 .slow-turn { color: var(--el-color-danger); font-weight: 600; }
 .muted { color: var(--el-text-color-secondary); }
+.turn-calls { padding: 4px 12px; }
+.turn-call { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.turn-call__args { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-call__dur { font-variant-numeric: tabular-nums; font-size: 12px; }
+.call-args { font-size: 12px; }
 </style>

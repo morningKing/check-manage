@@ -167,18 +167,16 @@ def _norm_args(args_text) -> str:
     return ' '.join((args_text or '').split())[:200]
 
 
-def _tool_aggregates(cur, sid: str, start_ms: int, end_ms: int) -> dict:
-    cur.execute(
-        "SELECT tool, args_text, state, duration_ms FROM agent_tool_calls "
-        "WHERE root_session_id = %s AND occurred_at >= to_timestamp(%s/1000.0)"
-        " AND occurred_at <= to_timestamp(%s/1000.0)",
-        (sid, start_ms, end_ms))
-    rows = cur.fetchall()
+def _tool_aggregates(rows: list) -> dict:
+    """工具调用行 → 聚合 + 逐调用明细。rows（时间序）：
+    (part_id, tool, args_text, state, duration_ms, started_at, subtask_id,
+     turn_index|int|None)。"""
     by_tool: dict = {}
     key_counts: dict = {}
     errors = 0
     any_duration = False
-    for tool, args_text, state, dur in rows:
+    calls: list = []
+    for part_id, tool, args_text, state, dur, started_at, subtask_id, turn_idx in rows:
         if state == 'error':
             errors += 1
         entry = by_tool.setdefault(tool, {'count': 0, 'totalMs': 0,
@@ -196,6 +194,11 @@ def _tool_aggregates(cur, sid: str, start_ms: int, end_ms: int) -> dict:
         if dur is not None:
             kc['hasDuration'] = True
             kc['totalMs'] += int(dur)
+        calls.append({'partId': part_id, 'tool': tool,
+                      'args': _norm_args(args_text),
+                      'state': state, 'startedAt': _iso(started_at),
+                      'durationMs': dur, 'subtaskId': subtask_id,
+                      'turnIndex': turn_idx})
     by = [{'tool': t, 'count': v['count'],
            'totalMs': v['totalMs'] if v['hasDuration'] else None}
           for t, v in sorted(by_tool.items(), key=lambda kv: -kv[1]['totalMs'])]
@@ -204,8 +207,10 @@ def _tool_aggregates(cur, sid: str, start_ms: int, end_ms: int) -> dict:
                 'totalMs': v['totalMs'] if v['hasDuration'] else None}
                for v in key_counts.values() if v['count'] >= REPEAT_TOOL_COUNT]
     repeats.sort(key=lambda r: -(r['totalMs'] or 0))
+    truncated = len(calls) > TOOL_CALLS_MAX
     return {'errorCount': errors, 'repeats': repeats, 'byTool': by,
-            'durationAvailable': any_duration}
+            'durationAvailable': any_duration,
+            'calls': calls[:TOOL_CALLS_MAX], 'callsTruncated': truncated}
 
 
 def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
@@ -245,22 +250,55 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
                          'status': status, 'startedAt': _iso(created),
                          'finishedAt': _iso(finished),
                          'wallMs': max(0, e_ms - s_ms)})
-    # 二期 detail 路径：取工具执行区间切出第四类 toolMs（非 detail 不查询）
+    # 二期 detail 路径：工具调用一次取齐（覆盖区间/聚合/逐调用明细共用；
+    # 非 detail 路径不查询）
     tool_ivs: list | None = None
+    tools: dict = {'errorCount': 0, 'repeats': [], 'calls': [],
+                   'callsTruncated': False}
     if with_detail:
         cur.execute(
-            "SELECT started_at, duration_ms FROM agent_tool_calls "
-            "WHERE root_session_id = %s AND duration_ms IS NOT NULL"
-            " AND started_at >= to_timestamp(%s/1000.0)"
-            " AND started_at <= to_timestamp(%s/1000.0)",
+            "SELECT part_id, tool, args_text, state, duration_ms, started_at,"
+            " occurred_at, subtask_id FROM agent_tool_calls "
+            "WHERE root_session_id = %s"
+            " AND occurred_at >= to_timestamp(%s/1000.0)"
+            " AND occurred_at <= to_timestamp(%s/1000.0) ORDER BY occurred_at",
             (sid, start_ms, end_ms))
-        tool_ivs = [(int(_to_ms(s)), int(_to_ms(s)) + int(d))
-                    for s, d in cur.fetchall() if s is not None]
+        tool_rows = cur.fetchall()
+        tool_ivs = [(int(_to_ms(s)) , int(_to_ms(s)) + int(d))
+                    for (_p, _t, _a, _st, d, s, _o, _sub) in tool_rows
+                    if s is not None and d is not None]
+        # 轮次归组：调用归属「最后一条 start ≤ 调用时刻」的轮次（时间序；
+        # 早于首条轮次或子代理调用 → None）
+        bounds = [(_iso_ms(t['createdAt']), i)
+                  for i, t in enumerate(turn_details) if t['createdAt']]
+        bounds.sort()
+
+        def _turn_index(call_start: int | None):
+            if call_start is None:
+                return None
+            idx = None
+            for b_start, i in bounds:
+                if b_start <= call_start:
+                    idx = i
+                else:
+                    break
+            return idx
+
+        agg_rows = []
+        for part_id, tool, args_text, state, dur, started_at, occurred_at, sub in tool_rows:
+            c_start = _to_ms(started_at) or _to_ms(occurred_at)
+            agg_rows.append((part_id, tool, args_text, state, dur,
+                             started_at, sub, _turn_index(c_start)))
+        tools = _tool_aggregates(agg_rows)
+        counts: dict = {}
+        for c in tools['calls']:
+            ti = c['turnIndex']
+            if ti is not None:
+                counts[ti] = counts.get(ti, 0) + 1
+        for i, t in enumerate(turn_details):
+            t['toolCount'] = counts.get(i, 0)
     cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs, tool_ivs)
     wall_ms = cov['wallMs']
-    tools = {'errorCount': 0, 'repeats': []}
-    if with_detail:
-        tools = _tool_aggregates(cur, sid, start_ms, end_ms)
     out = {
         'attemptId': row['id'], 'sessionId': sid,
         'sourceType': row['source_type'], 'status': row['status'],
@@ -386,6 +424,7 @@ IDLE_RATIO = 0.3
 IDLE_MIN_WALL_MS = 120_000
 OUTLIER_P50_FACTOR = 4
 SEQUENTIAL_OVERLAP = 0.1
+TOOL_CALLS_MAX = 500          # detail 逐调用明细条数封顶（超出截断标记）
 
 
 def _overlap_ratio(a: tuple[int, int], b: tuple[int, int]) -> float:

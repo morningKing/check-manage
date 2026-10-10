@@ -89,9 +89,10 @@ def user_id(db_conn):
         cur.execute("DELETE FROM ai_chat_batches WHERE user_id = %s", (uid,))
         cur.execute("DELETE FROM users WHERE id = %s", (uid,))
         # agent_tool_calls 无 FK 不随会话级联，且无用户维度，按本套件前缀回收
-        # （oc-agg-*/oc-old 为时长聚合用例的固定幂等键，一并回收防重跑撞唯一索引）
+        # （各用例固定幂等键一并回收防重跑撞唯一索引）
         cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id LIKE 'oc-x-%'"
-                    " OR oc_session_id LIKE 'oc-agg-%' OR oc_session_id = 'oc-old'")
+                    " OR oc_session_id LIKE 'oc-agg-%' OR oc_session_id = 'oc-old'"
+                    " OR oc_session_id LIKE 'oc-cap-%' OR oc_session_id LIKE 'oc-ta-%'")
     db_conn.commit()
 
 
@@ -225,8 +226,8 @@ class TestAttemptMetrics:
                     "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
                     " part_id, tool, args_text, state, occurred_at, duration_ms)"
                     " VALUES (%s, %s, %s, %s, %s, %s,"
-                    " NOW() - interval '300 seconds', %s)",
-                    (f'oc-agg-{i}', _sid, pid, tool, args, st, dur))
+                    " NOW() - interval '300 seconds' + interval '%s seconds', %s)",
+                    (f'oc-agg-{i}', _sid, pid, tool, args, st, i, dur))
         db_conn.commit()
         m = load_attempt_metrics(db_conn, aid)
         tools = m['tools']
@@ -237,6 +238,74 @@ class TestAttemptMetrics:
         assert by['read']['count'] == 3 and by['read']['totalMs'] == 10_000
         rep = next(r for r in tools['repeats'] if r['tool'] == 'read')
         assert rep['count'] == 3 and rep['totalMs'] == 10_000
+        # 逐调用明细（方案 2 续）：命令文本/状态/时长都在，时间序
+        assert tools['callsTruncated'] is False
+        calls = tools['calls']
+        assert len(calls) == 5
+        bash_calls = [c for c in calls if c['tool'] == 'bash']
+        assert [c['args'] for c in bash_calls] == ['{}', '{}']
+        assert [c['durationMs'] for c in bash_calls] == [40_000, 30_000]
+        assert all(c['state'] in ('completed', 'error') for c in calls)
+
+    def test_tool_calls_turn_assignment_and_subtask(self, db_conn, user_id):
+        """轮次归组（按「最后一条 start ≤ 调用时刻」的轮次）：根会话调用带
+        turnIndex；早于首条轮次与子代理调用 → null；轮次条目带 toolCount。"""
+        _bid, _sid, aid = _seed_perf(
+            db_conn, user_id,
+            model_turns=[(400_000, 10_000, 100, 0), (50_000, 2_000, 100, 420)],
+            subtasks=[('general', 10, 20)])
+        # 轮1 [0,400]s、轮2 [420,470]s（墙钟 500s）；子代理 [10,20]s
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT id FROM ai_chat_subtasks WHERE root_session_id=%s",
+                        (_sid,))
+            sub_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " subtask_id, part_id, tool, args_text, state, occurred_at,"
+                " started_at, duration_ms) VALUES"
+                " ('oc-ta-1', %s, NULL, 'ta1', 'bash',"
+                "  '{\"command\":\"ls -la\"}', 'completed',"
+                "  NOW() - interval '600 seconds' + interval '50 seconds',"
+                "  NOW() - interval '600 seconds' + interval '50 seconds', 8_000),"
+                " ('oc-ta-2', %s, NULL, 'ta2', 'read', '{}', 'completed',"
+                "  NOW() - interval '600 seconds' + interval '430 seconds',"
+                "  NOW() - interval '600 seconds' + interval '430 seconds', 1_000),"
+                " ('oc-ta-3', %s, NULL, 'ta3', 'grep', '{}', 'completed',"
+                "  NOW() - interval '599 seconds',"
+                "  NOW() - interval '601 seconds', 500),"
+                " ('oc-ta-4', %s, %s, 'ta4', 'grep', '{}', 'completed',"
+                "  NOW() - interval '600 seconds' + interval '15 seconds',"
+                "  NOW() - interval '600 seconds' + interval '15 seconds', 2_000)",
+                (_sid, _sid, _sid, _sid, sub_id))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        calls = {c['partId']: c for c in m['tools']['calls']}
+        assert calls['ta1']['turnIndex'] == 0      # t=50s：轮1 已 start
+        assert calls['ta2']['turnIndex'] == 1      # t=430s：轮2 已 start
+        assert calls['ta3']['turnIndex'] is None   # t=-1s：早于首条轮次
+        assert calls['ta4']['subtaskId'] == sub_id  # 子代理调用原样透传
+        assert calls['ta1']['args'] == '{"command":"ls -la"}'
+        assert calls['ta1']['durationMs'] == 8_000
+        turns = m['turnDetails']
+        assert turns[0]['toolCount'] == 2          # ta1 + ta4（子代理计入所在轮）
+        assert turns[1]['toolCount'] == 1
+
+    def test_tool_calls_cap_truncation(self, db_conn, user_id, monkeypatch):
+        from utils import perf_analysis as pf
+        monkeypatch.setattr(pf, 'TOOL_CALLS_MAX', 3)
+        _bid, _sid, aid = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            for i in range(5):
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                    " part_id, tool, args_text, state, occurred_at)"
+                    " VALUES (%s, %s, %s, 'read', '{}', 'completed',"
+                    " NOW() - interval '300 seconds' + interval '%s seconds')",
+                    (f'oc-cap-{i}', _sid, f'cap{i}', i))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        assert len(m['tools']['calls']) == 3
+        assert m['tools']['callsTruncated'] is True
 
     def test_tool_duration_unavailable_flag(self, db_conn, user_id):
         _bid, _sid, aid = _seed_perf(db_conn, user_id)

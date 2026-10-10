@@ -13,7 +13,7 @@ vi.mock('@/api/aiSkills', async (orig) => ({
     coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 30000, idleMs: 10000,
                 toolMs: 0 },
     turns: [{ messageId: 'm1', createdAt: null, durationMs: 60000,
-              tokensIn: 5000, tokensOut: 500, preview: 'p' }],
+              tokensIn: 5000, tokensOut: 500, preview: 'p', toolCount: 0 }],
     subtasks: [{ subtaskId: 'ses_1', agent: 'general', description: 'd',
                  status: 'completed', startedAt: null, finishedAt: null, wallMs: 30000 }],
     tools: { errorCount: 0, repeats: [] },
@@ -77,7 +77,15 @@ describe('PerfTaskDetail', () => {
       tools: { errorCount: 1, durationAvailable: true,
                byTool: [{ tool: 'bash', count: 2, totalMs: 40000 },
                         { tool: 'read', count: 3, totalMs: 10000 }],
-               repeats: [] },
+               repeats: [],
+               callsTruncated: false,
+               calls: [{ partId: 'pc1', tool: 'bash',
+                         args: '{"command": "ls -la /data"}', state: 'completed',
+                         startedAt: '2026-10-10T12:00:05', durationMs: 32000,
+                         subtaskId: null, turnIndex: 0 },
+                       { partId: 'pc2', tool: 'read', args: '{"p": "a.py"}',
+                         state: 'error', startedAt: '2026-10-10T12:00:20',
+                         durationMs: null, subtaskId: 'ses_9ab', turnIndex: null }] },
       completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
     }))
     const w = mount(PerfTaskDetail, {
@@ -90,6 +98,11 @@ describe('PerfTaskDetail', () => {
     expect(w.text()).toContain('bash')
     expect(w.text()).toContain('40.0s')
     expect(w.find('[data-test="cov-tool"]').attributes('style')).toContain('20%')
+    // 逐调用明细：bash 命令文本 + 各自耗时（null 显 '-'）+ 子代理归属
+    expect(w.find('[data-test="tool-call-list"]').exists()).toBe(true)
+    expect(w.text()).toContain('ls -la /data')
+    expect(w.text()).toContain('32.0s')
+    expect(w.text()).toContain('子代理 ses_9ab')
   })
 
   it('Skill 耗时表渲染 runtime 精确值与来源徽标，无记录显示空态', async () => {
