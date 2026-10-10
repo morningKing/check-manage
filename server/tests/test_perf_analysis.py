@@ -385,3 +385,25 @@ class TestPerfEndpoints:
         r = pf_client.get('/ai/chat/admin/perf/overview',
                           headers={'Authorization': f'Bearer {tok}'})
         assert r.status_code == 403
+
+
+class TestToolDurationSchema:
+    def test_agent_tool_calls_duration_columns_exist(self, db_conn):
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'agent_tool_calls' "
+                "  AND column_name IN ('started_at', 'duration_ms')")
+            cols = {r[0] for r in cur.fetchall()}
+        assert cols == {'started_at', 'duration_ms'}
+
+    def test_perf_indexes_exist(self, db_conn):
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT indexname FROM pg_indexes WHERE tablename IN "
+                "('agent_tool_calls', 'ai_execution_manifests') "
+                "  AND indexname IN ('idx_agent_tool_call_root', "
+                "                    'idx_execution_manifest_kind_name')")
+            names = {r[0] for r in cur.fetchall()}
+        assert names == {'idx_agent_tool_call_root',
+                         'idx_execution_manifest_kind_name'}

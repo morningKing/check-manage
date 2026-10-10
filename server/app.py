@@ -531,6 +531,18 @@ try:
 except Exception as _e:
     logging.warning('def version content archive migration on boot failed: %s', _e)
 
+# 工具级耗时采集列（2026-10-10）：agent_tool_calls 加 started_at/duration_ms
+# + root/manifest 聚合索引（SkillOpt 性能分析二期，spec §7）。随启动幂等执行。
+try:
+    _mp20 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_10_10_tool_call_duration.py')
+    _spec20 = _ilu.spec_from_file_location('_tool_duration_boot', _mp20)
+    _m20 = _ilu.module_from_spec(_spec20)
+    _spec20.loader.exec_module(_m20)
+    _m20.run()
+except Exception as _e:
+    logging.warning('tool call duration migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
