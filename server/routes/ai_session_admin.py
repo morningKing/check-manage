@@ -370,12 +370,14 @@ def analyze_session(session_id):
         workspace_path=workspace_path,
     )
     if audit_attempt_id:
+        execution_audit.collect_and_save_workspace_manifests(
+            audit_attempt_id, workspace_path)
         execution_audit.save_manifests(audit_attempt_id, [
             {'kind': 'skill', 'name': analysis_skill,
              'source': 'platform_global', 'path': os.path.join(skill_src, 'SKILL.md'),
              'content_hash': skill_hash, 'injected': True,
              'injection_status': 'success', 'selected': 'requested'},
-        ] + execution_audit.scan_workspace_manifests(workspace_path))
+        ])
 
     # 9. Listener BEFORE dispatch (same ordering rationale as before).
     from utils.chat_persist import ensure_listener

@@ -273,8 +273,8 @@ def send_message(sid):
         workspace_path=workspace_path,
     )
     if audit_attempt_id:
-        execution_audit.save_manifests(
-            audit_attempt_id, execution_audit.scan_workspace_manifests(workspace_path))
+        execution_audit.collect_and_save_workspace_manifests(
+            audit_attempt_id, workspace_path)
     ensure_listener(sid, oc_sid, workspace_path)
     client.send_prompt_async(oc_sid, prompt.strip(), model=model,
                              directory=workspace_path, agent=agent, agent_parts=[])

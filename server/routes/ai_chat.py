@@ -990,8 +990,9 @@ def send_message(sid):
         workspace_path=sess[4],
     )
     if audit_attempt_id:
-        execution_audit.save_manifests(audit_attempt_id, execution_audit
-            .scan_workspace_manifests(sess[4]))
+        # 三合一封装（scan+save+def_versions 被动归档）：绕开直接 save+scan
+        # 会让归档静默失效、SkillOpt 左栏恒空（护栏 test_manifest_passive_archive_wired）
+        execution_audit.collect_and_save_workspace_manifests(audit_attempt_id, sess[4])
         if requested_agent:
             execution_audit.save_manifests(audit_attempt_id, [{
                 'kind': 'agent', 'name': requested_agent, 'source': 'runtime_global',

@@ -1496,8 +1496,8 @@ class BatchWorker:
                 workspace_path=ws,
             )
             if audit_attempt_id:
-                execution_audit.save_manifests(
-                    audit_attempt_id, execution_audit.scan_workspace_manifests(ws))
+                execution_audit.collect_and_save_workspace_manifests(
+                    audit_attempt_id, ws)
                 if agent:
                     execution_audit.save_manifests(audit_attempt_id, [{
                         'kind': 'agent', 'name': agent,
