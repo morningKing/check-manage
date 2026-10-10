@@ -575,8 +575,8 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
     // still arrives as a `message.part.updated` snapshot); without this listener
     // every turn renders all at once after session.idle instead of streaming.
     for (const name of [
-      'message.updated', 'message.part.updated', 'message.part.delta',
-      'session.idle', 'session.error',
+      'session.hello', 'message.updated', 'message.part.updated',
+      'message.part.delta', 'session.idle', 'session.error',
       'question.asked', 'question.replied', 'question.rejected',
     ]) {
       es.addEventListener(name, (e: MessageEvent) => {

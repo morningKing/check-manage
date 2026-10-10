@@ -93,7 +93,9 @@ def test_chat_sse_pings_while_upstream_idle(client, admin_headers, monkeypatch):
     rest = ''
     for chunk in resp.response:
         rest += chunk.decode() if isinstance(chunk, bytes) else chunk
-    assert 'event:' not in body + rest   # 全程无真实事件，只有注释帧
+    # 订阅锚点（session.hello）之外全程无真实事件，只有注释帧
+    assert body.count('event:') + rest.count('event:') == 1
+    assert 'event: session.hello' in body
     resp.close()
 
 
@@ -108,7 +110,9 @@ def test_chat_sse_ends_promptly_when_upstream_dies(client, admin_headers,
     resp = client.get('/ai/chat/sessions/s-dead/events', headers=admin_headers)
     assert resp.status_code == 200
     body = _drain(resp, lambda b: False, deadline_sec=10)
-    assert body == ''
+    # 上游挂死即收口：锚点（hello）之外无任何事件/ping 帧
+    assert body.count('event:') == 1 and 'event: session.hello' in body
+    assert ': ping' not in body
     resp.close()
 
 

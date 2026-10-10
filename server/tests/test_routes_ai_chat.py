@@ -413,7 +413,8 @@ def test_sse_events_emits_midturn_snapshot_burst_on_subscribe(setup):
 
 def test_sse_events_no_snapshot_burst_when_turn_completed(setup):
     """最近一条 assistant 已完成（有 time.completed）→ 没有进行中的回合，
-    不发爆发（完成的回合由持久化历史收敛）。"""
+    不发爆发（完成的回合由持久化历史收敛）。锚点事件（session.hello）之外
+    不应有任何 message 事件。"""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
                                     '/tmp/ws', None, None)
@@ -425,7 +426,29 @@ def test_sse_events_no_snapshot_burst_when_turn_completed(setup):
     oc.subscribe_events.return_value = iter([])
     resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
     body = b''.join(resp.response).decode('utf-8')
-    assert body == ''
+    assert 'event: message.updated' not in body
+    assert 'event: message.part.updated' not in body
+
+
+def test_sse_events_opens_with_session_hello_anchor(setup):
+    """订阅起点先发 session.hello 锚点（父会话的 OpenCode sessionID）——
+    前端事件归属路由（把子代理事件排除在父会话流式状态之外）的判据，必须
+    先于快照爆发与实时事件，消除子代理事件先于委托发现到达的判别竞态。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active',
+                                    '/tmp/ws', None, None)
+    oc.get_messages.return_value = []
+    oc.subscribe_events.return_value = iter([
+        {'event': 'message.updated', 'data': {'type': 'message.updated',
+            'properties': {'info': {'id': 'm1', 'role': 'assistant',
+                                    'sessionID': 'oc_sess_42'}}}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    hello_pos = body.find('event: session.hello')
+    assert hello_pos >= 0
+    assert '"sessionID": "oc_sess_42"' in body
+    assert hello_pos < body.find('event: message.updated')
 
 
 def test_sse_events_snapshot_burst_skipped_on_rest_failure(setup):

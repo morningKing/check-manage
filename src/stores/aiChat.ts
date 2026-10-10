@@ -168,6 +168,39 @@ let _pendingNewSession: Promise<string> | null = null
 // 子代理 todo 轮询进行中的会话(防重入;子代理的 SSE 事件不流经前端,
 // 实测 1.18.30 下 446 帧全属父会话,所以走 REST 轻轮询)。
 const _subTodoPolling: Record<string, boolean> = {}
+// 平台会话 id → OpenCode 内部 sessionID 锚点（后端 SSE 订阅起点的
+// session.hello 事件 / runtime-state 接口提供）。SSE 事件携带的 sessionID
+// 是 OC 内部 id，与订阅用的平台 id 不同，事件归属路由据此判别父会话。
+const _ocSidBySession: Record<string, string | null> = {}
+// 平台会话 id → 已发现子代理的 OC sessionID 集（task part 的
+// state.metadata.sessionId）。刻意不随 _resetStreamState 清空——跨回合的
+// 归属判别需要它（子代理事件在多段委托/切回场景下随时可能到达）。
+const _childSids: Record<string, Set<string>> = {}
+
+/** 从事件 payload 提取该事件所属的 OpenCode sessionID（与后端
+ * chat_persist.event_session_id 同构：props.sessionID / part / info）。 */
+function _eventSessionId(data: any): string | null {
+  if (!data || typeof data !== 'object') return null
+  if (typeof data.sessionID === 'string' && data.sessionID) return data.sessionID
+  for (const k of ['part', 'info'] as const) {
+    const v = data[k]
+    if (v && typeof v === 'object' && typeof v.sessionID === 'string' && v.sessionID) {
+      return v.sessionID
+    }
+  }
+  return null
+}
+
+/** 该事件是否来自子代理/无关会话（而非本流订阅的父会话）。有 OC 锚点时
+ * sessionID ≠ 锚点即外部事件——后端代理已滤掉无关会话，能到达这里的
+ * 「未知 id」只可能是子代理（如发现事件被角落路径丢弃时）；无锚点
+ * （旧后端/锚点获取失败）退化为按已发现的子代理 id 判别。 */
+function _isForeignEvent(sid: string, evSid: string | null): boolean {
+  if (!evSid) return false
+  const oc = _ocSidBySession[sid]
+  if (oc) return evSid !== oc
+  return _childSids[sid]?.has(evSid) ?? false
+}
 
 export interface SubtaskTodoGroup {
   childSid: string
@@ -362,7 +395,14 @@ export const useAiChatStore = defineStore('aiChat', {
       // _adoptStreamTarget 收编流式目标 + 置 streaming），因此轮询守卫
       // （reloadMessages）对它同样有效；轮询只在流未订阅/重连中降级启用。
       if (opts.stream === false) this._closeStream()
-      else this._openStream(id)
+      else {
+        this._openStream(id)
+        // 切回会话（新开流，非重连）同样对账一次：离开期间回合可能已结束
+        // 而爆发缺席（最近一条 assistant 已完成 → 后端不发爆发），门禁空转
+        // 会把视图冻结在离开前的半截回合——runtime-state 对账收敛到持久化
+        // 终态（2026-10-11 子代理区块「切回不刷新」缺陷）。
+        void this._syncAfterReconnect(id)
+      }
     },
 
     // Re-fetch the persisted messages for `id` and adopt them. Used to live-poll
@@ -875,6 +915,8 @@ export const useAiChatStore = defineStore('aiChat', {
       delete this.queuedBySession[id]
       delete this.usageBySession[id]
       delete this.turnFailure[id]
+      delete _ocSidBySession[id]
+      delete _childSids[id]
     },
 
     async clearSession(id: string) {
@@ -935,6 +977,9 @@ export const useAiChatStore = defineStore('aiChat', {
     async _syncAfterReconnect(sid: string) {
       try {
         const st = await getRuntimeState(sid)
+        // 事件归属路由的兜底锚点：session.hello 缺席（旧后端）时从
+        // runtime-state 补取父会话的 OC sessionID。
+        if (st?.opencodeSessionId) _ocSidBySession[sid] = st.opencodeSessionId
         if (st.turnStatus !== 'running' && this.streaming[sid]) {
           this.streaming[sid] = false
           this.thinking[sid] = false
@@ -1003,7 +1048,23 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     _handleEvent(sid: string, event: string, data: any) {
+      // 事件归属路由（2026-10-11 子代理区块缺陷修复）：后端代理会把已发现
+      // 子代理的全部事件原样转发给浏览器，旧实现一律当父会话事件处理——
+      // 子代理的 message/part 事件写进主消息流（本该在子代理区块里的内容
+      // 跑到区块外，reasoning 串进全局思考面板），子代理的 session.idle/
+      // session.error 还会重置父会话流式门禁（切回会话/多段委托后区块
+      // 冻结到回合结束或中断）。子代理内容统一走 REST 轮询（SubtaskBubble
+      // 展开自取 / pollSubtaskTodos），外部会话事件一律不触碰父流式状态。
+      if (_isForeignEvent(sid, _eventSessionId(data))) return
       switch (event) {
+        case 'session.hello': {
+          // 订阅锚点：本流父会话的 OC sessionID（后端在爆发/实时事件之前
+          // 发送，先于任何子代理事件消除判别竞态）。
+          if (typeof data?.sessionID === 'string' && data.sessionID) {
+            _ocSidBySession[sid] = data.sessionID
+          }
+          break
+        }
         case 'message.updated': {
           const info = data?.info
           if (info?.role === 'assistant' && info?.id) {
@@ -1048,6 +1109,7 @@ export const useAiChatStore = defineStore('aiChat', {
             if (part.tool === 'task' && childSid) {
               // 委托发生/状态推进:启动(或继续)子代理 todo 轮询
               void this.pollSubtaskTodos(sid)
+              ;(_childSids[sid] ?? (_childSids[sid] = new Set())).add(childSid)
               ;(_toolChildByMsg[sid] ?? (_toolChildByMsg[sid] = {}))[part.messageID] = childSid
               const subPartId = _subtaskPartByMsg[sid]?.[part.messageID]
               if (subPartId) {
@@ -1112,7 +1174,9 @@ export const useAiChatStore = defineStore('aiChat', {
           if (!partID || field !== 'text' || typeof delta !== 'string' || !delta) break
           if (!_assistantMsgIds[sid]?.has(messageID)) break
           const list = this.messages[sid] ?? []
-          const msg = list.length ? list[list.length - 1] : undefined
+          // 目标行按 messageID 定位（与 _upsertAssistantPart 同一纪律）——
+          // 读「最后一行」会把增量拼到末尾的排队插话气泡等别的行上
+          const msg = list.find((m) => m.id === messageID)
           const idx = _partIndexById[sid]?.[partID]
           const cur = msg && idx !== undefined ? msg.content[idx] : null
           if (cur?.type === 'reasoning') {

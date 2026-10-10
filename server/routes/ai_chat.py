@@ -1466,6 +1466,13 @@ def sse_events(sid):
         state = new_state()
         logger.info('sse stream open session=%s oc=%s', sid, opencode_session_id)
         try:
+            # 订阅锚点：先把本会话的 OpenCode sessionID 告诉前端——事件携带
+            # 的是 OC 内部 id，与订阅用的平台会话 id 不同，前端事件归属路由
+            # （把子代理事件排除在父会话流式状态之外，2026-10-11 子代理区块
+            # 缺陷修复）需要这个判据。必须先于快照爆发与实时流，消除子代理
+            # 事件先于委托发现到达时的判别竞态。
+            yield _format_sse('session.hello',
+                              {'sessionID': opencode_session_id, 'sessionId': sid})
             # 订阅起点先补发进行中回合的快照爆发（见 _midturn_snapshot_events），
             # 再进入实时流。爆发同样喂 apply_event：代理自己的累积状态与前端
             # 同步预热——中途挂流触发的兜底持久化（无后台监听器时）才不会缺
