@@ -21,15 +21,17 @@ class TestCoverageSplit:
         assert r == {'wallMs': 1000, 'modelMs': 400, 'toolMs': 0,
                      'subagentWaitMs': 400, 'idleMs': 200}
 
-    def test_subagent_under_model_is_wait_zero(self):
-        # 子代理区间完全落在模型活跃内（父轮次在等 task 返回）→ 等待为 0
+    def test_subagent_inside_model_counted_as_wait(self):
+        # v2 语义：委托跨度（含落在模型轮内的）一律归「子代理等待」——
+        # 轮次时长是毛跨度（含挂起等委托的时间），不切出来会被误标为模型
         r = coverage_split(0, 1000, [(0, 1000)], [(200, 800)])
-        assert r['subagentWaitMs'] == 0 and r['modelMs'] == 1000 and r['idleMs'] == 0
+        assert r['subagentWaitMs'] == 600 and r['modelMs'] == 400 and r['idleMs'] == 0
 
     def test_partial_overlap_counts_only_exposed_wait(self):
-        # 子代理 [300,900] 与模型 [0,500] 重叠 200 → 等待只算露出的 [500,900]=400
+        # v2：委托跨度 [300,900]=600 全归等待；模型只剩 [0,300]=300
         r = coverage_split(0, 1000, [(0, 500)], [(300, 900)])
-        assert r['subagentWaitMs'] == 400 and r['idleMs'] == 100
+        assert r['subagentWaitMs'] == 600 and r['modelMs'] == 300
+        assert r['idleMs'] == 100
 
     def test_overlapping_model_turns_unioned_not_summed(self):
         # 两轮模型区间重叠 [200,400]：并集 [0,600]=600，不是 400+400
@@ -56,19 +58,31 @@ class TestCoverageSplit:
         assert r == {'wallMs': 1000, 'modelMs': 600, 'toolMs': 400,
                      'subagentWaitMs': 0, 'idleMs': 0}
 
-    def test_tool_outside_model_ignored(self):
-        # 工具只发生在模型回合内；模型外的「工具区间」不计（防御）
+    def test_tool_outside_model_still_counted(self):
+        # v2：工具时间就是工具时间（不依赖是否落在模型轮内）
         r = coverage_split(0, 1000, [(0, 400)], [], [(500, 900)])
-        assert r['toolMs'] == 0 and r['modelMs'] == 400
+        assert r['toolMs'] == 400 and r['modelMs'] == 400 and r['idleMs'] == 200
 
     def test_tool_partial_overlap(self):
         r = coverage_split(0, 1000, [(0, 500)], [], [(300, 800)])
-        assert r['toolMs'] == 200 and r['modelMs'] == 300 and r['idleMs'] == 500
+        assert r['toolMs'] == 500 and r['modelMs'] == 300 and r['idleMs'] == 200
 
     def test_default_no_tool_param_backwards_compatible(self):
         r = coverage_split(0, 1000, [(0, 400)], [(600, 1000)])
         assert r['toolMs'] == 0
         assert r['modelMs'] == 400 and r['subagentWaitMs'] == 400
+
+    def test_task_spans_counted_as_delegate_wait(self):
+        # task 工具跨度（等子代理）归「子代理等待」而非工具——v2 语义修复
+        r = coverage_split(0, 1000, [(0, 1000)], [], [], [(200, 800)])
+        assert r['subagentWaitMs'] == 600 and r['toolMs'] == 0
+        assert r['modelMs'] == 400 and r['idleMs'] == 0
+
+    def test_tool_vs_task_priority(self):
+        # 同段并存：非 task 工具优先于 task 等待（两者并集已铺满轮次 → idle 0）
+        r = coverage_split(0, 1000, [(0, 1000)], [], [(200, 600)], [(200, 600)])
+        assert r['toolMs'] == 400 and r['subagentWaitMs'] == 0
+        assert r['modelMs'] == 600 and r['idleMs'] == 0
 
 
 # ---- 任务指标与聚合（DB 播种）----
@@ -143,20 +157,20 @@ def _seed_perf(db_conn, user_id, *, source_type='batch', oc_sid=None,
 
 class TestAttemptMetrics:
     def test_metrics_coverage_tokens_subtasks(self, db_conn, user_id):
-        # 墙钟 500s：模型 [0,200]s 一轮(dur 200s, tin 5000)；子代理 [100,300]s
-        # → 等待只算 [200,300]=100s，间隙 200s
+        # 墙钟 500s：模型轮 [0,200]s（毛，含挂起）；委托 [100,300]s。
+        # v2：委托全段 200s 归「子代理等待」；模型净 = [0,100]s；间隙 200s
         _bid, _sid, aid = _seed_perf(
             db_conn, user_id, model_turns=[(200_000, 5000, 800, 0)],
             subtasks=[('general', 100, 300)])
         m = load_attempt_metrics(db_conn, aid)
         assert m['wallMs'] == 500_000
-        assert m['modelMs'] == 200_000
-        assert m['subagentWaitMs'] == 100_000
+        assert m['modelMs'] == 100_000
+        assert m['subagentWaitMs'] == 200_000
         assert m['idleMs'] == 200_000
         assert m['turns'] == 1 and m['tokensIn'] == 5000 and m['tokensOut'] == 800
         assert m['subtaskCount'] == 1
         assert m['subtasks'][0]['agent'] == 'general'
-        assert m['turnDetails'][0]['durationMs'] == 200_000
+        assert m['turnDetails'][0]['durationMs'] == 200_000   # 轮次仍是毛时长
         assert m['completeness'] == {'turnsWithoutDuration': 0, 'runningSubtasks': 0}
 
     def test_missing_meta_counted_in_completeness(self, db_conn, user_id):

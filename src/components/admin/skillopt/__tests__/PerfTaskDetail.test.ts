@@ -46,6 +46,10 @@ describe('PerfTaskDetail', () => {
     expect(w.find('[data-test="cov-wait"]').attributes('style')).toContain('30%')
     expect(w.text()).toContain('general')
     expect(w.text()).toContain('68% 时间在等子代理')
+    // 口径说明：四段互斥 + 表格毛跨度提示（对账指引）
+    expect(w.find('[data-test="coverage-note"]').exists()).toBe(true)
+    expect(w.text()).toContain('之和 = 墙钟')
+    expect(w.text()).toContain('直接相加会大于墙钟')
   })
 
   it('诊断接口失败不影响主数据渲染（仅提示，不整页报错）', async () => {
@@ -72,7 +76,8 @@ describe('PerfTaskDetail', () => {
                  completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
       coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 30000, idleMs: 0,
                   toolMs: 20000 },
-      turns: [],
+      turns: [{ messageId: 'm1', createdAt: null, durationMs: 50000,
+                tokensIn: 5000, tokensOut: 500, preview: 'p', toolCount: 1 }],
       subtasks: [],
       tools: { errorCount: 1, durationAvailable: true,
                byTool: [{ tool: 'bash', count: 2, totalMs: 40000 },
@@ -103,6 +108,12 @@ describe('PerfTaskDetail', () => {
     expect(w.text()).toContain('ls -la /data')
     expect(w.text()).toContain('32.0s')
     expect(w.text()).toContain('子代理 ses_9ab')
+    // 轮次表工具数列 + 展开行小计（ElTable 展开内容需触发展开才渲染）
+    expect(w.text()).toContain('1 次')
+    await w.find('.el-table__expand-icon').trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.text()).toContain('本轮工具 1 次 · 合计 32.0s')
+    expect(w.text()).toContain('ls -la /data')
   })
 
   it('Skill 耗时表渲染 runtime 精确值与来源徽标，无记录显示空态', async () => {

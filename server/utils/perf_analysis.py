@@ -69,19 +69,28 @@ def _intersect(base: list[tuple[int, int]], mask: list[tuple[int, int]]) -> list
 def coverage_split(wall_start_ms: int, wall_end_ms: int,
                    model_intervals: list[tuple[int, int]],
                    subagent_intervals: list[tuple[int, int]],
-                   tool_intervals: list[tuple[int, int]] | None = None) -> dict:
-    """attempt 墙钟 → 互斥覆盖时长。二期（spec §3.2/§7）：tool_intervals
-    提供时产出第四类 toolMs = 工具覆盖 ∩ 模型覆盖（工具发生在模型回合内），
-    modelMs 相应扣除——四类之和仍 = wallMs。缺省 tool 0，一期调用零改动。"""
+                   tool_intervals: list[tuple[int, int]] | None = None,
+                   task_intervals: list[tuple[int, int]] | None = None) -> dict:
+    """attempt 墙钟 → 互斥覆盖时长。v2 优先级分解（工具 > 子代理等待 > 模型
+    > 间隙），四类之和恒 = wallMs：
+
+    - toolMs          非 task 工具覆盖（bash/read 等真实工具执行）
+    - subagentWaitMs  子代理跨度 ∪ task 工具跨度（等委托），扣除非 task 工具
+                      ——task 跨度无论是否落在轮内都归等待（轮次时长是毛
+                      跨度含挂起等委托，不切出来会被误标为模型/工具）
+    - modelMs         模型轮次跨度扣除以上两类（纯推理）
+    - idleMs          其余
+    task_intervals 缺省为空：此时 subagentWait = 子代理跨度原值。"""
     wall_ms = max(0, wall_end_ms - wall_start_ms)
     model = _union(model_intervals, wall_start_ms, wall_end_ms)
     sub = _union(subagent_intervals, wall_start_ms, wall_end_ms)
-    tool_ivs = _union(tool_intervals or [], wall_start_ms, wall_end_ms)
-    tool_ms = _covered_ms(_intersect(model, tool_ivs))
-    model_ms = _covered_ms(_subtract(model, tool_ivs))
-    wait = _subtract(sub, model)               # 子代理等待仍相对模型总覆盖
-    wait_ms = _covered_ms(wait)
-    idle_ms = max(0, wall_ms - model_ms - tool_ms - wait_ms)
+    tool = _union(tool_intervals or [], wall_start_ms, wall_end_ms)
+    task = _union(task_intervals or [], wall_start_ms, wall_end_ms)
+    delegate = _union(sub + task, wall_start_ms, wall_end_ms)
+    tool_ms = _covered_ms(tool)
+    wait_ms = _covered_ms(_subtract(delegate, tool))
+    model_ms = _covered_ms(_subtract(_subtract(model, tool), delegate))
+    idle_ms = max(0, wall_ms - tool_ms - wait_ms - model_ms)
     return {'wallMs': wall_ms, 'modelMs': model_ms, 'toolMs': tool_ms,
             'subagentWaitMs': wait_ms, 'idleMs': idle_ms}
 
