@@ -28,8 +28,11 @@ with get_db() as conn:
 `], { cwd: 'E:/wsl/check/check-manage', encoding: 'utf-8' })
 }
 
-// 确定性种子的固定 id（便于清理；复跑前先清防撞）
+// 确定性种子的固定 id（便于清理；复跑前先清防撞）。
+// agent_tool_calls 对 sessions 无 FK——会话级联清不掉工具调用行，
+// 而 (oc_session_id, part_id) 唯一索引使复跑必撞，故必须显式先清。
 const PF_CLEANUP = `
+  DELETE FROM agent_tool_calls WHERE oc_session_id = 'oc-pf-e2e';
   DELETE FROM ai_chat_sessions WHERE id = 'pf-e2e-sess';
   DELETE FROM ai_execution_attempts WHERE id = 'pf-e2e-att';
   DELETE FROM ai_chat_batches WHERE id = 'pf-e2e-batch';
@@ -67,6 +70,14 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
     INSERT INTO ai_chat_subtasks (id, root_session_id, agent, description, status, created_at, completed_at)
     VALUES ('ses-pf-e2e', 'pf-e2e-sess', 'general', 'e2e 委派', 'completed',
             NOW() - interval '400 seconds', NOW() - interval '200 seconds');
+    -- 工具调用两行（attempt 时窗内；不显式插 id——BIGSERIAL 自增）：
+    -- bash 150s + 50s = 200s 工具时长，聚合表应出现 bash 且从模型活跃中切出
+    INSERT INTO agent_tool_calls (oc_session_id, root_session_id, part_id,
+      tool, args_text, state, occurred_at, started_at, duration_ms) VALUES
+    ('oc-pf-e2e', 'pf-e2e-sess', 'pt1', 'bash', '{}', 'completed',
+     NOW() - interval '350 seconds', NOW() - interval '350 seconds', 150000),
+    ('oc-pf-e2e', 'pf-e2e-sess', 'pt2', 'bash', '{}', 'completed',
+     NOW() - interval '300 seconds', NOW() - interval '300 seconds', 50000);
   `)
   try {
     await gotoWithAuth(page, PAGE)
@@ -81,6 +92,9 @@ test('性能分析：DB 播种任务在视图中渲染（趋势+下钻+诊断）
     await page.locator('.perf-view .el-table__row').first().click()
     await expect(page.locator('[data-test="cov-model"]')).toBeVisible({ timeout: 10_000 })
     await expect(page.locator('[data-test="diag-list"]')).toBeVisible()
+    // 工具耗时聚合表：播种的两条 bash 工具调用带真实时长 → 表可见且含 bash
+    await expect(page.locator('[data-test="tool-perf-table"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-test="tool-perf-table"]')).toContainText('bash')
     await screenshot(page, 'skillopt-perf-seeded-drilldown')
   } finally {
     dbExec(PF_CLEANUP)
