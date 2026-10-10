@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { ElDrawer, ElAlert, ElTable, ElTableColumn } from 'element-plus'
+import { ElDrawer, ElAlert, ElTable, ElTableColumn, ElTag } from 'element-plus'
 
 vi.mock('@/api/aiSkills', async (orig) => ({
   ...(await (orig as any)()),
@@ -90,5 +90,59 @@ describe('PerfTaskDetail', () => {
     expect(w.text()).toContain('bash')
     expect(w.text()).toContain('40.0s')
     expect(w.find('[data-test="cov-tool"]').attributes('style')).toContain('20%')
+  })
+
+  it('Skill 耗时表渲染 runtime 精确值与来源徽标，无记录显示空态', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 0, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 5000, tokensOut: 500,
+                 subtaskCount: 0, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 0, idleMs: 0,
+                  toolMs: 0 },
+      turns: [], subtasks: [],
+      tools: { errorCount: 0, durationAvailable: false, byTool: [], repeats: [] },
+      skills: [{ name: 'stock-analysis', source: 'runtime',
+                 evidenceLevel: 'confirmed', invokedAt: null, durationMs: 45000 },
+               { name: 'ghost-skill', source: 'heuristic',
+                 evidenceLevel: 'inferred', invokedAt: null, durationMs: null }],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn, ElTag },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.find('[data-test="skill-perf-table"]').exists()).toBe(true)
+    expect(w.text()).toContain('stock-analysis')
+    expect(w.text()).toContain('45.0s')
+    expect(w.text()).toContain('未采集')          // inferred 无时长 → 宁缺不估
+  })
+
+  it('无 skill 调用记录时显示空态文案', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 0, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 0, tokensIn: 0, tokensOut: 0,
+                 subtaskCount: 0, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 0, idleMs: 0,
+                  toolMs: 0 },
+      turns: [], subtasks: [],
+      tools: { errorCount: 0, durationAvailable: false, byTool: [], repeats: [] },
+      skills: [],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    expect(w.find('[data-test="skill-perf-empty"]').exists()).toBe(true)
   })
 })

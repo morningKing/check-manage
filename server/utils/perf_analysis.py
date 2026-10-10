@@ -502,3 +502,86 @@ def _def_of_attempt(db_ctx, attempt_id: str):
                 "ORDER BY kind, name LIMIT 1", (attempt_id,))
             row = cur.fetchone()
     return (row[0], row[1]) if row else (None, None)
+
+
+# ---- Skill 调用耗时推导（方案 2：runtime 精确 + 启发式 inferred，纯读）----
+
+_SKILL_INV_SQL = (
+    "SELECT skill_name, source, evidence_level, invoked_at, evidence_refs "
+    "FROM ai_skill_invocations WHERE attempt_id = %s ORDER BY invoked_at")
+
+_TOOL_TIMELINE_SQL = (
+    "SELECT part_id, tool, args_text, started_at, duration_ms, occurred_at "
+    "FROM agent_tool_calls "
+    "WHERE root_session_id = %s"
+    " AND occurred_at >= to_timestamp(%s/1000.0)"
+    " AND occurred_at <= to_timestamp(%s/1000.0) ORDER BY occurred_at")
+
+
+def _part_ref(evidence_refs) -> str | None:
+    """evidence_refs（JSONB 数组）解析 runtime 上报的 partID。"""
+    for ref in evidence_refs or []:
+        if isinstance(ref, str) and ref.startswith('event:skill:'):
+            return ref[len('event:skill:'):] or None
+    return None
+
+
+def derive_skill_durations(db_ctx, attempt_id: str, session_id: str,
+                           start_ms: int, end_ms: int) -> list:
+    """skill 调用耗时推导（性能下钻 Skill 耗时表数据源，纯读两级）：
+
+    - runtime 确认行（evidence_refs 含 event:skill:<partID>）：按 part_id 回查
+      agent_tool_calls 的二期时长列（started_at/duration_ms）——精确值；
+    - 启发式（inferred）行：工具时间线里「读该 skill 的 SKILL.md」的调用为
+      起点，证据链（args 引用 skill 目录名）最后一次调用为终点取跨度；仅
+      加载无后续引用时跨度到墙钟终点；找不到 SKILL.md 读取 → durationMs
+      为 None（宁缺不估）。
+    runtime 行回查不到账本行也出 None。列表条目：
+    {name, source, evidenceLevel, invokedAt, durationMs|None}。"""
+    with _open_conn(db_ctx) as conn:
+        with conn.cursor() as cur:
+            cur.execute(_SKILL_INV_SQL, (attempt_id,))
+            inv_cols = [d[0] for d in cur.description]
+            invocations = [dict(zip(inv_cols, r)) for r in cur.fetchall()]
+            cur.execute(_TOOL_TIMELINE_SQL, (session_id, start_ms, end_ms))
+            timeline = cur.fetchall()
+
+    # 工具时间线：每行 (start_ms 有效值, dur, args)
+    rows = []
+    for part_id, tool, args_text, started_at, dur_ms, occurred_at in timeline:
+        s = _to_ms(started_at) or _to_ms(occurred_at)
+        rows.append({'partId': part_id, 'tool': tool,
+                     'args': args_text or '', 'start': s,
+                     'dur': int(dur_ms) if dur_ms is not None else 0})
+    skill_parts = {r['partId']: r for r in rows if r['tool'] == 'skill'}
+
+    def _skill_dir_refs(name: str) -> list:
+        return [r for r in rows if name in r['args'] and 'SKILL.md' in r['args']]
+
+    def _any_ref_after(name: str, after_start: int) -> list:
+        return [r for r in rows
+                if name in r['args'] and r['start'] > after_start]
+
+    out: list = []
+    for inv in invocations:
+        name = inv['skill_name']
+        refs = inv.get('evidence_refs') or []
+        duration = None
+        if inv['source'] == 'runtime':
+            part = _part_ref(refs)
+            hit = skill_parts.get(part) if part else None
+            if hit:
+                duration = hit['dur'] or None
+        else:
+            loads = _skill_dir_refs(name)
+            if loads:
+                start = min(r['start'] for r in loads)
+                chain = _any_ref_after(name, start)
+                end = (max(r['start'] + r['dur'] for r in chain)
+                       if chain else end_ms)
+                duration = max(0, end - start)
+        out.append({'name': name, 'source': inv['source'],
+                    'evidenceLevel': inv['evidence_level'],
+                    'invokedAt': _iso(inv['invoked_at']),
+                    'durationMs': duration})
+    return out

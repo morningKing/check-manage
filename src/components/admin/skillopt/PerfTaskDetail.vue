@@ -64,6 +64,32 @@
           本任务无工具级耗时数据（早于采集上线或无工具调用）。
         </div>
 
+        <!-- Skill 耗时（方案 2 推导）：runtime 精确 / inferred 启发式跨度 -->
+        <h4>Skill 耗时</h4>
+        <ElTable v-if="skills.length" :data="skills" size="small"
+                 data-test="skill-perf-table">
+          <ElTableColumn prop="name" label="Skill" min-width="180" show-overflow-tooltip />
+          <ElTableColumn label="来源" width="110">
+            <template #default="{ row }">
+              <ElTag size="small" :type="row.source === 'runtime' ? 'success' : 'info'">
+                {{ row.source === 'runtime' ? '精确' : '推导' }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="耗时" width="110">
+            <template #default="{ row }">
+              <span :class="{ 'slow-turn': (row.durationMs || 0) >= 30000 }">
+                {{ row.durationMs == null ? '未采集' : fmtMs(row.durationMs) }}</span>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="占墙钟" width="100">
+            <template #default="{ row }">
+              {{ row.durationMs == null ? '-' : pct(cov.wallMs ? row.durationMs / cov.wallMs : 0) }}
+            </template>
+          </ElTableColumn>
+        </ElTable>
+        <div v-else class="muted" data-test="skill-perf-empty">本任务无 skill 调用记录。</div>
+
         <ElAlert v-if="diagnosesError" type="warning" :closable="false"
                  :title="diagnosesError" />
         <PerfDiagnosisList :diagnoses="diagnoses" />
@@ -96,6 +122,7 @@ const { ready: wfReady, setOption: wfSet } = useEcharts(waterfallEl)
 const cov = computed(() => detail.value?.coverage
   ?? { wallMs: 0, modelMs: 0, subagentWaitMs: 0, idleMs: 0, toolMs: 0 })
 const tools = computed(() => detail.value?.tools)
+const skills = computed(() => detail.value?.skills ?? [])
 const ratio = (ms: number) => (cov.value.wallMs ? ms / cov.value.wallMs : 0)
 const turnRowClass = ({ row }: any) =>
   [(row.durationMs || 0) >= 30_000 ? 'slow-turn-row' : '',

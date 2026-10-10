@@ -456,6 +456,7 @@ class TestPerfEndpoints:
         assert 'toolMs' in body['coverage']
         assert set(body['tools']) >= {'errorCount', 'repeats', 'byTool',
                                       'durationAvailable'}
+        assert isinstance(body['skills'], list)   # skill 耗时推导（方案 2）
         assert isinstance(body['turns'], list) and isinstance(body['subtasks'], list)
 
         r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}/diagnosis',
@@ -520,3 +521,123 @@ class TestToolDurationSchema:
             names = {r[0] for r in cur.fetchall()}
         assert names == {'idx_agent_tool_call_root',
                          'idx_execution_manifest_kind_name'}
+
+
+# ---------------------------------------------------------------------------
+# Skill 调用耗时推导（方案 2：runtime 精确 + 启发式 inferred，纯读）
+# ---------------------------------------------------------------------------
+
+from utils.perf_analysis import derive_skill_durations  # noqa: E402
+
+
+def _seed_invocation(db_conn, aid, sid, name, *, source='runtime',
+                     evidence_refs=None, invoked_off=100):
+    refs = json.dumps(evidence_refs if evidence_refs is not None
+                      else ['manifest:' + name])
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ai_skill_invocations (id, session_id, attempt_id,"
+            " skill_name, skill_hash, source, evidence_level, invoked_at,"
+            " evidence_refs) VALUES (%s, %s, %s, %s, '', %s,"
+            " %s, NOW() - interval '%s seconds', %s::jsonb)",
+            (f'inv-{uuid.uuid4().hex[:10]}', sid, aid, name, source,
+             'confirmed' if source == 'runtime' else 'inferred',
+             invoked_off, refs))
+    db_conn.commit()
+
+
+def _seed_tool_row(db_conn, sid, part_id, args, *, tool='read',
+                   start_off=100, dur=None, state='completed'):
+    """start_off：相对 attempt 起点（NOW()-600s）的秒偏移。"""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+            " part_id, tool, args_text, state, occurred_at, started_at,"
+            " duration_ms) VALUES (%s, %s, %s, %s, %s, %s,"
+            " NOW() - interval '600 seconds' + interval '%s seconds',"
+            " NOW() - interval '600 seconds' + interval '%s seconds', %s)",
+            (f'oc-sd-{uuid.uuid4().hex[:6]}', sid, part_id, tool, args,
+             state, start_off, start_off, dur))
+    db_conn.commit()
+
+
+def _db_window_ms(db_conn):
+    """attempt 窗口的 epoch 毫秒（NOW()-600s, NOW()-100s）——取自 DB 时钟，
+    与种子的 NOW() 同源避免偏差。"""
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT EXTRACT(EPOCH FROM (NOW() - interval '600 seconds')) * 1000,"
+                    " EXTRACT(EPOCH FROM (NOW() - interval '100 seconds')) * 1000")
+        s, e = cur.fetchone()
+    return int(s), int(e)
+
+
+class TestDeriveSkillDurations:
+    def test_runtime_row_exact_duration_via_part_id(self, db_conn, user_id):
+        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _seed_invocation(db_conn, aid, sid, 'stock-analysis',
+                         evidence_refs=['event:skill:part-skill-1'])
+        _seed_tool_row(db_conn, sid, 'part-skill-1',
+                       '{"name": "stock-analysis"}', tool='skill', dur=45_000)
+        w0, w1 = _db_window_ms(db_conn)
+        rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
+        import json as _j
+        with db_conn.cursor() as _c:
+            _c.execute("SELECT part_id, tool, root_session_id, started_at,"
+                       " duration_ms FROM agent_tool_calls WHERE root_session_id=%s",
+                       (sid,))
+            print('DBG toolrows:', _c.fetchall())
+            _c.execute("SELECT skill_name, source, attempt_id, evidence_refs"
+                       " FROM ai_skill_invocations WHERE session_id=%s", (sid,))
+            print('DBG invrows:', _c.fetchall())
+        print('DBG window:', w0, w1, 'rows:', _j.dumps(rows, default=str))
+        hit = next(r for r in rows if r['name'] == 'stock-analysis')
+        assert hit['source'] == 'runtime'
+        assert hit['durationMs'] == 45_000        # 精确：来自二期时长列
+
+    def test_runtime_row_part_missing_yields_none(self, db_conn, user_id):
+        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _seed_invocation(db_conn, aid, sid, 'no-part',
+                         evidence_refs=['event:skill:part-gone'])
+        w0, w1 = _db_window_ms(db_conn)
+        rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
+        hit = next(r for r in rows if r['name'] == 'no-part')
+        assert hit['durationMs'] is None          # 宁缺不估
+
+    def test_heuristic_row_span_from_read_to_last_ref(self, db_conn, user_id):
+        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _seed_invocation(db_conn, aid, sid, 'my-skill', source='heuristic')
+        _seed_tool_row(db_conn, sid, 'pr1',
+                       '{"filePath": "C:/x/skills/my-skill/SKILL.md"}',
+                       start_off=100, dur=500)
+        _seed_tool_row(db_conn, sid, 'pr2',
+                       '{"filePath": "C:/x/skills/my-skill/ref.md"}',
+                       start_off=200, dur=1_000)
+        w0, w1 = _db_window_ms(db_conn)
+        rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
+        hit = next(r for r in rows if r['name'] == 'my-skill')
+        assert hit['source'] == 'heuristic'
+        # 跨度 = 加载(100s) 到最后引用(200s+1s) → 101s，inferred
+        # 跨度 = 加载(100s) 到最后引用(200s+1s) ≈ 101s；种子行与窗口取自
+        # 不同事务的 NOW()（毫秒级偏差），容差断言
+        assert abs(hit['durationMs'] - 101_000) < 5_000
+
+    def test_heuristic_row_load_only_spans_to_wall_end(self, db_conn, user_id):
+        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _seed_invocation(db_conn, aid, sid, 'lonely', source='heuristic')
+        _seed_tool_row(db_conn, sid, 'pl1',
+                       '{"filePath": "C:/x/skills/lonely/SKILL.md"}',
+                       start_off=100, dur=500)
+        w0, w1 = _db_window_ms(db_conn)
+        rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
+        hit = next(r for r in rows if r['name'] == 'lonely')
+        # 只有加载引用 → 到墙钟终点（500s 起点）→ 400s
+        # 只有加载引用 → 到墙钟终点（t≈500s）→ ≈400s（NOW 事务偏差容差）
+        assert abs(hit['durationMs'] - 400_000) < 5_000
+
+    def test_heuristic_row_no_read_yields_none(self, db_conn, user_id):
+        _b, sid, aid = _seed_perf(db_conn, user_id)
+        _seed_invocation(db_conn, aid, sid, 'ghost', source='heuristic')
+        w0, w1 = _db_window_ms(db_conn)
+        rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
+        hit = next(r for r in rows if r['name'] == 'ghost')
+        assert hit['durationMs'] is None

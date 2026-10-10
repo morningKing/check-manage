@@ -50,6 +50,8 @@ const detail = (): PerfAttemptDetail => ({
                status: 'completed', startedAt: '2026-10-09T10:00:10',
                finishedAt: '2026-10-09T10:00:40', wallMs: 30000 }],
   tools: { errorCount: 0, repeats: [], byTool: [], durationAvailable: false },
+  skills: [{ name: 'stock-analysis', source: 'runtime',
+             evidenceLevel: 'confirmed', invokedAt: null, durationMs: 45000 }],
   completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
 })
 

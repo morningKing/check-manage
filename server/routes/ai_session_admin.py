@@ -1565,7 +1565,8 @@ def perf_def_tasks(kind, name):
 @require_permission('admin.ai_chat_admin')
 def perf_attempt(aid):
     from db import get_db
-    from utils.perf_analysis import load_attempt_metrics
+    from utils.perf_analysis import (load_attempt_metrics,
+                                     derive_skill_durations)
     m = load_attempt_metrics(get_db, aid)
     if not m:
         return jsonify({'error': 'attempt not found'}), 404
@@ -1573,6 +1574,14 @@ def perf_attempt(aid):
         'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
         'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs'],
         'toolMs': 0}
+    # skill 调用耗时（方案 2）：runtime 精确 + 启发式 inferred，纯读推导
+    from datetime import datetime as _dt
+    _s = _dt.fromisoformat(m['startedAt']) if m.get('startedAt') else None
+    _e = _dt.fromisoformat(m['finishedAt']) if m.get('finishedAt') else None
+    skills = derive_skill_durations(
+        get_db, aid, m['sessionId'],
+        int(_s.timestamp() * 1000) if _s else 0,
+        int(_e.timestamp() * 1000) if _e else 0)
     return jsonify({'attempt': {**{k: v for k, v in m.items()
                                    if k not in ('turnDetails', 'subtasks', 'tools', 'coverage')},
                                  'toolMs': cov.get('toolMs', 0)},
@@ -1580,6 +1589,7 @@ def perf_attempt(aid):
                     'turns': m.get('turnDetails') or [],
                     'subtasks': m.get('subtasks') or [],
                     'tools': m.get('tools') or {},
+                    'skills': skills,
                     'completeness': m.get('completeness')})
 
 

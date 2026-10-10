@@ -296,6 +296,16 @@ export interface PerfToolAgg {
   durationAvailable: boolean
 }
 
+/** skill 调用耗时（方案 2 推导）：runtime 行为二期时长列精确值，
+ *  inferred 行为「加载→证据链末」启发式跨度，采不到为 null（宁缺不估）。 */
+export interface PerfSkillAgg {
+  name: string
+  source: 'runtime' | 'heuristic'
+  evidenceLevel: 'confirmed' | 'inferred'
+  invokedAt: string | null
+  durationMs: number | null
+}
+
 export interface PerfAttemptDetail {
   attempt: PerfTaskEntry & {
     requestedModel?: string | null; effectiveModel?: string | null
@@ -306,6 +316,7 @@ export interface PerfAttemptDetail {
   turns: PerfTurn[]
   subtasks: PerfSubtask[]
   tools: PerfToolAgg
+  skills: PerfSkillAgg[]
   completeness: { turnsWithoutDuration: number; runningSubtasks: number }
 }
 
