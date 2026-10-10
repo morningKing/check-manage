@@ -179,35 +179,41 @@ def _norm_args(args_text) -> str:
 def _tool_aggregates(rows: list) -> dict:
     """工具调用行 → 聚合 + 逐调用明细。rows（时间序）：
     (part_id, tool, args_text, state, duration_ms, started_at, subtask_id,
-     turn_index|int|None)。"""
+     turn_index|int|None)。
+
+    task 调用是「开子代理」的委派动作而非工具执行（其子代理内部的工具与
+    推理另计）——不计入 byTool/重复/失败/hotspot 等工具统计，只在 calls
+    明细保留并以 isDelegation 标注（前端渲染为「开子代理」）。"""
     by_tool: dict = {}
     key_counts: dict = {}
     errors = 0
     any_duration = False
     calls: list = []
     for part_id, tool, args_text, state, dur, started_at, subtask_id, turn_idx in rows:
-        if state == 'error':
-            errors += 1
-        entry = by_tool.setdefault(tool, {'count': 0, 'totalMs': 0,
-                                          'hasDuration': False})
-        entry['count'] += 1
-        if dur is not None:
-            any_duration = True
-            entry['hasDuration'] = True
-            entry['totalMs'] += int(dur)
-        key = f'{tool}|{_norm_args(args_text)}'
-        kc = key_counts.setdefault(key, {'count': 0, 'totalMs': 0,
-                                         'hasDuration': False, 'tool': tool,
-                                         'argsPreview': _norm_args(args_text)})
-        kc['count'] += 1
-        if dur is not None:
-            kc['hasDuration'] = True
-            kc['totalMs'] += int(dur)
+        is_delegation = (tool == 'task')
+        if not is_delegation:
+            if state == 'error':
+                errors += 1
+            entry = by_tool.setdefault(tool, {'count': 0, 'totalMs': 0,
+                                              'hasDuration': False})
+            entry['count'] += 1
+            if dur is not None:
+                any_duration = True
+                entry['hasDuration'] = True
+                entry['totalMs'] += int(dur)
+            key = f'{tool}|{_norm_args(args_text)}'
+            kc = key_counts.setdefault(key, {'count': 0, 'totalMs': 0,
+                                             'hasDuration': False, 'tool': tool,
+                                             'argsPreview': _norm_args(args_text)})
+            kc['count'] += 1
+            if dur is not None:
+                kc['hasDuration'] = True
+                kc['totalMs'] += int(dur)
         calls.append({'partId': part_id, 'tool': tool,
                       'args': _norm_args(args_text),
                       'state': state, 'startedAt': _iso(started_at),
                       'durationMs': dur, 'subtaskId': subtask_id,
-                      'turnIndex': turn_idx})
+                      'turnIndex': turn_idx, 'isDelegation': is_delegation})
     by = [{'tool': t, 'count': v['count'],
            'totalMs': v['totalMs'] if v['hasDuration'] else None}
           for t, v in sorted(by_tool.items(), key=lambda kv: -kv[1]['totalMs'])]

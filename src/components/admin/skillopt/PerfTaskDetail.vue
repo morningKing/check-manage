@@ -56,15 +56,18 @@
                 <div v-if="!turnCalls(row).length" class="muted">本轮无工具调用记录。</div>
                 <template v-else>
                   <div v-for="c in turnCalls(row)" :key="c.partId" class="turn-call">
-                    <ElTag size="small" :type="c.state === 'error' ? 'danger' : 'info'"
+                    <ElTag v-if="c.isDelegation" size="small" type="warning"
+                           class="turn-call__tool">开子代理</ElTag>
+                    <ElTag v-else size="small"
+                           :type="c.state === 'error' ? 'danger' : 'info'"
                            class="turn-call__tool">{{ c.tool }}</ElTag>
                     <code class="turn-call__args">{{ c.args || '（无参数）' }}</code>
                     <span class="turn-call__dur"
                           :class="{ 'slow-turn': (c.durationMs || 0) >= 30000 }">
                       {{ c.durationMs == null ? '-' : fmtMs(c.durationMs) }}</span>
                   </div>
-                  <div class="muted" v-if="turnToolSubtotal(row)">
-                    {{ turnToolSubtotal(row) }}
+                  <div class="muted" v-if="turnSubtotals(row)">
+                    {{ turnSubtotals(row) }}
                   </div>
                 </template>
               </div>
@@ -82,7 +85,7 @@
               <span data-test="turn-inference-cell">{{ inferenceLabel(row) }}</span>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="工具" width="90">
+          <ElTableColumn label="调用" width="90">
             <template #default="{ row }">
               {{ row.toolCount ? `${row.toolCount} 次` : '-' }}
             </template>
@@ -120,7 +123,12 @@
             <ElTableColumn label="时间" width="110">
               <template #default="{ row }">{{ shortTime(row.startedAt) }}</template>
             </ElTableColumn>
-            <ElTableColumn prop="tool" label="工具" width="110" />
+            <ElTableColumn label="工具" width="110">
+              <template #default="{ row }">
+                <ElTag v-if="row.isDelegation" size="small" type="warning">开子代理</ElTag>
+                <span v-else>{{ row.tool }}</span>
+              </template>
+            </ElTableColumn>
             <ElTableColumn label="命令 / 参数" min-width="260" show-overflow-tooltip>
               <template #default="{ row }">
                 <code class="call-args">{{ row.args || '（无参数）' }}</code>
@@ -214,11 +222,26 @@ function turnCalls(row: { messageId?: string }): PerfToolCall[] {
   if (idx < 0) return []
   return (tools.value?.calls ?? []).filter(c => c.turnIndex === idx)
 }
-function turnToolSubtotal(row: { messageId?: string }): string {
+/** 轮内小计：工具（非委派）与「开子代理」委派等待分行——毛时长 = 推理 +
+ *  工具 + 委派等待，三类各自可对账。 */
+function turnSubtotals(row: { messageId?: string }): string {
   const calls = turnCalls(row)
-  const withDur = calls.filter(c => c.durationMs != null)
-  if (!withDur.length) return ''
-  return `本轮工具 ${calls.length} 次 · 合计 ${fmtMs(withDur.reduce((a, c) => a + (c.durationMs || 0), 0))}`
+  const parts: string[] = []
+  const tools = calls.filter(c => !c.isDelegation)
+  const toolWithDur = tools.filter(c => c.durationMs != null)
+  if (tools.length) {
+    parts.push(`工具 ${tools.length} 次` +
+      (toolWithDur.length
+        ? ` · 合计 ${fmtMs(toolWithDur.reduce((a, c) => a + (c.durationMs || 0), 0))}` : ''))
+  }
+  const dels = calls.filter(c => c.isDelegation)
+  const delWithDur = dels.filter(c => c.durationMs != null)
+  if (dels.length) {
+    parts.push(`开子代理 ${dels.length} 次` +
+      (delWithDur.length
+        ? ` · 等待 ${fmtMs(delWithDur.reduce((a, c) => a + (c.durationMs || 0), 0))}` : ''))
+  }
+  return parts.join(' ｜ ')
 }
 
 /** 轮内模型推理 = 轮毛时长 − 轮内工具时长。轮内存在未采集时长的调用时

@@ -106,7 +106,8 @@ def user_id(db_conn):
         # （各用例固定幂等键一并回收防重跑撞唯一索引）
         cur.execute("DELETE FROM agent_tool_calls WHERE oc_session_id LIKE 'oc-x-%'"
                     " OR oc_session_id LIKE 'oc-agg-%' OR oc_session_id = 'oc-old'"
-                    " OR oc_session_id LIKE 'oc-cap-%' OR oc_session_id LIKE 'oc-ta-%'")
+                    " OR oc_session_id LIKE 'oc-cap-%' OR oc_session_id LIKE 'oc-ta-%'"
+                    " OR oc_session_id LIKE 'oc-del-%'")
     db_conn.commit()
 
 
@@ -260,6 +261,35 @@ class TestAttemptMetrics:
         assert [c['args'] for c in bash_calls] == ['{}', '{}']
         assert [c['durationMs'] for c in bash_calls] == [40_000, 30_000]
         assert all(c['state'] in ('completed', 'error') for c in calls)
+
+    def test_task_delegation_excluded_from_tool_stats(self, db_conn, user_id):
+        """task = 开子代理的委派动作，不是工具执行——不进 byTool/重复/失败
+        统计（子代理内部另有工具与推理），calls 明细保留并标 isDelegation。"""
+        _bid, _sid, aid = _seed_perf(db_conn, user_id)
+        rows = [
+            ('pt1', 'task', '统计行数', 'completed', 300_000),
+            ('pt2', 'task', '统计行数', 'error', None),      # 委派失败也不进失败风暴
+            ('pt3', 'bash', '{"command":"ls"}', 'error', 1_000),
+        ]
+        with db_conn.cursor() as cur:
+            for i, (pid, tool, args, st, dur) in enumerate(rows):
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                    " part_id, tool, args_text, state, occurred_at, duration_ms)"
+                    " VALUES (%s, %s, %s, %s, %s, %s,"
+                    " NOW() - interval '300 seconds' + interval '%s seconds', %s)",
+                    (f'oc-del-{i}', _sid, pid, tool, args, st, i, dur))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        tools = m['tools']
+        assert all(t['tool'] != 'task' for t in tools['byTool'])
+        by_tool = {t['tool']: t for t in tools['byTool']}
+        assert by_tool['bash'] == {'tool': 'bash', 'count': 1, 'totalMs': 1_000}
+        assert tools['errorCount'] == 1            # 只有 bash 计入失败
+        assert all(r['tool'] != 'task' for r in tools['repeats'])
+        task_calls = [c for c in tools['calls'] if c['tool'] == 'task']
+        assert len(task_calls) == 2 and all(c['isDelegation'] for c in task_calls)
+        assert task_calls[0]['durationMs'] == 300_000   # 明细保留委派等待时长
 
     def test_tool_calls_turn_assignment_and_subtask(self, db_conn, user_id):
         """轮次归组（按「最后一条 start ≤ 调用时刻」的轮次）：根会话调用带

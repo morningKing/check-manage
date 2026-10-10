@@ -301,6 +301,8 @@ export interface PerfToolCall {
   durationMs: number | null
   subtaskId: string | null
   turnIndex: number | null
+  /** task 调用 = 开子代理的委派动作（非工具执行），不计入工具统计 */
+  isDelegation: boolean
 }
 
 export interface PerfToolAgg {

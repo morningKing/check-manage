@@ -87,10 +87,11 @@ describe('PerfTaskDetail', () => {
                calls: [{ partId: 'pc1', tool: 'bash',
                          args: '{"command": "ls -la /data"}', state: 'completed',
                          startedAt: '2026-10-10T12:00:05', durationMs: 32000,
-                         subtaskId: null, turnIndex: 0 },
+                         subtaskId: null, turnIndex: 0, isDelegation: false },
                        { partId: 'pc2', tool: 'read', args: '{"p": "a.py"}',
                          state: 'error', startedAt: '2026-10-10T12:00:20',
-                         durationMs: null, subtaskId: 'ses_9ab', turnIndex: null }] },
+                         durationMs: null, subtaskId: 'ses_9ab', turnIndex: null,
+                         isDelegation: false }] },
       completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
     }))
     const w = mount(PerfTaskDetail, {
@@ -114,9 +115,55 @@ describe('PerfTaskDetail', () => {
     expect(w.find('[data-test="turn-inference-cell"]').text()).toBe('18.0s')
     await w.find('.el-table__expand-icon').trigger('click')
     await new Promise(r => setTimeout(r, 0))
-    expect(w.text()).toContain('本轮工具 1 次 · 合计 32.0s')
+    expect(w.text()).toContain('工具 1 次 · 合计 32.0s')
     expect(w.text()).toContain('ls -la /data')
     expect(w.find('[data-test="turn-inference"]').text()).toContain('18.0s')
+  })
+
+  it('task 委派行标注「开子代理」且不计入工具小计', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 30000, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 0, tokensOut: 0,
+                 subtaskCount: 1, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 30000, idleMs: 0,
+                  toolMs: 0 },
+      turns: [{ messageId: 'm1', createdAt: null, durationMs: 50000,
+                tokensIn: 0, tokensOut: 0, preview: 'p', toolCount: 2 }],
+      subtasks: [{ subtaskId: 'ses_del', agent: 'general', description: 'd',
+                   status: 'completed', startedAt: null, finishedAt: null,
+                   wallMs: 30000 }],
+      tools: { errorCount: 0, durationAvailable: true,
+               byTool: [{ tool: 'bash', count: 1, totalMs: 5000 }],
+               repeats: [],
+               callsTruncated: false,
+               calls: [{ partId: 'pk1', tool: 'task',
+                         args: '统计行数', state: 'completed',
+                         startedAt: '2026-10-10T12:00:10', durationMs: 30000,
+                         subtaskId: 'ses_del', turnIndex: 0, isDelegation: true },
+                       { partId: 'pk2', tool: 'bash', args: '{"command":"ls"}',
+                         state: 'completed', startedAt: '2026-10-10T12:00:40',
+                         durationMs: 5000, subtaskId: null, turnIndex: 0,
+                         isDelegation: false }] },
+      skills: [],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn, ElTag },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await w.find('.el-table__expand-icon').trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    // 委派行显式标注，工具小计只含非委派，委派等待单列
+    expect(w.text()).toContain('开子代理')
+    expect(w.text()).toContain('工具 1 次 · 合计 5.0s')
+    expect(w.text()).toContain('开子代理 1 次 · 等待 30.0s')
+    // byTool 聚合表不含 task 行（委派不是工具执行）
+    expect(w.find('[data-test="tool-perf-table"]').text()).not.toContain('task')
   })
 
   it('轮内有未采集时长调用时推理值显下界（≥）', async () => {
@@ -137,10 +184,10 @@ describe('PerfTaskDetail', () => {
                callsTruncated: false,
                calls: [{ partId: 'pd1', tool: 'bash', args: '{}',
                          state: 'completed', startedAt: null, durationMs: 10000,
-                         subtaskId: null, turnIndex: 0 },
+                         subtaskId: null, turnIndex: 0, isDelegation: false },
                        { partId: 'pd2', tool: 'read', args: '{}',
                          state: 'completed', startedAt: null, durationMs: null,
-                         subtaskId: null, turnIndex: 0 }] },
+                         subtaskId: null, turnIndex: 0, isDelegation: false }] },
       skills: [],
       completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
     }))
