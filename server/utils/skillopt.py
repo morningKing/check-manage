@@ -13,6 +13,11 @@
   tool.execute.before 钩子（P3-C3）：工具调用前向
   /ai/gate/internal/pre-check 校验 deny list（mode='pre' 期望），
   命中即抛错阻断该次工具调用；门禁不可达时放行（终态核对兜底）。
+  另注册 tool.execute.after 钩子（checkpoint after 时机）：工具调用后向
+  /ai/gate/internal/post-check 询问检查提示词，inject=true 时把 prompt
+  追加到工具结果文本（output.output）尾部。Task 1 探针实测：after 里
+  throw 会把工具结果摧毁成 status=error/result=null，被否——采用非阻断
+  append_result，整个钩子 try/catch 全包（fail-open，终态核对仍兜底）。
 """
 
 import json
@@ -252,15 +257,24 @@ PLUGIN_JS = """// Baize runtime trace plugin (auto-installed by Baize server).
 // pre-check 询问 deny list——命中(mode='pre' 期望 + tool/args 匹配)时抛错
 // 阻断该次调用（OpenCode 把钩子抛出的错误作为该工具调用的错误结果回给
 // 模型）。门禁服务不可达/超时时一律放行（可用性优先，终态核对仍兜底）。
+// checkpoint after 时机：tool.execute.after 钩子在每次工具调用后向
+// /ai/gate/internal/post-check 询问检查提示词，inject=true 时把 prompt
+// 非阻断追加到工具结果 output.output 尾部（append_result）。Task 1 探针
+// 实测：after 里 throw 会把工具结果摧毁成 status=error/result=null（提示
+// 词虽可见但原始结果丢失），被否——注入绝不抛错，整个钩子 try/catch
+// 全包，任何异常静默放行原始结果（fail-open，终态核对仍兜底）。
 const ENDPOINT = process.env.BAIZE_RUNTIME_EVENT_URL || '__ENDPOINT__'
 const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 const GATE_URL = process.env.BAIZE_GATE_PRECHECK_URL || '__GATE_ENDPOINT__'
+const GATE_POST_URL = process.env.BAIZE_GATE_POSTCHECK_URL || '__GATE_POSTCHECK__'
 const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
 const GATE_TIMEOUT_MS = 3000
 // (sessionID → expiry)。服务端返回 rules=0（该会话无任何 pre 规则）时短路
 // 后续工具调用的 pre-check 请求——无规则是常态，热路径零开销。
 const _gateEmpty = new Map()
 const GATE_EMPTY_TTL_MS = 30000
+// post-check 的 rules=0 短路缓存（与 pre-check 同款，独立 Map）
+const _gatePostEmpty = new Map()
 
 async function report(body) {
   if (!ENDPOINT) return
@@ -314,6 +328,32 @@ async function gatePreCheck(sessionID, tool, argsText) {
   }
 }
 
+// checkpoint after 时机（结构与 gatePreCheck 镜像）：rules=0 短路缓存、
+// 3s 超时、非 2xx → { inject: false }（不注入，fail-open）。
+async function gatePostCheck(sessionID, tool, argsText) {
+  const emptyAt = _gatePostEmpty.get(sessionID)
+  if (emptyAt) {
+    if (Date.now() - emptyAt <= GATE_EMPTY_TTL_MS) return { inject: false }
+    _gatePostEmpty.delete(sessionID)
+  }
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), GATE_TIMEOUT_MS)
+  try {
+    const res = await fetch(GATE_POST_URL, {
+      method: 'POST',
+      headers: HEADERS,
+      signal: ctrl.signal,
+      body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
+    })
+    if (!res.ok) return { inject: false }   // 非 2xx（含 token 失配 403）→ 不注入
+    const body = await res.json()
+    if (body && body.rules === 0) _gatePostEmpty.set(sessionID, Date.now())
+    return body || { inject: false }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const BaizeTracePlugin = async () => {
   return {
     async event({ event }) {
@@ -359,20 +399,40 @@ export const BaizeTracePlugin = async () => {
         throw new Error(reason)
       }
     },
+    // checkpoint after 时机：工具调用完成后询问检查提示词并注入。非阻断
+    // append_result 语义（Task 1 探针实测：after 抛错会把工具结果摧毁成
+    // status=error/result:null，被否）——把 prompt 追加到 output.output
+    // （工具结果文本）尾部，模型下一轮可见、原始结果保留。整个钩子
+    // try/catch 全包，任何异常静默 return（fail-open），绝不破坏工具结果。
+    async 'tool.execute.after'(input, output) {
+      try {
+        if (!GATE_POST_URL || !input || !input.tool || !input.sessionID) return
+        // 探针实测 after 的 input 直接含 args（{tool, sessionID, callID, args}）——
+        // argsText 就地取，无需 before 钩子暂存。
+        const body = await gatePostCheck(input.sessionID, input.tool,
+                                         gateArgsText(input && input.args))
+        if (body && body.inject && body.prompt) {
+          output.output = (output.output ?? '') + '\\n\\n' + body.prompt
+        }
+      } catch { /* fail-open：post-check 不可达/注入失败不影响工具结果 */ }
+    },
   }
 }
 """
 
 
 def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
-                          gate_endpoint: str = '') -> str | None:
+                          gate_endpoint: str = '',
+                          gate_post_endpoint: str = '') -> str | None:
     """写入 <OPENCODE_GLOBAL_DIR>/plugin/baize-trace.js（幂等）。
 
     endpoint 与 internal token 都直接嵌入插件文件（serve 子进程环境不可靠，
     内嵌值保证开箱即用；BAIZE_RUNTIME_EVENT_URL / BAIZE_INTERNAL_TOKEN env
     优先级更高，便于部署侧覆写）。gate_endpoint 是 P3-C3 PreToolUse 校验
-    端点（/ai/gate/internal/pre-check）；留空时插件模板里的占位符替换为
-    空串，pre-check 钩子短路放行（等价于未启用 deny list 拦截）。
+    端点（/ai/gate/internal/pre-check）；gate_post_endpoint 是 checkpoint
+    after 时机 post-check 端点（/ai/gate/internal/post-check，after 钩子
+    非阻断追加注入）。任一留空时插件模板里的占位符替换为空串，对应钩子
+    短路（pre 放行 / after 不注入，等价于未启用该门禁）。
     内容变化会在下次启动时重写插件文件——OC serve 需重启才重新加载。"""
     import os
     if not global_dir:
@@ -383,7 +443,8 @@ def ensure_runtime_plugin(global_dir: str, endpoint: str, token: str = '',
         path = os.path.join(pdir, RUNTIME_PLUGIN_NAME)
         js = PLUGIN_JS.replace('__ENDPOINT__', endpoint or '') \
                       .replace('__TOKEN__', token or '') \
-                      .replace('__GATE_ENDPOINT__', gate_endpoint or '')
+                      .replace('__GATE_ENDPOINT__', gate_endpoint or '') \
+                      .replace('__GATE_POSTCHECK__', gate_post_endpoint or '')
         current = open(path, encoding='utf-8').read() if os.path.exists(path) else ''
         if current != js:
             with open(path, 'w', encoding='utf-8') as f:

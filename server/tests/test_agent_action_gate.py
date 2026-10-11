@@ -995,6 +995,21 @@ class TestPostCheck:
         assert body['inject'] is True and '结论段' in body['prompt']
 
 
+def test_plugin_js_has_after_hook_and_postcheck():
+    """插件含 after 钩子与 post-check 调用（探针结论=append_result 非阻断追加）。
+
+    Task 1 探针（task-1-report.md）：after 里 throw 会把工具结果摧毁成
+    status=error/result=null，被否；注入目标是 output.output（工具结果文本）
+    非阻断追加。after 的 input 直接含 args（{tool, sessionID, callID, args}），
+    无需 before 钩子暂存——断言 _lastArgsByCall 不存在，防止暂存方案回潮。"""
+    from utils.skillopt import PLUGIN_JS
+    assert 'tool.execute.after' in PLUGIN_JS
+    assert 'gate/internal/post-check' in PLUGIN_JS
+    assert 'BAIZE_GATE_POSTCHECK_URL' in PLUGIN_JS
+    assert 'inject' in PLUGIN_JS and 'prompt' in PLUGIN_JS
+    assert '_lastArgsByCall' not in PLUGIN_JS
+
+
 # ---------------------------------------------------------------------------
 # Task 6: 终态兜底——check_session_gate 核对 checkpoint assert_spec
 # ---------------------------------------------------------------------------

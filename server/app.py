@@ -186,9 +186,12 @@ try:
     _ep = f'http://127.0.0.1:{_FPORT}/ai/memory/internal/runtime-events'
     # PreToolUse 门禁校验端点（P3-C3）：与 skill 上报同一插件进程、同一 token
     _gate_ep = f'http://127.0.0.1:{_FPORT}/ai/gate/internal/pre-check'
+    # checkpoint after 时机 post-check 端点：after 钩子非阻断追加注入
+    _gate_post_ep = f'http://127.0.0.1:{_FPORT}/ai/gate/internal/post-check'
     _sk.ensure_runtime_plugin(_OGD, _ep,
                               _os.getenv('MCP_INTERNAL_TOKEN', ''),
-                              gate_endpoint=_gate_ep)
+                              gate_endpoint=_gate_ep,
+                              gate_post_endpoint=_gate_post_ep)
     _ret = _sk.apply_retention()
     # 运营日志表保留（大数据量优化 §2.2/2.3/2.4）：operation_logs /
     # agent_tool_calls / webhook_logs 分批清理过期行
