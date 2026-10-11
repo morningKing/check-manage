@@ -155,6 +155,82 @@ def test_create_batch_rejects_missing_policy(db_conn):
                      files=[{'name': 'a.txt', 'path': 'batch-staging/u/a.txt'}],
                      gate_policy_id='gpol_nope')
 
+def test_openapi_update_action_checks_syncs_policy_merged_set(db_conn, client):
+    """开放 API PATCH actionChecks 后，非终态子任务的期望行 = 策略 ∪ 批合并集。
+
+    口径对齐 UI 路径（routes/ai_chat_batches.update_config）：同步集来自
+    gate_policy_repo.merged_action_checks（在 UPDATE 落列之后现查），而非裸
+    actionChecks——否则引用策略的批经开放 API 改 checks 会把策略侧规则从
+    期望行里挤掉，与 worker 派发（_fetch_action_checks 同一合并事实源）分裂。
+    鉴权走真实 api_key_required/require_bound_key：播种绑定 user-admin 的
+    is_active 密钥；批的 api_key_id 必须等于该密钥 id（update_batch_config
+    的密钥作用域），否则 404。
+    """
+    from auth import hash_api_key
+    pid = repo.create_policy('user-admin', f'pol-{uuid.uuid4().hex[:6]}',
+                             None, CHECKS)['id']
+    key_id = f'ak-{uuid.uuid4().hex[:10]}'
+    raw_key = 'cm_openapi_' + uuid.uuid4().hex
+    bid = str(uuid.uuid4())
+    sid_open = str(uuid.uuid4())
+    sid_done = str(uuid.uuid4())
+    own = [{'name': '写后读产物', 'tool': 'write', 'args_pattern': 'outputs/own'}]
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO api_keys (id, name, key_hash, is_active, owner_user_id) "
+            "VALUES (%s, 'gate-openapi-test', %s, TRUE, 'user-admin')",
+            (key_id, hash_api_key(raw_key)))
+        cur.execute(
+            "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total,"
+            " status, action_checks, gate_policy_id, api_key_id) "
+            "VALUES (%s,'user-admin','p','p',1,'running',NULL,%s,%s)",
+            (bid, pid, key_id))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id,user_id,status,batch_id,batch_seq,"
+            "opencode_session_id) VALUES (%s,'user-admin','running',%s,0,%s)",
+            (sid_open, bid, f'oc-{sid_open[:12]}'))
+        cur.execute(
+            "INSERT INTO ai_chat_sessions (id,user_id,status,batch_id,batch_seq) "
+            "VALUES (%s,'user-admin','completed',%s,1)", (sid_done, bid))
+        cur.execute(
+            "INSERT INTO action_expectations (scope_type,scope_id,name,tool,"
+            "args_pattern,source,last_status) "
+            "VALUES ('session',%s,'历史核对','bash','old','batch','failed')",
+            (sid_done,))
+    db_conn.commit()
+    try:
+        r = client.patch(f'/v1/ai-batches/{bid}',
+                         headers={'X-API-Key': raw_key},
+                         json={'actionChecks': own})
+        assert r.status_code == 200, r.get_data(as_text=True)
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, args_pattern FROM action_expectations "
+                "WHERE scope_id=%s AND source='batch' "
+                "ORDER BY name", (sid_open,))
+            rows = cur.fetchall()
+            cur.execute(
+                "SELECT name FROM action_expectations "
+                "WHERE scope_type='session' AND scope_id=%s", (sid_done,))
+            done_names = [x[0] for x in cur.fetchall()]
+        # 合并集两侧都在：策略侧 checkpoint 规则 + API 传入的批侧 post 规则
+        by_name = {n: p for n, p in rows}
+        assert set(by_name) == {'写前读知识库', '写后读产物'}
+        assert by_name['写前读知识库'] == 'outputs/report'   # 策略侧原样并入
+        assert by_name['写后读产物'] == 'outputs/own'
+        # 已终态子任务的历史核对结果保持原样（同步只动非终态）
+        assert done_names == ['历史核对']
+    finally:
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM action_expectations "
+                        "WHERE scope_id IN (%s,%s)", (sid_open, sid_done))
+            cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))
+            cur.execute("DELETE FROM ai_chat_batches WHERE id=%s", (bid,))
+            cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
+            cur.execute("DELETE FROM gate_policies WHERE id=%s", (pid,))
+    db_conn.commit()
+
+
 def test_policy_endpoints_auth_and_validation(client, admin_h, db_conn):
     # 写权限：非 admin 403
     from auth import create_token

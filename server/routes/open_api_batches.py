@@ -962,7 +962,12 @@ def update_config(batch_id):
     if result is None:
         return err('批任务不存在', NOT_FOUND, 404)
     if 'actionChecks' in body:
-        agent_ledger.sync_batch_expectations(batch_id, checks or None)
+        # 同步集 = 策略 ∪ 批（模板兜底）合并集，与 UI 路径/worker 派发同一
+        # 事实源（gate_policy_repo.merged_action_checks）——在 UPDATE 落列
+        # 之后现查（action_checks/gate_policy_id 已是最新值）。用裸 actionChecks
+        # 会把引用策略的批的策略侧规则从期望行里挤掉（口径分裂）。
+        from utils.gate_policy_repo import merged_action_checks
+        agent_ledger.sync_batch_expectations(batch_id, merged_action_checks(batch_id))
     log_api_operation('update', 'ai_chat_batch', batch_id, result['batch'].get('name'),
                       f'通过 API Key 修改批任务「{result["batch"].get("name")}」配置')
     return jsonify(_batch_out(result['batch']))
