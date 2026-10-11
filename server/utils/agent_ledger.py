@@ -305,7 +305,8 @@ VALID_CHECK_TYPES = ('tool', 'file', 'db_record', 'verifier')
 # P3-C3：'post'=终态核对（既有语义，缺省——向后兼容）；'pre'=PreToolUse
 # 拦截（deny list，工具调用前阻断）。只有 tool 型检查支持 pre：file/db_record/
 # verifier 都是"效果断言"，只能在终态核对，过程期无从拦截。
-VALID_MODES = ('post', 'pre')
+# 'checkpoint'=过程检查：工具调用前后注入 prompt 做过程核对，也是 tool 型。
+VALID_MODES = ('post', 'pre', 'checkpoint')
 
 
 def _validate_effect_spec(check_type, spec, idx):
@@ -418,6 +419,59 @@ def validate_checks(checks) -> list:
         if mode == 'pre' and check_type != 'tool':
             raise ValueError(f'action_checks[{i}].mode=pre 只支持 tool 型检查'
                              '（file/db_record/verifier 是效果断言，只能终态核对）')
+        prompt = None
+        timing = 'before'
+        max_checks = 1
+        assert_spec = None
+        if mode == 'checkpoint':
+            if check_type != 'tool':
+                raise ValueError(f'action_checks[{i}].mode=checkpoint 只支持 '
+                                 'tool 型检查（触发对象是工具调用）')
+            prompt = (c.get('prompt') or '').strip()
+            if not prompt:
+                raise ValueError(f'action_checks[{i}].prompt 必填（checkpoint 规则）')
+            if len(prompt) > 2000:
+                raise ValueError(f'action_checks[{i}].prompt 超长(>2000 字)')
+            timing = (c.get('timing') or 'before').strip()
+            if timing not in ('before', 'after'):
+                raise ValueError(f'action_checks[{i}].timing 只支持 before/after')
+            try:
+                # 注意不能写 `or 1`：0 是 falsy 会被吞成缺省 1，cp5（max_checks=0
+                # 必须报错）就永远不红——只把"未传"回填为 1，0 走范围校验。
+                max_checks = 1 if c.get('max_checks') is None else int(c['max_checks'])
+            except (TypeError, ValueError):
+                raise ValueError(f'action_checks[{i}].max_checks 必须是整数')
+            if not 1 <= max_checks <= 20:
+                raise ValueError(f'action_checks[{i}].max_checks 必须在 1..20')
+            aspec = c.get('assert_spec')
+            if aspec is not None:
+                if not isinstance(aspec, dict):
+                    raise ValueError(f'action_checks[{i}].assert_spec 必须是对象')
+                a_tool = (aspec.get('tool') or '').strip()
+                a_pat = (aspec.get('args_pattern') or '').strip()
+                if not a_tool or len(a_tool) > 50:
+                    raise ValueError(f'action_checks[{i}].assert_spec.tool '
+                                     '必填且不超过 50 字')
+                if not a_pat:
+                    raise ValueError(f'action_checks[{i}].assert_spec.args_pattern 必填')
+                try:
+                    re.compile(a_pat)
+                except re.error as e:
+                    raise ValueError(f'action_checks[{i}].assert_spec.args_pattern '
+                                     f'不是合法正则: {e}')
+                try:
+                    validate_pg_regex(a_pat)
+                except ValueError as e:
+                    raise ValueError(f'action_checks[{i}].assert_spec.args_pattern {e}')
+                try:
+                    a_min = int(aspec.get('min_count', 1) or 1)
+                except (TypeError, ValueError):
+                    raise ValueError(f'action_checks[{i}].assert_spec.min_count '
+                                     '必须是整数')
+                if a_min < 1:
+                    raise ValueError(f'action_checks[{i}].assert_spec.min_count 至少为 1')
+                assert_spec = {'tool': a_tool, 'args_pattern': a_pat,
+                               'min_count': a_min}
         try:
             min_count = int(c.get('min_count', 1) or 1)
         except (TypeError, ValueError):
@@ -433,6 +487,11 @@ def validate_checks(checks) -> list:
             'scope': scope, 'check_type': check_type,
             'mode': mode,
             'effect_spec': effect_spec,
+            # checkpoint 规则承载键（Task 4/6/7 依赖）：非 checkpoint 的
+            # post/pre 规则保持缺省（prompt/assert_spec=None、timing=before、
+            # max_checks=1）——落库列有同名缺省，登记路径零改动。
+            'prompt': prompt, 'timing': timing, 'max_checks': max_checks,
+            'assert_spec': assert_spec,
             'subagents': c.get('subagents'),
             # F2（ai-harness-p0 spec §8.2）：保留 apply_to——此前规范化时被
             # 剥离，内部创建/编辑/模板路径落库前就丢了定向条件，引擎侧

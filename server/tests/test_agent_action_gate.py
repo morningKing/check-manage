@@ -113,6 +113,8 @@ def test_validate_checks_normalizes():
     assert out == [{'name': '克隆仓库', 'tool': 'bash', 'args_pattern': 'git clone',
                     'require_state': 'completed', 'min_count': 1, 'scope': 'tree',
                     'check_type': 'tool', 'mode': 'post', 'effect_spec': None,
+                    'prompt': None, 'timing': 'before', 'max_checks': 1,
+                    'assert_spec': None,
                     'subagents': None, 'apply_to': None}]
 
 
@@ -125,6 +127,55 @@ def test_validate_checks_normalizes_subagents():
     with pytest.raises(ValueError, match='subagents'):
         agent_ledger.validate_checks([
             {'name': 'x', 'tool': 'read', 'args_pattern': 'a', 'subagents': 'general'}])
+
+
+def test_validate_checkpoint_rule_normalized():
+    out = agent_ledger.validate_checks([{
+        'name': '写报告前读知识库', 'mode': 'checkpoint', 'check_type': 'tool',
+        'tool': 'write', 'args_pattern': 'outputs/report',
+        'timing': 'after', 'prompt': '检查写入内容是否含结论段。',
+        'max_checks': 3,
+        'assert_spec': {'tool': 'read', 'args_pattern': 'docs/kb/', 'min_count': 1},
+    }])
+    c = out[0]
+    assert c['mode'] == 'checkpoint' and c['timing'] == 'after'
+    assert c['max_checks'] == 3 and c['prompt'].startswith('检查')
+    assert c['assert_spec'] == {'tool': 'read', 'args_pattern': 'docs/kb/',
+                                'min_count': 1}
+
+
+def test_validate_checkpoint_defaults_and_errors():
+    # 缺省回填：timing=before、max_checks=1
+    c = agent_ledger.validate_checks([{
+        'name': 'cp1', 'mode': 'checkpoint', 'tool': 'write',
+        'args_pattern': 'x', 'prompt': 'p'}])[0]
+    assert c['timing'] == 'before' and c['max_checks'] == 1
+    assert c['assert_spec'] is None
+    with pytest.raises(ValueError, match='prompt'):
+        agent_ledger.validate_checks([{
+            'name': 'cp2', 'mode': 'checkpoint', 'tool': 'w', 'args_pattern': 'x'}])
+    with pytest.raises(ValueError, match='超长'):
+        agent_ledger.validate_checks([{
+            'name': 'cp3', 'mode': 'checkpoint', 'tool': 'w', 'args_pattern': 'x',
+            'prompt': '长' * 2001}])
+    with pytest.raises(ValueError, match='timing'):
+        agent_ledger.validate_checks([{
+            'name': 'cp4', 'mode': 'checkpoint', 'tool': 'w', 'args_pattern': 'x',
+            'prompt': 'p', 'timing': 'mid'}])
+    with pytest.raises(ValueError, match='max_checks'):
+        agent_ledger.validate_checks([{
+            'name': 'cp5', 'mode': 'checkpoint', 'tool': 'w', 'args_pattern': 'x',
+            'prompt': 'p', 'max_checks': 0}])
+    with pytest.raises(ValueError, match='assert_spec.args_pattern'):
+        agent_ledger.validate_checks([{
+            'name': 'cp6', 'mode': 'checkpoint', 'tool': 'w', 'args_pattern': 'x',
+            'prompt': 'p',
+            'assert_spec': {'tool': 'read', 'args_pattern': '[bad'}}])
+    with pytest.raises(ValueError, match='只支持 tool'):
+        agent_ledger.validate_checks([{
+            'name': 'cp7', 'mode': 'checkpoint', 'check_type': 'file',
+            'tool': 'file', 'prompt': 'p',
+            'effect_spec': {'path': 'a.txt'}}])
 
 
 def test_check_applies_to_child_conditions():
