@@ -156,7 +156,9 @@ describe('子代理事件归属路由（内容不跑出区块/门禁不被炸）
                                metadata: { sessionId: CHILD } } } },
     })
     expect(store.streaming[SID]).toBe(true)
-    const m = (store.messages[SID] ?? []).find((x: any) => x.role === 'assistant')
+    // any 注解：store 的消息/内容是 AiContentPart 联合类型，断言只关心
+    // 运行时形态（本文件其余用例同风格）——不引入类型收窄分支。
+    const m: any = (store.messages[SID] ?? []).find((x: any) => x.role === 'assistant')
     expect(m.content.find((p: any) => p.text?.includes('第二段'))?.text)
       .toBe('第一段第二段')
     expect(m.content.find((p: any) => p.type === 'subtask_use')?.status)
@@ -199,7 +201,7 @@ describe('子代理事件归属路由（内容不跑出区块/门禁不被炸）
       event: 'message.part.delta',
       data: { messageID: 'm1', partID: 'pt1', field: 'text', delta: '第二段' },
     })
-    const msgs = store.messages[SID]!
+    const msgs: any[] = store.messages[SID]!
     expect(msgs.find((m: any) => m.id === 'm1')?.content[0]?.text)
       .toBe('第一段第二段')
     expect(msgs.find((m: any) => m.id === 'local_q')?.content[0]?.text)
