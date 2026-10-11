@@ -183,9 +183,16 @@ async function save() {
       // 归一内部按行类型白名单过滤不完整的行(verifier 行看 rubric,tool 行看
       // args_pattern)——调用方不再按 args_pattern 预筛(会把判官行误删)
       action_checks = serializeChecks(gateChecks.value)
+      // policy-only 组合(spec §8.2):空批规则 + 已引用门禁策略 = 合法(后端按
+      // 策略 ∪ 空批 checks 合并核对)——仅当既无策略引用又无有效规则时才拦;
+      // 该组合下 serializeChecks 空数组归一为 null(批规则空缺,纯策略生效)。
+      // gatePolicyId 显式键哨兵语义不变:清空下拉 = 传 null 解绑,未动不传
       if (action_checks.length === 0) {
-        ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点)')
-        return
+        if (!gatePolicyId.value) {
+          ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点,或引用门禁策略)')
+          return
+        }
+        action_checks = null
       }
     }
     const body = {

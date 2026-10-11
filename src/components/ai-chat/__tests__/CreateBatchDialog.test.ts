@@ -5,10 +5,12 @@ import CreateBatchDialog from '../CreateBatchDialog.vue'
 import * as batchApi from '@/api/aiChatBatches'
 import * as tplApi from '@/api/aiChatPromptTemplates'
 import * as chatApi from '@/api/aiChat'
+import * as policyApi from '@/api/gatePolicies'
 
 vi.mock('@/api/aiChatBatches')
 vi.mock('@/api/aiChatPromptTemplates')
 vi.mock('@/api/aiChat')
+vi.mock('@/api/gatePolicies')
 
 beforeAll(() => {
   globalThis.ResizeObserver = class { observe(){} unobserve(){} disconnect(){} } as any
@@ -19,6 +21,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(tplApi.listTemplates).mockResolvedValue([])
   vi.mocked(chatApi.listAgents).mockResolvedValue({ agents: [], subagents: [], default: null })
+  vi.mocked(policyApi.listGatePolicies).mockResolvedValue({ policies: [] })
 })
 
 const stubs = {
@@ -245,6 +248,52 @@ describe('CreateBatchDialog', () => {
     ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
     ;(w.vm as any).gateEnabled = true
     ;(w.vm as any).gateChecks = [{ name: '', tool: 'bash', args_pattern: '', min_count: 1 }]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).not.toHaveBeenCalled()
+  })
+
+  // policy-only 组合(spec §8.2):后端支持「策略 ∪ 空批 checks」,UI 主路径放行
+  it('allows submit with gate policy selected but no complete check (payload action_checks null + gatePolicyId)', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [{ name: '', tool: 'bash', args_pattern: '', min_count: 1 }]  // 全是不完整行 → 无有效规则
+    ;(w.vm as any).gatePolicyId = 'pol-1'
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    // 空规则数组归一为 null(键显式存在),策略引用随请求下发
+    expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      action_checks: null,
+      gatePolicyId: 'pol-1',
+    }))
+  })
+
+  it('still blocks submit with no complete check and no gate policy selected', async () => {
+    vi.mocked(batchApi.createBatch).mockClear()
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [{ name: '', tool: 'bash', args_pattern: '', min_count: 1 }]
+    ;(w.vm as any).gatePolicyId = ''
     await flushPromises()
     await w.find('button[data-test="create-btn"]').trigger('click')
     await flushPromises()

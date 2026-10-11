@@ -341,8 +341,8 @@ async function submit() {
     ElMessage.error('判官核对要点超长（>2000 字）')
     return
   }
-  // 动作门禁:至少要有一条"名称+正则/判定要点"齐全的期望才随请求下发
-  // (行结构见 serializeChecks;subagents 填写 = 定向核对)
+  // 动作门禁:至少要有一条"名称+正则/判定要点"齐全的期望,或引用一条门禁策略,
+  // 才随请求下发(行结构见 serializeChecks;subagents 填写 = 定向核对)
   let action_checks: any[] | null = null
   if (gateEnabled.value) {
     // 过程检查行守卫(§8.4,后端 validate_checks 同口径 400,前端先行拦截):
@@ -359,9 +359,15 @@ async function submit() {
       return
     }
     action_checks = serializeChecks(gateChecks.value)
+    // policy-only 组合(spec §8.2):空批规则 + 已引用门禁策略 = 合法(后端按
+    // 策略 ∪ 空批 checks 合并核对)——仅当既无策略引用又无有效规则时才拦;
+    // 该组合下 serializeChecks 空数组归一为 null(批规则空缺,纯策略生效)
     if (action_checks.length === 0) {
-      ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点)')
-      return
+      if (!gatePolicyId.value) {
+        ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点,或引用门禁策略)')
+        return
+      }
+      action_checks = null
     }
   }
   submitting.value = true
