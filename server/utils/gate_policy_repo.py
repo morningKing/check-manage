@@ -136,3 +136,40 @@ def delete_policy(pid: str, get_db=None) -> bool:
             deleted = cur.rowcount > 0
         conn.commit()
     return deleted
+
+
+def merged_action_checks(batch_id: str, get_db=None) -> list | None:
+    """批生效规则 = 策略 checks ∪ 批自身 action_checks（批缺省回退模板）。
+
+    登记顺序=数组顺序：先策略后批侧——register_session_expectations 按 name
+    幂等覆盖，后登记的批侧同名规则覆盖策略侧（"更具体者赢"）。策略停用/
+    不存在 → 跳过并留日志（已登记期望不受影响）。"""
+    db_ctx = get_db or _default
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT action_checks, template_id, gate_policy_id "
+                        "FROM ai_chat_batches WHERE id = %s", (batch_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            checks, template_id, policy_id = row[0], row[1], row[2]
+            policy_checks: list = []
+            if policy_id:
+                cur.execute("SELECT checks, enabled FROM gate_policies "
+                            "WHERE id = %s", (policy_id,))
+                prow = cur.fetchone()
+                if prow is None:
+                    log.warning('batch %s 引用的门禁策略 %s 已删除，跳过',
+                                batch_id, policy_id)
+                elif not prow[1]:
+                    log.warning('batch %s 引用的门禁策略 %s 已停用，跳过',
+                                batch_id, policy_id)
+                else:
+                    policy_checks = prow[0] or []
+            if not checks and template_id:
+                cur.execute("SELECT action_checks FROM ai_chat_prompt_templates "
+                            "WHERE id = %s", (template_id,))
+                trow = cur.fetchone()
+                checks = trow[0] if trow else None
+            merged = [*(policy_checks or []), *(checks or [])]
+            return merged or None

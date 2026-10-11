@@ -1771,27 +1771,9 @@ class BatchWorker:
     # --- 动作账本与到位门禁（设计:docs/design/AI子任务动作账本与到位门禁设计.md）---
 
     def _fetch_action_checks(self, batch_id: str):
-        """入口 A/B:批任务自身的 action_checks,未配则回退引用模板上的值。"""
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT action_checks, template_id FROM ai_chat_batches "
-                    "WHERE id = %s",
-                    (batch_id,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return None
-                checks, template_id = row[0], row[1]
-                if not checks and template_id:
-                    cur.execute(
-                        "SELECT action_checks FROM ai_chat_prompt_templates "
-                        "WHERE id = %s",
-                        (template_id,),
-                    )
-                    trow = cur.fetchone()
-                    checks = trow[0] if trow else None
-                return checks or None
+        """入口 A/B/策略（spec §8.2）：合并事实源在 gate_policy_repo。"""
+        from utils.gate_policy_repo import merged_action_checks
+        return merged_action_checks(batch_id)
 
     def _register_action_expectations(self, sid: str, batch_id: str,
                                       session_row: dict | None = None) -> dict:

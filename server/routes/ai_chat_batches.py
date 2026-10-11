@@ -131,12 +131,27 @@ def create():
         subagent_reuse = validate_subagent_reuse(body.get('subagent_reuse'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+    # 引用门禁策略（spec §8.2）：存在且 enabled 才放行（失效引用 400）；
+    # create_batch 内有同款兜底校验（开放 API/定时扫描直达路径）。
+    gate_policy_id = body.get('gatePolicyId') or None
+    if gate_policy_id:
+        from db import get_db as _get_db
+        with _get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT enabled FROM gate_policies WHERE id=%s",
+                            (gate_policy_id,))
+                prow = cur.fetchone()
+        if prow is None:
+            return jsonify({'error': '引用的门禁策略不存在'}), 400
+        if not prow[0]:
+            return jsonify({'error': '引用的门禁策略已停用'}), 400
     result = create_batch(g.current_user['userId'],
                           name=name, prompt=prompt,
                           template_id=template_id, files=files,
                           agent=agent, model=model,
                           provision_repo=provision_repo, provision_ref=provision_ref,
                           action_checks=action_checks or None,
+                          gate_policy_id=gate_policy_id,
                           gate_retry=bool(body.get('gate_retry')),
                           subagent_reuse=subagent_reuse or None)
     # Wake the worker so it picks up the new pending sessions immediately.
@@ -323,6 +338,22 @@ def update_config(batch_id):
         patch_kwargs['action_checks'] = checks or None
     if 'gate_retry' in body:
         patch_kwargs['gate_retry'] = bool(body.get('gate_retry'))
+    # 引用门禁策略（spec §8.2）：哨兵语义——显式传入才更新，`null`=解绑；
+    # 引用不存在/已停用 400（update_batch_config 内有同款兜底校验）。
+    if 'gatePolicyId' in body:
+        gp = body.get('gatePolicyId') or None
+        if gp:
+            from db import get_db as _get_db
+            with _get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT enabled FROM gate_policies WHERE id=%s",
+                                (gp,))
+                    prow = cur.fetchone()
+            if prow is None:
+                return jsonify({'error': '引用的门禁策略不存在'}), 400
+            if not prow[0]:
+                return jsonify({'error': '引用的门禁策略已停用'}), 400
+        patch_kwargs['gate_policy_id'] = gp
     if 'subagent_reuse' in body:
         try:
             patch_kwargs['subagent_reuse'] = validate_subagent_reuse(
@@ -350,8 +381,13 @@ def update_config(batch_id):
     if result is None:
         return jsonify({'error': 'not found'}), 404
     # 未终态子任务同步替换期望,已终态子任务的历史核对结果保持原样。
-    if 'action_checks' in body:
-        agent_ledger.sync_batch_expectations(batch_id, checks or None)
+    # 换策略/解绑（spec §8.2）同样要同步：同步集是「策略 ∪ 批（模板兜底）」
+    # 合并集，在 UPDATE 落列之后现查（gate_policy_id 已是最新值）——合并
+    # 事实源在 gate_policy_repo.merged_action_checks，与 worker 派发共用。
+    if 'action_checks' in body or 'gatePolicyId' in body:
+        from utils.gate_policy_repo import merged_action_checks
+        agent_ledger.sync_batch_expectations(
+            batch_id, merged_action_checks(batch_id))
     return jsonify(result)
 
 

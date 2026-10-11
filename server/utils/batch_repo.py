@@ -250,6 +250,7 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                  provision_repo: str | None = None,
                  provision_ref: str | None = None,
                  action_checks: list | None = None,
+                 gate_policy_id: str | None = None,
                  gate_retry: bool | None = None,
                  api_key_id: str | None = None,
                  callback_url: str | None = None,
@@ -274,6 +275,18 @@ def create_batch(user_id: str, *, name: str, prompt: str,
     batch reaches a terminal status, instead of requiring the caller to poll.
     Returns {batch, sessions}.
     """
+    # 门禁策略引用（spec §8.2）：存在且 enabled 才放行；路由层有同款预检，
+    # 这里兜底（开放 API/定时扫描等直达 create_batch 的路径同样拦住）。
+    if gate_policy_id:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT enabled FROM gate_policies WHERE id = %s",
+                            (gate_policy_id,))
+                row = cur.fetchone()
+        if row is None:
+            raise ValueError('引用的门禁策略不存在')
+        if not row[0]:
+            raise ValueError('引用的门禁策略已停用')
     # 0 文件合法:空批壳,后续 append 填充
     max_files = get_max_files_per_batch()
     if len(files) > max_files:
@@ -286,12 +299,13 @@ def create_batch(user_id: str, *, name: str, prompt: str,
                 "INSERT INTO ai_chat_batches "
                 "  (id, user_id, name, prompt, template_id, total, status, agent, model, "
                 "   provision_repo, provision_ref, api_key_id, callback_url, callback_secret, "
-                "   scan_task_id, action_checks, gate_retry, subagent_reuse) "
-                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                "   scan_task_id, action_checks, gate_policy_id, gate_retry, subagent_reuse) "
+                "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                 (batch_id, user_id, name, prompt, template_id, len(files), agent, model,
                  provision_repo, provision_ref, api_key_id, callback_url, callback_secret,
                  scan_task_id,
                  Json(action_checks) if action_checks else None,
+                 gate_policy_id,
                  gate_retry,
                  Json(subagent_reuse) if subagent_reuse else None),
             )
@@ -917,6 +931,7 @@ def update_batch_config(user_id: str, batch_id: str, *,
                         provision_repo: str | None = None,
                         provision_ref: str | None = None,
                         action_checks= _UNSET,
+                        gate_policy_id= _UNSET,
                         gate_retry= _UNSET,
                         subagent_reuse= _UNSET,
                         name= _UNSET,
@@ -936,6 +951,9 @@ def update_batch_config(user_id: str, batch_id: str, *,
 
     `name`/`prompt`（编辑对话框，2026-09-29）为 _UNSET 哨兵语义：显式传入才
     更新，未传保持原值；prompt 对未执行子任务生效（worker 派发实时读）。
+
+    `gate_policy_id`（门禁策略引用，spec §8.2）同哨兵语义：显式传入才更新，
+    `None` 合法 = 解绑；引用不存在/已停用抛 ValueError。
     """
     # 归属预检：action_checks/gate_retry 的子更新与主更新同口径——api_key_id
     # 非 None 时必须命中该密钥名下的批次，否则什么也不写（防跨密钥越权改门禁）。
@@ -959,6 +977,28 @@ def update_batch_config(user_id: str, batch_id: str, *,
                     "WHERE id = %s AND user_id = %s",
                     (Json(action_checks) if action_checks else None,
                      batch_id, user_id),
+                )
+            conn.commit()
+    if gate_policy_id is not _UNSET:
+        # 门禁策略引用（spec §8.2）：显式传入才更新（哨兵语义同 action_checks，
+        # 既有调用方不受影响）；None 合法 = 解绑。换策略/解绑后路由层会用
+        # 合并集同步期望——见 routes/ai_chat_batches.update_config。
+        if gate_policy_id:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT enabled FROM gate_policies WHERE id = %s",
+                                (gate_policy_id,))
+                    prow = cur.fetchone()
+            if prow is None:
+                raise ValueError('引用的门禁策略不存在')
+            if not prow[0]:
+                raise ValueError('引用的门禁策略已停用')
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE ai_chat_batches SET gate_policy_id = %s "
+                    "WHERE id = %s AND user_id = %s",
+                    (gate_policy_id, batch_id, user_id),
                 )
             conn.commit()
     if gate_retry is not _UNSET:
