@@ -706,9 +706,21 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
                 )
                 if cur.fetchone():
                     return {'allow': False, 'reason': prompt, 'rules': rules_n}
+            # 短路缓存口径=全会话规则总数（pre + checkpoint(before)，不限工具）：
+            # 插件按 sessionID 缓存 rules=0，若按当前 tool 计数，首个无规则工具
+            # 的调用（如先 read 输入）会把整个会话缓存成"无规则"，跨工具误短路
+            # 后续 write 的 checkpoint 注入（Task 13 E2E 实测复现）。
+            cur.execute(
+                "SELECT COUNT(*) FROM action_expectations "
+                "WHERE scope_id = %s AND (mode = 'pre' "
+                "  OR (mode = 'checkpoint' AND timing = 'before'))",
+                (session_id,),
+            )
+            session_rules = cur.fetchone()[0]
     # rules=0 供插件短路缓存：该会话无 pre 规则也无 checkpoint(before) 规则
     # 时，后续工具调用不再发 pre-check 请求（无规则是常态，热路径零开销）。
-    return {'allow': True, 'rules': rules_n}
+    # 口径为全会话规则总数（见上），不是当前 tool 的命中数。
+    return {'allow': True, 'rules': session_rules}
 
 
 def post_check_tool(session_id: str, tool: str, args_text: str,
@@ -743,7 +755,16 @@ def post_check_tool(session_id: str, tool: str, args_text: str,
                 if cur.fetchone():
                     return {'inject': True, 'prompt': prompt,
                             'rules': len(check_rows)}
-    return {'inject': False, 'rules': len(check_rows)}
+            # 短路缓存口径=全会话 checkpoint(after) 规则总数（不限工具）——
+            # 与 pre_check_tool 同理，按工具计数会跨工具误短路注入
+            # （插件按 sessionID 缓存 rules=0，Task 13 E2E 实测复现）。
+            cur.execute(
+                "SELECT COUNT(*) FROM action_expectations "
+                "WHERE scope_id = %s AND mode = 'checkpoint' AND timing = 'after'",
+                (session_id,),
+            )
+            session_rules = cur.fetchone()[0]
+    return {'inject': False, 'rules': session_rules}
 
 
 # ---------------------------------------------------------------------------

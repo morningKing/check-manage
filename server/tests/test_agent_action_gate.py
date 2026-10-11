@@ -872,8 +872,12 @@ class TestPreCheckCheckpoint:
         assert r3 == {'allow': True, 'rules': 1}   # 预算耗尽 → 放行
 
     def test_non_matching_tool_untouched(self, db_conn, cp_scope):
+        # 非命中工具不耗预算；rules 是**全会话**规则总数（pre+checkpoint(before)
+        # 不限工具）——插件按 sessionID 缓存 rules=0，按工具计数会让首调的
+        # 无规则工具（如先 read 输入）把整个会话缓存成"无规则"，跨工具误短路
+        # write 的 checkpoint 注入（Task 13 E2E 实测复现后修正口径）。
         r = agent_ledger.pre_check_tool(cp_scope, 'bash', 'outputs/report')
-        assert r == {'allow': True, 'rules': 0}
+        assert r == {'allow': True, 'rules': 1}
         with db_conn.cursor() as cur:
             cur.execute("SELECT fired_count FROM action_expectations "
                         "WHERE scope_id=%s", (cp_scope,))
