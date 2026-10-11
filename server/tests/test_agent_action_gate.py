@@ -918,3 +918,78 @@ class TestPreCheckCheckpoint:
                 cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",
                             (scope,))
             db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Task 5: post_check_tool 的 checkpoint 预算注入（after 时机，工具调用后）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cp_after_scope(db_conn):
+    """登记一条 checkpoint(after) 规则到临时 scope，收尾删除。"""
+    scope = f'sess_cpa_{uuid.uuid4().hex[:8]}'
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO action_expectations (scope_type, scope_id, name, tool,"
+            " args_pattern, require_state, min_count, source, check_type, mode,"
+            " timing, max_checks, fired_count, prompt)"
+            " VALUES ('tree', %s, '写后查结论', 'write', 'outputs/report',"
+            " 'completed', 1, 'batch', 'tool', 'checkpoint', 'after', 1, 0,"
+            " '请确认文件包含结论段，缺失请立即补写')", (scope,))
+    db_conn.commit()
+    yield scope
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM action_expectations WHERE scope_id = %s", (scope,))
+    db_conn.commit()
+
+
+class TestPostCheck:
+    def test_after_inject_budget_and_exhaust(self, db_conn, cp_after_scope):
+        r = agent_ledger.post_check_tool(cp_after_scope, 'write', 'outputs/report.md')
+        assert r == {'inject': True, 'prompt': '请确认文件包含结论段，缺失请立即补写',
+                     'rules': 1}
+        r2 = agent_ledger.post_check_tool(cp_after_scope, 'write', 'outputs/report.md')
+        assert r2 == {'inject': False, 'rules': 1}   # 预算耗尽
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (cp_after_scope,))
+            assert cur.fetchone()[0] == 1
+
+    def test_before_rows_not_matched_by_after(self, db_conn, cp_scope):
+        assert agent_ledger.post_check_tool(cp_scope, 'write', 'outputs/report') \
+            == {'inject': False, 'rules': 0}
+
+    def test_post_check_endpoint_auth_and_flow(self, db_conn, cp_after_scope,
+                                               monkeypatch):
+        """端点：token 鉴权 403 / 缺参 inject=false / 正常注入（scope 映射）。"""
+        import db as db_module
+        db_module.pool = None
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if getattr(mod, 'get_db', None) is not None and (
+                    mod_name.startswith('routes.') or mod_name.startswith('utils.')
+                    or mod_name == 'auth'):
+                try:
+                    mod.get_db = db_module.get_db
+                except (AttributeError, TypeError):
+                    pass
+        from app import app
+        app.config['TESTING'] = True
+        client = app.test_client()
+        monkeypatch.setattr('routes.ai_gate_internal.MCP_INTERNAL_TOKEN',
+                            'test-token')
+        tok = 'test-token'
+        assert client.post('/ai/gate/internal/post-check',
+                           json={'sessionId': cp_after_scope}).status_code == 403
+        r = client.post('/ai/gate/internal/post-check',
+                        headers={'X-Internal-Token': tok},
+                        json={'sessionId': cp_after_scope})
+        assert r.status_code == 200
+        assert r.get_json()['inject'] is False        # 缺 tool
+        r2 = client.post('/ai/gate/internal/post-check',
+                         headers={'X-Internal-Token': tok},
+                         json={'sessionId': cp_after_scope,
+                               'tool': 'write', 'argsText': 'outputs/report.md'})
+        body = r2.get_json()
+        assert body['inject'] is True and '结论段' in body['prompt']

@@ -9,6 +9,9 @@ OpenCode 插件 baize-trace.js（utils.skillopt 随启动部署）注册
 - POST /pre-check  body {sessionId, tool, argsText}
     返回 {allow: bool, reason?: str}。allow=false 时插件阻断调用并把
     reason 回给模型。
+- POST /post-check body {sessionId, tool, argsText}
+    返回 {inject: bool, prompt?: str, rules: int}。inject=true 时插件在
+    工具调用完成后向模型注入 prompt（checkpoint(after) 过程核对）。
 
 鉴权：X-Internal-Token（与 ai_memory_internal / ai_subagent_internal 同一把
 MCP_INTERNAL_TOKEN）。失败语义：本端点不可达/非 2xx 时插件侧静默放行
@@ -23,7 +26,7 @@ from flask import Blueprint, jsonify, request
 
 from config import MCP_INTERNAL_TOKEN
 from db import get_db
-from utils.agent_ledger import pre_check_tool
+from utils.agent_ledger import post_check_tool, pre_check_tool
 
 ai_gate_internal_bp = Blueprint('ai_gate_internal', __name__,
                                 url_prefix='/ai/gate/internal')
@@ -93,4 +96,31 @@ def pre_check():
         logging.getLogger(__name__).warning(
             'pre-check failed sid=%s tool=%s: %s', scope_id, tool, e)
         result = {'allow': True, 'error': str(e)[:200]}
+    return jsonify(result), 200
+
+
+@ai_gate_internal_bp.route('/post-check', methods=['POST'])
+def post_check():
+    """工具调用后过程检查：session_id + tool + args → inject/prompt。
+
+    inject=true 时插件向模型注入 prompt（注入方式由探针结论定夺，见实现
+    计划 Task 1/8）。fail-open 口径与 pre-check 相同：本端点不可达/非 2xx
+    时插件侧不注入；查询异常服务端同样 fail-open 并留痕。"""
+    if not _authorized():
+        return jsonify({'error': 'forbidden'}), 403
+    body = request.get_json(silent=True) or {}
+    session_id = body.get('sessionId')
+    tool = body.get('tool')
+    args_text = body.get('argsText') or ''
+    if not session_id or not tool:
+        return jsonify({'inject': False, 'rules': 0}), 200
+    scope_id, agent_name = _resolve_session(str(session_id))
+    try:
+        result = post_check_tool(scope_id, str(tool), str(args_text or ''),
+                                 agent_name=agent_name)
+    except Exception as e:  # noqa: BLE001 —— 校验故障不注入（fail-open）
+        import logging
+        logging.getLogger(__name__).warning(
+            'post-check failed sid=%s tool=%s: %s', scope_id, tool, e)
+        result = {'inject': False, 'rules': 0, 'error': str(e)[:200]}
     return jsonify(result), 200

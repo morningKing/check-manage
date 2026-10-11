@@ -18,6 +18,8 @@
    pre_check_tool 过程拦截,终态"该做的做了没"对 deny 规则无意义。
 4. pre_check_tool —— PreToolUse 拦截检查(P3-C3):OC 插件在工具调用前
    经 /ai/gate/internal/pre-check 询问,deny list 命中即阻断该次调用。
+5. post_check_tool —— checkpoint 过程检查(after 时机):工具调用完成后经
+   /ai/gate/internal/post-check 询问,预算内注入 prompt 做过程核对。
 """
 import glob as _glob
 import json
@@ -695,6 +697,41 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
     # rules=0 供插件短路缓存：该会话无 pre 规则也无 checkpoint(before) 规则
     # 时，后续工具调用不再发 pre-check 请求（无规则是常态，热路径零开销）。
     return {'allow': True, 'rules': rules_n}
+
+
+def post_check_tool(session_id: str, tool: str, args_text: str,
+                    agent_name: str | None = None, get_db=None) -> dict:
+    """checkpoint 过程检查（after 时机）——工具调用完成后由 OC 插件经
+    /ai/gate/internal/post-check 调用。语义与 pre_check_tool 的 checkpoint
+    分支对称：timing='after' 行匹配 + 原子预算 + agent 定向（agent_name 由
+    路由层解析传入，口径同 §4.1）；预算耗尽/无规则 → inject=False（动作照常
+    完成，终态 assert 兜底）。查询异常向上抛——路由统一 fail-open（不注入）。"""
+    import re as _re
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, prompt, args_pattern, subagents FROM action_expectations "
+                "WHERE scope_id = %s AND mode = 'checkpoint' "
+                "  AND timing = 'after' AND tool = %s "
+                "ORDER BY created_at, id",
+                (session_id, tool),
+            )
+            check_rows = cur.fetchall()
+            for rid, prompt, pattern, subagents in check_rows:
+                if not pattern or not _re.search(pattern, args_text or ''):
+                    continue
+                if subagents and (not agent_name or agent_name not in subagents):
+                    continue
+                cur.execute(
+                    "UPDATE action_expectations SET fired_count = fired_count + 1 "
+                    "WHERE id = %s AND fired_count < max_checks RETURNING id",
+                    (rid,),
+                )
+                if cur.fetchone():
+                    return {'inject': True, 'prompt': prompt,
+                            'rules': len(check_rows)}
+    return {'inject': False, 'rules': len(check_rows)}
 
 
 # ---------------------------------------------------------------------------
