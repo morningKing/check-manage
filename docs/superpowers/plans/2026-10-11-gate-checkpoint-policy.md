@@ -960,7 +960,7 @@ git commit -m "feat(gate): 重新登记重置 checkpoint 注入预算 fired_coun
 - Consumes: Task 5 的 `/post-check` 端点（`{inject, prompt, rules}`）。
 - Produces: 插件 after 钩子按探针结论注入。部署后需重启 OC serve。
 
-**探针结论**：（Task 1 完成后填写——`throw` / `append_result` / `degrade_before`；下述代码按 `throw` 写，探针结论为 `append_result` 时把抛错行换成 `output.result = ...` 追加，`degrade_before` 时跳过本任务、改为在 `pre_check_tool` 的查询条件放开 `timing='before'` 到含 after 并设 env `AI_GATE_AFTER_DEGRADE=1`，同时本任务只加 post-check 客户端调用的注释说明。）
+**探针结论**：`append_result`（Task 1 探针已证实，2026-10-11，证据见 `.superpowers/sdd/2026-10-11-gate-checkpoint-policy/task-1-report.md`）。要点：① after 钩子 input 为 `{tool, sessionID, callID, args}`——**args 直接可得，argsText 无需 before 暂存**；② output 键为 `{title, metadata, output, attachments}`，**没有 `result` 键**，注入目标是 `output.output`（字符串，即工具结果文本）；③ T2 实测：改写 `output.output` 追加标记后，模型同一轮即把标记逐字复述出来（可见、非破坏性，status 保持 completed）；④ T1 实测：after 抛错也会把错误文本回给模型（同轮复述），但工具结果被摧毁（result=null、status=error），不适合注入检查提示词。实现时把本任务代码里的 `throw` 行换成 `if (typeof output?.output === 'string') output.output += '\n' + prompt` 形态。
 
 - [ ] **Step 1: 写失败测试**
 
