@@ -52,6 +52,8 @@ export interface CreateBatchBody {
   subagent_reuse?: string[]
   gate_retry?: boolean
   action_checks?: any[]
+  /** 引用门禁策略（spec §8.2）：派发时策略 checks ∪ 批 action_checks 合并登记 */
+  gatePolicyId?: string
   files: any[]
 }
 
