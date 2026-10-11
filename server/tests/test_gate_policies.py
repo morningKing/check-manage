@@ -65,6 +65,26 @@ def test_policy_crud_roundtrip(db_conn):
     finally:
         _cleanup(pid)
 
+def test_duplicate_name_rejected_as_value_error(db_conn):
+    """name 列 UNIQUE：重名创建/改成既有名 → ValueError(策略名已存在)，
+    路由映射 400 而非 500。"""
+    name = f'pol-{uuid.uuid4().hex[:6]}'
+    pid = repo.create_policy('user-admin', name, None, CHECKS)['id']
+    try:
+        with pytest.raises(ValueError, match='策略名已存在'):
+            repo.create_policy('user-admin', name, None, CHECKS)
+        pid2 = repo.create_policy('user-admin', f'pol-{uuid.uuid4().hex[:6]}',
+                                  None, CHECKS)['id']
+        try:
+            with pytest.raises(ValueError, match='策略名已存在'):
+                repo.update_policy(pid2, name=name)
+            # 改回自己当前的名字不触发 UNIQUE 冲突
+            repo.update_policy(pid2, name=repo.get_policy(pid2)['name'])
+        finally:
+            _cleanup(pid2)
+    finally:
+        _cleanup(pid)
+
 def test_delete_blocked_by_active_batch_ref(db_conn):
     pid = repo.create_policy('user-admin', f'pol-{uuid.uuid4().hex[:6]}',
                              None, CHECKS)['id']

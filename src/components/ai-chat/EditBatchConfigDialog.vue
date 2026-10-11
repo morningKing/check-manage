@@ -50,61 +50,13 @@
         </ElSelect>
       </div>
       <template v-if="gateEnabled">
-        <div v-for="(c, i) in gateChecks" :key="i" class="gate-card" :data-test="`gate-row-${i}`">
-          <!-- 行模式(2026-10-11 spec §8.4):终态期望=账本终态核对;拦截(pre)=执行前
-               deny 拦断;过程检查=执行前/后拦工具调用。pre 仅回填既有数据时出现,
-               语义只能透传不能改写(deny 降级成 post=静默放行) -->
-          <div class="gate-card__line">
-            <ElRadioGroup v-model="c.mode" size="small" data-test="gate-row-mode">
-              <ElRadioButton value="post">终态期望</ElRadioButton>
-              <ElRadioButton value="pre">拦截</ElRadioButton>
-              <ElRadioButton value="checkpoint">过程检查</ElRadioButton>
-            </ElRadioGroup>
-            <template v-if="c.mode === 'checkpoint'">
-              <ElRadioGroup v-model="c.timing" size="small" data-test="gate-row-timing">
-                <ElRadioButton value="before">执行前</ElRadioButton>
-                <ElRadioButton value="after">执行后</ElRadioButton>
-              </ElRadioGroup>
-              <span class="gate-card__label">次数上限</span>
-              <ElInputNumber v-model="c.max_checks" :min="1" :max="20" controls-position="right"
-                             data-test="gate-row-max-checks" style="flex:0 0 110px" />
-            </template>
-          </div>
-          <div class="gate-card__line">
-            <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:1" />
-            <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
-                      filterable allow-create default-first-option>
-              <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
-            </ElSelect>
-            <ElInputNumber v-if="c.mode !== 'checkpoint'" v-model="c.min_count" :min="1" :max="99" controls-position="right"
-                           style="flex:0 0 100px" />
-            <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
-                      :disabled="gateChecks.length <= 1">删除</ElButton>
-          </div>
-          <!-- 过程检查条件(§8.4):prompt 命中后注入模型;可选终态兜底断言(账本核对) -->
-          <template v-if="c.mode === 'checkpoint'">
-            <ElInput v-model="c.prompt" type="textarea" :rows="2"
-                     maxlength="2000" show-word-limit
-                     placeholder="检查提示词（命中后注入给模型）"
-                     data-test="gate-row-prompt" />
-            <ElCheckbox v-model="c.hasAssert" data-test="gate-row-has-assert">终态兜底断言</ElCheckbox>
-            <div v-if="c.hasAssert" class="gate-card__line">
-              <ElInput v-model="c.assert_tool" placeholder="断言工具（如 read）"
-                       data-test="gate-row-assert-tool" />
-              <ElInput v-model="c.assert_pattern" placeholder="断言 args 正则（如 docs/kb/）"
-                       data-test="gate-row-assert-pattern" />
-              <ElInputNumber v-model="c.assert_min_count" :min="1" controls-position="right"
-                             data-test="gate-row-assert-min-count" style="flex:0 0 100px" />
-            </div>
+        <!-- 规则行编辑(2026-10-11 spec §8.4):与批创建对话框/管理页门禁策略
+             共用 GateCheckRows(同一套字段与提交归一,见该组件 serializeChecks) -->
+        <GateCheckRows v-model="gateChecks">
+          <template #footer>
+            <ElCheckbox v-model="gateRetry" data-test="gate-retry" style="margin-left:12px">自动修正（不过门时带缺失明细在原会话续跑修复）</ElCheckbox>
           </template>
-          <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
-          <ElInput v-model="c.subagents"
-                   placeholder="适用子代理(可选,逗号分隔;留空=对所有子代理生效)" />
-        </div>
-        <div class="row__inline">
-          <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
-          <ElCheckbox v-model="gateRetry" data-test="gate-retry" style="margin-left:12px">自动修正（不过门时带缺失明细在原会话续跑修复）</ElCheckbox>
-        </div>
+        </GateCheckRows>
         <div class="row__inline">
           <span class="hint">
             保存后对未完成子任务立即生效；已完成子任务的历史核对结果保持不变。
@@ -121,12 +73,15 @@
 </template>
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElDialog, ElSelect, ElOption, ElButton, ElInput, ElInputNumber,
-         ElCheckbox, ElMessage, ElRadioGroup, ElRadioButton } from 'element-plus'
+import { ElDialog, ElSelect, ElOption, ElButton, ElInput,
+         ElCheckbox, ElMessage } from 'element-plus'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
 import { listGatePolicies } from '@/api/gatePolicies'
 import type { GatePolicy } from '@/api/gatePolicies'
+import GateCheckRows from '@/components/admin/GateCheckRows.vue'
+import type { GateCheckEditRow } from '@/components/admin/GateCheckRows.vue'
+import { emptyEditRow, prefillEditRows, serializeChecks } from '@/components/admin/GateCheckRows.vue'
 import { useAiChatBatchesStore } from '@/stores/aiChatBatches'
 import type { AiChatBatch } from '@/types/aiChatBatch'
 
@@ -146,26 +101,10 @@ const reuseAgents = ref<string[]>([])
 const subagentList = ref<AgentInfo[]>([])
 
 // 动作门禁(设计 §5.2 入口 A 的编辑面):预填批任务上已保存的期望
+// 行编辑形态与提交归一见共享组件 GateCheckRows(行类型/serializeChecks 同源)
 const gateEnabled = ref(false)
 const gateRetry = ref(false)
-// 2026-10-11 spec §8.4:mode=checkpoint 的过程检查行——timing/prompt/max_checks/
-// hasAssert/assert_* 是行内部编辑字段,提交前 serializeChecks 剥离(不落 payload);
-// raw=回填留存的原始行(仅 pre 透传分支读,post/checkpoint 白名单重建不读它)
-type GateCheckMode = 'post' | 'pre' | 'checkpoint'
-type GateCheckRow = {
-  name: string; tool: string; args_pattern: string; min_count: number; subagents: string
-  mode: GateCheckMode; timing: 'before' | 'after'; prompt: string
-  max_checks: number; hasAssert: boolean
-  assert_tool: string; assert_pattern: string; assert_min_count: number
-  raw?: Record<string, unknown> | null
-}
-const gateChecks = ref<GateCheckRow[]>([])
-const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
-function emptyCheck(): GateCheckRow {
-  return { name: '', tool: 'bash', args_pattern: '', min_count: 1, subagents: '',
-           mode: 'post', timing: 'before', prompt: '', max_checks: 1,
-           hasAssert: false, assert_tool: '', assert_pattern: '', assert_min_count: 1 }
-}
+const gateChecks = ref<GateCheckEditRow[]>([])
 // 引用门禁策略(2026-10-11 spec §8.2):回填批详情上的引用;下拉拉取失败静默
 // (空下拉不阻塞表单)。gatePolicyIdInitial/gateEnabledInitial 记录打开时的值——
 // 保存时只对改动传显式键(哨兵语义)
@@ -191,33 +130,15 @@ function prefill() {
   // 「未动不传」比对基线
   gatePolicyIdInitial.value = (props.batch as any).gate_policy_id || ''
   gatePolicyId.value = gatePolicyIdInitial.value
-  // 门禁预填:批定义上的 action_checks(创建时或编辑时保存的)
+  // 门禁预填:批定义上的 action_checks(创建时或编辑时保存的)——
+  // pre/checkpoint/verifier 行 round-trip(共享 prefillEditRows,raw 只挂 pre 行)
   const checks = (props.batch as any).action_checks as
-    Array<{ name: string; tool: string; args_pattern: string; min_count?: number;
-            subagents?: string[]; mode?: string; timing?: string; prompt?: string;
-            max_checks?: number;
-            assert_spec?: { tool: string; args_pattern: string; min_count: number } | null }> | null
+    Array<Record<string, any>> | null
   gateEnabled.value = Array.isArray(checks) && checks.length > 0
   gateEnabledInitial.value = gateEnabled.value
   gateRetry.value = (props.batch as any).gate_retry === true
-  gateChecks.value = (checks || []).map(c => ({
-    name: c.name, tool: c.tool || 'bash',
-    args_pattern: c.args_pattern, min_count: c.min_count ?? 1,
-    subagents: (c.subagents || []).join(', '),
-    // 行模式 round-trip:checkpoint/pre 原样保留(post 为缺省)——pre 是 deny
-    // 拦截型规则,回填显示成 post 会在保存时静默改写语义;raw 留存原始行,
-    // serializeChecks 对 pre 行透传(apply_to 等编辑面未建模的键不丢)
-    mode: c.mode === 'checkpoint' ? 'checkpoint' : c.mode === 'pre' ? 'pre' : 'post',
-    timing: c.timing === 'after' ? 'after' : 'before',
-    prompt: c.prompt || '',
-    max_checks: c.max_checks ?? 1,
-    hasAssert: !!c.assert_spec,
-    assert_tool: c.assert_spec?.tool || '',
-    assert_pattern: c.assert_spec?.args_pattern || '',
-    assert_min_count: c.assert_spec?.min_count ?? 1,
-    ...(c.mode === 'pre' ? { raw: c as Record<string, unknown> } : {}),
-  }))
-  if (gateEnabled.value && gateChecks.value.length === 0) gateChecks.value = [emptyCheck()]
+  gateChecks.value = prefillEditRows(checks)
+  if (gateEnabled.value && gateChecks.value.length === 0) gateChecks.value = [emptyEditRow()]
   loadPolicies()
 }
 
@@ -232,50 +153,6 @@ onMounted(async () => {
   try { models.value = (await listModels()).models } catch { /* non-fatal */ }
   prefill()
 })
-
-/** 提交归一(2026-10-11 spec §8.4):剥离行内部字段,checkpoint 行 mode 键齐——
- * pre(拦截)行 = 原样透传 {name, mode:'pre', check_type:'tool', tool,
- *   args_pattern, min_count[, subagents][, raw 上的 apply_to 等未建模键]}——
- *   deny 语义不能被编辑改写(mode 键丢了=拦截规则静默降级成终态期望);
- * post 行保持既有提交契约 {name, tool, args_pattern, min_count[, subagents]};
- * checkpoint 行 = {name, mode:'checkpoint', check_type:'tool', tool, args_pattern,
- *   timing, prompt, max_checks[, assert_spec][, subagents]} */
-function serializeChecks(rows: GateCheckRow[]): any[] {
-  return rows.map((c) => {
-    const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
-    if (c.mode === 'pre') {
-      // 拦截型行(deny,2026-10-11 spec):round-trip 保真——mode 键原样保留;
-      // raw=回填留存的原始行(可能带 apply_to/require_state 等编辑面未建模的键,
-      // 原样透传),建模键以 UI 当前值为准覆盖
-      const row: any = { ...(c.raw || {}) }
-      row.name = c.name.trim()
-      row.mode = 'pre'
-      row.check_type = 'tool'
-      row.tool = c.tool || 'bash'
-      row.args_pattern = c.args_pattern.trim()
-      row.min_count = c.min_count || 1
-      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与拦截
-      else delete row.subagents  // 编辑面清空 = 取消定向(原始行的 subagents 不保留)
-      return row
-    }
-    if (c.mode === 'checkpoint') {
-      const row: any = { name: c.name.trim(), mode: 'checkpoint', check_type: 'tool',
-        tool: c.tool || 'bash', args_pattern: c.args_pattern.trim(),
-        timing: c.timing === 'after' ? 'after' : 'before',
-        prompt: (c.prompt || '').trim(), max_checks: c.max_checks || 1 }
-      if (c.hasAssert) {
-        row.assert_spec = { tool: c.assert_tool.trim(),
-          args_pattern: c.assert_pattern.trim(), min_count: c.assert_min_count || 1 }
-      }
-      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
-      return row
-    }
-    const row: any = { name: c.name.trim(), tool: c.tool || 'bash',
-      args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
-    if (subs.length) row.subagents = subs
-    return row
-  })
-}
 
 async function save() {
   if (!name.value.trim()) {
@@ -303,10 +180,11 @@ async function save() {
         ElMessage.error('终态兜底断言需要填写断言工具与 args 正则')
         return
       }
-      action_checks = serializeChecks(
-        gateChecks.value.filter(c => c.name.trim() && c.args_pattern.trim()))
+      // 归一内部按行类型白名单过滤不完整的行(verifier 行看 rubric,tool 行看
+      // args_pattern)——调用方不再按 args_pattern 预筛(会把判官行误删)
+      action_checks = serializeChecks(gateChecks.value)
       if (action_checks.length === 0) {
-        ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则)')
+        ElMessage.warning('已启用动作门禁,但没有任何一条完整的期望(需要名称与参数正则/判定要点)')
         return
       }
     }

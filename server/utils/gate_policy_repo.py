@@ -9,6 +9,8 @@ import json
 import logging
 import secrets
 
+import psycopg2
+
 from db import get_db as _default
 
 log = logging.getLogger(__name__)
@@ -27,18 +29,23 @@ def create_policy(user_id: str, name: str, description, checks,
         raise ValueError('策略名必填且不超过 100 字')
     pid = 'gpol_' + secrets.token_hex(6)
     db_ctx = get_db or _default
-    with db_ctx() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO gate_policies (id, name, description, checks, "
-                " enabled, created_by) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
-                (pid, name, description,
-                 json.dumps(normalized, ensure_ascii=False)
-                 if normalized else '[]',
-                 bool(enabled), user_id))
-            row = cur.fetchone()
-            cols = [d[0] for d in cur.description]
-        conn.commit()
+    try:
+        with db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO gate_policies (id, name, description, checks, "
+                    " enabled, created_by) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+                    (pid, name, description,
+                     json.dumps(normalized, ensure_ascii=False)
+                     if normalized else '[]',
+                     bool(enabled), user_id))
+                row = cur.fetchone()
+                cols = [d[0] for d in cur.description]
+            conn.commit()
+    except psycopg2.errors.UniqueViolation as e:
+        # name 列 UNIQUE（迁移建表约束）：撞名 500 → 400（路由把 ValueError
+        # 映射为 400，前端直接可提示重试）
+        raise ValueError('策略名已存在') from e
     return dict(zip(cols, row))
 
 
@@ -93,13 +100,17 @@ def update_policy(pid: str, *, name=None, description=None, checks=None,
     sets.append('updated_at=NOW()')
     params.append(pid)
     db_ctx = get_db or _default
-    with db_ctx() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"UPDATE gate_policies SET {', '.join(sets)} "
-                        "WHERE id=%s RETURNING *", tuple(params))
-            row = cur.fetchone()
-            cols = [d[0] for d in cur.description] if row else []
-        conn.commit()
+    try:
+        with db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE gate_policies SET {', '.join(sets)} "
+                            "WHERE id=%s RETURNING *", tuple(params))
+                row = cur.fetchone()
+                cols = [d[0] for d in cur.description] if row else []
+            conn.commit()
+    except psycopg2.errors.UniqueViolation as e:
+        # 与 create_policy 同口径：改成既有策略名 500 → 400
+        raise ValueError('策略名已存在') from e
     return dict(zip(cols, row)) if row else None
 
 

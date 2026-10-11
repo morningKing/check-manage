@@ -30,8 +30,9 @@ export interface GatePolicy {
   description: string | null
   checks: GateCheckRow[]
   enabled: boolean
-  createdBy?: string | null
-  updatedAt?: string | null
+  created_by?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export function listGatePolicies(enabled?: boolean) {

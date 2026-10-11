@@ -82,77 +82,15 @@
                     @click="onExtract">AI 提炼（按 Prompt 与 Skill 步骤生成建议）</ElButton>
         </div>
         <template v-if="gateEnabled">
-          <div v-for="(c, i) in gateChecks" :key="i" class="gate-card" :data-test="`gate-row-${i}`">
-            <!-- 行模式(2026-10-11 spec §8.4):终态期望=账本终态核对;拦截(pre)=执行前
-                 deny 拦断;过程检查=执行前/后拦工具调用。pre 仅回填既有数据时出现,
-                 语义只能透传不能改写(deny 降级成 post=静默放行) -->
-            <div v-if="c.check_type !== 'verifier'" class="gate-card__line">
-              <ElRadioGroup v-model="c.mode" size="small" data-test="gate-row-mode">
-                <ElRadioButton value="post">终态期望</ElRadioButton>
-                <ElRadioButton value="pre">拦截</ElRadioButton>
-                <ElRadioButton value="checkpoint">过程检查</ElRadioButton>
-              </ElRadioGroup>
-              <template v-if="c.mode === 'checkpoint'">
-                <ElRadioGroup v-model="c.timing" size="small" data-test="gate-row-timing">
-                  <ElRadioButton value="before">执行前</ElRadioButton>
-                  <ElRadioButton value="after">执行后</ElRadioButton>
-                </ElRadioGroup>
-                <span class="gate-card__label">次数上限</span>
-                <ElInputNumber v-model="c.max_checks" :min="1" :max="20" controls-position="right"
-                               data-test="gate-row-max-checks" style="flex:0 0 110px" />
-              </template>
-            </div>
-            <div class="gate-card__line">
-              <!-- 类型选择仅 post 行暴露:pre/checkpoint 行固定 tool 型
-                   (后端 mode=pre/checkpoint 只支持 tool 行) -->
-              <ElSelect v-if="c.mode === 'post'" v-model="c.check_type" style="flex:0 0 132px">
-                <ElOption label="工具调用断言" value="tool" />
-                <ElOption label="判官核对" value="verifier" />
-              </ElSelect>
-              <ElInput v-model="c.name" placeholder="名称,如: 克隆目标仓库" style="flex:1" />
-              <template v-if="c.check_type !== 'verifier'">
-                <ElSelect v-model="c.tool" placeholder="工具" style="flex:0 0 110px"
-                          filterable allow-create default-first-option>
-                  <ElOption v-for="t in gateTools" :key="t" :label="t" :value="t" />
-                </ElSelect>
-                <ElInputNumber v-if="c.mode !== 'checkpoint'" v-model="c.min_count" :min="1" :max="99" controls-position="right"
-                               style="flex:0 0 100px" />
-              </template>
-              <ElButton link type="danger" @click="gateChecks.splice(i, 1)"
-                        :disabled="gateChecks.length <= 1">删除</ElButton>
-            </div>
-            <!-- 过程检查条件(§8.4):prompt 命中后注入模型;可选终态兜底断言(账本核对) -->
-            <template v-if="c.mode === 'checkpoint'">
-              <ElInput v-model="c.prompt" type="textarea" :rows="2"
-                       maxlength="2000" show-word-limit
-                       placeholder="检查提示词（命中后注入给模型）"
-                       data-test="gate-row-prompt" />
-              <ElCheckbox v-model="c.hasAssert" data-test="gate-row-has-assert">终态兜底断言</ElCheckbox>
-              <div v-if="c.hasAssert" class="gate-card__line">
-                <ElInput v-model="c.assert_tool" placeholder="断言工具（如 read）"
-                         data-test="gate-row-assert-tool" />
-                <ElInput v-model="c.assert_pattern" placeholder="断言 args 正则（如 docs/kb/）"
-                         data-test="gate-row-assert-pattern" />
-                <ElInputNumber v-model="c.assert_min_count" :min="1" controls-position="right"
-                               data-test="gate-row-assert-min-count" style="flex:0 0 100px" />
-              </div>
+          <!-- 规则行编辑(2026-10-11 spec §8.4):与批编辑对话框/管理页门禁策略
+               共用 GateCheckRows(同一套字段与提交归一,见该组件 serializeChecks) -->
+          <GateCheckRows v-model="gateChecks">
+            <template #footer>
+              <span style="color:var(--el-text-color-placeholder);font-size:11px">
+                核对不过门的子任务将标记失败并写明缺失项;指定子代理时只核对它们的动作,留空则对所有子代理生效。
+              </span>
             </template>
-            <ElInput v-if="c.check_type === 'verifier'" v-model="c.rubric" type="textarea" :rows="3"
-                     placeholder="判定要点（≤2000 字，写给判官核对）" />
-            <ElInput v-if="c.check_type === 'verifier'" v-model="c.subagents"
-                     placeholder="适用子代理(可选,逗号分隔;留空=核对任务会话整体,填写=只核对这些子代理的会话与动作)" />
-            <template v-else>
-              <ElInput v-model="c.args_pattern" placeholder="参数正则,如: git clone\s+\S*acme/inspector" />
-              <ElInput v-model="c.subagents"
-                       placeholder="适用子代理(可选,逗号分隔,如: general, explore;留空=对所有子代理生效)" />
-            </template>
-          </div>
-          <div class="row__inline">
-            <ElButton link data-test="gate-add" @click="gateChecks.push(emptyCheck())">+ 加一条期望</ElButton>
-            <span style="color:var(--el-text-color-placeholder);font-size:11px">
-              核对不过门的子任务将标记失败并写明缺失项;指定子代理时只核对它们的动作,留空则对所有子代理生效。
-            </span>
-          </div>
+          </GateCheckRows>
         </template>
       </div>
 
@@ -209,12 +147,15 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import {
   ElDialog, ElInput, ElSelect, ElOption, ElCheckbox, ElButton, ElUpload,
-  ElInputNumber, ElMessage, ElRadioGroup, ElRadioButton,
+  ElMessage,
 } from 'element-plus'
 import { stagingUpload, createBatch, listBatches, extractActionChecks } from '@/api/aiChatBatches'
 import { listTemplates, createTemplate } from '@/api/aiChatPromptTemplates'
 import { listGatePolicies } from '@/api/gatePolicies'
 import type { GatePolicy } from '@/api/gatePolicies'
+import GateCheckRows from '@/components/admin/GateCheckRows.vue'
+import type { GateCheckEditRow } from '@/components/admin/GateCheckRows.vue'
+import { serializeChecks } from '@/components/admin/GateCheckRows.vue'
 import { listAgents, listModels } from '@/api/aiChat'
 import type { AgentInfo, ModelInfo } from '@/api/aiChat'
 import type { AiChatBatchDetail, AiChatPromptTemplate, StagedFile } from '@/types/aiChatBatch'
@@ -245,21 +186,9 @@ const provisionRepo = ref<string>('')
 const gateEnabled = ref(false)
 // 修正开关(设计 §5.4):门禁不过时原会话 continue 修正(默认关)
 const gateRetry = ref(false)
-// 门禁行类型:tool=工具调用断言(账本正则核对) / verifier=判官核对(rubric 语义要点)
-// 2026-10-11 spec §8.4:mode=checkpoint 的过程检查行——timing/prompt/max_checks/
-// hasAssert/assert_* 是行内部编辑字段,提交前 serializeChecks 剥离(不落 payload);
+// 门禁行类型与提交归一见共享组件 GateCheckRows(行编辑 + serializeChecks);
 // raw=回填留存的原始行(仅 pre 透传分支读,post/checkpoint 白名单重建不读它)
-type GateCheckMode = 'post' | 'pre' | 'checkpoint'
-type GateCheckRow = {
-  name: string; check_type: 'tool' | 'verifier'; tool: string
-  args_pattern: string; min_count: number; subagents: string; rubric: string
-  mode: GateCheckMode; timing: 'before' | 'after'; prompt: string
-  max_checks: number; hasAssert: boolean
-  assert_tool: string; assert_pattern: string; assert_min_count: number
-  raw?: Record<string, unknown> | null
-}
-const gateChecks = ref<GateCheckRow[]>([])
-const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
+const gateChecks = ref<GateCheckEditRow[]>([])
 // 引用门禁策略(2026-10-11 spec §8.2):命名的规则集,批引用即生效;
 // 下拉拉取失败静默(空下拉不阻塞表单)
 const policies = ref<GatePolicy[]>([])
@@ -273,74 +202,6 @@ const extracting = ref(false)
 const reuseAgents = ref<string[]>([])
 const subagentList = ref<AgentInfo[]>([])
 const subagentOptions = computed(() => subagentList.value)
-function emptyCheck(): GateCheckRow {
-  return { name: '', check_type: 'tool', tool: 'bash', args_pattern: '',
-           min_count: 1, subagents: '', rubric: '',
-           mode: 'post', timing: 'before', prompt: '', max_checks: 1,
-           hasAssert: false, assert_tool: '', assert_pattern: '', assert_min_count: 1 }
-}
-
-/** 提交归一(spec §8.4 + 设计 §5.2):行内部字段(mode 编辑态的 timing/prompt/
- * max_checks/hasAssert/assert_*)不落 payload——按行类型白名单重建,不完整的行过滤:
- * pre(拦截)行 = 原样透传 {name, mode:'pre', check_type:'tool', tool,
- *   args_pattern, min_count[, subagents][, raw 上的 apply_to 等未建模键]}——
- *   deny 语义不能被编辑改写(mode 键丢了=拦截规则静默降级成终态期望);
- * post/tool 行 = {name, check_type:'tool', tool, args_pattern, min_count[, subagents]}
- * verifier 行 = {name, check_type:'verifier', rubric[, subagents]}
- * checkpoint 行 = {name, mode:'checkpoint', check_type:'tool', tool, args_pattern,
- *   timing, prompt, max_checks[, assert_spec][, subagents]}(mode 键齐) */
-function serializeChecks(rows: GateCheckRow[]): any[] {
-  const out: any[] = []
-  for (const c of rows) {
-    const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
-    if (c.mode === 'pre') {
-      // 拦截型行(deny,2026-10-11 spec):round-trip 保真——mode 键原样保留;
-      // raw=回填留存的原始行(可能带 apply_to/require_state 等编辑面未建模的键,
-      // 原样透传),建模键以 UI 当前值为准覆盖
-      if (!c.name.trim() || !c.args_pattern.trim()) continue
-      const row: any = { ...(c.raw || {}) }
-      row.name = c.name.trim()
-      row.mode = 'pre'
-      row.check_type = 'tool'
-      row.tool = c.tool || 'bash'
-      row.args_pattern = c.args_pattern.trim()
-      row.min_count = c.min_count || 1
-      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与拦截
-      else delete row.subagents  // 编辑面清空 = 取消定向(原始行的 subagents 不保留)
-      out.push(row)
-      continue
-    }
-    if (c.check_type === 'verifier') {
-      if (c.name.trim() && c.rubric.trim()) {
-        const row: any = { name: c.name.trim(), check_type: 'verifier', rubric: c.rubric.trim() }
-        if (subs.length) row.subagents = subs  // 判官定向:只核对这些子代理
-        out.push(row)
-      }
-      continue
-    }
-    if (c.mode === 'checkpoint') {
-      // 过程检查行:prompt 必填(命中后注入模型);assert_spec=终态兜底断言
-      if (!c.name.trim() || !c.args_pattern.trim() || !(c.prompt || '').trim()) continue
-      const row: any = { name: c.name.trim(), mode: 'checkpoint', check_type: 'tool',
-        tool: c.tool || 'bash', args_pattern: c.args_pattern.trim(),
-        timing: c.timing === 'after' ? 'after' : 'before',
-        prompt: c.prompt.trim(), max_checks: c.max_checks || 1 }
-      if (c.hasAssert) {
-        row.assert_spec = { tool: c.assert_tool.trim(),
-          args_pattern: c.assert_pattern.trim(), min_count: c.assert_min_count || 1 }
-      }
-      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
-      out.push(row)
-      continue
-    }
-    if (!c.name.trim() || !c.args_pattern.trim()) continue
-    const row: any = { name: c.name.trim(), check_type: 'tool', tool: c.tool || 'bash',
-      args_pattern: c.args_pattern.trim(), min_count: c.min_count || 1 }
-    if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与核对
-    out.push(row)
-  }
-  return out
-}
 
 /** M1.5:AI 提炼——只产出建议并预填表单,登记仍由用户点「创建」确认 */
 async function onExtract() {
@@ -353,7 +214,7 @@ async function onExtract() {
       agent: selectedAgent.value || null,
     })
     // 后端建议已支持 verifier 类型(rubric 装在 effect_spec 里)——按类型预填对应行
-    gateChecks.value = checks.map((c): GateCheckRow => {
+    gateChecks.value = checks.map((c): GateCheckEditRow => {
       const isVerifier = String(c.check_type || '') === 'verifier'
       return {
         name: c.name,
@@ -567,13 +428,6 @@ function reset() {
 .row label { font-size: 13px; color: var(--el-text-color-secondary); }
 .row__inline { display: flex; gap: 8px; align-items: center; }
 .row--inline { display: flex; flex-direction: row; gap: 12px; align-items: center; }
-.gate-card {
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 10px; border: 1px solid var(--el-border-color-lighter);
-  border-radius: 6px; background: var(--el-fill-color-lighter);
-}
-.gate-card__line { display: flex; gap: 6px; align-items: center; }
-.gate-card__label { font-size: 11px; color: var(--el-text-color-secondary); }
 .files { list-style: none; padding: 0; margin: 8px 0 0; max-height: 200px; overflow: auto; }
 .files li { display: flex; justify-content: space-between; padding: 4px 8px; }
 .files__uploading { color: var(--el-text-color-secondary); }

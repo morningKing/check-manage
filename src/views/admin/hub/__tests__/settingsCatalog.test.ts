@@ -10,9 +10,9 @@ import {
 } from '../settingsCatalog'
 
 describe('SETTINGS_GROUPS', () => {
-  it('共 7 组 22 条', () => {
+  it('共 7 组 23 条', () => {
     expect(SETTINGS_GROUPS).toHaveLength(7)
-    expect(ALL_SETTINGS_ITEMS).toHaveLength(22)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(23)
   })
 
   it('条目 id 全局唯一', () => {
@@ -130,9 +130,9 @@ describe('schema：any-of 权限', () => {
 })
 
 describe('AI 组合并', () => {
-  it('共 7 组 22 条', () => {
+  it('共 7 组 23 条', () => {
     expect(SETTINGS_GROUPS).toHaveLength(7)
-    expect(ALL_SETTINGS_ITEMS).toHaveLength(22)
+    expect(ALL_SETTINGS_ITEMS).toHaveLength(23)
   })
   it('被并掉的 5 个旧 id 不再是条目', () => {
     for (const id of ['ai-opencode', 'ai-skillopt', 'ai-batches', 'ai-sessions', 'ai-orchestrations']) {

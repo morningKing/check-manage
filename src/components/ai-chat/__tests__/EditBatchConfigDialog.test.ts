@@ -84,8 +84,10 @@ describe('EditBatchConfigDialog pre 规则行 round-trip', () => {
       { name: '禁删产物', mode: 'pre', check_type: 'tool', tool: 'bash',
         args_pattern: 'rm\\s+-rf', min_count: 1,
         apply_to: { input_file_glob: 'docs/**' } },
-      // post 行:既有提交契约不变(无 mode 键)
-      { name: '克隆目标仓库', tool: 'bash', args_pattern: 'git clone', min_count: 1 },
+      // post 行:与批创建对话框同一套 serializeChecks(共享 GateCheckRows)后
+      // 显式携带 check_type:'tool'(后端缺省即 tool,仅键面更明确)
+      { name: '克隆目标仓库', check_type: 'tool', tool: 'bash',
+        args_pattern: 'git clone', min_count: 1 },
     ])
   })
 
