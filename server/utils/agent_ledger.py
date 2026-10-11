@@ -850,7 +850,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                     cur.execute(
                         "SELECT count(*) FROM action_expectations "
                         "WHERE scope_id = %s AND scope_type IN ('session','tree') "
-                        "  AND mode = 'post'",
+                        "  AND mode IN ('post', 'checkpoint') "
+                        "  AND (mode = 'post' OR assert_spec IS NOT NULL)",
                         (session_id,),
                     )
                     expected_n = cur.fetchone()[0]
@@ -861,10 +862,11 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                     """
                     SELECT id, name, tool, args_pattern, require_state,
                            min_count, scope_type, check_type, effect_spec,
-                           subagents
+                           subagents, mode, assert_spec
                     FROM action_expectations
                     WHERE scope_id = %s AND scope_type IN ('session','tree')
-                      AND mode = 'post'
+                      AND (mode = 'post'
+                           OR (mode = 'checkpoint' AND assert_spec IS NOT NULL))
                     ORDER BY id
                     """,
                     (session_id,),
@@ -875,11 +877,20 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                 tree_ids = None
                 results = []
                 for (eid, name, tool, pattern, req_state, min_count,
-                     scope, check_type, effect_spec, subagents) in exps:
+                     scope, check_type, effect_spec, subagents,
+                     exp_mode, assert_spec) in exps:
                     if check_type == 'verifier':
                         # 判官核对由引擎钩子（utils/verifier）负责：证据循环
                         # 跳过——verifier 行 args_pattern='' 会让 `~ ''` 恒真
                         continue
+                    if exp_mode == 'checkpoint':
+                        # 过程检查的终态兜底断言：assert_spec 的账本字段参与
+                        # 核对（行上的 tool/args_pattern 是触发匹配，不是断言）
+                        aspec = assert_spec or {}
+                        tool = aspec.get('tool') or tool
+                        pattern = aspec.get('args_pattern') or ''
+                        min_count = int(aspec.get('min_count') or 1)
+                        req_state = 'completed'
                     if check_type == 'file':
                         evidence = _count_file_evidence(cur, session_id,
                                                         effect_spec)
@@ -937,6 +948,7 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                         'check_type': check_type or 'tool',
                         'effect_spec': effect_spec,
                         'subagents': subagents,
+                        'mode': exp_mode or 'post',
                     })
         overall = 'failed' if any(r['status'] == 'failed' for r in results) \
             else 'passed'
@@ -952,7 +964,8 @@ def check_session_gate(session_id: str, ledger_healthy: bool = True,
                     cur.execute(
                         "SELECT count(*) FROM action_expectations "
                         "WHERE scope_id = %s AND scope_type IN ('session','tree') "
-                        "  AND mode = 'post'",
+                        "  AND mode IN ('post', 'checkpoint') "
+                        "  AND (mode = 'post' OR assert_spec IS NOT NULL)",
                         (session_id,),
                     )
                     expected_n = cur.fetchone()[0]
@@ -973,6 +986,8 @@ def _expectation_desc(r: dict) -> str:
     if ct == 'db_record':
         spec = r.get('effect_spec') or {}
         return f"存在 {spec.get('collection', '?')} 记录({spec.get('filter') or '任意'})"
+    if r.get('mode') == 'checkpoint':
+        return f"过程检查·{r.get('tool')} ~ {r.get('args_pattern')}"
     return f"{r.get('tool')} ~ {r.get('args_pattern')}"
 
 

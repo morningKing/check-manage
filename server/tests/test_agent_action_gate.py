@@ -993,3 +993,70 @@ class TestPostCheck:
                                'tool': 'write', 'argsText': 'outputs/report.md'})
         body = r2.get_json()
         assert body['inject'] is True and '结论段' in body['prompt']
+
+
+# ---------------------------------------------------------------------------
+# Task 6: 终态兜底——check_session_gate 核对 checkpoint assert_spec
+# ---------------------------------------------------------------------------
+
+class TestCheckpointTerminalAssert:
+    def test_assert_spec_counts_ledger_hits(self, db_conn):
+        """assert_spec：账本命中 ≥ min_count → passed；不满足 → failed。"""
+        suffix = uuid.uuid4().hex[:8]
+        scope = f'sess_ta_{suffix}'
+        uid = f'u-ta-{suffix}'
+        oc_sid = f'oc-ta-{suffix}'
+        with db_conn.cursor() as cur:
+            # users 行兜 FK；id 带 suffix 防并行/重跑冲突（本文件通行做法）
+            cur.execute(
+                "INSERT INTO users (id, username, password_hash, display_name,"
+                " role) VALUES (%s, %s, 'x', %s, 'developer')",
+                (uid, f'gate-ta-{suffix}', f'Gate TA {suffix}'))
+            cur.execute(
+                "INSERT INTO ai_chat_sessions (id, user_id, status,"
+                " opencode_session_id, workspace_path)"
+                " VALUES (%s, %s, 'completed', %s, '/tmp/ta')",
+                (scope, uid, oc_sid))
+            cur.execute(
+                "INSERT INTO action_expectations (scope_type, scope_id, name,"
+                " tool, args_pattern, require_state, min_count, source,"
+                " check_type, mode, timing, max_checks, fired_count, prompt,"
+                " assert_spec)"
+                " VALUES ('tree', %s, '写前读知识库', 'write', 'r', 'completed',"
+                " 1, 'batch', 'tool', 'checkpoint', 'before', 3, 1, '先读',"
+                " %s)", (scope, '{"tool":"read","args_pattern":"docs/kb/",'
+                                '"min_count":1}'))
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " part_id, tool, args_text, state, occurred_at)"
+                " VALUES (%s, %s, 'p1', 'read', 'docs/kb/a.md',"
+                " 'completed', NOW())", (oc_sid, scope))
+        db_conn.commit()
+        try:
+            gate = agent_ledger.check_session_gate(scope)
+            assert gate['status'] == 'passed'
+            assert gate['results'][0]['mode'] == 'checkpoint'
+            # 撤掉证据 → failed；gate_failure_message 渲染过程检查明细
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM agent_tool_calls"
+                            " WHERE oc_session_id=%s AND part_id='p1'", (oc_sid,))
+            db_conn.commit()
+            gate2 = agent_ledger.check_session_gate(scope)
+            assert gate2['status'] == 'failed'
+            msg = agent_ledger.gate_failure_message(gate2)
+            assert '写前读知识库' in msg and 'read' in msg
+            # 无 assert 的纯提醒行不参与终态
+            with db_conn.cursor() as cur:
+                cur.execute("UPDATE action_expectations SET assert_spec = NULL "
+                            "WHERE scope_id=%s", (scope,))
+            db_conn.commit()
+            assert agent_ledger.check_session_gate(scope)['status'] == 'passed'
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id=%s",
+                            (scope,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (scope,))
+                cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",
+                            (scope,))
+                cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            db_conn.commit()
