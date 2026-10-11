@@ -646,37 +646,55 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
 # ---------------------------------------------------------------------------
 
 def pre_check_tool(session_id: str, tool: str, args_text: str,
-                   get_db=None) -> dict:
-    """P3-C3：PreToolUse 拦截检查——工具调用前由 OC 插件经
-    /ai/gate/internal/pre-check 调用。
+                   agent_name: str | None = None, get_db=None) -> dict:
+    """P3-C3 pre 阻断 + checkpoint 过程检查（before 时机）。
 
-    该会话存在 mode='pre' 的期望行且 tool 相等 + args_text 命中
-    args_pattern（Python re.search；登记时已按 PG `~` 口径校验过正则，
-    常用方言两侧语义一致）→ {'allow': False, 'reason': …}；否则 allow。
-
-    `session_id` 须已是期望登记的 scope_id（OC 内部会话 id 的映射在路由层
-    完成）。查询异常向上抛——由路由统一 fail-open（拦截基础设施故障不得
-    阻断全部工具调用；终态核对仍兜底）。
-    """
+    判定顺序：① mode='pre' deny 命中即拦（优先级最高，不计预算）；
+    ② mode='checkpoint' AND timing='before' 按 (created_at, id) 序取第一条
+    匹配且有预算的行，原子消耗 fired_count 后注入 prompt——复用 deny 的抛错
+    通道（reason 即注入内容）。`agent_name` 是动作归属子代理名（路由层由 OC
+    会话映射解析；根会话自身动作=None）：带 subagents 名单的行只对名单内
+    子代理注入，名单外（含根会话）不注入不耗预算；无名单行树级全量。查询
+    异常向上抛——由路由统一 fail-open。"""
     import re as _re
     db_ctx = get_db or _default_get_db
     with db_ctx() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT name, args_pattern FROM action_expectations
-                WHERE scope_id = %s AND mode = 'pre' AND tool = %s
-                """,
+                "SELECT name, args_pattern FROM action_expectations "
+                "WHERE scope_id = %s AND mode = 'pre' AND tool = %s",
                 (session_id, tool),
             )
-            rows = cur.fetchall()
-    for name, pattern in rows:
-        if pattern and _re.search(pattern, args_text or ''):
-            return {'allow': False,
-                    'reason': f'门禁规则「{name}」拦截了工具 {tool} 的调用'}
-    # rules=0 供插件短路缓存：该会话无任何 pre 规则时，后续工具调用不再
-    # 发 pre-check 请求（无规则是常态，热路径零开销）。
-    return {'allow': True, 'rules': len(rows)}
+            deny_rows = cur.fetchall()
+            for name, pattern in deny_rows:
+                if pattern and _re.search(pattern, args_text or ''):
+                    return {'allow': False,
+                            'reason': f'门禁规则「{name}」拦截了工具 {tool} 的调用',
+                            'rules': len(deny_rows)}
+            cur.execute(
+                "SELECT id, prompt, args_pattern, subagents FROM action_expectations "
+                "WHERE scope_id = %s AND mode = 'checkpoint' "
+                "  AND timing = 'before' AND tool = %s "
+                "ORDER BY created_at, id",
+                (session_id, tool),
+            )
+            check_rows = cur.fetchall()
+            rules_n = len(deny_rows) + len(check_rows)
+            for rid, prompt, pattern, subagents in check_rows:
+                if not pattern or not _re.search(pattern, args_text or ''):
+                    continue
+                if subagents and (not agent_name or agent_name not in subagents):
+                    continue
+                cur.execute(
+                    "UPDATE action_expectations SET fired_count = fired_count + 1 "
+                    "WHERE id = %s AND fired_count < max_checks RETURNING id",
+                    (rid,),
+                )
+                if cur.fetchone():
+                    return {'allow': False, 'reason': prompt, 'rules': rules_n}
+    # rules=0 供插件短路缓存：该会话无 pre 规则也无 checkpoint(before) 规则
+    # 时，后续工具调用不再发 pre-check 请求（无规则是常态，热路径零开销）。
+    return {'allow': True, 'rules': rules_n}
 
 
 # ---------------------------------------------------------------------------

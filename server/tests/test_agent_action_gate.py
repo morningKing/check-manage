@@ -836,3 +836,85 @@ def test_gate_checkpoint_policy_schema(db_conn):
             "WHERE table_name = 'ai_chat_batches' "
             "  AND column_name = 'gate_policy_id'")
         assert cur.fetchone() is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 4: pre_check_tool 的 checkpoint 预算注入（deny 优先 + agent 定向）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cp_scope(db_conn):
+    """登记一条 checkpoint(before) 规则到临时 scope，收尾删除。"""
+    scope = f'sess_cp_{uuid.uuid4().hex[:8]}'
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO action_expectations (scope_type, scope_id, name, tool,"
+            " args_pattern, require_state, min_count, source, check_type, mode,"
+            " timing, max_checks, fired_count, prompt)"
+            " VALUES ('tree', %s, '写前读知识库', 'write', 'outputs/report',"
+            " 'completed', 1, 'batch', 'tool', 'checkpoint', 'before', 2, 0,"
+            " '请先读取知识库 docs/kb/ 再写入')", (scope,))
+    db_conn.commit()
+    yield scope
+    with db_conn.cursor() as cur:
+        cur.execute("DELETE FROM action_expectations WHERE scope_id = %s", (scope,))
+    db_conn.commit()
+
+
+class TestPreCheckCheckpoint:
+    def test_budget_consume_then_exhaust_then_allow(self, db_conn, cp_scope):
+        r1 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
+        assert r1 == {'allow': False, 'reason': '请先读取知识库 docs/kb/ 再写入',
+                      'rules': 1}
+        r2 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
+        assert r2['allow'] is False          # 预算 2：第二次仍注入
+        r3 = agent_ledger.pre_check_tool(cp_scope, 'write', 'outputs/report.md')
+        assert r3 == {'allow': True, 'rules': 1}   # 预算耗尽 → 放行
+
+    def test_non_matching_tool_untouched(self, db_conn, cp_scope):
+        r = agent_ledger.pre_check_tool(cp_scope, 'bash', 'outputs/report')
+        assert r == {'allow': True, 'rules': 0}
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT fired_count FROM action_expectations "
+                        "WHERE scope_id=%s", (cp_scope,))
+            assert cur.fetchone()[0] == 0     # 未命中不耗预算
+
+    def test_deny_wins_over_checkpoint(self, db_conn, cp_scope):
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO action_expectations (scope_type, scope_id, name,"
+                " tool, args_pattern, require_state, min_count, source,"
+                " check_type, mode)"
+                " VALUES ('tree', %s, '禁删', 'write', 'secrets', 'completed',"
+                " 1, 'batch', 'tool', 'pre')", (cp_scope,))
+        db_conn.commit()
+        r = agent_ledger.pre_check_tool(cp_scope, 'write', 'secrets.txt')
+        assert r['allow'] is False and '拦截' in r['reason']
+
+    def test_subagents_directed_injection(self, db_conn):
+        """名单内子代理动作注入；名单外子代理/根会话动作放行且不耗预算。"""
+        import psycopg2.extras
+        scope = f'sess_cp2_{uuid.uuid4().hex[:8]}'
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO action_expectations (scope_type, scope_id, name,"
+                " tool, args_pattern, require_state, min_count, source,"
+                " check_type, mode, timing, max_checks, fired_count, prompt,"
+                " subagents)"
+                " VALUES ('tree', %s, '定向检查', 'write', 'r', 'completed', 1,"
+                " 'batch', 'tool', 'checkpoint', 'before', 5, 0, '先读知识库',"
+                " %s)", (scope, psycopg2.extras.Json(['分析师'])))
+        db_conn.commit()
+        try:
+            assert agent_ledger.pre_check_tool(
+                scope, 'write', 'r', agent_name='执行器')['allow'] is True
+            assert agent_ledger.pre_check_tool(
+                scope, 'write', 'r', agent_name=None)['allow'] is True
+            hit = agent_ledger.pre_check_tool(
+                scope, 'write', 'r', agent_name='分析师')
+            assert hit['allow'] is False and hit['reason'] == '先读知识库'
+        finally:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM action_expectations WHERE scope_id=%s",
+                            (scope,))
+            db_conn.commit()

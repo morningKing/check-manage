@@ -2,8 +2,9 @@
 
 OpenCode 插件 baize-trace.js（utils.skillopt 随启动部署）注册
 `tool.execute.before` 钩子：每次工具调用前 POST 本端点，命中 deny list
-（action_expectations 中 mode='pre' 的行）时插件抛错阻断该次工具执行——
-动作门禁从"终态核对该做的做了没"补上"不允许做的别做"。
+（action_expectations 中 mode='pre' 的行）或 checkpoint(before) 预算注入
+时插件抛错阻断该次工具执行——动作门禁从"终态核对该做的做了没"补上
+"不允许做的别做 / 该先做的先做"。
 
 - POST /pre-check  body {sessionId, tool, argsText}
     返回 {allow: bool, reason?: str}。allow=false 时插件阻断调用并把
@@ -33,15 +34,16 @@ def _authorized():
     return bool(MCP_INTERNAL_TOKEN) and token == MCP_INTERNAL_TOKEN
 
 
-def _resolve_scope_id(oc_or_platform_id: str) -> str:
-    """工具调用所在会话 id → 期望登记的 scope_id。
+def _resolve_session(oc_or_platform_id: str) -> tuple[str, str | None]:
+    """工具调用所在会话 id → (期望登记的 scope_id, 动作归属 agent 名)。
 
-    平台 id（sess_ 前缀）原样返回；OC 内部 id 先查根/批子会话表，再查
-    子代理表（归属根会话——子代理动作受根上登记的 deny list 约束）；
-    都查不到时原样返回（查不到就匹配不上 → allow，与无期望同义）。"""
+    平台 id（sess_ 前缀）原样返回（根会话自身动作 agent=None）；OC 内部 id
+    先查根/批子会话表（agent=None），再查子代理表（agent=子代理名，归属根
+    会话——期望登记在根作用域、约束整棵树）。都查不到时原样返回（匹配不上
+    → allow，与无期望同义）。"""
     sid = oc_or_platform_id or ''
     if not sid or sid.startswith('sess_'):
-        return sid
+        return sid, None
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -51,18 +53,18 @@ def _resolve_scope_id(oc_or_platform_id: str) -> str:
                     "ORDER BY last_active_at DESC NULLS LAST LIMIT 1", (sid,))
                 row = cur.fetchone()
                 if row:
-                    return row[0]
+                    return row[0], None
                 cur.execute(
-                    "SELECT root_session_id FROM ai_chat_subtasks "
+                    "SELECT root_session_id, agent FROM ai_chat_subtasks "
                     "WHERE id = %s", (sid,))
                 row = cur.fetchone()
                 if row and row[0]:
-                    return row[0]
-    except Exception as e:  # noqa: BLE001 —— 映射失败按原 id 查（匹配不上 → allow）
+                    return row[0], row[1]
+    except Exception as e:  # noqa: BLE001
         import logging
         logging.getLogger(__name__).warning(
-            'pre-check session resolve failed %s: %s', sid, e)
-    return sid
+            'gate session resolve failed %s: %s', sid, e)
+    return sid, None
 
 
 @ai_gate_internal_bp.route('/pre-check', methods=['POST'])
@@ -70,7 +72,9 @@ def pre_check():
     """工具调用前校验：session_id + tool + args → allow/deny。
 
     deny 条件：该会话存在 mode='pre' 的期望行，
-    且 tool 匹配 + args_text ~ args_pattern。
+    且 tool 匹配 + args_text ~ args_pattern；
+    checkpoint(before) 规则命中且有预算时注入 prompt（reason 即注入内容，
+    插件侧同一抛错通道）。agent 名由 _resolve_session 一并解析传入。
     """
     if not _authorized():
         return jsonify({'error': 'forbidden'}), 403
@@ -80,9 +84,10 @@ def pre_check():
     args_text = body.get('argsText') or ''
     if not session_id or not tool:
         return jsonify({'allow': True}), 200
-    scope_id = _resolve_scope_id(str(session_id))
+    scope_id, agent_name = _resolve_session(str(session_id))
     try:
-        result = pre_check_tool(scope_id, str(tool), str(args_text or ''))
+        result = pre_check_tool(scope_id, str(tool), str(args_text or ''),
+                                agent_name=agent_name)
     except Exception as e:  # noqa: BLE001 —— 校验故障不阻断执行（fail-open）
         import logging
         logging.getLogger(__name__).warning(
