@@ -615,8 +615,10 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                     INSERT INTO action_expectations
                         (scope_type, scope_id, name, tool, args_pattern,
                          require_state, min_count, source, last_status,
-                         check_type, effect_spec, subagents, mode)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
+                         check_type, effect_spec, subagents, mode,
+                         prompt, timing, max_checks, fired_count, assert_spec)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending',
+                            %s, %s, %s, %s, %s, %s, %s, 0, %s)
                     ON CONFLICT (scope_type, scope_id, name) DO UPDATE SET
                         tool = EXCLUDED.tool,
                         args_pattern = EXCLUDED.args_pattern,
@@ -627,6 +629,11 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                         effect_spec = EXCLUDED.effect_spec,
                         subagents = EXCLUDED.subagents,
                         mode = EXCLUDED.mode,
+                        prompt = EXCLUDED.prompt,
+                        timing = EXCLUDED.timing,
+                        max_checks = EXCLUDED.max_checks,
+                        assert_spec = EXCLUDED.assert_spec,
+                        fired_count = 0,
                         last_status = 'pending',
                         last_checked_at = NULL,
                         last_evidence = NULL
@@ -638,7 +645,12 @@ def register_session_expectations(session_id: str, checks, source: str = 'batch'
                      if c['effect_spec'] else None,
                      psycopg2.extras.Json(c['subagents'])
                      if c.get('subagents') else None,
-                     c.get('mode') or 'post'),
+                     c.get('mode') or 'post',
+                     c.get('prompt'), c.get('timing') or 'before',
+                     c.get('max_checks') or 1,
+                     psycopg2.extras.Json(c.get('assert_spec'))
+                     if c.get('assert_spec') else None,
+                     ),
                 )
     return len(normalized)
 

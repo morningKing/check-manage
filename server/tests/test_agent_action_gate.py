@@ -1060,3 +1060,23 @@ class TestCheckpointTerminalAssert:
                             (scope,))
                 cur.execute("DELETE FROM users WHERE id=%s", (uid,))
             db_conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Task 7: 登记重置——重新登记（重试/修正轮）把 checkpoint 预算归零
+# ---------------------------------------------------------------------------
+
+def test_register_resets_fired_count(db_conn, cp_scope):
+    """重新登记（重试/修正轮）预算重置：fired_count 归零。"""
+    with db_conn.cursor() as cur:
+        cur.execute("UPDATE action_expectations SET fired_count = 2 "
+                    "WHERE scope_id=%s", (cp_scope,))
+    db_conn.commit()
+    agent_ledger.register_session_expectations(cp_scope, [{
+        'name': '写前读知识库', 'mode': 'checkpoint', 'tool': 'write',
+        'args_pattern': 'outputs/report', 'prompt': '请先读取知识库 docs/kb/ 再写入',
+        'max_checks': 2, 'timing': 'before', 'scope': 'tree'}])
+    with db_conn.cursor() as cur:
+        cur.execute("SELECT fired_count FROM action_expectations "
+                    "WHERE scope_id=%s", (cp_scope,))
+        assert cur.fetchone()[0] == 0
