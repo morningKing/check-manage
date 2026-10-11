@@ -165,6 +165,75 @@ describe('CreateBatchDialog', () => {
     }))
   })
 
+  it('pre(拦截)行提交保留 mode:pre——deny 规则不被静默降级为 post', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [
+      { name: '禁删产物', check_type: 'tool', tool: 'bash',
+        args_pattern: 'rm\\s+-rf', min_count: 1, subagents: '', rubric: '',
+        mode: 'pre', timing: 'before', prompt: '', max_checks: 1,
+        hasAssert: false, assert_tool: '', assert_pattern: '', assert_min_count: 1 },
+    ]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      action_checks: [
+        { name: '禁删产物', mode: 'pre', check_type: 'tool', tool: 'bash',
+          args_pattern: 'rm\\s+-rf', min_count: 1 },
+      ],
+    }))
+  })
+
+  it('pre 行 raw 透传:apply_to 等编辑面未建模的键原样保留,建模键以编辑值为准', async () => {
+    vi.mocked(batchApi.createBatch).mockResolvedValue({
+      batch: { id: 'b', user_id: 'u', name: 'B', prompt: 'p',
+               template_id: null, agent: null, model: null, status: 'pending', total: 1,
+               done: 0, failed: 0, created_at: '', completed_at: null },
+      sessions: [],
+    })
+    const w = mount(CreateBatchDialog, {
+      props: { modelValue: true },
+      global: { stubs },
+    })
+    await w.find('input[data-test="name"]').setValue('B')
+    await w.find('input[data-test="prompt"]').setValue('p')
+    ;(w.vm as any).stagedFiles = [{ name: 'a', path: 'p' }]
+    ;(w.vm as any).gateEnabled = true
+    ;(w.vm as any).gateChecks = [
+      { name: '禁删产物', check_type: 'tool', tool: 'bash',
+        args_pattern: 'rm\\s+-rf', min_count: 2, subagents: 'general', rubric: '',
+        mode: 'pre', timing: 'before', prompt: '', max_checks: 1,
+        hasAssert: false, assert_tool: '', assert_pattern: '', assert_min_count: 1,
+        // 回填时留存的原始行:raw 上的未建模键透传,UI 建模键(min_count)以编辑值为准
+        raw: { name: '禁删产物', mode: 'pre', check_type: 'tool', tool: 'bash',
+               args_pattern: 'rm\\s+-rf', min_count: 99,
+               apply_to: { batch_seq: [1] }, require_state: 'clean' } },
+    ]
+    await flushPromises()
+    await w.find('button[data-test="create-btn"]').trigger('click')
+    await flushPromises()
+    expect(batchApi.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      action_checks: [
+        { name: '禁删产物', mode: 'pre', check_type: 'tool', tool: 'bash',
+          args_pattern: 'rm\\s+-rf', min_count: 2, subagents: ['general'],
+          apply_to: { batch_seq: [1] }, require_state: 'clean' },
+      ],
+    }))
+  })
+
   it('blocks submit when 动作门禁 is enabled but no complete check', async () => {
     vi.mocked(batchApi.createBatch).mockClear()
     const w = mount(CreateBatchDialog, {

@@ -83,10 +83,13 @@
         </div>
         <template v-if="gateEnabled">
           <div v-for="(c, i) in gateChecks" :key="i" class="gate-card" :data-test="`gate-row-${i}`">
-            <!-- 行模式(2026-10-11 spec §8.4):终态期望=账本终态核对;过程检查=执行前/后拦工具调用 -->
+            <!-- 行模式(2026-10-11 spec §8.4):终态期望=账本终态核对;拦截(pre)=执行前
+                 deny 拦断;过程检查=执行前/后拦工具调用。pre 仅回填既有数据时出现,
+                 语义只能透传不能改写(deny 降级成 post=静默放行) -->
             <div v-if="c.check_type !== 'verifier'" class="gate-card__line">
               <ElRadioGroup v-model="c.mode" size="small" data-test="gate-row-mode">
                 <ElRadioButton value="post">终态期望</ElRadioButton>
+                <ElRadioButton value="pre">拦截</ElRadioButton>
                 <ElRadioButton value="checkpoint">过程检查</ElRadioButton>
               </ElRadioGroup>
               <template v-if="c.mode === 'checkpoint'">
@@ -100,7 +103,9 @@
               </template>
             </div>
             <div class="gate-card__line">
-              <ElSelect v-if="c.mode !== 'checkpoint'" v-model="c.check_type" style="flex:0 0 132px">
+              <!-- 类型选择仅 post 行暴露:pre/checkpoint 行固定 tool 型
+                   (后端 mode=pre/checkpoint 只支持 tool 行) -->
+              <ElSelect v-if="c.mode === 'post'" v-model="c.check_type" style="flex:0 0 132px">
                 <ElOption label="工具调用断言" value="tool" />
                 <ElOption label="判官核对" value="verifier" />
               </ElSelect>
@@ -242,7 +247,8 @@ const gateEnabled = ref(false)
 const gateRetry = ref(false)
 // 门禁行类型:tool=工具调用断言(账本正则核对) / verifier=判官核对(rubric 语义要点)
 // 2026-10-11 spec §8.4:mode=checkpoint 的过程检查行——timing/prompt/max_checks/
-// hasAssert/assert_* 是行内部编辑字段,提交前 serializeChecks 剥离(不落 payload)
+// hasAssert/assert_* 是行内部编辑字段,提交前 serializeChecks 剥离(不落 payload);
+// raw=回填留存的原始行(仅 pre 透传分支读,post/checkpoint 白名单重建不读它)
 type GateCheckMode = 'post' | 'pre' | 'checkpoint'
 type GateCheckRow = {
   name: string; check_type: 'tool' | 'verifier'; tool: string
@@ -250,6 +256,7 @@ type GateCheckRow = {
   mode: GateCheckMode; timing: 'before' | 'after'; prompt: string
   max_checks: number; hasAssert: boolean
   assert_tool: string; assert_pattern: string; assert_min_count: number
+  raw?: Record<string, unknown> | null
 }
 const gateChecks = ref<GateCheckRow[]>([])
 const gateTools = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task']
@@ -275,6 +282,9 @@ function emptyCheck(): GateCheckRow {
 
 /** 提交归一(spec §8.4 + 设计 §5.2):行内部字段(mode 编辑态的 timing/prompt/
  * max_checks/hasAssert/assert_*)不落 payload——按行类型白名单重建,不完整的行过滤:
+ * pre(拦截)行 = 原样透传 {name, mode:'pre', check_type:'tool', tool,
+ *   args_pattern, min_count[, subagents][, raw 上的 apply_to 等未建模键]}——
+ *   deny 语义不能被编辑改写(mode 键丢了=拦截规则静默降级成终态期望);
  * post/tool 行 = {name, check_type:'tool', tool, args_pattern, min_count[, subagents]}
  * verifier 行 = {name, check_type:'verifier', rubric[, subagents]}
  * checkpoint 行 = {name, mode:'checkpoint', check_type:'tool', tool, args_pattern,
@@ -283,6 +293,23 @@ function serializeChecks(rows: GateCheckRow[]): any[] {
   const out: any[] = []
   for (const c of rows) {
     const subs = (c.subagents || '').split(/[,，\s]+/).map(x => x.trim()).filter(Boolean)
+    if (c.mode === 'pre') {
+      // 拦截型行(deny,2026-10-11 spec):round-trip 保真——mode 键原样保留;
+      // raw=回填留存的原始行(可能带 apply_to/require_state 等编辑面未建模的键,
+      // 原样透传),建模键以 UI 当前值为准覆盖
+      if (!c.name.trim() || !c.args_pattern.trim()) continue
+      const row: any = { ...(c.raw || {}) }
+      row.name = c.name.trim()
+      row.mode = 'pre'
+      row.check_type = 'tool'
+      row.tool = c.tool || 'bash'
+      row.args_pattern = c.args_pattern.trim()
+      row.min_count = c.min_count || 1
+      if (subs.length) row.subagents = subs  // 子代理定向:只有这些子代理的动作参与拦截
+      else delete row.subagents  // 编辑面清空 = 取消定向(原始行的 subagents 不保留)
+      out.push(row)
+      continue
+    }
     if (c.check_type === 'verifier') {
       if (c.name.trim() && c.rubric.trim()) {
         const row: any = { name: c.name.trim(), check_type: 'verifier', rubric: c.rubric.trim() }
