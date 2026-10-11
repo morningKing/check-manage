@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="1210" viewBox="0 0 1560 1210" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#37474f"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#e65100"/>
+    </marker>
+    <marker id="arrowP" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#6a1b9a"/>
+    </marker>
+  </defs>
+  <style>
+    .t{font-size:13px;fill:#263238}
+    .m{font-size:11px;fill:#546e7a}
+    .h{font-size:13px;font-weight:700;fill:#607d8b;letter-spacing:2px}
+    .b{font-size:12px;font-weight:700;fill:#1a237e}
+  </style>
+<rect x="0" y="0" width="1560" height="1210" fill="#fafafa"/>
+<text x="40" y="42" font-size="24" font-weight="700" fill="#0d47a1">动作门禁 · 工作原理图</text>
+<text x="40" y="66" font-size="13" fill="#546e7a">三种时机：pre 阻断（不允许做的别做）· checkpoint 过程检查（做的时机对不对 / 做得好不好）· post 终态核对（该做的做了没）—— 策略库复用 + gate_retry 闭环</text>
+
+<!-- ═══ 阶段 A：登记期 ═══ -->
+<rect x="40" y="92" width="1480" height="240" rx="14" fill="#e3f2fd" stroke="#1e88e5" stroke-width="2"/>
+<text x="56" y="118" class="h">A · 登记期（执行开始前，期望先行）</text>
+
+<rect x="60" y="132" width="250" height="86" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="72" y="152" class="b">登记入口</text>
+<text x="72" y="170" class="m">A 批创建/编辑 action_checks</text>
+<text x="72" y="184" class="m">B 模板携带（派发回退）</text>
+<text x="72" y="198" class="m">D 管理员补挂 · C MCP(仅post)</text>
+<text x="72" y="212" class="m">E AI 提炼（只出建议不登记）</text>
+
+<rect x="350" y="132" width="300" height="86" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="362" y="152" class="b">validate_checks（全入口共用）</text>
+<text x="362" y="170" class="m">规范化 + re.compile + PG `~` 正则把关</text>
+<text x="362" y="184" class="m">checkpoint：prompt 必填 / timing / 预算</text>
+<text x="362" y="198" class="m">非法 400 —— 不带病入库</text>
+<text x="362" y="212" class="m">红线：模型无增删期望路径（核对在服务端）</text>
+
+<rect x="690" y="132" width="290" height="86" rx="10" fill="#e0f7fa" stroke="#00acc1" stroke-width="2"/>
+<text x="702" y="152" class="b" fill="#006064">门禁策略库 gate_policies</text>
+<text x="702" y="170" class="m">命名规则集（deny/post/checkpoint 混装）</text>
+<text x="702" y="184" class="m">批引用 gate_policy_id → 生效集=策略∪批</text>
+<text x="702" y="198" class="m">先策略后批侧，同名批侧覆盖（更具体者赢）</text>
+<text x="702" y="212" class="m">DELETE 防护：非终态批引用 → 409</text>
+
+<rect x="1020" y="132" width="480" height="86" rx="10" fill="#ffffff" stroke="#64b5f6" stroke-width="1.5"/>
+<text x="1032" y="152" class="b">派发登记 → action_expectations 期望行（生效快照）</text>
+<text x="1032" y="170" class="m">apply_to 过滤（batch_seq / 输入文件 glob）→ 树作用域约束整棵子代理树</text>
+<text x="1032" y="184" class="m">幂等覆盖登记：核对状态重置 pending · fired_count 重置 0（修正轮预算刷新）</text>
+<text x="1032" y="198" class="m">P0 fail-closed：登记异常 → 终态 inconclusive → 不得 completed</text>
+<text x="1032" y="212" class="m">期望行即快照 —— 策略后改不重写已登记任务（免版本化）</text>
+
+<rect x="60" y="232" width="1440" height="86" rx="10" fill="#ffffff" stroke="#90caf9" stroke-width="1.5" stroke-dasharray="6 3"/>
+<text x="72" y="254" class="b" fill="#1565c0">规则三形态（mode）</text>
+<text x="72" y="274" class="t">mode='pre'　deny list：命中即拦，「不允许做的别做」——不计预算，树级全量</text>
+<text x="72" y="292" class="t" fill="#e65100" font-weight="700">mode='checkpoint'　过程检查：timing=before（执行前拦截注入）/ after（执行后追加注入）；预算 max_checks 内每次命中都注入，耗尽放行；可带 assert_spec 终态兜底；subagents 名单注入与断言同口径</text>
+<text x="72" y="310" class="t">mode='post'　终态核对：tool / file / db_record / verifier 判官 ——「该做的做了没」</text>
+
+<!-- ═══ 阶段 B：执行期 ═══ -->
+<rect x="40" y="352" width="1480" height="400" rx="14" fill="#fff3e0" stroke="#fb8c00" stroke-width="2"/>
+<text x="56" y="378" class="h" fill="#e65100">B · 执行期（过程中：三道闸 + 账本）</text>
+
+<rect x="60" y="394" width="230" height="120" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
+<text x="72" y="416" class="b" fill="#e65100">OpenCode 运行时（OC serve）</text>
+<text x="72" y="436" class="m">模型驱动工具调用</text>
+<text x="72" y="452" class="m">插件 baize-trace.js（平台随</text>
+<text x="72" y="466" class="m">启动部署，需重启 serve 生效）</text>
+<text x="72" y="486" class="m">tool.execute.before / .after</text>
+<text x="72" y="500" class="m">X-Internal-Token 内网鉴权</text>
+
+<rect x="330" y="394" width="300" height="120" rx="10" fill="#ffffff" stroke="#fb8c00" stroke-width="2"/>
+<text x="342" y="416" class="b" fill="#e65100">闸 1 · before（工具调用前）</text>
+<text x="342" y="436" class="m">POST /ai/gate/internal/pre-check</text>
+<text x="342" y="452" class="m">{sessionId, tool, argsText}</text>
+<text x="342" y="470" class="t">deny 命中 → 拦截（reason 回给模型）</text>
+<text x="342" y="488" class="t" fill="#e65100" font-weight="700">checkpoint 命中 → 原子消耗预算 →</text>
+<text x="342" y="504" class="t" fill="#e65100" font-weight="700">注入检查提示词（模型合规后重试）</text>
+
+<rect x="670" y="394" width="300" height="120" rx="10" fill="#ffffff" stroke="#fb8c00" stroke-width="2"/>
+<text x="682" y="416" class="b" fill="#e65100">闸 2 · after（工具调用后）</text>
+<text x="682" y="436" class="m">POST /ai/gate/internal/post-check</text>
+<text x="682" y="452" class="m">{sessionId, tool, argsText}</text>
+<text x="682" y="470" class="t" fill="#e65100" font-weight="700">checkpoint(after) 命中 → 预算内 →</text>
+<text x="682" y="486" class="t" fill="#e65100" font-weight="700">结果尾部追加提示词（非阻断，</text>
+<text x="682" y="502" class="m">模型读结果即见检查指令，立即补正）</text>
+
+<rect x="1010" y="394" width="490" height="120" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5"/>
+<text x="1022" y="416" class="b" fill="#e65100">动作账本 agent_tool_calls（全程落账）</text>
+<text x="1022" y="436" class="m">批侧 worker 持久化时 / 交互侧 SSE 收敛时，双路径幂等</text>
+<text x="1022" y="452" class="m">UNIQUE(oc_session_id, part_id)——重复投递只落一份</text>
+<text x="1022" y="468" class="m">root_session_id 树标识 + agent 子代理归属（核对定位键）</text>
+<text x="1022" y="484" class="m">best-effort：落账失败不打断执行 → 终态判 inconclusive</text>
+<text x="1022" y="500" class="m">rules 短路缓存口径：全会话行总数（跨工具缓存安全）</text>
+
+<rect x="60" y="540" width="1440" height="90" rx="10" fill="#ffebee" stroke="#e53935" stroke-width="1.5" stroke-dasharray="6 3"/>
+<text x="72" y="564" class="b" fill="#b71c1c">fail-open 三层（过程闸不瘫痪执行）</text>
+<text x="72" y="586" class="t">① 插件侧：pre/post-check 3s 超时 / 非 2xx / 不可达 → 放行　② 服务端：查询异常 → 放行 + 日志留痕　③ 缺参 → 放行；预算耗尽 → 放行（防冗余）</text>
+<text x="72" y="610" class="m">被绕过的过程闸由终态 assert 兜底（fail-closed）——「检查提前到过程中，不是免检通行证」</text>
+
+<rect x="60" y="644" width="1440" height="88" rx="10" fill="#ffffff" stroke="#ffb74d" stroke-width="1.5" stroke-dasharray="6 3"/>
+<text x="72" y="666" class="b" fill="#e65100">预算与 agent 定向（checkpoint 专属语义）</text>
+<text x="72" y="686" class="t">预算：UPDATE … SET fired_count = fired_count+1 WHERE fired_count &lt; max_checks RETURNING —— 行锁原子；重复动作（写脚本→改脚本）不再重复检查</text>
+<text x="72" y="706" class="t">agent 定向：路由层 _resolve_session 由 OC 会话反查归属 agent（零额外查询）；subagents 名单内子代理动作才注入/计入，名单外（含根会话）不注入不计入</text>
+<text x="72" y="724" class="m">rules 返回值 = 全会话 pre+checkpoint 行数——0 才允许插件 30s 短路缓存（无规则是常态，热路径零开销）</text>
+
+<!-- ═══ 阶段 C：终态期 ═══ -->
+<rect x="40" y="772" width="1480" height="330" rx="14" fill="#f3e5f5" stroke="#8e24aa" stroke-width="2"/>
+<text x="56" y="798" class="h" fill="#6a1b9a">C · 终态期（回合收敛：机械核对 + fail-closed + 修正闭环）</text>
+
+<rect x="60" y="814" width="260" height="110" rx="10" fill="#ffffff" stroke="#ba68c8" stroke-width="1.5"/>
+<text x="72" y="836" class="b" fill="#6a1b9a">回合收敛触发</text>
+<text x="72" y="856" class="m">wait_subtasks_drained：等子代理</text>
+<text x="72" y="870" class="m">全部收敛（批 120s/交互 30s）</text>
+<text x="72" y="886" class="m">防「中途快照」误判 completed</text>
+<text x="72" y="906" class="m">批侧 _check_action_gate 主链</text>
+
+<rect x="360" y="814" width="700" height="110" rx="10" fill="#ffffff" stroke="#ba68c8" stroke-width="1.5"/>
+<text x="372" y="836" class="b" fill="#6a1b9a">check_session_gate —— 逐期望机械核对</text>
+<text x="372" y="856" class="t">tool：账本计数（tree 根+全部子代理；subagents 名单 JOIN 定向；args_text ~ PG 正则）</text>
+<text x="372" y="874" class="t">file：工作区相对 glob　·　db_record：dynamic_data 集合+Mongo filter 计数</text>
+<text x="372" y="892" class="t" fill="#6a1b9a" font-weight="700">checkpoint：assert_spec 账本断言（复用 tool 计数路径）——无视提示词蒙混 → 此处拦下</text>
+<text x="372" y="910" class="t">verifier：隐藏判官会话按 rubric 裁决（语义级断言，无法穷举为正则的）</text>
+
+<rect x="1100" y="814" width="400" height="110" rx="10" fill="#ffffff" stroke="#ba68c8" stroke-width="1.5"/>
+<text x="1112" y="836" class="b" fill="#6a1b9a">判定（fail-closed）</text>
+<text x="1112" y="856" class="m">无期望 → passed（只约束登记过的事项）</text>
+<text x="1112" y="872" class="m">inconclusive（账本不健康/异常）→ 携带</text>
+<text x="1112" y="886" class="m">expected 条数 → 一律不算完成</text>
+<text x="1112" y="906" class="m">结果回写期望行 last_status/last_evidence</text>
+
+<rect x="60" y="944" width="1440" height="72" rx="10" fill="#ffffff" stroke="#ba68c8" stroke-width="2"/>
+<text x="72" y="966" class="b" fill="#6a1b9a">gate_retry 修正闭环（批级开关，预算内）</text>
+<text x="72" y="986" class="t">failed → 注入带缺失明细的修正提示（gate_failure_message 按类型分形：工具~正则 / 过程检查·read ~ docs/kb/）→ 原 OpenCode 会话 continue 续跑补齐 → 重新核对</text>
+<text x="72" y="1004" class="m">修正轮期望重新登记 → 注入预算重置 → 修正期过程检查照常生效；预算外/超预算 → failed 终态 + gate.evaluated 审计事件</text>
+
+<!-- ═══ 底部：原则条 ═══ -->
+<rect x="40" y="1122" width="1480" height="64" rx="10" fill="#eceff1" stroke="#b0bec5" stroke-width="1.5"/>
+<text x="56" y="1146" class="b" fill="#37474f">设计红线</text>
+<text x="130" y="1146" class="t">过程闸 fail-open 保可用，终态核对 fail-closed 保可信；三道机械校验（schema/正则 → dry-run 试算 → 人工确认）逐道收窄；执行侧自始至终无增删期望路径</text>
+<text x="130" y="1168" class="m">审批（人工事前裁决）与门禁互补不替代 · verifier 判官 fail-closed · 会话用完即弃 · 全链路排除 kefu</text>
+</svg>
