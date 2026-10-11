@@ -502,6 +502,19 @@ try:
 except Exception as _e:
     logging.warning('action gate mode migration on boot failed: %s', _e)
 
+# 动作门禁过程检查 + 策略库（2026-10-11）：checkpoint 承载列 / gate_policies /
+# 批引用列。随启动幂等执行；漏注册会让 pre/post-check 查询报列不存在 → 全部
+# fail-open 放行（过程检查静默失效）。
+try:
+    _mp19 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'migrations', '2026_10_11_gate_checkpoint_policy.py')
+    _spec19 = _ilu.spec_from_file_location('_gate_checkpoint_boot', _mp19)
+    _m19 = _ilu.module_from_spec(_spec19)
+    _spec19.loader.exec_module(_m19)
+    _m19.run()
+except Exception as _e:
+    logging.warning('gate checkpoint/policy migration on boot failed: %s', _e)
+
 # SkillOpt 任务拟合表（2026-10-01）：ai_skill_fit_results / ai_skill_def_versions
 # / ai_skill_invocations.subtask_id。随启动幂等执行。漏注册事故第二例（2026-10-08
 # 生产任务拟合页全空）——init_db 自动扫描只覆盖全新库，生产「拉代码+重启」

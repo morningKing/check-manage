@@ -766,3 +766,22 @@ def test_interactive_ledger_records_mapped_parts_from_apply_event(gate_fixture):
     gate = agent_ledger.finalize_interactive_turn(f['sid'], oc, state)
     assert gate['status'] == 'passed', gate
     assert gate['results'][0]['evidence'] == 1
+
+
+def test_gate_checkpoint_policy_schema(db_conn):
+    """checkpoint 承载列 / gate_policies 表 / 批引用列就绪（迁移双注册护栏）。"""
+    with db_conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'action_expectations' "
+            "  AND column_name IN ('prompt','timing','max_checks',"
+            "                      'fired_count','assert_spec')")
+        assert {r[0] for r in cur.fetchall()} == {
+            'prompt', 'timing', 'max_checks', 'fired_count', 'assert_spec'}
+        cur.execute("SELECT to_regclass('gate_policies')")
+        assert cur.fetchone()[0] is not None
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'ai_chat_batches' "
+            "  AND column_name = 'gate_policy_id'")
+        assert cur.fetchone() is not None
