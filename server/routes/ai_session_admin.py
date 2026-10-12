@@ -1598,6 +1598,29 @@ def perf_attempt(aid):
                     'completeness': m.get('completeness')})
 
 
+@ai_execution_admin_bp.post('/perf/attempts/<aid>/reconcile-task-durations')
+@require_permission('admin.ai_chat_admin')
+def perf_reconcile_task_durations(aid):
+    """存量 task 行时长对账（2026-10-12）：时长采集上线前落账的「开子代理」
+    行 started_at/duration_ms 恒 NULL（会话终态后无新轮询、upsert 永不刷新）
+    ——性能分解等待段画不出来。从 OC REST 重取消息走同一条 upsert 补齐。
+    会话已删/OC 不可达返回 skipped，不报错。"""
+    from db import get_db
+    from utils.agent_ledger import reconcile_task_durations
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT session_id FROM ai_execution_attempts WHERE id = %s",
+                        (aid,))
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'attempt not found'}), 404
+    result = reconcile_task_durations(row[0])
+    if result.get('status') == 'ok':
+        log_operation('update', 'agent_tool_calls', aid, None,
+                      '性能分析对账：补齐 task 行时长')
+    return jsonify(result)
+
+
 @ai_execution_admin_bp.get('/perf/attempts/<aid>/diagnosis')
 @require_permission('admin.ai_chat_admin')
 def perf_attempt_diagnosis(aid):

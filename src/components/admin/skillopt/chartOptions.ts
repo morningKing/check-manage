@@ -43,29 +43,36 @@ export function buildTrendOption(tasks: PerfTaskEntry[]) {
 /** 任务下钻时间轴瀑布：y 轴为段类型（子代理/模型）、x 轴为绝对时间。
  *  每段 data 项挂 __ref（messageId/subtaskId），诊断「定位」可据此跳转。 */
 export function buildWaterfallOption(detail: PerfAttemptDetail) {
-  const segs: { name: string; type: string; ref: string;
-                start: number; end: number }[] = []
+  // 每个子代理独立一行（归属一目了然；行名=agent + 短 id），模型轮次合占一行
+  interface Seg { name: string; type: string; ref: string; row: number;
+                  start: number; end: number }
+  const segs: Seg[] = []
   for (const turn of detail.turns) {
     if (turn.durationMs == null || !turn.createdAt) continue
     const s = Date.parse(turn.createdAt)
     if (!Number.isFinite(s)) continue        // 畸形时间串不产 NaN 段
     segs.push({ name: `模型轮次 ${(turn.durationMs / 1000).toFixed(1)}s`,
-                type: 'model', ref: turn.messageId, start: s, end: s + turn.durationMs })
+                type: 'model', ref: turn.messageId, row: 0, start: s,
+                end: s + turn.durationMs })
   }
+  const subRows: string[] = []
   for (const st of detail.subtasks) {
     if (!st.startedAt) continue
     const s = Date.parse(st.startedAt)
     if (!Number.isFinite(s)) continue
     const e = st.finishedAt ? Date.parse(st.finishedAt) : s + st.wallMs
     if (!Number.isFinite(e) || e <= s) continue
-    segs.push({ name: `子代理 ${st.agent || ''} ${(st.wallMs / 1000).toFixed(1)}s`,
-                type: 'subagent', ref: st.subtaskId, start: s, end: e })
+    subRows.push(`${st.agent || '子代理'}·${st.subtaskId.slice(0, 8)}`)
+    segs.push({ name: `${st.agent || '子代理'}（等待 ${(st.wallMs / 1000).toFixed(1)}s）·${st.subtaskId.slice(0, 8)}`,
+                type: 'subagent', ref: st.subtaskId,
+                row: subRows.length, start: s, end: e })
   }
+  const rows = ['模型', ...subRows]
   return {
     tooltip: { formatter: (p: any) => p.name },
-    grid: { left: 90, right: 30, top: 20, bottom: 40 },
+    grid: { left: 150, right: 30, top: 20, bottom: 40 },
     xAxis: { type: 'time' },
-    yAxis: { type: 'category', data: ['子代理', '模型'], inverse: false },
+    yAxis: { type: 'category', data: rows, inverse: false },
     series: [{
       type: 'custom',
       renderItem: (_params: any, api: any) => {
@@ -76,12 +83,12 @@ export function buildWaterfallOption(detail: PerfAttemptDetail) {
         return {
           type: 'rect',
           shape: { x: left, y: top - 12, width: Math.max(1, right - left), height: 24 },
-          style: { fill: catIdx === 1 ? '#409eff' : '#e6a23c' },
+          style: { fill: catIdx === 0 ? '#409eff' : '#e6a23c' },
         }
       },
       encode: { x: [1, 2], y: 0 },
       data: segs.map(s => ({
-        name: s.name, value: [s.type === 'model' ? 1 : 0, s.start, s.end],
+        name: s.name, value: [s.row, s.start, s.end],
         __ref: s.ref,
       })),
     }],

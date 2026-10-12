@@ -21,7 +21,7 @@ class TestExtractDuration:
     def test_raw_shape_extracts_start_and_duration(self):
         rows = extract_from_parts([_raw_tool_part()])
         assert len(rows) == 1
-        pid, tool, args, state, started, dur = rows[0]
+        pid, tool, args, state, started, dur, meta_sid = rows[0]
         assert tool == 'bash' and state == 'completed'
         assert dur == 5_000
         assert started is not None
@@ -30,7 +30,7 @@ class TestExtractDuration:
     def test_raw_shape_without_time_yields_nones(self):
         p = {'id': 'p2', 'type': 'tool', 'tool': 'read',
              'state': {'status': 'completed', 'input': {}}}
-        pid, tool, args, state, started, dur = extract_from_parts([p])[0]
+        pid, tool, args, state, started, dur, meta_sid = extract_from_parts([p])[0]
         assert started is None and dur is None
 
     def test_mapped_shape_extracts_start_and_duration(self):
@@ -39,6 +39,6 @@ class TestExtractDuration:
                   'input': {'filePath': 'a.py'}, 'durationMs': 2_500,
                   'time': {'start': 1_700_000_000_000, 'end': 1_700_000_002_500}}
         rows = extract_from_part_map({'p9': mapped})
-        pid, tool, args, state, started, dur = rows[0]
+        pid, tool, args, state, started, dur, meta_sid = rows[0]
         assert tool == 'read' and dur == 2_500
         assert started == datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)

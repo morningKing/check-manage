@@ -58,12 +58,15 @@ const detail = (): PerfAttemptDetail => ({
 })
 
 describe('buildWaterfallOption', () => {
-  it('时间轴系列含模型段与子代理段，y 为段类型、x 为绝对时间', () => {
+  it('时间轴含模型行与每子代理独立行（行名带 agent 归属），x 为绝对时间', () => {
     const opt = buildWaterfallOption(detail())
     const data = (opt.series as any[])[0].data
     expect(data.length).toBe(2)                       // 1 个模型段 + 1 个子代理段
     expect(data[0].name).toContain('模型')
-    expect(data[1].name).toContain('子代理')
+    // 子代理段名带 agent 归属与短 id（任务里多个子代理可分辨）
+    expect(data[1].name).toContain('general')
+    expect(data[1].name).toContain('ses_1')
+    expect((opt.yAxis as any).data).toEqual(['模型', 'general·ses_1'])
     expect(opt.xAxis.type).toBe('time')
   })
 })

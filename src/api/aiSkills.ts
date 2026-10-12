@@ -360,6 +360,11 @@ export function perfAttemptDiagnosis(id: string) {
   return get<{ diagnoses: Diagnosis[] }>(
     `${ADMIN}/perf/attempts/${encodeURIComponent(id)}/diagnosis`)
 }
+/** 存量 task 行时长对账：时长采集上线前落账的「开子代理」行从 OC 重取补齐。 */
+export function perfReconcileTaskDurations(id: string) {
+  return post<{ status: string; remainingNull?: number; reason?: string }>(
+    `${ADMIN}/perf/attempts/${encodeURIComponent(id)}/reconcile-task-durations`, {})
+}
 export function perfSlowTasks(limit = 10) {
   return get<{ tasks: PerfTaskEntry[] }>(`${ADMIN}/perf/slow-tasks?limit=${limit}`)
 }

@@ -17,6 +17,15 @@
           <span><i class="dot dot--idle" />引擎间隙 {{ pct(ratio(cov.idleMs)) }}</span>
           <span class="muted">墙钟 {{ fmtMs(cov.wallMs) }}</span>
         </div>
+        <ElAlert v-if="taskRowsMissingDur > 0 && !reconciled" type="warning"
+                 :closable="false" data-test="reconcile-hint" class="reconcile-hint">
+          <template #title>
+            本任务有 {{ taskRowsMissingDur }} 条「开子代理」记录缺少等待时长
+            （时长采集上线前的旧数据），等待段无法在时间轴中画出。
+            <ElButton size="small" type="primary" link data-test="reconcile-btn"
+                      :loading="reconciling" @click="onReconcile">从运行时对账补齐</ElButton>
+          </template>
+        </ElAlert>
         <div class="muted cov__note" data-test="coverage-note">
           口径：四段互斥、之和 = 墙钟。下方表格是原始跨度（模型轮次含轮内的工具与
           子代理等待，子代理彼此并行时也互相重叠），直接相加会大于墙钟——对账以
@@ -247,7 +256,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import {
-  perfAttempt, perfAttemptDiagnosis, type PerfAttemptDetail, type Diagnosis,
+  perfAttempt, perfAttemptDiagnosis, perfReconcileTaskDurations,
+  type PerfAttemptDetail, type Diagnosis,
 } from '@/api/aiSkills'
 import { useEcharts } from './useEcharts'
 import { buildWaterfallOption } from './chartOptions'
@@ -276,7 +286,8 @@ const skills = computed(() => detail.value?.skills ?? [])
 function timelineOf(row: { messageId?: string }): TurnTimeline {
   const turn = detail.value?.turns.find(t => t.messageId === row.messageId)
   if (!turn) return { segments: [], nested: {}, unplaced: [] }
-  return buildTurnTimeline(turn, tools.value?.calls ?? [], detail.value?.subTurns)
+  return buildTurnTimeline(turn, tools.value?.calls ?? [],
+    detail.value?.subTurns, detail.value?.subtasks)
 }
 /** 子代理墙钟合计（毛和；并行会重叠，对账以覆盖条为准） */
 const subtaskWallSum = computed(() =>
@@ -363,6 +374,25 @@ function renderWaterfall() {
 }
 watch([wfReady, detail], () => nextTick(renderWaterfall), { immediate: true })
 
+/** task 行（开子代理）缺时长的条数——旧数据采集上线前落账，等待段画不出 */
+const taskRowsMissingDur = computed(() =>
+  (detail.value?.tools.calls ?? []).filter(c => c.isDelegation && c.durationMs == null).length)
+const reconciling = ref(false)
+const reconciled = ref(false)
+async function onReconcile() {
+  if (reconciling.value) return
+  reconciling.value = true
+  try {
+    const r = await perfReconcileTaskDurations(props.attemptId)
+    if (r.status === 'ok') {
+      reconciled.value = true
+      detail.value = await perfAttempt(props.attemptId)   // 重拉：等待段补齐
+    } else {
+      reconciled.value = true   // skipped（会话已删/OC 不可达）：不再打扰
+    }
+  } catch { /* 全局拦截器已提示 */ } finally { reconciling.value = false }
+}
+
 onMounted(async () => {
   loading.value = true
   try {
@@ -389,6 +419,7 @@ onMounted(async () => {
 h4 { margin: 18px 0 8px; }
 .slow-turn { color: var(--el-color-danger); font-weight: 600; }
 .muted { color: var(--el-text-color-secondary); }
+.reconcile-hint { margin-bottom: 10px; }
 .turn-calls { padding: 4px 12px; }
 .turn-call { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .turn-call__args { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -84,7 +84,7 @@ def _start_dt(time_obj):
 
 def extract_from_parts(parts) -> list:
     """从 part 字典集合抽取 tool part 记录(REST 消息 parts 原始形状)。
-    返回 [(part_id, tool, args_text, state, started_at, duration_ms)]——
+    返回 [(part_id, tool, args_text, state, started_at, duration_ms, meta_session_id)]——
     started_at 由 state.time.start(epoch ms)换算(tz-aware UTC),
     duration_ms 由 tool_duration_ms(state) 得出;无 time 时两者为 None。"""
     out: dict = {}
@@ -100,7 +100,8 @@ def extract_from_parts(parts) -> list:
         args_text = args_to_text(state_obj.get('input'))[:MAX_ARGS_LEN]
         started = _start_dt(state_obj.get('time'))
         out[pid] = (str(pid), str(tool), args_text, str(state)[:20],
-                    started, tool_duration_ms(state_obj))
+                    started, tool_duration_ms(state_obj),
+                    (state_obj.get('metadata') or {}).get('sessionId'))
     return list(out.values())
 
 
@@ -127,6 +128,7 @@ def extract_from_part_map(part_map) -> list:
             state = (state_obj.get('status') or 'pending')
             started = _start_dt(state_obj.get('time'))
             dur = tool_duration_ms(state_obj)
+            meta_sid = (state_obj.get('metadata') or {}).get('sessionId')
         elif t == 'tool_use':                # map_part 映射形状（已透传 time）
             key = str(pid)
             tool = p.get('name')
@@ -135,12 +137,13 @@ def extract_from_part_map(part_map) -> list:
             started = _start_dt(p.get('time'))
             dur = p.get('durationMs')
             dur = int(dur) if isinstance(dur, (int, float)) else None
+            meta_sid = None   # map 形状不携带 metadata（子代理 id 在发现期已提取）
         else:
             continue
         if not tool:
             continue
         out[key] = (key, str(tool), args_text[:MAX_ARGS_LEN], str(state)[:20],
-                    started, dur)
+                    started, dur, meta_sid)
     return list(out.values())
 
 
@@ -183,14 +186,85 @@ def record_messages(oc_session_id: str, messages, *,
                        OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
                        OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
                     """,
-                    [(oc_session_id, root_session_id, subtask_id, agent_name,
+                    [(oc_session_id, root_session_id,
+                      subtask_id or meta_sid, agent_name,
                       pid, tool, args, state, started, dur)
-                     for (pid, tool, args, state, started, dur) in part_rows],
+                     for (pid, tool, args, state, started, dur, meta_sid)
+                     in part_rows],
+                )
+                # task（开子代理）行时长兜底（2026-10-12）：OC 的 task part
+                # 部分版本 state.time 缺失 → 时长 NULL。extract_from_parts 已
+                # 从 state.metadata.sessionId 带出 subtask_id（子代理发现的
+                # 同款字段）——按 subtask_id 关联子代理生命周期回填等待时长
+                # （created_at→completed_at，权威；未终结用 NOW() 截断，
+                # 下次落账继续刷新）。
+                cur.execute(
+                    """
+                    UPDATE agent_tool_calls t
+                    SET started_at = st.created_at,
+                        duration_ms = GREATEST(0, EXTRACT(EPOCH FROM
+                            (COALESCE(st.completed_at, NOW()) - st.created_at)
+                            * 1000))::bigint
+                    FROM ai_chat_subtasks st
+                    WHERE t.tool = 'task' AND t.started_at IS NULL
+                      AND st.id = t.subtask_id
+                      AND st.created_at IS NOT NULL
+                      AND t.oc_session_id = %s
+                    """,
+                    (oc_session_id,),
                 )
         return True
     except Exception as e:  # noqa: BLE001 —— 账本绝不打断任务流程
         log.warning('agent ledger record failed oc=%s: %s', oc_session_id, e)
         return False
+
+
+def reconcile_task_durations(session_id: str, *, get_db=None,
+                             oc_client=None) -> dict:
+    """存量 task 行时长对账（2026-10-12）：duration_ms 采集（2026-10-10 迁移）
+    之前落账的 task 行 started_at/duration_ms 恒 NULL，且会话终态后不再有新
+    轮询、upsert 永远不会刷新它们——性能分解的「开子代理等待」段对这些任务
+    画不出来。这里从 OC REST 重新拉该会话消息、走同一条 extract+upsert：
+    OC task part 自带 state.time（start/end 齐全），新值命中
+    `duration_ms IS DISTINCT FROM NULL` 覆盖 NULL。
+
+    只处理有 OC 会话且账本确有 NULL task 行的会话；OC 不可达/会话已删则
+    跳过（返回 skipped）。best-effort：失败不抛。"""
+    db_ctx = get_db or _default_get_db
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT opencode_session_id, workspace_path FROM ai_chat_sessions "
+                "WHERE id = %s", (session_id,))
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return {'status': 'skipped', 'reason': 'no oc session'}
+            oc_sid, ws = row
+            cur.execute(
+                "SELECT count(*) FROM agent_tool_calls "
+                "WHERE oc_session_id = %s AND tool = 'task' "
+                "  AND started_at IS NULL", (oc_sid,))
+            if cur.fetchone()[0] == 0:
+                return {'status': 'clean'}
+    try:
+        from utils.runtime import get_runtime
+        client = oc_client or get_runtime().get_client()
+        msgs = client.get_messages(oc_sid, directory=(ws or '')) or []
+        if not msgs:
+            return {'status': 'skipped', 'reason': 'oc messages empty'}
+        record_messages(oc_sid, msgs, root_session_id=session_id,
+                        get_db=get_db)
+        with db_ctx() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM agent_tool_calls "
+                    "WHERE oc_session_id = %s AND tool = 'task' "
+                    "  AND started_at IS NULL", (oc_sid,))
+                left = cur.fetchone()[0]
+        return {'status': 'ok', 'remainingNull': left}
+    except Exception as e:  # noqa: BLE001
+        log.warning('reconcile_task_durations failed sid=%s: %s', session_id, e)
+        return {'status': 'error', 'error': str(e)[:200]}
 
 
 def record_state(session_id: str, oc_session_id: str, state, *,
@@ -232,9 +306,28 @@ def record_state(session_id: str, oc_session_id: str, state, *,
                            OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
                         """,
                         [(child_sid, session_id,
-                          None if scope is None else child_sid, agent_name,
+                          (None if scope is None else child_sid) or meta_sid,
+                          agent_name,
                           pid, tool, args, st, started, dur)
-                         for (pid, tool, args, st, started, dur) in part_rows],
+                         for (pid, tool, args, st, started, dur, meta_sid)
+                         in part_rows],
+                    )
+                    # task 行时长兜底（同 record_messages——OC task part 的
+                    # state.time 缺失时用子代理生命周期回填）
+                    cur.execute(
+                        """
+                        UPDATE agent_tool_calls t
+                        SET started_at = st.created_at,
+                            duration_ms = GREATEST(0, EXTRACT(EPOCH FROM
+                                (COALESCE(st.completed_at, NOW()) - st.created_at)
+                                * 1000))::bigint
+                        FROM ai_chat_subtasks st
+                        WHERE t.tool = 'task' AND t.started_at IS NULL
+                          AND st.id = t.subtask_id
+                          AND st.created_at IS NOT NULL
+                          AND t.root_session_id = %s
+                        """,
+                        (session_id,),
                     )
         except Exception as e:  # noqa: BLE001
             log.warning('agent ledger record_state failed oc=%s: %s', child_sid, e)

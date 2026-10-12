@@ -77,7 +77,8 @@ function spanSegments(windowStart: number, windowEnd: number,
 export function buildTurnTimeline(
   turn: { createdAt: string | null; durationMs: number },
   calls: PerfToolCall[],
-  subTurns?: Record<string, { createdAt: string; durationMs: number }[]>): TurnTimeline {
+  subTurns?: Record<string, { createdAt: string; durationMs: number }[]>,
+  subagents?: { subtaskId: string; agent: string | null }[]): TurnTimeline {
   const w0 = parseMs(turn.createdAt)
   if (!w0 || turn.durationMs == null) return { segments: [], nested: {}, unplaced: calls }
   const w1 = w0 + turn.durationMs
@@ -98,11 +99,17 @@ export function buildTurnTimeline(
     const subCalls = calls.filter(c => c.subtaskId === call.subtaskId
                                   && c.partId !== seg.ref)
     const subTurnList = subTurns?.[call.subtaskId]
-    if (subTurnList?.length) {
-      nested[seg.ref] = subSegments(seg.start, seg.end, subCalls, subTurnList)
-    } else {
-      nested[seg.ref] = spanSegments(seg.start, seg.end, subCalls).segments
-    }
+    const owner = subagents?.find(a => a.subtaskId === call.subtaskId)?.agent
+    const tagPrefix = owner ? `[${owner}] ` : ''
+    const raw = subTurnList?.length
+      ? subSegments(seg.start, seg.end, subCalls, subTurnList)
+      : spanSegments(seg.start, seg.end, subCalls).segments
+    // 归属标注：嵌套段 label 前缀 agent 名（推理/工具都是「谁的」）
+    nested[seg.ref] = raw.map(seg => ({
+      ...seg,
+      label: seg.type === 'inference' ? `${tagPrefix}子代理推理`
+        : `${tagPrefix}${seg.label}`,
+    }))
   }
   return { segments, nested, unplaced }
 }

@@ -250,6 +250,57 @@ def _tool_part(pid, tool, command, status='completed'):
             'state': {'status': status, 'input': {'command': command}}}
 
 
+def test_task_row_duration_backfilled_from_subtask_lifetime(gate_fixture):
+    """task（开子代理）行时长兜底（2026-10-12）：OC task part 无 state.time 时
+    started_at/duration_ms 落 NULL——record_messages 用子代理生命周期
+    （ai_chat_subtasks.created_at→completed_at）回填；非 task 行不受影响。"""
+    f = gate_fixture
+    created = '2026-10-12T10:00:00+00:00'
+    completed = '2026-10-12T10:01:30+00:00'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # 子代理行时间窗 90s（gate_fixture 的 child1 已建但无时间，补上）
+            cur.execute("UPDATE ai_chat_subtasks SET created_at=%s, completed_at=%s "
+                        "WHERE id=%s", (created, completed, f['child1']))
+    msgs = [_msg([
+        {'id': 'pt-recon', 'type': 'tool', 'tool': 'task',
+         'state': {'status': 'completed', 'input': {'description': '委派'},
+                   'metadata': {'sessionId': f['child1']}}},          # 无 time
+        _tool_part('pb-recon', 'bash', 'echo hi'),                    # 无 time 的普通工具
+    ])]
+    assert agent_ledger.record_messages(f['oc_sid'], msgs, root_session_id=f['sid'])
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT started_at, duration_ms, subtask_id FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='pt-recon'",
+                        (f['oc_sid'],))
+            started, dur, stid = cur.fetchone()
+            print('DBG task row:', started, dur, 'stid=', stid, 'child1=', f['child1'])
+            cur.execute("SELECT created_at, completed_at FROM ai_chat_subtasks WHERE id=%s",
+                        (f['child1'],))
+            print('DBG sub lifetime:', cur.fetchone())
+            assert started is not None and dur == 90_000   # 子代理生命周期回填
+            cur.execute("SELECT started_at, duration_ms FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='pb-recon'",
+                        (f['oc_sid'],))
+            assert cur.fetchone() == (None, None)          # 非 task 行不回填
+
+
+def test_reconcile_task_durations_skips_when_no_null(gate_fixture, monkeypatch):
+    """对账函数：账本无 NULL task 行 → clean 短路（不打 OC）；无 OC 会话 → skipped。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s "
+                        "WHERE id=%s", ('oc-recon-x', f['sid']))
+    # 无 NULL 行 → clean，且不触 OC（不 mock client，触发了会炸）
+    r = agent_ledger.reconcile_task_durations(f['sid'])
+    assert r == {'status': 'clean'}
+    # 无会话行 → skipped
+    r2 = agent_ledger.reconcile_task_durations('no-such-session')
+    assert r2['status'] == 'skipped'
+
+
 def test_record_messages_idempotent_and_state_transition(gate_fixture):
     f = gate_fixture
     msgs = [_msg([_tool_part('p1', 'bash', 'git clone https://x/y.git',
