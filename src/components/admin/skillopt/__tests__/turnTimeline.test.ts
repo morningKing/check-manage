@@ -119,6 +119,31 @@ describe('buildTurnTimeline', () => {
       .toEqual(['inference', 'tool', 'inference'])   // 与不传 subTurns 一致
   })
 
+  it('多轮：每轮只铺本轮流次的调用（此前全量铺进每轮 → 每轮展开都一样）', () => {
+    // 轮0 [0,30]s：bash [5,10]s；轮1 [30,60]s：read [40,45]s。
+    // 轮0 的轴上不得出现 read；轮1 的轴上不得出现 bash。
+    const calls = [
+      call({ partId: 'b0', tool: 'bash', args: 'command=clone',
+             startedAt: new Date(T0 + 5_000).toISOString(), durationMs: 5_000,
+             turnIndex: 0 }),
+      call({ partId: 'r1', tool: 'read', args: 'filePath=a.md',
+             startedAt: new Date(T0 + 40_000).toISOString(), durationMs: 5_000,
+             turnIndex: 1 }),
+    ]
+    const turn0 = { createdAt: new Date(T0).toISOString(), durationMs: 30_000 }
+    const turn1 = { createdAt: new Date(T0 + 30_000).toISOString(),
+                    durationMs: 30_000 }
+    const tl0 = buildTurnTimeline(turn0, calls, {}, [], 0)
+    const tl1 = buildTurnTimeline(turn1, calls, {}, [], 1)
+    const labels0 = tl0.segments.filter(s => s.type === 'tool').map(s => s.ref)
+    const labels1 = tl1.segments.filter(s => s.type === 'tool').map(s => s.ref)
+    expect(labels0).toEqual(['b0'])
+    expect(labels1).toEqual(['r1'])
+    // 和恒等于各自轮时长
+    expect(tl0.segments.reduce((a, s) => a + (s.end - s.start), 0)).toBe(30_000)
+    expect(tl1.segments.reduce((a, s) => a + (s.end - s.start), 0)).toBe(30_000)
+  })
+
   it('无时间戳调用进 unplaced 不上轴（旧数据）', () => {
     const calls = [call({ partId: 'old', tool: 'read', startedAt: null })]
     const tl = buildTurnTimeline(turn, calls)

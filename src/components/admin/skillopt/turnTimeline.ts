@@ -81,14 +81,33 @@ export function buildTurnTimeline(
   turn: { createdAt: string | null; durationMs: number },
   calls: PerfToolCall[],
   subTurns?: Record<string, { createdAt: string; durationMs: number }[]>,
-  subagents?: { subtaskId: string; agent: string | null }[]): TurnTimeline {
+  subagents?: { subtaskId: string; agent: string | null }[],
+  turnIndex?: number | null): TurnTimeline {
   const w0 = parseMs(turn.createdAt)
   if (!w0 || turn.durationMs == null) return { segments: [], nested: {}, unplaced: calls }
   const w1 = w0 + turn.durationMs
-  // 根轴：根会话调用 + task 委托调用（task 带 subtaskId 但它是父轴上的
-  // 委托事件）；子代理内部的调用走嵌套分解
-  const root = calls.filter(c => !c.subtaskId || c.tool === 'task')
-  const { segments, unplaced } = spanSegments(w0, w1, root)
+  // 根轴：本轮的根会话调用 + task 委托调用（task 带 subtaskId 但它是父轴
+  // 上的委托事件）。此前不过滤——每轮的轴上都铺了全部轮次的工具，任何
+  // 轮展开看到的都是同一份调用（生产报告：每个轮次点开内容都一样，
+  // 且段参数因引用不在本轮 turnCalls 里而显示不出来）。
+  // 过滤键：turnIndex 已归组的直接比对；归组为 null 的早期/子代理调用
+  // 按时间窗落位（started_at ∈ 轮窗）；子代理非委托调用永不进根轴。
+  const root: PerfToolCall[] = []
+  const unplacedPre: PerfToolCall[] = []
+  for (const c of calls) {
+    if (c.subtaskId && c.tool !== 'task') continue
+    // turnIndex 可比对归组；未传（旧调用方）或调用未归组时按时间窗落位，
+    // 无时间/落不在窗内的进 unplaced（旧数据语义：保留但不占轴）
+    if (turnIndex != null && c.turnIndex != null) {
+      if (c.turnIndex === turnIndex) root.push(c)
+      continue
+    }
+    const t = parseMs(c.startedAt)
+    if (t != null && t >= w0 && t < w1) root.push(c)
+    else unplacedPre.push(c)
+  }
+  const { segments, unplaced: spanUnplaced } = spanSegments(w0, w1, root)
+  const unplaced = [...unplacedPre, ...spanUnplaced]
   const nested: Record<string, TurnSeg[]> = {}
   for (const seg of segments) {
     if (seg.type !== 'task' || !seg.ref) continue

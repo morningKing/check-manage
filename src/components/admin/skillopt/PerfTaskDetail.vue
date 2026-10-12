@@ -283,11 +283,12 @@ const cov = computed(() => detail.value?.coverage
 const tools = computed(() => detail.value?.tools)
 const skills = computed(() => detail.value?.skills ?? [])
 /** 轮内时间轴（推理/工具/委托交替 + task 委托的子代理嵌套分解） */
-function timelineOf(row: { messageId?: string }): TurnTimeline {
-  const turn = detail.value?.turns.find(t => t.messageId === row.messageId)
+function timelineOf(row: { messageId?: string; turnIndex?: number | null }): TurnTimeline {
+  const idx = detail.value?.turns.findIndex(t => t.messageId === row.messageId) ?? -1
+  const turn = idx >= 0 ? detail.value!.turns[idx] : undefined
   if (!turn) return { segments: [], nested: {}, unplaced: [] }
   return buildTurnTimeline(turn, tools.value?.calls ?? [],
-    detail.value?.subTurns, detail.value?.subtasks)
+    detail.value?.subTurns, detail.value?.subtasks, idx)
 }
 /** 子代理墙钟合计（毛和；并行会重叠，对账以覆盖条为准） */
 const subtaskWallSum = computed(() =>
