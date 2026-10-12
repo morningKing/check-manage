@@ -320,6 +320,19 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
                 "ORDER BY created_at, id", (attempt_id,))
             manifests = [{'kind': k, 'name': n, 'path': p, 'content_hash': h}
                          for (k, n, p, h) in cur.fetchall()]
+            # 只拟合有调用证据的 skill（2026-10-12）：派发时全部启用技能
+            # （平台+OC 系统）都会补录成 injected manifest——agent 没调用过的
+            # skill 也参与拟合、落 score=0/diverged 的无意义结果行（用户报告
+            # 「没调用的 skill 却出了拟合结果且全偏离」）。运行时确认调用
+            # （ai_skill_invocations source='runtime'，插件上报）是「用过」的
+            # 证据；仅可见（heuristic inferred）不算。agent 维度不设此门槛
+            # ——manifests 里的 agent 本就是实际选中的执行者。
+            cur.execute(
+                "SELECT DISTINCT skill_name FROM ai_skill_invocations "
+                "WHERE attempt_id = %s AND source = 'runtime'", (attempt_id,))
+            invoked_skills = {r[0] for r in cur.fetchall()}
+            manifests = [m for m in manifests
+                         if m['kind'] != 'skill' or m['name'] in invoked_skills]
     # 2. 轨迹序列
     trace = _load_trace(db_ctx, session_id, started_at, finished_at)
     # 3. 解析 + 匹配（文件 I/O 不占连接）
@@ -351,13 +364,20 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
     # 4. 落库（幂等 upsert）；同时注册定义版本——拟合遇到新 hash 即登记，
     #    ON CONFLICT DO UPDATE 保旧内容不覆盖，重复 compute 幂等（spec §3.4）
     out: list[dict] = []
-    if vals_list:
-        with db_ctx() as conn:
-            with conn.cursor() as cur:
-                for vals in vals_list:
-                    out.append(_upsert_result(cur, vals))
-                    register_def_version(cur, vals['def_kind'],
-                                         vals['def_name'], vals['def_hash'])
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            for vals in vals_list:
+                out.append(_upsert_result(cur, vals))
+                register_def_version(cur, vals['def_kind'],
+                                     vals['def_name'], vals['def_hash'])
+            # 清理无调用证据的 skill 历史结果行（2026-10-12 口径修复的自愈）：
+            # 旧链路对全部 injected manifest 出拟合行，agent 未调用的 skill
+            # 留着 score=0/diverged 的噪声结果。幂等：有运行证据的行保留；
+            # 本任务无任何 runtime 调用时清空全部 skill 行（agent 行不动）。
+            cur.execute(
+                "DELETE FROM ai_skill_fit_results WHERE attempt_id = %s "
+                "  AND def_kind = 'skill' AND def_name <> ALL(%s)",
+                (attempt_id, sorted(invoked_skills)))
     return out
 
 

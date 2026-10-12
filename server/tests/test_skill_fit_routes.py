@@ -85,6 +85,13 @@ def _seed_fit_fixture(db_conn, tmp_path):
                     "VALUES (%s, %s, 'skill', 'demo-skill', 'session', %s, %s, true)",
                     ('man_' + uuid.uuid4().hex[:8], attempt, str(md),
                      hashlib.sha256(md.read_bytes()).hexdigest()))
+        # 运行时调用证据（2026-10-12 拟合口径）：recompute 只拟合有调用证据
+        # 的 skill，缺这行 recompute 会清掉种子 fit 行
+        cur.execute("INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'demo-skill', '', 'runtime', 'confirmed', "
+                    "  '[]'::jsonb)",
+                    ('inv_' + uuid.uuid4().hex[:10], sid, attempt))
         cur.execute("INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
                     "  def_kind, def_name, def_hash, steps_total, steps_hit, "
                     "  score, status, per_step) "
@@ -124,6 +131,7 @@ def test_skill_fit_list_and_detail(client, admin_headers, db_conn, tmp_path):
     finally:
         with db_conn.cursor() as cur:
             cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id=%s", (attempt,))
+            cur.execute("DELETE FROM ai_skill_invocations WHERE attempt_id=%s", (attempt,))
             cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id=%s", (attempt,))
             cur.execute("DELETE FROM ai_execution_attempts WHERE id=%s", (attempt,))
             cur.execute("DELETE FROM ai_chat_sessions WHERE batch_id=%s", (bid,))

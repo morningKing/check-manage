@@ -201,6 +201,12 @@ fit:
                     "  subtask_id, agent, part_id, tool, args_text, state) "
                     "VALUES (%s, %s, NULL, NULL, 'p1', 'bash', 'git clone x', 'completed')",
                     (f'oc-sf-{attempt[:8]}', sid))
+                # 运行时调用证据（2026-10-12 口径）：拟合只认 runtime 确认调用
+                cur.execute(
+                    "INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'demo-skill', '', 'runtime', 'confirmed', '[]'::jsonb)",
+                    ('inv_' + _uuid.uuid4().hex[:10], sid, attempt))
 
         rows = skill_fit.compute_attempt_fit(attempt)
         assert len(rows) == 1
@@ -234,6 +240,100 @@ fit:
                 cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
                 cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s",
                             (sid,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
+def test_compute_attempt_fit_skills_without_invocation_evidence(db_conn, tmp_path):
+    """拟合口径（2026-10-12）：派发时全部启用技能都会补录 injected manifest
+    ——agent 没调用过的 skill 不得出拟合行（score=0/diverged 全是噪声）；
+    历史噪声行在同 attempt 重算时自愈清理，有 runtime 证据的行保留。"""
+    import hashlib
+    import uuid as _uuid
+    from db import get_db
+    from utils import skill_fit
+
+    uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
+    skill_dir = os.path.join(str(tmp_path), 'inv-skill')
+    os.makedirs(skill_dir, exist_ok=True)
+    md_path = os.path.join(skill_dir, 'SKILL.md')
+    md_text = """---
+description: 有调用证据的技能
+fit:
+  steps:
+    - id: clone
+      name: 克隆仓库
+      expect:
+        - tool: bash
+          args_pattern: 'git clone'
+---
+正文。
+"""
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(md_text)
+    md_hash = hashlib.sha256(md_text.encode('utf-8')).hexdigest()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) "
+                    "VALUES (%s, %s, 'x', 'SF', 'developer')", (uid, f'sf_{uid[:8]}'))
+                cur.execute(
+                    "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                    "VALUES (%s, %s, 'sf', 'p', 1)", (bid, uid))
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                    "  batch_seq, workspace_path, session_token) "
+                    "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                    (sid, uid, bid, f'C:\sf\{sid}', f'tok-{sid[:12]}'))
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                    "  operation, started_at, finished_at) "
+                    "VALUES (%s, %s, 'interactive', 'send', NOW() - interval '5 minutes', NOW())",
+                    (attempt, sid))
+                # 两个 skill 都被补录 injected manifest（派发现实形状）
+                for tag, h in (('inv-skill', md_hash), ('never-called-skill', 'x')):
+                    cur.execute(
+                        "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                        "  source, path, content_hash, injected) "
+                        "VALUES (%s, %s, 'skill', %s, 'platform_global', %s, %s, true)",
+                        ('man_' + _uuid.uuid4().hex[:8], attempt, tag,
+                         md_path if tag == 'inv-skill' else md_path, h))
+                # 只有 inv-skill 有 runtime 确认调用
+                cur.execute(
+                    "INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'inv-skill', '', 'runtime', 'confirmed', '[]'::jsonb)",
+                    ('inv_' + _uuid.uuid4().hex[:10], sid, attempt))
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
+                    "  part_id, tool, args_text, state) "
+                    "VALUES (%s, %s, 'p1', 'bash', 'git clone x', 'completed')",
+                    (f'oc-sf-{attempt[:8]}', sid))
+                # 历史噪声：never-called-skill 已有旧链路落的 diverged 行
+                cur.execute(
+                    "INSERT INTO ai_skill_fit_results (id, attempt_id, session_id, "
+                    "  def_kind, def_name, steps_total, steps_hit, score, status, per_step) "
+                    "VALUES (%s, %s, %s, 'skill', 'never-called-skill', 1, 0, 0, 'diverged', '[]'::jsonb)",
+                    ('fit_' + _uuid.uuid4().hex[:10], attempt, sid))
+        rows = skill_fit.compute_attempt_fit(attempt)
+        # 只出有调用证据的 inv-skill；噪声行被自愈清理
+        assert [(r['def_name'], r['score'], r['status']) for r in rows] == [
+            ('inv-skill', 100, 'fit')]
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT def_name FROM ai_skill_fit_results WHERE attempt_id = %s",
+                            (attempt,))
+                assert [r[0] for r in cur.fetchall()] == ['inv-skill']
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s", (attempt,))
+                cur.execute("DELETE FROM ai_skill_invocations WHERE attempt_id = %s", (attempt,))
+                cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id = %s", (attempt,))
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
+                cur.execute("DELETE FROM agent_tool_calls WHERE root_session_id = %s", (sid,))
                 cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
                 cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
                 cur.execute("DELETE FROM users WHERE id = %s", (uid,))
@@ -299,6 +399,11 @@ fit:
                     "  source, path, content_hash, injected) "
                     "VALUES (%s, %s, 'skill', 'err-skill', 'session', %s, %s, true)",
                     ('man_' + _uuid.uuid4().hex[:8], attempt, md_path, md_hash))
+                cur.execute(
+                    "INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'err-skill', '', 'runtime', 'confirmed', '[]'::jsonb)",
+                    ('inv_' + _uuid.uuid4().hex[:10], sid, attempt))
                 cur.execute(
                     "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
                     "  subtask_id, agent, part_id, tool, args_text, state, occurred_at) "
@@ -433,6 +538,11 @@ fit:
                     "VALUES (%s, %s, 'skill', 'reg-skill', 'session', %s, %s, true)",
                     ('man_' + _uuid.uuid4().hex[:8], attempt, md_path, md_hash))
                 cur.execute(
+                    "INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'reg-skill', '', 'runtime', 'confirmed', '[]'::jsonb)",
+                    ('inv_' + _uuid.uuid4().hex[:10], sid, attempt))
+                cur.execute(
                     "INSERT INTO agent_tool_calls (oc_session_id, root_session_id, "
                     "  subtask_id, agent, part_id, tool, args_text, state) "
                     "VALUES (%s, %s, NULL, NULL, 'p1', 'bash', 'echo ok', 'completed')",
@@ -465,6 +575,8 @@ fit:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_skill_invocations WHERE attempt_id = %s",
                             (attempt,))
                 cur.execute("DELETE FROM ai_skill_def_versions WHERE content_hash = %s "
                             "AND def_name = 'reg-skill'", (md_hash,))
