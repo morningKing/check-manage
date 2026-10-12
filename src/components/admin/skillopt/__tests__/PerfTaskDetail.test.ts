@@ -120,6 +120,47 @@ describe('PerfTaskDetail', () => {
     expect(w.find('[data-test="turn-inference"]').text()).toContain('18.0s')
   })
 
+  it('时间轴分支：段行显示工具参数（bash 执行了什么直接可见）', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    perfAttempt.mockResolvedValue({
+      attempt: { attemptId: 'a1', wallMs: 60000, modelMs: 0, subagentWaitMs: 0,
+                 idleMs: 0, toolMs: 0, sourceType: 'batch', status: 'completed',
+                 turnCount: 1, subtaskCount: 0, sessionId: 's1', startedAt: null,
+                 finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 60000, modelMs: 28000, subagentWaitMs: 0, idleMs: 0,
+                  toolMs: 0 },
+      turns: [{ messageId: 'm1', createdAt: '2026-10-12T10:00:00',
+                durationMs: 30000, tokensIn: 1, tokensOut: 1, preview: 'p',
+                toolCount: 1 }],
+      subtasks: [],
+      subTurns: {},
+      tools: { errorCount: 0, durationAvailable: true, byTool: [], repeats: [],
+               callsTruncated: false,
+               calls: [{ partId: 'px1', tool: 'bash',
+                         args: 'command=git clone https://x/y.git\ndescription=克隆',
+                         state: 'completed',
+                         startedAt: '2026-10-12T10:00:05', durationMs: 5000,
+                         subtaskId: null, turnIndex: 0, isDelegation: false }] },
+      skills: [],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    } as any)
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    // turn-seq-list 在轮次表展开行内——先触发展开
+    await w.find('.el-table__expand-icon').trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    const seq = w.find('[data-test="turn-seq-list"]')
+    expect(seq.exists()).toBe(true)
+    // 段行显示 bash 的参数首行（command=…），不再只有「bash 5.0s」
+    expect(seq.text()).toContain('command=git clone https://x/y.git')
+  })
+
+
   it('task 委派行标注「开子代理」且不计入工具小计', async () => {
     const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
     ;(perfAttempt as any).mockImplementationOnce(async () => ({
