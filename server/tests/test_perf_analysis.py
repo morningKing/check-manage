@@ -225,6 +225,31 @@ class TestAttemptMetrics:
         _bid, _sid, aid = _seed_perf(db_conn, user_id, source_type='kefu')
         assert load_attempt_metrics(db_conn, aid) is None
 
+    def test_detail_sub_turns_from_subtask_message_meta(self, db_conn, user_id):
+        """detail 出参 subTurns：子代理 assistant 消息 meta.durationMs →
+        前端时间轴「子代理内部推理段」的数据源。无 meta（旧数据）→ 空条目。"""
+        _b, _s, aid = _seed_perf(db_conn, user_id,
+                                 subtasks=[('general', 10, 50)])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT id FROM ai_chat_subtasks WHERE root_session_id=%s",
+                        (_s,))
+            stid = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role,"
+                " content, meta) VALUES (%s, %s, 'assistant', %s::jsonb, %s::jsonb),"
+                " (%s, %s, 'assistant', %s::jsonb, NULL)",
+                (f'{stid}:a', stid, '[{"type":"text","text":"t"}]',
+                 json.dumps({'durationMs': 42_000, 'tokensInput': 10,
+                             'tokensOutput': 2}),
+                 f'{stid}:a2', stid, '[{"type":"text","text":"t2"}]'))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        assert m['subTurns'][stid] == [
+            {'createdAt': m['subTurns'][stid][0]['createdAt'], 'durationMs': 42_000}]
+        # 非 detail 路径（列表/概览）不产出 subTurns
+        tasks = list_definition_tasks(db_conn, 'skill', 'stock-analysis')
+        assert all('subTurns' not in t for t in tasks)
+
     def test_detail_coverage_includes_tool_ms(self, db_conn, user_id):
         _bid, _sid, aid = _seed_perf(
             db_conn, user_id, model_turns=[(400_000, 10_000, 100, 0)])

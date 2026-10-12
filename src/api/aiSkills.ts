@@ -333,6 +333,9 @@ export interface PerfAttemptDetail {
               toolMs: number }
   turns: PerfTurn[]
   subtasks: PerfSubtask[]
+  /** 子代理内部轮次（2026-10-12）：subtaskId → [{createdAt, durationMs}]——
+   *  子代理推理↔工具切分的数据源；meta 2026-10-12 起采集，旧数据为空 dict */
+  subTurns: Record<string, { createdAt: string; durationMs: number }[]>
   tools: PerfToolAgg
   skills: PerfSkillAgg[]
   completeness: { turnsWithoutDuration: number; runningSubtasks: number }

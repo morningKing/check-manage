@@ -243,6 +243,8 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         "SELECT id, agent, description, status, created_at, completed_at "
         "FROM ai_chat_subtasks WHERE root_session_id = %s ORDER BY created_at", (sid,))
     sub_ivs, subtasks, running = [], [], 0
+    sub_turns: dict = {}   # subtaskId → [{createdAt, durationMs}]（子代理轮次，
+    #                        detail 路径下发给前端时间轴算「内部推理段」）
     for stid, agent, desc, status, created, finished in cur.fetchall():
         s_ms = _to_ms(created)
         # 已收尾但缺 completed_at 的子代理（中断残留/旧数据）按 attempt 终点
@@ -257,6 +259,23 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
                          'status': status, 'startedAt': _iso(created),
                          'finishedAt': _iso(finished),
                          'wallMs': max(0, e_ms - s_ms)})
+        if with_detail:
+            # 子代理轮次（assistant 消息带 durationMs 的）：给前端把子代理
+            # 内部时间切成「推理 ↔ 工具」。meta 2026-10-12 起才采集，旧数据
+            # 无 durationMs → 空列表，前端自然退化为仅工具间隙。
+            cur.execute(
+                "SELECT created_at, meta FROM ai_chat_subtask_messages "
+                "WHERE subtask_id = %s AND role = 'assistant' "
+                "  AND meta ? 'durationMs' ORDER BY created_at", (stid,))
+            turns_out = []
+            for tc, tmeta in cur.fetchall():
+                tmeta = tmeta or {}
+                tdur = tmeta.get('durationMs')
+                if tdur is None:
+                    continue
+                turns_out.append({'createdAt': _iso(tc), 'durationMs': int(tdur)})
+            if turns_out:
+                sub_turns[stid] = turns_out
     # 二期 detail 路径：工具调用一次取齐（覆盖区间/聚合/逐调用明细共用；
     # 非 detail 路径不查询）
     tool_ivs: list | None = None
@@ -328,6 +347,8 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         out['effectiveModel'] = row.get('effective_model')
         out['turnDetails'] = turn_details
         out['subtasks'] = subtasks
+        # 子代理内部轮次（推理↔工具切分的数据源；旧数据无 meta → 空 dict）
+        out['subTurns'] = sub_turns
         out['tools'] = tools
         # 四类覆盖明细（含 toolMs）：顶层 modelMs 已是扣除工具后的净值，
         # coverage 与其同源，供端点/前端直接拆包

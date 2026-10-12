@@ -396,11 +396,18 @@ def persist_subtasks(root_session_id, state):
                          json.dumps([{'type': 'text', 'text': sub['prompt']}])),
                     )
                 if content:
+                    # 轮次 meta 与根会话同源（2026-10-12）：子代理推理耗时是
+                    # 性能分析「子代理内部推理段」的数据前提。子代理 scope 的
+                    # meta_by_msg 在 apply_event 里与顶层同方式累积（:112）。
+                    meta = public_meta(aggregate_metas(
+                        list((sub.get('meta_by_msg') or {}).values())))
                     cur.execute(
-                        "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
-                        "VALUES (%s, %s, 'assistant', %s) "
-                        "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
-                        (f'{sid}:a', sid, json.dumps(content)),
+                        "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content, meta) "
+                        "VALUES (%s, %s, 'assistant', %s, %s) "
+                        "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, "
+                        "  meta = COALESCE(EXCLUDED.meta, ai_chat_subtask_messages.meta)",
+                        (f'{sid}:a', sid, json.dumps(content),
+                         json.dumps(meta) if meta else None),
                     )
                 conn.commit()
         except Exception as e:

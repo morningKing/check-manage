@@ -2814,11 +2814,17 @@ class BatchWorker:
                 if not content:
                     continue
                 mid = minfo.get('id') or f'{subtask_id}:a:{id(m)}'
+                # 轮次 meta 与根会话同源（2026-10-12）：子代理推理耗时是性能
+                # 分析「子代理内部推理段」的数据前提——此前子代理消息从不写
+                # meta，推理段永远只能靠工具间隙推导
+                meta = public_meta(meta_from_info(minfo))
                 cur.execute(
-                    "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
-                    "VALUES (%s, %s, 'assistant', %s) "
-                    "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content",
-                    (mid, subtask_id, _json.dumps(content)),
+                    "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content, meta) "
+                    "VALUES (%s, %s, 'assistant', %s, %s) "
+                    "ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, "
+                    "  meta = COALESCE(EXCLUDED.meta, ai_chat_subtask_messages.meta)",
+                    (mid, subtask_id, _json.dumps(content),
+                     _json.dumps(meta) if meta else None),
                 )
             # 任务段合并：子会话内新增的 user 消息（按序号判新）→ 追加任务段
             if user_ords:

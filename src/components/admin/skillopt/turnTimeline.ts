@@ -76,7 +76,8 @@ function spanSegments(windowStart: number, windowEnd: number,
  *  segments=[]（前端回退到明细列表）。 */
 export function buildTurnTimeline(
   turn: { createdAt: string | null; durationMs: number },
-  calls: PerfToolCall[]): TurnTimeline {
+  calls: PerfToolCall[],
+  subTurns?: Record<string, { createdAt: string; durationMs: number }[]>): TurnTimeline {
   const w0 = parseMs(turn.createdAt)
   if (!w0 || turn.durationMs == null) return { segments: [], nested: {}, unplaced: calls }
   const w1 = w0 + turn.durationMs
@@ -89,11 +90,19 @@ export function buildTurnTimeline(
     if (seg.type !== 'task' || !seg.ref) continue
     const call = calls.find(c => c.partId === seg.ref)
     if (!call?.subtaskId) continue
-    // 委托段内部 = 子代理自己的工具与推理间隙（排除 task 调用行本身——
-    // 它就是这段的边界，否则自包含成环）
+    // 委托段内部 = 子代理自己的推理与工具（排除 task 调用行本身——
+    // 它就是这段的边界，否则自包含成环）。子代理轮次 meta 可得（2026-10-12
+    // 起采集）时按「轮内交替 + 轮间隙」重建——推理段=工具间隙+轮间间隙，
+    // 不再只靠工具间隙近似；旧数据无 meta 退化为纯间隙（子代理毛时长-工具
+    // 全部算推理，首尾间隙归推理与轮内算法一致）。
     const subCalls = calls.filter(c => c.subtaskId === call.subtaskId
                                   && c.partId !== seg.ref)
-    nested[seg.ref] = spanSegments(seg.start, seg.end, subCalls).segments
+    const subTurnList = subTurns?.[call.subtaskId]
+    if (subTurnList?.length) {
+      nested[seg.ref] = subSegments(seg.start, seg.end, subCalls, subTurnList)
+    } else {
+      nested[seg.ref] = spanSegments(seg.start, seg.end, subCalls).segments
+    }
   }
   return { segments, nested, unplaced }
 }
@@ -149,4 +158,55 @@ export function buildTurnTimelineOption(timeline: TurnTimeline) {
       data,
     }],
   }
+}
+
+
+/** 子代理内部时间轴：轮次 meta 可得时的推理↔工具切分。
+ *  每轮 = [createdAt, createdAt+durationMs] 窗口内做工具交替（间隙=该轮推理）；
+ *  轮与轮之间、首尾与委托段边界的空隙并入推理（没在跑工具的时间本质都是
+ *  「没在干活」）。spanSegments 产出的间隙 label 是主轴的「模型推理」，这里
+ *  统一改标「子代理推理」再输出。工具无法定位轮次（缺时间/旧数据）不上轴。 */
+function subSegments(windowStart: number, windowEnd: number,
+                     calls: PerfToolCall[],
+                     subTurnList: { createdAt: string; durationMs: number }[]): TurnSeg[] {
+  const segments: TurnSeg[] = []
+  let cursor = windowStart
+  const turns = [...subTurnList].sort((a, b) =>
+    (parseMs(a.createdAt) ?? 0) - (parseMs(b.createdAt) ?? 0))
+  for (const t of turns) {
+    const t0 = parseMs(t.createdAt)
+    if (t0 == null || t.durationMs == null) continue
+    const t1 = t0 + t.durationMs
+    if (t0 > cursor) {
+      segments.push({ type: 'inference', start: cursor, end: t0,
+                      label: '子代理推理', afterTool: null })
+    }
+    const inTurn = calls.filter(c => {
+      const s = parseMs(c.startedAt)
+      return s != null && s >= cursor && s < t1 && c.durationMs != null
+    })
+    const { segments: segs } = spanSegments(Math.max(cursor, t0), t1, inTurn)
+    for (const seg of segs) {
+      segments.push(seg.type === 'inference'
+        ? { ...seg, label: '子代理推理' } : seg)
+    }
+    cursor = Math.max(cursor, t1)
+  }
+  // 尾隙：与轮隙同语义（没在跑工具=推理）；相邻推理段合并（轮隙+轮首本
+  // 就是一段连续推理，切开只会让时间轴碎片化）
+  if (cursor < windowEnd) {
+    segments.push({ type: 'inference', start: cursor, end: windowEnd,
+                    label: '子代理推理', afterTool: null })
+  }
+  const merged: TurnSeg[] = []
+  for (const seg of segments) {
+    const last = merged[merged.length - 1]
+    if (seg.type === 'inference' && last?.type === 'inference'
+        && last.end === seg.start) {
+      last.end = seg.end
+      continue
+    }
+    merged.push(seg)
+  }
+  return merged
 }

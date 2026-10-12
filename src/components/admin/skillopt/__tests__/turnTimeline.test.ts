@@ -62,6 +62,63 @@ describe('buildTurnTimeline', () => {
     expect(nested[4]).toMatchObject({ start: T0 + 30_000, end: T0 + 40_000 })
   })
 
+  it('subTurns 可得：子代理内部按轮次切推理↔工具，和=委托段时长', () => {
+    // 轮 [0,60]s：task [10,40]s；子代理两轮 [15,25]s 与 [30,36]s；
+    // 子代理内 grep [18,20]s（轮1 内）、bash [31,33]s（轮2 内）
+    const calls = [
+      call({ partId: 'task1', tool: 'task',
+             startedAt: new Date(T0 + 10_000).toISOString(), durationMs: 30_000,
+             subtaskId: 'ses_sub', isDelegation: true }),
+      call({ partId: 's1', tool: 'grep',
+             startedAt: new Date(T0 + 18_000).toISOString(), durationMs: 2_000,
+             subtaskId: 'ses_sub' }),
+      call({ partId: 's2', tool: 'bash',
+             startedAt: new Date(T0 + 31_000).toISOString(), durationMs: 2_000,
+             subtaskId: 'ses_sub' }),
+    ]
+    const subTurns = {
+      ses_sub: [
+        { createdAt: new Date(T0 + 15_000).toISOString(), durationMs: 10_000 },
+        { createdAt: new Date(T0 + 30_000).toISOString(), durationMs: 6_000 },
+      ],
+    }
+    const tl = buildTurnTimeline(turn, calls, subTurns)
+    const nested = tl.nested['task1']!
+    // 相邻推理段合并后 5 段：[10,18]（轮隙+轮1 首）→ grep[18,20] →
+    // [20,31]（轮1 尾+轮隙+轮2 首）→ bash[31,33] → [33,40]（轮2 尾+尾隙）
+    expect(nested[0]).toMatchObject({ type: 'inference', start: T0 + 10_000,
+                                      end: T0 + 18_000 })
+    expect(nested.filter(s => s.type === 'tool')
+      .map(s => [s.start - T0, s.end - T0]))
+      .toEqual([[18_000, 20_000], [31_000, 33_000]])
+    const inf = nested.filter(s => s.type === 'inference')
+    const sum = nested.reduce((a, s) => a + (s.end - s.start), 0)
+    expect(sum).toBe(30_000)                     // 和 = 委托段时长
+    // 全部推理段 label 一致（子代理推理），与主轴「模型推理」区分；相邻推理
+    // 段已合并：[10,18]（轮隙+轮1 首）→ grep → [20,31]（轮1 尾+轮隙+轮2 首）
+    // → bash → [33,40]（轮2 尾+尾隙）——和恒等于委托段时长
+    expect(nested.map(s => s.type)).toEqual([
+      'inference', 'tool', 'inference', 'tool', 'inference'])
+    expect(inf.map(s => [s.start - T0, s.end - T0])).toEqual([
+      [10_000, 18_000], [20_000, 31_000], [33_000, 40_000]])
+    expect(inf.every(s => s.label === '子代理推理')).toBe(true)
+  })
+
+  it('subTurns 为空 dict（旧数据）：嵌套退化为纯间隙算法，行为不变', () => {
+    const calls = [
+      call({ partId: 'task1', tool: 'task',
+             startedAt: new Date(T0 + 10_000).toISOString(), durationMs: 30_000,
+             subtaskId: 'ses_sub', isDelegation: true }),
+      call({ partId: 's1', tool: 'grep',
+             startedAt: new Date(T0 + 15_000).toISOString(), durationMs: 5_000,
+             subtaskId: 'ses_sub' }),
+    ]
+    const tl = buildTurnTimeline(turn, calls, {})
+    const nested = tl.nested['task1']!
+    expect(nested.map(s => s.type))
+      .toEqual(['inference', 'tool', 'inference'])   // 与不传 subTurns 一致
+  })
+
   it('无时间戳调用进 unplaced 不上轴（旧数据）', () => {
     const calls = [call({ partId: 'old', tool: 'read', startedAt: null })]
     const tl = buildTurnTimeline(turn, calls)

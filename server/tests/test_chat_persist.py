@@ -412,6 +412,64 @@ def test_apply_event_depth_limit_stops_at_five():
     assert 'ses_too_deep' not in s['subtasks']
 
 
+def test_persist_subtasks_writes_assistant_meta_for_perf():
+    """子代理 assistant 消息落 meta（2026-10-12）：性能分析「子代理内部推理
+    段」的数据前提——info.time.created/completed → meta.durationMs。"""
+    import uuid
+    from db import get_db
+    from utils.chat_persist import new_state, apply_event, persist_subtasks
+
+    uid = 'u-cp-meta-' + uuid.uuid4().hex[:6]
+    sid = 's-cp-meta-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    created_ms = 1_700_000_000_000
+    try:
+        s = new_state()
+        # 父回合 assistant 消息先行登记（apply_event 的 part 门禁要求
+        # messageID 已在 scope['assistant_msg_ids'] 里）
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'm1', 'sessionID': 'oc'}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'pt1', 'messageID': 'm1', 'type': 'tool', 'tool': 'task',
+                      'state': {'status': 'completed',
+                                'metadata': {'sessionId': 'ses_child_meta'}},
+                      'sessionID': 'oc'}}), 'oc')
+        # 子代理 assistant 消息带 time（→ durationMs=30s）
+        apply_event(s, _ev('message.updated',
+            {'info': {'role': 'assistant', 'id': 'cm1',
+                      'sessionID': 'ses_child_meta',
+                      'time': {'created': created_ms,
+                               'completed': created_ms + 30_000}}}), 'oc')
+        apply_event(s, _ev('message.part.updated',
+            {'part': {'id': 'cp1', 'messageID': 'cm1', 'type': 'text', 'text': 'hi',
+                      'sessionID': 'ses_child_meta'}}), 'oc')
+        persist_subtasks(sid, s)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT meta FROM ai_chat_subtask_messages "
+                            "WHERE id = 'ses_child_meta:a'")
+                meta = cur.fetchone()[0]
+        assert meta is not None and meta['durationMs'] == 30_000
+        assert meta['tokensInput'] == 0 and 'cost' in meta
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_subtask_messages "
+                            "WHERE subtask_id='ses_child_meta'")
+                cur.execute("DELETE FROM ai_chat_subtasks WHERE id='ses_child_meta'")
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id=%s", (sid,))
+                cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+        conn.commit()
+
+
 def test_persist_subtasks_writes_rows_and_messages():
     """persist_subtasks 要把 state['subtasks'] 里的内容落到
     ai_chat_subtasks / ai_chat_subtask_messages，而不是只停留在内存。"""

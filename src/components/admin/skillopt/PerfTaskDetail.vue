@@ -161,6 +161,21 @@
           </div>
           <ElTable :data="tools.calls" size="small" data-test="tool-call-list"
                    max-height="360">
+            <ElTableColumn type="expand" width="34">
+              <template #default="{ row }">
+                <div class="call-detail" data-test="tool-call-detail">
+                  <div class="call-detail__row">
+                    <ElTag size="small" type="info">参数</ElTag>
+                    <pre class="call-detail__pre">{{ row.args || '（无参数——该工具不接入参）' }}</pre>
+                  </div>
+                  <div class="call-detail__row">
+                    <ElTag size="small">定位</ElTag>
+                    <span class="muted">开始 {{ row.startedAt || '-' }} ·
+                      {{ row.subtaskId ? '子代理 ' + row.subtaskId : '根会话' }}</span>
+                  </div>
+                </div>
+              </template>
+            </ElTableColumn>
             <ElTableColumn label="时间" width="110">
               <template #default="{ row }">{{ shortTime(row.startedAt) }}</template>
             </ElTableColumn>
@@ -172,7 +187,7 @@
             </ElTableColumn>
             <ElTableColumn label="命令 / 参数" min-width="260" show-overflow-tooltip>
               <template #default="{ row }">
-                <code class="call-args">{{ row.args || '（无参数）' }}</code>
+                <code class="call-args">{{ firstArgLine(row.args) || '（无参数）' }}</code>
               </template>
             </ElTableColumn>
             <ElTableColumn label="耗时" width="100">
@@ -256,7 +271,7 @@ const skills = computed(() => detail.value?.skills ?? [])
 function timelineOf(row: { messageId?: string }): TurnTimeline {
   const turn = detail.value?.turns.find(t => t.messageId === row.messageId)
   if (!turn) return { segments: [], nested: {}, unplaced: [] }
-  return buildTurnTimeline(turn, tools.value?.calls ?? [])
+  return buildTurnTimeline(turn, tools.value?.calls ?? [], detail.value?.subTurns)
 }
 /** 子代理墙钟合计（毛和；并行会重叠，对账以覆盖条为准） */
 const subtaskWallSum = computed(() =>
@@ -310,6 +325,11 @@ function inferenceLabel(row: { messageId?: string }): string {
   if (ms == null) return '缺数据'
   return (complete ? '' : '≥ ') + fmtMs(ms)
 }
+/** 参数首行（多行参数在列里只显示第一行，行展开看全文） */
+function firstArgLine(args: string): string {
+  const i = (args || '').indexOf('\n')
+  return i >= 0 ? args.slice(0, i) : args
+}
 function shortTime(iso: string | null): string {
   if (!iso) return '-'
   return iso.slice(11, 19)
@@ -362,6 +382,13 @@ h4 { margin: 18px 0 8px; }
 .turn-call__args { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-call__dur { font-variant-numeric: tabular-nums; font-size: 12px; }
 .call-args { font-size: 12px; }
+.call-detail { padding: 4px 12px; display: grid; gap: 8px; }
+.call-detail__row { display: flex; gap: 8px; align-items: flex-start; }
+.call-detail__pre {
+  flex: 1; margin: 0; font-size: 12px; white-space: pre-wrap;
+  word-break: break-all; max-height: 200px; overflow: auto;
+  background: var(--el-fill-color-light); padding: 6px 8px; border-radius: 4px;
+}
 .seq-list { margin-bottom: 8px; }
 .seq-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .seq-row--nested { margin-left: 28px; }

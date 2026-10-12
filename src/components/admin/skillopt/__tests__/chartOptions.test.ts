@@ -46,6 +46,7 @@ const detail = (): PerfAttemptDetail => ({
               toolMs: 0 },
   turns: [{ messageId: 'm1', createdAt: '2026-10-09T10:00:00',
             durationMs: 60000, tokensIn: 5000, tokensOut: 500, preview: 'p', toolCount: 0 }],
+  subTurns: {},
   subtasks: [{ subtaskId: 'ses_1', agent: 'general', description: 'd',
                status: 'completed', startedAt: '2026-10-09T10:00:10',
                finishedAt: '2026-10-09T10:00:40', wallMs: 30000 }],
