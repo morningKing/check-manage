@@ -1,4 +1,5 @@
 import type { PerfTaskEntry, PerfAttemptDetail } from '@/api/aiSkills'
+import { fmtMs } from './format'
 
 /** 柱色按 source_type 区分（spec §5.1），未识别来源回落 batch 蓝。 */
 export const SOURCE_COLORS: Record<string, string> = {
@@ -51,7 +52,7 @@ export function buildWaterfallOption(detail: PerfAttemptDetail) {
     if (turn.durationMs == null || !turn.createdAt) continue
     const s = Date.parse(turn.createdAt)
     if (!Number.isFinite(s)) continue        // 畸形时间串不产 NaN 段
-    segs.push({ name: `模型轮次 ${(turn.durationMs / 1000).toFixed(1)}s`,
+    segs.push({ name: `模型轮次 ${fmtMs(turn.durationMs)}`,
                 type: 'model', ref: turn.messageId, row: 0, start: s,
                 end: s + turn.durationMs })
   }
@@ -63,7 +64,7 @@ export function buildWaterfallOption(detail: PerfAttemptDetail) {
     const e = st.finishedAt ? Date.parse(st.finishedAt) : s + st.wallMs
     if (!Number.isFinite(e) || e <= s) continue
     subRows.push(`${st.agent || '子代理'}·${st.subtaskId.slice(0, 8)}`)
-    segs.push({ name: `${st.agent || '子代理'}（等待 ${(st.wallMs / 1000).toFixed(1)}s）·${st.subtaskId.slice(0, 8)}`,
+    segs.push({ name: `${st.agent || '子代理'}（等待 ${fmtMs(st.wallMs)}）·${st.subtaskId.slice(0, 8)}`,
                 type: 'subagent', ref: st.subtaskId,
                 row: subRows.length, start: s, end: e })
   }

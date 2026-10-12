@@ -8,6 +8,7 @@
  * 多久一目了然。
  */
 import type { PerfToolCall } from '@/api/aiSkills'
+import { fmtMs } from './format'
 
 export interface TurnSeg {
   type: 'inference' | 'tool' | 'task'
@@ -58,8 +59,10 @@ function spanSegments(windowStart: number, windowEnd: number,
                       afterTool: segments[segments.length - 1]?.type === 'tool'
                         ? segments[segments.length - 1].label : null })
     }
-    const label = isTask ? `开子代理（等待 ${(c.durationMs! / 1000).toFixed(1)}s）`
-      : `${c.tool} ${(c.durationMs! / 1000).toFixed(1)}s`
+    // 时长统一走 fmtMs（1083s 与 18m4s 是同一时长的两种写法——此前段标签
+    // 硬编码秒、页面其他处走 fmtMs，用户看成两个对不上的时间）
+    const label = isTask ? `开子代理（等待 ${fmtMs(c.durationMs)}）`
+      : `${c.tool} ${fmtMs(c.durationMs)}`
     segments.push({ type: isTask ? 'task' : 'tool', start: s, end: Math.max(end, clampedStart),
                     label, ref: c.partId })
     cursor = Math.max(cursor, end)
