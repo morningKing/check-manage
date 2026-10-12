@@ -69,7 +69,7 @@
                             : s.type === 'task' ? '开子代理' : '工具' }}
                         </ElTag>
                         <code v-if="s.type !== 'inference'" class="seq-args">
-                          {{ seqArgs(row, s.ref) || s.label }}</code>
+                          {{ seqArgs(s.ref) || s.label }}</code>
                         <span v-else class="seq-args seq-args--muted">{{ s.label }}</span>
                         <span class="seq-dur"
                               :class="{ 'slow-turn': s.type !== 'inference' && (s.end - s.start) >= 30000 }">
@@ -82,7 +82,7 @@
                           {{ ns.type === 'inference' ? '推理' : '工具' }}
                         </ElTag>
                         <code v-if="ns.type !== 'inference'" class="seq-args">
-                          {{ seqArgs(row, ns.ref) || ns.label }}</code>
+                          {{ seqArgs(ns.ref) || ns.label }}</code>
                         <span v-else class="seq-args seq-args--muted">{{ ns.label }}</span>
                         <span class="seq-dur">{{ fmtMs(ns.end - ns.start) }}</span>
                       </div>
@@ -349,11 +349,14 @@ function firstArgLine(args: string): string {
   const i = (args || '').indexOf('\n')
   return i >= 0 ? args.slice(0, i) : args
 }
-/** 时间轴段行的参数（按段 ref=partId 从该轮调用取参数首行；ref 缺失/
- *  未命中返回空串回落段 label）。bash 执行了什么、grep 什么在这里直接可见。 */
-function seqArgs(row: { messageId?: string }, ref?: string): string {
+/** 时间轴段行的参数（按段 ref=partId 从调用明细取参数首行；ref 缺失/
+ *  未命中返回空串回落段 label）。bash 执行了什么、grep 什么在这里直接可见。
+ *  按全量 calls 查而不是本轮 turnCalls——嵌套段（子代理自己的工具）被
+ *  轮内列表排除在外，按 turnCalls 查不到会把参数回落成段标签；partId
+ *  全局唯一，按全量查同样安全。 */
+function seqArgs(ref?: string): string {
   if (!ref) return ''
-  const c = turnCalls(row).find(x => x.partId === ref)
+  const c = (tools.value?.calls ?? []).find(x => x.partId === ref)
   return c ? (firstArgLine(c.args) || '') : ''
 }
 function shortTime(iso: string | null): string {

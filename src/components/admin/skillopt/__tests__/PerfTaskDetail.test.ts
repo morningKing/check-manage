@@ -346,4 +346,58 @@ describe('PerfTaskDetail', () => {
     expect(calls.text()).toContain('开子代理 1 次 · 等待 20.0s')
     expect(calls.find('[data-test="turn-inference"]').text()).toContain('10.0s')
   })
+
+  it('时间轴嵌套段：子代理自己的工具调用显示参数（不回落段标签）', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 50000, modelRatio: 0.5,
+                 subagentWaitMs: 30000, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 0, tokensOut: 0,
+                 subtaskCount: 1, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 50000, subagentWaitMs: 30000, idleMs: 0,
+                  toolMs: 0 },
+      turns: [{ messageId: 'm1', createdAt: '2026-10-12T10:00:00',
+                durationMs: 30000, tokensIn: 0, tokensOut: 0, preview: 'p',
+                toolCount: 2 }],
+      subtasks: [{ subtaskId: 'ses_ch', agent: 'general', description: 'd',
+                   status: 'completed', startedAt: null, finishedAt: null,
+                   wallMs: 15000 }],
+      subTurns: {},
+      tools: { errorCount: 0, durationAvailable: true, byTool: [], repeats: [],
+               callsTruncated: false,
+               calls: [
+                 { partId: 'pdt', tool: 'task', args: 'description=读取股票清单',
+                   state: 'completed', startedAt: '2026-10-12T10:00:05',
+                   durationMs: 15000, subtaskId: 'ses_ch', turnIndex: 0,
+                   isDelegation: true },
+                 { partId: 'pdc', tool: 'read',
+                   args: 'filePath=C:\\ws\\stock-list.txt',
+                   state: 'completed', startedAt: '2026-10-12T10:00:08',
+                   durationMs: 23, subtaskId: 'ses_ch', turnIndex: 0,
+                   isDelegation: false },
+                 { partId: 'pdr', tool: 'bash', args: 'command=wc -l x',
+                   state: 'completed', startedAt: '2026-10-12T10:00:25',
+                   durationMs: 2000, subtaskId: null, turnIndex: 0,
+                   isDelegation: false }] },
+      skills: [],
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await w.find('.el-table__expand-icon').trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    const seq = w.find('[data-test="turn-seq-list"]')
+    expect(seq.exists()).toBe(true)
+    // 嵌套段（子代理自己的 read）显示其参数首行——此前按本轮 turnCalls 查
+    // 引用（子代理调用已被排除）查不到，回落成「[general] read 23ms」标签
+    expect(seq.text()).toContain('filePath=C:\\ws\\stock-list.txt')
+    // 委派段/根工具段参数照常
+    expect(seq.text()).toContain('description=读取股票清单')
+    expect(seq.text()).toContain('command=wc -l x')
+  })
 })
