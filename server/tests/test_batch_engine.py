@@ -1451,6 +1451,91 @@ def test_subtask_status_from_messages_detects_error():
     assert status == 'completed'
 
 
+def test_persist_conversation_no_short_circuit_while_delegation_running(monkeypatch):
+    """委派执行期不得被快照短路：sig 只哈希根会话消息，委派运行时根静止
+    （task part 停在 running）→ sig 恒等 → 周期持久化全部短路，子代理消息
+    直到委派完成才一次性落库（生产报告：子代理气泡无实时内容）。根快照
+    存在非终态 task part 时必须照常全量拉取子代理树；委派结束后（快照不
+    变且无未终态 task part）短路优化恢复——稳定期零成本不回退。"""
+    import uuid
+    import utils.batch_engine as eng
+    from db import get_db
+    from unittest.mock import MagicMock
+
+    uid = 'u-be-sc-' + uuid.uuid4().hex[:6]
+    sid = 's-be-sc-' + uuid.uuid4().hex[:6]
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO users (id, username, password_hash, display_name, role) "
+                        "VALUES (%s,%s,'x',%s,'developer')", (uid, uid, uid))
+            cur.execute("INSERT INTO ai_chat_sessions (id, user_id, workspace_path, "
+                        "session_token, token_expires_at) VALUES "
+                        "(%s,%s,'/tmp/x',%s, now() + interval '1 day')",
+                        (sid, uid, 'tok-' + uuid.uuid4().hex))
+        conn.commit()
+    try:
+        raw_running = [
+            {'info': {'role': 'assistant', 'id': 'm1'},
+             'parts': [{'type': 'tool', 'tool': 'task',
+                        'state': {'status': 'running',
+                                  'metadata': {'sessionId': 'ses_child_sc'}}}]},
+        ]
+        raw_done = [
+            {'info': {'role': 'assistant', 'id': 'm1'},
+             'parts': [{'type': 'tool', 'tool': 'task',
+                        'state': {'status': 'completed',
+                                  'metadata': {'sessionId': 'ses_child_sc'}}}]},
+        ]
+        holder = {
+            'raw': raw_running,
+            'child': [{'info': {'role': 'assistant', 'id': 'cm1', 'finish': 'stop',
+                                'time': {'created': 1, 'completed': 2}},
+                       'parts': [{'type': 'text', 'text': 'child v1'}]}],
+        }
+        fetch_log = []
+        fake = MagicMock()
+
+        def _fake_get(oc_id, directory=''):
+            # 根会话拉取是 sig 的数据来源，每次轮询都会发生（廉价）；子会话
+            # 拉取是贵的那部分——短路省的就是它。分开计数才能断言「恢复短路」。
+            fetch_log.append(oc_id)
+            return holder['raw'] if oc_id == 'oc-top' else list(holder['child'])
+
+        fake.get_messages.side_effect = _fake_get
+        monkeypatch.setattr(eng, 'opencode_client', fake)
+
+        w = eng.BatchWorker()
+        # ① 委派执行期：根快照不变（task running），子代理新增一条消息
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+        holder['child'].append(
+            {'info': {'role': 'assistant', 'id': 'cm2', 'finish': 'tool-calls',
+                      'time': {'created': 3, 'completed': 4}},
+             'parts': [{'type': 'text', 'text': 'child v2 (mid-run)'}]})
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM ai_chat_subtask_messages "
+                            "WHERE subtask_id = %s", ('ses_child_sc',))
+                # 委派期第二次持久化必须把新增的子代理消息拉下来（修复前
+                # 被 sig 短路 → 恒为 1，直到委派完成才一次性出现）
+                assert cur.fetchone()[0] == 2
+
+        # ② 委派结束：快照变化（task completed）→ 全量；随后快照不再变 →
+        #    短路恢复——子会话重拉停止（根会话拉取是 sig 来源，照常发生）
+        holder['raw'] = raw_done
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+        child_pulls_after_done = sum(1 for c in fetch_log if c == 'ses_child_sc')
+        w._persist_conversation(sid, 'prompt', 'oc-top', None, directory='/tmp/x')
+        assert sum(1 for c in fetch_log if c == 'ses_child_sc') \
+            == child_pulls_after_done          # 稳定期短路：子会话不再重拉
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+            conn.commit()
+
+
 def test_persist_conversation_persists_discovered_subtask_and_refreshes_parent_stub(monkeypatch):
     """_persist_conversation 拉到的顶层消息里含 subtask part 时，要：
     (1) 递归拉取该子代理自己的消息并落库到 ai_chat_subtasks/ai_chat_subtask_messages；

@@ -180,7 +180,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
+import { ref, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
@@ -348,6 +348,34 @@ async function openConversation(row: AdminChild) {
     convLoading.value = false
   }
 }
+
+// 会话对话弹窗自动刷新（2026-10-12）：委派执行期，子代理气泡的占位 part
+// 依赖父对话刷新才会出现（气泡内容自己轮询，占位不刷新就永远不出现——
+// 后端持久化修复后占位最迟一个进度周期落库，这里负责把它带到界面）。
+// 子任务 running 期间每 5s 重拉（顺带刷新 detail 的状态列）；终态或关弹窗即停。
+const CONV_POLL_MS = 5000
+let convPollTimer: ReturnType<typeof setInterval> | null = null
+function stopConvPoll() {
+  if (convPollTimer) { clearInterval(convPollTimer); convPollTimer = null }
+}
+async function refreshConversation() {
+  if (!detail.value || !convSessionId.value) return
+  try {
+    detail.value = await getAdminBatch(detail.value.batch.batchId)
+    const row = detail.value.sessions.find(s => s.sessionId === convSessionId.value)
+    if (!row || isTerminal(row.status)) { stopConvPoll(); return }
+    if (convLoading.value) return                    // 首拉未完成，跳过本轮
+    const res = await getAdminChildMessages(detail.value.batch.batchId, row.sessionId)
+    convMessages.value = res.messages
+    convTruncated.value = res.truncated
+    convTotal.value = res.total
+  } catch { /* 轮询失败保持现状，下个周期再试 */ }
+}
+watch(convOpen, (open) => {
+  stopConvPoll()
+  if (open) convPollTimer = setInterval(() => { void refreshConversation() }, CONV_POLL_MS)
+})
+onUnmounted(stopConvPoll)
 
 // 产出文件 dialog —— 同 convOpen 风格的局部 state（不进 store）。先清空再开弹窗，
 // 这样切换子任务时不会泄露上一行残留列表；列表为空时 AdminBatchFiles 显示

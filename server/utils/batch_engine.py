@@ -718,6 +718,19 @@ def subtask_status_from_messages(messages: list) -> tuple[str, str | None]:
     return 'running', None
 
 
+def _raw_has_open_delegation(raw) -> bool:
+    """根会话快照里是否存在未终态的 task part（=委派正在执行）。
+
+    快照短路的豁免开关：委派执行期根会话静止（sig 恒等），但子代理树在
+    持续产出消息——此时必须照常全量拉取，否则子代理内容无实时性。"""
+    for m in raw or []:
+        for p in (m.get('parts') or []):
+            if p.get('tool') == 'task':
+                if (p.get('state') or {}).get('status') not in ('completed', 'error'):
+                    return True
+    return False
+
+
 def gate_participates(gate: dict, applicable: int) -> bool:
     """门禁判定信号（H3，单一事实来源——引擎与测试共用，10 号 §7-2）。
 
@@ -808,6 +821,11 @@ class BatchWorker:
         # 判官同步核对期间豁免 tool-stuck 看门狗（核对会暂停轮询线程）。
         # 快照短路（批满负载优化）：session_id -> 最近一次持久化的消息签名
         self._persist_sig: dict = {}
+        # 委派豁免（2026-10-12）：session_id -> 上次快照是否含未终态 task
+        # part（=委派执行中）。委派期根静止、sig 恒等，但子代理树在持续
+        # 产出——此标记为真时不短路（否则子代理消息直到委派完成才一次性
+        # 落库，气泡无实时内容，生产实测）。
+        self._persist_open_delegation: dict = {}
         self._deleg_gate_done: dict = {}
         self._deleg_gate_results: dict = {}
         self._gate_checking: set = set()
@@ -2907,10 +2925,17 @@ class BatchWorker:
             # 一致时跳过整棵子代理树的 REST 重拉与全量 upsert——稳定期（长
             # 工具执行）的周期持久化从每次全量工作退化为一次哈希比较。收尾
             # 持久化传 force=True 不短路。
+            # 委派豁免（2026-10-12）：sig 只哈希根会话消息，而委派执行期根
+            # 静止（task part 停在 running）——按 sig 短路会把子代理树的
+            # 重拉一并跳过，子代理消息直到委派完成才一次性落库（子代理气泡
+            # 无实时内容，生产报告 + 真批任务实测）。上次快照含未终态 task
+            # part 时照常全量拉取；发现/内容延迟随之收敛到 ≤1 个进度周期。
             sig = _json.dumps(raw, ensure_ascii=False, default=str)
-            if not force and self._persist_sig.get(session_id) == sig:
+            if not force and self._persist_sig.get(session_id) == sig \
+                    and not self._persist_open_delegation.get(session_id):
                 return
             self._persist_sig[session_id] = sig
+            self._persist_open_delegation[session_id] = _raw_has_open_delegation(raw)
 
             # 阶段一：递归发现整棵子代理树 + 各自的当前状态。
             known: dict = {}
