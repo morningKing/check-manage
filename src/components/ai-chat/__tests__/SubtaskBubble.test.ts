@@ -53,6 +53,46 @@ describe('SubtaskBubble', () => {
     expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
   })
 
+  it('running 态轮询遇拉取失败不死亡：失败后仍按节奏续排，恢复后内容继续刷新', async () => {
+    // 生产缺陷（2026-10-12 用户报告「区块内容卡住不刷新，直到任务结束才完整」）：
+    // schedulePoll 的续排条件是 result.value && result.value.subtask.status==='running'——
+    // 首次拉取失败（子会话消息端点瞬时 404/网络抖动）时 result 仍是 null，
+    // falsy 短路走 stopPolling()，轮询永久死亡；running 态下 emptyRetry 又被
+    // 显式跳过（scheduleEmptyRetry 里 status==='running' return）→ 区块冻结
+    // 到父回合结束（_reloadPersisted 整替）才有内容。
+    vi.useFakeTimers()
+    try {
+      const ok = (status: 'running' | 'completed') => ({
+        subtask: { id: 'ses_x', agent: 'build', description: 'do x', status, error: null },
+        messages: [], truncated: false, total: 0,
+      })
+      let calls = 0
+      vi.mocked(getSubtaskMessages).mockImplementation(async () => {
+        calls += 1
+        if (calls <= 2) throw new Error('transient 404')   // 首拉+首个轮询回调连续失败
+        return ok('running')
+      })
+      const wrapper = mount(SubtaskBubble, {
+        props: { subtaskId: 'ses_x', sessionId: 's-1', agent: 'build',
+                 description: 'do x', status: 'running', depth: 1, fetchFn: getSubtaskMessages },
+        attachTo: document.body,
+      })
+      await wrapper.find('.subtask-bubble__head').trigger('click')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(1)   // 首拉失败（被吞）
+
+      // 轮询必须仍然续排：2.5s 后再拉（此刻成功）
+      await vi.advanceTimersByTimeAsync(2_500)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(2)
+      // 恢复后继续正常节奏
+      await vi.advanceTimersByTimeAsync(2_500)
+      expect(getSubtaskMessages).toHaveBeenCalledTimes(3)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('展开态 running 时轮询刷新；到终态拉最终数据，空结果限次重试等落库', async () => {
     vi.useFakeTimers()
     try {

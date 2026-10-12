@@ -256,9 +256,13 @@ function schedulePoll() {
   pollTimer = setTimeout(async () => {
     if (!open.value || props.status !== 'running') return
     await refresh()
-    // REST 返回的子任务状态优先于父级 part 的快照：已终态就收尾
-    if (result.value && result.value.subtask.status === 'running') schedulePoll()
-    else stopPolling()
+    // REST 明确宣告终态才提前收尾；拉取失败（result 为 null 或保留旧快照）
+    // 不判死——旧实现「result && status==='running' 才续排」在连续失败时
+    // falsy 短路走 stopPolling()，轮询永久死亡、区块冻结到父回合结束
+    // （2026-10-12 生产报告：子代理区块内容卡住不刷新）。
+    const st = result.value?.subtask?.status
+    if (st && st !== 'running') stopPolling()
+    else schedulePoll()
   }, POLL_MS)
 }
 
