@@ -389,6 +389,36 @@ def test_record_state_subtask_use_writes_task_row(gate_fixture):
             assert tool == 'task' and sub == f['child1'] and dur == 4_000
 
 
+def test_reconcile_snaps_occurred_at_for_late_recorded_rows(gate_fixture):
+    """对账补建/迟到落账的行：occurred_at=落账时刻，落在历史 attempt 窗口
+    （occurred_at 夹窗）之外——性能分解整体看不到它们。对账必须把「执行与
+    落库偏差 >5 分钟」的行贴回 started_at（10-12 治愈实测：用户会话的
+    task 行落在窗口外，性能分解仍看不到委派）。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # 两天前开始执行、一小时前才落账（老批次完成时才写/对账补建形态）
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " subtask_id, part_id, tool, args_text, state, occurred_at,"
+                " started_at, duration_ms) VALUES"
+                " (%s, %s, %s, 'p-task-old', 'task', 'd',"
+                "  'completed', NOW() - interval '1 hour',"
+                "  NOW() - interval '2 hours', 60_000)",
+                (f['oc_sid'], f['sid'], f['child1']))
+    r = agent_ledger.reconcile_task_durations(
+        f['sid'], oc_client=_FakeReconcileClient(f['oc_sid'], f['child1']))
+    assert r['status'] == 'ok'
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT occurred_at, started_at FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='p-task-old'",
+                        (f['oc_sid'],))
+            occurred, started = cur.fetchone()
+            assert occurred is not None and started is not None
+            assert abs((occurred - started).total_seconds()) < 300   # 贴回执行时刻
+
+
 class _FakeReconcileClient:
     """重放对账的 OC 桩：根会话给一条 task part（metadata+time 齐全），
     子会话给一条带时间的 assistant 消息（meta 回填源）。"""

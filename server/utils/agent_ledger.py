@@ -326,6 +326,16 @@ def reconcile_task_durations(session_id: str, *, get_db=None,
                 "SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s",
                 (session_id,))
             child_ids = [r[0] for r in cur.fetchall()]
+            # 落库时刻贴回执行时刻（2026-10-12）：对账补建的行 occurred_at=
+            # 对账时刻，落在历史 attempt 的 occurred_at 夹窗之外——性能分解
+            # 整体看不到它们；旧批次「委派完成才落账」的长委派行同理。偏差
+            # >5 分钟（正常轮询延迟是秒级）即贴回 started_at。放在完好性
+            # 判定之前：已治愈（字段齐全）的会话同样可能有本条残留偏差。
+            cur.execute(
+                "UPDATE agent_tool_calls SET occurred_at = started_at "
+                "WHERE root_session_id = %s AND started_at IS NOT NULL "
+                "  AND occurred_at > started_at + interval '5 minutes'",
+                (session_id,))
             # 完好 = 无缺字段且行数覆盖全部已登记子代理（无委托时为 0/0）
             if incomplete == 0 and task_rows >= len(child_ids):
                 return {'status': 'clean'}
