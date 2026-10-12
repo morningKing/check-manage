@@ -233,10 +233,19 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         if dur is None:
             missing += 1
         else:
-            cms = _to_ms(created)
+            # 轮窗起点优先 meta.startedAt（消息自身起始，2026-10-12 起落库）：
+            # 批路径的行在回合结束后才落库，created_at 晚于轮内全部调用——
+            # 拿它当窗口起点会让调用全部落到窗口外（前端时间轴画不出来）。
+            # 旧行无锚点回落 created_at（交互路径二者近似）。
+            anchor = meta.get('startedAt')
+            cms = _iso_ms(anchor) if anchor else None
+            if cms is None:
+                cms = _to_ms(created)
             model_ivs.append((cms, cms + int(dur)))
             turn_details.append({
-                'messageId': mid, 'createdAt': _iso(created),
+                'messageId': mid,
+                # 输出形态与旧口径一致（本地时区 aware ISO）；锚点是 epoch ms
+                'createdAt': _iso(_dt.fromtimestamp(cms / 1000).astimezone()),
                 'durationMs': int(dur), 'tokensIn': tin, 'tokensOut': tout,
                 'preview': _first_text_preview(cur, mid)})
     cur.execute(
@@ -273,7 +282,11 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
                 tdur = tmeta.get('durationMs')
                 if tdur is None:
                     continue
-                turns_out.append({'createdAt': _iso(tc), 'durationMs': int(tdur)})
+                # 窗口起点优先 meta.startedAt（消息自身起始）：批路径的行是
+                # 回合结束后才写的，created_at 滞后于子代理真实起点，拿它
+                # 当窗口起点会让嵌套段的推理/工具切分整体右移。
+                turns_out.append({'createdAt': tmeta.get('startedAt') or _iso(tc),
+                                  'durationMs': int(tdur)})
             if turns_out:
                 sub_turns[stid] = turns_out
     # 二期 detail 路径：工具调用一次取齐（覆盖区间/聚合/逐调用明细共用；
@@ -290,9 +303,16 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
             " AND occurred_at <= to_timestamp(%s/1000.0) ORDER BY occurred_at",
             (sid, start_ms, end_ms))
         tool_rows = cur.fetchall()
-        tool_ivs = [(int(_to_ms(s)) , int(_to_ms(s)) + int(d))
-                    for (_p, _t, _a, _st, d, s, _o, _sub) in tool_rows
-                    if s is not None and d is not None]
+        # 覆盖区间按口径拆两组：task（开子代理委派）归「子代理等待」，
+        # 其余工具归「工具」——coverage_split 的 v2 语义要求 caller 显式
+        # 传 task_intervals；此前漏传 → 委派跨度全被记进 toolMs，页面上
+        # 「开子代理等待」对不上（10-12 实测复现）。
+        tool_ivs, task_ivs = [], []
+        for (_p, _t, _a, _st, d, s, _o, _sub) in tool_rows:
+            if s is None or d is None:
+                continue
+            iv = (int(_to_ms(s)), int(_to_ms(s)) + int(d))
+            (task_ivs if _t == 'task' else tool_ivs).append(iv)
         # 轮次归组：调用归属「最后一条 start ≤ 调用时刻」的轮次（时间序；
         # 早于首条轮次或子代理调用 → None）
         bounds = [(_iso_ms(t['createdAt']), i)
@@ -318,12 +338,19 @@ def _attempt_metrics(cur, row: dict, *, with_detail: bool) -> dict:
         tools = _tool_aggregates(agg_rows)
         counts: dict = {}
         for c in tools['calls']:
-            ti = c['turnIndex']
-            if ti is not None:
+            # 轮次「调用 N 次」计数与前端轮内工具列表同口径：子代理自己的
+            # 调用归嵌套分解（避免一个调用既算父轮又算子代理）
+            if c['turnIndex'] is not None and not (
+                    c.get('subtaskId') and c['tool'] != 'task'):
+                ti = c['turnIndex']
                 counts[ti] = counts.get(ti, 0) + 1
         for i, t in enumerate(turn_details):
             t['toolCount'] = counts.get(i, 0)
-    cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs, tool_ivs)
+    if with_detail:
+        cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs,
+                             tool_ivs, task_ivs)
+    else:
+        cov = coverage_split(start_ms, end_ms, model_ivs, sub_ivs)
     wall_ms = cov['wallMs']
     out = {
         'attemptId': row['id'], 'sessionId': sid,

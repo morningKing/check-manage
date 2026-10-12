@@ -17,11 +17,10 @@
           <span><i class="dot dot--idle" />引擎间隙 {{ pct(ratio(cov.idleMs)) }}</span>
           <span class="muted">墙钟 {{ fmtMs(cov.wallMs) }}</span>
         </div>
-        <ElAlert v-if="taskRowsMissingDur > 0 && !reconciled" type="warning"
+        <ElAlert v-if="reconcileGap && !reconciled" type="warning"
                  :closable="false" data-test="reconcile-hint" class="reconcile-hint">
           <template #title>
-            本任务有 {{ taskRowsMissingDur }} 条「开子代理」记录缺少等待时长
-            （时长采集上线前的旧数据），等待段无法在时间轴中画出。
+            本任务{{ reconcileGap }}（旧版本采集/落账缺口的存量数据）。
             <ElButton size="small" type="primary" link data-test="reconcile-btn"
                       :loading="reconciling" @click="onReconcile">从运行时对账补齐</ElButton>
           </template>
@@ -297,11 +296,14 @@ function subtaskSummary(): (string | number)[] {
   return ['合计', `${detail.value?.subtasks.length ?? 0} 个子代理（并行会重叠）`,
           '', fmtMs(subtaskWallSum.value)]
 }
-/** 轮次展开行：该轮内的逐工具调用（turnIndex 归组，时间序） */
+/** 轮次展开行：该轮内的逐工具调用（turnIndex 归组，时间序）。
+ *  子代理自己的调用归 task 段的嵌套分解，不混进本轮根工具列表——
+ *  与时间轴根轴同过滤（task 委托行留在根轴，它是父轴的委托事件）。 */
 function turnCalls(row: { messageId?: string }): PerfToolCall[] {
   const idx = detail.value?.turns.findIndex(t => t.messageId === row.messageId) ?? -1
   if (idx < 0) return []
-  return (tools.value?.calls ?? []).filter(c => c.turnIndex === idx)
+  return (tools.value?.calls ?? []).filter(c =>
+    c.turnIndex === idx && (!c.subtaskId || c.tool === 'task'))
 }
 /** 轮内小计：工具（非委派）与「开子代理」委派等待分行——毛时长 = 推理 +
  *  工具 + 委派等待，三类各自可对账。 */function turnSubtotals(row: { messageId?: string }): string {
@@ -375,9 +377,22 @@ function renderWaterfall() {
 }
 watch([wfReady, detail], () => nextTick(renderWaterfall), { immediate: true })
 
-/** task 行（开子代理）缺时长的条数——旧数据采集上线前落账，等待段画不出 */
-const taskRowsMissingDur = computed(() =>
-  (detail.value?.tools.calls ?? []).filter(c => c.isDelegation && c.durationMs == null).length)
+/** 需要「从运行时对账补齐」的存量缺口（三种都能由 reconcile 修复）：
+ *  ① 开子代理行缺等待时长（时长采集 10-10 之前的旧账）；
+ *  ② 有行但缺子会话链接（10-12 前 upsert 不补 subtask_id——嵌套分解画不出）；
+ *  ③ 有子代理但一行委派都没有（交互路径 map_part 曾把 task 行整类漏账）。 */
+const reconcileGap = computed(() => {
+  const calls = detail.value?.tools.calls ?? []
+  const dels = calls.filter(c => c.isDelegation)
+  const noDur = dels.filter(c => c.durationMs == null).length
+  if (noDur) return `有 ${noDur} 条「开子代理」记录缺少等待时长`
+  const noLink = dels.filter(c => !c.subtaskId).length
+  if (noLink) return `有 ${noLink} 条「开子代理」记录未关联子代理，内部耗时画不出来`
+  if (!dels.length && (detail.value?.subtasks.length ?? 0) > 0) {
+    return '有子代理但缺少「开子代理」委派记录（时间轴画不出委托段）'
+  }
+  return ''
+})
 const reconciling = ref(false)
 const reconciled = ref(false)
 async function onReconcile() {

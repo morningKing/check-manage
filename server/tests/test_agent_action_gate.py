@@ -286,19 +286,163 @@ def test_task_row_duration_backfilled_from_subtask_lifetime(gate_fixture):
             assert cur.fetchone() == (None, None)          # 非 task 行不回填
 
 
-def test_reconcile_task_durations_skips_when_no_null(gate_fixture, monkeypatch):
-    """对账函数：账本无 NULL task 行 → clean 短路（不打 OC）；无 OC 会话 → skipped。"""
+def test_reconcile_task_durations_skips_when_clean(gate_fixture):
+    """对账门禁：task 行完备（覆盖全部已登记子代理、无 NULL 字段）→ clean
+    短路（不打 OC）；无 OC 会话 → skipped。"""
     f = gate_fixture
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s "
                         "WHERE id=%s", ('oc-recon-x', f['sid']))
-    # 无 NULL 行 → clean，且不触 OC（不 mock client，触发了会炸）
+            # 完备账本：两个子代理各一行 task（有链接、有时长）
+            for pid, child in (('pt-c1', f['child1']), ('pt-c2', f['child2'])):
+                cur.execute(
+                    "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                    " subtask_id, part_id, tool, args_text, state, occurred_at,"
+                    " started_at, duration_ms)"
+                    " VALUES (%s,%s,%s,%s,'task','d','completed',NOW(),NOW(),1000)",
+                    ('oc-recon-x', f['sid'], child, pid))
+    # 完备 → clean，且不触 OC（不 mock client，触发了会炸）
     r = agent_ledger.reconcile_task_durations(f['sid'])
     assert r == {'status': 'clean'}
     # 无会话行 → skipped
     r2 = agent_ledger.reconcile_task_durations('no-such-session')
     assert r2['status'] == 'skipped'
+
+
+def test_record_messages_backfills_subtask_link_and_duration(gate_fixture):
+    """首插时 task part 的 metadata 未到 → subtask_id/duration NULL；后续
+    上报带 metadata+time 时 upsert 必须把子会话链接与时长补上——10-12 前
+    SET 里没有 subtask_id，行永远挂 NULL，嵌套分解画不出（真批任务复现）。"""
+    f = gate_fixture
+    pending = {'id': 'p-task-link', 'type': 'tool', 'tool': 'task',
+               'state': {'status': 'pending',
+                         'input': {'description': '统计行数'}}}
+    assert agent_ledger.record_messages(
+        f['oc_sid'], [_msg([pending])], root_session_id=f['sid'])
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT subtask_id, duration_ms FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='p-task-link'",
+                        (f['oc_sid'],))
+            assert cur.fetchone() == (None, None)   # 首插确实无链接无时长
+    done = {'id': 'p-task-link', 'type': 'tool', 'tool': 'task',
+            'state': {'status': 'completed',
+                      'input': {'description': '统计行数'},
+                      'metadata': {'sessionId': f['child1']},
+                      'time': {'start': 1_791_800_000_000,
+                               'end': 1_791_800_003_000}}}
+    assert agent_ledger.record_messages(
+        f['oc_sid'], [_msg([done])], root_session_id=f['sid'])
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT subtask_id, duration_ms FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='p-task-link'",
+                        (f['oc_sid'],))
+            sub, dur = cur.fetchone()
+            assert sub == f['child1'] and dur == 3_000
+
+
+def test_record_messages_drops_unregistered_subtask_link(gate_fixture):
+    """metadata.sessionId 指向未登记子会话（发现丢失/历史缺账）：链接降为
+    NULL 落行——此前整批 upsert 被 FK 拒绝、时长与参数一起丢
+    （存量治愈实测 4 个会话整行写不进）。"""
+    f = gate_fixture
+    part = {'id': 'p-task-orphan', 'type': 'tool', 'tool': 'task',
+            'state': {'status': 'completed', 'input': {'description': 'd'},
+                      'metadata': {'sessionId': 'ses-not-registered'},
+                      'time': {'start': 1_791_800_000_000,
+                               'end': 1_791_800_002_000}}}
+    assert agent_ledger.record_messages(
+        f['oc_sid'], [_msg([part])], root_session_id=f['sid'])
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT subtask_id, duration_ms FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='p-task-orphan'",
+                        (f['oc_sid'],))
+            sub, dur = cur.fetchone()
+            assert sub is None and dur == 2_000
+
+
+def test_record_state_subtask_use_writes_task_row(gate_fixture):
+    """交互路径落账：chat_persist 累积态里的 subtask_use 占位（map_part 对
+    tool:'task' 的映射）此前被提取器整类跳过——委派从不落账。现在必须
+    落成 task 行：subtask_id=子会话、时长取透传 time。"""
+    f = gate_fixture
+    state = {
+        'parts_by_id': {
+            'pt-task-1': {'type': 'subtask_use', 'subtaskId': f['child1'],
+                          'agent': 'worker', 'description': '统计行数',
+                          'status': 'completed',
+                          'time': {'start': 1_791_800_000_000,
+                                   'end': 1_791_800_004_000}},
+        },
+        'subtasks': {},
+    }
+    assert agent_ledger.record_state(f['sid'], f['oc_sid'], state)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT tool, subtask_id, duration_ms FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='pt-task-1'",
+                        (f['oc_sid'],))
+            tool, sub, dur = cur.fetchone()
+            assert tool == 'task' and sub == f['child1'] and dur == 4_000
+
+
+class _FakeReconcileClient:
+    """重放对账的 OC 桩：根会话给一条 task part（metadata+time 齐全），
+    子会话给一条带时间的 assistant 消息（meta 回填源）。"""
+
+    def __init__(self, root_sid, child_sid):
+        self.root_sid, self.child_sid = root_sid, child_sid
+
+    def get_messages(self, oc_sid, directory=''):
+        if oc_sid == self.root_sid:
+            return [{'info': {'id': 'm-root', 'role': 'assistant'}, 'parts': [
+                {'id': 'p-task-r', 'type': 'tool', 'tool': 'task',
+                 'state': {'status': 'completed',
+                           'input': {'description': '委派'},
+                           'metadata': {'sessionId': self.child_sid},
+                           'time': {'start': 1_791_800_000_000,
+                                    'end': 1_791_800_005_000}}}]}]
+        if oc_sid == self.child_sid:
+            return [{'info': {'id': f'{self.child_sid}:m1', 'role': 'assistant',
+                              'time': {'created': 1_791_800_001_000,
+                                       'completed': 1_791_800_008_500},
+                              'tokens': {'input': 10, 'output': 2},
+                              'cost': 0.0}, 'parts': []}]
+        return []
+
+
+def test_reconcile_pulls_when_delegation_rows_missing(gate_fixture):
+    """会话有子代理却一条 task 行都没有（交互路径曾整类漏账）：门禁不得
+    按 clean 短路——必须重放补齐，并回填子代理消息 meta（嵌套分解窗口）。"""
+    f = gate_fixture
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE ai_chat_sessions SET opencode_session_id=%s "
+                        "WHERE id=%s", ('oc-recon-pull', f['sid']))
+            # 交互形状的聚合行（meta 空）——对账后应被回填
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content) "
+                "VALUES (%s, %s, 'assistant', '[]'::jsonb)",
+                (f'{f["child1"]}:a', f['child1']))
+    r = agent_ledger.reconcile_task_durations(
+        f['sid'], oc_client=_FakeReconcileClient('oc-recon-pull', f['child1']))
+    assert r['status'] == 'ok' and r['remainingNull'] == 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT subtask_id, started_at, duration_ms "
+                        "FROM agent_tool_calls "
+                        "WHERE oc_session_id=%s AND part_id='p-task-r'",
+                        ('oc-recon-pull',))
+            sub, started, dur = cur.fetchone()
+            assert sub == f['child1'] and started is not None and dur == 5_000
+            cur.execute("SELECT meta FROM ai_chat_subtask_messages "
+                        "WHERE id=%s", (f'{f["child1"]}:a',))
+            meta = cur.fetchone()[0]
+            assert meta and meta.get('durationMs') == 7_500
+            assert meta.get('startedAt')
 
 
 def test_record_messages_idempotent_and_state_transition(gate_fixture):

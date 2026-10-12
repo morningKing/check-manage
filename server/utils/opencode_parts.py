@@ -57,6 +57,11 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
                     # 会话复用任务段数（2026-09-24）：>1 表示该子会话被多个
                     # 任务段复用，气泡头显示「已复用·N 段」徽标
                     'segmentCount': len((subtask_segments or {}).get(child_sid) or []),
+                    # 委派时长采集（2026-10-12）：tool:'task' 的 state.time 透传
+                    # 给账本——extract_from_part_map 的 subtask_use 分支据此还原
+                    # 「开子代理」行的精确起止。持久化内容时会剥掉本键
+                    # （chat_persist._flatten_scope），气泡形状不变。
+                    'time': st.get('time'),
                 }
         return {
             'type': 'tool_use',

@@ -33,7 +33,8 @@ import psycopg2
 import psycopg2.extras
 
 from db import get_db as _default_get_db
-from utils.ai_message_meta import tool_duration_ms
+from utils.ai_message_meta import (aggregate_metas, meta_from_info,
+                                   public_meta, tool_duration_ms)
 
 MAX_ARGS_LEN = 8192
 MAX_FILE_EVIDENCE = 1000
@@ -138,6 +139,19 @@ def extract_from_part_map(part_map) -> list:
             dur = p.get('durationMs')
             dur = int(dur) if isinstance(dur, (int, float)) else None
             meta_sid = None   # map 形状不携带 metadata（子代理 id 在发现期已提取）
+        elif t == 'subtask_use':             # 委托占位（map_part 对 tool:'task' 的映射）
+            # 交互路径的委派行此前从未落账：map_part 把 tool:'task' 映射成
+            # subtask_use 占位（前端气泡形状），提取器只认 tool/tool_use →
+            # 整行被跳过 → 性能分解画不出「开子代理」段与嵌套分解。这里把
+            # 占位还原成 task 行：描述当参数、子代理 status 当状态、子会话 id
+            # 当 subtask_id；time 由 map_part 透传（缺时靠子代理生命周期兜底）。
+            key = str(pid)
+            tool = 'task'
+            args_text = str(p.get('description') or '')
+            state = (p.get('status') or 'pending')
+            started = _start_dt(p.get('time'))
+            dur = tool_duration_ms({'time': p.get('time')})
+            meta_sid = p.get('subtaskId')
         else:
             continue
         if not tool:
@@ -156,6 +170,25 @@ def extract_tool_parts(messages) -> list:
     return extract_from_parts(parts)
 
 
+def _registered_subtask_ids(cur, part_rows, subtask_id) -> set:
+    """外键守卫：收集本批需要落链接的 subtask_id，一次查回已登记集合。
+
+    agent_tool_calls.subtask_id 外键指向 ai_chat_subtasks——子会话未登记
+    （发现丢失/深链断裂/历史缺账）时若直接把 metadata.sessionId 写进去，
+    整批 upsert 会因 FK 失败而全部丢失（行的时长/参数一起没了）。这里把
+    未登记链接降为 NULL：行本身比链接更重要，嵌套分解对无登记子代理本
+    就无从渲染。调用方给的显式 subtask_id（批子会话自身路径）不参与守卫
+    ——调用序已保证行先于账本落库。"""
+    if subtask_id is not None:
+        return set()
+    wanted = {r[6] for r in part_rows if r[6]}
+    if not wanted:
+        return set()
+    cur.execute("SELECT id FROM ai_chat_subtasks WHERE id = ANY(%s)",
+                (list(wanted),))
+    return {r[0] for r in cur.fetchall()}
+
+
 def record_messages(oc_session_id: str, messages, *,
                     root_session_id=None, subtask_id=None,
                     agent_name=None, get_db=None) -> bool:
@@ -170,6 +203,7 @@ def record_messages(oc_session_id: str, messages, *,
     try:
         with db_ctx() as conn:
             with conn.cursor() as cur:
+                registered = _registered_subtask_ids(cur, part_rows, subtask_id)
                 psycopg2.extras.execute_values(
                     cur,
                     """
@@ -181,13 +215,19 @@ def record_messages(oc_session_id: str, messages, *,
                     SET state = EXCLUDED.state,
                         args_text = EXCLUDED.args_text,
                         started_at = EXCLUDED.started_at,
-                        duration_ms = EXCLUDED.duration_ms
+                        duration_ms = EXCLUDED.duration_ms,
+                        subtask_id = COALESCE(agent_tool_calls.subtask_id,
+                                              EXCLUDED.subtask_id)
                     WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
                        OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
                        OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
+                       OR (agent_tool_calls.subtask_id IS NULL
+                           AND EXCLUDED.subtask_id IS NOT NULL)
                     """,
                     [(oc_session_id, root_session_id,
-                      subtask_id or meta_sid, agent_name,
+                      subtask_id or (meta_sid if meta_sid in registered
+                                     else None),
+                      agent_name,
                       pid, tool, args, state, started, dur)
                      for (pid, tool, args, state, started, dur, meta_sid)
                      in part_rows],
@@ -197,16 +237,18 @@ def record_messages(oc_session_id: str, messages, *,
                 # 从 state.metadata.sessionId 带出 subtask_id（子代理发现的
                 # 同款字段）——按 subtask_id 关联子代理生命周期回填等待时长
                 # （created_at→completed_at，权威；未终结用 NOW() 截断，
-                # 下次落账继续刷新）。
+                # 下次落账继续刷新）。只补 duration 仍为空的行——部分时间
+                # （只有 start 没有 end）的行也归这里；已有精确时长的行不动。
                 cur.execute(
                     """
                     UPDATE agent_tool_calls t
-                    SET started_at = st.created_at,
+                    SET started_at = COALESCE(t.started_at, st.created_at),
                         duration_ms = GREATEST(0, EXTRACT(EPOCH FROM
-                            (COALESCE(st.completed_at, NOW()) - st.created_at)
+                            (COALESCE(st.completed_at, NOW())
+                             - COALESCE(t.started_at, st.created_at))
                             * 1000))::bigint
                     FROM ai_chat_subtasks st
-                    WHERE t.tool = 'task' AND t.started_at IS NULL
+                    WHERE t.tool = 'task' AND t.duration_ms IS NULL
                       AND st.id = t.subtask_id
                       AND st.created_at IS NOT NULL
                       AND t.oc_session_id = %s
@@ -219,17 +261,50 @@ def record_messages(oc_session_id: str, messages, *,
         return False
 
 
+def _fill_subtask_meta(db_ctx, subtask_id: str, msgs) -> None:
+    """存量自愈：子代理消息 meta（轮次 meta 采集 2026-10-12 上线）缺失时，
+    用 REST 消息自带的 time/tokens 补写。只填空行（meta IS NULL），已有
+    采集数据不覆盖。批路径按消息 id 逐行落库、交互路径是聚合行
+    `{sid}:a`——两种形状各按各的 id 填。best-effort：读块单独吞异常。"""
+    assistant_infos = [(m.get('info') or {}) for m in (msgs or [])
+                       if (m.get('info') or {}).get('role') == 'assistant']
+    per_msg = [meta_from_info(i) for i in assistant_infos]
+    agg = aggregate_metas(per_msg)
+    rows = []
+    if agg:
+        rows.append((f'{subtask_id}:a', public_meta(agg, with_anchor=True)))
+    for info, one in zip(assistant_infos, per_msg):
+        if one and info.get('id'):
+            rows.append((info['id'], public_meta(one, with_anchor=True)))
+    if not rows:
+        return
+    with db_ctx() as conn:
+        with conn.cursor() as cur:
+            for rid, meta in rows:
+                cur.execute(
+                    "UPDATE ai_chat_subtask_messages SET meta = %s "
+                    "WHERE id = %s AND role = 'assistant' AND meta IS NULL",
+                    (json.dumps(meta), rid),
+                )
+
+
 def reconcile_task_durations(session_id: str, *, get_db=None,
                              oc_client=None) -> dict:
-    """存量 task 行时长对账（2026-10-12）：duration_ms 采集（2026-10-10 迁移）
-    之前落账的 task 行 started_at/duration_ms 恒 NULL，且会话终态后不再有新
-    轮询、upsert 永远不会刷新它们——性能分解的「开子代理等待」段对这些任务
-    画不出来。这里从 OC REST 重新拉该会话消息、走同一条 extract+upsert：
-    OC task part 自带 state.time（start/end 齐全），新值命中
-    `duration_ms IS DISTINCT FROM NULL` 覆盖 NULL。
+    """存量对账（2026-10-12）：从 OC REST 重放该会话消息，补齐性能分解
+    依赖的三类存量缺口——
 
-    只处理有 OC 会话且账本确有 NULL task 行的会话；OC 不可达/会话已删则
-    跳过（返回 skipped）。best-effort：失败不抛。"""
+    1. task（开子代理）行缺时长/缺子会话链接：时长采集（10-10 迁移）之前
+       落账的 task 行 started_at/duration_ms 恒 NULL；且首插时 part 的
+       metadata.sessionId 未到、upsert 又不更新 subtask_id——这类行永远
+       挂在 NULL 上。时间轴画不出「开子代理」段，嵌套分解也没有归属锚点。
+    2. 交互路径 task 行整行缺失：map_part 把 tool:'task' 映成 subtask_use
+       占位、提取器曾整类跳过（10-12 修复）——老会话一行都没有，只能重放。
+    3. 子代理自身调用（read/bash…）缺时长：同因（10-10 前落账）。逐个已
+       登记子代理重放其 REST 消息补；顺带把缺 meta 的子代理消息行补上
+       （嵌套分解的轮次窗口）。
+
+    门禁：task 行覆盖全部已登记子代理且无 NULL 字段才短路 clean。OC
+    不可达/会话已删返回 skipped。best-effort：失败不抛。"""
     db_ctx = get_db or _default_get_db
     with db_ctx() as conn:
         with conn.cursor() as cur:
@@ -241,10 +316,18 @@ def reconcile_task_durations(session_id: str, *, get_db=None,
                 return {'status': 'skipped', 'reason': 'no oc session'}
             oc_sid, ws = row
             cur.execute(
-                "SELECT count(*) FROM agent_tool_calls "
-                "WHERE oc_session_id = %s AND tool = 'task' "
-                "  AND started_at IS NULL", (oc_sid,))
-            if cur.fetchone()[0] == 0:
+                "SELECT count(*) FILTER (WHERE started_at IS NULL"
+                "                      OR duration_ms IS NULL"
+                "                      OR subtask_id IS NULL),"
+                "       count(*) FROM agent_tool_calls"
+                " WHERE oc_session_id = %s AND tool = 'task'", (oc_sid,))
+            incomplete, task_rows = cur.fetchone()
+            cur.execute(
+                "SELECT id FROM ai_chat_subtasks WHERE root_session_id = %s",
+                (session_id,))
+            child_ids = [r[0] for r in cur.fetchall()]
+            # 完好 = 无缺字段且行数覆盖全部已登记子代理（无委托时为 0/0）
+            if incomplete == 0 and task_rows >= len(child_ids):
                 return {'status': 'clean'}
     try:
         from utils.runtime import get_runtime
@@ -254,12 +337,25 @@ def reconcile_task_durations(session_id: str, *, get_db=None,
             return {'status': 'skipped', 'reason': 'oc messages empty'}
         record_messages(oc_sid, msgs, root_session_id=session_id,
                         get_db=get_db)
+        # 子代理自身调用行同样存量缺时长（10-10 前落账）——逐个重放补；
+        # 单个子会话不可达不拖垮整次对账。
+        for child_sid in child_ids:
+            try:
+                child_msgs = client.get_messages(
+                    child_sid, directory=(ws or '')) or []
+            except Exception:  # noqa: BLE001
+                continue
+            if not child_msgs:
+                continue
+            record_messages(child_sid, child_msgs, root_session_id=session_id,
+                            subtask_id=child_sid, get_db=get_db)
+            _fill_subtask_meta(db_ctx, child_sid, child_msgs)
         with db_ctx() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT count(*) FROM agent_tool_calls "
                     "WHERE oc_session_id = %s AND tool = 'task' "
-                    "  AND started_at IS NULL", (oc_sid,))
+                    "  AND duration_ms IS NULL", (oc_sid,))
                 left = cur.fetchone()[0]
         return {'status': 'ok', 'remainingNull': left}
     except Exception as e:  # noqa: BLE001
@@ -289,6 +385,10 @@ def record_state(session_id: str, oc_session_id: str, state, *,
         try:
             with db_ctx() as conn:
                 with conn.cursor() as cur:
+                    explicit = None if scope is None else child_sid
+                    registered = (set() if explicit
+                                  else _registered_subtask_ids(cur, part_rows,
+                                                               None))
                     psycopg2.extras.execute_values(
                         cur,
                         """
@@ -300,29 +400,36 @@ def record_state(session_id: str, oc_session_id: str, state, *,
                         SET state = EXCLUDED.state,
                             args_text = EXCLUDED.args_text,
                             started_at = EXCLUDED.started_at,
-                            duration_ms = EXCLUDED.duration_ms
+                            duration_ms = EXCLUDED.duration_ms,
+                            subtask_id = COALESCE(agent_tool_calls.subtask_id,
+                                                  EXCLUDED.subtask_id)
                         WHERE agent_tool_calls.state IS DISTINCT FROM EXCLUDED.state
                            OR agent_tool_calls.args_text IS DISTINCT FROM EXCLUDED.args_text
                            OR agent_tool_calls.duration_ms IS DISTINCT FROM EXCLUDED.duration_ms
+                           OR (agent_tool_calls.subtask_id IS NULL
+                               AND EXCLUDED.subtask_id IS NOT NULL)
                         """,
                         [(child_sid, session_id,
-                          (None if scope is None else child_sid) or meta_sid,
+                          explicit or (meta_sid if meta_sid in registered
+                                       else None),
                           agent_name,
                           pid, tool, args, st, started, dur)
                          for (pid, tool, args, st, started, dur, meta_sid)
                          in part_rows],
                     )
                     # task 行时长兜底（同 record_messages——OC task part 的
-                    # state.time 缺失时用子代理生命周期回填）
+                    # state.time 缺失时用子代理生命周期回填；只补 duration
+                    # 仍为空的行，已有精确时长的不动）
                     cur.execute(
                         """
                         UPDATE agent_tool_calls t
-                        SET started_at = st.created_at,
+                        SET started_at = COALESCE(t.started_at, st.created_at),
                             duration_ms = GREATEST(0, EXTRACT(EPOCH FROM
-                                (COALESCE(st.completed_at, NOW()) - st.created_at)
+                                (COALESCE(st.completed_at, NOW())
+                                 - COALESCE(t.started_at, st.created_at))
                                 * 1000))::bigint
                         FROM ai_chat_subtasks st
-                        WHERE t.tool = 'task' AND t.started_at IS NULL
+                        WHERE t.tool = 'task' AND t.duration_ms IS NULL
                           AND st.id = t.subtask_id
                           AND st.created_at IS NOT NULL
                           AND t.root_session_id = %s

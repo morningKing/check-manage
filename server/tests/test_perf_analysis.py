@@ -4,6 +4,7 @@ import json
 import sys
 import os
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 
@@ -376,7 +377,9 @@ class TestAttemptMetrics:
         assert calls['ta1']['args'] == '{"command":"ls -la"}'
         assert calls['ta1']['durationMs'] == 8_000
         turns = m['turnDetails']
-        assert turns[0]['toolCount'] == 2          # ta1 + ta4（子代理计入所在轮）
+        # 子代理自身的调用（ta4）归嵌套分解，不再计入父轮「调用 N 次」——
+        # 与前端轮内工具列表同口径（10-12 统一：父轮只列自身工具 + 委派）
+        assert turns[0]['toolCount'] == 1          # 仅 ta1（根会话 bash）
         assert turns[1]['toolCount'] == 1
 
     def test_tool_calls_cap_truncation(self, db_conn, user_id, monkeypatch):
@@ -407,6 +410,74 @@ class TestAttemptMetrics:
         db_conn.commit()
         m = load_attempt_metrics(db_conn, aid)
         assert m['tools']['durationAvailable'] is False
+
+    def test_coverage_delegation_span_routed_to_wait(self, db_conn, user_id):
+        """task 委派跨度归「子代理等待」而非工具：coverage_split 要求
+        caller 显式传 task_intervals——漏传时委派被计进 toolMs、等待≈0
+        （10-12 真批任务复现：tool toolMs 吞掉整段委派）。"""
+        _bid, _sid, aid = _seed_perf(
+            db_conn, user_id, model_turns=[(400_000, 10_000, 100, 0)],
+            subtasks=[('general', 100, 300)])
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_tool_calls (oc_session_id, root_session_id,"
+                " subtask_id, part_id, tool, args_text, state, occurred_at,"
+                " started_at, duration_ms) VALUES"
+                " ('oc-x-cov1', %s, (SELECT id FROM ai_chat_subtasks"
+                "                    WHERE root_session_id=%s LIMIT 1),"
+                "  'p-deleg', 'task', '统计', 'completed',"
+                "  NOW() - interval '500 seconds',"
+                "  NOW() - interval '500 seconds', 200_000)",
+                (_sid, _sid))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        cov = m['coverage']
+        assert cov['toolMs'] == 0                       # 委派不算工具执行
+        # 委托全段归等待（子代理区间与 task 区间各自取 NOW() 有毫秒级取整差）
+        assert abs(cov['subagentWaitMs'] - 200_000) <= 1_000
+        assert abs(cov['modelMs'] - 200_000) <= 1_000
+        assert abs(cov['idleMs'] - 100_000) <= 1_000
+
+    def test_turn_window_prefers_meta_started_anchor(self, db_conn, user_id):
+        """批路径的轮次行是回合结束后才落库的：轮窗起点必须优先
+        meta.startedAt（消息自身起始）——用行 created_at 会把整轮调用挤出
+        窗口，前端时间轴渲染为空（10-12 真任务复现）。"""
+        _bid, _sid, aid = _seed_perf(
+            db_conn, user_id, model_turns=[(50_000, 100, 10, 0)])
+        with db_conn.cursor() as cur:
+            # 行 created_at 保持 NOW-600s（落库晚），锚点设 NOW-500s
+            cur.execute(
+                "UPDATE ai_chat_messages SET meta = meta || jsonb_build_object("
+                " 'startedAt', to_char((NOW() - interval '500 seconds')"
+                " AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00'))"
+                " WHERE id = %s", (f'{aid}-m0',))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        got = datetime.fromisoformat(m['turnDetails'][0]['createdAt'])
+        age = (datetime.now(timezone.utc) - got).total_seconds()
+        assert 480 < age < 501          # ≈ NOW-500s（锚点），而非 NOW-600s
+
+    def test_sub_turn_window_prefers_meta_started_anchor(self, db_conn, user_id):
+        """子代理轮次窗同理：meta.startedAt 优先，落库 created_at 只做旧行
+        回落（批路径的落库时刻滞后于子代理真实起点）。"""
+        _bid, _sid, aid = _seed_perf(db_conn, user_id,
+                                     subtasks=[('general', 100, 300)])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT id FROM ai_chat_subtasks "
+                        "WHERE root_session_id=%s", (_sid,))
+            sub_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role,"
+                " content, meta) VALUES (%s, %s, 'assistant', '[]'::jsonb,"
+                " jsonb_build_object('durationMs', 5000, 'startedAt',"
+                " to_char((NOW() - interval '400 seconds')"
+                " AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US+00:00')))",
+                (f'{sub_id}:a', sub_id))
+        db_conn.commit()
+        m = load_attempt_metrics(db_conn, aid)
+        got = datetime.fromisoformat(m['subTurns'][sub_id][0]['createdAt'])
+        age = (datetime.now(timezone.utc) - got).total_seconds()
+        assert 380 < age < 401          # ≈ NOW-400s（锚点），而非落库时刻
 
 
 class TestDefinitionAggregates:

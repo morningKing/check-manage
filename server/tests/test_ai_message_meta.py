@@ -37,6 +37,17 @@ def test_public_meta_strips_internals():
     assert public_meta(None) is None
 
 
+def test_public_meta_with_anchor_surfaces_started_at():
+    """with_anchor：窗口锚点 startedAt（ISO UTC，来自消息自身 _created）——
+    性能分解的轮次/子代理窗口起点不能用落库时刻（批路径滞后一整轮）。"""
+    m = meta_from_info({'time': {'created': 1_791_800_001_000,
+                                 'completed': 1_791_800_008_500},
+                        'tokens': {'input': 3, 'output': 4}, 'cost': 0})
+    pub = public_meta(m, with_anchor=True)
+    assert pub['startedAt'] == '2026-10-12T10:13:21+00:00'
+    assert '_created' not in pub
+
+
 def test_aggregate_spans_and_sums():
     metas = [
         meta_from_info({'time': {'created': 1000, 'completed': 3000},
@@ -49,7 +60,10 @@ def test_aggregate_spans_and_sums():
     assert agg['tokensInput'] == 250            # max (cumulative), not 350
     assert agg['tokensOutput'] == 55            # summed
     assert agg['cost'] == 0.003                 # summed
-    assert '_created' not in agg
+    # 聚合跨度端点随结果带出（窗口锚点）：public_meta 缺省剥离、with_anchor 转
+    assert agg['_created'] == 1000 and agg['_completed'] == 6000
+    assert '_created' not in public_meta(agg)
+    assert public_meta(agg, with_anchor=True)['startedAt'].startswith('1970-01-01')
 
 
 def test_aggregate_none_when_empty():

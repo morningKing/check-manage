@@ -319,7 +319,10 @@ def _flatten_scope(scope, subtask_status, subtask_id_map=None):
             mapped = subtask_by_child.get(p['subtaskId'], p)
             if mapped['subtaskId'] not in seen_subtask_ids:
                 seen_subtask_ids.add(mapped['subtaskId'])
-                content.append(mapped)
+                # 'time' 是给账本还原「开子代理」精确时长的旁路键
+                # （map_part 透传、extract_from_part_map 消费）——剥掉，
+                # 持久化内容与气泡形状保持原样。
+                content.append({k: v for k, v in mapped.items() if k != 'time'})
     if scope.get('error'):
         # 出错的回合也要留痕：没有它，半截输出（或空输出）就是这条消息的
         # 全部历史，用户无法分辨"完成了"还是"挂了"。
@@ -344,7 +347,10 @@ def persist_turn(session_id, state):
     if not content:
         return
     row_id = state.get('turn_msg_id') or ('msg_' + secrets.token_hex(6))
-    meta = public_meta(aggregate_metas(list(state.get('meta_by_msg', {}).values())))
+    # with_anchor：落库 meta 带 startedAt（消息自身起始）——性能分解的轮次
+    # 窗口以它为起点；本行 created_at 只是落库时刻（批路径在回合结束后）。
+    meta = public_meta(aggregate_metas(list(state.get('meta_by_msg', {}).values())),
+                       with_anchor=True)
     meta_json = json.dumps(meta) if meta else None
     try:
         with get_db() as conn:
@@ -399,8 +405,11 @@ def persist_subtasks(root_session_id, state):
                     # 轮次 meta 与根会话同源（2026-10-12）：子代理推理耗时是
                     # 性能分析「子代理内部推理段」的数据前提。子代理 scope 的
                     # meta_by_msg 在 apply_event 里与顶层同方式累积（:112）。
+                    # with_anchor：startedAt=子代理消息自身起始——嵌套分解的
+                    # 窗口起点不能用本行 created_at（其为首次落库时刻）。
                     meta = public_meta(aggregate_metas(
-                        list((sub.get('meta_by_msg') or {}).values())))
+                        list((sub.get('meta_by_msg') or {}).values())),
+                        with_anchor=True)
                     cur.execute(
                         "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content, meta) "
                         "VALUES (%s, %s, 'assistant', %s, %s) "

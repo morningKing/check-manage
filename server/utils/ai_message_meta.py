@@ -6,6 +6,7 @@ OpenCode message `info` carries `time {created, completed}` (epoch ms),
 and cost per turn (and per tool call). Shared by the interactive persist path
 (chat_persist) and the batch persist path (batch_engine).
 """
+from datetime import datetime, timezone
 
 
 def meta_from_info(info):
@@ -37,7 +38,10 @@ def aggregate_metas(metas):
     messages; input tokens take the max (OpenCode resends the growing context
     each step, so summing would double-count — the last/largest is the real
     context size). Returns None if no usable metas.
-    """
+
+    `_created`/`_completed`（聚合跨度端点）随结果带出——public_meta 缺省会
+    剥掉；with_anchor=True 时转成 startedAt（性能分解的轮次/子代理窗口起点
+    必须来自消息自身时间，见 public_meta 的 docstring）。"""
     usable = [m for m in metas if m]
     if not usable:
         return None
@@ -48,14 +52,27 @@ def aggregate_metas(metas):
         'tokensInput': max(m['tokensInput'] for m in usable),
         'tokensOutput': sum(m['tokensOutput'] for m in usable),
         'cost': round(sum(m['cost'] for m in usable), 6),
+        '_created': created,
+        '_completed': completed,
     }
 
 
-def public_meta(meta):
-    """Strip internal `_created`/`_completed` keys before persisting/returning."""
+def public_meta(meta, with_anchor=False):
+    """Strip internal `_created`/`_completed` keys before persisting/returning.
+
+    `with_anchor=True` additionally surfaces the window anchor as
+    `startedAt`（ISO UTC，来自 `_created`）——性能分解把落库行的 meta 当
+    轮次/子代理窗口起点：交互行落库≈回合开始（created_at 恰好可用），但
+    批路径的行是回合结束后才写的，created_at 落在调用之后，拿它当窗口
+    起点会让整轮调用落不进窗口（前端时间轴渲染为空）。锚点必须来自消息
+    自身时间。"""
     if not meta:
         return None
-    return {k: v for k, v in meta.items() if not k.startswith('_')}
+    out = {k: v for k, v in meta.items() if not k.startswith('_')}
+    if with_anchor and meta.get('_created'):
+        out['startedAt'] = datetime.fromtimestamp(
+            int(meta['_created']) / 1000, tz=timezone.utc).isoformat()
+    return out
 
 
 def tool_duration_ms(state):

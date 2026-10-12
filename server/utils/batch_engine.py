@@ -2816,8 +2816,10 @@ class BatchWorker:
                 mid = minfo.get('id') or f'{subtask_id}:a:{id(m)}'
                 # 轮次 meta 与根会话同源（2026-10-12）：子代理推理耗时是性能
                 # 分析「子代理内部推理段」的数据前提——此前子代理消息从不写
-                # meta，推理段永远只能靠工具间隙推导
-                meta = public_meta(meta_from_info(minfo))
+                # meta，推理段永远只能靠工具间隙推导。with_anchor：批路径的
+                # 行是回合结束后才写的，startedAt（消息自身起始）才是嵌套
+                # 窗口的合法起点。
+                meta = public_meta(meta_from_info(minfo), with_anchor=True)
                 cur.execute(
                     "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role, content, meta) "
                     "VALUES (%s, %s, 'assistant', %s, %s) "
@@ -2977,7 +2979,9 @@ class BatchWorker:
                 content = self._content_from_parts(m.get('parts'), subtask_status,
                                                    subtask_id_map, subtask_segments)
                 if content:
-                    meta = public_meta(meta_from_info(info))
+                    # with_anchor：批路径的行是回合结束后才写的——轮次窗口
+                    # 的起点必须是消息自身起始（perf 优先读 startedAt）。
+                    meta = public_meta(meta_from_info(info), with_anchor=True)
                     assistant_rows.append((info.get('id') or f'{session_id}:a:{len(assistant_rows)}',
                                            content, meta))
             if not assistant_rows:   # REST gave nothing usable — fall back to final msg

@@ -296,4 +296,54 @@ describe('PerfTaskDetail', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(w.find('[data-test="skill-perf-empty"]').exists()).toBe(true)
   })
+
+  it('涉子代理的轮次：委派等待计入小计、子代理自身调用归嵌套不进根列表', async () => {
+    const { perfAttempt } = vi.mocked(await import('@/api/aiSkills')) as any
+    ;(perfAttempt as any).mockImplementationOnce(async () => ({
+      attempt: { attemptId: 'a1', wallMs: 100000, modelMs: 60000, modelRatio: 0.6,
+                 subagentWaitMs: 20000, idleMs: 0, sourceType: 'batch',
+                 status: 'completed', turns: 1, tokensIn: 5000, tokensOut: 500,
+                 subtaskCount: 1, sessionId: 's1', startedAt: null, finishedAt: null,
+                 completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 } },
+      coverage: { wallMs: 100000, modelMs: 60000, subagentWaitMs: 20000, idleMs: 0,
+                  toolMs: 10000 },
+      // createdAt=null → 时间轴不可重建，走平铺明细分支（断言轮内列表口径）
+      turns: [{ messageId: 'm1', createdAt: null, durationMs: 40000,
+                tokensIn: 5000, tokensOut: 500, preview: 'p', toolCount: 2 }],
+      subtasks: [{ subtaskId: 'ses_ch', agent: 'general', description: 'd',
+                   status: 'completed', startedAt: null, finishedAt: null,
+                   wallMs: 20000 }],
+      tools: { errorCount: 0, durationAvailable: true, byTool: [], repeats: [],
+               callsTruncated: false,
+               calls: [
+                 { partId: 'p-deleg', tool: 'task', args: '统计行数',
+                   state: 'completed', startedAt: null, durationMs: 20000,
+                   subtaskId: 'ses_ch', turnIndex: 0, isDelegation: true },
+                 { partId: 'p-child', tool: 'read', args: '{"p":"a"}',
+                   state: 'completed', startedAt: null, durationMs: 5000,
+                   subtaskId: 'ses_ch', turnIndex: 0, isDelegation: false },
+                 { partId: 'p-root', tool: 'bash', args: '{"command":"ls"}',
+                   state: 'completed', startedAt: null, durationMs: 10000,
+                   subtaskId: null, turnIndex: 0, isDelegation: false }] },
+      completeness: { turnsWithoutDuration: 0, runningSubtasks: 0 },
+    }))
+    const w = mount(PerfTaskDetail, {
+      props: { attemptId: 'a1' },
+      global: { components: { ElDrawer, ElAlert, ElTable, ElTableColumn, ElTag },
+                directives: { loading: {} } },
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await w.find('.el-table__expand-icon').trigger('click')
+    await new Promise(r => setTimeout(r, 0))
+    const calls = w.find('[data-test="turn-calls"]')
+    // 根列表：委派 + 根工具；子代理自己的 read 不进（它归嵌套分解）
+    expect(calls.text()).toContain('开子代理')
+    expect(calls.text()).toContain('统计行数')
+    expect(calls.text()).toContain('ls')
+    expect(calls.text()).not.toContain('a"')      // read 的参数不在根列表
+    // 小计分行：工具（不含委派/子代理）+ 委托等待；推理 = 40 − 20 − 10
+    expect(calls.text()).toContain('工具 1 次 · 合计 10.0s')
+    expect(calls.text()).toContain('开子代理 1 次 · 等待 20.0s')
+    expect(calls.find('[data-test="turn-inference"]').text()).toContain('10.0s')
+  })
 })
