@@ -29,6 +29,23 @@ def test_content_from_parts_drops_empty_text():
     assert out == []
 
 
+def test_content_from_parts_blocked_tool_keeps_gate_reason():
+    """被门禁拦截的调用（deny/checkpoint 抛错）没有 output/result，但
+    state.error 带着拦截/注入文案——必须兜底进 result，否则会话里被拦
+    气泡显示为空结果，门禁命中在前端不可见（2026-10-13 用户报告）。"""
+    parts = [
+        {'type': 'tool', 'tool': 'bash',
+         'state': {'status': 'error',
+                   'input': {'command': 'echo forbidden-probe'},
+                   'error': '门禁规则「禁止回显探针」拦截了工具 bash 的调用',
+                   'time': {'start': 1000, 'end': 1010}}},
+    ]
+    out = eng.BatchWorker._content_from_parts(parts)
+    tool = [p for p in out if p['type'] == 'tool_use'][0]
+    assert tool['status'] == 'error'
+    assert tool['result'] == '门禁规则「禁止回显探针」拦截了工具 bash 的调用'
+
+
 def test_content_from_parts_maps_subtask_parts():
     """自 Task 5 起，subtask part 会被映射成一条 subtask_use 占位——批任务
     路径每次都重新拉取完整消息列表并算好整棵子代理树的当前状态

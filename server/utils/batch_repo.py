@@ -1376,7 +1376,7 @@ def admin_get_batch_detail(batch_id: str) -> dict | None:
                 return None
             cur.execute(
                 "SELECT id, status, batch_seq, batch_input_file, error_message, "
-                "       last_message_preview "
+                "       last_message_preview, gate_status, gate_error "
                 "  FROM ai_chat_sessions "
                 "  WHERE batch_id = %s AND deleted_at IS NULL ORDER BY batch_seq",
                 (batch_id,))

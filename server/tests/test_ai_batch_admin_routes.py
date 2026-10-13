@@ -160,11 +160,52 @@ def test_detail_returns_contract_fields_only(client, admin_headers):
         'batchId', 'name', 'status', 'total', 'done', 'failed', 'agent', 'model',
         'createdAt', 'completedAt', 'ownerUsername', 'source'}
     assert set(body['sessions'][0]) == {
-        'sessionId', 'seq', 'name', 'status', 'error', 'preview'}
+        'sessionId', 'seq', 'name', 'status', 'error', 'preview',
+        'gateStatus', 'gateError'}
     assert body['sessions'][0]['name'] == 'report.docx'
     assert body['sessions'][0]['sessionId'] == 's-1'
     assert body['sessions'][0]['seq'] == 1
     assert body['sessions'][0]['preview'] == '处理完成'
+
+
+def test_child_gate_exposes_status_and_expectations(client, admin_headers):
+    """门禁读端点：终态状态 + 期望清单（模式/触发/命中/核对结果）——
+    此前读侧零门禁出口，命中在前端不可见（2026-10-13 用户报告）。"""
+    from unittest.mock import MagicMock
+    sess = {'id': 's-1', 'status': 'completed', 'opencode_session_id': 'oc-1'}
+    cur = MagicMock()
+    cur.fetchone.return_value = ('passed', None)
+    cur.fetchall.return_value = [
+        ('禁止回显探针', 'pre', 'before', 'tool', 'bash', 'forbidden-probe',
+         1, 0, 1, 'pending', None, None, 'tree'),
+        ('读取输入文件', 'post', 'before', 'tool', 'read', 'stock-list', 1, 0, 1,
+         'passed', 1, None, 'tree'),
+    ]
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.cursor.return_value.__enter__.return_value = cur
+    with patch('routes.ai_batch_admin.admin_get_child_session',
+               return_value=sess), \
+            patch('db.get_db', return_value=conn):
+        resp = client.get(f'{BASE}/b-1/sessions/s-1/gate', headers=admin_headers)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['gateStatus'] == 'passed' and body['gateError'] is None
+    assert len(body['expectations']) == 2
+    e0 = body['expectations'][0]
+    assert set(e0) == {'name', 'mode', 'timing', 'checkType', 'tool',
+                       'argsPattern', 'minCount', 'firedCount', 'maxChecks',
+                       'lastStatus', 'lastEvidence', 'lastCheckedAt', 'scope'}
+    assert e0['mode'] == 'pre' and e0['tool'] == 'bash'
+    assert body['expectations'][1]['lastStatus'] == 'passed'
+    assert body['expectations'][1]['lastEvidence'] == 1
+
+
+def test_child_gate_not_found_is_404(client, admin_headers):
+    with patch('routes.ai_batch_admin.admin_get_child_session',
+               return_value=None):
+        resp = client.get(f'{BASE}/b-1/sessions/s-x/gate', headers=admin_headers)
+    assert resp.status_code == 404
 
 
 def test_messages_not_found_is_404(client, admin_headers):

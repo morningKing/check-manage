@@ -81,13 +81,22 @@
               <el-tag size="small" :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="error" label="错误信息" min-width="220" show-overflow-tooltip />
-          <el-table-column label="操作" width="300" fixed="right">
+          <el-table-column prop="error" label="错误信息" min-width="200" show-overflow-tooltip />
+          <el-table-column label="门禁" width="96">
+            <template #default="{ row }">
+              <el-tag v-if="row.gateStatus" size="small" data-test="gate-badge"
+                      :type="gateBadgeType(row.gateStatus)">
+                {{ gateBadgeLabel(row.gateStatus) }}</el-tag>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="360" fixed="right">
             <template #default="{ row }">
               <div class="child-actions">
                 <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
                 <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
                 <el-button link type="primary" @click="openToolCalls(row)">工具调用</el-button>
+                <el-button link type="primary" @click="openChildGate(row)">门禁</el-button>
                 <el-button link type="warning" :disabled="!isTerminal(row.status)"
                            @click="onReexecute(row)">重跑</el-button>
                 <el-button link type="danger" :disabled="!isTerminal(row.status)"
@@ -165,6 +174,10 @@
       />
     </el-dialog>
 
+    <el-dialog v-model="gateOpen" :title="`门禁状态：${gateName}`" width="60%" top="8vh">
+      <AdminChildGate v-if="gateOpen" :gate="gateData" :loading="gateLoading" />
+    </el-dialog>
+
     <el-dialog v-model="previewOpen" :title="`预览：${previewPath}`" width="60%" top="10vh" append-to-body>
       <div v-if="previewLoading" class="admin-preview__hint">加载中…</div>
       <template v-else>
@@ -185,8 +198,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
+import AdminChildGate from '@/components/ai-chat/AdminChildGate.vue'
 import ToolCallsPanel from '@/components/admin/ToolCallsPanel.vue'
-import { getChildToolCalls, type AdminToolCall } from '@/api/aiBatchAdmin'
+import { getChildToolCalls, getAdminChildGate,
+         type AdminToolCall, type AdminChildGate as AdminChildGateData } from '@/api/aiBatchAdmin'
 import { previewKind } from '@/utils/filePreview'
 import {
   getAdminBatch, getAdminChildMessages, retryAdminBatch, reexecuteAdminChild,
@@ -446,6 +461,39 @@ async function openChildFiles(row: AdminChild) {
     childFilesTruncated.value = res.truncated
   } finally {
     childFilesLoading.value = false
+  }
+}
+
+// 门禁弹窗（2026-10-13 命中可见性）：终态状态 + 期望清单（命中次数/核对结果）——
+// 读侧此前零出口，门禁命中了在前端看不到。行内徽标直接用列表接口带的 gateStatus。
+const gateOpen = ref(false)
+const gateName = ref('')
+const gateLoading = ref(false)
+const gateData = ref<AdminChildGateData | null>(null)
+
+function gateBadgeLabel(s: string): string {
+  if (s === 'passed') return '已通过'
+  if (s === 'failed') return '未通过'
+  if (s === 'inconclusive') return '无法判定'
+  return s
+}
+function gateBadgeType(s: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (s === 'passed') return 'success'
+  if (s === 'failed') return 'danger'
+  if (s === 'inconclusive') return 'warning'
+  return 'info'
+}
+
+async function openChildGate(row: AdminChild) {
+  if (!detail.value) return
+  gateName.value = `${row.name} #${row.seq}`
+  gateData.value = null
+  gateLoading.value = true
+  gateOpen.value = true
+  try {
+    gateData.value = await getAdminChildGate(detail.value.batch.batchId, row.sessionId)
+  } finally {
+    gateLoading.value = false
   }
 }
 

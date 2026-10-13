@@ -62,7 +62,45 @@ def _session_out(s: dict) -> dict:
         'status': s.get('status'),
         'error': s.get('error_message'),
         'preview': s.get('last_message_preview'),
+        # 门禁终态（passed/failed/inconclusive；None=未开或未核对）——
+        # 子任务列表的行内徽标数据源（2026-10-13 门禁命中可见性）
+        'gateStatus': s.get('gate_status'),
+        'gateError': s.get('gate_error'),
     }
+
+
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/gate')
+@require_permission('admin.ai_chat_admin')
+def child_gate(batch_id, sid):
+    """子任务门禁状态与期望清单（管理面只读）：终态核对结果（gate_status/
+    gate_error）+ 派发登记的每条期望（模式/触发条件/命中次数/核对结果与
+    证据）——门禁命中在前端可见的数据出口（此前读侧零出口，命中不可见）。"""
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    from db import get_db as _get_db
+    with _get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT gate_status, gate_error FROM ai_chat_sessions "
+                "WHERE id = %s", (sid,))
+            gs, ge = cur.fetchone()
+            cur.execute(
+                "SELECT name, mode, timing, check_type, tool, args_pattern,"
+                "       min_count, fired_count, max_checks, last_status,"
+                "       last_evidence, last_checked_at, scope_type"
+                "  FROM action_expectations WHERE scope_id = %s"
+                " ORDER BY created_at, id", (sid,))
+            exps = [
+                {'name': r[0], 'mode': r[1], 'timing': r[2],
+                 'checkType': r[3], 'tool': r[4], 'argsPattern': r[5],
+                 'minCount': r[6], 'firedCount': r[7], 'maxChecks': r[8],
+                 'lastStatus': r[9], 'lastEvidence': r[10],
+                 'lastCheckedAt': r[11].isoformat() if r[11] else None,
+                 'scope': r[12]}
+                for r in cur.fetchall()]
+    return jsonify({'gateStatus': gs, 'gateError': ge,
+                    'expectations': exps})
 
 
 @ai_batch_admin_bp.get('')

@@ -23,6 +23,37 @@ export interface AdminChild {
   status: string
   error: string | null
   preview: string | null
+  /** 门禁终态：passed/failed/inconclusive；null=未开或未核对（2026-10-13） */
+  gateStatus: string | null
+  gateError: string | null
+}
+
+export interface AdminGateExpectation {
+  name: string
+  mode: string            // post | pre | checkpoint
+  timing: string          // before | after
+  checkType: string
+  tool: string
+  argsPattern: string
+  minCount: number
+  firedCount: number
+  maxChecks: number
+  lastStatus: string | null
+  lastEvidence: number | null
+  lastCheckedAt: string | null
+  scope: string
+}
+
+export interface AdminChildGate {
+  gateStatus: string | null
+  gateError: string | null
+  expectations: AdminGateExpectation[]
+}
+
+/** 子任务门禁状态与期望清单（命中可见性，2026-10-13）。 */
+export function getAdminChildGate(batchId: string, sid: string) {
+  return get<AdminChildGate>(
+    `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/sessions/${encodeURIComponent(sid)}/gate`)
 }
 
 export interface AdminMessage {

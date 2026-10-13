@@ -69,7 +69,13 @@ def map_part(part: dict, *, subtask_status: dict | None = None,
             'title': st.get('title') or '',
             'status': st.get('status'),
             'input': st.get('input'),
-            'result': st.get('output') if st.get('output') is not None else st.get('result'),
+            # 兜底链 output → result → error：被门禁拦截（deny/checkpoint
+            # 抛错）与工具自身失败时没有 output/result，但 state.error 带着
+            # 拦截/注入/失败文案——不带出来会话里就是空白结果，门禁命中在
+            # 前端不可见（2026-10-13 用户报告）。
+            'result': (st.get('output') if st.get('output') is not None
+                       else st.get('result') if st.get('result') is not None
+                       else st.get('error')),
             'durationMs': tool_duration_ms(st),
             # 工具级耗时采集（spec §7）：绝对 start/end 透传给账本交互路径
             'time': st.get('time'),
