@@ -66,7 +66,8 @@
                                :type="s.type === 'inference' ? 'warning'
                                  : s.type === 'task' ? 'warning' : 'success'">
                           {{ s.type === 'inference' ? '推理'
-                            : s.type === 'task' ? '开子代理' : '工具' }}
+                            : (seqToolLabel(s.ref)
+                               || (s.type === 'task' ? '开子代理' : '工具')) }}
                         </ElTag>
                         <code v-if="s.type !== 'inference'" class="seq-args">
                           {{ seqArgs(s.ref) || s.label }}</code>
@@ -79,7 +80,8 @@
                            :key="`${i}-${j}`" class="seq-row seq-row--nested">
                         <ElTag size="small"
                                :type="ns.type === 'inference' ? 'warning' : 'success'">
-                          {{ ns.type === 'inference' ? '推理' : '工具' }}
+                          {{ ns.type === 'inference' ? '推理'
+                            : (seqToolLabel(ns.ref) || '工具') }}
                         </ElTag>
                         <code v-if="ns.type !== 'inference'" class="seq-args">
                           {{ seqArgs(ns.ref) || ns.label }}</code>
@@ -349,6 +351,18 @@ function firstArgLine(args: string): string {
   const i = (args || '').indexOf('\n')
   return i >= 0 ? args.slice(0, i) : args
 }
+/** 段行标签的工具名：按段 ref=partId 从调用明细取真实工具名（read/write/
+ *  bash/grep…），task 委托归「开子代理」。此前段行只标泛称「工具」+参数，
+ *  看不出具体是哪个工具（只有明细表有工具列）——2026-10-13 用户报告
+ *  「子代理批次中工具耗时只显示了参数和工具」。ref 缺失/未命中回落空串，
+ *  由调用方兜底泛称。 */
+function seqToolLabel(ref?: string): string {
+  if (!ref) return ''
+  const c = (tools.value?.calls ?? []).find(x => x.partId === ref)
+  if (!c) return ''
+  return c.isDelegation ? '开子代理' : c.tool
+}
+
 /** 时间轴段行的参数（按段 ref=partId 从调用明细取参数首行；ref 缺失/
  *  未命中返回空串回落段 label）。bash 执行了什么、grep 什么在这里直接可见。
  *  按全量 calls 查而不是本轮 turnCalls——嵌套段（子代理自己的工具）被

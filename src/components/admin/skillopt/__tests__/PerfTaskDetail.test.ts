@@ -399,5 +399,12 @@ describe('PerfTaskDetail', () => {
     // 委派段/根工具段参数照常
     expect(seq.text()).toContain('description=读取股票清单')
     expect(seq.text()).toContain('command=wc -l x')
+    // 段行标签 = 具体工具名（read/write/bash…）而非泛称「工具」——只有明细表
+    // 有工具列、时间轴段行此前只见「工具」，看不出是哪个工具
+    // （2026-10-13 用户报告：子代理批次中工具耗时只显示参数和「工具」）
+    const seqRows = [...seq.element.querySelectorAll('.seq-row')]
+      .map(r => r.textContent || '')
+    expect(seqRows.some(t => t.includes('read'))).toBe(true)
+    expect(seqRows.some(t => t.includes('bash'))).toBe(true)
   })
 })
