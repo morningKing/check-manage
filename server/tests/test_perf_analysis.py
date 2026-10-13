@@ -745,6 +745,31 @@ class TestPerfEndpoints:
         assert isinstance(body['skills'], list)   # skill 耗时推导（方案 2）
         assert isinstance(body['turns'], list) and isinstance(body['subtasks'], list)
 
+    def test_attempt_endpoint_exposes_top_level_sub_turns(self, db_conn,
+                                                          user_id, pf_client,
+                                                          admin_h):
+        """subTurns（子代理轮次窗）必须在响应**顶层**：前端嵌套分解读的是
+        detail.subTurns——曾只留在 attempt 里，生产 UI 永远走退化算法
+        （纯工具间隙），轮次窗模式是死代码（2026-10-13 自验证发现）。"""
+        _b, _s, aid = _seed_perf(db_conn, user_id,
+                                 subtasks=[('general', 100, 300)])
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT id FROM ai_chat_subtasks WHERE root_session_id=%s",
+                        (_s,))
+            sub_id = cur.fetchone()[0]
+            cur.execute(
+                "INSERT INTO ai_chat_subtask_messages (id, subtask_id, role,"
+                " content, meta) VALUES (%s, %s, 'assistant', '[]'::jsonb,"
+                " jsonb_build_object('durationMs', 5000))", (f'{sub_id}:a', sub_id))
+        db_conn.commit()
+        r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}', headers=admin_h)
+        body = r.get_json()
+        assert r.status_code == 200
+        assert isinstance(body.get('subTurns'), dict) and sub_id in body['subTurns']
+        win = body['subTurns'][sub_id][0]
+        assert win['durationMs'] == 5000
+        assert 'createdAt' in win
+
         r = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}/diagnosis',
                           headers=admin_h)
         assert r.status_code == 200

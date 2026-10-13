@@ -1588,11 +1588,14 @@ def perf_attempt(aid):
         int(_s.timestamp() * 1000) if _s else 0,
         int(_e.timestamp() * 1000) if _e else 0)
     return jsonify({'attempt': {**{k: v for k, v in m.items()
-                                   if k not in ('turnDetails', 'subtasks', 'tools', 'coverage')},
+                                   if k not in ('turnDetails', 'subtasks', 'tools', 'coverage', 'subTurns')},
                                  'toolMs': cov.get('toolMs', 0)},
                     'coverage': cov,
                     'turns': m.get('turnDetails') or [],
                     'subtasks': m.get('subtasks') or [],
+                    # subTurns 必须在顶层：前端嵌套分解读 detail.subTurns——
+                    # 曾只留在 attempt 里，轮次窗模式在生产是死代码（自验证发现）
+                    'subTurns': m.get('subTurns') or {},
                     'tools': m.get('tools') or {},
                     'skills': skills,
                     'completeness': m.get('completeness')})
