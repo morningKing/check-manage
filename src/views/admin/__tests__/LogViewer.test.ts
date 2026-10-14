@@ -40,12 +40,12 @@ describe('LogViewer', () => {
       .mockResolvedValueOnce(resp({ lines: ['beta'], offset: 20 }))
     const wrapper = await mountView()
     expect(mockGet).toHaveBeenCalledWith('/ai/logs/tail',
-      { file: 'chat', offset: -1, limit: 300 })
+      { file: 'chat', offset: -1, limit: 300 }, { silent: true })
     expect(wrapper.text()).toContain('alpha')
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
     expect(mockGet).toHaveBeenLastCalledWith('/ai/logs/tail',
-      { file: 'chat', offset: 10, limit: 300 })
+      { file: 'chat', offset: 10, limit: 300 }, { silent: true })
     expect(wrapper.text()).toContain('beta')
     wrapper.unmount()
   })
@@ -112,7 +112,7 @@ describe('LogViewer', () => {
     group.vm.$emit('change', 'serve')
     await flushPromises()
     expect(mockGet).toHaveBeenLastCalledWith('/ai/logs/tail',
-      { file: 'serve', offset: -1, limit: 300 })
+      { file: 'serve', offset: -1, limit: 300 }, { silent: true })
     wrapper.unmount()
   })
 
@@ -121,7 +121,7 @@ describe('LogViewer', () => {
     const wrapper = await mountView()
     expect(wrapper.text()).toContain('暂无日志文件（等待产生）')
     expect(mockGet).toHaveBeenLastCalledWith('/ai/logs/tail',
-      { file: 'chat', offset: -1, limit: 300 })
+      { file: 'chat', offset: -1, limit: 300 }, { silent: true })
     wrapper.unmount()
   })
 
@@ -143,6 +143,52 @@ describe('LogViewer', () => {
     const calls = mockGet.mock.calls.length
     await vi.advanceTimersByTimeAsync(5000)
     expect(mockGet.mock.calls.length).toBe(calls)
+    ;(wrapper.vm as unknown as { show: boolean }).show = true
+    await flushPromises()
+    expect(mockGet.mock.calls.length).toBe(calls + 1)
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    expect(mockGet.mock.calls.length).toBe(calls + 2)
+    wrapper.unmount()
+  })
+
+  it('keep-alive 页面已离开时，浏览器 tab 切回不复活轮询', async () => {
+    mockGet.mockResolvedValue(resp({ lines: [] }))
+    const Host = defineComponent({
+      components: { LogViewer },
+      template: '<KeepAlive><LogViewer v-if="show" /></KeepAlive>',
+      setup() { return { show: ref(true) } },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    expect(mockGet).toHaveBeenCalledTimes(1)
+
+    // 导航离开：deactivated 停表，但组件仍存活、visibilitychange 监听仍在
+    ;(wrapper.vm as unknown as { show: boolean }).show = false
+    await nextTick()
+    await flushPromises()
+    const calls = mockGet.mock.calls.length
+
+    // 模拟浏览器 tab 切走再切回（隐藏属性为 jsdom 原型 getter，按实例遮蔽后还原）
+    const origHidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+    try {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true, writable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true, writable: true })
+      document.dispatchEvent(new Event('visibilitychange'))
+    } finally {
+      if (origHidden) Object.defineProperty(document, 'hidden', origHidden)
+      else delete (document as unknown as { hidden?: boolean }).hidden
+    }
+    await flushPromises()
+
+    // deactivated 期间 visibilitychange 不得复活轮询（1.5s 定时也不得空转）
+    expect(mockGet.mock.calls.length).toBe(calls)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await flushPromises()
+    expect(mockGet.mock.calls.length).toBe(calls)
+
+    // 真正返回该路由：activated 补拉并恢复定时
     ;(wrapper.vm as unknown as { show: boolean }).show = true
     await flushPromises()
     expect(mockGet.mock.calls.length).toBe(calls + 1)

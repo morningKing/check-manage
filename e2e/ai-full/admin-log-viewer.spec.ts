@@ -44,8 +44,12 @@ test('运行日志页：跟尾出现 / 暂停停刷 / 继续补拉 / 筛选计�
   await expect(page.locator('.log-viewer__status')).toContainText('命中 0')
   await page.locator('[data-test="filter-input"] input').fill('')
 
-  // 文件切换：oc-serve.log 可加载（内容不限，页签生效即可）
+  // 文件切换：chat 缓冲清空 + oc-serve.log 页签选中并真实走一轮请求
   await page.locator('[data-test="file-serve"]').click()
   await expect(pane).toBeVisible()
+  // 缓冲已重置：仅 chat 文件有的本用例标记行不得再出现（内容无关的切换证据）
+  await expect(pane).not.toContainText(tk)
+  // 页签选中态：ElRadioButton 根 <label> 选中时带 is-active（attrs 透传到该 label）
+  await expect(page.locator('[data-test="file-serve"]')).toHaveClass(/is-active/)
   await expect(page.locator('.log-viewer__status')).toContainText(/实时|等待文件|连接中断/)
 })

@@ -59,6 +59,9 @@ const status = ref<'ok' | 'error' | 'waiting'>('ok')
 const trimmed = ref(false)
 const paneRef = ref<HTMLElement | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
+// 路由组件是否处于激活态（非响应式：没有模板依赖它）。内容被 keep-alive
+// 缓存时组件仍“存活”，只有 activated/deactivated 能反映用户是否在看它。
+let active = true
 
 const lineEntries = computed(() => entries.value.filter(e => e.kind === 'line'))
 const lineCount = computed(() => lineEntries.value.length)
@@ -157,10 +160,13 @@ function onScroll() {
 
 function onVisibility() {
   if (document.hidden) stopTimer()
-  else if (!paused.value) { startTimer(); void poll() }
+  // keep-alive 下导航离开后，切走/切回浏览器 tab 也会触发 visibilitychange；
+  // 不校验 active 会在无人查看的缓存页面上复活 1.5s 轮询。
+  else if (active && !paused.value) { startTimer(); void poll() }
 }
 
 onMounted(() => {
+  active = true
   document.addEventListener('visibilitychange', onVisibility)
   startTimer()
   void poll()
@@ -173,8 +179,12 @@ onUnmounted(() => {
 // 轮询必须在这条路径上停/续，否则后台会持续每 1.5s 打一次 /ai/logs/tail。
 // `!timer` 守卫：首次挂载时 activated 与 mounted 同批触发，mounted 已 startTimer，
 // 无守卫会以 offset=-1 再发一次重复请求（同一尾窗被 append 两遍 → 行重复）。
-onDeactivated(stopTimer)
+onDeactivated(() => {
+  active = false
+  stopTimer()
+})
 onActivated(() => {
+  active = true
   if (!paused.value && !timer) { startTimer(); void poll() }
 })
 </script>
