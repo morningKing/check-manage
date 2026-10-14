@@ -54,6 +54,7 @@ from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
 from routes.ai_gate_internal import ai_gate_internal_bp
 from routes.ai_gate_policies import ai_gate_policies_bp
+from routes.ai_logs import ai_logs_bp
 from routes.ai_data_internal import ai_data_internal_bp
 from routes.ai_subagent_internal import ai_subagent_internal_bp
 from routes.ai_orchestrations import ai_orchestrations_bp
@@ -574,6 +575,7 @@ app.register_blueprint(ai_scan_tasks_bp)
 app.register_blueprint(ai_memory_internal_bp)
 app.register_blueprint(ai_gate_internal_bp)
 app.register_blueprint(ai_gate_policies_bp)
+app.register_blueprint(ai_logs_bp)
 app.register_blueprint(ai_subagent_internal_bp)
 app.register_blueprint(ai_data_internal_bp)
 app.register_blueprint(ai_orchestrations_bp)
