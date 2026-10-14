@@ -95,10 +95,14 @@ function appendLines(lines: string[]) {
   if (autoScroll.value) scrollToBottom()
 }
 
+let epoch = 0   // 在途响应作废序号：新轮询/切文件自增，旧响应落地时丢弃
+
 async function poll() {
   if (document.hidden || paused.value) return
+  const my = ++epoch
   try {
     const r = await fetchLogTail(activeFile.value, offsetRef.value, DEFAULT_LIMIT)
+    if (my !== epoch) return   // 响应在途期间已被更新轮询/切文件作废
     if (r.missing) {
       status.value = 'waiting'
       return
@@ -115,7 +119,7 @@ async function poll() {
     offsetRef.value = r.offset
     appendLines(r.lines)
   } catch {
-    status.value = 'error'
+    if (my === epoch) status.value = 'error'
   }
 }
 
@@ -134,6 +138,7 @@ function togglePause() {
 
 function switchFile() {
   stopTimer()
+  epoch++               // 作废在途响应：暂停中切换时旧文件的行不得落入新缓冲
   offsetRef.value = -1
   entries.value = []
   trimmed.value = false
@@ -232,7 +237,8 @@ onActivated(() => {
   white-space: pre-wrap;
   word-break: break-all;
 }
-.log-viewer__line.is-marker {
+.log-viewer__line.is-marker,
+.log-viewer__marker {
   color: #e6a23c;
   text-align: center;
   margin: 4px 0;

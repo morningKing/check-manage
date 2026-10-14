@@ -197,4 +197,25 @@ describe('LogViewer', () => {
     expect(mockGet.mock.calls.length).toBe(calls + 2)
     wrapper.unmount()
   })
+
+  it('切文件后在途响应作废，不污染新文件缓冲', async () => {
+    // 首请求挂起不决，制造"响应在途时切文件"的时序
+    let resolveFirst: (v: unknown) => void = () => {}
+    mockGet
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r }))
+      .mockResolvedValueOnce(resp({ file: 'serve', lines: ['serve-line'], offset: 7 }))
+    const wrapper = await mountView()
+
+    const group = wrapper.findComponent({ name: 'ElRadioGroup' })
+    group.vm.$emit('update:modelValue', 'serve')
+    group.vm.$emit('change', 'serve')
+    await flushPromises()
+    expect(wrapper.text()).toContain('serve-line')
+
+    // 旧 chat 响应此刻才落地：必须被 epoch 守卫丢弃
+    resolveFirst(resp({ file: 'chat', lines: ['stale-chat-line'], offset: 999 }))
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('stale-chat-line')
+    wrapper.unmount()
+  })
 })
