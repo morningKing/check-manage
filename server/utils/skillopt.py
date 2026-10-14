@@ -319,7 +319,14 @@ async function gatePreCheck(sessionID, tool, argsText) {
       signal: ctrl.signal,
       body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
     })
-    if (!res.ok) return { allow: true }   // 非 2xx（含 token 失配 403）→ 放行
+    if (!res.ok) {
+      // 非 2xx（含 token 失配 403）→ 放行；留痕到 oc-serve.log——服务端
+      // 排查矩阵：有此行=插件在发请求（查 token/服务端），无此行也无 DENY=
+      // 插件没发请求（老插件/serve 未重启）。
+      console.error(`[baize-trace] gate pre-check http ${res.status} → allow ` +
+        `tool=${tool}`)
+      return { allow: true }
+    }
     const body = await res.json()
     if (body && body.rules === 0) _gateEmpty.set(sessionID, Date.now())
     return body || { allow: true }
@@ -345,7 +352,11 @@ async function gatePostCheck(sessionID, tool, argsText) {
       signal: ctrl.signal,
       body: JSON.stringify({ sessionId: sessionID, tool, argsText }),
     })
-    if (!res.ok) return { inject: false }   // 非 2xx（含 token 失配 403）→ 不注入
+    if (!res.ok) {
+      console.error(`[baize-trace] gate post-check http ${res.status} → skip ` +
+        `tool=${tool}`)
+      return { inject: false }   // 非 2xx（含 token 失配 403）→ 不注入
+    }
     const body = await res.json()
     if (body && body.rules === 0) _gatePostEmpty.set(sessionID, Date.now())
     return body || { inject: false }
@@ -403,7 +414,7 @@ export const BaizeTracePlugin = async () => {
     // append_result 语义（Task 1 探针实测：after 抛错会把工具结果摧毁成
     // status=error/result:null，被否）——把 prompt 追加到 output.output
     // （工具结果文本）尾部，模型下一轮可见、原始结果保留。整个钩子
-    // try/catch 全包，任何异常静默 return（fail-open），绝不破坏工具结果。
+    // try/catch 全包（fail-open，绝不破坏工具结果），异常留痕 oc-serve.log。
     async 'tool.execute.after'(input, output) {
       try {
         if (!GATE_POST_URL || !input || !input.tool || !input.sessionID) return
@@ -414,7 +425,10 @@ export const BaizeTracePlugin = async () => {
         if (body && body.inject && body.prompt) {
           output.output = (output.output ?? '') + '\\n\\n' + body.prompt
         }
-      } catch { /* fail-open：post-check 不可达/注入失败不影响工具结果 */ }
+      } catch (e) {
+        console.error(`[baize-trace] gate post-check unreachable → skip ` +
+          `tool=${input && input.tool}: ${e && e.message}`)
+      }
     },
   }
 }

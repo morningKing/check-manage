@@ -963,6 +963,20 @@ def restart_serve() -> dict:
         return _restart_serve_locked()
 
 
+def _serve_stdio_file():
+    """serve 子进程 stdout/stderr 落盘文件（<server>/oc-serve.log，append）。
+    >10MB 轮转保留一份（oc-serve.log.1）。父进程写完 spawn 分隔行即关——
+    子进程持有继承句柄，不受影响。"""
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                        'oc-serve.log')
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 10 * 1024 * 1024:
+            os.replace(path, path + '.1')
+    except OSError:
+        pass
+    return open(path, 'a', buffering=1, encoding='utf-8', errors='replace')
+
+
 def _restart_serve_locked() -> dict:
     """Restart `opencode serve` so freshly written skill/agent files load.
 
@@ -1005,11 +1019,20 @@ def _restart_serve_locked() -> dict:
     # serve 必须读取的目录，两侧永不漂移。
     env = opencode_launch.child_env()
     env['OPENCODE_GLOBAL_DIR'] = global_dir()
-    subprocess.Popen(target, shell=use_shell, cwd=opencode_launch.serve_cwd(),
-                     env=env,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     creationflags=creationflags,
-                     start_new_session=(sys.platform != 'win32'))
+    # 插件（baize-trace 等）的 console.error 只走 serve 进程 stdio——OC 自带
+    # 日志文件不收插件输出，此前 DEVNULL 等于插件侧零日志，无法区分"插件没发
+    # 请求"和"服务端没回对"（2026-10-14 门禁生产排查教训）。落盘 oc-serve.log。
+    stdio = _serve_stdio_file()
+    try:
+        stdio.write('===== oc-serve spawn '
+                    f'{time.strftime("%Y-%m-%d %H:%M:%S")} =====\n')
+        subprocess.Popen(target, shell=use_shell, cwd=opencode_launch.serve_cwd(),
+                         env=env,
+                         stdout=stdio, stderr=subprocess.STDOUT,
+                         creationflags=creationflags,
+                         start_new_session=(sys.platform != 'win32'))
+    finally:
+        stdio.close()
 
     deadline = time.time() + max(10, config.OPENCODE_RESTART_TIMEOUT_SEC)
     last = {'healthy': False, 'version': None}
