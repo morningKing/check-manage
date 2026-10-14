@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { defineComponent, nextTick, ref } from 'vue'
 
 const mockGet = vi.fn()
 vi.mock('@/utils/request', () => ({
@@ -121,6 +122,33 @@ describe('LogViewer', () => {
     expect(wrapper.text()).toContain('暂无日志文件（等待产生）')
     expect(mockGet).toHaveBeenLastCalledWith('/ai/logs/tail',
       { file: 'chat', offset: -1, limit: 300 })
+    wrapper.unmount()
+  })
+
+  it('keep-alive 导航离开停轮询，返回立即补拉并恢复定时', async () => {
+    mockGet.mockResolvedValue(resp({ lines: [] }))
+    // 宿主复刻 ContentArea 的 <keep-alive>：导航离开只触发 deactivated，不触发 unmounted
+    const Host = defineComponent({
+      components: { LogViewer },
+      template: '<KeepAlive><LogViewer v-if="show" /></KeepAlive>',
+      setup() { return { show: ref(true) } },
+    })
+    const wrapper = mount(Host)
+    await flushPromises()
+    // 首次挂载 activated 与 mounted 同批触发，不应产生第二次重复请求
+    expect(mockGet).toHaveBeenCalledTimes(1)
+    ;(wrapper.vm as unknown as { show: boolean }).show = false
+    await nextTick()
+    await flushPromises()
+    const calls = mockGet.mock.calls.length
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(mockGet.mock.calls.length).toBe(calls)
+    ;(wrapper.vm as unknown as { show: boolean }).show = true
+    await flushPromises()
+    expect(mockGet.mock.calls.length).toBe(calls + 1)
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    expect(mockGet.mock.calls.length).toBe(calls + 2)
     wrapper.unmount()
   })
 })

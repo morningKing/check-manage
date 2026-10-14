@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { ElButton, ElInput, ElRadioButton, ElRadioGroup, ElSwitch } from 'element-plus'
 import { fetchLogTail } from '@/api/adminLogs'
 
@@ -168,6 +168,14 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   stopTimer()
+})
+// ContentArea 用 <keep-alive> 缓存路由组件，导航离开走 deactivated 而非 unmounted，
+// 轮询必须在这条路径上停/续，否则后台会持续每 1.5s 打一次 /ai/logs/tail。
+// `!timer` 守卫：首次挂载时 activated 与 mounted 同批触发，mounted 已 startTimer，
+// 无守卫会以 offset=-1 再发一次重复请求（同一尾窗被 append 两遍 → 行重复）。
+onDeactivated(stopTimer)
+onActivated(() => {
+  if (!paused.value && !timer) { startTimer(); void poll() }
 })
 </script>
 
