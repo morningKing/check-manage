@@ -717,6 +717,7 @@ const fileUrl = (path: string) => downloadFileUrl(activeId.value || '', path)
 const thinking = computed(() => (activeId.value ? !!store.thinking[activeId.value] : false))
 const pendingQuestion = computed(() => store.activePendingQuestion)
 const pendingPermission = computed(() => store.activePendingPermission)
+const pendingPermissionExtra = computed(() => store.activePendingPermissionExtra)
 
 // P0 执行所有权（ai-harness-p0 spec §7.1 前端配合）：非终态批子会话由后台
 // 执行器独家驱动——composer 禁用并提示；终态批子会话可发送（经 continue 通道）。
@@ -749,7 +750,7 @@ const activeBatchInfo = computed(() => {
 // 询问/授权（OC 侧由批任务清扫自动拒绝，见 batch_engine._reject_pending_*）
 watch(activeBatchInfo, (info) => {
   if (info && activeId.value) {
-    store.pendingPermission[activeId.value] = null
+    store.clearPendingRequests(activeId.value)
     store.pendingQuestion[activeId.value] = null
   }
 })
@@ -1689,10 +1690,14 @@ function onKey(e: Event) {
               @reject="() => store.rejectPendingQuestion(activeId!)"
             />
 
+            <!-- :key 按请求 id 重建——队列里答完一条立刻切到下一条，
+                 组件内部的 busy 状态不能跨请求残留 -->
             <PermissionCard
               v-if="pendingPermission && !activeBatchInfo"
+              :key="pendingPermission.id"
               :request="pendingPermission"
-              @reply="(response) => store.answerPendingPermission(activeId!, pendingPermission!.id, response)"
+              :extra="pendingPermissionExtra"
+              :submit="(response) => store.answerPendingPermission(activeId!, pendingPermission!.id, response)"
             />
 
             <!-- P0 §8.2 发送失败错误卡：保留原始输入，提供明确的重试入口 -->

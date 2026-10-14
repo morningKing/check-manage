@@ -455,7 +455,9 @@ export interface PermissionRequest {
 }
 
 export function getPendingPermission(id: string) {
-  return get<{ data: PermissionRequest | null }>(
+  // items = 该会话**全部**挂起请求（可并发多条：模型一次发多个工具调用时
+  // 每条 external_directory 都会各自询问）；data 保留首条以兼容旧调用方。
+  return get<{ data: PermissionRequest | null; items?: PermissionRequest[] }>(
     `/ai/chat/sessions/${encodeURIComponent(id)}/pending-permission`, undefined, { silent: true },
   )
 }
@@ -578,6 +580,9 @@ export function createEventStream(sessionId: string, h: StreamHandlers) {
       'session.hello', 'message.updated', 'message.part.updated',
       'message.part.delta', 'session.idle', 'session.error',
       'question.asked', 'question.replied', 'question.rejected',
+      // 权限门（external_directory ask）：漏登记 → 帧到了浏览器被静默丢弃，
+      // 授权气泡在真实链路永不出现（2026-10-14 实测，回合静默挂起）。
+      'permission.asked', 'permission.replied', 'permission.rejected',
     ]) {
       es.addEventListener(name, (e: MessageEvent) => {
         try {

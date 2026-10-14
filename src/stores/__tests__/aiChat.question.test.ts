@@ -5,6 +5,7 @@ vi.mock('@/api/aiChat', () => ({
   getPendingQuestion: vi.fn(),
   replyQuestion: vi.fn(),
   rejectQuestion: vi.fn(),
+  getPendingPermission: vi.fn(),
   // other named exports used by the store module must exist as no-ops
   createSession: vi.fn(), listSessions: vi.fn(), renameSession: vi.fn(),
   deleteSession: vi.fn(), getMessages: vi.fn(), sendMessage: vi.fn(),
@@ -12,12 +13,16 @@ vi.mock('@/api/aiChat', () => ({
   createEventStream: vi.fn(() => ({ close() {} })),
 }))
 
-import { getPendingQuestion, replyQuestion, rejectQuestion } from '@/api/aiChat'
+import { getPendingQuestion, getPendingPermission, replyQuestion, rejectQuestion } from '@/api/aiChat'
 import { useAiChatStore } from '@/stores/aiChat'
 
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
+  // session.idle 现在向服务端对账（中止生成不解除 OC 侧挂起请求），
+  // 默认「服务端已无挂起」→ 与旧的无条件清空在无挂起时同效。
+  ;(getPendingQuestion as any).mockResolvedValue({ data: null })
+  ;(getPendingPermission as any).mockResolvedValue({ data: null, items: [] })
 })
 
 const QUESTION = {
@@ -59,13 +64,26 @@ describe('pendingQuestion via SSE', () => {
     expect(store.pendingQuestion['s1']).toBeNull()
   })
 
-  it('session.idle defensively clears any leftover pending question', () => {
+  it('session.idle 按服务端真相对账：服务端已无挂起 → 清空', async () => {
     const store = useAiChatStore()
     store.activeSessionId = 's1'
     store.messages['s1'] = []
     store.pendingQuestion['s1'] = QUESTION
     ;(store as any)._handleEvent('s1', 'session.idle', {})
+    await new Promise((r) => setTimeout(r, 0))
+    expect(getPendingQuestion).toHaveBeenCalledWith('s1')
     expect(store.pendingQuestion['s1']).toBeNull()
+  })
+
+  it('session.idle 后服务端仍挂着询问 → 保留（中止生成不解除 OC 侧挂起）', async () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    store.messages['s1'] = []
+    store.pendingQuestion['s1'] = QUESTION
+    ;(getPendingQuestion as any).mockResolvedValue({ data: QUESTION })
+    ;(store as any)._handleEvent('s1', 'session.idle', {})
+    await new Promise((r) => setTimeout(r, 0))
+    expect(store.pendingQuestion['s1']).toEqual(QUESTION)
   })
 })
 

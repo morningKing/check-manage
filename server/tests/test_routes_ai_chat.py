@@ -1454,3 +1454,69 @@ def test_send_message_passes_agent_mentions(setup):
     assert resp.status_code == 202
     _, kwargs = oc.send_prompt_async.call_args
     assert kwargs.get('agent_parts') == mentions
+
+
+# ── 权限请求（external_directory ask）重水化与应答 ──────────────────────────
+# 2026-10-14 实测缺陷链：permission.asked 是命名 SSE 帧，前端漏登记监听 →
+# 实时事件被丢弃，气泡只能靠 openSession 的 REST 重水化补出。重水化若只回
+# 第一条挂起请求（旧实现 next(...)），并发多个 external_directory 询问时
+# 剩下的在 UI 上永不可见 → 回合静默挂死。故重水化必须给出全部匹配项。
+
+def _perm(pid, oc_sid='oc_sess', **over):
+    base = {'id': pid, 'sessionID': oc_sid, 'permission': 'external_directory',
+            'patterns': ['C:/Windows/*'], 'metadata': {'filepath': 'C:/Windows/win.ini'},
+            'always': ['C:/Windows/*']}
+    base.update(over)
+    return base
+
+
+def test_get_pending_permission_returns_all_matching_in_items(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_permissions.return_value = [
+        _perm('per_a'),
+        _perm('per_b'),
+        _perm('per_other', 'oc_sess_unrelated'),
+    ]
+    resp = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['data']['id'] == 'per_a'                     # 兼容字段：第一条
+    assert [q['id'] for q in body['items']] == ['per_a', 'per_b']
+    _, k = oc.list_permissions.call_args
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_get_pending_permission_none_when_no_match(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_permissions.return_value = [_perm('per_other', 'oc_sess_unrelated')]
+    resp = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json()['data'] is None
+    assert resp.get_json()['items'] == []
+
+
+def test_reply_permission_forwards_choice(setup):
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_permissions.return_value = [_perm('per_a')]
+    resp = client.post('/ai/chat/sessions/sess_x/permissions/per_a/reply',
+                       json={'response': 'once'}, headers=dev_h)
+    assert resp.status_code == 200
+    assert resp.get_json() == {'ok': True}
+    a, k = oc.reply_permission.call_args
+    assert a[0] == 'per_a' and a[1] == 'once'
+    assert k.get('directory') == '/tmp/ws'
+
+
+def test_reply_permission_not_owned_by_session_404(setup):
+    """requestID 属于别的 OpenCode 会话 → 404，不转发（与 question 同款 IDOR 守卫）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.list_permissions.return_value = [_perm('per_a', 'oc_sess_someone_else')]
+    resp = client.post('/ai/chat/sessions/sess_x/permissions/per_a/reply',
+                       json={'response': 'once'}, headers=dev_h)
+    assert resp.status_code == 404
+    assert resp.get_json()['code'] == 'PERMISSION_NOT_FOUND'
+    oc.reply_permission.assert_not_called()

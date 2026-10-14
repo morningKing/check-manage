@@ -72,6 +72,10 @@ describe('createEventStream', () => {
     expect(names).toEqual(expect.arrayContaining([
       'message.updated', 'message.part.updated', 'session.idle', 'session.error',
       'question.asked', 'question.replied', 'question.rejected',
+      // 2026-10-14 实测：permission.* 漏登记 → 授权气泡在真实链路永不出现，
+      // 只有切会话/刷新时的 REST 重水化才补得出来（store 单测走 _handleEvent
+      // 直达，遮住了这个洞）。与 question.* 同因，故同表守护。
+      'permission.asked', 'permission.replied', 'permission.rejected',
     ]))
   })
 })

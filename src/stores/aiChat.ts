@@ -125,7 +125,13 @@ interface State {
    * and would otherwise lose a question asked while disconnected).
    */
   pendingQuestion: Record<string, QuestionRequest | null>
-  pendingPermission: Record<string, PermissionRequest | null>
+  /**
+   * 该会话全部挂起授权请求（队列）。一个回合里模型可能并发多个工具调用，
+   * 每条工作区外访问都会各自产生一条 external_directory 询问——旧实现只
+   * 存一条（后到覆盖先到），被覆盖的那条在 UI 上永不可见，OpenCode 侧却
+   * 一直挂着等应答 → 回合静默卡死（2026-10-14 实测）。
+   */
+  pendingPermissions: Record<string, PermissionRequest[]>
   fitSummary: Record<string, Array<{ defKind: string; defName: string; stepsTotal: number; stepsHit: number; score: number; status: string }> | null>
   /**
    * 运行中插话队列（TUI 的 mid-turn queueing）：streaming 时发送的消息不调
@@ -240,7 +246,7 @@ export const useAiChatStore = defineStore('aiChat', {
     streamStatus: {} as Record<string, StreamStatus>,
     uploadingCount: 0,
     pendingQuestion: {},
-    pendingPermission: {},
+    pendingPermissions: {},
     fitSummary: {},
     queuedBySession: {} as Record<string, QueuedMessage[]>,
     usageBySession: {} as Record<string, SessionUsage>,
@@ -280,7 +286,15 @@ export const useAiChatStore = defineStore('aiChat', {
       return state.activeSessionId ? state.pendingQuestion[state.activeSessionId] ?? null : null
     },
     activePendingPermission(state): PermissionRequest | null {
-      return state.activeSessionId ? state.pendingPermission[state.activeSessionId] ?? null : null
+      const list = state.activeSessionId
+        ? state.pendingPermissions[state.activeSessionId] ?? [] : []
+      return list[0] ?? null
+    },
+    /** 队列里除当前卡片外还剩几条（同回合并发的多个外部目录询问）。 */
+    activePendingPermissionExtra(state): number {
+      const list = state.activeSessionId
+        ? state.pendingPermissions[state.activeSessionId] ?? [] : []
+      return Math.max(0, list.length - 1)
     },
     activeUsage(state): SessionUsage {
       return state.activeSessionId
@@ -581,19 +595,36 @@ export const useAiChatStore = defineStore('aiChat', {
     },
 
     async loadPendingPermission(id: string) {
+      // 服务端真相对账。事件是最新通道，但会漏（断线窗口、旧后端的订阅
+      // 细节），所以每次会话打开/重连/idle 都核一遍。
+      const before = new Set((this.pendingPermissions[id] ?? []).map((x) => x.id))
       try {
-        const { data } = await getPendingPermission(id)
-        this.pendingPermission[id] = data
+        const { data, items } = await getPendingPermission(id)
+        const server = (items && items.length ? items : (data ? [data] : [])) as PermissionRequest[]
+        const serverIds = new Set(server.map((x) => x.id))
+        const local = this.pendingPermissions[id] ?? []
+        // 请求发起前就在本地的、服务端已不再列的 → 已应答/失效，去掉；
+        // 请求期间才到的（不在 before）保留，避免与实时事件竞态丢卡。
+        const fresh = local.filter((x) => !serverIds.has(x.id) && !before.has(x.id))
+        this.pendingPermissions[id] = [...server, ...fresh]
       } catch { /* best-effort: don't block session open on this */ }
+    },
+
+    /** 清空挂起授权（批子会话守卫：无人值守会话不允许 ask，OC 侧自动拒绝）。 */
+    clearPendingRequests(id: string) {
+      this.pendingPermissions[id] = []
     },
 
     async answerPendingPermission(sid: string, requestId: string,
                                   response: 'once' | 'always' | 'reject') {
-      const p = this.pendingPermission[sid]
-      if (!p || p.id !== requestId) return
+      const list = this.pendingPermissions[sid] ?? []
+      if (!list.some((p) => p.id === requestId)) return
+      // 失败原样上抛（404 已被别处应答/网络错误）：卡片据此复位 busy 并留在
+      // 屏幕上，不能悄悄清掉——那会让回合继续挂着而 UI 已无入口。
       await replyPermission(sid, requestId, response)
-      // optimistic: clear locally; the permission.replied echo also handles it
-      if (this.pendingPermission[sid]?.id === requestId) this.pendingPermission[sid] = null
+      // 乐观：清掉已答的这条；permission.replied echo 也会做一次
+      this.pendingPermissions[sid] = (this.pendingPermissions[sid] ?? [])
+        .filter((p) => p.id !== requestId)
     },
 
     async answerPendingQuestion(sid: string, answers: string[][]) {
@@ -980,6 +1011,10 @@ export const useAiChatStore = defineStore('aiChat', {
         // 事件归属路由的兜底锚点：session.hello 缺席（旧后端）时从
         // runtime-state 补取父会话的 OC sessionID。
         if (st?.opencodeSessionId) _ocSidBySession[sid] = st.opencodeSessionId
+        // 断线窗口内到达的询问/授权只有 REST 能补回来（SSE 事件不回放，
+        // 订阅起点的快照爆发只含消息与 part）——不补的话回合会静默挂死。
+        void this.loadPendingQuestion(sid)
+        void this.loadPendingPermission(sid)
         if (st.turnStatus !== 'running' && this.streaming[sid]) {
           this.streaming[sid] = false
           this.thinking[sid] = false
@@ -1196,8 +1231,12 @@ export const useAiChatStore = defineStore('aiChat', {
           this.thinking[sid] = false
           void this.pollSubtaskTodos(sid)  // 收尾:拉取子代理的最终 todo 快照
           this._resetStreamState(sid)
-          this.pendingQuestion[sid] = null  // defensive: a finished turn can't still have one pending
-          this.pendingPermission[sid] = null  // 同上：权限询问随回合终止一并清掉
+          // 挂起的询问/授权**不与服务端硬碰**：中止生成并不解除 OpenCode 侧
+          // 的挂起请求（2026-10-14 实测：abort 后 /permission 仍在，切回会话
+          // 就会以「迟到气泡」冒出来），无条件清空会让仍可应答的卡片消失。
+          // 核一遍服务端真相再决定去留。
+          void this.loadPendingQuestion(sid)
+          void this.loadPendingPermission(sid)
           this.loadFiles(sid)  // surface any files the agent wrote to outputs/
           this.loadChanges(sid)
           this._reloadPersisted(sid)  // converge on server-persisted turn (incl. tool calls)
@@ -1240,15 +1279,22 @@ export const useAiChatStore = defineStore('aiChat', {
           break
         // 权限门询问（如 external_directory=ask 下读工作区外的文件）：
         // 前端渲染 PermissionCard 由用户选择放行方式；无人应答会一直挂起
-        case 'permission.asked':
-          this.pendingPermission[sid] = data as PermissionRequest
+        case 'permission.asked': {
+          const req = data as PermissionRequest
+          if (!req?.id) break
+          const list = this.pendingPermissions[sid] ?? (this.pendingPermissions[sid] = [])
+          // 同一请求可能被爆发/重连补发两次，按 id 去重
+          if (!list.some((x) => x.id === req.id)) list.push(req)
           break
+        }
         case 'permission.replied':
-        case 'permission.rejected':
-          if (this.pendingPermission[sid]?.id === data?.requestID) {
-            this.pendingPermission[sid] = null
-          }
+        case 'permission.rejected': {
+          const rid = data?.requestID
+          if (!rid) break
+          this.pendingPermissions[sid] = (this.pendingPermissions[sid] ?? [])
+            .filter((x) => x.id !== rid)
           break
+        }
       }
     },
 

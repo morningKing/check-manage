@@ -1993,9 +1993,13 @@ def get_pending_permission(sid):
         pending = OpenCodeClient(OPENCODE_BASE_URL).list_permissions(directory=sess[4])
     except Exception:
         logger.exception('list_permissions failed session=%s', sid)
-        return jsonify({'data': None}), 200
-    match = next((q for q in pending if q.get('sessionID') == sess[2]), None)
-    return jsonify({'data': match}), 200
+        return jsonify({'data': None, 'items': []}), 200
+    # 一个回合可以并发挂起多条（模型一次发多个工具调用，每条工作区外访问
+    # 各自询问）。只回第一条的话，其余在 UI 上永不可见、OpenCode 侧却一直
+    # 挂着等应答 → 回合静默卡死（2026-10-14 实测）。data 保留首条兼容旧
+    # 调用方，items 给全量。
+    matches = [q for q in pending if q.get('sessionID') == sess[2]]
+    return jsonify({'data': matches[0] if matches else None, 'items': matches}), 200
 
 
 @ai_chat_bp.route('/sessions/<sid>/permissions/<request_id>/reply', methods=['POST'])

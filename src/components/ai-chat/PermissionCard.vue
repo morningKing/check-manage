@@ -4,16 +4,30 @@ import { ElButton, ElIcon, ElMessage } from 'element-plus'
 import { Lock, Check, Close } from '@element-plus/icons-vue'
 import type { PermissionRequest } from '@/api/aiChat'
 
-const props = defineProps<{ request: PermissionRequest }>()
-const emit = defineEmits<{ reply: [response: 'once' | 'always' | 'reject'] }>()
+const props = defineProps<{
+  request: PermissionRequest
+  /** 队列里还有几条待授权（同回合并发的外部目录询问） */
+  extra?: number
+  /** 由父级注入：实际发出应答（失败会 reject，卡片据此复位按钮） */
+  submit: (response: 'once' | 'always' | 'reject') => Promise<void>
+}>()
 
 const busy = ref(false)
 
-function respond(response: 'once' | 'always' | 'reject') {
+async function respond(response: 'once' | 'always' | 'reject') {
   if (busy.value) return
   busy.value = true
-  emit('reply', response)
-  ElMessage.success(response === 'reject' ? '已拒绝' : response === 'always' ? '已放行并记住该目录' : '已放行本次')
+  try {
+    await props.submit(response)
+    // 成功提示放在应答真正落定之后——旧实现先弹「已放行」再发请求，
+    // 请求失败时界面在说谎，且按钮因 busy 永不复位而全变死。
+    ElMessage.success(response === 'reject' ? '已拒绝'
+      : response === 'always' ? '已放行并记住该目录' : '已放行本次')
+  } catch {
+    /* 失败：拦截器已弹错误；保留卡片与按钮，用户可重试或换个选择 */
+  } finally {
+    busy.value = false
+  }
 }
 
 const target = computed(() => props.request.metadata?.filepath || props.request.patterns?.[0] || '(未知路径)')
@@ -25,6 +39,7 @@ const isDir = computed(() => !props.request.metadata?.filepath)
     <div class="perm-card__head">
       <ElIcon class="perm-card__icon"><Lock /></ElIcon>
       <span class="perm-card__title">权限请求 · {{ request.permission }}</span>
+      <span v-if="extra" class="perm-card__extra">另有 {{ extra }} 条待授权</span>
     </div>
     <div class="perm-card__body">
       <p class="perm-card__target" :title="target">
@@ -36,11 +51,13 @@ const isDir = computed(() => !props.request.metadata?.filepath)
       </p>
     </div>
     <div class="perm-card__actions">
-      <ElButton size="small" type="primary" :icon="Check" data-test="perm-once" @click="respond('once')">
+      <ElButton size="small" type="primary" :icon="Check" :loading="busy" data-test="perm-once"
+                @click="respond('once')">
         本次允许
       </ElButton>
-      <ElButton size="small" data-test="perm-always" @click="respond('always')">总是允许</ElButton>
-      <ElButton size="small" type="danger" plain :icon="Close" data-test="perm-reject" @click="respond('reject')">
+      <ElButton size="small" :disabled="busy" data-test="perm-always" @click="respond('always')">总是允许</ElButton>
+      <ElButton size="small" type="danger" plain :icon="Close" :disabled="busy" data-test="perm-reject"
+                @click="respond('reject')">
         拒绝
       </ElButton>
     </div>
@@ -63,6 +80,12 @@ const isDir = computed(() => !props.request.metadata?.filepath)
   margin-bottom: 6px;
 }
 .perm-card__icon { color: var(--el-color-warning); }
+.perm-card__extra {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+}
 .perm-card__target { margin: 0 0 4px; word-break: break-all; }
 .perm-card__target code {
   background: var(--el-fill-color-light);
