@@ -39,9 +39,37 @@ def test_admin_reads_file(client, admin_headers, tmp_path, monkeypatch):
     resp = client.get(BASE + '?file=chat', headers=admin_headers)
     assert resp.status_code == 200
     data = resp.get_json()
+    # 全键锁定：Task 3 前端契约（LogTailResponse）依赖这 7 个键一个不多一个不少
+    assert set(data) == {'file', 'offset', 'size', 'rotated', 'truncated',
+                         'missing', 'lines'}
     assert data['lines'] == ['hello', 'world']
     assert data['file'] == 'chat'
     assert data['missing'] is False
+
+
+def test_non_admin_denied(client, dev_headers):
+    """登录但无 admin.ai_chat_admin：403（区别于匿名的 401）。"""
+    resp = client.get(BASE + '?file=chat', headers=dev_headers)
+    assert resp.status_code == 403
+
+
+def test_boundary_params_accepted(client, admin_headers, tmp_path, monkeypatch):
+    """边界/缺省值必须被接受（此前只测了拒绝侧）。"""
+    p = tmp_path / 'a.log'
+    p.write_bytes(b'l1\nl2\n')
+    monkeypatch.setitem(LOG_FILES, 'chat', str(p))
+    for qs in ('limit=500', 'limit=1', 'offset=-1', ''):   # ''=limit 缺省 300
+        resp = client.get(f'{BASE}?file=chat&{qs}', headers=admin_headers)
+        assert resp.status_code == 200, qs
+
+
+def test_chat_log_path_honors_env_override(monkeypatch, tmp_path):
+    """chat 路径尊重 AI_CHAT_LOG_FILE（与 logging_setup 写侧同源，防漂移）。"""
+    override = str(tmp_path / 'custom.log')
+    monkeypatch.setenv('AI_CHAT_LOG_FILE', override)
+    assert ai_logs._chat_log_path() == override
+    monkeypatch.delenv('AI_CHAT_LOG_FILE')
+    assert ai_logs._chat_log_path().endswith('ai-chat.log')
 
 
 def test_invalid_file_400(client, admin_headers):

@@ -35,19 +35,29 @@ def _missing() -> dict:
 
 
 def _tail_window(path: str, size: int, limit: int):
-    """末尾窗口回读最后 limit 行（跟尾语义：窗口内更早的行舍弃不标记）。"""
+    """末尾窗口回读最后 limit 行（跟尾语义：窗口内更早的行舍弃不标记）。
+
+    窗口起点落在某行中部时，首段残片丢弃（GNU tail 口径）——否则会显示
+    一条从半句开始的"伪行"。"""
+    start = max(0, size - TAIL_WINDOW_BYTES)
+    partial_head = False
     with open(path, 'rb') as f:
-        f.seek(max(0, size - TAIL_WINDOW_BYTES))
+        if start > 0:
+            f.seek(start - 1)
+            partial_head = f.read(1) != b'\n'
+        f.seek(start)
         raw = f.read()
     end = raw.rfind(b'\n')
     if end < 0:
         return [], size
-    lines = [_decode_line(seg) for seg in raw[:end + 1].split(b'\n')[:-1]]
-    return lines[-limit:], size
+    segs = raw[:end + 1].split(b'\n')[:-1]
+    if partial_head:
+        segs = segs[1:]          # 首段是上一行的尾巴，丢弃
+    return [_decode_line(seg) for seg in segs][-limit:], size
 
 
 def _read_forward(path: str, offset: int, limit: int):
-    """从 offset 顺序读完整行。返回 (lines, consumed_bytes, truncated)。"""
+    """从 offset 顺序读完整行。返回 (lines, consumed_bytes)。"""
     with open(path, 'rb') as f:
         f.seek(offset)
         raw = f.read(MAX_READ_BYTES)
@@ -60,14 +70,15 @@ def _read_forward(path: str, offset: int, limit: int):
         pos = nl + 1
     if not lines and len(raw) == MAX_READ_BYTES:
         # 整块无换行 = 超长行：跳读防活锁（否则 offset 不推进，永久重读同块）
-        return [SKIP_MARKER_TPL.format(n=len(raw))], len(raw), False
-    truncated = len(lines) == limit and (
-        pos < len(raw) or len(raw) == MAX_READ_BYTES)
-    return lines, pos, truncated
+        return [SKIP_MARKER_TPL.format(n=len(raw))], len(raw)
+    return lines, pos
 
 
 def read_tail(path: str, offset: int = -1, limit: int = DEFAULT_LIMIT) -> dict:
-    """spec §4.2 响应形状：{offset, size, rotated, truncated, missing, lines}。"""
+    """spec §4.2 响应形状：{offset, size, rotated, truncated, missing, lines}。
+
+    已知边界（spec 固有行为）：哨兵（offset=-1）恒返回 offset=size——文件尾部
+    若恰是未换行残段，该残段永不回读；其后续补全的新行从残段之后开始显示。"""
     if not path or not os.path.isfile(path):
         return _missing()
     size = os.path.getsize(path)
@@ -75,6 +86,9 @@ def read_tail(path: str, offset: int = -1, limit: int = DEFAULT_LIMIT) -> dict:
         lines, off = _tail_window(path, size, limit)
         return {'offset': off, 'size': size, 'rotated': offset > size,
                 'truncated': False, 'missing': False, 'lines': lines}
-    lines, consumed, truncated = _read_forward(path, offset, limit)
+    lines, consumed = _read_forward(path, offset, limit)
+    # 触限且未到文件尾才算 truncated（精确口径，spec §4.3；此前按"读满缓冲"
+    # 近似会在恰好读到 EOF 时误报）
+    truncated = len(lines) == limit and offset + consumed < size
     return {'offset': offset + consumed, 'size': size, 'rotated': False,
             'truncated': truncated, 'missing': False, 'lines': lines}

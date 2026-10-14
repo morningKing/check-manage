@@ -19,9 +19,17 @@ ai_logs_bp = Blueprint('ai_logs', __name__, url_prefix='/ai/logs')
 # server/ 目录（routes/ 的上一级）——与 logging_setup / opencode_global 落盘同口径
 _SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 白名单：逻辑名 → 落盘路径。公开展示给确认页的 ID 集合唯一入口。
+# 白名单：逻辑名 → 落盘路径。不接受用户传入路径。
+def _chat_log_path() -> str:
+    """chat 日志路径与写侧同源：尊重 logging_setup 的 AI_CHAT_LOG_FILE 覆写，
+    否则默认 <server>/ai-chat.log——不读该变量会在操作员覆写路径后显示旧文件
+    （恰好在最需要日志的排障场景下给出误导视图）。"""
+    return os.environ.get('AI_CHAT_LOG_FILE') or os.path.join(
+        _SERVER_DIR, 'ai-chat.log')
+
+
 LOG_FILES = {
-    'chat': os.path.join(_SERVER_DIR, 'ai-chat.log'),
+    'chat': _chat_log_path(),
     'serve': os.path.join(_SERVER_DIR, 'oc-serve.log'),
 }
 

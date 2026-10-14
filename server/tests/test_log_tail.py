@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.log_tail import (  # noqa: E402
-    MAX_READ_BYTES, TRUNC_SUFFIX, read_tail,
+    MAX_READ_BYTES, TAIL_WINDOW_BYTES, TRUNC_SUFFIX, read_tail,
 )
 
 
@@ -101,3 +101,23 @@ def test_giant_line_without_newline_skips_no_livelock(tmp_path):
 def test_crlf_stripped(tmp_path):
     path = _write(tmp_path, b'a\r\nb\r\n')
     assert read_tail(path, 0)['lines'] == ['a', 'b']
+
+
+def test_tail_window_drops_partial_head_segment(tmp_path):
+    """窗口起点落在行中时首段残片不得作为"伪行"返回（GNU tail 口径）。"""
+    first = b'y' * 100 + b'\n'            # 101B：窗口起点（第 50 字节）落在其内部
+    pad = b'p\n' * 131045                 # 262090B
+    path = _write(tmp_path, first + pad + b'zz\n')   # 合计 TAIL_WINDOW_BYTES + 50
+    r = read_tail(path, -1, limit=10)
+    assert r['lines'][0] == 'p'           # 残片被丢弃，首行是完整行
+    assert not any(set(ln) == {'y'} for ln in r['lines'])
+    assert r['lines'][-1] == 'zz'
+
+
+def test_truncated_false_when_buffer_exactly_at_eof(tmp_path):
+    """读满一块且恰好到文件尾：不算"触限未到尾部"，不得误报 truncated。"""
+    line = b'x' * (MAX_READ_BYTES - 1) + b'\n'       # 恰好一块 262144B
+    path = _write(tmp_path, line)
+    r = read_tail(path, 0, limit=1)
+    assert r['truncated'] is False
+    assert r['offset'] == MAX_READ_BYTES
