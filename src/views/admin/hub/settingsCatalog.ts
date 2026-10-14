@@ -84,6 +84,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       component: () => import('@/views/admin/AiSkillOpt.vue') },
     { id: 'gate-policies', label: '门禁策略', perm: 'admin.ai_chat_admin', icon: 'Lock',
       component: () => import('@/views/admin/GatePolicies.vue') },
+    { id: 'logs', label: '运行日志', perm: 'admin.ai_chat_admin', icon: 'Document',
+      component: () => import('@/views/admin/LogViewer.vue') },
     { id: 'ai-execution', label: 'AI 执行中心', perm: ['admin.ai_chat_admin', 'admin.ai_orchestration_admin'], icon: 'Tickets',
       component: () => import('@/views/admin/hub/AiExecutionHub.vue'),
       tabs: [
