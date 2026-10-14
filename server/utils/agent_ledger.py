@@ -892,11 +892,14 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
             deny_rows = cur.fetchall()
             for name, pattern in deny_rows:
                 if pattern and _re.search(pattern, args_text or ''):
+                    log.info('gate pre-deny hit rule=%s sid=%s tool=%s',
+                             name, session_id, tool)
                     return {'allow': False,
                             'reason': f'门禁规则「{name}」拦截了工具 {tool} 的调用',
                             'rules': len(deny_rows)}
             cur.execute(
-                "SELECT id, prompt, args_pattern, subagents FROM action_expectations "
+                "SELECT id, name, prompt, args_pattern, subagents, max_checks "
+                "FROM action_expectations "
                 "WHERE scope_id = %s AND mode = 'checkpoint' "
                 "  AND timing = 'before' AND tool = %s "
                 "ORDER BY created_at, id",
@@ -904,17 +907,22 @@ def pre_check_tool(session_id: str, tool: str, args_text: str,
             )
             check_rows = cur.fetchall()
             rules_n = len(deny_rows) + len(check_rows)
-            for rid, prompt, pattern, subagents in check_rows:
+            for rid, name, prompt, pattern, subagents, max_checks in check_rows:
                 if not pattern or not _re.search(pattern, args_text or ''):
                     continue
                 if subagents and (not agent_name or agent_name not in subagents):
                     continue
                 cur.execute(
                     "UPDATE action_expectations SET fired_count = fired_count + 1 "
-                    "WHERE id = %s AND fired_count < max_checks RETURNING id",
+                    "WHERE id = %s AND fired_count < max_checks "
+                    "RETURNING id, fired_count",
                     (rid,),
                 )
-                if cur.fetchone():
+                fired = cur.fetchone()
+                if fired:
+                    log.info('gate checkpoint-before hit rule=%s sid=%s '
+                             'tool=%s fired=%s/%s', name, session_id, tool,
+                             fired[1], max_checks)
                     return {'allow': False, 'reason': prompt, 'rules': rules_n}
             # 短路缓存口径=全会话规则总数（pre + checkpoint(before)，不限工具）：
             # 插件按 sessionID 缓存 rules=0，若按当前 tool 计数，首个无规则工具
@@ -945,24 +953,30 @@ def post_check_tool(session_id: str, tool: str, args_text: str,
     with db_ctx() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, prompt, args_pattern, subagents FROM action_expectations "
+                "SELECT id, name, prompt, args_pattern, subagents, max_checks "
+                "FROM action_expectations "
                 "WHERE scope_id = %s AND mode = 'checkpoint' "
                 "  AND timing = 'after' AND tool = %s "
                 "ORDER BY created_at, id",
                 (session_id, tool),
             )
             check_rows = cur.fetchall()
-            for rid, prompt, pattern, subagents in check_rows:
+            for rid, name, prompt, pattern, subagents, max_checks in check_rows:
                 if not pattern or not _re.search(pattern, args_text or ''):
                     continue
                 if subagents and (not agent_name or agent_name not in subagents):
                     continue
                 cur.execute(
                     "UPDATE action_expectations SET fired_count = fired_count + 1 "
-                    "WHERE id = %s AND fired_count < max_checks RETURNING id",
+                    "WHERE id = %s AND fired_count < max_checks "
+                    "RETURNING id, fired_count",
                     (rid,),
                 )
-                if cur.fetchone():
+                fired = cur.fetchone()
+                if fired:
+                    log.info('gate checkpoint-after hit rule=%s sid=%s '
+                             'tool=%s fired=%s/%s', name, session_id, tool,
+                             fired[1], max_checks)
                     return {'inject': True, 'prompt': prompt,
                             'rules': len(check_rows)}
             # 短路缓存口径=全会话 checkpoint(after) 规则总数（不限工具）——

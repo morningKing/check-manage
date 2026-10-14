@@ -22,6 +22,8 @@ sessionId 口径：插件看到的是 OpenCode 内部会话 id（ses_…）—�
 scope_id），子代理会话经 ai_chat_subtasks 归属根会话（deny list 登记在
 根作用域，约束整棵树）。
 """
+import logging
+
 from flask import Blueprint, jsonify, request
 
 from config import MCP_INTERNAL_TOKEN
@@ -31,10 +33,19 @@ from utils.agent_ledger import post_check_tool, pre_check_tool
 ai_gate_internal_bp = Blueprint('ai_gate_internal', __name__,
                                 url_prefix='/ai/gate/internal')
 
+log = logging.getLogger(__name__)
+
 
 def _authorized():
     token = request.headers.get('X-Internal-Token', '')
     return bool(MCP_INTERNAL_TOKEN) and token == MCP_INTERNAL_TOKEN
+
+
+def _unauthorized(endpoint: str):
+    """token 校验失败留痕——插件侧对非 2xx 静默放行（fail-open），token 错位
+    若两端都无日志，命中全 0 的问题无从定位（2026-10-14 生产排查教训）。"""
+    log.warning('gate %s unauthorized: X-Internal-Token mismatch, from=%s',
+                endpoint, request.remote_addr)
 
 
 def _resolve_session(oc_or_platform_id: str) -> tuple[str, str | None]:
@@ -80,6 +91,7 @@ def pre_check():
     插件侧同一抛错通道）。agent 名由 _resolve_session 一并解析传入。
     """
     if not _authorized():
+        _unauthorized('pre-check')
         return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(silent=True) or {}
     session_id = body.get('sessionId')
@@ -92,9 +104,7 @@ def pre_check():
         result = pre_check_tool(scope_id, str(tool), str(args_text or ''),
                                 agent_name=agent_name)
     except Exception as e:  # noqa: BLE001 —— 校验故障不阻断执行（fail-open）
-        import logging
-        logging.getLogger(__name__).warning(
-            'pre-check failed sid=%s tool=%s: %s', scope_id, tool, e)
+        log.warning('pre-check failed sid=%s tool=%s: %s', scope_id, tool, e)
         result = {'allow': True, 'error': str(e)[:200]}
     return jsonify(result), 200
 
@@ -107,6 +117,7 @@ def post_check():
     计划 Task 1/8）。fail-open 口径与 pre-check 相同：本端点不可达/非 2xx
     时插件侧不注入；查询异常服务端同样 fail-open 并留痕。"""
     if not _authorized():
+        _unauthorized('post-check')
         return jsonify({'error': 'forbidden'}), 403
     body = request.get_json(silent=True) or {}
     session_id = body.get('sessionId')
@@ -119,8 +130,6 @@ def post_check():
         result = post_check_tool(scope_id, str(tool), str(args_text or ''),
                                  agent_name=agent_name)
     except Exception as e:  # noqa: BLE001 —— 校验故障不注入（fail-open）
-        import logging
-        logging.getLogger(__name__).warning(
-            'post-check failed sid=%s tool=%s: %s', scope_id, tool, e)
+        log.warning('post-check failed sid=%s tool=%s: %s', scope_id, tool, e)
         result = {'inject': False, 'rules': 0, 'error': str(e)[:200]}
     return jsonify(result), 200
