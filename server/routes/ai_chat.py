@@ -1515,8 +1515,15 @@ def sse_events(sid):
                 # would drop the very event that discovers the subtask.
                 sig = apply_event(state, evt, opencode_session_id)
 
+                # 相关性闸门。例外：permission.* 永不因「子代理尚未被发现」被丢
+                # ——子代理的 permission.asked 可能早于教我们认它的 task part 到
+                # 达（发现依赖该 part 的 metadata.sessionId），丢掉它就等于让一
+                # 个正在阻塞中的回合静默挂死（2026-10-14 实测的交互会话挂死形态）。
+                # 订阅本身按会话工作区目录隔离（目录与平台会话一一对应），故目录
+                # 内的 permission 事件都属于本会话图谱；越界 id 在应答端 fail-closed。
                 relevant = (not ev_sid) or (ev_sid == opencode_session_id) \
-                    or (ev_sid in state['subtasks'])
+                    or (ev_sid in state['subtasks']) \
+                    or etype.startswith('permission.')
                 if not relevant:
                     continue
 
@@ -1978,19 +1985,61 @@ def reject_question(sid, request_id):
     return jsonify({'ok': True}), 200
 
 
+def _child_session_agents(client, sess) -> dict:
+    """本会话消息流里的子代理：{子会话 OC id: agent 名}。
+
+    授权询问/重水化都发生在回合中途，而 `ai_chat_subtasks` 行要到回合结束才
+    落库——中途唯一能拿到「这个 OC 会话是不是本会话委派出去的子代理」的地方
+    就是父会话自己的消息流：在跑的 task 工具 part 带着
+    `state.metadata.sessionId`（真实子会话 id）与 `state.input.subagent_type`
+    （agent 名）。取不到就返回空 dict（fail-closed：宁可让人等一下重开会话，
+    也不把别的会话的请求当自家的放行）。"""
+    out: dict = {}
+    try:
+        raw = client.get_messages(sess[2], directory=sess[4]) or []
+    except Exception:
+        logger.exception('child session scan failed sid=%s oc=%s', sess[0], sess[2])
+        return out
+
+    def _scan(parts):
+        for p in parts or []:
+            if not isinstance(p, dict):
+                continue
+            state = p.get('state') or {}
+            md = state.get('metadata') or {}
+            cid = md.get('sessionId') or md.get('sessionID')
+            if cid:
+                agent = (state.get('input') or {}).get('subagent_type')
+                if cid not in out or (not out[cid] and agent):
+                    out[cid] = agent
+            if p.get('type') == 'subtask':
+                _scan(p.get('parts'))          # 子代理占位 part 里的嵌套部分
+
+    for m in raw:
+        info = m.get('info') or {}
+        if info.get('role') == 'assistant':
+            _scan(m.get('parts'))
+    return out
+
+
 @ai_chat_bp.route('/sessions/<sid>/pending-permission', methods=['GET'])
 @login_required
 def get_pending_permission(sid):
     """Rehydrate a still-unanswered `permission.asked`（OpenCode 权限门——如
     `external_directory: ask` 下读工作区外的文件）。与 pending-question 同理：
     事件只发一次，浏览器断线/重连期间出现的询问否则永久丢失。无人值守的批
-    子会话不走这里（工作区已写项目级 allow / 清扫自动拒绝）。"""
+    子会话不走这里（工作区已写项目级 allow / 清扫自动拒绝）。
+
+    归属不止父会话自己：本会话**委派出去的子代理**（子会话）的询问同样浮
+    出来——它阻塞的是父回合（父的 task 工具在等子代理返回），只认父会话 id
+    会让这类询问在 UI 上永不可见。子代理的条目带 `subtaskAgent` 标注来源。"""
     user = flask_g.current_user
     sess = _load_session_for_user(sid, user['userId'])
     if not sess:
         return jsonify({'error': 'session not found', 'code': 'SESSION_NOT_FOUND'}), 404
+    client = OpenCodeClient(OPENCODE_BASE_URL)
     try:
-        pending = OpenCodeClient(OPENCODE_BASE_URL).list_permissions(directory=sess[4])
+        pending = client.list_permissions(directory=sess[4])
     except Exception:
         logger.exception('list_permissions failed session=%s', sid)
         return jsonify({'data': None, 'items': []}), 200
@@ -1998,7 +2047,13 @@ def get_pending_permission(sid):
     # 各自询问）。只回第一条的话，其余在 UI 上永不可见、OpenCode 侧却一直
     # 挂着等应答 → 回合静默卡死（2026-10-14 实测）。data 保留首条兼容旧
     # 调用方，items 给全量。
-    matches = [q for q in pending if q.get('sessionID') == sess[2]]
+    kids = _child_session_agents(client, sess)
+    matches = []
+    for q in pending:
+        if q.get('sessionID') == sess[2]:
+            matches.append(q)
+        elif q.get('sessionID') in kids:
+            matches.append({**q, 'subtaskAgent': kids.get(q['sessionID'])})
     return jsonify({'data': matches[0] if matches else None, 'items': matches}), 200
 
 
@@ -2018,7 +2073,16 @@ def reply_permission(sid, request_id):
         return jsonify({'error': 'response must be once/always/reject'}), 400
     client = OpenCodeClient(OPENCODE_BASE_URL)
     pending = client.list_permissions(directory=sess[4])
-    if not any(q.get('id') == request_id and q.get('sessionID') == sess[2] for q in pending):
+    # 归属：父会话自己的请求，或本会话委派出去的子代理（子会话）的请求——
+    # 子代理的询问阻塞的是父回合的 task 工具，父会话 UI 是唯一能答的地方。
+    kids = _child_session_agents(client, sess)
+
+    def _owned(q) -> bool:
+        if q.get('id') != request_id:
+            return False
+        return q.get('sessionID') == sess[2] or q.get('sessionID') in kids
+
+    if not any(_owned(q) for q in pending):
         return jsonify({'error': 'permission not found', 'code': 'PERMISSION_NOT_FOUND'}), 404
     client.reply_permission(request_id, response, directory=sess[4])
     return jsonify({'ok': True}), 200

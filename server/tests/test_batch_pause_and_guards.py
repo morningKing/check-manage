@@ -189,10 +189,41 @@ def test_auto_reject_swallows_opencode_errors(monkeypatch):
     def _boom(directory=''):
         raise RuntimeError('opencode down')
 
-    fake = type('F', (), {'list_questions': staticmethod(_boom)})
+    fake = type('F', (), {'list_questions': staticmethod(_boom)})()
     monkeypatch.setattr(eng, 'opencode_client', fake)
     # 不抛异常即可（辅助检查绝不能打断主轮询）
     eng.BatchWorker()._reject_pending_questions('oc')
+
+
+def test_auto_reject_covers_running_subagent_sessions(monkeypatch):
+    """子代理（子会话）的授权询问/提问同样无人能答。旧实现只按父会话 id 过滤，
+    子代理的询问漏网 → 父回合被它阻塞，要等 900s 工具卡死看门狗才失败。
+    extra_sids = 本回合在跑的子代理会话 id（父消息流里 task 工具给出）。"""
+    import utils.batch_engine as eng
+    perms, qs = [], []
+    fake = type('F', (), {
+        'list_permissions': staticmethod(lambda directory='': [
+            {'id': 'p1', 'sessionID': 'oc'},           # 批子会话自己 → 拒
+            {'id': 'p2', 'sessionID': 'oc_child'},     # 在跑的子代理 → 拒
+            {'id': 'p3', 'sessionID': 'oc_other'},     # 无关会话 → 不动
+            {'id': None, 'sessionID': 'oc'},           # 畸形 → 跳过
+        ]),
+        'reply_permission': staticmethod(
+            lambda pid, reply, directory='': perms.append((pid, reply))),
+        'list_questions': staticmethod(lambda directory='': [
+            {'id': 'q1', 'sessionID': 'oc'},
+            {'id': 'q2', 'sessionID': 'oc_child'},
+            {'id': 'q3', 'sessionID': 'oc_other'},
+        ]),
+        'reject_question': staticmethod(
+            lambda qid, directory='': qs.append(qid)),
+    })()
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    w = eng.BatchWorker()
+    w._reject_pending_permissions('oc', directory='/ws', extra_sids={'oc_child'})
+    w._reject_pending_questions('oc', directory='/ws', extra_sids={'oc_child'})
+    assert perms == [('p1', 'reject'), ('p2', 'reject')]
+    assert qs == ['q1', 'q2']
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +262,57 @@ def test_tool_stall_watchdog_kills_frozen_plain_tool(monkeypatch):
     assert ei.value.reason == 'tool stuck'
     assert '工具调用' in str(ei.value)
     assert aborted == ['oc']      # 失败前先 abort，别让 OpenCode 空转
+
+
+def test_turn_loop_auto_rejects_subagent_asks(monkeypatch):
+    """轮询把**在跑的子代理会话**一起传进清扫（不只是父会话自己）。
+
+    批任务不允许询问：没有用户能应答。父会话自己的询问早就有清扫（每 10s），
+    但子代理（子会话）的询问曾漏网——而工具卡死看门狗又会因为「子代理作保」
+    顺延不杀，父回合会被它拖到 900s 才失败。这条锁住调用点真的把子代理会话
+    传下去了。"""
+    import utils.batch_engine as eng
+    w = eng.BatchWorker()
+    w.SESSION_TIMEOUT_SEC = 0
+    w.STALL_TIMEOUT_SEC = 30
+    w.TOOL_STALL_TIMEOUT_SEC = 0
+    w.POLL_INTERVAL_SEC = 0.02
+    w.QUESTION_CHECK_INTERVAL = 999        # last_q_check=0 → 仅首轮扫一次
+
+    task_tool = [{'type': 'tool_use', 'name': 'task', 'status': 'running',
+                  'output_len': 0, 'child_sid': 'child1'}]
+    polls = {'n': 0}
+    perms, qs = [], []
+
+    def fake_list_messages(oc, directory=''):
+        polls['n'] += 1
+        if polls['n'] <= 2:
+            return [_msg(finish='tool-calls', running_tool=True, content=task_tool)]
+        return [_msg(finish='stop', content=[{'type': 'text', 'text': 'done'}])]
+
+    fake = type('F', (), {
+        'list_messages': staticmethod(fake_list_messages),
+        'list_permissions': staticmethod(lambda directory='': [
+            {'id': 'p_own', 'sessionID': 'oc'},            # 父会话自己 → 拒
+            {'id': 'p_child', 'sessionID': 'child1'},      # 在跑的子代理 → 拒
+            {'id': 'p_other', 'sessionID': 'someone_else'},  # 无关会话 → 不动
+        ]),
+        'reply_permission': staticmethod(
+            lambda pid, reply, directory='': perms.append(pid)),
+        'list_questions': staticmethod(lambda directory='': [
+            {'id': 'q_child', 'sessionID': 'child1'},
+        ]),
+        'reject_question': staticmethod(
+            lambda qid, directory='': qs.append(qid)),
+        'get_messages': staticmethod(lambda oc, directory='': []),
+    })()
+    monkeypatch.setattr(eng, 'opencode_client', fake)
+    _, msg = w._await_finished('oc', 'sid-test')
+
+    assert msg['content'][0]['text'] == 'done'
+    assert sorted(perms) == ['p_child', 'p_own']   # 子代理询问真的被传下去了
+    assert qs == ['q_child']
+    assert 'p_other' not in perms
 
 
 def test_tool_stall_deferred_while_subagent_progressing(monkeypatch):

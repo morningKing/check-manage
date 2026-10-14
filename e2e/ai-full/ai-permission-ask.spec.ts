@@ -57,3 +57,45 @@ test('普通会话：工作区外读取触发授权气泡，无需切换会话�
   await expect(card).toBeHidden({ timeout: 30_000 })
   await screenshot(page, 'permission-ask-answered')
 })
+
+test('普通会话：子代理发起的授权询问浮到父会话 UI 并可应答',
+     async ({ page, request }) => {
+  // 场景：模型把「读工作区外文件」委派给 @general 子代理。子代理的
+  // permission.asked 携带的是**子会话**的 sessionID：
+  //  - 后端代理曾因「子代理尚未被发现」把它整条丢掉（发现依赖教我们认它的
+  //    task part 的 metadata.sessionId，可能后到）；
+  //  - 前端曾按事件归属过滤把它当外部事件丢弃；
+  //  - 应答端的归属校验曾只认父会话 OC id。
+  // 三者任一不治，父回合都会静默挂到 900s 工具卡死看门狗（交互会话没有批
+  // 任务那套自动拒绝）。本用例锁死：气泡出现（带来源标注）且应答真的送达。
+  const created = await api(request, 'POST', '/ai/chat/sessions', {})
+  expect(created.status, '创建会话').toBeLessThan(300)
+  const sid = created.json.id
+
+  await page.goto('/')
+  await page.fill('input[placeholder*="用户名"]', 'admin')
+  await page.fill('input[placeholder*="密码"]', 'admin123')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
+  await page.waitForTimeout(2000)
+  await page.goto(`/ai-chat?session=${sid}`)
+  const input = page.getByPlaceholder(/给 AI 助手发消息/)
+  await input.waitFor({ state: 'visible', timeout: 60_000 })
+
+  await input.fill(
+    '请用 task 工具把下面这件事委派给 @general 子代理去做（你自己不要读）：'
+    + '用 read 工具读取 C:\\Windows\\System32\\drivers\\etc\\hosts 的前 2 行并原样贴出来。'
+    + '必须真的委派，不要跳过。')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  const card = page.locator('[data-test="permission-card"]')
+  await expect(card).toBeVisible({ timeout: 240_000 })
+  await expect(card).toContainText('来自子代理')   // 来源标注（agent 名可能有值）
+  await expect(card).toContainText('hosts')
+  console.log('subagent permission card:', (await card.innerText()).replace(/\s+/g, ' ').slice(0, 160))
+  await screenshot(page, 'permission-ask-subagent-card')
+
+  // 应答必须真的送达 OpenCode（归属校验放行子会话）→ 卡片消失、回合继续
+  await page.locator('[data-test="perm-once"]').click()
+  await expect(card).toBeHidden({ timeout: 30_000 })
+  await screenshot(page, 'permission-ask-subagent-answered')
+})

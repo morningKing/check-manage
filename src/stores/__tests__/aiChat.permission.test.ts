@@ -142,3 +142,56 @@ describe('pendingPermissions via SSE（队列语义）', () => {
     expect(store.pendingPermissions['s1']).toEqual([])
   })
 })
+
+describe('子代理（子会话）发起的授权询问', () => {
+  const CHILD_ASK = { ...PERMISSION, id: 'per_child', sessionID: 'oc_child' }
+
+  it('permission.asked 来自子会话同样入队：被阻塞的是父回合（父的 task 工具在等子代理）', () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_parent' })
+    ;(store as any)._handleEvent('s1', 'permission.asked', CHILD_ASK)
+    // 子代理来源要标注（卡片显示「来自子代理」，与重水化路径一致）
+    expect(store.pendingPermissions['s1']).toEqual([{ ...CHILD_ASK, subtaskAgent: '' }])
+    expect(store.activePendingPermission).toEqual({ ...CHILD_ASK, subtaskAgent: '' })
+  })
+
+  it('父会话自己的询问不标注子代理来源', () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_1' })  // = PERMISSION.sessionID
+    ;(store as any)._handleEvent('s1', 'permission.asked', PERMISSION)
+    expect(store.pendingPermissions['s1']).toEqual([PERMISSION])
+  })
+
+  it('permission.replied 来自子会话按 id 移除（多标签/别处应答的 echo）', () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_parent' })
+    ;(store as any)._handleEvent('s1', 'permission.asked', CHILD_ASK)
+    ;(store as any)._handleEvent('s1', 'permission.replied', { sessionID: 'oc_child', requestID: 'per_child' })
+    expect(store.pendingPermissions['s1']).toEqual([])
+  })
+
+  it('子会话的其它事件仍按外部事件丢弃（不污染父流式状态）', () => {
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    store.streaming['s1'] = true
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_parent' })
+    ;(store as any)._handleEvent('s1', 'session.idle', { sessionID: 'oc_child' })
+    expect(store.streaming['s1']).toBe(true)
+    expect(store.pendingPermissions['s1'] ?? []).toEqual([])
+  })
+
+  it('锚点会随新 session.hello 更新：clearSession 换 OC 会话后事件不再被判为外部', () => {
+    // 清空会话 → 后端重建 OpenCode 会话（新 id）。旧锚点会把新 hello 当外部
+    // 事件丢掉，锚点停在旧 id 后整条流的事件全被过滤 —— 会话看似卡死。
+    const store = useAiChatStore()
+    store.activeSessionId = 's1'
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_old' })
+    ;(store as any)._handleEvent('s1', 'session.hello', { sessionID: 'oc_new' })
+    store.streaming['s1'] = true
+    ;(store as any)._handleEvent('s1', 'session.idle', { sessionID: 'oc_new' })
+    expect(store.streaming['s1']).toBe(false)   // 新会话的事件按本会话处理
+  })
+})

@@ -333,6 +333,25 @@ def test_sse_events_filters_other_sessions(setup):
     assert 'OTHER' not in body
 
 
+def test_sse_events_forwards_permission_ask_from_undiscovered_child(setup):
+    """子代理的授权询问可能早于教我们认它的 task part 到达（发现依赖该 part 的
+    metadata.sessionId）。它阻塞的是父回合，丢掉就是静默挂死（2026-10-14 实测）
+    ——故 permission.* 不受「已发现子代理」闸门约束，必须原样转发；
+    真的越界 id 由应答端 fail-closed 兜底。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess_42', 'active', '/tmp/ws')
+    ask = {'id': 'per_child', 'sessionID': 'ses_child_not_yet_discovered',
+           'permission': 'external_directory', 'patterns': ['C:/Windows/*'],
+           'metadata': {'filepath': 'C:/Windows/win.ini'}, 'always': []}
+    oc.subscribe_events.return_value = iter([
+        {'event': 'permission.asked',
+         'data': {'type': 'permission.asked', 'properties': ask}},
+    ])
+    resp = client.get('/ai/chat/sessions/sess_x/events', headers=dev_h)
+    body = b''.join(resp.response).decode('utf-8')
+    assert 'permission.asked' in body and 'per_child' in body
+
+
 def test_sse_events_forwards_subtask_events_not_just_top_level(setup):
     """A subagent delegation runs under its own OpenCode sessionID, distinct
     from the top-level session's opencode_session_id. The SSE proxy must forward
@@ -1473,6 +1492,7 @@ def _perm(pid, oc_sid='oc_sess', **over):
 def test_get_pending_permission_returns_all_matching_in_items(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.get_messages.return_value = []          # 消息流里没有子代理
     oc.list_permissions.return_value = [
         _perm('per_a'),
         _perm('per_b'),
@@ -1490,6 +1510,7 @@ def test_get_pending_permission_returns_all_matching_in_items(setup):
 def test_get_pending_permission_none_when_no_match(setup):
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.get_messages.return_value = []
     oc.list_permissions.return_value = [_perm('per_other', 'oc_sess_unrelated')]
     resp = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
     assert resp.status_code == 200
@@ -1511,12 +1532,57 @@ def test_reply_permission_forwards_choice(setup):
 
 
 def test_reply_permission_not_owned_by_session_404(setup):
-    """requestID 属于别的 OpenCode 会话 → 404，不转发（与 question 同款 IDOR 守卫）。"""
+    """requestID 属于别的 OpenCode 会话（也不在本会话的子代理清单里）→ 404。"""
     client, cursor, oc, dev_h, _, _ = setup
     cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.get_messages.return_value = []
     oc.list_permissions.return_value = [_perm('per_a', 'oc_sess_someone_else')]
     resp = client.post('/ai/chat/sessions/sess_x/permissions/per_a/reply',
                        json={'response': 'once'}, headers=dev_h)
     assert resp.status_code == 404
     assert resp.get_json()['code'] == 'PERMISSION_NOT_FOUND'
     oc.reply_permission.assert_not_called()
+
+
+def _parent_msgs_with_task(child_sid, agent='general'):
+    """父会话消息流里在跑的 task 工具 part（子会话 id + agent 名都在其中）。"""
+    return [{'info': {'role': 'assistant', 'id': 'm1'}, 'parts': [
+        {'id': 'p1', 'type': 'tool', 'tool': 'task', 'messageID': 'm1',
+         'sessionID': 'oc_sess',
+         'state': {'status': 'running', 'input': {'subagent_type': agent},
+                   'metadata': {'sessionId': child_sid}}},
+    ]}]
+
+
+def test_get_pending_permission_includes_subtask_owned_with_agent(setup):
+    """子代理（子会话）的询问阻塞的是父回合（父的 task 工具在等它返回），
+    必须随父会话一起浮出来，并标注来源子代理——否则父回合静默挂到看门狗。
+    归属判据：子会话 id 出现在父消息流里在跑的 task 工具 part 上（中途也拿得到；
+    ai_chat_subtasks 行要到回合结束才落库）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.get_messages.return_value = _parent_msgs_with_task('oc_child')
+    oc.list_permissions.return_value = [
+        _perm('per_a'),
+        _perm('per_child', 'oc_child'),
+        _perm('per_other', 'oc_someone_else'),
+    ]
+    resp = client.get('/ai/chat/sessions/sess_x/pending-permission', headers=dev_h)
+    assert resp.status_code == 200
+    items = resp.get_json()['items']
+    assert [q['id'] for q in items] == ['per_a', 'per_child']
+    assert items[1]['subtaskAgent'] == 'general'
+
+
+def test_reply_permission_accepts_subtask_owned_request(setup):
+    """在 UI 上答子代理的询问要真的能送达 OpenCode（目录同父工作区）。"""
+    client, cursor, oc, dev_h, _, _ = setup
+    cursor.fetchone.return_value = ('sess_x', 'user-1', 'oc_sess', 'active', '/tmp/ws')
+    oc.get_messages.return_value = _parent_msgs_with_task('oc_child')
+    oc.list_permissions.return_value = [_perm('per_child', 'oc_child')]
+    resp = client.post('/ai/chat/sessions/sess_x/permissions/per_child/reply',
+                       json={'response': 'once'}, headers=dev_h)
+    assert resp.status_code == 200
+    a, k = oc.reply_permission.call_args
+    assert a[0] == 'per_child' and a[1] == 'once'
+    assert k.get('directory') == '/tmp/ws'

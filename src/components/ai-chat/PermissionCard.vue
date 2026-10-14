@@ -32,6 +32,10 @@ async function respond(response: 'once' | 'always' | 'reject') {
 
 const target = computed(() => props.request.metadata?.filepath || props.request.patterns?.[0] || '(未知路径)')
 const isDir = computed(() => !props.request.metadata?.filepath)
+// 后端重水化时会标注来源（键存在即为子代理发起）；实时事件不带该键
+const fromSubagent = computed(() => props.request.subtaskAgent !== undefined)
+const subagentLabel = computed(() => props.request.subtaskAgent
+  ? `来自子代理：${props.request.subtaskAgent}` : '来自子代理')
 </script>
 
 <template>
@@ -39,6 +43,7 @@ const isDir = computed(() => !props.request.metadata?.filepath)
     <div class="perm-card__head">
       <ElIcon class="perm-card__icon"><Lock /></ElIcon>
       <span class="perm-card__title">权限请求 · {{ request.permission }}</span>
+      <span v-if="fromSubagent" class="perm-card__from">{{ subagentLabel }}</span>
       <span v-if="extra" class="perm-card__extra">另有 {{ extra }} 条待授权</span>
     </div>
     <div class="perm-card__body">
@@ -80,6 +85,14 @@ const isDir = computed(() => !props.request.metadata?.filepath)
   margin-bottom: 6px;
 }
 .perm-card__icon { color: var(--el-color-warning); }
+.perm-card__from {
+  font-size: 12px;
+  font-weight: 400;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
 .perm-card__extra {
   margin-left: auto;
   font-size: 12px;

@@ -2599,8 +2599,13 @@ class BatchWorker:
             now = time.time()
             if now - last_q_check >= self.QUESTION_CHECK_INTERVAL:
                 last_q_check = now
-                self._reject_pending_questions(oc_session_id, directory=directory)
-                self._reject_pending_permissions(oc_session_id, directory=directory)
+                # 子代理会话的询问一并扫：它阻塞的是父回合的 task 工具，而
+                # 工具卡死看门狗会因为「子代理作保」顺延——不扫就没人管它。
+                sub_sids = set(self._running_task_children(msgs, baseline_ids))
+                self._reject_pending_questions(oc_session_id, directory=directory,
+                                               extra_sids=sub_sids)
+                self._reject_pending_permissions(oc_session_id, directory=directory,
+                                                 extra_sids=sub_sids)
             if on_progress and now - last_persist_at >= self.PROGRESS_PERSIST_SEC:
                 try:
                     on_progress()
@@ -3494,19 +3499,25 @@ class BatchWorker:
             return 'pause'
         return None
 
-    def _reject_pending_questions(self, oc_session_id: str, directory: str = ''):
+    def _reject_pending_questions(self, oc_session_id: str, directory: str = '',
+                                  extra_sids: set | None = None):
         """无人值守兜底：模型调用 question 工具向用户提问会把回合无限期挂起
         （批任务没有用户能回答）。发现本会话的 pending 问题就自动拒绝 ——
         OpenCode 把该工具调用标记为 rejected 并让模型继续（与交互聊天里用户
         点「拒绝」是同一条机制）。全部防御式包装：OpenCode 不可达或返回畸形
-        数据都直接跳过，绝不因这个辅助检查打断主轮询。"""
+        数据都直接跳过，绝不因这个辅助检查打断主轮询。
+
+        `extra_sids`：本回合在跑的子代理会话 id（父消息流里 task 工具给出的
+        `child_sid`）。子代理的提问同样无人能答，而它阻塞的是**父回合**——只
+        按父会话 id 过滤会让它漏网，父回合要等 900s 工具卡死看门狗才失败。"""
+        accepted = {oc_session_id} | set(extra_sids or ())
         try:
             pending = opencode_client.list_questions(directory=directory)
             items = [q for q in (pending or []) if isinstance(q, dict)]
         except Exception:
             return
         for q in items:
-            if q.get('sessionID') != oc_session_id or not q.get('id'):
+            if q.get('sessionID') not in accepted or not q.get('id'):
                 continue
             try:
                 opencode_client.reject_question(q['id'], directory=directory)
@@ -3515,18 +3526,24 @@ class BatchWorker:
             except Exception:
                 traceback.print_exc()
 
-    def _reject_pending_permissions(self, oc_session_id: str, directory: str = ''):
+    def _reject_pending_permissions(self, oc_session_id: str, directory: str = '',
+                                    extra_sids: set | None = None):
         """无人值守兜底（2026-09-30）：批子会话工作区已写 external_directory
         allow，但其他权限类型（如 doom_loop）仍可能触发 ask——权限询问同样
         无人能答、无限期挂起。发现本会话的挂起权限请求就自动 reject（模型
-        收到拒绝后自行继续）。防御式包装同 _reject_pending_questions。"""
+        收到拒绝后自行继续）。防御式包装同 _reject_pending_questions。
+
+        `extra_sids` 同 _reject_pending_questions：子代理会话的权限询问一并
+        拒绝（它阻塞的是父回合的 task 工具，父级看门狗的「子代理作保」还会
+        因此顺延不杀——不扫就会挂到很久）。"""
+        accepted = {oc_session_id} | set(extra_sids or ())
         try:
             pending = opencode_client.list_permissions(directory=directory)
             items = [q for q in (pending or []) if isinstance(q, dict)]
         except Exception:
             return
         for q in items:
-            if q.get('sessionID') != oc_session_id or not q.get('id'):
+            if q.get('sessionID') not in accepted or not q.get('id'):
                 continue
             try:
                 opencode_client.reply_permission(q['id'], 'reject',

@@ -182,6 +182,9 @@ const _ocSidBySession: Record<string, string | null> = {}
 // state.metadata.sessionId）。刻意不随 _resetStreamState 清空——跨回合的
 // 归属判别需要它（子代理事件在多段委托/切回场景下随时可能到达）。
 const _childSids: Record<string, Set<string>> = {}
+// 平台会话 id → { 子会话 id: agent 名 }。授权气泡要标注来源（子代理发起的
+// 询问浮到父会话 UI 时，用户得知道这条不是父级发起的）。同样不随回合清空。
+const _childAgentBySid: Record<string, Record<string, string>> = {}
 
 /** 从事件 payload 提取该事件所属的 OpenCode sessionID（与后端
  * chat_persist.event_session_id 同构：props.sessionID / part / info）。 */
@@ -1090,7 +1093,18 @@ export const useAiChatStore = defineStore('aiChat', {
       // session.error 还会重置父会话流式门禁（切回会话/多段委托后区块
       // 冻结到回合结束或中断）。子代理内容统一走 REST 轮询（SubtaskBubble
       // 展开自取 / pollSubtaskTodos），外部会话事件一律不触碰父流式状态。
-      if (_isForeignEvent(sid, _eventSessionId(data))) return
+      //
+      // 例外一：session.hello 就是订阅锚点本身，必须无条件采纳。clearSession
+      // 会重建 OpenCode 会话（新 id），旧锚点会把新 hello 判成「外部事件」丢
+      // 掉 → 锚点停留在旧 id，随后整条流的事件全被判为外部 → 会话看似卡死，
+      // 直到刷新页面。
+      // 例外二：permission.* 不按归属过滤——后端只转发本会话图谱内的事件
+      // （父 + 已发现的子代理），而**子代理的授权询问阻塞的是父回合**（父的
+      // task 工具在等子代理返回），父会话 UI 是唯一能答的地方，丢掉它父回合
+      // 就静默挂死（2026-10-14 实测）。它只写 pendingPermissions 队列，不触碰
+      // 流式状态，对本段注释守的那些坑无影响。
+      if (event !== 'session.hello' && !event.startsWith('permission.')
+          && _isForeignEvent(sid, _eventSessionId(data))) return
       switch (event) {
         case 'session.hello': {
           // 订阅锚点：本流父会话的 OC sessionID（后端在爆发/实时事件之前
@@ -1145,6 +1159,8 @@ export const useAiChatStore = defineStore('aiChat', {
               // 委托发生/状态推进:启动(或继续)子代理 todo 轮询
               void this.pollSubtaskTodos(sid)
               ;(_childSids[sid] ?? (_childSids[sid] = new Set())).add(childSid)
+              ;(_childAgentBySid[sid] ?? (_childAgentBySid[sid] = {}))[childSid] =
+                st.input?.subagent_type ?? ''
               ;(_toolChildByMsg[sid] ?? (_toolChildByMsg[sid] = {}))[part.messageID] = childSid
               const subPartId = _subtaskPartByMsg[sid]?.[part.messageID]
               if (subPartId) {
@@ -1284,7 +1300,13 @@ export const useAiChatStore = defineStore('aiChat', {
           if (!req?.id) break
           const list = this.pendingPermissions[sid] ?? (this.pendingPermissions[sid] = [])
           // 同一请求可能被爆发/重连补发两次，按 id 去重
-          if (!list.some((x) => x.id === req.id)) list.push(req)
+          if (list.some((x) => x.id === req.id)) break
+          // 子代理发起的询问：标注来源（重水化路径由后端标注，这里补实时路径）
+          const oc = _ocSidBySession[sid]
+          const fromChild = !!oc && !!req.sessionID && req.sessionID !== oc
+          list.push(fromChild && req.subtaskAgent === undefined
+            ? { ...req, subtaskAgent: _childAgentBySid[sid]?.[req.sessionID] ?? '' }
+            : req)
           break
         }
         case 'permission.replied':

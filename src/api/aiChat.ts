@@ -452,6 +452,8 @@ export interface PermissionRequest {
   patterns: string[]
   metadata: { filepath?: string; parentDir?: string }
   always?: string[]
+  /** 重水化时由后端标注：该询问来自本会话委派出去的子代理（值为 agent 名） */
+  subtaskAgent?: string | null
 }
 
 export function getPendingPermission(id: string) {
