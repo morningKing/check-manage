@@ -952,3 +952,65 @@ class TestDeriveSkillDurations:
         rows = derive_skill_durations(db_conn, aid, sid, w0, w1)
         hit = next(r for r in rows if r['name'] == 'ghost')
         assert hit['durationMs'] is None
+
+
+class TestChildPerfEndpoint:
+    """批子会话性能报告端点（2026-10-15）：解析子会话最新 attempt，payload
+    与 /perf/attempts/<aid> 同形状（两处入口共用 attempt_payload 装配）。"""
+
+    def test_payload_shape_matches_attempt_endpoint(self, db_conn, user_id,
+                                                    pf_client, admin_h):
+        bid, sid, aid = _seed_perf(db_conn, user_id,
+                                   model_turns=[(1000, 5, 7, 0)])
+        r1 = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                           headers=admin_h)
+        assert r1.status_code == 200
+        d1 = r1.get_json()
+        r2 = pf_client.get(f'/ai/chat/admin/perf/attempts/{aid}', headers=admin_h)
+        assert r2.status_code == 200
+        d2 = r2.get_json()
+        # 同形状契约：键集一致（防两处装配分叉）
+        assert set(d1) == set(d2)
+        assert set(d1['attempt']) == set(d2['attempt'])
+        assert d1['attempt']['attemptId'] == aid
+        assert d1['attempt']['sessionId'] == sid
+
+    def test_latest_attempt_selected(self, db_conn, user_id, pf_client, admin_h):
+        bid, sid, aid1 = _seed_perf(db_conn, user_id)
+        aid2 = str(uuid.uuid4())
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ai_execution_attempts (id, session_id, source_type,"
+                " source_id, status, started_at, finished_at, attempt_no) "
+                "VALUES (%s,%s,'batch',%s,'completed', NOW() - interval '50 seconds',"
+                "        NOW() - interval '10 seconds', 2)", (aid2, sid, bid))
+        db_conn.commit()
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                          headers=admin_h)
+        assert r.status_code == 200
+        assert r.get_json()['attempt']['attemptId'] == aid2
+
+    def test_empty_state_when_no_attempt(self, db_conn, user_id,
+                                         pf_client, admin_h):
+        bid, sid, aid = _seed_perf(db_conn, user_id)
+        with db_conn.cursor() as cur:
+            cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (aid,))
+        db_conn.commit()
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{sid}/perf',
+                          headers=admin_h)
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body['empty'] is True and body['attempt'] is None
+
+    def test_unknown_child_404(self, db_conn, user_id, pf_client, admin_h):
+        bid, _sid, _aid = _seed_perf(db_conn, user_id)
+        r = pf_client.get(f'/ai/chat/admin/batches/{bid}/sessions/{uuid.uuid4()}/perf',
+                          headers=admin_h)
+        assert r.status_code == 404
+
+    def test_requires_admin_permission(self, pf_client):
+        from auth import create_token
+        tok = create_token({'id': 'u2', 'username': 'g', 'role': 'guest'})
+        r = pf_client.get('/ai/chat/admin/batches/b-x/sessions/s-x/perf',
+                          headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 403
