@@ -25,6 +25,9 @@
 部署与故障处置的操作性文档（诊断路径、修复步骤、验证标准）：
 
 - [`mcp-internal-token-403-修复.md`](./ops/mcp-internal-token-403-修复.md) — 内部通道 403 / 门禁命中恒 0 的诊断与修复
+- 启动残留体检脚本：[`server/scripts/stale_check.py`](../server/scripts/stale_check.py)
+  — 端口占用/归属/孤儿进程/oc-serve.log 状态，只读、退出码 2 表示有残留
+  （「proxy 启动成功但服务旧代码/旧 serve」类静默故障的启动前检查）
 
 ## 快速导航
 
