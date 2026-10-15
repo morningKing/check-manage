@@ -93,6 +93,24 @@ def _authorized():
 **token 三级链**：serve 进程 env `BAIZE_INTERNAL_TOKEN`（最高）→ 插件文件嵌入值
 （回落）→ 服务端 `config.MCP_INTERNAL_TOKEN`（比对基准，来自 `.env`）。
 
+### 三条指纹日志（2026-10-15 起，一眼对账）
+
+| 位置 | 日志（各自文件） | 含义 |
+| --- | --- | --- |
+| 后端启动 | `ai-chat.log`：`MCP_INTERNAL_TOKEN configured fingerprint=xxxxxx…len=N`（未配置则为 warning） | 后端实际生效的配置值 |
+| 插件加载 | `oc-serve.log`：`[baize-trace] gate token source=env\|file fingerprint=…` | 插件实际使用的值 + 来源（env=serve 进程环境 / file=插件文件回落） |
+| 每次 403 | `ai-chat.log`：`token 不匹配 server=… got=…` 或 `未配置（一律拒绝） got=…` | 服务端 vs 请求带来的值，双侧对照 |
+
+判读：**插件 fingerprint == 后端 fingerprint → 对齐**；不等 → 就是它，按 §4 重启链
+对齐。只打前缀+长度（指纹），不落完整凭据。
+
+两个注意：
+- 插件日志在**会话首次运行时**才打印（OC 懒加载插件）——重启 serve 后没跑过任务时
+  `oc-serve.log` 里没有这行是正常的；**跑过一次任务仍没有这行 = serve 加载的还是
+  老插件**（未重启或加载了别的目录的插件文件）。
+- `source=file` 本身不是故障：平台重启端点拉起的 serve 不带 env、回落文件，只要
+  后端刚重写过文件即正确；`source=env` 则比对该 fingerprint 与后端启动指纹。
+
 **403 的两种情形**：
 
 | 情形 | 判据 | 修复 |
