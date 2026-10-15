@@ -757,3 +757,39 @@ def derive_skill_durations(db_ctx, attempt_id: str, session_id: str,
                     'invokedAt': _iso(inv['invoked_at']),
                     'durationMs': duration})
     return out
+
+
+def attempt_payload(db_ctx, attempt_id: str) -> dict | None:
+    """perf/attempts 路由的响应装配（两处入口共用：技能拟合优化性能分析页、
+    批任务子会话性能报告）。返回 None = attempt 不存在。
+
+    2026-10-15 自 ai_session_admin.perf_attempt 路由抽出（新增批子会话入口，
+    避免两处装配逻辑分叉）。响应形状与键名是前端 PerfAttemptDetail 契约。
+    """
+    m = load_attempt_metrics(db_ctx, attempt_id)
+    if not m:
+        return None
+    cov = m.get('coverage') or {
+        'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
+        'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs'],
+        'toolMs': 0}
+    # skill 调用耗时（方案 2）：runtime 精确 + 启发式 inferred，纯读推导
+    _s = _dt.fromisoformat(m['startedAt']) if m.get('startedAt') else None
+    _e = _dt.fromisoformat(m['finishedAt']) if m.get('finishedAt') else None
+    skills = derive_skill_durations(
+        db_ctx, attempt_id, m['sessionId'],
+        int(_s.timestamp() * 1000) if _s else 0,
+        int(_e.timestamp() * 1000) if _e else 0)
+    return {'attempt': {**{k: v for k, v in m.items()
+                           if k not in ('turnDetails', 'subtasks', 'tools',
+                                        'coverage', 'subTurns')},
+                        'toolMs': cov.get('toolMs', 0)},
+            'coverage': cov,
+            'turns': m.get('turnDetails') or [],
+            'subtasks': m.get('subtasks') or [],
+            # subTurns 必须在顶层：前端嵌套分解读 detail.subTurns——
+            # 曾只留在 attempt 里，轮次窗模式在生产是死代码（自验证发现）
+            'subTurns': m.get('subTurns') or {},
+            'tools': m.get('tools') or {},
+            'skills': skills,
+            'completeness': m.get('completeness')}

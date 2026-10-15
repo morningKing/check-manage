@@ -103,6 +103,35 @@ def child_gate(batch_id, sid):
                     'expectations': exps})
 
 
+@ai_batch_admin_bp.get('/<batch_id>/sessions/<sid>/perf')
+@require_permission('admin.ai_chat_admin')
+def child_perf(batch_id, sid):
+    """子任务性能报告（管理面只读）：解析该子会话**最新一次**执行 attempt，
+    返回与 /ai/chat/admin/perf/attempts/<aid> 同形状的 payload（概要/轮次/
+    子代理/逐调用明细/重复/失败计数）——批任务排障视角的性能报告出口
+    （2026-10-15 需求：工具耗时 Top 到参数/推理 Top/失败/重复调用）。
+
+    无执行记录（未跑过/attempt 未落库）→ 200 {'attempt': None, 'empty': True}，
+    前端显示空态，不当作错误。"""
+    sess = admin_get_child_session(batch_id, sid)
+    if sess is None:
+        return jsonify({'error': '子任务不存在', 'code': 'NOT_FOUND'}), 404
+    from db import get_db
+    from utils.perf_analysis import attempt_payload
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM ai_execution_attempts WHERE session_id = %s "
+                "ORDER BY started_at DESC NULLS LAST LIMIT 1", (sid,))
+            row = cur.fetchone()
+    if not row:
+        return jsonify({'attempt': None, 'empty': True})
+    payload = attempt_payload(get_db, row[0])
+    if payload is None:
+        return jsonify({'attempt': None, 'empty': True})
+    return jsonify(payload)
+
+
 @ai_batch_admin_bp.get('')
 @require_permission('admin.ai_chat_admin')
 def list_all():

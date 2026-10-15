@@ -1570,35 +1570,13 @@ def perf_def_tasks(kind, name):
 @require_permission('admin.ai_chat_admin')
 def perf_attempt(aid):
     from db import get_db
-    from utils.perf_analysis import (load_attempt_metrics,
-                                     derive_skill_durations)
-    m = load_attempt_metrics(get_db, aid)
-    if not m:
+    from utils.perf_analysis import attempt_payload
+    # 装配抽到 perf_analysis.attempt_payload（2026-10-15）：批任务子会话
+    # 性能报告入口共用同一响应形状，两处不再分叉。
+    payload = attempt_payload(get_db, aid)
+    if payload is None:
         return jsonify({'error': 'attempt not found'}), 404
-    cov = m.get('coverage') or {
-        'wallMs': m['wallMs'], 'modelMs': m['modelMs'],
-        'subagentWaitMs': m['subagentWaitMs'], 'idleMs': m['idleMs'],
-        'toolMs': 0}
-    # skill 调用耗时（方案 2）：runtime 精确 + 启发式 inferred，纯读推导
-    from datetime import datetime as _dt
-    _s = _dt.fromisoformat(m['startedAt']) if m.get('startedAt') else None
-    _e = _dt.fromisoformat(m['finishedAt']) if m.get('finishedAt') else None
-    skills = derive_skill_durations(
-        get_db, aid, m['sessionId'],
-        int(_s.timestamp() * 1000) if _s else 0,
-        int(_e.timestamp() * 1000) if _e else 0)
-    return jsonify({'attempt': {**{k: v for k, v in m.items()
-                                   if k not in ('turnDetails', 'subtasks', 'tools', 'coverage', 'subTurns')},
-                                 'toolMs': cov.get('toolMs', 0)},
-                    'coverage': cov,
-                    'turns': m.get('turnDetails') or [],
-                    'subtasks': m.get('subtasks') or [],
-                    # subTurns 必须在顶层：前端嵌套分解读 detail.subTurns——
-                    # 曾只留在 attempt 里，轮次窗模式在生产是死代码（自验证发现）
-                    'subTurns': m.get('subTurns') or {},
-                    'tools': m.get('tools') or {},
-                    'skills': skills,
-                    'completeness': m.get('completeness')})
+    return jsonify(payload)
 
 
 @ai_execution_admin_bp.post('/perf/attempts/<aid>/reconcile-task-durations')
