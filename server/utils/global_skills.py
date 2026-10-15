@@ -254,10 +254,12 @@ def list_skill_files(skill_id: str, workspace_root: str) -> list[dict]:
         for fn in filenames:
             fp = os.path.join(dirpath, fn)
             rel = os.path.relpath(fp, skill_dir).replace(os.sep, '/')
+            st = os.stat(fp)
             files.append({
                 'name': fn,
                 'path': rel,
-                'size': os.path.getsize(fp),
+                'size': st.st_size,
+                'mtime': int(st.st_mtime),   # 2026-10-15 文件树时间列
             })
     files.sort(key=lambda f: f['path'])
     return files

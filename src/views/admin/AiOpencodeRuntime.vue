@@ -223,28 +223,20 @@
 
     <!-- ── skill 附属文件管理 dialog ── -->
     <el-dialog v-model="showFiles" :title="`技能文件 — ${filesSkill}（脚本/模板等附属文件）`"
-               width="680px" destroy-on-close>
-      <div class="oc-runtime__toolbar">
-        <el-button size="small" @click="openFileCreate">新建文本文件</el-button>
-        <span class="oc-runtime__hint">脚本类文件保存后对之后的 Agent 运行即时生效；SKILL.md 变更需重启 OpenCode。</span>
-      </div>
-      <el-table :data="skillFiles" v-loading="filesLoading" size="small" max-height="380">
-        <el-table-column prop="path" label="路径" min-width="240" show-overflow-tooltip />
-        <el-table-column label="大小" width="100">
-          <template #default="{ row }">{{ formatSize(row.size) }}</template>
-        </el-table-column>
-        <el-table-column label="修改时间" width="160">
-          <template #default="{ row }">{{ fmtTime(row.mtime) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openFileEdit(row)">
-              {{ row.path.toUpperCase() === 'SKILL.MD' ? '编辑' : '查看/编辑' }}
-            </el-button>
-            <el-button link type="danger" @click="onDeleteFile(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+               width="760px" destroy-on-close>
+      <SkillFilesTree ref="filesTreeRef" :files="skillFiles" :loading="filesLoading"
+                      @select="openFileEdit">
+        <template #toolbar>
+          <el-button size="small" @click="openFileCreate">新建文本文件</el-button>
+          <span class="oc-runtime__hint">脚本类文件保存后对之后的 Agent 运行即时生效；SKILL.md 变更需重启 OpenCode。</span>
+        </template>
+        <template #actions="{ file }">
+          <el-button link type="primary" @click="openFileEdit(file)">
+            {{ file.path.toUpperCase() === 'SKILL.MD' ? '编辑' : '查看/编辑' }}
+          </el-button>
+          <el-button link type="danger" @click="onDeleteFile(file)">删除</el-button>
+        </template>
+      </SkillFilesTree>
     </el-dialog>
 
     <!-- ── 附属文件编辑/新建 dialog ── -->
@@ -330,6 +322,7 @@ import type {
 import { listPlatformSkills } from '@/api/aiOpencodeAdmin'
 import type { GlobalSkill } from '@/api/aiSkills'
 import PlatformSkillsPanel from '@/components/admin/PlatformSkillsPanel.vue'
+import SkillFilesTree from '@/components/admin/SkillFilesTree.vue'
 import McpServersCard from '@/components/admin/McpServersCard.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -545,6 +538,8 @@ const skillFiles = ref<api.SkillFileInfo[]>([])
 const filesLoading = ref(false)
 const showFileEdit = ref(false)
 const fileForm = ref({ creating: false, path: '', content: '', truncated: false })
+/** 文件树实例：保存/新建后展开定位到目标文件（默认只展开根层，不丢上下文） */
+const filesTreeRef = ref<InstanceType<typeof SkillFilesTree> | null>(null)
 
 async function openFiles(row: GlobalSkillItem) {
   filesSkill.value = row.name
@@ -560,7 +555,7 @@ function openFileCreate() {
   showFileEdit.value = true
 }
 
-async function openFileEdit(row: api.SkillFileInfo) {
+async function openFileEdit(row: { path: string }) {
   try {
     const d = await api.readSkillFile(filesSkill.value, row.path)
     fileForm.value = {
@@ -578,15 +573,16 @@ async function openFileEdit(row: api.SkillFileInfo) {
 async function saveFile() {
   saving.value = true
   try {
-    await api.writeSkillFile(filesSkill.value, fileForm.value.path.trim(),
-                             fileForm.value.content)
+    const path = fileForm.value.path.trim()
+    await api.writeSkillFile(filesSkill.value, path, fileForm.value.content)
     ElMessage.success('已保存（脚本类文件即时生效；SKILL.md 变更需重启 OpenCode）')
     showFileEdit.value = false
     skillFiles.value = (await api.listSkillFiles(filesSkill.value)).files
+    filesTreeRef.value?.revealPath(path)   // 展开并定位到刚保存的文件
   } catch (e: unknown) { ElMessage.error(errText(e)) } finally { saving.value = false }
 }
 
-async function onDeleteFile(row: api.SkillFileInfo) {
+async function onDeleteFile(row: { path: string }) {
   try {
     await ElMessageBox.confirm(`删除文件「${row.path}」？`, '删除确认', { type: 'warning' })
   } catch { return }
@@ -595,13 +591,6 @@ async function onDeleteFile(row: api.SkillFileInfo) {
     ElMessage.success('已删除')
     skillFiles.value = (await api.listSkillFiles(filesSkill.value)).files
   } catch (e: unknown) { ElMessage.error(errText(e)) }
-}
-
-function formatSize(n: number | null): string {
-  if (n == null) return '—'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
 // ── Agent 编辑 ──────────────────────────────────────────────

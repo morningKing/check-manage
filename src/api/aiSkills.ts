@@ -17,6 +17,8 @@ export interface GlobalSkillFile {
   name: string
   path: string
   size: number
+  /** 秒级时间戳（2026-10-15 起文件树展示修改时间列） */
+  mtime?: number
 }
 
 export function listGlobalSkills() {

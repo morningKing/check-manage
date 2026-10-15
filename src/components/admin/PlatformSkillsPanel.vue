@@ -85,17 +85,9 @@
     </el-dialog>
 
     <!-- Files dialog -->
-    <el-dialog v-model="showFiles" :title="`技能文件 — ${filesTarget?.name}`" width="600px"
+    <el-dialog v-model="showFiles" :title="`技能文件 — ${filesTarget?.name}`" width="760px"
                destroy-on-close>
-      <div v-loading="filesLoading">
-        <div v-if="skillFiles.length === 0" class="el-text-color-secondary">无文件</div>
-        <div v-for="f in skillFiles" :key="f.path" class="platform-skills__file-item"
-             @click="previewFile(f)">
-          <span class="platform-skills__file-name">{{ f.name }}</span>
-          <span class="platform-skills__file-path el-text-color-secondary">{{ f.path }}</span>
-          <span class="platform-skills__file-size el-text-color-secondary">{{ formatSize(f.size) }}</span>
-        </div>
-      </div>
+      <SkillFilesTree :files="skillFiles" :loading="filesLoading" @select="previewFile" />
     </el-dialog>
 
     <!-- File preview dialog -->
@@ -115,6 +107,7 @@ import {
   listSkillFiles, readSkillFile, uploadGlobalSkill,
   type GlobalSkill, type GlobalSkillFile,
 } from '@/api/aiSkills'
+import SkillFilesTree from '@/components/admin/SkillFilesTree.vue'
 
 const skills = ref<GlobalSkill[]>([])
 const loading = ref(false)
@@ -231,7 +224,7 @@ async function openFiles(skill: GlobalSkill) {
   }
 }
 
-async function previewFile(f: GlobalSkillFile) {
+async function previewFile(f: { path: string }) {
   if (!filesTarget.value) return
   previewPath.value = f.path
   previewContent.value = ''
@@ -280,34 +273,6 @@ onMounted(fetchList)
   &__name {
     font-weight: 500;
     font-family: monospace;
-  }
-
-  &__file-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 6px 0;
-    cursor: pointer;
-    &:hover { background: var(--el-fill-color-light); }
-  }
-
-  &__file-name {
-    min-width: 120px;
-    font-weight: 500;
-  }
-
-  &__file-path {
-    flex: 1;
-    font-family: monospace;
-    font-size: 12px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__file-size {
-    min-width: 70px;
-    text-align: right;
   }
 
   &__preview {
