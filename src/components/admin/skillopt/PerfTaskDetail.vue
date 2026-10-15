@@ -16,6 +16,9 @@
           <span v-if="(cov.toolMs ?? 0) > 0"><i class="dot dot--tool" />工具 {{ pct(ratio(cov.toolMs ?? 0)) }}</span>
           <span><i class="dot dot--idle" />引擎间隙 {{ pct(ratio(cov.idleMs)) }}</span>
           <span class="muted">墙钟 {{ fmtMs(cov.wallMs) }}</span>
+          <el-button size="small" type="primary" plain class="cov__report-btn"
+                     data-test="open-full-report" @click="showFullReport = true">
+            完整性能报告</el-button>
         </div>
         <ElAlert v-if="reconcileGap && !reconciled" type="warning"
                  :closable="false" data-test="reconcile-hint" class="reconcile-hint">
@@ -252,6 +255,10 @@
       </template>
     </div>
   </ElDrawer>
+  <!-- 完整性能报告（2026-10-15）：与批任务页共用同一报告组件（attemptId 入口） -->
+  <SubtaskPerfReport v-if="showFullReport" :attempt-id="props.attemptId"
+                     title="性能报告（含 Top 与失败/重复清单）"
+                     @close="showFullReport = false" />
 </template>
 
 <script setup lang="ts">
@@ -265,11 +272,14 @@ import { buildWaterfallOption } from './chartOptions'
 import { buildTurnTimeline, type TurnTimeline } from './turnTimeline'
 import TurnTimelineChart from './TurnTimelineChart.vue'
 import PerfDiagnosisList from './PerfDiagnosisList.vue'
+import SubtaskPerfReport from './SubtaskPerfReport.vue'
 import { fmtMs, pct } from './format'
 import type { PerfToolCall } from '@/api/aiSkills'
 
 const props = defineProps<{ attemptId: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
+/** 完整性能报告抽屉开关（同 attemptId 复用 SubtaskPerfReport） */
+const showFullReport = ref(false)
 
 const loading = ref(false)
 const error = ref('')

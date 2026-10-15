@@ -1,5 +1,6 @@
 import { get, post, del, authParam } from '@/utils/request'
 import type { SubtaskMessagesResult } from './aiChat'
+import type { PerfAttemptDetail } from './aiSkills'
 
 export interface AdminBatch {
   batchId: string
@@ -54,6 +55,13 @@ export interface AdminChildGate {
 export function getAdminChildGate(batchId: string, sid: string) {
   return get<AdminChildGate>(
     `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/sessions/${encodeURIComponent(sid)}/gate`)
+}
+
+/** 子任务性能报告（2026-10-15）：子会话最新 attempt 的性能 payload，
+ *  与 /perf/attempts/<aid> 同形状；无执行记录返回 {attempt: null, empty: true}。 */
+export function getAdminChildPerf(batchId: string, sid: string) {
+  return get<PerfAttemptDetail | { attempt: null; empty: true }>(
+    `/ai/chat/admin/batches/${encodeURIComponent(batchId)}/sessions/${encodeURIComponent(sid)}/perf`)
 }
 
 export interface AdminMessage {

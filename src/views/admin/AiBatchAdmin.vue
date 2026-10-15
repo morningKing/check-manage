@@ -90,13 +90,14 @@
               <span v-else class="muted">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="360" fixed="right">
+          <el-table-column label="操作" width="420" fixed="right">
             <template #default="{ row }">
               <div class="child-actions">
                 <el-button link type="primary" @click="openConversation(row)">查看对话</el-button>
                 <el-button link type="primary" @click="openChildFiles(row)">产出文件</el-button>
                 <el-button link type="primary" @click="openToolCalls(row)">工具调用</el-button>
                 <el-button link type="primary" @click="openChildGate(row)">门禁</el-button>
+                <el-button link type="primary" @click="openChildPerf(row)">性能</el-button>
                 <el-button link type="warning" :disabled="!isTerminal(row.status)"
                            @click="onReexecute(row)">重跑</el-button>
                 <el-button link type="danger" :disabled="!isTerminal(row.status)"
@@ -178,6 +179,13 @@
       <AdminChildGate v-if="gateOpen" :gate="gateData" :loading="gateLoading" />
     </el-dialog>
 
+    <!-- 子任务性能报告（2026-10-15）：最新 attempt 的性能分解 + 工具/推理 Top +
+         失败/重复清单；与技能拟合优化页共用同一报告组件 -->
+    <SubtaskPerfReport v-if="perfOpen && detail"
+                       :batch-id="detail.batch.batchId" :sid="perfSid"
+                       :title="`子任务性能报告：${perfName}`"
+                       @close="perfOpen = false" />
+
     <el-dialog v-model="previewOpen" :title="`预览：${previewPath}`" width="60%" top="10vh" append-to-body>
       <div v-if="previewLoading" class="admin-preview__hint">加载中…</div>
       <template v-else>
@@ -199,6 +207,7 @@ import { useAiBatchAdminStore } from '@/stores/aiBatchAdmin'
 import BatchConversationView from '@/components/ai-chat/BatchConversationView.vue'
 import AdminBatchFiles from '@/components/ai-chat/AdminBatchFiles.vue'
 import AdminChildGate from '@/components/ai-chat/AdminChildGate.vue'
+import SubtaskPerfReport from '@/components/admin/skillopt/SubtaskPerfReport.vue'
 import ToolCallsPanel from '@/components/admin/ToolCallsPanel.vue'
 import { getChildToolCalls, getAdminChildGate,
          type AdminToolCall, type AdminChildGate as AdminChildGateData } from '@/api/aiBatchAdmin'
@@ -495,6 +504,18 @@ async function openChildGate(row: AdminChild) {
   } finally {
     gateLoading.value = false
   }
+}
+
+// 子任务性能报告（2026-10-15）：数据由组件自取（子会话最新 attempt），
+// 这里只传 batchId/sid 与展示名。
+const perfOpen = ref(false)
+const perfSid = ref('')
+const perfName = ref('')
+
+function openChildPerf(row: AdminChild) {
+  perfSid.value = row.sessionId
+  perfName.value = `${row.name} #${row.seq}`
+  perfOpen.value = true
 }
 
 async function onPreviewChildFile(f: AdminChildFile) {
