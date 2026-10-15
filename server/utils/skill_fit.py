@@ -359,7 +359,15 @@ def compute_attempt_fit(attempt_id: str, get_db=None) -> list[dict]:
                               'per_step': []})
             continue
         if not steps:
-            continue                # 无 fit 块的定义不参与拟合（不出结果行）
+            # 有运行时调用证据、但定义里没有 fit.steps —— 拟合无从判定。以前这里
+            # 静默 continue，页面上就是「什么都没有」（2026-10-14 用户报告：技能
+            # 是系统技能、上传后也生成过步骤，批任务里却完全没有拟合分析；实测
+            # 复现：步骤只停在生成对话框草稿里、没回写文件时，正是这种静默零行）。
+            # 落一行 no_steps 把缺口摆到页面上，指向「生成步骤并回写」这一步；
+            # 未被调用的技能仍被上面的 invoked_skills 门槛挡在外面，不产生噪声行。
+            vals_list.append({**base, 'steps_total': 0, 'steps_hit': 0,
+                              'score': 0, 'status': 'no_steps', 'per_step': []})
+            continue
         vals_list.append({**base, **match_steps(steps, trace)})
     # 4. 落库（幂等 upsert）；同时注册定义版本——拟合遇到新 hash 即登记，
     #    ON CONFLICT DO UPDATE 保旧内容不覆盖，重复 compute 幂等（spec §3.4）

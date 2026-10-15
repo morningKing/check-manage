@@ -131,6 +131,96 @@ def test_match_steps_skipped_not_scored():
     assert {p['id']: p['status'] for p in r['per_step']}['free'] == 'skipped'
 
 
+def test_compute_attempt_fit_records_no_steps_for_invoked_skill(
+        db_conn, tmp_path, monkeypatch):
+    """被调用、但定义里没有 fit.steps 的技能 → 落一行 no_steps（不再静默零行）。
+
+    2026-10-14 用户报告形态：技能是上传的系统技能、步骤也生成过，批任务里却
+    完全没有拟合分析。实测复现：步骤停在生成对话框草稿、没回写文件 frontmatter
+    时，拟合侧什么都不产出（既不落行也不报错），页面上就是「暂无拟合结果」。
+    缺口要可见，用户才知道去「生成步骤并回写」。"""
+    import hashlib
+    import uuid as _uuid
+    from db import get_db
+    from utils import skill_fit
+
+    uid, sid, bid, attempt = (str(_uuid.uuid4()) for _ in range(4))
+    # 定义文件写在 pytest 的临时目录内（显式做边界断言，写入前校验包含关系）
+    md_path = tmp_path / 'no-step-skill' / 'SKILL.md'
+    root = tmp_path.resolve()
+    assert root in md_path.resolve().parents and md_path.name == 'SKILL.md'
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_text = """---
+description: 没有 fit 块的定义
+---
+正文。
+"""
+    md_path.write_text(md_text, encoding='utf-8')
+    md_path_str, md_hash = str(md_path), hashlib.sha256(md_text.encode('utf-8')).hexdigest()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (id, username, password_hash, display_name, role) "
+                    "VALUES (%s, %s, 'x', 'SF', 'developer')", (uid, f'sf_{uid[:8]}'))
+                cur.execute(
+                    "INSERT INTO ai_chat_batches (id, user_id, name, prompt, total) "
+                    "VALUES (%s, %s, 'sf', 'p', 1)", (bid, uid))
+                cur.execute(
+                    "INSERT INTO ai_chat_sessions (id, user_id, status, batch_id, "
+                    "  batch_seq, workspace_path, session_token) "
+                    "VALUES (%s, %s, 'completed', %s, 0, %s, %s)",
+                    (sid, uid, bid, f'C:/sf/{sid}', f'tok-{sid[:12]}'))
+                cur.execute(
+                    "INSERT INTO ai_execution_attempts (id, session_id, source_type, "
+                    "  operation, started_at, finished_at) "
+                    "VALUES (%s, %s, 'batch', 'send', NOW() - interval '5 minutes', NOW())",
+                    (attempt, sid))
+                cur.execute(
+                    "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                    "  source, path, content_hash, injected) "
+                    "VALUES (%s, %s, 'skill', 'no-step-skill', 'session', %s, %s, true)",
+                    ('man_' + _uuid.uuid4().hex[:8], attempt, md_path_str, md_hash))
+                # 运行时调用证据（没它会被 invoked_skills 门槛挡住，本就不该出行）
+                cur.execute(
+                    "INSERT INTO ai_skill_invocations (id, session_id, attempt_id, "
+                    "  skill_name, skill_hash, source, evidence_level, evidence_refs) "
+                    "VALUES (%s, %s, %s, 'no-step-skill', '', 'runtime', 'confirmed', '[]'::jsonb)",
+                    ('inv_' + _uuid.uuid4().hex[:10], sid, attempt))
+
+        rows = skill_fit.compute_attempt_fit(attempt)
+        assert len(rows) == 1, rows
+        assert rows[0]['status'] == 'no_steps'
+        assert rows[0]['steps_total'] == 0 and rows[0]['score'] == 0
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM ai_skill_fit_results "
+                    "WHERE attempt_id = %s AND def_name = 'no-step-skill'", (attempt,))
+                assert cur.fetchone()[0] == 1
+                # 未被调用的技能仍不出行：同 attempt 再塞一个无调用证据的 skill
+                cur.execute(
+                    "INSERT INTO ai_execution_manifests (id, attempt_id, kind, name, "
+                    "  source, path, content_hash, injected) "
+                    "VALUES (%s, %s, 'skill', 'not-invoked', 'session', %s, %s, true)",
+                    ('man_' + _uuid.uuid4().hex[:8], attempt, md_path_str, md_hash))
+        rows2 = skill_fit.compute_attempt_fit(attempt)
+        assert [r['def_name'] for r in rows2] == ['no-step-skill']
+    finally:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM ai_skill_fit_results WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_skill_invocations WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_execution_manifests WHERE attempt_id = %s",
+                            (attempt,))
+                cur.execute("DELETE FROM ai_execution_attempts WHERE id = %s", (attempt,))
+                cur.execute("DELETE FROM ai_chat_sessions WHERE id = %s", (sid,))
+                cur.execute("DELETE FROM ai_chat_batches WHERE id = %s", (bid,))
+                cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+
+
 def test_compute_attempt_fit_end_to_end(db_conn, tmp_path, monkeypatch):
     """编排：manifests 定义 + 账本轨迹 → 结果行落库（attempt + def_name 冲突覆盖）。
 

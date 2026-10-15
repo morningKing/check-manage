@@ -41,6 +41,8 @@ describe('SkillFitBadge', () => {
       ['diverged', '偏离'],
       ['no_trace', '无轨迹'],
       ['parse_error', '解析失败'],
+      // 技能被调用过、但定义没有 fit.steps：显式文案，别让用户面对空白猜原因
+      ['no_steps', '未定义步骤'],
     ]
     for (const [status, label] of cases) {
       const w = mount(SkillFitBadge, {

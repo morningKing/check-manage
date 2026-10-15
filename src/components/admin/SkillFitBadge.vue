@@ -22,7 +22,7 @@ const props = defineProps<{
   perStep: Array<{ status: string }>
   /** 拟合得分 0-100 */
   score: number
-  /** 拟合状态：fit/partial/diverged/no_trace/parse_error */
+  /** 拟合状态：fit/partial/diverged/no_trace/parse_error/no_steps */
   status: string
 }>()
 
@@ -35,6 +35,9 @@ const STATUS_META: Record<string, {
   diverged: { label: '偏离', type: 'danger' },
   no_trace: { label: '无轨迹', type: 'info' },
   parse_error: { label: '解析失败', type: 'info' },
+  // 技能确实被调用过，但定义里没有 fit.steps（步骤只生成了草稿、没回写文件）
+  // ——给出显式文案，别让用户面对「什么都没有」猜原因（2026-10-14）。
+  no_steps: { label: '未定义步骤', type: 'info' },
 }
 
 const statusLabel = computed(() => STATUS_META[props.status]?.label ?? props.status)
