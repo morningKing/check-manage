@@ -111,6 +111,16 @@ def _authorized():
 - `source=file` 本身不是故障：平台重启端点拉起的 serve 不带 env、回落文件，只要
   后端刚重写过文件即正确；`source=env` 则比对该 fingerprint 与后端启动指纹。
 
+### 日志落点（2026-10-15 统一）
+
+三条拉起 serve 的路径——**proxy 自启动 / 平台重启端点 / watchdog**——统一写
+`server/oc-serve.log`（append、>10MB 轮转、每次启动写入 `===== oc-serve spawn
+(proxy|restart) … =====` 分隔行，来源可辨）。`/admin/logs` 日志查看器读的也是
+这一个文件。
+
+更早版本里 proxy 自启动写的是 `server/proxy-opencode.log`（'w' 截断模式，与重启
+端点分叉）——**升级前的生产实例可直接看该文件**找插件日志；升级后它不再更新。
+
 **403 的两种情形**：
 
 | 情形 | 判据 | 修复 |
