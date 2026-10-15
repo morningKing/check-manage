@@ -65,6 +65,19 @@ def test_newest_spawn_ts_from_log(tmp_path):
     assert stale_check._newest_spawn_ts(str(tmp_path / 'nope.log')) is None
 
 
+def test_platform_child_cmd_patterns():
+    """平台子进程孤儿判定：backend/MCP/proxy 命中；OC serve 与无关进程不命中
+    （serve 按设计在父进程退出后存活，另行判定）。"""
+    assert stale_check._platform_child_cmd(
+        'F:\\py\\python.exe -c "import app; from waitress import serve"')
+    assert stale_check._platform_child_cmd('python app.py')
+    assert stale_check._platform_child_cmd('python proxy.py')
+    assert stale_check._platform_child_cmd('python mcp-server/main.py')
+    assert not stale_check._platform_child_cmd('opencode.exe serve')
+    assert not stale_check._platform_child_cmd('python scripts/stale_check.py')
+    assert not stale_check._platform_child_cmd('')
+
+
 def test_normalize_wmic_text_strips_leading_blank():
     """wmic 输出以 \\r\\r\\n 开头——不剥掉会让 CSV 首行空串当表头（键全 None）。"""
     t = stale_check._normalize_wmic_text('\r\r\nNode,A\r\r\nX,1\r\r\n')

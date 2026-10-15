@@ -246,6 +246,18 @@ def _classify(cmd: str) -> str:
     return '未知'
 
 
+# 平台受管子进程（backend/MCP/proxy）的命令行特征——**不含 OC serve**：
+# serve 按设计在父进程退出后存活（平台复用/重启端点接管），其归属与新旧
+# 另有专门判定；backend/MCP 的父进程死了就是上一轮 proxy 强杀/未杀树的遗留。
+_ORPHAN_CMD_PATTERNS = ('proxy.py', 'waitress', 'app.py', 'mcp-server',
+                        'mcp_server')
+
+
+def _platform_child_cmd(cmd: str) -> bool:
+    c = (cmd or '').lower()
+    return any(p in c for p in _ORPHAN_CMD_PATTERNS)
+
+
 def _kill_hint(pids: list[int]) -> str:
     if sys.platform == 'win32':
         return ' ; '.join(f'taskkill /F /PID {p}' for p in pids)
@@ -392,6 +404,33 @@ def collect(*, verbose: bool = True) -> dict:
             'pids': [o['pid'] for o in orphans],
         })
 
+    # 平台进程孤儿：backend/MCP/proxy 的父进程已退出 = 上一轮 proxy 被强杀
+    # （taskkill /F 不走清理回调）或未杀树留下的子进程——新 proxy 会与它们
+    # 端口冲突/复用旧服务。OC serve 不在此列（按设计存活，另行判定）。
+    # 候选 = 命令行特征 ∪ 平台端口监听者（MCP 的裸 `python main.py` 命令行
+    # 认不出，靠端口归属兜底）。
+    platform_listener_pids = {pid for _role, p, pid in port_pids if p != oc_port}
+    platform_orphans: list[dict] = []
+    for pid, info in procs.items():
+        if not (_platform_child_cmd(info['cmd'])
+                or pid in platform_listener_pids):
+            continue
+        parent = info['parent']
+        if parent and parent not in procs:
+            platform_orphans.append({'pid': pid, 'parent': parent,
+                                     'cmd': info['cmd'][:120]})
+    if platform_orphans:
+        findings.append({
+            'level': 'warn',
+            'title': f'上一轮遗留的平台子进程 {len(platform_orphans)} 个'
+                     '（父进程已退出）',
+            'detail': 'proxy 被强杀（taskkill /F 绕过清理）或未杀树时留下的 '
+                      'backend/MCP/proxy 子进程；新 proxy 启动会与它们冲突'
+                      '或复用旧服务。若不是你有意保留的独立后端，可清理。',
+            'suggest': _kill_hint([o['pid'] for o in platform_orphans]),
+            'pids': [o['pid'] for o in platform_orphans],
+        })
+
     step(5, 'oc-serve.log 状态…')
     log_info: dict = {'path': OC_SERVE_LOG, 'exists': os.path.isfile(OC_SERVE_LOG)}
     if log_info['exists']:
@@ -441,6 +480,7 @@ def collect(*, verbose: bool = True) -> dict:
         'serveStale': serve_stale,
         'newestSpawnTs': newest_spawn,
         'orphans': orphans,
+        'platformOrphans': platform_orphans,
         'ocServeLog': log_info,
         'legacyLogExists': os.path.isfile(LEGACY_OC_LOG),
         'snapshotDegraded': degraded,
@@ -479,6 +519,11 @@ def _print_human(r: dict) -> None:
         print('\n[孤儿进程]')
         for o in r['orphans']:
             print(f"  pid={o['pid']}  parent_pid={o['parent']}（已不存在）")
+    if r.get('platformOrphans'):
+        print('\n[上一轮遗留的平台子进程]')
+        for o in r['platformOrphans']:
+            print(f"  pid={o['pid']}  parent_pid={o['parent']}（已退出）"
+                  f"  {o['cmd'][:80]}")
     print('\n[结论]')
     if not r['findings']:
         print('  ✓ 未发现残留。proxy 启动输出应为：'

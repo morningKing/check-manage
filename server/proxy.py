@@ -548,6 +548,27 @@ def wait_for_opencode(base_url, timeout=20):
     return False
 
 
+def _kill_tree(p):
+    """终止一个受管子进程及其整棵子树。
+
+    `p.kill()` 只杀直接子进程：backend 的 multiprocessing 子进程（spawn_main）
+    会残留成孤儿（实测清理过 3 个）；Windows 上强杀 proxy（taskkill /F 不走
+    清理回调）时更是全家变孤儿。Windows 用 taskkill /T 杀树；POSIX 走
+    terminate（进程组信号处理）。
+    """
+    try:
+        if sys.platform == 'win32':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(p.pid)],
+                           capture_output=True, timeout=15)
+        else:
+            p.terminate()
+    except Exception:  # noqa: BLE001 —— 树杀失败回落单进程杀
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main():
     if not os.path.isdir(DIST_DIR):
         print(f'[ERROR] dist/ not found at {DIST_DIR}')
@@ -632,10 +653,7 @@ def main():
             for p in procs:
                 if p is None or p.poll() is not None:
                     continue
-                if sys.platform == 'win32':
-                    p.kill()
-                else:
-                    p.terminate()
+                _kill_tree(p)   # 杀整棵树：孙子进程（multiprocessing）不留孤儿
 
             # Shutdown HTTP server in a thread to avoid blocking
             import threading
@@ -650,7 +668,7 @@ def main():
                 try:
                     p.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    p.kill()
+                    _kill_tree(p)
                     p.wait()
 
             print('[Shutdown] Done.', flush=True)
@@ -678,7 +696,7 @@ def main():
         # Cleanup
         for p in procs:
             if p is not None and p.poll() is None:
-                p.kill()
+                _kill_tree(p)
                 p.wait()
 
 
