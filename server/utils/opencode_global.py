@@ -963,10 +963,14 @@ def restart_serve() -> dict:
         return _restart_serve_locked()
 
 
-def _serve_stdio_file():
+def serve_stdio_file():
     """serve 子进程 stdout/stderr 落盘文件（<server>/oc-serve.log，append）。
     >10MB 轮转保留一份（oc-serve.log.1）。父进程写完 spawn 分隔行即关——
-    子进程持有继承句柄，不受影响。"""
+    子进程持有继承句柄，不受影响。
+
+    单一落点：proxy 自启动 / 平台重启端点 / watchdog 三条拉起路径共用本文件
+    （此前 proxy 写 proxy-opencode.log、重启端点写 oc-serve.log，生产上查日志
+    要看两个文件——2026-10-15 统一）。"""
     path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                         'oc-serve.log')
     try:
@@ -1022,9 +1026,9 @@ def _restart_serve_locked() -> dict:
     # 插件（baize-trace 等）的 console.error 只走 serve 进程 stdio——OC 自带
     # 日志文件不收插件输出，此前 DEVNULL 等于插件侧零日志，无法区分"插件没发
     # 请求"和"服务端没回对"（2026-10-14 门禁生产排查教训）。落盘 oc-serve.log。
-    stdio = _serve_stdio_file()
+    stdio = serve_stdio_file()
     try:
-        stdio.write('===== oc-serve spawn '
+        stdio.write('===== oc-serve spawn (restart) '
                     f'{time.strftime("%Y-%m-%d %H:%M:%S")} =====\n')
         subprocess.Popen(target, shell=use_shell, cwd=opencode_launch.serve_cwd(),
                          env=env,

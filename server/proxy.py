@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 # 独立进程里安全 import —— 不会把 Flask/db 那一坨拖进来。
 from utils.upload_limits import body_limit_for_path
 from utils import opencode_launch
+from utils.opencode_global import serve_stdio_file
 
 # Load server/.env so PROXY_*/BACKEND_URL/MCP_*/CORS_* take effect from the file
 # (this process is separate from Flask's config.py, which loads it for the app).
@@ -55,7 +56,11 @@ OPENCODE_BASE_URL = os.environ.get('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 # diagnosable trace. .gitignore already excludes *.log.
 BACKEND_LOG = os.path.join(os.path.dirname(__file__), 'proxy-backend.log')
 MCP_LOG = os.path.join(os.path.dirname(__file__), 'proxy-mcp.log')
-OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'proxy-opencode.log')
+# serve 输出与平台重启端点/watchdog 统一落 server/oc-serve.log（append +
+# 轮转，见 utils.opencode_global.serve_stdio_file）——插件 console 输出只有
+# 这一个落点，/admin/logs 日志查看器也读它。旧的 proxy-opencode.log 停用
+# （'w' 截断模式，且与重启端点分叉，生产查日志要看两个文件）。
+OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'oc-serve.log')
 
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
@@ -483,22 +488,27 @@ def start_opencode():
             and not target[0].lower().endswith(('.exe', '.cmd', '.bat')):
         # Bare name on Windows: CreateProcess can't resolve npm's .cmd wrapper
         # without a shell — point OPENCODE_BIN at the real .exe to avoid a
-        # confusingly empty proxy-opencode.log.
+        # confusingly empty oc-serve.log.
         print('       [HINT] OPENCODE_BIN 是裸命令名，Windows 下无法直接以 argv 拉起，'
               '建议在 server/.env 配置 opencode.exe 的完整路径', flush=True)
-    log = open(OPENCODE_LOG, 'w', encoding='utf-8', errors='replace')
-    # 执行环境编码钉死 UTF-8（Windows 中文环境默认 GBK，会让 serve 拉起的
-    # bash/git 工具输出乱码）+ 显式钉死 OPENCODE_GLOBAL_DIR（serve 必须读取
-    # 管理界面操作的同一全局目录）——见 utils/opencode_launch.serve_env。
-    return subprocess.Popen(
-        target,
-        shell=use_shell,
-        cwd=opencode_launch.serve_cwd(),
-        env=opencode_launch.serve_env(),
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        creationflags=_NO_WINDOW,
-    )
+    log = serve_stdio_file()
+    try:
+        log.write('===== oc-serve spawn (proxy) '
+                  f'{time.strftime("%Y-%m-%d %H:%M:%S")} =====\n')
+        # 执行环境编码钉死 UTF-8（Windows 中文环境默认 GBK，会让 serve 拉起的
+        # bash/git 工具输出乱码）+ 显式钉死 OPENCODE_GLOBAL_DIR（serve 必须读取
+        # 管理界面操作的同一全局目录）——见 utils/opencode_launch.serve_env。
+        return subprocess.Popen(
+            target,
+            shell=use_shell,
+            cwd=opencode_launch.serve_cwd(),
+            env=opencode_launch.serve_env(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            creationflags=_NO_WINDOW,
+        )
+    finally:
+        log.close()
 
 
 def record_serve_ownership(timeout=25):
