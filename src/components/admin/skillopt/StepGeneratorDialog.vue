@@ -44,7 +44,7 @@
           <div class="gen__row">
             <span class="gen__label">试算 attempt</span>
             <ElInput v-model="gen.attemptId" size="small"
-                     placeholder="历史 attemptId（可从拟合结果子标签复制）" />
+                     placeholder="历史运行 ID（从运行详情打开时自动带入）" />
             <ElButton size="small" :loading="gen.previewing" @click="runPreview">试算</ElButton>
           </div>
           <div v-if="gen.preview" class="gen__preview-result">
@@ -91,9 +91,12 @@ import {
   resolveSkillDefPath,
 } from '@/api/aiSkills'
 import type { FitStep, FitPreview } from '@/api/aiSkills'
+import { stepStatusText } from './fitView'
 
 const props = defineProps<{ visible: boolean; defKind: string; defName: string;
-                            defHash?: string }>()
+                            defHash?: string;
+                            /** 试算用的历史运行；从运行详情打开时自动带入 */
+                            attemptId?: string }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void }>()
 
 interface GenStepRow {
@@ -117,7 +120,7 @@ const gen = ref({
 watch(() => props.visible, v => {
   if (v) {
     Object.assign(gen.value, {
-      path: '', steps: [], attemptId: '', preview: null, error: '',
+      path: '', steps: [], attemptId: props.attemptId ?? '', preview: null, error: '',
       source: '',
     })
     void autoResolve()
@@ -230,14 +233,10 @@ function trunc(s: string | undefined, n: number) {
 function dotClass(status: string) {
   if (status === 'hit') return 'is-hit'
   if (status === 'miss') return 'is-miss'
+  if (status === 'out_of_order') return 'is-out-of-order'
   return 'is-skipped'
 }
-function stepStatusText(status: string) {
-  if (status === 'hit') return '命中'
-  if (status === 'miss') return '未命中'
-  if (status === 'skipped') return '跳过'
-  return status
-}
+
 </script>
 
 <style scoped>
@@ -250,6 +249,7 @@ function stepStatusText(status: string) {
 }
 .fit-dot.is-hit { background: var(--el-color-success); }
 .fit-dot.is-miss { background: var(--el-color-danger); }
+.fit-dot.is-out-of-order { background: var(--el-color-warning); }
 .fit-dot.is-skipped { background: var(--el-border-color-darker); opacity: .55; }
 
 .gen__row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }

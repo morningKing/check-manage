@@ -313,6 +313,9 @@ def test_skill_fit_definition_summary_union_and_metrics(client, admin_headers,
         assert d['tasks'] == 1 and d['fitRate'] == 0.0 and d['divergedCount'] == 1
         assert d['versions'] == 1 and d['latestHash'] == 'h1'
         assert d['lastActivity'] is not None
+        # 健康度依据：最近一次运行状态 + 未配置步骤计数
+        assert d['latestStatus'] == 'diverged' and d['noStepsCount'] == 0
+        assert bare['latestStatus'] is None
         # 与版本端点口径一致（同一份数据 fitRate 相等）
         v = client.get('/ai/chat/admin/skill-def-versions', headers=admin_headers,
                        query_string={'defName': agent_name})

@@ -14,38 +14,36 @@
         <div v-loading="fitLoading" class="skillopt__pane">
           <ElAlert v-if="fitError" type="error" :closable="false" :title="fitError" />
           <div v-else-if="!definitions.length" class="fit-empty">
-            <p>暂无拟合数据——任务执行后自动计算拟合结果。</p>
-            <p class="muted">可在技能/代理定义 frontmatter 配置 fit.steps 声明步骤契约。</p>
+            <p class="fit-empty__title">还没有拟合数据</p>
+            <ol class="fit-empty__steps">
+              <li>在技能或代理定义的 frontmatter 里写 <code>fit.steps</code>，声明应当执行的步骤</li>
+              <li>任务执行后系统自动对照实际工具调用轨迹，判断每一步是否执行</li>
+              <li>回到这里查看结果，偏离时给出原因与修订建议</li>
+            </ol>
           </div>
-          <div v-else class="fit-layout">
-            <aside class="fit-layout__side">
-              <FitDefinitionList :definitions="definitions" :selected="selected"
-                                 @select="selected = $event" />
-              <ElButton link size="small" class="fit-layout__global"
+          <template v-else>
+            <div class="fit-summary">
+              <span><b>{{ definitions.length }}</b> 个定义</span>
+              <span :class="{ 'is-bad': attentionCount > 0 }">
+                <b>{{ attentionCount }}</b> 个需要关注
+              </span>
+              <span><b>{{ totalRuns }}</b> 次累计运行</span>
+              <ElButton link size="small" class="fit-summary__top"
                         @click="globalPatternsVisible = true">
-                全局偏离 Top
+                查看跨定义的偏离模式
               </ElButton>
-            </aside>
-            <section class="fit-layout__main">
-              <DefOverview v-if="selected" :def="selected" />
-              <ElTabs v-model="detailTab">
-                <ElTabPane label="拟合结果" name="results">
-                  <FitResultsPanel v-if="selected" :def-kind="selected.defKind"
-                                   :def-name="selected.defName"
-                                   @recomputed="loadDefinitions" />
-                </ElTabPane>
-                <ElTabPane label="版本演进" name="versions">
-                  <DefVersionTimeline v-if="selected" :def-kind="selected.defKind"
-                                      :def-name="selected.defName"
-                                      @generate="openGeneratorFromVersion" />
-                </ElTabPane>
-                <ElTabPane label="偏离模式" name="patterns">
-                  <DefPatternsPanel v-if="selected" :def-kind="selected.defKind"
-                                    :def-name="selected.defName" />
-                </ElTabPane>
-              </ElTabs>
-            </section>
-          </div>
+            </div>
+            <div class="fit-layout">
+              <aside class="fit-layout__side">
+                <FitDefinitionList :definitions="definitions" :selected="selected"
+                                   @select="selected = $event" />
+              </aside>
+              <section v-if="selected" class="fit-layout__main">
+                <FitWorkspace :key="selected.defKind + '/' + selected.defName"
+                              :def="selected" @changed="loadDefinitions" />
+              </section>
+            </div>
+          </template>
         </div>
       </ElTabPane>
 
@@ -147,13 +145,10 @@
     </ElTabs>
 
     <!-- ── 页面级对话框（与两个 tab 平级）───────────────────────────── -->
-    <ElDialog v-model="globalPatternsVisible" title="全局偏离模式（跨定义 Top）"
+    <ElDialog v-model="globalPatternsVisible" title="跨定义偏离模式（步骤缺失 Top）"
               width="860px" append-to-body>
       <DefPatternsPanel v-if="globalPatternsVisible" />
     </ElDialog>
-    <StepGeneratorDialog :visible="genVisible" :def-kind="genKind"
-                         :def-name="genName" :def-hash="genHash"
-                         @update:visible="genVisible = $event" />
   </div>
 </template>
 
@@ -165,14 +160,12 @@ import {
 } from 'element-plus'
 import { get } from '@/utils/request'
 import FitDefinitionList from '@/components/admin/skillopt/FitDefinitionList.vue'
-import DefOverview from '@/components/admin/skillopt/DefOverview.vue'
-import FitResultsPanel from '@/components/admin/skillopt/FitResultsPanel.vue'
-import DefVersionTimeline from '@/components/admin/skillopt/DefVersionTimeline.vue'
+import FitWorkspace from '@/components/admin/skillopt/FitWorkspace.vue'
 import DefPatternsPanel from '@/components/admin/skillopt/DefPatternsPanel.vue'
-import StepGeneratorDialog from '@/components/admin/skillopt/StepGeneratorDialog.vue'
 import PerfView from '@/components/admin/skillopt/PerfView.vue'
 import { getSkillFitDefinitionSummary } from '@/api/aiSkills'
-import type { SkillFitDefinitionSummary, SkillDefVersion } from '@/api/aiSkills'
+import type { SkillFitDefinitionSummary } from '@/api/aiSkills'
+import { classifyHealth } from '@/components/admin/skillopt/fitView'
 
 // ── 调用聚合 tab（既有逻辑）────────────────────────────────────────────
 
@@ -254,12 +247,13 @@ const fitLoading = ref(false)
 const fitError = ref('')
 const definitions = ref<SkillFitDefinitionSummary[]>([])
 const selected = ref<SkillFitDefinitionSummary | null>(null)
-const detailTab = ref('results')
 const globalPatternsVisible = ref(false)
-const genVisible = ref(false)
-const genKind = ref('')
-const genName = ref('')
-const genHash = ref('')
+
+/** 需要人工介入的定义数（偏离 / 部分符合 / 未配置步骤） */
+const attentionCount = computed(() =>
+  definitions.value.filter(d => classifyHealth(d).rank <= 2).length)
+const totalRuns = computed(() =>
+  definitions.value.reduce((s, d) => s + (d.tasks || 0), 0))
 
 async function loadDefinitions() {
   fitLoading.value = true
@@ -280,13 +274,6 @@ async function loadDefinitions() {
     fitLoading.value = false
   }
 }
-function openGeneratorFromVersion(v: SkillDefVersion) {
-  genKind.value = v.defKind
-  genName.value = v.defName
-  genHash.value = v.contentHash || ''
-  genVisible.value = true
-}
-
 function refresh() {
   void load()
   void loadDefinitions()
@@ -329,8 +316,23 @@ function fmtTime(v?: string | null) {
 .delta-up { color: var(--el-color-success); font-weight: 600; }
 .delta-down { color: var(--el-color-danger); font-weight: 600; }
 
-.fit-layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; align-items: start; }
-.fit-layout__side { display: flex; flex-direction: column; gap: 8px; }
-.fit-layout__global { align-self: flex-start; margin-top: 4px; }
-.fit-empty { padding: 48px 0; text-align: center; }
+.fit-summary {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 14px; border-radius: 6px;
+  background: var(--el-fill-color-light); font-size: 13px;
+}
+.fit-summary b { font-size: 16px; font-variant-numeric: tabular-nums; margin-right: 2px; }
+.fit-summary .is-bad b { color: var(--el-color-danger); }
+.fit-summary__top { margin-left: auto; }
+.fit-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+.fit-layout__side { position: sticky; top: 8px; }
+.fit-layout__main { min-width: 0; }
+.fit-empty { max-width: 560px; margin: 40px auto; }
+.fit-empty__title { font-size: 15px; font-weight: 600; margin: 0 0 10px; text-align: center; }
+.fit-empty__steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.9; color: var(--el-text-color-regular); }
+.fit-empty code { font-size: 12px; background: var(--el-fill-color); padding: 1px 4px; border-radius: 3px; }
+@media (max-width: 960px) {
+  .fit-layout { grid-template-columns: minmax(0, 1fr); }
+  .fit-layout__side { position: static; }
+}
 </style>

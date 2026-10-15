@@ -48,11 +48,11 @@ test('TC-FIT-01 拟合三态：recompute 落库 + 幂等不重复 + 明细 perSt
     const defCard = page.locator('.fit-def', { hasText: aFit.defName }).first()
     await defCard.waitFor({ state: 'visible', timeout: 30_000 })
     await defCard.click()
-    await expect(page.locator('.el-table__row').first()).toBeVisible({ timeout: 15_000 })
-    // 「重新计算」按钮在行展开明细内（FitResultsPanel.vue type=expand 列的
-    // .fit-detail__ops），仅展开态渲染——先点首行展开箭头展开明细行
-    await page.locator('.el-table__expand-icon').first().click()
-    await page.locator('button', { hasText: '重新计算' }).first().click()
+    await expect(page.locator('.runs__row').first()).toBeVisible({ timeout: 15_000 })
+    // 「重新计算」在运行详情抽屉（RunDrawer.vue）的页脚——点击运行记录行打开抽屉
+    await page.locator('.runs__row').first().click()
+    await expect(page.locator('.el-drawer .rd')).toBeVisible()
+    await page.locator('.el-drawer button', { hasText: '重新计算' }).first().click()
     await expect(page.locator('.el-message', { hasText: '已重新计算' })).toBeVisible()
   } finally { cleanupFitSeeds() }
 })

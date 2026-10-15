@@ -60,7 +60,8 @@ export function uploadGlobalSkill(file: File, description: string) {
 
 const ADMIN = '/ai/chat/admin'
 
-export type FitStepStatus = 'hit' | 'miss' | 'skipped'
+/** 步骤状态：out_of_order = 做了但次序与定义不一致（计入分母、不计命中） */
+export type FitStepStatus = 'hit' | 'miss' | 'out_of_order' | 'skipped'
 
 /** fit.steps 步骤（定义 frontmatter / 生成器草案 / 修订草案同构） */
 export interface FitStep {
@@ -146,6 +147,10 @@ export interface SkillFitDefinitionSummary {
   avgScore: number | null
   partialCount: number
   divergedCount: number
+  /** 未定义 fit.steps 的运行数（status='no_steps'） */
+  noStepsCount: number
+  /** 最近一次运行的状态（健康度按它判定，不是历史累计）；无运行为 null */
+  latestStatus: string | null
   versions: number
   latestLabel: string | null
   latestHash: string | null

@@ -40,13 +40,19 @@ test('主从布局：左栏列表或空状态 + 子标签切换', async ({ page 
   }
   await firstDef.waitFor({ state: 'visible', timeout: 30_000 })
   await firstDef.click()
+  // 右侧工作区：定义头部 + 步骤命中情况 + 运行记录（单页呈现，无子标签）
   await expect(page.locator('.def-ov')).toBeVisible()
-  for (const name of ['版本演进', '偏离模式', '拟合结果']) {
-    await page.getByRole('tab', { name }).click()
-    await expect(
-      page.locator('.fit-layout__main').getByRole('tabpanel').first(),
-    ).toBeVisible()
+  await expect(page.getByText('步骤命中情况')).toBeVisible()
+  await expect(page.getByText('运行记录', { exact: true })).toBeVisible()
+  // 运行记录有数据时：点击行打开运行详情抽屉
+  const firstRun = page.locator('.runs__row').first()
+  if (await firstRun.isVisible().catch(() => false)) {
+    await firstRun.click()
+    await expect(page.locator('.el-drawer .rd')).toBeVisible()
+    await page.keyboard.press('Escape')
   }
+  // 版本历史默认折叠，展开后可见版本时间线
+  await page.getByText(/版本历史/).click()
   fs.mkdirSync('e2e/screenshots/ai-full', { recursive: true })
   await page.screenshot({ path: 'e2e/screenshots/ai-full/skillopt-redesign.png',
                           fullPage: true })

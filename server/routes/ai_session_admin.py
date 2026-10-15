@@ -963,11 +963,13 @@ def skill_fit_definition_summary():
                        COALESCE(t.fit_tasks, 0)      AS fit_tasks,
                        COALESCE(t.partial_tasks, 0)  AS partial_tasks,
                        COALESCE(t.diverged_tasks, 0) AS diverged_tasks,
+                       COALESCE(t.no_steps_tasks, 0) AS no_steps_tasks,
                        COALESCE(t.score_sum, 0)      AS score_sum,
                        d.versions                    AS versions,
                        lv.version_label              AS latest_label,
                        lv.content_hash               AS latest_hash,
-                       t.last_activity               AS last_activity
+                       t.last_activity               AS last_activity,
+                       ls.latest_status              AS latest_status
                 FROM (
                   SELECT u.def_kind, u.def_name, max(u.versions) AS versions
                   FROM (
@@ -987,18 +989,25 @@ def skill_fit_definition_summary():
                          count(*) FILTER (WHERE status = 'fit')       AS fit_tasks,
                          count(*) FILTER (WHERE status = 'partial')   AS partial_tasks,
                          count(*) FILTER (WHERE status = 'diverged')  AS diverged_tasks,
+                         count(*) FILTER (WHERE status = 'no_steps')  AS no_steps_tasks,
                          sum(score)                                   AS score_sum,
                          max(computed_at)                             AS last_activity
                   FROM ai_skill_fit_results
                   GROUP BY def_kind, def_name
                 ) t ON t.def_kind = d.def_kind AND t.def_name = d.def_name
-                LEFT JOIN LATERAL (
-                  SELECT v.version_label, v.content_hash
-                  FROM ai_skill_def_versions v
-                  WHERE v.def_kind = d.def_kind AND v.def_name = d.def_name
-                  ORDER BY v.first_seen_at DESC LIMIT 1
-                ) lv ON true
-                """)
+                 LEFT JOIN LATERAL (
+                   SELECT v.version_label, v.content_hash
+                   FROM ai_skill_def_versions v
+                   WHERE v.def_kind = d.def_kind AND v.def_name = d.def_name
+                   ORDER BY v.first_seen_at DESC LIMIT 1
+                 ) lv ON true
+                 LEFT JOIN LATERAL (
+                   SELECT r.status AS latest_status
+                   FROM ai_skill_fit_results r
+                   WHERE r.def_kind = d.def_kind AND r.def_name = d.def_name
+                   ORDER BY r.computed_at DESC LIMIT 1
+                 ) ls ON true
+                 """)
             cols = [c[0] for c in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
     defs = []
@@ -1011,6 +1020,8 @@ def skill_fit_definition_summary():
             'avgScore': round(r['score_sum'] / tasks, 1) if tasks else None,
             'partialCount': r['partial_tasks'],
             'divergedCount': r['diverged_tasks'],
+            'noStepsCount': r['no_steps_tasks'],
+            'latestStatus': r['latest_status'],
             'versions': r['versions'] or 0,
             'latestLabel': r['latest_label'],
             'latestHash': r['latest_hash'],
