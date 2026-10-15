@@ -1,6 +1,6 @@
-"""启动前/排障用：平台进程残留体检（只读，不杀任何进程）。
+"""启动前/排障用：平台进程残留体检（默认只读；--clean 执行清理）。
 
-Run: cd server && python scripts/stale_check.py [--json]
+Run: cd server && python scripts/stale_check.py [--json] [--clean]
 
 背景（2026-10-15 生产排障，两类静默故障的共因都是"旧进程被复用"）：
 - proxy 启动**无条件**拉起新后端：旧后端占着 BACKEND_URL 端口时，新后端
@@ -8,21 +8,27 @@ Run: cd server && python scripts/stale_check.py [--json]
   服务旧代码（新路由 404、新配置不生效）。
 - OC serve 只在**不可达**时才由 proxy 拉起：旧 serve 被复用时，它的 stdio
   仍在旧落点（旧版 proxy 的 proxy-opencode.log / 手工启动的终端），
-  server/oc-serve.log 永远不更新——看起来"oc-serve 没日志"。
+  server/oc-serve.log 永远不更新——看起来"oc-serve 没日志"。**归属为
+  platform 的 serve 也可能是旧代码拉起的**（占着 4096 不落盘）：本脚本用
+  「进程创建时间 vs 日志最近 spawn 记录」识别这种"新不新"的残留。
 - 历史强杀留下的孤儿 python multiprocessing 子进程会常驻（parent 已死）。
 
 检查项：
   1. 平台端口占用者识别与分类（后端 / 代理 / MCP / OC serve / 未知）
-  2. OC serve 归属（平台托管 vs 外部/旧实例——外部实例 proxy 不会重启它）
+  2. OC serve 归属（平台托管 vs 外部）+ **新旧**（创建时间对 spawn 落盘记录）
   3. 孤儿 python 多进程子进程（parent_pid 已不存在）
   4. oc-serve.log 存在性与新旧（serve 在跑但日志陈旧 = 复用旧实例的典型）
   5. 多后端实例并存（BACKEND_URL 端口 与 FLASK_PORT 同时有后端在听）
+
+--clean：清理被标记且带 pid 的残留——**孤儿进程 + 需重启的 OC serve**；
+不碰后端（可能在服务运行中的代理栈），多后端并存只提示。清理后自动复检。
 
 退出码：0 = 干净；2 = 发现残留（便于启动脚本/CI 断言）。
 """
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from urllib.parse import urlparse
@@ -45,6 +51,9 @@ from utils.opencode_global import serve_listener_pids  # noqa: E402
 SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OC_SERVE_LOG = os.path.join(SERVER_DIR, 'oc-serve.log')
 LEGACY_OC_LOG = os.path.join(SERVER_DIR, 'proxy-opencode.log')
+# serve 创建时间与"最近 spawn 落盘记录"的允许偏差：平台拉起时先写分隔行再
+# Popen，正常应差 ≤ 数秒；超此值说明该 serve 不是当前落盘路径拉起的。
+FRESH_TOLERANCE_SEC = 120
 
 
 def _env(key: str, default: str = '') -> str:
@@ -125,6 +134,69 @@ def _kill_hint(pids: list[int]) -> str:
     return ' ; '.join(f'kill -9 {p}' for p in pids)
 
 
+def _proc_created(pid: int) -> float | None:
+    """进程创建时间（epoch 秒）；取不到返回 None（POSIX 简化：不判新旧）。"""
+    if sys.platform != 'win32':
+        return None
+    try:
+        out = subprocess.run(
+            ['wmic', 'process', 'where', f'ProcessId={pid}',
+             'get', 'CreationDate'],
+            capture_output=True, timeout=15).stdout.decode('utf-8', 'replace')
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        # 形如 20261015173615.123456+480（本地时间）
+        if len(lines) < 2 or not lines[1][:14].isdigit():
+            return None
+        import datetime as _dtm
+        return _dtm.datetime.strptime(lines[1][:14], '%Y%m%d%H%M%S').timestamp()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _newest_spawn_ts(path: str = OC_SERVE_LOG) -> float | None:
+    """oc-serve.log 里最近一条 spawn 分隔行的时间（epoch 秒）；无记录 → None。"""
+    import datetime as _dtm
+    newest = None
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            for ln in f:
+                if 'oc-serve spawn' not in ln:
+                    continue
+                m = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', ln)
+                if m:
+                    newest = _dtm.datetime.strptime(
+                        m.group(1), '%Y-%m-%d %H:%M:%S').timestamp()
+    except OSError:
+        return None
+    return newest
+
+
+def _serve_stale(created: float | None, newest_spawn: float | None) -> bool:
+    """serve 是否"非当前落盘路径拉起"：无任何 spawn 记录，或创建时间与最近
+    记录偏差超容忍。created 取不到时保守返回 False（不误杀）。"""
+    if newest_spawn is None:
+        return True
+    if created is None:
+        return False
+    return abs(created - newest_spawn) > FRESH_TOLERANCE_SEC
+
+
+def _kill(pids: list[int]) -> list[dict]:
+    results = []
+    for pid in pids:
+        try:
+            if sys.platform == 'win32':
+                r = subprocess.run(['taskkill', '/F', '/PID', str(pid)],
+                                   capture_output=True, timeout=15)
+            else:
+                r = subprocess.run(['kill', '-9', str(pid)],
+                                   capture_output=True, timeout=15)
+            results.append({'pid': pid, 'ok': r.returncode == 0})
+        except (OSError, subprocess.SubprocessError) as e:  # noqa: BLE001
+            results.append({'pid': pid, 'ok': False, 'error': str(e)[:120]})
+    return results
+
+
 def _python_pids() -> list[int]:
     if sys.platform == 'win32':
         out = subprocess.run(['wmic', 'process', 'where',
@@ -178,17 +250,26 @@ def collect() -> dict:
 
     findings: list[dict] = []
 
-    # 1) OC serve 归属：非平台托管 = 外部/旧实例（proxy 不重启它，日志不落盘）
+    # 1) OC serve：归属 + 新旧（创建时间对 spawn 落盘记录）双信号
     serve_ls = [it for it in listeners if it['port'] == oc_port]
     oc_mode = opencode_ownership.status(oc_port)['mode'] if serve_ls else 'none'
-    if serve_ls and oc_mode != 'platform':
+    serve_created = _proc_created(serve_ls[0]['pid']) if serve_ls else None
+    newest_spawn = _newest_spawn_ts()
+    serve_stale = bool(serve_ls) and _serve_stale(serve_created, newest_spawn)
+    if serve_ls and (oc_mode != 'platform' or serve_stale):
+        reasons = []
+        if oc_mode != 'platform':
+            reasons.append(f'归属={oc_mode}（外部/旧实例）')
+        if serve_stale:
+            reasons.append('启动无对应 spawn 落盘记录（旧版/手工拉起）')
         findings.append({
             'level': 'warn',
-            'title': f'OC serve 非平台托管（mode={oc_mode}）',
+            'title': f"OC serve 需重启（{'；'.join(reasons)}）",
             'detail': 'proxy 只在 serve 不可达时才拉起：该实例会被复用，'
-                      'oc-serve.log 不会更新（其 stdio 在旧落点）；平台重启'
-                      '端点也会拒绝接管。',
+                      'oc-serve.log 与插件版本可能停留在旧状态（"没日志"/'
+                      '门禁不命中的典型根因）。',
             'suggest': _kill_hint([it['pid'] for it in serve_ls]),
+            'pids': [it['pid'] for it in serve_ls],
         })
 
     # 2) 孤儿 python 多进程子进程（parent 已死）
@@ -197,7 +278,6 @@ def collect() -> dict:
         cmd = _cmdline(pid)
         if 'spawn_main' not in cmd:
             continue
-        import re
         m = re.search(r'parent_pid=(\d+)', cmd)
         if not m:
             continue
@@ -210,6 +290,7 @@ def collect() -> dict:
             'title': f'孤儿 python 子进程 {len(orphans)} 个（父进程已死）',
             'detail': '历史强杀残留，常驻占内存/句柄；与本轮启动无关，可安全清理。',
             'suggest': _kill_hint([o['pid'] for o in orphans]),
+            'pids': [o['pid'] for o in orphans],
         })
 
     # 3) 多后端并存（BACKEND_URL 端口 与 FLASK_PORT 同时有后端在听）
@@ -255,6 +336,9 @@ def collect() -> dict:
     return {
         'listeners': listeners,
         'serveOwnership': oc_mode,
+        'serveCreated': serve_created,
+        'serveStale': serve_stale,
+        'newestSpawnTs': newest_spawn,
         'orphans': orphans,
         'ocServeLog': log_info,
         'legacyLogExists': os.path.isfile(LEGACY_OC_LOG),
@@ -270,9 +354,15 @@ def _print_human(r: dict) -> None:
     for it in r['listeners']:
         print(f"  :{it['port']:<5} {it['role']:<22} pid={it['pid']:<7} "
               f"{it['kind']:<10} {it['cmd'][:90]}")
-    print('\n[OC serve 归属]')
+    print('\n[OC serve 归属/新旧]')
+    import time as _t
+    fmt = lambda ts: (_t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(ts))
+                      if ts else '—')
     print(f"  mode={r['serveOwnership']}"
-          f"{'（平台托管）' if r['serveOwnership'] == 'platform' else ''}")
+          f"{'（平台托管）' if r['serveOwnership'] == 'platform' else ''}"
+          f" · 进程创建 {fmt(r.get('serveCreated'))}"
+          f" · 最近落盘 spawn {fmt(r.get('newestSpawnTs'))}"
+          f"{' · ⚠ 判定为残留' if r.get('serveStale') else ''}")
     print('\n[oc-serve.log]')
     li = r['ocServeLog']
     if li['exists']:
@@ -300,10 +390,28 @@ def _print_human(r: dict) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description='平台进程残留体检（只读）')
+    ap = argparse.ArgumentParser(description='平台进程残留体检（默认只读）')
     ap.add_argument('--json', action='store_true', help='机器可读输出')
+    ap.add_argument('--clean', action='store_true',
+                    help='清理被标记且带 pid 的残留（孤儿进程 + 需重启的 '
+                         'OC serve；不碰后端），随后自动复检')
     args = ap.parse_args()
+
     r = collect()
+    if args.clean:
+        killed_any = False
+        for f in r['findings']:
+            for pid in f.get('pids') or []:
+                res = _kill([pid])[0]
+                killed_any = True
+                print(f"[clean] {'OK  ' if res['ok'] else 'FAIL'} pid={pid} "
+                      f"({f['title'][:40]})"
+                      + ('' if res['ok'] else f"  {res.get('error', '')}"))
+        if not killed_any:
+            print('[clean] 无可清理项（findings 未携带 pid）')
+        else:
+            print('[clean] 复检中…')
+            r = collect()   # 清理后复检，如实报告剩余
     if args.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
     else:

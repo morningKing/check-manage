@@ -33,10 +33,33 @@ def test_port_parsing():
 def test_collect_shape():
     r = stale_check.collect()
     assert set(r) >= {'listeners', 'serveOwnership', 'orphans', 'ocServeLog',
-                      'findings'}
+                      'findings', 'serveCreated', 'serveStale', 'newestSpawnTs'}
     assert isinstance(r['listeners'], list)
     assert isinstance(r['findings'], list)
     assert r['serveOwnership'] in ('platform', 'external', 'unknown', 'none')
     assert 'path' in r['ocServeLog'] and 'exists' in r['ocServeLog']
     for it in r['listeners']:
         assert {'pid', 'port', 'role', 'kind'} <= set(it)
+
+
+def test_serve_stale_logic():
+    """新旧判定：无记录=残留；取不到创建时间不判（不误杀）；偏差超容忍=残留。"""
+    assert stale_check._serve_stale(None, None) is True
+    assert stale_check._serve_stale(1000.0, None) is True
+    assert stale_check._serve_stale(None, 1000.0) is False
+    assert stale_check._serve_stale(1000.0, 1005.0) is False   # 数秒内一致
+    assert stale_check._serve_stale(1000.0, 2000.0) is True
+
+
+def test_newest_spawn_ts_from_log(tmp_path):
+    p = tmp_path / 'oc-serve.log'
+    p.write_text('===== oc-serve spawn (proxy) 2026-10-15 10:00:00 =====\n'
+                 'noise line\n'
+                 '===== oc-serve spawn (restart) 2026-10-15 17:36:15 =====\n',
+                 encoding='utf-8')
+    ts = stale_check._newest_spawn_ts(str(p))
+    assert ts is not None
+    import datetime
+    assert datetime.datetime.fromtimestamp(ts).strftime(
+        '%Y-%m-%d %H:%M:%S') == '2026-10-15 17:36:15'   # 取最近一条
+    assert stale_check._newest_spawn_ts(str(tmp_path / 'nope.log')) is None
