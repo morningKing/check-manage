@@ -9,16 +9,21 @@ Run: cd server && python scripts/stale_check.py [--json] [--clean]
 - OC serve 只在**不可达**时才由 proxy 拉起：旧 serve 被复用时，它的 stdio
   仍在旧落点（旧版 proxy 的 proxy-opencode.log / 手工启动的终端），
   server/oc-serve.log 永远不更新——看起来"oc-serve 没日志"。**归属为
-  platform 的 serve 也可能是旧代码拉起的**（占着 4096 不落盘）：本脚本用
-  「进程创建时间 vs 日志最近 spawn 记录」识别这种"新不新"的残留。
+  platform 的 serve 也可能是旧代码拉起的**：本脚本用「进程创建时间 vs
+  日志最近 spawn 记录」识别这种"新不新"的残留。
 - 历史强杀留下的孤儿 python multiprocessing 子进程会常驻（parent 已死）。
 
 检查项：
   1. 平台端口占用者识别与分类（后端 / 代理 / MCP / OC serve / 未知）
-  2. OC serve 归属（平台托管 vs 外部）+ **新旧**（创建时间对 spawn 落盘记录）
+  2. OC serve 归属（平台托管 vs 外部）+ 新旧（创建时间对 spawn 落盘记录）
   3. 孤儿 python 多进程子进程（parent_pid 已不存在）
   4. oc-serve.log 存在性与新旧（serve 在跑但日志陈旧 = 复用旧实例的典型）
   5. 多后端实例并存（BACKEND_URL 端口 与 FLASK_PORT 同时有后端在听）
+
+实现要点（2026-10-15 卡死修复）：进程信息用**单次全量快照**（Windows 一次
+wmic CSV；POSIX 扫 /proc），不再逐 pid 调 wmic——旧版每进程 3 次串行 wmic
+在 WMI 慢的机器上要跑几十秒到几分钟且全程无输出，看起来像卡死。快照失败
+自动降级（端口与日志检查照常），并在 stderr 打进度。
 
 --clean：清理被标记且带 pid 的残留——**孤儿进程 + 需重启的 OC serve**；
 不碰后端（可能在服务运行中的代理栈），多后端并存只提示。清理后自动复检。
@@ -26,6 +31,8 @@ Run: cd server && python scripts/stale_check.py [--json] [--clean]
 退出码：0 = 干净；2 = 发现残留（便于启动脚本/CI 断言）。
 """
 import argparse
+import csv
+import io
 import json
 import os
 import re
@@ -54,6 +61,7 @@ LEGACY_OC_LOG = os.path.join(SERVER_DIR, 'proxy-opencode.log')
 # serve 创建时间与"最近 spawn 落盘记录"的允许偏差：平台拉起时先写分隔行再
 # Popen，正常应差 ≤ 数秒；超此值说明该 serve 不是当前落盘路径拉起的。
 FRESH_TOLERANCE_SEC = 120
+_SNAPSHOT_TIMEOUT = 25          # 单次全量快照的超时（wmic 慢机器留裕量）
 
 
 def _env(key: str, default: str = '') -> str:
@@ -74,34 +82,153 @@ PROXY_PORT = int(_env('PROXY_PORT', '8080') or 8080)
 FLASK_PORT = int(_env('FLASK_PORT', '3002') or 3002)
 
 
-def _cmdline(pid: int) -> str:
-    """进程命令行；取不到返回 ''。"""
+def _progress(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
+
+
+def _parse_wmic_date(raw: str | None) -> float | None:
+    """wmic CreationDate（形如 20261015173615.123456+480，本地时间）→ epoch 秒。"""
+    if not raw or len(raw) < 14 or not raw[:14].isdigit():
+        return None
+    import datetime as _dtm
     try:
-        if sys.platform == 'win32':
-            out = subprocess.run(
-                ['wmic', 'process', 'where', f'ProcessId={pid}',
-                 'get', 'CommandLine'],
-                capture_output=True, timeout=15).stdout.decode('utf-8', 'replace')
-            lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-            # 首行是表头 CommandLine；无实例时是 No Instance(s) Available.
-            return lines[1] if len(lines) > 1 and lines[1] != 'CommandLine' else ''
-        with open(f'/proc/{pid}/cmdline', 'rb') as f:
-            return f.read().replace(b'\0', b' ').decode('utf-8', 'replace').strip()
+        return _dtm.datetime.strptime(raw[:14], '%Y%m%d%H%M%S').timestamp()
+    except ValueError:
+        return None
+
+
+def _normalize_wmic_text(text: str) -> str:
+    """wmic 输出规整：行尾是 \\r\\r\\n，且整体以 \\r\\r\\n 开头（首行为空）——
+    不剥掉会让 csv.DictReader 把空行当表头（键全 None）。"""
+    return (text.replace('\r\r\n', '\n').replace('\r\n', '\n')
+            .replace('\r', '\n').lstrip('\n'))
+
+
+def _int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _wmic_csv(props: str, where: str = '') -> list[dict]:
+    """一次 wmic 查询 → CSV 行字典列表；失败/超时返回 []。
+
+    仅用于**纯数字字段**（ProcessId/ParentProcessId/CreationDate）：wmic 的
+    CSV 不转义值里的逗号，CommandLine 会被拆列拆行（实测 waitress 命令行）——
+    命令行一律走 _wmic_list。"""
+    cmd = ['wmic', 'process']
+    if where:
+        cmd += ['where', where]
+    cmd += ['get', props, '/format:csv']
+    try:
+        out = subprocess.run(cmd, capture_output=True,
+                             timeout=_SNAPSHOT_TIMEOUT).stdout
     except (OSError, subprocess.SubprocessError):
-        return ''
+        return []
+    return list(csv.DictReader(
+        io.StringIO(_normalize_wmic_text(out.decode('utf-8', 'replace')))))
 
 
-def _pid_alive(pid: int) -> bool:
-    if sys.platform == 'win32':
-        out = subprocess.run(['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV'],
-                             capture_output=True, timeout=15).stdout.decode(
-                                 'utf-8', 'replace')
-        return f'"{pid}"' in out
+def _parse_wmic_list(text: str) -> list[dict]:
+    """wmic /format:list 文本 → [{Key: Value}]。
+
+    值内逗号/引号安全（CSV 会拆坏、默认表格格式空格对齐同样不可靠）；
+    值含换行的续行（无 Key= 前缀）拼回上一个键。"""
+    text = _normalize_wmic_text(text)
+    records: list[dict] = []
+    cur: dict = {}
+    for line in text.split('\n'):
+        if not line.strip():
+            if cur:
+                records.append(cur)
+                cur = {}
+            continue
+        m = re.match(r'^([A-Za-z]+)=(.*)$', line)
+        if m:
+            cur[m.group(1)] = m.group(2)
+        elif cur:
+            last = next(reversed(cur))
+            cur[last] = f'{cur[last]} {line.strip()}'.strip()
+    if cur:
+        records.append(cur)
+    return records
+
+
+def _wmic_list(props: str, where: str = '') -> list[dict]:
+    """wmic **列表格式**（/format:list）：每属性一行 `Key=Value`，块间空行——
+    值里的逗号/引号安全（CSV 会拆坏，默认表格格式空格对齐同样不可靠）。
+    值含换行的续行（无 Key=）拼回上键。"""
+    cmd = ['wmic', 'process']
+    if where:
+        cmd += ['where', where]
+    cmd += ['get', props, '/format:list']
     try:
-        os.kill(pid, 0)
-        return True
+        out = subprocess.run(cmd, capture_output=True,
+                             timeout=_SNAPSHOT_TIMEOUT).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return _parse_wmic_list(out.decode('utf-8', 'replace'))
+
+
+def snapshot_processes() -> dict[int, dict]:
+    """全量进程快照：{pid: {cmd, parent, created}}。
+
+    Windows：一次全量 wmic（旧版逐 pid 调用会在 WMI 慢的机器上像卡死）+ 一次
+    按名定向查询补 CommandLine（无 WHERE 的批量查询在很多进程上取不到命令行，
+    实测 name 过滤可取）。POSIX：扫 /proc。失败返回空 dict（降级：进程细节
+    不可用，端口与日志检查照常）。"""
+    table: dict[int, dict] = {}
+    if sys.platform == 'win32':
+        # 数字字段走 CSV（一次全量）；命令行走列表格式（逗号安全），
+        # 先按名过滤取 python（孤儿判定只需 python 进程），端口占用者
+        # 的缺口由 collect 用 _cmdline_one 定向补（数量有界）。
+        for row in _wmic_csv('ProcessId,ParentProcessId,CreationDate'):
+            pid = _int(row.get('ProcessId'))
+            if pid <= 0:
+                continue
+            table[pid] = {
+                'cmd': '',
+                'parent': _int(row.get('ParentProcessId')),
+                'created': _parse_wmic_date(row.get('CreationDate')),
+            }
+        for rec in _wmic_list('ProcessId,CommandLine', "name='python.exe'"):
+            pid = _int(rec.get('ProcessId'))
+            cmd = (rec.get('CommandLine') or '').strip()
+            if pid > 0 and cmd:
+                entry = table.setdefault(pid, {'parent': 0, 'created': None})
+                entry['cmd'] = cmd
+        return table
+    # POSIX
+    try:
+        names = os.listdir('/proc')
     except OSError:
-        return False
+        return {}
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                cmd = f.read().replace(b'\0', b' ').decode(
+                    'utf-8', 'replace').strip()
+            with open(f'/proc/{pid}/stat', 'r', encoding='utf-8',
+                      errors='replace') as f:
+                parent = int(f.read().split()[3])
+        except (OSError, ValueError, IndexError):
+            continue
+        table[pid] = {'cmd': cmd, 'parent': parent, 'created': None}
+    return table
+
+
+def _cmdline_one(pid: int) -> str:
+    """单进程命令行（定向补洞用；数量有界，仅对端口占用者调用）。"""
+    if sys.platform != 'win32':
+        return ''
+    for rec in _wmic_list('ProcessId,CommandLine', f'ProcessId={pid}'):
+        if _int(rec.get('ProcessId')) == pid:
+            return (rec.get('CommandLine') or '').strip()
+    return ''
 
 
 def _classify(cmd: str) -> str:
@@ -119,38 +246,10 @@ def _classify(cmd: str) -> str:
     return '未知'
 
 
-def _listeners(port: int) -> list[dict]:
-    out = []
-    for pid in serve_listener_pids(port):
-        cmd = _cmdline(pid)
-        out.append({'pid': pid, 'port': port, 'cmd': cmd[:220],
-                    'kind': _classify(cmd)})
-    return out
-
-
 def _kill_hint(pids: list[int]) -> str:
     if sys.platform == 'win32':
         return ' ; '.join(f'taskkill /F /PID {p}' for p in pids)
     return ' ; '.join(f'kill -9 {p}' for p in pids)
-
-
-def _proc_created(pid: int) -> float | None:
-    """进程创建时间（epoch 秒）；取不到返回 None（POSIX 简化：不判新旧）。"""
-    if sys.platform != 'win32':
-        return None
-    try:
-        out = subprocess.run(
-            ['wmic', 'process', 'where', f'ProcessId={pid}',
-             'get', 'CreationDate'],
-            capture_output=True, timeout=15).stdout.decode('utf-8', 'replace')
-        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
-        # 形如 20261015173615.123456+480（本地时间）
-        if len(lines) < 2 or not lines[1][:14].isdigit():
-            return None
-        import datetime as _dtm
-        return _dtm.datetime.strptime(lines[1][:14], '%Y%m%d%H%M%S').timestamp()
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
 
 
 def _newest_spawn_ts(path: str = OC_SERVE_LOG) -> float | None:
@@ -197,30 +296,16 @@ def _kill(pids: list[int]) -> list[dict]:
     return results
 
 
-def _python_pids() -> list[int]:
-    if sys.platform == 'win32':
-        out = subprocess.run(['wmic', 'process', 'where',
-                              "name='python.exe'", 'get', 'ProcessId'],
-                             capture_output=True, timeout=15).stdout.decode(
-                                 'utf-8', 'replace')
-        pids = []
-        for ln in out.splitlines():
-            ln = ln.strip()
-            if ln.isdigit():
-                pids.append(int(ln))
-        return pids
-    pids = []
-    for name in os.listdir('/proc'):
-        if name.isdigit():
-            pids.append(int(name))
-    return pids
+def collect(*, verbose: bool = True) -> dict:
+    def step(n: int, msg: str) -> None:
+        if verbose:
+            _progress(f'[{n}/5] {msg}')
 
-
-def collect() -> dict:
     backend_port = _port(BACKEND_URL, 3001)
     oc_port = _port(OPENCODE_URL, 4096)
     mcp_port = _port(MCP_HEALTH_URL, 3003)
 
+    step(1, '扫描平台端口占用…')
     ports = [
         ('后端(proxy/BACKEND_URL)', backend_port),
         ('后端(dev/FLASK_PORT)', FLASK_PORT),
@@ -229,31 +314,46 @@ def collect() -> dict:
         ('代理(proxy)', PROXY_PORT),
     ]
     seen_ports: set[int] = set()
-    listeners: list[dict] = []
+    port_pids: list[tuple[str, int, int]] = []   # (role, port, pid)
     for name, port in ports:
         if port in seen_ports:
             continue
         seen_ports.add(port)
-        for item in _listeners(port):
-            item['role'] = name
-            # 命令行认不出时按端口归属兜底（如 MCP 的裸 `python main.py`）
-            if item['kind'] == '未知':
-                if port == mcp_port:
-                    item['kind'] = 'MCP'
-                elif port == oc_port:
-                    item['kind'] = 'OC serve'
-                elif port == PROXY_PORT:
-                    item['kind'] = '代理(proxy)'
-                elif port in (backend_port, FLASK_PORT):
-                    item['kind'] = '后端'
-            listeners.append(item)
+        for pid in serve_listener_pids(port):
+            port_pids.append((name, port, pid))
+
+    step(2, '采集进程快照（单次查询）…')
+    procs = snapshot_processes()
+    degraded = not procs
+
+    def cmd_of(pid: int) -> str:
+        return (procs.get(pid) or {}).get('cmd', '')
+
+    listeners: list[dict] = []
+    for role, port, pid in port_pids:
+        cmd = cmd_of(pid)
+        if not cmd:                       # 批量查询取不到 → 定向补（有界，仅占用者）
+            cmd = _cmdline_one(pid)
+        kind = _classify(cmd)
+        if kind == '未知':   # 命令行认不出时按端口归属兜底（如 MCP 裸 main.py）
+            if port == mcp_port:
+                kind = 'MCP'
+            elif port == oc_port:
+                kind = 'OC serve'
+            elif port == PROXY_PORT:
+                kind = '代理(proxy)'
+            elif port in (backend_port, FLASK_PORT):
+                kind = '后端'
+        listeners.append({'pid': pid, 'port': port, 'role': role,
+                          'kind': kind, 'cmd': cmd[:220]})
 
     findings: list[dict] = []
 
-    # 1) OC serve：归属 + 新旧（创建时间对 spawn 落盘记录）双信号
+    step(3, 'OC serve 归属/新旧判定…')
     serve_ls = [it for it in listeners if it['port'] == oc_port]
     oc_mode = opencode_ownership.status(oc_port)['mode'] if serve_ls else 'none'
-    serve_created = _proc_created(serve_ls[0]['pid']) if serve_ls else None
+    serve_created = (procs.get(serve_ls[0]['pid']) or {}).get('created') \
+        if serve_ls else None
     newest_spawn = _newest_spawn_ts()
     serve_stale = bool(serve_ls) and _serve_stale(serve_created, newest_spawn)
     if serve_ls and (oc_mode != 'platform' or serve_stale):
@@ -272,17 +372,16 @@ def collect() -> dict:
             'pids': [it['pid'] for it in serve_ls],
         })
 
-    # 2) 孤儿 python 多进程子进程（parent 已死）
+    step(4, '孤儿进程检查…')
     orphans: list[dict] = []
-    for pid in _python_pids():
-        cmd = _cmdline(pid)
-        if 'spawn_main' not in cmd:
+    for pid, info in procs.items():
+        if 'spawn_main' not in info['cmd']:
             continue
-        m = re.search(r'parent_pid=(\d+)', cmd)
+        m = re.search(r'parent_pid=(\d+)', info['cmd'])
         if not m:
             continue
         parent = int(m.group(1))
-        if not _pid_alive(parent):
+        if parent not in procs:   # 快照里没有 = 父进程已不存在
             orphans.append({'pid': pid, 'parent': parent})
     if orphans:
         findings.append({
@@ -293,24 +392,11 @@ def collect() -> dict:
             'pids': [o['pid'] for o in orphans],
         })
 
-    # 3) 多后端并存（BACKEND_URL 端口 与 FLASK_PORT 同时有后端在听）
-    be_ports = {it['port'] for it in listeners
-                if it['kind'] == '后端'}
-    if len(be_ports) >= 2:
-        findings.append({
-            'level': 'warn',
-            'title': f'多个后端实例并存（端口 {sorted(be_ports)}）',
-            'detail': 'proxy 模式下应先停手动/旧后端再启动：否则 proxy 的新后端'
-                      '可能 bind 失败，探测却命中旧后端（看起来启动成功）。',
-            'suggest': _kill_hint([it['pid'] for it in listeners
-                                   if it['kind'] == '后端']),
-        })
-
-    # 4) oc-serve.log 状态
+    step(5, 'oc-serve.log 状态…')
     log_info: dict = {'path': OC_SERVE_LOG, 'exists': os.path.isfile(OC_SERVE_LOG)}
     if log_info['exists']:
-        st = os.stat(OC_SERVE_LOG)
         import time as _t
+        st = os.stat(OC_SERVE_LOG)
         log_info['mtime'] = _t.strftime('%Y-%m-%d %H:%M:%S',
                                         _t.localtime(st.st_mtime))
         log_info['size'] = st.st_size
@@ -333,6 +419,21 @@ def collect() -> dict:
                        '"OpenCode started"）',
         })
 
+    # 多后端并存（不自动清理：可能在服务运行中的代理栈）
+    be_ports = {it['port'] for it in listeners if it['kind'] == '后端'}
+    if len(be_ports) >= 2:
+        findings.append({
+            'level': 'warn',
+            'title': f'多个后端实例并存（端口 {sorted(be_ports)}）',
+            'detail': 'proxy 模式下应先停手动/旧后端再启动：否则 proxy 的新后端'
+                      '可能 bind 失败，探测却命中旧后端（看起来启动成功）。',
+            'suggest': _kill_hint([it['pid'] for it in listeners
+                                   if it['kind'] == '后端']),
+        })
+
+    if degraded and verbose:
+        _progress('[warn] 进程快照不可用（wmic 失败/缺失）：进程细节已降级')
+
     return {
         'listeners': listeners,
         'serveOwnership': oc_mode,
@@ -342,11 +443,15 @@ def collect() -> dict:
         'orphans': orphans,
         'ocServeLog': log_info,
         'legacyLogExists': os.path.isfile(LEGACY_OC_LOG),
+        'snapshotDegraded': degraded,
         'findings': findings,
     }
 
 
 def _print_human(r: dict) -> None:
+    import time as _t
+    fmt = lambda ts: (_t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(ts))
+                      if ts else '—')
     print('== 平台进程残留体检 ==')
     print('\n[端口占用]')
     if not r['listeners']:
@@ -355,9 +460,6 @@ def _print_human(r: dict) -> None:
         print(f"  :{it['port']:<5} {it['role']:<22} pid={it['pid']:<7} "
               f"{it['kind']:<10} {it['cmd'][:90]}")
     print('\n[OC serve 归属/新旧]')
-    import time as _t
-    fmt = lambda ts: (_t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(ts))
-                      if ts else '—')
     print(f"  mode={r['serveOwnership']}"
           f"{'（平台托管）' if r['serveOwnership'] == 'platform' else ''}"
           f" · 进程创建 {fmt(r.get('serveCreated'))}"
@@ -397,7 +499,7 @@ def main() -> int:
                          'OC serve；不碰后端），随后自动复检')
     args = ap.parse_args()
 
-    r = collect()
+    r = collect(verbose=not args.json)
     if args.clean:
         killed_any = False
         for f in r['findings']:
@@ -411,7 +513,7 @@ def main() -> int:
             print('[clean] 无可清理项（findings 未携带 pid）')
         else:
             print('[clean] 复检中…')
-            r = collect()   # 清理后复检，如实报告剩余
+            r = collect(verbose=False)   # 清理后复检，如实报告剩余
     if args.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))
     else:

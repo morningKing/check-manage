@@ -63,3 +63,26 @@ def test_newest_spawn_ts_from_log(tmp_path):
     assert datetime.datetime.fromtimestamp(ts).strftime(
         '%Y-%m-%d %H:%M:%S') == '2026-10-15 17:36:15'   # 取最近一条
     assert stale_check._newest_spawn_ts(str(tmp_path / 'nope.log')) is None
+
+
+def test_normalize_wmic_text_strips_leading_blank():
+    """wmic 输出以 \\r\\r\\n 开头——不剥掉会让 CSV 首行空串当表头（键全 None）。"""
+    t = stale_check._normalize_wmic_text('\r\r\nNode,A\r\r\nX,1\r\r\n')
+    assert t.startswith('Node,A')
+    assert t.endswith('X,1\n')
+
+
+def test_parse_wmic_list_commas_and_continuations():
+    """列表格式：值内逗号安全（CSV 会拆坏 waitress 命令行）+ 续行拼回上键。"""
+    text = ('\r\r\n'
+            'CommandLine=F:\\x\\python.exe -c "import app; serve(host=\\"0.0.0.0\\", '
+            'port=3002, threads=32)"\r\r\n'
+            'ProcessId=41472\r\r\n'
+            '\r\r\n'
+            'CommandLine=multi line\r\r\n  continued part\r\r\n'
+            'ProcessId=999\r\r\n')
+    recs = stale_check._parse_wmic_list(text)
+    assert len(recs) == 2
+    assert recs[0]['ProcessId'] == '41472'
+    assert 'port=3002, threads=32' in recs[0]['CommandLine']
+    assert recs[1]['CommandLine'] == 'multi line continued part'
