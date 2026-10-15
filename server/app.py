@@ -52,7 +52,7 @@ from routes.ai_skills import ai_skills_bp
 from routes.ai_opencode_admin import ai_opencode_admin_bp
 from routes.ai_scan_tasks import ai_scan_tasks_bp
 from routes.ai_memory_internal import ai_memory_internal_bp
-from routes.ai_gate_internal import ai_gate_internal_bp
+from routes.ai_gate_internal import ai_gate_internal_bp, token_fingerprint
 from routes.ai_gate_policies import ai_gate_policies_bp
 from routes.ai_logs import ai_logs_bp
 from routes.ai_data_internal import ai_data_internal_bp
@@ -194,6 +194,18 @@ try:
                               _os.getenv('MCP_INTERNAL_TOKEN', ''),
                               gate_endpoint=_gate_ep,
                               gate_post_endpoint=_gate_post_ep)
+    # 内部通道 token 留痕（2026-10-15 生产排查）：配置值指纹随启动打印——
+    # 与插件加载日志的 fingerprint、403 日志的 server=/got= 三处对照，
+    # token 错位无需再猜。未配置时全部内部端点一律 403（消费方 fail-open
+    # 静默降级，见 docs/ops/mcp-internal-token-403-修复.md）。
+    _tok = _os.getenv('MCP_INTERNAL_TOKEN', '')
+    if not _tok:
+        logging.warning(
+            'MCP_INTERNAL_TOKEN 未配置：所有内部端点（门禁/记忆/轨迹上报/data）'
+            '一律 403，消费方全部 fail-open 静默降级')
+    else:
+        logging.info('MCP_INTERNAL_TOKEN configured fingerprint=%s',
+                     token_fingerprint(_tok))
     _ret = _sk.apply_retention()
     # 运营日志表保留（大数据量优化 §2.2/2.3/2.4）：operation_logs /
     # agent_tool_calls / webhook_logs 分批清理过期行

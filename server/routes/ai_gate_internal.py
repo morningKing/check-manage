@@ -36,16 +36,30 @@ ai_gate_internal_bp = Blueprint('ai_gate_internal', __name__,
 log = logging.getLogger(__name__)
 
 
+def token_fingerprint(token: str) -> str:
+    """日志用指纹：前缀 6 字符 + 长度——两侧对照足以定位错位，不落完整凭据。"""
+    return f'{token[:6]}…len={len(token)}' if token else '(empty)'
+
+
 def _authorized():
     token = request.headers.get('X-Internal-Token', '')
     return bool(MCP_INTERNAL_TOKEN) and token == MCP_INTERNAL_TOKEN
 
 
 def _unauthorized(endpoint: str):
-    """token 校验失败留痕——插件侧对非 2xx 静默放行（fail-open），token 错位
-    若两端都无日志，命中全 0 的问题无从定位（2026-10-14 生产排查教训）。"""
-    log.warning('gate %s unauthorized: X-Internal-Token mismatch, from=%s',
-                endpoint, request.remote_addr)
+    """token 校验失败留痕（双侧指纹）——插件侧对非 2xx 静默放行（fail-open），
+    token 错位若两端都无日志，命中全 0 无从定位（2026-10-14 生产排查教训）。
+    2026-10-15 补双侧：server=后端配置值、got=请求带来的值，一眼看出错位层级；
+    "未配置"与"不匹配"分开报——前者是部署漏配，后者是两侧不同步。"""
+    got = request.headers.get('X-Internal-Token', '')
+    if not MCP_INTERNAL_TOKEN:
+        log.warning('gate %s 403: server MCP_INTERNAL_TOKEN 未配置（一律拒绝）'
+                    ' got=%s from=%s', endpoint, token_fingerprint(got),
+                    request.remote_addr)
+    else:
+        log.warning('gate %s 403: token 不匹配 server=%s got=%s from=%s',
+                    endpoint, token_fingerprint(MCP_INTERNAL_TOKEN),
+                    token_fingerprint(got), request.remote_addr)
 
 
 def _resolve_session(oc_or_platform_id: str) -> tuple[str, str | None]:

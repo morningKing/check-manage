@@ -268,6 +268,15 @@ const TOKEN = process.env.BAIZE_INTERNAL_TOKEN || '__TOKEN__'
 const GATE_URL = process.env.BAIZE_GATE_PRECHECK_URL || '__GATE_ENDPOINT__'
 const GATE_POST_URL = process.env.BAIZE_GATE_POSTCHECK_URL || '__GATE_POSTCHECK__'
 const HEADERS = { 'content-type': 'application/json', 'x-internal-token': TOKEN }
+// 诊断留痕（2026-10-15 生产 token 错位排查）：插件实际使用的 token 指纹与
+// 来源（env 优先/文件回落）随加载打印一次——与后端启动日志的 fingerprint、
+// 403 日志的 server=/got= 两侧对照，错位在哪一级一眼可见。只打前缀+长度。
+{
+  const _envTok = process.env.BAIZE_INTERNAL_TOKEN
+  const _tokStr = String(TOKEN)
+  const _fp = _tokStr ? `${_tokStr.slice(0, 6)}…len=${_tokStr.length}` : '(empty)'
+  console.error(`[baize-trace] gate token source=${_envTok ? 'env' : 'file'} fingerprint=${_fp}`)
+}
 const GATE_TIMEOUT_MS = 3000
 // (sessionID → expiry)。服务端返回 rules=0（该会话无任何 pre 规则）时短路
 // 后续工具调用的 pre-check 请求——无规则是常态，热路径零开销。

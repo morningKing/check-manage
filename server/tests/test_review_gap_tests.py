@@ -2162,6 +2162,36 @@ def test_pre_check_endpoint_requires_internal_token(app):
     assert r.status_code == 403
 
 
+def test_unauthorized_logs_side_by_side_fingerprints(client, caplog):
+    """2026-10-15：403 日志带双侧指纹（server=/got=）——生产 token 错位
+    一眼定位错在哪一级，不再靠猜。只打前缀+长度，不落完整凭据。"""
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING, logger='routes.ai_gate_internal'):
+        resp = client.post('/ai/gate/internal/pre-check',
+                           headers={'X-Internal-Token': 'wrong-token-abc'},
+                           json={'sessionId': 'sess_x', 'tool': 'write'})
+    assert resp.status_code == 403
+    text = caplog.text
+    assert 'token 不匹配' in text
+    assert 'server=' in text and 'got=' in text
+    assert 'wrong-…len=15' in text          # got 侧指纹可见
+    assert 'from=' in text
+
+
+def test_unauthorized_logs_not_configured_branch(client, caplog, monkeypatch):
+    """未配置与不匹配分开报：前者是部署漏配，后者是两侧不同步。"""
+    import logging as _logging
+    from routes import ai_gate_internal as _mod
+    monkeypatch.setattr(_mod, 'MCP_INTERNAL_TOKEN', '')
+    with caplog.at_level(_logging.WARNING, logger='routes.ai_gate_internal'):
+        resp = client.post('/ai/gate/internal/pre-check',
+                           headers={'X-Internal-Token': 'whatever'},
+                           json={'sessionId': 'sess_x', 'tool': 'write'})
+    assert resp.status_code == 403
+    assert '未配置' in caplog.text
+    assert 'got=whatev…len=8' in caplog.text
+
+
 def test_settle_by_key_session_scoped(db_conn, user_id):
     """遗留项 1：session 不匹配时 settle 返回 False。
     （ai_execution_effects.session_id 有 FK → sess-a 用真实会话；
