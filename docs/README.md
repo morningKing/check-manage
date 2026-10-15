@@ -21,6 +21,11 @@
 ### 📙 [superpowers/](./superpowers/) — 开发流程文档
 使用 Superpowers 流程产出的规范文档：`plans/`（实现计划）、`specs/`（设计规范）。
 
+### 📗 [ops/](./ops/) — 运维手册
+部署与故障处置的操作性文档（诊断路径、修复步骤、验证标准）：
+
+- [`mcp-internal-token-403-修复.md`](./ops/mcp-internal-token-403-修复.md) — 内部通道 403 / 门禁命中恒 0 的诊断与修复
+
 ## 快速导航
 
 ### 新用户入门
