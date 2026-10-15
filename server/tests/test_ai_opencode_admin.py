@@ -454,6 +454,12 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
     ownership.record(4321, ocg.serve_port())
     killed: list[int] = []
     monkeypatch.setattr(ocg, '_kill_pids', lambda pids: killed.extend(pids))
+    # 2026-10-15：spawn 块会把分隔行写进真实 oc-serve.log（即使 Popen 被
+    # mock）——测试重定向到临时文件，避免用例污染真实日志（曾致排查误判：
+    # 10:45 的四条假分隔行被当成真实重启记录）
+    monkeypatch.setattr(ocg, 'serve_stdio_file',
+                        lambda: open(tmp_path / 'oc-serve.log', 'a',
+                                     encoding='utf-8'))
     with patch('utils.opencode_global.subprocess.Popen') as popen, \
          patch.object(ocg.time, 'sleep'), \
          patch.object(ocg, 'serve_health',
@@ -469,6 +475,9 @@ def test_restart_guard_and_force(gdir, admin_headers, monkeypatch, tmp_path):
     # Spec P0: OPENCODE_GLOBAL_DIR is pinned explicitly into the child env so
     # the serve reads the same global dir this page manages.
     assert popen.call_args.kwargs['env']['OPENCODE_GLOBAL_DIR'] == str(gdir)
+    # 统一落盘行为钉住：spawn 分隔行写入（重定向后的）oc-serve.log
+    assert 'oc-serve spawn (restart)' in (
+        tmp_path / 'oc-serve.log').read_text(encoding='utf-8')
 
     # health never comes back → 502
     with patch('utils.opencode_global.subprocess.Popen'), \
@@ -640,6 +649,9 @@ def test_runtime_apply_route_refuses_when_busy(gdir, admin_headers, monkeypatch)
                                  'activeBatches': 0})
     monkeypatch.setattr(ownership, 'runtime_dir', lambda: str(gdir.parent / 'own'))
     monkeypatch.setattr(ocg, '_serve_pids_on_port', lambda port: [])
+    # spawn 分隔行重定向（勿写真实 oc-serve.log，同 test_restart_guard_and_force）
+    monkeypatch.setattr(ocg, 'serve_stdio_file',
+                        lambda: open(gdir / 'oc-serve.log', 'a', encoding='utf-8'))
     with patch('utils.opencode_global.subprocess.Popen') as popen, \
          patch.object(ocg.time, 'sleep'), \
          patch.object(ocg, 'serve_health',
@@ -705,6 +717,9 @@ def test_permission_split_apply_and_restart(gdir, admin_headers, monkeypatch):
 
     monkeypatch.setattr('utils.permissions.can_admin',
                         _grant_only('admin.ai_runtime_restart'))
+    # spawn 分隔行重定向（勿写真实 oc-serve.log，同 test_restart_guard_and_force）
+    monkeypatch.setattr(ocg, 'serve_stdio_file',
+                        lambda: open(gdir / 'oc-serve.log', 'a', encoding='utf-8'))
     with patch('utils.opencode_global.subprocess.Popen'), \
          patch.object(ocg.time, 'sleep'), \
          patch.object(ocg, 'serve_health',
