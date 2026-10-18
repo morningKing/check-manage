@@ -77,6 +77,9 @@ const staticRoutes: RouteRecordRaw[] = [
       // 工作流全屏编辑页（新建 / 按 id 编辑）
       { path: 'workflow/new', name: 'WorkflowEditorNew', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '新建工作流' } },
       { path: 'workflow/:id', name: 'WorkflowEditor', component: () => import('@/views/workflow/WorkflowEditor.vue'), meta: { title: '编辑工作流' } },
+      // 智能写作（suggest-editor）：文档列表 + 全屏编辑页（WS 走 /suggest-ws）
+      { path: 'suggest-editor', name: 'SuggestEditorList', component: () => import('@/views/suggest/SuggestEditorListView.vue'), meta: { title: '智能写作' } },
+      { path: 'suggest-editor/:docId', name: 'SuggestEditorDoc', component: () => import('@/views/suggest/SuggestEditorDocView.vue'), meta: { title: '智能写作' } },
       // 通用动态数据页面（通过 pageId 参数匹配）
       {
         path: 'page/:pageId',

@@ -16,6 +16,8 @@ declare module '*.vue' {
 // 声明环境变量类型
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string
+  /** 智能写作：置为 "off" 关闭 LLM 续写兜底（词表/文档层照常） */
+  readonly VITE_LLM_COMPLETION?: string
 }
 
 interface ImportMeta {

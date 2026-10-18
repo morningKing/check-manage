@@ -1,0 +1,793 @@
+/**
+ * 智能写作编辑器样式（自 suggest-editor 原型 styles.css 适配）。
+ * 布局类全部加 se- 前缀；正文排版类（.doc-surface 等）限定在 .se-scope 下，
+ * 避免与平台全局样式互相污染。浮层（补全候选/斜杠菜单）挂在编辑器 DOM 内、
+ * fixed 定位，根类名带 se- 前缀，样式保持全局。
+ */
+
+.se-scope {
+  --se-ink: #1f2328;
+  --se-muted: #6b7280;
+  --se-line: #e5e7eb;
+  --se-accent: #2563eb;
+  color: var(--se-ink);
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.se-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.se-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fff;
+  border-bottom: 1px solid var(--se-line);
+  font-size: 13px;
+  flex: none;
+}
+
+.se-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #f3f4f6;
+  color: var(--se-muted);
+}
+
+.se-badge-synced {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.se-badge-connecting {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.se-badge-disconnected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.se-status {
+  color: var(--se-muted);
+}
+
+.se-hint {
+  margin-left: auto;
+  color: #9ca3af;
+}
+
+.se-editor-host {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+  padding: 32px 16px;
+  min-width: 0;
+}
+
+.se-workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---------------- 富文本排版（标题 / 列表 / 引用 / 代码 / 链接 …） ---------------- */
+
+.se-scope .doc-surface {
+  width: min(760px, 100%);
+  min-height: 60vh;
+  padding: 40px 48px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 12px;
+  outline: none;
+  font-size: 16px;
+  line-height: 1.8;
+  color: var(--se-ink);
+}
+
+.se-scope .doc-surface h1,
+.se-scope .doc-surface h2,
+.se-scope .doc-surface h3 {
+  line-height: 1.35;
+}
+
+.se-scope .doc-surface h1 {
+  margin: 1.1em 0 0.45em;
+  font-size: 1.75em;
+  font-weight: 650;
+}
+
+.se-scope .doc-surface h2 {
+  margin: 1em 0 0.4em;
+  font-size: 1.42em;
+  font-weight: 650;
+}
+
+.se-scope .doc-surface h3 {
+  margin: 0.9em 0 0.35em;
+  font-size: 1.18em;
+  font-weight: 650;
+}
+
+.se-scope .doc-surface p {
+  margin: 0 0 0.9em;
+}
+
+.se-scope .doc-surface ul,
+.se-scope .doc-surface ol {
+  margin: 0 0 0.9em;
+  padding-left: 1.5em;
+}
+
+.se-scope .doc-surface ul {
+  list-style: disc;
+}
+
+.se-scope .doc-surface ol {
+  list-style: decimal;
+}
+
+.se-scope .doc-surface li {
+  margin: 0.18em 0;
+}
+
+.se-scope .doc-surface li p {
+  margin: 0;
+}
+
+.se-scope .doc-surface blockquote {
+  margin: 0 0 0.9em;
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 3px solid #d1d5db;
+  color: #4b5563;
+}
+
+.se-scope .doc-surface code {
+  padding: 0.12em 0.32em;
+  background: #f3f4f6;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.se-scope .doc-surface pre {
+  margin: 0 0 0.9em;
+  padding: 12px 14px;
+  background: #f6f8fa;
+  border: 1px solid var(--se-line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.se-scope .doc-surface pre code {
+  padding: 0;
+  background: none;
+  font-size: 0.9em;
+  line-height: 1.6;
+}
+
+.se-scope .doc-surface a {
+  color: var(--se-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.se-scope .doc-surface hr {
+  margin: 1.3em 0;
+  border: none;
+  border-top: 1px solid var(--se-line);
+}
+
+.se-scope .doc-surface mark {
+  background: #fef08a;
+}
+
+.se-scope .doc-surface ::selection {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+/* 任务列表 */
+.se-scope .doc-surface ul[data-type='taskList'] {
+  padding-left: 0.2em;
+  list-style: none;
+}
+
+.se-scope .doc-surface ul[data-type='taskList'] li {
+  display: flex;
+  gap: 0.5em;
+  align-items: flex-start;
+}
+
+.se-scope .doc-surface ul[data-type='taskList'] li > label {
+  margin-top: 0.3em;
+  user-select: none;
+}
+
+.se-scope .doc-surface ul[data-type='taskList'] input[type='checkbox'] {
+  accent-color: var(--se-accent);
+}
+
+.se-scope .doc-surface ul[data-type='taskList'] li[data-checked='true'] > div,
+.se-scope .doc-surface ul[data-type='taskList'] li[data-checked='true'] > p {
+  color: var(--se-muted);
+  text-decoration: line-through;
+}
+
+/* 空文档占位提示 */
+.se-scope .doc-surface p.is-editor-empty:first-child::before,
+.se-scope .doc-surface p.is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: #9ca3af;
+  pointer-events: none;
+}
+
+/* ---------------- 选中浮层工具栏 ---------------- */
+
+.se-bubble-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+}
+
+.se-bubble-btn {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--se-ink);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.se-bubble-btn:hover {
+  background: #f3f4f6;
+}
+
+.se-bubble-btn.is-active {
+  background: #e8f0fe;
+  color: #1d4ed8;
+}
+
+.se-bubble-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--se-line);
+}
+
+.se-bubble-link-editor {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.se-bubble-link-input {
+  width: 200px;
+  padding: 3px 8px;
+  border: 1px solid var(--se-line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* ---------------- 斜杠命令菜单（挂 body，根类 se- 前缀） ---------------- */
+
+.se-slash-menu {
+  position: fixed;
+  z-index: 70;
+  width: 240px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+  font-size: 13px;
+  color: var(--se-ink);
+}
+
+.se-slash-menu .slash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.se-slash-menu .slash-item.is-selected {
+  background: #e8f0fe;
+}
+
+.se-slash-menu .slash-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 4px;
+  background: #f3f4f6;
+  border-radius: 5px;
+  color: #374151;
+  font-size: 11px;
+}
+
+.se-slash-menu .slash-title {
+  flex: none;
+}
+
+.se-slash-menu .slash-hint {
+  margin-left: auto;
+  color: var(--se-muted);
+  font-size: 11px;
+}
+
+.se-slash-menu .slash-empty {
+  padding: 8px;
+  color: var(--se-muted);
+  font-size: 12px;
+}
+
+/* -------- 建议：Word 式批注（正文只留标注线 + 行内标记，卡片在右侧栏） -------- */
+
+.se-scope .suggest {
+  background: rgba(37, 99, 235, 0.08);
+  border-bottom: 2px solid rgba(37, 99, 235, 0.55);
+  cursor: pointer;
+}
+
+.se-scope .suggest-warn {
+  background: rgba(217, 119, 6, 0.08);
+  border-bottom-color: #d97706;
+}
+
+.se-scope .suggest-error {
+  background: rgba(220, 38, 38, 0.07);
+  border-bottom-color: #dc2626;
+}
+
+/* 本地即时检查：点线下划线区分于 AI 建议 */
+.se-scope .suggest-local {
+  border-bottom-style: dotted;
+}
+
+/* 改写建议（紫色，区别于 AI 蓝 / 本地绿） */
+.se-scope .suggest-rewrite {
+  background: rgba(168, 85, 247, 0.08);
+  border-bottom-color: rgba(168, 85, 247, 0.55);
+}
+
+/* 悬停/选中某条建议时，正文对应位置加重提示 */
+.se-scope .suggest.is-active {
+  background: rgba(37, 99, 235, 0.18);
+  border-bottom-color: #1d4ed8;
+}
+
+/* 行内标记：AI / 改写是编号圆标，即时检查是点状标 */
+.se-scope .suggest-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin: 0 1px;
+  border-radius: 50%;
+  font-size: 10px;
+  line-height: 1;
+  vertical-align: super;
+  cursor: pointer;
+  user-select: none;
+}
+
+.se-scope .suggest-marker-numbered {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.se-scope .suggest-marker-numbered.is-active {
+  background: #1d4ed8;
+  color: #fff;
+}
+
+.se-scope .suggest-marker-local {
+  width: 6px;
+  height: 6px;
+  background: #a7f3d0;
+  border: 1px solid #10b981;
+}
+
+.se-scope .suggest-marker-local.is-active {
+  background: #10b981;
+}
+
+/* -------- 右侧批注栏 -------- */
+
+.se-suggest-panel {
+  width: 320px;
+  flex: none;
+  padding: 12px;
+  overflow-y: auto;
+  background: #fafafa;
+  border-left: 1px solid var(--se-line);
+}
+
+.se-suggest-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.se-suggest-panel-count {
+  padding: 0 6px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  color: #374151;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.se-suggest-panel-sub {
+  margin: 12px 0 6px;
+  color: var(--se-muted);
+  font-size: 11px;
+}
+
+.se-suggest-panel-empty {
+  padding: 12px;
+  background: #fff;
+  border: 1px dashed var(--se-line);
+  border-radius: 8px;
+  color: var(--se-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.se-suggest-note {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.se-suggest-note.is-active {
+  border-left-color: var(--se-accent);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.09);
+}
+
+.se-suggest-note-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.se-suggest-note-badge {
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.se-suggest-note-badge-ai {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.se-suggest-note-badge-rewrite {
+  background: #faf5ff;
+  color: #7e22ce;
+}
+
+.se-suggest-note-badge-local {
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.se-suggest-note-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  background: #dbeafe;
+  border-radius: 50%;
+  color: #1d4ed8;
+  font-size: 10px;
+}
+
+.se-suggest-note-severity {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.se-suggest-note-severity-info {
+  color: #6b7280;
+}
+
+.se-suggest-note-severity-warn {
+  color: #b45309;
+}
+
+.se-suggest-note-severity-error {
+  color: #b91c1c;
+}
+
+.se-suggest-note-quote {
+  color: var(--se-ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.se-suggest-note-replacement {
+  margin-top: 3px;
+  color: #166534;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.se-suggest-note-reason {
+  margin-top: 4px;
+  color: var(--se-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.se-suggest-note-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.se-suggest-btn {
+  padding: 2px 10px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.se-suggest-btn-accept {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.se-suggest-btn-ignore {
+  color: var(--se-muted);
+}
+
+.se-suggest-btn:hover {
+  filter: brightness(0.97);
+}
+
+.se-badge-toggle {
+  background: #fff;
+  border: 1px solid var(--se-line);
+  cursor: pointer;
+}
+
+/* 续写联想的 ghost 文本 */
+.se-scope .ghost-text {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+/* ghost 的来源标记（词表 / 文档 / AI） */
+.se-scope .ghost-source {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 10px;
+  font-style: normal;
+  vertical-align: super;
+}
+
+/* IDE 式候选列表（fixed 定位，不参与正文排版；VS Code 风格 chrome） */
+.se-completion-popup {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.se-completion-popup .completion-list {
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+  font-size: 13px;
+}
+
+.se-completion-popup .completion-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-left: 2px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.se-completion-popup .completion-item.is-selected {
+  background: #e8f0fe;
+  border-left-color: var(--se-accent);
+}
+
+/* 行首类型图标（VS Code 风格） */
+.se-completion-popup .completion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.se-completion-popup .completion-icon-vocab {
+  color: #4338ca;
+}
+
+.se-completion-popup .completion-icon-doc {
+  color: #166534;
+}
+
+/* 片段标记（含占位符的词条） */
+.se-completion-popup .completion-badge {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: #fdf4ff;
+  color: #86198f;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.se-completion-popup .completion-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 命中的字符（VS Code 的匹配高亮） */
+.se-completion-popup .completion-match {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.se-completion-popup .completion-detail {
+  color: var(--se-muted);
+  font-size: 11px;
+}
+
+.se-completion-popup .completion-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: #fff;
+  border-top: 1px solid var(--se-line);
+  color: #9ca3af;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 右侧详情面板（VS Code 的 docs 面板） */
+.se-completion-popup .completion-doc {
+  width: 220px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  font-size: 12px;
+}
+
+.se-completion-popup .completion-doc-title {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--se-line);
+  font-weight: 600;
+}
+
+.se-completion-popup .completion-doc-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+  color: var(--se-ink);
+}
+
+.se-completion-popup .completion-doc-key {
+  min-width: 32px;
+  color: var(--se-muted);
+}
+
+/* 选中 → 右键 的改写菜单 */
+.se-revise-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 320px;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+  font-size: 13px;
+  color: var(--se-ink);
+}
+
+.se-revise-menu-quote {
+  max-width: 360px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--se-muted);
+}
+
+.se-revise-menu-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.se-revise-menu-btn {
+  padding: 4px 10px;
+  background: #f9fafb;
+  border: 1px solid var(--se-line);
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.se-revise-menu-btn:hover {
+  background: #f3f4f6;
+}
+
+.se-revise-menu-send {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.se-revise-menu-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--se-line);
+  border-radius: 6px;
+  font-size: 12px;
+}

@@ -30,6 +30,12 @@ export default defineConfig({
         target: 'http://localhost:3002',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
+      },
+      // 智能写作的 Yjs 协作 WebSocket → Hocuspocus Node 服务（suggest-editor-server）
+      '/suggest-ws': {
+        target: 'ws://localhost:1234',
+        ws: true,
+        changeOrigin: true
       }
     }
   },
