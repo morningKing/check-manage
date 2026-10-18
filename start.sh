@@ -63,7 +63,7 @@ fi
 # NOTE: port 4096 (OpenCode) is intentionally left alone — it is an external
 # service managed outside this script.
 if command -v netstat.exe &>/dev/null; then
-    for port in 3001 3003; do
+    for port in 3001 3003 1234; do
         pids=$(netstat.exe -ano 2>/dev/null \
             | grep -E "LISTENING" \
             | grep -E ":${port}\s" \

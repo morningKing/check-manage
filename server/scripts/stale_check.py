@@ -80,6 +80,7 @@ OPENCODE_URL = _env('OPENCODE_BASE_URL', 'http://127.0.0.1:4096')
 MCP_HEALTH_URL = _env('MCP_HEALTH_URL', 'http://127.0.0.1:3003/health')
 PROXY_PORT = int(_env('PROXY_PORT', '8080') or 8080)
 FLASK_PORT = int(_env('FLASK_PORT', '3002') or 3002)
+SE_WS_PORT = int(_env('SE_WS_PORT', '1234') or 1234)
 
 
 def _progress(msg: str) -> None:
@@ -239,6 +240,8 @@ def _classify(cmd: str) -> str:
         return '后端'
     if 'mcp-server' in c or 'mcp_server' in c:
         return 'MCP'
+    if 'suggest-editor-server' in c:
+        return '智能写作(SE)'
     if 'opencode' in c:
         return 'OC serve'
     if 'spawn_main' in c:
@@ -324,6 +327,7 @@ def collect(*, verbose: bool = True) -> dict:
         ('MCP', mcp_port),
         ('OC serve', oc_port),
         ('代理(proxy)', PROXY_PORT),
+        ('智能写作(SE)', SE_WS_PORT),
     ]
     seen_ports: set[int] = set()
     port_pids: list[tuple[str, int, int]] = []   # (role, port, pid)
@@ -350,6 +354,8 @@ def collect(*, verbose: bool = True) -> dict:
         if kind == '未知':   # 命令行认不出时按端口归属兜底（如 MCP 裸 main.py）
             if port == mcp_port:
                 kind = 'MCP'
+            elif port == SE_WS_PORT:
+                kind = '智能写作(SE)'
             elif port == oc_port:
                 kind = 'OC serve'
             elif port == PROXY_PORT:

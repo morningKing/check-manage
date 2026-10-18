@@ -9,6 +9,8 @@ Reverse proxy server for production deployment.
 import os
 import sys
 import mimetypes
+import socket
+import threading
 import urllib.request
 import urllib.error
 import subprocess
@@ -61,6 +63,12 @@ MCP_LOG = os.path.join(os.path.dirname(__file__), 'proxy-mcp.log')
 # 这一个落点，/admin/logs 日志查看器也读它。旧的 proxy-opencode.log 停用
 # （'w' 截断模式，且与重启端点分叉，生产查日志要看两个文件）。
 OPENCODE_LOG = os.path.join(os.path.dirname(__file__), 'oc-serve.log')
+
+# 智能写作（suggest-editor）Node 服务：Yjs 协作编辑的 WebSocket（/suggest-ws 隧道
+# 的目标）。见 suggest-editor-server/（受管子进程，与 backend/mcp 同一生命周期）。
+SE_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'suggest-editor-server'))
+SE_WS_PORT = int(os.environ.get('SE_WS_PORT', '1234'))
+SE_LOG = os.path.join(os.path.dirname(__file__), 'proxy-se.log')
 
 # Ensure mimetypes are correct on Windows
 mimetypes.add_type('application/javascript', '.js')
@@ -294,10 +302,108 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    # -- WebSocket 隧道（智能写作 /suggest-ws） ----------------------------
+
+    def _tunnel_websocket(self):
+        """把 WebSocket 升级请求隧道到智能写作 Node 服务（裸 socket 双向拷贝）。
+
+        urllib 做不了 101 协议切换，这里手动把升级请求（请求行 + 全部头，WS 握手
+        对 Sec-WebSocket-Key/Version/Protocol 逐个敏感，一个都不能丢）原样转发到
+        127.0.0.1:SE_WS_PORT，再把两端的字节流对拷到任一侧关闭为止。
+        ThreadingHTTPServer 每连接一线程：隧道占用本请求线程 + 一个对拷线程，
+        与 SSE 长连接同一量级，符合既有线程模型。
+        """
+        path = _safe_upstream_path(self.path)
+        try:
+            remote = socket.create_connection(('127.0.0.1', SE_WS_PORT), timeout=10)
+        except OSError as e:
+            msg = f'{{"error":"suggest-editor ws unavailable: {e}"}}'.encode()
+            self.send_response(502)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(msg))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+
+        lines = [f'{self.command} {path} HTTP/1.1']
+        for key, value in self.headers.items():
+            if key.lower() == 'host':
+                # 目标按 Host 头区分没有意义，但保持合法的 HTTP/1.1 请求
+                lines.append(f'Host: 127.0.0.1:{SE_WS_PORT}')
+            else:
+                lines.append(f'{key}: {value}')
+        try:
+            remote.sendall(('\r\n'.join(lines) + '\r\n\r\n').encode('latin-1', errors='replace'))
+        except OSError:
+            remote.close()
+            return
+
+        # 转发目标响应（101 Switching Protocols 头部为止；provider 在收到 101 前
+        # 不会发任何帧，客户端侧不存在待转发的悬空字节）
+        try:
+            buf = b''
+            while b'\r\n\r\n' not in buf and len(buf) <= 64 * 1024:
+                chunk = remote.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            head, _, rest = buf.partition(b'\r\n\r\n')
+            self.connection.sendall(head + b'\r\n\r\n' + rest)
+        except OSError:
+            remote.close()
+            return
+
+        self.close_connection = True
+
+        def pump_socket(src, dst):
+            # socket → socket 方向：recv 阻塞读
+            try:
+                while True:
+                    data = src.recv(65536)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except OSError:
+                pass
+            finally:
+                try:
+                    dst.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        def pump_rfile(rfile, dst):
+            # rfile（BufferedReader）→ socket 方向：必须用 read1——
+            # read(n) 会凑满 n 字节才返回（破坏消息流），read1 一次取尽
+            # 当前可用字节（含头解析阶段已缓冲进 rfile 的 early-data）。
+            try:
+                while True:
+                    data = rfile.read1(65536)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except OSError:
+                pass
+            finally:
+                try:
+                    dst.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        # 本请求线程做 remote→local，一个 daemon 线程做 local→remote。
+        upstream = threading.Thread(target=pump_rfile, args=(self.rfile, remote), daemon=True)
+        upstream.start()
+        try:
+            pump_socket(remote, self.connection)
+        finally:
+            remote.close()
+            upstream.join(timeout=2)
+
     # -- Route dispatch ---------------------------------------------------
 
     def do_GET(self):
-        if self.path.startswith('/api/') or self.path == '/api':
+        if self.path == '/suggest-ws' or self.path.startswith('/suggest-ws/'):
+            self._tunnel_websocket()
+        elif self.path.startswith('/api/') or self.path == '/api':
             self._proxy_to_backend(stream=self._is_sse())
         else:
             self._serve_static_or_fallback()
@@ -464,6 +570,59 @@ def wait_for_mcp(url, timeout=15):
     return False
 
 
+def _se_node():
+    """suggest-editor-server 的启动命令：node + tsx cli + src/index.ts（与该目录
+    package.json 的 start 脚本同一形态，只是不经 shell/npm cmd 包装）。
+    node 是真 .exe，CreateProcess 直接按 PATH 解析，不需要 shell。"""
+    tsx_cli = os.path.join(SE_DIR, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+    if not os.path.isfile(tsx_cli):
+        return None
+    return ['node', tsx_cli, 'src/index.ts']
+
+
+def start_se():
+    """Start the suggest-editor Node service (Yjs collaboration WebSocket).
+
+    Returns the process, or None if node_modules/tsx isn't installed there
+    (智能写作降级，其余功能不受影响）。SE_API_URL 跟随本进程实际拉起的 backend，
+    内部 token / JWT_SECRET 由 server/.env 装载（load_dotenv 已跑）。
+    """
+    cmd = _se_node()
+    if cmd is None:
+        print(f'       [WARN] suggest-editor-server 依赖未安装（缺 tsx）；'
+              f'智能写作不可用。修复：cd suggest-editor-server && npm install', flush=True)
+        return None
+    env = opencode_launch.child_env()
+    # Node 服务默认连 3002（dev）；生产里 backend 在 BACKEND_URL（默认 3001），
+    # 必须显式指过去，否则它把文档状态写到不存在的后端上。
+    env['SE_API_URL'] = BACKEND_URL
+    env['PORT'] = str(SE_WS_PORT)
+    env['DATA_DIR'] = os.path.join(SE_DIR, '.data')
+    env['NODE_OPTIONS'] = ''  # 防继承无关的 loader 钩子
+    log = open(SE_LOG, 'w', encoding='utf-8', errors='replace')
+    proc = subprocess.Popen(
+        cmd,
+        cwd=SE_DIR,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=_NO_WINDOW,
+    )
+    return proc
+
+
+def wait_for_se(timeout=15):
+    """Wait until the suggest-editor WS port accepts TCP connections."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(('127.0.0.1', SE_WS_PORT), timeout=1) as s:
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
 def check_opencode(base_url, timeout=3):
     """Probe whether OpenCode is reachable."""
     try:
@@ -583,7 +742,7 @@ def main():
     procs = []
 
     # Start Flask backend
-    print('[1/4] Starting backend (Flask) ...', flush=True)
+    print('[1/5] Starting backend (Flask) ...', flush=True)
     backend_proc = start_backend()
     procs.append(backend_proc)
     if wait_for_backend(BACKEND_URL):
@@ -600,7 +759,7 @@ def main():
               f'see {BACKEND_LOG}', flush=True)
 
     # Start MCP server (AI chat capability provider)
-    print('[2/4] Starting MCP server ...', flush=True)
+    print('[2/5] Starting MCP server ...', flush=True)
     mcp_proc = start_mcp()
     if mcp_proc is not None:
         procs.append(mcp_proc)
@@ -616,7 +775,7 @@ def main():
 
     # OpenCode agent runtime: if already reachable we leave it alone (whoever
     # started it owns it); otherwise launch it here as a managed subprocess.
-    print('[3/4] Starting OpenCode agent runtime ...', flush=True)
+    print('[3/5] Starting OpenCode agent runtime ...', flush=True)
     if check_opencode(OPENCODE_BASE_URL):
         print(f'       OpenCode reachable ({OPENCODE_BASE_URL})', flush=True)
     else:
@@ -639,12 +798,27 @@ def main():
             print('       [WARN] OpenCode slow to respond but still running; '
                   f'see {OPENCODE_LOG}', flush=True)
 
+    # 智能写作（suggest-editor）Node 服务：Yjs 协作 WebSocket。失败只降级写作功能。
+    print('[4/5] Starting suggest-editor (Yjs collaboration) ...', flush=True)
+    se_proc = start_se()
+    if se_proc is not None:
+        procs.append(se_proc)
+        if wait_for_se():
+            print(f'       suggest-editor ready (ws port {SE_WS_PORT})', flush=True)
+        elif _report_dead_subprocess('suggest-editor', se_proc, SE_LOG):
+            print('       [WARN] suggest-editor failed to start; 智能写作不可用 '
+                  '(rest of the app still serves).', flush=True)
+        else:
+            print('       [WARN] suggest-editor slow to respond but still running; '
+                  f'see {SE_LOG}', flush=True)
+
     # Start reverse proxy (threaded so long-lived SSE streams don't block others)
-    print('[4/4] Starting reverse proxy ...', flush=True)
+    print('[5/5] Starting reverse proxy ...', flush=True)
     server = ThreadingHTTPServer((PROXY_HOST, PROXY_PORT), ProxyHandler)
     print(f'       Serving at http://localhost:{PROXY_PORT}', flush=True)
     print(f'       Static files: {DIST_DIR}', flush=True)
     print(f'       API proxy:    /api/* -> {BACKEND_URL}', flush=True)
+    print(f'       WS tunnel:    /suggest-ws -> ws://127.0.0.1:{SE_WS_PORT}', flush=True)
     print(flush=True)
 
     def shutdown(sig=None, frame=None):
