@@ -1,0 +1,3 @@
+# 智能写作整合期临时使用：本机全局 ~/.npmrc 的 SOCKS5 代理未运行，直连安装会被拒。
+# 用法：npm install --userconfig=.npmrc-local（走 npmmirror、不走代理）
+registry=https://registry.npmmirror.com

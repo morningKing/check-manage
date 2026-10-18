@@ -66,6 +66,7 @@ from routes.workflows import workflows_bp
 from routes.import_runs import import_runs_bp
 from routes.kefu_admin import kefu_admin_bp
 from routes.kefu_public import kefu_public_bp
+from routes.suggest_editor import suggest_editor_bp
 from utils.logging_setup import setup_logging
 
 # Configure logging (console + rotating file) before anything logs. Skip the
@@ -573,6 +574,18 @@ try:
 except Exception as _e:
     logging.warning('tool call duration migration on boot failed: %s', _e)
 
+# 智能写作三张表 + 内置模板/菜单 seed（2026-10-18）。随启动幂等执行；
+# 新迁移必须在此显式注册（init_db 自动扫描只覆盖全新库，见护栏测试）。
+try:
+    _mp_se = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'migrations', '2026_10_18_suggest_editor_tables.py')
+    _spec_se = _ilu.spec_from_file_location('_suggest_editor_tables_boot', _mp_se)
+    _m_se = _ilu.module_from_spec(_spec_se)
+    _spec_se.loader.exec_module(_m_se)
+    _m_se.run()
+except Exception as _e:
+    logging.warning('suggest editor migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
@@ -598,6 +611,8 @@ app.register_blueprint(roles_bp)
 app.register_blueprint(workflows_bp)
 app.register_blueprint(kefu_admin_bp)
 app.register_blueprint(kefu_public_bp)
+# 智能写作（suggest-editor）必须在 catch-all dynamic_bp 之前注册
+app.register_blueprint(suggest_editor_bp)
 app.register_blueprint(dynamic_bp)
 
 # Start backup scheduler (only in the reloader child process to avoid double-start).

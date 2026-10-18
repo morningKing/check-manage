@@ -49,6 +49,7 @@ PERMISSION_CATALOG = [
     {'key': 'admin.ai_orchestration_admin', 'label': 'AI 编排定义管理', 'group': '平台管理'},
     {'key': 'admin.ai_approval',       'label': 'AI 执行前审批', 'group': '平台管理'},
     {'key': 'admin.kefu',              'label': '智能客服',     'group': '平台管理'},
+    {'key': 'admin.suggest_editor',    'label': '智能写作模板管理', 'group': '平台管理'},
 ]
 
 

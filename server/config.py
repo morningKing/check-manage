@@ -162,3 +162,12 @@ DATA_FILE_MAX_MB      = _to_int(os.getenv('DATA_FILE_MAX_MB'), 50)
 # Shared secret for the MCP server -> Flask internal memory endpoints.
 # Empty (default) disables the internal endpoints (returns 403).
 MCP_INTERNAL_TOKEN = os.getenv('MCP_INTERNAL_TOKEN', '')
+
+# 智能写作（suggest-editor）：Node 侧 agent 工作区与词表的磁盘根目录。
+# 必须与 suggest-editor-server 启动时的 DATA_DIR 一致（默认即其 .data 目录），
+# 删除文档时 Flask 用它清理该文档的 agent 工作区（正文/建议本体在数据库）。
+SE_DATA_DIR = os.getenv(
+    'SE_DATA_DIR',
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 'suggest-editor-server', '.data'),
+)

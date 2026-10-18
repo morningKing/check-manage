@@ -1,0 +1,4 @@
+# 本机全局 ~/.npmrc 配置了未运行的 SOCKS5 代理（127.0.0.1:10808），直连安装会被拒。
+# 用 --userconfig 指向本文件可整体替换用户级配置：走 npmmirror、不走代理。
+#   npm install --userconfig=.npmrc-local
+registry=https://registry.npmmirror.com
