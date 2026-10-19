@@ -213,3 +213,60 @@ export async function readChecklistEntries(maxEntries = 40): Promise<string[]> {
   }
   return entries
 }
+
+/* ------------------------------- 检查规则（全局 + 文档级） -------------------------------
+ * 真源为 Flask 管理的 JSON 文件（全局 ${dataDir}/规则-全局.json、文档级
+ * ${dataDir}/ws/<id>/规则.json）。每轮分析前读取 enabled 且带 aiPrompt 的规则注入
+ * prompt；文档级同 id 覆盖全局。presence/maps 等本地规则由前端通道处理，不经过这里。 */
+
+/** 检查规则文件：全局（对所有文档生效） */
+export function rulesPath(): string {
+  return path.join(config.dataDir, "规则-全局.json")
+}
+
+/** 检查规则文件：文档级（仅对该文档生效） */
+export function docRulesPath(docName: string): string {
+  return path.join(workspaceDir(docName), "规则.json")
+}
+
+/** 读一份规则文件；文件缺失/坏 JSON/结构无效一律跳过并告警，不阻断分析 */
+async function readRulesFile(file: string): Promise<Array<Record<string, unknown>>> {
+  try {
+    const raw = await fs.readFile(file, "utf8")
+    const payload = JSON.parse(raw) as { rules?: unknown } | null
+    if (!payload || !Array.isArray(payload.rules)) {
+      console.warn(`[workspace] 规则文件结构无效，已跳过：${file}`)
+      return []
+    }
+    return payload.rules as Array<Record<string, unknown>>
+  } catch (error) {
+    console.warn(
+      `[workspace] 读取规则文件失败，已跳过：${file}`,
+      error instanceof Error ? error.message : error,
+    )
+    return []
+  }
+}
+
+/** 供分析 prompt 注入：enabled 且带 aiPrompt 的规则（文档级覆盖全局），上限 40 条 */
+export async function readRulePrompts(
+  docName: string,
+  maxRules = 40,
+): Promise<Array<{ name: string; prompt: string }>> {
+  const merged = new Map<string, Record<string, unknown>>()
+  for (const rule of await readRulesFile(rulesPath())) {
+    if (typeof rule.id === "string") merged.set(rule.id, rule)
+  }
+  for (const rule of await readRulesFile(docRulesPath(docName))) {
+    if (typeof rule.id === "string") merged.set(rule.id, rule)
+  }
+  const out: Array<{ name: string; prompt: string }> = []
+  for (const rule of merged.values()) {
+    if (rule.enabled === false) continue
+    const prompt = typeof rule.aiPrompt === "string" ? rule.aiPrompt.trim() : ""
+    if (!prompt) continue
+    out.push({ name: typeof rule.name === "string" ? rule.name : (rule.id as string), prompt })
+    if (out.length >= maxRules) break
+  }
+  return out
+}

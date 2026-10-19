@@ -6,6 +6,7 @@ import {
   ensureCompletionWorkspace,
   ensureWorkspace,
   readChecklistEntries,
+  readRulePrompts,
   writeSnapshot,
 } from "./workspace.js"
 import { syncVocabulary } from "./vocabulary.js"
@@ -550,10 +551,20 @@ async function processCommands(state: DocState): Promise<void> {
 
 /* ------------------------------- 自动分析 ------------------------------- */
 
-function buildPrompt(dirty: BlockInfo[], avoid: string[], checklist: string[], snapshotPath: string): string {
+function buildPrompt(
+  dirty: BlockInfo[],
+  avoid: string[],
+  checklist: string[],
+  snapshotPath: string,
+  rulePrompts: Array<{ name: string; prompt: string }>,
+): string {
   const lines = [
     `请先用 read 工具读取文件 ${snapshotPath}（绝对路径，里面是文档最近改动的 ${dirty.length} 个段落），再按下面的检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
   ]
+  if (rulePrompts.length > 0) {
+    lines.push("领域检查规则（逐条核对，命中在 reason 中注明规则名）：")
+    for (const rule of rulePrompts) lines.push(`- [${rule.name}] ${rule.prompt}`)
+  }
   if (checklist.length > 0) {
     lines.push("检查要点（逐条核对，命中才提；reason 里注明命中的要点名）：")
     for (const entry of checklist) lines.push(`- ${entry}`)
@@ -616,10 +627,13 @@ async function run(state: DocState): Promise<void> {
     const snapshotPath = await writeSnapshot(state.name, dirty.map((block) => block.text.trim()).join("\n\n"))
 
     const avoid = suggestionEntries(state.ydoc).map((s) => s.quote)
-    // 检查要点每轮分析前现读：后台改完，下一段输入即按新要点查
+    // 检查要点与检查规则每轮分析前现读：后台改完，下一段输入即按新内容查
     const checklist = await readChecklistEntries()
+    const rulePrompts = await readRulePrompts(state.name)
     const result = await withTimeout(
-      state.analysisLock(() => session.analyze(buildPrompt(dirty, avoid, checklist, snapshotPath))),
+      state.analysisLock(() =>
+        session.analyze(buildPrompt(dirty, avoid, checklist, snapshotPath, rulePrompts)),
+      ),
       config.analyzeTimeoutMs,
       () => session.cancel(),
     )
