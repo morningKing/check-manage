@@ -20,6 +20,7 @@
     <div class="se-suggest-note-reason">{{ item.reason }}</div>
     <div class="se-suggest-note-actions">
       <button
+        v-if="!item.notice"
         type="button"
         class="se-suggest-btn se-suggest-btn-accept"
         @mousedown.prevent

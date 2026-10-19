@@ -4,6 +4,7 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view"
 import * as Y from "yjs"
 import { relativePositionToAbsolutePosition, ySyncPluginKey } from "@tiptap/y-tiptap"
 import { runLocalRules, type Severity } from "./local-rules"
+import { EMPTY_COMPILED_RULES, runCheckRules, type CompiledRules } from "./check-rules"
 
 /** 刷新 decoration 的事务 meta key */
 export const SUGGESTIONS_REFRESH_META = "suggest-editor:refresh"
@@ -20,6 +21,10 @@ export interface SuggestionItem {
   to: number
   /** AI / 改写建议的序号（与正文标记一致）；本地即时检查为 null */
   index: number | null
+  /** 命中的检查规则名（仅动态规则命中） */
+  ruleName?: string
+  /** 完整性提醒：不可接受，只能忽略 */
+  notice?: boolean
 }
 
 export interface SuggestionLayersApi {
@@ -51,8 +56,9 @@ export function createSuggestionLayers(options: {
   getEditor: () => Editor | null
   onChange: (items: { ai: SuggestionItem[]; local: SuggestionItem[] }) => void
   onActiveChange?: (id: string | null) => void
+  getCheckRules?: () => CompiledRules | null
 }): { extension: Extension; api: SuggestionLayersApi } {
-  const { ydoc, getEditor, onChange, onActiveChange } = options
+  const { ydoc, getEditor, onChange, onActiveChange, getCheckRules } = options
   const suggestions = ydoc.getMap("suggestions")
   const aiRanges = new Map<string, { from: number; to: number }>()
   const localRanges = new Map<string, { from: number; to: number }>()
@@ -77,6 +83,7 @@ export function createSuggestionLayers(options: {
 
   const api: SuggestionLayersApi = {
     accept: (item) => {
+      if (item.notice) return // 完整性提醒不可接受，只能忽略
       if (item.source === "local") {
         const range = localRanges.get(item.id)
         if (!range) return
@@ -202,6 +209,27 @@ export function createSuggestionLayers(options: {
         from: match.from,
         to: match.to,
         index: null,
+      })
+    }
+
+    // 2b) 服务端下发的检查规则（全局 + 文档级，毫秒级本地命中）：同样让位 AI、与本地去重
+    const matches = runCheckRules(state.doc, getCheckRules?.() ?? EMPTY_COMPILED_RULES)
+    for (const match of matches) {
+      if (dismissedLocal.has(`${match.id}\u0000${match.text}`)) continue
+      if (aiItems.some((item) => match.from < item.to && match.to > item.from)) continue
+      if (localItems.some((item) => match.from < item.to && match.to > item.from)) continue
+      localItems.push({
+        id: match.id,
+        source: "local",
+        quote: match.text,
+        replacement: match.replacement ?? "",
+        reason: match.reason,
+        severity: match.severity,
+        from: match.from,
+        to: match.to,
+        index: null,
+        ruleName: match.ruleName,
+        notice: match.notice,
       })
     }
 

@@ -86,6 +86,8 @@ import { COMMANDS_MAP, requestRewrite } from './core/commands'
 import { CompletionGhost } from './core/completion'
 import { SlashMenu } from './core/slash-menu'
 import { createSuggestionLayers, SUGGESTIONS_REFRESH_META, type SuggestionItem } from './core/suggestions'
+import { compileRules, type CompiledRules } from './core/check-rules'
+import { getRules, type LocalCheckRule } from '@/api/suggestEditor'
 
 const props = defineProps<{ docId: string; token: string }>()
 const emit = defineEmits<{ (e: 'synced'): void }>()
@@ -131,6 +133,8 @@ const rewriteHint = ref<string | null>(null)
 const notes = ref<{ ai: SuggestionItem[]; local: SuggestionItem[] }>({ ai: [], local: [] })
 const activeNoteId = ref<string | null>(null)
 const sidebarOpen = ref(true)
+/** 全局 + 文档级检查规则（编译后）；null = 仅内置规则 */
+const compiledRules = shallowRef<CompiledRules | null>(null)
 
 const syncStateLabel = computed(() =>
   syncState.value === 'synced' ? '已同步' : syncState.value === 'connecting' ? '连接中' : '已断开',
@@ -153,7 +157,9 @@ const suggestionLayer = createSuggestionLayers({
   onActiveChange: (id) => {
     activeNoteId.value = id
   },
+  getCheckRules: () => compiledRules.value,
 })
+void loadRules()
 
 const editor = useEditor({
   extensions: [
@@ -207,6 +213,28 @@ watch(
 function refreshSuggestions(): void {
   const view = editorRef.value?.view
   if (view) view.dispatch(view.state.tr.setMeta(SUGGESTIONS_REFRESH_META, true))
+}
+
+/**
+ * 拉取全局 + 文档级检查规则并编译；文档级同 id 覆盖全局，单份失败只降级该份。
+ * 编辑器打开时调用一次；规则对话框保存成功后经 expose 的 reloadRules 重载。
+ */
+async function loadRules(): Promise<void> {
+  try {
+    const [globalRules, docRules] = await Promise.all([
+      getRules({ kind: 'global' }).then((r) => r.rules).catch(() => [] as LocalCheckRule[]),
+      getRules({ kind: 'document', docId: props.docId }).then((r) => r.rules).catch(() => [] as LocalCheckRule[]),
+    ])
+    // 文档级同 id 覆盖全局
+    const byId = new Map<string, LocalCheckRule>()
+    for (const rule of globalRules) byId.set(rule.id, rule)
+    for (const rule of docRules) byId.set(rule.id, rule)
+    compiledRules.value = compileRules([...byId.values()])
+    refreshSuggestions()
+  } catch (error) {
+    console.warn('[suggest-editor] 检查规则加载失败，仅用内置规则：', error)
+    compiledRules.value = null
+  }
 }
 
 function readAssistantStatus(): void {
@@ -358,6 +386,8 @@ defineExpose({
   /** refs 经 expose 自动解包：父组件拿到 Editor 实例（或 undefined） */
   editor,
   ydoc,
+  /** 规则保存后由父组件调用：重新拉取 + 重算本地命中 */
+  reloadRules: loadRules,
 })
 </script>
 
