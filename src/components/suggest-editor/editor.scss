@@ -21,6 +21,17 @@
   min-height: 0;
 }
 
+/* 头部（标题栏 + 格式工具栏）整体 sticky：
+   正常布局下外层容器零溢出（正文只在 .se-editor-host 内滚动），sticky 是兜底——
+   即使未来出现意外溢出，头部也钉在顶部不被滚走，且参与 flex 布局不占额外空间 */
+.se-head {
+  flex: none;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fff;
+}
+
 .se-topbar {
   display: flex;
   align-items: center;
@@ -273,18 +284,7 @@
   pointer-events: none;
 }
 
-/* ---------------- 选中浮层工具栏 ---------------- */
-
-.se-bubble-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
-  background: #fff;
-  border: 1px solid var(--se-line);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
-}
+/* ---------------- 工具栏按钮（头部固定工具栏使用；原浮动工具栏已移除） ---------------- */
 
 .se-bubble-btn {
   min-width: 26px;

@@ -116,8 +116,8 @@
 <script setup lang="ts">
 /**
  * 编辑器顶部固定格式工具栏（Word / Google Docs 式）：
- * 与纸张同宽居中，常驻可见——选中浮出工具栏（BubbleToolbar）之外的常规入口。
- * 撤销/重做走 Collaboration 扩展注册的 Yjs UndoManager 命令。
+ * 与纸张同宽居中，常驻可见——格式操作的唯一入口（原选中浮出工具栏已移除，
+ * 避免遮挡正文）。撤销/重做走 Collaboration 扩展注册的 Yjs UndoManager 命令。
  * 所有格式按钮 @mousedown.prevent：点按钮不丢编辑器选区。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'

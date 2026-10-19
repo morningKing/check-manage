@@ -172,8 +172,10 @@ async function saveAsTemplate(): Promise<void> {
 
 <style scoped lang="scss">
 .suggest-doc-page {
-  height: calc(100vh - 60px - 40px - 32px); /* AppLayout header + app-content 上下 padding + 标签栏 */
-  min-height: 480px;
+  /* 精确填满内容区（标签栏高度变化时不再出现外层滚动把头部挤走）；
+     正文滚动只发生在编辑器内部（.se-editor-host） */
+  height: 100%;
+  min-height: 0;
   background: #fff;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;

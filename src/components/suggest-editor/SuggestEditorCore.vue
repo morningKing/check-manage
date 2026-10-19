@@ -1,18 +1,22 @@
 <template>
   <div class="se-scope">
     <div class="se-layout">
-      <header class="se-topbar">
-        <slot name="title" />
-        <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
-        <span class="se-status">{{ rewriteHint ?? statusText }}</span>
-        <span v-if="connectionHint" class="se-conn-hint">⚠ {{ connectionHint }}</span>
-        <button type="button" class="se-badge se-badge-toggle" @click="sidebarOpen = !sidebarOpen">
-          {{ sidebarOpen ? '隐藏建议栏' : `建议 ${notes.ai.length + notes.local.length}` }}
-        </button>
-        <span class="se-hint">选中浮出格式工具 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
-        <slot name="actions" />
-      </header>
-      <EditorToolbar v-if="editor" :editor="editor" />
+      <!-- 头部整体 sticky 兜底：正常布局下外层零溢出（正文只在下方区域内滚动），
+           任何意外溢出时标题栏与工具栏也不会被滚走 -->
+      <div class="se-head">
+        <header class="se-topbar">
+          <slot name="title" />
+          <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
+          <span class="se-status">{{ rewriteHint ?? statusText }}</span>
+          <span v-if="connectionHint" class="se-conn-hint">⚠ {{ connectionHint }}</span>
+          <button type="button" class="se-badge se-badge-toggle" @click="sidebarOpen = !sidebarOpen">
+            {{ sidebarOpen ? '隐藏建议栏' : `建议 ${notes.ai.length + notes.local.length}` }}
+          </button>
+          <span class="se-hint">格式用上方工具栏 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
+          <slot name="actions" />
+        </header>
+        <EditorToolbar v-if="editor" :editor="editor" />
+      </div>
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
         <SuggestionSidebar
@@ -26,7 +30,6 @@
           @hover="onHover"
         />
       </div>
-      <BubbleToolbar v-if="editor" :editor="editor" />
       <div
         v-if="menu"
         class="se-revise-menu"
@@ -68,7 +71,7 @@
  * - 三层建议（本地规则 / AI 分析 / 用户改写）经 decoration 呈现，接受才落正文；
  * - 模板初始化由父组件（SuggestEditorDocView）在 synced 后调用 setContent 完成。
  */
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, reactive, ref, shallowRef, watch } from 'vue'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
@@ -77,7 +80,6 @@ import { Placeholder } from '@tiptap/extensions'
 import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
-import BubbleToolbar from './BubbleToolbar.vue'
 import EditorToolbar from './EditorToolbar.vue'
 import SuggestionSidebar from './SuggestionSidebar.vue'
 import { COMMANDS_MAP, requestRewrite } from './core/commands'
@@ -193,17 +195,14 @@ watch(
   editor,
   (value) => {
     editorRef.value = value ?? null
+    // 调试钩子：?debug=1 时暴露 editor / ydoc（编辑器实例就绪即挂，供 E2E 与控制台排查）
+    if (value && new URLSearchParams(window.location.search).has('debug')) {
+      ;(window as unknown as Record<string, unknown>).__editor = value
+      ;(window as unknown as Record<string, unknown>).__ydoc = ydoc
+    }
   },
   { immediate: true },
 )
-
-onMounted(() => {
-  // 调试钩子：?debug=1 时暴露 editor / ydoc，便于 E2E 测试与控制台排查
-  if (new URLSearchParams(window.location.search).has('debug')) {
-    ;(window as unknown as Record<string, unknown>).__editor = editorRef.value
-    ;(window as unknown as Record<string, unknown>).__ydoc = ydoc
-  }
-})
 
 function refreshSuggestions(): void {
   const view = editorRef.value?.view
