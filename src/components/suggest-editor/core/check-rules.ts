@@ -78,8 +78,10 @@ export function compileRules(rules: LocalCheckRuleInput[]): CompiledRules {
     }
     for (const p of rule.patterns ?? []) {
       try {
+        // flags 由上游自由填写：去掉会与必需的 g 冲突的 g/y，避免 gg/yg 非法标志吞掉整条规则
+        const flags = (p.flags ?? '').replace(/[gy]/g, '') + 'g'
         compiled.patterns.push({
-          rule, extract: new RegExp(p.extract, (p.flags ?? '') + 'g'),
+          rule, extract: new RegExp(p.extract, flags),
           valid: new RegExp(p.valid), message: p.message,
         })
       } catch { /* 跳过坏正则 */ }
@@ -99,38 +101,49 @@ export function compileRules(rules: LocalCheckRuleInput[]): CompiledRules {
   return compiled
 }
 
+type TextMechanism = 'maps' | 'patterns' | 'whitelists'
+
 function matchInTextNode(
   node: ProseMirrorNode, pos: number, compiled: CompiledRules, out: RuleMatch[],
 ): void {
   const text = node.text ?? ''
   if (!text) return
-  const push = (rule: LocalCheckRuleInput, from: number, to: number, replacement: string | null,
+  const push = (rule: LocalCheckRuleInput, mechanism: TextMechanism, entryIndex: number,
+                from: number, to: number, replacement: string | null,
                 message: string, notice: boolean): void => {
+    const globalFrom = pos + from
+    const globalTo = pos + to
     out.push({
-      id: `rule:${rule.id}:${from}`, ruleId: rule.id, ruleName: rule.name,
+      id: `rule:${rule.id}:${mechanism}:${entryIndex}:${globalFrom}:${globalTo}`,
+      ruleId: rule.id, ruleName: rule.name,
       severity: rule.severity, reason: `[${rule.name}] ${message}`,
-      from: pos + from, to: pos + to, text: text.slice(from, to),
+      from: globalFrom, to: globalTo, text: text.slice(from, to),
       replacement, notice,
     })
   }
-  for (const entry of compiled.maps) {
+  for (let i = 0; i < compiled.maps.length; i += 1) {
+    const entry = compiled.maps[i]
     entry.regex.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = entry.regex.exec(text)) !== null) {
       const hit = entry.byLower.get(m[0].toLowerCase())
-      if (hit) push(entry.rule, m.index, m.index + m[0].length, hit.right, '请使用规范写法', false)
+      if (hit) push(entry.rule, 'maps', i, m.index, m.index + m[0].length, hit.right, '请使用规范写法', false)
       if (m[0].length === 0) entry.regex.lastIndex += 1
     }
   }
-  for (const entry of compiled.patterns) {
+  for (let i = 0; i < compiled.patterns.length; i += 1) {
+    const entry = compiled.patterns[i]
     entry.extract.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = entry.extract.exec(text)) !== null) {
-      if (!entry.valid.test(m[0])) push(entry.rule, m.index, m.index + m[0].length, null, entry.message, true)
+      if (!entry.valid.test(m[0])) {
+        push(entry.rule, 'patterns', i, m.index, m.index + m[0].length, null, entry.message, true)
+      }
       if (m[0].length === 0) entry.extract.lastIndex += 1
     }
   }
-  for (const entry of compiled.whitelists) {
+  for (let i = 0; i < compiled.whitelists.length; i += 1) {
+    const entry = compiled.whitelists[i]
     for (const anchor of entry.anchors) {
       let at = text.indexOf(anchor)
       while (at !== -1) {
@@ -139,7 +152,7 @@ function matchInTextNode(
         entry.valueRegex.lastIndex = cursor
         const m = entry.valueRegex.exec(text)
         if (m && !entry.values.has(m[0])) {
-          push(entry.rule, m.index, m.index + m[0].length, null, entry.message, true)
+          push(entry.rule, 'whitelists', i, m.index, m.index + m[0].length, null, entry.message, true)
         }
         at = text.indexOf(anchor, at + anchor.length)
       }
@@ -171,7 +184,8 @@ export function runCheckRules(doc: ProseMirrorNode, compiled: CompiledRules): Ru
   const fullText = doc.textBetween(0, doc.content.size, '\n')
   if (fullText.length > PRESENCE_MAX_CHARS) return matches
   const lower = fullText.toLowerCase()
-  for (const entry of compiled.presence) {
+  for (let i = 0; i < compiled.presence.length; i += 1) {
+    const entry = compiled.presence[i]
     const triggered = entry.triggers.some((t) => lower.includes(t.toLowerCase()))
     if (!triggered) continue
     const satisfied = entry.requiresAny.some((t) => lower.includes(t.toLowerCase()))
@@ -180,7 +194,7 @@ export function runCheckRules(doc: ProseMirrorNode, compiled: CompiledRules): Ru
     const spot = findFirstOccurrence(doc, trigger)
     if (!spot) continue
     matches.push({
-      id: `rule:${entry.rule.id}:presence`, ruleId: entry.rule.id, ruleName: entry.rule.name,
+      id: `rule:${entry.rule.id}:presence:${i}`, ruleId: entry.rule.id, ruleName: entry.rule.name,
       severity: entry.rule.severity, reason: `[${entry.rule.name}] ${entry.message}`,
       from: spot.from, to: spot.to, text: trigger, replacement: null, notice: true,
     })

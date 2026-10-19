@@ -35,6 +35,12 @@ describe('patterns', () => {
     expect(m[0].notice).toBe(true)
     expect(m[0].replacement).toBeNull()
   })
+  it('flags 含 g 时自动去重，仍能大小写不敏感匹配', () => {
+    const rule = R({ id: 'pf', patterns: [{ extract: 'ab-\\d{3}', valid: '^AB-\\d{3}$', message: '格式', flags: 'gi' }] })
+    const m = runCheckRules(docOf('<p>ab-123</p>'), compileRules([rule]))
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatchObject({ text: 'ab-123', notice: true })
+  })
 })
 
 describe('whitelists', () => {
@@ -66,5 +72,29 @@ describe('presence', () => {
   it('多段落也能跨段落判定', () => {
     const m = runCheckRules(docOf('<p>9800M12</p><p>其它说明</p>'), compileRules([rule]))
     expect(m).toHaveLength(1)
+  })
+})
+
+describe('match ids', () => {
+  it('同一规则 maps 与 whitelists 在同一位置命中时 id 不同', () => {
+    const rule = R({
+      id: 'dup',
+      maps: [{ wrong: 'S-5700', right: 'S5700' }],
+      whitelists: [{ anchors: ['设备：'], values: ['S5700'], message: '不在清单' }],
+    })
+    const m = runCheckRules(docOf('<p>设备：S-5700</p>'), compileRules([rule]))
+    expect(m).toHaveLength(2)
+    expect(m[0].from).toBe(m[1].from)
+    expect(m[0].to).toBe(m[1].to)
+    expect(new Set(m.map((x) => x.id)).size).toBe(2)
+  })
+  it('同一规则多个 presence 条目 id 不同', () => {
+    const rule = R({ id: 'pc2', presence: [
+      { triggers: ['9800M12'], requiresAny: ['9800UPS'], message: '缺 A' },
+      { triggers: ['9800M12'], requiresAny: ['9800UPS'], message: '缺 B' },
+    ] })
+    const m = runCheckRules(docOf('<p>9800M12</p>'), compileRules([rule]))
+    expect(m).toHaveLength(2)
+    expect(new Set(m.map((x) => x.id)).size).toBe(2)
   })
 })
