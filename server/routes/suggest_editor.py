@@ -436,6 +436,87 @@ def export_global_vocabulary():
     return _vocab_export(_global_vocab_path(), "词表-全局.txt")
 
 
+# ----------------------- 检查要点（全局，AI 分析 prompt 注入） -----------------------
+#
+# 技术文档的业务描述/逻辑检查点清单。真源 = .data/检查要点-全局.txt；Node 侧
+# 每轮分析前现读（engine.readChecklistEntries）逐条注入 prompt——后台改完，
+# 下一段输入即按新要点查（已分析块命中块级缓存，存量全文重查需重新触发编辑）。
+# AGENT_KIND=mock 时 mock agent 不读提示词语义，此清单只对真 opencode 生效。
+
+# 与 suggest-editor-server/src/workspace.ts 的 DEFAULT_CHECKLIST 保持一致
+# （两处都是"首次缺失时播种"，谁先到谁写；显式两份以免 Flask 依赖 Node 源码）
+DEFAULT_CHECKLIST = """# 检查要点：AI 分析时逐条核对（每行一条，# 开头为注释；后台可维护）
+# 命中要点的问题请在 reason 里注明对应要点，便于作者定位。
+# —— 业务与数据描述 ——
+数据口径一致：同一指标在全文中的名称、单位、精度、统计口径是否一致
+数量自洽：总数与分项之和、百分比、状态描述前后是否对得上
+术语一致：同一概念是否中途换叫法（中英混用、缩写未先定义、新旧系统名混称）
+主体与归属明确：责任方、系统模块、操作对象是否写清，避免无主语的「系统会自动…」
+—— 逻辑与流程 ——
+因果成立：结论是否真的由前文推导得出，有无逻辑跳跃或以偏概全
+时序合理：步骤先后、依赖关系、并发与竞态是否交代清楚且顺序正确
+边界与例外：空值、超限、失败、回滚、兜底路径是否有着落
+条件完备：条件分支是否成对，遗漏的默认分支是否说明
+—— 一致性与可执行性 ——
+前后文一致：同一流程在不同章节的描述（接口、字段、配置名）是否一致
+可执行：操作步骤能否照做（环境、前置条件、预期结果齐全）
+安全与权限：涉及权限、数据暴露、外部依赖的描述符合最小权限与合规口径
+—— 表达质量 ——
+冗余与歧义：删除冗余修饰，消除指代不明的「它/该/上述」
+书面规范：口语化连接词、绝对化用语（肯定/绝对/完美）改为审慎表述
+"""
+
+
+def _checklist_path() -> str:
+    return _vocab_safe_path(os.path.join(SE_DATA_DIR, "检查要点-全局.txt"))
+
+
+@suggest_editor_bp.route("/checklists/global", methods=["GET"])
+@require_permission("admin.suggest_editor")
+def get_global_checklist():
+    content = _read_vocab_file(_checklist_path())
+    if not content:
+        # 首次使用播种默认清单（写盘；Node 侧 ensure 只在缺失时写，不会互相覆盖）
+        _write_vocab_file(_checklist_path(), DEFAULT_CHECKLIST)
+        content = DEFAULT_CHECKLIST
+    return jsonify({"content": content})
+
+
+@suggest_editor_bp.route("/checklists/global", methods=["PUT"])
+@require_permission("admin.suggest_editor")
+def put_global_checklist():
+    body = request.get_json(silent=True) or {}
+    content = body.get("content")
+    if not isinstance(content, str):
+        return jsonify({"error": "content must be a string"}), 400
+    if len(content) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "检查要点内容过大"}), 400
+    _write_vocab_file(_checklist_path(), content)
+    return jsonify({"ok": True, "total": len(_vocab_entries(content))})
+
+
+@suggest_editor_bp.route("/checklists/global/import", methods=["POST"])
+@require_permission("admin.suggest_editor")
+def import_global_checklist():
+    mode = (request.form.get("mode") or "append").strip()
+    if mode not in ("append", "replace"):
+        return jsonify({"error": "mode must be append or replace"}), 400
+    text, err = _decode_vocab_upload()
+    if err:
+        return jsonify({"error": err}), 400
+    if text is None:
+        return jsonify({"error": "file required"}), 400
+    if len(text) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "检查要点内容过大"}), 400
+    return _vocab_import_response(_checklist_path(), text, mode)
+
+
+@suggest_editor_bp.route("/checklists/global/export", methods=["GET"])
+@require_permission_sse("admin.suggest_editor")
+def export_global_checklist():
+    return _vocab_export(_checklist_path(), "检查要点-全局.txt")
+
+
 def _owned_doc_vocab_path(doc_id: str) -> str | None:
     """owner 门 + 路径校验一起做；非属主/不存在/非法 id 统一 None（404 语义）。"""
     doc = _get_own_document(doc_id)

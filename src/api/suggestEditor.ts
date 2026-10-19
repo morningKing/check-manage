@@ -96,3 +96,28 @@ export function importVocabulary(
 export function vocabularyExportUrl(scope: VocabularyScope): string {
   return `/api${vocabBase(scope)}/export${authParam()}`
 }
+
+/* ------------------------- 检查要点（全局，admin） ------------------------- */
+
+export function getChecklist() {
+  return get<{ content: string }>('/suggest-editor/checklists/global')
+}
+
+export function saveChecklist(content: string) {
+  return put<{ ok: boolean; total: number }>('/suggest-editor/checklists/global', { content })
+}
+
+export function importChecklist(file: File, mode: 'append' | 'replace') {
+  const form = new FormData()
+  form.append('mode', mode)
+  form.append('file', file)
+  return post<{ ok: boolean; total: number; added: number; skipped: number }>(
+    '/suggest-editor/checklists/global/import',
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}
+
+export function checklistExportUrl(): string {
+  return `/api/suggest-editor/checklists/global/export${authParam()}`
+}

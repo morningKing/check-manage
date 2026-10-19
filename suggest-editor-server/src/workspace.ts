@@ -30,11 +30,12 @@ permission:
 
 ## 任务一：自动分析（默认）
 1. 读取 document.md（若提示词指定了范围，只看该范围）。
-2. 找出值得修改的问题：冗余啰嗦、表述歧义、逻辑跳跃、语病与错别字、语气不一致等。
+2. 按提示词中给出的「检查要点」逐条核对；提示词未给要点时，找通用的写作问题：
+   冗余啰嗦、表述歧义、逻辑跳跃、语病与错别字、语气不一致。
 3. 逐条调用 emit_suggestions 提交建议：
    - quote 从原文逐字复制（含标点），不要给字符偏移量；
    - replacement 给出可直接替换的完整文本，纯删除用空字符串；
-   - reason 一句话讲清为什么；
+   - reason 一句话讲清为什么（命中检查要点时注明要点名）；
    - 最多 5 条，按严重度排序（error > warn > info）。
 
 ## 任务二：用户改写（提示词含 <<<ORIGINAL>>> ... <<<END>>>）
@@ -145,4 +146,66 @@ export async function ensureCompletionWorkspace(docName: string): Promise<string
 export async function writeSnapshot(docName: string, text: string): Promise<void> {
   const dir = await ensureWorkspace(docName)
   await fs.writeFile(path.join(dir, "document.md"), text, "utf8")
+}
+
+/* ------------------------------- 检查要点（全局） -------------------------------
+ * 技术文档的业务描述/逻辑检查点由管理员在后台维护（真源 = 检查要点-全局.txt），
+ * 每轮分析前读取并逐条注入分析 prompt；AGENT_KIND=mock 时不生效（mock 是
+ * 确定性规则 agent，不读提示词语义）。改要点只影响之后分析的段落——已分析块
+ * 命中块级缓存跳过，存量全文重查需重新触发编辑。 */
+
+/** 检查要点文件（全局，对所有文档生效） */
+export function checklistPath(): string {
+  return path.join(config.dataDir, "检查要点-全局.txt")
+}
+
+export const DEFAULT_CHECKLIST = `# 检查要点：AI 分析时逐条核对（每行一条，# 开头为注释；后台可维护）
+# 命中要点的问题请在 reason 里注明对应要点，便于作者定位。
+# —— 业务与数据描述 ——
+数据口径一致：同一指标在全文中的名称、单位、精度、统计口径是否一致
+数量自洽：总数与分项之和、百分比、状态描述前后是否对得上
+术语一致：同一概念是否中途换叫法（中英混用、缩写未先定义、新旧系统名混称）
+主体与归属明确：责任方、系统模块、操作对象是否写清，避免无主语的「系统会自动…」
+—— 逻辑与流程 ——
+因果成立：结论是否真的由前文推导得出，有无逻辑跳跃或以偏概全
+时序合理：步骤先后、依赖关系、并发与竞态是否交代清楚且顺序正确
+边界与例外：空值、超限、失败、回滚、兜底路径是否有着落
+条件完备：条件分支是否成对，遗漏的默认分支是否说明
+—— 一致性与可执行性 ——
+前后文一致：同一流程在不同章节的描述（接口、字段、配置名）是否一致
+可执行：操作步骤能否照做（环境、前置条件、预期结果齐全）
+安全与权限：涉及权限、数据暴露、外部依赖的描述符合最小权限与合规口径
+—— 表达质量 ——
+冗余与歧义：删除冗余修饰，消除指代不明的「它/该/上述」
+书面规范：口语化连接词、绝对化用语（肯定/绝对/完美）改为审慎表述
+`
+
+/** 首次使用时播种默认清单（已存在则不动，后台编辑后以此为准） */
+export async function ensureGlobalChecklistFile(): Promise<string> {
+  const file = checklistPath()
+  try {
+    await fs.access(file)
+  } catch {
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, DEFAULT_CHECKLIST, "utf8")
+  }
+  return file
+}
+
+/** 读取检查要点（非注释行）；文件缺失时先播种默认清单 */
+export async function readChecklistEntries(maxEntries = 40): Promise<string[]> {
+  const file = await ensureGlobalChecklistFile()
+  const entries: string[] = []
+  try {
+    const content = await fs.readFile(file, "utf8")
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith("#")) continue
+      entries.push(line)
+      if (entries.length >= maxEntries) break
+    }
+  } catch {
+    /* 读不到就当空清单，prompt 退回通用措辞 */
+  }
+  return entries
 }

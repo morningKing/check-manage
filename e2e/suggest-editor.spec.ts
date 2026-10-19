@@ -198,9 +198,9 @@ test('词表后台配置 → 文档内前缀联想生效（含导入/导出入�
   await page.keyboard.press('Enter')
   await page.keyboard.type(entry, { delay: 10 })
   await vocabDialog.getByRole('button', { name: '保存' }).click()
-  await expect(page.locator('.el-message', { hasText: '词表已保存' })).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.el-message', { hasText: '已保存（' })).toBeVisible({ timeout: 10_000 })
   // 导出链接带鉴权参数
-  await expect(vocabDialog.locator('[data-testid="vocab-export"]')).toHaveAttribute(
+  await expect(vocabDialog.locator('[data-testid="asset-export"]')).toHaveAttribute(
     'href', /export\?access_token=/,
   )
   await vocabDialog.getByRole('button', { name: '关闭', exact: true }).click()
@@ -215,13 +215,39 @@ test('词表后台配置 → 文档内前缀联想生效（含导入/导出入�
   ).toBeVisible({ timeout: 20_000 })
   await page.screenshot({ path: 'e2e/screenshots/suggest-editor-vocab.png' })
 
-  // 3) 清理：恢复原词表内容 + 删除测试文档
+  // 3) 检查要点对话框（admin）：默认清单播种 + 保存往返
+  await gotoSuggestList(page)
+  await page.getByRole('button', { name: '检查要点' }).click()
+  const ckDialog = page.locator('.el-dialog', { hasText: '检查要点' })
+  await ckDialog.waitFor({ state: 'visible' })
+  const ckArea = ckDialog.locator('textarea')
+  await ckArea.waitFor({ state: 'visible' })
+  await expect(ckArea).toHaveValue(/数据口径一致/) // 首次打开已播种默认技术文档清单
+  const ckOriginal = await ckArea.inputValue()
+  await ckArea.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Enter')
+  const ckEntry = `E2E检查要点${Date.now()}：单位口径统一`
+  await page.keyboard.type(ckEntry, { delay: 10 })
+  await ckDialog.getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.el-message', { hasText: '已保存（' })).toBeVisible({ timeout: 10_000 })
+  await ckDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+  // 4) 清理：恢复原词表内容 + 删除测试文档
+  await gotoSuggestList(page)
+  await page.getByRole('button', { name: '检查要点' }).click()
+  await ckDialog.waitFor({ state: 'visible' })
+  await ckArea.fill(ckOriginal)
+  await ckDialog.getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.el-message', { hasText: '已保存（' })).toBeVisible({ timeout: 10_000 })
+  await ckDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
   await gotoSuggestList(page)
   await page.getByRole('button', { name: '词表管理' }).click()
   await vocabDialog.waitFor({ state: 'visible' })
   await area.fill(original)
   await vocabDialog.getByRole('button', { name: '保存' }).click()
-  await expect(page.locator('.el-message', { hasText: '词表已保存' })).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.el-message', { hasText: '已保存（' })).toBeVisible({ timeout: 10_000 })
   await vocabDialog.getByRole('button', { name: '关闭', exact: true }).click()
 
   const row = page.locator('.el-table__row', { hasText: title })

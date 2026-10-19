@@ -30,6 +30,10 @@ import {
   saveVocabulary,
   importVocabulary,
   vocabularyExportUrl,
+  getChecklist,
+  saveChecklist,
+  importChecklist,
+  checklistExportUrl,
 } from '../suggestEditor'
 
 beforeEach(() => {
@@ -143,5 +147,28 @@ describe('suggestEditor vocabulary api', () => {
       .toBe('/api/suggest-editor/vocabularies/global/export?access_token=tok')
     expect(vocabularyExportUrl({ kind: 'document', docId: 'doc-1' }))
       .toBe('/api/suggest-editor/documents/doc-1/vocabulary/export?access_token=tok')
+  })
+})
+
+describe('suggestEditor checklist api', () => {
+  it('get/save hit /suggest-editor/checklists/global', async () => {
+    await getChecklist()
+    expect(get).toHaveBeenCalledWith('/suggest-editor/checklists/global')
+
+    await saveChecklist('数据口径一致')
+    expect(put).toHaveBeenCalledWith('/suggest-editor/checklists/global', {
+      content: '数据口径一致',
+    })
+  })
+
+  it('import posts multipart with mode; export url shaped', async () => {
+    const file = new File(['要点'], '检查要点.txt', { type: 'text/plain' })
+    await importChecklist(file, 'append')
+    const [url, form] = vi.mocked(post).mock.calls[0]
+    expect(url).toBe('/suggest-editor/checklists/global/import')
+    expect((form as FormData).get('mode')).toBe('append')
+
+    expect(checklistExportUrl())
+      .toBe('/api/suggest-editor/checklists/global/export?access_token=tok')
   })
 })

@@ -38,10 +38,7 @@
       </template>
     </SuggestEditorCore>
     <div v-else class="suggest-doc-loading" v-loading="true" element-loading-text="加载文档…" />
-    <VocabularyDialog
-      v-model:visible="vocabVisible"
-      :scope="doc ? { kind: 'document', docId: doc.id } : { kind: 'global' }"
-    />
+    <SeTextAssetDialog v-model:visible="vocabVisible" :asset="docVocabAsset" />
   </div>
 </template>
 
@@ -58,16 +55,21 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue'
-import VocabularyDialog from '@/components/suggest-editor/VocabularyDialog.vue'
+import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
+import { computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   createTemplate,
   getDocument,
   getTemplateById,
+  getVocabulary,
+  importVocabulary,
   openDocument,
   renameDocument,
+  saveVocabulary,
+  vocabularyExportUrl,
 } from '@/api/suggestEditor'
 import type { SuggestDocument } from '@/types/suggestEditor'
 
@@ -81,6 +83,20 @@ const titleDraft = ref('')
 const coreRef = ref<InstanceType<typeof SuggestEditorCore> | null>(null)
 const savingTemplate = ref(false)
 const vocabVisible = ref(false)
+
+/** 本文档词表（优先于全局词表；属主维护） */
+const docVocabAsset = computed<SeTextAssetApi>(() => ({
+  title: '本文档词表（优先于全局词表）',
+  load: async () => (await getVocabulary({ kind: 'document', docId: docId })).content,
+  save: (content) => saveVocabulary({ kind: 'document', docId }, content),
+  importFile: (file, mode) => importVocabulary({ kind: 'document', docId: docId }, file, mode),
+  exportUrl: () => vocabularyExportUrl({ kind: 'document', docId: docId }),
+  hint: [
+    '一行一个词条：<code>词条</code>／<code>词条|别名</code>／片段占位符 <code>${1:默认值}</code>；<code>#</code> 开头为注释。',
+    '只对本文档生效；保存后任意一次编辑（或重新打开文档）即热生效。',
+  ].join(''),
+  placeholder: '综上所述\n人工智能|AI',
+}))
 
 /** 模板只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
 let templateApplied = false

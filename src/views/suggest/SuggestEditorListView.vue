@@ -10,6 +10,9 @@
             </div>
           </div>
           <div class="suggest-list-actions">
+            <el-button v-if="auth.can('admin.suggest_editor')" @click="checklistVisible = true">
+              检查要点
+            </el-button>
             <el-button v-if="auth.can('admin.suggest_editor')" @click="vocabVisible = true">
               词表管理
             </el-button>
@@ -78,8 +81,10 @@
       </template>
     </el-dialog>
 
-    <!-- 词表管理（admin.suggest_editor）：全局词表对所有文档生效 -->
-    <VocabularyDialog v-model:visible="vocabVisible" :scope="{ kind: 'global' }" />
+    <!-- 词表管理（admin）：全局词表对所有文档生效 -->
+    <SeTextAssetDialog v-model:visible="vocabVisible" :asset="vocabAsset" />
+    <!-- 检查要点（admin）：AI 分析时逐条核对的检查清单，注入分析 prompt -->
+    <SeTextAssetDialog v-model:visible="checklistVisible" :asset="checklistAsset" />
 
     <!-- 模板管理（admin.suggest_editor） -->
     <el-dialog v-model="templateManagerVisible" title="写作模板管理" width="860px">
@@ -137,7 +142,7 @@ import { computed, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import VocabularyDialog from '@/components/suggest-editor/VocabularyDialog.vue'
+import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
 import {
   createDocument,
   createTemplate,
@@ -147,6 +152,14 @@ import {
   listTemplates,
   renameDocument,
   updateTemplate,
+  checklistExportUrl,
+  getChecklist,
+  getVocabulary,
+  importChecklist,
+  importVocabulary,
+  saveChecklist,
+  saveVocabulary,
+  vocabularyExportUrl,
 } from '@/api/suggestEditor'
 import type { SuggestDocument, SuggestTemplate } from '@/types/suggestEditor'
 
@@ -162,6 +175,39 @@ const creating = ref(false)
 const createForm = ref<{ title: string; templateId: string | null }>({ title: '', templateId: null })
 
 const vocabVisible = ref(false)
+const checklistVisible = ref(false)
+
+const VOCAB_HINT = [
+  '一行一个词条：<code>词条</code>／<code>词条|别名</code>（输入别名替换成词条）／片段占位符 <code>${1:默认值}</code>；<code>#</code> 开头为注释。',
+  '全局词表对所有文档生效，文档词表优先（编辑页「词表」按钮维护）；',
+  '保存后任意一次编辑（或重新打开文档）即热生效。',
+].join('')
+
+const CHECKLIST_HINT = [
+  '每行一条检查要点，AI 分析文档时逐条核对（命中才提建议，reason 注明要点名）；<code>#</code> 开头为注释。',
+  '面向技术文档：业务与数据描述、逻辑与流程、一致性与可执行性等均可定义。',
+  '生效时机：保存后新分析的段落即按新要点查；已分析段落命中块级缓存不重查，存量全文重查请重新触发编辑。',
+].join('')
+
+const vocabAsset = computed<SeTextAssetApi>(() => ({
+  title: '全局词表（对所有文档生效）',
+  load: async () => (await getVocabulary({ kind: 'global' })).content,
+  save: (content) => saveVocabulary({ kind: 'global' }, content),
+  importFile: (file, mode) => importVocabulary({ kind: 'global' }, file, mode),
+  exportUrl: () => vocabularyExportUrl({ kind: 'global' }),
+  hint: VOCAB_HINT,
+  placeholder: '综上所述\n人工智能|AI\n主题：${1:议题} 时间：${2:日期}',
+}))
+
+const checklistAsset = computed<SeTextAssetApi>(() => ({
+  title: '检查要点（AI 分析检查清单）',
+  load: async () => (await getChecklist()).content,
+  save: saveChecklist,
+  importFile: importChecklist,
+  exportUrl: checklistExportUrl,
+  hint: CHECKLIST_HINT,
+  placeholder: '数据口径一致：同一指标的名称、单位、口径是否一致\n因果成立：结论是否由前文推导得出',
+}))
 
 const templateManagerVisible = ref(false)
 const templateEditVisible = ref(false)

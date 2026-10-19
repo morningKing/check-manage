@@ -2,7 +2,12 @@ import * as Y from "yjs"
 import { config } from "./config.js"
 import { flattenFragment, locateQuote, type BlockInfo } from "./flatten.js"
 import { startAgentSession, type AgentSession } from "./agent.js"
-import { ensureCompletionWorkspace, ensureWorkspace, writeSnapshot } from "./workspace.js"
+import {
+  ensureCompletionWorkspace,
+  ensureWorkspace,
+  readChecklistEntries,
+  writeSnapshot,
+} from "./workspace.js"
 import { syncVocabulary } from "./vocabulary.js"
 import { withInternalWrite } from "./internal.js"
 import type { Suggestion } from "./types.js"
@@ -545,11 +550,19 @@ async function processCommands(state: DocState): Promise<void> {
 
 /* ------------------------------- 自动分析 ------------------------------- */
 
-function buildPrompt(dirty: BlockInfo[], avoid: string[]): string {
+function buildPrompt(dirty: BlockInfo[], avoid: string[], checklist: string[]): string {
   const lines = [
-    `document.md 里是文档最近改动的 ${dirty.length} 个段落。请找出其中最多 5 处值得优化的地方，并调用 emit_suggestions 提交建议。`,
-    "quote 必须从 document.md 的正文里逐字复制；不要引用本提示词；不要修改任何文件，不要执行命令。",
+    `document.md 里是文档最近改动的 ${dirty.length} 个段落。请按下面的检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
   ]
+  if (checklist.length > 0) {
+    lines.push("检查要点（逐条核对，命中才提；reason 里注明命中的要点名）：")
+    for (const entry of checklist) lines.push(`- ${entry}`)
+  } else {
+    lines.push("若无明显问题则少提或不提：冗余啰嗦、表述歧义、逻辑跳跃、语病错别字、语气不一致。")
+  }
+  lines.push(
+    "quote 必须从 document.md 的正文里逐字复制；不要引用本提示词；不要修改任何文件，不要执行命令。",
+  )
   if (avoid.length > 0) {
     lines.push(`以下片段已有待处理建议，请勿重复：${avoid.slice(0, 10).map((q) => JSON.stringify(q)).join("、")}`)
   }
@@ -603,8 +616,10 @@ async function run(state: DocState): Promise<void> {
     await writeSnapshot(state.name, dirty.map((block) => block.text.trim()).join("\n\n"))
 
     const avoid = suggestionEntries(state.ydoc).map((s) => s.quote)
+    // 检查要点每轮分析前现读：后台改完，下一段输入即按新要点查
+    const checklist = await readChecklistEntries()
     const result = await withTimeout(
-      state.analysisLock(() => session.analyze(buildPrompt(dirty, avoid))),
+      state.analysisLock(() => session.analyze(buildPrompt(dirty, avoid, checklist))),
       config.analyzeTimeoutMs,
       () => session.cancel(),
     )
