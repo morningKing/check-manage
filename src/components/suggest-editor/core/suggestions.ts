@@ -274,9 +274,17 @@ export function createSuggestionLayers(options: {
     }
 
     // 4) 通知侧栏（内容有变化才回调，避免每个事务都 setState）
+    // quote/reason/replacement/notice 也纳入签名：规则重载后即使位置未变，
+    // 卡片也能拿到新的提示文案与替换值，避免展示/接受旧值。
     const signature = JSON.stringify([
-      aiItems.map((item) => [item.id, item.index, item.from, item.to]),
-      localItems.map((item) => [item.id, item.from, item.to]),
+      aiItems.map((item) => [
+        item.id, item.index, item.from, item.to,
+        item.quote, item.reason, item.replacement, item.notice,
+      ]),
+      localItems.map((item) => [
+        item.id, item.from, item.to,
+        item.quote, item.reason, item.replacement, item.notice,
+      ]),
     ])
     if (signature !== lastSignature) {
       lastSignature = signature

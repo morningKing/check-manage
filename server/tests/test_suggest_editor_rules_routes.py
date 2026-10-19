@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """检查规则端点测试：全局（admin 门）与文档级（属主门）+ CSV 导入导出 + 播种。"""
 import io
+import json
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import pytest
@@ -32,7 +33,7 @@ def rules_env(tmp_path, monkeypatch):
         'client': client,
         'admin': {'Authorization': f"Bearer {create_token({'id': admin_id, 'username': 'a', 'role': 'admin'})}"},
         'dev': {'Authorization': f"Bearer {create_token({'id': dev_id, 'username': 'd', 'role': 'developer'})}"},
-        'admin_id': admin_id, 'dev_id': dev_id,
+        'admin_id': admin_id, 'dev_id': dev_id, 'data_dir': str(tmp_path),
     }
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -45,14 +46,24 @@ def rules_env(tmp_path, monkeypatch):
 
 def test_global_rules_require_admin_and_seed_example(rules_env):
     client, dev, admin = rules_env['client'], rules_env['dev'], rules_env['admin']
-    assert client.get('/suggest-editor/rules/global', headers=dev).status_code == 403
-    r = client.get('/suggest-editor/rules/global', headers=admin)
+    # 读取放宽为登录即可：developer 也能拿到播种示例
+    r = client.get('/suggest-editor/rules/global', headers=dev)
     assert r.status_code == 200
     rules = r.get_json()['rules']
     assert any('9800M12' in (rule.get('presence', [{}])[0].get('triggers', ['']) or [''])[0]
                for rule in rules if rule.get('presence'))
-    # 播种幂等：再 GET 内容一致
+    # 播种幂等：admin 再 GET 内容一致
     assert client.get('/suggest-editor/rules/global', headers=admin).get_json() == {'rules': rules}
+    # 未登录仍拒绝
+    assert client.get('/suggest-editor/rules/global').status_code == 401
+    # 写操作（PUT/import/export）仍限 admin.suggest_editor
+    assert client.put('/suggest-editor/rules/global', headers=dev,
+                      json={'rules': [SAMPLE_RULE]}).status_code == 403
+    csv_text = 'type,name,severity,enabled,wrong,right\nmap,dev,warn,true,A,B\n'
+    assert client.post('/suggest-editor/rules/global/import', headers=dev,
+                       data={'mode': 'append', 'file': (io.BytesIO(csv_text.encode()), 'r.csv')},
+                       content_type='multipart/form-data').status_code == 403
+    assert client.get('/suggest-editor/rules/global/export', headers=dev).status_code == 403
 
 
 def test_global_rules_put_roundtrip_and_reject_bad(rules_env):
@@ -109,3 +120,41 @@ def test_rules_file_written_at_expected_paths(rules_env):
     doc_id = r.get_json()['document']['id']
     client.put(f'/suggest-editor/documents/{doc_id}/rules', headers=env['dev'], json={'rules': [SAMPLE_RULE]})
     assert os.path.isfile(_doc_rules_path(doc_id))
+
+
+def test_global_rules_bad_json_file_returns_500(rules_env):
+    client, admin = rules_env['client'], rules_env['admin']
+    path = os.path.join(rules_env['data_dir'], '规则-全局.json')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('{"rules": [ 坏掉的 json')
+    r = client.get('/suggest-editor/rules/global', headers=admin)
+    assert r.status_code == 500
+    assert 'JSON' in r.get_json()['error']
+
+
+def test_global_rules_put_rejects_body_over_2mb(rules_env):
+    client, admin = rules_env['client'], rules_env['admin']
+    # ~2.05MB：content_length 先于解析拦截（避免真正读入/校验超大规则）
+    huge = {'rules': [dict(SAMPLE_RULE, maps=[{'wrong': 'x' * 2_050_000, 'right': 'y'}])]}
+    r = client.put('/suggest-editor/rules/global', headers=admin,
+                   data=json.dumps(huge), content_type='application/json')
+    assert r.status_code == 413
+    assert '2MB' in r.get_json()['error']
+
+
+def test_document_rules_import_export_roundtrip(rules_env):
+    client, dev = rules_env['client'], rules_env['dev']
+    r = client.post('/suggest-editor/documents', headers=dev, json={'title': '导入导出'})
+    doc_id = r.get_json()['document']['id']
+    csv_text = ('type,name,severity,enabled,wrong,right\n'
+                'map,文档级纠错,warn,true,A-1,A1\n')
+    r = client.post(f'/suggest-editor/documents/{doc_id}/rules/import', headers=dev,
+                    data={'mode': 'append', 'file': (io.BytesIO(csv_text.encode()), 'r.csv')},
+                    content_type='multipart/form-data')
+    assert r.get_json() == {'ok': True, 'added': 1, 'skipped': 0, 'total': 1}
+    r = client.get(f'/suggest-editor/documents/{doc_id}/rules/export', headers=dev)
+    assert r.status_code == 200
+    assert 'attachment' in r.headers.get('Content-Disposition', '')
+    exported = r.data.decode('utf-8')
+    assert 'type,name,severity' in exported
+    assert '文档级纠错' in exported

@@ -9,6 +9,8 @@ MAX_FILE_BYTES = 2_000_000
 MAX_RULES = 500
 MAX_ITEMS = 200
 MAX_TEXT = 500
+MAX_RIGHT = 200  # 映射目标（right）上限；空串保留「删除」语义
+MAX_FLAGS = 10  # 正则 flags 上限
 SEVERITIES = {'info', 'warn', 'error'}
 CSV_COLUMNS = ['type', 'name', 'severity', 'enabled', 'wrong', 'right', 'extract',
                'valid', 'anchors', 'values', 'triggers', 'requiresAny', 'message', 'aiPrompt']
@@ -65,8 +67,12 @@ def _validate_one(index, rule):
 
     for i, item in enumerate(items('maps')):
         _check_text(item.get('wrong'), f'{where}.maps[{i}].wrong')
-        if not isinstance(item.get('right'), str):
+        right = item.get('right')
+        if not isinstance(right, str):
             raise RuleValidationError(f'{where}.maps[{i}].right: 必须是字符串')
+        # 空串=删除该错误写法，允许；但上限仍要守住
+        if len(right) > MAX_RIGHT:
+            raise RuleValidationError(f'{where}.maps[{i}].right: 超过 {MAX_RIGHT} 字符')
         if not isinstance(item.get('caseSensitive', False), bool):
             raise RuleValidationError(f'{where}.maps[{i}].caseSensitive: 必须是布尔值')
     for i, item in enumerate(items('patterns')):
@@ -74,6 +80,12 @@ def _validate_one(index, rule):
         _compile(item['extract'], f'{where}.patterns[{i}].extract')
         _check_text(item.get('valid'), f'{where}.patterns[{i}].valid')
         _compile(item['valid'], f'{where}.patterns[{i}].valid')
+        flags = item.get('flags')
+        if flags is not None:
+            if not isinstance(flags, str):
+                raise RuleValidationError(f'{where}.patterns[{i}].flags: 必须是字符串')
+            if len(flags) > MAX_FLAGS:
+                raise RuleValidationError(f'{where}.patterns[{i}].flags: 超过 {MAX_FLAGS} 字符')
         _check_text(item.get('message'), f'{where}.patterns[{i}].message')
     for i, item in enumerate(items('whitelists')):
         anchors = item.get('anchors')
@@ -82,6 +94,10 @@ def _validate_one(index, rule):
             raise RuleValidationError(f'{where}.whitelists[{i}].anchors: 不能为空数组')
         if not isinstance(values, list) or not values:
             raise RuleValidationError(f'{where}.whitelists[{i}].values: 不能为空数组')
+        if len(anchors) > MAX_ITEMS:
+            raise RuleValidationError(f'{where}.whitelists[{i}].anchors: 超过 {MAX_ITEMS} 项')
+        if len(values) > MAX_ITEMS:
+            raise RuleValidationError(f'{where}.whitelists[{i}].values: 超过 {MAX_ITEMS} 项')
         for v in anchors + values:
             _check_text(v, f'{where}.whitelists[{i}]')
         if item.get('valuePattern'):
@@ -92,6 +108,8 @@ def _validate_one(index, rule):
             value = item.get(key)
             if not isinstance(value, list) or not value:
                 raise RuleValidationError(f'{where}.presence[{i}].{key}: 不能为空数组')
+            if len(value) > MAX_ITEMS:
+                raise RuleValidationError(f'{where}.presence[{i}].{key}: 超过 {MAX_ITEMS} 项')
             for v in value:
                 _check_text(v, f'{where}.presence[{i}].{key}')
         _check_text(item.get('message'), f'{where}.presence[{i}].message')

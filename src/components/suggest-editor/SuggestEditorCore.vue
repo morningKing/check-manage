@@ -222,8 +222,10 @@ function refreshSuggestions(): void {
 async function loadRules(): Promise<void> {
   try {
     const [globalRules, docRules] = await Promise.all([
-      getRules({ kind: 'global' }).then((r) => r.rules).catch(() => [] as LocalCheckRule[]),
-      getRules({ kind: 'document', docId: props.docId }).then((r) => r.rules).catch(() => [] as LocalCheckRule[]),
+      getRules({ kind: 'global' }, { silent: true }).then((r) => r.rules).catch(() => [] as LocalCheckRule[]),
+      getRules({ kind: 'document', docId: props.docId }, { silent: true })
+        .then((r) => r.rules)
+        .catch(() => [] as LocalCheckRule[]),
     ])
     // 文档级同 id 覆盖全局
     const byId = new Map<string, LocalCheckRule>()

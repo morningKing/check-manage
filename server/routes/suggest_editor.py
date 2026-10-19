@@ -669,6 +669,19 @@ def _write_rules_file(path: str, rules: list[dict]) -> None:
     _write_vocab_file(path, json.dumps({"rules": rules}, ensure_ascii=False, indent=2) + "\n")
 
 
+def _rules_body_too_large(payload: dict | None = None) -> bool:
+    """PUT 请求体 2MB 上限。
+
+    content_length 可用时先判（不读 body）；缺失/不可信时，用规范化序列化后的
+    UTF-8 字节数兜底——2MB 是规则文件上限（MAX_FILE_BYTES）。"""
+    if request.content_length is not None and request.content_length > MAX_FILE_BYTES:
+        return True
+    if payload is None:
+        return False
+    size = len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    return size > MAX_FILE_BYTES
+
+
 def _rules_export(rules: list[dict], filename: str):
     """导出走内存 Response（同 _vocab_export：不在 Windows 上握文件句柄）。"""
     buf = io.StringIO()
@@ -724,7 +737,7 @@ def _rules_import(path: str, mode: str):
 
 
 @suggest_editor_bp.route("/rules/global", methods=["GET"])
-@require_permission("admin.suggest_editor")
+@login_required  # 读取放宽为登录即可；PUT/import/export 仍限 admin.suggest_editor
 def get_global_rules():
     path = _global_rules_path()
     try:
@@ -741,7 +754,11 @@ def get_global_rules():
 @suggest_editor_bp.route("/rules/global", methods=["PUT"])
 @require_permission("admin.suggest_editor")
 def put_global_rules():
+    if _rules_body_too_large():
+        return jsonify({"error": "规则文件超过 2MB 上限"}), 413
     body = request.get_json(silent=True) or {}
+    if _rules_body_too_large(body):
+        return jsonify({"error": "规则文件超过 2MB 上限"}), 413
     try:
         rules = validate_rules(body)
     except RuleValidationError as e:
@@ -790,7 +807,11 @@ def put_document_rules(doc_id: str):
     path = _owned_doc_rules_path(doc_id)
     if path is None:
         return jsonify({"error": "文档不存在"}), 404
+    if _rules_body_too_large():
+        return jsonify({"error": "规则文件超过 2MB 上限"}), 413
     body = request.get_json(silent=True) or {}
+    if _rules_body_too_large(body):
+        return jsonify({"error": "规则文件超过 2MB 上限"}), 413
     try:
         rules = validate_rules(body)
     except RuleValidationError as e:

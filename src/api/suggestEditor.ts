@@ -5,6 +5,7 @@
  * /suggest-ws WebSocket 直连 Node 服务同步，Flask 内部端点只对 Node 开放。
  */
 
+import type { AxiosRequestConfig } from 'axios'
 import { get, post, patch, put, del, authParam } from '@/utils/request'
 import type { SuggestDocument, SuggestTemplate } from '@/types/suggestEditor'
 
@@ -142,8 +143,12 @@ function rulesBase(scope: VocabularyScope): string {
     : `/suggest-editor/documents/${scope.docId}/rules`
 }
 
-export function getRules(scope: VocabularyScope) {
-  return get<{ rules: LocalCheckRule[] }>(rulesBase(scope))
+export function getRules(scope: VocabularyScope, config?: AxiosRequestConfig) {
+  const url = rulesBase(scope)
+  // 不传 config 时保持单参调用形状（既有调用/测试断言不变）
+  return config
+    ? get<{ rules: LocalCheckRule[] }>(url, undefined, config)
+    : get<{ rules: LocalCheckRule[] }>(url)
 }
 
 export function saveRules(scope: VocabularyScope, rules: LocalCheckRule[]) {

@@ -55,6 +55,8 @@ export const EMPTY_COMPILED_RULES: CompiledRules = {
 
 const PRESENCE_MAX_CHARS = 500_000
 const DEFAULT_VALUE_PATTERN = '[A-Za-z0-9_\\-./]+'
+/** 全文超限跳过 presence 的一次性告警标记（防每次编辑刷屏） */
+let presenceSkipWarned = false
 
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -73,7 +75,9 @@ export function compileRules(rules: LocalCheckRuleInput[]): CompiledRules {
         try {
           const source = items.map((m) => escapeRegex(m.wrong)).join('|')
           compiled.maps.push({ rule, regex: new RegExp(source, caseSensitive ? 'g' : 'gi'), byLower })
-        } catch { /* 单条跳过 */ }
+        } catch (err) {
+          console.warn('[suggest-editor] 规则编译失败，已跳过：', rule.id, err)
+        }
       }
     }
     for (const p of rule.patterns ?? []) {
@@ -84,7 +88,9 @@ export function compileRules(rules: LocalCheckRuleInput[]): CompiledRules {
           rule, extract: new RegExp(p.extract, flags),
           valid: new RegExp(p.valid), message: p.message,
         })
-      } catch { /* 跳过坏正则 */ }
+      } catch (err) {
+        console.warn('[suggest-editor] 规则编译失败，已跳过：', rule.id, err)
+      }
     }
     for (const w of rule.whitelists ?? []) {
       try {
@@ -92,7 +98,9 @@ export function compileRules(rules: LocalCheckRuleInput[]): CompiledRules {
           rule, anchors: w.anchors, values: new Set(w.values),
           valueRegex: new RegExp(w.valuePattern ?? DEFAULT_VALUE_PATTERN, 'y'), message: w.message,
         })
-      } catch { /* 跳过 */ }
+      } catch (err) {
+        console.warn('[suggest-editor] 规则编译失败，已跳过：', rule.id, err)
+      }
     }
     for (const pr of rule.presence ?? []) {
       compiled.presence.push({ rule, triggers: pr.triggers, requiresAny: pr.requiresAny, message: pr.message })
@@ -182,7 +190,13 @@ export function runCheckRules(doc: ProseMirrorNode, compiled: CompiledRules): Ru
   })
   if (!compiled.presence.length) return matches
   const fullText = doc.textBetween(0, doc.content.size, '\n')
-  if (fullText.length > PRESENCE_MAX_CHARS) return matches
+  if (fullText.length > PRESENCE_MAX_CHARS) {
+    if (!presenceSkipWarned) {
+      presenceSkipWarned = true
+      console.warn(`[suggest-editor] 文档超过 ${PRESENCE_MAX_CHARS} 字符，已跳过条件完整性（presence）检查`)
+    }
+    return matches
+  }
   const lower = fullText.toLowerCase()
   for (let i = 0; i < compiled.presence.length; i += 1) {
     const entry = compiled.presence[i]

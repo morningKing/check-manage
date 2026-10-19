@@ -235,13 +235,13 @@ async function readRulesFile(file: string): Promise<Array<Record<string, unknown
     const raw = await fs.readFile(file, "utf8")
     const payload = JSON.parse(raw) as { rules?: unknown } | null
     if (!payload || !Array.isArray(payload.rules)) {
-      console.warn(`[workspace] 规则文件结构无效，已跳过：${file}`)
+      console.warn(`[rules] 规则文件结构无效，已跳过：${file}`)
       return []
     }
     return payload.rules as Array<Record<string, unknown>>
   } catch (error) {
     console.warn(
-      `[workspace] 读取规则文件失败，已跳过：${file}`,
+      `[rules] 读取规则文件失败，已跳过：${file}`,
       error instanceof Error ? error.message : error,
     )
     return []
@@ -266,7 +266,10 @@ export async function readRulePrompts(
     const prompt = typeof rule.aiPrompt === "string" ? rule.aiPrompt.trim() : ""
     if (!prompt) continue
     out.push({ name: typeof rule.name === "string" ? rule.name : (rule.id as string), prompt })
-    if (out.length >= maxRules) break
+  }
+  if (out.length > maxRules) {
+    console.warn(`[rules] 注入规则超过 ${maxRules} 条，已截断`)
+    out.length = maxRules
   }
   return out
 }

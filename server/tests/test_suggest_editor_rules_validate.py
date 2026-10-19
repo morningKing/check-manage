@@ -37,6 +37,47 @@ def test_validate_caps():
         validate_rules({'rules': big})
 
 
+def test_validate_nested_array_caps():
+    # 每类机制内部的数组同样受 MAX_ITEMS=200 约束
+    anchors = [f'a{i}' for i in range(250)]
+    with pytest.raises(RuleValidationError) as ei:
+        validate_rules({'rules': [_rule(whitelists=[{'anchors': anchors, 'values': ['v'], 'message': 'm'}])]})
+    assert 'anchors' in str(ei.value)
+
+    values = [f'v{i}' for i in range(250)]
+    with pytest.raises(RuleValidationError) as ei:
+        validate_rules({'rules': [_rule(whitelists=[{'anchors': ['a'], 'values': values, 'message': 'm'}])]})
+    assert 'values' in str(ei.value)
+
+    for key in ('triggers', 'requiresAny'):
+        item = {'triggers': ['t'], 'requiresAny': ['r'], 'message': 'm'}
+        item[key] = [f'{key}{i}' for i in range(250)]
+        with pytest.raises(RuleValidationError) as ei:
+            validate_rules({'rules': [_rule(presence=[item])]})
+        assert key in str(ei.value)
+
+
+def test_validate_map_right_allows_empty_but_caps_length_and_type():
+    # 空串=删除该错误写法，保持允许
+    rules = validate_rules({'rules': [_rule(maps=[{'wrong': 'S-5700', 'right': ''}])]})
+    assert rules[0]['maps'][0]['right'] == ''
+    with pytest.raises(RuleValidationError):
+        validate_rules({'rules': [_rule(maps=[{'wrong': 'X', 'right': 'y' * 201}])]})
+    with pytest.raises(RuleValidationError):
+        validate_rules({'rules': [_rule(maps=[{'wrong': 'X', 'right': 123}])]})
+
+
+def test_validate_pattern_flags_must_be_short_string():
+    bad_type = {'extract': 'a', 'valid': 'a', 'message': 'm', 'flags': 1}
+    with pytest.raises(RuleValidationError) as ei:
+        validate_rules({'rules': [_rule(patterns=[bad_type])]})
+    assert 'flags' in str(ei.value)
+    too_long = {'extract': 'a', 'valid': 'a', 'message': 'm', 'flags': 'i' * 11}
+    with pytest.raises(RuleValidationError) as ei:
+        validate_rules({'rules': [_rule(patterns=[too_long])]})
+    assert 'flags' in str(ei.value)
+
+
 def test_csv_parses_all_five_types_and_multivalue_columns():
     text = (
         'type,name,severity,enabled,wrong,right,extract,valid,anchors,values,triggers,requiresAny,message,aiPrompt\n'

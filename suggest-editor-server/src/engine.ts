@@ -559,7 +559,7 @@ function buildPrompt(
   rulePrompts: Array<{ name: string; prompt: string }>,
 ): string {
   const lines = [
-    `请先用 read 工具读取文件 ${snapshotPath}（绝对路径，里面是文档最近改动的 ${dirty.length} 个段落），再按下面的检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
+    `请先用 read 工具读取文件 ${snapshotPath}（绝对路径，里面是文档最近改动的 ${dirty.length} 个段落），再按下面的检查规则与检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
   ]
   if (rulePrompts.length > 0) {
     lines.push("领域检查规则（逐条核对，命中在 reason 中注明规则名）：")

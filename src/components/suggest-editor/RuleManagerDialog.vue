@@ -10,14 +10,14 @@
       <el-button size="small" type="primary" :disabled="loadFailed" @click="openEdit(null)">
         新建规则
       </el-button>
-      <el-radio-group v-model="importMode" size="small" :disabled="loadFailed">
-        <el-radio-button value="append">追加（去重）</el-radio-button>
+      <el-radio-group v-model="importMode" size="small">
+        <el-radio-button value="append" :disabled="loadFailed">追加（去重）</el-radio-button>
         <el-radio-button value="replace">覆盖</el-radio-button>
       </el-radio-group>
       <el-button
         size="small"
         :loading="importing"
-        :disabled="loadFailed"
+        :disabled="loadFailed && importMode !== 'replace'"
         @click="fileInput?.click()"
       >
         导入 CSV…
@@ -41,8 +41,8 @@
       type="error"
       :closable="false"
       show-icon
-      title="规则加载失败，暂不能保存以避免覆盖服务端规则"
-      description="请关闭对话框后重试；加载成功前新建、导入、删除与保存均已禁用。"
+      title="规则加载失败"
+      description="新建、编辑、删除与保存已禁用；若规则文件损坏，可用「覆盖」模式导入整份替换修复。"
     />
 
     <el-table
@@ -239,7 +239,7 @@
  * 保存走整份替换（saveRules），导入成功后同样通知宿主动态重载规则。
  */
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   getRules,
   importRules,
@@ -326,7 +326,13 @@ function blankDraft(): RuleDraft {
 }
 
 function newRuleId(): string {
-  return `rule-${crypto.randomUUID().slice(0, 12)}`
+  // crypto.randomUUID 仅 secure context 可用（http 内网地址下为 undefined）：
+  // 兜底用时间戳 + 随机串，最终仍形如 rule-<token>（服务端 id ≤64 字符）。
+  const uuid = globalThis.crypto?.randomUUID?.()
+  const token = uuid
+    ? uuid.slice(0, 12)
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  return `rule-${token.replace(/[^a-zA-Z0-9-]/g, '')}`
 }
 
 function toDraft(rule: LocalCheckRule): RuleDraft {
@@ -587,11 +593,23 @@ async function onFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (loadFailed.value) {
-    ElMessage.warning('规则加载失败，暂不能导入规则')
+  if (loadFailed.value && importMode.value !== 'replace') {
+    ElMessage.warning('规则加载失败时仅支持「覆盖」导入')
     return
   }
   if (!file) return
+  if (loadFailed.value) {
+    // 规则文件损坏/加载失败时覆盖会丢失服务端现有规则，二次确认
+    try {
+      await ElMessageBox.confirm(
+        '规则文件损坏/加载失败时，覆盖导入将替换服务端全部规则，确定继续？',
+        '覆盖导入',
+        { type: 'warning', confirmButtonText: '覆盖导入', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
   importing.value = true
   try {
     const r = await importRules(props.scope, file, importMode.value)
