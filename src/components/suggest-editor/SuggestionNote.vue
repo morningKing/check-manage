@@ -16,7 +16,7 @@
       </span>
     </div>
     <div class="se-suggest-note-quote">“{{ item.quote }}”</div>
-    <div class="se-suggest-note-replacement">{{ item.replacement ? `→ ${item.replacement}` : '→ 删除' }}</div>
+    <div v-if="!item.notice" class="se-suggest-note-replacement">{{ item.replacement ? `→ ${item.replacement}` : '→ 删除' }}</div>
     <div class="se-suggest-note-reason">{{ item.reason }}</div>
     <div class="se-suggest-note-actions">
       <button

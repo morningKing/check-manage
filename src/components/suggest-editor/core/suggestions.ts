@@ -23,6 +23,8 @@ export interface SuggestionItem {
   index: number | null
   /** 命中的检查规则名（仅动态规则命中） */
   ruleName?: string
+  /** 命中的检查规则 id（仅动态规则命中，用于忽略记忆键） */
+  ruleId?: string
   /** 完整性提醒：不可接受，只能忽略 */
   notice?: boolean
 }
@@ -97,7 +99,7 @@ export function createSuggestionLayers(options: {
     },
     ignore: (item) => {
       if (item.source === "local") {
-        dismissedLocal.add(`${item.id}\u0000${item.quote}`)
+        dismissedLocal.add(`${item.ruleId ?? item.id}\u0000${item.quote}`)
         localRanges.delete(item.id)
         refresh()
         return
@@ -196,7 +198,7 @@ export function createSuggestionLayers(options: {
 
     // 2) 本地即时检查（毫秒级规则）：与已存在的建议范围重叠时让位
     for (const match of runLocalRules(state.doc)) {
-      if (dismissedLocal.has(`${match.id}\u0000${match.text}`)) continue
+      if (dismissedLocal.has(`local:${match.id}\u0000${match.text}`)) continue
       if (aiItems.some((item) => match.from < item.to && match.to > item.from)) continue
       if (localItems.some((item) => match.from < item.to && match.to > item.from)) continue
       localItems.push({
@@ -215,7 +217,7 @@ export function createSuggestionLayers(options: {
     // 2b) 服务端下发的检查规则（全局 + 文档级，毫秒级本地命中）：同样让位 AI、与本地去重
     const matches = runCheckRules(state.doc, getCheckRules?.() ?? EMPTY_COMPILED_RULES)
     for (const match of matches) {
-      if (dismissedLocal.has(`${match.id}\u0000${match.text}`)) continue
+      if (dismissedLocal.has(`${match.ruleId ?? match.id}\u0000${match.text}`)) continue
       if (aiItems.some((item) => match.from < item.to && match.to > item.from)) continue
       if (localItems.some((item) => match.from < item.to && match.to > item.from)) continue
       localItems.push({
@@ -229,6 +231,7 @@ export function createSuggestionLayers(options: {
         to: match.to,
         index: null,
         ruleName: match.ruleName,
+        ruleId: match.ruleId,
         notice: match.notice,
       })
     }
