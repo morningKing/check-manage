@@ -121,3 +121,48 @@ export function importChecklist(file: File, mode: 'append' | 'replace') {
 export function checklistExportUrl(): string {
   return `/api/suggest-editor/checklists/global/export${authParam()}`
 }
+
+/* ------------------------- 检查规则（全局 + 文档级） ------------------------- */
+
+export interface LocalCheckRule {
+  id: string
+  name: string
+  enabled: boolean
+  severity: 'info' | 'warn' | 'error'
+  aiPrompt?: string
+  maps?: { wrong: string; right: string; caseSensitive?: boolean }[]
+  patterns?: { extract: string; valid: string; message: string; flags?: string }[]
+  whitelists?: { anchors: string[]; values: string[]; valuePattern?: string; message: string }[]
+  presence?: { triggers: string[]; requiresAny: string[]; message: string }[]
+}
+
+function rulesBase(scope: VocabularyScope): string {
+  return scope.kind === 'global'
+    ? '/suggest-editor/rules/global'
+    : `/suggest-editor/documents/${scope.docId}/rules`
+}
+
+export function getRules(scope: VocabularyScope) {
+  return get<{ rules: LocalCheckRule[] }>(rulesBase(scope))
+}
+
+export function saveRules(scope: VocabularyScope, rules: LocalCheckRule[]) {
+  return put<{ ok: boolean; count: number }>(rulesBase(scope), { rules })
+}
+
+/** mode: append=按内容去重追加；replace=整文件覆盖 */
+export function importRules(scope: VocabularyScope, file: File, mode: 'append' | 'replace') {
+  const form = new FormData()
+  form.append('mode', mode)
+  form.append('file', file)
+  return post<{ ok: boolean; added: number; skipped: number; total: number }>(
+    `${rulesBase(scope)}/import`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}
+
+/** 导出下载链接（<a href> 直下，鉴权走 ?access_token=） */
+export function rulesExportUrl(scope: VocabularyScope): string {
+  return `/api${rulesBase(scope)}/export${authParam()}`
+}

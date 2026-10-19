@@ -34,6 +34,10 @@ import {
   saveChecklist,
   importChecklist,
   checklistExportUrl,
+  getRules,
+  saveRules,
+  importRules,
+  rulesExportUrl,
 } from '../suggestEditor'
 
 beforeEach(() => {
@@ -170,5 +174,27 @@ describe('suggestEditor checklist api', () => {
 
     expect(checklistExportUrl())
       .toBe('/api/suggest-editor/checklists/global/export?access_token=tok')
+  })
+})
+
+describe('suggestEditor rules api', () => {
+  it('global scope get/save hit /suggest-editor/rules/global', async () => {
+    await getRules({ kind: 'global' })
+    expect(get).toHaveBeenCalledWith('/suggest-editor/rules/global')
+    await saveRules({ kind: 'global' }, [])
+    expect(put).toHaveBeenCalledWith('/suggest-editor/rules/global', { rules: [] })
+  })
+
+  it('document scope paths embed docId; import posts multipart; export url shaped', async () => {
+    await getRules({ kind: 'document', docId: 'doc-1' })
+    expect(get).toHaveBeenCalledWith('/suggest-editor/documents/doc-1/rules')
+    const file = new File(['x'], 'rules.csv', { type: 'text/csv' })
+    await importRules({ kind: 'document', docId: 'doc-1' }, file, 'replace')
+    const calls = vi.mocked(post).mock.calls
+    const [url, form] = calls[calls.length - 1]
+    expect(url).toBe('/suggest-editor/documents/doc-1/rules/import')
+    expect((form as FormData).get('mode')).toBe('replace')
+    expect(rulesExportUrl({ kind: 'global' }))
+      .toBe('/api/suggest-editor/rules/global/export?access_token=tok')
   })
 })
