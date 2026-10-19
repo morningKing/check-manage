@@ -107,6 +107,37 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
 文档严格属主私有：列表、编辑、WebSocket 连接三处都按属主校验（非属主一律 404/拒绝），
 管理员也没有旁路；管理面只覆盖模板。
 
+## 部署（生产）
+
+智能写作的 Node 服务由 `proxy.py` 统一托管（受管子进程，与 backend/MCP 同生命周期；失败只降级写作功能）：
+
+1. **装依赖**（首次部署 / 依赖变更时；`suggest-editor-server/node_modules` 不入库）：
+
+   ```bash
+   npm install                              # 前端（tiptap/yjs 等已在 package.json）
+   cd suggest-editor-server && npm install && cd ..
+   ```
+
+   缺依赖时 proxy 启动日志会打印明确 WARN（智能写作不可用，其余功能不受影响）。
+
+2. **配置 `server/.env`**（部署级，模板见 `.env.example` 智能写作段）：
+
+   - `MCP_INTERNAL_TOKEN=<随机串>`：Node↔Flask 内部通道（与 MCP/门禁共用同一把），必配；
+   - `AGENT_KIND=opencode` + `AGENT_MODEL` / `AGENT_MODEL_COMPLETE`（留空 `AGENT_MODEL` 则自动采用后台「AI 配置」页默认模型）；
+   - `OPENCODE_DIR` 指到平台自带 oc126 的 bin 目录（npm 全局 opencode 1.19.3 的 ACP `session/prompt` 会故障，见运维要点）；
+   - 生产若设了 `JWT_SECRET`：Node 服务从同一个 `server/.env` 读取，无需另行配置（两侧不一致会导致编辑器连接被拒）。
+
+3. **启动**：`bash start.sh`——自动完成：清残留端口（含 1234）→ `init_db.py` 跑迁移（建三张表、种子菜单/内置模板）→ `npm run build` → `proxy.py` 拉起 backend / MCP / OpenCode / 智能写作 Node 四件套 + :8080 反向代理与 `/suggest-ws` WS 隧道。
+   **改过前端代码必须重新 build**（proxy 直接服务 `dist/`），只重启不 build 会停留在旧前端。
+
+4. **验证**：
+
+   - 启动日志出现 `[4/5] suggest-editor ready (ws port 1234)`；
+   - 探针：`node e2e/manual/suggest-editor-ws-smoke.mjs`（生产入口加 `SE_SMOKE_API=http://<host>:8080/api SE_SMOKE_WS=ws://<host>:8080/suggest-ws`）；真模型再加 `suggest-editor-real-agent-check.mjs`；
+   - 浏览器强刷（Ctrl+F5）→ 侧栏「智能写作」→ 新建文档 → 顶栏徽标显示「已同步」。
+
+5. **数据与备份**：正文、建议、分析缓存、文档元数据都在 PostgreSQL（随系统备份/还原）；agent 工作区、文档级词表、全局词表与检查要点在 `suggest-editor-server/.data/`（**不随系统备份**）——重要词表/检查要点请用管理面「导出」定期留档。`server/.env` 的 `SE_DATA_DIR` 若特配，必须与 Node 的 `DATA_DIR` 一致（默认两侧相同）。
+
 ## 运维要点
 
 | 项 | 值 |
