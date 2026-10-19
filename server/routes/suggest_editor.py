@@ -244,6 +244,19 @@ def internal_document_access(doc_id: str):
     return jsonify(access_check(doc_id, user_id))
 
 
+@suggest_editor_bp.route("/internal/settings", methods=["GET"])
+def internal_settings():
+    """Node 服务启动时读一次：平台后台配置的默认模型（AI 配置页）。
+
+    语义与 AI 助手族一致：ai_settings.default_chat_model 优先、OPENCODE_MODEL
+    env 兜底（见 config.get_default_chat_model）。Node 侧仅在本服务**未显式**配置
+    AGENT_MODEL 时采用它，作为生成文档工作区 opencode.json 的 model 字段。"""
+    if not _internal_authorized():
+        return jsonify({"error": "forbidden"}), 403
+    from config import get_default_chat_model
+    return jsonify({"defaultModel": get_default_chat_model()})
+
+
 @suggest_editor_bp.route("/internal/documents/<doc_id>/state", methods=["GET"])
 def internal_document_state_get(doc_id: str):
     if not _internal_authorized():

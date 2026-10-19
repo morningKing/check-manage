@@ -105,3 +105,32 @@ export const config = {
   /** 续写联想单独指定模型（可选）：联想对延迟敏感，建议指向更快的模型 */
   completionModel: process.env.AGENT_MODEL_COMPLETE ?? process.env.AGENT_MODEL ?? "",
 }
+
+/**
+ * 平台后台默认模型兜底：启动时调一次（index.ts）。
+ * 未显式配置 AGENT_MODEL 时，采用 Flask「AI 配置」页的默认模型
+ * （ai_settings.default_chat_model → 见 Flask /suggest-editor/internal/settings）。
+ * 显式 AGENT_MODEL（env 或 server/.env）永远优先；读取失败仅告警并回退
+ * opencode 全局配置——绝不让引导失败拖垮服务启动。
+ */
+export async function applyPlatformModelDefaults(): Promise<void> {
+  if (config.model) return
+  if (!config.internalToken) return
+  try {
+    const res = await fetch(`${config.apiUrl}/suggest-editor/internal/settings`, {
+      headers: { "X-Internal-Token": config.internalToken },
+    })
+    if (!res.ok) return
+    const body = (await res.json()) as { defaultModel?: string }
+    const model = (body.defaultModel ?? "").trim()
+    if (!model) return
+    config.model = model
+    if (!config.completionModel) config.completionModel = model
+    console.log(`[server] 未显式配置 AGENT_MODEL，采用平台后台默认模型：${model}`)
+  } catch (error) {
+    console.warn(
+      "[server] 读取平台默认模型失败，将回退 opencode 全局配置：",
+      error instanceof Error ? error.message : error,
+    )
+  }
+}

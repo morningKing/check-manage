@@ -254,3 +254,16 @@ def test_internal_state_put_validates_payload(se_users, dev_client):
     assert c.put(url, headers=_internal_headers(),
                  json={'state': 'AAAA', 'analyzedHashes': 'oops'}).status_code == 400
     client.delete(f'/suggest-editor/documents/{doc_id}', headers=headers)
+
+
+def test_internal_settings_exposes_platform_default_model(se_users):
+    """Node 启动引导读取的平台默认模型：token 门 + 形状（值来自 ai_settings）。"""
+    c = _client()
+    assert c.get('/suggest-editor/internal/settings').status_code == 403
+    r = c.get('/suggest-editor/internal/settings', headers=_internal_headers())
+    assert r.status_code == 200
+    body = r.get_json()
+    assert 'defaultModel' in body
+    # 与平台同一取数函数（DB 优先、env 兜底）——两边读到的必须是同一个值
+    from config import get_default_chat_model
+    assert body['defaultModel'] == get_default_chat_model()

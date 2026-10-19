@@ -62,7 +62,12 @@ async function main() {
   ydoc.destroy()
 
   if (suggestions.size === 0) {
-    throw new Error(`${Math.round((Date.now() - started) / 1000)}s 内未收到建议——查 agent 工作区日志与模型配置`)
+    // 诊断：assistant map 里会有分析状态/错误（引擎 catch 写回 Y.Doc）
+    const assistant = ydoc.getMap('assistant')
+    const state = {}
+    assistant.forEach((v, k) => { state[k] = String(v).slice(0, 300) })
+    console.error('[real-check] assistant 状态:', JSON.stringify(state, null, 2))
+    throw new Error(`${Math.round((Date.now() - started) / 1000)}s 内未收到建议——看上面 assistant 状态与 SE 日志`)
   }
   console.log(`[real-check] PASS：${suggestions.size} 条建议，耗时 ${Math.round((Date.now() - started) / 1000)}s`)
   suggestions.forEach((raw) => {

@@ -1,6 +1,6 @@
 import { Server } from "@hocuspocus/server"
 import { checkDocumentAccess, verifyToken } from "./auth.js"
-import { config } from "./config.js"
+import { applyPlatformModelDefaults, config } from "./config.js"
 import {
   disposeDocument,
   getAnalyzedHashes,
@@ -64,10 +64,12 @@ const server = new Server({
   },
 })
 
+await applyPlatformModelDefaults()
 await server.listen()
 
 const agentLabel = config.agentKind === "opencode" ? "opencode acp" : "mock-agent（内置，无需模型 key）"
+const modelLabel = config.model || "（未配置，用 opencode 全局配置）"
 console.log(`[server] Hocuspocus 已启动：ws://127.0.0.1:${config.port}`)
-console.log(`[server] agent：${agentLabel}`)
+console.log(`[server] agent：${agentLabel}　模型：${modelLabel}`)
 console.log(`[server] Flask：${config.apiUrl}（内部状态仓库，X-Internal-Token 鉴权）`)
 console.log(`[server] 数据目录：${config.dataDir}（ws/ agent 工作区；文档正文与建议在数据库）`)

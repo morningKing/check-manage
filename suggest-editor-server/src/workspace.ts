@@ -9,7 +9,7 @@ export function workspaceDir(docName: string): string {
 
 const AGENTS_MD = `# 工作区纪律
 
-你是文档写作教练，工作区里的 \`document.md\` 是要分析的文档快照。
+你是文档写作教练，\`document.md\` 是要分析的文档快照——**每个任务的提示词都会给出它的完整绝对路径，用它**（不要自行推断路径）。
 
 - 只读文件，**禁止修改任何文件**、禁止执行 shell 命令。
 - 自动分析任务：必须通过 \`emit_suggestions\` 工具提交结构化建议（不要只在回复里写文本）。
@@ -29,7 +29,7 @@ permission:
 你是一名严格的文档写作教练。按提示词分两种任务：
 
 ## 任务一：自动分析（默认）
-1. 读取 document.md（若提示词指定了范围，只看该范围）。
+1. 用提示词给出的**完整路径**读取 document.md（若提示词指定了范围，只看该范围）。
 2. 按提示词中给出的「检查要点」逐条核对；提示词未给要点时，找通用的写作问题：
    冗余啰嗦、表述歧义、逻辑跳跃、语病与错别字、语气不一致。
 3. 逐条调用 emit_suggestions 提交建议：
@@ -142,10 +142,14 @@ export async function ensureCompletionWorkspace(docName: string): Promise<string
   return dir
 }
 
-/** 每次分析前把最新快照写入工作区，供 agent 读取 */
-export async function writeSnapshot(docName: string, text: string): Promise<void> {
+/** 每次分析前把最新快照写入工作区，供 agent 读取；返回快照的绝对路径
+ * （提示词里直接给绝对路径——ACP 下模型对"项目根"的推断可能把相对路径解析错，
+ * 实测有模型拼出双写路径读不到文件、整轮空转）。 */
+export async function writeSnapshot(docName: string, text: string): Promise<string> {
   const dir = await ensureWorkspace(docName)
-  await fs.writeFile(path.join(dir, "document.md"), text, "utf8")
+  const file = path.join(dir, "document.md")
+  await fs.writeFile(file, text, "utf8")
+  return file
 }
 
 /* ------------------------------- 检查要点（全局） -------------------------------
