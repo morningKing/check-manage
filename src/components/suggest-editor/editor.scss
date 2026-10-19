@@ -59,6 +59,15 @@
   color: var(--se-muted);
 }
 
+.se-conn-hint {
+  color: #b91c1c;
+  font-size: 12px;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .se-hint {
   margin-left: auto;
   color: #9ca3af;

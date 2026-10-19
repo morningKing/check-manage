@@ -72,7 +72,9 @@ app
       if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
         console.log(`[${update.sessionUpdate}]`, JSON.stringify(update.rawInput ?? update.rawOutput).slice(0, 400))
       } else if (update.sessionUpdate === "agent_message_chunk") {
-        console.log("[text]", JSON.stringify((update.content && update.content.text) || "").slice(0, 200))
+        const content = update.content
+        const text = content && content.type === "text" ? content.text : ""
+        console.log("[text]", JSON.stringify(text).slice(0, 200))
       } else if (update.sessionUpdate === "agent_thought_chunk") {
         console.log("[thinking…]")
       }

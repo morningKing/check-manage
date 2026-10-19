@@ -5,6 +5,7 @@
         <slot name="title" />
         <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
         <span class="se-status">{{ rewriteHint ?? statusText }}</span>
+        <span v-if="connectionHint" class="se-conn-hint">⚠ {{ connectionHint }}</span>
         <button type="button" class="se-badge se-badge-toggle" @click="sidebarOpen = !sidebarOpen">
           {{ sidebarOpen ? '隐藏建议栏' : `建议 ${notes.ai.length + notes.local.length}` }}
         </button>
@@ -120,6 +121,8 @@ const editorRef = shallowRef<Editor | null>(null)
 const myRewriteIds = new Set<string>()
 const assistant = reactive<AssistantStatus>({})
 const syncState = ref<'connecting' | 'synced' | 'disconnected'>('connecting')
+/** 连接诊断提示（鉴权失败/重连中/重试耗尽），成功同步后清空 */
+const connectionHint = ref<string | null>(null)
 const menu = ref<ReviseMenu | null>(null)
 const customInstruction = ref('')
 const rewriteHint = ref<string | null>(null)
@@ -232,15 +235,34 @@ const onCommandsChanged = () => {
 }
 const onSynced = () => {
   syncState.value = 'synced'
+  connectionHint.value = null
   readAssistantStatus()
   refreshSuggestions()
   emit('synced')
 }
-const onDisconnect = () => {
+const onDisconnect = (payload?: { event?: CloseEvent }) => {
   syncState.value = 'disconnected'
+  const code = payload?.event?.code
+  // 1000=正常关闭；1006=异常断开（隧道/服务端断链）；其余为协议级关闭
+  connectionHint.value =
+    code === 1000 ? null : `连接已断开（${code ? `code ${code}` : '无码'}），自动重连中…`
+  console.warn(`[suggest-editor] WS 断开 doc=${props.docId} code=${code ?? '-'}，provider 将自动重连`)
 }
 const onConnect = () => {
   syncState.value = 'connecting'
+  console.info(`[suggest-editor] WS 建立 doc=${props.docId}（等待同步）`)
+}
+/** 服务端 onAuthenticate 拒绝时带回具体原因（令牌过期/签名不匹配/非属主…） */
+const onAuthenticationFailed = (payload: { reason?: string }) => {
+  const reason = payload?.reason || '未知原因'
+  syncState.value = 'disconnected'
+  connectionHint.value = `鉴权失败：${reason}`
+  console.error(`[suggest-editor] 鉴权失败 doc=${props.docId}：${reason}——若是令牌过期请退出重新登录`)
+}
+const onMaxAttemptsFailed = (payload: { error?: unknown }) => {
+  syncState.value = 'disconnected'
+  connectionHint.value = '连接失败（已达最大重试次数）：检查服务是否运行、网络/反向代理是否放行 WebSocket'
+  console.error(`[suggest-editor] 连接重试耗尽 doc=${props.docId}：`, payload?.error)
 }
 
 suggestionsMap.observeDeep(onSuggestionsChanged)
@@ -251,14 +273,20 @@ commandsMap.observe(onCommandsChanged)
  * Provider 生命周期：ContentArea 对所有页面套 keep-alive，切走时组件不会卸载。
  * onDeactivated 断开 WS（服务端随即落盘并回收该文档的 agent 进程），
  * onActivated 重新建连——同一 Y.Doc 重连后由服务端最新状态回灌（断线重连语义）。
+ * 连接诊断：console 一律 [suggest-editor] 前缀 + 顶栏提示具体失败原因
+ * （与服务端 proxy [WS] 行、proxy-se.log [ws] 行三处按时间对齐排障）。
  */
 let provider: HocuspocusProvider | null = null
 
 function createProvider(): HocuspocusProvider {
-  const p = new HocuspocusProvider({ url: wsUrl(), name: props.docId, document: ydoc, token: props.token })
+  const url = wsUrl()
+  console.info(`[suggest-editor] 发起连接 ${url} doc=${props.docId}`)
+  const p = new HocuspocusProvider({ url, name: props.docId, document: ydoc, token: props.token })
   p.on('synced', onSynced)
   p.on('disconnect', onDisconnect)
   p.on('connect', onConnect)
+  p.on('authenticationFailed', onAuthenticationFailed)
+  p.on('maxAttemptsFailed', onMaxAttemptsFailed)
   return p
 }
 
@@ -267,6 +295,8 @@ function releaseProvider(): void {
   provider.off('synced', onSynced)
   provider.off('disconnect', onDisconnect)
   provider.off('connect', onConnect)
+  provider.off('authenticationFailed', onAuthenticationFailed)
+  provider.off('maxAttemptsFailed', onMaxAttemptsFailed)
   provider.destroy()
   provider = null
 }

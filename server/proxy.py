@@ -312,11 +312,19 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         127.0.0.1:SE_WS_PORT，再把两端的字节流对拷到任一侧关闭为止。
         ThreadingHTTPServer 每连接一线程：隧道占用本请求线程 + 一个对拷线程，
         与 SSE 长连接同一量级，符合既有线程模型。
+
+        全程 [WS] 前缀落日志（隧道不走 send_response，默认访问日志看不到它）：
+        打开 / 上游不可达 / 非 101 响应 / 关闭（含上下行字节数）——排障时与
+        proxy-se.log 的 [ws] 行按时间对齐即可还原一个连接的全生命周期。
         """
         path = _safe_upstream_path(self.path)
+        # 只留路径与调试用查询片段（去掉可能存在的 token）
+        path_display = path.split('?', 1)[0]
         try:
             remote = socket.create_connection(('127.0.0.1', SE_WS_PORT), timeout=10)
         except OSError as e:
+            print(f'  [WS] 隧道失败 {path_display} → 127.0.0.1:{SE_WS_PORT} 不可达：{e}'
+                  f'（检查 suggest-editor 服务是否在运行：proxy-se.log）', flush=True)
             msg = f'{{"error":"suggest-editor ws unavailable: {e}"}}'.encode()
             self.send_response(502)
             self.send_header('Content-Type', 'application/json')
@@ -324,6 +332,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(msg)
             return
+
+        print(f'  [WS] 隧道打开 {path_display} → 127.0.0.1:{SE_WS_PORT}', flush=True)
 
         lines = [f'{self.command} {path} HTTP/1.1']
         for key, value in self.headers.items():
@@ -334,7 +344,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 lines.append(f'{key}: {value}')
         try:
             remote.sendall(('\r\n'.join(lines) + '\r\n\r\n').encode('latin-1', errors='replace'))
-        except OSError:
+        except OSError as e:
+            print(f'  [WS] 隧道失败 {path_display}：转发升级请求时报错 {e}', flush=True)
             remote.close()
             return
 
@@ -348,12 +359,18 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     break
                 buf += chunk
             head, _, rest = buf.partition(b'\r\n\r\n')
+            status_line = head.split(b'\r\n', 1)[0].decode('latin-1', errors='replace')
+            if not status_line.startswith('HTTP/1.1 101'):
+                print(f'  [WS] 上游非升级响应 {path_display}：{status_line}'
+                      f'（连接将被关闭，客户端会表现为连接失败/重连）', flush=True)
             self.connection.sendall(head + b'\r\n\r\n' + rest)
-        except OSError:
+        except OSError as e:
+            print(f'  [WS] 隧道失败 {path_display}：转发响应时报错 {e}', flush=True)
             remote.close()
             return
 
         self.close_connection = True
+        counters = {'up': 0, 'down': 0}  # up=浏览器→SE，down=SE→浏览器
 
         def pump_socket(src, dst):
             # socket → socket 方向：recv 阻塞读
@@ -362,6 +379,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     data = src.recv(65536)
                     if not data:
                         break
+                    counters['down'] += len(data)
                     dst.sendall(data)
             except OSError:
                 pass
@@ -380,6 +398,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                     data = rfile.read1(65536)
                     if not data:
                         break
+                    counters['up'] += len(data)
                     dst.sendall(data)
             except OSError:
                 pass
@@ -397,6 +416,8 @@ class ProxyHandler(SimpleHTTPRequestHandler):
         finally:
             remote.close()
             upstream.join(timeout=2)
+            print(f'  [WS] 隧道关闭 {path_display}（上行 {counters["up"] // 1024} KB / '
+                  f'下行 {counters["down"] // 1024} KB）', flush=True)
 
     # -- Route dispatch ---------------------------------------------------
 
