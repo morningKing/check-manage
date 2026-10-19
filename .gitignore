@@ -94,3 +94,10 @@ e2e/.auth/
 
 # suggest-editor (智能写作) Node 服务的运行时数据（agent 工作区/词表）
 suggest-editor-server/.data/
+
+# 测试覆盖率产物
+.coverage
+coverage.json
+
+# ZCode 会话工作目录（脚本/计划等临时产物）
+.zcode/
