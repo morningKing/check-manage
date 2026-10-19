@@ -7,12 +7,21 @@
     @open="load"
   >
     <div class="rules-bar">
-      <el-button size="small" type="primary" @click="openEdit(null)">新建规则</el-button>
-      <el-radio-group v-model="importMode" size="small">
+      <el-button size="small" type="primary" :disabled="loadFailed" @click="openEdit(null)">
+        新建规则
+      </el-button>
+      <el-radio-group v-model="importMode" size="small" :disabled="loadFailed">
         <el-radio-button value="append">追加（去重）</el-radio-button>
         <el-radio-button value="replace">覆盖</el-radio-button>
       </el-radio-group>
-      <el-button size="small" :loading="importing" @click="fileInput?.click()">导入 CSV…</el-button>
+      <el-button
+        size="small"
+        :loading="importing"
+        :disabled="loadFailed"
+        @click="fileInput?.click()"
+      >
+        导入 CSV…
+      </el-button>
       <input
         ref="fileInput"
         type="file"
@@ -26,12 +35,22 @@
       <el-button size="small" @click="emit('update:visible', false)">关闭</el-button>
     </div>
 
+    <el-alert
+      v-if="loadFailed"
+      class="rules-alert"
+      type="error"
+      :closable="false"
+      show-icon
+      title="规则加载失败，暂不能保存以避免覆盖服务端规则"
+      description="请关闭对话框后重试；加载成功前新建、导入、删除与保存均已禁用。"
+    />
+
     <el-table
       v-loading="loading"
       :data="rules"
       size="small"
       max-height="420"
-      empty-text="暂无规则，点「新建规则」添加"
+      :empty-text="loadFailed ? '规则加载失败' : '暂无规则，点「新建规则」添加'"
     >
       <el-table-column prop="name" label="名称" width="160" />
       <el-table-column label="严重度" width="80">
@@ -45,8 +64,8 @@
       </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-          <el-button link type="danger" @click="remove(row)">删除</el-button>
+          <el-button link type="primary" :disabled="loadFailed" @click="openEdit(row)">编辑</el-button>
+          <el-button link type="danger" :disabled="loadFailed" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -205,7 +224,9 @@
       </el-form>
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveDraft">确定</el-button>
+        <el-button type="primary" :loading="saving" :disabled="loadFailed" @click="saveDraft">
+          确定
+        </el-button>
       </template>
     </el-dialog>
   </el-dialog>
@@ -275,6 +296,8 @@ const SEVERITY_LABEL: Record<Severity, string> = { info: '提示', warn: '建议
 
 const rules = ref<LocalCheckRule[]>([])
 const loading = ref(false)
+/** 加载失败时禁止一切写操作：避免空表 + 整份 PUT 覆盖服务端全部规则 */
+const loadFailed = ref(false)
 const editVisible = ref(false)
 const draft = ref<RuleDraft>(blankDraft())
 const saving = ref(false)
@@ -352,15 +375,22 @@ async function load(): Promise<void> {
   loading.value = true
   try {
     rules.value = (await getRules(props.scope)).rules
+    loadFailed.value = false
   } catch {
-    // 错误提示由请求拦截器统一处理；避免把上一 scope 的规则误当成当前 scope 保存
+    // 保留空表但标记失败：任何写操作（含整份 PUT）都被禁止，直到重新加载成功
     rules.value = []
+    loadFailed.value = true
+    ElMessage.error('规则加载失败，暂不能保存以避免覆盖服务端规则')
   } finally {
     loading.value = false
   }
 }
 
 function openEdit(rule: LocalCheckRule | null): void {
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能编辑规则')
+    return
+  }
   draft.value = rule ? toDraft(rule) : blankDraft()
   editVisible.value = true
 }
@@ -514,6 +544,10 @@ function cleanDraft(source: RuleDraft): LocalCheckRule | null {
 }
 
 function saveDraft(): void {
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能保存以避免覆盖服务端规则')
+    return
+  }
   const cleaned = cleanDraft(draft.value)
   if (!cleaned) return
   const index = rules.value.findIndex((r) => r.id === cleaned.id)
@@ -524,6 +558,10 @@ function saveDraft(): void {
 }
 
 async function persist(): Promise<void> {
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能保存以避免覆盖服务端规则')
+    return
+  }
   saving.value = true
   try {
     await saveRules(props.scope, rules.value)
@@ -537,6 +575,10 @@ async function persist(): Promise<void> {
 }
 
 async function remove(rule: LocalCheckRule): Promise<void> {
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能删除规则')
+    return
+  }
   rules.value = rules.value.filter((r) => r.id !== rule.id)
   await persist()
 }
@@ -545,6 +587,10 @@ async function onFile(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能导入规则')
+    return
+  }
   if (!file) return
   importing.value = true
   try {
@@ -584,6 +630,10 @@ function downloadTemplate(): void {
 
 .rules-spacer {
   flex: 1;
+}
+
+.rules-alert {
+  margin-bottom: 12px;
 }
 
 .rule-rows {
