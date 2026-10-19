@@ -1,6 +1,7 @@
 <template>
-  <div class="se-toolbar">
-    <div class="se-toolbar-inner">
+  <div class="se-toolbar-row">
+    <div class="se-toolbar">
+      <div class="se-toolbar-inner">
       <template v-if="linkOpen">
         <input
           v-model="linkValue"
@@ -109,7 +110,10 @@
           @click="editor.chain().focus().unsetAllMarks().clearNodes().run()"
         >✕</button>
       </template>
+      </div>
     </div>
+    <!-- 建议栏占位：工具栏只在「正文区宽度」内居中，与纸张像素对齐 -->
+    <div v-if="withSidebarPad" class="se-toolbar-pad" />
   </div>
 </template>
 
@@ -123,7 +127,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
 
-const props = defineProps<{ editor: Editor }>()
+const props = defineProps<{
+  editor: Editor
+  /** 右侧建议栏是否展开——展开时工具栏行加同宽占位，保证与纸张对齐 */
+  withSidebarPad?: boolean
+}>()
 
 const BLOCK_OPTIONS = [
   { value: 'paragraph', label: '正文' },

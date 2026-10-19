@@ -87,6 +87,26 @@ test('长文档：头部常驻、正文区内滚动；选中无浮动工具栏�
   await expect(toolbar).toBeVisible()
   const toolbarBefore = await toolbar.boundingBox()
 
+  // 工具栏必须与纸张「中心对齐」——占位镜像正文区宽度（此前按整页居中错位半栏）
+  const align = await page.evaluate(() => {
+    const inner = document.querySelector('.se-toolbar-inner') as HTMLElement | null
+    const paper = document.querySelector('.doc-surface') as HTMLElement | null
+    if (!inner || !paper) return null
+    const a = inner.getBoundingClientRect()
+    const b = paper.getBoundingClientRect()
+    return {
+      toolbarCenter: a.left + a.width / 2,
+      paperCenter: b.left + b.width / 2,
+      toolbarWidth: a.width,
+      paperWidth: b.width,
+    }
+  })
+  expect(align).not.toBeNull()
+  expect(Math.abs((align as { toolbarCenter: number }).toolbarCenter
+    - (align as { paperCenter: number }).paperCenter)).toBeLessThanOrEqual(2)
+  expect((align as { toolbarWidth: number }).toolbarWidth)
+    .toBeCloseTo((align as { paperWidth: number }).paperWidth, -1)
+
   // 外层容器不得出现可滚动溢出（否则滚轮会把头部挤走）
   const outerOverflow = await page.evaluate(() => {
     const main = document.querySelector('.content-main') as HTMLElement | null

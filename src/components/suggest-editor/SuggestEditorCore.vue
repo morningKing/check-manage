@@ -15,7 +15,7 @@
           <span class="se-hint">格式用上方工具栏 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
           <slot name="actions" />
         </header>
-        <EditorToolbar v-if="editor" :editor="editor" />
+        <EditorToolbar v-if="editor" :editor="editor" :with-sidebar-pad="sidebarOpen" />
       </div>
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
@@ -161,7 +161,7 @@ const editor = useEditor({
     TaskList,
     TaskItem.configure({ nested: true }),
     Placeholder.configure({
-      placeholder: '输入正文…（输入 / 唤起块菜单，选中文字浮出格式工具）',
+      placeholder: '输入正文…（输入 / 唤起块菜单，格式用上方工具栏）',
     }),
     Collaboration.configure({ document: ydoc, field: 'default' }),
     suggestionLayer.extension,

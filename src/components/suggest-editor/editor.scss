@@ -95,11 +95,24 @@
 
 /* ---------------- 顶部固定格式工具栏（与纸张同宽居中，常驻可见） ---------------- */
 
+/* 工具栏行的宽度结构镜像正文区：flex:1 的工具栏 + 建议栏同宽占位（展开时），
+   这样工具栏在「正文区宽度」内居中，和纸张像素对齐（此前按整页居中会错位半栏） */
+.se-toolbar-row {
+  display: flex;
+  align-items: flex-start;
+}
+
 .se-toolbar {
-  flex: none;
+  flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
   padding: 10px 16px 0;
+}
+
+.se-toolbar-pad {
+  width: 320px;
+  flex: none;
 }
 
 .se-toolbar-inner {
