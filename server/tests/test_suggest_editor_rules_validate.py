@@ -61,6 +61,31 @@ def test_csv_error_reports_line_number():
     assert '第 2 行' in str(ei.value) or 'line 2' in str(ei.value)
 
 
+def test_txt_simple_mapping_import():
+    text = '# 注释行\nS-5700=>S5700\n\nX-1 => X1\n'
+    rules = parse_rules_csv(text)
+    assert len(rules) == 2
+    assert rules[0]['maps'] == [{'wrong': 'S-5700', 'right': 'S5700'}]
+    assert rules[1]['maps'] == [{'wrong': 'X-1', 'right': 'X1'}]
+    assert all(r['severity'] == 'warn' and r['enabled'] is True for r in rules)
+    assert rules[0]['name'] == 'TXT 映射：S-5700'
+
+
+def test_txt_bad_line_rejects_whole_batch():
+    with pytest.raises(RuleValidationError) as ei:
+        parse_rules_csv('A=>B\nNO ARROW\nC=>D\n')
+    assert '第 2 行' in str(ei.value)
+    assert '错误写法=>正确写法' in str(ei.value)
+
+
+def test_format_detection_keeps_csv_branch():
+    text = 'type,name,severity,wrong,right\nmap,型号纠错,error,A,B\n'
+    rules = parse_rules_csv(text)
+    assert len(rules) == 1
+    assert rules[0]['name'] == '型号纠错'
+    assert rules[0]['maps'] == [{'wrong': 'A', 'right': 'B'}]
+
+
 def test_merge_append_dedupes_and_replace_overwrites():
     existing = [_rule()]
     incoming = [_rule(id='rule-abc'), _rule(id='rule-def', maps=[{'wrong': 'X', 'right': 'Y'}])]

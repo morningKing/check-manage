@@ -1,4 +1,4 @@
-"""检查规则：校验、CSV 解析、合并。纯函数——文件读写留在路由层。"""
+"""检查规则：校验、CSV/TXT 解析、合并。纯函数——文件读写留在路由层。"""
 import csv
 import io
 import json
@@ -160,7 +160,40 @@ def _row_to_rule(row, line_no):
         raise RuleValidationError(f'第 {line_no} 行: {e}')
 
 
+def _parse_rules_txt(text):
+    """TXT 简版：每行 `错误写法=>正确写法` 生成一条 map 规则（# 注释/空行跳过）。"""
+    out = []
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if len(out) >= MAX_RULES:
+            raise RuleValidationError(f'第 {line_no} 行: 规则数量超过 {MAX_RULES} 条')
+        wrong, sep, right = line.partition('=>')
+        wrong, right = wrong.strip(), right.strip()
+        if not sep or not wrong or not right:
+            raise RuleValidationError(f'第 {line_no} 行: 需要 错误写法=>正确写法')
+        rule = {'id': f'rule-{uuid.uuid4().hex[:12]}',
+                'name': f'TXT 映射：{wrong}', 'enabled': True, 'severity': 'warn',
+                'maps': [{'wrong': wrong, 'right': right}]}
+        try:
+            out.append(_validate_one(len(out), rule))
+        except RuleValidationError as e:
+            raise RuleValidationError(f'第 {line_no} 行: {e}')
+    return out
+
+
 def parse_rules_csv(text):
+    """解析导入文本：首行 `type,`（不区分大小写）走 CSV，否则按 TXT 简版。
+
+    路由层已按 utf-8-sig 解码；这里再去一次 BOM，保证直接调用方同样可用。
+    两种格式都是整批解析：任一行出错即抛 RuleValidationError，不做部分导入。
+    """
+    if text.startswith('\ufeff'):
+        text = text[1:]
+    first = next((line.strip() for line in text.splitlines() if line.strip()), '')
+    if not first.lower().startswith('type,'):
+        return _parse_rules_txt(text)
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise RuleValidationError('CSV 缺少表头')
