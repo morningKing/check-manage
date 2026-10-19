@@ -8,6 +8,10 @@
  * 前置：dev:all 全栈（Flask 3002 + vite 5173 + suggest-editor-server 1234）。
  * 建议引擎用内置 mock agent（确定性规则：非常→删除、但是→然而、连续空格→单空格），
  * 不依赖 OpenCode。
+ *
+ * ⚠️ 本 spec 依赖 mock 的确定性建议文案。dev:all 的 se script 已钉 mock；
+ *    若通过 :5173 复用**生产栈**（.env AGENT_KIND=opencode）运行，AI 断言
+ *    会因真模型措辞不同而失败——跑 E2E 前先停生产栈或临时置回 mock。
  */
 import fs from 'node:fs'
 import path from 'node:path'

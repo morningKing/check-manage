@@ -112,9 +112,10 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
 | 项 | 值 |
 | --- | --- |
 | Node 服务 | `suggest-editor-server/`（Hocuspocus WebSocket，端口 `SE_WS_PORT`，默认 1234） |
-| dev 启动 | `npm run dev:all`（已含 se 服务） |
-| 生产启动 | `start.sh` / `proxy.py`（托管子进程，`/suggest-ws` 经 8080 隧道转发） |
-| agent | 默认内置 mock（无需模型）；`AGENT_KIND=opencode AGENT_MODEL=<provider>/<model>` 切真模型 |
+| dev 启动 | `npm run dev:all`（已含 se 服务，agent 钉 mock 保确定性）；想要真模型在 dev 用 `npm run se` |
+| 生产启动 | `start.sh` / `proxy.py`（托管子进程，`/suggest-ws` 经 8080 隧道转发）。**改前端后必须 `npm run build`**，proxy 直接服务 `dist/`，浏览器强刷（Ctrl+F5）生效 |
+| agent | 默认内置 mock（无需模型）；真模型在 `server/.env` 配 `AGENT_KIND=opencode` + `AGENT_MODEL=<provider>/<model>`（`opencode models` 查可选值），重启生效 |
+| ⚠️ opencode 版本 | ACP 模式务必用 `OPENCODE_DIR` 指到平台自带的 oc126（1.2.26）——npm 全局 opencode 1.19.3 的 `session/prompt` 会返回 "OpenCode service failure"（2026-10-19 实测二分定位） |
 | 数据 | 正文/建议在数据库（随系统备份）；agent 工作区在 `suggest-editor-server/.data/ws/`（快照与词表，临时数据不备份） |
 | 体检 | `server/scripts/stale_check.py` 已识别 1234 端口（角色：智能写作(SE)） |
-| 冒烟探针 | `node e2e/manual/suggest-editor-ws-smoke.mjs`（可配 `SE_SMOKE_API`/`SE_SMOKE_WS` 穿透任意入口） |
+| 冒烟探针 | `node e2e/manual/suggest-editor-ws-smoke.mjs`（WS+落库，mock 即可）；`node e2e/manual/suggest-editor-real-agent-check.mjs`（真模型出建议，含检查要点命中验证） |
