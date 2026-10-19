@@ -11,7 +11,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 
 const AUTH_DIR = path.join(process.cwd(), 'e2e', '.auth')
 const AUTH_FILE = path.join(AUTH_DIR, 'admin.json')
@@ -87,32 +87,51 @@ async function createBlankDoc(page: Page, title: string): Promise<void> {
   await dialog.waitFor({ state: 'visible' })
   await dialog.getByPlaceholder('未命名文档').fill(title)
   await dialog.getByRole('button', { name: '创建' }).click()
-  // 编辑页就绪：正文 surface 出现且顶栏同步徽标不再停在「已断开」
+  // 编辑页就绪：正文 surface 出现且顶栏徽标已同步（不接受「连接中」，
+  // 否则规则装载/模板灌入等 synced 后的动作尚未完成，后续断言会随机失败）
   await expect(page.locator('.doc-surface')).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('.se-badge').first()).toHaveText(/已同步|连接中/, { timeout: 20_000 })
+  await expect(page.locator('.se-badge').first()).toHaveText('已同步', { timeout: 20_000 })
   await page.waitForTimeout(1200) // 等 synced 事件后规则装载/空文档就绪
 }
 
-async function deleteDocRow(page: Page, title: string): Promise<void> {
-  const row = page.locator('.el-table__row', { hasText: title })
-  await expect(row).toBeVisible({ timeout: 15_000 })
-  await row.getByRole('button', { name: '删除' }).click()
-  const confirmBox = page.locator('.el-message-box')
-  await confirmBox.waitFor({ state: 'visible' })
-  await confirmBox.getByRole('button', { name: '删除' }).click()
-  await expect(page.locator('.el-table__row', { hasText: title })).toHaveCount(0, {
-    timeout: 15_000,
-  })
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.stack ?? error.message
+  return String(error)
+}
+
+function authHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 }
 
 async function putGlobalRules(
-  page: Page, token: string, rules: unknown[],
+  api: APIRequestContext, token: string, rules: unknown[],
 ): Promise<void> {
-  const res = await page.request.put(`${API_BASE}/suggest-editor/rules/global`, {
-    headers: { Authorization: `Bearer ${token}` },
+  const res = await api.put(`${API_BASE}/suggest-editor/rules/global`, {
+    headers: authHeaders(token),
     data: { rules },
   })
   expect(res.ok(), `PUT global rules failed: ${res.status()} ${await res.text()}`).toBeTruthy()
+}
+
+/**
+ * 按标题删除文档（清理专用，走 REST，不依赖 page 生命周期）。
+ * 找不到同名文档视为已清理（用例可能在建文档前就失败）。
+ */
+async function deleteDocsByTitle(
+  api: APIRequestContext, token: string, title: string,
+): Promise<void> {
+  const res = await api.get(`${API_BASE}/suggest-editor/documents`, {
+    headers: authHeaders(token),
+  })
+  expect(res.ok(), `GET documents failed: ${res.status()} ${await res.text()}`).toBeTruthy()
+  const body = await res.json() as { documents?: { id: string; title: string }[] }
+  const matches = (body.documents ?? []).filter((doc) => doc.title === title)
+  for (const doc of matches) {
+    const deleted = await api.delete(`${API_BASE}/suggest-editor/documents/${doc.id}`, {
+      headers: authHeaders(token),
+    })
+    expect(deleted.ok(), `DELETE document ${doc.id} failed: ${deleted.status()}`).toBeTruthy()
+  }
 }
 
 /**
@@ -152,92 +171,108 @@ async function createDocPresenceRule(
   await rulesDialog.waitFor({ state: 'hidden', timeout: 10_000 })
 }
 
-test('映射毫秒级命中并接受；presence 随豁免词消失；文档级隔离', async ({ page }) => {
+test('映射毫秒级命中并接受；presence 随豁免词消失；文档级隔离', async ({ page, playwright }) => {
   test.setTimeout(180_000)
   const ts = Date.now()
   const titleMap = `E2E-规则-${ts}`
   const titleIsolated = `E2E-规则隔离-${ts}`
 
-  // 0) 先登录态页面就绪，读 token（beforeEach 已注入 localStorage）
-  await page.goto('/home')
-  const token = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem('check-manage:token') || '""')) as string
-  expect(token).toBeTruthy()
-
-  // 保存测试前的全局规则，结束时原样恢复（首次 GET 会播种 9800 示例）
-  let originalGlobalRules: unknown[] = DEFAULT_GLOBAL_RULES
+  // 清理与 API 直连用独立 request context（playwright.request.newContext()）：
+  // 不依赖 page 生命周期，用例超时/页面被关闭后仍能恢复全局规则、删除测试文档
+  const api = await playwright.request.newContext()
+  let testFailure: unknown = null
   try {
-    const current = await page.request.get(`${API_BASE}/suggest-editor/rules/global`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (current.ok()) {
-      const body = await current.json() as { rules?: unknown[] }
-      if (Array.isArray(body.rules)) originalGlobalRules = body.rules
-    }
-  } catch { /* 恢复时退回 DEFAULT_GLOBAL_RULES */ }
+    // 0) 先登录态页面就绪，读 token（beforeEach 已注入 localStorage）
+    await page.goto('/home')
+    const token = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('check-manage:token') || '""')) as string
+    expect(token).toBeTruthy()
 
-  try {
-    // 0) 全局规则重置为可控集合：只保留一条映射（避免默认全局 presence 干扰断言）
-    await putGlobalRules(page, token, [{
-      id: 'e2e-map',
-      name: 'E2E 型号纠错',
-      enabled: true,
-      severity: 'error',
-      maps: [{ wrong: 'S-5700', right: 'S5700' }],
-    }])
-
-    // 1) 列表页 → 新建文档 → 文档级 presence 规则（UI 全流程）
-    await gotoSuggestList(page)
-    await createBlankDoc(page, titleMap)
-    await createDocPresenceRule(page, 'E2E 拖带完整性', '9800M12', ['9800UPS', '不涉及拖带'], '缺拖带说明')
-
-    // 2) 映射规则：输入错误写法 → 卡片即时出现（≤5s）→ 接受后正文替换
-    await page.locator('.doc-surface').click()
-    await page.keyboard.type('设备 S-5700 与 9800M12 组网。', { delay: 20 })
-    const mapCard = page.locator('.se-suggest-note', { hasText: 'E2E 型号纠错' })
-    await expect(mapCard).toBeVisible({ timeout: 5_000 })
-    await mapCard.getByRole('button', { name: '接受' }).click()
-    await expect(page.locator('.doc-surface')).toContainText('S5700')
-    await expect(page.locator('.doc-surface')).not.toContainText('S-5700')
-
-    // 3) presence：出现 notice（无「接受」按钮）→ 补豁免词 → 实时消失
-    const presenceCard = page.locator('.se-suggest-note', { hasText: 'E2E 拖带完整性' })
-    await expect(presenceCard).toBeVisible({ timeout: 5_000 })
-    await expect(presenceCard.getByRole('button', { name: '接受' })).toHaveCount(0)
-    await page.screenshot({ path: 'e2e/screenshots/suggest-editor-rules-presence.png' })
-
-    await page.locator('.doc-surface').click()
-    await page.keyboard.press('Control+End')
-    await page.keyboard.type('本方案不涉及拖带。', { delay: 20 })
-    await expect(presenceCard).toHaveCount(0, { timeout: 5_000 })
-
-    // 4) 隔离：另一文档不出现该 presence 提示；全局映射仍生效
-    await gotoSuggestList(page)
-    await createBlankDoc(page, titleIsolated)
-    await page.locator('.doc-surface').click()
-    await page.keyboard.type('设备 S-5700 与 9800M12 组网。', { delay: 20 })
-    await expect(
-      page.locator('.se-suggest-note', { hasText: 'E2E 型号纠错' }),
-    ).toBeVisible({ timeout: 5_000 })
-    // 给规则重算留出时间：若文档级规则被错误地全局应用，这里必然出现卡片
-    await page.waitForTimeout(1800)
-    await expect(
-      page.locator('.se-suggest-note', { hasText: 'E2E 拖带完整性' }),
-    ).toHaveCount(0)
-  } finally {
-    // 5) 清理：全局规则恢复（优先恢复测试前原值），删除两篇文档
+    // 保存测试前的全局规则，结束时原样恢复（首次 GET 会播种 9800 示例）
+    let originalGlobalRules: unknown[] = DEFAULT_GLOBAL_RULES
     try {
-      await putGlobalRules(page, token, originalGlobalRules)
+      const current = await api.get(`${API_BASE}/suggest-editor/rules/global`, {
+        headers: authHeaders(token),
+      })
+      if (current.ok()) {
+        const body = await current.json() as { rules?: unknown[] }
+        if (Array.isArray(body.rules)) originalGlobalRules = body.rules
+      }
+    } catch { /* 恢复时退回 DEFAULT_GLOBAL_RULES */ }
+
+    try {
+      // 0) 全局规则重置为可控集合：只保留一条映射（避免默认全局 presence 干扰断言）
+      await putGlobalRules(api, token, [{
+        id: 'e2e-map',
+        name: 'E2E 型号纠错',
+        enabled: true,
+        severity: 'error',
+        maps: [{ wrong: 'S-5700', right: 'S5700' }],
+      }])
+
+      // 1) 列表页 → 新建文档 → 文档级 presence 规则（UI 全流程）
+      await gotoSuggestList(page)
+      await createBlankDoc(page, titleMap)
+      await createDocPresenceRule(page, 'E2E 拖带完整性', '9800M12', ['9800UPS', '不涉及拖带'], '缺拖带说明')
+
+      // 2) 映射规则：输入错误写法 → 卡片即时出现（≤5s）→ 接受后正文替换
+      await page.locator('.doc-surface').click()
+      await page.keyboard.type('设备 S-5700 与 9800M12 组网。', { delay: 20 })
+      const mapCard = page.locator('.se-suggest-note', { hasText: 'E2E 型号纠错' })
+      await expect(mapCard).toBeVisible({ timeout: 5_000 })
+      await mapCard.getByRole('button', { name: '接受' }).click()
+      await expect(page.locator('.doc-surface')).toContainText('S5700')
+      await expect(page.locator('.doc-surface')).not.toContainText('S-5700')
+
+      // 3) presence：出现 notice（无「接受」按钮）→ 补豁免词 → 实时消失
+      const presenceCard = page.locator('.se-suggest-note', { hasText: 'E2E 拖带完整性' })
+      await expect(presenceCard).toBeVisible({ timeout: 5_000 })
+      await expect(presenceCard.getByRole('button', { name: '接受' })).toHaveCount(0)
+      await page.screenshot({ path: 'e2e/screenshots/suggest-editor-rules-presence.png' })
+
+      await page.locator('.doc-surface').click()
+      await page.keyboard.press('Control+End')
+      await page.keyboard.type('本方案不涉及拖带。', { delay: 20 })
+      await expect(presenceCard).toHaveCount(0, { timeout: 5_000 })
+
+      // 4) 隔离：另一文档不出现该 presence 提示；全局映射仍生效
+      await gotoSuggestList(page)
+      await createBlankDoc(page, titleIsolated)
+      await page.locator('.doc-surface').click()
+      await page.keyboard.type('设备 S-5700 与 9800M12 组网。', { delay: 20 })
+      await expect(
+        page.locator('.se-suggest-note', { hasText: 'E2E 型号纠错' }),
+      ).toBeVisible({ timeout: 5_000 })
+      // 给规则重算留出时间：若文档级规则被错误地全局应用，这里必然出现卡片
+      await page.waitForTimeout(1800)
+      await expect(
+        page.locator('.se-suggest-note', { hasText: 'E2E 拖带完整性' }),
+      ).toHaveCount(0)
     } catch (error) {
-      console.warn('[suggest-editor-rules] 全局规则恢复失败：', error)
+      testFailure = error
+    }
+
+    // 5) 清理：全局规则恢复与文档删除各自收集错误；任何一步失败都必须让用例失败，
+    //    不允许仅 warn 后仍判 PASS（否则会静默把环境留在 e2e-map-only 状态）。
+    const cleanupErrors: string[] = []
+    try {
+      await putGlobalRules(api, token, originalGlobalRules)
+    } catch (error) {
+      cleanupErrors.push(`恢复全局规则失败：${errorText(error)}`)
     }
     for (const title of [titleMap, titleIsolated]) {
       try {
-        await gotoSuggestList(page)
-        await deleteDocRow(page, title)
+        await deleteDocsByTitle(api, token, title)
       } catch (error) {
-        console.warn(`[suggest-editor-rules] 删除文档 ${title} 失败：`, error)
+        cleanupErrors.push(`删除文档「${title}」失败：${errorText(error)}`)
       }
     }
+    if (cleanupErrors.length) {
+      const primary = testFailure ? `\n\n用例主体原始失败：\n${errorText(testFailure)}` : ''
+      throw new Error(`清理未完成，环境可能残留脏数据：\n- ${cleanupErrors.join('\n- ')}${primary}`)
+    }
+    if (testFailure) throw testFailure
+  } finally {
+    await api.dispose()
   }
 })
