@@ -26,6 +26,7 @@
         />
       </template>
       <template #actions>
+        <el-button size="small" @click="vocabVisible = true">词表</el-button>
         <el-button
           v-if="auth.can('admin.suggest_editor')"
           size="small"
@@ -37,6 +38,10 @@
       </template>
     </SuggestEditorCore>
     <div v-else class="suggest-doc-loading" v-loading="true" element-loading-text="加载文档…" />
+    <VocabularyDialog
+      v-model:visible="vocabVisible"
+      :scope="doc ? { kind: 'document', docId: doc.id } : { kind: 'global' }"
+    />
   </div>
 </template>
 
@@ -53,6 +58,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue'
+import VocabularyDialog from '@/components/suggest-editor/VocabularyDialog.vue'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import { useAuthStore } from '@/stores/auth'
@@ -74,6 +80,7 @@ const loadError = ref('')
 const titleDraft = ref('')
 const coreRef = ref<InstanceType<typeof SuggestEditorCore> | null>(null)
 const savingTemplate = ref(false)
+const vocabVisible = ref(false)
 
 /** 模板只灌一次（多客户端同开时先到者写，其余看到 Yjs 同步来的内容自然跳过） */
 let templateApplied = false

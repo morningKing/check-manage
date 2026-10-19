@@ -10,6 +10,9 @@
             </div>
           </div>
           <div class="suggest-list-actions">
+            <el-button v-if="auth.can('admin.suggest_editor')" @click="vocabVisible = true">
+              词表管理
+            </el-button>
             <el-button v-if="auth.can('admin.suggest_editor')" @click="openTemplateManager">
               模板管理
             </el-button>
@@ -75,6 +78,9 @@
       </template>
     </el-dialog>
 
+    <!-- 词表管理（admin.suggest_editor）：全局词表对所有文档生效 -->
+    <VocabularyDialog v-model:visible="vocabVisible" :scope="{ kind: 'global' }" />
+
     <!-- 模板管理（admin.suggest_editor） -->
     <el-dialog v-model="templateManagerVisible" title="写作模板管理" width="860px">
       <div class="template-manager-bar">
@@ -131,6 +137,7 @@ import { computed, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import VocabularyDialog from '@/components/suggest-editor/VocabularyDialog.vue'
 import {
   createDocument,
   createTemplate,
@@ -153,6 +160,8 @@ const templates = ref<SuggestTemplate[]>([])
 const createVisible = ref(false)
 const creating = ref(false)
 const createForm = ref<{ title: string; templateId: string | null }>({ title: '', templateId: null })
+
+const vocabVisible = ref(false)
 
 const templateManagerVisible = ref(false)
 const templateEditVisible = ref(false)

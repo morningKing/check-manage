@@ -10,9 +10,10 @@ vi.mock('@/utils/request', () => ({
   put: vi.fn(),
   patch: vi.fn(),
   del: vi.fn(),
+  authParam: vi.fn(() => '?access_token=tok'),
 }))
 
-import { get, post, patch, del } from '@/utils/request'
+import { get, post, put, patch, del } from '@/utils/request'
 import {
   listDocuments,
   getDocument,
@@ -25,6 +26,10 @@ import {
   createTemplate,
   updateTemplate,
   deleteTemplate,
+  getVocabulary,
+  saveVocabulary,
+  importVocabulary,
+  vocabularyExportUrl,
 } from '../suggestEditor'
 
 beforeEach(() => {
@@ -96,5 +101,47 @@ describe('suggestEditor templates api', () => {
 
     await deleteTemplate('se-tpl-weekly')
     expect(del).toHaveBeenCalledWith('/suggest-editor/templates/se-tpl-weekly')
+  })
+})
+
+describe('suggestEditor vocabulary api', () => {
+  it('global scope: get/save hit /suggest-editor/vocabularies/global', async () => {
+    await getVocabulary({ kind: 'global' })
+    expect(get).toHaveBeenCalledWith('/suggest-editor/vocabularies/global')
+
+    await saveVocabulary({ kind: 'global' }, '词条')
+    expect(put).toHaveBeenCalledWith('/suggest-editor/vocabularies/global', { content: '词条' })
+  })
+
+  it('document scope: paths embed docId', async () => {
+    await getVocabulary({ kind: 'document', docId: 'doc-1' })
+    expect(get).toHaveBeenCalledWith('/suggest-editor/documents/doc-1/vocabulary')
+
+    await saveVocabulary({ kind: 'document', docId: 'doc-1' }, '词条|别名')
+    expect(put).toHaveBeenCalledWith('/suggest-editor/documents/doc-1/vocabulary', {
+      content: '词条|别名',
+    })
+  })
+
+  it('import posts multipart form with mode and file', async () => {
+    const file = new File(['词条'], '词表.txt', { type: 'text/plain' })
+    await importVocabulary({ kind: 'global' }, file, 'replace')
+    expect(post).toHaveBeenCalledTimes(1)
+    const [url, form, config] = vi.mocked(post).mock.calls[0]
+    expect(url).toBe('/suggest-editor/vocabularies/global/import')
+    expect(form).toBeInstanceOf(FormData)
+    expect((form as FormData).get('mode')).toBe('replace')
+    expect((form as FormData).get('file')).toBe(file)
+    expect(config).toMatchObject({ headers: { 'Content-Type': 'multipart/form-data' } })
+
+    await importVocabulary({ kind: 'document', docId: 'doc-9' }, file, 'append')
+    expect(vi.mocked(post).mock.calls[1][0]).toBe('/suggest-editor/documents/doc-9/vocabulary/import')
+  })
+
+  it('export url carries /api prefix and access_token', () => {
+    expect(vocabularyExportUrl({ kind: 'global' }))
+      .toBe('/api/suggest-editor/vocabularies/global/export?access_token=tok')
+    expect(vocabularyExportUrl({ kind: 'document', docId: 'doc-1' }))
+      .toBe('/api/suggest-editor/documents/doc-1/vocabulary/export?access_token=tok')
   })
 })

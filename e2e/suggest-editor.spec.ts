@@ -170,3 +170,55 @@ test('模板建文档 → 建议 → 刷新恢复 → 列表管理', async ({ pa
 
   await page.screenshot({ path: 'e2e/screenshots/suggest-editor-e2e.png', fullPage: true })
 })
+
+test('词表后台配置 → 文档内前缀联想生效（含导入/导出入口）', async ({ page }) => {
+  test.setTimeout(120_000)
+
+  await gotoSuggestList(page)
+
+  // 1) 词表管理对话框（admin）：追加一条词条并保存
+  await page.getByRole('button', { name: '词表管理' }).click()
+  const vocabDialog = page.locator('.el-dialog', { hasText: '全局词表' })
+  await vocabDialog.waitFor({ state: 'visible' })
+  const area = vocabDialog.locator('textarea')
+  await area.waitFor({ state: 'visible' })
+  const original = await area.inputValue()
+  const entry = `测试词表条目${Date.now()}`
+  await area.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(entry, { delay: 10 })
+  await vocabDialog.getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.el-message', { hasText: '词表已保存' })).toBeVisible({ timeout: 10_000 })
+  // 导出链接带鉴权参数
+  await expect(vocabDialog.locator('[data-testid="vocab-export"]')).toHaveAttribute(
+    'href', /export\?access_token=/,
+  )
+  await vocabDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+  // 2) 新建文档，输入词条前缀 → 候选列表出现该词条（全局词表热同步进 Y.Map）
+  const title = `E2E-词表-${Date.now()}`
+  await createDocFromTemplate(page, title, null)
+  await page.locator('.doc-surface').click()
+  await page.keyboard.type('测试词', { delay: 40 })
+  await expect(
+    page.locator('.se-completion-popup', { hasText: entry }),
+  ).toBeVisible({ timeout: 20_000 })
+  await page.screenshot({ path: 'e2e/screenshots/suggest-editor-vocab.png' })
+
+  // 3) 清理：恢复原词表内容 + 删除测试文档
+  await gotoSuggestList(page)
+  await page.getByRole('button', { name: '词表管理' }).click()
+  await vocabDialog.waitFor({ state: 'visible' })
+  await area.fill(original)
+  await vocabDialog.getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.el-message', { hasText: '词表已保存' })).toBeVisible({ timeout: 10_000 })
+  await vocabDialog.getByRole('button', { name: '关闭', exact: true }).click()
+
+  const row = page.locator('.el-table__row', { hasText: title })
+  await row.getByRole('button', { name: '删除' }).click()
+  const confirmBox = page.locator('.el-message-box')
+  await confirmBox.waitFor({ state: 'visible' })
+  await confirmBox.getByRole('button', { name: '删除' }).click()
+  await expect(page.locator('.el-table__row', { hasText: title })).toHaveCount(0, { timeout: 15_000 })
+})

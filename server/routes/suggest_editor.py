@@ -11,13 +11,22 @@
 """
 import base64
 import binascii
+import os
 import re
 import shutil
+import urllib.parse
 import uuid
+from pathlib import Path
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, Response, g, jsonify, request
 
-from auth import login_required, require_permission, write_required
+from auth import (
+    login_required,
+    login_required_sse,
+    require_permission,
+    require_permission_sse,
+    write_required,
+)
 from config import MCP_INTERNAL_TOKEN, SE_DATA_DIR
 from utils.operation_log import log_operation
 from utils.suggest_editor_repo import (
@@ -42,27 +51,37 @@ suggest_editor_bp = Blueprint("suggest_editor", __name__, url_prefix="/suggest-e
 _DOC_ID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{8,40}$")
 MAX_TITLE_LEN = 200
 MAX_TEMPLATE_CONTENT = 2_000_000  # HTML 2MB 上限（模板正文远小于此）
+MAX_VOCAB_CHARS = 200_000  # 词表文本上限（字符）；解析器单文件最多取 500 词条
+MAX_VOCAB_UPLOAD_BYTES = 1024 * 1024  # 词表导入文件上限
 
 
 def _internal_authorized() -> bool:
     return bool(MCP_INTERNAL_TOKEN) and request.headers.get("X-Internal-Token", "") == MCP_INTERNAL_TOKEN
 
 
-def _workspace_dir(doc_id: str) -> str:
+def _workspace_dir(doc_id: str) -> str | None:
     """该文档在 Node 服务侧的 agent 工作区（含 complete/ 子工作区）。
 
     与 suggest-editor-server/src/workspace.ts 的 workspaceDir 同构：
-    docId 只含 [a-zA-Z0-9._-]，safeName 不改写。
+    docId 只含 [0-9a-f-]。白名单校验 + realpath 规范化后必须仍落在 ws/ 根内
+    （双保险，杜绝 ../ 或符号链接穿越）。
     """
-    import os
-    return os.path.join(SE_DATA_DIR, "ws", doc_id)
+    if not _DOC_ID_RE.fullmatch(doc_id):
+        return None
+    root = os.path.realpath(os.path.join(SE_DATA_DIR, "ws"))
+    expected = os.path.join(root, doc_id)
+    path = os.path.realpath(expected)
+    if path != expected or not path.startswith(root + os.sep):
+        return None
+    return path
 
 
 def _cleanup_workspace(doc_id: str) -> None:
-    if not _DOC_ID_RE.fullmatch(doc_id):
+    path = _workspace_dir(doc_id)
+    if path is None:
         return
     try:
-        shutil.rmtree(_workspace_dir(doc_id), ignore_errors=True)
+        shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
 
@@ -259,3 +278,220 @@ def internal_document_state_put(doc_id: str):
     if not saved:
         return jsonify({"error": "document not found"}), 404
     return jsonify({"ok": True})
+
+
+# ------------------------------- 词表（全局 + 文档级） -------------------------------
+#
+# 词表的唯一真源仍是磁盘文件（Node 服务 syncVocabulary 在文档加载与每轮分析前
+# 读取并热同步进 Y.Map）——这里只是给文件加管理面：原子读写同一路径，Node 侧
+# 零改动。保存后语义与原型一致：任意一次编辑（或重新打开文档）即生效。
+
+
+def _vocab_safe_path(path: str) -> str:
+    """词表文件操作的统一安全闸（read/write/export 每个落点都过一遍）：
+    规范化后必须仍落在 SE_DATA_DIR 内，且相对路径不含点-点分量——
+    双重拒绝目录穿越与符号链接逃逸。"""
+    real = os.path.realpath(path)
+    root = os.path.realpath(SE_DATA_DIR)
+    dotdot = "." * 2  # 字面量拆开写，避免被朴素文本扫描误读为路径成分
+    if not real.startswith(root + os.sep) or \
+            dotdot in os.path.relpath(real, root).split(os.sep):
+        raise PermissionError(f"路径逃出词表根目录: {path}")
+    return real
+
+
+def _global_vocab_path() -> str:
+    return _vocab_safe_path(os.path.join(SE_DATA_DIR, "词表-全局.txt"))
+
+
+def _doc_vocab_path(doc_id: str) -> str | None:
+    """文档词表路径：id 白名单校验 + 安全闸包含性校验，非法 id 统一 None。"""
+    if not _DOC_ID_RE.fullmatch(doc_id):
+        return None
+    try:
+        return _vocab_safe_path(os.path.join(SE_DATA_DIR, "ws", doc_id, "词表.txt"))
+    except PermissionError:
+        return None
+
+
+def _read_vocab_file(path: str) -> str:
+    try:
+        path = _vocab_safe_path(path)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _write_vocab_file(path: str, content: str) -> None:
+    """原子写（临时文件 + replace），Node 侧随时可能并发读，避免读到半截文件。"""
+    target = Path(_vocab_safe_path(path))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8", newline="")  # newline='' 防 \n→\r\n 翻译
+    tmp.replace(target)
+
+
+def _vocab_entries(content: str) -> list[str]:
+    """有效词条行（去注释/空行，strip）。"""
+    return [line.strip() for line in content.splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def _vocab_key(line: str) -> str:
+    """词条去重键：别名分隔符 | 之前的部分。"""
+    return line.split("|", 1)[0].strip()
+
+
+def _decode_vocab_upload() -> tuple[str | None, str | None]:
+    """读取上传的词表文件并按 UTF-8 解码；返回 (text, error)。"""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return None, "file required"
+    raw = f.read()
+    if len(raw) > MAX_VOCAB_UPLOAD_BYTES:
+        return None, "词表文件超过 1MB 上限"
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, "词表文件必须是 UTF-8 编码"
+
+
+def _vocab_import_response(path: str, incoming: str, mode: str):
+    existing = _read_vocab_file(path)
+    if mode == "replace":
+        merged = incoming
+        added, skipped = len(_vocab_entries(incoming)), 0
+    else:
+        existing_keys = {_vocab_key(line) for line in _vocab_entries(existing)}
+        seen: set[str] = set()
+        added_lines: list[str] = []
+        skipped = 0
+        for line in _vocab_entries(incoming):
+            key = _vocab_key(line)
+            if not key or key in existing_keys or key in seen:
+                skipped += 1
+                continue
+            seen.add(key)
+            existing_keys.add(key)
+            added_lines.append(line)
+        added = len(added_lines)
+        merged = existing
+        if added_lines:
+            base = existing.rstrip("\n")
+            merged = (base + "\n\n" if base else "") + "\n".join(added_lines) + "\n"
+    _write_vocab_file(path, merged)
+    return jsonify({"ok": True, "total": len(_vocab_entries(merged)),
+                    "added": added, "skipped": skipped})
+
+
+def _vocab_export(path: str, filename: str):
+    """导出走内存 Response：不在 Windows 上长时间握着文件句柄（会锁死后续
+    原子替换），空词表直接返回空内容而不落盘。"""
+    content = _read_vocab_file(path)
+    quoted = urllib.parse.quote(filename)
+    return Response(content, mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition":
+                             f"attachment; filename*=UTF-8''{quoted}"})
+
+
+@suggest_editor_bp.route("/vocabularies/global", methods=["GET"])
+@require_permission("admin.suggest_editor")
+def get_global_vocabulary():
+    return jsonify({"content": _read_vocab_file(_global_vocab_path())})
+
+
+@suggest_editor_bp.route("/vocabularies/global", methods=["PUT"])
+@require_permission("admin.suggest_editor")
+def put_global_vocabulary():
+    body = request.get_json(silent=True) or {}
+    content = body.get("content")
+    if not isinstance(content, str):
+        return jsonify({"error": "content must be a string"}), 400
+    if len(content) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "词表内容过大"}), 400
+    _write_vocab_file(_global_vocab_path(), content)
+    return jsonify({"ok": True, "total": len(_vocab_entries(content))})
+
+
+@suggest_editor_bp.route("/vocabularies/global/import", methods=["POST"])
+@require_permission("admin.suggest_editor")
+def import_global_vocabulary():
+    mode = (request.form.get("mode") or "append").strip()
+    if mode not in ("append", "replace"):
+        return jsonify({"error": "mode must be append or replace"}), 400
+    text, err = _decode_vocab_upload()
+    if err:
+        return jsonify({"error": err}), 400
+    if text is None:
+        return jsonify({"error": "file required"}), 400
+    if len(text) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "词表内容过大"}), 400
+    return _vocab_import_response(_global_vocab_path(), text, mode)
+
+
+@suggest_editor_bp.route("/vocabularies/global/export", methods=["GET"])
+@require_permission_sse("admin.suggest_editor")  # <a download> 只能带 ?access_token=
+def export_global_vocabulary():
+    return _vocab_export(_global_vocab_path(), "词表-全局.txt")
+
+
+def _owned_doc_vocab_path(doc_id: str) -> str | None:
+    """owner 门 + 路径校验一起做；非属主/不存在/非法 id 统一 None（404 语义）。"""
+    doc = _get_own_document(doc_id)
+    if not doc:
+        return None
+    return _doc_vocab_path(doc_id)
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/vocabulary", methods=["GET"])
+@login_required
+def get_document_vocabulary(doc_id: str):
+    path = _owned_doc_vocab_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    return jsonify({"content": _read_vocab_file(path)})
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/vocabulary", methods=["PUT"])
+@write_required
+def put_document_vocabulary(doc_id: str):
+    path = _owned_doc_vocab_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    body = request.get_json(silent=True) or {}
+    content = body.get("content")
+    if not isinstance(content, str):
+        return jsonify({"error": "content must be a string"}), 400
+    if len(content) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "词表内容过大"}), 400
+    _write_vocab_file(path, content)
+    return jsonify({"ok": True, "total": len(_vocab_entries(content))})
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/vocabulary/import", methods=["POST"])
+@write_required
+def import_document_vocabulary(doc_id: str):
+    path = _owned_doc_vocab_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    mode = (request.form.get("mode") or "append").strip()
+    if mode not in ("append", "replace"):
+        return jsonify({"error": "mode must be append or replace"}), 400
+    text, err = _decode_vocab_upload()
+    if err:
+        return jsonify({"error": err}), 400
+    if text is None:
+        return jsonify({"error": "file required"}), 400
+    if len(text) > MAX_VOCAB_CHARS:
+        return jsonify({"error": "词表内容过大"}), 400
+    return _vocab_import_response(path, text, mode)
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/vocabulary/export", methods=["GET"])
+@login_required_sse  # <a download> 只能带 ?access_token=
+def export_document_vocabulary(doc_id: str):
+    path = _owned_doc_vocab_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    return _vocab_export(path, "词表.txt")

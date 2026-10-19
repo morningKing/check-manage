@@ -5,7 +5,7 @@
  * /suggest-ws WebSocket 直连 Node 服务同步，Flask 内部端点只对 Node 开放。
  */
 
-import { get, post, patch, del } from '@/utils/request'
+import { get, post, patch, put, del, authParam } from '@/utils/request'
 import type { SuggestDocument, SuggestTemplate } from '@/types/suggestEditor'
 
 export function listDocuments() {
@@ -56,4 +56,43 @@ export function updateTemplate(
 
 export function deleteTemplate(templateId: string) {
   return del<{ ok: boolean }>(`/suggest-editor/templates/${templateId}`)
+}
+
+/* ------------------------------- 词表（全局 + 文档级） ------------------------------- */
+
+export type VocabularyScope = { kind: 'global' } | { kind: 'document'; docId: string }
+
+function vocabBase(scope: VocabularyScope): string {
+  return scope.kind === 'global'
+    ? '/suggest-editor/vocabularies/global'
+    : `/suggest-editor/documents/${scope.docId}/vocabulary`
+}
+
+export function getVocabulary(scope: VocabularyScope) {
+  return get<{ content: string }>(vocabBase(scope))
+}
+
+export function saveVocabulary(scope: VocabularyScope, content: string) {
+  return put<{ ok: boolean; total: number }>(vocabBase(scope), { content })
+}
+
+/** mode: append=按词条去重追加；replace=整文件覆盖 */
+export function importVocabulary(
+  scope: VocabularyScope,
+  file: File,
+  mode: 'append' | 'replace',
+) {
+  const form = new FormData()
+  form.append('mode', mode)
+  form.append('file', file)
+  return post<{ ok: boolean; total: number; added: number; skipped: number }>(
+    `${vocabBase(scope)}/import`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}
+
+/** 导出下载链接（<a href> 直下，鉴权走 ?access_token=） */
+export function vocabularyExportUrl(scope: VocabularyScope): string {
+  return `/api${vocabBase(scope)}/export${authParam()}`
 }
