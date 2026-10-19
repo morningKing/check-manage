@@ -731,7 +731,7 @@ const fitBadge = computed(() => {
     const order: Record<string, number> = { diverged: 0, partial: 1, fit: 2 }
     return (order[f.status] ?? 3) < (order[w.status] ?? 3) ? f : w
   }, fits[0])
-  const textMap: Record<string, string> = { fit: '拟合', partial: '部分拟合', diverged: '偏离', no_trace: '无轨迹', parse_error: '解析失败' }
+  const textMap: Record<string, string> = { fit: '拟合', partial: '部分拟合', diverged: '偏离', no_trace: '无轨迹', parse_error: '解析失败', no_steps: '未定义步骤' }
   return { score: avg, text: textMap[worst.status] || worst.status }
 })
 function gotoSkillOpt() {
