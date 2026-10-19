@@ -11,6 +11,7 @@
         <span class="se-hint">选中浮出格式工具 · 输入 / 插入块 · 停笔自动分析/联想 · Tab 接受</span>
         <slot name="actions" />
       </header>
+      <EditorToolbar v-if="editor" :editor="editor" />
       <div class="se-workspace">
         <EditorContent v-if="editor" :editor="editor" class="se-editor-host" />
         <SuggestionSidebar
@@ -76,6 +77,7 @@ import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import BubbleToolbar from './BubbleToolbar.vue'
+import EditorToolbar from './EditorToolbar.vue'
 import SuggestionSidebar from './SuggestionSidebar.vue'
 import { COMMANDS_MAP, requestRewrite } from './core/commands'
 import { CompletionGhost } from './core/completion'

@@ -91,6 +91,15 @@ test('模板建文档 → 建议 → 刷新恢复 → 列表管理', async ({ pa
   await createDocFromTemplate(page, title, '项目周报')
   await expect(page.locator('.doc-surface h1')).toHaveText('本周工作汇报', { timeout: 10_000 })
 
+  // 1b) 顶部固定格式工具栏：像真正的编辑器——选区不丢，点按钮即生效
+  await expect(page.locator('.se-toolbar')).toBeVisible()
+  await page.locator('.doc-surface li p', { hasText: '事项一' }).click()
+  await page.keyboard.press('Shift+Home')
+  await page.locator('.se-toolbar [title="加粗 (Ctrl+B)"]').click()
+  await expect(page.locator('.doc-surface strong', { hasText: '事项一' })).toBeVisible({
+    timeout: 10_000,
+  })
+
   // 2) 输入触发文本：另起一段
   await page.locator('.doc-surface').click()
   await page.keyboard.press('Control+End')
@@ -98,9 +107,9 @@ test('模板建文档 → 建议 → 刷新恢复 → 列表管理', async ({ pa
   await page.keyboard.type(TRIGGER_TEXT, { delay: 20 })
   await page.waitForTimeout(2500)
 
-  // 本地即时检查（毫秒级）：连续空格 → 绿色「即时」卡片
+  // 本地即时检查（毫秒级）：连续空格 → 卡片（AI 卡可能同时在场，取 first 防重名）
   await expect(
-    page.locator('.se-suggest-note', { hasText: '连续空格' }),
+    page.locator('.se-suggest-note', { hasText: '连续空格' }).first(),
   ).toBeVisible({ timeout: 10_000 })
 
   // AI 建议（mock agent 确定性规则：「但是」→「然而」）
@@ -127,7 +136,7 @@ test('模板建文档 → 建议 → 刷新恢复 → 列表管理', async ({ pa
     page.locator('.se-suggest-note', { hasText: '然而' }).first(),
   ).toBeVisible({ timeout: 30_000 })
   await expect(
-    page.locator('.se-suggest-note', { hasText: '连续空格' }),
+    page.locator('.se-suggest-note', { hasText: '连续空格' }).first(),
   ).toBeVisible({ timeout: 10_000 })
   await page.screenshot({ path: 'e2e/screenshots/suggest-editor-recovered.png' })
 

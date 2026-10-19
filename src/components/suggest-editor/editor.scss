@@ -69,8 +69,39 @@
   display: flex;
   justify-content: center;
   overflow: auto;
-  padding: 32px 16px;
+  padding: 24px 16px 32px;
   min-width: 0;
+}
+
+/* ---------------- 顶部固定格式工具栏（与纸张同宽居中，常驻可见） ---------------- */
+
+.se-toolbar {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: 10px 16px 0;
+}
+
+.se-toolbar-inner {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(760px, 100%);
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid var(--se-line);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+}
+
+.se-toolbar-inner .se-block-select {
+  width: 112px;
+  margin: 0 4px;
+
+  .el-select__wrapper {
+    min-height: 26px;
+    font-size: 12.5px;
+  }
 }
 
 .se-workspace {
@@ -87,7 +118,8 @@
   padding: 40px 48px;
   background: #fff;
   border: 1px solid var(--se-line);
-  border-radius: 12px;
+  /* 顶边与固定工具栏无缝相接（工具栏无下边框、同宽） */
+  border-radius: 0 0 12px 12px;
   outline: none;
   font-size: 16px;
   line-height: 1.8;
