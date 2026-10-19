@@ -337,7 +337,7 @@ git commit -m "feat(se): 检查规则校验与 CSV 解析纯函数（Python）"
 
 **Interfaces:**
 - Consumes: Task 1 的 `validate_rules/parse_rules_csv/merge_rules/RuleValidationError`
-- Produces HTTP：
+- Produces HTTP（最终评审 Ruling：全局读取放宽为 login_required，写入/导入/导出仍 admin.suggest_editor）：
   - `GET /suggest-editor/rules/global` → `{rules}`（文件缺失播种示例，含 9800 presence）
   - `PUT /suggest-editor/rules/global` ← `{rules}` → `{ok, count}`
   - `POST /suggest-editor/rules/global/import`（multipart `file`+`mode`）→ `{ok, added, skipped, total}`

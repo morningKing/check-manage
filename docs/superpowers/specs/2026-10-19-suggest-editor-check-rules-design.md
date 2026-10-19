@@ -89,7 +89,7 @@ Node 每轮分析前现读两份 → 注入 prompt。保存规则后前端立即
 
 ## 5. 端点（Flask，`routes/suggest_editor.py`）
 
-全局（`admin.suggest_editor` 门）：
+全局（读取 `login_required`——编辑器本地通道对每个文档属主生效；写入/导入/导出 `admin.suggest_editor` 门）：
 
 - `GET /suggest-editor/rules/global` → `{rules: [...]}`（缺文件时播种示例并返回）
 - `PUT /suggest-editor/rules/global` ← `{rules: [...]}`（整份替换，校验后原子写）
