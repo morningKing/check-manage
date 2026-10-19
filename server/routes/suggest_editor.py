@@ -11,6 +11,9 @@
 """
 import base64
 import binascii
+import csv
+import io
+import json
 import os
 import re
 import shutil
@@ -43,6 +46,14 @@ from utils.suggest_editor_repo import (
     save_state,
     touch_document,
     update_template,
+)
+from utils.suggest_editor_rules import (
+    CSV_COLUMNS,
+    MAX_FILE_BYTES,
+    RuleValidationError,
+    merge_rules,
+    parse_rules_csv,
+    validate_rules,
 )
 
 suggest_editor_bp = Blueprint("suggest_editor", __name__, url_prefix="/suggest-editor")
@@ -589,3 +600,221 @@ def export_document_vocabulary(doc_id: str):
     if path is None:
         return jsonify({"error": "文档不存在"}), 404
     return _vocab_export(path, "词表.txt")
+
+
+# ------------------------------- 检查规则（全局 + 文档级） -------------------------------
+#
+# 真源为 JSON 文件（全局 .data/规则-全局.json、文档 ws/<id>/规则.json），Node 分析前
+# 读 aiPrompt、前端 REST 拉取编译本地规则。校验/CSV 解析见 utils/suggest_editor_rules。
+
+DEFAULT_RULES = {
+    "rules": [{
+        "id": "rule-9800ups-drag",
+        "name": "9800UPS 拖带完整性",
+        "enabled": True,
+        "severity": "warn",
+        "presence": [{
+            "triggers": ["9800M12"],
+            "requiresAny": ["9800UPS", "不涉及拖带", "无需拖带", "不拖带"],
+            "message": "方案涉及 9800M12，但未提及 9800UPS（可拖带 9800M12），也未标识「不涉及拖带」",
+        }],
+        "aiPrompt": "检查设备配套与拖带声明：涉及 9800M12 时须写明 9800UPS 或明确不涉及拖带。",
+    }],
+}
+
+
+def _global_rules_path() -> str:
+    return _vocab_safe_path(os.path.join(SE_DATA_DIR, "规则-全局.json"))
+
+
+def _doc_rules_path(doc_id: str) -> str | None:
+    """文档规则路径：与 _doc_vocab_path 同构（id 白名单 + 安全闸包含性校验）。"""
+    if not _DOC_ID_RE.fullmatch(doc_id):
+        return None
+    try:
+        return _vocab_safe_path(os.path.join(SE_DATA_DIR, "ws", doc_id, "规则.json"))
+    except PermissionError:
+        return None
+
+
+def _decode_rules_upload() -> tuple[str | None, str | None]:
+    """读取 multipart 上传的规则 CSV；返回 (text, error)。
+
+    上限用 rules 模块的 2MB（不复用 1MB 的词表上传门），并按 utf-8-sig 解码
+    以吸收 Excel 另存 CSV 的 BOM。"""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return None, "file required"
+    raw = f.read()
+    if len(raw) > MAX_FILE_BYTES:
+        return None, "规则文件超过 2MB 上限"
+    try:
+        return raw.decode("utf-8-sig"), None
+    except UnicodeDecodeError:
+        return None, "规则文件必须是 UTF-8 编码"
+
+
+def _read_rules_file(path: str) -> list[dict]:
+    raw = _read_vocab_file(path)
+    if not raw.strip():
+        return []
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise RuleValidationError("规则文件不是合法 JSON，请通过导入覆盖修复")
+    return validate_rules(payload)
+
+
+def _write_rules_file(path: str, rules: list[dict]) -> None:
+    _write_vocab_file(path, json.dumps({"rules": rules}, ensure_ascii=False, indent=2) + "\n")
+
+
+def _rules_export(rules: list[dict], filename: str):
+    """导出走内存 Response（同 _vocab_export：不在 Windows 上握文件句柄）。"""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS)
+    writer.writeheader()
+    for rule in rules:
+        row = {"type": "", "name": rule.get("name", ""), "severity": rule.get("severity", "warn"),
+               "enabled": "true" if rule.get("enabled", True) else "false",
+               "aiPrompt": rule.get("aiPrompt", "")}
+        if rule.get("maps"):
+            row.update(type="map", wrong=rule["maps"][0]["wrong"], right=rule["maps"][0]["right"])
+        elif rule.get("patterns"):
+            p = rule["patterns"][0]
+            row.update(type="pattern", extract=p["extract"], valid=p["valid"], message=p["message"])
+        elif rule.get("whitelists"):
+            w = rule["whitelists"][0]
+            row.update(type="whitelist", anchors="|".join(w["anchors"]),
+                       values="|".join(w["values"]), message=w["message"])
+        elif rule.get("presence"):
+            pr = rule["presence"][0]
+            row.update(type="presence", triggers="|".join(pr["triggers"]),
+                       requiresAny="|".join(pr["requiresAny"]), message=pr["message"])
+        else:
+            row["type"] = "ai"
+        writer.writerow(row)
+    quoted = urllib.parse.quote(filename)
+    return Response(buf.getvalue(), mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition":
+                             f"attachment; filename*=UTF-8''{quoted}"})
+
+
+def _rules_import(path: str, mode: str):
+    """CSV 导入的共享实现（全局/文档级同构）。mode 显式校验，非法不静默降级。"""
+    if mode not in ("append", "replace"):
+        return jsonify({"error": "mode must be append or replace"}), 400
+    text, err = _decode_rules_upload()
+    if err:
+        return jsonify({"error": err}), 400
+    if text is None:
+        return jsonify({"error": "file required"}), 400
+    try:
+        incoming = parse_rules_csv(text)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        # replace 不依赖旧文件内容——旧文件损坏时也能靠导入覆盖修复
+        existing = _read_rules_file(path) if mode == "append" else []
+        merged, added, skipped = merge_rules(existing, incoming, mode)
+        _write_rules_file(path, merged)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"ok": True, "added": added, "skipped": skipped, "total": len(merged)})
+
+
+@suggest_editor_bp.route("/rules/global", methods=["GET"])
+@require_permission("admin.suggest_editor")
+def get_global_rules():
+    path = _global_rules_path()
+    try:
+        if not os.path.isfile(path):
+            # 首次使用播种示例（含 9800 presence）；已有文件一律不覆盖
+            rules = validate_rules(DEFAULT_RULES)
+            _write_rules_file(path, rules)
+            return jsonify({"rules": rules})
+        return jsonify({"rules": _read_rules_file(path)})
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@suggest_editor_bp.route("/rules/global", methods=["PUT"])
+@require_permission("admin.suggest_editor")
+def put_global_rules():
+    body = request.get_json(silent=True) or {}
+    try:
+        rules = validate_rules(body)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    _write_rules_file(_global_rules_path(), rules)
+    return jsonify({"ok": True, "count": len(rules)})
+
+
+@suggest_editor_bp.route("/rules/global/import", methods=["POST"])
+@require_permission("admin.suggest_editor")
+def import_global_rules():
+    return _rules_import(_global_rules_path(), (request.form.get("mode") or "append").strip())
+
+
+@suggest_editor_bp.route("/rules/global/export", methods=["GET"])
+@require_permission_sse("admin.suggest_editor")  # <a download> 只能带 ?access_token=
+def export_global_rules():
+    try:
+        return _rules_export(_read_rules_file(_global_rules_path()), "规则-全局.csv")
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _owned_doc_rules_path(doc_id: str) -> str | None:
+    """owner 门 + 路径校验一起做；非属主（含 admin）/不存在/非法 id 统一 None。"""
+    if not _get_own_document(doc_id):
+        return None
+    return _doc_rules_path(doc_id)
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/rules", methods=["GET"])
+@login_required
+def get_document_rules(doc_id: str):
+    path = _owned_doc_rules_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    try:
+        return jsonify({"rules": _read_rules_file(path)})
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/rules", methods=["PUT"])
+@write_required
+def put_document_rules(doc_id: str):
+    path = _owned_doc_rules_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        rules = validate_rules(body)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    _write_rules_file(path, rules)
+    return jsonify({"ok": True, "count": len(rules)})
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/rules/import", methods=["POST"])
+@write_required
+def import_document_rules(doc_id: str):
+    path = _owned_doc_rules_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    return _rules_import(path, (request.form.get("mode") or "append").strip())
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/rules/export", methods=["GET"])
+@login_required_sse  # <a download> 只能带 ?access_token=
+def export_document_rules(doc_id: str):
+    path = _owned_doc_rules_path(doc_id)
+    if path is None:
+        return jsonify({"error": "文档不存在"}), 404
+    try:
+        return _rules_export(_read_rules_file(path), "规则.csv")
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 500
