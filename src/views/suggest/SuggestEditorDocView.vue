@@ -26,6 +26,7 @@
         />
       </template>
       <template #actions>
+        <el-button size="small" @click="rulesVisible = true">规则</el-button>
         <el-button size="small" @click="vocabVisible = true">词表</el-button>
         <el-button
           v-if="auth.can('admin.suggest_editor')"
@@ -39,6 +40,12 @@
     </SuggestEditorCore>
     <div v-else class="suggest-doc-loading" v-loading="true" element-loading-text="加载文档…" />
     <SeTextAssetDialog v-model:visible="vocabVisible" :asset="docVocabAsset" />
+    <!-- 检查规则（本文档属主）：仅本文档生效，保存后重载本地规则 -->
+    <RuleManagerDialog
+      v-model:visible="rulesVisible"
+      :scope="doc ? { kind: 'document', docId: doc.id } : { kind: 'global' }"
+      @saved="coreRef?.reloadRules()"
+    />
   </div>
 </template>
 
@@ -56,6 +63,7 @@ import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import SuggestEditorCore from '@/components/suggest-editor/SuggestEditorCore.vue'
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
+import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
 import * as Y from 'yjs'
 import type { Editor } from '@tiptap/core'
 import { computed } from 'vue'
@@ -83,6 +91,7 @@ const titleDraft = ref('')
 const coreRef = ref<InstanceType<typeof SuggestEditorCore> | null>(null)
 const savingTemplate = ref(false)
 const vocabVisible = ref(false)
+const rulesVisible = ref(false)
 
 /** 本文档词表（优先于全局词表；属主维护） */
 const docVocabAsset = computed<SeTextAssetApi>(() => ({

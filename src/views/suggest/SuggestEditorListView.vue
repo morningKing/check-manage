@@ -13,6 +13,9 @@
             <el-button v-if="auth.can('admin.suggest_editor')" @click="checklistVisible = true">
               检查要点
             </el-button>
+            <el-button v-if="auth.can('admin.suggest_editor')" @click="rulesVisible = true">
+              检查规则
+            </el-button>
             <el-button v-if="auth.can('admin.suggest_editor')" @click="vocabVisible = true">
               词表管理
             </el-button>
@@ -85,6 +88,8 @@
     <SeTextAssetDialog v-model:visible="vocabVisible" :asset="vocabAsset" />
     <!-- 检查要点（admin）：AI 分析时逐条核对的检查清单，注入分析 prompt -->
     <SeTextAssetDialog v-model:visible="checklistVisible" :asset="checklistAsset" />
+    <!-- 检查规则（admin）：全局规则对所有文档生效 -->
+    <RuleManagerDialog v-model:visible="rulesVisible" :scope="{ kind: 'global' }" />
 
     <!-- 模板管理（admin.suggest_editor） -->
     <el-dialog v-model="templateManagerVisible" title="写作模板管理" width="860px">
@@ -143,6 +148,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import SeTextAssetDialog, { type SeTextAssetApi } from '@/components/suggest-editor/SeTextAssetDialog.vue'
+import RuleManagerDialog from '@/components/suggest-editor/RuleManagerDialog.vue'
 import {
   createDocument,
   createTemplate,
@@ -176,6 +182,7 @@ const createForm = ref<{ title: string; templateId: string | null }>({ title: ''
 
 const vocabVisible = ref(false)
 const checklistVisible = ref(false)
+const rulesVisible = ref(false)
 
 const VOCAB_HINT = [
   '一行一个词条：<code>词条</code>／<code>词条|别名</code>（输入别名替换成词条）／片段占位符 <code>${1:默认值}</code>；<code>#</code> 开头为注释。',
