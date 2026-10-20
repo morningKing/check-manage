@@ -243,7 +243,8 @@
         placeholder="例如：涉及 9800M12 时必须写 9800UPS 或声明不涉及拖带；型号 S-5700 应写作 S5700"
       />
       <div class="rules-ai-hint">
-        AI 会把它转成结构化规则（映射 / 正则 / 白名单 / 完整性 / AI 说明），生成后请核对再保存。约 10–60 秒。
+        AI 会把它转成结构化规则（映射 / 正则 / 白名单 / 完整性 / AI 说明），生成后请核对再保存。
+        通常 3–60 秒；服务刚启动或模型较慢时可能需要更久，页面最长等待 120 秒。
       </div>
       <template #footer>
         <el-button @click="aiVisible = false">取消</el-button>

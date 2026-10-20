@@ -147,12 +147,12 @@ describe('suggestEditor vocabulary api', () => {
     expect(vi.mocked(post).mock.calls[1][0]).toBe('/suggest-editor/documents/doc-9/vocabulary/import')
   })
 
-  it('convertRules posts description and stays silent on errors', async () => {
+  it('convertRules posts description, stays silent and outlives axios 30s default', async () => {
     await convertRules('涉及 9800M12 时必须写 9800UPS 或不涉及拖带')
     expect(post).toHaveBeenCalledWith(
       '/suggest-editor/rules/convert',
       { description: '涉及 9800M12 时必须写 9800UPS 或不涉及拖带' },
-      { silent: true },
+      { silent: true, timeout: 120_000 },
     )
   })
 

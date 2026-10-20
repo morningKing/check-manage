@@ -172,12 +172,16 @@ export function rulesExportUrl(scope: VocabularyScope): string {
   return `/api${rulesBase(scope)}/export${authParam()}`
 }
 
-/** 自然语言 → 结构化规则草稿（AI 生成，不落盘；由管理面核对后保存） */
+/** 自然语言 → 结构化规则草稿（AI 生成，不落盘；由管理面核对后保存）
+ *
+ * 真实模型生成通常 3–60 秒，服务刚启动时可能更久；后端自身上限 90 秒。
+ * 必须覆写 axios 全局 30 秒超时，否则浏览器先断开、用户只看到“网络连接失败”。
+ */
 export function convertRules(description: string) {
   return post<{ rules: LocalCheckRule[] }>(
     '/suggest-editor/rules/convert',
     { description },
-    { silent: true },
+    { silent: true, timeout: 120_000 },
   )
 }
 
