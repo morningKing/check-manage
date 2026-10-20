@@ -180,3 +180,25 @@ export function convertRules(description: string) {
     { silent: true },
   )
 }
+
+/* -------------------------- 文本模板（/ 快捷插入，全局） -------------------------- */
+
+export interface TextSnippet {
+  id: string
+  name: string
+  description: string
+  /** 额外检索词（空格分隔），让 / 菜单能用拼音或别名命中 */
+  keywords: string
+  /** 选中后插入光标处的 HTML */
+  contentHtml: string
+}
+
+export function getSnippets(config?: AxiosRequestConfig) {
+  return config
+    ? get<{ snippets: TextSnippet[] }>('/suggest-editor/snippets/global', undefined, config)
+    : get<{ snippets: TextSnippet[] }>('/suggest-editor/snippets/global')
+}
+
+export function saveSnippets(snippets: TextSnippet[]) {
+  return put<{ ok: boolean; count: number }>('/suggest-editor/snippets/global', { snippets })
+}

@@ -67,7 +67,8 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
   无序/有序/任务列表 / 引用 / 代码块，随光标位置动态显示当前块类型）、加粗 / 斜体 / 下划线 /
   删除线 / 行内代码 / 链接（内联输入，可移除）、清除格式；点按钮不丢选区。
 - **格式入口统一在顶部工具栏**（2026-10-19 起不再有跟随选区的浮动工具栏，避免遮挡正文）；
-  `/` 斜杠块菜单与 Markdown 输入规则（`# `、`- `、`> `、``` 三个反引号）照常可用；
+  `/` 斜杠菜单（内置块类型 + 后台可配置的**快捷填充模板**，见下节）与 Markdown 输入规则
+  （`# `、`- `、`> `、``` 三个反引号）照常可用；
   快捷键 `Ctrl+B/I/U`、`Ctrl+Alt+1..3` 标题、`Ctrl+Shift+7/8` 列表、`Ctrl+Z/Y` 撤销重做。
 - 头部（标题栏 + 工具栏）常驻不滚动：长文档只在正文区内滚动（有布局回归用例 `e2e/suggest-editor-layout.spec.ts` 守护）。
 - 排版：标题层级与间距、列表缩进、任务列表勾选（勾选自动删除线）、引用竖线、代码块灰底、
@@ -116,6 +117,26 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
   约 10–60 秒，失败会提示原因（超时 / 无法解析 / 规则不合法）。
 另支持 **TXT 简版**导入：一行 `错误写法=>正确写法` 生成一条错误映射规则（导出始终为 CSV）。
 边界：本地匹配限单个文本节点；presence 为字面匹配（同义词需加入词表）；提醒型（notice）只能忽略。
+
+## 快捷填充模板（/ 菜单，后台可配）
+
+写检查结论、方案段落时最常用的「逻辑骨架」可以预置成模板：编辑器里输入 `/` 便与内置块类型一起列出；
+选中后把模板正文插入光标处，并自动选中第一个 `___` 占位符，直接输入即可替换。
+
+- **入口**：列表页「**快捷填充**」按钮（`admin.suggest_editor` 权限），表格支持新建 / 编辑 / 删除。
+- **字段**：名称（菜单主标题）、描述（名称右侧说明）、检索词（空格分隔的别名/拼音，如 `jiance 检查`）、
+  正文 HTML（Tiptap 片段，支持段落 / 标题 / 列表 / 引用 / 代码块；用 `___` 标记待填位置）。
+- **默认示例**：首次读取会播种一条「检查逻辑（示例）」——检查项 / 检查方法 / 检查结论三段式；
+  管理员可直接改掉或删除。
+- **检索**：输入 `/` 后继续键入名称、描述或检索词过滤（如 `/检查`、`/jiance`）；
+  文本模板排在内置块类型之前，最多一次展示 14 项。
+- **保存即生效**：保存后所有已打开的编辑器会通过 BroadcastChannel 即时重载模板，**无需刷新页面**；
+  下一次输入 `/` 就能看到新模板（有 E2E 守护：`e2e/suggest-editor-snippets.spec.ts`）。
+- **边界**：最多 200 条；单条正文 ≤ 5000 字符；名称必填且 ≤ 100 字符；描述 / 检索词 ≤ 200 字符；id 不可重复。
+- **存储与接口**：`suggest-editor-server/.data/文本模板-全局.json`；
+  `GET /suggest-editor/snippets/global`（登录可读）、`PUT`（`admin.suggest_editor`）。
+- **与「模板管理」的区别**：写作模板决定「新建文档时的初始正文」；快捷填充模板是编辑过程中
+  按 `/` 插入的片段，二者互不影响。
 
 ## 文档管理与模板
 
@@ -200,6 +221,6 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
 | 生产启动 | `start.sh` / `proxy.py`（托管子进程，`/suggest-ws` 经 8080 隧道转发）。**改前端后必须 `npm run build`**，proxy 直接服务 `dist/`，浏览器强刷（Ctrl+F5）生效 |
 | agent | 默认内置 mock（无需模型）；真模型在 `server/.env` 配 `AGENT_KIND=opencode` + `AGENT_MODEL=<provider>/<model>`（`opencode models` 查可选值），重启生效。**未显式配 `AGENT_MODEL` 时自动采用后台「AI 配置」页的默认模型**（env 永远优先）；模型健康度会波动，异常时先 `opencode run "hi" --model <id>` 单测再换 |
 | ⚠️ opencode 版本 | ACP 模式务必用 `OPENCODE_DIR` 指到平台自带的 oc126（1.2.26）——npm 全局 opencode 1.19.3 的 `session/prompt` 会返回 "OpenCode service failure"（2026-10-19 实测二分定位） |
-| 数据 | 正文/建议在数据库（随系统备份）；agent 工作区在 `suggest-editor-server/.data/ws/`（快照与词表，临时数据不备份） |
+| 数据 | 正文/建议在数据库（随系统备份）；agent 工作区与全局词表 / 检查要点 / 检查规则 / 快捷填充模板在 `suggest-editor-server/.data/`（临时数据不备份） |
 | 体检 | `server/scripts/stale_check.py` 已识别 1234 端口（角色：智能写作(SE)） |
 | 冒烟探针 | `node e2e/manual/suggest-editor-ws-smoke.mjs`（WS+落库，mock 即可）；`node e2e/manual/suggest-editor-real-agent-check.mjs`（真模型出建议，含检查要点命中验证） |

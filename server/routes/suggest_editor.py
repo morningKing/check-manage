@@ -806,6 +806,109 @@ def convert_rule_text():
     return jsonify({"rules": rules})
 
 
+# ----------------------- 文本模板（/ 快捷插入，全局） -----------------------
+# 编辑器里输入 / 唤起菜单时，除内置块类型外还列出这里配置的模板；选择后把
+# contentHtml 插入光标处。读取登录即可（所有写作者消费），写入 admin。
+
+MAX_SNIPPETS = 200
+MAX_SNIPPET_CONTENT = 5000
+
+DEFAULT_SNIPPETS = {
+    "snippets": [{
+        "id": "snip-example",
+        "name": "检查逻辑（示例）",
+        "description": "检查项 / 检查方法 / 检查结论 三段式占位",
+        "keywords": "jiance 检查 逻辑 示例",
+        "contentHtml": "<p>检查项：___</p><p>检查方法：___</p><p>检查结论：___</p>",
+    }],
+}
+
+
+def _snippets_path() -> str:
+    return _vocab_safe_path(os.path.join(SE_DATA_DIR, "文本模板-全局.json"))
+
+
+def _validate_snippets(payload) -> list:
+    """文本模板校验：字段/caps/去重 id；不合法抛 RuleValidationError（同规则校验）。"""
+    if not isinstance(payload, dict) or not isinstance(payload.get("snippets"), list):
+        raise RuleValidationError("请求体必须是 {snippets: [...]}")
+    items = payload["snippets"]
+    if len(items) > MAX_SNIPPETS:
+        raise RuleValidationError(f"模板数量超过 {MAX_SNIPPETS} 条")
+    seen = set()
+    out = []
+    for index, item in enumerate(items):
+        where = f"snippets[{index}]"
+        if not isinstance(item, dict):
+            raise RuleValidationError(f"{where}: 必须是对象")
+        snippet = {
+            "id": str(item.get("id") or "").strip(),
+            "name": str(item.get("name") or "").strip(),
+            "description": str(item.get("description") or "").strip(),
+            "keywords": str(item.get("keywords") or "").strip(),
+            "contentHtml": str(item.get("contentHtml") or ""),
+        }
+        if not snippet["id"] or len(snippet["id"]) > 64:
+            raise RuleValidationError(f"{where}.id: 必填且不超过 64 字符")
+        if snippet["id"] in seen:
+            raise RuleValidationError(f"{where}.id: 重复的 id {snippet['id']}")
+        seen.add(snippet["id"])
+        if not snippet["name"] or len(snippet["name"]) > 100:
+            raise RuleValidationError(f"{where}.name: 必填且不超过 100 字符")
+        if len(snippet["description"]) > 200:
+            raise RuleValidationError(f"{where}.description: 超过 200 字符")
+        if len(snippet["keywords"]) > 200:
+            raise RuleValidationError(f"{where}.keywords: 超过 200 字符")
+        if not snippet["contentHtml"].strip():
+            raise RuleValidationError(f"{where}.contentHtml: 不能为空")
+        if len(snippet["contentHtml"]) > MAX_SNIPPET_CONTENT:
+            raise RuleValidationError(f"{where}.contentHtml: 超过 {MAX_SNIPPET_CONTENT} 字符")
+        out.append(snippet)
+    return out
+
+
+def _read_snippets_file(path: str) -> list:
+    raw = _read_vocab_file(path)
+    if not raw.strip():
+        return []
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        raise RuleValidationError("文本模板文件不是合法 JSON，请通过整份保存修复")
+    return _validate_snippets(payload)
+
+
+def _write_snippets_file(path: str, snippets: list) -> None:
+    _write_vocab_file(path, json.dumps({"snippets": snippets}, ensure_ascii=False, indent=2) + "\n")
+
+
+@suggest_editor_bp.route("/snippets/global", methods=["GET"])
+@login_required
+def get_global_snippets():
+    path = _snippets_path()
+    seed = not os.path.isfile(path)
+    try:
+        snippets = _read_snippets_file(path)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 500
+    if seed:
+        snippets = _validate_snippets(DEFAULT_SNIPPETS)
+        _write_snippets_file(path, snippets)
+    return jsonify({"snippets": snippets})
+
+
+@suggest_editor_bp.route("/snippets/global", methods=["PUT"])
+@require_permission("admin.suggest_editor")
+def put_global_snippets():
+    body = request.get_json(silent=True) or {}
+    try:
+        snippets = _validate_snippets(body)
+    except RuleValidationError as e:
+        return jsonify({"error": str(e)}), 400
+    _write_snippets_file(_snippets_path(), snippets)
+    return jsonify({"ok": True, "count": len(snippets)})
+
+
 def _owned_doc_rules_path(doc_id: str) -> str | None:
     """owner 门 + 路径校验一起做；非属主（含 admin）/不存在/非法 id 统一 None。"""
     if not _get_own_document(doc_id):

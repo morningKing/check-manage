@@ -91,10 +91,10 @@ import EditorToolbar from './EditorToolbar.vue'
 import SuggestionSidebar from './SuggestionSidebar.vue'
 import { COMMANDS_MAP, requestRewrite } from './core/commands'
 import { CompletionGhost } from './core/completion'
-import { SlashMenu } from './core/slash-menu'
+import { createSlashMenu } from './core/slash-menu'
 import { createSuggestionLayers, SUGGESTIONS_REFRESH_META, type SuggestionItem } from './core/suggestions'
 import { compileRules, type CompiledRules } from './core/check-rules'
-import { getRules, type LocalCheckRule } from '@/api/suggestEditor'
+import { getRules, getSnippets, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
 
 const props = defineProps<{ docId: string; token: string }>()
 const emit = defineEmits<{ (e: 'synced'): void }>()
@@ -144,6 +144,8 @@ const sidebarOpen = ref(true)
 const compiledRules = shallowRef<CompiledRules | null>(null)
 /** 已加载的检查规则条数（null=加载失败）；顶栏小徽标让「规则是否生效」一眼可见 */
 const loadedRuleCount = ref<number | null>(null)
+/** 后台可配置的文本模板（/ 菜单里的快捷填充项） */
+const snippets = shallowRef<TextSnippet[]>([])
 
 const syncStateLabel = computed(() =>
   syncState.value === 'synced' ? '已同步' : syncState.value === 'connecting' ? '连接中' : '已断开',
@@ -169,16 +171,18 @@ const suggestionLayer = createSuggestionLayers({
   getCheckRules: () => compiledRules.value,
 })
 void loadRules()
+void loadSnippets()
 
 /**
- * 规则变更跨标签页通知：管理面保存/导入规则后广播，已打开的编辑器即时重载
- * 本地规则（否则要等下一次打开文档，标签页内的旧规则会让人误以为"编辑没生效"）。
+ * 规则/文本模板变更跨标签页通知：管理面保存/导入后广播，已打开的编辑器即时重载
+ * 本地规则与模板（否则要等下一次打开文档，标签页内的旧数据会让人误以为"编辑没生效"）。
  */
 let rulesChannel: BroadcastChannel | null = null
 if (typeof BroadcastChannel !== 'undefined') {
   rulesChannel = new BroadcastChannel('suggest-editor-rules')
   rulesChannel.onmessage = () => {
     void loadRules()
+    void loadSnippets()
   }
 }
 
@@ -193,7 +197,7 @@ const editor = useEditor({
     Collaboration.configure({ document: ydoc, field: 'default' }),
     suggestionLayer.extension,
     CompletionGhost({ ydoc, getEditor: () => editorRef.value }),
-    SlashMenu,
+    createSlashMenu(() => snippets.value),
   ],
   editorProps: {
     attributes: { class: 'doc-surface' },
@@ -260,6 +264,16 @@ async function loadRules(): Promise<void> {
     console.warn('[suggest-editor] 检查规则加载失败，仅用内置规则：', error)
     compiledRules.value = null
     loadedRuleCount.value = null
+  }
+}
+
+/** 文本模板只影响 / 菜单内容，加载失败时静默保留上一份（首次失败则只有内置块类型） */
+async function loadSnippets(): Promise<void> {
+  try {
+    const result = await getSnippets({ silent: true })
+    snippets.value = result.snippets
+  } catch (error) {
+    console.warn('[suggest-editor] 文本模板加载失败，/ 菜单仅保留内置块类型：', error)
   }
 }
 

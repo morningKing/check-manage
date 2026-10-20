@@ -184,6 +184,8 @@ Notion 式协作编辑器（Tiptap + Yjs），停笔自动产出写作建议，*
 
 检查规则（2026-10-19）：与检查要点并存的领域强约束，真源为 JSON（全局 `.data/规则-全局.json`、文档级 `ws/<id>/规则.json`；`/suggest-editor/rules/global` 四端点 admin 门 + `/documents/<id>/rules*` 属主门，首次 GET 播种含 9800 presence 的示例）。一条规则可组合 maps（错误映射，输入即出可接受替换）/ patterns（正则提取后按 valid 判定）/ whitelists（锚点后的值须在清单）/ presence（全文出现 triggers 但 requiresAny 全缺→提醒，补上任一即消失），外加 `aiPrompt` 语义兜底。前端 `core/check-rules.ts` 的 `compileRules`/`runCheckRules` 纯函数毫秒级执行（文本匹配限单个文本节点、presence 扫全文 >500k 字符跳过；文档级同 id 覆盖全局，拉取失败只降级该份）；Node `readRulePrompts` 每轮分析前现读 enabled+aiPrompt 规则注入 prompt（文档级覆盖全局、上限 40 条），命中规则名进 reason。管理面 `RuleManagerDialog`（列表页全局/编辑页本文档，表格 + 四类判定表单，整份 PUT；加载失败禁用一切写操作以防空表覆盖）+ CSV 导入导出与模板下载（多值列 `|` 分隔、utf-8-sig 吸收 Excel BOM、任一行错整批拒绝并报行号）。
 
+快捷填充模板（2026-10-20）：`/` 菜单除内置块类型外合并**后台可配置的文本模板**。真源全局 `.data/文本模板-全局.json`（`/suggest-editor/snippets/global` GET 登录可读 / PUT `admin.suggest_editor`，首次 GET 播种「检查逻辑」三段式示例；`MAX_SNIPPETS=200`、单条正文 ≤5000 字符、id 去重），管理面 `SnippetManagerDialog` 在列表页「快捷填充」入口。前端 `core/slash-menu.ts` 改为工厂 `createSlashMenu(getSnippets)`——模板项**排在块类型之前**，结构 `{id,name,description,keywords,contentHtml}`，选中后 `deleteRange(range)+insertContent(contentHtml)` 并选中首个 `___` 占位符；`getSnippets` 每次过滤现取 ref，管理面保存后经同一 BroadcastChannel（suggest-editor-rules，Core 收到同时重载规则+模板）热生效，无需刷新。E2E `e2e/suggest-editor-snippets.spec.ts` 两例（UI 建模板→`/` 过滤→插入+占位符替换；另一标签页保存→已开文档 `/` 即现），用例结束按快照恢复全局模板。
+
 ### AI Scheduled Tasks (定时 AI 数据流水线)
 
 A **generic** config-driven paradigm (audit is one instance): on a schedule, scan a data page, hand each pending record (fields + attached documents) to an AI session with a prompt/skill, parse its structured JSON, and write results back into the record while flowing a **status field** 待处理 → 处理中 → 已处理/处理失败. See `docs/user-guide/ai/scan-tasks.md`.
