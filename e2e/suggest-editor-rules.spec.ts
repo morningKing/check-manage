@@ -367,3 +367,99 @@ test('AI 生成：自然语言转规则 → 入表保存 → 本地检查立即�
   }
 })
 
+// ---------------------------------------------------------------------------
+// 跨标签页规则即时生效：标签页 A 打开文档编辑，标签页 B 在列表页改全局规则，
+// 保存后 A 不刷新、不再输入，也应立即出现新规则的提示（BroadcastChannel）。
+// 这正是「编辑了规则没生效」的典型场景，防止回归。
+// ---------------------------------------------------------------------------
+test('规则保存后其它标签页即时生效（无需刷新/编辑）', async ({ page, context, playwright }) => {
+  test.setTimeout(150_000)
+  const title = `E2E-跨标签规则-${Date.now()}`
+  const api = await playwright.request.newContext()
+  const pageB = await context.newPage()
+  let token = ''
+  let testFailure: unknown = null
+  let originalGlobalRules: unknown[] = DEFAULT_GLOBAL_RULES
+
+  try {
+    await page.goto('/home')
+    token = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('check-manage:token') || '""')) as string
+    expect(token).toBeTruthy()
+
+    // 快照 + 受控规则：只保留一条 9800M12 触发词（9600M12 尚未覆盖）
+    try {
+      const current = await api.get(`${API_BASE}/suggest-editor/rules/global`, {
+        headers: authHeaders(token),
+      })
+      if (current.ok()) {
+        const body = await current.json() as { rules?: unknown[] }
+        if (Array.isArray(body.rules)) originalGlobalRules = body.rules
+      }
+    } catch { /* 恢复时退回默认 */ }
+    await putGlobalRules(api, token, [{
+      id: 'e2e-cross-tab',
+      name: 'E2E 跨标签规则',
+      enabled: true,
+      severity: 'warn',
+      presence: [{
+        triggers: ['9800M12'],
+        requiresAny: ['9800UPS', '不涉及拖带'],
+        message: '缺拖带说明',
+      }],
+    }])
+
+    // A 标签页：打开文档，输入 9600M12（当前规则不覆盖 → 不应有卡片）
+    await gotoSuggestList(page)
+    await createBlankDoc(page, title)
+    await page.locator('.doc-surface').click()
+    await page.keyboard.type('设备 9600M12 组网。', { delay: 20 })
+    const card = page.locator('.se-suggest-note', { hasText: 'E2E 跨标签规则' })
+    await expect(card).toHaveCount(0)
+    await page.waitForTimeout(800)
+
+    // B 标签页：列表页改全局规则，triggers 追加 9600M12
+    await gotoSuggestList(pageB)
+    await pageB.getByRole('button', { name: '检查规则' }).click()
+    const dialogB = pageB.locator('.el-dialog').filter({
+      has: pageB.locator('.el-dialog__title', { hasText: '检查规则' }),
+    })
+    await dialogB.waitFor({ state: 'visible' })
+    await dialogB.locator('.el-table__row').first().getByRole('button', { name: '编辑' }).click()
+    const formB = pageB.locator('.el-dialog').filter({
+      has: pageB.locator('.el-dialog__title', { hasText: '编辑规则' }),
+    })
+    await formB.waitFor({ state: 'visible' })
+    await formB.locator('[data-field="triggers"]').fill('9800M12\n9600M12')
+    await formB.getByRole('button', { name: '确定' }).click()
+    await expect(pageB.locator('.el-message', { hasText: '规则已保存' })).toBeVisible({
+      timeout: 10_000,
+    })
+
+    // A 标签页：不刷新、不输入，卡片应立即出现（BroadcastChannel → reloadRules → 重新判定）
+    await expect(card).toBeVisible({ timeout: 10_000 })
+  } catch (error) {
+    testFailure = error
+  } finally {
+    const cleanupErrors: string[] = []
+    try {
+      await putGlobalRules(api, token, originalGlobalRules)
+    } catch (error) {
+      cleanupErrors.push(`恢复全局规则失败：${errorText(error)}`)
+    }
+    try {
+      await deleteDocsByTitle(api, token, title)
+    } catch (error) {
+      cleanupErrors.push(`删除文档「${title}」失败：${errorText(error)}`)
+    }
+    await pageB.close().catch(() => {})
+    await api.dispose()
+    if (cleanupErrors.length) {
+      const primary = testFailure ? `\n\n用例主体原始失败：\n${errorText(testFailure)}` : ''
+      throw new Error(`清理未完成，环境可能残留脏数据：\n- ${cleanupErrors.join('\n- ')}${primary}`)
+    }
+    if (testFailure) throw testFailure
+  }
+})
+
+

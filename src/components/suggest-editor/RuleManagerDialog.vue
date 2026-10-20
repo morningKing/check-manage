@@ -595,6 +595,22 @@ function saveDraft(): void {
   void persist()
 }
 
+/**
+ * 通知其它已打开的编辑器标签页：规则已变更，立即重载本地规则。
+ * （同一页面内的编辑器由 @saved → reloadRules 处理；跨标签页只有广播能触达。）
+ */
+function broadcastRulesChanged(): void {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('suggest-editor-rules')
+      channel.postMessage({ type: 'changed' })
+      channel.close()
+    }
+  } catch {
+    /* 广播失败不影响保存结果 */
+  }
+}
+
 async function persist(): Promise<void> {
   if (loadFailed.value) {
     ElMessage.warning('规则加载失败，暂不能保存以避免覆盖服务端规则')
@@ -605,6 +621,7 @@ async function persist(): Promise<void> {
     await saveRules(props.scope, rules.value)
     ElMessage.success('规则已保存')
     emit('saved')
+    broadcastRulesChanged()
   } catch {
     // 错误提示由请求拦截器统一处理
   } finally {
@@ -676,6 +693,7 @@ async function onFile(event: Event): Promise<void> {
     ElMessage.success(`导入完成：新增 ${r.added}，跳过 ${r.skipped}，共 ${r.total} 条`)
     await load()
     emit('saved')
+    broadcastRulesChanged()
   } catch {
     // 错误提示由请求拦截器统一处理
   } finally {

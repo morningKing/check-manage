@@ -161,6 +161,18 @@ const suggestionLayer = createSuggestionLayers({
 })
 void loadRules()
 
+/**
+ * 规则变更跨标签页通知：管理面保存/导入规则后广播，已打开的编辑器即时重载
+ * 本地规则（否则要等下一次打开文档，标签页内的旧规则会让人误以为"编辑没生效"）。
+ */
+let rulesChannel: BroadcastChannel | null = null
+if (typeof BroadcastChannel !== 'undefined') {
+  rulesChannel = new BroadcastChannel('suggest-editor-rules')
+  rulesChannel.onmessage = () => {
+    void loadRules()
+  }
+}
+
 const editor = useEditor({
   extensions: [
     StarterKit.configure({ undoRedo: false }), // 协作模式用 Yjs 的 undo
@@ -346,6 +358,8 @@ onActivated(() => {
 
 onBeforeUnmount(() => {
   releaseProvider()
+  rulesChannel?.close()
+  rulesChannel = null
   suggestionsMap.unobserveDeep(onSuggestionsChanged)
   assistantMap.unobserveDeep(() => readAssistantStatus())
   commandsMap.unobserve(onCommandsChanged)
