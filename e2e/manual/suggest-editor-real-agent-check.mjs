@@ -2,7 +2,11 @@
  * 智能写作「真 agent」链路检查（AGENT_KIND=opencode 时用）：
  *   登录 → 建文档 → WS 同步 → 写入带问题的文本 → 等真 opencode acp 分析出建议。
  * 首轮分析含 opencode 进程启动 + 模型调用，实测可到 ~1-3 分钟，超时 4 分钟。
- * 用法：SE_CHECK_API / SE_CHECK_WS 可覆盖入口（默认本机 3002/1234 直连）。
+ * 用法：
+ *   SE_CHECK_API / SE_CHECK_WS 覆盖入口（默认本机 3002/1234 直连）
+ *   SE_CHECK_TEXT   写入的正文（默认通用问题文本）
+ *   SE_CHECK_EXPECT 建议 reason 中必须出现的子串（如某规则名），缺一即 FAIL
+ *   SE_CHECK_FORBID 建议 reason 中不得出现的子串（逗号分隔），出现即 FAIL（误报回归）
  */
 import assert from 'node:assert'
 import { HocuspocusProvider } from '@hocuspocus/provider'
@@ -13,7 +17,10 @@ const WS = process.env.SE_CHECK_WS ?? 'ws://127.0.0.1:1234'
 const TIMEOUT_MS = Number(process.env.SE_CHECK_TIMEOUT ?? 240_000)
 
 const TRIGGER =
+  process.env.SE_CHECK_TEXT ??
   '系统会自动处理这个情况，但是 如果数据不对的话它也会自己重试，而且 不会  通知任何人。'
+const EXPECT = (process.env.SE_CHECK_EXPECT ?? '').trim()
+const FORBID = (process.env.SE_CHECK_FORBID ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
 async function main() {
   const login = await fetch(`${API}/auth/login`, {
@@ -62,18 +69,29 @@ async function main() {
   ydoc.destroy()
 
   if (suggestions.size === 0) {
-    // 诊断：assistant map 里会有分析状态/错误（引擎 catch 写回 Y.Doc）
-    const assistant = ydoc.getMap('assistant')
-    const state = {}
-    assistant.forEach((v, k) => { state[k] = String(v).slice(0, 300) })
-    console.error('[real-check] assistant 状态:', JSON.stringify(state, null, 2))
-    throw new Error(`${Math.round((Date.now() - started) / 1000)}s 内未收到建议——看上面 assistant 状态与 SE 日志`)
+    if (EXPECT) {
+      throw new Error(`EXPECT 未命中（0 条建议）：${EXPECT}`)
+    }
+    console.log('[real-check] PASS：0 条建议（无误报）')
+    await fetch(`${API}/suggest-editor/documents/${doc.id}`, { method: 'DELETE', headers: auth })
+    return
   }
-  console.log(`[real-check] PASS：${suggestions.size} 条建议，耗时 ${Math.round((Date.now() - started) / 1000)}s`)
+  console.log(`[real-check] ${suggestions.size} 条建议，耗时 ${Math.round((Date.now() - started) / 1000)}s`)
+  const reasons = []
   suggestions.forEach((raw) => {
     const v = raw
+    reasons.push(String(v.reason ?? ''))
     console.log(`  - [${v.severity}] ${JSON.stringify(v.quote)} → ${JSON.stringify(v.replacement)} ｜ ${v.reason}`)
   })
+  if (EXPECT && !reasons.some((r) => r.includes(EXPECT))) {
+    throw new Error(`EXPECT 未命中：${EXPECT}（reasons: ${JSON.stringify(reasons)}）`)
+  }
+  for (const bad of FORBID) {
+    if (reasons.some((r) => r.includes(bad))) {
+      throw new Error(`出现禁止子串（误报回归）：${bad}`)
+    }
+  }
+  console.log(`[real-check] PASS${EXPECT ? `（EXPECT 命中：${EXPECT}）` : ''}${FORBID.length ? `（无禁止子串：${FORBID.join('/')}）` : ''}`)
   await fetch(`${API}/suggest-editor/documents/${doc.id}`, { method: 'DELETE', headers: auth })
 }
 

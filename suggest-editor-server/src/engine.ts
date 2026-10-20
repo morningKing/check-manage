@@ -564,6 +564,10 @@ function buildPrompt(
   if (rulePrompts.length > 0) {
     lines.push("领域检查规则（逐条核对，命中在 reason 中注明规则名）：")
     for (const rule of rulePrompts) lines.push(`- [${rule.name}] ${rule.prompt}`)
+    lines.push(
+      "核对纪律：先判断文档是否已经满足该规则——规则里写明「或」的，满足其中任意一项即视为合规；" +
+        "已满足就不要再提建议（例如要求「写明 A 或声明不涉及 X」，文中出现任一项即不要提示）。",
+    )
   }
   if (checklist.length > 0) {
     lines.push("检查要点（逐条核对，命中才提；reason 里注明命中的要点名）：")
