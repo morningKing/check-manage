@@ -276,3 +276,94 @@ test('映射毫秒级命中并接受；presence 随豁免词消失；文档级�
     await api.dispose()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 自然语言 → 规则：转换端点用 page.route 拦截（确定性、不依赖真模型），
+// 验证「AI 生成 → 入表 → 立即生效」的 UI 与本地通道接线。真模型转换由
+// 后端 pytest + 手工探针覆盖（见 docs/user-guide/ai/suggest-editor.md）。
+// 作用域用文档级（规则随文档删除，不污染全局）。
+// ---------------------------------------------------------------------------
+test('AI 生成：自然语言转规则 → 入表保存 → 本地检查立即生效', async ({ page, playwright }) => {
+  test.setTimeout(120_000)
+  const title = `E2E-AI规则-${Date.now()}`
+  const api = await playwright.request.newContext()
+  let token = ''
+  let testFailure: unknown = null
+
+  await page.route('**/api/suggest-editor/rules/convert', async (route) => {
+    const body = route.request().postDataJSON() as { description?: string }
+    expect(route.request().method()).toBe('POST')
+    expect(String(body.description ?? '')).toContain('X-1')
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        rules: [{
+          id: 'rule-ai-gen',
+          name: 'E2E AI 生成映射',
+          enabled: true,
+          severity: 'warn',
+          maps: [{ wrong: 'X-1', right: 'X1' }],
+          aiPrompt: '型号统一写作 X1',
+        }],
+      }),
+    })
+  })
+
+  try {
+    await page.goto('/home')
+    token = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('check-manage:token') || '""')) as string
+    expect(token).toBeTruthy()
+
+    await gotoSuggestList(page)
+    await createBlankDoc(page, title)
+
+    // 文档级规则对话框 → AI 生成
+    await page.getByRole('button', { name: '规则', exact: true }).click()
+    const rulesDialog = page.locator('.el-dialog').filter({
+      has: page.locator('.el-dialog__title', { hasText: '检查规则' }),
+    })
+    await rulesDialog.waitFor({ state: 'visible' })
+    await rulesDialog.getByRole('button', { name: 'AI 生成' }).click()
+
+    const aiDialog = page.locator('.el-dialog').filter({
+      has: page.locator('.el-dialog__title', { hasText: '用自然语言生成规则' }),
+    })
+    await aiDialog.waitFor({ state: 'visible' })
+    await aiDialog.locator('[data-field="nl-rule"]').fill('型号 X-1 应写作 X1')
+    await aiDialog.getByRole('button', { name: '生成' }).click()
+
+    await expect(page.locator('.el-message', { hasText: 'AI 已生成' })).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(
+      rulesDialog.locator('.el-table__row', { hasText: 'E2E AI 生成映射' }),
+    ).toBeVisible({ timeout: 10_000 })
+    await rulesDialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await rulesDialog.waitFor({ state: 'hidden', timeout: 10_000 })
+
+    // 生成的规则立即生效：输入错误写法 → 本地卡片（毫秒级）
+    await page.locator('.doc-surface').click()
+    await page.keyboard.type('型号 X-1 上线。', { delay: 20 })
+    await expect(
+      page.locator('.se-suggest-note', { hasText: 'E2E AI 生成映射' }),
+    ).toBeVisible({ timeout: 5_000 })
+  } catch (error) {
+    testFailure = error
+  } finally {
+    const cleanupErrors: string[] = []
+    try {
+      await deleteDocsByTitle(api, token, title)
+    } catch (error) {
+      cleanupErrors.push(`删除文档「${title}」失败：${errorText(error)}`)
+    }
+    await api.dispose()
+    if (cleanupErrors.length) {
+      const primary = testFailure ? `\n\n用例主体原始失败：\n${errorText(testFailure)}` : ''
+      throw new Error(`清理未完成，环境可能残留脏数据：\n- ${cleanupErrors.join('\n- ')}${primary}`)
+    }
+    if (testFailure) throw testFailure
+  }
+})
+

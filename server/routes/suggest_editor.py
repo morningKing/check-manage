@@ -782,6 +782,30 @@ def export_global_rules():
         return jsonify({"error": str(e)}), 500
 
 
+@suggest_editor_bp.route("/rules/convert", methods=["POST"])
+@require_permission("admin.suggest_editor")
+def convert_rule_text():
+    """自然语言 → 结构化规则（AI 生成草稿，不落盘；由前端核对后走 save/import 保存）。
+
+    模型输出一律经 normalize+validate 后才能返回；上游失败 502、无法解析 422。"""
+    body = request.get_json(silent=True) or {}
+    description = str(body.get("description") or "").strip()
+    if not description:
+        return jsonify({"error": "description required"}), 400
+    from utils.suggest_editor_rule_ai import (
+        MAX_DESCRIPTION_CHARS, RuleConversionError, RuleParseError, convert_nl_to_rules,
+    )
+    if len(description) > MAX_DESCRIPTION_CHARS:
+        return jsonify({"error": f"描述不超过 {MAX_DESCRIPTION_CHARS} 字符"}), 400
+    try:
+        rules = convert_nl_to_rules(description)
+    except RuleParseError as e:
+        return jsonify({"error": str(e)}), 422
+    except RuleConversionError as e:
+        return jsonify({"error": str(e)}), 502
+    return jsonify({"rules": rules})
+
+
 def _owned_doc_rules_path(doc_id: str) -> str | None:
     """owner 门 + 路径校验一起做；非属主（含 admin）/不存在/非法 id 统一 None。"""
     if not _get_own_document(doc_id):

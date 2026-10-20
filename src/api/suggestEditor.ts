@@ -171,3 +171,12 @@ export function importRules(scope: VocabularyScope, file: File, mode: 'append' |
 export function rulesExportUrl(scope: VocabularyScope): string {
   return `/api${rulesBase(scope)}/export${authParam()}`
 }
+
+/** 自然语言 → 结构化规则草稿（AI 生成，不落盘；由管理面核对后保存） */
+export function convertRules(description: string) {
+  return post<{ rules: LocalCheckRule[] }>(
+    '/suggest-editor/rules/convert',
+    { description },
+    { silent: true },
+  )
+}

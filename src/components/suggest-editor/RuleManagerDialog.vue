@@ -10,6 +10,9 @@
       <el-button size="small" type="primary" :disabled="loadFailed" @click="openEdit(null)">
         新建规则
       </el-button>
+      <el-button size="small" :disabled="loadFailed" @click="aiVisible = true">
+        AI 生成…
+      </el-button>
       <el-radio-group v-model="importMode" size="small">
         <el-radio-button value="append" :disabled="loadFailed">追加（去重）</el-radio-button>
         <el-radio-button value="replace">覆盖</el-radio-button>
@@ -229,6 +232,31 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 自然语言 → 规则：AI 生成草稿，核对后随整份规则保存 -->
+    <el-dialog v-model="aiVisible" title="用自然语言生成规则" width="640px" append-to-body>
+      <el-input
+        v-model="aiText"
+        type="textarea"
+        :rows="4"
+        data-field="nl-rule"
+        placeholder="例如：涉及 9800M12 时必须写 9800UPS 或声明不涉及拖带；型号 S-5700 应写作 S5700"
+      />
+      <div class="rules-ai-hint">
+        AI 会把它转成结构化规则（映射 / 正则 / 白名单 / 完整性 / AI 说明），生成后请核对再保存。约 10–60 秒。
+      </div>
+      <template #footer>
+        <el-button @click="aiVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="aiGenerating"
+          :disabled="!aiText.trim()"
+          @click="generateByAi"
+        >
+          生成
+        </el-button>
+      </template>
+    </el-dialog>
   </el-dialog>
 </template>
 
@@ -241,6 +269,7 @@
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  convertRules,
   getRules,
   importRules,
   rulesExportUrl,
@@ -304,6 +333,9 @@ const saving = ref(false)
 const importing = ref(false)
 const importMode = ref<'append' | 'replace'>('append')
 const fileInput = ref<HTMLInputElement | null>(null)
+const aiVisible = ref(false)
+const aiText = ref('')
+const aiGenerating = ref(false)
 
 const title = computed(() =>
   props.scope.kind === 'global'
@@ -580,6 +612,34 @@ async function persist(): Promise<void> {
   }
 }
 
+/** 自然语言 → 规则：AI 返回已校验的草稿，合入列表后整份保存 */
+async function generateByAi(): Promise<void> {
+  if (loadFailed.value) {
+    ElMessage.warning('规则加载失败，暂不能生成/保存')
+    return
+  }
+  const description = aiText.value.trim()
+  if (!description) return
+  aiGenerating.value = true
+  try {
+    const { rules: drafts } = await convertRules(description)
+    for (const generated of drafts) {
+      const index = rules.value.findIndex((rule) => rule.id === generated.id)
+      if (index >= 0) rules.value.splice(index, 1, generated)
+      else rules.value.push(generated)
+    }
+    aiVisible.value = false
+    aiText.value = ''
+    await persist()
+    ElMessage.success(`AI 已生成 ${drafts.length} 条规则并保存，请在列表中核对`)
+  } catch (error) {
+    const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
+    ElMessage.error(message || 'AI 生成失败，请稍后重试')
+  } finally {
+    aiGenerating.value = false
+  }
+}
+
 async function remove(rule: LocalCheckRule): Promise<void> {
   if (loadFailed.value) {
     ElMessage.warning('规则加载失败，暂不能删除规则')
@@ -648,6 +708,13 @@ function downloadTemplate(): void {
 
 .rules-spacer {
   flex: 1;
+}
+
+.rules-ai-hint {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.7;
 }
 
 .rules-alert {

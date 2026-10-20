@@ -30,6 +30,7 @@ import {
   saveVocabulary,
   importVocabulary,
   vocabularyExportUrl,
+  convertRules,
   getChecklist,
   saveChecklist,
   importChecklist,
@@ -144,6 +145,15 @@ describe('suggestEditor vocabulary api', () => {
 
     await importVocabulary({ kind: 'document', docId: 'doc-9' }, file, 'append')
     expect(vi.mocked(post).mock.calls[1][0]).toBe('/suggest-editor/documents/doc-9/vocabulary/import')
+  })
+
+  it('convertRules posts description and stays silent on errors', async () => {
+    await convertRules('涉及 9800M12 时必须写 9800UPS 或不涉及拖带')
+    expect(post).toHaveBeenCalledWith(
+      '/suggest-editor/rules/convert',
+      { description: '涉及 9800M12 时必须写 9800UPS 或不涉及拖带' },
+      { silent: true },
+    )
   })
 
   it('export url carries /api prefix and access_token', () => {
