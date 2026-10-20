@@ -8,6 +8,13 @@
           <slot name="title" />
           <span class="se-badge" :class="`se-badge-${syncState}`">{{ syncStateLabel }}</span>
           <span class="se-status">{{ rewriteHint ?? statusText }}</span>
+          <span
+            class="se-rules-badge"
+            :class="{ 'is-error': loadedRuleCount === null }"
+            :title="loadedRuleCount === null
+              ? '检查规则加载失败：当前仅内置规则生效'
+              : `已加载 ${loadedRuleCount} 条检查规则（本地毫秒级实时检查）`"
+          >规则 {{ loadedRuleCount ?? '?' }}</span>
           <span v-if="connectionHint" class="se-conn-hint">⚠ {{ connectionHint }}</span>
           <button type="button" class="se-badge se-badge-toggle" @click="sidebarOpen = !sidebarOpen">
             {{ sidebarOpen ? '隐藏建议栏' : `建议 ${notes.ai.length + notes.local.length}` }}
@@ -135,6 +142,8 @@ const activeNoteId = ref<string | null>(null)
 const sidebarOpen = ref(true)
 /** 全局 + 文档级检查规则（编译后）；null = 仅内置规则 */
 const compiledRules = shallowRef<CompiledRules | null>(null)
+/** 已加载的检查规则条数（null=加载失败）；顶栏小徽标让「规则是否生效」一眼可见 */
+const loadedRuleCount = ref<number | null>(null)
 
 const syncStateLabel = computed(() =>
   syncState.value === 'synced' ? '已同步' : syncState.value === 'connecting' ? '连接中' : '已断开',
@@ -243,11 +252,14 @@ async function loadRules(): Promise<void> {
     const byId = new Map<string, LocalCheckRule>()
     for (const rule of globalRules) byId.set(rule.id, rule)
     for (const rule of docRules) byId.set(rule.id, rule)
-    compiledRules.value = compileRules([...byId.values()])
+    const merged = [...byId.values()]
+    compiledRules.value = compileRules(merged)
+    loadedRuleCount.value = merged.filter((rule) => rule.enabled !== false).length
     refreshSuggestions()
   } catch (error) {
     console.warn('[suggest-editor] 检查规则加载失败，仅用内置规则：', error)
     compiledRules.value = null
+    loadedRuleCount.value = null
   }
 }
 

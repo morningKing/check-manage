@@ -70,6 +70,20 @@
   color: var(--se-muted);
 }
 
+.se-rules-badge {
+  padding: 1px 7px;
+  border: 1px solid var(--se-line);
+  border-radius: 999px;
+  color: var(--se-muted);
+  font-size: 11px;
+  cursor: default;
+
+  &.is-error {
+    color: #b91c1c;
+    border-color: #fca5a5;
+  }
+}
+
 .se-conn-hint {
   color: #b91c1c;
   font-size: 12px;
