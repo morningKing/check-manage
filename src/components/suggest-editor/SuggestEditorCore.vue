@@ -95,6 +95,7 @@ import { createSlashMenu } from './core/slash-menu'
 import { createSuggestionLayers, SUGGESTIONS_REFRESH_META, type SuggestionItem } from './core/suggestions'
 import { compileRules, type CompiledRules } from './core/check-rules'
 import { FORMATTING_EXTENSIONS } from './core/formatting'
+import { TABLE_EXTENSIONS } from './core/table'
 import { getRules, getSnippets, type LocalCheckRule, type TextSnippet } from '@/api/suggestEditor'
 
 const props = defineProps<{ docId: string; token: string }>()
@@ -196,6 +197,7 @@ const editor = useEditor({
       placeholder: '输入正文…（输入 / 唤起块菜单，格式用上方工具栏）',
     }),
     ...FORMATTING_EXTENSIONS,
+    ...TABLE_EXTENSIONS,
     Collaboration.configure({ document: ydoc, field: 'default' }),
     suggestionLayer.extension,
     CompletionGhost({ ydoc, getEditor: () => editorRef.value }),

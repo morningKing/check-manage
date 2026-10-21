@@ -84,6 +84,14 @@ const BLOCK_ITEMS: SlashItem[] = [
     command: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run(),
   },
   {
+    title: "表格",
+    hint: "3×3，带表头",
+    keywords: "table biaoge",
+    badge: "▦",
+    command: ({ editor, range }) =>
+      editor.chain().focus().deleteRange(range).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
+  },
+  {
     title: "分割线",
     hint: "水平分隔",
     keywords: "hr divider line fengexian",

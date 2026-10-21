@@ -355,6 +355,40 @@
   background: var(--se-line);
 }
 
+.doc-surface table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.doc-surface th,
+.doc-surface td {
+  position: relative;
+  padding: 6px 8px;
+  border: 1px solid var(--el-border-color);
+  vertical-align: top;
+}
+
+.doc-surface th {
+  background: var(--el-fill-color-light);
+  font-weight: 600;
+  text-align: left;
+}
+
+.doc-surface .column-resize-handle {
+  width: 2px;
+  background: var(--el-color-primary);
+}
+
+.doc-surface .selectedCell::after {
+  position: absolute;
+  inset: 0;
+  background: rgba(64, 158, 255, .12);
+  content: '';
+  pointer-events: none;
+}
+
 .se-bubble-link-editor {
   display: flex;
   align-items: center;

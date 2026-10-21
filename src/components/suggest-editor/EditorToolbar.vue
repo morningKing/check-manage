@@ -137,6 +137,20 @@
           class="se-bubble-btn" :class="{ 'is-active': editor.isActive({ textAlign: align.value }) }"
           :title="align.label" @click="applyAlign(align.value)">{{ align.icon }}</button>
 
+        <template v-if="editor.isActive('table')">
+          <span class="se-bubble-sep" />
+          <button type="button" class="se-bubble-btn" title="上方插入行" @click="TABLE_COMMANDS.addRowBefore(editor)">↑行</button>
+          <button type="button" class="se-bubble-btn" title="下方插入行" @click="TABLE_COMMANDS.addRowAfter(editor)">↓行</button>
+          <button type="button" class="se-bubble-btn" title="删除行" @click="TABLE_COMMANDS.deleteRow(editor)">删行</button>
+          <button type="button" class="se-bubble-btn" title="左侧插入列" @click="TABLE_COMMANDS.addColumnBefore(editor)">←列</button>
+          <button type="button" class="se-bubble-btn" title="右侧插入列" @click="TABLE_COMMANDS.addColumnAfter(editor)">→列</button>
+          <button type="button" class="se-bubble-btn" title="删除列" @click="TABLE_COMMANDS.deleteColumn(editor)">删列</button>
+          <button type="button" class="se-bubble-btn" title="合并单元格" @click="TABLE_COMMANDS.mergeCells(editor)">合并</button>
+          <button type="button" class="se-bubble-btn" title="拆分单元格" @click="TABLE_COMMANDS.splitCell(editor)">拆分</button>
+          <button type="button" class="se-bubble-btn" title="切换表头行" @click="TABLE_COMMANDS.toggleHeaderRow(editor)">表头</button>
+          <button type="button" class="se-bubble-btn" title="删除表格" @click="TABLE_COMMANDS.deleteTable(editor)">删表</button>
+        </template>
+
         <span class="se-bubble-sep" />
 
         <button
@@ -164,6 +178,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
 import { FONT_SIZES, TEXT_COLORS, HIGHLIGHT_COLORS, clearFormatting } from './core/formatting'
+import { TABLE_COMMANDS } from './core/table'
 
 const props = defineProps<{
   editor: Editor
