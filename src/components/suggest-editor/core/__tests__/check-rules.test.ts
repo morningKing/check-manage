@@ -55,6 +55,29 @@ describe('whitelists', () => {
     const rule = R({ id: 'w2', whitelists: [{ anchors: ['型号：'], values: ['A1'], message: 'm' }] })
     expect(runCheckRules(docOf('<p>型号：  B2</p>'), compileRules([rule]))).toHaveLength(1)
   })
+  it('锚点后多个值（；分隔）：逐个校验，非法值命中', () => {
+    const rule = R({ id: 'wm', whitelists: [{ anchors: ['设备类型：', '设备类型:'],
+      values: ['9800M12', '9600M12'], message: '设备类型只能是 9800M12 或 9600M12' }] })
+    const m = runCheckRules(docOf('<p>设备类型：9800M12；5000M12</p>'), compileRules([rule]))
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatchObject({ text: '5000M12', notice: true })
+    expect(m[0].reason).toContain('设备类型只能是')
+  })
+  it('多个值全部合法（中英文分隔符/连接词）→ 无', () => {
+    const rule = R({ id: 'wok', whitelists: [{ anchors: ['设备类型：'],
+      values: ['9800M12', '9600M12'], message: 'm' }] })
+    const compiled = compileRules([rule])
+    expect(runCheckRules(docOf('<p>设备类型：9800M12、9600M12</p>'), compiled)).toHaveLength(0)
+    expect(runCheckRules(docOf('<p>设备类型：9800M12 或 9600M12</p>'), compiled)).toHaveLength(0)
+    expect(runCheckRules(docOf('<p>设备类型：9800M12和9600M12</p>'), compiled)).toHaveLength(0)
+  })
+  it('值列表遇到非分隔符即停止，不把后文误当值', () => {
+    const rule = R({ id: 'wstop', whitelists: [{ anchors: ['设备类型：'],
+      values: ['9800M12'], message: 'm' }] })
+    const compiled = compileRules([rule])
+    expect(runCheckRules(docOf('<p>设备类型：9800M12（不涉及拖带）5000M12</p>'), compiled)).toHaveLength(0)
+    expect(runCheckRules(docOf('<p>设备类型：9800M12 台数 3</p>'), compiled)).toHaveLength(0)
+  })
 })
 
 describe('presence', () => {

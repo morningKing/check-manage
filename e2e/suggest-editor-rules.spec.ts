@@ -503,4 +503,71 @@ test('AI 生成 502：弹窗展示上游诊断信息', async ({ page }) => {
   await alert.getByRole('button', { name: '知道了' }).click()
 })
 
+// ---------------------------------------------------------------------------
+// 白名单多值：锚点后是列表（9800M12；5000M12）时，第二个非法值也必须毫秒级命中。
+// 回归 2026-10-21：原实现只看锚点后的第一个 token，5000M12 被漏检。
+// ---------------------------------------------------------------------------
+test('白名单多值：锚点后第二个非法值实时命中', async ({ page, playwright }) => {
+  test.setTimeout(180_000)
+  const title = `E2E-白名单多值-${Date.now()}`
+  const api = await playwright.request.newContext()
+  let token = ''
+  let original: unknown[] = DEFAULT_GLOBAL_RULES
+  let testFailure: unknown = null
+
+  try {
+    await page.goto('/home')
+    token = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('check-manage:token') || '""')) as string
+    expect(token).toBeTruthy()
+    const current = await api.get(`${API_BASE}/suggest-editor/rules/global`, {
+      headers: authHeaders(token),
+    })
+    if (current.ok()) {
+      const body = await current.json() as { rules?: unknown[] }
+      if (Array.isArray(body.rules)) original = body.rules
+    }
+    await putGlobalRules(api, token, [{
+      id: 'e2e-whitelist-multi',
+      name: 'E2E设备类型白名单',
+      enabled: true,
+      severity: 'warn',
+      whitelists: [{
+        anchors: ['设备类型：', '设备类型:'],
+        values: ['9800M12', '9600M12'],
+        message: '设备类型只能是 9800M12 或 9600M12',
+      }],
+    }])
+
+    await gotoSuggestList(page)
+    await createBlankDoc(page, title)
+    await page.locator('.doc-surface').click()
+    await page.keyboard.type('设备类型：9800M12；5000M12', { delay: 20 })
+
+    const card = page.locator('.se-suggest-note', { hasText: '设备类型只能是 9800M12 或 9600M12' })
+    await expect(card).toBeVisible({ timeout: 10_000 })
+    await expect(card.locator('.se-suggest-note-quote')).toContainText('5000M12')
+  } catch (error) {
+    testFailure = error
+  } finally {
+    const cleanupErrors: string[] = []
+    try {
+      await putGlobalRules(api, token, original)
+    } catch (error) {
+      cleanupErrors.push(`恢复全局规则失败：${errorText(error)}`)
+    }
+    try {
+      await deleteDocsByTitle(api, token, title)
+    } catch (error) {
+      cleanupErrors.push(`删除文档「${title}」失败：${errorText(error)}`)
+    }
+    await api.dispose()
+    if (cleanupErrors.length) {
+      const primary = testFailure ? `\n\n用例主体原始失败：\n${errorText(testFailure)}` : ''
+      throw new Error(`清理未完成，环境可能残留脏数据：\n- ${cleanupErrors.join('\n- ')}${primary}`)
+    }
+    if (testFailure) throw testFailure
+  }
+})
+
 

@@ -55,6 +55,8 @@ export const EMPTY_COMPILED_RULES: CompiledRules = {
 
 const PRESENCE_MAX_CHARS = 500_000
 const DEFAULT_VALUE_PATTERN = '[A-Za-z0-9_\\-./]+'
+/** 锚点后的多个值：用列表分隔符（中英文标点/连接词）继续逐个校验，而不是只看第一个 */
+const WHITELIST_SEPARATORS = new Set(Array.from('、,，;；/|&和及与或'))
 /** 全文超限跳过 presence 的一次性告警标记（防每次编辑刷屏） */
 let presenceSkipWarned = false
 
@@ -157,10 +159,21 @@ function matchInTextNode(
       while (at !== -1) {
         let cursor = at + anchor.length
         while (cursor < text.length && (text[cursor] === ' ' || text[cursor] === '\t')) cursor += 1
-        entry.valueRegex.lastIndex = cursor
-        const m = entry.valueRegex.exec(text)
-        if (m && !entry.values.has(m[0])) {
-          push(entry.rule, 'whitelists', i, m.index, m.index + m[0].length, null, entry.message, true)
+        // 一个锚点后可能是列表（如「设备类型：9800M12；5000M12」）：逐个值检查，
+        // 只允许用列表分隔符继续，遇到其它文字/标点就停，避免把后文误当值。
+        while (cursor < text.length) {
+          entry.valueRegex.lastIndex = cursor
+          const m = entry.valueRegex.exec(text)
+          if (!m || m[0].length === 0) break
+          if (!entry.values.has(m[0])) {
+            push(entry.rule, 'whitelists', i, m.index, m.index + m[0].length, null, entry.message, true)
+          }
+          cursor = m.index + m[0].length
+          let next = cursor
+          while (next < text.length && (text[next] === ' ' || text[next] === '\t')) next += 1
+          if (next >= text.length || !WHITELIST_SEPARATORS.has(text[next])) break
+          cursor = next + 1
+          while (cursor < text.length && (text[cursor] === ' ' || text[cursor] === '\t')) cursor += 1
         }
         at = text.indexOf(anchor, at + anchor.length)
       }
