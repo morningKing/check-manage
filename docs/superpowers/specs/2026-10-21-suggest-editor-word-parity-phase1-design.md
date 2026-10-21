@@ -62,8 +62,7 @@
 | --- | --- |
 | `@tiptap/extension-table` | TableKit：table/row/cell/header、合并、列宽 |
 | `@tiptap/extension-image` | 图片节点（作为 figure 的子节点） |
-| `@tiptap/extension-text-style` | TextStyle 基础 mark，承载 Color/FontSize |
-| `@tiptap/extension-color` | 文字颜色 |
+| `@tiptap/extension-text-style` | TextStyle 基础 mark；`./color`、`./font-size` 子路径提供颜色与字号 |
 | `@tiptap/extension-highlight` | 多色高亮 |
 | `@tiptap/extension-text-align` | 段落/标题对齐 |
 | `mammoth` | docx → HTML（懒加载） |
@@ -73,22 +72,26 @@
 
 ### 3.2 数据库迁移
 
-新增 `server/migrations/2026-10-21-suggest-editor-attachments.sql`，并按项目惯例在 `server/app.py` 迁移注册表**双注册**：
+新增 `server/migrations/2026_10_21_suggest_editor_attachments.py`（与现有 SE 迁移同形态的 Python 幂等迁移，`run()` 内执行 DDL），并按项目惯例在 `server/app.py` 显式注册启动钩子（`init_db` 自动扫描只覆盖全新库，见护栏测试）：
 
-```sql
-CREATE TABLE IF NOT EXISTS se_attachments (
-  id            VARCHAR(64) PRIMARY KEY,
-  document_id   VARCHAR(64) NOT NULL,
-  owner_user_id VARCHAR(64) NOT NULL,
-  filename      VARCHAR(255) NOT NULL,
-  mime          VARCHAR(100) NOT NULL,
-  size          BIGINT NOT NULL,
-  stored_path   TEXT NOT NULL,
-  created_at    TIMESTAMP NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_se_attachments_document ON se_attachments(document_id);
-
-ALTER TABLE se_documents ADD COLUMN IF NOT EXISTS seed_content_html TEXT;
+```python
+def run():
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS se_attachments ("
+            " id TEXT PRIMARY KEY,"
+            " document_id TEXT NOT NULL,"
+            " owner_user_id TEXT NOT NULL,"
+            " filename TEXT NOT NULL,"
+            " mime VARCHAR(100) NOT NULL,"
+            " size BIGINT NOT NULL,"
+            " stored_path TEXT NOT NULL,"
+            " created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_se_attachments_document "
+                    "ON se_attachments (document_id)")
+        cur.execute("ALTER TABLE se_documents ADD COLUMN IF NOT EXISTS seed_content_html TEXT")
+        conn.commit()
 ```
 
 - `seed_content_html`：导入文档的初始正文，编辑器应用后清空；与 `template_id` 互斥（导入文档不带模板）。
