@@ -33,6 +33,11 @@ from auth import (
 )
 from config import MCP_INTERNAL_TOKEN, SE_DATA_DIR
 from utils.operation_log import log_operation
+from utils.suggest_editor_attachments import (
+    delete_document_attachments,
+    get_attachment,
+    save_attachment,
+)
 from utils.suggest_editor_repo import (
     access_check,
     create_document,
@@ -172,6 +177,7 @@ def delete_my_document(doc_id: str):
     if not doc:
         return jsonify({"error": "文档不存在"}), 404
     delete_document(doc_id)
+    delete_document_attachments(doc_id)
     _cleanup_workspace(doc_id)
     log_operation("delete", "suggest_editor_document", doc_id, doc["title"],
                   f"删除智能写作文档「{doc['title']}」")
@@ -186,6 +192,43 @@ def open_my_document(doc_id: str):
         return jsonify({"error": "文档不存在"}), 404
     touch_document(doc_id, "last_opened_at")
     return jsonify({"ok": True})
+
+
+# ------------------------------- 附件（图片） -------------------------------
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/attachments", methods=["POST"])
+@write_required
+def upload_document_attachment(doc_id: str):
+    doc = _get_own_document(doc_id)
+    if not doc:
+        return jsonify({"error": "文档不存在"}), 404
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "缺少 file"}), 400
+    data = file.read()
+    try:
+        attachment = save_attachment(doc_id, _user_id(), file.filename or "image", data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"attachment": {
+        key: attachment[key] for key in ('id', 'url', 'filename', 'mime', 'size')
+    }}), 201
+
+
+@suggest_editor_bp.route("/attachments/<attachment_id>", methods=["GET"])
+@login_required_sse
+def serve_attachment(attachment_id: str):
+    att = get_attachment(attachment_id)
+    if not att or att["owner_user_id"] != _user_id():
+        return jsonify({"error": "附件不存在"}), 404
+    path = Path(att["stored_path"])
+    if not path.is_file():
+        return jsonify({"error": "附件文件缺失"}), 404
+    resp = Response(path.read_bytes(), mimetype=att["mime"])
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    resp.headers["Content-Disposition"] = "inline"
+    return resp
 
 
 # ------------------------------- 模板 -------------------------------

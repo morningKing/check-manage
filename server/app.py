@@ -586,6 +586,17 @@ try:
 except Exception as _e:
     logging.warning('suggest editor migration on boot failed: %s', _e)
 
+# 智能写作附件表 + 导入种子列（2026-10-21）。幂等；同样必须显式注册。
+try:
+    _mp_se_att = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              'migrations', '2026_10_21_suggest_editor_attachments.py')
+    _spec_se_att = _ilu.spec_from_file_location('_suggest_editor_attachments_boot', _mp_se_att)
+    _m_se_att = _ilu.module_from_spec(_spec_se_att)
+    _spec_se_att.loader.exec_module(_m_se_att)
+    _m_se_att.run()
+except Exception as _e:
+    logging.warning('suggest editor attachments migration on boot failed: %s', _e)
+
 # 内置技能种子(仓库 skills/ → 全局技能,只插缺不覆盖):部署拉代码重启即自带
 try:
     from utils.global_skills import ensure_builtin_skills
