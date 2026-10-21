@@ -14,6 +14,7 @@ import binascii
 import csv
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -57,6 +58,7 @@ from utils.suggest_editor_rules import (
 )
 
 suggest_editor_bp = Blueprint("suggest_editor", __name__, url_prefix="/suggest-editor")
+logger = logging.getLogger(__name__)
 
 # 文档 id 由本服务生成（uuid4），删除工作区目录前校验一次，杜绝路径拼接
 _DOC_ID_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{8,40}$")
@@ -800,8 +802,10 @@ def convert_rule_text():
     try:
         rules = convert_nl_to_rules(description)
     except RuleParseError as e:
+        logger.warning('rules/convert parse failed desc_len=%d: %s', len(description), e)
         return jsonify({"error": str(e)}), 422
     except RuleConversionError as e:
+        logger.warning('rules/convert failed desc_len=%d: %s', len(description), e)
         return jsonify({"error": str(e)}), 502
     return jsonify({"rules": rules})
 

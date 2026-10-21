@@ -651,8 +651,17 @@ async function generateByAi(): Promise<void> {
     await persist()
     ElMessage.success(`AI 已生成 ${drafts.length} 条规则并保存，请在列表中核对`)
   } catch (error) {
-    const message = (error as { response?: { data?: { error?: string } } })?.response?.data?.error
-    ElMessage.error(message || 'AI 生成失败，请稍后重试')
+    const response = (error as { response?: { status?: number; data?: { error?: string } } })?.response
+    const message = response?.data?.error || 'AI 生成失败，请稍后重试'
+    // 上游 502 的诊断信息较长（serve 地址/模型/排查提示）：用可复制的弹窗而不是 3 秒 toast
+    if ((response?.status ?? 0) >= 500) {
+      void ElMessageBox.alert(message, 'AI 生成失败（上游服务 502）', {
+        type: 'error',
+        confirmButtonText: '知道了',
+      })
+    } else {
+      ElMessage.error(message)
+    }
   } finally {
     aiGenerating.value = false
   }

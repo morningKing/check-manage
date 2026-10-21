@@ -157,8 +157,49 @@ def _convert_model() -> str:
     return (os.getenv("AGENT_MODEL") or "").strip() or get_default_chat_model()
 
 
+def _serve_hint(model: str) -> str:
+    """502 时给管理员的可操作提示：生产多用 proxy.py 托管，先看 [3/5] 段。"""
+    return (
+        f"opencode serve={OPENCODE_BASE_URL}，model={model or '默认模型'}。"
+        "请检查 proxy.py 启动日志 [3/5] 段（OpenCode reachable/started）、"
+        "server/.env 的 OPENCODE_BIN / OPENCODE_BASE_URL、以及 server/oc-serve.log；"
+        "服务刚启动时首次生成可能较慢，可直接重试"
+    )
+
+
+def _ensure_serve_reachable() -> None:
+    """转换前先探活：serve 没起来时立刻给出可定位的错误，而不是等 90 秒超时。"""
+    try:
+        OpenCodeClient(OPENCODE_BASE_URL, timeout=3).list_providers()
+    except Exception as e:
+        raise RuleConversionError(
+            f"opencode serve 不可达（{OPENCODE_BASE_URL}）：{e}。{_serve_hint(_convert_model())}"
+        )
+
+
+def _describe_model_error(error) -> str:
+    """OpenCode 的 info.error 形如 {name, data:{message}}；转成人能读的一行。"""
+    if isinstance(error, dict):
+        name = str(error.get("name") or "").strip()
+        data = error.get("data")
+        detail = ""
+        if isinstance(data, dict):
+            detail = str(data.get("message") or data.get("error") or "").strip()
+        elif data:
+            detail = str(data).strip()
+        if name or detail:
+            return f"{name}：{detail}".strip("：")
+        return json.dumps(error, ensure_ascii=False)[:300]
+    return str(error)[:300]
+
+
 def convert_nl_to_rules(description: str) -> list:
     """自然语言 → 已校验的规则列表。上游失败抛 RuleConversionError。"""
+    model = _convert_model()
+    started = time.time()
+    logger.info("rule-convert start model=%s serve=%s desc_len=%d",
+                model or "default", OPENCODE_BASE_URL, len(description))
+    _ensure_serve_reachable()
     client = OpenCodeClient(OPENCODE_BASE_URL)
     workdir = tempfile.mkdtemp(prefix="se-rule-convert-")
     session_id = ""
@@ -167,34 +208,60 @@ def convert_nl_to_rules(description: str) -> list:
             session_id = client.create_session(directory=workdir, title="规则生成")
             client.send_prompt_async(
                 session_id, build_convert_prompt(description),
-                model=_convert_model(), directory=workdir,
+                model=model, directory=workdir,
             )
         except OpenCodeError as e:
-            raise RuleConversionError(f"AI 服务调用失败：{e}")
+            raise RuleConversionError(
+                f"AI 服务调用失败（create_session，{OPENCODE_BASE_URL}）：{e}。{_serve_hint(model)}"
+            )
         except Exception as e:  # requests 层异常等
-            raise RuleConversionError(f"AI 服务不可用：{e}")
+            raise RuleConversionError(
+                f"AI 服务不可用（{OPENCODE_BASE_URL}）：{e}。{_serve_hint(model)}"
+            )
 
         deadline = time.time() + CONVERT_TIMEOUT_SEC
         text = ""
+        poll_errors = 0
         while time.time() < deadline:
             time.sleep(1.0)
             try:
                 messages = client.get_messages(session_id, directory=workdir)
-            except Exception:
+            except Exception as e:
+                poll_errors += 1
+                if poll_errors == 1 or poll_errors % 30 == 0:
+                    logger.warning("rule-convert poll failed session=%s count=%d: %s",
+                                   session_id, poll_errors, e)
                 continue
             assistant = [m for m in messages if (m.get("info") or {}).get("role") == "assistant"]
             if not assistant:
                 continue
             last = assistant[-1]
             info = last.get("info") or {}
+            # 模型/供应商侧错误（鉴权失败、额度、模型不存在…）：立刻报，不再空等 90 秒
+            model_error = info.get("error")
+            if model_error:
+                logger.warning("rule-convert model error session=%s: %s", session_id, model_error)
+                raise RuleConversionError(
+                    f"模型调用失败（{model or '默认模型'}）：{_describe_model_error(model_error)}。"
+                    f"{_serve_hint(model)}"
+                )
             if info.get("finish") and (info.get("time") or {}).get("completed"):
                 text = "\n".join(
                     p.get("text", "") for p in (last.get("parts") or []) if p.get("type") == "text"
                 )
                 break
         else:
-            raise RuleConversionError(f"AI 生成超时（>{CONVERT_TIMEOUT_SEC}s），请稍后重试或把描述写得简短些")
-        return normalize_rules(parse_rule_json(text), description)
+            elapsed = time.time() - started
+            logger.warning("rule-convert timeout session=%s after=%.1fs model=%s poll_errors=%d",
+                           session_id, elapsed, model or "default", poll_errors)
+            raise RuleConversionError(
+                f"AI 生成超时（>{CONVERT_TIMEOUT_SEC}s，实际 {elapsed:.0f}s，"
+                f"轮询失败 {poll_errors} 次）：{_serve_hint(model)}"
+            )
+        rules = normalize_rules(parse_rule_json(text), description)
+        logger.info("rule-convert ok session=%s rules=%d %.1fs",
+                    session_id, len(rules), time.time() - started)
+        return rules
     finally:
         if session_id:
             try:

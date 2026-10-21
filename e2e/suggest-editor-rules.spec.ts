@@ -462,4 +462,45 @@ test('规则保存后其它标签页即时生效（无需刷新/编辑）', asyn
   }
 })
 
+// ---------------------------------------------------------------------------
+// 上游 502 的可诊断性：接口把具体原因（serve 不可达/模型错误/超时）放在
+// JSON error 里；前端用可复制的弹窗展示，而不是 3 秒 toast。
+// 这里用路由拦截固定一个 502（不依赖真 opencode）。
+// ---------------------------------------------------------------------------
+test('AI 生成 502：弹窗展示上游诊断信息', async ({ page }) => {
+  test.setTimeout(120_000)
+  const upstreamError =
+    'opencode serve 不可达（http://127.0.0.1:4096）：连接被拒绝。'
+    + '请检查 proxy.py 启动日志 [3/5] 段（OpenCode reachable/started）'
+  await page.route('**/api/suggest-editor/rules/convert', (route) =>
+    route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: upstreamError }),
+    }))
+
+  await page.goto('/home')
+  await gotoSuggestList(page)
+  await page.getByRole('button', { name: '检查规则' }).click()
+  const rulesDialog = page.locator('.el-dialog').filter({
+    has: page.locator('.el-dialog__title', { hasText: '检查规则' }),
+  })
+  await rulesDialog.waitFor({ state: 'visible' })
+  await rulesDialog.getByRole('button', { name: 'AI 生成…' }).click()
+
+  const aiDialog = page.locator('.el-dialog').filter({
+    has: page.locator('.el-dialog__title', { hasText: '用自然语言生成规则' }),
+  })
+  await aiDialog.waitFor({ state: 'visible' })
+  await aiDialog.locator('[data-field="nl-rule"]').fill('型号 S-5700 应写作 S5700')
+  await aiDialog.getByRole('button', { name: '生成' }).click()
+
+  const alert = page.locator('.el-message-box')
+  await expect(alert).toBeVisible({ timeout: 10_000 })
+  await expect(alert).toContainText('上游服务 502')
+  await expect(alert).toContainText('opencode serve 不可达')
+  await expect(alert).toContainText('[3/5]')
+  await alert.getByRole('button', { name: '知道了' }).click()
+})
+
 

@@ -213,6 +213,24 @@ suggest-editor-server/.data/词表-全局.txt             # 全局
 | 同上 | `[ws] 鉴权拒绝 …内部端点 403` | `MCP_INTERNAL_TOKEN` 未配置或两侧不一致 |
 | 新建文档打不开 | proxy `[WS] 隧道失败 …不可达` | 智能写作 Node 服务没起来：看 proxy 启动日志 `[4/5]` 段与 `proxy-se.log` 启动行（多为依赖未装） |
 
+## 排障：AI 生成规则（rules/convert）502
+
+`502` 是本接口对上游失败的**可诊断错误**：响应体一定是 `{"error": "..."}`。先在浏览器
+DevTools → Network → 该请求的 Response（或页面弹窗）里看这句 error，三类原因对应不同处置：
+
+| error 开头 | 含义 | 处置 |
+| --- | --- | --- |
+| `opencode serve 不可达` | Flask 连不上 `OPENCODE_BASE_URL`（默认 `http://127.0.0.1:4096`） | 看 proxy 启动日志 `[3/5]` 段是否出现 `OpenCode reachable/started`；确认 `OPENCODE_AUTOSTART` 未被设为 0、`OPENCODE_BIN` 指到平台自带 oc126 的真实 `opencode.exe`（不要依赖 PATH 里的全局 opencode）、`OPENCODE_BASE_URL` 端口与 serve 实际监听一致；在服务器上执行 `curl http://127.0.0.1:4096/` 验证。再看 `server/oc-serve.log` 启动报错 |
+| `模型调用失败（…）` | serve 起来了，但 provider 鉴权失败 / 额度不足 / 模型不存在 | 核对 `server/.env` 的 `AGENT_MODEL` 是否在该环境的 provider 列表里；用 `opencode run "hi" --model <AGENT_MODEL>` 单测；检查 `server/oc-serve.log` 里的 provider 错误 |
+| `AI 生成超时（>90s…）` | serve/模型在 90 秒内没有完成本轮 | 服务刚启动的**第一次**调用可能是冷启动，直接重试；持续超时看 `server/proxy-backend.log` 的 `rules/convert failed` 与 `server/oc-serve.log` |
+
+**外层反向代理/网关**：若 502 的响应体是 HTML 而不是上面的 JSON，说明是 nginx/网关自己超时
+（nginx `proxy_read_timeout` 默认 60s，Cloudflare 约 100s）。把 `proxy_read_timeout` /
+`proxy_send_timeout` 调到 **≥150s**，否则后端 90s 的生成还没返回就被网关截断成 502。
+
+**服务端日志**：`server/proxy-backend.log`（每次失败记 `rules/convert failed desc_len=… : 具体原因`，
+含 serve 地址、模型、超时秒数、轮询失败次数）；`server/oc-serve.log`（serve 启动与上游错误）。
+
 ## 运维要点
 
 | 项 | 值 |
