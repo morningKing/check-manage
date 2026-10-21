@@ -102,12 +102,49 @@
 
         <span class="se-bubble-sep" />
 
+        <el-dropdown trigger="click" @command="(size: string) => applyFontSize(size)">
+          <span class="se-bubble-btn" title="字号">字号</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">默认</el-dropdown-item>
+              <el-dropdown-item v-for="size in FONT_SIZES" :key="size" :command="size">{{ size }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="(color: string) => applyColor(color)">
+          <span class="se-bubble-btn" title="文字颜色">颜色</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">默认</el-dropdown-item>
+              <el-dropdown-item v-for="color in TEXT_COLORS" :key="color" :command="color">
+                <span class="se-color-dot" :style="{ background: color }" />{{ color }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="(color: string) => applyHighlight(color)">
+          <span class="se-bubble-btn" title="高亮">高亮</span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="">清除</el-dropdown-item>
+              <el-dropdown-item v-for="color in HIGHLIGHT_COLORS" :key="color" :command="color">
+                <span class="se-color-dot" :style="{ background: color }" />{{ color }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <button v-for="align in ALIGNMENTS" :key="align.value" type="button"
+          class="se-bubble-btn" :class="{ 'is-active': editor.isActive({ textAlign: align.value }) }"
+          :title="align.label" @click="applyAlign(align.value)">{{ align.icon }}</button>
+
+        <span class="se-bubble-sep" />
+
         <button
           type="button"
           title="清除格式"
           class="se-bubble-btn"
           @mousedown.prevent
-          @click="editor.chain().focus().unsetAllMarks().clearNodes().run()"
+          @click="clearFormatting(editor)"
         >✕</button>
       </template>
       </div>
@@ -126,6 +163,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
+import { FONT_SIZES, TEXT_COLORS, HIGHLIGHT_COLORS, clearFormatting } from './core/formatting'
 
 const props = defineProps<{
   editor: Editor
@@ -222,5 +260,31 @@ function applyLink(): void {
     props.editor.chain().focus().extendMarkRange('link').setLink({ href }).run()
   }
   closeLink()
+}
+
+const ALIGNMENTS = [
+  { value: 'left', label: '左对齐', icon: '⯇' },
+  { value: 'center', label: '居中', icon: '≡' },
+  { value: 'right', label: '右对齐', icon: '⯈' },
+  { value: 'justify', label: '两端对齐', icon: '☰' },
+] as const
+
+function applyFontSize(size: string): void {
+  if (!size) props.editor.chain().focus().unsetFontSize().run()
+  else props.editor.chain().focus().setFontSize(size).run()
+}
+
+function applyColor(color: string): void {
+  if (!color) props.editor.chain().focus().unsetColor().run()
+  else props.editor.chain().focus().setColor(color).run()
+}
+
+function applyHighlight(color: string): void {
+  if (!color) props.editor.chain().focus().unsetHighlight().run()
+  else props.editor.chain().focus().setHighlight({ color }).run()
+}
+
+function applyAlign(align: string): void {
+  props.editor.chain().focus().setTextAlign(align).run()
 }
 </script>

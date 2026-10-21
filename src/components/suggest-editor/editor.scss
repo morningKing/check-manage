@@ -314,6 +314,9 @@
 /* ---------------- 工具栏按钮（头部固定工具栏使用；原浮动工具栏已移除） ---------------- */
 
 .se-bubble-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 26px;
   height: 26px;
   padding: 0 6px;
@@ -324,6 +327,16 @@
   font-size: 12.5px;
   line-height: 1;
   cursor: pointer;
+}
+
+.se-color-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border: 1px solid rgba(0, 0, 0, .15);
+  border-radius: 50%;
+  vertical-align: middle;
 }
 
 .se-bubble-btn:hover {
