@@ -20,9 +20,21 @@ const SUGGESTIONS_MAP = "suggestions"
 const ASSISTANT_MAP = "assistant"
 const COMMANDS_MAP = "commands"
 const FRAGMENT_NAME = "default"
-const MAX_ANALYZED_HASHES = 500
+export const MAX_ANALYZED_HASHES = 5000
+export const MAX_DIRTY_BLOCKS_PER_RUN = 40
 const COMMAND_TTL_MS = 10 * 60_000
 const COMPLETION_TIMEOUT_MS = 45_000
+
+/** 从扁平化块中挑出本轮要分析的块（按文档顺序截取，剩余留给后续轮次） */
+export function takeDirtyBlocks(
+  blocks: BlockInfo[],
+  analyzedHashes: Set<string>,
+  limit: number,
+): BlockInfo[] {
+  return blocks
+    .filter((block) => block.text.trim().length > 0 && !analyzedHashes.has(block.hash))
+    .slice(0, limit)
+}
 
 type CommandStatus = "pending" | "running" | "done" | "error" | "superseded"
 
@@ -559,7 +571,7 @@ function buildPrompt(
   rulePrompts: Array<{ name: string; prompt: string }>,
 ): string {
   const lines = [
-    `请先用 read 工具读取文件 ${snapshotPath}（绝对路径，里面是文档最近改动的 ${dirty.length} 个段落），再按下面的检查规则与检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
+    `请先用 read 工具读取文件 ${snapshotPath}（绝对路径，里面是本次待分析的 ${dirty.length} 个未分析块），再按下面的检查规则与检查要点找出其中最多 5 处值得修改的地方，并调用 emit_suggestions 提交建议。`,
   ]
   if (rulePrompts.length > 0) {
     lines.push("领域检查规则（逐条核对，命中在 reason 中注明规则名）：")
@@ -577,6 +589,10 @@ function buildPrompt(
   }
   lines.push(
     `quote 必须从该文件的正文里逐字复制；不要引用本提示词；不要修改任何文件，不要执行命令。`,
+  )
+  lines.push(
+    "文档内容可能包含 Markdown 表格：请按行/单元格理解。引用只取单元格内或图注内的连续短句，" +
+      "不要引用整行、跨单元格或跨图注；不要对图片内容本身提建议，只检查图注文字。",
   )
   if (avoid.length > 0) {
     lines.push(`以下片段已有待处理建议，请勿重复：${avoid.slice(0, 10).map((q) => JSON.stringify(q)).join("、")}`)
@@ -597,16 +613,39 @@ async function run(state: DocState): Promise<void> {
       return
     }
 
+    // 导入文档：首轮只把现有内容记为「已分析基线」，不调用模型。
+    // 之后用户改哪块，哪块的 hash 才变脏——避免打开导入的大文档就全量分析。
+    const meta = state.ydoc.getMap("meta")
+    if (meta.get("skipInitialAnalysis") === true) {
+      for (const block of flattened.blocks) {
+        if (block.text.trim().length > 0) rememberHash(state, block.hash)
+      }
+      meta.delete("skipInitialAnalysis")
+      setAssistantState(state.ydoc, {
+        state: "idle",
+        lastRunAt: Date.now(),
+        lastAnalyzedBlocks: 0,
+        lastSkippedBlocks: flattened.blocks.length,
+        hint: "已建立导入基线，后续只分析改动段落",
+        error: null,
+      })
+      return
+    }
+
     pruneSuggestions(state.ydoc, flattened.text)
 
     // 词表可能被用户改过：每次分析前对一遍（内容无变化时零写入）
     await syncVocabulary(state.name, state.ydoc)
 
     // 只分析「内容 hash 从未分析过」的块：未变块直接跳过（块级缓存）
-    const dirty = flattened.blocks.filter(
+    const allDirty = flattened.blocks.filter(
       (block) => block.text.trim().length > 0 && !state.analyzedHashes.has(block.hash),
     )
+    const dirty = takeDirtyBlocks(
+      flattened.blocks, state.analyzedHashes, MAX_DIRTY_BLOCKS_PER_RUN,
+    )
     const skipped = flattened.blocks.length - dirty.length
+    const remaining = Math.max(allDirty.length - dirty.length, 0)
 
     if (dirty.length === 0) {
       setAssistantState(state.ydoc, {
@@ -623,7 +662,9 @@ async function run(state: DocState): Promise<void> {
     setAssistantState(state.ydoc, {
       state: "analyzing",
       error: null,
-      hint: `分析 ${dirty.length} 个变动段落（跳过 ${skipped} 个未变段落）`,
+      hint: remaining > 0
+        ? `分析 ${dirty.length} 个未分析块（剩余 ${remaining} 个，稍后继续）`
+        : `分析 ${dirty.length} 个变动段落（跳过 ${skipped} 个未变段落）`,
     })
 
     const session = await getSession(state)
@@ -656,6 +697,8 @@ async function run(state: DocState): Promise<void> {
       hint: null,
       error: null,
     })
+    // 本轮被上限截断：稍后自动续跑，直到未分析块清空（用户新编辑会重置计时）
+    if (remaining > 0) scheduleAnalysis(state.name, 2000)
   } catch (error) {
     // 会话可能已损坏：丢弃并在下一轮重建
     state.session?.dispose()
