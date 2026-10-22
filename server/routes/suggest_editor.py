@@ -40,6 +40,7 @@ from utils.suggest_editor_attachments import (
 )
 from utils.suggest_editor_repo import (
     access_check,
+    clear_document_seed,
     create_document,
     create_template,
     delete_document,
@@ -50,6 +51,7 @@ from utils.suggest_editor_repo import (
     list_templates,
     rename_document,
     save_state,
+    set_document_seed,
     touch_document,
     update_template,
 )
@@ -229,6 +231,36 @@ def serve_attachment(attachment_id: str):
     resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     resp.headers["Content-Disposition"] = "inline"
     return resp
+
+
+# ------------------------------- 导入种子正文 -------------------------------
+
+MAX_SEED_HTML_BYTES = 5 * 1024 * 1024
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/seed", methods=["PUT"])
+@write_required
+def put_document_seed(doc_id: str):
+    if not _get_own_document(doc_id):
+        return jsonify({"error": "文档不存在"}), 404
+    body = request.get_json(silent=True) or {}
+    html = body.get("contentHtml")
+    if not isinstance(html, str) or not html.strip():
+        return jsonify({"error": "contentHtml 不能为空"}), 400
+    if len(html.encode("utf-8")) > MAX_SEED_HTML_BYTES:
+        return jsonify({"error": "contentHtml 超过 5MB"}), 400
+    if not set_document_seed(doc_id, html):
+        return jsonify({"error": "文档已开始编辑或已有种子内容"}), 409
+    return jsonify({"ok": True})
+
+
+@suggest_editor_bp.route("/documents/<doc_id>/seed/applied", methods=["POST"])
+@write_required
+def mark_document_seed_applied(doc_id: str):
+    if not _get_own_document(doc_id):
+        return jsonify({"error": "文档不存在"}), 404
+    clear_document_seed(doc_id)
+    return jsonify({"ok": True})
 
 
 # ------------------------------- 模板 -------------------------------
