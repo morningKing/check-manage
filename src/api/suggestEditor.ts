@@ -206,3 +206,23 @@ export function getSnippets(config?: AxiosRequestConfig) {
 export function saveSnippets(snippets: TextSnippet[]) {
   return put<{ ok: boolean; count: number }>('/suggest-editor/snippets/global', { snippets })
 }
+
+/* ------------------------------ 附件（图片） ------------------------------ */
+
+export interface SeAttachment {
+  id: string
+  url: string
+  filename: string
+  mime: string
+  size: number
+}
+
+export function uploadAttachment(docId: string, file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return post<{ attachment: SeAttachment }>(
+    `/suggest-editor/documents/${docId}/attachments`,
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+}

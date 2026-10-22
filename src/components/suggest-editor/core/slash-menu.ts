@@ -84,6 +84,14 @@ const BLOCK_ITEMS: SlashItem[] = [
     command: ({ editor, range }) => editor.chain().focus().deleteRange(range).toggleCodeBlock().run(),
   },
   {
+    title: "图片",
+    hint: "上传本地图片",
+    keywords: "image tupian",
+    badge: "🖼",
+    command: ({ editor }) =>
+      editor.view.dom.dispatchEvent(new CustomEvent("se:insert-image", { bubbles: true })),
+  },
+  {
     title: "表格",
     hint: "3×3，带表头",
     keywords: "table biaoge",

@@ -389,6 +389,28 @@
   pointer-events: none;
 }
 
+.doc-surface figure.se-figure {
+  margin: 14px 0;
+  text-align: center;
+}
+
+.doc-surface figure.se-figure img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.doc-surface figure.se-figure figcaption {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.doc-surface figure.se-figure figcaption:empty::before {
+  color: var(--el-text-color-placeholder);
+  content: '图注（可选）';
+}
+
 .se-bubble-link-editor {
   display: flex;
   align-items: center;

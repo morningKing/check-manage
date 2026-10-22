@@ -136,6 +136,9 @@
         <button v-for="align in ALIGNMENTS" :key="align.value" type="button"
           class="se-bubble-btn" :class="{ 'is-active': editor.isActive({ textAlign: align.value }) }"
           :title="align.label" @click="applyAlign(align.value)">{{ align.icon }}</button>
+        <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+          style="display: none" @change="onImageChosen" />
+        <button type="button" class="se-bubble-btn" title="插入图片" @click="openImagePicker">图片</button>
 
         <template v-if="editor.isActive('table')">
           <span class="se-bubble-sep" />
@@ -179,11 +182,15 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Editor } from '@tiptap/core'
 import { FONT_SIZES, TEXT_COLORS, HIGHLIGHT_COLORS, clearFormatting } from './core/formatting'
 import { TABLE_COMMANDS } from './core/table'
+import { insertFigure } from './core/figure'
+import { uploadAttachment } from '@/api/suggestEditor'
 
 const props = defineProps<{
   editor: Editor
   /** 右侧建议栏是否展开——展开时工具栏行加同宽占位，保证与纸张对齐 */
   withSidebarPad?: boolean
+  /** 当前文档 id（图片上传需要） */
+  docId: string
 }>()
 
 const BLOCK_OPTIONS = [
@@ -302,4 +309,25 @@ function applyHighlight(color: string): void {
 function applyAlign(align: string): void {
   props.editor.chain().focus().setTextAlign(align).run()
 }
+
+const imageInput = ref<HTMLInputElement | null>(null)
+
+function openImagePicker(): void {
+  imageInput.value?.click()
+}
+
+async function onImageChosen(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  try {
+    const { attachment } = await uploadAttachment(props.docId, file)
+    insertFigure(props.editor, { src: attachment.url, alt: file.name })
+  } catch {
+    // 错误提示由请求拦截器统一处理
+  }
+}
+
+defineExpose({ openImagePicker })
 </script>
